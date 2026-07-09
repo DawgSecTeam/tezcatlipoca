@@ -1,0 +1,13 @@
+.env
+venv/
+terraform/terraform.tfvars
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/*.tfstate
+terraform/*.tfstate.*
+nakon
+nakon/
+quotient/__pycache__/
+.claude
+__pycache__/
+proxmox
