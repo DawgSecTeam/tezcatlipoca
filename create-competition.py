@@ -64,7 +64,10 @@ def update_env(updates: dict):
     text = ENV_PATH.read_text()
     for key, value in updates.items():
         line = f"{key}={value}"
-        new_text, count = re.subn(rf"^{key}=.*$", line, text, flags=re.MULTILINE)
+        # Pass `line` as a function replacement, not a string: re.sub interprets
+        # backslashes/group refs (\1, \g<0>) in a string replacement, which would crash
+        # or corrupt .env for values like a free-form event_name containing a backslash.
+        new_text, count = re.subn(rf"^{re.escape(key)}=.*$", lambda _m: line, text, flags=re.MULTILINE)
         text = new_text if count else text + f"\n{line}\n"
         os.environ[key] = value
     ENV_PATH.write_text(text)
