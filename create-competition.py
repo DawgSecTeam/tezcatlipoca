@@ -677,9 +677,29 @@ def bootstrap_scoring_engine(ctx):
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
-            "sudo apt-get update && sudo apt-get install -y docker.io docker-compose-plugin git curl",
+            "sudo apt-get update && sudo apt-get install -y docker.io git curl",
         ],
         check=True, timeout=180,
+    )
+
+    print("  Installing Docker Compose v2 plugin...")
+    subprocess.run(
+        [
+            "ssh", "-i", key,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            f"{scoring_user}@{scoring_ip}",
+            (
+                "install -m 0755 -d /etc/apt/keyrings && "
+                "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc > /dev/null && "
+                "chmod a+r /etc/apt/keyrings/docker.asc && "
+                "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] "
+                "https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable\" "
+                "| sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && "
+                "sudo apt-get update && sudo apt-get install -y docker-compose-plugin"
+            ),
+        ],
+        check=True, timeout=120,
     )
 
     print("  Starting Docker (already installed by Terraform)...")
