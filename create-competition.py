@@ -677,22 +677,21 @@ def bootstrap_scoring_engine(ctx):
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
-            "sudo apt-get update && sudo apt-get install -y docker.io docker-compose git curl",
+            "sudo apt-get update && sudo apt-get install -y docker.io docker-compose-plugin git curl",
         ],
         check=True, timeout=180,
     )
 
-    print("  Installing Docker...")
+    print("  Starting Docker (already installed by Terraform)...")
     subprocess.run(
         [
             "ssh", "-i", key,
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
-            "curl -fsSL https://get.docker.com | sudo sh && "
-            "sudo systemctl start docker && sudo systemctl enable docker",
+            "sudo systemctl start docker && sudo systemctl enable docker && sleep 2 && sudo docker version",
         ],
-        check=True, timeout=120,
+        check=True, timeout=30,
     )
 
     print("  Cloning Quotient...")
@@ -705,6 +704,28 @@ def bootstrap_scoring_engine(ctx):
             "sudo mkdir -p /opt/quotient && sudo git clone --depth 1 https://github.com/dbaseqp/Quotient.git /opt/quotient 2>/dev/null || true",
         ],
         check=True, timeout=60,
+    )
+
+    # Write .env for Quotient (required before docker compose build/up)
+    print("  Writing Quotient .env...")
+    import base64
+    quotient_env = (
+        "POSTGRES_PASSWORD=postgres_password\n"
+        "POSTGRES_USER=engineuser\n"
+        "POSTGRES_HOST=quotient_database\n"
+        "POSTGRES_DB=engine\n"
+        "REDIS_PASSWORD=redis_password\n"
+    )
+    env_b64 = base64.b64encode(quotient_env.encode()).decode()
+    subprocess.run(
+        [
+            "ssh", "-i", key,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            f"{scoring_user}@{scoring_ip}",
+            f"echo '{env_b64}' | base64 -d | sudo tee /opt/quotient/.env",
+        ],
+        check=True, timeout=10,
     )
 
     print("  Building Quotient Docker images...")

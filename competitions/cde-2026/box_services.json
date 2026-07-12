@@ -1,10 +1,10 @@
 {
   "pikachu": [
-    "dovecot",
-    "bind"
+    "splunk",
+    "vsftpd"
   ],
   "raichu": [
-    "bind",
+    "dovecot",
     "splunk"
   ]
 }
