@@ -689,7 +689,8 @@ def bootstrap_scoring_engine(ctx):
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
-            "curl -fsSL https://get.docker.com | sudo sh",
+            "curl -fsSL https://get.docker.com | sudo sh && "
+            "sudo systemctl start docker && sudo systemctl enable docker",
         ],
         check=True, timeout=120,
     )
@@ -701,7 +702,7 @@ def bootstrap_scoring_engine(ctx):
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
-            "sudo mkdir -p /opt/quotient && sudo git clone https://github.com/QuotientScoreboard/quotient.git /opt/quotient 2>/dev/null || true",
+            "sudo mkdir -p /opt/quotient && sudo git clone --depth 1 https://github.com/dbaseqp/Quotient.git /opt/quotient 2>/dev/null || true",
         ],
         check=True, timeout=60,
     )
@@ -781,15 +782,13 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name):
         check=True, timeout=30,
     )
 
-    # Write .env for Quotient
+    # Write .env for Quotient (matches docker-compose.yml env_file expectations)
     env_content = (
-        "QUOTIENT_DB_HOST=127.0.0.1\n"
-        "QUOTIENT_DB_PORT=5432\n"
-        "QUOTIENT_DB_NAME=quotient\n"
-        "QUOTIENT_DB_USER=quotient\n"
-        "QUOTIENT_DB_PASSWORD=quotient\n"
-        "QUOTIENT_REDIS_HOST=127.0.0.1\n"
-        "QUOTIENT_REDIS_PORT=6379\n"
+        "POSTGRES_PASSWORD=postgres_password\n"
+        "POSTGRES_USER=engineuser\n"
+        "POSTGRES_HOST=quotient_database\n"
+        "POSTGRES_DB=engine\n"
+        "REDIS_PASSWORD=redis_password\n"
     )
     env_b64 = base64.b64encode(env_content.encode()).decode()
     subprocess.run(
