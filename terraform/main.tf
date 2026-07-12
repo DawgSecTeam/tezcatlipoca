@@ -181,15 +181,6 @@ resource "proxmox_virtual_environment_vm" "team_box" {
         : "8.8.8.8"
       ]
     }
-    # runcmd runs AFTER cloud-init sets up the user account
-    # Enables password auth for Nakon's paramiko connections and NOPASSWD sudo for package install
-    runcmd = [
-      "sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config",
-      "sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config",
-      "systemctl restart sshd 2>/dev/null || true",
-      "echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu",
-      "chmod 440 /etc/sudoers.d/ubuntu",
-    ]
   }
 
   depends_on = [proxmox_network_linux_bridge.team_bridge]

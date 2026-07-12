@@ -462,6 +462,58 @@ def fix_services_on_boxes(comp_dir, teams, boxes, ctx):
                 print(f"    Service hardening error on {ip}: {e}")
 
 
+def setup_ubuntu_auth(teams, boxes, ctx):
+    """Enable password auth and NOPASSWD sudo for ubuntu on team boxes.
+    
+    The template has PasswordAuthentication disabled, but Nakon's paramiko
+    connections use password auth (ubuntu/ubuntu). Also, Nakon runs sudo
+    commands to install packages, so NOPASSWD is required.
+    
+    Runs via the scoring engine gateway since team boxes are on isolated bridges.
+    """
+    key = ctx["ssh_key_path"]
+    scoring_ip = ctx["scoring_engine_ip"]
+    scoring_user = ctx["vm_username"]
+    proxy = (
+        f"ssh -i {key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-W %h:%p {scoring_user}@{scoring_ip}"
+    )
+    
+    print("  Enabling password auth + NOPASSWD sudo for ubuntu on team boxes...")
+    auth_cmd = (
+        "sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config; "
+        "sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config; "
+        "sudo systemctl restart sshd 2>/dev/null || true; "
+        "echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/ubuntu; "
+        "sudo chmod 440 /etc/sudoers.d/ubuntu"
+    )
+    
+    for team in teams.values():
+        for box in boxes:
+            ip = f"192.168.{team['identifier']}.{box['last_octet']}"
+            for attempt in range(1, 9):
+                try:
+                    subprocess.run(
+                        [
+                            "ssh", "-i", key,
+                            "-o", "StrictHostKeyChecking=no",
+                            "-o", "UserKnownHostsFile=/dev/null",
+                            "-o", "ConnectTimeout=10",
+                            "-o", f"ProxyCommand={proxy}",
+                            f"ubuntu@{ip}", auth_cmd,
+                        ],
+                        check=True, timeout=40, capture_output=True, text=True,
+                    )
+                    print(f"    Auth configured on {ip}")
+                    break
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                    if attempt < 8:
+                        print(f"    Auth setup attempt {attempt}/8 failed for {ip}, retrying in 15s...")
+                        time.sleep(15)
+                    else:
+                        print(f"  WARNING: Auth setup failed for {ip} after 8 attempts — proceeding anyway")
+
+
 def clone_team_boxes(teams, boxes, ctx, comp_dir):
     sorted_keys = sorted(teams.keys())
     team1_key = sorted_keys[0]
@@ -748,6 +800,9 @@ def deploy_competition(comp_dir, name, scenario, difficulty, teams, admin_passwo
     print("[4/7] Bootstrapping scoring engine (packages, Docker, Quotient)...")
     ctx = read_terraform_ctx()
     bootstrap_scoring_engine(ctx)
+
+    print("[4.5/7] Enabling password auth + NOPASSWD sudo for ubuntu on team1 boxes...")
+    setup_ubuntu_auth(team1_only, boxes, ctx)
 
     print("[5/7] Running Nakon deployment on team1 boxes...")
     run_nakon_deploy(ctx)
