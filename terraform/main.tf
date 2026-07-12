@@ -81,7 +81,7 @@ resource "proxmox_virtual_environment_vm" "scoring_engine" {
   # baked-in netplan (dhcp4 on the mgmt NIC) is enough on its own. The
   # template's own cloud-init build already baked in var.ssh_public_key
   # and passwordless sudo for var.vm_username, so no further bootstrap
-  # is needed before null_resource.orchestrate connects.
+  # is needed before create-competition.py connects.
 
   depends_on = [proxmox_network_linux_bridge.team_bridge]
 }
@@ -181,6 +181,15 @@ resource "proxmox_virtual_environment_vm" "team_box" {
         : "8.8.8.8"
       ]
     }
+    # runcmd runs AFTER cloud-init sets up the user account
+    # Enables password auth for Nakon's paramiko connections and NOPASSWD sudo for package install
+    runcmd = [
+      "sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config",
+      "sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config",
+      "systemctl restart sshd 2>/dev/null || true",
+      "echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu",
+      "chmod 440 /etc/sudoers.d/ubuntu",
+    ]
   }
 
   depends_on = [proxmox_network_linux_bridge.team_bridge]
@@ -202,43 +211,12 @@ resource "null_resource" "orchestrate" {
     box_ids   = join(",", [for vm in proxmox_virtual_environment_vm.team_box : vm.id])
   }
 
-  # Step A: install what cloud-init would otherwise have provided (docker,
-  # repos). No password-based bootstrap needed — the template's own
-  # cloud-init build already baked in the SSH key (authorized_keys) and
-  # passwordless sudo (/etc/sudoers.d/90-cloud-init-users) for var.vm_username.
+  # Step B: configure team NICs and NAT on scoring VM
+  # Steps A (package install), C (Quotient Docker), D (Nakon deploy) moved to
+  # create-competition.py to keep terraform apply under the tool timeout limit.
   provisioner "remote-exec" {
     inline = [
-      "set -e", # fail fast and loud instead of limping into a confusing error several commands later
-      "echo 'scoring VM up'",
-      # fresh boots race unattended-upgrades for the dpkg lock — wait it out rather than failing apt-get immediately
-      "for i in $(seq 1 60); do sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break; sleep 2; done",
-      "sudo apt-get update",
-      "sudo apt-get install -y git python3-pip python3-venv ca-certificates curl",
-      # docker-compose-plugin (the v2 'docker compose' subcommand used below) isn't in Ubuntu's
-      # own repos — only Docker's official apt repo ships it, hence the convenience script
-      "curl -fsSL https://get.docker.com | sudo sh",
-      "sudo systemctl enable --now docker",
-      # repo ships its own default .env (no .env.example) — Step C overwrites it with real values later
-      "sudo rm -rf /opt/quotient && sudo git clone https://github.com/dbaseqp/Quotient /opt/quotient",
-      # 'divisor' is a submodule — plain clone leaves it as an empty dir, breaking the compose build
-      "cd /opt/quotient && sudo git submodule update --init --recursive",
-      # repo ships only .example credlists — event.conf references real .credlist filenames
-      "sudo cp /opt/quotient/config/credlists/linux.credlist.example /opt/quotient/config/credlists/linux.credlist",
-      "sudo cp /opt/quotient/config/credlists/windows.credlist.example /opt/quotient/config/credlists/windows.credlist",
-      "sudo rm -rf /opt/nakon && sudo git clone https://github.com/CyberDawgsTeam/nakon /opt/nakon",
-      "sudo pip3 install --break-system-packages mysql-connector-python paramiko python-dotenv",
-    ]
-    connection {
-      type        = "ssh"
-      user        = var.vm_username
-      private_key = file(var.ssh_private_key_path)
-      host        = local.scoring_ip
-    }
-  }
-
-  # Step B: configure team NICs on scoring VM
-  provisioner "remote-exec" {
-    inline = [
+      "set -e",
       # Generate netplan config for each team NIC
       # NICs are named predictably: ens18=mgmt, ens19=team1, ens20=team2, ...
       "sudo tee /etc/netplan/60-team-ifaces.yaml << 'EOF'",
@@ -253,6 +231,11 @@ resource "null_resource" "orchestrate" {
       "sudo netplan apply",
       "sudo sysctl -w net.ipv4.ip_forward=1",
       "echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf",
+      # Disable reverse path filtering so NAT/masqueraded return traffic reaches team subnets
+      "sudo sysctl -w net.ipv4.conf.all.rp_filter=2",
+      "sudo sysctl -w net.ipv4.conf.default.rp_filter=2",
+      "echo 'net.ipv4.conf.all.rp_filter=2' | sudo tee -a /etc/sysctl.conf",
+      "echo 'net.ipv4.conf.default.rp_filter=2' | sudo tee -a /etc/sysctl.conf",
       "sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE",
     ]
     connection {
@@ -261,73 +244,6 @@ resource "null_resource" "orchestrate" {
       private_key = file(var.ssh_private_key_path)
       host        = local.scoring_ip
     }
-  }
-
-  # Step C: drop Quotient .env and start it (paused)
-  provisioner "remote-exec" {
-    inline = [
-      "sudo tee /opt/quotient/.env << 'EOF'",
-      "POSTGRES_USER=engineuser",
-      "POSTGRES_PASSWORD=changeme_in_prod",
-      "POSTGRES_DB=engine",
-      "POSTGRES_HOST=quotient_database",
-      "REDIS_PASSWORD=changeme_in_prod",
-      "REDIS_HOST=quotient_redis",
-      "EOF",
-      "cd /opt/quotient && sudo docker compose up -d --build",
-      "sleep 15", # wait for DB to initialise
-      # Docker sets FORWARD policy to DROP when it starts, which silently blocks all
-      # team-subnet → internet forwarding (even though NAT and ip_forward are correct).
-      # DOCKER-USER is processed first in FORWARD and Docker never flushes it on restart,
-      # so this is the correct place to permanently allow team traffic through.
-      "sudo iptables -I DOCKER-USER -s 192.168.0.0/16 -j ACCEPT",
-      "sudo iptables -I DOCKER-USER -d 192.168.0.0/16 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
-    ]
-    connection {
-      type        = "ssh"
-      user        = var.vm_username
-      private_key = file(var.ssh_private_key_path)
-      host        = local.scoring_ip
-    }
-  }
-
-  # Step D: push nakon's config and run it on team1 boxes only. DNS fix,
-  # cloning to other teams, event.conf push, and Quotient seeding all happen
-  # in create-competition.py after `terraform apply` returns.
-  provisioner "local-exec" {
-    command = <<-EOT
-      set -e
-
-      # Run nakon on the scoring engine, not locally — team subnets are isolated
-      # bridges with no uplink, so only the scoring engine (which has a NIC on
-      # each one, set up in Step B) can actually reach the target machines.
-      # /opt/nakon is root-owned from the Step A clone, so stage via /tmp first.
-      # config.json must already exist — create-competition.py generates it
-      # before calling `terraform apply`.
-      test -f ../nakon/config.json || { echo "missing nakon/config.json — run create-competition.py first" >&2; exit 1; }
-      scp -i ${var.ssh_private_key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        ../nakon/config.json ../nakon/.env ${var.vm_username}@${local.scoring_ip}:/tmp/
-      ${local.ssh_cmd} "sudo cp /tmp/config.json /opt/nakon/config.json && sudo cp /tmp/.env /opt/nakon/.env"
-      ${local.ssh_cmd} "cd /opt/nakon && sudo python3 -c \"
-import json, paramiko
-from dotenv import load_dotenv
-load_dotenv()
-with open('config.json') as f:
-    cfg = json.load(f)
-for m in cfg['machines']:
-    try:
-        c = paramiko.SSHClient()
-        c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        c.connect(m['ip'], username=m['user'], password=m['password'])
-        c.exec_command('find /tmp -maxdepth 1 -type f -delete')
-        c.close()
-        print('[pre-clean] cleared /tmp on ' + m['ip'])
-    except Exception as e:
-        print('[pre-clean] ' + m['ip'] + ': ' + str(e))
-\" && sudo python3 deploy.py"
-
-      echo "=== Range infra is up — create-competition.py will push event.conf and start the competition next ==="
-    EOT
   }
 
   depends_on = [
