@@ -18,8 +18,8 @@ import toml
 import urllib3
 from dotenv import load_dotenv
 
-from quotient.setup import build_event_conf, seed_and_start
-from utils import load_compfile, pick_competition
+from quotient.setup import build_credlist, build_event_conf, seed_and_start
+from utils import DNS_FIX_CMD, load_compfile, pick_competition
 
 ENV_PATH = Path(".env")
 NAKON_DIR = Path("nakon")
@@ -122,8 +122,29 @@ def wait_for_proxmox_task(node, upid, timeout=600):
         time.sleep(3)
 
 
+# VM IDs are 200 + identifier*10 + box_index (mirrored in main.tf's team_box.vm_id), which
+# leaves each team a stride of exactly 10. An 11th box would land on the next team's first box
+# and silently clobber it, so the scheme caps the box count rather than the picker.
+MAX_BOXES_PER_TEAM = 10
+
+
 def vm_id_for(identifier, box_index):
     return 200 + int(identifier) * 10 + box_index
+
+
+def stop_vm(node, vmid):
+    # Graceful first so the box's filesystem is consistent for the clone, but never
+    # indefinitely: a shutdown is an ACPI power-button event, and a guest without acpid (box
+    # templates are only required to have working cloud-init) just ignores it. That used to
+    # stall here for the full task timeout and then abort the deploy — after nakon had already
+    # run — so fall back to pulling the plug instead.
+    try:
+        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/shutdown")["data"]
+        wait_for_proxmox_task(node, upid, timeout=120)
+    except RuntimeError:
+        print(f"    vmid {vmid} ignored ACPI shutdown — forcing stop")
+        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
+        wait_for_proxmox_task(node, upid, timeout=120)
 
 
 def destroy_vm_if_exists(node, vmid):
@@ -150,7 +171,12 @@ def collect_boxes():
     else:
         print("  (no templates found in Proxmox — you'll need to type template names manually)\n")
 
-    number_of_boxes = int(input("How many box types for this competition? "))
+    while True:
+        number_of_boxes = int(input("How many box types for this competition? "))
+        if 1 <= number_of_boxes <= MAX_BOXES_PER_TEAM:
+            break
+        print(f"  Enter a number from 1 to {MAX_BOXES_PER_TEAM} (see MAX_BOXES_PER_TEAM).")
+
     boxes = []
     for i in range(1, number_of_boxes + 1):
         print(f"\n─── Box {i} of {number_of_boxes} " + "─" * 40)
@@ -177,8 +203,15 @@ def collect_boxes():
 
         cpu = int(input("  CPU cores    [1]: ").strip() or 1)
         memory_mb = int(input("  Memory (MB)  [2048]: ").strip() or 2048)
+        # Blank keeps the template's own disk. Terraform only emits a disk block when this is
+        # set (main.tf), because Proxmox cannot shrink a disk — a value below the template's
+        # own size fails the clone.
+        disk_raw = input("  Disk (GB)    [keep template's]: ").strip()
 
-        box = {"name": name, "last_octet": i + 1, "cpu": cpu, "memory_mb": memory_mb, "template": template}
+        box = {
+            "name": name, "last_octet": i + 1, "cpu": cpu, "memory_mb": memory_mb,
+            "disk_gb": int(disk_raw) if disk_raw else None, "template": template,
+        }
         boxes.append(box)
     return boxes
 
@@ -281,13 +314,8 @@ def fix_dns_on_boxes(teams, boxes, ctx):
         f"ssh -i {key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"-W %h:%p {scoring_user}@{scoring_ip}"
     )
-    dns_cmd = (
-        'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf; '
-        'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf.head; '
-        "sudo mkdir -p /etc/systemd/resolved.conf.d; "
-        'printf "[Resolve]\\nDNS=8.8.8.8\\n" | sudo tee /etc/systemd/resolved.conf.d/upstream.conf; '
-        "sudo systemctl restart systemd-resolved 2>/dev/null || true"
-    )
+    # Terraform's Step D already did this once before nakon ran; it has to happen again here
+    # because clone_team_boxes()' `cloud-init clean` + reboot regenerates resolv.conf.
     print("  Fixing DNS on all team boxes...")
     for team in teams.values():
         for box in boxes:
@@ -301,7 +329,7 @@ def fix_dns_on_boxes(teams, boxes, ctx):
                             "-o", "UserKnownHostsFile=/dev/null",
                             "-o", "ConnectTimeout=10",
                             "-o", f"ProxyCommand={proxy}",
-                            f"ubuntu@{ip}", dns_cmd,
+                            f"ubuntu@{ip}", DNS_FIX_CMD,
                         ],
                         check=True, timeout=40,
                     )
@@ -354,8 +382,7 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir):
     print("  Shutting down team1 boxes...")
     for i, box in enumerate(boxes):
         vmid = vm_id_for(team1["identifier"], i)
-        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/shutdown")["data"]
-        wait_for_proxmox_task(node, upid)
+        stop_vm(node, vmid)
         print(f"    {team1_key}-{box['name']} (vmid {vmid}) stopped")
 
     # Clone sequentially to avoid Proxmox's VM lock contention (same issue the Terraform
@@ -378,22 +405,19 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir):
             cloned_vms[new_name] = new_vmid
 
     print("  Configuring cloud-init on clones...")
-    dns_box = next((b for b in boxes if b["name"].startswith("dns")), None)
     for team_key in other_keys:
         team = teams[team_key]
         for i, box in enumerate(boxes):
             vmid = cloned_vms[f"{team_key}-{box['name']}"]
             ip = f"192.168.{team['identifier']}.{box['last_octet']}"
             gw = f"192.168.{team['identifier']}.1"
-            dns = (
-                f"192.168.{team['identifier']}.{dns_box['last_octet']}"
-                if dns_box else "8.8.8.8"
-            )
             proxmox_api(
                 "PUT", f"/nodes/{node}/qemu/{vmid}/config",
                 json={
                     "ipconfig0": f"ip={ip}/24,gw={gw}",
-                    "nameserver": dns,
+                    # A public resolver, never the team's own dns* box — same reason as the
+                    # dns block in main.tf, and fix_dns_on_boxes() forces this value anyway.
+                    "nameserver": "8.8.8.8",
                     "ciuser": "ubuntu",
                     "cipassword": "ubuntu",
                     "sshkeys": url_quote(ssh_pubkey, safe=""),
@@ -425,16 +449,24 @@ def push_event_conf(comp_dir):
     event_conf_path = comp_dir / "event.conf"
     event_conf_path.write_text(toml.dumps(build_event_conf(ctx, box_services)))
 
+    # Goes next to event.conf rather than into Terraform: it has to describe the same accounts
+    # event.conf's checks reference, and both are only knowable here.
+    credlist_path = comp_dir / "linux.credlist"
+    credlist_path.write_text(build_credlist())
+
     ip, key, user = ctx["scoring_engine_ip"], ctx["ssh_key_path"], ctx["vm_username"]
     ssh = ["ssh", "-i", key, "-o", "StrictHostKeyChecking=no", f"{user}@{ip}"]
 
-    print(f"  Pushing event.conf to the scoring engine ({ip})...")
+    print(f"  Pushing event.conf and credlist to the scoring engine ({ip})...")
     subprocess.run(
-        ["scp", "-i", key, "-o", "StrictHostKeyChecking=no", str(event_conf_path), f"{user}@{ip}:/tmp/event.conf"],
+        ["scp", "-i", key, "-o", "StrictHostKeyChecking=no",
+         str(event_conf_path), str(credlist_path), f"{user}@{ip}:/tmp/"],
         check=True,
     )
     subprocess.run(
-        ssh + ["sudo cp /tmp/event.conf /opt/quotient/config/event.conf && cd /opt/quotient && sudo docker compose restart"],
+        ssh + ["sudo cp /tmp/event.conf /opt/quotient/config/event.conf "
+               "&& sudo cp /tmp/linux.credlist /opt/quotient/config/credlists/linux.credlist "
+               "&& cd /opt/quotient && sudo docker compose restart"],
         check=True,
     )
     print("  Seeding teams and starting the competition clock...")
@@ -448,6 +480,16 @@ def deploy_competition(comp_dir, name, scenario, difficulty, teams, admin_passwo
     # identical regardless of how name/teams/boxes were decided. Compfile is written by the
     # caller as soon as name/scenario/difficulty are known, not here — no reason to hold a
     # file back once its contents are decided, just because later steps might still fail.
+
+    # Both flows funnel through here, so this also covers a boxes.json saved before the cap
+    # existed or edited by hand — collect_boxes() only guards what it prompts for.
+    if len(boxes) > MAX_BOXES_PER_TEAM:
+        raise SystemExit(
+            f"{len(boxes)} boxes exceeds the {MAX_BOXES_PER_TEAM}-per-team limit the VM ID "
+            f"scheme allows (see MAX_BOXES_PER_TEAM) — team {len(boxes) // MAX_BOXES_PER_TEAM + 1}'s "
+            "VM IDs would collide with the next team's. Remove boxes or widen the stride."
+        )
+
     (comp_dir / "boxes.json").write_text(json.dumps(boxes, indent=2))
     (comp_dir / "teams.json").write_text(json.dumps(teams, indent=2))
 

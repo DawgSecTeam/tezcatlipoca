@@ -6,8 +6,11 @@ set of target boxes per team, all on Proxmox. Terraform builds the VMs and netwo
 **nakon** (not part of this repo — cloned from GitHub at runtime) SSHes into each target
 box to break it in specific, scored ways.
 
-Team networks have no internet/LAN uplink. The scoring engine is the only machine with a
-network card on every team's subnet, so it also doubles as the machine that runs nakon.
+Team bridges have no uplink of their own. The scoring engine is the only machine with a
+network card on every team's subnet, so it also doubles as the machine that runs nakon — and
+as every team's gateway to the internet, which it NATs. That also means it can route team to
+team, so what actually isolates teams is `range-firewall.sh` (`main.tf` Step C), not the
+bridges being empty.
 
 ## The pipeline, in order
 
@@ -47,14 +50,23 @@ everything below happens without further intervention:
      and clones N target VMs per team from the box templates picked in step 3.
    - Terraform SSHes into the scoring engine and installs Docker, clones Quotient + nakon,
      starts Quotient (paused).
+   - `terraform/scripts/prepare_boxes.py` is scp'd to the scoring engine and run against every
+     target box first: it repairs DNS (boxes boot with an empty `/etc/resolv.conf`) and
+     refreshes the package cache. It **fails the apply** if a box still can't resolve, because
+     nakon installs everything with `apt-get` and reports success either way — a box that
+     skips this silently gets nothing installed and shows every service down.
    - `nakon/config.json` (from step 5) gets scp'd to the scoring engine and nakon runs there,
      SSHing into every target box to actually install services and plant misconfigurations.
 7. Once `apply` returns, `push_event_conf()` runs **on your laptop**: it reads
    `terraform output -json` for the scoring engine's real (DHCP-leased) IP and the rest of
    `agent_context`, then `quotient/setup.py`'s `build_event_conf()` turns that into
    `event.conf` (Quotient's scoring rules), written straight into the competition's folder.
-8. `push_event_conf()` pushes that `event.conf` to the scoring engine and restarts Quotient
-   to pick it up.
+   `build_credlist()` writes `linux.credlist` next to it — the accounts Quotient's login
+   checks authenticate with. It has to match the account `main.tf` puts on every box, so it's
+   generated here rather than copied from Quotient's `.example` (whose accounts exist nowhere,
+   which scores healthy services as down).
+8. `push_event_conf()` pushes `event.conf` + `linux.credlist` to the scoring engine and
+   restarts Quotient to pick them up.
 9. `quotient/setup.py`'s `seed_and_start()` logs into Quotient's web API, sets each team's
    subnet number, and starts the competition clock.
 10. `print_summary()` prints the scoreboard URL, the admin login, every team's login +
@@ -101,6 +113,11 @@ everything from scratch — there's no "update in place."
 7. **vulndb** reachable from your workstation (`create-competition.py` queries it directly to
    build `nakon/config.json`) *and* from the scoring engine (nakon re-runs there during
    `terraform apply`) — same `nakon/.env` is scp'd to the scoring engine in `main.tf`.
+8. **Patch vulndb's `bind` script**: `python3 fix-bind-stub-listener.py`. On Debian 13
+   systemd-resolved already holds `127.0.0.53:53`, so bind9 loses the race for port 53 and
+   never starts — any competition that draws `bind` scores that box down forever. Nothing
+   calls this for you: it's a one-time `UPDATE` against the **shared** vulndb, so it is
+   deliberately not part of every run. Run it once per database, not once per event.
 
 Once all of that is in place: `python3 create-competition.py`.
 
@@ -111,12 +128,14 @@ Once all of that is in place: `python3 create-competition.py`.
 | `create-competition.py` | The entry point. Loads `.env`, drives the interactive prompts (including the Proxmox-template-backed box picker), rewrites the per-event `TF_VAR_*` values, generates `nakon/config.json`, runs Terraform, then pushes/starts Quotient. |
 | `competitions/<id>/boxes.json` | The box list (`name`/`template`/`cpu`/`memory_mb`/`disk_gb`/`last_octet`) picked interactively when that competition was created — written by `create-competition.py`, reloaded verbatim when you reuse the competition. |
 | `terraform/main.tf` | Everything infra-side: bridges, scoring VM, target VMs, then SSHes in to install software and run nakon. This is the core of the provisioning. |
+| `terraform/scripts/prepare_boxes.py` | Runs on the scoring engine from `main.tf`'s Step D, immediately before nakon: repairs DNS and refreshes the package cache on every target box, and aborts the apply if any box still can't resolve. Exists because nakon swallows its own install failures. |
 | `terraform/variables.tf` | Declares every setting, with defaults where it makes sense. Each one is set via the `TF_VAR_<name>` env var of the same name — read this file to know what's configurable. |
 | `terraform/outputs.tf` | Packages everything `quotient/setup.py` needs (IPs, passwords, team list) into one JSON blob (`agent_context`) that `create-competition.py` reads via `terraform output -json` after `apply` finishes. |
 | `terraform/templates/scoring-init.yaml.tpl` | A cloud-init template — **currently unused**. The scoring engine is cloned from a pre-built template instead (see "Improve" below), so this file is dead code right now. |
-| `quotient/setup.py` | `build_event_conf()` turns Terraform's output into `event.conf` (Quotient TOML); `seed_and_start()` logs into Quotient's web API as admin, assigns each team its subnet number, and clicks "start competition". Both are called from `create-competition.py` after `terraform apply` returns. |
+| `quotient/setup.py` | `build_event_conf()` turns Terraform's output into `event.conf` (Quotient TOML); `build_credlist()` writes the accounts its login checks authenticate with; `seed_and_start()` logs into Quotient's web API as admin, assigns each team its subnet number, and clicks "start competition". All called from `create-competition.py` after `terraform apply` returns. |
 | `proxmox` / `proxmox.pub` | The SSH keypair Terraform/quotient/nakon all use to reach VMs. |
 | `.env` / `.env.example` | The single config file for both Terraform (`TF_VAR_*`) and `create-competition.py`. `.env` is gitignored (real secrets); `.env.example` is committed (placeholders only, safe to share). |
+| `fix-bind-stub-listener.py` | One-time vulndb patch, run by hand (see setup step 8). Rewrites the `bind` configuration's install script so it disables systemd-resolved's stub listener before starting bind9 — without it bind9 can't bind port 53 on Debian 13 and the box scores down. Mutates the shared database, so it is not wired into `create-competition.py`. |
 | `nakon/` | A symlink to your local nakon checkout. Unlike the rest of nakon (which Terraform clones fresh onto the scoring engine), `nakon/randomize_config.py` is loaded in-process by `generate_nakon_config()` in `create-competition.py` and runs on your laptop *before* `terraform apply` — it queries the vulndb and writes `nakon/config.json`, which `main.tf` then pushes to the scoring engine. `nakon/.env` (vulndb creds) is its own file, deliberately not merged into the root `.env`. |
 
 ## Things that are fake / placeholder right now
@@ -152,10 +171,14 @@ Once all of that is in place: `python3 create-competition.py`.
 - **Decide if nakon needs key-based SSH instead of the hardcoded `ubuntu`/`ubuntu`**
   password — if nakon supports key auth, switching removes a real weak point (every box,
   every event, same password).
-- **Confirm Quotient's check types match what your templates actually run.** `build_event_conf()`
-  only knows `web`→http check, `ssh`→ssh check, `dns`→dns check, by string-matching the
-  box name. Any other service Quotient supports (ftp, smb, etc.) silently gets no check at
-  all — extend `build_event_conf` if you add box types that need scoring.
+- **Give the `Sql` check a database user it can actually log in as.** `build_credlist()` emits
+  the boxes' OS account, which satisfies the Ssh/Smtp/Imap checks (they authenticate through
+  PAM) but not Sql, which authenticates against the database's own user table. Until nakon's
+  mysql/mariadb install script creates a matching DB user, those checks score down on a
+  perfectly healthy server. Same question for any future check type with `CredLists`.
+- **Extend `_SERVICE_TO_CHECK` as vulndb grows.** `build_event_conf()` maps nakon's service
+  names to Quotient checks through that table; anything in vulndb that isn't in it gets no
+  check at all and only logs a warning. Worth an audit against the `configurations` table.
 - **Remove or use `scoring-init.yaml.tpl`** so the repo doesn't have two unreconciled
   ways of describing the scoring engine.
 - **Move Quotient's hardcoded Postgres/Redis passwords into `.env`-sourced Terraform

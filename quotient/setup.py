@@ -8,6 +8,8 @@ import time
 
 import requests
 
+from utils import BOX_PASSWORD, BOX_USERNAME
+
 # Maps a nakon service name to its Quotient check key + config dict.
 # Keys and field names must match Quotient's Go struct TOML tags exactly (case-sensitive
 # for the check-type key on Box; field names are matched case-insensitively by BurntSushi).
@@ -39,7 +41,10 @@ _SERVICE_TO_CHECK = {
     # IMAP — Box.Imap field; CredLists triggers authenticated mailbox-list check
     "dovecot":   ("Imap", {"Display": "imap", "Port": 143, "CredLists": ["linux.credlist"]}),
     "cyrus":     ("Imap", {"Display": "imap", "Port": 143, "CredLists": ["linux.credlist"]}),
-    # SQL — Box.Sql field; Kind defaults to "mysql" but must be explicit; needs CredLists to login
+    # SQL — Box.Sql field; Kind defaults to "mysql" but must be explicit; needs CredLists to login.
+    # Unlike the checks above, these authenticate against the database's own user table rather
+    # than a system account, so build_credlist()'s OS credentials only satisfy them if nakon's
+    # install script creates a DB user to match. Expect these to score down until it does.
     "mariadb":   ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
     "mysql":     ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
     "mysqld":    ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
@@ -104,6 +109,23 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
         }
 
     return conf
+
+
+def build_credlist() -> str:
+    """
+    The credentials Quotient's login checks authenticate with, as CSV (username,password —
+    engine/db/credentials.go skips any record that isn't exactly two columns).
+
+    Quotient seeds this file as every team's starting credentials, so it has to describe an
+    account that really exists on the boxes. It previously shipped as a straight copy of
+    upstream's linux.credlist.example, whose placeholder accounts exist nowhere — which put
+    every Ssh/Smtp/Imap/Sql check permanently down no matter how healthy the service was.
+
+    Only covers checks that authenticate against a system account. The Sql check logs into the
+    database rather than the OS, so it stays down unless nakon's own install script happens to
+    create a matching DB user — see the note in _SERVICE_TO_CHECK.
+    """
+    return f"{BOX_USERNAME},{BOX_PASSWORD}\n"
 
 
 def seed_and_start(host: str, ctx: dict) -> None:
