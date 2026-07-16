@@ -11,6 +11,8 @@ quotient/__pycache__/
 .claude
 __pycache__/
 proxmox
+deploy.log
+deploy-*.log
 
 # Per-run competition secrets (random admin/team passwords) — never commit.
 # boxes.json / Compfile / box_services.json are non-secret and stay tracked.
