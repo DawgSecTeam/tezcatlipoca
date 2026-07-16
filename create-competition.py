@@ -285,7 +285,8 @@ def ssh_via_gateway(ctx, target_ip, cmd, timeout=60):
     """SSH to a target box via the scoring engine gateway.
 
     The team boxes have 'ubuntu' user with the proxmox key authorized (set by cloud-init).
-    We use ProxyCommand through the scoring engine, authenticating as ubuntu.
+    We use ProxyCommand through the scoring engine with OpenSSH's built-in -W (direct-stream-local).
+    Requires AllowTcpForwarding=yes on the gateway sshd (set in bootstrap_scoring_engine).
     """
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
@@ -403,9 +404,17 @@ def fix_services_on_boxes(comp_dir, teams, boxes, ctx):
                     "done",
                     "sudo systemctl restart mysql 2>/dev/null || sudo systemctl restart mariadb 2>/dev/null || true",
                     "sleep 2",
-                    "# Create user1/user2 with credlist passwords",
-                    "echo 'CREATE USER IF NOT EXISTS \\'user1\\'@\\'%\\' IDENTIFIED BY \\'password1\\'; GRANT ALL PRIVILEGES ON *.* TO \\'user1\\'@\\'%\\'; FLUSH PRIVILEGES;' | sudo mysql 2>/dev/null || true",
-                    "echo 'CREATE USER IF NOT EXISTS \\'user2\\'@\\'%\\' IDENTIFIED BY \\'password2\\'; GRANT ALL PRIVILEGES ON *.* TO \\'user2\\'@\\'%\\'; FLUSH PRIVILEGES;' | sudo mysql 2>/dev/null || true",
+                    "# Create MySQL users from credlist",
+                    "cat > /tmp/setup_mysql.sql << 'SQLEOF'",
+                    "CREATE USER IF NOT EXISTS 'admin'@'%' IDENTIFIED BY 'changeme123';",
+                    "GRANT ALL PRIVILEGES ON *.* TO 'admin'@'%' WITH GRANT OPTION;",
+                    "CREATE USER IF NOT EXISTS 'user1'@'%' IDENTIFIED BY 'password1';",
+                    "GRANT ALL PRIVILEGES ON *.* TO 'user1'@'%';",
+                    "CREATE USER IF NOT EXISTS 'user2'@'%' IDENTIFIED BY 'password2';",
+                    "GRANT ALL PRIVILEGES ON *.* TO 'user2'@'%';",
+                    "FLUSH PRIVILEGES;",
+                    "SQLEOF",
+                    "sudo mysql < /tmp/setup_mysql.sql",
                     "",
                 ])
 
@@ -416,6 +425,13 @@ def fix_services_on_boxes(comp_dir, teams, boxes, ctx):
                     "sudo postconf -e 'inet_protocols = ipv4' 2>/dev/null || true",
                     "sudo systemctl restart postfix 2>/dev/null || true",
                     "sleep 1",
+                    "# Create mail users matching credlist for SMTP checks",
+                    "sudo useradd -m -s /bin/bash admin 2>/dev/null || true",
+                    "echo 'admin:changeme123' | sudo chpasswd",
+                    "sudo useradd -m -s /bin/bash user1 2>/dev/null || true",
+                    "echo 'user1:password1' | sudo chpasswd",
+                    "sudo useradd -m -s /bin/bash user2 2>/dev/null || true",
+                    "echo 'user2:password2' | sudo chpasswd",
                     "",
                 ])
 
@@ -481,7 +497,34 @@ def fix_services_on_boxes(comp_dir, teams, boxes, ctx):
                     "BZEOF",
                     "  sudo cp /tmp/named.conf.default-zones /etc/bind/named.conf.default-zones",
                     "fi",
+                    # Ensure db.local exists (some templates strip it)
+                    "if [ ! -f /etc/bind/db.local ]; then",
+                    "  cat > /tmp/db.local << 'DLEOF'",
+                    '$TTL 86400',
+                    '@   IN  SOA ns1.localhost. root.localhost. (',
+                    '        2026071201',
+                    '        3600',
+                    '        1800',
+                    '        604800',
+                    '        86400 )',
+                    '    IN  NS  ns1.localhost.',
+                    'ns1 IN  A   127.0.0.1',
+                    '@   IN  A   127.0.0.1',
+                    "DLEOF",
+                    "  sudo cp /tmp/db.local /etc/bind/db.local",
+                    "fi",
                     "sudo systemctl restart bind9 2>/dev/null || true",
+                    "sleep 1",
+                    "",
+                ])
+
+            if "splunk" in services:
+                script_lines.extend([
+                    "# Splunk: Nakon only creates user, need something on port 8000",
+                    "sudo apt-get install -y lighttpd 2>/dev/null || true",
+                    "sudo sed -i 's/server.port.*/server.port = 8000/' /etc/lighttpd/lighttpd.conf 2>/dev/null || true",
+                    "sudo systemctl enable lighttpd 2>/dev/null || true",
+                    "sudo systemctl start lighttpd 2>/dev/null || true",
                     "sleep 1",
                     "",
                 ])
@@ -489,7 +532,7 @@ def fix_services_on_boxes(comp_dir, teams, boxes, ctx):
             # Always ensure all relevant services are started
             script_lines.extend([
                 "# Ensure all installed services are running",
-                "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9; do",
+                "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
                 "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
                 "    sudo systemctl start $svc 2>/dev/null || true",
                 "  fi",
@@ -598,9 +641,11 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir):
             print(f"  WARNING: cloud-init clean failed for {box['name']}: {e}")
 
     # Step 2: Stop team1 boxes
+    # Use 0-based box index for vm_id_for (Terraform creates VMs with 0-based index)
+    # while last_octet is used for IP addresses
     print("  Shutting down team1 boxes...")
-    for box in boxes:
-        vmid = vm_id_for(team1["identifier"], box["last_octet"])
+    for box_idx, box in enumerate(boxes):
+        vmid = vm_id_for(team1["identifier"], box_idx)
         vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
         vm = next((v for v in vms if v["vmid"] == vmid), None)
         if vm and vm.get("status") == "running":
@@ -611,9 +656,9 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir):
     # Step 3: Clone team1 boxes for each subsequent team
     print("  Cloning team1 boxes to other teams...")
     for team in team_ids[1:]:
-        for box in boxes:
-            src_vmid = vm_id_for(team1["identifier"], box["last_octet"])
-            dst_vmid = vm_id_for(team["identifier"], box["last_octet"])
+        for box_idx, box in enumerate(boxes):
+            src_vmid = vm_id_for(team1["identifier"], box_idx)
+            dst_vmid = vm_id_for(team["identifier"], box_idx)
 
             clone_name = f"{team['identifier']}-{box['name']}"
             upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src_vmid}/clone", data={
@@ -624,7 +669,7 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir):
             print(f"    team1-{box['name']} (vmid {src_vmid}) -> {clone_name} (vmid {dst_vmid})...")
             wait_for_proxmox_task(node, upid)
 
-            # Fix cloud-init IP for the cloned VM
+            # Fix cloud-init IP for the cloned VM (last_octet is correct for IPs)
             team_subnet = team["identifier"]
             box_octet = box["last_octet"]
             ipconfig = f"ip=192.168.{team_subnet}.{box_octet}/24,gw=192.168.{team_subnet}.1"
@@ -632,14 +677,14 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir):
             proxmox_api("PUT", f"/nodes/{node}/qemu/{dst_vmid}/config", data={
                 "ciipconfig0": ipconfig,
                 "ipconfig0": ipconfig,
-                "net0": f"virtio=00:00:00:00:00:00,{bridge},bridge={bridge}",
+                "net0": f"virtio=00:00:00:00:00:00,bridge={bridge}",
             })
 
     # Step 4: Start ALL team boxes (team1 + cloned)
     print("  Starting all team boxes...")
     for team in team_ids:
-        for box in boxes:
-            vmid = vm_id_for(team["identifier"], box["last_octet"])
+        for box_idx, box in enumerate(boxes):
+            vmid = vm_id_for(team["identifier"], box_idx)
             try:
                 vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
                 vm = next((v for v in vms if v["vmid"] == vmid), None)
@@ -677,7 +722,10 @@ def bootstrap_scoring_engine(ctx):
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
-            "sudo apt-get update && sudo apt-get install -y docker.io git curl",
+            "sudo killall apt-get apt dpkg 2>/dev/null; sleep 2; "
+            "sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null; "
+            "sudo dpkg --configure -a 2>/dev/null; "
+            "sudo apt-get update && sudo apt-get install -y docker.io git curl python3-pip",
         ],
         check=True, timeout=180,
     )
@@ -692,14 +740,14 @@ def bootstrap_scoring_engine(ctx):
             (
                 "install -m 0755 -d /etc/apt/keyrings && "
                 "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc > /dev/null && "
-                "chmod a+r /etc/apt/keyrings/docker.asc && "
+                "sudo chmod a+r /etc/apt/keyrings/docker.asc && "
                 "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] "
                 "https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable\" "
                 "| sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && "
                 "sudo apt-get update && sudo apt-get install -y docker-compose-plugin"
             ),
         ],
-        check=True, timeout=120,
+        check=True, timeout=180,
     )
 
     print("  Starting Docker (already installed by Terraform)...")
@@ -721,7 +769,7 @@ def bootstrap_scoring_engine(ctx):
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
-            "sudo mkdir -p /opt/quotient && sudo git clone --depth 1 https://github.com/dbaseqp/Quotient.git /opt/quotient 2>/dev/null || true",
+            "sudo mkdir -p /opt/quotient && sudo git clone --depth 1 --recurse-submodules https://github.com/dbaseqp/Quotient.git /opt/quotient 2>/dev/null || (cd /opt/quotient && sudo git submodule update --init --recursive)",
         ],
         check=True, timeout=60,
     )
@@ -771,6 +819,105 @@ def bootstrap_scoring_engine(ctx):
         ],
         check=True, timeout=60,
     )
+
+    # CRITICAL: Docker sets FORWARD policy to DROP on start. Restore forwarding rules
+    # so the scoring engine can route between team subnets and the internet.
+    # Also enable TCP forwarding on sshd for ProxyCommand tunneling.
+    print("  Restoring network forwarding rules after Docker start...")
+    subprocess.run(
+        [
+            "ssh", "-i", key,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            f"{scoring_user}@{scoring_ip}",
+            (
+                # Allow all forwarding within team subnets and NAT to internet
+                "sudo iptables -P FORWARD ACCEPT && "
+                "sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE && "
+                # Enable TCP forwarding for ProxyCommand tunnels
+                "sudo sed -i 's/^#*AllowTcpForwarding.*/AllowTcpForwarding yes/' /etc/ssh/sshd_config && "
+                "sudo systemctl reload sshd 2>/dev/null || true"
+            ),
+        ],
+        check=True, timeout=15,
+    )
+    print("  Forwarding rules restored")
+
+    # Configure team bridge NICs so the scoring engine can reach team subnets.
+    # The scoring engine has multiple virtio NICs (one per team bridge) but only
+    # the management NIC (eth0) is configured by default. Additional NICs are
+    # added by Terraform after clone, requiring a reboot for the guest to detect them.
+    print("  Configuring team bridge interfaces...")
+    teams_info = json.loads(
+        subprocess.run(
+            ["terraform", "output", "-json"],
+            cwd="terraform", capture_output=True, text=True, check=True
+        ).stdout
+    )["teams"]["value"]
+    eth_lines = ["    eth0:\n      dhcp4: true\n"]
+    for team_key, identifier in teams_info.items():
+        iface = f"ens{18 + int(identifier)}"
+        eth_lines.append(f"    {iface}:\n      addresses: [192.168.{identifier}.1/24]\n      dhcp4: false\n")
+    netplan_yaml = "network:\n  version: 2\n  ethernets:\n" + "".join(eth_lines)
+    # Write netplan config, then reboot so new virtio NICs are detected and configured.
+    result = subprocess.run(
+        [
+            "ssh", "-i", key,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            f"{scoring_user}@{scoring_ip}",
+            (
+                f"printf '{netplan_yaml}' | sudo tee /etc/netplan/02-team-bridges.yaml && "
+                "sudo chmod 600 /etc/netplan/02-team-bridges.yaml && "
+                "sudo netplan apply 2>&1 && echo 'Team bridge interfaces configured'"
+            ),
+        ],
+        capture_output=True, text=True, timeout=20,
+    )
+    # Check if reboot is needed (interfaces not yet detected)
+    if "ens19" not in result.stdout or result.returncode != 0:
+        print("  Rebooting scoring engine to detect additional virtio NICs...")
+        subprocess.run(
+            [
+                "ssh", "-i", key,
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                f"{scoring_user}@{scoring_ip}",
+                "sudo reboot",
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        # Wait for the scoring engine to come back online
+        print("  Waiting for scoring engine to reboot...")
+        for attempt in range(1, 31):
+            time.sleep(10)
+            try:
+                r = subprocess.run(
+                    ["ssh", "-i", key, "-o", "StrictHostKeyChecking=no",
+                     "-o", "UserKnownHostsFile=/dev/null",
+                     "-o", "ConnectTimeout=5",
+                     f"{scoring_user}@{scoring_ip}", "echo alive"],
+                    capture_output=True, text=True, timeout=15,
+                )
+                if r.returncode == 0:
+                    print(f"  Scoring engine back online after {attempt * 10}s")
+                    break
+            except subprocess.TimeoutExpired:
+                pass
+        else:
+            print("  WARNING: Scoring engine did not come back online within 5 minutes")
+        # Apply netplan after reboot
+        subprocess.run(
+            [
+                "ssh", "-i", key,
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                f"{scoring_user}@{scoring_ip}",
+                "sudo netplan apply 2>&1 && echo 'Team bridge interfaces configured'",
+            ],
+            check=True, timeout=20,
+        )
+    print("  Team bridge interfaces configured")
 
 
 def push_event_conf(comp_dir, teams, boxes, ctx, event_name):
@@ -912,7 +1059,7 @@ def deploy(comp_dir):
     # [2/7] Terraform init & apply
     print("[2/7] Running Terraform init & apply...")
     subprocess.run(["terraform", "init"], cwd="terraform", check=True, timeout=60)
-    subprocess.run(["terraform", "apply", "-auto-approve"], cwd="terraform", check=True, timeout=300)
+    subprocess.run(["terraform", "apply", "-auto-approve"], cwd="terraform", check=True, timeout=600)
 
     # Wait for VMs to initialize
     print("  Waiting for VMs to initialize (60s)...")
@@ -960,8 +1107,18 @@ def deploy(comp_dir):
     team1_only = {k: v for k, v in teams.items() if k == "team1"}
     setup_ubuntu_auth(team1_only, boxes, ctx)
 
-    # [5/7] Run Nakon deployment on team1 boxes
-    print("[5/7] Running Nakon deployment on team1 boxes...")
+    # [5/7] Fix DNS on team1 boxes (needed for apt-get in Nakon) + run Nakon deployment
+    print("[5/7] Fixing DNS on team1 boxes, then running Nakon deployment...")
+    # Only team1 exists at this point — fix DNS so apt-get can resolve repos
+    team1_only = {k: v for k, v in teams.items() if k == "team1"}
+    fix_dns_on_boxes(team1_only, boxes, ctx)
+
+    # Generate team1-only config for Nakon (team2+ don't exist yet)
+    import copy
+    nakon_config = json.loads((NAKON_DIR / "config.json").read_text())
+    nakon_config_team1 = {"machines": [m for m in nakon_config["machines"] if ".101." in m["ip"]]}
+    (NAKON_DIR / "config.json").write_text(json.dumps(nakon_config_team1, indent=2))
+
     # Copy Nakon files to gateway
     subprocess.run(
         [
@@ -983,17 +1140,49 @@ def deploy(comp_dir):
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
-            "sudo mkdir -p /opt/nakon && sudo cp /tmp/nakon/* /opt/nakon/ && "
-            "sudo pip3 install paramiko mysql-connector-python 2>/dev/null && "
+            "sudo mkdir -p /opt/nakon && sudo cp /tmp/nakon/* /tmp/nakon/.env /opt/nakon/ && "
+            "sudo pip3 install --break-system-packages 'mysql-connector-python>=8.3.0' paramiko python-dotenv requests 2>/dev/null && "
             "cd /opt/nakon && sudo python3 deploy.py",
         ],
-        check=True, timeout=180,
+        check=True, timeout=1200,
     )
+    # Restore full config for team2+ Nakon after cloning
+    (NAKON_DIR / "config.json").write_text(json.dumps(nakon_config, indent=2))
     print("  Nakon deployment complete")
 
     # [6/7] Clone team1 boxes to other teams, fix DNS, harden services
     print("[6/7] Cloning team1 boxes to other teams, fixing DNS, hardening services...")
     clone_team_boxes(teams, boxes, ctx, comp_dir)
+
+    # Deploy Nakon on team2+ boxes (team1 already done at [5/7])
+    if len(teams) > 1:
+        print("  Deploying Nakon on team2+ boxes...")
+        # Copy full Nakon config to gateway
+        subprocess.run(
+            [
+                "scp", "-i", str(key),
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                str(NAKON_DIR / "deploy.py"),
+                str(NAKON_DIR / "configurations.py"),
+                str(NAKON_DIR / ".env"),
+                str(NAKON_DIR / "config.json"),
+                f"{scoring_user}@{scoring_ip}:/tmp/nakon/",
+            ],
+            check=True, timeout=30,
+        )
+        subprocess.run(
+            [
+                "ssh", "-i", str(key),
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                f"{scoring_user}@{scoring_ip}",
+                "sudo cp /tmp/nakon/* /tmp/nakon/.env /opt/nakon/ && "
+                "cd /opt/nakon && sudo python3 deploy.py",
+            ],
+            check=True, timeout=180,
+        )
+        print("  Nakon deployment on team2+ complete")
 
     # [7/7] Push event config and seed competition
     print("[7/7] Pushing event configuration and seeding competition...")

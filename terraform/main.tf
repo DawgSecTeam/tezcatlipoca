@@ -196,10 +196,55 @@ locals {
   ssh_cmd = "ssh -i ${var.ssh_private_key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${var.vm_username}@${local.scoring_ip}"
 }
 
+# Reboot scoring engine so the guest kernel detects the additional virtio NICs
+# that Terraform added at the hypervisor level. Without this, only the first
+# NIC (eth0) is visible and the team networks (ens19/ens20) don't exist.
+#
+# CRITICAL: Must use hard shutdown + start via Proxmox API — guest-level
+# "sudo reboot" does NOT trigger a PCI bus scan for newly added VirtIO NICs,
+# so ens19/ens20 never appear. A cold-boot from the hypervisor is required.
+resource "null_resource" "reboot_scoring_engine" {
+  triggers = {
+    engine_id = proxmox_virtual_environment_vm.scoring_engine.id
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Hard-stopping scoring engine VM ${proxmox_virtual_environment_vm.scoring_engine.id} via Proxmox API..."
+      curl -sk -X POST \
+        -H "Authorization: PVEAPIToken $${TF_VAR_proxmox_api_token}" \
+        "${var.proxmox_endpoint}api2/json/nodes/${var.proxmox_node}/qemu/${proxmox_virtual_environment_vm.scoring_engine.id}/status/stop" \
+        -d "shutdown=0"
+      echo ""
+      echo "Waiting for VM to fully stop..."
+      sleep 15
+      echo "Starting scoring engine VM ${proxmox_virtual_environment_vm.scoring_engine.id} via Proxmox API..."
+      curl -sk -X POST \
+        -H "Authorization: PVEAPIToken $${TF_VAR_proxmox_api_token}" \
+        "${var.proxmox_endpoint}api2/json/nodes/${var.proxmox_node}/qemu/${proxmox_virtual_environment_vm.scoring_engine.id}/status/start"
+      echo ""
+      echo "Cold-boot complete — PCI bus scan will detect new VirtIO NICs."
+    EOT
+  }
+
+  depends_on = [
+    proxmox_virtual_environment_vm.scoring_engine,
+    proxmox_virtual_environment_vm.team_box,
+  ]
+}
+
 resource "null_resource" "orchestrate" {
   triggers = {
     engine_id = proxmox_virtual_environment_vm.scoring_engine.id
     box_ids   = join(",", [for vm in proxmox_virtual_environment_vm.team_box : vm.id])
+  }
+
+  # Wait for the scoring engine to come back up after reboot.
+  # Loop runs SSH with actual command execution (not just TCP connect) to
+  # confirm auth is working, then sleeps 30s to let the system stabilize
+  # before the remote-exec provisioner fires.
+  provisioner "local-exec" {
+    command = "for i in $(seq 1 30); do if ssh -i ${var.ssh_private_key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes ${var.vm_username}@${local.scoring_ip} echo ok 2>/dev/null | grep -q ok; then echo 'Scoring engine online'; break; fi; echo \"Waiting for scoring engine ($i/30)\"; sleep 10; done; sleep 30"
   }
 
   # Step B: configure team NICs and NAT on scoring VM
@@ -234,6 +279,7 @@ resource "null_resource" "orchestrate" {
       user        = var.vm_username
       private_key = file(var.ssh_private_key_path)
       host        = local.scoring_ip
+      timeout     = "5m"
     }
   }
 

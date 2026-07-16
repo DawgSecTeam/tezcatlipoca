@@ -1,10 +1,10 @@
 {
   "pikachu": [
-    "apache",
-    "splunk"
+    "roundcube",
+    "bind"
   ],
   "raichu": [
-    "bind",
-    "mysql"
+    "splunk",
+    "nginx"
   ]
 }
