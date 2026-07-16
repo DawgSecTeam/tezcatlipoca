@@ -15,6 +15,7 @@ Hence the hard failure below: a box that can't resolve is worth stopping the app
 """
 
 import json
+import subprocess
 import sys
 
 import paramiko
@@ -47,7 +48,21 @@ def run(client, command, timeout=300):
 def prepare(machine):
     client = paramiko.SSHClient()
     client.load_system_host_keys()
-    client.set_missing_host_key_policy(paramiko.WarningPolicy())
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    scan = subprocess.run(
+        ["ssh-keyscan", "-T", "5", "-H", machine["ip"]],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    host_keys = client.get_host_keys()
+    for line in scan.stdout.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        entry = paramiko.hostkeys.HostKeyEntry.from_line(line)
+        if entry:
+            for host in entry.hostnames:
+                host_keys.add(host, entry.key.get_name(), entry.key)
     client.connect(
         machine["ip"], username=machine["user"], password=machine["password"], timeout=30
     )
