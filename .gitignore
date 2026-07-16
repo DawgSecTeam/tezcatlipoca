@@ -16,4 +16,5 @@ proxmox
 # boxes.json / Compfile / box_services.json are non-secret and stay tracked.
 competitions/*/teams.json
 competitions/*/event.conf
+competitions/*/linux.credlist
 competitions/*/cloned_vms.json
