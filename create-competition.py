@@ -805,11 +805,11 @@ def bootstrap_scoring_engine(ctx):
     print("  Writing Quotient .env...")
     import base64
     quotient_env = (
-        "POSTGRES_PASSWORD=postgres_password\n"
+        f"POSTGRES_PASSWORD={os.environ.get('TF_VAR_quotient_postgres_password', 'postgres_password')}\n"
         "POSTGRES_USER=engineuser\n"
         "POSTGRES_HOST=quotient_database\n"
         "POSTGRES_DB=engine\n"
-        "REDIS_PASSWORD=redis_password\n"
+        f"REDIS_PASSWORD={os.environ.get('TF_VAR_quotient_redis_password', 'redis_password')}\n"
     )
     env_b64 = base64.b64encode(quotient_env.encode()).decode()
     subprocess.run(
@@ -963,7 +963,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name):
         "boxes_per_team": boxes,
         "team_passwords": {team_key: team_data["password"] for team_key, team_data in teams.items()},
         "event_name": event_name,
-        "quotient_admin_password": "changeme123",
+        "quotient_admin_password": os.environ.get('TF_VAR_quotient_admin_password', 'changeme123'),
     }
 
     # Build event.conf from box_services
@@ -983,8 +983,8 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name):
         check=True, timeout=30,
     )
 
-    # Write credlist
-    credlist = "admin,changeme123\nuser1,password1\nuser2,password2\n"
+    # Write credlist using build_credlist() from quotient.setup
+    credlist = build_credlist()
     credlist_b64 = base64.b64encode(credlist.encode()).decode()
     subprocess.run(
         [
@@ -993,26 +993,6 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name):
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
             f"mkdir -p /opt/quotient/config/credlists && echo '{credlist_b64}' | base64 -d | sudo tee /opt/quotient/config/credlists/linux.credlist",
-        ],
-        check=True, timeout=30,
-    )
-
-    # Write .env for Quotient (matches docker-compose.yml env_file expectations)
-    env_content = (
-        "POSTGRES_PASSWORD=postgres_password\n"
-        "POSTGRES_USER=engineuser\n"
-        "POSTGRES_HOST=quotient_database\n"
-        "POSTGRES_DB=engine\n"
-        "REDIS_PASSWORD=redis_password\n"
-    )
-    env_b64 = base64.b64encode(env_content.encode()).decode()
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            f"{scoring_user}@{scoring_ip}",
-            f"echo '{env_b64}' | base64 -d | sudo tee /opt/quotient/.env",
         ],
         check=True, timeout=30,
     )
@@ -1074,8 +1054,8 @@ def deploy(comp_dir):
     print("[1/7] Cleaning up previous deployment...")
     node = os.environ["TF_VAR_proxmox_node"]
     for team in teams.values():
-        for box in boxes:
-            destroy_vm_if_exists(node, vm_id_for(team["identifier"], box["last_octet"]))
+        for box_idx, box in enumerate(boxes):
+            destroy_vm_if_exists(node, vm_id_for(team["identifier"], box_idx))
     # Destroy scoring engine (vmid hardcoded in main.tf)
     destroy_vm_if_exists(node, 1000)
     # Destroy bridges
@@ -1109,7 +1089,7 @@ def deploy(comp_dir):
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             str(key),
-            f"{scoring_user}@{scoring_ip}:/home/sysadmin/.ssh/proxmox_key",
+            f"{scoring_user}@{scoring_ip}:/home/{scoring_user}/.ssh/proxmox_key",
         ],
         check=True, timeout=15,
     )
@@ -1119,7 +1099,7 @@ def deploy(comp_dir):
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
-            "sudo chmod 600 /home/sysadmin/.ssh/proxmox_key",
+            f"sudo chmod 600 /home/{scoring_user}/.ssh/proxmox_key",
         ],
         check=True, timeout=10,
     )
@@ -1223,7 +1203,7 @@ def deploy(comp_dir):
     print("  Seeding teams and starting the competition clock...")
     quotient_ctx = {
         "teams": {team_key: team_data["identifier"] for team_key, team_data in teams.items()},
-        "quotient_admin_password": "changeme123",
+        "quotient_admin_password": os.environ.get('TF_VAR_quotient_admin_password', 'changeme123'),
     }
     seed_and_start(scoring_ip, quotient_ctx)
 
@@ -1234,7 +1214,8 @@ def deploy(comp_dir):
     print(f"Scenario: {scenario}")
     print(f"Saved to: competitions/{comp_name}/")
     print(f"\nScoreboard:    http://{scoring_ip}")
-    print(f"Admin login:   admin / changeme123")
+    admin_display_password = os.environ.get('TF_VAR_quotient_admin_password', 'changeme123')
+    print(f"Admin login:   admin / {admin_display_password}")
     print(f"\nTeam logins:")
     for team_name, team_data in teams.items():
         print(f"  {team_name} / {team_data['password']}  (subnet 192.168.{team_data['identifier']}.0/24)")
