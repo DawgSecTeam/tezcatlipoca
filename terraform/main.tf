@@ -81,7 +81,7 @@ resource "proxmox_virtual_environment_vm" "scoring_engine" {
   # baked-in netplan (dhcp4 on the mgmt NIC) is enough on its own. The
   # template's own cloud-init build already baked in var.ssh_public_key
   # and passwordless sudo for var.vm_username, so no further bootstrap
-  # is needed before null_resource.orchestrate connects.
+  # is needed before create-competition.py connects.
 
   depends_on = [proxmox_network_linux_bridge.team_bridge]
 }
@@ -255,167 +255,92 @@ resource "null_resource" "team_nics" {
   depends_on = [proxmox_virtual_environment_vm.scoring_engine]
 }
 
+# Reboot scoring engine so the guest kernel detects the additional virtio NICs
+# that Terraform added at the hypervisor level. Without this, only the first
+# NIC (eth0) is visible and the team networks (ens19/ens20) don't exist.
+#
+# CRITICAL: Must use hard shutdown + start via Proxmox API — guest-level
+# "sudo reboot" does NOT trigger a PCI bus scan for newly added VirtIO NICs,
+# so ens19/ens20 never appear. A cold-boot from the hypervisor is required.
+resource "null_resource" "reboot_scoring_engine" {
+  triggers = {
+    engine_id = proxmox_virtual_environment_vm.scoring_engine.id
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Hard-stopping scoring engine VM ${proxmox_virtual_environment_vm.scoring_engine.id} via Proxmox API..."
+      curl -sk -X POST \
+        -H "Authorization: PVEAPIToken $${TF_VAR_proxmox_api_token}" \
+        "${var.proxmox_endpoint}api2/json/nodes/${var.proxmox_node}/qemu/${proxmox_virtual_environment_vm.scoring_engine.id}/status/stop" \
+        -d "shutdown=0"
+      echo ""
+      echo "Waiting for VM to fully stop..."
+      sleep 15
+      echo "Starting scoring engine VM ${proxmox_virtual_environment_vm.scoring_engine.id} via Proxmox API..."
+      curl -sk -X POST \
+        -H "Authorization: PVEAPIToken $${TF_VAR_proxmox_api_token}" \
+        "${var.proxmox_endpoint}api2/json/nodes/${var.proxmox_node}/qemu/${proxmox_virtual_environment_vm.scoring_engine.id}/status/start"
+      echo ""
+      echo "Cold-boot complete — PCI bus scan will detect new VirtIO NICs."
+    EOT
+  }
+
+  depends_on = [
+    proxmox_virtual_environment_vm.scoring_engine,
+    proxmox_virtual_environment_vm.team_box,
+  ]
+}
+
 resource "null_resource" "orchestrate" {
   triggers = {
     engine_id = proxmox_virtual_environment_vm.scoring_engine.id
     box_ids   = join(",", [for vm in proxmox_virtual_environment_vm.team_box : vm.id])
   }
 
-  # Step A: install what cloud-init would otherwise have provided (docker,
-  # repos). No password-based bootstrap needed — the template's own
-  # cloud-init build already baked in the SSH key (authorized_keys) and
-  # passwordless sudo (/etc/sudoers.d/90-cloud-init-users) for var.vm_username.
-  provisioner "remote-exec" {
-    inline = [
-      "set -e", # fail fast and loud instead of limping into a confusing error several commands later
-      "echo 'scoring VM up'",
-      # fresh boots race unattended-upgrades for the dpkg lock — wait it out rather than failing apt-get immediately
-      "for i in $(seq 1 60); do sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break; sleep 2; done",
-      "sudo apt-get update",
-      "sudo apt-get install -y git python3-pip python3-venv ca-certificates curl",
-      # docker-compose-plugin (the v2 'docker compose' subcommand used below) isn't in Ubuntu's
-      # own repos — only Docker's official apt repo ships it, hence the convenience script
-      "curl -fsSL https://get.docker.com | sudo sh",
-      "sudo systemctl enable --now docker",
-      # repo ships its own default .env (no .env.example) — Step C overwrites it with real values later
-      "sudo rm -rf /opt/quotient && sudo git clone https://github.com/dbaseqp/Quotient /opt/quotient",
-      # 'divisor' is a submodule — plain clone leaves it as an empty dir, breaking the compose build
-      "cd /opt/quotient && sudo git submodule update --init --recursive",
-      # linux.credlist is written by create-competition.py's push_event_conf() instead of
-      # copied from upstream's .example — the example's accounts exist on no box, so every
-      # login check scored a healthy service as down. windows.credlist is staged only because
-      # upstream ships it; no check build_event_conf() emits references it.
-      "sudo cp /opt/quotient/config/credlists/windows.credlist.example /opt/quotient/config/credlists/windows.credlist",
-      "sudo rm -rf /opt/nakon && sudo git clone https://github.com/CyberDawgsTeam/nakon /opt/nakon",
-      "sudo pip3 install --break-system-packages mysql-connector-python paramiko python-dotenv",
-    ]
-    connection {
-      type        = "ssh"
-      user        = var.vm_username
-      private_key = file(var.ssh_private_key_path)
-      host        = local.scoring_ip
-    }
-  }
-
-  # Step C: drop Quotient .env and start it (paused)
-  provisioner "remote-exec" {
-    inline = [
-      "sudo tee /opt/quotient/.env << 'EOF'",
-      "POSTGRES_USER=engineuser",
-      "POSTGRES_PASSWORD=changeme_in_prod",
-      "POSTGRES_DB=engine",
-      "POSTGRES_HOST=quotient_database",
-      "REDIS_PASSWORD=changeme_in_prod",
-      "REDIS_HOST=quotient_redis",
-      "EOF",
-      "cd /opt/quotient && sudo docker compose up -d --build",
-      "sleep 15", # wait for DB to initialise
-
-      # Docker sets the FORWARD policy to DROP when it starts, which silently blocks all
-      # team-subnet → internet forwarding even though NAT and ip_forward are correct. These
-      # rules used to be applied inline right here, which left them alive only until the next
-      # reboot: a restarted scoring engine lost NAT and every service went down at once, with
-      # nothing to point at. A script plus a unit ordered after docker.service survives that,
-      # and being idempotent it is also safe to re-run on every apply.
-      "sudo tee /usr/local/sbin/range-firewall.sh << 'EOF'",
-      "#!/bin/bash",
-      "# Applies the range's forwarding rules. Idempotent: safe to re-run at any time.",
-      "# Installed by terraform/main.tf Step C; run at boot by range-firewall.service.",
-      "set -eu",
-      "",
-      "TEAM_NET=192.168.0.0/16",
-      "UPLINK=$(ip route show default | awk '{print $5; exit}')",
-      "[ -n \"$UPLINK\" ] || { echo 'no default route — cannot identify the uplink NIC' >&2; exit 1; }",
-      "",
-      "# -C tests for an identical rule, so an existing one is never duplicated. Docker appends",
-      "# a RETURN to DOCKER-USER, so rules must be inserted (-I) — appending lands after it and",
-      "# would never be reached.",
-      "ins() {",
-      "  local table=$1; shift",
-      "  iptables -t \"$table\" -C \"$@\" 2>/dev/null || iptables -t \"$table\" -I \"$@\"",
-      "}",
-      "",
-      "sysctl -qw net.ipv4.ip_forward=1",
-      "",
-      "# Teams reach the internet through the engine.",
-      "ins nat POSTROUTING -s \"$TEAM_NET\" ! -d \"$TEAM_NET\" -j MASQUERADE",
-      "",
-      "if iptables -t filter -L DOCKER-USER -n >/dev/null 2>&1; then",
-      "  # Team traffic is accepted only when it is leaving via the uplink. This was previously",
-      "  # '-s $TEAM_NET -j ACCEPT', which also accepted team1 → team2 (the engine holds a NIC on",
-      "  # every team bridge and forwards between them, so empty bridges do not isolate anything)",
-      "  # and team → Docker's container network, where Quotient's Postgres listens on a default",
-      "  # password. Matching the outbound interface keeps the intended egress and drops both.",
-      "  ins filter DOCKER-USER -s \"$TEAM_NET\" -o \"$UPLINK\" -j ACCEPT",
-      "  ins filter DOCKER-USER -d \"$TEAM_NET\" -i \"$UPLINK\" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
-      "else",
-      "  echo 'DOCKER-USER chain absent (is Docker running?) — skipping its rules' >&2",
-      "fi",
-      "",
-      "# Explicit, so team ↔ team does not depend on Docker's FORWARD policy being DROP —",
-      "# that reverts to ACCEPT the moment Docker is stopped. Only matches traffic the engine",
-      "# routes between two team subnets; a team reaching its own gateway is INPUT, not FORWARD.",
-      "ins filter FORWARD -s \"$TEAM_NET\" -d \"$TEAM_NET\" -j DROP",
-      "EOF",
-      "sudo chmod 755 /usr/local/sbin/range-firewall.sh",
-
-      "sudo tee /etc/systemd/system/range-firewall.service << 'EOF'",
-      "[Unit]",
-      "Description=Range forwarding rules (team subnets to internet, team isolation)",
-      "# Docker rebuilds FORWARD and DOCKER-USER on start, so we must apply ours afterwards.",
-      "After=docker.service network-online.target",
-      "Wants=docker.service network-online.target",
-      "",
-      "[Service]",
-      "Type=oneshot",
-      "RemainAfterExit=yes",
-      "ExecStart=/usr/local/sbin/range-firewall.sh",
-      "",
-      "[Install]",
-      "WantedBy=multi-user.target",
-      "EOF",
-      "sudo systemctl daemon-reload",
-      "sudo systemctl enable --now range-firewall.service",
-    ]
-    connection {
-      type        = "ssh"
-      user        = var.vm_username
-      private_key = file(var.ssh_private_key_path)
-      host        = local.scoring_ip
-    }
-  }
-
-  # Step D: prepare team1's boxes, then push nakon's config and run it on them. Cloning to
-  # other teams, the post-clone DNS repair, event.conf push, and Quotient seeding all happen
-  # in create-competition.py after `terraform apply` returns.
+  # Wait for the scoring engine to come back up after reboot.
+  # Loop runs SSH with actual command execution (not just TCP connect) to
+  # confirm auth is working, then sleeps 30s to let the system stabilize
+  # before the remote-exec provisioner fires.
   provisioner "local-exec" {
-    command = <<-EOT
-      set -e
-
-      # Run nakon on the scoring engine, not locally — team subnets are isolated
-      # bridges with no uplink, so only the scoring engine (which has a NIC on
-      # each one, addressed by null_resource.team_nics) can actually reach the target machines.
-      # /opt/nakon is root-owned from the Step A clone, so stage via /tmp first.
-      # config.json must already exist — create-competition.py generates it
-      # before calling `terraform apply`.
-      test -f ../nakon/config.json || { echo "missing nakon/config.json — run create-competition.py first" >&2; exit 1; }
-      scp -i ${var.ssh_private_key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        ../nakon/config.json ../nakon/.env scripts/prepare_boxes.py ../utils.py \
-        ${var.vm_username}@${local.scoring_ip}:/tmp/
-      # Our two files land in their own directory rather than /opt/nakon, which is a checkout
-      # of someone else's repo — dropping a utils.py in there would collide the day nakon adds
-      # one of its own.
-      ${local.ssh_cmd} "sudo cp /tmp/config.json /tmp/.env /opt/nakon/ && sudo mkdir -p /opt/range-prep && sudo cp /tmp/prepare_boxes.py /tmp/utils.py /opt/range-prep/"
-      # prepare_boxes.py runs first and is allowed to fail the whole apply: it repairs the DNS
-      # every `apt-get install` in deploy.py depends on, and nakon installs nothing (while
-      # still exiting 0) on a box that can't resolve. See prepare_boxes.py's docstring.
-      ${local.ssh_cmd} "sudo python3 /opt/range-prep/prepare_boxes.py /opt/nakon/config.json"
-      ${local.ssh_cmd} "cd /opt/nakon && sudo python3 deploy.py"
-
-      echo "=== Range infra is up — create-competition.py will push event.conf and start the competition next ==="
-    EOT
+    command = "for i in $(seq 1 30); do if ssh -i ${var.ssh_private_key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes ${var.vm_username}@${local.scoring_ip} echo ok 2>/dev/null | grep -q ok; then echo 'Scoring engine online'; break; fi; echo \"Waiting for scoring engine ($i/30)\"; sleep 10; done; sleep 30"
   }
 
+  # Step B: configure team NICs and NAT on scoring VM
+  # Steps A (package install), C (Quotient Docker), D (Nakon deploy) moved to
+  # create-competition.py to keep terraform apply under the tool timeout limit.
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      # Generate netplan config for each team NIC
+      # NICs are named predictably: ens18=mgmt, ens19=team1, ens20=team2, ...
+      "sudo tee /etc/netplan/60-team-ifaces.yaml << 'EOF'",
+      "network:",
+      "  version: 2",
+      "  ethernets:",
+      # One entry per team — identifiers sorted so NIC order is deterministic
+      join("\n", [for idx, team in sort(keys(var.teams)) :
+        "    ens${18 + idx + 1}:\n      addresses: [\"192.168.${var.teams[team].identifier}.1/24\"]"
+      ]),
+      "EOF",
+      "sudo netplan apply",
+      "sudo sysctl -w net.ipv4.ip_forward=1",
+      "echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf",
+      # Disable reverse path filtering so NAT/masqueraded return traffic reaches team subnets
+      "sudo sysctl -w net.ipv4.conf.all.rp_filter=2",
+      "sudo sysctl -w net.ipv4.conf.default.rp_filter=2",
+      "echo 'net.ipv4.conf.all.rp_filter=2' | sudo tee -a /etc/sysctl.conf",
+      "echo 'net.ipv4.conf.default.rp_filter=2' | sudo tee -a /etc/sysctl.conf",
+      "sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE",
+    ]
+    connection {
+      type        = "ssh"
+      user        = var.vm_username
+      private_key = file(var.ssh_private_key_path)
+      host        = local.scoring_ip
+      timeout     = "5m"
+    }
+  }
   depends_on = [
     proxmox_virtual_environment_vm.scoring_engine,
     proxmox_virtual_environment_vm.team_box,
