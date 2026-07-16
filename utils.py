@@ -1,5 +1,27 @@
 from pathlib import Path
 
+# Boxes boot with an empty /etc/resolv.conf — cloud-init's dns.servers is silently ignored on
+# Debian once the interface has a static IP. Two separate places have to repair it and must not
+# drift apart: terraform/scripts/prepare_boxes.py (before nakon installs anything, since every
+# install is an apt-get that has to resolve a mirror) and fix_dns_on_boxes() in
+# create-competition.py (again after clone_team_boxes(), because `cloud-init clean` + reboot
+# regenerates resolv.conf on the clones and undoes the first fix).
+DNS_FIX_CMD = (
+    'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf; '
+    'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf.head; '
+    "sudo mkdir -p /etc/systemd/resolved.conf.d; "
+    'printf "[Resolve]\\nDNS=8.8.8.8\\n" | sudo tee /etc/systemd/resolved.conf.d/upstream.conf; '
+    "sudo systemctl restart systemd-resolved 2>/dev/null || true"
+)
+
+
+# The one account main.tf's initialization.user_account block creates on every box clone
+# (nakon authenticates with a password, not a key, hence the fixed password). Quotient's
+# credlist has to carry exactly this pair or its login checks score a box that is actually
+# healthy as down — keep in sync with main.tf's user_account block if it ever changes.
+BOX_USERNAME = "ubuntu"
+BOX_PASSWORD = "ubuntu"
+
 
 def load_compfile(path):
     name = None

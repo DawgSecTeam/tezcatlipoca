@@ -18,8 +18,8 @@ import toml
 import urllib3
 from dotenv import load_dotenv
 
-from quotient.setup import build_event_conf, seed_and_start
-from utils import load_compfile, pick_competition
+from quotient.setup import build_credlist, build_event_conf, seed_and_start
+from utils import DNS_FIX_CMD, load_compfile, pick_competition
 
 ENV_PATH = Path(".env")
 NAKON_DIR = Path("nakon")
@@ -122,8 +122,29 @@ def wait_for_proxmox_task(node, upid, timeout=600):
         time.sleep(3)
 
 
+# VM IDs are 200 + identifier*10 + box_index (mirrored in main.tf's team_box.vm_id), which
+# leaves each team a stride of exactly 10. An 11th box would land on the next team's first box
+# and silently clobber it, so the scheme caps the box count rather than the picker.
+MAX_BOXES_PER_TEAM = 10
+
+
 def vm_id_for(identifier, box_index):
     return 200 + int(identifier) * 10 + box_index
+
+
+def stop_vm(node, vmid):
+    # Graceful first so the box's filesystem is consistent for the clone, but never
+    # indefinitely: a shutdown is an ACPI power-button event, and a guest without acpid (box
+    # templates are only required to have working cloud-init) just ignores it. That used to
+    # stall here for the full task timeout and then abort the deploy — after nakon had already
+    # run — so fall back to pulling the plug instead.
+    try:
+        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/shutdown")["data"]
+        wait_for_proxmox_task(node, upid, timeout=120)
+    except RuntimeError:
+        print(f"    vmid {vmid} ignored ACPI shutdown — forcing stop")
+        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
+        wait_for_proxmox_task(node, upid, timeout=120)
 
 
 def destroy_vm_if_exists(node, vmid):
@@ -158,7 +179,12 @@ def collect_boxes():
     else:
         print("  (no templates found in Proxmox — you'll need to type template names manually)\n")
 
-    number_of_boxes = int(input("How many box types for this competition? "))
+    while True:
+        number_of_boxes = int(input("How many box types for this competition? "))
+        if 1 <= number_of_boxes <= MAX_BOXES_PER_TEAM:
+            break
+        print(f"  Enter a number from 1 to {MAX_BOXES_PER_TEAM} (see MAX_BOXES_PER_TEAM).")
+
     boxes = []
     for i in range(1, number_of_boxes + 1):
         print(f"\n─── Box {i} of {number_of_boxes} " + "─" * 40)
@@ -185,8 +211,15 @@ def collect_boxes():
 
         cpu = int(input("  CPU cores    [1]: ").strip() or 1)
         memory_mb = int(input("  Memory (MB)  [2048]: ").strip() or 2048)
+        # Blank keeps the template's own disk. Terraform only emits a disk block when this is
+        # set (main.tf), because Proxmox cannot shrink a disk — a value below the template's
+        # own size fails the clone.
+        disk_raw = input("  Disk (GB)    [keep template's]: ").strip()
 
-        box = {"name": name, "last_octet": i + 1, "cpu": cpu, "memory_mb": memory_mb, "template": template}
+        box = {
+            "name": name, "last_octet": i + 1, "cpu": cpu, "memory_mb": memory_mb,
+            "disk_gb": int(disk_raw) if disk_raw else None, "template": template,
+        }
         boxes.append(box)
     return boxes
 
@@ -333,14 +366,8 @@ def fix_dns_on_boxes(teams, boxes, ctx):
         f"ssh -i {key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"-W %h:%p {scoring_user}@{scoring_ip}"
     )
-    dns_cmd = (
-        'sudo chattr -i /etc/resolv.conf 2>/dev/null; '
-        'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf; '
-        'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf.head; '
-        "sudo mkdir -p /etc/systemd/resolved.conf.d; "
-        'printf "[Resolve]\\nDNS=8.8.8.8\\n" | sudo tee /etc/systemd/resolved.conf.d/upstream.conf; '
-        "sudo systemctl restart systemd-resolved 2>/dev/null || true"
-    )
+    # Terraform's Step D already did this once before nakon ran; it has to happen again here
+    # because clone_team_boxes()' `cloud-init clean` + reboot regenerates resolv.conf.
     print("  Fixing DNS on all team boxes...")
     for team in teams.values():
         for box in boxes:
@@ -354,7 +381,7 @@ def fix_dns_on_boxes(teams, boxes, ctx):
                             "-o", "UserKnownHostsFile=/dev/null",
                             "-o", "ConnectTimeout=10",
                             "-o", f"ProxyCommand={proxy}",
-                            f"ubuntu@{ip}", dns_cmd,
+                            f"ubuntu@{ip}", DNS_FIX_CMD,
                         ],
                         check=True, timeout=40,
                     )

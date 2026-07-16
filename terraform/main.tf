@@ -116,10 +116,6 @@ locals {
       bridge     = "vmbr${var.teams[local.team1_key].identifier}"
     }
   }
-
-  # Whichever box is named "dns*" is the resolver for its team; if a team
-  # has none, fall back to the gateway (the scoring engine's team-facing NIC).
-  dns_box_last_octet = [for b in var.boxes_per_team : b.last_octet if can(regex("^dns", b.name))]
 }
 
 resource "proxmox_virtual_environment_vm" "team_box" {
@@ -174,12 +170,16 @@ resource "proxmox_virtual_environment_vm" "team_box" {
       # the account has no password hash at all and every login attempt is rejected outright
       password = "ubuntu"
     }
+    # Always a public resolver, never the team's own dns* box. Pointing boxes at that box
+    # deadlocks provisioning: its bind9 is installed by nakon, and nakon installs it with
+    # apt-get, which needs a resolver that already works. fix_dns_on_boxes() in
+    # create-competition.py forced 8.8.8.8 over the top of this anyway, so the dns* box was
+    # never actually serving its team — the two mechanisms just disagreed.
+    #
+    # To make a dns* box its team's real resolver, repoint the boxes after nakon has run
+    # (i.e. from create-competition.py), not here.
     dns {
-      servers = [
-        length(local.dns_box_last_octet) > 0
-        ? "192.168.${each.value.identifier}.${local.dns_box_last_octet[0]}"
-        : "8.8.8.8"
-      ]
+      servers = ["8.8.8.8"]
     }
   }
 
@@ -189,11 +189,70 @@ resource "proxmox_virtual_environment_vm" "team_box" {
 locals {
   # ip_config just echoes back "dhcp" (the configured value); the actual
   # leased address has to come from the QEMU guest agent instead.
-  scoring_ip = [
+  #
+  # Select the management address by exclusion rather than taking the first one: once
+  # null_resource.team_nics runs, the engine also holds 192.168.<identifier>.1 on every team
+  # NIC, and the guest agent gives no ordering guarantee. Picking one would break every scp/ssh
+  # and print an unreachable scoreboard URL. Team subnets are always 192.168.0.0/16 (see
+  # team_vms above), so management must live outside it — .env.example uses 10.0.0.0/8.
+  scoring_mgmt_ips = [
     for ip in flatten(proxmox_virtual_environment_vm.scoring_engine.ipv4_addresses) :
-    ip if ip != "127.0.0.1"
-  ][0]
-  ssh_cmd = "ssh -i ${var.ssh_private_key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${var.vm_username}@${local.scoring_ip}"
+    ip if !startswith(ip, "127.") && !startswith(ip, "192.168.")
+  ]
+  scoring_ip = local.scoring_mgmt_ips[0]
+  ssh_cmd    = "ssh -i ${var.ssh_private_key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${var.vm_username}@${local.scoring_ip}"
+}
+
+# Addressing the engine's team-facing NICs is the one part of provisioning that depends on the
+# team set, so it gets its own resource: adding a team has to re-run this (otherwise the new
+# team's NIC never gets an address and every one of its services is unreachable), but must NOT
+# re-run null_resource.orchestrate, whose Step A does `rm -rf /opt/quotient` and whose Step D
+# re-runs nakon — that would flatten a live competition just to add a team to it.
+#
+# This was Step B of null_resource.orchestrate. The remaining steps keep their original letters
+# (A, then C, then D) so the many references to them in README.md/OVERVIEW.md still line up —
+# hence the gap where B used to be.
+resource "null_resource" "team_nics" {
+  triggers = {
+    engine_id = proxmox_virtual_environment_vm.scoring_engine.id
+    # Identifiers only — putting var.teams here would print team passwords in every plan.
+    team_identifiers = join(",", [for k in local.sorted_team_keys : var.teams[k].identifier])
+  }
+
+  # Configure team NICs on scoring VM
+  provisioner "remote-exec" {
+    inline = [
+      # Generate netplan config for each team NIC
+      # NICs are named predictably: ens18=mgmt, ens19=team1, ens20=team2, ...
+      "sudo tee /etc/netplan/60-team-ifaces.yaml << 'EOF'",
+      "network:",
+      "  version: 2",
+      "  ethernets:",
+      # One entry per team — identifiers sorted so NIC order is deterministic, and sorted the
+      # same way the scoring engine's dynamic network_device blocks are (Terraform iterates
+      # maps in lexicographic key order), so stanza N always describes NIC N.
+      join("\n", [for idx, team in local.sorted_team_keys :
+        "    ens${18 + idx + 1}:\n      addresses: [\"192.168.${var.teams[team].identifier}.1/24\"]"
+      ]),
+      "EOF",
+      # netplan refuses to read (and warns loudly about) world-readable configs
+      "sudo chmod 600 /etc/netplan/60-team-ifaces.yaml",
+      "sudo netplan apply",
+      # A drop-in that gets overwritten, not `tee -a /etc/sysctl.conf`, which appended another
+      # copy of this line on every apply. NAT and the rest of the firewall are handled by
+      # range-firewall.sh in Step C — they have to be re-applied after Docker starts.
+      "echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/99-range-forward.conf",
+      "sudo sysctl -p /etc/sysctl.d/99-range-forward.conf",
+    ]
+    connection {
+      type        = "ssh"
+      user        = var.vm_username
+      private_key = file(var.ssh_private_key_path)
+      host        = local.scoring_ip
+    }
+  }
+
+  depends_on = [proxmox_virtual_environment_vm.scoring_engine]
 }
 
 # Reboot scoring engine so the guest kernel detects the additional virtio NICs
@@ -282,9 +341,11 @@ resource "null_resource" "orchestrate" {
       timeout     = "5m"
     }
   }
-
   depends_on = [
     proxmox_virtual_environment_vm.scoring_engine,
     proxmox_virtual_environment_vm.team_box,
+    # Step D reaches team1's boxes over the engine's team-facing NICs, so they must be
+    # addressed before nakon runs.
+    null_resource.team_nics,
   ]
 }
