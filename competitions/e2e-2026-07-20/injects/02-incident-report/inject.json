@@ -1,0 +1,7 @@
+{
+  "title": "INJECT 02 — Incident Report: Suspicious SUID Binary",
+  "description_file": "prompt.md",
+  "open_offset_min": 10,
+  "due_offset_min": 55,
+  "close_offset_min": 70
+}

@@ -30,7 +30,10 @@ def load_compfile(path):
 
     with open(path) as f:
         for line in f:
-            key, value = line.strip().split(" ", 1)
+            stripped = line.strip()
+            if not stripped or " " not in stripped:
+                continue  # skip blank lines and keys with no value
+            key, value = stripped.split(" ", 1)
             if key == "name":
                 name = value
             elif key == "scenario":
