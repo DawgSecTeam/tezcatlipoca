@@ -360,10 +360,17 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir):
             )
             box_configs[box["name"]] = (services, vulns)
 
-        # Persist just the scoreable services so push_event_conf() can build
-        # Quotient checks without re-querying the DB on subsequent runs.
+        # Persist the scoreable services so push_event_conf() can build Quotient checks
+        # without re-querying the DB on subsequent runs.
         services_path.write_text(
             json.dumps({name: svcs for name, (svcs, _) in box_configs.items()}, indent=2)
+        )
+        # Also persist the planted misconfigs/vulns to the companion box_vulns.json. Without this
+        # the vulns were re-picked (or, on a reused competition, dropped entirely — the pinned
+        # branch reads box_vulns.json), so a reused competition planted services only and lost
+        # its misconfigs. Pinning both makes re-runs fully deterministic.
+        (comp_dir / "box_vulns.json").write_text(
+            json.dumps({name: vulns for name, (_, vulns) in box_configs.items()}, indent=2)
         )
 
     machines = []
@@ -628,6 +635,10 @@ def fix_services_on_boxes(comp_dir, teams, boxes, ctx):
                     "# Postfix: ensure it listens on all interfaces",
                     "sudo postconf -e 'inet_interfaces = all' 2>/dev/null || true",
                     "sudo postconf -e 'inet_protocols = ipv4' 2>/dev/null || true",
+                    "# Ensure the smtpd listener exists. A non-interactive postfix install can leave"
+                    " master.cf empty (no 'smtp inet' service), so postfix runs but binds nothing on"
+                    " :25 and the SMTP check scores down. postconf -M adds it idempotently.",
+                    "sudo postconf -M 'smtp/inet=smtp inet n - y - - smtpd' 2>/dev/null || true",
                     "sudo systemctl restart postfix 2>/dev/null || true",
                     "sleep 1",
                     "# Create mail users matching credlist for SMTP checks",
