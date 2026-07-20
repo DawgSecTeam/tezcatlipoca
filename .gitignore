@@ -1,0 +1,25 @@
+.env
+venv/
+terraform/terraform.tfvars
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/*.tfstate
+terraform/*.tfstate.*
+nakon
+nakon/
+quotient/__pycache__/
+.claude
+__pycache__/
+proxmox
+deploy.log
+deploy-*.log
+
+# Per-run competition secrets (random admin/team passwords) — never commit.
+# boxes.json / Compfile / box_services.json are non-secret and stay tracked.
+competitions/*/teams.json
+competitions/*/event.conf
+competitions/*/linux.credlist
+competitions/*/cloned_vms.json
+competitions/*/credentials.txt
+# Resumable-deploy checkpoint (holds per-run secrets so a resume matches the deployed range).
+competitions/*/.deploy_state.json
