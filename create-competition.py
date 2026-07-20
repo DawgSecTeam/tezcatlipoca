@@ -18,7 +18,7 @@ import toml
 import urllib3
 from dotenv import load_dotenv
 
-from quotient.setup import build_credlist, build_event_conf, create_injects, seed_and_start
+from quotient.setup import build_event_conf, create_injects, seed_and_start
 from utils import DNS_FIX_CMD, load_compfile, pick_competition
 
 ENV_PATH = Path(".env")
@@ -535,7 +535,7 @@ def fix_services_on_boxes(comp_dir, teams, boxes, ctx):
                     "GRANT ALL PRIVILEGES ON *.* TO 'user2'@'%';",
                     "FLUSH PRIVILEGES;",
                     "SQLEOF",
-                    "sudo mysql < /tmp/setup_mysql.sql",
+                    "sudo mysql < /tmp/setup_mysql.sql || true",
                     "",
                 ])
 
@@ -776,12 +776,17 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir):
 
     # Step 3: Clone team1 boxes for each subsequent team
     print("  Cloning team1 boxes to other teams...")
+    # Record cloned VM ids so destroy-competition.py can tear them down — these are
+    # created directly via the Proxmox API, so they're NOT in Terraform state and
+    # `terraform destroy` won't remove them.
+    cloned_vms = {}
     for team in team_ids[1:]:
         for box_idx, box in enumerate(boxes):
             src_vmid = vm_id_for(team1["identifier"], box_idx)
             dst_vmid = vm_id_for(team["identifier"], box_idx)
 
             clone_name = f"{team['identifier']}-{box['name']}"
+            cloned_vms[clone_name] = dst_vmid
             upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src_vmid}/clone", data={
                 "newid": dst_vmid,
                 "name": clone_name,
@@ -802,6 +807,8 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir):
                 "ipconfig0": ipconfig,
                 "net0": f"virtio,bridge={bridge}",
             })
+
+    (comp_dir / "cloned_vms.json").write_text(json.dumps(cloned_vms, indent=2))
 
     # Step 4: Start ALL team boxes (team1 + cloned)
     print("  Starting all team boxes...")
@@ -928,7 +935,7 @@ def bootstrap_scoring_engine(ctx):
             f"{scoring_user}@{scoring_ip}",
             "cd /opt/quotient && sudo docker compose build --no-cache",
         ],
-        check=True, timeout=300,
+        check=True, timeout=1800,
     )
 
     print("  Starting Quotient Docker containers...")
@@ -1192,6 +1199,11 @@ def deploy(comp_dir):
         "TF_VAR_boxes_per_team": boxes_json,
     })
 
+    # Persist team credentials so destroy-competition.py can find and tear down this
+    # competition later (it requires teams.json to exist). Also lets us look up team
+    # logins for verification without re-deriving them.
+    (comp_dir / "teams.json").write_text(teams_json)
+
     # Confirm deployment
     if not confirm_deploy(name, scenario, difficulty, teams, boxes):
         print("  Deployment cancelled.")
@@ -1287,7 +1299,10 @@ def deploy(comp_dir):
     # Generate team1-only config for Nakon (team2+ don't exist yet)
     import copy
     nakon_config = json.loads((NAKON_DIR / "config.json").read_text())
-    nakon_config_team1 = {"machines": [m for m in nakon_config["machines"] if ".101." in m["ip"]]}
+    team1_identifier = teams["team1"]["identifier"]
+    nakon_config_team1 = {"machines": [
+        m for m in nakon_config["machines"] if m["ip"].split(".")[2] == str(team1_identifier)
+    ]}
     (NAKON_DIR / "config.json").write_text(json.dumps(nakon_config_team1, indent=2))
 
     # Make sure the boxes can still reach the internet right before nakon's apt-get runs.
@@ -1358,6 +1373,12 @@ def deploy(comp_dir):
             check=True, timeout=2400,
         )
         print("  Nakon deployment on team2+ complete")
+    else:
+        # Single team: clone_team_boxes() returns early without hardening services or
+        # creating the credlist OS accounts (admin/user1/user2), so auth checks would
+        # score down. Run that step here for the one-team case.
+        print("  Single team — hardening services on team1 boxes...")
+        fix_services_on_boxes(comp_dir, teams, boxes, ctx)
 
     # [7/7] Seed competition and create injects (event.conf was pushed at [4/7])
     print("[7/7] Seeding competition and creating injects...")
