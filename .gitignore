@@ -21,3 +21,5 @@ competitions/*/event.conf
 competitions/*/linux.credlist
 competitions/*/cloned_vms.json
 competitions/*/credentials.txt
+# Resumable-deploy checkpoint (holds per-run secrets so a resume matches the deployed range).
+competitions/*/.deploy_state.json
