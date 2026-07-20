@@ -30,10 +30,13 @@ _SERVICE_TO_CHECK = {
     "ssh":       ("Ssh",  {"Display": "ssh",  "Port": 22,  "CredLists": ["linux.credlist"]}),
     "openssh":   ("Ssh",  {"Display": "ssh",  "Port": 22,  "CredLists": ["linux.credlist"]}),
     "sshd":      ("Ssh",  {"Display": "ssh",  "Port": 22,  "CredLists": ["linux.credlist"]}),
-    # FTP — Box.Ftp field; no CredLists = anonymous login check
-    "vsftpd":    ("Ftp",  {"Display": "ftp",  "Port": 21}),
-    "ftpd":      ("Ftp",  {"Display": "ftp",  "Port": 21}),
-    "ftp":       ("Ftp",  {"Display": "ftp",  "Port": 21}),
+    # FTP — Box.Ftp field. Use an authenticated login against linux.credlist (the same
+    # admin/user1/user2 accounts SMTP scores against): the `unauthorized-ftp-server` config
+    # installs vsftpd with Ubuntu's default anonymous_enable=NO / local_enable=YES, so an
+    # anonymous check can never pass but a local login does. (Keep box config + check in sync.)
+    "vsftpd":    ("Ftp",  {"Display": "ftp",  "Port": 21,  "CredLists": ["linux.credlist"]}),
+    "ftpd":      ("Ftp",  {"Display": "ftp",  "Port": 21,  "CredLists": ["linux.credlist"]}),
+    "ftp":       ("Ftp",  {"Display": "ftp",  "Port": 21,  "CredLists": ["linux.credlist"]}),
     # SMTP — Box.Smtp field; smtp.go always calls getCreds so CredLists is required
     "postfix":   ("Smtp", {"Display": "smtp", "Port": 25,  "CredLists": ["linux.credlist"]}),
     "sendmail":  ("Smtp", {"Display": "smtp", "Port": 25,  "CredLists": ["linux.credlist"]}),

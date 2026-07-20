@@ -1080,7 +1080,8 @@ def ensure_nat_forwarding(ctx):
     print("  NAT/forwarding ensured on scoring engine")
 
 
-def push_event_conf(comp_dir, teams, boxes, ctx, event_name, inject_password=None):
+def push_event_conf(comp_dir, teams, boxes, ctx, event_name, inject_password=None,
+                    admin_password="changeme123"):
     """Build event.conf and push it to the scoring engine."""
     import base64
 
@@ -1096,7 +1097,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, inject_password=Non
         "boxes_per_team": boxes,
         "team_passwords": {team_key: team_data["password"] for team_key, team_data in teams.items()},
         "event_name": event_name,
-        "quotient_admin_password": "changeme123",
+        "quotient_admin_password": admin_password,
         "inject_password": inject_password,
     }
 
@@ -1281,7 +1282,13 @@ def deploy(comp_dir):
     print("  Pushing event.conf early (stabilizes Quotient so NAT survives nakon)...")
     injects = load_injects(comp_dir)
     inject_password = random_password() if injects else None
-    push_event_conf(comp_dir, teams, boxes, ctx, name, inject_password=inject_password)
+    # Per-competition Quotient web-admin password. This is the scoreboard/admin login only;
+    # the box service credlist (linux.credlist: admin/changeme123 …) is a separate thing the
+    # checks authenticate WITH and must stay in sync with the box OS accounts, so it's left
+    # untouched.
+    admin_password = random_password()
+    push_event_conf(comp_dir, teams, boxes, ctx, name,
+                    inject_password=inject_password, admin_password=admin_password)
     ensure_nat_forwarding(ctx)
 
     # [4.5/7] Enable password auth + NOPASSWD sudo for ubuntu on team1 boxes
@@ -1391,23 +1398,39 @@ def deploy(comp_dir):
     print("  Seeding teams and starting the competition clock...")
     quotient_ctx = {
         "teams": {team_key: team_data["identifier"] for team_key, team_data in teams.items()},
-        "quotient_admin_password": "changeme123",
+        "quotient_admin_password": admin_password,
     }
     seed_and_start(scoring_ip, quotient_ctx)
 
     # Create injects via Quotient's API (competition must be seeded/started first)
     if injects:
         print(f"  Creating {len(injects)} inject(s)...")
-        create_injects(scoring_ip, "changeme123", injects)
+        create_injects(scoring_ip, admin_password, injects)
+
+    # Persist all credentials to a mode-0600 file so operators have a durable, non-log
+    # record (the summary below still prints them for convenience, but the file is the
+    # authoritative copy and is chmod 600 so it isn't world-readable).
+    cred_lines = [
+        f"# Credentials for {name} — generated {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Scoreboard:  http://{scoring_ip}",
+        f"admin  {admin_password}",
+    ]
+    if inject_password:
+        cred_lines.append(f"inject  {inject_password}")
+    for team_name, team_data in teams.items():
+        cred_lines.append(f"{team_name}  {team_data['password']}  (192.168.{team_data['identifier']}.0/24)")
+    cred_path = comp_dir / "credentials.txt"
+    cred_path.write_text("\n".join(cred_lines) + "\n")
+    os.chmod(cred_path, 0o600)
 
     # Print summary
     print(f"\n{'='*60}")
     print(f"  {name} is live")
     print(f"{'='*60}")
     print(f"Scenario: {scenario}")
-    print(f"Saved to: competitions/{comp_name}/")
+    print(f"Saved to: competitions/{comp_name}/  (credentials.txt, mode 0600)")
     print(f"\nScoreboard:    http://{scoring_ip}")
-    print(f"Admin login:   admin / changeme123")
+    print(f"Admin login:   admin / {admin_password}")
     if inject_password:
         print(f"Inject login:  inject / {inject_password}   ({len(injects)} inject(s) loaded)")
     print(f"\nTeam logins:")
