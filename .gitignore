@@ -20,3 +20,4 @@ competitions/*/teams.json
 competitions/*/event.conf
 competitions/*/linux.credlist
 competitions/*/cloned_vms.json
+competitions/*/credentials.txt
