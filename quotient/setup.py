@@ -5,6 +5,7 @@ team identifiers and start the competition clock once that config is live.
 """
 
 import time
+from pathlib import Path
 
 import requests
 
@@ -29,10 +30,13 @@ _SERVICE_TO_CHECK = {
     "ssh":       ("Ssh",  {"Display": "ssh",  "Port": 22,  "CredLists": ["linux.credlist"]}),
     "openssh":   ("Ssh",  {"Display": "ssh",  "Port": 22,  "CredLists": ["linux.credlist"]}),
     "sshd":      ("Ssh",  {"Display": "ssh",  "Port": 22,  "CredLists": ["linux.credlist"]}),
-    # FTP — Box.Ftp field; no CredLists = anonymous login check
-    "vsftpd":    ("Ftp",  {"Display": "ftp",  "Port": 21}),
-    "ftpd":      ("Ftp",  {"Display": "ftp",  "Port": 21}),
-    "ftp":       ("Ftp",  {"Display": "ftp",  "Port": 21}),
+    # FTP — Box.Ftp field. Use an authenticated login against linux.credlist (the same
+    # admin/user1/user2 accounts SMTP scores against): the `unauthorized-ftp-server` config
+    # installs vsftpd with Ubuntu's default anonymous_enable=NO / local_enable=YES, so an
+    # anonymous check can never pass but a local login does. (Keep box config + check in sync.)
+    "vsftpd":    ("Ftp",  {"Display": "ftp",  "Port": 21,  "CredLists": ["linux.credlist"]}),
+    "ftpd":      ("Ftp",  {"Display": "ftp",  "Port": 21,  "CredLists": ["linux.credlist"]}),
+    "ftp":       ("Ftp",  {"Display": "ftp",  "Port": 21,  "CredLists": ["linux.credlist"]}),
     # SMTP — Box.Smtp field; smtp.go always calls getCreds so CredLists is required
     "postfix":   ("Smtp", {"Display": "smtp", "Port": 25,  "CredLists": ["linux.credlist"]}),
     "sendmail":  ("Smtp", {"Display": "smtp", "Port": 25,  "CredLists": ["linux.credlist"]}),
@@ -43,8 +47,11 @@ _SERVICE_TO_CHECK = {
     "cyrus":     ("Imap", {"Display": "imap", "Port": 143, "CredLists": ["linux.credlist"]}),
     # SQL — Box.Sql field; Kind defaults to "mysql" but must be explicit; needs CredLists to login.
     # Unlike the checks above, these authenticate against the database's own user table rather
-    # than a system account, so build_credlist()'s OS credentials only satisfy them if nakon's
-    # install script creates a DB user to match. Expect these to score down until it does.
+    # than a system account. create-competition.py's fix_services_on_boxes binds mariadb/mysql to
+    # 0.0.0.0 and creates the admin/user1/user2 DB users with the linux.credlist passwords
+    # (CREATE USER ... @'%' + GRANT ALL), so the same credlist that satisfies SSH/SMTP logs in
+    # here too and a healthy box scores UP. (Keep box config + check in sync — the box grants the
+    # DB users, so don't drop CredLists.)
     "mariadb":   ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
     "mysql":     ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
     "mysqld":    ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
@@ -76,6 +83,13 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
         ],
         "box": [],
     }
+
+    # Inject-manager account. Quotient's INJECTAUTH-guarded routes (POST /api/injects/create,
+    # announcements, submission downloads) accept the `admin` and `inject` roles; adding a
+    # dedicated inject manager lets an organizer run injects without the full admin login.
+    # Emitted whenever an inject password is supplied (i.e. the competition has an injects/ dir).
+    if ctx.get("inject_password"):
+        conf["inject"] = [{"name": "inject", "pw": ctx["inject_password"]}]
 
     needs_linux_credlist = False
 
@@ -111,6 +125,13 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
     return conf
 
 
+def _normalize_host(host: str) -> str:
+    """Quotient's IP comes off Terraform as a bare address; requests needs a scheme."""
+    if host.startswith("http://") or host.startswith("https://"):
+        return host.rstrip("/")
+    return f"http://{host}"
+
+
 def build_credlist() -> str:
     """
     The credentials Quotient's login checks authenticate with, as CSV (username,password —
@@ -121,9 +142,10 @@ def build_credlist() -> str:
     upstream's linux.credlist.example, whose placeholder accounts exist nowhere — which put
     every Ssh/Smtp/Imap/Sql check permanently down no matter how healthy the service was.
 
-    Only covers checks that authenticate against a system account. The Sql check logs into the
-    database rather than the OS, so it stays down unless nakon's own install script happens to
-    create a matching DB user — see the note in _SERVICE_TO_CHECK.
+    NOTE: the live driver (create-competition.py's push_event_conf) now writes linux.credlist
+    inline as admin/user1/user2 (the accounts fix_services_on_boxes creates on every box,
+    including matching mysql DB users), so the Sql check authenticates fine too. This helper is
+    retained for reference/tests; it is not the source of the deployed credlist.
     """
     return f"{BOX_USERNAME},{BOX_PASSWORD}\n"
 
@@ -134,6 +156,7 @@ def seed_and_start(host: str, ctx: dict) -> None:
     # 192.168._.N substitution in box IPs) isn't settable from the TOML at all. Look the IDs
     # up by name, then batch-update identifiers in a single call (that's the only shape
     # /api/admin/teams accepts).
+    host = _normalize_host(host)
     # Wait for Quotient to accept connections — docker compose restart can take >10 s
     deadline = time.time() + 120
     while True:
@@ -177,3 +200,49 @@ def seed_and_start(host: str, ctx: dict) -> None:
     r = session.post(f"{host}/api/engine/pause", json={"pause": False})
     r.raise_for_status()
     print(f"[quotient] engine unpaused → {r.status_code}")
+
+
+def create_injects(host: str, admin_password: str, injects: list) -> None:
+    """Create injects in Quotient via its API (POST /api/injects/create).
+
+    Each `injects` entry is a dict with keys: title, description, open_time, due_time,
+    close_time (RFC3339 strings) and files (list of local file paths, may be empty). The
+    endpoint is multipart/form-data with field names title/description/open-time/due-time/
+    close-time and a repeated `files` file part — this mirrors Quotient's CreateInject handler.
+    Runs as the admin account (INJECTAUTH accepts admin), so no separate inject login needed.
+    """
+    if not injects:
+        return
+
+    host = _normalize_host(host)
+    session = requests.Session()
+    r = session.post(f"{host}/api/login", json={"username": "admin", "password": admin_password})
+    r.raise_for_status()
+
+    for inj in injects:
+        # Quotient's CreateInject calls ParseMultipartForm, so the request MUST be
+        # multipart/form-data even when there are no attachments. requests only switches to
+        # multipart when `files=` is populated, so send the text fields as (None, value)
+        # parts too (rather than via `data=`, which would encode as urlencoded and 400).
+        parts = [
+            ("title",       (None, inj["title"])),
+            ("description", (None, inj["description"])),
+            ("open-time",   (None, inj["open_time"])),
+            ("due-time",    (None, inj["due_time"])),
+            ("close-time",  (None, inj["close_time"])),
+        ]
+        open_handles = []
+        for fpath in inj.get("files", []):
+            p = Path(fpath)
+            fh = p.open("rb")
+            open_handles.append(fh)
+            parts.append(("files", (p.name, fh)))
+        try:
+            r = session.post(f"{host}/api/injects/create", files=parts)
+        finally:
+            for fh in open_handles:
+                fh.close()
+        if r.status_code >= 400:
+            print(f"[quotient] WARNING: inject '{inj['title']}' failed → {r.status_code} {r.text[:200]}")
+        else:
+            print(f"[quotient] created inject '{inj['title']}' → {r.status_code}")

@@ -1,0 +1,10 @@
+{
+  "web01": [
+    "mysql",
+    "vsftpd"
+  ],
+  "svc01": [
+    "postfix",
+    "bind"
+  ]
+}

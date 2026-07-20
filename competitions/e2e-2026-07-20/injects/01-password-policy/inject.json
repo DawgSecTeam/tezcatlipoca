@@ -1,0 +1,7 @@
+{
+  "title": "INJECT 01 — Enterprise Password Policy",
+  "description_file": "prompt.md",
+  "open_offset_min": 0,
+  "due_offset_min": 45,
+  "close_offset_min": 60
+}
