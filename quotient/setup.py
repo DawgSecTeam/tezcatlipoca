@@ -5,6 +5,7 @@ team identifiers and start the competition clock once that config is live.
 """
 
 import time
+from pathlib import Path
 
 import requests
 
@@ -77,6 +78,13 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
         "box": [],
     }
 
+    # Inject-manager account. Quotient's INJECTAUTH-guarded routes (POST /api/injects/create,
+    # announcements, submission downloads) accept the `admin` and `inject` roles; adding a
+    # dedicated inject manager lets an organizer run injects without the full admin login.
+    # Emitted whenever an inject password is supplied (i.e. the competition has an injects/ dir).
+    if ctx.get("inject_password"):
+        conf["inject"] = [{"name": "inject", "pw": ctx["inject_password"]}]
+
     needs_linux_credlist = False
 
     for box in boxes:
@@ -111,6 +119,13 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
     return conf
 
 
+def _normalize_host(host: str) -> str:
+    """Quotient's IP comes off Terraform as a bare address; requests needs a scheme."""
+    if host.startswith("http://") or host.startswith("https://"):
+        return host.rstrip("/")
+    return f"http://{host}"
+
+
 def build_credlist() -> str:
     """
     The credentials Quotient's login checks authenticate with, as CSV (username,password —
@@ -134,6 +149,7 @@ def seed_and_start(host: str, ctx: dict) -> None:
     # 192.168._.N substitution in box IPs) isn't settable from the TOML at all. Look the IDs
     # up by name, then batch-update identifiers in a single call (that's the only shape
     # /api/admin/teams accepts).
+    host = _normalize_host(host)
     # Wait for Quotient to accept connections — docker compose restart can take >10 s
     deadline = time.time() + 120
     while True:
@@ -177,3 +193,49 @@ def seed_and_start(host: str, ctx: dict) -> None:
     r = session.post(f"{host}/api/engine/pause", json={"pause": False})
     r.raise_for_status()
     print(f"[quotient] engine unpaused → {r.status_code}")
+
+
+def create_injects(host: str, admin_password: str, injects: list) -> None:
+    """Create injects in Quotient via its API (POST /api/injects/create).
+
+    Each `injects` entry is a dict with keys: title, description, open_time, due_time,
+    close_time (RFC3339 strings) and files (list of local file paths, may be empty). The
+    endpoint is multipart/form-data with field names title/description/open-time/due-time/
+    close-time and a repeated `files` file part — this mirrors Quotient's CreateInject handler.
+    Runs as the admin account (INJECTAUTH accepts admin), so no separate inject login needed.
+    """
+    if not injects:
+        return
+
+    host = _normalize_host(host)
+    session = requests.Session()
+    r = session.post(f"{host}/api/login", json={"username": "admin", "password": admin_password})
+    r.raise_for_status()
+
+    for inj in injects:
+        # Quotient's CreateInject calls ParseMultipartForm, so the request MUST be
+        # multipart/form-data even when there are no attachments. requests only switches to
+        # multipart when `files=` is populated, so send the text fields as (None, value)
+        # parts too (rather than via `data=`, which would encode as urlencoded and 400).
+        parts = [
+            ("title",       (None, inj["title"])),
+            ("description", (None, inj["description"])),
+            ("open-time",   (None, inj["open_time"])),
+            ("due-time",    (None, inj["due_time"])),
+            ("close-time",  (None, inj["close_time"])),
+        ]
+        open_handles = []
+        for fpath in inj.get("files", []):
+            p = Path(fpath)
+            fh = p.open("rb")
+            open_handles.append(fh)
+            parts.append(("files", (p.name, fh)))
+        try:
+            r = session.post(f"{host}/api/injects/create", files=parts)
+        finally:
+            for fh in open_handles:
+                fh.close()
+        if r.status_code >= 400:
+            print(f"[quotient] WARNING: inject '{inj['title']}' failed → {r.status_code} {r.text[:200]}")
+        else:
+            print(f"[quotient] created inject '{inj['title']}' → {r.status_code}")

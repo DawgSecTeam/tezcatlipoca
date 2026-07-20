@@ -1,0 +1,10 @@
+{
+  "webmail": [
+    "nginx",
+    "ssh"
+  ],
+  "core": [
+    "bind",
+    "mysql"
+  ]
+}
