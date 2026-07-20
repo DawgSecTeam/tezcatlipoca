@@ -1,21 +1,24 @@
 # Quotient + nakon range automation
 
-Proxmox-based scoring range. Terraform provisions the infra, create-competition.py generates
-Quotient's scoring config and nakon's machine list, then nakon SSHes into each box to install
-services and deploy misconfigs. Team bridges have no uplink of their own, so the scoring engine
-is the only thing with a NIC on every team's network — it's also where nakon actually runs, and
-it's what NATs each team out to the internet. Because it sits on every team bridge it *could*
-route team to team; `range-firewall.sh` (installed by `main.tf` Step C) is what actually keeps
-teams apart, not the empty bridges.
+Proxmox-based scoring range. `create-competition.py` is the driver: it generates Quotient's
+scoring config and nakon's machine list, then runs a seven-phase deploy. Terraform is one phase
+of that — it builds only team1's boxes, the scoring engine, and the team bridges; the driver
+then bootstraps Quotient, runs nakon, and clones team1's boxes out to the other teams over SSH.
+nakon SSHes into each box to install services and deploy misconfigs. Team bridges have no uplink
+of their own, so the scoring engine is the only thing with a NIC on every team's network — it's
+the jump host the driver tunnels through, where nakon actually runs, and what NATs each team out
+to the internet. Because it sits on every team bridge it *could* route team to team;
+`range-firewall.sh` on the engine is what actually keeps teams apart, not the empty bridges.
 
 ## Layout
 
 ```
-terraform/   Infra: bridges, scoring VM, team VMs, orchestration (main.tf)
+terraform/   Infra: bridges, scoring VM, team1's VMs, engine team-NIC wiring (main.tf)
 quotient/    setup.py — builds event.conf and seeds/starts the competition via Quotient's API
 nakon/       symlink to ~/dev/nakon — box configuration tool, developed in its own repo.
-             create-competition.py loads randomize_config.py from here to write config.json
-             before calling `terraform apply` — you don't run it yourself anymore.
+             create-competition.py loads randomize_config.py from here to write config.json,
+             then scps nakon's runtime files onto the scoring engine and runs them there
+             during the deploy — you don't run it yourself anymore.
 ```
 
 ## Prerequisites (one-time, per Proxmox host)
@@ -178,10 +181,12 @@ single place to configure both Terraform and `create-competition.py`.
 | `teams` | JSON map of team key → `{identifier, password}` — `identifier` is the subnet's third octet, e.g. `{"team1":{"identifier":"1","password":"hunter2"}}` |
 | `boxes_per_team` | JSON list of boxes cloned per team, max 10 (VM IDs allow each team a stride of 10 — see `MAX_BOXES_PER_TEAM`). `template` must match a tagged Proxmox template name; `disk_gb` is optional (omit or `null` to keep the template's own disk size — Proxmox cannot shrink, so a value under the template's own size fails the clone) |
 
-`event_name`, `quotient_admin_password`, `teams`, and `boxes_per_team` are all rewritten
-automatically by `create-competition.py` every time you create or reuse a competition — edit
-them by hand in `.env` only if you're running `terraform apply` directly without going through
-that script. Boxes are different per event on purpose (that's the point of nakon scaling
+`teams` and `boxes_per_team` are rewritten automatically in `.env` by `create-competition.py`
+every time you create or reuse a competition (`update_env()`). `event_name` comes from the
+competition's `Compfile`, and `quotient_admin_password` is generated fresh in memory each run
+(saved to `competitions/<id>/credentials.txt`, not written back to `.env`) — edit the `.env`
+copies of these by hand only if you're running `terraform apply` directly without going through
+the driver. Boxes are different per event on purpose (that's the point of nakon scaling
 difficulty per box) — `create-competition.py` queries Proxmox for templates tagged `template`
 and walks you through picking boxes interactively each time, then saves the result as
 `competitions/<id>/boxes.json` so reusing that competition later replays the exact same boxes
@@ -208,33 +213,40 @@ python3 create-competition.py
 ```
 
 This is the actual entry point — see [OVERVIEW.md](OVERVIEW.md) for exactly what it does step
-by step. In short: it loads `.env`, asks whether to reuse an existing competition or create a
-new one, asks how many teams (it names/passwords them for you, see [Configure the
-event](#configure-the-event)), generates nakon's machine + vuln list itself (the same logic as
-`nakon/randomize_config.py`, called in-process — no separate manual step), then runs
-`terraform init && terraform apply` and pushes/starts Quotient once infra is up. A few minutes
-per box; expect most of the time in package installs and image builds. At the end it prints a
-summary with the scoreboard URL, admin login, every team's login, and the scoring engine's SSH
+by step, including the seven deploy phases. In short: it loads `.env`, asks whether to reuse an
+existing competition or create a new one, asks how many teams (it names/passwords them for you,
+see [Configure the event](#configure-the-event)), generates nakon's machine + vuln list itself
+(the same logic as `nakon/randomize_config.py`, called in-process — no separate manual step),
+then runs `deploy()`: it cleans up any prior range, runs `terraform apply` to build team1 +
+the engine + the bridges, bootstraps Quotient and pushes `event.conf`, runs nakon on team1,
+clones team1's boxes out to the other teams and runs nakon on them, and finally seeds and starts
+the competition. A few minutes per box; expect most of the time in package installs and image
+builds. At the end it prints a summary and writes `competitions/<id>/credentials.txt` (mode
+0600) with the scoreboard URL, admin login, every team's login, and the scoring engine's SSH
 command — copy this down, it's the only place team/admin passwords are shown.
 
-**Teardown**: `cd terraform && terraform destroy -parallelism=1` (templates aren't touched).
+**Teardown**: `python3 destroy-competition.py`. It destroys the team2+ boxes that were cloned
+via the Proxmox API (they're not in Terraform state, so `terraform destroy` alone can't remove
+them — it reads `competitions/<id>/cloned_vms.json`), then runs `terraform destroy`. It needs
+that competition's `teams.json` + `boxes.json` (both written by the deploy). Templates aren't
+touched.
 
-**Add a team mid-event**: re-running `create-competition.py` with a higher team count
-regenerates **every** team's password, not just the new one — fine before an event starts, bad
-once teams are already playing on their current credentials. To add a team without disturbing
-existing ones, append to `TF_VAR_teams` in `.env` by hand (leave existing entries untouched)
-and `terraform apply` directly — only the new bridge is created, plus `null_resource.team_nics`
-re-runs to give the engine an address on it. `null_resource.orchestrate` deliberately does
-*not* re-run (its Step A re-clones Quotient and its Step D re-runs nakon, which would wipe a
-live event), so the new team gets no boxes from this — clone them yourself, the way
-`clone_team_boxes()` does, and re-push `event.conf` so Quotient knows about the team.
+**Add a team mid-event**: don't re-run `create-competition.py` for this. A fresh run
+regenerates **every** team's password *and* its phase [1/7] destroys the existing team boxes,
+engine, and bridges before rebuilding — a full teardown, not an incremental add. To add a team
+to a live event, do it by hand: clone the boxes onto a new `vmbr<identifier>` bridge the way
+`clone_team_boxes()` does, give the engine an address on that bridge, and re-push `event.conf`
+so Quotient knows about the team.
 
 **Add a box type**: see [Adding a template VM](#adding-a-template-vm) to build/tag the template
 — then it just shows up as an option in `create-competition.py`'s box picker. New boxes are
-created for every team.
+built for team1 and cloned out to every other team.
 
-**Running `terraform` directly** (skipping `create-competition.py`) — Terraform doesn't load
-`.env` itself, so export it into your shell first. Plain `source .env` breaks on values with
+**Running `terraform` directly** (skipping `create-competition.py`) — note this only builds
+team1's boxes, the scoring engine, and the bridges; it does **not** bootstrap Quotient, run
+nakon, or clone boxes to the other teams (the driver does all of that after `apply`), so a bare
+`terraform apply` leaves you with an unconfigured range. Terraform also doesn't load `.env`
+itself, so export it into your shell first. Plain `source .env` breaks on values with
 spaces/`!`/JSON braces (several of these have all three), so load it through python-dotenv
 instead, the same parser `create-competition.py` uses:
 ```bash
@@ -267,12 +279,12 @@ export TF_VAR_quotient_admin_password="..."
 | Can't SSH into a freshly cloned box | Template's cloud-init is broken/disabled | Verify on a scratch clone (`cloud-init status --long`) before tagging as a template |
 | `apt-get install` fails or hangs on a fresh clone | Racing `unattended-upgrades`' first-boot run for the dpkg lock | Already retried automatically (60×2s); rerun apply if it still loses the race |
 | Quotient panics on startup re: credlist | A box check references a credlist that was never staged | `create-competition.py` pushes `linux.credlist` alongside `event.conf`, so the two always agree — check `config/credlists/` on the scoring engine if not |
-| `terraform apply` fails with "missing nakon/config.json" | Running `terraform apply` directly instead of via `create-competition.py` (which generates it for you) | Run `python3 create-competition.py`, or generate it manually: `cd nakon && python3 randomize_config.py`, then re-apply |
+| nakon can't find `config.json` on the scoring engine | Ran a bare `terraform apply` instead of `create-competition.py` — Terraform no longer runs nakon or ships it `config.json`; the driver scps it to the engine in phases 5/6 | Run `python3 create-competition.py` (it generates `nakon/config.json` and pushes it), rather than driving Terraform by hand |
 | `randomize_config.py` or nakon: MySQL access denied / connection refused | vulndb unreachable (from your laptop when generating config.json, or from the scoring engine when nakon runs it), or `nakon/.env` creds/db name don't match actual grants | Confirm reachability, check `SHOW GRANTS`, fix `nakon/.env` |
 | nakon can't SSH into a box | Box still booting, or its template's account/password doesn't match what `randomize_config.py` assumes | Check `boxes_per_team[].template`'s cloud-init account |
 | Bridge creation fails (403) | API token missing `Sys.Modify` | Re-add the permission at the right path/level |
 | Everything went down at once, after a scoring-engine reboot | The forwarding/NAT rules didn't get re-applied — Docker rebuilds `FORWARD` (policy `DROP`) on every start | `sudo systemctl status range-firewall.service` on the engine; `sudo systemctl restart range-firewall.service` re-applies them (the script is idempotent). It's ordered after `docker.service` and should do this automatically at boot |
 | A team can reach another team's boxes | `range-firewall.sh` isn't applied — the empty bridges don't isolate anything by themselves, since the engine has a NIC on every team bridge and forwards between them | `sudo /usr/local/sbin/range-firewall.sh` on the engine, then check `sudo iptables -L FORWARD -n --line-numbers` for the `192.168.0.0/16 → 192.168.0.0/16 DROP` rule |
 | `/tmp` full on a team VM — `No space left on device` in apt output, or `size mismatch in put!` from `deploy.py` | Stale files from a previous failed deploy accumulated in `/tmp` (a RAM-backed tmpfs); `deploy.py` does not clean up after itself | SSH into the scoring engine, then into the affected machine using credentials from `config.json`, and run `find /tmp -maxdepth 1 -type f -delete`; re-run `create-competition.py`. Also fix `deploy.py` in the `nakon` repo to remove `/tmp/<attachment>` after each script run. |
-| `terraform apply` fails at `[prep] … box(es) not ready` | Cloud-init's `dns.servers` is silently ignored on Debian with static IPs, leaving `/etc/resolv.conf` empty. Step D's `prepare_boxes.py` repairs it before nakon runs and refuses to continue if a box still can't resolve — nakon would install nothing there and still report success | Read which box failed and why in the `[prep]` output. To debug: SSH through the scoring engine to that box and check `cat /etc/resolv.conf`, `cat /etc/systemd/resolved.conf.d/upstream.conf`, and `getent hosts deb.debian.org`. Re-run `create-competition.py` once fixed |
-| Services all show down on the scoreboard | First check round only lands `Delay`+`Jitter` (~70 s) after the summary prints — wait it out first. If they stay down, nakon installed nothing (see the `[prep]` row above), or a login check is authenticating with credentials no box has | On a box: `ss -ltnp` to see whether the service is even listening. If it is, the check is failing auth — compare `/opt/quotient/config/credlists/linux.credlist` on the scoring engine against the box's real accounts. `Sql` checks need a matching *database* user, which nakon's install script has to create |
+| A box installs no services / DNS fails before nakon | Cloud-init's `dns.servers` is silently ignored on Debian with static IPs, leaving `/etc/resolv.conf` empty. The driver's `fix_dns_on_boxes()` (phases 5 and 6, run over the engine jump host) repairs it before nakon's `apt-get`, retrying up to 8× — nakon would otherwise install nothing there and still report success | Watch the `[5/7]`/`[6/7]` DNS output for the failing box. To debug: SSH through the scoring engine to that box and check `cat /etc/resolv.conf`, `cat /etc/systemd/resolved.conf.d/upstream.conf`, and `getent hosts deb.debian.org`. Re-run `create-competition.py` once fixed |
+| Services all show down on the scoreboard | First check round only lands `Delay`+`Jitter` (~70 s) after the summary prints — wait it out first. If they stay down, nakon installed nothing (see the DNS row above), or a login check is authenticating with credentials no box has | On a box: `ss -ltnp` to see whether the service is even listening. If it is, the check is failing auth — compare `/opt/quotient/config/credlists/linux.credlist` on the scoring engine against the box's real accounts. `Sql` checks need a matching *database* user, which nakon's install script has to create |

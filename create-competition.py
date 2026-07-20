@@ -195,7 +195,7 @@ def collect_boxes():
 
         if templates:
             while True:
-                raw = input(f"  Template [{1}–{len(templates)}]: ").strip()
+                raw = input(f"  Template [{1}–{len(templates)}, or name]: ").strip()
                 try:
                     idx = int(raw)
                     if 1 <= idx <= len(templates):
@@ -203,7 +203,12 @@ def collect_boxes():
                         break
                 except ValueError:
                     pass
-                print(f"  Enter a number from 1 to {len(templates)}.")
+                # Also accept a template name string that matches list_proxmox_templates()
+                # exactly — removes the fragile index-only selection. Index still works.
+                if raw in templates:
+                    template = raw
+                    break
+                print(f"  Enter a number from 1 to {len(templates)}, or a template name.")
         else:
             template = input("  Template name: ").strip()
             while not template:
@@ -434,6 +439,85 @@ def ssh_on_gateway(ctx, cmd, timeout=30):
         ],
         capture_output=True, text=True, timeout=timeout,
     )
+
+
+def wait_for_ssh(key, user, host, timeout=300):
+    """Poll a host's SSH until it accepts a command, replacing a blind post-boot sleep.
+
+    Returns True once `ssh user@host true` succeeds, False on timeout. Never raises — a
+    timeout prints a warning and the caller proceeds (matching the surrounding "continue
+    anyway" error posture), because the later steps have their own retry loops.
+    """
+    print(f"  Waiting for {host} to accept SSH (timeout {timeout}s)...")
+    deadline = time.time() + timeout
+    attempt = 0
+    while time.time() < deadline:
+        attempt += 1
+        try:
+            r = subprocess.run(
+                ["ssh", "-i", key,
+                 "-o", "StrictHostKeyChecking=no",
+                 "-o", "UserKnownHostsFile=/dev/null",
+                 "-o", "ConnectTimeout=10",
+                 "-o", "BatchMode=yes",
+                 f"{user}@{host}", "true"],
+                capture_output=True, text=True, timeout=20,
+            )
+            if r.returncode == 0:
+                print(f"    {host} reachable via SSH (after {attempt} attempt(s))")
+                return True
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(5)
+    print(f"  WARNING: {host} not reachable via SSH within {timeout}s — continuing anyway")
+    return False
+
+
+def wait_for_boxes_ssh(ctx, teams, boxes, timeout=300):
+    """Poll every team box's SSH reachability THROUGH the gateway before the DNS/harden loops.
+
+    Replaces a blind post-clone sleep. Uses one shared time budget across all boxes (they boot
+    together, so once cloud-init finishes they come up nearly at once). Never raises — the
+    fix_dns/setup_auth steps that follow already retry, so a timeout just warns and proceeds.
+    """
+    print("  Waiting for team boxes to accept SSH via gateway...")
+    deadline = time.time() + timeout
+    for team in teams.values():
+        for box in boxes:
+            ip = f"192.168.{team['identifier']}.{box['last_octet']}"
+            while True:
+                try:
+                    r = ssh_via_gateway(ctx, ip, "true", timeout=20)
+                    if r.returncode == 0:
+                        print(f"    {ip} reachable")
+                        break
+                except Exception:
+                    pass
+                if time.time() > deadline:
+                    print(f"    WARNING: {ip} not reachable within timeout — continuing")
+                    break
+                time.sleep(10)
+
+
+def wait_for_http(url, timeout=120):
+    """Poll a URL until it returns ANY HTTP response (not connection-refused), replacing a
+    blind sleep before seeding. requests.get returns for 4xx/5xx too (we don't raise_for_status),
+    so any served response means the app is up. Never raises — timeout warns and proceeds.
+    """
+    print(f"  Waiting for {url} to respond (timeout {timeout}s)...")
+    deadline = time.time() + timeout
+    attempt = 0
+    while time.time() < deadline:
+        attempt += 1
+        try:
+            requests.get(url, timeout=5)
+            print(f"    {url} responded (after {attempt} attempt(s))")
+            return True
+        except requests.exceptions.RequestException:
+            pass
+        time.sleep(3)
+    print(f"  WARNING: {url} did not respond within {timeout}s — continuing anyway")
+    return False
 
 
 def fix_dns_on_boxes(teams, boxes, ctx):
@@ -825,9 +909,9 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir):
             except Exception as e:
                 print(f"  WARNING: Failed to start vmid {vmid}: {e}")
 
-    # Wait for cloud-init to finish on all boxes
-    print("  Waiting for VMs to initialize (60s)...")
-    time.sleep(60)
+    # Wait for cloud-init to finish on all boxes. Poll each cloned box's SSH THROUGH the
+    # gateway instead of a blind sleep; the fix_dns/auth loops below still retry on their own.
+    wait_for_boxes_ssh(ctx, teams, boxes, timeout=300)
 
     # Step 5: Fix DNS on ALL team boxes
     fix_dns_on_boxes(teams, boxes, ctx)
@@ -839,8 +923,12 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir):
     fix_services_on_boxes(comp_dir, teams, boxes, ctx)
 
 
-def bootstrap_scoring_engine(ctx):
-    """Bootstrap the scoring engine: install packages, Docker, Quotient."""
+def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
+    """Bootstrap the scoring engine: install packages, Docker, Quotient.
+
+    postgres_password / redis_password are generated once per deploy() run and passed in so the
+    Quotient stack .env written here agrees with the same values push_event_conf() writes later.
+    """
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]
@@ -908,11 +996,11 @@ def bootstrap_scoring_engine(ctx):
     print("  Writing Quotient .env...")
     import base64
     quotient_env = (
-        "POSTGRES_PASSWORD=postgres_password\n"
+        f"POSTGRES_PASSWORD={postgres_password}\n"
         "POSTGRES_USER=engineuser\n"
         "POSTGRES_HOST=quotient_database\n"
         "POSTGRES_DB=engine\n"
-        "REDIS_PASSWORD=redis_password\n"
+        f"REDIS_PASSWORD={redis_password}\n"
     )
     env_b64 = base64.b64encode(quotient_env.encode()).decode()
     subprocess.run(
@@ -972,6 +1060,59 @@ def bootstrap_scoring_engine(ctx):
         check=True, timeout=15,
     )
     print("  Forwarding rules restored")
+
+    # Make the team-subnet NAT durable. The rules restored just above are wiped every time
+    # Docker re-syncs iptables (any container start/restart), silently cutting team boxes off
+    # the internet. ensure_nat_forwarding() only re-asserts before nakon runs — not good enough
+    # once the range is live. Install a tiny idempotent systemd oneshot + a 30s timer ON THE
+    # ENGINE so the rules are continuously re-asserted for the lifetime of the range.
+    print("  Installing quotient-nat systemd unit + timer (keeps team NAT durable)...")
+    nat_script = (
+        "#!/bin/bash\n"
+        "iptables -P FORWARD ACCEPT\n"
+        "iptables -t nat -C POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE 2>/dev/null || "
+        "iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE\n"
+    )
+    nat_service = (
+        "[Unit]\n"
+        "Description=Re-assert Quotient team-subnet NAT/forwarding (Docker wipes it on restart)\n"
+        "After=docker.service\n"
+        "\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        "ExecStart=/usr/local/sbin/quotient-nat.sh\n"
+    )
+    nat_timer = (
+        "[Unit]\n"
+        "Description=Periodically re-assert Quotient team-subnet NAT/forwarding\n"
+        "\n"
+        "[Timer]\n"
+        "OnBootSec=30\n"
+        "OnUnitActiveSec=30\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=timers.target\n"
+    )
+    nat_script_b64 = base64.b64encode(nat_script.encode()).decode()
+    nat_service_b64 = base64.b64encode(nat_service.encode()).decode()
+    nat_timer_b64 = base64.b64encode(nat_timer.encode()).decode()
+    subprocess.run(
+        [
+            "ssh", "-i", key,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            f"{scoring_user}@{scoring_ip}",
+            (
+                f"echo '{nat_script_b64}' | base64 -d | sudo tee /usr/local/sbin/quotient-nat.sh > /dev/null && "
+                "sudo chmod +x /usr/local/sbin/quotient-nat.sh && "
+                f"echo '{nat_service_b64}' | base64 -d | sudo tee /etc/systemd/system/quotient-nat.service > /dev/null && "
+                f"echo '{nat_timer_b64}' | base64 -d | sudo tee /etc/systemd/system/quotient-nat.timer > /dev/null && "
+                "sudo systemctl daemon-reload && sudo systemctl enable --now quotient-nat.timer"
+            ),
+        ],
+        check=True, timeout=30,
+    )
+    print("  quotient-nat.timer enabled (re-asserts NAT every 30s)")
 
     # Configure team bridge NICs so the scoring engine can reach team subnets.
     # The scoring engine has multiple virtio NICs (one per team bridge) but only
@@ -1081,8 +1222,13 @@ def ensure_nat_forwarding(ctx):
 
 
 def push_event_conf(comp_dir, teams, boxes, ctx, event_name, inject_password=None,
-                    admin_password="changeme123"):
-    """Build event.conf and push it to the scoring engine."""
+                    admin_password="changeme123", postgres_password="postgres_password",
+                    redis_password="redis_password"):
+    """Build event.conf and push it to the scoring engine.
+
+    postgres_password / redis_password come from deploy() so the .env rewritten here matches the
+    one bootstrap_scoring_engine() wrote — Postgres and the app must agree on the same secret.
+    """
     import base64
 
     key = ctx["ssh_key_path"]
@@ -1134,11 +1280,11 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, inject_password=Non
 
     # Write .env for Quotient (matches docker-compose.yml env_file expectations)
     env_content = (
-        "POSTGRES_PASSWORD=postgres_password\n"
+        f"POSTGRES_PASSWORD={postgres_password}\n"
         "POSTGRES_USER=engineuser\n"
         "POSTGRES_HOST=quotient_database\n"
         "POSTGRES_DB=engine\n"
-        "REDIS_PASSWORD=redis_password\n"
+        f"REDIS_PASSWORD={redis_password}\n"
     )
     env_b64 = base64.b64encode(env_content.encode()).decode()
     subprocess.run(
@@ -1167,8 +1313,16 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, inject_password=Non
     print("  Event configuration pushed to scoring engine")
 
 
-def deploy(comp_dir):
-    """Main deployment pipeline."""
+def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
+    """Main deployment pipeline.
+
+    num_teams / assume_yes let the tool run non-interactively (argparse in main()): when they're
+    None/False the function prompts exactly as it did before. from_phase (>1) resumes a partially
+    built range: it SKIPS the destructive [1/7] cleanup and [2/7] terraform apply, and reloads the
+    teams + per-run secrets from competitions/<id>/.deploy_state.json so a resume agrees with what
+    was already deployed. After each numbered phase completes, the last-completed phase number is
+    checkpointed to that state file; on failure the resume command is printed.
+    """
     # Load competition configuration (Compfile is key=value format)
     name, scenario, difficulty = load_compfile(comp_dir / "Compfile")
     comp_name = comp_dir.name
@@ -1181,8 +1335,62 @@ def deploy(comp_dir):
         print("  ERROR: No boxes.json found. Create a new competition or add boxes.json.")
         sys.exit(1)
 
-    number_of_teams = int(input("How many teams? "))
-    teams = collect_teams(number_of_teams)
+    # Resumable-phase state. Secrets (admin/inject/postgres/redis) and the team set are per-run;
+    # a resume MUST reuse the originals or the engine's already-written .env / already-seeded
+    # admin login won't match. Persist them here (gitignored, mode 0600) and reload on resume.
+    state_path = comp_dir / ".deploy_state.json"
+    resuming = from_phase > 1 and state_path.exists()
+
+    def _save_state():
+        state_path.write_text(json.dumps(state, indent=2))
+        try:
+            os.chmod(state_path, 0o600)
+        except OSError:
+            pass
+
+    def checkpoint(n):
+        state["last_phase"] = n
+        _save_state()
+
+    injects = load_injects(comp_dir)
+
+    if resuming:
+        state = json.loads(state_path.read_text())
+        teams = {
+            k: {"identifier": v["identifier"], "password": v["password"]}
+            for k, v in state["teams"].items()
+        }
+        number_of_teams = len(teams)
+        admin_password = state.get("admin_password") or random_password()
+        postgres_password = state.get("postgres_password") or random_password()
+        redis_password = state.get("redis_password") or random_password()
+        inject_password = state.get("inject_password")
+        print(f"  Resuming from phase {from_phase} "
+              f"({number_of_teams} team(s), last completed phase {state.get('last_phase')})")
+    else:
+        if num_teams is not None:
+            number_of_teams = num_teams
+        else:
+            number_of_teams = int(input("How many teams? "))
+        teams = collect_teams(number_of_teams)
+        # Per-competition Quotient web-admin password (scoreboard/admin login only). Postgres and
+        # Redis passwords for the Quotient stack are generated once here and passed to both
+        # bootstrap_scoring_engine() and push_event_conf() so the two .env writes agree. The box
+        # service credlist (admin/changeme123 …) is a separate thing the checks authenticate WITH
+        # and is left untouched.
+        admin_password = random_password()
+        postgres_password = random_password()
+        redis_password = random_password()
+        inject_password = random_password() if injects else None
+        state = {
+            "last_phase": 0,
+            "teams": teams,
+            "admin_password": admin_password,
+            "inject_password": inject_password,
+            "postgres_password": postgres_password,
+            "redis_password": redis_password,
+        }
+        _save_state()
 
     # Generate Nakon config
     generate_nakon_config(teams, boxes, difficulty, comp_dir)
@@ -1205,207 +1413,245 @@ def deploy(comp_dir):
     # logins for verification without re-deriving them.
     (comp_dir / "teams.json").write_text(teams_json)
 
-    # Confirm deployment
-    if not confirm_deploy(name, scenario, difficulty, teams, boxes):
-        print("  Deployment cancelled.")
-        return
+    # Confirm deployment (skipped by --yes and on resume — resuming implies prior confirmation)
+    if not assume_yes and not resuming:
+        if not confirm_deploy(name, scenario, difficulty, teams, boxes):
+            print("  Deployment cancelled.")
+            return
 
-    # [1/7] Clean up previous deployment
-    print("[1/7] Cleaning up previous deployment...")
     node = os.environ["TF_VAR_proxmox_node"]
-    for team in teams.values():
-        # vm_id_for takes the 0-based box index (matching main.tf and clone_team_boxes), NOT
-        # last_octet — passing last_octet computed the wrong vmids, so cleanup never actually
-        # removed the previous run's team boxes and they lingered to collide with the next run.
-        for box_idx, _box in enumerate(boxes):
-            destroy_vm_if_exists(node, vm_id_for(team["identifier"], box_idx))
-    # Destroy scoring engine (vmid hardcoded in main.tf)
-    destroy_vm_if_exists(node, 1000)
-    # Destroy bridges
-    for team in teams.values():
-        destroy_bridge_if_exists(node, f"vmbr{team['identifier']}")
-    time.sleep(5)
+    # Tracks the phase currently executing so the failure handler can tell the operator exactly
+    # where to resume from.
+    current_phase = max(from_phase, 1)
+    try:
+        # [1/7] Clean up previous deployment (DESTRUCTIVE — skipped on resume)
+        if from_phase <= 1:
+            current_phase = 1
+            print("[1/7] Cleaning up previous deployment...")
+            for team in teams.values():
+                # vm_id_for takes the 0-based box index (matching main.tf and clone_team_boxes),
+                # NOT last_octet — passing last_octet computed the wrong vmids, so cleanup never
+                # actually removed the previous run's team boxes and they lingered to collide with
+                # the next run.
+                for box_idx, _box in enumerate(boxes):
+                    destroy_vm_if_exists(node, vm_id_for(team["identifier"], box_idx))
+            # Destroy scoring engine (vmid hardcoded in main.tf)
+            destroy_vm_if_exists(node, 1000)
+            # Destroy bridges
+            for team in teams.values():
+                destroy_bridge_if_exists(node, f"vmbr{team['identifier']}")
+            time.sleep(5)
+            checkpoint(1)
+        else:
+            print("[1/7] Skipped (resume) — leaving existing VMs/bridges in place.")
 
-    # [2/7] Terraform init & apply
-    print("[2/7] Running Terraform init & apply...")
-    subprocess.run(["terraform", "init"], cwd="terraform", check=True, timeout=120)
-    # -parallelism=1 serializes the clones: full-cloning the scoring engine and every team box
-    # at once saturates the datastore and the Proxmox API starts returning HTTP 596 (timeout),
-    # failing the apply. Cloning one VM at a time is slower but reliable (main.tf assumes this).
-    subprocess.run(["terraform", "apply", "-auto-approve", "-parallelism=1"], cwd="terraform", check=True, timeout=2400)
+        # [2/7] Terraform init & apply (DESTRUCTIVE rebuild — skipped on resume)
+        if from_phase <= 2:
+            current_phase = 2
+            print("[2/7] Running Terraform init & apply...")
+            subprocess.run(["terraform", "init"], cwd="terraform", check=True, timeout=120)
+            # -parallelism=1 serializes the clones: full-cloning the scoring engine and every team
+            # box at once saturates the datastore and the Proxmox API starts returning HTTP 596
+            # (timeout), failing the apply. Cloning one VM at a time is slower but reliable
+            # (main.tf assumes this).
+            subprocess.run(["terraform", "apply", "-auto-approve", "-parallelism=1"], cwd="terraform", check=True, timeout=2400)
 
-    # Wait for VMs to initialize
-    print("  Waiting for VMs to initialize (60s)...")
-    time.sleep(60)
+            # Poll the engine's SSH reachability instead of a blind post-apply sleep.
+            apply_ctx = read_terraform_ctx()
+            wait_for_ssh(apply_ctx["ssh_key_path"], apply_ctx["vm_username"],
+                         apply_ctx["scoring_engine_ip"], timeout=300)
+            checkpoint(2)
+        else:
+            print("[2/7] Skipped (resume) — not re-running terraform apply.")
 
-    # [3/7] Copy SSH key to scoring engine
-    print("[3/7] Copying SSH key to scoring engine...")
-    key = Path("terraform") / os.environ.get("TF_VAR_ssh_key_path", "proxmox")
-    if not key.exists():
-        key = Path("proxmox")
-    scoring_user = os.environ["TF_VAR_vm_username"]
+        # Shared setup needed by every phase from [3/7] on. Runs even when phase 3 itself is
+        # skipped, because phases 4–7 all reference key/ctx/scoring_ip/scoring_user.
+        key = Path("terraform") / os.environ.get("TF_VAR_ssh_key_path", "proxmox")
+        if not key.exists():
+            key = Path("proxmox")
+        scoring_user = os.environ["TF_VAR_vm_username"]
+        ctx = read_terraform_ctx()
+        scoring_ip = ctx["scoring_engine_ip"]
 
-    # Read scoring engine IP from Terraform output
-    ctx = read_terraform_ctx()
-    scoring_ip = ctx["scoring_engine_ip"]
+        # [3/7] Copy SSH key to scoring engine
+        if from_phase <= 3:
+            current_phase = 3
+            print("[3/7] Copying SSH key to scoring engine...")
+            subprocess.run(
+                [
+                    "scp", "-i", str(key),
+                    "-o", "StrictHostKeyChecking=no",
+                    "-o", "UserKnownHostsFile=/dev/null",
+                    str(key),
+                    f"{scoring_user}@{scoring_ip}:/home/sysadmin/.ssh/proxmox_key",
+                ],
+                check=True, timeout=15,
+            )
+            subprocess.run(
+                [
+                    "ssh", "-i", str(key),
+                    "-o", "StrictHostKeyChecking=no",
+                    "-o", "UserKnownHostsFile=/dev/null",
+                    f"{scoring_user}@{scoring_ip}",
+                    "sudo chmod 600 /home/sysadmin/.ssh/proxmox_key",
+                ],
+                check=True, timeout=10,
+            )
+            checkpoint(3)
+        else:
+            print("[3/7] Skipped (resume).")
 
-    subprocess.run(
-        [
-            "scp", "-i", str(key),
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            str(key),
-            f"{scoring_user}@{scoring_ip}:/home/sysadmin/.ssh/proxmox_key",
-        ],
-        check=True, timeout=15,
-    )
-    subprocess.run(
-        [
-            "ssh", "-i", str(key),
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            f"{scoring_user}@{scoring_ip}",
-            "sudo chmod 600 /home/sysadmin/.ssh/proxmox_key",
-        ],
-        check=True, timeout=10,
-    )
+        # [4/7] Bootstrap scoring engine
+        if from_phase <= 4:
+            current_phase = 4
+            print("[4/7] Bootstrapping scoring engine (packages, Docker, Quotient)...")
+            bootstrap_scoring_engine(ctx, postgres_password, redis_password)
 
-    # [4/7] Bootstrap scoring engine
-    print("[4/7] Bootstrapping scoring engine (packages, Docker, Quotient)...")
-    bootstrap_scoring_engine(ctx)
+            # Push event.conf now, BEFORE nakon. Quotient's server panics on every scoring round
+            # while event.conf is absent, and each container restart re-syncs iptables and wipes
+            # the team NAT rule — which starves nakon's apt-get of internet. Writing a valid
+            # event.conf here stops the crash loop so NAT stays up through the nakon runs.
+            # event.conf uses the 192.168._.N wildcard and lists every team, so it's complete even
+            # though team2+ boxes don't exist yet.
+            print("  Pushing event.conf early (stabilizes Quotient so NAT survives nakon)...")
+            push_event_conf(comp_dir, teams, boxes, ctx, name,
+                            inject_password=inject_password, admin_password=admin_password,
+                            postgres_password=postgres_password, redis_password=redis_password)
+            ensure_nat_forwarding(ctx)
 
-    # Push event.conf now, BEFORE nakon. Quotient's server panics on every scoring round while
-    # event.conf is absent, and each container restart re-syncs iptables and wipes the team NAT
-    # rule — which starves nakon's apt-get of internet. Writing a valid event.conf here stops the
-    # crash loop so NAT stays up through the nakon runs. event.conf uses the 192.168._.N wildcard
-    # and lists every team, so it's complete even though team2+ boxes don't exist yet.
-    print("  Pushing event.conf early (stabilizes Quotient so NAT survives nakon)...")
-    injects = load_injects(comp_dir)
-    inject_password = random_password() if injects else None
-    # Per-competition Quotient web-admin password. This is the scoreboard/admin login only;
-    # the box service credlist (linux.credlist: admin/changeme123 …) is a separate thing the
-    # checks authenticate WITH and must stay in sync with the box OS accounts, so it's left
-    # untouched.
-    admin_password = random_password()
-    push_event_conf(comp_dir, teams, boxes, ctx, name,
-                    inject_password=inject_password, admin_password=admin_password)
-    ensure_nat_forwarding(ctx)
+            # [4.5/7] Enable password auth + NOPASSWD sudo for ubuntu on team1 boxes
+            print("[4.5/7] Enabling password auth + NOPASSWD sudo for ubuntu on team1 boxes...")
+            # Only team1 exists at this point (team2+ are cloned later)
+            team1_only = {k: v for k, v in teams.items() if k == "team1"}
+            setup_ubuntu_auth(team1_only, boxes, ctx)
+            checkpoint(4)
+        else:
+            print("[4/7] Skipped (resume).")
 
-    # [4.5/7] Enable password auth + NOPASSWD sudo for ubuntu on team1 boxes
-    print("[4.5/7] Enabling password auth + NOPASSWD sudo for ubuntu on team1 boxes...")
-    # Only team1 exists at this point (team2+ are cloned later)
-    team1_only = {k: v for k, v in teams.items() if k == "team1"}
-    setup_ubuntu_auth(team1_only, boxes, ctx)
+        # [5/7] Fix DNS on team1 boxes (needed for apt-get in Nakon) + run Nakon deployment
+        if from_phase <= 5:
+            current_phase = 5
+            print("[5/7] Fixing DNS on team1 boxes, then running Nakon deployment...")
+            # Only team1 exists at this point — fix DNS so apt-get can resolve repos
+            team1_only = {k: v for k, v in teams.items() if k == "team1"}
+            fix_dns_on_boxes(team1_only, boxes, ctx)
 
-    # [5/7] Fix DNS on team1 boxes (needed for apt-get in Nakon) + run Nakon deployment
-    print("[5/7] Fixing DNS on team1 boxes, then running Nakon deployment...")
-    # Only team1 exists at this point — fix DNS so apt-get can resolve repos
-    team1_only = {k: v for k, v in teams.items() if k == "team1"}
-    fix_dns_on_boxes(team1_only, boxes, ctx)
+            # Generate team1-only config for Nakon (team2+ don't exist yet)
+            nakon_config = json.loads((NAKON_DIR / "config.json").read_text())
+            team1_identifier = teams["team1"]["identifier"]
+            nakon_config_team1 = {"machines": [
+                m for m in nakon_config["machines"] if m["ip"].split(".")[2] == str(team1_identifier)
+            ]}
+            (NAKON_DIR / "config.json").write_text(json.dumps(nakon_config_team1, indent=2))
 
-    # Generate team1-only config for Nakon (team2+ don't exist yet)
-    import copy
-    nakon_config = json.loads((NAKON_DIR / "config.json").read_text())
-    team1_identifier = teams["team1"]["identifier"]
-    nakon_config_team1 = {"machines": [
-        m for m in nakon_config["machines"] if m["ip"].split(".")[2] == str(team1_identifier)
-    ]}
-    (NAKON_DIR / "config.json").write_text(json.dumps(nakon_config_team1, indent=2))
+            # Make sure the boxes can still reach the internet right before nakon's apt-get runs.
+            ensure_nat_forwarding(ctx)
 
-    # Make sure the boxes can still reach the internet right before nakon's apt-get runs.
-    ensure_nat_forwarding(ctx)
+            # Copy Nakon files to gateway
+            subprocess.run(
+                [
+                    "scp", "-i", str(key),
+                    "-o", "StrictHostKeyChecking=no",
+                    "-o", "UserKnownHostsFile=/dev/null",
+                    str(NAKON_DIR / "deploy.py"),
+                    str(NAKON_DIR / "configurations.py"),
+                    str(NAKON_DIR / ".env"),
+                    str(NAKON_DIR / "config.json"),
+                    f"{scoring_user}@{scoring_ip}:/tmp/nakon/",
+                ],
+                check=True, timeout=30,
+            )
+            # Install Nakon dependencies and run deployment
+            subprocess.run(
+                [
+                    "ssh", "-i", str(key),
+                    "-o", "StrictHostKeyChecking=no",
+                    "-o", "UserKnownHostsFile=/dev/null",
+                    f"{scoring_user}@{scoring_ip}",
+                    "sudo mkdir -p /opt/nakon && sudo cp /tmp/nakon/* /tmp/nakon/.env /opt/nakon/ && "
+                    "sudo pip3 install --break-system-packages 'mysql-connector-python>=8.3.0' paramiko python-dotenv requests 2>/dev/null && "
+                    "cd /opt/nakon && sudo python3 deploy.py",
+                ],
+                check=True, timeout=2400,
+            )
+            # Restore full config for team2+ Nakon after cloning
+            (NAKON_DIR / "config.json").write_text(json.dumps(nakon_config, indent=2))
+            print("  Nakon deployment complete")
+            checkpoint(5)
+        else:
+            print("[5/7] Skipped (resume).")
 
-    # Copy Nakon files to gateway
-    subprocess.run(
-        [
-            "scp", "-i", str(key),
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            str(NAKON_DIR / "deploy.py"),
-            str(NAKON_DIR / "configurations.py"),
-            str(NAKON_DIR / ".env"),
-            str(NAKON_DIR / "config.json"),
-            f"{scoring_user}@{scoring_ip}:/tmp/nakon/",
-        ],
-        check=True, timeout=30,
-    )
-    # Install Nakon dependencies and run deployment
-    subprocess.run(
-        [
-            "ssh", "-i", str(key),
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            f"{scoring_user}@{scoring_ip}",
-            "sudo mkdir -p /opt/nakon && sudo cp /tmp/nakon/* /tmp/nakon/.env /opt/nakon/ && "
-            "sudo pip3 install --break-system-packages 'mysql-connector-python>=8.3.0' paramiko python-dotenv requests 2>/dev/null && "
-            "cd /opt/nakon && sudo python3 deploy.py",
-        ],
-        check=True, timeout=2400,
-    )
-    # Restore full config for team2+ Nakon after cloning
-    (NAKON_DIR / "config.json").write_text(json.dumps(nakon_config, indent=2))
-    print("  Nakon deployment complete")
+        # [6/7] Clone team1 boxes to other teams, fix DNS, harden services
+        if from_phase <= 6:
+            current_phase = 6
+            print("[6/7] Cloning team1 boxes to other teams, fixing DNS, hardening services...")
+            clone_team_boxes(teams, boxes, ctx, comp_dir)
 
-    # [6/7] Clone team1 boxes to other teams, fix DNS, harden services
-    print("[6/7] Cloning team1 boxes to other teams, fixing DNS, hardening services...")
-    clone_team_boxes(teams, boxes, ctx, comp_dir)
+            # Deploy Nakon on team2+ boxes (team1 already done at [5/7])
+            if len(teams) > 1:
+                print("  Deploying Nakon on team2+ boxes...")
+                ensure_nat_forwarding(ctx)
+                # Copy full Nakon config to gateway
+                subprocess.run(
+                    [
+                        "scp", "-i", str(key),
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "UserKnownHostsFile=/dev/null",
+                        str(NAKON_DIR / "deploy.py"),
+                        str(NAKON_DIR / "configurations.py"),
+                        str(NAKON_DIR / ".env"),
+                        str(NAKON_DIR / "config.json"),
+                        f"{scoring_user}@{scoring_ip}:/tmp/nakon/",
+                    ],
+                    check=True, timeout=30,
+                )
+                subprocess.run(
+                    [
+                        "ssh", "-i", str(key),
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "UserKnownHostsFile=/dev/null",
+                        f"{scoring_user}@{scoring_ip}",
+                        "sudo cp /tmp/nakon/* /tmp/nakon/.env /opt/nakon/ && "
+                        "cd /opt/nakon && sudo python3 deploy.py",
+                    ],
+                    check=True, timeout=2400,
+                )
+                print("  Nakon deployment on team2+ complete")
+            else:
+                # Single team: clone_team_boxes() returns early without hardening services or
+                # creating the credlist OS accounts (admin/user1/user2), so auth checks would
+                # score down. Run that step here for the one-team case.
+                print("  Single team — hardening services on team1 boxes...")
+                fix_services_on_boxes(comp_dir, teams, boxes, ctx)
+            checkpoint(6)
+        else:
+            print("[6/7] Skipped (resume).")
 
-    # Deploy Nakon on team2+ boxes (team1 already done at [5/7])
-    if len(teams) > 1:
-        print("  Deploying Nakon on team2+ boxes...")
-        ensure_nat_forwarding(ctx)
-        # Copy full Nakon config to gateway
-        subprocess.run(
-            [
-                "scp", "-i", str(key),
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                str(NAKON_DIR / "deploy.py"),
-                str(NAKON_DIR / "configurations.py"),
-                str(NAKON_DIR / ".env"),
-                str(NAKON_DIR / "config.json"),
-                f"{scoring_user}@{scoring_ip}:/tmp/nakon/",
-            ],
-            check=True, timeout=30,
-        )
-        subprocess.run(
-            [
-                "ssh", "-i", str(key),
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                f"{scoring_user}@{scoring_ip}",
-                "sudo cp /tmp/nakon/* /tmp/nakon/.env /opt/nakon/ && "
-                "cd /opt/nakon && sudo python3 deploy.py",
-            ],
-            check=True, timeout=2400,
-        )
-        print("  Nakon deployment on team2+ complete")
-    else:
-        # Single team: clone_team_boxes() returns early without hardening services or
-        # creating the credlist OS accounts (admin/user1/user2), so auth checks would
-        # score down. Run that step here for the one-team case.
-        print("  Single team — hardening services on team1 boxes...")
-        fix_services_on_boxes(comp_dir, teams, boxes, ctx)
+        # [7/7] Seed competition and create injects (event.conf was pushed at [4/7])
+        current_phase = 7
+        print("[7/7] Seeding competition and creating injects...")
 
-    # [7/7] Seed competition and create injects (event.conf was pushed at [4/7])
-    print("[7/7] Seeding competition and creating injects...")
+        # Poll Quotient's HTTP endpoint instead of a blind sleep before seeding.
+        wait_for_http(f"http://{scoring_ip}/api/login", timeout=120)
 
-    # Wait for Quotient to be ready
-    print("  Waiting for Quotient to be ready...")
-    time.sleep(10)
+        # Seed teams and start competition
+        print("  Seeding teams and starting the competition clock...")
+        quotient_ctx = {
+            "teams": {team_key: team_data["identifier"] for team_key, team_data in teams.items()},
+            "quotient_admin_password": admin_password,
+        }
+        seed_and_start(scoring_ip, quotient_ctx)
 
-    # Seed teams and start competition
-    print("  Seeding teams and starting the competition clock...")
-    quotient_ctx = {
-        "teams": {team_key: team_data["identifier"] for team_key, team_data in teams.items()},
-        "quotient_admin_password": admin_password,
-    }
-    seed_and_start(scoring_ip, quotient_ctx)
-
-    # Create injects via Quotient's API (competition must be seeded/started first)
-    if injects:
-        print(f"  Creating {len(injects)} inject(s)...")
-        create_injects(scoring_ip, admin_password, injects)
+        # Create injects via Quotient's API (competition must be seeded/started first)
+        if injects:
+            print(f"  Creating {len(injects)} inject(s)...")
+            create_injects(scoring_ip, admin_password, injects)
+        checkpoint(7)
+    except BaseException:
+        print(f"\n  [!] Deploy failed during phase {current_phase} of '{comp_name}'.")
+        print(f"      Resume with: python3 create-competition.py "
+              f"--competition {comp_name} --from-phase {current_phase} --yes")
+        raise
 
     # Persist all credentials to a mode-0600 file so operators have a durable, non-log
     # record (the summary below still prints them for convenience, but the file is the
@@ -1441,9 +1687,58 @@ def deploy(comp_dir):
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Tezcatlipoca — CTF Range Deployment. With no flags it runs fully "
+                    "interactively (as before); flags let it run non-interactively.",
+    )
+    parser.add_argument("--competition", help="Competition name. If it already has a Compfile + "
+                                              "boxes.json, deploy it straight away; otherwise it "
+                                              "is created (needs --scenario/--difficulty or falls "
+                                              "back to prompting).")
+    parser.add_argument("--teams", type=int, help="Number of teams (skips the 'How many teams?' prompt).")
+    parser.add_argument("--yes", action="store_true", help="Skip the confirm-deploy prompt.")
+    parser.add_argument("--scenario", help="Scenario description (only when creating a new competition).")
+    parser.add_argument("--difficulty", type=int, help="Difficulty 1-10 (only when creating a new competition).")
+    parser.add_argument("--from-phase", type=int, default=1, dest="from_phase",
+                        help="Resume from this phase (>1 skips the destructive cleanup + terraform "
+                             "apply). See the resume hint printed on a failed deploy.")
+    args = parser.parse_args()
+
     print("Tezcatlipoca - CTF Range Deployment")
     print("=" * 40)
 
+    # Non-interactive path: --competition names the competition to deploy or create.
+    if args.competition:
+        comp_name = args.competition.strip().lower().replace(" ", "-")
+        comp_dir = Path("competitions") / comp_name
+        has_compfile = (comp_dir / "Compfile").exists()
+        has_boxes = (comp_dir / "boxes.json").exists()
+
+        if comp_dir.is_dir() and has_compfile and has_boxes:
+            # Reuse existing competition — straight to deploy(), no stdin needed.
+            print(f"Reusing existing competition '{comp_name}'.")
+        else:
+            # Create the competition. scenario/difficulty come from flags when given, otherwise
+            # we fall back to prompting for just the missing pieces. boxes are still collected
+            # interactively (there's no non-interactive box spec yet).
+            print(f"Creating new competition '{comp_name}'.")
+            comp_dir.mkdir(parents=True, exist_ok=True)
+            scenario = args.scenario if args.scenario is not None else input("Scenario description: ").strip()
+            difficulty = args.difficulty if args.difficulty is not None else int(input("Difficulty (1-10): "))
+            (comp_dir / "Compfile").write_text(
+                f"name {comp_name}\n"
+                f"scenario {scenario}\n"
+                f"difficulty {difficulty}\n"
+            )
+            boxes = collect_boxes()
+            (comp_dir / "boxes.json").write_text(json.dumps(boxes, indent=2))
+
+        deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase)
+        return
+
+    # Interactive path (unchanged behavior when no --competition flag is given).
     previous = load_previous_competitions()
     if previous:
         print("\nPrevious competitions:")
@@ -1479,7 +1774,9 @@ def main():
             sys.exit(1)
         comp_dir = Path("competitions") / comp_name
 
-    deploy(comp_dir)
+    # Pass through --teams/--yes/--from-phase so they still work in interactive mode; they're
+    # None/False/1 by default, giving exactly the prior interactive behavior.
+    deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase)
 
 
 if __name__ == "__main__":

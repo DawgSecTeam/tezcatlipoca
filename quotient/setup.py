@@ -47,8 +47,11 @@ _SERVICE_TO_CHECK = {
     "cyrus":     ("Imap", {"Display": "imap", "Port": 143, "CredLists": ["linux.credlist"]}),
     # SQL — Box.Sql field; Kind defaults to "mysql" but must be explicit; needs CredLists to login.
     # Unlike the checks above, these authenticate against the database's own user table rather
-    # than a system account, so build_credlist()'s OS credentials only satisfy them if nakon's
-    # install script creates a DB user to match. Expect these to score down until it does.
+    # than a system account. create-competition.py's fix_services_on_boxes binds mariadb/mysql to
+    # 0.0.0.0 and creates the admin/user1/user2 DB users with the linux.credlist passwords
+    # (CREATE USER ... @'%' + GRANT ALL), so the same credlist that satisfies SSH/SMTP logs in
+    # here too and a healthy box scores UP. (Keep box config + check in sync — the box grants the
+    # DB users, so don't drop CredLists.)
     "mariadb":   ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
     "mysql":     ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
     "mysqld":    ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
@@ -139,9 +142,10 @@ def build_credlist() -> str:
     upstream's linux.credlist.example, whose placeholder accounts exist nowhere — which put
     every Ssh/Smtp/Imap/Sql check permanently down no matter how healthy the service was.
 
-    Only covers checks that authenticate against a system account. The Sql check logs into the
-    database rather than the OS, so it stays down unless nakon's own install script happens to
-    create a matching DB user — see the note in _SERVICE_TO_CHECK.
+    NOTE: the live driver (create-competition.py's push_event_conf) now writes linux.credlist
+    inline as admin/user1/user2 (the accounts fix_services_on_boxes creates on every box,
+    including matching mysql DB users), so the Sql check authenticates fine too. This helper is
+    retained for reference/tests; it is not the source of the deployed credlist.
     """
     return f"{BOX_USERNAME},{BOX_PASSWORD}\n"
 
