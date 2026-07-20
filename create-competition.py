@@ -18,7 +18,7 @@ import toml
 import urllib3
 from dotenv import load_dotenv
 
-from quotient.setup import build_credlist, build_event_conf, seed_and_start
+from quotient.setup import build_credlist, build_event_conf, create_injects, seed_and_start
 from utils import DNS_FIX_CMD, load_compfile, pick_competition
 
 ENV_PATH = Path(".env")
@@ -224,6 +224,58 @@ def collect_boxes():
     return boxes
 
 
+def load_injects(comp_dir):
+    """Load per-competition injects from competitions/<id>/injects/.
+
+    Each inject is a subdirectory containing `inject.json`:
+        {
+          "title": "...", "description": "...",   # description may instead live in a
+          "description_file": "prompt.md",         # sibling file (markdown), optional
+          "open_offset_min": 0, "due_offset_min": 60, "close_offset_min": 90
+        }
+    Any other files in the subdirectory (e.g. a template .docx, a PoC) are uploaded as the
+    inject's attachments. Offsets are minutes relative to competition start (now); they're
+    resolved to RFC3339 timestamps here so Quotient's CreateInject can parse them directly.
+    Returns [] when there's no injects/ dir, so competitions without injects are unaffected.
+    """
+    injects_dir = comp_dir / "injects"
+    if not injects_dir.is_dir():
+        return []
+
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+
+    injects = []
+    for sub in sorted(injects_dir.iterdir()):
+        manifest = sub / "inject.json"
+        if not sub.is_dir() or not manifest.exists():
+            continue
+        meta = json.loads(manifest.read_text())
+
+        description = meta.get("description", "")
+        if meta.get("description_file"):
+            desc_path = sub / meta["description_file"]
+            if desc_path.exists():
+                description = desc_path.read_text()
+
+        def rfc3339(minutes):
+            return (now + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Attachments: every file in the folder except the manifest / description source.
+        skip = {"inject.json", meta.get("description_file")}
+        files = [str(f) for f in sorted(sub.iterdir()) if f.is_file() and f.name not in skip]
+
+        injects.append({
+            "title":       meta["title"],
+            "description": description,
+            "open_time":   rfc3339(meta.get("open_offset_min", 0)),
+            "due_time":    rfc3339(meta.get("due_offset_min", 60)),
+            "close_time":  rfc3339(meta.get("close_offset_min", 90)),
+            "files":       files,
+        })
+    return injects
+
+
 def load_boxes(comp_dir):
     # Saved by this script at competition-creation time (see boxes.json below) — reusing a
     # competition replays the exact boxes it was built with, not whatever's currently in .env.
@@ -267,21 +319,47 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir):
     cursor.close()
     mydb.close()
 
-    # Randomize once per box type so every team defends the same service set,
-    # which lets Quotient use its 192.168._.N wildcard IP pattern uniformly.
-    box_configs = {}
-    for box in boxes:
-        platform = nr.os_to_platform(box["template"])
-        services, vulns, _ = nr.pick_configurations(
-            name_to_row, platform, max(math.ceil(difficulty / 3), 1), max(difficulty, 1)
-        )
-        box_configs[box["name"]] = (services, vulns)
+    # Services that are legitimate in the catalog but too heavy/slow for an automated apply
+    # (splunk pulls a ~500 MB installer per box; roundcube drags in apache+mariadb+php). They
+    # can still be assigned by hand via box_services.json — they're only excluded from the
+    # random auto-pick so a hands-off deploy stays fast and reliable.
+    SLOW_SERVICES = {"splunk", "roundcube"}
+    for svc in SLOW_SERVICES:
+        name_to_row.pop(svc, None)
 
-    # Persist just the scoreable services so push_event_conf() can build
-    # Quotient checks without re-querying the DB on subsequent runs.
-    (comp_dir / "box_services.json").write_text(
-        json.dumps({name: svcs for name, (svcs, _) in box_configs.items()}, indent=2)
-    )
+    services_path = comp_dir / "box_services.json"
+
+    # Deterministic re-runs: if this competition already has a box_services.json, honour it
+    # instead of re-randomising. Lets an operator pin an exact service set (and makes reusing a
+    # competition reproduce the same boxes, which is the documented intent for boxes-per-event).
+    if services_path.exists():
+        pinned = json.loads(services_path.read_text())
+        # Optional companion file pins the misconfigs/vulns nakon plants per box. box_services.json
+        # only holds the scoreable services (that's all Quotient needs); vulns live here so a
+        # pinned competition can still deploy misconfigurations rather than services alone.
+        vulns_path = comp_dir / "box_vulns.json"
+        pinned_vulns = json.loads(vulns_path.read_text()) if vulns_path.exists() else {}
+        box_configs = {
+            box["name"]: (pinned.get(box["name"], []), pinned_vulns.get(box["name"], []))
+            for box in boxes
+        }
+        print(f"  Using pinned services from {services_path}")
+    else:
+        # Randomize once per box type so every team defends the same service set,
+        # which lets Quotient use its 192.168._.N wildcard IP pattern uniformly.
+        box_configs = {}
+        for box in boxes:
+            platform = nr.os_to_platform(box["template"])
+            services, vulns, _ = nr.pick_configurations(
+                name_to_row, platform, max(math.ceil(difficulty / 3), 1), max(difficulty, 1)
+            )
+            box_configs[box["name"]] = (services, vulns)
+
+        # Persist just the scoreable services so push_event_conf() can build
+        # Quotient checks without re-querying the DB on subsequent runs.
+        services_path.write_text(
+            json.dumps({name: svcs for name, (svcs, _) in box_configs.items()}, indent=2)
+        )
 
     machines = []
     for i, (team, box) in enumerate(
@@ -419,6 +497,22 @@ def fix_services_on_boxes(comp_dir, teams, boxes, ctx):
 
             # Build a per-box hardening script
             script_lines = ["#!/bin/bash", "set -e", ""]
+
+            # Always create the credlist OS accounts. Quotient's Ssh/Smtp/Imap/Ftp login checks
+            # authenticate against these system users; previously they were only created in the
+            # postfix branch, so a box that ran ssh (or ftp/imap) but not postfix had no account
+            # to log in as and scored permanently down. Creating them unconditionally is cheap
+            # and idempotent, and matches the linux.credlist push_event_conf() writes.
+            script_lines.extend([
+                "# Credlist OS accounts (admin/user1/user2) for all auth-based service checks",
+                "sudo useradd -m -s /bin/bash admin 2>/dev/null || true",
+                "echo 'admin:changeme123' | sudo chpasswd",
+                "sudo useradd -m -s /bin/bash user1 2>/dev/null || true",
+                "echo 'user1:password1' | sudo chpasswd",
+                "sudo useradd -m -s /bin/bash user2 2>/dev/null || true",
+                "echo 'user2:password2' | sudo chpasswd",
+                "",
+            ])
 
             if "mysql" in services or "mariadb" in services:
                 script_lines.extend([
@@ -701,10 +795,12 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir):
             box_octet = box["last_octet"]
             ipconfig = f"ip=192.168.{team_subnet}.{box_octet}/24,gw=192.168.{team_subnet}.1"
             bridge = f"vmbr{team_subnet}"
+            # `ipconfig0` is the cloud-init IP key; there is no `ciipconfig0` param and
+            # including it makes Proxmox reject the whole request (400 Parameter verification
+            # failed). Let Proxmox auto-assign the NIC MAC rather than pinning 00:00:00:00:00:00.
             proxmox_api("PUT", f"/nodes/{node}/qemu/{dst_vmid}/config", data={
-                "ciipconfig0": ipconfig,
                 "ipconfig0": ipconfig,
-                "net0": f"virtio=00:00:00:00:00:00,bridge={bridge}",
+                "net0": f"virtio,bridge={bridge}",
             })
 
     # Step 4: Start ALL team boxes (team1 + cloned)
@@ -947,7 +1043,37 @@ def bootstrap_scoring_engine(ctx):
     print("  Team bridge interfaces configured")
 
 
-def push_event_conf(comp_dir, teams, boxes, ctx, event_name):
+def ensure_nat_forwarding(ctx):
+    """Idempotently (re)assert the engine's team-subnet NAT + forwarding.
+
+    The scoring engine is every team's NAT gateway to the internet, which nakon needs for
+    apt-get. But Docker re-syncs iptables on any container start/restart and drops the custom
+    team-subnet MASQUERADE, leaving boxes offline — and nakon swallows the resulting apt
+    failures, so services silently don't install. Call this right before any step that needs
+    the team boxes online (i.e. before each nakon run). Only the boxes→internet path needs
+    NAT; engine→box scoring is direct routing on the team bridge, so this is only about nakon.
+    """
+    key = ctx["ssh_key_path"]
+    scoring_ip = ctx["scoring_engine_ip"]
+    scoring_user = ctx["vm_username"]
+    cmd = (
+        "sudo iptables -P FORWARD ACCEPT; "
+        "sudo iptables -t nat -C POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE 2>/dev/null || "
+        "sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE"
+    )
+    subprocess.run(
+        [
+            "ssh", "-i", key,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            f"{scoring_user}@{scoring_ip}", cmd,
+        ],
+        check=False, timeout=30,
+    )
+    print("  NAT/forwarding ensured on scoring engine")
+
+
+def push_event_conf(comp_dir, teams, boxes, ctx, event_name, inject_password=None):
     """Build event.conf and push it to the scoring engine."""
     import base64
 
@@ -964,6 +1090,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name):
         "team_passwords": {team_key: team_data["password"] for team_key, team_data in teams.items()},
         "event_name": event_name,
         "quotient_admin_password": "changeme123",
+        "inject_password": inject_password,
     }
 
     # Build event.conf from box_services
@@ -1074,8 +1201,11 @@ def deploy(comp_dir):
     print("[1/7] Cleaning up previous deployment...")
     node = os.environ["TF_VAR_proxmox_node"]
     for team in teams.values():
-        for box in boxes:
-            destroy_vm_if_exists(node, vm_id_for(team["identifier"], box["last_octet"]))
+        # vm_id_for takes the 0-based box index (matching main.tf and clone_team_boxes), NOT
+        # last_octet — passing last_octet computed the wrong vmids, so cleanup never actually
+        # removed the previous run's team boxes and they lingered to collide with the next run.
+        for box_idx, _box in enumerate(boxes):
+            destroy_vm_if_exists(node, vm_id_for(team["identifier"], box_idx))
     # Destroy scoring engine (vmid hardcoded in main.tf)
     destroy_vm_if_exists(node, 1000)
     # Destroy bridges
@@ -1085,8 +1215,11 @@ def deploy(comp_dir):
 
     # [2/7] Terraform init & apply
     print("[2/7] Running Terraform init & apply...")
-    subprocess.run(["terraform", "init"], cwd="terraform", check=True, timeout=60)
-    subprocess.run(["terraform", "apply", "-auto-approve"], cwd="terraform", check=True, timeout=600)
+    subprocess.run(["terraform", "init"], cwd="terraform", check=True, timeout=120)
+    # -parallelism=1 serializes the clones: full-cloning the scoring engine and every team box
+    # at once saturates the datastore and the Proxmox API starts returning HTTP 596 (timeout),
+    # failing the apply. Cloning one VM at a time is slower but reliable (main.tf assumes this).
+    subprocess.run(["terraform", "apply", "-auto-approve", "-parallelism=1"], cwd="terraform", check=True, timeout=2400)
 
     # Wait for VMs to initialize
     print("  Waiting for VMs to initialize (60s)...")
@@ -1128,6 +1261,17 @@ def deploy(comp_dir):
     print("[4/7] Bootstrapping scoring engine (packages, Docker, Quotient)...")
     bootstrap_scoring_engine(ctx)
 
+    # Push event.conf now, BEFORE nakon. Quotient's server panics on every scoring round while
+    # event.conf is absent, and each container restart re-syncs iptables and wipes the team NAT
+    # rule — which starves nakon's apt-get of internet. Writing a valid event.conf here stops the
+    # crash loop so NAT stays up through the nakon runs. event.conf uses the 192.168._.N wildcard
+    # and lists every team, so it's complete even though team2+ boxes don't exist yet.
+    print("  Pushing event.conf early (stabilizes Quotient so NAT survives nakon)...")
+    injects = load_injects(comp_dir)
+    inject_password = random_password() if injects else None
+    push_event_conf(comp_dir, teams, boxes, ctx, name, inject_password=inject_password)
+    ensure_nat_forwarding(ctx)
+
     # [4.5/7] Enable password auth + NOPASSWD sudo for ubuntu on team1 boxes
     print("[4.5/7] Enabling password auth + NOPASSWD sudo for ubuntu on team1 boxes...")
     # Only team1 exists at this point (team2+ are cloned later)
@@ -1145,6 +1289,9 @@ def deploy(comp_dir):
     nakon_config = json.loads((NAKON_DIR / "config.json").read_text())
     nakon_config_team1 = {"machines": [m for m in nakon_config["machines"] if ".101." in m["ip"]]}
     (NAKON_DIR / "config.json").write_text(json.dumps(nakon_config_team1, indent=2))
+
+    # Make sure the boxes can still reach the internet right before nakon's apt-get runs.
+    ensure_nat_forwarding(ctx)
 
     # Copy Nakon files to gateway
     subprocess.run(
@@ -1171,7 +1318,7 @@ def deploy(comp_dir):
             "sudo pip3 install --break-system-packages 'mysql-connector-python>=8.3.0' paramiko python-dotenv requests 2>/dev/null && "
             "cd /opt/nakon && sudo python3 deploy.py",
         ],
-        check=True, timeout=1200,
+        check=True, timeout=2400,
     )
     # Restore full config for team2+ Nakon after cloning
     (NAKON_DIR / "config.json").write_text(json.dumps(nakon_config, indent=2))
@@ -1184,6 +1331,7 @@ def deploy(comp_dir):
     # Deploy Nakon on team2+ boxes (team1 already done at [5/7])
     if len(teams) > 1:
         print("  Deploying Nakon on team2+ boxes...")
+        ensure_nat_forwarding(ctx)
         # Copy full Nakon config to gateway
         subprocess.run(
             [
@@ -1207,13 +1355,12 @@ def deploy(comp_dir):
                 "sudo cp /tmp/nakon/* /tmp/nakon/.env /opt/nakon/ && "
                 "cd /opt/nakon && sudo python3 deploy.py",
             ],
-            check=True, timeout=180,
+            check=True, timeout=2400,
         )
         print("  Nakon deployment on team2+ complete")
 
-    # [7/7] Push event config and seed competition
-    print("[7/7] Pushing event configuration and seeding competition...")
-    push_event_conf(comp_dir, teams, boxes, ctx, name)
+    # [7/7] Seed competition and create injects (event.conf was pushed at [4/7])
+    print("[7/7] Seeding competition and creating injects...")
 
     # Wait for Quotient to be ready
     print("  Waiting for Quotient to be ready...")
@@ -1227,6 +1374,11 @@ def deploy(comp_dir):
     }
     seed_and_start(scoring_ip, quotient_ctx)
 
+    # Create injects via Quotient's API (competition must be seeded/started first)
+    if injects:
+        print(f"  Creating {len(injects)} inject(s)...")
+        create_injects(scoring_ip, "changeme123", injects)
+
     # Print summary
     print(f"\n{'='*60}")
     print(f"  {name} is live")
@@ -1235,6 +1387,8 @@ def deploy(comp_dir):
     print(f"Saved to: competitions/{comp_name}/")
     print(f"\nScoreboard:    http://{scoring_ip}")
     print(f"Admin login:   admin / changeme123")
+    if inject_password:
+        print(f"Inject login:  inject / {inject_password}   ({len(injects)} inject(s) loaded)")
     print(f"\nTeam logins:")
     for team_name, team_data in teams.items():
         print(f"  {team_name} / {team_data['password']}  (subnet 192.168.{team_data['identifier']}.0/24)")

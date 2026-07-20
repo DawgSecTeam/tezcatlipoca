@@ -1,0 +1,7 @@
+{
+  "title": "INJECT 03 — DNS & Database Service Hardening",
+  "description_file": "prompt.md",
+  "open_offset_min": 20,
+  "due_offset_min": 75,
+  "close_offset_min": 90
+}
