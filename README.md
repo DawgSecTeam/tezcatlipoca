@@ -1,14 +1,24 @@
-# Quotient + nakon range automation
+# tezcatlipoca — Proxmox CTF range automation
 
-Proxmox-based scoring range. `create-competition.py` is the driver: it generates Quotient's
-scoring config and nakon's machine list, then runs a seven-phase deploy. Terraform is one phase
-of that — it builds only team1's boxes, the scoring engine, and the team bridges; the driver
-then bootstraps Quotient, runs nakon, and clones team1's boxes out to the other teams over SSH.
-nakon SSHes into each box to install services and deploy misconfigs. Team bridges have no uplink
-of their own, so the scoring engine is the only thing with a NIC on every team's network — it's
-the jump host the driver tunnels through, where nakon actually runs, and what NATs each team out
-to the internet. Because it sits on every team bridge it *could* route team to team;
-`range-firewall.sh` on the engine is what actually keeps teams apart, not the empty bridges.
+Automates the full lifecycle of a hacking-competition range on Proxmox: provisioning VMs,
+bootstrapping [Quotient](https://github.com/CyberDawgsTeam/quotient) for scoring, and deploying
+[nakon](https://github.com/CyberDawgsTeam/nakon) to plant services and misconfigurations across
+team boxes. `create-competition.py` is the single entry point — it runs a seven-phase deploy
+covering Terraform infra, Quotient bootstrap, nakon execution, and VM cloning.
+
+**Quick links:** [OVERVIEW.md](OVERVIEW.md) (detailed pipeline walkthrough) · [Adding a template VM](#adding-a-template-vm) · [Configure the event](#configure-the-event) · [Run it](#run-it) · [Troubleshooting](#troubleshooting)
+
+## How it works
+
+`create-competition.py` is the driver: it generates Quotient's scoring config and nakon's
+machine list, then runs a seven-phase deploy. Terraform is one phase of that — it builds only
+team1's boxes, the scoring engine, and the team bridges; the driver then bootstraps Quotient,
+runs nakon, and clones team1's boxes out to the other teams over SSH. nakon SSHes into each box
+to install services and deploy misconfigs. Team bridges have no uplink of their own, so the
+scoring engine is the only thing with a NIC on every team's network — it's the jump host the
+driver tunnels through, where nakon actually runs, and what NATs each team out to the internet.
+Because it sits on every team bridge it *could* route team to team; `range-firewall.sh` on the
+engine is what actually keeps teams apart, not the empty bridges.
 
 ## Layout
 
@@ -19,6 +29,9 @@ nakon/       symlink to ~/dev/nakon — box configuration tool, developed in its
              create-competition.py loads randomize_config.py from here to write config.json,
              then scps nakon's runtime files onto the scoring engine and runs them there
              during the deploy — you don't run it yourself anymore.
+create-competition.py  Single entry point — interactive prompts, then 7-phase deploy
+destroy-competition.py Teardown — destroys cloned VMs + runs terraform destroy
+verify-competition.py  Post-deploy health check — validates boxes, services, and scoring
 ```
 
 ## Prerequisites (one-time, per Proxmox host)
@@ -34,6 +47,8 @@ role, or at minimum `VM.Allocate`, `VM.Clone`, `VM.Config.All`, `VM.PowerMgmt`,
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/range_key -C "range-automation" -N ""
 ```
+Then set `TF_VAR_ssh_private_key_path` in `.env` to the private key path (default in `.env.example`
+is `../proxmox`, so either move/copy the key there or update the `.env` value).
 
 **Workstation tooling**:
 ```bash
@@ -53,6 +68,12 @@ cp .env.example .env
 ```
 `.env` is gitignored — it's the only place real Proxmox creds, SSH key path, and passwords
 live. See [Configure the event](#configure-the-event) below for what each value means.
+
+**nakon** — clone the repo and symlink it:
+```bash
+git clone https://github.com/CyberDawgsTeam/nakon ~/dev/nakon
+ln -s ~/dev/nakon nakon
+```
 
 **vulndb** — nakon's MySQL database of `vulnerabilities`/`misconfigs` (see `nakon/README.md`
 for the schema). nakon runs *on the scoring engine*, not your workstation, so vulndb must be
