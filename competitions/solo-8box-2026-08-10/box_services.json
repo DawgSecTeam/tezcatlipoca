@@ -1,0 +1,28 @@
+{
+  "web01": [
+    "nginx"
+  ],
+  "app01": [
+    "dovecot"
+  ],
+  "web02": [
+    "postfix"
+  ],
+  "app02": [
+    "mysql"
+  ],
+  "db01": [
+    "mysql"
+  ],
+  "db02": [
+    "mysql"
+  ],
+  "mail01": [
+    "postfix",
+    "dovecot"
+  ],
+  "infra01": [
+    "bind",
+    "telnet-service"
+  ]
+}

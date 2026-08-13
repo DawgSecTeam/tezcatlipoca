@@ -2,17 +2,17 @@
   {
     "name": "web01",
     "last_octet": 2,
-    "cpu": 2,
+    "cpu": 1,
     "memory_mb": 2048,
     "disk_gb": null,
     "template": "ubuntu24.04-fix"
   },
   {
-    "name": "svc01",
+    "name": "app01",
     "last_octet": 3,
     "cpu": 1,
-    "memory_mb": 1536,
+    "memory_mb": 2048,
     "disk_gb": null,
-    "template": "ubuntu24.04-fix"
+    "template": "debian13-lite-fix"
   }
 ]
