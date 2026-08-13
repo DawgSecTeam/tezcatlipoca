@@ -1,7 +1,9 @@
 """
 Drives Quotient (the scoring engine): build_event_conf() generates its TOML scoring
-config from Terraform's agent_context; seed_and_start() logs into its admin API to seed
-team identifiers and start the competition clock once that config is live.
+config from Terraform's agent_context; seed_teams() logs into its admin API to seed team
+identifiers and start the competition clock once that config is live; unpause_engine()
+separately unblocks the scoring round loop (split out from seed_teams() because that one
+call isn't safely repeatable — see its docstring).
 """
 
 import time
@@ -55,6 +57,11 @@ _SERVICE_TO_CHECK = {
     "mariadb":   ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
     "mysql":     ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
     "mysqld":    ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
+    # Telnet — no protocol-aware Telnet check exists in Quotient, but it does ship a generic
+    # Box.Tcp check (engine/checks/tcp.go: dials the port, scores UP on connect) that's exactly
+    # enough to confirm the service is listening. Confirmed against /opt/quotient's own source
+    # and config/event.conf.example on the scoring engine (2026-08-07).
+    "telnet-service": ("Tcp", {"Display": "telnet", "Port": 23}),
 }
 
 
@@ -150,31 +157,41 @@ def build_credlist() -> str:
     return f"{BOX_USERNAME},{BOX_PASSWORD}\n"
 
 
-def seed_and_start(host: str, ctx: dict) -> None:
+def _wait_for_quotient(host: str) -> None:
+    # Wait for Quotient to accept connections — docker compose restart can take >10 s
+    deadline = time.time() + 120
+    while True:
+        try:
+            requests.get(f"{host}/api/login", timeout=3)
+            return
+        except requests.exceptions.ConnectionError:
+            if time.time() > deadline:
+                raise SystemExit(f"[quotient] timed out waiting for {host} to come up")
+            time.sleep(3)
+
+
+def _admin_session(host: str, ctx: dict) -> requests.Session:
+    session = requests.Session()
+    # Quotient's auth is cookie-based (POST /api/login sets a session cookie) — there's no
+    # bearer token anywhere in the API.
+    r = session.post(f"{host}/api/login", json={"username": "admin", "password": ctx["quotient_admin_password"]})
+    r.raise_for_status()
+    print(f"[quotient] logged in as admin → {r.status_code}")
+    return session
+
+
+def seed_teams(host: str, ctx: dict) -> None:
+    """Assign each team its identifier and flip the DB 'started' flag. Safe to call more than
+    once — /api/admin/teams and /api/competition/start both just (re)write DB state, unlike
+    unpause_engine()'s call below."""
     # Teams already exist by this point — event.conf's [[team]] entries seed name/pw at
     # startup — but Quotient assigns them their own numeric IDs, and `identifier` (used for
     # 192.168._.N substitution in box IPs) isn't settable from the TOML at all. Look the IDs
     # up by name, then batch-update identifiers in a single call (that's the only shape
     # /api/admin/teams accepts).
     host = _normalize_host(host)
-    # Wait for Quotient to accept connections — docker compose restart can take >10 s
-    deadline = time.time() + 120
-    while True:
-        try:
-            requests.get(f"{host}/api/login", timeout=3)
-            break
-        except requests.exceptions.ConnectionError:
-            if time.time() > deadline:
-                raise SystemExit(f"[quotient] timed out waiting for {host} to come up")
-            time.sleep(3)
-
-    session = requests.Session()
-
-    # Quotient's auth is cookie-based (POST /api/login sets a session cookie) — there's no
-    # bearer token anywhere in the API.
-    r = session.post(f"{host}/api/login", json={"username": "admin", "password": ctx["quotient_admin_password"]})
-    r.raise_for_status()
-    print(f"[quotient] logged in as admin → {r.status_code}")
+    _wait_for_quotient(host)
+    session = _admin_session(host, ctx)
 
     r = session.get(f"{host}/api/teams")
     r.raise_for_status()
@@ -194,9 +211,19 @@ def seed_and_start(host: str, ctx: dict) -> None:
     r.raise_for_status()
     print(f"[quotient] competition started (DB) → {r.status_code}")
 
-    # /api/competition/start only updates the DB flag — the engine goroutine stays blocked
-    # on EnginePauseWg.Wait() (because event.conf has StartPaused=true) until this call
-    # decrements the WaitGroup and allows the round loop to proceed.
+
+def unpause_engine(host: str, ctx: dict) -> None:
+    """Unblock the scoring round loop. NOT safely repeatable: /api/competition/start only
+    updates the DB flag — the engine goroutine stays blocked on EnginePauseWg.Wait() (because
+    event.conf has StartPaused=true) until this call decrements that WaitGroup once and lets
+    the round loop proceed. A second call after it's already succeeded risks decrementing past
+    zero — Go's sync.WaitGroup panics ("negative WaitGroup counter") if that happens. Callers
+    (deploy()'s phase 7) must gate this behind a state flag so a resume/retry can't call it
+    twice; this function itself has no way to ask Quotient "am I already unpaused?" since no
+    read endpoint for that state is exposed."""
+    host = _normalize_host(host)
+    _wait_for_quotient(host)
+    session = _admin_session(host, ctx)
     r = session.post(f"{host}/api/engine/pause", json={"pause": False})
     r.raise_for_status()
     print(f"[quotient] engine unpaused → {r.status_code}")
@@ -210,6 +237,11 @@ def create_injects(host: str, admin_password: str, injects: list) -> None:
     endpoint is multipart/form-data with field names title/description/open-time/due-time/
     close-time and a repeated `files` file part — this mirrors Quotient's CreateInject handler.
     Runs as the admin account (INJECTAUTH accepts admin), so no separate inject login needed.
+
+    Skips any inject whose title already exists on the engine (GET /api/injects first) —
+    defense in depth so a phase-7 resume/retry that reaches here again doesn't re-create
+    duplicates, even if the caller's own state-flag guard (deploy()'s injects_created) were
+    ever stale or hand-edited.
     """
     if not injects:
         return
@@ -219,7 +251,19 @@ def create_injects(host: str, admin_password: str, injects: list) -> None:
     r = session.post(f"{host}/api/login", json={"username": "admin", "password": admin_password})
     r.raise_for_status()
 
+    existing_titles = set()
+    try:
+        r = session.get(f"{host}/api/injects", timeout=10)
+        r.raise_for_status()
+        existing_titles = {inj.get("Title") or inj.get("title") for inj in (r.json() or [])}
+    except requests.RequestException as e:
+        print(f"[quotient] WARNING: couldn't fetch existing injects ({e}) — proceeding without "
+              "dedup, a resume may create duplicates")
+
     for inj in injects:
+        if inj["title"] in existing_titles:
+            print(f"[quotient] inject '{inj['title']}' already exists — skipping")
+            continue
         # Quotient's CreateInject calls ParseMultipartForm, so the request MUST be
         # multipart/form-data even when there are no attachments. requests only switches to
         # multipart when `files=` is populated, so send the text fields as (None, value)
