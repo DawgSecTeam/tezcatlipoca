@@ -1,0 +1,12 @@
+{
+  "web01": [
+    "suid-find",
+    "www-data-shell",
+    "bad-perms-userConfig",
+    "example-evil-image"
+  ],
+  "svc01": [
+    "suid-find",
+    "bad-perms-userConfig"
+  ]
+}

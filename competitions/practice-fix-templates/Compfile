@@ -1,0 +1,3 @@
+name practice-fix-templates
+scenario Practice run validating the fixed cloud-init templates (950 ubuntu24.04-fix, 951 debian13-lite-fix)
+difficulty 3

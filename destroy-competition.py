@@ -51,7 +51,14 @@ def destroy_cloned_vms(cloned_vms_path):
         while True:
             if time.time() > deadline:
                 raise RuntimeError(f"Proxmox task {upid} timed out after {timeout}s")
-            if pve("GET", f"/nodes/{node}/tasks/{upid}/status")["data"]["status"] == "stopped":
+            data = pve("GET", f"/nodes/{node}/tasks/{upid}/status")["data"]
+            if data["status"] == "stopped":
+                # A stopped task isn't necessarily a successful one — checking only "status"
+                # (as this used to) reported a failed stop/delete (e.g. a permissions error)
+                # as "deleted" even though the VM was still there, and `terraform destroy`
+                # then orphaned it without anyone noticing.
+                if data.get("exitstatus") != "OK":
+                    raise RuntimeError(f"Proxmox task {upid} failed: {data.get('exitstatus')}")
                 return
             time.sleep(3)
 
