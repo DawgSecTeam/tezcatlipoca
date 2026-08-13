@@ -103,7 +103,10 @@ locals {
   # other teams via the Proxmox API after Nakon has run. All bridges are still
   # created here (scoring engine needs its NICs on every team bridge regardless).
   sorted_team_keys = sort(keys(var.teams))
-  team1_key        = local.sorted_team_keys[0]
+  # The rest of the pipeline (create-competition.py's collect_teams()/hardcoded "team1"
+  # lookups) hard-assumes a team literally named team1 exists — look it up by name, not by
+  # sort order, so a non-default team-key set fails fast instead of building the wrong team.
+  team1_key = "team1"
 
   team_vms = {
     for box in var.boxes_per_team : "${local.team1_key}-${box.name}" => {
@@ -133,6 +136,15 @@ resource "proxmox_virtual_environment_vm" "team_box" {
     retries = 15 # Proxmox locks the source VM; concurrent clones from the same template race for the
                  # lock and the loser gets a short timeout. 15 retries gives ~2 min of retry budget —
                  # enough for the winning clone to finish and release the lock before we give up.
+  }
+
+  lifecycle {
+    precondition {
+      condition = (200 + (tonumber(each.value.identifier) * 10) + index(
+        [for b in var.boxes_per_team : b.name], each.value.box.name
+      )) != proxmox_virtual_environment_vm.scoring_engine.vm_id
+      error_message = "Computed team_box vm_id collides with the scoring engine's fixed vm_id (1000). Adjust team identifiers or box count."
+    }
   }
 
   cpu { cores = each.value.box.cpu }
@@ -167,8 +179,9 @@ resource "proxmox_virtual_environment_vm" "team_box" {
       username = "ubuntu"
       keys     = [var.ssh_public_key]
       # nakon's paramiko connections use password auth (see quotient/setup.py) — without this
-      # the account has no password hash at all and every login attempt is rejected outright
-      password = "ubuntu"
+      # the account has no password hash at all and every login attempt is rejected outright.
+      # Generated fresh per competition (see var.box_password's description), not a literal.
+      password = var.box_password
     }
     # Always a public resolver, never the team's own dns* box. Pointing boxes at that box
     # deadlocks provisioning: its bind9 is installed by nakon, and nakon installs it with
@@ -197,7 +210,14 @@ locals {
   # team_vms above), so management must live outside it — .env.example uses 10.0.0.0/8.
   scoring_mgmt_ips = [
     for ip in flatten(proxmox_virtual_environment_vm.scoring_engine.ipv4_addresses) :
-    ip if !startswith(ip, "127.") && !startswith(ip, "192.168.")
+    ip if(
+      !startswith(ip, "127.") &&
+      !startswith(ip, "192.168.") &&
+      # Docker's default bridge range (e.g. 172.17.0.1) — Quotient runs in Docker on this VM.
+      !(startswith(ip, "172.") && tonumber(split(".", ip)[1]) >= 16 && tonumber(split(".", ip)[1]) <= 31) &&
+      # Tailscale's CGNAT range, in case the engine is also on a tailnet.
+      !(startswith(ip, "100.") && tonumber(split(".", ip)[1]) >= 64 && tonumber(split(".", ip)[1]) <= 127)
+    )
   ]
   scoring_ip = local.scoring_mgmt_ips[0]
   ssh_cmd    = "ssh -i ${var.ssh_private_key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${var.vm_username}@${local.scoring_ip}"
@@ -210,8 +230,8 @@ locals {
 # re-runs nakon — that would flatten a live competition just to add a team to it.
 #
 # This was Step B of null_resource.orchestrate. The remaining steps keep their original letters
-# (A, then C, then D) so the many references to them in README.md/OVERVIEW.md still line up —
-# hence the gap where B used to be.
+# (A, then C, then D) so the many references to them in the README still line up — hence the
+# gap where B used to be.
 resource "null_resource" "team_nics" {
   triggers = {
     engine_id = proxmox_virtual_environment_vm.scoring_engine.id
@@ -239,9 +259,12 @@ resource "null_resource" "team_nics" {
       "sudo chmod 600 /etc/netplan/60-team-ifaces.yaml",
       "sudo netplan apply",
       # A drop-in that gets overwritten, not `tee -a /etc/sysctl.conf`, which appended another
-      # copy of this line on every apply. NAT and the rest of the firewall are handled by
-      # range-firewall.sh in Step C — they have to be re-applied after Docker starts.
-      "echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/99-range-forward.conf",
+      # copy of this line on every apply. NAT is handled idempotently by
+      # create-competition.py's ensure_nat_forwarding()/range-firewall.timer instead — they have
+      # to be re-applied after Docker starts anyway, so terraform doesn't need to own it too.
+      # rp_filter=2 disables strict reverse-path filtering so NAT/masqueraded return traffic
+      # from team subnets isn't dropped.
+      "printf 'net.ipv4.ip_forward=1\\nnet.ipv4.conf.all.rp_filter=2\\nnet.ipv4.conf.default.rp_filter=2\\n' | sudo tee /etc/sysctl.d/99-range-forward.conf",
       "sudo sysctl -p /etc/sysctl.d/99-range-forward.conf",
     ]
     connection {
@@ -252,7 +275,11 @@ resource "null_resource" "team_nics" {
     }
   }
 
-  depends_on = [proxmox_virtual_environment_vm.scoring_engine]
+  depends_on = [
+    proxmox_virtual_environment_vm.scoring_engine,
+    # Reboot must complete (hypervisor-level cold boot) before netplan apply can find ens19/ens20.
+    null_resource.reboot_scoring_engine,
+  ]
 }
 
 # Reboot scoring engine so the guest kernel detects the additional virtio NICs
@@ -301,49 +328,23 @@ resource "null_resource" "orchestrate" {
   # Wait for the scoring engine to come back up after reboot.
   # Loop runs SSH with actual command execution (not just TCP connect) to
   # confirm auth is working, then sleeps 30s to let the system stabilize
-  # before the remote-exec provisioner fires.
+  # before create-competition.py's later phases run.
   provisioner "local-exec" {
     command = "for i in $(seq 1 30); do if ssh -i ${var.ssh_private_key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes ${var.vm_username}@${local.scoring_ip} echo ok 2>/dev/null | grep -q ok; then echo 'Scoring engine online'; break; fi; echo \"Waiting for scoring engine ($i/30)\"; sleep 10; done; sleep 30"
   }
 
-  # Step B: configure team NICs and NAT on scoring VM
-  # Steps A (package install), C (Quotient Docker), D (Nakon deploy) moved to
-  # create-competition.py to keep terraform apply under the tool timeout limit.
-  provisioner "remote-exec" {
-    inline = [
-      "set -e",
-      # Generate netplan config for each team NIC
-      # NICs are named predictably: ens18=mgmt, ens19=team1, ens20=team2, ...
-      "sudo tee /etc/netplan/60-team-ifaces.yaml << 'EOF'",
-      "network:",
-      "  version: 2",
-      "  ethernets:",
-      # One entry per team — identifiers sorted so NIC order is deterministic
-      join("\n", [for idx, team in sort(keys(var.teams)) :
-        "    ens${18 + idx + 1}:\n      addresses: [\"192.168.${var.teams[team].identifier}.1/24\"]"
-      ]),
-      "EOF",
-      "sudo netplan apply",
-      "sudo sysctl -w net.ipv4.ip_forward=1",
-      "echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf",
-      # Disable reverse path filtering so NAT/masqueraded return traffic reaches team subnets
-      "sudo sysctl -w net.ipv4.conf.all.rp_filter=2",
-      "sudo sysctl -w net.ipv4.conf.default.rp_filter=2",
-      "echo 'net.ipv4.conf.all.rp_filter=2' | sudo tee -a /etc/sysctl.conf",
-      "echo 'net.ipv4.conf.default.rp_filter=2' | sudo tee -a /etc/sysctl.conf",
-      "sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE",
-    ]
-    connection {
-      type        = "ssh"
-      user        = var.vm_username
-      private_key = file(var.ssh_private_key_path)
-      host        = local.scoring_ip
-      timeout     = "5m"
-    }
-  }
+  # Step B (netplan/sysctl/NAT config on the scoring VM) has moved entirely into
+  # null_resource.team_nics (terraform-side) and create-competition.py's
+  # ensure_nat_forwarding()/range-firewall.timer (python-side, since NAT + team isolation get
+  # wiped by Docker's iptables resync on every container restart and have to be idempotently
+  # re-asserted anyway).
+  # This resource now only gates on the engine being SSH-reachable after reboot; Steps A
+  # (package install), C (Quotient Docker), D (Nakon deploy) live in create-competition.py.
   depends_on = [
     proxmox_virtual_environment_vm.scoring_engine,
     proxmox_virtual_environment_vm.team_box,
+    # Reboot must complete before this resource's SSH-readiness probe runs.
+    null_resource.reboot_scoring_engine,
     # Step D reaches team1's boxes over the engine's team-facing NICs, so they must be
     # addressed before nakon runs.
     null_resource.team_nics,

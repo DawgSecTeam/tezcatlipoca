@@ -33,6 +33,12 @@ variable "quotient_admin_password" {
   sensitive   = true
 }
 
+variable "box_password" {
+  description = "Password for the 'ubuntu' cloud-init account created on every team box clone. Generated fresh per competition in deploy() (create-competition.py) — not a fixed literal — because nakon authenticates with password auth (see quotient/setup.py) rather than a key, and a fixed value across every deployment would be guessable from this open-source repo. The username itself stays 'ubuntu' everywhere; only this password rotates."
+  type        = string
+  sensitive   = true
+}
+
 variable "event_name" {
   type    = string
   default = "Range 2025"

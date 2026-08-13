@@ -16,17 +16,22 @@ DNS_FIX_CMD = (
 
 
 # The one account main.tf's initialization.user_account block creates on every box clone
-# (nakon authenticates with a password, not a key, hence the fixed password). Quotient's
-# credlist has to carry exactly this pair or its login checks score a box that is actually
-# healthy as down — keep in sync with main.tf's user_account block if it ever changes.
+# (nakon authenticates with a password, not a key, hence a password rather than a key). The
+# *username* is a fixed, non-secret constant — 3+ SSH call sites and cloud-init's key binding
+# assume it's always "ubuntu" — but the *password* is not: it's generated fresh per
+# competition in deploy() (create-competition.py, box_password) and threaded through
+# TF_VAR_box_password / generate_nakon_config() / .deploy_state.json / credentials.txt, not
+# read from here. BOX_PASSWORD below is a fallback/reference constant only (used by
+# quotient/setup.py's build_credlist(), which is itself dead code kept for reference — see its
+# docstring) — it is NOT the value any real deployment actually uses.
 BOX_USERNAME = "ubuntu"
 BOX_PASSWORD = "ubuntu"
 
 
 def load_compfile(path):
-    name = None
-    scenario = None
-    difficulty = None
+    name = ""
+    scenario = ""
+    difficulty = 0
 
     with open(path) as f:
         for line in f:
@@ -39,7 +44,10 @@ def load_compfile(path):
             elif key == "scenario":
                 scenario = value
             elif key == "difficulty":
-                difficulty = int(value)
+                try:
+                    difficulty = int(value)
+                except ValueError:
+                    difficulty = 0
 
     return name, scenario, difficulty
 
