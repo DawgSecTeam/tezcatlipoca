@@ -175,6 +175,55 @@ when Terraform clones it for real and just leaves you locked out.
   [Configure the event](#configure-the-event)) queries Proxmox for tagged templates and will
   offer this one by name the next time you create or reuse a competition.
 
+### Windows box templates
+
+None of the above applies to Windows — there's no cloud-init, so the process is different, not
+just similarly-shaped. `terraform/main.tf`'s `initialization` block is skipped entirely for any
+template whose name contains `win` (the same substring convention nakon's own `os_to_platform()`
+uses to route catalog configs, so name it consistently and every layer agrees). Windows boxes get
+their IP/gateway/DNS and local Administrator password set post-clone instead, over the QEMU guest
+agent (`bootstrap_windows_box()` in `create-competition.py`) — nakon authenticates by password
+(see `nakon/deploy/ssh.py`), not a key, so there's no equivalent of pushing `ssh_public_key`.
+
+Building the template itself, verified end-to-end producing `windows-server-fix`:
+
+1. **Install unattended.** Windows Server Evaluation ISOs are free from Microsoft
+   (`https://go.microsoft.com/fwlink/p/?LinkID=2195280` for 2022 at time of writing — confirm the
+   redirect target is a real `...download.prss.microsoft.com` signed ISO before trusting it).
+   Drive the install with an `autounattend.xml` (floppy image via `qm set <vmid> --args '-fda
+   /path/to/autounattend.img'` — attaching it as a second CD-ROM did *not* get auto-detected in
+   testing, the floppy path is the reliable one). **The one bug that will burn you**: declare
+   `xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"` on the root `<unattend>`
+   element if you use any `wcm:action` attribute — omitting it fails silently past the very first
+   WinPE language-select screen (that screen never auto-skips even with a *working* answer file,
+   don't mistake it for detection failure) and only surfaces as "could not parse... line N column
+   M" once you click through to "Install now" manually. Boot with SeaBIOS + a SATA disk + an
+   `e1000` NIC, not virtio — avoids needing driver injection during WinPE's fragile textmode
+   phase; install the real virtio-win guest tools afterward instead (next step).
+2. **Bootstrap over the guest agent** (works before there's any network, same as the Linux
+   template-fix workflow): `msiexec /i <virtio-win-iso-drive>:\virtio-win-gt-x64.msi /qn
+   /norestart` — the QEMU guest agent service reports "running" without this, but doesn't
+   actually work (no vioserial driver bound) until the real virtio drivers are installed. Then
+   `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`, start+enable `sshd`, open the
+   firewall for :22.
+3. **Sysprep it.** `sysprep /generalize /oobe /shutdown /unattend:<path>` where that unattend.xml
+   sets `<ComputerName>*</ComputerName>` (specialize pass) so every future clone gets a fresh
+   random hostname/SID with zero manual steps, and skips OOBE the same way the install-time
+   answer file did. **The other bug that will burn you**: sysprep fails immediately (error
+   0x3cf2, "Package Microsoft.MicrosoftEdge.Stable... was installed for a user, but not
+   provisioned for all users") on current Server images — the well-known Edge-blocks-sysprep
+   issue. Fix before sysprepping: `Get-AppxPackage -AllUsers -Name "*MicrosoftEdge*" |
+   Remove-AppxPackage -AllUsers` (the broader `Get-AppxPackage -AllUsers | Remove-AppxPackage
+   -AllUsers` alone was not sufficient in testing — target Edge explicitly and confirm it's
+   actually gone before retrying).
+4. **Tag it** the same as any other template: `qm template <vmid>; qm set <vmid> --tags
+   template`.
+
+Verify the same way as step 4 above, but over the guest agent instead of SSH (no network is
+guaranteed yet on a fresh clone): confirm `$env:COMPUTERNAME` differs from the template's own
+build-time name, and that `(Get-Service sshd).Status`/`(Get-Service QEMU-GA).Status` both read
+`Running` with no manual intervention.
+
 ## Configure the event
 
 Everything else lives in `.env` (gitignored — copy `.env.example` and edit, never commit real
@@ -226,6 +275,27 @@ option — you can pin the exact set instead by hand-authoring
 `competitions/<id>/box_services.json` / `box_vulns.json` yourself (either file alone is enough
 to count as pinned). See [usage-agents.md](usage-agents.md#pinning-a-competitions-configuration)
 for the file shapes and the `nakon catalog` validator.
+
+### Windows domain-join boxes
+
+Promoting a box to an AD domain controller (`ADDS`) and joining another box to it (`Domain
+Join`) don't go through `box_vulns.json`/`box_services.json` like every other config — a reboot
+mid-plan silently kills every step nakon had queued after it (a box's full `configurations` list
+runs as one script), so these two need to be the *only* thing in their own deploy pass, and
+that pass has to run strictly after every team's boxes exist (promoting a DC before cloning would
+clone its live AD database to every other team — Terraform's own comments call this out as an
+unsafe-DC-clone scenario). `create-competition.py` handles this separately, driven by a new
+per-competition file, `competitions/<id>/domain_roles.json`:
+```json
+{"dc01": "dc", "member01": "member"}
+```
+The first `"dc"`-role box (by name) is promoted to a fresh forest per team
+(`team<identifier>.local`, so each team's forest is independent, same isolation guarantee as
+everything else in this range); every `"member"`-role box in the same team is joined to it
+afterward. A competition without this file is unaffected — this is purely additive. See
+`deploy_windows_domain_configs()` in `create-competition.py` for the exact sequencing, and
+[Adding a template VM → Windows box templates](#windows-box-templates) for the template this
+needs.
 
 ### Theming usernames
 

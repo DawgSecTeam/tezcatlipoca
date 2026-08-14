@@ -11,7 +11,7 @@ nakon SSHes into each box to install services and deploy misconfigs.
 
 > **Setup:** clone with submodules (`git clone --recurse-submodules …`, or
 > `git submodule update --init --recursive` in an existing checkout) — nakon is vendored at
-> `vendor/nakon` (pinned to a release; currently v0.1.1). For agent/integration context see
+> `vendor/nakon` (pinned to a release; currently v0.1.2). For agent/integration context see
 > **[AGENTS.md](AGENTS.md)**.
 
 ## How it works
@@ -105,9 +105,9 @@ a known-good point, not a repair.
 | `terraform/scripts/prepare_boxes.py` | Legacy DNS-repair helper from when nakon ran inside `terraform apply` — dead, superseded by `fix_dns_on_boxes()` in the driver. |
 | `terraform/templates/scoring-init.yaml.tpl` | Unused — the scoring engine is cloned from a pre-built template instead. |
 | `quotient/setup.py` | Builds `event.conf`/`linux.credlist`, seeds/starts the competition via Quotient's API, uploads injects. |
-| `vendor/nakon/` | **Submodule** pinned to a nakon release (currently v0.1.1). Invoked as a CLI (`nakon randomize`/`build`/`deploy`) to generate `competitions/<id>/nakon-config.json` and a content-addressed bundle; only the bundle (not vulndb credentials) is shipped to the scoring engine. Needs its own `.env` for build-time catalog access. Set up with `git submodule update --init --recursive` after clone. |
+| `vendor/nakon/` | **Submodule** pinned to a nakon release (currently v0.1.2). Invoked as a CLI (`nakon randomize`/`build`/`deploy`) to generate `competitions/<id>/nakon-config.json` and a content-addressed bundle; only the bundle (not vulndb credentials) is shipped to the scoring engine. Needs its own `.env` for build-time catalog access. Set up with `git submodule update --init --recursive` after clone. |
 | `.env` / `.env.example` | The single config file for both Terraform (`TF_VAR_*`) and `create-competition.py`. `.env` is gitignored; `.env.example` is the committed placeholder version. |
-| `competitions/<id>/` | Per-competition state: `Compfile`, `boxes.json`, `users.json` (optional — themeable usernames), `box_services.json`/`box_vulns.json`, `teams.json`, `cloned_vms.json`, `credentials.txt`, `nakon-config.json`, `packet.md`. |
+| `competitions/<id>/` | Per-competition state: `Compfile`, `boxes.json`, `users.json` (optional — themeable usernames), `box_services.json`/`box_vulns.json`, `domain_roles.json` (optional — Windows domain-controller/member roles, see [usage-people.md](docs/usage-people.md#windows-domain-join-boxes)), `teams.json`, `cloned_vms.json`, `credentials.txt`, `nakon-config.json`, `packet.md`. |
 
 ## Secrets
 
@@ -133,3 +133,9 @@ export TF_VAR_quotient_admin_password="..."
   `.env` — internal to that network, but not zero-hardcoded-secrets.
 - **`terraform/templates/scoring-init.yaml.tpl` is dead code** — the scoring engine is cloned
   from a pre-built template instead (see [usage-people.md](docs/usage-people.md#adding-a-template-vm)).
+- **Windows scoring is port-open only**: Quotient has no native SMB/RDP/WinRM check type, so
+  those get a generic `Tcp` check (dial-and-connect, same mechanism the Linux `telnet-service`
+  config uses) — it can't tell a healthy service from one just listening. The Windows deploy path
+  itself (including full domain-join — see [usage-people.md](docs/usage-people.md#windows-domain-join-boxes))
+  is verified end-to-end; the one still-untested corner is nakon's `winget`/`choco`
+  package-manager fallback, which no catalog config used in that pass.

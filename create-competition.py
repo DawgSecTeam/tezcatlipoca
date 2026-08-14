@@ -1498,15 +1498,35 @@ def _run_single_nakon_config(machine, configurations, key, scoring_user, scoring
               only=[machine["name"]], timeout=timeout)
 
 
-# The AD-flavored configs "Add User Account"/"Elevate User Account"/"Disable System
-# Firewall"/"Removing all auditing" all branch on `Get-Module -ListAvailable -Name
-# ActiveDirectory` to decide whether to touch AD objects or fall back to local ones — so they
-# only produce the intended AD-flavored misconfigs once ADDS has actually promoted the box.
-# Run right after ADDS in the same post-reboot pass (not the normal phase-5/6 run, which
-# happens BEFORE promotion — see deploy_windows_domain_configs()).
-AD_FLAVORED_CONFIGS = [
-    "Add User Account", "Elevate User Account", "Disable System Firewall", "Removing all auditing",
-]
+# "Add User Account"/"Elevate User Account"/"Disable System Firewall" all branch on
+# `Get-Module -ListAvailable -Name ActiveDirectory` to decide whether to touch AD objects or
+# fall back to local ones — so they only produce the intended AD-flavored misconfigs once ADDS
+# has actually promoted the box. Run right after ADDS in the same post-reboot pass (not the
+# normal phase-5/6 run, which happens BEFORE promotion — see deploy_windows_domain_configs()).
+
+
+def wait_for_windows_sshd(node, vmid, timeout=180):
+    """Block until sshd reports Running via the guest agent — stronger than
+    wait_for_guest_agent() alone: the agent can be up (it's an early-starting service) well
+    before sshd has finished (re)starting, especially right after a heavier-than-usual reboot
+    like an ADDS promotion or a domain join. Confirmed live: a flat 30s sleep after
+    wait_for_guest_agent() wasn't always enough and nakon's next connection attempt failed with
+    "Unable to connect to port 22" even though the box came back fine moments later. Never
+    raises — a timeout just means the following connection attempt gets to retry/fail on its
+    own, same posture as wait_for_guest_agent().
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            rc, out, _ = guest_agent_exec_windows(
+                node, vmid, "(Get-Service sshd -ErrorAction SilentlyContinue).Status", timeout=20
+            )
+            if rc == 0 and out.strip() == "Running":
+                return True
+        except Exception:
+            pass
+        time.sleep(10)
+    return False
 
 
 def deploy_windows_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scoring_user,
@@ -1565,8 +1585,15 @@ def deploy_windows_domain_configs(teams, boxes, comp_dir, nakon_config_path, key
         dc_ip = dc_machine["ip"]
 
         print(f"  [{team_key}] Promoting {dc_box['name']} ({dc_ip}) to a new AD forest ({domain})...")
+        # Install-ADDSForest requires -SafeModeAdministratorPassword (the DSRM password) —
+        # without it the cmdlet always prompts interactively, which nakon's non-interactive
+        # transport can't satisfy (confirmed live: "Read-Host : ... NonInteractive mode").
+        # Reusing box_password keeps this to one credential to remember per competition, same
+        # as everywhere else (WINDOWS_ADMIN_USER's own password doubles as the eventual domain
+        # Administrator password).
         _run_single_nakon_config(
-            dc_machine, [{"name": "ADDS", "vars": {"domain": domain}}],
+            dc_machine,
+            [{"name": "ADDS", "vars": {"domain": domain, "dsrm_password": box_password}}],
             key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-adds",
         )
         print(f"    Waiting for {dc_box['name']} to reboot and come back (AD DS promotion "
@@ -1575,11 +1602,27 @@ def deploy_windows_domain_configs(teams, boxes, comp_dir, nakon_config_path, key
             print(f"  WARNING: {dc_box['name']} guest agent never came back after ADDS — "
                   f"skipping the rest of {team_key}'s domain setup")
             continue
-        time.sleep(30)  # sshd is a service on this box too, but give it a moment past "agent up"
+        # guest-agent-alive doesn't mean sshd is listening yet — confirmed live: a flat 30s
+        # sleep here wasn't always enough right after an ADDS-promotion reboot specifically
+        # (heavier than an ordinary reboot), causing nakon's next connection to fail with
+        # "Unable to connect to port 22" even though the box came back fine moments later.
+        wait_for_windows_sshd(node, dc_vmid, timeout=180)
 
         print(f"  [{team_key}] Planting AD-flavored misconfigs on {dc_box['name']}...")
+        # Add User Account / Elevate User Account need vars (id 67/68 in the catalog) — without
+        # them New-ADUser gets empty required params and the step does nothing useful. Reuses
+        # box_password so there's still just one credential to remember per competition.
         _run_single_nakon_config(
-            dc_machine, [{"name": n} for n in AD_FLAVORED_CONFIGS],
+            dc_machine,
+            [
+                {"name": "Add User Account", "vars": {
+                    "username": "svc-support", "password": box_password,
+                    "full_name": "IT Support", "domain_address": domain,
+                }},
+                {"name": "Elevate User Account", "vars": {"username": "svc-support"}},
+                {"name": "Disable System Firewall"},
+                {"name": "Removing all auditing"},
+            ],
             key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-ad-misconfigs",
         )
 
@@ -1612,7 +1655,7 @@ def deploy_windows_domain_configs(teams, boxes, comp_dir, nakon_config_path, key
                 print(f"  WARNING: {member_box['name']} guest agent never came back after "
                       f"Domain Join")
                 continue
-            time.sleep(30)
+            wait_for_windows_sshd(node, member_vmid, timeout=180)
 
 
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password):

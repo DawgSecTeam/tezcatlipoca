@@ -27,3 +27,7 @@ competitions/*/.deploy_state.json
 # nakon config generated per-run — currently just placeholder creds, but keep it out of git
 # for consistency with its sibling per-run files above.
 competitions/*/nakon-config.json
+# Throwaway single-config nakon configs deploy_windows_domain_configs() writes per ADDS/Domain
+# Join/etc. step (see _run_single_nakon_config() in create-competition.py) — same per-run-secret
+# class as nakon-config.json above, just scoped to one machine/step instead of the whole comp.
+competitions/*/.nakon-domain-*.json
