@@ -44,6 +44,8 @@ except ImportError as e:  # pragma: no cover
 
 from dotenv import load_dotenv
 
+from utils import BOX_USERNAME_DEFAULT, load_users_config
+
 # The engine speaks plain HTTP, but Quotient's checks & the Proxmox API elsewhere use
 # self-signed TLS — silence the noise so output stays readable.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -51,9 +53,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 REPO_ROOT = Path(__file__).resolve().parent
 ENV_PATH = REPO_ROOT / ".env"
 
-# Box login (see utils.py BOX_USERNAME / BOX_PASSWORD). We authenticate to boxes with the
-# proxmox key (cloud-init authorizes it for 'ubuntu'), so the password is informational.
-BOX_USERNAME = "ubuntu"
+# Box login (see utils.py load_users_config() / competitions/<id>/users.json). We authenticate
+# to boxes with the proxmox key (cloud-init authorizes it for the configured box_username), so
+# the password is informational. BOX_USERNAME_DEFAULT is the fallback when a competition has no
+# users.json; main() overrides it with the competition's real value via build_ctx()'s box_username.
 DEFAULT_ADMIN_PASSWORD = "changeme123"
 
 # Planted-misconfig verifiers: config name -> (shell command, predicate on stdout).
@@ -127,8 +130,9 @@ def resolve_ssh_key():
     return str((REPO_ROOT / val).resolve())
 
 
-def build_ctx(args):
-    """Assemble {scoring_engine_ip, ssh_key_path, vm_username}, honoring --engine-ip override."""
+def build_ctx(args, comp_dir):
+    """Assemble {scoring_engine_ip, ssh_key_path, vm_username, box_username}, honoring
+    --engine-ip override."""
     ctx = {}
     tf_error = None
     if not args.engine_ip:
@@ -147,6 +151,11 @@ def build_ctx(args):
         ctx["ssh_key_path"] = resolve_ssh_key()
     if not ctx.get("vm_username"):
         ctx["vm_username"] = os.environ.get("TF_VAR_vm_username")
+    # box_username: prefer Terraform's (it's what was actually deployed); fall back to this
+    # competition's own users.json (the authoritative source create-competition.py wrote it
+    # from), then the hardcoded default — same three-tier fallback as vm_username above.
+    if not ctx.get("box_username"):
+        ctx["box_username"] = load_users_config(comp_dir)[0] or BOX_USERNAME_DEFAULT
     if tf_error:
         print(f"  (note: Terraform context unavailable, using .env: {tf_error})")
     return ctx
@@ -157,6 +166,7 @@ def ssh_via_gateway(ctx, target_ip, cmd, timeout=60):
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]
+    box_username = ctx.get("box_username", BOX_USERNAME_DEFAULT)
     if not key or not scoring_user:
         raise CheckError("missing SSH key path or vm_username for gateway SSH.")
     proxy = (
@@ -171,7 +181,7 @@ def ssh_via_gateway(ctx, target_ip, cmd, timeout=60):
                 "-o", "UserKnownHostsFile=/dev/null",
                 "-o", "ConnectTimeout=10",
                 "-o", f"ProxyCommand={proxy}",
-                f"{BOX_USERNAME}@{target_ip}", cmd,
+                f"{box_username}@{target_ip}", cmd,
             ],
             capture_output=True, text=True, timeout=timeout,
         )
@@ -635,7 +645,7 @@ def main():
         return 2
 
     try:
-        ctx = build_ctx(args)
+        ctx = build_ctx(args, comp_dir)
         teams = load_teams(comp_dir)
         admin_password = load_admin_password(comp_dir, args.admin_password)
         boxes = load_boxes(comp_dir)

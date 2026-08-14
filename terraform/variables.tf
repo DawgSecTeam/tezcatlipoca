@@ -33,8 +33,14 @@ variable "quotient_admin_password" {
   sensitive   = true
 }
 
+variable "box_username" {
+  description = "Username for the cloud-init account created on every team box clone. Themeable per competition via competitions/<id>/users.json (see utils.load_users_config()) — create-competition.py writes this into TF_VAR_box_username; defaults to 'ubuntu' when no users.json exists."
+  type        = string
+  default     = "ubuntu"
+}
+
 variable "box_password" {
-  description = "Password for the 'ubuntu' cloud-init account created on every team box clone. Generated fresh per competition in deploy() (create-competition.py) — not a fixed literal — because nakon authenticates with password auth (see quotient/setup.py) rather than a key, and a fixed value across every deployment would be guessable from this open-source repo. The username itself stays 'ubuntu' everywhere; only this password rotates."
+  description = "Password for var.box_username's cloud-init account created on every team box clone. Generated fresh per competition in deploy() (create-competition.py) — not a fixed literal — because nakon authenticates with password auth (see quotient/setup.py) rather than a key, and a fixed value across every deployment would be guessable from this open-source repo. The username may vary per competition (var.box_username); only this password rotates."
   type        = string
   sensitive   = true
 }

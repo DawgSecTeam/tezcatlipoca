@@ -168,31 +168,40 @@ resource "proxmox_virtual_environment_vm" "team_box" {
     model  = "virtio"
   }
 
-  initialization {
-    ip_config {
-      ipv4 {
-        address = "${each.value.ip}/24"
-        gateway = each.value.gw
+  # Cloud-init only — a Windows template (name contains "win", same convention nakon's own
+  # os_to_platform() uses to route catalog configs) has no cloud-init/cloudbase-init agent to
+  # consume this block, so it would silently do nothing anyway. Its IP/gateway/DNS and local
+  # admin credentials are instead set post-clone via QEMU guest-agent exec
+  # (bootstrap_windows_box() in create-competition.py), which works over virtio-serial with no
+  # dependency on cloud-init or even a working network yet.
+  dynamic "initialization" {
+    for_each = strcontains(lower(each.value.box.template), "win") ? [] : [1]
+    content {
+      ip_config {
+        ipv4 {
+          address = "${each.value.ip}/24"
+          gateway = each.value.gw
+        }
       }
-    }
-    user_account {
-      username = "ubuntu"
-      keys     = [var.ssh_public_key]
-      # nakon's paramiko connections use password auth (see quotient/setup.py) — without this
-      # the account has no password hash at all and every login attempt is rejected outright.
-      # Generated fresh per competition (see var.box_password's description), not a literal.
-      password = var.box_password
-    }
-    # Always a public resolver, never the team's own dns* box. Pointing boxes at that box
-    # deadlocks provisioning: its bind9 is installed by nakon, and nakon installs it with
-    # apt-get, which needs a resolver that already works. fix_dns_on_boxes() in
-    # create-competition.py forced 8.8.8.8 over the top of this anyway, so the dns* box was
-    # never actually serving its team — the two mechanisms just disagreed.
-    #
-    # To make a dns* box its team's real resolver, repoint the boxes after nakon has run
-    # (i.e. from create-competition.py), not here.
-    dns {
-      servers = ["8.8.8.8"]
+      user_account {
+        username = var.box_username
+        keys     = [var.ssh_public_key]
+        # nakon's paramiko connections use password auth (see quotient/setup.py) — without this
+        # the account has no password hash at all and every login attempt is rejected outright.
+        # Generated fresh per competition (see var.box_password's description), not a literal.
+        password = var.box_password
+      }
+      # Always a public resolver, never the team's own dns* box. Pointing boxes at that box
+      # deadlocks provisioning: its bind9 is installed by nakon, and nakon installs it with
+      # apt-get, which needs a resolver that already works. fix_dns_on_boxes() in
+      # create-competition.py forced 8.8.8.8 over the top of this anyway, so the dns* box was
+      # never actually serving its team — the two mechanisms just disagreed.
+      #
+      # To make a dns* box its team's real resolver, repoint the boxes after nakon has run
+      # (i.e. from create-competition.py), not here.
+      dns {
+        servers = ["8.8.8.8"]
+      }
     }
   }
 

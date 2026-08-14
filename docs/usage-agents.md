@@ -20,6 +20,8 @@ need all of them, only enough to cover what you'd otherwise be asked:
 | `--difficulty N` | Difficulty 1–10 (only used when creating a new competition). |
 | `--from-phase N` | Resume from this phase; `N > 1` skips the destructive cleanup + `terraform apply`. See the resume hint a failed deploy prints. |
 | `--plan-only` | Collect/generate the competition's config and print a summary, then exit **without touching any infrastructure** — no teardown, no `terraform apply`. |
+| `--box-username NAME` | Themeable box login username (only used when creating a new competition; default `ubuntu`). Written to `competitions/<id>/users.json`. |
+| `--credlist-usernames A,B,C` | Themeable credlist account names, exactly 3 comma-separated (only used when creating a new competition; default `admin,user1,user2`). Written to the same `users.json`. |
 
 **Box selection has no flag equivalent** — naming/templating/sizing each box type
 (`collect_boxes()`) is always interactive, even under `--yes`. To skip it non-interactively,
@@ -62,6 +64,7 @@ of letting `create-competition.py` generate them:
 ```
 competitions/<id>/Compfile     # name, scenario, difficulty
 competitions/<id>/boxes.json   # box list: name/template/cpu/memory_mb/disk_gb/last_octet
+competitions/<id>/users.json   # optional — themeable box/credlist usernames, see below
 ```
 
 See `competitions/example/` for the exact shape. Then:
@@ -69,6 +72,11 @@ See `competitions/example/` for the exact shape. Then:
 ```bash
 python3 create-competition.py --competition <id> --teams N --yes
 ```
+
+`users.json` is optional (default `ubuntu`/`admin,user1,user2` when absent) —
+`{"box_username": "engineer", "credlist_usernames": ["svc-admin", "analyst1", "analyst2"]}`.
+When creating a new competition non-interactively, `--box-username`/`--credlist-usernames`
+write it for you instead of hand-authoring the file.
 
 ## Pinning a competition's configuration
 
@@ -94,6 +102,21 @@ python3 -m nakon catalog check --box-vulns competitions/<id>/box_vulns.json
 `catalog check` catches typos, building blocks requested directly instead of the misconfig
 that wraps them, and platform mismatches before a deploy. See `docs/agent-selection.md` in the
 nakon repo for the full catalog format.
+
+## `generate-packet.py`
+
+```bash
+python3 generate-packet.py competitions/<id>
+```
+
+Renders `competitions/<id>/packet.md` — a single, team-agnostic Markdown briefing (network
+layout, per-box services, the configured box login username, inject schedule if any, rules of
+engagement) meant to be handed to competitors ahead of the event, before real credentials
+exist. Pure local-file read: needs only `Compfile`, `boxes.json`, and `box_services.json` to
+exist (any combination of generated-by-`create-competition.py` or hand-authored/pinned per the
+sections above) — no live deploy, no Proxmox/Quotient access. Deliberately never reads
+`box_vulns.json`, so planted misconfigs never leak into it. Re-run any time those inputs change
+to regenerate; it always overwrites `packet.md` in full.
 
 ## `verify-competition.py`
 
@@ -130,6 +153,67 @@ Data sources (all read at runtime): scoring-engine IP from `terraform output -js
 (override with `--engine-ip`), team creds from `competitions/<id>/teams.json`, admin password
 from `competitions/<id>/credentials.txt` (override with `--admin-password`), SSH key/user from
 `.env`, planted configs from `competitions/<id>/nakon-config.json`.
+
+## `redeploy-competition.py`
+
+Puts a **subset** of a live competition's boxes back without tearing down the range — the tool
+for "team 3's web01 is wrecked and the event is still running". `create-competition.py` can't do
+this: its phase 1 destroys every team, and even `--from-phase` operates on the whole
+competition.
+
+```bash
+python3 redeploy-competition.py --competition <id> [selection] [--mode M] [--dry-run] [--yes]
+```
+
+### Selection (AND-combined; no filters = every box)
+
+| Flag | Effect |
+|---|---|
+| `--competition ID` | Which competition. Omit for an interactive menu. |
+| `--teams 2,team3,104` | Teams, by key (`team2`), number (`2`), or subnet identifier (`102`). |
+| `--boxes web01,db01` | Box names from `boxes.json`. |
+| `--platform linux\|windows` | Boxes whose template is that platform, via nakon's `os_to_platform()`. |
+| `--dry-run` | Print the resolved targets (vm name, vmid, IP, snapshots present) and exit. |
+| `--yes` | Skip the confirmation prompt. |
+
+Anything that matches no team/box is a hard error, not a silent empty selection.
+
+### Modes (`--mode`, cheapest first)
+
+| Mode | What it does | When |
+|---|---|---|
+| `rollback-ready` *(default)* | Roll back to the `tz-ready` snapshot, restart, wait for SSH. ~seconds per box. | The box was fine at hour zero and isn't now. |
+| `rollback-base` | Roll back to `tz-base`, then re-run DNS/auth/`nakon deploy --only`/hardening and re-take `tz-ready`. | `tz-ready` is also bad. |
+| `reconfigure` | No rollback — re-run that same chain against the live box. | A service died but the box is otherwise the team's to keep. |
+| `rebuild` | Destroy the VM, re-clone it from its **Packer template**, configure from scratch, take both snapshots. | The VM is gone or won't boot. |
+
+`rebuild` deliberately clones the template rather than team1's live box (which is what phase 6
+does at deploy time): mid-competition team1's box carries whatever team1's defenders have done
+to it. Rebuilding a **team1** box also puts it out of sync with Terraform state — the tool warns,
+and the next `terraform apply` will want to replace it.
+
+`nakon deploy --only` is scoped to exactly the selected machines. *What* gets applied to each is
+fixed by the content-addressed bundle (built from the full machine list), so a partial redeploy
+plants the identical configuration set a full deploy would.
+
+### Prerequisites
+
+- Snapshots are taken by `create-competition.py` (phases 5 and 6) and require a
+  snapshot-capable `TF_VAR_datastore`: ZFS, LVM-thin, Ceph, or qcow2 on file storage. **Thick
+  LVM cannot snapshot.** A range deployed before snapshotting existed, or on such a datastore,
+  has only `reconfigure` and `rebuild`. The tool checks up front and prints which boxes are
+  missing which snapshot rather than failing partway.
+- Reads `teams.json`, `boxes.json`, `nakon-config.json` and the `box_password`/`box_creds` from
+  `.deploy_state.json`. Those secrets must be the originals — the credlist accounts it recreates
+  have to match what Quotient's `linux.credlist` expects, or a healthy box scores down on every
+  auth-based check. `nakon-config.json` is regenerated deterministically if missing (the
+  service/vuln sets are pinned by then).
+
+### Caution
+
+A rollback **discards everything the defending team did to that box.** It's a reset to a known
+state, not a repair. Every mode except `reconfigure` says so and requires confirmation unless
+`--yes`. Use `--dry-run` first.
 
 ## `destroy-competition.py`
 
