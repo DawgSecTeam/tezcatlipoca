@@ -11,7 +11,7 @@ from pathlib import Path
 
 import requests
 
-from utils import BOX_PASSWORD, BOX_USERNAME
+from utils import BOX_PASSWORD, BOX_USERNAME_DEFAULT
 
 # Maps a nakon service name to its Quotient check key + config dict.
 # Keys and field names must match Quotient's Go struct TOML tags exactly (case-sensitive
@@ -62,6 +62,15 @@ _SERVICE_TO_CHECK = {
     # enough to confirm the service is listening. Confirmed against /opt/quotient's own source
     # and config/event.conf.example on the scoring engine (2026-08-07).
     "telnet-service": ("Tcp", {"Display": "telnet", "Port": 23}),
+
+    # Windows — Quotient has no SMB/RDP/WinRM-aware check type (only Web/Dns/Ssh/Ftp/Smtp/Imap/
+    # Sql/Tcp exist anywhere in its engine), so these use the same generic Tcp port-open check
+    # as telnet-service above. Keyed by the exact nakon catalog config name (these are
+    # service-category Windows configs, not generic service binary names like "nginx" above —
+    # box_services.json's entries for a Windows box are catalog config names verbatim).
+    "Enable WinRM":   ("Tcp", {"Display": "winrm", "Port": 5985}),
+    "New SMB Share":  ("Tcp", {"Display": "smb",   "Port": 445}),
+    "RDP misconfigs": ("Tcp", {"Display": "rdp",   "Port": 3389}),
 }
 
 
@@ -154,7 +163,7 @@ def build_credlist() -> str:
     including matching mysql DB users), so the Sql check authenticates fine too. This helper is
     retained for reference/tests; it is not the source of the deployed credlist.
     """
-    return f"{BOX_USERNAME},{BOX_PASSWORD}\n"
+    return f"{BOX_USERNAME_DEFAULT},{BOX_PASSWORD}\n"
 
 
 def _wait_for_quotient(host: str) -> None:

@@ -4,13 +4,12 @@ import json
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
-import requests
 import urllib3
 from dotenv import load_dotenv
 
+from range_ops import proxmox_api, wait_for_proxmox_task
 from utils import load_compfile, pick_competition
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -35,43 +34,25 @@ def destroy_cloned_vms(cloned_vms_path):
     if not cloned_vms:
         return
 
+    # proxmox_api/wait_for_proxmox_task come from range_ops rather than the private copies this
+    # file used to carry. Same semantics (a "stopped" task with a non-OK exitstatus still
+    # raises, so a failed delete can't be misreported as success and then silently orphaned by
+    # terraform destroy), plus the transient-connection retry and the longer task timeout this
+    # copy never had — an ordinary VM delete on this host has been seen take past 600s.
     node = os.environ.get("TF_VAR_proxmox_node", "pve")
-    endpoint = os.environ["TF_VAR_proxmox_endpoint"].rstrip("/")
-    headers = {"Authorization": f"PVEAPIToken={os.environ['TF_VAR_proxmox_api_token']}"}
-
-    def pve(method, path, **kwargs):
-        r = requests.request(
-            method, f"{endpoint}/api2/json{path}", headers=headers, verify=False, timeout=60, **kwargs
-        )
-        r.raise_for_status()
-        return r.json()
-
-    def wait(upid, timeout=300):
-        deadline = time.time() + timeout
-        while True:
-            if time.time() > deadline:
-                raise RuntimeError(f"Proxmox task {upid} timed out after {timeout}s")
-            data = pve("GET", f"/nodes/{node}/tasks/{upid}/status")["data"]
-            if data["status"] == "stopped":
-                # A stopped task isn't necessarily a successful one — checking only "status"
-                # (as this used to) reported a failed stop/delete (e.g. a permissions error)
-                # as "deleted" even though the VM was still there, and `terraform destroy`
-                # then orphaned it without anyone noticing.
-                if data.get("exitstatus") != "OK":
-                    raise RuntimeError(f"Proxmox task {upid} failed: {data.get('exitstatus')}")
-                return
-            time.sleep(3)
 
     print(f"  Destroying {len(cloned_vms)} cloned VM(s) before terraform destroy...")
     for vm_key, vmid in cloned_vms.items():
         try:
-            upid = pve("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
-            wait(upid)
+            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
+            wait_for_proxmox_task(node, upid)
         except Exception:
             pass  # already stopped or gone
         try:
-            upid = pve("DELETE", f"/nodes/{node}/qemu/{vmid}", params={"purge": 1})["data"]
-            wait(upid)
+            # purge=1 also drops the VM from any jobs/HA config that reference it. Snapshots
+            # (tz-base/tz-ready, taken by create-competition.py) go with the disk automatically.
+            upid = proxmox_api("DELETE", f"/nodes/{node}/qemu/{vmid}", params={"purge": 1})["data"]
+            wait_for_proxmox_task(node, upid)
             print(f"    Deleted {vm_key} (vmid {vmid})")
         except Exception as e:
             print(f"    WARNING: could not delete {vm_key} (vmid {vmid}): {e}")

@@ -9,6 +9,11 @@ nakon SSHes into each box to install services and deploy misconfigs.
 **Usage docs**: [for people](docs/usage-people.md) (interactive setup + operation) ·
 [for agents](docs/usage-agents.md) (CLI flags, pre-authored configs, non-interactive)
 
+> **Setup:** clone with submodules (`git clone --recurse-submodules …`, or
+> `git submodule update --init --recursive` in an existing checkout) — nakon is vendored at
+> `vendor/nakon` (pinned to a release; currently v0.1.1). For agent/integration context see
+> **[AGENTS.md](AGENTS.md)**.
+
 ## How it works
 
 Team bridges have no uplink of their own, so the scoring engine is the only thing with a NIC on
@@ -38,12 +43,13 @@ phases itself over SSH, printing a `[n/7]` banner for each:
    Also enables password auth on team1's boxes (nakon connects as `ubuntu` with a password
    generated fresh per competition, not a fixed literal).
 5. **Fix DNS + run nakon on team1** — boxes boot with an empty `/etc/resolv.conf`; the driver
-   repairs it, then ships nakon's config/bundle to the engine and runs it there against team1.
+   repairs it, snapshots each box as `tz-base` (see below), then ships nakon's config/bundle to
+   the engine and runs it there against team1.
 6. **Clone team1's boxes to the other teams + run nakon on them** — full-clones team1 via the
    Proxmox API (rewriting each clone's IP/bridge), records the new vmids in
    `competitions/<id>/cloned_vms.json` (**not** in Terraform state — only
    `destroy-competition.py` can remove them), then repeats DNS-fix/auth/nakon for every other
-   team.
+   team. Ends by snapshotting every box as `tz-ready`.
 7. **Seed the competition** — logs into Quotient's API, assigns each team its subnet, starts
    the clock (each sub-step individually resumable — see `docs/usage-agents.md`), and uploads
    `injects/` if present.
@@ -56,25 +62,56 @@ the API-cloned team2+ boxes aren't in Terraform state.
 See [docs/usage-people.md](docs/usage-people.md) for the interactive walkthrough of all of
 this, or [docs/usage-agents.md](docs/usage-agents.md) to drive it non-interactively.
 
+## Recovering one team's boxes mid-competition
+
+A deploy is all-or-nothing, which is the wrong shape when a single team's box breaks an hour
+into an event. So phases 5 and 6 take two cheap disk-only (no-RAM) snapshots of every box:
+
+| Snapshot | Taken | Holds |
+|---|---|---|
+| `tz-base` | after the box boots with working DNS + `ubuntu` auth, before nakon | a clean box, nothing planted |
+| `tz-ready` | end of phase 6, after nakon + service hardening | exactly the box the competition starts on |
+
+`redeploy-competition.py` then puts a *filtered* set of boxes back — one team, one box type,
+one team's linux boxes — without touching anything else:
+
+```bash
+python3 redeploy-competition.py --competition <id> --teams 3               # whole team
+python3 redeploy-competition.py --competition <id> --teams 3 --boxes web01 # one box
+python3 redeploy-competition.py --competition <id> --teams 3 --dry-run     # just look
+```
+
+Rolling back to `tz-ready` takes seconds and restores the box as delivered. Heavier modes
+(`--mode rollback-base`, `reconfigure`, `rebuild`) are described in
+[docs/usage-agents.md](docs/usage-agents.md#redeploy-competitionpy). Snapshots need a
+snapshot-capable datastore (ZFS, LVM-thin, Ceph, or qcow2 on file storage — thick LVM can't);
+a range deployed without them falls back to `reconfigure`/`rebuild`.
+
+Note that a rollback **discards whatever the defending team did to that box** — it's a reset to
+a known-good point, not a repair.
+
 ## Layout
 
 | Path | What it is |
 |---|---|
 | `create-competition.py` | Entry point and seven-phase driver (above). |
+| `redeploy-competition.py` | Targeted recovery — snapshot rollback / reconfigure / rebuild for a filtered set of boxes (above). |
 | `destroy-competition.py` | Teardown — destroys API-cloned team2+ boxes then `terraform destroy`. |
 | `verify-competition.py` | Post-deploy smoke test (logins, services, misconfig spot-check, injects). |
+| `generate-packet.py` | Renders `competitions/<id>/packet.md`, a team-agnostic competitor briefing (network/services layout) — no live infra needed. |
+| `range_ops.py` | Shared Proxmox API layer, vmid math, snapshots, and the `(team, box)` target list every per-box step iterates. |
 | `terraform/main.tf` | Infra: team bridges, the scoring VM (vmid `1000`), team1's target VMs, and the engine's team-facing NIC wiring. Package install/Quotient/nakon were moved to Python — Terraform no longer does them. |
 | `terraform/variables.tf` / `outputs.tf` | Every configurable setting (`TF_VAR_<name>`), and the JSON blob (`agent_context`) the driver reads via `terraform output -json`. |
 | `terraform/scripts/prepare_boxes.py` | Legacy DNS-repair helper from when nakon ran inside `terraform apply` — dead, superseded by `fix_dns_on_boxes()` in the driver. |
 | `terraform/templates/scoring-init.yaml.tpl` | Unused — the scoring engine is cloned from a pre-built template instead. |
 | `quotient/setup.py` | Builds `event.conf`/`linux.credlist`, seeds/starts the competition via Quotient's API, uploads injects. |
-| `nakon/` | Symlink to a sibling nakon checkout. Queried in-process on your workstation to build `competitions/<id>/nakon-config.json` and a content-addressed bundle; only the bundle (not vulndb credentials) is shipped to the scoring engine. |
+| `vendor/nakon/` | **Submodule** pinned to a nakon release (currently v0.1.1). Invoked as a CLI (`nakon randomize`/`build`/`deploy`) to generate `competitions/<id>/nakon-config.json` and a content-addressed bundle; only the bundle (not vulndb credentials) is shipped to the scoring engine. Needs its own `.env` for build-time catalog access. Set up with `git submodule update --init --recursive` after clone. |
 | `.env` / `.env.example` | The single config file for both Terraform (`TF_VAR_*`) and `create-competition.py`. `.env` is gitignored; `.env.example` is the committed placeholder version. |
-| `competitions/<id>/` | Per-competition state: `Compfile`, `boxes.json`, `box_services.json`/`box_vulns.json`, `teams.json`, `cloned_vms.json`, `credentials.txt`, `nakon-config.json`. |
+| `competitions/<id>/` | Per-competition state: `Compfile`, `boxes.json`, `users.json` (optional — themeable usernames), `box_services.json`/`box_vulns.json`, `teams.json`, `cloned_vms.json`, `credentials.txt`, `nakon-config.json`, `packet.md`. |
 
 ## Secrets
 
-Never commit `.env`, `nakon/.env`, `competitions/*/nakon-config.json`, or
+Never commit `.env`, `vendor/nakon/.env`, `competitions/*/nakon-config.json`, or
 `competitions/*/event.conf` — all gitignored already (`.env.example` is the committed,
 placeholder version of `.env`, safe to share). For shared environments, prefer real env vars
 over writing secrets to disk at all:
@@ -85,11 +122,12 @@ export TF_VAR_quotient_admin_password="..."
 
 ## Known limitations
 
-- **Fixed box username**: every target VM's login is always `ubuntu` (`main.tf`), because
-  nakon connects with password auth rather than keys — the username isn't secret, so this is
-  low-risk on its own. The *password* is not fixed: it's generated fresh per competition
-  (`box_password` in `deploy()`) along with the `admin`/`user1`/`user2` credlist accounts
-  Quotient's checks authenticate with — see `credentials.txt` after a deploy.
+- **Box/credlist usernames are themeable, not secret**: every target VM's login and the
+  `admin`/`user1`/`user2`-equivalent credlist accounts default to those names but can be
+  renamed per competition via `competitions/<id>/users.json` (see
+  [usage-people.md](docs/usage-people.md#theming-usernames)) — the names themselves aren't
+  secret either way. The *passwords* are never fixed: generated fresh per competition
+  (`box_password`/`box_creds` in `deploy()`) — see `credentials.txt` after a deploy.
 - **Hardcoded Quotient internals**: Postgres/Redis passwords for Quotient's own docker-compose
   network are literals written into `/opt/quotient/.env` by the driver, not sourced from
   `.env` — internal to that network, but not zero-hardcoded-secrets.

@@ -1,0 +1,4 @@
+[
+  {"name": "dc01",     "last_octet": 2, "cpu": 2, "memory_mb": 4096, "disk_gb": null, "template": "windows-server-fix"},
+  {"name": "member01", "last_octet": 3, "cpu": 2, "memory_mb": 4096, "disk_gb": null, "template": "windows-server-fix"}
+]

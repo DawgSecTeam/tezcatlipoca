@@ -1,0 +1,19 @@
+{
+  "dc01": [],
+  "member01": [
+    "UAC Disabled",
+    "SMB v1",
+    "Telnet",
+    "TFTP",
+    "Enabling Print Spooler Service",
+    "Allow Remote Assistance",
+    {
+      "name": "Run/RunOnce Keys",
+      "vars": {
+        "process": "WindowsUpdateHelper",
+        "process_path": "C:\\Windows\\System32\\calc.exe",
+        "command": "C:\\Windows\\System32\\calc.exe"
+      }
+    }
+  ]
+}
