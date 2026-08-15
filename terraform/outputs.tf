@@ -38,6 +38,7 @@ output "agent_context" {
     team_passwords          = { for k, v in var.teams : k => v.password }
     ssh_key_path            = var.ssh_private_key_path
     vm_username             = var.vm_username
+    box_username            = var.box_username
     event_name              = var.event_name
     quotient_admin_password = var.quotient_admin_password
   })

@@ -1,0 +1,3 @@
+name win-domain-2team-2026-08-13
+scenario Windows-only, 2-team, 2-box-per-team range validating the nakon+tezcatlipoca Windows stack: each team promotes its own dc01 to a fresh AD forest and joins member01 to it, both carrying a spread of nakon's live Windows misconfig catalog
+difficulty 4

@@ -4,13 +4,13 @@
     "last_octet": 2,
     "cpu": 1,
     "memory_mb": 2048,
-    "template": "debian13-lite"
+    "template": "debian13-lite-fix"
   },
   {
     "name": "raichu",
     "last_octet": 3,
     "cpu": 1,
     "memory_mb": 2048,
-    "template": "debian13-lite"
+    "template": "debian13-lite-fix"
   }
 ]

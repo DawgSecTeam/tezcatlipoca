@@ -1,10 +1,12 @@
 {
   "web01": [
     "mysql",
-    "vsftpd"
+    "vsftpd",
+    "roundcube"
   ],
   "svc01": [
     "postfix",
-    "bind"
+    "bind",
+    "splunk"
   ]
 }

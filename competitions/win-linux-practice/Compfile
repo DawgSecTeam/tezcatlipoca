@@ -1,0 +1,3 @@
+name win-linux-practice
+scenario Single-team practice range: Windows DC (dc01) promoted to a fresh AD forest, Linux member (linux01) domain-joined to it via realmd/sssd
+difficulty 4

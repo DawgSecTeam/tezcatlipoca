@@ -1,0 +1,3 @@
+name solo-8box-2026-08-10
+scenario Single-team 8-box range, 15+ misconfigs per box across web/app/db/mail/infra roles
+difficulty 8

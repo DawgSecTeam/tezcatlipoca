@@ -1,0 +1,9 @@
+{
+  "dc01": [
+    "Enable WinRM"
+  ],
+  "member01": [
+    "New SMB Share",
+    "RDP misconfigs"
+  ]
+}

@@ -1,0 +1,3 @@
+[submodule "vendor/nakon"]
+	path = vendor/nakon
+	url = git@github.com:DawgSecTeam/nakon.git
