@@ -16,7 +16,7 @@ option first:
                    and service hardening for those machines. Use when tz-ready is also bad.
   reconfigure      no rollback at all: re-run DNS/auth/Nakon/hardening against the live boxes.
                    Use when a service died but the box is otherwise the team's to keep.
-  rebuild          the VM is gone or won't boot: recreate it from its Packer template, then do
+  rebuild          the VM is gone or won't boot: recreate it from its box template, then do
                    everything rollback-base does, and re-take both snapshots.
 
 Both snapshots are taken by create-competition.py during the normal deploy (phases 5 and 6) —
@@ -52,7 +52,7 @@ from range_ops import (
     take_snapshot,
     wait_for_proxmox_task,
 )
-from utils import load_compfile, pick_competition
+from utils import load_compfile, load_users_config, pick_competition
 
 ENV_PATH = Path(".env")
 load_dotenv(ENV_PATH)
@@ -163,8 +163,14 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
     scoring_user = os.environ["TF_VAR_vm_username"]
     scoring_ip = ctx["scoring_engine_ip"]
 
-    driver.fix_dns_on_boxes(targets, ctx)
-    driver.setup_ubuntu_auth(targets, ctx)
+    # Linux-only steps, same split the deploy's phases 5/6 make: a Windows box has no
+    # systemd-resolved/sshd_config-based `ubuntu` auth — feeding it through here burns 8
+    # retries × 15 s per box, and on a Windows-only selection the DNS loop's all-fail circuit
+    # breaker aborts the whole redeploy. Windows credentials/DNS belong to
+    # bootstrap_windows_box(), which rebuild/rebuild-style modes call separately.
+    linux_targets = [t for t in targets if box_platform(t["box"]) == "linux"]
+    driver.fix_dns_on_boxes(linux_targets, ctx)
+    driver.setup_ubuntu_auth(linux_targets, ctx)
 
     # The boxes NAT out through the engine; a container restart there drops the rule, and
     # Nakon's first action on every machine is an apt-get.
@@ -181,6 +187,52 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
     )
 
     driver.fix_services_on_boxes(comp_dir, targets, ctx, box_creds=state.get("box_creds"))
+
+
+def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
+    """Re-run the AD domain chain for teams whose domain-role boxes were reset.
+
+    rollback-base and rebuild restore a box to a pre-Nakon disk — for a dc/member box
+    (domain_roles.json) that also undoes the ADDS promotion / domain join, and until now the
+    domain was simply silently gone afterwards: no redeploy mode re-ran it, and the only
+    recovery was a full create-competition.py --from-phase 6.
+
+    Scopes driver.deploy_domain_configs() to the affected team(s). Per team: if the DC box
+    was among the reset boxes it gets re-promoted; if only members were reset the DC is left
+    as-is (promote_dc=False) and just the joins are redone — re-promoting a healthy DC
+    would only error out.
+    """
+    roles_path = comp_dir / "domain_roles.json"
+    if not roles_path.exists():
+        return
+    roles = json.loads(roles_path.read_text())
+    domain_targets = [t for t in targets if roles.get(t["box_name"])]
+    if not domain_targets:
+        return
+
+    box_password = state.get("box_password")
+    if not box_password:
+        print("  WARNING: .deploy_state.json has no box_password — cannot re-run domain "
+              "configuration for the reset domain-role box(es). Rejoin by hand, or re-run "
+              "create-competition.py --from-phase 6.")
+        return
+
+    teams = json.loads((comp_dir / "teams.json").read_text())
+    boxes = json.loads((comp_dir / "boxes.json").read_text())
+    affected_teams = {t["team_key"] for t in domain_targets}
+
+    print("  Domain-role box(es) were reset to a pre-domain state — re-running domain "
+          "configuration for " + ", ".join(sorted(affected_teams)) + "...")
+    for team_key in sorted(affected_teams):
+        dc_reset = any(
+            roles.get(t["box_name"]) == "dc" and t["team_key"] == team_key
+            for t in domain_targets
+        )
+        driver.deploy_domain_configs(
+            {team_key: teams[team_key]}, boxes, comp_dir, nakon_config_path,
+            Path(ctx["ssh_key_path"]), os.environ["TF_VAR_vm_username"],
+            ctx["scoring_engine_ip"], box_password, promote_dc=dc_reset,
+        )
 
 
 def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_path,
@@ -206,6 +258,9 @@ def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_pa
     if reconfigure:
         driver.wait_for_cloud_init(ctx, restored, timeout=240)
         run_nakon_and_harden(restored, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
+        # A reset dc/member box also lost its promotion/join — restore it before tz-ready is
+        # re-taken, so that snapshot is the complete as-delivered state again.
+        rerun_domain_configs(restored, ctx, comp_dir, state, nakon_config_path)
         print(f"  Re-taking '{SNAP_READY}' for the recovered boxes...")
         for t in restored:
             take_snapshot(node, t["vmid"], SNAP_READY,
@@ -218,6 +273,13 @@ def mode_reconfigure(targets, ctx, comp_dir, state, nakon_config_path, nakon_bun
     """No rollback — re-run the configure chain against the boxes as they are right now."""
     driver.wait_for_boxes_ssh(ctx, targets, timeout=300)
     run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
+    roles_path = comp_dir / "domain_roles.json"
+    if roles_path.exists():
+        roles = json.loads(roles_path.read_text())
+        if any(roles.get(t["box_name"]) for t in targets):
+            print("  NOTE: reconfigure never resets disks, so domain membership is assumed "
+                  "intact. If the AD domain itself is what's broken, use --mode rollback-base "
+                  "(or rebuild) — those re-promote/re-join after the reset.")
     return targets
 
 
@@ -239,7 +301,7 @@ def template_vmid_for(box):
 
 
 def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_bundle):
-    """Recreate each target VM from its Packer template, then configure it from scratch.
+    """Recreate each target VM from its box template, then configure it from scratch.
 
     The last rung: for a VM that has been deleted, or is so broken it won't boot far enough to
     roll back. Deliberately clones the box's own TEMPLATE rather than team1's live box the way
@@ -247,9 +309,10 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
     it, and handing another team a copy of that is neither fair nor reproducible. Cloning the
     template reproduces what Terraform built at deploy time instead.
 
-    Mirrors main.tf's `team_box` resource: full clone, cloud-init ipconfig0/net0, the `ubuntu`
-    account with this competition's box_password and the range SSH key, and the box's cpu/memory
-    from boxes.json.
+    Mirrors main.tf's `team_box` resource: full clone, cloud-init ipconfig0/net0 (Linux) or
+    net0 + guest-agent bootstrap_windows_box() (Windows — cloud-init keys are no-ops there,
+    main.tf skips the initialization block for win templates), the box login account with this
+    competition's box_password and the range SSH key, and the box's cpu/memory from boxes.json.
     """
     box_password = state.get("box_password")
     if not box_password:
@@ -258,10 +321,16 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
             "login the rest of the range uses. Rebuild is unavailable for this competition."
         )
     ssh_public_key = os.environ["TF_VAR_ssh_public_key"]
+    # The themed box login (users.json), NOT a hardcoded 'ubuntu' — main.tf creates the
+    # account as var.box_username, and every downstream step (DNS fix, auth setup, verify)
+    # authenticates as that user. Hardcoding it on a themed competition produced a box with
+    # the wrong account and no working login.
+    box_username = ctx.get("box_username", "ubuntu")
 
     rebuilt = []
     for t in targets:
         box = t["box"]
+        windows = box_platform(box) == "windows"
         src_vmid = template_vmid_for(box)
         print(f"  Rebuilding {describe_target(t)} from template "
               f"'{box['template']}' (vmid {src_vmid})...")
@@ -276,14 +345,17 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         wait_for_proxmox_task(node, upid)
 
         config = {
-            "ipconfig0": f"ip={t['ip']}/24,gw=192.168.{t['identifier']}.1",
             "net0": f"virtio,bridge=vmbr{t['identifier']}",
-            "ciuser": "ubuntu",
-            "cipassword": box_password,
-            "sshkeys": quote_sshkeys(ssh_public_key),
             "cores": box["cpu"],
             "memory": box["memory_mb"],
         }
+        if not windows:
+            config.update({
+                "ipconfig0": f"ip={t['ip']}/24,gw=192.168.{t['identifier']}.1",
+                "ciuser": box_username,
+                "cipassword": box_password,
+                "sshkeys": quote_sshkeys(ssh_public_key),
+            })
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data=config)
 
         # main.tf only emits a disk block when disk_gb is set; a null means "keep the
@@ -295,6 +367,15 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
             })
 
         start_vm(node, t["vmid"])
+
+        if windows:
+            # No cloud-init on Windows — IP/gateway/DNS + Administrator password go over the
+            # guest agent, exactly like the deploy's phase [4.5/7]. Without this a rebuilt
+            # Windows box comes up unconfigured and unreachable.
+            print(f"    Bootstrapping Windows box {t['ip']} (vmid {t['vmid']})...")
+            gw = f"192.168.{t['identifier']}.1"
+            driver.bootstrap_windows_box(node, t["vmid"], t["ip"], gw, "8.8.8.8", box_password)
+
         rebuilt.append(t)
 
         if t["team_key"] == "team1":
@@ -304,15 +385,18 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
 
     driver.wait_for_boxes_ssh(ctx, rebuilt, timeout=600)
     driver.wait_for_cloud_init(ctx, rebuilt, timeout=300)
-    driver.fix_dns_on_boxes(rebuilt, ctx)
-    driver.setup_ubuntu_auth(rebuilt, ctx)
 
     print(f"  Snapshotting rebuilt boxes as '{SNAP_BASE}'...")
     for t in rebuilt:
         take_snapshot(node, t["vmid"], SNAP_BASE,
                       description="tezcatlipoca: rebuilt from template, pre-Nakon")
 
+    # run_nakon_and_harden() does the DNS fix + auth setup (Linux-only, filtered inside).
     run_nakon_and_harden(rebuilt, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
+
+    # A rebuilt dc/member box came from a pre-domain template — promote/join it again before
+    # tz-ready is taken, so that snapshot is the complete as-delivered state.
+    rerun_domain_configs(rebuilt, ctx, comp_dir, state, nakon_config_path)
 
     print(f"  Snapshotting rebuilt boxes as '{SNAP_READY}'...")
     for t in rebuilt:
@@ -449,9 +533,20 @@ def main():
     if args.mode in ("rollback-base", "reconfigure", "rebuild"):
         nakon_config_path = comp_dir / "nakon-config.json"
         if not nakon_config_path.exists():
+            box_password = state.get("box_password")
+            if not box_password:
+                raise SystemExit(
+                    "  ERROR: nakon-config.json is missing and .deploy_state.json has no "
+                    "box_password — can't regenerate the machine list (nakon authenticates to "
+                    "every box with it). This mode is unavailable for this competition."
+                )
             print("  nakon-config.json missing — regenerating from the pinned service/vuln sets...")
+            # The themed box login from users.json, same source the deploy itself used —
+            # generate_nakon_config()'s default is a plain 'ubuntu', which breaks nakon's
+            # password auth on every machine for a themed competition.
+            box_username, _credlist = load_users_config(comp_dir)
             nakon_config_path = driver.generate_nakon_config(
-                teams, boxes, difficulty, comp_dir, state["box_password"]
+                teams, boxes, difficulty, comp_dir, box_password, box_username=box_username
             )
         nakon_bundle = driver.build_nakon_bundle(nakon_config_path)
 

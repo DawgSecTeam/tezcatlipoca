@@ -28,7 +28,9 @@ huitzilopochtli.
 ## Layout
 
 ```
-create-competition.py   the driver: 7-phase deploy + generate_nakon_config/build/run_nakon
+create-competition.py   the driver: 7-phase deploy + generate_nakon_config/build/run_nakon,
+                        + deploy_domain_configs() (AD forests per team — Windows members via
+                        Add-Computer, Linux members via realmd/sssd; roles in domain_roles.json)
 destroy-competition.py  full teardown (incl. API-cloned team2+ boxes not in Terraform state)
 redeploy-competition.py per-team rollback/reconfigure mid-competition
 verify-competition.py   post-deploy checks
@@ -36,7 +38,7 @@ range_ops.py            Proxmox API, guest-agent exec, snapshots, NAT/DNS helper
 utils.py                Compfile/users/competition loading
 quotient/               Quotient event.conf/cledlist/injects setup
 generate-packet.py      competitor briefing packet
-vendor/nakon/           SUBMODULE (currently v0.1.1) — nakon for build/randomize/deploy
+vendor/nakon/           SUBMODULE (currently v0.1.2) — nakon for build/randomize/deploy
 terraform/              team bridges, scoring VM, team1 boxes
 docs/                   usage-people.md (interactive), usage-agents.md (non-interactive)
 ```

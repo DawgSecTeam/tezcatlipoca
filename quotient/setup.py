@@ -173,7 +173,10 @@ def _wait_for_quotient(host: str) -> None:
         try:
             requests.get(f"{host}/api/login", timeout=3)
             return
-        except requests.exceptions.ConnectionError:
+        # timeout=3 covers connect AND read: a slow-but-accepting Quotient raises ReadTimeout,
+        # not ConnectionError — catching only the latter let it escape and kill the deploy
+        # with a traceback instead of this loop's intended retry-then-exit.
+        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout):
             if time.time() > deadline:
                 raise SystemExit(f"[quotient] timed out waiting for {host} to come up")
             time.sleep(3)
