@@ -1,0 +1,8 @@
+{
+  "dc01": [
+    "Enable WinRM"
+  ],
+  "linux01": [
+    "ssh"
+  ]
+}

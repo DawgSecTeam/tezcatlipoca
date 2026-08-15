@@ -2,11 +2,11 @@ import json
 from pathlib import Path
 
 # Boxes boot with an empty /etc/resolv.conf — cloud-init's dns.servers is silently ignored on
-# Debian once the interface has a static IP. Two separate places have to repair it and must not
-# drift apart: terraform/scripts/prepare_boxes.py (before nakon installs anything, since every
-# install is an apt-get that has to resolve a mirror) and fix_dns_on_boxes() in
-# create-competition.py (again after clone_team_boxes(), because `cloud-init clean` + reboot
-# regenerates resolv.conf on the clones and undoes the first fix).
+# Debian once the interface has a static IP. fix_dns_on_boxes() in create-competition.py
+# repairs it: once for team1 in phase 5 (before nakon installs anything, since every install
+# is an apt-get that has to resolve a mirror) and again after clone_team_boxes(), because
+# `cloud-init clean` + reboot regenerates resolv.conf on the clones and undoes the first fix.
+# (The old terraform/scripts/prepare_boxes.py half of this is gone — that script is dead.)
 DNS_FIX_CMD = (
     'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf; '
     'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf.head; '

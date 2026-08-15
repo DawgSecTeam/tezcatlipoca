@@ -85,6 +85,14 @@ MISCONFIG_CHECKS = {
 }
 
 
+def _config_name(entry):
+    """Configurations entries may be a plain string OR {"name": ..., "vars": {...}} (see
+    generate_nakon_config() — some Windows configs need vars). `entry in MISCONFIG_CHECKS`
+    on a dict raises TypeError (unhashable), so normalize to the name before any dict
+    lookup or use as a grouping key."""
+    return entry if isinstance(entry, str) else entry.get("name")
+
+
 # --------------------------------------------------------------------------- helpers
 
 class CheckError(Exception):
@@ -440,11 +448,22 @@ def check_isolation(ctx, teams, boxes):
             ctx, from_ip,
             f"timeout 3 bash -c 'echo > /dev/tcp/{to_ip}/22' 2>/dev/null; echo RC=$?"
         )
-        blocked = "RC=0" not in proc.stdout
     except (CheckError, subprocess.TimeoutExpired) as e:
         print(f"  WARN  — cross-team connection test couldn't run ({e}); rule-presence check "
               "above already passed, not failing on this alone.")
         return True
+
+    if proc.returncode != 0:
+        # The SSH hop itself failed (box down, key rejected, ...): stdout is empty, which used
+        # to be read as "RC=0 not in output" -> "blocked as expected" -> PASS. An unreachable
+        # verifier source is indistinguishable from a blocked connection by output alone, so
+        # this has to be "couldn't verify", never a pass.
+        print(f"  WARN  — couldn't SSH to {from_ip} to run the test "
+              f"(rc={proc.returncode}): {(proc.stderr or '').strip()[:150]}; rule-presence "
+              "check above already passed, not failing on this alone.")
+        return True
+
+    blocked = "RC=0" not in proc.stdout
 
     if blocked:
         print(f"  PASS  {from_ip} cannot reach {to_ip}:22 (blocked as expected)")
@@ -506,7 +525,8 @@ def check_misconfig(ctx, boxes):
     # Pick the first box that has at least one config we know how to verify.
     target = None
     for box in boxes:
-        verifiable = [c for c in box.get("configurations", []) if c in MISCONFIG_CHECKS]
+        verifiable = [c for c in map(_config_name, box.get("configurations", []))
+                      if c in MISCONFIG_CHECKS]
         if box.get("ip") and verifiable:
             target = (box, verifiable)
             break
@@ -556,7 +576,10 @@ def check_misconfig_survival(ctx, boxes):
     for box in boxes:
         if not box.get("ip"):
             continue
-        configs = tuple(box.get("configurations", []))
+        # Key the group on the normalized NAMES, not the raw entries: dict-form entries
+        # aren't hashable, and "the same box, different teams" means same names regardless
+        # of whether one team's copy carries vars.
+        configs = tuple(_config_name(c) for c in box.get("configurations", []))
         verifiable = [c for c in configs if c in MISCONFIG_CHECKS]
         if not verifiable:
             continue

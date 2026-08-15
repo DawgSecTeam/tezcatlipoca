@@ -14,7 +14,7 @@ need all of them, only enough to cover what you'd otherwise be asked:
 | Flag | Effect |
 |---|---|
 | `--competition NAME` | Deploys it straight away if it already has a `Compfile` + `boxes.json`; otherwise creates it (needs `--scenario`/`--difficulty` or falls back to prompting for them). |
-| `--teams N` | Number of teams — skips the "How many teams?" prompt. |
+| `--teams N` | Number of teams — skips the "How many teams?" prompt. Must be 1–154 (`MAX_TEAMS`: team identifiers are `192.168.<101-254>.x`). |
 | `--yes` | Skips the confirm-deploy prompt. |
 | `--scenario TEXT` | Scenario description (only used when creating a new competition). |
 | `--difficulty N` | Difficulty 1–10 (only used when creating a new competition). |
@@ -42,8 +42,9 @@ infrastructure, review it, then re-run the same command without `--plan-only` (p
 
 ### Resuming (`--from-phase`)
 
-`deploy()` runs seven phases (destroy-prior-range, `terraform apply`, copy SSH key, bootstrap
-engine, nakon-on-team1, clone+nakon-on-other-teams, seed/start — see the
+`deploy()` runs seven phases (destroy-prior-range, `terraform apply`, a no-op phase 3 — the
+SSH-key copy it used to do was removed, bootstrap engine, nakon-on-team1,
+clone+nakon-on-other-teams, seed/start — see the
 [README](../README.md#how-it-works) for what each does). A failed deploy prints which phase it
 died in; `--from-phase N` re-enters there instead of tearing everything down and rebuilding
 from scratch. Phase 6's clone step reads the nakon bundle by content hash, so a resume there
@@ -92,11 +93,20 @@ competitions/<id>/box_vulns.json      {"web01": ["suid-find", ...]}  planted mis
 Either file on its own is enough to count as pinned; if neither exists, the run randomises
 and then writes both, so a re-run of the same competition reproduces it exactly.
 
-nakon exposes the catalog and a validator for building these programmatically:
+Entries can be a plain string **or** an object with vars —
+`{"name": "Run/RunOnce Keys", "vars": {"process": "WindowsUpdateHelper", ...}}` — for the
+catalog configs that take parameters (see `vendor/nakon/config-example.json`). Windows
+domain roles (`ADDS`, `Domain Join`) must never appear here: they reboot the box and are
+driven separately by `deploy_domain_configs()` (see `domain_roles.json` in
+[usage-people.md](usage-people.md#windows-domain-join-boxes)).
+
+nakon exposes the catalog and a validator for building these programmatically. Run them from
+`vendor/nakon/` — that's where the module and its `.env` (catalog creds) live:
 
 ```bash
+cd vendor/nakon
 python3 -m nakon catalog list --json
-python3 -m nakon catalog check --box-vulns competitions/<id>/box_vulns.json
+python3 -m nakon catalog check --box-vulns /abs/path/to/competitions/<id>/box_vulns.json
 ```
 
 `catalog check` catches typos, building blocks requested directly instead of the misconfig
@@ -134,18 +144,22 @@ python3 verify-competition.py competitions/<id> [--engine-ip IP] [--admin-passwo
    another's is confirmed blocked while that same box can still reach the internet (rule
    presence alone can't tell a correct rule from one that's shadowed or misordered).
 4. **MISCONFIG** — at least one planted misconfig is present on a target box (SSH via the
-   scoring-engine gateway).
+   scoring-engine gateway). A follow-on **misconfig-survival** pass checks every team's copy
+   of each verifiable config (2+ teams) is identically present — a regression guard for the
+   clone-vs-cloud-init race where a clone's first-boot cloud-init silently reverts a
+   filesystem-permission plant.
 5. **INJECTS** — if the competition ships an `injects/` dir, the engine has that many injects.
 
 Two additional lines: a `no_default_creds` regression guard (part of the exit-code gate,
-same as logins/isolation/misconfig/injects) confirming `credentials.txt`'s box-login/credlist
-lines aren't the old fixed literals, and a purely informational report of
+same as logins/isolation/misconfig/misconfig-survival/injects) confirming `credentials.txt`'s
+box-login/credlist lines aren't the old fixed literals, and a purely informational report of
 `range-healthcheck.timer`'s current status + any recent failures it logged (see
 `install_range_healthcheck()` in `create-competition.py`) — that one doesn't affect the exit
 code, it's just visibility.
 
 Exit code is `0` only when logins all pass, no default creds remain, isolation holds, the
-misconfig spot-check confirms, and injects (if any) are present; service DOWN is reported but
+misconfig spot-check (and, with 2+ teams, the misconfig-survival pass) confirms, and injects
+(if any) are present; service DOWN is reported but
 not fatal unless `--strict-services`. Isolation is **not** demoted to informational the way
 services are — a failed isolation check means teams can reach each other right now.
 
@@ -185,12 +199,17 @@ Anything that matches no team/box is a hard error, not a silent empty selection.
 | `rollback-ready` *(default)* | Roll back to the `tz-ready` snapshot, restart, wait for SSH. ~seconds per box. | The box was fine at hour zero and isn't now. |
 | `rollback-base` | Roll back to `tz-base`, then re-run DNS/auth/`nakon deploy --only`/hardening and re-take `tz-ready`. | `tz-ready` is also bad. |
 | `reconfigure` | No rollback — re-run that same chain against the live box. | A service died but the box is otherwise the team's to keep. |
-| `rebuild` | Destroy the VM, re-clone it from its **Packer template**, configure from scratch, take both snapshots. | The VM is gone or won't boot. |
+| `rebuild` | Destroy the VM, re-clone it from its **box template**, configure from scratch, take both snapshots. Windows boxes are bootstrapped over the guest agent (`bootstrap_windows_box()`), Linux via cloud-init. | The VM is gone or won't boot. |
 
 `rebuild` deliberately clones the template rather than team1's live box (which is what phase 6
 does at deploy time): mid-competition team1's box carries whatever team1's defenders have done
 to it. Rebuilding a **team1** box also puts it out of sync with Terraform state — the tool warns,
 and the next `terraform apply` will want to replace it.
+
+`rollback-base` and `rebuild` also re-run the AD domain chain (`deploy_domain_configs()`) for
+any selected box with a role in `domain_roles.json` — restoring a pre-Nakon disk undoes the
+ADDS promotion/domain join too, so the affected team's DC is re-promoted (or its members
+re-joined, if only members were reset) before `tz-ready` is re-taken.
 
 `nakon deploy --only` is scoped to exactly the selected machines. *What* gets applied to each is
 fixed by the content-addressed bundle (built from the full machine list), so a partial redeploy

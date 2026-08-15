@@ -20,13 +20,6 @@ variable "vm_username" {
   default     = "sysadmin"
 }
 
-variable "vm_password" {
-  description = "Password for var.vm_username, baked into the templates. Used once to bootstrap key-based access on the scoring engine, which doesn't go through cloud-init."
-  type        = string
-  sensitive   = true
-  default     = "asdf"
-}
-
 variable "quotient_admin_password" {
   description = "Password baked into event.conf's admin account (username 'admin'). Orchestration logs in with this after Quotient boots to obtain an API token — you choose this value, no need to know anything from inside Quotient ahead of time."
   type        = string
@@ -47,20 +40,24 @@ variable "box_password" {
 
 variable "event_name" {
   type    = string
-  default = "Range 2025"
+  default = "Range 2026"
 }
 
 variable "teams" {
   description = "Map of team key → identifier (used as subnet third octet)"
   type        = map(object({ identifier = string, password = string }))
+  # Identifiers follow the 192.168.<101-254>.x convention collect_teams() uses — the defaults
+  # are placeholders (create-competition.py always overwrites TF_VAR_teams), but keeping them
+  # realistic stops anyone hand-running `terraform apply` from building 192.168.1.x boxes the
+  # engine's NAT/isolation rules (192.168.0.0/16, with team subnets at 101+) don't expect.
   default = {
-    team1 = { identifier = "1", password = "team1pass" }
-    team2 = { identifier = "2", password = "team2pass" }
+    team1 = { identifier = "101", password = "team1pass" }
+    team2 = { identifier = "102", password = "team2pass" }
   }
 }
 
 variable "boxes_per_team" {
-  description = "Boxes cloned identically for every team. 'template' must match a Packer-built template name in Proxmox."
+  description = "Boxes cloned identically for every team. 'template' must match a Proxmox VM tagged 'template' exactly (see docs/usage-people.md 'Adding a template VM')."
   type = list(object({
     name       = string
     last_octet = number

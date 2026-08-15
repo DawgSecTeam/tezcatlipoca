@@ -83,14 +83,14 @@ def random_password():
 WINDOWS_ADMIN_USER = "Administrator"  # the windows-server-fix template's built-in local admin
                                        # (RID 500) — its password carries over as the domain
                                        # Administrator password once ADDS promotes the box, which
-                                       # is what lets deploy_windows_domain_configs() reuse
+                                       # is what lets deploy_domain_configs() reuse
                                        # box_password as the Domain Join credential.
 
 # Configs that reboot the box as part of what they do. A nakon deploy runs a machine's full
 # configurations list as ONE script (run.ps1) — a reboot mid-script kills every step after it,
 # silently. These are excluded from every box's normal box_vulns.json/box_services.json list
 # (see the win-domain-* Compfile) and instead driven one at a time by
-# deploy_windows_domain_configs(), each in its own single-config script with an explicit
+# deploy_domain_configs(), each in its own single-config script with an explicit
 # reboot-and-reconnect wait in between.
 REBOOTS_BOX_CONFIGS = {"ADDS", "Domain Join"}
 
@@ -242,6 +242,20 @@ def _prompt_int(prompt, default):
             print(f"  Enter a whole number (or leave blank for {default}).")
 
 
+def _prompt_difficulty():
+    """Difficulty prompt that re-asks on non-numeric/out-of-range input instead of crashing."""
+    while True:
+        raw = input("Difficulty (1-10): ").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            print("  Enter a whole number from 1 to 10.")
+            continue
+        if 1 <= value <= 10:
+            return value
+        print("  Enter a number from 1 to 10.")
+
+
 def _prompt_optional_int(prompt):
     """Like _prompt_int, but blank means None (no default) instead of a fallback value."""
     while True:
@@ -371,16 +385,17 @@ def load_injects(comp_dir):
           "open_offset_min": 0, "due_offset_min": 60, "close_offset_min": 90
         }
     Any other files in the subdirectory (e.g. a template .docx, a PoC) are uploaded as the
-    inject's attachments. Offsets are minutes relative to competition start (now); they're
-    resolved to RFC3339 timestamps here so Quotient's CreateInject can parse them directly.
+    inject's attachments. Offsets are minutes relative to competition start — they are NOT
+    resolved to timestamps here: load time is the top of deploy(), which runs an hour or more
+    before phase 7 actually seeds the competition and creates injects, so anchoring there made
+    every inject systematically early by the whole deploy duration (a "+15 min" inject could
+    already be open when the event started). resolve_inject_times() turns the offsets into
+    RFC3339 timestamps at creation time instead.
     Returns [] when there's no injects/ dir, so competitions without injects are unaffected.
     """
     injects_dir = comp_dir / "injects"
     if not injects_dir.is_dir():
         return []
-
-    from datetime import datetime, timedelta, timezone
-    now = datetime.now(timezone.utc)
 
     injects = []
     for sub in sorted(injects_dir.iterdir()):
@@ -395,9 +410,6 @@ def load_injects(comp_dir):
             if desc_path.exists():
                 description = desc_path.read_text()
 
-        def rfc3339(minutes):
-            return (now + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
         # Attachments: every file in the folder except the manifest / description source.
         skip = {"inject.json", meta.get("description_file")}
         files = [str(f) for f in sorted(sub.iterdir()) if f.is_file() and f.name not in skip]
@@ -405,11 +417,29 @@ def load_injects(comp_dir):
         injects.append({
             "title":       meta["title"],
             "description": description,
-            "open_time":   rfc3339(meta.get("open_offset_min", 0)),
-            "due_time":    rfc3339(meta.get("due_offset_min", 60)),
-            "close_time":  rfc3339(meta.get("close_offset_min", 90)),
+            "open_offset_min":  meta.get("open_offset_min", 0),
+            "due_offset_min":  meta.get("due_offset_min", 60),
+            "close_offset_min": meta.get("close_offset_min", 90),
             "files":       files,
         })
+    return injects
+
+
+def resolve_inject_times(injects):
+    """Turn load_injects()' offsets into RFC3339 timestamps anchored at NOW — called right
+    before create_injects() in phase 7, i.e. as close to actual competition start as the
+    pipeline gets (seed_teams() has just run). Mutates the entries in place.
+    """
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+
+    def rfc3339(minutes):
+        return (now + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    for inj in injects:
+        inj["open_time"] = rfc3339(inj.pop("open_offset_min", 0))
+        inj["due_time"] = rfc3339(inj.pop("due_offset_min", 60))
+        inj["close_time"] = rfc3339(inj.pop("close_offset_min", 90))
     return injects
 
 
@@ -1206,10 +1236,6 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds=None):
             "done",
         ])
 
-        if len(script_lines) <= 3:  # Only shebang, set -e, and empty line
-            print(f"    No hardening needed on {ip}")
-            continue
-
         # Encode script as base64 to avoid ALL quoting issues
         script_content = "\n".join(script_lines)
         script_b64 = base64.b64encode(script_content.encode()).decode()
@@ -1335,7 +1361,17 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
         try:
             result = ssh_via_gateway(ctx, ip, "sudo cloud-init clean --logs --machine-id",
                                       timeout=30, user=ctx.get("box_username", "ubuntu"))
-            print(f"    {box['name']}: cloud-init clean done")
+            if result.returncode != 0:
+                # The whole point of this step is that clones DON'T inherit team1's machine-id
+                # and cloud-init state — a silent failure here means every clone boots as a
+                # duplicate of team1's instance. Warn loudly; the clone still proceeds (the
+                # operator may prefer a dirty clone over no competition).
+                print(f"  WARNING: cloud-init clean FAILED for {box['name']} "
+                      f"(rc={result.returncode}): {(result.stderr or '').strip()[:150]}")
+                print(f"           Clones of {box['name']} may inherit its machine-id/"
+                      f"cloud-init state (duplicate-identity bugs).")
+            else:
+                print(f"    {box['name']}: cloud-init clean done")
         except Exception as e:
             print(f"  WARNING: cloud-init clean failed for {box['name']}: {e}")
 
@@ -1348,8 +1384,10 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
         vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
         vm = next((v for v in vms if v["vmid"] == vmid), None)
         if vm and vm.get("status") == "running":
-            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
-            wait_for_proxmox_task(node, upid)
+            # stop_vm (graceful ACPI first, force only if ignored) — the disks about to be
+            # full-cloned should be filesystem-consistent, which a raw status/stop power-cut
+            # doesn't guarantee. Same reason range_ops.stop_vm() exists.
+            stop_vm(node, vmid)
         print(f"    team1-{box['name']} (vmid {vmid}) stopped")
 
     # Step 3: Clone team1 boxes for each subsequent team
@@ -1432,7 +1470,7 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
     # bootstrapped right after Terraform apply — see deploy()'s [4.5/7]). This is Windows'
     # equivalent of the ipconfig0 PUT the `else` branch above did for Linux clones: IP/gateway/
     # DNS + local admin password, all guest-agent-driven since there's no cloud-init here.
-    # Public DNS for now — dns_repoint_windows_box() in deploy_windows_domain_configs() points
+    # Public DNS for now — dns_repoint_windows_box() in deploy_domain_configs() points
     # the domain-joining box at its team's DC once that DC actually exists.
     for t in all_targets:
         if t["team_key"] == "team1" or not is_windows_template(t["box"]["template"]):
@@ -1481,7 +1519,7 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
 def _run_single_nakon_config(machine, configurations, key, scoring_user, scoring_ip, comp_dir,
                               tag, timeout=1800):
     """Deploy exactly one machine with an OVERRIDDEN configurations list, outside the
-    competition's main bundle. Used by deploy_windows_domain_configs() to run a
+    competition's main bundle. Used by deploy_domain_configs() to run a
     reboot-triggering config (or the AD-flavored set that has to follow it) in total isolation
     from everything else nakon would otherwise run for that box in the same script — see
     REBOOTS_BOX_CONFIGS' comment for why a shared script is unsafe here.
@@ -1502,7 +1540,7 @@ def _run_single_nakon_config(machine, configurations, key, scoring_user, scoring
 # `Get-Module -ListAvailable -Name ActiveDirectory` to decide whether to touch AD objects or
 # fall back to local ones — so they only produce the intended AD-flavored misconfigs once ADDS
 # has actually promoted the box. Run right after ADDS in the same post-reboot pass (not the
-# normal phase-5/6 run, which happens BEFORE promotion — see deploy_windows_domain_configs()).
+# normal phase-5/6 run, which happens BEFORE promotion — see deploy_domain_configs()).
 
 
 def wait_for_windows_sshd(node, vmid, timeout=180):
@@ -1529,11 +1567,39 @@ def wait_for_windows_sshd(node, vmid, timeout=180):
     return False
 
 
-def deploy_windows_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scoring_user,
-                                   scoring_ip, box_password):
-    """Promote each team's DC box to its own AD forest, then join that team's member box(es) to
-    it. Deliberately NOT part of the normal phase-5 (team1-only) / phase-6 (every team) nakon
-    runs — two independent reasons:
+def wait_for_dc_dns(node, dc_vmid, domain, dc_ip, timeout=300):
+    """Poll the DC's DNS server (over the guest agent) until it actually serves the domain's
+    SRV records. Guest-agent-alive after the ADDS reboot doesn't mean DNS is answering yet —
+    confirmed live on win-linux-practice: the Linux member's `realm join` ran while the
+    just-promoted DC's DNS wasn't serving and failed with "No such realm found" (and Windows
+    Add-Computer locates the domain through the same SRV records, so the race applies to both
+    member platforms). Never raises — a timeout warns and the join attempt gets to fail on
+    its own, same posture as wait_for_windows_sshd().
+    """
+    record = f"_ldap._tcp.dc._msdcs.{domain}"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            rc, out, _ = guest_agent_exec_windows(
+                node, dc_vmid,
+                f"(Resolve-DnsName -Name {record} -Server {dc_ip} -Type SRV -ErrorAction "
+                f"SilentlyContinue | Select-Object -First 1).NameHost",
+                timeout=20,
+            )
+            if rc == 0 and out.strip():
+                return True
+        except Exception:
+            pass
+        time.sleep(10)
+    return False
+
+
+def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scoring_user,
+                          scoring_ip, box_password, promote_dc=True):
+    """Promote each team's DC box to its own AD forest, then join that team's member box(es)
+    to it — Windows members via Add-Computer, Linux members via realmd/sssd (nakon's
+    "domain-join" catalog config). Deliberately NOT part of the normal phase-5 (team1-only) /
+    phase-6 (every team) nakon runs — two independent reasons:
 
     1. A reboot mid-script silently kills every step queued after it in that box's run.ps1
        (nakon runs a machine's full configurations list as ONE script) — ADDS and Domain Join
@@ -1547,15 +1613,20 @@ def deploy_windows_domain_configs(teams, boxes, comp_dir, nakon_config_path, key
        per team, means every team promotes its OWN forest from a still-vanilla clone — safe.
 
     Reads comp_dir/domain_roles.json — {box_name: "dc"|"member"} — to know which box plays which
-    role; a competition with no such file (i.e. every non-Windows-domain competition) is a no-op.
+    role; a competition with no such file (i.e. every non-domain competition) is a no-op.
     First "dc"-role box in `boxes` is promoted; every "member"-role box in the same team joins
-    it. Domain name is derived per team as team<identifier>.local — each team's forest is
-    independent, matching the per-team subnet isolation everywhere else in this range.
+    it (member platform decides the join mechanism — Windows or Linux). Domain name is derived
+    per team as team<identifier>.local — each team's forest is independent, matching the
+    per-team subnet isolation everywhere else in this range.
 
-    box_password doubles as the Domain Join credential: WINDOWS_ADMIN_USER is the template's
-    built-in Administrator (RID 500), whose password carries over as the domain Administrator
-    password once ADDS promotes the box that account lives on (bootstrap_windows_box() set it to
-    box_password before any of this ran).
+    box_password doubles as the join credential for both platforms: WINDOWS_ADMIN_USER is the
+    template's built-in Administrator (RID 500), whose password carries over as the domain
+    Administrator password once ADDS promotes the box that account lives on
+    (bootstrap_windows_box() set it to box_password before any of this ran).
+
+    promote_dc=False skips the ADDS promotion + AD misconfig pass and only (re)joins the
+    members — used by redeploy-competition.py when a MEMBER box was reset but the team's DC
+    is still promoted (re-promoting a healthy DC would just error).
     """
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
@@ -1584,47 +1655,52 @@ def deploy_windows_domain_configs(teams, boxes, comp_dir, nakon_config_path, key
         dc_vmid = vm_id_for(identifier, boxes.index(dc_box))
         dc_ip = dc_machine["ip"]
 
-        print(f"  [{team_key}] Promoting {dc_box['name']} ({dc_ip}) to a new AD forest ({domain})...")
-        # Install-ADDSForest requires -SafeModeAdministratorPassword (the DSRM password) —
-        # without it the cmdlet always prompts interactively, which nakon's non-interactive
-        # transport can't satisfy (confirmed live: "Read-Host : ... NonInteractive mode").
-        # Reusing box_password keeps this to one credential to remember per competition, same
-        # as everywhere else (WINDOWS_ADMIN_USER's own password doubles as the eventual domain
-        # Administrator password).
-        _run_single_nakon_config(
-            dc_machine,
-            [{"name": "ADDS", "vars": {"domain": domain, "dsrm_password": box_password}}],
-            key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-adds",
-        )
-        print(f"    Waiting for {dc_box['name']} to reboot and come back (AD DS promotion "
-              f"is slow — budgeting up to 20 min)...")
-        if not wait_for_guest_agent(node, dc_vmid, timeout=1200):
-            print(f"  WARNING: {dc_box['name']} guest agent never came back after ADDS — "
-                  f"skipping the rest of {team_key}'s domain setup")
-            continue
-        # guest-agent-alive doesn't mean sshd is listening yet — confirmed live: a flat 30s
-        # sleep here wasn't always enough right after an ADDS-promotion reboot specifically
-        # (heavier than an ordinary reboot), causing nakon's next connection to fail with
-        # "Unable to connect to port 22" even though the box came back fine moments later.
-        wait_for_windows_sshd(node, dc_vmid, timeout=180)
+        if not promote_dc:
+            print(f"  [{team_key}] DC {dc_box['name']} left as-is — (re)joining member "
+                  f"box(es) to existing {domain}...")
+        else:
+            print(f"  [{team_key}] Promoting {dc_box['name']} ({dc_ip}) to a new AD forest "
+                  f"({domain})...")
+            # Install-ADDSForest requires -SafeModeAdministratorPassword (the DSRM password) —
+            # without it the cmdlet always prompts interactively, which nakon's non-interactive
+            # transport can't satisfy (confirmed live: "Read-Host : ... NonInteractive mode").
+            # Reusing box_password keeps this to one credential to remember per competition, same
+            # as everywhere else (WINDOWS_ADMIN_USER's own password doubles as the eventual domain
+            # Administrator password).
+            _run_single_nakon_config(
+                dc_machine,
+                [{"name": "ADDS", "vars": {"domain": domain, "dsrm_password": box_password}}],
+                key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-adds",
+            )
+            print(f"    Waiting for {dc_box['name']} to reboot and come back (AD DS promotion "
+                  f"is slow — budgeting up to 20 min)...")
+            if not wait_for_guest_agent(node, dc_vmid, timeout=1200):
+                print(f"  WARNING: {dc_box['name']} guest agent never came back after ADDS — "
+                      f"skipping the rest of {team_key}'s domain setup")
+                continue
+            # guest-agent-alive doesn't mean sshd is listening yet — confirmed live: a flat 30s
+            # sleep here wasn't always enough right after an ADDS-promotion reboot specifically
+            # (heavier than an ordinary reboot), causing nakon's next connection to fail with
+            # "Unable to connect to port 22" even though the box came back fine moments later.
+            wait_for_windows_sshd(node, dc_vmid, timeout=180)
 
-        print(f"  [{team_key}] Planting AD-flavored misconfigs on {dc_box['name']}...")
-        # Add User Account / Elevate User Account need vars (id 67/68 in the catalog) — without
-        # them New-ADUser gets empty required params and the step does nothing useful. Reuses
-        # box_password so there's still just one credential to remember per competition.
-        _run_single_nakon_config(
-            dc_machine,
-            [
-                {"name": "Add User Account", "vars": {
-                    "username": "svc-support", "password": box_password,
-                    "full_name": "IT Support", "domain_address": domain,
-                }},
-                {"name": "Elevate User Account", "vars": {"username": "svc-support"}},
-                {"name": "Disable System Firewall"},
-                {"name": "Removing all auditing"},
-            ],
-            key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-ad-misconfigs",
-        )
+            print(f"  [{team_key}] Planting AD-flavored misconfigs on {dc_box['name']}...")
+            # Add User Account / Elevate User Account need vars (id 67/68 in the catalog) — without
+            # them New-ADUser gets empty required params and the step does nothing useful. Reuses
+            # box_password so there's still just one credential to remember per competition.
+            _run_single_nakon_config(
+                dc_machine,
+                [
+                    {"name": "Add User Account", "vars": {
+                        "username": "svc-support", "password": box_password,
+                        "full_name": "IT Support", "domain_address": domain,
+                    }},
+                    {"name": "Elevate User Account", "vars": {"username": "svc-support"}},
+                    {"name": "Disable System Firewall"},
+                    {"name": "Removing all auditing"},
+                ],
+                key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-ad-misconfigs",
+            )
 
         for member_box in member_boxes:
             member_machine_name = f"{member_box['name']}-team{identifier}"
@@ -1636,26 +1712,50 @@ def deploy_windows_domain_configs(teams, boxes, comp_dir, nakon_config_path, key
             member_vmid = vm_id_for(identifier, boxes.index(member_box))
             member_ip = member_machine["ip"]
 
-            print(f"  [{team_key}] Repointing {member_box['name']}'s DNS at "
-                  f"{dc_box['name']} ({dc_ip}) so it can find the domain...")
-            dns_repoint_windows_box(node, member_vmid, dc_ip)
+            if is_windows_template(member_box["template"]):
+                print(f"  [{team_key}] Repointing {member_box['name']}'s DNS at "
+                      f"{dc_box['name']} ({dc_ip}) so it can find the domain...")
+                dns_repoint_windows_box(node, member_vmid, dc_ip)
 
-            print(f"  [{team_key}] Joining {member_box['name']} to {domain}...")
-            _run_single_nakon_config(
-                member_machine,
-                [{"name": "Domain Join", "vars": {
-                    "domain": domain, "admin_user": WINDOWS_ADMIN_USER, "admin_pass": box_password,
-                }}],
-                key, scoring_user, scoring_ip, comp_dir,
-                tag=f"{team_key}-{member_box['name']}-join",
-            )
-            print(f"    Waiting for {member_box['name']} to reboot and come back "
-                  f"(domain join)...")
-            if not wait_for_guest_agent(node, member_vmid, timeout=900):
-                print(f"  WARNING: {member_box['name']} guest agent never came back after "
-                      f"Domain Join")
-                continue
-            wait_for_windows_sshd(node, member_vmid, timeout=180)
+                print(f"  [{team_key}] Joining {member_box['name']} to {domain}...")
+                _run_single_nakon_config(
+                    member_machine,
+                    [{"name": "Domain Join", "vars": {
+                        "domain": domain, "admin_user": WINDOWS_ADMIN_USER,
+                        "admin_pass": box_password,
+                    }}],
+                    key, scoring_user, scoring_ip, comp_dir,
+                    tag=f"{team_key}-{member_box['name']}-join",
+                )
+                print(f"    Waiting for {member_box['name']} to reboot and come back "
+                      f"(domain join)...")
+                if not wait_for_guest_agent(node, member_vmid, timeout=900):
+                    print(f"  WARNING: {member_box['name']} guest agent never came back after "
+                          f"Domain Join")
+                    continue
+                wait_for_windows_sshd(node, member_vmid, timeout=180)
+            else:
+                # Linux member: realmd/sssd via nakon's "domain-join" config (installs
+                # realmd/adcli/sssd, points the box's own resolvers at the DC — so no separate
+                # DNS repoint is needed, unlike the Windows path — and runs an idempotent
+                # `realm join`). Uppercase env-style vars, per that config's declaration (the
+                # Windows configs take lowercase PowerShell vars). No reboot, so there's no
+                # guest-agent/sshd wait afterwards either. BOX_HOSTNAME only matters if the
+                # box still has a placeholder `localhost` hostname, which realmd refuses.
+                print(f"  [{team_key}] Joining Linux member {member_box['name']} ({member_ip}) "
+                      f"to {domain} via realmd/sssd...")
+                _run_single_nakon_config(
+                    member_machine,
+                    [{"name": "domain-join", "vars": {
+                        "DOMAIN": domain,
+                        "DC_IP": dc_ip,
+                        "DOMAIN_ADMIN_USER": WINDOWS_ADMIN_USER,
+                        "DOMAIN_ADMIN_PASS": box_password,
+                        "BOX_HOSTNAME": member_box["name"],
+                    }}],
+                    key, scoring_user, scoring_ip, comp_dir,
+                    tag=f"{team_key}-{member_box['name']}-join",
+                )
 
 
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
@@ -2143,7 +2243,18 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
     # a resume MUST reuse the originals or the engine's already-written .env / already-seeded
     # admin login won't match. Persist them here (gitignored, mode 0600) and reload on resume.
     state_path = comp_dir / ".deploy_state.json"
-    resuming = from_phase > 1 and state_path.exists()
+    if from_phase > 1 and not state_path.exists():
+        # Without this guard the else-branch below ran as if fresh — minting NEW passwords and
+        # overwriting teams.json — while from_phase still skipped the destructive phases 1-2,
+        # leaving the deployed range and its credentials silently out of sync (e.g. nakon
+        # authenticating with a password no box has).
+        raise SystemExit(
+            f"  ERROR: --from-phase {from_phase} but {state_path} doesn't exist — there are no "
+            f"saved team passwords/secrets to resume with, and generating fresh ones while "
+            f"skipping the destructive phases would leave the deployed range and its credentials "
+            f"out of sync. Re-run without --from-phase for a clean redeploy."
+        )
+    resuming = from_phase > 1
 
     def _save_state():
         state_path.write_text(json.dumps(state, indent=2))
@@ -2449,10 +2560,10 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
 
             # Promote/join any Windows domain-controller/member boxes (domain_roles.json) — a
             # no-op for every competition that doesn't have one. Runs AFTER cloning, never
-            # before: see deploy_windows_domain_configs()'s docstring for why cloning an
+            # before: see deploy_domain_configs()'s docstring for why cloning an
             # already-promoted DC is unsafe.
             print("  Configuring Windows AD domains (if any)...")
-            deploy_windows_domain_configs(teams, boxes, comp_dir, nakon_config_path,
+            deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path,
                                            key, scoring_user, scoring_ip, box_password)
 
             # Snapshot every box in its as-delivered state — the exact disk the competition
@@ -2505,6 +2616,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             # here avoids even querying/re-posting on an otherwise-clean resume.
             if injects and not state.get("injects_created"):
                 print(f"  Creating {len(injects)} inject(s)...")
+                resolve_inject_times(injects)  # anchor offsets to actual competition start
                 create_injects(scoring_ip, admin_password, injects)
                 state["injects_created"] = True
                 _save_state()
@@ -2639,7 +2751,7 @@ def main():
             print(f"Creating new competition '{comp_name}'.")
             comp_dir.mkdir(parents=True, exist_ok=True)
             scenario = args.scenario if args.scenario is not None else input("Scenario description: ").strip()
-            difficulty = args.difficulty if args.difficulty is not None else int(input("Difficulty (1-10): "))
+            difficulty = args.difficulty if args.difficulty is not None else _prompt_difficulty()
             (comp_dir / "Compfile").write_text(
                 f"name {comp_name}\n"
                 f"scenario {scenario}\n"
@@ -2677,7 +2789,7 @@ def main():
         comp_dir.mkdir(parents=True, exist_ok=True)
 
         scenario = input("Scenario description: ").strip()
-        difficulty = int(input("Difficulty (1-10): "))
+        difficulty = _prompt_difficulty()
 
         # Write Compfile in key=value format (matching utils.load_compfile)
         (comp_dir / "Compfile").write_text(
@@ -2694,7 +2806,11 @@ def main():
             {"box_username": box_username, "credlist_usernames": credlist_usernames}, indent=2
         ))
     else:
-        idx = int(choice) - 1
+        try:
+            idx = int(choice) - 1
+        except ValueError:
+            print("Invalid choice.")
+            sys.exit(1)
         if 0 <= idx < len(previous):
             comp_name = previous[idx]
         else:
