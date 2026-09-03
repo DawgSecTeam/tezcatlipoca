@@ -34,11 +34,6 @@ def destroy_cloned_vms(cloned_vms_path):
     if not cloned_vms:
         return
 
-    # proxmox_api/wait_for_proxmox_task come from range_ops rather than the private copies this
-    # file used to carry. Same semantics (a "stopped" task with a non-OK exitstatus still
-    # raises, so a failed delete can't be misreported as success and then silently orphaned by
-    # terraform destroy), plus the transient-connection retry and the longer task timeout this
-    # copy never had — an ordinary VM delete on this host has been seen take past 600s.
     node = os.environ.get("TF_VAR_proxmox_node", "pve")
 
     print(f"  Destroying {len(cloned_vms)} cloned VM(s) before terraform destroy...")
@@ -49,8 +44,6 @@ def destroy_cloned_vms(cloned_vms_path):
         except Exception:
             pass  # already stopped or gone
         try:
-            # purge=1 also drops the VM from any jobs/HA config that reference it. Snapshots
-            # (tz-base/tz-ready, taken by create-competition.py) go with the disk automatically.
             upid = proxmox_api("DELETE", f"/nodes/{node}/qemu/{vmid}", params={"purge": 1})["data"]
             wait_for_proxmox_task(node, upid)
             print(f"    Deleted {vm_key} (vmid {vmid})")

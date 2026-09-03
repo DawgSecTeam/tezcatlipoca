@@ -209,14 +209,7 @@ resource "proxmox_virtual_environment_vm" "team_box" {
 }
 
 locals {
-  # ip_config just echoes back "dhcp" (the configured value); the actual
-  # leased address has to come from the QEMU guest agent instead.
-  #
-  # Select the management address by exclusion rather than taking the first one: once
-  # null_resource.team_nics runs, the engine also holds 192.168.<identifier>.1 on every team
-  # NIC, and the guest agent gives no ordering guarantee. Picking one would break every scp/ssh
-  # and print an unreachable scoreboard URL. Team subnets are always 192.168.0.0/16 (see
-  # team_vms above), so management must live outside it — .env.example uses 10.0.0.0/8.
+  # Management IP via guest agent; exclude team subnets / docker / tailscale; no ordering guarantee.
   scoring_mgmt_ips = [
     for ip in flatten(proxmox_virtual_environment_vm.scoring_engine.ipv4_addresses) :
     ip if(
@@ -232,15 +225,7 @@ locals {
   ssh_cmd    = "ssh -i ${var.ssh_private_key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${var.vm_username}@${local.scoring_ip}"
 }
 
-# Addressing the engine's team-facing NICs is the one part of provisioning that depends on the
-# team set, so it gets its own resource: adding a team has to re-run this (otherwise the new
-# team's NIC never gets an address and every one of its services is unreachable), but must NOT
-# re-run null_resource.orchestrate, whose Step A does `rm -rf /opt/quotient` and whose Step D
-# re-runs nakon — that would flatten a live competition just to add a team to it.
-#
-# This was Step B of null_resource.orchestrate. The remaining steps keep their original letters
-# (A, then C, then D) so the many references to them in the README still line up — hence the
-# gap where B used to be.
+# Team NIC addressing depends on team set; isolated so adding a team doesn't re-run orchestrate.
 resource "null_resource" "team_nics" {
   triggers = {
     engine_id = proxmox_virtual_environment_vm.scoring_engine.id
@@ -257,9 +242,6 @@ resource "null_resource" "team_nics" {
       "network:",
       "  version: 2",
       "  ethernets:",
-      # One entry per team — identifiers sorted so NIC order is deterministic, and sorted the
-      # same way the scoring engine's dynamic network_device blocks are (Terraform iterates
-      # maps in lexicographic key order), so stanza N always describes NIC N.
       join("\n", [for idx, team in local.sorted_team_keys :
         "    ens${18 + idx + 1}:\n      addresses: [\"192.168.${var.teams[team].identifier}.1/24\"]"
       ]),
@@ -267,12 +249,6 @@ resource "null_resource" "team_nics" {
       # netplan refuses to read (and warns loudly about) world-readable configs
       "sudo chmod 600 /etc/netplan/60-team-ifaces.yaml",
       "sudo netplan apply",
-      # A drop-in that gets overwritten, not `tee -a /etc/sysctl.conf`, which appended another
-      # copy of this line on every apply. NAT is handled idempotently by
-      # create-competition.py's ensure_nat_forwarding()/range-firewall.timer instead — they have
-      # to be re-applied after Docker starts anyway, so terraform doesn't need to own it too.
-      # rp_filter=2 disables strict reverse-path filtering so NAT/masqueraded return traffic
-      # from team subnets isn't dropped.
       "printf 'net.ipv4.ip_forward=1\\nnet.ipv4.conf.all.rp_filter=2\\nnet.ipv4.conf.default.rp_filter=2\\n' | sudo tee /etc/sysctl.d/99-range-forward.conf",
       "sudo sysctl -p /etc/sysctl.d/99-range-forward.conf",
     ]
@@ -291,13 +267,7 @@ resource "null_resource" "team_nics" {
   ]
 }
 
-# Reboot scoring engine so the guest kernel detects the additional virtio NICs
-# that Terraform added at the hypervisor level. Without this, only the first
-# NIC (eth0) is visible and the team networks (ens19/ens20) don't exist.
-#
-# CRITICAL: Must use hard shutdown + start via Proxmox API — guest-level
-# "sudo reboot" does NOT trigger a PCI bus scan for newly added VirtIO NICs,
-# so ens19/ens20 never appear. A cold-boot from the hypervisor is required.
+# Cold-boot required: guest reboot doesn't trigger PCI scan for new VirtIO NICs.
 resource "null_resource" "reboot_scoring_engine" {
   triggers = {
     engine_id = proxmox_virtual_environment_vm.scoring_engine.id
@@ -334,21 +304,10 @@ resource "null_resource" "orchestrate" {
     box_ids   = join(",", [for vm in proxmox_virtual_environment_vm.team_box : vm.id])
   }
 
-  # Wait for the scoring engine to come back up after reboot.
-  # Loop runs SSH with actual command execution (not just TCP connect) to
-  # confirm auth is working, then sleeps 30s to let the system stabilize
-  # before create-competition.py's later phases run.
   provisioner "local-exec" {
     command = "for i in $(seq 1 30); do if ssh -i ${var.ssh_private_key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes ${var.vm_username}@${local.scoring_ip} echo ok 2>/dev/null | grep -q ok; then echo 'Scoring engine online'; break; fi; echo \"Waiting for scoring engine ($i/30)\"; sleep 10; done; sleep 30"
   }
 
-  # Step B (netplan/sysctl/NAT config on the scoring VM) has moved entirely into
-  # null_resource.team_nics (terraform-side) and create-competition.py's
-  # ensure_nat_forwarding()/range-firewall.timer (python-side, since NAT + team isolation get
-  # wiped by Docker's iptables resync on every container restart and have to be idempotently
-  # re-asserted anyway).
-  # This resource now only gates on the engine being SSH-reachable after reboot; Steps A
-  # (package install), C (Quotient Docker), D (Nakon deploy) live in create-competition.py.
   depends_on = [
     proxmox_virtual_environment_vm.scoring_engine,
     proxmox_virtual_environment_vm.team_box,
