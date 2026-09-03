@@ -7,7 +7,8 @@ then bootstraps Quotient, runs nakon, and clones team1's boxes out to the other 
 nakon SSHes into each box to install services and deploy misconfigs.
 
 **Usage docs**: [for people](docs/usage-people.md) (interactive setup + operation) ·
-[for agents](docs/usage-agents.md) (CLI flags, pre-authored configs, non-interactive)
+[for agents](docs/usage-agents.md) (CLI flags, pre-authored configs, non-interactive) ·
+[architecture](docs/architecture.md) (phases, data flow, isolation)
 
 > **Setup:** clone with submodules (`git clone --recurse-submodules …`, or
 > `git submodule update --init --recursive` in an existing checkout) — nakon is vendored at
@@ -94,19 +95,23 @@ a known-good point, not a repair.
 
 | Path | What it is |
 |---|---|
-| `create-competition.py` | Entry point and seven-phase driver (above). |
-| `redeploy-competition.py` | Targeted recovery — snapshot rollback / reconfigure / rebuild for a filtered set of boxes (above). |
+| `create-competition.py` | Shim re-exporting the pipeline (keeps `import driver` working). |
+| `constants.py` | `vmid` math, `MAX_TEAMS`/`MAX_BOXES_PER_TEAM`, snapshots, budgets, `NAKON_DIR`. |
+| `ssh_ops.py` | Gateway SSH (`ProxyCommand -W`), Terraform `agent_context`, wait helpers. |
+| `config_ops` / `nakon_ops` / `windows_ops` / `hardening_ops` / `clone_ops` / `domain_ops` / `engine_ops` / `deploy` | Deploy pipeline modules (split from `create-competition.py`). |
+| `range_ops.py` | Proxmox API, guest-agent exec, snapshots, `enumerate_targets`. |
+| `utils.py` | `Compfile`/`users.json` loading + `DNS_FIX_CMD`. |
+| `redeploy-competition.py` | Targeted recovery — snapshot rollback / reconfigure / rebuild for filtered boxes. |
 | `destroy-competition.py` | Teardown — destroys API-cloned team2+ boxes then `terraform destroy`. |
 | `verify-competition.py` | Post-deploy smoke test (logins, services, misconfig spot-check, injects). |
-| `generate-packet.py` | Renders `competitions/<id>/packet.md`, a team-agnostic competitor briefing (network/services layout) — no live infra needed. |
-| `range_ops.py` | Shared Proxmox API layer, vmid math, snapshots, and the `(team, box)` target list every per-box step iterates. |
-| `terraform/main.tf` | Infra: team bridges, the scoring VM (vmid `1000`), team1's target VMs, and the engine's team-facing NIC wiring. Package install/Quotient/nakon were moved to Python — Terraform no longer does them. |
-| `terraform/variables.tf` / `outputs.tf` | Every configurable setting (`TF_VAR_<name>`), and the JSON blob (`agent_context`) the driver reads via `terraform output -json`. |
-| `terraform/scripts/prepare_boxes.py` | Legacy DNS-repair helper from when nakon ran inside `terraform apply` — dead, superseded by `fix_dns_on_boxes()` in the driver. |
-| `quotient/setup.py` | Builds `event.conf`/`linux.credlist`, seeds/starts the competition via Quotient's API, uploads injects. |
-| `vendor/nakon/` | **Submodule** pinned to a nakon release (currently v0.1.2). Invoked as a CLI (`nakon randomize`/`build`/`deploy`) to generate `competitions/<id>/nakon-config.json` and a content-addressed bundle; only the bundle (not vulndb credentials) is shipped to the scoring engine. Needs its own `.env` for build-time catalog access. Set up with `git submodule update --init --recursive` after clone. |
-| `.env` / `.env.example` | The single config file for both Terraform (`TF_VAR_*`) and `create-competition.py`. `.env` is gitignored; `.env.example` is the committed placeholder version. |
-| `competitions/<id>/` | Per-competition state: `Compfile`, `boxes.json`, `users.json` (optional — themeable usernames), `box_services.json`/`box_vulns.json`, `domain_roles.json` (optional — Windows DC/member roles; Linux member boxes are joined via realmd/sssd, see [usage-people.md](docs/usage-people.md#windows-domain-join-boxes)), `teams.json`, `cloned_vms.json`, `credentials.txt`, `nakon-config.json`, `packet.md`. |
+| `generate-packet.py` | Renders `competitions/<id>/packet.md` (network/services briefing). |
+| `terraform/main.tf` | Bridges, scoring VM (1000), team1 VMs, team NIC wiring. |
+| `terraform/variables.tf` / `outputs.tf` | `TF_VAR_*` settings and `agent_context` JSON blob. |
+| `terraform/scripts/prepare_boxes.py` | Legacy DNS helper — superseded by `hardening_ops.fix_dns_on_boxes`. |
+| `quotient/setup.py` | Builds `event.conf`/`linux.credlist`, seeds/starts competition, uploads injects. |
+| `vendor/nakon/` | Submodule (v0.1.2) — CLI only (`randomize`/`build`/`deploy`), bundles under `bundles/`. |
+| `.env` / `.env.example` | Single config for Terraform + driver; `.env` gitignored. |
+| `competitions/<id>/` | Per-competition state: `Compfile`, `boxes.json`, `users.json`, `box_services.json`/`box_vulns.json`, `domain_roles.json`, `teams.json`, `nakon-config.json`, `credentials.txt`, etc. |
 
 ## Secrets
 
