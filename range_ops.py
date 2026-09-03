@@ -1,12 +1,5 @@
-"""Proxmox API layer, VM identity math, and the (team, box) target abstraction.
-
-This started as private helpers inside create-competition.py. It moved out here so
-redeploy-competition.py can drive the same infrastructure without importing the 2000-line
-deploy driver just to reach a REST call — and so destroy-competition.py stops carrying its own
-divergent copy of proxmox_api()/wait_for_proxmox_task().
-
-Nothing here prompts, writes to competitions/, or knows about deploy phases. It reads
-TF_VAR_proxmox_* out of the environment (the importing script is responsible for load_dotenv).
+"""Proxmox API layer, VM identity math, and (team, box) target abstraction.
+Reads TF_VAR_proxmox_* from environment; no prompts or phase logic.
 """
 
 import os
@@ -25,12 +18,7 @@ def proxmox_api(method, path, **kwargs):
     endpoint = os.environ["TF_VAR_proxmox_endpoint"].rstrip("/")
     url = f"{endpoint}/api2/json{path}"
     headers = {"Authorization": f"PVEAPIToken={os.environ['TF_VAR_proxmox_api_token']}"}
-    # This host has shown occasional transient network blips under load (pveproxy dropping a
-    # connection mid-request, a `RemoteDisconnected` with no HTTP response at all) — seen live
-    # killing an otherwise-healthy long-running deploy at a routine task-status poll. That's not
-    # an API error (no status code to even check) so it can't be told apart from a real outage
-    # by response content; a few short retries absorb the blip without masking a genuinely dead
-    # host; a call that's ACTUALLY down still exhausts these fast and raises as before.
+    # Retry transient connection blips (pveproxy drop) without masking real failures.
     last_exc = None
     for attempt in range(4):
         try:
@@ -45,12 +33,7 @@ def proxmox_api(method, path, **kwargs):
 
 
 def wait_for_proxmox_task(node, upid, timeout=1800):
-    # 600s used to be the default; seen live on this host twice now — a VM clone that ran past
-    # 90 minutes under concurrent disk contention (host-level, not this tool's doing — see the
-    # 2026-08 incident notes) and, separately, an ordinary VM delete that took a bit over 600s
-    # with nothing wrong (the task itself reported exitstatus OK once checked directly). A
-    # genuinely wedged task still needs a human/manual unlock regardless of the number here; this
-    # bump just stops an everyday slow patch on this host from failing a run outright.
+    # Timeout must tolerate slow storage (clones/deletes can exceed 10 min on this host).
     deadline = time.time() + timeout
     while True:
         if time.time() > deadline:
@@ -64,15 +47,8 @@ def wait_for_proxmox_task(node, upid, timeout=1800):
 
 
 def diagnose_unreachable_box(node, vmid):
-    """Best-effort diagnosis for a box that never became SSH-reachable, using the QEMU guest
-    agent — it works over virtio-serial regardless of network state, so it can tell us WHY a box
-    has no route (broken cloud-init, no IP at all, ...) instead of just that it's unreachable.
-    A blocked/failed cloud-init that never brings up the NIC looks identical to a slow-booting
-    box from the outside (both are "no route to host" for the full retry budget); this is the
-    difference between finding that out in seconds versus after 8-attempt retry loops in several
-    downstream steps all fail the same way. Never raises — purely diagnostic, and the guest
-    agent itself may be unreachable (e.g. not yet started, or genuinely no network at all).
-    """
+    """Diagnose unreachable box via guest agent (virtio-serial, no network needed). Never raises."""
+
     try:
         ifaces = proxmox_api(
             "GET", f"/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"
@@ -109,19 +85,8 @@ def diagnose_unreachable_box(node, vmid):
 
 
 def guest_agent_exec_root(node, vmid, script, timeout=60):
-    """Run a bash script as root via the QEMU guest agent (virtio-serial, not the network).
-
-    The agent daemon is root's own process, so this needs no sudo at all — unlike ssh_via_gateway
-    + a script full of `sudo` commands, it isn't affected by a box's *own* sudo trust being
-    broken (e.g. the writable-sudoers misconfig makes /etc/sudoers.d insecure, so modern sudo
-    refuses to honor sudo-nopasswd's NOPASSWD rule and demands a real password that doesn't
-    exist for the key-only cloud-init user — see fix_services_on_boxes). Deliberately does NOT
-    "fix" that misconfig; it just gives our own provisioning a channel that doesn't depend on it,
-    so the vuln stays intact for whoever's meant to find it.
-
-    Returns (exit_code, stdout, stderr); raises on a guest-agent-level failure (agent
-    unreachable, exec never returned) since callers should treat that differently from the
-    *command* failing.
+    """Run bash as root via QEMU guest agent (virtio-serial; no sudo needed, bypasses broken sudo).
+    Returns (exit_code, stdout, stderr); raises on agent failure.
     """
     pid = proxmox_api(
         "POST", f"/nodes/{node}/qemu/{vmid}/agent/exec",
@@ -140,20 +105,8 @@ def guest_agent_exec_root(node, vmid, script, timeout=60):
 
 
 def guest_agent_exec_windows(node, vmid, ps_script, timeout=120):
-    """Run a PowerShell script as SYSTEM via the QEMU guest agent — the Windows sibling of
-    guest_agent_exec_root(). Same virtio-serial channel, same no-sudo-equivalent-needed
-    property (the agent daemon runs as LocalSystem), which is exactly what's needed here: a
-    freshly cloned Windows box has no cloud-init/cloudbase-init equivalent to set its IP,
-    credentials or SSH access, so this is the ONLY channel available until that bootstrap has
-    run (see bootstrap_windows_box() in create-competition.py).
-
-    -EncodedCommand avoids the usual quoting minefield of smuggling a multi-line script through
-    the agent's ["powershell.exe", ..., "-Command", script] argv (embedded quotes/newlines get
-    mangled across the JSON->exec->cmd.exe hops); base64-UTF16LE is what powershell.exe itself
-    expects for this flag.
-
-    Returns (exit_code, stdout, stderr); raises on a guest-agent-level failure (agent
-    unreachable, exec never returned), same contract as guest_agent_exec_root().
+    """Run PowerShell as SYSTEM via guest agent (-EncodedCommand avoids quoting issues).
+    Only channel before Windows bootstrap. Returns (exit_code, stdout, stderr).
     """
     import base64
     encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
@@ -177,15 +130,8 @@ def guest_agent_exec_windows(node, vmid, ps_script, timeout=120):
 
 
 def wait_for_guest_agent(node, vmid, timeout=300):
-    """Block until the QEMU guest agent responds to a ping — works over virtio-serial with no
-    dependency on the guest having any network at all, which is exactly the gap a Windows box
-    needs covered: it has no cloud-init/cloudbase-init to signal "I'm up", and until
-    bootstrap_windows_box() has run it may not even have an IP address yet. Used both right
-    after a fresh clone and after a reboot triggered mid-plan (ADDS/Domain Join).
+    """Wait for guest agent ping (virtio-serial, no network needed). Never raises."""
 
-    Never raises — a timeout returns False and callers decide how to react (this mirrors
-    wait_for_ssh()'s posture elsewhere in the toolchain).
-    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -227,11 +173,7 @@ def vm_status(node, vmid):
 
 
 def stop_vm(node, vmid):
-    # Graceful first so the box's filesystem is consistent for the clone, but never
-    # indefinitely: a shutdown is an ACPI power-button event, and a guest without acpid (box
-    # templates are only required to have working cloud-init) just ignores it. That used to
-    # stall here for the full task timeout and then abort the deploy — after nakon had already
-    # run — so fall back to pulling the plug instead.
+    # Graceful ACPI first for filesystem consistency; force stop if ignored.
     try:
         upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/shutdown")["data"]
         wait_for_proxmox_task(node, upid, timeout=120)
@@ -265,20 +207,8 @@ def destroy_vm_if_exists(node, vmid):
 ### Targets — the (team, box) pair every per-box operation actually works on
 
 def enumerate_targets(teams, boxes):
-    """One target dict per (team, box), carrying the TRUE index of the box in `boxes`.
-
-    Every per-box operation needs four different names for the same machine — an IP, a vmid, a
-    Proxmox VM name, and a nakon machine name — and three of them are derived, not stored. The
-    derivation that matters is the vmid: vm_id_for() takes the box's 0-based POSITION in the
-    competition's full box list, which is only the same thing as `enumerate(boxes)` when `boxes`
-    is the complete list.
-
-    That is exactly why this function exists. The callers used to iterate
-    `for team in teams.values(): for box_idx, box in enumerate(boxes)` inline, which silently
-    computes wrong vmids the moment anyone passes a filtered subset of boxes — the same class of
-    bug that once made deploy()'s cleanup phase miss every team box (it passed last_octet where
-    a box index was wanted). Build the full target list ONCE from the full inputs, then filter
-    the targets; never filter `boxes` and re-enumerate.
+    """One target per (team, box) with correct vmid/IP/name derivations.
+    Build from full lists then filter; never filter boxes and re-enumerate (vmid is positional).
     """
     return [
         {
@@ -307,19 +237,10 @@ def describe_target(t):
 
 
 ### Snapshots
-
-# Taken before nakon plants anything: the box boots, has working DNS and a usable `ubuntu`
-# login, and nothing else. Rolling back here and re-running nakon reproduces the deploy.
-#
-# One asymmetry worth knowing: team1's tz-base really is a bare box, but team2+ boxes are
-# full-cloned from team1 AFTER phase 5's nakon run, so their tz-base already carries team1's
-# planted configurations. It is still the correct "before we configured THIS box" point —
-# tz-base + `nakon deploy --only <machine>` + fix_services_on_boxes() is precisely what phase 6
-# does to a freshly cloned box — the two just don't hold identical bits.
+# tz-base: booted, networked, pre-nakon. tz-ready: as-delivered post-nakon+hardening.
+# Note: team2+ tz-base is cloned after phase 5, so it carries team1's configs but is still
+# the per-box "before nakon" point for that team.
 SNAP_BASE = "tz-base"
-
-# Taken at the end of phase 6, after the final nakon pass and service hardening: the exact box
-# the competition starts on. This is what a mid-competition rollback restores.
 SNAP_READY = "tz-ready"
 
 
@@ -342,21 +263,8 @@ def delete_snapshot(node, vmid, name, timeout=600):
 
 
 def take_snapshot(node, vmid, name, description="", timeout=900):
-    """Take a disk-only (no-RAM) snapshot. Returns True on success, False on any failure.
-
-    `vmstate: 0` is what keeps this cheap — no RAM dump, so it's a storage-level operation that
-    finishes in seconds instead of writing gigabytes. The boxes run qemu-guest-agent (see
-    guest_agent_exec_root), so Proxmox issues a guest fsfreeze around it and the image is
-    filesystem-consistent rather than merely crash-consistent.
-
-    Deliberately never raises. Snapshots are a recovery convenience layered onto the deploy, not
-    a prerequisite for it: a datastore that can't snapshot (thick LVM, as opposed to qcow2 on
-    file storage / ZFS / LVM-thin / Ceph) must not take down an otherwise-good competition
-    build. The failure is printed so the operator knows redeploy-competition.py's rollback modes
-    won't be available for this range.
-
-    An existing snapshot of the same name is deleted first, so re-running a deploy phase
-    (--from-phase) re-snapshots the state it just rebuilt instead of failing on a name clash.
+    """Take disk-only snapshot (vmstate 0; fsfreeze via guest agent). Never raises;
+    snapshots are optional recovery (thick LVM can't snapshot). Replaces existing name.
     """
     try:
         if name in list_snapshots(node, vmid):
@@ -374,12 +282,8 @@ def take_snapshot(node, vmid, name, description="", timeout=900):
 
 
 def rollback_snapshot(node, vmid, name, timeout=900, restart=True):
-    """Roll a VM back to a snapshot: stop, rollback, start.
+    """Rollback to snapshot (requires stop/start for no-RAM snapshot). Raises on failure."""
 
-    Proxmox refuses to roll back a running VM, and a no-RAM snapshot has no saved machine state
-    to resume into anyway — so the stop/start round trip is mandatory, not defensive. Raises if
-    the rollback itself fails; the caller decides whether one bad box aborts the batch.
-    """
     if vm_status(node, vmid) == "running":
         stop_vm(node, vmid)
     upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/snapshot/{name}/rollback")["data"]

@@ -86,10 +86,7 @@ MISCONFIG_CHECKS = {
 
 
 def _config_name(entry):
-    """Configurations entries may be a plain string OR {"name": ..., "vars": {...}} (see
-    generate_nakon_config() — some Windows configs need vars). `entry in MISCONFIG_CHECKS`
-    on a dict raises TypeError (unhashable), so normalize to the name before any dict
-    lookup or use as a grouping key."""
+    """Normalize config entry (string or {"name": ...}) to name for dict lookup."""
     return entry if isinstance(entry, str) else entry.get("name")
 
 
@@ -100,11 +97,8 @@ class CheckError(Exception):
 
 
 def read_terraform_ctx():
-    """Read the agent_context Terraform output (same shape as create-competition.py).
+    """Read agent_context from `terraform output -json`; resolve ssh_key_path absolute."""
 
-    Returns a dict with at least scoring_engine_ip / ssh_key_path / vm_username. ssh_key_path
-    is resolved to an absolute path (Terraform's file() resolves it relative to terraform/).
-    """
     try:
         raw = subprocess.run(
             ["terraform", "output", "-json"],
@@ -139,8 +133,7 @@ def resolve_ssh_key():
 
 
 def build_ctx(args, comp_dir):
-    """Assemble {scoring_engine_ip, ssh_key_path, vm_username, box_username}, honoring
-    --engine-ip override."""
+    """Assemble connection context, honoring --engine-ip override."""
     ctx = {}
     tf_error = None
     if not args.engine_ip:
@@ -159,9 +152,6 @@ def build_ctx(args, comp_dir):
         ctx["ssh_key_path"] = resolve_ssh_key()
     if not ctx.get("vm_username"):
         ctx["vm_username"] = os.environ.get("TF_VAR_vm_username")
-    # box_username: prefer Terraform's (it's what was actually deployed); fall back to this
-    # competition's own users.json (the authoritative source create-competition.py wrote it
-    # from), then the hardcoded default — same three-tier fallback as vm_username above.
     if not ctx.get("box_username"):
         ctx["box_username"] = load_users_config(comp_dir)[0] or BOX_USERNAME_DEFAULT
     if tf_error:
@@ -246,11 +236,7 @@ _DEFAULT_CRED_LITERALS = {"changeme123", "password1", "password2", "ubuntu"}
 
 
 def check_no_default_creds(comp_dir):
-    """Cheap regression guard: confirm credentials.txt's box-login/box-credlist lines don't
-    carry the old fixed literals (ubuntu/ubuntu, admin/changeme123, user1/password1,
-    user2/password2) — i.e. that the per-competition credential rotation actually ran, not
-    just that create-competition.py's code for it exists. Not a full numbered check (it's a
-    sanity assertion on data the other checks already load), but still gates the exit code."""
+    """Confirm credentials.txt doesn't carry default literal passwords (rotation guard)."""
     path = comp_dir / "credentials.txt"
     if not path.exists():
         print("  (no credentials.txt to check for default creds)")
@@ -282,11 +268,7 @@ def count_local_injects(comp_dir):
 
 
 def load_boxes(comp_dir):
-    """Load planted-misconfig boxes from this competition's nakon-config.json.
-
-    This used to read nakon/config.json out of the nakon checkout, which meant it reported on
-    whichever competition happened to have been deployed last rather than the one being verified.
-    """
+    """Load boxes from per-competition nakon-config.json."""
     path = comp_dir / "nakon-config.json"
     if not path.exists():
         legacy = REPO_ROOT / "nakon" / "config.json"
@@ -330,8 +312,7 @@ def check_logins(base_url, teams, admin_password):
 
 
 def _check_passed(check):
-    """Result truthiness needs an explicit check: bool() on any non-empty string (e.g. a
-    hypothetical "false"/"0") is True, which would misreport a DOWN check as UP."""
+    """Check Result truthiness with string normalization ("false"/"0" -> False)."""
     result = check.get("Result")
     if isinstance(result, str):
         return result.strip().lower() not in ("", "0", "false")
@@ -373,9 +354,6 @@ def check_services(base_url, admin_session, teams, strict):
             any_service = True
             name = svc.get("ServiceName", "?")
             rounds = svc.get("Last10Rounds") or []
-            # rounds[0] isn't guaranteed to be a dict (a malformed/None round entry raises
-            # AttributeError from .get() and used to abort the whole verifier) — guard the type,
-            # not just emptiness.
             first_round = rounds[0] if rounds else None
             checks = (first_round.get("Checks") if isinstance(first_round, dict) else None) or []
             if not checks:
@@ -400,10 +378,8 @@ def check_services(base_url, admin_session, teams, strict):
 
 
 def check_isolation(ctx, teams, boxes):
-    """Confirm the team-to-team isolation DROP rule (range-firewall.sh) is actually in place
-    and, with >=2 teams, that it actually blocks a real cross-team connection while the
-    internet is still reachable (rule-presence alone can't tell a correct rule from one that's
-    present but shadowed/misordered)."""
+    """Confirm isolation DROP rule present and actually blocks cross-team traffic."""
+
     print("\n[3/5] ISOLATION")
     try:
         proc = ssh_to_engine(ctx, "sudo iptables -S FORWARD")
@@ -454,10 +430,6 @@ def check_isolation(ctx, teams, boxes):
         return True
 
     if proc.returncode != 0:
-        # The SSH hop itself failed (box down, key rejected, ...): stdout is empty, which used
-        # to be read as "RC=0 not in output" -> "blocked as expected" -> PASS. An unreachable
-        # verifier source is indistinguishable from a blocked connection by output alone, so
-        # this has to be "couldn't verify", never a pass.
         print(f"  WARN  — couldn't SSH to {from_ip} to run the test "
               f"(rc={proc.returncode}): {(proc.stderr or '').strip()[:150]}; rule-presence "
               "check above already passed, not failing on this alone.")
@@ -491,10 +463,7 @@ def check_isolation(ctx, teams, boxes):
 
 
 def report_healthcheck_status(ctx):
-    """Informational only (not part of the pass/fail gate) — surfaces whether
-    range-healthcheck.timer (create-competition.py's install_range_healthcheck()) is running
-    on the engine and any recent failures it logged, so an operator running this manually
-    during a live event doesn't also have to SSH in separately just to check."""
+    """Report range-healthcheck.timer status (informational, not gate)."""
     try:
         proc = ssh_to_engine(
             ctx,
@@ -560,18 +529,8 @@ def check_misconfig(ctx, boxes):
 
 
 def check_misconfig_survival(ctx, boxes):
-    """Confirm every team's copy of a box carries the SAME verifiable misconfigs as every other
-    team — regression guard for the clone-vs-cloud-init race where a freshly cloned box's own
-    first-boot cloud-init (specifically its users/sudo module) can silently revert a
-    filesystem-permission misconfig like writable-sudoers after nakon plants it (see
-    wait_for_cloud_init() in create-competition.py). check_misconfig() above only spot-checks ONE
-    box; this checks every team's copy of each box that has >=2 teams and >=1 verifiable config,
-    and explicitly flags "present on team X, missing on team Y" rather than treating one pass as
-    good enough.
-    """
+    """Confirm every team's copy of each box carries same verifiable misconfigs (clone race guard)."""
     print("\n  (cross-team misconfig survival check)")
-    # generate_nakon_config() gives every team's copy of a given box name the identical
-    # configurations list, so group by that shared list to find "the same box, different teams".
     groups = {}
     for box in boxes:
         if not box.get("ip"):

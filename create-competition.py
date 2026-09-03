@@ -42,13 +42,10 @@ from utils import BOX_USERNAME_DEFAULT, DNS_FIX_CMD, load_compfile, load_users_c
 ENV_PATH = Path(".env")
 NAKON_DIR = Path("vendor/nakon")
 
-# Terraform reads these straight out of the process environment (TF_VAR_<name>) — loading
-# .env here also makes them available to the `terraform` subprocess calls below, since
-# subprocess inherits the parent's environment by default.
+# TF_VAR_* must be in env for `terraform` subprocesses (inherited from parent).
 load_dotenv(ENV_PATH)
 
-# Proxmox's API token auth (below) talks straight to the API over the same self-signed cert
-# main.tf's provider block sets insecure=true for — same tradeoff, just from Python instead.
+# Proxmox uses self-signed cert; matches main.tf insecure=true.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 ### Helper functions
@@ -66,32 +63,14 @@ def random_password():
 
 
 ### Windows support
-#
-# Everything below exists because a Windows box has no cloud-init/cloudbase-init agent to
-# consume Terraform's `initialization` block (see terraform/main.tf — that block is skipped
-# entirely for Windows templates) and nakon's own SSH transport authenticates with a password,
-# not a key (nakon/deploy/ssh.py). So a Windows box needs its own post-clone bootstrap pass —
-# IP/gateway/DNS, local admin password, confirming sshd/guest-agent — done over the QEMU guest
-# agent (guest_agent_exec_windows(), works over virtio-serial with no network dependency),
-# mirroring what cloud-init does for Linux boxes but imperatively instead of declaratively.
-#
-# "win" substring in the template name is the single naming convention this whole toolchain
-# uses to mean "this is a Windows box" — it's what nakon's own os_to_platform() keys off of
-# (nakon/catalog/randomize.py), and terraform/main.tf's dynamic "initialization" block uses the
-# same check, so a box only has to be named consistently once for every layer to agree.
+# Windows templates have no cloud-init; bootstrap via QEMU guest agent (virtio-serial)
+# for IP/gateway/DNS, admin password, sshd/guest-agent. "win" substring is the
+# single convention for Windows detection (nakon randomize + terraform initialization).
 
-WINDOWS_ADMIN_USER = "Administrator"  # the windows-server-fix template's built-in local admin
-                                       # (RID 500) — its password carries over as the domain
-                                       # Administrator password once ADDS promotes the box, which
-                                       # is what lets deploy_domain_configs() reuse
-                                       # box_password as the Domain Join credential.
+WINDOWS_ADMIN_USER = "Administrator"  # RID 500; carries over as domain Administrator after ADDS.
 
-# Configs that reboot the box as part of what they do. A nakon deploy runs a machine's full
-# configurations list as ONE script (run.ps1) — a reboot mid-script kills every step after it,
-# silently. These are excluded from every box's normal box_vulns.json/box_services.json list
-# (see the win-domain-* Compfile) and instead driven one at a time by
-# deploy_domain_configs(), each in its own single-config script with an explicit
-# reboot-and-reconnect wait in between.
+# Reboot-triggering configs run as single-config scripts with explicit reboot waits;
+# a full list runs as one run.ps1, so a mid-script reboot would kill remaining steps.
 REBOOTS_BOX_CONFIGS = {"ADDS", "Domain Join"}
 
 
@@ -100,17 +79,9 @@ def is_windows_template(template_name):
 
 
 def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, timeout=600):
-    """Post-clone setup for a Windows box: static IP/gateway/DNS, local admin password, confirm
-    sshd + the guest agent are running. The Windows equivalent of cloud-init's `ip_config`/
-    `user_account` blocks (see terraform/main.tf) — run over the QEMU guest agent because that's
-    the only channel that exists before this has happened (no network yet, no known SSH
-    password yet).
-
-    Blocks on wait_for_guest_agent() first — right after a clone/first boot the agent may not be
-    up yet (Windows boots slower than Linux, and the windows-server-fix template's own
-    first-logon commands need to finish before the agent's fully steady). Raises if the agent
-    never responds — every downstream step depends on this one, so failing loud beats a
-    confusing failure three steps later.
+    """Post-clone Windows setup: static IP/gateway/DNS, admin password, sshd + guest agent
+    via QEMU guest agent (only channel before network/password exists). Waits for agent;
+    raises on timeout since downstream steps depend on it.
     """
     if not wait_for_guest_agent(node, vmid, timeout=timeout):
         raise RuntimeError(f"vmid {vmid}: guest agent never became responsive within {timeout}s")
@@ -143,13 +114,8 @@ if (-not (Get-NetFirewallRule -Name sshd -ErrorAction SilentlyContinue)) {{
 
 
 def dns_repoint_windows_box(node, vmid, dns_server, timeout=60):
-    """Point a Windows box's DNS at a specific server (its team's newly-promoted DC) instead of
-    the public resolver bootstrap_windows_box() set it to initially. Windows domain-join
-    (Add-Computer) locates a domain via DNS SRV records, so the joining box has to be pointed at
-    a DNS server that's actually authoritative for that domain BEFORE the join runs — same
-    "make a box the team's real resolver after the fact" pattern main.tf's `dns` block comment
-    already documents for the Linux dns* box case, applied here over the guest agent instead of
-    cloud-init.
+    """Point Windows DNS at the team's DC before domain join (Add-Computer needs SRV records
+    from an authoritative server). Guest-agent equivalent of Linux dns* repoint.
     """
     ps_script = f"""
 $ErrorActionPreference = 'Stop'
@@ -220,10 +186,7 @@ def destroy_bridge_if_exists(node, bridge_name):
     try:
         proxmox_api("DELETE", f"/nodes/{node}/network/{bridge_name}")
     except requests.exceptions.HTTPError as e:
-        # Swallowing every exception here used to hide real failures (bad/expired token,
-        # permission denied) behind "bridge doesn't exist" — a bridge that actually failed to
-        # delete was then treated as already gone. A 404 genuinely means "no such bridge" and
-        # is the only case worth staying silent about; anything else at least gets a warning.
+        # Only 404 means "no such bridge"; other errors must warn.
         if e.response is None or e.response.status_code != 404:
             print(f"    WARNING: could not delete bridge {bridge_name}: {e}")
     except Exception as e:
@@ -341,12 +304,8 @@ def collect_boxes():
 
 
 def collect_users_config(box_username_flag=None, credlist_flag=None):
-    """Prompt for (or take from CLI flags) the themeable box login username and the three
-    credlist account names — see utils.load_users_config()/competitions/<id>/users.json.
-    Enter alone keeps the ubuntu/admin/user1/user2 defaults, so this is a no-op for anyone who
-    doesn't care to theme usernames. Always returns a full (box_username, credlist_usernames)
-    pair; main() writes it to users.json unconditionally, same as boxes.json, so it stays
-    visible/pinnable/pre-authorable.
+    """Collect themeable box login + 3 credlist usernames (see utils.load_users_config).
+    Returns defaults when blank; always writes to users.json for pinning.
     """
     from utils import CREDLIST_USERNAMES_DEFAULT
 
@@ -377,21 +336,10 @@ def collect_users_config(box_username_flag=None, credlist_flag=None):
 
 def load_injects(comp_dir):
     """Load per-competition injects from competitions/<id>/injects/.
-
-    Each inject is a subdirectory containing `inject.json`:
-        {
-          "title": "...", "description": "...",   # description may instead live in a
-          "description_file": "prompt.md",         # sibling file (markdown), optional
-          "open_offset_min": 0, "due_offset_min": 60, "close_offset_min": 90
-        }
-    Any other files in the subdirectory (e.g. a template .docx, a PoC) are uploaded as the
-    inject's attachments. Offsets are minutes relative to competition start — they are NOT
-    resolved to timestamps here: load time is the top of deploy(), which runs an hour or more
-    before phase 7 actually seeds the competition and creates injects, so anchoring there made
-    every inject systematically early by the whole deploy duration (a "+15 min" inject could
-    already be open when the event started). resolve_inject_times() turns the offsets into
-    RFC3339 timestamps at creation time instead.
-    Returns [] when there's no injects/ dir, so competitions without injects are unaffected.
+    Each subdirectory with inject.json defines title/description/offsets (minutes
+    relative to competition start) and attachments. Offsets are resolved to
+    RFC3339 at creation time (phase 7) to avoid anchoring to deploy start.
+    Returns [] when no injects/ dir exists.
     """
     injects_dir = comp_dir / "injects"
     if not injects_dir.is_dir():
@@ -426,10 +374,8 @@ def load_injects(comp_dir):
 
 
 def resolve_inject_times(injects):
-    """Turn load_injects()' offsets into RFC3339 timestamps anchored at NOW — called right
-    before create_injects() in phase 7, i.e. as close to actual competition start as the
-    pipeline gets (seed_teams() has just run). Mutates the entries in place.
-    """
+    """Resolve inject offsets to RFC3339 timestamps anchored at now (phase 7). Mutates in place."""
+
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)
 
@@ -444,8 +390,7 @@ def resolve_inject_times(injects):
 
 
 def load_boxes(comp_dir):
-    # Saved by this script at competition-creation time (see boxes.json below) — reusing a
-    # competition replays the exact boxes it was built with, not whatever's currently in .env.
+    # Reusing a competition replays its saved boxes.json, not current .env.
     path = comp_dir / "boxes.json"
     return json.loads(path.read_text()) if path.exists() else None
 
@@ -474,20 +419,12 @@ def os_to_platform(template):
     return "windows" if "win" in template.lower() else "linux"
 
 
-# Services that are legitimate in the catalog but too heavy/slow for an automated apply
-# (splunk pulls a ~500 MB installer per box; roundcube drags in apache+mariadb+php). They can
-# still be assigned by hand via box_services.json; they're only excluded from the random auto-
-# pick so a hands-off deploy stays fast and reliable. Passed to `nakon randomize --exclude`.
+# Excluded from auto-pick for speed (still assignable manually via box_services.json).
 SLOW_SERVICES = ("splunk", "roundcube")
 
 
 def _nakon_randomize(platform, services_budget, vulns_budget):
-    """Pick a platform's services+vulns via the nakon CLI (not an in-process import).
-
-    Runs `nakon randomize --json` with cwd=NAKON_DIR so nakon can read its own .env for the
-    catalog; returns (services, vulns). Keeps the selection algorithm — and its dependency-aware
-    budgeting — in one place (nakon), and this file free of nakon's internal module layout.
-    """
+    """Pick services+vulns via `nakon randomize --json` (cwd=NAKON_DIR for catalog access)."""
     cmd = [
         sys.executable, "-m", "nakon", "randomize",
         "--platform", platform,
@@ -512,18 +449,9 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
     services_path = comp_dir / "box_services.json"
     vulns_path = comp_dir / "box_vulns.json"
 
-    # Deterministic re-runs: if this competition already pins its configurations, honour them
-    # instead of re-randomising. Lets an operator pin an exact set (and makes reusing a
-    # competition reproduce the same boxes, which is the documented intent for boxes-per-event).
-    #
-    # Either file on its own is enough to count as pinned. This used to key off box_services.json
-    # alone, which meant an agent (or a person) who wrote only box_vulns.json got silently
-    # ignored: the run took the randomise branch and then overwrote their choices.
+    # Deterministic re-runs: honour pinned configs if either file exists.
     if services_path.exists() or vulns_path.exists():
         pinned = json.loads(services_path.read_text()) if services_path.exists() else {}
-        # box_services.json holds the scoreable services (that's all Quotient needs); the
-        # misconfigs/vulns nakon plants live in box_vulns.json, so a pinned competition can
-        # deploy misconfigurations rather than services alone.
         pinned_vulns = json.loads(vulns_path.read_text()) if vulns_path.exists() else {}
         box_configs = {
             box["name"]: (pinned.get(box["name"], []), pinned_vulns.get(box["name"], []))
@@ -533,11 +461,7 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             p.name for p in (services_path, vulns_path) if p.exists()
         )
         print(f"  Using pinned configurations from {pinned_from}")
-        # fix_services_on_boxes()/push_event_conf() both do an unconditional read of
-        # box_services.json later in the deploy. If only box_vulns.json was pinned, that file
-        # was never written and those reads crashed with FileNotFoundError. Always write both
-        # (even `{}` for a box with no pinned services) so the pinned branch is self-contained,
-        # same as the randomize branch below.
+        # Always write both files so later unconditional reads don't fail.
         services_path.write_text(
             json.dumps({name: svcs for name, (svcs, _) in box_configs.items()}, indent=2)
         )
@@ -545,10 +469,7 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             json.dumps({name: vulns for name, (_, vulns) in box_configs.items()}, indent=2)
         )
     else:
-        # Randomize once per box type so every team defends the same service set,
-        # which lets Quotient use its 192.168._.N wildcard IP pattern uniformly. Done via the
-        # nakon CLI so the selection algorithm (and its dependency-aware budgeting) lives in
-        # nakon, not duplicated here.
+        # One randomization per box type so every team gets identical services (Quotient wildcard IP).
         box_configs = {}
         for box in boxes:
             platform = os_to_platform(box["template"])
@@ -557,31 +478,14 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             )
             box_configs[box["name"]] = (services, vulns)
 
-        # Persist the scoreable services so push_event_conf() can build Quotient checks
-        # without re-querying the DB on subsequent runs.
         services_path.write_text(
             json.dumps({name: svcs for name, (svcs, _) in box_configs.items()}, indent=2)
         )
-        # Also persist the planted misconfigs/vulns to the companion box_vulns.json. Without this
-        # the vulns were re-picked (or, on a reused competition, dropped entirely — the pinned
-        # branch reads box_vulns.json), so a reused competition planted services only and lost
-        # its misconfigs. Pinning both makes re-runs fully deterministic.
         (comp_dir / "box_vulns.json").write_text(
             json.dumps({name: vulns for name, (_, vulns) in box_configs.items()}, indent=2)
         )
 
-    # Some vulns intentionally break outbound name resolution or the package manager itself
-    # (resolv-conf-null-dns; apt-sources-empty, apt-hold-all-packages, dpkg-broken-hold-state).
-    # Nakon runs a box's configurations in list order, and the vulns list returned by
-    # `nakon randomize` has no notion of "this needs the network/apt" vs "this breaks the
-    # network/apt" — so a box that draws both a disruptive vuln and a package-installing one
-    # (e.g. redis-no-auth's `apt-get
-    # install redis-server`) can have the installer land after DNS/apt is already dead, failing
-    # with "Temporary failure resolving ..." or a held/broken package error. None of these configs
-    # is buggy on its own; it's purely an ordering artifact of concatenation order. Schedule known
-    # disruptive configs last so anything needing package installs still has a working network
-    # and package manager when it runs. list.sort with this key is stable, so relative order is
-    # otherwise unchanged.
+    # Disruptive vulns break DNS/apt; sort them last so package installs still have network.
     DISRUPTIVE_CONFIGS = {
         "resolv-conf-null-dns", "apt-sources-empty", "apt-hold-all-packages",
         "dpkg-broken-hold-state",
@@ -593,10 +497,7 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
     ):
         services, vulns = box_configs[box["name"]]
         configurations = services + vulns
-        # Entries can be a plain string OR {"name": ..., "vars": {...}} (nakon's own config.json
-        # schema supports both — see config-example.json) — some Windows configs need vars (e.g.
-        # "Run/RunOnce Keys" needs $process/$process_path/$command). `in DISRUPTIVE_CONFIGS`
-        # would raise `TypeError: unhashable type: dict` on those, so key off the name either way.
+        # Entries may be string or {"name": ..., "vars": {...}}; normalize for sorting.
         configurations.sort(
             key=lambda c: (c if isinstance(c, str) else c["name"]) in DISRUPTIVE_CONFIGS
         )
@@ -611,31 +512,15 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             "configurations": configurations,
         })
 
-    # The machine list belongs to this competition, not to nakon's checkout. Writing it into
-    # nakon/config.json made that directory shared mutable state: only one competition could be
-    # "current", nothing recorded which one it was, and a crash mid-run left the next run reading
-    # somebody else's machines.
+    # Machine list is per-competition (not shared nakon/config.json state).
     config_path = comp_dir / "nakon-config.json"
     config_path.write_text(json.dumps({"machines": machines}, indent=2))
     return config_path
 
 
 def build_nakon_bundle(config_path):
-    """Build (or reuse) the Nakon bundle for this competition. Returns its directory.
-
-    Runs on the operator machine because it is the half that needs the vulndb. The bundle is
-    content-addressed: if nothing in the catalog has changed since the last build, this is a
-    cache hit and costs one round of MySQL queries.
-
-    That property is what makes --from-phase resume safe. box_services.json / box_vulns.json
-    pin the selection, so a resumed run generates the same machine list, which produces the
-    same request keys, which hits the same bundle. Phase 5 (team1 only) and phase 6 (every
-    team) therefore deploy provably identical content.
-
-    Runs with cwd=NAKON_DIR for one reason only: `nakon build` loads `vendor/nakon/.env` for the
-    vulndb credentials. The machine list is passed as an absolute path from the competition
-    directory, and --out stays inside vendor/nakon because bundles are content-addressed and
-    immutable — sharing that directory across competitions is what makes a rebuild a cache hit.
+    """Build (or reuse) the Nakon bundle for this competition. Content-addressed;
+    cached when catalog unchanged. Runs with cwd=NAKON_DIR for vulndb creds.
     """
     result = subprocess.run(
         [sys.executable, "-m", "nakon", "build",
@@ -652,34 +537,22 @@ def build_nakon_bundle(config_path):
             "this machine. Check vendor/nakon/.env."
         )
 
-    # --json prints its summary as the final line, after any log output.
     info = json.loads(result.stdout.strip().splitlines()[-1])
     state = "cached" if info["cached"] else "fresh"
     print(f"  Nakon bundle {info['bundle_id'][:12]} ({state}, {info['plans']} plan(s), "
           f"{info['machines']} machine(s))")
-    # info["path"] is "bundles/<bundle_id>", relative to the build's cwd (NAKON_DIR) — the
-    # bundle id alone (Path(...).name) isn't enough, the "bundles/" directory is part of it.
     return NAKON_DIR / info["path"]
 
 
-# nakon deploys the machines in a run sequentially, one full plan after another (not in
-# parallel) — this is the per-machine time budget deploy()'s phase-5/6 run_nakon() calls scale
-# against, so a bigger box_vulns.json (more configs, more package installs per box) grows the
-# timeout instead of racing a flat constant that was only ever sized for the original ~4
-# configs/box competitions.
+# Per-machine budget for scaling deploy timeouts with config count.
 PER_MACHINE_NAKON_BUDGET = 2400
 
 
-def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, timeout=2400):
-    """Push the prebuilt bundle to the scoring engine and deploy from it.
-
-    The engine is the only host that routes into the isolated team subnets, so Nakon has to
-    run there — but it no longer needs anything from the vulndb. What used to be copied over
-    (deploy.py, configurations.py and, critically, vendor/nakon/.env with the database password) is
-    replaced by a self-contained bundle, and the engine's pip install drops to paramiko.
-
-    `only` restricts the deploy to those machine names. Phase 5 uses it because team2+ don't
-    exist yet; what gets applied to each machine is fixed by the bundle either way.
+def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, timeout=2400,
+              strict=True):
+    """Push bundle to scoring engine and run `nakon deploy` there.
+    `only` scopes to machine names without changing bundle content.
+    strict=True passes --strict so failures abort instead of reporting live.
     """
     ssh_base = [
         "ssh", "-i", str(key),
@@ -688,9 +561,6 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
         f"{scoring_user}@{scoring_ip}",
     ]
 
-    # /tmp/nakon was never created before being scp'd into — multi-source scp into a
-    # non-existent directory fails, so this only ever worked on an engine that happened to
-    # have the directory left over from an earlier run.
     subprocess.run(ssh_base + ["rm -rf /tmp/nakon && mkdir -p /tmp/nakon"],
                    check=True, timeout=60)
 
@@ -712,6 +582,7 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
     only_args = ""
     if only:
         only_args = " --only " + " ".join(shlex.quote(name) for name in only)
+    strict_arg = " --strict" if strict else ""
 
     try:
         subprocess.run(
@@ -720,21 +591,12 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
                 "sudo cp -r /tmp/nakon/. /opt/nakon/ && "
                 "sudo pip3 install --break-system-packages paramiko 2>/dev/null; "
                 "cd /opt/nakon && sudo python3 -m nakon deploy "
-                f"--bundle /opt/nakon/{bundle.name} --config {remote_config}{only_args}"
+                f"--bundle /opt/nakon/{bundle.name} --config {remote_config}{only_args}{strict_arg}"
             ],
             check=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        # Killing OUR ssh client on a client-side timeout does not reliably kill the remote
-        # `sudo python3 -m nakon deploy` — it's the foreground process of a `sudo`'d session on
-        # the engine, not something we hold a direct handle to, and a dropped SSH connection can
-        # take a while (or, with a lingering sudo/setsid quirk, never) to deliver SIGHUP to it.
-        # Left running, it keeps mutating team boxes in the background while a resume/retry
-        # starts a SECOND deploy against the same machines — two nakon processes racing apt/dpkg
-        # on the same box, which is consistent with corrupted state seen in practice (packages
-        # apt-marked held from a run that otherwise never got far enough to install them).
-        # Best-effort pkill before propagating the timeout, so a caller that resumes doesn't
-        # inherit an orphaned process it doesn't know exists.
+        # Client timeout doesn't reliably kill remote `nakon deploy`; pkill to avoid racing second deploy.
         try:
             subprocess.run(ssh_base + ["sudo pkill -9 -f 'nakon deploy' || true"],
                            timeout=30)
@@ -748,8 +610,6 @@ def read_terraform_ctx():
         ["terraform", "output", "-json"], cwd="terraform", capture_output=True, text=True, check=True
     ).stdout
     ctx = json.loads(json.loads(raw)["agent_context"]["value"])
-    # ssh_key_path is relative to terraform/ (where Terraform's file() resolves it) —
-    # resolve it to an absolute path so subprocess calls from the project root work.
     key_path = ctx["ssh_key_path"]
     if not os.path.isabs(key_path):
         ctx = {**ctx, "ssh_key_path": str((Path("terraform") / key_path).resolve())}
@@ -757,16 +617,9 @@ def read_terraform_ctx():
 
 
 def ssh_via_gateway(ctx, target_ip, cmd, timeout=60, user="ubuntu"):
-    """SSH to a target box via the scoring engine gateway.
-
-    Linux team boxes have 'ubuntu' with the proxmox key authorized (set by cloud-init) — the
-    default. Windows boxes have no key auth (nakon's own transport is password-based; see
-    nakon/deploy/ssh.py) and use WINDOWS_ADMIN_USER instead — callers pass `user` explicitly for
-    those, and password auth over this path needs `sshpass`/similar, which is why Windows
-    readiness checks (wait_for_boxes_ssh) only prove the port accepts a *connection*, not a
-    login — full command execution on Windows boxes goes through nakon or guest_agent_exec_windows().
-    We use ProxyCommand through the scoring engine with OpenSSH's built-in -W (direct-stream-local).
-    Requires AllowTcpForwarding=yes on the gateway sshd (set in bootstrap_scoring_engine).
+    """SSH to a target box via the scoring engine gateway (ProxyCommand -W).
+    Requires AllowTcpForwarding=yes on gateway. Windows uses password auth;
+    Linux uses key auth for box_username.
     """
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
@@ -806,12 +659,8 @@ def ssh_on_gateway(ctx, cmd, timeout=30):
 
 
 def wait_for_ssh(key, user, host, timeout=300):
-    """Poll a host's SSH until it accepts a command, replacing a blind post-boot sleep.
+    """Poll SSH until `ssh user@host true` succeeds. Returns True/False; never raises."""
 
-    Returns True once `ssh user@host true` succeeds, False on timeout. Never raises — a
-    timeout prints a warning and the caller proceeds (matching the surrounding "continue
-    anyway" error posture), because the later steps have their own retry loops.
-    """
     print(f"  Waiting for {host} to accept SSH (timeout {timeout}s)...")
     deadline = time.time() + timeout
     attempt = 0
@@ -838,26 +687,8 @@ def wait_for_ssh(key, user, host, timeout=300):
 
 
 def wait_for_boxes_ssh(ctx, targets, timeout=300):
-    """Poll every target box's SSH reachability THROUGH the gateway before the DNS/harden loops.
-
-    Replaces a blind post-clone sleep. Uses one shared time budget across all boxes (they boot
-    together, so once cloud-init finishes they come up nearly at once). Individual timeouts just
-    warn and proceed — the fix_dns/setup_auth/nakon steps that follow already retry on their
-    own — but if EVERY box in the set times out, that's not "some boxes are slow," it's
-    a systemic problem (broken template, dead bridge, ...), and ploughing ahead just repeats the
-    same failure through several more 8-attempt retry loops for 30-60+ minutes with nothing to
-    show for it. Raises in that all-fail case so deploy()'s phase handler reports it plainly
-    instead.
-
-    `targets` is a list from range_ops.enumerate_targets() — possibly a filtered subset, in
-    which case the all-fail circuit breaker is scoped to that subset, which is what you want:
-    "the three boxes I asked to recover are all dead" is just as systemic as the whole range.
-
-    Windows targets have no SSH key trust (nakon authenticates by password; see
-    ssh_via_gateway()'s docstring) so a `ssh ... true` probe would always fail auth even on a
-    perfectly healthy box — checked via the guest agent instead, which is a strictly stronger
-    signal anyway (proves the box actually booted, not just that something answers on :22).
-    """
+    """Poll every target's reachability through gateway (shared timeout).
+    Windows via guest agent (no key auth). Raises if all boxes fail (systemic)."""
     node = os.environ["TF_VAR_proxmox_node"]
     print("  Waiting for team boxes to accept SSH via gateway...")
     deadline = time.time() + timeout
@@ -868,10 +699,6 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
         ip = t["ip"]
         windows = is_windows_template(t["box"]["template"])
         while True:
-            # Check the shared deadline BEFORE attempting: an earlier box burning the whole
-            # budget used to still let every later box make one full (up to 20s) SSH
-            # attempt after the deadline had already passed, so "not reachable" was reported
-            # without any real probes ever happening for those boxes.
             if time.time() > deadline:
                 print(f"    WARNING: {ip} not reachable within timeout — continuing")
                 print(diagnose_unreachable_box(node, t["vmid"]))
@@ -900,22 +727,8 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
 
 
 def wait_for_cloud_init(ctx, targets, timeout=240):
-    """Block until cloud-init has actually FINISHED on every target box — not just SSH-reachable.
-
-    wait_for_boxes_ssh() only confirms SSH accepts a command; cloud-init can still be mid-flight
-    at that point, especially on a freshly cloned box. clone_team_boxes() runs `cloud-init clean
-    --machine-id` on team1 before cloning and gives each clone a new ipconfig0/net0, so every
-    clone (and the restarted team1) looks like a brand-new instance to cloud-init and reruns its
-    full first-boot module set — including the module that secures /etc/sudoers.d permissions
-    for the ciuser. If the final run_nakon() pass (which (re)plants filesystem-permission
-    misconfigs like writable-sudoers) lands before that module finishes, cloud-init silently
-    reverts the plant afterward. Confirmed live: writable-sudoers survived on team1 but a clone
-    of the same box came back at safe 750. `cloud-init status --wait` blocks until cloud-init is
-    fully done and needs no sudo, closing that race before nakon's no-`--only` pass runs.
-
-    Never raises — a box still mid-boot just gets a warning; the DNS/auth/nakon steps that
-    follow already retry on their own, and a box that's SSH-reachable but never finishes
-    cloud-init is unusual enough to be worth a loud warning rather than aborting the whole run.
+    """Wait for cloud-init to finish on all targets. Cloud-init can revert planted
+    perms after clone; wait for it before nakon. Never raises; warns on timeout.
     """
     print("  Waiting for cloud-init to finish on all team boxes...")
     deadline = time.time() + timeout
@@ -939,10 +752,8 @@ def wait_for_cloud_init(ctx, targets, timeout=240):
 
 
 def wait_for_http(url, timeout=120):
-    """Poll a URL until it returns ANY HTTP response (not connection-refused), replacing a
-    blind sleep before seeding. requests.get returns for 4xx/5xx too (we don't raise_for_status),
-    so any served response means the app is up. Never raises — timeout warns and proceeds.
-    """
+    """Poll URL until any HTTP response. Never raises; warns on timeout."""
+
     print(f"  Waiting for {url} to respond (timeout {timeout}s)...")
     deadline = time.time() + timeout
     attempt = 0
@@ -960,10 +771,8 @@ def wait_for_http(url, timeout=120):
 
 
 def fix_dns_on_boxes(targets, ctx):
-    """Fix DNS on every target box. This is the only readiness gate team1 gets in phase [5/7]
-    (wait_for_boxes_ssh only runs later, inside clone_team_boxes, for team2+) — so on an all-fail
-    run it's this function's circuit breaker, not wait_for_boxes_ssh's, that has to catch it.
-    """
+    """Fix DNS on every target box. All-fail aborts (systemic vs transient)."""
+
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]
@@ -973,8 +782,6 @@ def fix_dns_on_boxes(targets, ctx):
         f"ssh -i {key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"-W %h:%p {scoring_user}@{scoring_ip}"
     )
-    # Terraform's Step D already did this once before nakon ran; it has to happen again here
-    # because clone_team_boxes()' `cloud-init clean` + reboot regenerates resolv.conf.
     print("  Fixing DNS on all team boxes...")
     total = 0
     failed = 0
@@ -1015,23 +822,8 @@ def fix_dns_on_boxes(targets, ctx):
 
 
 def fix_services_on_boxes(comp_dir, targets, ctx, box_creds=None):
-    """Post-Nakon service hardening: make services accessible externally.
-
-    Writes a single hardening script to the gateway, then distributes it to each target box.
-    Handles: mysql/mariadb bind address, postfix, nginx, vsftpd, dovecot, bind9.
-    Also starts all services on every box.
-
-    `targets` is a list from range_ops.enumerate_targets(); the service set is looked up by box
-    TYPE (box_services.json is keyed by name, not per team — every team defends the identical
-    set for Quotient's wildcard-IP checks), so a filtered subset hardens exactly the same way a
-    full run would.
-
-    box_creds ({username: password, ...}, 3 entries) names the credlist accounts created on
-    every box — generated fresh per competition in deploy() and must match what
-    push_event_conf() writes to linux.credlist, or every credlist-based check scores a healthy
-    box as down. The account names themselves are themeable per competition (see
-    utils.load_users_config()/competitions/<id>/users.json) — default admin/user1/user2 when
-    no users.json exists. Falls back to the legacy fixed literals only if not supplied.
+    """Post-nakon service hardening (bind address, mail, ftp, dns, etc).
+    Credlist accounts must match push_event_conf's linux.credlist.
     """
     import base64
 
@@ -1049,11 +841,7 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds=None):
         # Build a per-box hardening script
         script_lines = ["#!/bin/bash", "set -e", ""]
 
-        # Always create the credlist OS accounts. Quotient's Ssh/Smtp/Imap/Ftp login checks
-        # authenticate against these system users; previously they were only created in the
-        # postfix branch, so a box that ran ssh (or ftp/imap) but not postfix had no account
-        # to log in as and scored permanently down. Creating them unconditionally is cheap
-        # and idempotent, and matches the linux.credlist push_event_conf() writes.
+        # Always create credlist OS accounts (all auth checks need them).
         script_lines.append(f"# Credlist OS accounts ({'/'.join(creds)}) for all auth-based service checks")
         for username, password in cred_items:
             script_lines.append(f"sudo useradd -m -s /bin/bash {username} 2>/dev/null || true")
@@ -1076,8 +864,6 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds=None):
             ])
             for idx, (username, password) in enumerate(cred_items):
                 script_lines.append(f"CREATE USER IF NOT EXISTS '{username}'@'%' IDENTIFIED BY '{password}';")
-                # First credlist account keeps the "admin" role's elevated grant (matches the
-                # old admin/user1/user2 behavior); the rest get plain ALL PRIVILEGES.
                 grant = "GRANT ALL PRIVILEGES ON *.* TO '{}'@'%' WITH GRANT OPTION;" if idx == 0 \
                     else "GRANT ALL PRIVILEGES ON *.* TO '{}'@'%';"
                 script_lines.append(grant.format(username))
@@ -1093,9 +879,7 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds=None):
                 "# Postfix: ensure it listens on all interfaces",
                 "sudo postconf -e 'inet_interfaces = all' 2>/dev/null || true",
                 "sudo postconf -e 'inet_protocols = ipv4' 2>/dev/null || true",
-                "# Ensure the smtpd listener exists. A non-interactive postfix install can leave"
-                " master.cf empty (no 'smtp inet' service), so postfix runs but binds nothing on"
-                " :25 and the SMTP check scores down. postconf -M adds it idempotently.",
+                "# Ensure smtpd listener exists (non-interactive install may leave master.cf empty).",
                 "sudo postconf -M 'smtp/inet=smtp inet n - y - - smtpd' 2>/dev/null || true",
                 "sudo systemctl restart postfix 2>/dev/null || true",
                 "sleep 1",
@@ -1129,19 +913,12 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds=None):
             script_lines.extend([
                 "# Dovecot: enable plaintext auth, create mail dirs",
                 "sudo sed -i 's/^#*disable_plaintext_auth.*/disable_plaintext_auth = no/' /etc/dovecot/conf.d/10-auth.conf 2>/dev/null || true",
-                # Dovecot 2.4 rewrote its settings around named blocks and renamed this one
-                # to a positive-sense key — the old sed above is a silent no-op on 2.4 (the
-                # line it targets no longer exists in 10-auth.conf at all), so a 2.4 box was
-                # left rejecting every plaintext IMAP login Quotient's check attempts
-                # ("cleartext authentication not allowed without SSL/TLS"), confirmed live on
-                # debian13-lite-fix. `auth_allow_cleartext` isn't a recognized key on pre-2.4
-                # dovecot, so this only writes it when the installed version actually is 2.4+.
+                # Dovecot 2.4 uses different key; add only on 2.4+.
                 "dovecot --version 2>/dev/null | grep -qE '^(2\\.[4-9]|[3-9]\\.)' && "
                 "sudo bash -c \"echo 'auth_allow_cleartext = yes' > "
                 "/etc/dovecot/conf.d/99-allow-plaintext.conf\" || true",
             ])
-            # Mail dir for every credlist account (harmless for the admin-equivalent one too —
-            # simpler than special-casing which of the (now arbitrarily-named) accounts is which).
+            # Mail dir for every credlist account.
             for username, _ in cred_items:
                 script_lines.append(f"sudo mkdir -p /home/{username}/mail")
                 script_lines.append(f"sudo chmod 700 /home/{username}/mail")
@@ -1205,10 +982,7 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds=None):
 
         if "telnet-service" in services or "telnet" in services:
             script_lines.extend([
-                "# Telnet: Debian ships the inetd entry disabled ('#<off>#' in"
-                " /etc/inetd.conf), and inetutils-inetd's ExecCondition refuses to even"
-                " start while every entry is off — nakon's install alone leaves nothing"
-                " listening on :23.",
+                "# Telnet: enable disabled inetd entry and restart.",
                 "sudo update-inetd --enable telnet 2>/dev/null || true",
                 "sudo systemctl restart inetutils-inetd 2>/dev/null || true",
                 "sleep 1",
@@ -1251,16 +1025,7 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds=None):
             result = ssh_via_gateway(ctx, ip, deploy_cmd, timeout=60,
                                       user=ctx.get("box_username", "ubuntu"))
             if result.returncode != 0:
-                # A box whose randomly-picked vulns include writable-sudoers can end up with
-                # /etc/sudoers.d world-writable, which makes modern sudo refuse to trust
-                # ANY rule there — including sudo-nopasswd's NOPASSWD line — and demand a
-                # real password the key-only ubuntu user doesn't have. Every `sudo ...` line
-                # in this script then fails ("a password is required"), so nothing after it
-                # runs (the script has `set -e`): no credlist accounts, no service tweaks.
-                # Fall back to the QEMU guest agent, which executes as root directly and so
-                # needs no sudo at all — this repairs OUR provisioning without touching the
-                # box's sudoers permissions, so the vuln stays intact for whoever's meant to
-                # find it.
+                # Writable-sudoers breaks sudo; fall back to guest agent (root, no sudo needed).
                 print(f"    Service hardening warning on {ip}: {result.stderr.strip()[:200]}")
                 print(f"    Retrying {ip} via guest agent (as root, no sudo needed)...")
                 vmid = t["vmid"]
@@ -1283,16 +1048,8 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds=None):
 
 
 def setup_ubuntu_auth(targets, ctx):
-    """Enable password auth and NOPASSWD sudo for ubuntu on the given target boxes.
+    """Enable password auth + NOPASSWD sudo for box_username (nakon uses password auth + sudo)."""
 
-    The template has PasswordAuthentication disabled, but Nakon's paramiko connections use
-    password auth (the per-competition box_password set via cloud-init/var.box_password, not
-    a fixed literal). Also, Nakon runs sudo commands to install packages, so NOPASSWD is
-    required. This function itself authenticates by SSH key, not password, so it's unaffected
-    by box_password's value.
-
-    Runs via the scoring engine gateway since team boxes are on isolated bridges.
-    """
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]
@@ -1350,9 +1107,7 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
 
     team1 = team_ids[0]
 
-    # Step 1: Run cloud-init clean on team1 boxes (Linux only — Windows has no cloud-init, and
-    # its clone-uniqueness equivalent, ComputerName=* in the sysprep-time unattend.xml, already
-    # generates a fresh SID/hostname on every first boot with no extra step needed here).
+    # Step 1: cloud-init clean on team1 (Linux only; Windows uses sysprep).
     print("  Running cloud-init clean on team1 boxes...")
     for box in boxes:
         if is_windows_template(box["template"]):
@@ -1362,10 +1117,6 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
             result = ssh_via_gateway(ctx, ip, "sudo cloud-init clean --logs --machine-id",
                                       timeout=30, user=ctx.get("box_username", "ubuntu"))
             if result.returncode != 0:
-                # The whole point of this step is that clones DON'T inherit team1's machine-id
-                # and cloud-init state — a silent failure here means every clone boots as a
-                # duplicate of team1's instance. Warn loudly; the clone still proceeds (the
-                # operator may prefer a dirty clone over no competition).
                 print(f"  WARNING: cloud-init clean FAILED for {box['name']} "
                       f"(rc={result.returncode}): {(result.stderr or '').strip()[:150]}")
                 print(f"           Clones of {box['name']} may inherit its machine-id/"
@@ -1384,24 +1135,14 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
         vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
         vm = next((v for v in vms if v["vmid"] == vmid), None)
         if vm and vm.get("status") == "running":
-            # stop_vm (graceful ACPI first, force only if ignored) — the disks about to be
-            # full-cloned should be filesystem-consistent, which a raw status/stop power-cut
-            # doesn't guarantee. Same reason range_ops.stop_vm() exists.
             stop_vm(node, vmid)
         print(f"    team1-{box['name']} (vmid {vmid}) stopped")
 
     # Step 3: Clone team1 boxes for each subsequent team
     print("  Cloning team1 boxes to other teams...")
-    # Record cloned VM ids so destroy-competition.py can tear them down — these are
-    # created directly via the Proxmox API, so they're NOT in Terraform state and
-    # `terraform destroy` won't remove them. Loaded (not reset) and written after every clone
-    # — not just once at the end — so a crash partway through this loop doesn't lose the record
-    # of what's already been created, and a `--from-phase 6` resume doesn't orphan it.
+    # Track cloned VMIDs for destroy + resume (not in Terraform state).
     cloned_vms_path = comp_dir / "cloned_vms.json"
     cloned_vms = json.loads(cloned_vms_path.read_text()) if cloned_vms_path.exists() else {}
-    # Existing VMIDs on Proxmox — lets a resume after a partial clone failure skip boxes a prior
-    # run already cloned, instead of re-cloning into a vmid that's already taken and looping on
-    # a "VM already exists" error.
     existing_vmids = {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
     for team in team_ids[1:]:
         for box_idx, box in enumerate(boxes):
@@ -1428,22 +1169,11 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
             bridge = f"vmbr{team_subnet}"
 
             if is_windows_template(box["template"]):
-                # No cloud-init to hand an ipconfig0 to — just rebridge the NIC here (still a
-                # Proxmox-level, not guest-level, change) and defer IP/gateway/DNS/credentials
-                # to bootstrap_windows_box() below, once the clone is actually running and its
-                # guest agent is reachable.
                 proxmox_api("PUT", f"/nodes/{node}/qemu/{dst_vmid}/config", data={
                     "net0": f"virtio,bridge={bridge}",
                 })
             else:
-                # Fix cloud-init IP for the cloned VM (last_octet is correct for IPs). Reapplied
-                # even when the clone itself was skipped above — this PUT is idempotent, and a
-                # prior run could have crashed between the clone and this step.
                 ipconfig = f"ip=192.168.{team_subnet}.{box_octet}/24,gw=192.168.{team_subnet}.1"
-                # `ipconfig0` is the cloud-init IP key; there is no `ciipconfig0` param and
-                # including it makes Proxmox reject the whole request (400 Parameter
-                # verification failed). Let Proxmox auto-assign the NIC MAC rather than pinning
-                # 00:00:00:00:00:00.
                 proxmox_api("PUT", f"/nodes/{node}/qemu/{dst_vmid}/config", data={
                     "ipconfig0": ipconfig,
                     "net0": f"virtio,bridge={bridge}",
@@ -1466,12 +1196,7 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
 
     all_targets = enumerate_targets(teams, boxes)
 
-    # Bootstrap the freshly cloned team2+ Windows boxes (team1's Windows boxes were already
-    # bootstrapped right after Terraform apply — see deploy()'s [4.5/7]). This is Windows'
-    # equivalent of the ipconfig0 PUT the `else` branch above did for Linux clones: IP/gateway/
-    # DNS + local admin password, all guest-agent-driven since there's no cloud-init here.
-    # Public DNS for now — dns_repoint_windows_box() in deploy_domain_configs() points
-    # the domain-joining box at its team's DC once that DC actually exists.
+    # Bootstrap cloned team2+ Windows boxes (team1 done in phase 4.5).
     for t in all_targets:
         if t["team_key"] == "team1" or not is_windows_template(t["box"]["template"]):
             continue
@@ -1479,27 +1204,13 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
         gw = f"192.168.{t['identifier']}.1"
         bootstrap_windows_box(node, t["vmid"], t["ip"], gw, "8.8.8.8", box_password)
 
-    # Wait for SSH first (cheap, gates the boxes being up at all), then for cloud-init to
-    # actually finish (closes the race with nakon's final plant of filesystem-permission
-    # misconfigs — see wait_for_cloud_init()'s docstring). Poll each box THROUGH the gateway
-    # instead of a blind sleep; the fix_dns/auth loops below still retry on their own.
     wait_for_boxes_ssh(ctx, all_targets, timeout=300)
     wait_for_cloud_init(ctx, all_targets, timeout=240)
 
-    # Step 5: Fix DNS on ALL team boxes (Linux only — Windows DNS is set by
-    # bootstrap_windows_box()/dns_repoint_windows_box() instead)
     fix_dns_on_boxes([t for t in all_targets if not is_windows_template(t["box"]["template"])], ctx)
-
-    # Step 6: Setup ubuntu auth on ALL team boxes (cloned VMs may need it reset) — Linux only,
-    # Windows credentials are handled entirely by bootstrap_windows_box().
     setup_ubuntu_auth([t for t in all_targets if not is_windows_template(t["box"]["template"])], ctx)
 
-    # Step 6.5: Snapshot the freshly cloned team2+ boxes BEFORE the phase-6 nakon pass touches
-    # them. team1 already got its tz-base back in phase 5; these clones get theirs here, which
-    # is their equivalent "booted, networked, nothing of ours planted on THIS box yet" point.
-    # (They are cloned from a post-phase-5 team1, so the bits differ from team1's tz-base — see
-    # SNAP_BASE's comment in range_ops.py. What matters is that tz-base + nakon + hardening
-    # reproduces exactly what this function is about to produce.)
+    # Snapshot cloned team2+ boxes before phase-6 nakon (team1 already has tz-base).
     print(f"  Snapshotting cloned boxes as '{SNAP_BASE}' (pre-Nakon restore point)...")
     for t in all_targets:
         if t["team_key"] == "team1":
@@ -1507,9 +1218,6 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
         take_snapshot(node, t["vmid"], SNAP_BASE,
                       description="tezcatlipoca: cloned, networked, pre-Nakon")
 
-    # Step 7: Harden services on ALL team boxes (Linux only — see fix_services_on_boxes' own
-    # sudo/systemctl-based implementation; Windows services this comp scores use auth-less Tcp
-    # checks, so no Windows-side credlist/hardening equivalent is needed here).
     fix_services_on_boxes(
         comp_dir, [t for t in all_targets if not is_windows_template(t["box"]["template"])],
         ctx, box_creds=box_creds,
@@ -1517,42 +1225,22 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
 
 
 def _run_single_nakon_config(machine, configurations, key, scoring_user, scoring_ip, comp_dir,
-                              tag, timeout=1800):
-    """Deploy exactly one machine with an OVERRIDDEN configurations list, outside the
-    competition's main bundle. Used by deploy_domain_configs() to run a
-    reboot-triggering config (or the AD-flavored set that has to follow it) in total isolation
-    from everything else nakon would otherwise run for that box in the same script — see
-    REBOOTS_BOX_CONFIGS' comment for why a shared script is unsafe here.
-
-    nakon build is content-addressed (build_nakon_bundle()'s docstring), so a tiny one-machine
-    config like this is a cheap, fast build even though it goes through the same MySQL-backed
-    path as the competition's real bundle.
-    """
+                              tag, timeout=1800, strict=True):
+    """Deploy one machine with overridden configs in isolation (reboot-safe)."""
     tmp_machine = {**machine, "configurations": configurations}
     tmp_config_path = comp_dir / f".nakon-domain-{tag}.json"
     tmp_config_path.write_text(json.dumps({"machines": [tmp_machine]}, indent=2))
     bundle = build_nakon_bundle(tmp_config_path)
     run_nakon(key, scoring_user, scoring_ip, bundle, tmp_config_path,
-              only=[machine["name"]], timeout=timeout)
+              only=[machine["name"]], timeout=timeout, strict=strict)
 
 
-# "Add User Account"/"Elevate User Account"/"Disable System Firewall" all branch on
-# `Get-Module -ListAvailable -Name ActiveDirectory` to decide whether to touch AD objects or
-# fall back to local ones — so they only produce the intended AD-flavored misconfigs once ADDS
-# has actually promoted the box. Run right after ADDS in the same post-reboot pass (not the
-# normal phase-5/6 run, which happens BEFORE promotion — see deploy_domain_configs()).
+# AD-flavored misconfigs must run after ADDS promotion to affect AD objects.
 
 
 def wait_for_windows_sshd(node, vmid, timeout=180):
-    """Block until sshd reports Running via the guest agent — stronger than
-    wait_for_guest_agent() alone: the agent can be up (it's an early-starting service) well
-    before sshd has finished (re)starting, especially right after a heavier-than-usual reboot
-    like an ADDS promotion or a domain join. Confirmed live: a flat 30s sleep after
-    wait_for_guest_agent() wasn't always enough and nakon's next connection attempt failed with
-    "Unable to connect to port 22" even though the box came back fine moments later. Never
-    raises — a timeout just means the following connection attempt gets to retry/fail on its
-    own, same posture as wait_for_guest_agent().
-    """
+    """Wait for sshd Running via guest agent (agent up doesn't guarantee sshd up after ADDS reboot). Never raises."""
+
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -1568,25 +1256,19 @@ def wait_for_windows_sshd(node, vmid, timeout=180):
 
 
 def wait_for_dc_dns(node, dc_vmid, domain, dc_ip, timeout=300):
-    """Poll the DC's DNS server (over the guest agent) until it actually serves the domain's
-    SRV records. Guest-agent-alive after the ADDS reboot doesn't mean DNS is answering yet —
-    confirmed live on win-linux-practice: the Linux member's `realm join` ran while the
-    just-promoted DC's DNS wasn't serving and failed with "No such realm found" (and Windows
-    Add-Computer locates the domain through the same SRV records, so the race applies to both
-    member platforms). Never raises — a timeout warns and the join attempt gets to fail on
-    its own, same posture as wait_for_windows_sshd().
-    """
+    """Poll DC DNS until it serves domain SRV records (DNS may lag guest-agent). Never raises."""
+
     record = f"_ldap._tcp.dc._msdcs.{domain}"
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             rc, out, _ = guest_agent_exec_windows(
                 node, dc_vmid,
-                f"(Resolve-DnsName -Name {record} -Server {dc_ip} -Type SRV -ErrorAction "
-                f"SilentlyContinue | Select-Object -First 1).NameHost",
+                f"@(Resolve-DnsName -Name {record} -Server {dc_ip} -Type SRV -ErrorAction "
+                f"SilentlyContinue).Count -gt 0",
                 timeout=20,
             )
-            if rc == 0 and out.strip():
+            if rc == 0 and out.strip().lower() == "true":
                 return True
         except Exception:
             pass
@@ -1596,37 +1278,9 @@ def wait_for_dc_dns(node, dc_vmid, domain, dc_ip, timeout=300):
 
 def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scoring_user,
                           scoring_ip, box_password, promote_dc=True):
-    """Promote each team's DC box to its own AD forest, then join that team's member box(es)
-    to it — Windows members via Add-Computer, Linux members via realmd/sssd (nakon's
-    "domain-join" catalog config). Deliberately NOT part of the normal phase-5 (team1-only) /
-    phase-6 (every team) nakon runs — two independent reasons:
-
-    1. A reboot mid-script silently kills every step queued after it in that box's run.ps1
-       (nakon runs a machine's full configurations list as ONE script) — ADDS and Domain Join
-       both reboot, so each needs to be the ONLY thing in its script.
-    2. Team1's disk gets cloned to every other team (clone_team_boxes(), called before this
-       function runs). If team1's DC were already promoted to a live forest before that clone,
-       every team would inherit a COPY of the same AD database/domain GUID — real Windows AD
-       treats that as an unsafe DC clone (VM-Generation-ID-triggered USN rollback recovery,
-       designed for a live replication partner that doesn't exist in these isolated,
-       never-replicating per-team forests). Running this AFTER clone_team_boxes(), independently
-       per team, means every team promotes its OWN forest from a still-vanilla clone — safe.
-
-    Reads comp_dir/domain_roles.json — {box_name: "dc"|"member"} — to know which box plays which
-    role; a competition with no such file (i.e. every non-domain competition) is a no-op.
-    First "dc"-role box in `boxes` is promoted; every "member"-role box in the same team joins
-    it (member platform decides the join mechanism — Windows or Linux). Domain name is derived
-    per team as team<identifier>.local — each team's forest is independent, matching the
-    per-team subnet isolation everywhere else in this range.
-
-    box_password doubles as the join credential for both platforms: WINDOWS_ADMIN_USER is the
-    template's built-in Administrator (RID 500), whose password carries over as the domain
-    Administrator password once ADDS promotes the box that account lives on
-    (bootstrap_windows_box() set it to box_password before any of this ran).
-
-    promote_dc=False skips the ADDS promotion + AD misconfig pass and only (re)joins the
-    members — used by redeploy-competition.py when a MEMBER box was reset but the team's DC
-    is still promoted (re-promoting a healthy DC would just error).
+    """Per-team AD forest promotion + member joins. Runs after clone to avoid DC clone
+    duplication; reboot configs run isolated. Reads domain_roles.json; no-op if absent.
+    promote_dc=False only rejoins members (redeploy case).
     """
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
@@ -1661,12 +1315,6 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
         else:
             print(f"  [{team_key}] Promoting {dc_box['name']} ({dc_ip}) to a new AD forest "
                   f"({domain})...")
-            # Install-ADDSForest requires -SafeModeAdministratorPassword (the DSRM password) —
-            # without it the cmdlet always prompts interactively, which nakon's non-interactive
-            # transport can't satisfy (confirmed live: "Read-Host : ... NonInteractive mode").
-            # Reusing box_password keeps this to one credential to remember per competition, same
-            # as everywhere else (WINDOWS_ADMIN_USER's own password doubles as the eventual domain
-            # Administrator password).
             _run_single_nakon_config(
                 dc_machine,
                 [{"name": "ADDS", "vars": {"domain": domain, "dsrm_password": box_password}}],
@@ -1678,16 +1326,10 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                 print(f"  WARNING: {dc_box['name']} guest agent never came back after ADDS — "
                       f"skipping the rest of {team_key}'s domain setup")
                 continue
-            # guest-agent-alive doesn't mean sshd is listening yet — confirmed live: a flat 30s
-            # sleep here wasn't always enough right after an ADDS-promotion reboot specifically
-            # (heavier than an ordinary reboot), causing nakon's next connection to fail with
-            # "Unable to connect to port 22" even though the box came back fine moments later.
             wait_for_windows_sshd(node, dc_vmid, timeout=180)
 
             print(f"  [{team_key}] Planting AD-flavored misconfigs on {dc_box['name']}...")
-            # Add User Account / Elevate User Account need vars (id 67/68 in the catalog) — without
-            # them New-ADUser gets empty required params and the step does nothing useful. Reuses
-            # box_password so there's still just one credential to remember per competition.
+            # strict=False: AD misconfig pass lands misconfigs before inevitable non-fatal failures.
             _run_single_nakon_config(
                 dc_machine,
                 [
@@ -1700,7 +1342,15 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                     {"name": "Removing all auditing"},
                 ],
                 key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-ad-misconfigs",
+                strict=False,
             )
+
+        # Wait for DC DNS SRV records before any member join.
+        if member_boxes:
+            print(f"  [{team_key}] Waiting for {dc_box['name']}'s DNS to serve {domain}...")
+            if not wait_for_dc_dns(node, dc_vmid, domain, dc_ip):
+                print(f"  WARNING: {dc_box['name']} DNS never served SRV records for {domain} "
+                      f"— member joins may fail")
 
         for member_box in member_boxes:
             member_machine_name = f"{member_box['name']}-team{identifier}"
@@ -1735,13 +1385,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                     continue
                 wait_for_windows_sshd(node, member_vmid, timeout=180)
             else:
-                # Linux member: realmd/sssd via nakon's "domain-join" config (installs
-                # realmd/adcli/sssd, points the box's own resolvers at the DC — so no separate
-                # DNS repoint is needed, unlike the Windows path — and runs an idempotent
-                # `realm join`). Uppercase env-style vars, per that config's declaration (the
-                # Windows configs take lowercase PowerShell vars). No reboot, so there's no
-                # guest-agent/sshd wait afterwards either. BOX_HOSTNAME only matters if the
-                # box still has a placeholder `localhost` hostname, which realmd refuses.
+                # Linux member via realmd/sssd (no reboot, no separate DNS repoint).
                 print(f"  [{team_key}] Joining Linux member {member_box['name']} ({member_ip}) "
                       f"to {domain} via realmd/sssd...")
                 _run_single_nakon_config(
@@ -1873,9 +1517,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
         check=True, timeout=60,
     )
 
-    # CRITICAL: Docker sets FORWARD policy to DROP on start. Restore forwarding rules
-    # so the scoring engine can route between team subnets and the internet.
-    # Also enable TCP forwarding on sshd for ProxyCommand tunneling.
+    # Docker sets FORWARD policy to DROP; restore forwarding + isolation.
     print("  Restoring network forwarding rules after Docker start...")
     subprocess.run(
         [
@@ -1884,15 +1526,9 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
             (
-                # Allow all forwarding within team subnets and NAT to internet
-                "sudo iptables -P FORWARD ACCEPT && "
-                # Block team-to-team traffic. Teams can only reach each other THROUGH the
-                # engine (each team bridge has no uplink of its own, but the engine has a NIC
-                # on every one and forwards between them) — without this DROP rule, the
-                # bridges' lack of a physical uplink isolates nothing. -I ... 1 so this can't
-                # be shadowed by anything Docker inserts ahead of it in FORWARD on a restart.
-                "sudo iptables -C FORWARD -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP 2>/dev/null || "
-                "sudo iptables -I FORWARD 1 -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP && "
+                    "sudo iptables -P FORWARD ACCEPT && "
+                    "sudo iptables -C FORWARD -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP 2>/dev/null || "
+                    "sudo iptables -I FORWARD 1 -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP && "
                 "sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE && "
                 # Enable TCP forwarding for ProxyCommand tunnels
                 "sudo sed -i 's/^#*AllowTcpForwarding.*/AllowTcpForwarding yes/' /etc/ssh/sshd_config && "
@@ -1903,20 +1539,11 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
     )
     print("  Forwarding rules restored")
 
-    # Make the team-subnet NAT *and* the team-isolation DROP rule durable. Both get wiped every
-    # time Docker re-syncs iptables (any container start/restart), silently cutting team boxes
-    # off the internet AND, worse, silently re-opening team-to-team routing. ensure_nat_forwarding()
-    # only re-asserts before nakon runs — not good enough once the range is live. Install a tiny
-    # idempotent systemd oneshot + a 30s timer ON THE ENGINE so both rules are continuously
-    # re-asserted for the lifetime of the range. This is the range-firewall.sh/.service/.timer
-    # referenced in docs/usage-people.md's Troubleshooting table.
+    # Make NAT + isolation durable (Docker wipes iptables on restart).
     print("  Installing range-firewall systemd unit + timer (keeps team NAT + isolation durable)...")
     firewall_script = (
         "#!/bin/bash\n"
         "iptables -P FORWARD ACCEPT\n"
-        # Team-to-team isolation: the engine has a NIC on every team bridge (needed to NAT them
-        # out), so without this DROP rule any team can route straight to any other team's boxes
-        # through it. -I ... 1 keeps it ahead of anything Docker inserts into FORWARD.
         "iptables -C FORWARD -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP 2>/dev/null || "
         "iptables -I FORWARD 1 -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP\n"
         "iptables -t nat -C POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE 2>/dev/null || "
@@ -1971,18 +1598,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
 
 
 def install_range_healthcheck(ctx):
-    """Install a lightweight, zero-dependency live-ops health check on the scoring engine.
-
-    Nothing in this tool watches a *running* competition — range-firewall.timer self-heals the
-    NAT/isolation rules but logs nothing and alerts no one, and verify-competition.py is a
-    manual one-shot script. This adds a lightweight systemd timer (same push pattern as
-    range-firewall above) that checks Quotient's container + API, and the NAT/isolation rules,
-    every 60s, and appends one line per FAILURE to /var/log/range-healthcheck.log (silent when
-    healthy, so `tail -f` during an event only ever shows something an operator needs to act
-    on). Deliberately does NOT push-alert (email/Slack/webhook) — that's a bigger, separate
-    call for an operator to wire in explicitly; see docs/usage-people.md's Troubleshooting
-    table for the log-watching workflow this is meant to support.
-    """
+    """Install live-ops health check timer on scoring engine (Quotient + NAT/isolation)."""
     import base64
 
     key = ctx["ssh_key_path"]
@@ -2404,17 +2020,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             current_phase = 2
             print("[2/7] Running Terraform init & apply...")
             subprocess.run(["terraform", "init"], cwd="terraform", check=True, timeout=120)
-            # -parallelism=1 serializes the clones: full-cloning the scoring engine and every team
-            # box at once saturates the datastore and the Proxmox API starts returning HTTP 596
-            # (timeout), failing the apply. Cloning one VM at a time is slower but reliable
-            # (main.tf assumes this).
-            #
-            # 2400s was sized for Linux templates (~15GB disks). Windows templates are much
-            # bigger (windows-server-fix is 60GB) and a full clone of one under real host
-            # contention has been observed taking 30-40+ minutes on its own — a flat 2400s for
-            # the WHOLE apply (scoring engine + every team1 box) undercounts a multi-box Windows
-            # team badly. Scale up per Windows box in team1's plan, same idea as
-            # PER_MACHINE_NAKON_BUDGET scaling run_nakon's timeout.
+            # -parallelism=1: concurrent full clones saturate datastore/API (HTTP 596).
+            # Scale timeout per Windows box (60GB vs 15GB Linux).
             apply_timeout = 2400 + 1800 * sum(1 for b in boxes if is_windows_template(b["template"]))
             subprocess.run(["terraform", "apply", "-auto-approve", "-parallelism=1"], cwd="terraform", check=True, timeout=apply_timeout)
 
@@ -2449,12 +2056,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             print("[4/7] Bootstrapping scoring engine (packages, Docker, Quotient)...")
             bootstrap_scoring_engine(ctx, postgres_password, redis_password)
 
-            # Push event.conf now, BEFORE nakon. Quotient's server panics on every scoring round
-            # while event.conf is absent, and each container restart re-syncs iptables and wipes
-            # the team NAT rule — which starves nakon's apt-get of internet. Writing a valid
-            # event.conf here stops the crash loop so NAT stays up through the nakon runs.
-            # event.conf uses the 192.168._.N wildcard and lists every team, so it's complete even
-            # though team2+ boxes don't exist yet.
+            # Push event.conf before nakon: prevents Quotient crash loop that wipes NAT.
             print("  Pushing event.conf early (stabilizes Quotient so NAT survives nakon)...")
             push_event_conf(comp_dir, teams, boxes, ctx, name,
                             inject_password=inject_password, admin_password=admin_password,
@@ -2483,43 +2085,22 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
         if from_phase <= 5:
             current_phase = 5
             print("[5/7] Fixing DNS on team1 boxes, then running Nakon deployment...")
-            # Only team1 exists at this point — fix DNS so apt-get can resolve repos. Windows
-            # DNS was already set by bootstrap_windows_box() above.
             fix_dns_on_boxes([t for t in team1_targets if not is_windows_template(t["box"]["template"])], ctx)
 
-            # Snapshot team1 BEFORE nakon plants anything: a booted box with working DNS and a
-            # usable `ubuntu` login and nothing else. This is what redeploy-competition.py's
-            # --mode rollback-base restores to before re-running nakon. Disk-only, so it costs
-            # seconds; a datastore that can't snapshot just warns (see take_snapshot()).
             print(f"  Snapshotting team1 boxes as '{SNAP_BASE}' (pre-Nakon restore point)...")
             for t in team1_targets:
                 take_snapshot(node, t["vmid"], SNAP_BASE,
                               description="tezcatlipoca: booted, networked, pre-Nakon")
 
-            # Narrow the deploy to team1 (team2+ don't exist yet). This only decides which
-            # machines get connected to — what gets deployed to each one is fixed by the
-            # bundle, which was built from the full machine list before Terraform ran.
-            #
-            # This used to rewrite the machine list to team1, deploy, then write the full list
-            # back. If anything failed in between — or the run was interrupted — the file was
-            # left holding one team, and a --from-phase resume then silently deployed to one
-            # team. `nakon deploy --only` expresses the same thing without mutating anything.
+            # Scope deploy to team1 only (--only); bundle still full.
             team1_identifier = teams["team1"]["identifier"]
             team1_machines = [
                 m["name"] for m in json.loads(nakon_config_path.read_text())["machines"]
                 if m["ip"].split(".")[2] == str(team1_identifier)
             ]
 
-            # Make sure the boxes can still reach the internet right before nakon's apt-get runs.
             ensure_nat_forwarding(ctx)
 
-            # nakon deploys machines sequentially (confirmed via deploy logs — one machine's
-            # plan finishes before the next starts), so the SSH timeout has to scale with how
-            # many machines and configs this run is actually driving, not stay a flat constant.
-            # PER_MACHINE_NAKON_BUDGET (2400s) is sized off practice-fix-templates' heaviest box
-            # (~40 configs, several real package installs) with headroom — a smaller Compfile
-            # finishes well under it, a bigger one scales the timeout instead of hitting a wall
-            # mid-deploy like a flat 2400s did once config sets grew past the original ~4/box.
             run_nakon(key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
                       only=team1_machines,
                       timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(team1_machines)))
@@ -2539,37 +2120,21 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             if len(teams) > 1:
                 print("  Deploying Nakon on team2+ boxes...")
                 ensure_nat_forwarding(ctx)
-                # Same bundle as phase 5, with no --only, so this run reaches every team. The
-                # clones already carry team1's applied configurations; re-running is deliberate
-                # and matches the previous behaviour. Scale the timeout by the FULL machine
-                # count (every team, not just team1) — see the phase-5 call for why this can't
-                # stay a flat constant.
                 all_machines = json.loads(nakon_config_path.read_text())["machines"]
                 run_nakon(key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
                           timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(all_machines)))
                 print("  Nakon deployment on team2+ complete")
             else:
-                # Single team: clone_team_boxes() returns early without hardening services or
-                # creating the credlist OS accounts (admin/user1/user2), so auth checks would
-                # score down. Run that step here for the one-team case.
                 print("  Single team — hardening services on team1 boxes...")
                 fix_services_on_boxes(
                     comp_dir, [t for t in all_targets if not is_windows_template(t["box"]["template"])],
                     ctx, box_creds=box_creds,
                 )
 
-            # Promote/join any Windows domain-controller/member boxes (domain_roles.json) — a
-            # no-op for every competition that doesn't have one. Runs AFTER cloning, never
-            # before: see deploy_domain_configs()'s docstring for why cloning an
-            # already-promoted DC is unsafe.
             print("  Configuring Windows AD domains (if any)...")
             deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path,
                                            key, scoring_user, scoring_ip, box_password)
 
-            # Snapshot every box in its as-delivered state — the exact disk the competition
-            # starts on, after nakon and service hardening. This is the default restore point
-            # for redeploy-competition.py: rolling a broken box back to tz-ready puts it back
-            # to hour zero without rebuilding anything.
             print(f"  Snapshotting all boxes as '{SNAP_READY}' (as-delivered restore point)...")
             for t in all_targets:
                 take_snapshot(node, t["vmid"], SNAP_READY,
@@ -2591,11 +2156,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
                 "quotient_admin_password": admin_password,
             }
 
-            # Each sub-step is gated on its own state flag (not just phase 7's checkpoint) so a
-            # resume that re-enters phase 7 — e.g. a crash between seeding and injects — can't
-            # re-run a step that already succeeded. This matters most for unpause_engine(): its
-            # /api/engine/pause call decrements a server-side WaitGroup exactly once (see its
-            # docstring in quotient/setup.py) and isn't safe to call twice.
+            # Gate each sub-step on state flags (unpause_engine is not idempotent).
             if not state.get("seeded"):
                 print("  Seeding teams and starting the competition clock...")
                 seed_teams(scoring_ip, quotient_ctx)
@@ -2611,9 +2172,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             else:
                 print("  Engine already unpaused (resume) — skipping.")
 
-            # Create injects via Quotient's API (competition must be seeded/started first).
-            # create_injects() itself also dedupes by title (defense in depth), but the flag
-            # here avoids even querying/re-posting on an otherwise-clean resume.
             if injects and not state.get("injects_created"):
                 print(f"  Creating {len(injects)} inject(s)...")
                 resolve_inject_times(injects)  # anchor offsets to actual competition start
@@ -2628,11 +2186,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
     except BaseException as e:
         print(f"\n  [!] Deploy failed during phase {current_phase} of '{comp_name}'.")
         resume_phase = current_phase
-        # A failure that smells like a Proxmox/Terraform state mismatch (an orphaned VM/config
-        # from a prior interrupted apply, most often) can't be fixed by resuming from the same
-        # phase — phase 2+ resumes explicitly skip phase 1's cleanup ("[1/7] Skipped (resume) —
-        # leaving existing VMs/bridges in place."), so retrying the exact suggested command just
-        # reproduces the identical error. Point at phase 1 instead when we see that signature.
+        # "already exists" suggests Proxmox/Terraform state mismatch; resume from phase 1.
         if current_phase >= 2 and "already exists" in str(e).lower():
             resume_phase = 1
             print("      This looks like a Proxmox/Terraform state mismatch (something the "
