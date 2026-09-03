@@ -1,3 +1,4 @@
+# DEAD: superseded by hardening_ops.fix_dns_on_boxes — kept for reference; not invoked by terraform/main.tf.
 #!/usr/bin/env python3
 """
 Gets every team box into a state where nakon's deploy.py can actually install things:
