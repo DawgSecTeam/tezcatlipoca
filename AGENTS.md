@@ -28,19 +28,20 @@ huitzilopochtli.
 ## Layout
 
 ```
-create-competition.py   the driver: 7-phase deploy + generate_nakon_config/build/run_nakon,
-                        + deploy_domain_configs() (AD forests per team — Windows members via
-                        Add-Computer, Linux members via realmd/sssd; roles in domain_roles.json)
-destroy-competition.py  full teardown (incl. API-cloned team2+ boxes not in Terraform state)
-redeploy-competition.py per-team rollback/reconfigure mid-competition
-verify-competition.py   post-deploy checks
-range_ops.py            Proxmox API, guest-agent exec, snapshots, NAT/DNS helpers
+create-competition.py   shim re-exporting pipeline (keeps `import driver` working)
+deploy.py / config_ops.py / nakon_ops.py / windows_ops.py / hardening_ops.py / clone_ops.py / domain_ops.py / engine_ops.py   pipeline (split from create-competition.py)
+constants.py            vmid math, snapshots, budgets, NAKON_DIR
+ssh_ops.py              gateway SSH + Terraform ctx + wait helpers
+range_ops.py            Proxmox API, guest-agent exec, snapshots, enumerate_targets
 utils.py                Compfile/users/competition loading
-quotient/               Quotient event.conf/cledlist/injects setup
+quotient/setup.py       event.conf/credlist/seed/injects setup
+terraform/main.tf       bridges, scoring VM (1000), team1 VMs, NIC wiring
+vendor/nakon/           SUBMODULE (v0.1.2) — CLI only (randomize/build/deploy)
+docs/architecture.md    architecture (phases, data flow, isolation)
+docs/                   usage-people.md, usage-agents.md
+destroy-competition.py  teardown (API clones + terraform destroy)
+redeploy-competition.py per-team rollback/reconfigure; verify-competition.py checks
 generate-packet.py      competitor briefing packet
-vendor/nakon/           SUBMODULE (currently v0.1.2) — nakon for build/randomize/deploy
-terraform/              team bridges, scoring VM, team1 boxes
-docs/                   usage-people.md (interactive), usage-agents.md (non-interactive)
 ```
 
 ## Run / build / test
@@ -68,10 +69,8 @@ exercising the nakon CLI directly from `vendor/nakon` (`python3 -m nakon randomi
   checkout — work in the nakon repo, tag a release, then pin it here.
 - **`vendor/nakon/.env`** (gitignored) holds the vulndb creds for build/randomize; the bundle
   itself carries no creds to the engine.
-- **`NAKON_DIR = Path("vendor/nakon")`** — nakon runs with that as cwd (so it can read its `.env`)
-  and bundles live under `vendor/nakon/bundles/` (content-addressed, shared across competitions).
-- **`os_to_platform`** lives in `create-competition.py` (mirrors nakon's); `redeploy` uses
-  `driver.os_to_platform` so classification can't disagree with what generates the config.
+- **`NAKON_DIR = Path("vendor/nakon")`** in `constants.py` — nakon runs with that as cwd (so it can read its `.env`) and bundles live under `vendor/nakon/bundles/` (content-addressed, shared).
+- **`os_to_platform`** lives in `nakon_ops.py` (mirrors nakon's), re-exported via the shim; `redeploy` uses `driver.os_to_platform` so classification can't disagree.
 - **Per-run secrets** (teams.json, event.conf, credentials.txt, nakon-config.json, .deploy_state.json)
   are gitignored; boxes.json/Compfile/box_services.json are non-secret and tracked.
 - **Resumable deploy:** `--from-phase N`; pinned `box_services.json`/`box_vulns.json` make re-runs

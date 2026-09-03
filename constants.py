@@ -1,8 +1,6 @@
-"""Central constants for vmid math, snapshots, budgets, and naming.
-
-VM IDs: 200 + identifier*10 + box_index (stride 10, mirrored in terraform/main.tf).
-Snapshots, budgets, and naming conventions live here so range_ops, create-competition,
-redeploy, and verify import from one place.
+"""Central constants for vmid math, snapshots, budgets, naming, and nakon path.
+VM IDs use stride 10 (mirrored in terraform/main.tf); defines MAX_TEAMS, SNAP_*.
+Shared by range_ops, deploy, redeploy, and verify.
 """
 
 from pathlib import Path
