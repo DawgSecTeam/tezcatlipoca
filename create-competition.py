@@ -18,6 +18,14 @@ import toml
 import urllib3
 from dotenv import load_dotenv
 
+from constants import (
+    DISRUPTIVE_CONFIGS,
+    NAKON_DIR,
+    PER_MACHINE_NAKON_BUDGET,
+    REBOOTS_BOX_CONFIGS,
+    SLOW_SERVICES,
+    WINDOWS_ADMIN_USER,
+)
 from quotient.setup import build_event_conf, create_injects, seed_teams, unpause_engine
 from range_ops import (
     MAX_BOXES_PER_TEAM,
@@ -37,10 +45,26 @@ from range_ops import (
     wait_for_guest_agent,
     wait_for_proxmox_task,
 )
+from ssh_ops import (
+    read_terraform_ctx,
+    ssh_on_gateway,
+    ssh_to_engine,
+    ssh_via_gateway,
+    wait_for_boxes_ssh,
+    wait_for_cloud_init,
+    wait_for_http,
+    wait_for_ssh,
+)
 from utils import BOX_USERNAME_DEFAULT, DNS_FIX_CMD, load_compfile, load_users_config, pick_competition
 
 ENV_PATH = Path(".env")
-NAKON_DIR = Path("vendor/nakon")
+# NAKON_DIR imported from constants — keep alias for backwards compatibility is automatic via import
+
+# Re-export for redeploy-competition.py which imports this file as `driver`.
+# (will be cleaned up in Phase 3 when redeploy imports ssh_ops directly)
+# read_terraform_ctx, ssh_via_gateway, ssh_on_gateway, wait_for_ssh,
+# wait_for_boxes_ssh, wait_for_cloud_init, wait_for_http are already
+# available as module globals via the ssh_ops import above.
 
 # TF_VAR_* must be in env for `terraform` subprocesses (inherited from parent).
 load_dotenv(ENV_PATH)
@@ -66,12 +90,7 @@ def random_password():
 # Windows templates have no cloud-init; bootstrap via QEMU guest agent (virtio-serial)
 # for IP/gateway/DNS, admin password, sshd/guest-agent. "win" substring is the
 # single convention for Windows detection (nakon randomize + terraform initialization).
-
-WINDOWS_ADMIN_USER = "Administrator"  # RID 500; carries over as domain Administrator after ADDS.
-
-# Reboot-triggering configs run as single-config scripts with explicit reboot waits;
-# a full list runs as one run.ps1, so a mid-script reboot would kill remaining steps.
-REBOOTS_BOX_CONFIGS = {"ADDS", "Domain Join"}
+# WINDOWS_ADMIN_USER and REBOOTS_BOX_CONFIGS live in constants.py.
 
 
 def is_windows_template(template_name):
@@ -419,8 +438,7 @@ def os_to_platform(template):
     return "windows" if "win" in template.lower() else "linux"
 
 
-# Excluded from auto-pick for speed (still assignable manually via box_services.json).
-SLOW_SERVICES = ("splunk", "roundcube")
+# SLOW_SERVICES lives in constants.py (excluded from auto-pick for speed).
 
 
 def _nakon_randomize(platform, services_budget, vulns_budget):
@@ -486,10 +504,7 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
         )
 
     # Disruptive vulns break DNS/apt; sort them last so package installs still have network.
-    DISRUPTIVE_CONFIGS = {
-        "resolv-conf-null-dns", "apt-sources-empty", "apt-hold-all-packages",
-        "dpkg-broken-hold-state",
-    }
+    # DISRUPTIVE_CONFIGS imported from constants.py
 
     machines = []
     for i, (team, box) in enumerate(
@@ -544,8 +559,7 @@ def build_nakon_bundle(config_path):
     return NAKON_DIR / info["path"]
 
 
-# Per-machine budget for scaling deploy timeouts with config count.
-PER_MACHINE_NAKON_BUDGET = 2400
+# PER_MACHINE_NAKON_BUDGET lives in constants.py
 
 
 def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, timeout=2400,
@@ -605,169 +619,9 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
         raise
 
 
-def read_terraform_ctx():
-    raw = subprocess.run(
-        ["terraform", "output", "-json"], cwd="terraform", capture_output=True, text=True, check=True
-    ).stdout
-    ctx = json.loads(json.loads(raw)["agent_context"]["value"])
-    key_path = ctx["ssh_key_path"]
-    if not os.path.isabs(key_path):
-        ctx = {**ctx, "ssh_key_path": str((Path("terraform") / key_path).resolve())}
-    return ctx
-
-
-def ssh_via_gateway(ctx, target_ip, cmd, timeout=60, user="ubuntu"):
-    """SSH to a target box via the scoring engine gateway (ProxyCommand -W).
-    Requires AllowTcpForwarding=yes on gateway. Windows uses password auth;
-    Linux uses key auth for box_username.
-    """
-    key = ctx["ssh_key_path"]
-    scoring_ip = ctx["scoring_engine_ip"]
-    scoring_user = ctx["vm_username"]
-    proxy = (
-        f"ssh -i {key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-        f"-W %h:%p {scoring_user}@{scoring_ip}"
-    )
-    return subprocess.run(
-        [
-            "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=10",
-            "-o", f"ProxyCommand={proxy}",
-            f"{user}@{target_ip}", cmd,
-        ],
-        capture_output=True, text=True, timeout=timeout,
-    )
-
-
-def ssh_on_gateway(ctx, cmd, timeout=30):
-    """Run a command directly on the scoring engine gateway."""
-    key = ctx["ssh_key_path"]
-    scoring_ip = ctx["scoring_engine_ip"]
-    scoring_user = ctx["vm_username"]
-    return subprocess.run(
-        [
-            "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=10",
-            f"{scoring_user}@{scoring_ip}", cmd,
-        ],
-        capture_output=True, text=True, timeout=timeout,
-    )
-
-
-def wait_for_ssh(key, user, host, timeout=300):
-    """Poll SSH until `ssh user@host true` succeeds. Returns True/False; never raises."""
-
-    print(f"  Waiting for {host} to accept SSH (timeout {timeout}s)...")
-    deadline = time.time() + timeout
-    attempt = 0
-    while time.time() < deadline:
-        attempt += 1
-        try:
-            r = subprocess.run(
-                ["ssh", "-i", key,
-                 "-o", "StrictHostKeyChecking=no",
-                 "-o", "UserKnownHostsFile=/dev/null",
-                 "-o", "ConnectTimeout=10",
-                 "-o", "BatchMode=yes",
-                 f"{user}@{host}", "true"],
-                capture_output=True, text=True, timeout=20,
-            )
-            if r.returncode == 0:
-                print(f"    {host} reachable via SSH (after {attempt} attempt(s))")
-                return True
-        except subprocess.TimeoutExpired:
-            pass
-        time.sleep(5)
-    print(f"  WARNING: {host} not reachable via SSH within {timeout}s — continuing anyway")
-    return False
-
-
-def wait_for_boxes_ssh(ctx, targets, timeout=300):
-    """Poll every target's reachability through gateway (shared timeout).
-    Windows via guest agent (no key auth). Raises if all boxes fail (systemic)."""
-    node = os.environ["TF_VAR_proxmox_node"]
-    print("  Waiting for team boxes to accept SSH via gateway...")
-    deadline = time.time() + timeout
-    total = 0
-    unreachable = 0
-    for t in targets:
-        total += 1
-        ip = t["ip"]
-        windows = is_windows_template(t["box"]["template"])
-        while True:
-            if time.time() > deadline:
-                print(f"    WARNING: {ip} not reachable within timeout — continuing")
-                print(diagnose_unreachable_box(node, t["vmid"]))
-                unreachable += 1
-                break
-            try:
-                if windows:
-                    ok = wait_for_guest_agent(node, t["vmid"], timeout=20)
-                else:
-                    ok = ssh_via_gateway(ctx, ip, "true", timeout=20,
-                                         user=ctx.get("box_username", "ubuntu")).returncode == 0
-                if ok:
-                    print(f"    {ip} reachable")
-                    break
-            except Exception:
-                pass
-            time.sleep(10)
-
-    if total > 0 and unreachable == total:
-        raise RuntimeError(
-            f"All {total} team box(es) failed to become SSH-reachable — this looks systemic "
-            f"(see the guest-agent diagnosis above for each box), not a one-off timing fluke. "
-            f"Aborting rather than burning through the DNS/auth/nakon retry loops for boxes "
-            f"that are already known unreachable."
-        )
-
-
-def wait_for_cloud_init(ctx, targets, timeout=240):
-    """Wait for cloud-init to finish on all targets. Cloud-init can revert planted
-    perms after clone; wait for it before nakon. Never raises; warns on timeout.
-    """
-    print("  Waiting for cloud-init to finish on all team boxes...")
-    deadline = time.time() + timeout
-    for t in targets:
-        if is_windows_template(t["box"]["template"]):
-            continue  # no cloud-init on Windows — bootstrap_windows_box() is its equivalent
-        ip = t["ip"]
-        remaining = max(int(deadline - time.time()), 15)
-        try:
-            r = ssh_via_gateway(ctx, ip, "cloud-init status --wait", timeout=remaining,
-                                user=ctx.get("box_username", "ubuntu"))
-            if r.returncode in (0, 2):  # 2 = done, with non-fatal warnings — still finished
-                print(f"    {ip}: cloud-init done (rc={r.returncode})")
-            else:
-                print(f"  WARNING: {ip} cloud-init status --wait exited {r.returncode}: "
-                      f"{(r.stdout or '').strip()[:150]}")
-        except subprocess.TimeoutExpired:
-            print(f"  WARNING: {ip} cloud-init still running after {remaining}s — continuing anyway")
-        except Exception as e:
-            print(f"  WARNING: cloud-init wait failed for {ip}: {e}")
-
-
-def wait_for_http(url, timeout=120):
-    """Poll URL until any HTTP response. Never raises; warns on timeout."""
-
-    print(f"  Waiting for {url} to respond (timeout {timeout}s)...")
-    deadline = time.time() + timeout
-    attempt = 0
-    while time.time() < deadline:
-        attempt += 1
-        try:
-            requests.get(url, timeout=5)
-            print(f"    {url} responded (after {attempt} attempt(s))")
-            return True
-        except requests.exceptions.RequestException:
-            pass
-        time.sleep(3)
-    print(f"  WARNING: {url} did not respond within {timeout}s — continuing anyway")
-    return False
+# SSH helpers live in ssh_ops.py — imported at top (see ssh_ops import).
+# Kept as module globals for redeploy-competition.py which does `import create_competition as driver`.
+# (Phase 3 will make redeploy import ssh_ops directly.)
 
 
 def fix_dns_on_boxes(targets, ctx):
