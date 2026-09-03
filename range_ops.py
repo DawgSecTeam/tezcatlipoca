@@ -7,6 +7,8 @@ import time
 
 import requests
 
+from constants import MAX_BOXES_PER_TEAM, MAX_TEAMS, SCORING_ENGINE_VMID, SNAP_BASE, SNAP_READY
+
 # Proxmox's API token auth talks straight to the API over the same self-signed cert main.tf's
 # provider block sets insecure=true for — same tradeoff, just from Python instead. Each entry
 # point that imports this module also calls urllib3.disable_warnings().
@@ -144,19 +146,7 @@ def wait_for_guest_agent(node, vmid, timeout=300):
 
 
 ### VM identity
-
-# VM IDs are 200 + identifier*10 + box_index (mirrored in main.tf's team_box.vm_id), which
-# leaves each team a stride of exactly 10. An 11th box would land on the next team's first box
-# and silently clobber it, so the scheme caps the box count rather than the picker.
-MAX_BOXES_PER_TEAM = 10
-
-# Team identifiers are `100 + i` and become the subnet's third octet (192.168.<identifier>.x),
-# which must stay a valid, non-zero octet (1-254) — i.e. i <= 154. Past that, identifiers like
-# 256 would produce an invalid IP and silently break the whole range.
-MAX_TEAMS = 154
-
-# The scoring engine's vmid is fixed in main.tf, not derived from the formula above.
-SCORING_ENGINE_VMID = 1000
+# (constants re-exported from constants.py for backwards compatibility)
 
 
 def vm_id_for(identifier, box_index):
@@ -237,11 +227,10 @@ def describe_target(t):
 
 
 ### Snapshots
+# (SNAP_BASE/SNAP_READY re-exported from constants.py for backwards compatibility)
 # tz-base: booted, networked, pre-nakon. tz-ready: as-delivered post-nakon+hardening.
 # Note: team2+ tz-base is cloned after phase 5, so it carries team1's configs but is still
 # the per-box "before nakon" point for that team.
-SNAP_BASE = "tz-base"
-SNAP_READY = "tz-ready"
 
 
 def list_snapshots(node, vmid):
