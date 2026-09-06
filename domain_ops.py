@@ -67,7 +67,12 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
             wait_for_windows_sshd(node, dc_vmid, timeout=180)
 
             print(f"  [{team_key}] Planting AD-flavored misconfigs on {dc_box['name']}...")
-            # strict=False: AD misconfig pass lands misconfigs before inevitable non-fatal failures.
+            # strict=False: this pass is scoring flavor, not range infrastructure, and it can
+            # still fail non-fatally even with nakon >= v0.1.3 (which fixed the duplicate
+            # vars-less dependency step): "Disable System Firewall" sweeps every AD computer
+            # over WinRM, and a Linux realmd member has no WinRM, so that step exits 1 on any
+            # mixed Windows/Linux domain after landing its own misconfig. Failures print in
+            # nakon's summary instead of aborting the deploy.
             _run_single_nakon_config(
                 dc_machine,
                 [
