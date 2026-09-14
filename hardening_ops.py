@@ -89,6 +89,21 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds=None):
             script_lines.append(f"echo '{username}:{password}' | sudo chpasswd")
         script_lines.append("")
 
+        # Several catalog configs (ssh-root-login, ssh-empty-passwords, ssh-password-auth,
+        # ssh-max-auth-retries-high, ssh-x11-forwarding, ...) each independently
+        # `systemctl restart ssh`. Landing several on one box back-to-back with no delay
+        # can trip systemd's crash-loop protection (Result: start-limit-hit), leaving sshd
+        # down for the rest of the competition -- confirmed live 2026-09-03 (web01-team101,
+        # 5 ssh-* configs, journalctl showed 5 restarts inside the same second). This
+        # reaches the box over SSH when it's still up, and falls through to the guest-agent
+        # fallback below when it isn't -- either way sshd ends the pass running.
+        script_lines.extend([
+            "# Un-wedge sshd if a burst of ssh-* misconfig restarts tripped the start-limit",
+            "sudo systemctl reset-failed ssh 2>/dev/null || true",
+            "sudo systemctl is-active --quiet ssh || sudo systemctl start ssh 2>/dev/null || true",
+            "",
+        ])
+
         if "mysql" in services or "mariadb" in services:
             script_lines.extend([
                 "# MySQL/MariaDB: bind to 0.0.0.0",
