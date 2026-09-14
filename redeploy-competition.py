@@ -1,31 +1,8 @@
 # Author: Hamza
 
-"""Redeploy a SUBSET of a live competition's boxes — one team, one box type, or any
-combination — without tearing down the range.
-
-create-competition.py is all-or-nothing: phase 1 destroys every team's boxes, the scoring
-engine and every bridge, and even a --from-phase resume operates on the whole competition. That
-is the wrong tool when a single team's box breaks an hour into an event.
-
-This one resolves a filtered set of (team, box) targets and puts just those back, cheapest
-option first:
-
-  rollback-ready   roll back to the `tz-ready` snapshot — the exact disk the competition
-  (default)        started on. Seconds to a couple of minutes. Nothing is rebuilt.
-  rollback-base    roll back to `tz-base` (booted + networked, pre-Nakon), then re-run Nakon
-                   and service hardening for those machines. Use when tz-ready is also bad.
-  reconfigure      no rollback at all: re-run DNS/auth/Nakon/hardening against the live boxes.
-                   Use when a service died but the box is otherwise the team's to keep.
-  rebuild          the VM is gone or won't boot: recreate it from its box template, then do
-                   everything rollback-base does, and re-take both snapshots.
-
-Both snapshots are taken by create-competition.py during the normal deploy (phases 5 and 6) —
-a range deployed before snapshotting existed, or on a datastore that can't snapshot, only has
-`reconfigure` and `rebuild` available. The tool says so rather than failing obscurely.
-
-WARNING: rolling a box back mid-competition discards everything the defending team did to it.
-It is a reset to a known-good point, not a repair. Every destructive mode prints the full
-target list and asks for confirmation unless --yes.
+"""Redeploy a subset of a live competition's boxes without tearing down the range.
+Modes: rollback-ready (tz-ready), rollback-base (tz-base+nakon), reconfigure (live),
+rebuild (from template). Rolling back discards team changes.
 """
 
 import argparse
@@ -60,15 +37,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def _load_driver():
-    """Import create-competition.py as a module.
-
-    Its filename has a hyphen, so it can't be imported with a plain `import` — hence the
-    importlib shim. Doing this rather than duplicating the SSH/Nakon chain is deliberate: the
-    DNS fix, `ubuntu` auth setup, Nakon invocation and service hardening must stay bit-identical
-    to what the full deploy does, or a redeployed box drifts from its neighbours and starts
-    scoring differently. Safe to import: that module's top level only calls load_dotenv() and
-    silences urllib3 warnings, and its main() is behind `if __name__ == "__main__"`.
-    """
+    """Import create-competition.py as module (hyphen requires importlib)."""
     path = Path(__file__).parent / "create-competition.py"
     spec = importlib.util.spec_from_file_location("create_competition", path)
     module = importlib.util.module_from_spec(spec)
@@ -83,13 +52,7 @@ driver = _load_driver()
 ### Selection
 
 def parse_team_selector(raw, teams):
-    """Resolve a comma-separated team selector against the competition's teams.json.
-
-    Accepts whatever an operator is most likely to have in front of them mid-event: the team key
-    (`team2`), the bare number (`2`), or the subnet identifier they can read off a box's IP
-    (`102`, from 192.168.102.x). Raises SystemExit on anything that matches no team — silently
-    redeploying nothing, or worse the wrong team, is the failure mode to avoid here.
-    """
+    """Parse team selector (team key, number, or subnet identifier)."""
     by_key = {k.lower(): k for k in teams}
     by_ident = {str(v["identifier"]): k for k, v in teams.items()}
     by_number = {k.lower().removeprefix("team"): k for k in teams}
@@ -124,11 +87,7 @@ def parse_box_selector(raw, boxes):
 
 
 def box_platform(box):
-    """'linux' / 'windows' for a box, from its template name.
-
-    Uses the driver's os_to_platform() — the same function generate_nakon_config() classifies
-    with — so --platform can never disagree with what Nakon thinks it is deploying to.
-    """
+    """Platform via driver's os_to_platform (must match nakon)."""
     return driver.os_to_platform(box.get("template", ""))
 
 
@@ -152,28 +111,15 @@ def select_targets(teams, boxes, args):
 ### Modes
 
 def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon_bundle):
-    """The configure half of a redeploy: DNS, auth, Nakon (scoped), service hardening.
-
-    Identical to what phases 5/6 do, except `nakon deploy --only` is scoped to exactly these
-    machines. What gets applied to each one is fixed by the bundle, which was built from the
-    full machine list — narrowing --only changes which boxes are connected to, never what is
-    deployed to them.
-    """
+    """Configure half: DNS, auth, scoped nakon (--only), service hardening."""
     key = Path(ctx["ssh_key_path"])
     scoring_user = os.environ["TF_VAR_vm_username"]
     scoring_ip = ctx["scoring_engine_ip"]
 
-    # Linux-only steps, same split the deploy's phases 5/6 make: a Windows box has no
-    # systemd-resolved/sshd_config-based `ubuntu` auth — feeding it through here burns 8
-    # retries × 15 s per box, and on a Windows-only selection the DNS loop's all-fail circuit
-    # breaker aborts the whole redeploy. Windows credentials/DNS belong to
-    # bootstrap_windows_box(), which rebuild/rebuild-style modes call separately.
     linux_targets = [t for t in targets if box_platform(t["box"]) == "linux"]
     driver.fix_dns_on_boxes(linux_targets, ctx)
     driver.setup_ubuntu_auth(linux_targets, ctx)
 
-    # The boxes NAT out through the engine; a container restart there drops the rule, and
-    # Nakon's first action on every machine is an apt-get.
     driver.ensure_nat_forwarding(ctx)
 
     machines = [t["machine"] for t in targets]
@@ -181,8 +127,6 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
     driver.run_nakon(
         key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
         only=machines,
-        # Same per-machine budget the full deploy uses, scaled to this selection rather than
-        # the whole range — see PER_MACHINE_NAKON_BUDGET in create-competition.py.
         timeout=max(2400, driver.PER_MACHINE_NAKON_BUDGET * len(machines)),
     )
 
@@ -190,18 +134,7 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
 
 
 def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
-    """Re-run the AD domain chain for teams whose domain-role boxes were reset.
-
-    rollback-base and rebuild restore a box to a pre-Nakon disk — for a dc/member box
-    (domain_roles.json) that also undoes the ADDS promotion / domain join, and until now the
-    domain was simply silently gone afterwards: no redeploy mode re-ran it, and the only
-    recovery was a full create-competition.py --from-phase 6.
-
-    Scopes driver.deploy_domain_configs() to the affected team(s). Per team: if the DC box
-    was among the reset boxes it gets re-promoted; if only members were reset the DC is left
-    as-is (promote_dc=False) and just the joins are redone — re-promoting a healthy DC
-    would only error out.
-    """
+    """Re-run AD domain chain for affected teams (promote DC only if reset)."""
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
         return
@@ -237,7 +170,7 @@ def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
 
 def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_path,
                   nakon_bundle, reconfigure):
-    """Roll each target back to `snapshot`, then optionally re-run the configure chain."""
+    """Rollback to snapshot, optionally reconfigure."""
     restored = []
     for t in targets:
         print(f"  Rolling back {describe_target(t)} to '{snapshot}'...")
@@ -246,8 +179,6 @@ def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_pa
             restored.append(t)
             print(f"    {t['vm_name']} restored")
         except Exception as e:
-            # One bad box must not abandon the rest — mid-event, recovering three of four boxes
-            # beats recovering none.
             print(f"  WARNING: rollback failed for {describe_target(t)}: {e}")
 
     if not restored:
@@ -258,8 +189,6 @@ def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_pa
     if reconfigure:
         driver.wait_for_cloud_init(ctx, restored, timeout=240)
         run_nakon_and_harden(restored, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
-        # A reset dc/member box also lost its promotion/join — restore it before tz-ready is
-        # re-taken, so that snapshot is the complete as-delivered state again.
         rerun_domain_configs(restored, ctx, comp_dir, state, nakon_config_path)
         print(f"  Re-taking '{SNAP_READY}' for the recovered boxes...")
         for t in restored:
@@ -301,19 +230,7 @@ def template_vmid_for(box):
 
 
 def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_bundle):
-    """Recreate each target VM from its box template, then configure it from scratch.
-
-    The last rung: for a VM that has been deleted, or is so broken it won't boot far enough to
-    roll back. Deliberately clones the box's own TEMPLATE rather than team1's live box the way
-    phase 6 does — mid-competition team1's box carries whatever team1's defenders have done to
-    it, and handing another team a copy of that is neither fair nor reproducible. Cloning the
-    template reproduces what Terraform built at deploy time instead.
-
-    Mirrors main.tf's `team_box` resource: full clone, cloud-init ipconfig0/net0 (Linux) or
-    net0 + guest-agent bootstrap_windows_box() (Windows — cloud-init keys are no-ops there,
-    main.tf skips the initialization block for win templates), the box login account with this
-    competition's box_password and the range SSH key, and the box's cpu/memory from boxes.json.
-    """
+    """Recreate VM from template then configure (clones template, not team1 live box)."""
     box_password = state.get("box_password")
     if not box_password:
         raise SystemExit(
@@ -321,10 +238,6 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
             "login the rest of the range uses. Rebuild is unavailable for this competition."
         )
     ssh_public_key = os.environ["TF_VAR_ssh_public_key"]
-    # The themed box login (users.json), NOT a hardcoded 'ubuntu' — main.tf creates the
-    # account as var.box_username, and every downstream step (DNS fix, auth setup, verify)
-    # authenticates as that user. Hardcoding it on a themed competition produced a box with
-    # the wrong account and no working login.
     box_username = ctx.get("box_username", "ubuntu")
 
     rebuilt = []
@@ -358,9 +271,6 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
             })
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data=config)
 
-        # main.tf only emits a disk block when disk_gb is set; a null means "keep the
-        # template's own disk", and forcing a size there would try to SHRINK a real template
-        # disk, which Proxmox rejects. Same rule here.
         if box.get("disk_gb"):
             proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/resize", data={
                 "disk": "scsi0", "size": f"{box['disk_gb']}G",
@@ -369,9 +279,6 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         start_vm(node, t["vmid"])
 
         if windows:
-            # No cloud-init on Windows — IP/gateway/DNS + Administrator password go over the
-            # guest agent, exactly like the deploy's phase [4.5/7]. Without this a rebuilt
-            # Windows box comes up unconfigured and unreachable.
             print(f"    Bootstrapping Windows box {t['ip']} (vmid {t['vmid']})...")
             gw = f"192.168.{t['identifier']}.1"
             driver.bootstrap_windows_box(node, t["vmid"], t["ip"], gw, "8.8.8.8", box_password)
@@ -391,11 +298,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         take_snapshot(node, t["vmid"], SNAP_BASE,
                       description="tezcatlipoca: rebuilt from template, pre-Nakon")
 
-    # run_nakon_and_harden() does the DNS fix + auth setup (Linux-only, filtered inside).
     run_nakon_and_harden(rebuilt, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
-
-    # A rebuilt dc/member box came from a pre-domain template — promote/join it again before
-    # tz-ready is taken, so that snapshot is the complete as-delivered state.
     rerun_domain_configs(rebuilt, ctx, comp_dir, state, nakon_config_path)
 
     print(f"  Snapshotting rebuilt boxes as '{SNAP_READY}'...")
@@ -504,7 +407,6 @@ def main():
         print("  --dry-run: nothing was changed.")
         return
 
-    # Snapshot availability gate — fail before touching anything, with the fallback spelled out.
     needed = {"rollback-ready": SNAP_READY, "rollback-base": SNAP_BASE}.get(args.mode)
     if needed:
         missing = [t for t in targets if needed not in list_snapshots(node, t["vmid"])]
@@ -525,10 +427,6 @@ def main():
 
     ctx = driver.read_terraform_ctx()
 
-    # The Nakon config + bundle are only needed by the modes that actually re-run Nakon.
-    # nakon-config.json is regenerated deterministically if absent: box_services.json and
-    # box_vulns.json are pinned by the time a competition is deployed, so generate_nakon_config()
-    # takes its "pinned" branch and reproduces the same machine list rather than re-randomising.
     nakon_config_path = nakon_bundle = None
     if args.mode in ("rollback-base", "reconfigure", "rebuild"):
         nakon_config_path = comp_dir / "nakon-config.json"
@@ -541,9 +439,6 @@ def main():
                     "every box with it). This mode is unavailable for this competition."
                 )
             print("  nakon-config.json missing — regenerating from the pinned service/vuln sets...")
-            # The themed box login from users.json, same source the deploy itself used —
-            # generate_nakon_config()'s default is a plain 'ubuntu', which breaks nakon's
-            # password auth on every machine for a themed competition.
             box_username, _credlist = load_users_config(comp_dir)
             nakon_config_path = driver.generate_nakon_config(
                 teams, boxes, difficulty, comp_dir, box_password, box_username=box_username

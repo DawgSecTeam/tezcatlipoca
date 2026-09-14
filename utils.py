@@ -1,12 +1,7 @@
 import json
 from pathlib import Path
 
-# Boxes boot with an empty /etc/resolv.conf — cloud-init's dns.servers is silently ignored on
-# Debian once the interface has a static IP. fix_dns_on_boxes() in create-competition.py
-# repairs it: once for team1 in phase 5 (before nakon installs anything, since every install
-# is an apt-get that has to resolve a mirror) and again after clone_team_boxes(), because
-# `cloud-init clean` + reboot regenerates resolv.conf on the clones and undoes the first fix.
-# (The old terraform/scripts/prepare_boxes.py half of this is gone — that script is dead.)
+# cloud-init ignores dns.servers with static IP; fix via resolv.conf + systemd-resolved.
 DNS_FIX_CMD = (
     'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf; '
     'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf.head; '
@@ -16,26 +11,15 @@ DNS_FIX_CMD = (
 )
 
 
-# The account main.tf's initialization.user_account block creates on every box clone (nakon
-# authenticates with a password, not a key, hence a password rather than a key). The
-# *username* used to be a fixed, non-secret constant everywhere; it's now themeable per
-# competition via competitions/<id>/users.json (see load_users_config() below) — these two
-# constants are fallback/reference values only, used when no users.json exists. BOX_PASSWORD
-# is additionally only ever used by quotient/setup.py's build_credlist(), which is itself dead
-# code kept for reference — see its docstring — it is NOT the value any real deployment uses.
+# Fallback when no users.json exists; themeable per competition.
 BOX_USERNAME_DEFAULT = "ubuntu"
 BOX_PASSWORD = "ubuntu"
 CREDLIST_USERNAMES_DEFAULT = ["admin", "user1", "user2"]
 
 
 def load_users_config(comp_dir):
-    """Read competitions/<id>/users.json (optional) for the themeable box login username and
-    the three credlist account names Quotient's Ssh/Smtp/Imap/Sql/Ftp checks authenticate
-    against. Returns (box_username, credlist_usernames), falling back to
-    (BOX_USERNAME_DEFAULT, CREDLIST_USERNAMES_DEFAULT) when the file is absent or a key is
-    missing — every existing competition directory (no users.json) keeps behaving exactly as
-    it did before this config existed.
-    """
+    """Load themeable box login + credlist usernames from users.json, or fall back to defaults."""
+
     path = Path(comp_dir) / "users.json"
     if not path.exists():
         return BOX_USERNAME_DEFAULT, list(CREDLIST_USERNAMES_DEFAULT)
