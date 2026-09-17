@@ -50,6 +50,12 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
         if not promote_dc:
             print(f"  [{team_key}] DC {dc_box['name']} left as-is — (re)joining member "
                   f"box(es) to existing {domain}...")
+        elif (comp_dir / f".nakon-domain-{team_key}-adds.json").exists():
+            # Resume after a mid-phase-6 failure: the promotion artifact means ADDS
+            # already ran for this team — re-running Install-ADDSForest on a live DC
+            # would just fail. Joins below still run (they're the recoverable part).
+            print(f"  [{team_key}] ADDS artifact present — DC {dc_box['name']} assumed "
+                  f"promoted, skipping promotion (resume)")
         else:
             print(f"  [{team_key}] Promoting {dc_box['name']} ({dc_ip}) to a new AD forest "
                   f"({domain})...")
