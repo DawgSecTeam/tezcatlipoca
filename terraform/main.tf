@@ -134,8 +134,8 @@ resource "proxmox_virtual_environment_vm" "team_box" {
     vm_id   = local.template_ids[each.value.box.template] # looked up by name from Packer tag
     full    = true
     retries = 15 # Proxmox locks the source VM; concurrent clones from the same template race for the
-                 # lock and the loser gets a short timeout. 15 retries gives ~2 min of retry budget —
-                 # enough for the winning clone to finish and release the lock before we give up.
+    # lock and the loser gets a short timeout. 15 retries gives ~2 min of retry budget —
+    # enough for the winning clone to finish and release the lock before we give up.
   }
 
   lifecycle {
@@ -157,9 +157,11 @@ resource "proxmox_virtual_environment_vm" "team_box" {
     for_each = each.value.box.disk_gb != null ? [each.value.box.disk_gb] : []
     content {
       datastore_id = var.datastore
-      interface    = "scsi0"
-      size         = disk.value
-      discard      = "on"
+      # coalesce, not try: a missing optional attribute is null (not an error),
+      # so try(null, "scsi0") would return null and fail validation at apply.
+      interface = coalesce(each.value.box.disk_iface, "scsi0")
+      size      = disk.value
+      discard   = "on"
     }
   }
 

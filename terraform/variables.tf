@@ -63,7 +63,8 @@ variable "boxes_per_team" {
     last_octet = number
     cpu        = number
     memory_mb  = number
-    disk_gb    = optional(number) # omit to keep the template's own disk size (no resize)
+    disk_gb    = optional(number) # omit to keep the template's own disk size (no resize). NOTE: omitting it also leaves the disk on the template's storage pool (var.datastore only applies when this block is emitted).
+    disk_iface = optional(string) # interface for the disk block; defaults to scsi0. Set "sata0" for Windows templates that boot from SATA (scsi0 needs virtio-scsi drivers the image may lack).
     template   = string           # e.g. "tmpl-ubuntu-22", "tmpl-debian-12", "tmpl-centos-9"
   }))
   default = [
