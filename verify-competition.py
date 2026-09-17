@@ -528,6 +528,31 @@ def check_misconfig(ctx, boxes):
     return False
 
 
+def report_beacons(ctx, machines):
+    """Report planted raw-socket beacons (informational, not a gate)."""
+    print("\n  (team beacons — informational)")
+    expected = live = 0
+    for m in machines or []:
+        if "win" in (m.get("os") or "").lower():
+            continue
+        expected += 1
+        ip = m.get("ip")
+        name = m.get("name", ip)
+        try:
+            proc = ssh_via_gateway(
+                ctx, ip, "systemctl is-active wda-digest.service 2>/dev/null || true", timeout=30)
+        except (subprocess.TimeoutExpired, CheckError) as e:
+            print(f"  WARN  {name} ({ip}): unreachable ({e})")
+            continue
+        state = (proc.stdout or "").strip()
+        if state == "active":
+            live += 1
+            print(f"  LIVE  {name} ({ip}) — wda-digest.service active")
+        else:
+            print(f"  ....  {name} ({ip}) — no beacon unit running ({state or 'none'})")
+    print(f"  beacons live: {live}/{expected} linux boxes")
+
+
 def check_misconfig_survival(ctx, boxes):
     """Confirm every team's copy of each box carries same verifiable misconfigs (clone race guard)."""
     print("\n  (cross-team misconfig survival check)")
@@ -649,6 +674,7 @@ def main():
     report_healthcheck_status(ctx)
     misconfig_ok = check_misconfig(ctx, boxes)
     misconfig_survival_ok = check_misconfig_survival(ctx, boxes)
+    report_beacons(ctx, boxes)
     injects_relevant, injects_ok = check_injects(base_url, admin_session, comp_dir)
 
     # Exit-code gate: logins + isolation + misconfig + injects (if any). Services are

@@ -54,6 +54,23 @@ def load_compfile(path):
     return name, scenario, difficulty
 
 
+def compfile_flag(path, key, default=0):
+    """Read an integer Compfile knob (e.g. `team_beacons 1`); default when the
+    key or the file is absent, so old Compfiles keep their behavior."""
+    try:
+        with open(path) as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith(key + " "):
+                    try:
+                        return int(stripped.split(" ", 1)[1].strip())
+                    except ValueError:
+                        return default
+    except FileNotFoundError:
+        pass
+    return default
+
+
 def pick_competition(competitions, label="saved", action="Select a competition"):
     print(f"Found {len(competitions)} {label} competition(s):\n")
     for i, comp in enumerate(competitions, 1):

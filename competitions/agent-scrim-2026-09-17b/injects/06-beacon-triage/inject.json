@@ -1,0 +1,7 @@
+{
+  "title": "Outbound beacon and exfil triage",
+  "description_file": "briefing.md",
+  "open_offset_min": 40,
+  "due_offset_min": 65,
+  "close_offset_min": 90
+}
