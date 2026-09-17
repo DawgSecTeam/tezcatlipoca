@@ -63,12 +63,15 @@ def fix_dns_on_boxes(targets, ctx):
         )
 
 
-def fix_services_on_boxes(comp_dir, targets, ctx, box_creds=None):
+def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
     """Post-nakon service hardening (bind address, mail, ftp, dns, etc).
-    Credlist accounts must match push_event_conf's linux.credlist.
+
+    box_creds is required — the same per-run secrets deploy() passed to push_event_conf(); a
+    fallback literal here would recreate the accounts with passwords Quotient's credlist
+    checks don't know, scoring healthy boxes as down.
     """
 
-    creds = box_creds or {"admin": "changeme123", "user1": "password1", "user2": "password2"}
+    creds = box_creds
     cred_items = list(creds.items())
 
     node = os.environ["TF_VAR_proxmox_node"]

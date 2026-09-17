@@ -20,12 +20,6 @@ variable "vm_username" {
   default     = "sysadmin"
 }
 
-variable "quotient_admin_password" {
-  description = "Password baked into event.conf's admin account (username 'admin'). Orchestration logs in with this after Quotient boots to obtain an API token — you choose this value, no need to know anything from inside Quotient ahead of time."
-  type        = string
-  sensitive   = true
-}
-
 variable "box_username" {
   description = "Username for the cloud-init account created on every team box clone. Themeable per competition via competitions/<id>/users.json (see utils.load_users_config()) — create-competition.py writes this into TF_VAR_box_username; defaults to 'ubuntu' when no users.json exists."
   type        = string

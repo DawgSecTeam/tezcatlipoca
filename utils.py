@@ -13,7 +13,6 @@ DNS_FIX_CMD = (
 
 # Fallback when no users.json exists; themeable per competition.
 BOX_USERNAME_DEFAULT = "ubuntu"
-BOX_PASSWORD = "ubuntu"
 CREDLIST_USERNAMES_DEFAULT = ["admin", "user1", "user2"]
 
 

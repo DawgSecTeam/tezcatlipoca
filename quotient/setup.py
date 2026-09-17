@@ -11,8 +11,6 @@ from pathlib import Path
 
 import requests
 
-from utils import BOX_PASSWORD, BOX_USERNAME_DEFAULT
-
 # Maps a nakon service name to its Quotient check key + config dict.
 # Keys and field names must match Quotient's Go struct TOML tags exactly (case-sensitive
 # for the check-type key on Box; field names are matched case-insensitively by BurntSushi).
@@ -146,13 +144,6 @@ def _normalize_host(host: str) -> str:
     if host.startswith("http://") or host.startswith("https://"):
         return host.rstrip("/")
     return f"http://{host}"
-
-
-def build_credlist() -> str:
-    """Credlist CSV for Quotient login checks. Retained for reference;
-    live deploys write linux.credlist inline via push_event_conf.
-    """
-    return f"{BOX_USERNAME_DEFAULT},{BOX_PASSWORD}\n"
 
 
 def _wait_for_quotient(host: str) -> None:
