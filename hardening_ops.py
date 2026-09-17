@@ -346,4 +346,19 @@ def setup_ubuntu_auth(targets, ctx):
                     print(f"    Auth attempt {attempt}/8 failed for {ip}, retrying in 15s...")
                     time.sleep(15)
                 else:
-                    print(f"  WARNING: Auth setup failed for {ip} after 8 attempts — proceeding anyway")
+                    # Planted misconfigs (writable-sudoers et al) break sudo for this path;
+                    # retry once as root via the guest agent — the same fallback service
+                    # hardening uses — instead of burning 2 minutes and moving on.
+                    print(f"    Auth setup failed for {ip} after 8 attempts — retrying via guest agent (root)...")
+                    vmid = t["vmid"]
+                    root_script = re.sub(r"\bsudo ", "", auth_cmd)
+                    try:
+                        rc, out, err = guest_agent_exec_root(
+                            os.environ["TF_VAR_proxmox_node"], vmid, root_script, timeout=120)
+                        if rc == 0:
+                            print(f"    Auth configured on {ip} (via guest agent)")
+                        else:
+                            print(f"    WARNING: Auth setup still failing on {ip} via guest agent: "
+                                  f"rc={rc} {err.strip()[:200]} — proceeding anyway")
+                    except Exception as e:
+                        print(f"    WARNING: Auth guest-agent fallback failed for {ip} (vmid {vmid}): {e} — proceeding anyway")
