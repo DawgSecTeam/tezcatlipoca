@@ -320,18 +320,16 @@ def ensure_nat_forwarding(ctx):
     print("  NAT/forwarding ensured on scoring engine")
 
 
-def push_event_conf(comp_dir, teams, boxes, ctx, event_name, inject_password=None,
-                    admin_password="changeme123", postgres_password="postgres_password",
-                    redis_password="redis_password", box_creds=None):
+def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
+                    postgres_password, redis_password, box_creds, inject_password=None):
     """Build event.conf and push it to the scoring engine.
 
-    postgres_password / redis_password come from deploy() so the .env rewritten here matches the
-    one bootstrap_scoring_engine() wrote — Postgres and the app must agree on the same secret.
-
-    box_creds ({"admin": ..., "user1": ..., "user2": ...}) is the credlist content Quotient's
-    Ssh/Smtp/Imap/Sql/Ftp checks authenticate WITH — it has to name accounts that really exist
-    on the boxes, i.e. exactly what fix_services_on_boxes() creates there. Falls back to the
-    legacy fixed literals only if not supplied (keeps this callable standalone / from tests).
+    admin_password / postgres_password / redis_password / box_creds come from deploy() — the
+    same per-run secrets passed to bootstrap_scoring_engine() (so the .env rewritten here
+    matches the one it wrote; Postgres and the app must agree) and to fix_services_on_boxes()
+    (which creates these OS accounts on the boxes). box_creds ({"admin": ..., "user1": ...})
+    is what Quotient's Ssh/Smtp/Imap/Sql/Ftp credlist checks authenticate WITH; any mismatch
+    or stale fallback literal silently scores healthy boxes as down, so there are no defaults.
     """
 
     key = ctx["ssh_key_path"]
@@ -370,8 +368,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, inject_password=Non
     # Write credlist. box_creds names the SAME accounts fix_services_on_boxes() creates on every
     # box — the two have to agree or every credlist-based check (Ssh/Smtp/Imap/Sql/Ftp) scores a
     # healthy box as down.
-    creds = box_creds or {"admin": "changeme123", "user1": "password1", "user2": "password2"}
-    credlist = "".join(f"{user},{pw}\n" for user, pw in creds.items())
+    credlist = "".join(f"{user},{pw}\n" for user, pw in box_creds.items())
     credlist_b64 = base64.b64encode(credlist.encode()).decode()
     subprocess.run(
         [

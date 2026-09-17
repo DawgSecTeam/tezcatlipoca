@@ -168,8 +168,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
         # — passwords generated fresh per competition, same as admin/postgres/redis above,
         # instead of the fixed ubuntu/ubuntu + admin/changeme123 literals this used to ship
         # with. A fixed value across every deployment is guessable from this open-source repo,
-        # or from fingerprinting a past deploy — see utils.py's BOX_USERNAME_DEFAULT/BOX_PASSWORD
-        # comment.
+        # or from fingerprinting a past deploy — see utils.py's BOX_USERNAME_DEFAULT comment.
         box_password = random_password()
         box_creds = {name: random_password() for name in credlist_usernames}
         inject_password = random_password() if injects else None
