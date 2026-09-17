@@ -1,0 +1,20 @@
+{
+  "dc01": [
+    "Enable WinRM"
+  ],
+  "win01": [
+    "Enable WinRM",
+    "New SMB Share",
+    "RDP misconfigs"
+  ],
+  "web01": [
+    "nginx"
+  ],
+  "app01": [
+    "apache",
+    "bind"
+  ],
+  "db01": [
+    "mysql"
+  ]
+}

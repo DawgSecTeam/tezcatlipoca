@@ -1,0 +1,4 @@
+name agent-scrim-2026-09-17b
+scenario Practice competition for agent blue teams. Meridian Health's regional care network is under a Code Silver cyber incident: the Windows domain controller (dc01, fresh AD forest per team) and its four domain-joined members (win01 ward workstation, web01 patient portal, app01 imaging/DNS, db01 records database) are riddled with Wardline crew persistence - rogue admins, backdoor services, planted credentials, exposed databases, loosened policies, covert raw-socket beacons, and piles of weaker low-visibility misconfigs. Hunt down the planted misconfigurations and adversary artifacts while keeping the scored services alive. Two teams defend identical, isolated copies of the network.
+difficulty 10
+team_beacons 1

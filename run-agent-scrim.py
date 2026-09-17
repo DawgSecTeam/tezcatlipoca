@@ -20,8 +20,9 @@ Born from the agent-scrim-2026-09-16 debrief; bake-in lessons:
 Usage:
   python3 run-agent-scrim.py --competition agent-scrim-2026-09-16 \
       [--new NAME --from-template DIR] [--teams 2] [--duration-min 90]
-      [--blue-model openai/gpt-4o-mini] [--red-model openai/gpt-4o-mini]
-      [--llm-base-url https://openrouter.ai/api/v1] [--skip-deploy] [--keep-range]
+      [--blue-model openai/gpt-5.6-luna] [--red-model openai/gpt-5.6-luna]
+      [--reasoning-effort minimal] [--llm-base-url https://openrouter.ai/api/v1]
+      [--skip-deploy] [--keep-range]
       [--resume-from deploy|blues|red|run|teardown]
 
 Requires: .env (TF_VAR_*), vendor/nakon v0.1.4+, bad-auto checkout next to this
@@ -122,7 +123,7 @@ OPENCODE_PROJECT_CFG = """{
       "models": {
         "{MODEL_ID}": {
           "name": "{MODEL_ID}",
-          "limit": { "context": {CTX}, "output": {OUT} }
+          "limit": { "context": {CTX}, "output": {OUT} }{EFFORT}
         }
       }
     }
@@ -162,9 +163,11 @@ def stage_author(args):
             subprocess.run(["cp", "-r", str(item), str(dst / item.name)], check=True)
         else:
             (dst / item.name).write_bytes(item.read_bytes())
-    for item in (src / "injects").iterdir() if (src / "injects").exists() else []:
-        subprocess.run(["cp", "-r", str(item), str(dst / "injects" / item.name)], check=True)
-    (dst / "injects").mkdir(exist_ok=True)
+    injects_src = src / "injects"
+    if injects_src.exists():
+        (dst / "injects").mkdir(exist_ok=True)
+        for item in injects_src.iterdir():
+            subprocess.run(["cp", "-r", str(item), str(dst / "injects" / item.name)], check=True)
     compfile = (dst / "Compfile").read_text().splitlines()
     compfile[0] = f"name {args.new}"
     (dst / "Compfile").write_text("\n".join(compfile) + "\n")
@@ -206,7 +209,7 @@ def stage_deploy(args, comp):
 
 def stage_verify(args, comp, creds):
     log("verify-competition + fire test")
-    r = run(["python3", "verify-competition.py", comp.name,
+    r = run(["python3", "verify-competition.py", str(comp.relative_to(REPO)),
              "--engine-ip", creds["ENGINE_IP"], "--admin-password", creds["ADMIN_PW"]],
             cwd=REPO, timeout=1800, check=False)
     print("\n".join((r.stdout or "").splitlines()[-25:]))
@@ -281,7 +284,8 @@ def stage_blues(args, comp, run_dir, creds, t0):
             .replace("{BASE_URL}", args.llm_base_url)
             .replace("{API_KEY_FIELD}", "{env:OPENROUTER_API_KEY}")
             .replace("{MODEL_ID}", blue_model)
-            .replace("{CTX}", "120000").replace("{OUT}", "16000"))
+            .replace("{CTX}", "120000").replace("{OUT}", "16000")
+            .replace("{EFFORT}", effort_json(args.reasoning_effort)))
     log("blue workdirs ready")
 
 
@@ -305,9 +309,18 @@ def provider_key(args):
     return "openrouter" if "openrouter" in args.llm_base_url else "scrim-llm"
 
 
+def effort_json(effort):
+    """opencode.jsonc fragment requesting a reasoning effort for the model."""
+    if not effort:
+        return ""
+    return f',\n          "options": {{ "reasoning_effort": "{effort}" }}'
+
+
 def status_text(creds, team):
     """Compact plain-text scoreboard for the cycle prompt."""
-    jar = "/tmp/scrim-status-jar"
+    # Per-call jar: this runs concurrently from the monitor thread and both blue
+    # feed loops; a shared jar lets one login clobber another's session cookie.
+    jar = f"/tmp/scrim-status-jar.{team}.{threading.get_ident()}"
     subprocess.run(["curl", "-s", "--max-time", "15", "-c", jar, "-X", "POST",
                     f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
                     "-d", json.dumps({"username": team, "password": creds[team.upper() + "_PW"]})],
@@ -367,11 +380,18 @@ def blue_feed_loop(n, args, creds, t0, stop):
         wd = Path(args.run_dir) / f"blue-team{n}"
         env = {**os.environ, "OPENROUTER_API_KEY": api_key()}
         try:
+            prompt = blue_cycle_prompt(n, creds, args, elapsed, remain)
+            cycles = wd / "cycles"
+            cycles.mkdir(exist_ok=True)
             r = subprocess.run(["opencode", "run", "-m",
                                 f"{provider_key(args)}/{args.blue_model}", "--auto",
-                                blue_cycle_prompt(n, creds, args, elapsed, remain)],
+                                prompt],
                                cwd=wd, env=env, capture_output=True, text=True, timeout=1500)
             out = re.sub(r"\x1b\[[0-9;]*m", "", (r.stdout or "") + (r.stderr or ""))
+            # full transcript + exact prompt kept for the after-action report;
+            # feed.log stays a short readable tail
+            (cycles / f"cycle-T+{elapsed:03d}.prompt.txt").write_text(prompt)
+            (cycles / f"cycle-T+{elapsed:03d}.output.log").write_text(out)
             (wd / "feed.log").open("a").write(f"\n===== cycle T+{elapsed} rc={r.returncode} =====\n{out[-2000:]}\n")
             log(f"blue-team{n} cycle T+{elapsed} rc={r.returncode}")
         except subprocess.TimeoutExpired:
@@ -386,22 +406,29 @@ def monitor_loop(args, creds, t0, stop):
         time.sleep(900)
         if stop.is_set():
             break
-        snap = {t: status_text(creds, t) for t in ("team1", "team2")}
+        try:
+            snap = {t: status_text(creds, t) for t in ("team1", "team2")}
+        except Exception as e:
+            log(f"monitor snapshot failed: {e}")
+            continue
         (Path(args.run_dir) / "monitor.log").open("a").write(
             f"\n#### T+{int((time.time()-t0)/60)}min {time.strftime('%H:%M')}\n" +
             "\n".join(f"{t}:\n{s}" for t, s in snap.items()))
         log("monitor snapshot written")
 
 
-def stage_red(args, comp, creds):
+def stage_red(args, comp, creds, run_dir):
+    llm = {"base_url": args.llm_base_url, "model": args.red_model,
+           "max_tokens": 4096, "timeout": 240}
+    if args.reasoning_effort:
+        llm["reasoning_effort"] = args.reasoning_effort
     cfg = {
-        "llm": {"base_url": args.llm_base_url, "model": args.red_model,
-                "max_tokens": 4096, "timeout": 240},
+        "llm": llm,
         "intel": "nakon",
         "competition_dir": str(comp.resolve()),
         "event": {"duration_min": args.duration_min},
-        "pacing": {"profile": "deadline", "decision_window_min": 4, "window_jitter_min": 1,
-                   "active_burst_min": 5, "burst_jitter_min": 2, "quiet_min": 4, "quiet_jitter_min": 2,
+        "pacing": {"profile": "deadline", "decision_window_min": 3, "window_jitter_min": 1,
+                   "active_burst_min": 8, "burst_jitter_min": 2, "quiet_min": 2, "quiet_jitter_min": 1,
                    "focus_rotation_min": max(10, args.duration_min // 8),
                    "max_concurrent_down_start": 1, "max_concurrent_down_end": 3,
                    "max_concurrent_down_endgame": 4, "access_deadline_remaining_min": args.duration_min // 4,
@@ -409,10 +436,17 @@ def stage_red(args, comp, creds):
                    "endgame_decision_window_sec": 60, "endgame_force_active": True,
                    "min_standing_services": 2, "credlist_gate_min": args.duration_min // 4,
                    "credlist_max_per_team": 1, "lockout_gate_pct": 0.75},
+        "limits": {"nmap_timing": "T3", "nmap_top_ports": 200,
+                   "max_retries_per_service": 4, "spray_attempts_per_target": 24,
+                   "action_timeout": 120, "scan_timeout": 900},
         "deploy": {"red_ip": "10.0.0.198", "red_gw": "10.0.0.1", "red_storage": "hdd"},
     }
     (BAD_AUTO / "config.yaml").write_text(json.dumps(cfg, indent=2))
-    env = {**os.environ, "BAuto_LLM_API_KEY": api_key()}
+    # Operator-side bad-auto runs (validate/dry-run/deploy bookkeeping) need a writable
+    # state dir — the VM's own config hardcodes /var/lib/bad-auto inside red01, so this
+    # override only affects the host side.
+    env = {**os.environ, "BAuto_LLM_API_KEY": api_key(),
+           "BAuto_STATE_DIR": str(Path(run_dir) / "bad-auto-state")}
     run(["python3", "-m", "badauto", "validate-llm"], cwd=BAD_AUTO, env=env, timeout=300, tail=3)
     run(["python3", "-m", "badauto", "run", "--once", "--dry-run",
          "--competition", str(comp.resolve())], cwd=BAD_AUTO, env=env, timeout=600, tail=6)
@@ -436,20 +470,34 @@ def stage_run(args, creds, t0):
             t.join(timeout=10)
 
 
+def _quotient_login(args_ev, creds, user, pw_key):
+    jar = args_ev / f".jar-{user}"
+    subprocess.run(["curl", "-s", "--max-time", "15", "-c", str(jar), "-X", "POST",
+                    f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
+                    "-d", json.dumps({"username": user, "password": creds[pw_key]})],
+                   capture_output=True)
+    return jar
+
+
 def stage_capture(args, creds):
     log("capturing final evidence")
     ev = Path(args.run_dir) / "evidence"
     ev.mkdir(parents=True, exist_ok=True)
+    # Capture runs after the event window closes, when Quotient has invalidated
+    # team sessions — authenticate as admin (valid post-event, sees all teams),
+    # falling back to the team login if the admin fetch is rejected.
+    admin_jar = _quotient_login(ev, creds, "admin", "ADMIN_PW")
     for team in ("team1", "team2"):
-        jar = ev / f".jar-{team}"
-        subprocess.run(["curl", "-s", "--max-time", "15", "-c", str(jar), "-X", "POST",
-                        f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
-                        "-d", json.dumps({"username": team, "password": creds[team.upper() + "_PW"]})],
-                       capture_output=True)
-        r = subprocess.run(["curl", "-s", "--max-time", "15", "-b", str(jar),
-                            f"http://{creds['ENGINE_IP']}/api/services/{creds[team.upper() + '_ID']}"],
+        url = f"http://{creds['ENGINE_IP']}/api/services/{creds[team.upper() + '_ID']}"
+        r = subprocess.run(["curl", "-s", "--max-time", "15", "-b", str(admin_jar), url],
                            capture_output=True, text=True)
-        (ev / f"final-services-{team}.json").write_text(r.stdout)
+        if '"error"' in (r.stdout or ""):
+            team_jar = _quotient_login(ev, creds, team, team.upper() + "_PW")
+            r = subprocess.run(["curl", "-s", "--max-time", "15", "-b", str(team_jar), url],
+                               capture_output=True, text=True)
+        (ev / f"final-services-{team}.json").write_text(r.stdout or "")
+        if '"error"' in (r.stdout or ""):
+            log(f"WARNING: {team} services capture failed: {(r.stdout or '')[:120]}")
     # pause scoring (best-effort) to freeze the final state
     jar = ev / ".jar-admin"
     subprocess.run(["curl", "-s", "--max-time", "15", "-c", str(jar), "-X", "POST",
@@ -461,9 +509,64 @@ def stage_capture(args, creds):
                     "-H", "Content-Type: application/json", "-d", '{"pause": true}'],
                    capture_output=True)
     log("engine paused (best-effort); services JSON captured")
+    # Blue-side deliverables into evidence/: logs, transcripts, submissions
+    for n in (1, 2):
+        src = Path(args.run_dir) / f"blue-team{n}"
+        dst = ev / f"blue-team{n}"
+        if not src.exists():
+            continue
+        dst.mkdir(parents=True, exist_ok=True)
+        for name in ("LOG.md", "feed.log"):
+            if (src / name).exists():
+                shutil_copy(src / name, dst / name)
+        for pattern in ("sub-*.md", "sub-*.txt"):
+            for f in src.glob(pattern):
+                shutil_copy(f, dst / f.name)
+        for sub in ("submissions", "cycles"):
+            if (src / sub).is_dir():
+                subprocess.run(["cp", "-r", str(src / sub), str(dst / sub)], check=False)
+    log("blue evidence collected")
 
 
-def stage_teardown(args):
+def pull_red_evidence(args):
+    """Fetch the red agent's on-VM state before badauto destroy erases it.
+
+    red01 is reachable from the operator host (same path bad-auto's own deploy
+    uses); its events.jsonl is the only complete record of what red did.
+    """
+    ev = Path(args.run_dir) / "evidence" / "red"
+    ev.mkdir(parents=True, exist_ok=True)
+    red_ip = "10.0.0.198"
+    try:
+        red_ip = json.loads((BAD_AUTO / "config.yaml").read_text())["deploy"]["red_ip"]
+    except Exception:
+        pass
+    key = str(REPO / "proxmox")
+    user = os.environ.get("TF_VAR_vm_username", "sysadmin")
+    opts = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=10", "-i", key]
+    log(f"pulling red evidence from {user}@{red_ip} before destroy")
+    for remote, local in (("/var/lib/bad-auto/events.jsonl", "events.jsonl"),
+                          ("/var/lib/bad-auto/world.json", "world.json")):
+        subprocess.run(["scp"] + opts + [f"{user}@{red_ip}:{remote}", str(ev / local)],
+                       capture_output=True, timeout=60)
+    r = subprocess.run(["ssh"] + opts + [f"{user}@{red_ip}",
+                        "sudo -n journalctl -u bad-auto --no-pager 2>/dev/null || "
+                        "journalctl -u bad-auto --no-pager 2>/dev/null || true"],
+                       capture_output=True, text=True, timeout=60)
+    if r.stdout.strip():
+        (ev / "bad-auto-journal.log").write_text(r.stdout)
+    got = sorted(p.name for p in ev.iterdir() if p.stat().st_size > 0)
+    log(f"red evidence captured: {got}")
+    return ev
+
+
+def stage_teardown(args, creds=None):
+    if creds:
+        try:
+            pull_red_evidence(args)
+        except Exception as e:
+            log(f"WARNING: red evidence pull failed: {e}")
     log("teardown: red01 + NAT")
     env = {**os.environ, "BAuto_LLM_API_KEY": api_key()}
     run(["python3", "-m", "badauto", "destroy"], cwd=BAD_AUTO, env=env, timeout=900, check=False)
@@ -484,8 +587,10 @@ def main():
     p.add_argument("--from-template", default=None)
     p.add_argument("--teams", type=int, default=2)
     p.add_argument("--duration-min", type=int, default=90)
-    p.add_argument("--blue-model", default="openai/gpt-4o-mini", help="cheap cloud model for blue agents")
-    p.add_argument("--red-model", default="openai/gpt-4o-mini", help="cheap cloud model for bad-auto")
+    p.add_argument("--blue-model", default="openai/gpt-5.6-luna", help="cheap cloud model for blue agents")
+    p.add_argument("--red-model", default="openai/gpt-5.6-luna", help="cheap cloud model for bad-auto")
+    p.add_argument("--reasoning-effort", default="minimal",
+                   help="reasoning effort sent to the LLM (GPT-5.x/o-series); '' disables")
     p.add_argument("--llm-base-url", default="https://openrouter.ai/api/v1")
     p.add_argument("--skip-deploy", action="store_true", help="competition already at phase 7")
     p.add_argument("--from-phase", dest="resume", type=int, default=None,
@@ -512,16 +617,20 @@ def main():
     creds = creds_from_files(comp)
     log(f"engine {creds['ENGINE_IP']}, teams {[(k, v['identifier']) for k, v in json.loads((comp / 'teams.json').read_text()).items()]}")
 
+    if not (comp / "packet.md").exists():
+        log("packet.md missing — generating")
+        run(["python3", "generate-packet.py", str(comp)], cwd=REPO, timeout=120)
+
     stage_verify(args, comp, creds)
     stage_blues(args, comp, run_dir, creds, time.time())
 
     log("T0 — starting red, then feeding blues")
     t0 = time.time()
-    stage_red(args, comp, creds)
+    stage_red(args, comp, creds, run_dir)
     stage_run(args, creds, t0)
 
     stage_capture(args, creds)
-    stage_teardown(args)
+    stage_teardown(args, creds)
     log("DONE — reports: run-agent-scrim output above + run_dir evidence; write FINDINGS from blue logs and bad-auto events")
 
 

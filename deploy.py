@@ -10,6 +10,7 @@ from pathlib import Path
 import urllib3
 from dotenv import load_dotenv
 
+from beacon_ops import plant_team_beacons
 from clone_ops import clone_team_boxes
 from config_ops import (
     _prompt_difficulty,
@@ -39,7 +40,7 @@ from nakon_ops import build_nakon_bundle, generate_nakon_config, run_nakon
 from quotient.setup import create_injects, seed_teams, unpause_engine
 from range_ops import destroy_vm_if_exists, enumerate_targets, take_snapshot, vm_id_for
 from ssh_ops import read_terraform_ctx, wait_for_boxes_ssh, wait_for_cloud_init, wait_for_http, wait_for_ssh
-from utils import load_compfile, load_users_config
+from utils import compfile_flag, load_compfile, load_users_config
 from windows_ops import bootstrap_windows_box, is_windows_template
 
 ENV_PATH = Path(".env")
@@ -366,6 +367,12 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             print("  Configuring Windows AD domains (if any)...")
             deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path,
                                            key, scoring_user, scoring_ip, box_password)
+
+            # Optional hunt artifacts (Compfile: team_beacons 1) — planted before
+            # the tz-ready snapshot so clones and restore points carry them.
+            if compfile_flag(comp_dir / "Compfile", "team_beacons"):
+                print("  Planting team beacons (hunt artifacts)...")
+                plant_team_beacons(teams, boxes, ctx, box_username=box_username)
 
             print(f"  Snapshotting all boxes as '{SNAP_READY}' (as-delivered restore point)...")
             for t in all_targets:
