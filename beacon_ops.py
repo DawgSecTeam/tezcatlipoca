@@ -61,13 +61,19 @@ def _scp_to_box(ctx, box_username, ip, src, dst):
         capture_output=True, text=True, timeout=120)
 
 
-def _ssh_box(ctx, box_username, ip, cmd, timeout=90):
-    return subprocess.run(
-        ["ssh", "-i", ctx["ssh_key_path"],
-         "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-         "-o", "ConnectTimeout=10", "-o", f"ProxyCommand={_gateway_proxy(ctx)}",
-         f"{box_username}@{ip}", cmd],
-        capture_output=True, text=True, timeout=timeout)
+def _ssh_box(ctx, box_username, ip, cmd, timeout=90, sudo_password=None):
+    """Run cmd on a team box via the gateway. With sudo_password, cmd runs as
+    root via `sudo -S bash -s` (password + script on stdin) — needed because the
+    planted writable-sudoers misconfig breaks passwordless sudo on some boxes."""
+    ssh_cmd = ["ssh", "-i", ctx["ssh_key_path"],
+               "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+               "-o", "ConnectTimeout=10", "-o", f"ProxyCommand={_gateway_proxy(ctx)}",
+               f"{box_username}@{ip}"]
+    if sudo_password is not None:
+        ssh_cmd.append("sudo -S -p '' bash -s")
+        return subprocess.run(ssh_cmd, input=sudo_password + "\n" + cmd,
+                              capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(ssh_cmd, input=cmd, capture_output=True, text=True, timeout=timeout)
 
 
 def _unit(unit_name, box_name, target_ip, interval):
@@ -86,7 +92,7 @@ def _unit(unit_name, box_name, target_ip, interval):
     )
 
 
-def plant_team_beacons(teams, boxes, ctx, box_username="ubuntu"):
+def plant_team_beacons(teams, boxes, ctx, box_username="ubuntu", box_password=None):
     """Install beacons on every (team, linux box in BEACON_INTERVALS). Warns and
     continues per box; beacons are scenario flavor and must never abort a deploy."""
     from range_ops import enumerate_targets
@@ -110,33 +116,46 @@ def plant_team_beacons(teams, boxes, ctx, box_username="ubuntu"):
                 r = _scp_to_box(ctx, box_username, ip, binary, "/tmp/.wda-b")
                 if r.returncode != 0:
                     raise RuntimeError(f"scp failed: {(r.stderr or '').strip()[-150:]}")
-                build_step = f"sudo install -m 755 /tmp/.wda-b {REMOTE_BIN}"
+                build_step = f"install -m 755 /tmp/.wda-b {REMOTE_BIN}"
             else:
                 r = _scp_to_box(ctx, box_username, ip, BEACON_SRC, "/tmp/.wda.c")
                 if r.returncode != 0:
                     raise RuntimeError(f"scp failed: {(r.stderr or '').strip()[-150:]}")
                 build_step = (
                     "command -v cc >/dev/null || command -v gcc >/dev/null || "
-                    "(sudo apt-get update -qq && sudo apt-get install -y -qq gcc) ; "
+                    "(apt-get update -qq && apt-get install -y -qq gcc) ; "
                     "cc -O2 -std=gnu99 -o /tmp/.wda-b /tmp/.wda.c 2>/dev/null "
                     "|| gcc -O2 -std=gnu99 -o /tmp/.wda-b /tmp/.wda.c ; "
-                    f"sudo install -m 755 /tmp/.wda-b {REMOTE_BIN}"
+                    f"install -m 755 /tmp/.wda-b {REMOTE_BIN}"
                 )
-            script = (
+            install_script = (
                 "set -e\n"
-                f"sudo mkdir -p {REMOTE_DIR}\n"
+                f"mkdir -p {REMOTE_DIR}\n"
                 f"{build_step}\n"
-                f"printf 'C2={gw}:{BEACON_PORT}\\nagent=wardline-{name}\\n' | sudo tee /etc/.sysmon.conf >/dev/null\n"
-                "sudo chmod 644 /etc/.sysmon.conf\n"
-                "sudo tee /etc/systemd/system/" + UNIT_NAME + " > /dev/null << 'UNITEOF'\n"
+                f"printf 'C2={gw}:{BEACON_PORT}\\nagent=wardline-{name}\\n' | tee /etc/.sysmon.conf >/dev/null\n"
+                "chmod 644 /etc/.sysmon.conf\n"
+                "tee /etc/systemd/system/" + UNIT_NAME + " > /dev/null << 'UNITEOF'\n"
                 + unit + "UNITEOF\n"
-                "sudo systemctl daemon-reload\n"
-                f"sudo systemctl enable --now {UNIT_NAME} >/dev/null 2>&1 || true\n"
+                "systemctl daemon-reload\n"
+                f"systemctl enable --now {UNIT_NAME} >/dev/null 2>&1 || true\n"
                 "sleep 1\n"
                 f"systemctl is-active {UNIT_NAME} || true\n"
                 "rm -f /tmp/.wda-b /tmp/.wda.c\n"
             )
-            r = _ssh_box(ctx, box_username, ip, script, timeout=300)
+            # Ship the script as a FILE and run it via `sudo -S bash <file>`:
+            # with the password on stdin, sudo consumes it only when prompted —
+            # when NOPASSWD applies the stdin line is unused, so the script must
+            # not travel on stdin or the password line would execute as a command
+            # on boxes where the planted writable-sudoers misconfig broke
+            # passwordless sudo.
+            local_script = BUILD_DIR / "wda-install.sh"
+            local_script.write_text(install_script)
+            r = _scp_to_box(ctx, box_username, ip, local_script, "/tmp/.wda-install.sh")
+            if r.returncode != 0:
+                raise RuntimeError(f"scp failed: {(r.stderr or '').strip()[-150:]}")
+            r = _ssh_box(ctx, box_username, ip, "sudo -S -p '' bash /tmp/.wda-install.sh",
+                         timeout=300, sudo_password=box_password)
+            _ssh_box(ctx, box_username, ip, "rm -f /tmp/.wda-install.sh", timeout=30)
             active = (r.stdout or "").strip().splitlines()[-1:] or ["?"]
             if active[0] == "active":
                 planted += 1

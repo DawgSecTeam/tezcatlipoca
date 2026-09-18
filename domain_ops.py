@@ -5,13 +5,42 @@ import os
 
 from constants import WINDOWS_ADMIN_USER
 from nakon_ops import _run_single_nakon_config
-from range_ops import vm_id_for, wait_for_guest_agent
+from range_ops import (
+    guest_agent_exec_root,
+    guest_agent_exec_windows,
+    vm_id_for,
+    wait_for_guest_agent,
+)
 from windows_ops import (
     dns_repoint_windows_box,
     is_windows_template,
     wait_for_dc_dns,
     wait_for_windows_sshd,
 )
+
+
+def _probe_joined(node, member_box, member_vmid, domain):
+    """Live membership probe via the guest agent (root truth, no SSH needed).
+    Joins are not idempotent (`realm join`/Add-Computer on an already-joined
+    member fails and the single-config pass is strict), so resumes must skip
+    members that are already in the domain."""
+    try:
+        if is_windows_template(member_box["template"]):
+            rc, out, _ = guest_agent_exec_windows(
+                node, member_vmid,
+                "(Get-WmiObject Win32_ComputerSystem).PartOfDomain; "
+                "(Get-WmiObject Win32_ComputerSystem).Domain", timeout=60)
+            lines = [l.strip() for l in (out or "").splitlines() if l.strip()]
+            return len(lines) >= 1 and lines[0].lower() == "true" \
+                and len(lines) >= 2 and lines[1].lower() == domain.lower()
+        rc, out, _ = guest_agent_exec_root(
+            node, member_vmid,
+            f"realm list 2>/dev/null | grep -qi 'domain-name: *{domain}' "
+            f"&& echo JOINED || echo NOT", timeout=60)
+        return "JOINED" in (out or "")
+    except Exception as e:
+        print(f"      (membership probe failed, will attempt join: {e})")
+        return False
 
 
 def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scoring_user,
@@ -112,6 +141,10 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
             member_ip = member_machine["ip"]
 
             if is_windows_template(member_box["template"]):
+                if _probe_joined(node, member_box, member_vmid, domain):
+                    print(f"  [{team_key}] {member_box['name']} already joined to {domain} — "
+                          f"skipping join (resume)")
+                    continue
                 print(f"  [{team_key}] Repointing {member_box['name']}'s DNS at "
                       f"{dc_box['name']} ({dc_ip}) so it can find the domain...")
                 dns_repoint_windows_box(node, member_vmid, dc_ip)
@@ -135,17 +168,30 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                 wait_for_windows_sshd(node, member_vmid, timeout=180)
             else:
                 # Linux member via realmd/sssd (no reboot, no separate DNS repoint).
+                if _probe_joined(node, member_box, member_vmid, domain):
+                    print(f"  [{team_key}] Linux member {member_box['name']} already joined to "
+                          f"{domain} — skipping join (resume)")
+                    continue
                 print(f"  [{team_key}] Joining Linux member {member_box['name']} ({member_ip}) "
                       f"to {domain} via realmd/sssd...")
-                _run_single_nakon_config(
-                    member_machine,
-                    [{"name": "domain-join", "vars": {
-                        "DOMAIN": domain,
-                        "DC_IP": dc_ip,
-                        "DOMAIN_ADMIN_USER": WINDOWS_ADMIN_USER,
-                        "DOMAIN_ADMIN_PASS": box_password,
-                        "BOX_HOSTNAME": member_box["name"],
-                    }}],
-                    key, scoring_user, scoring_ip, comp_dir,
-                    tag=f"{team_key}-{member_box['name']}-join",
-                )
+                try:
+                    _run_single_nakon_config(
+                        member_machine,
+                        [{"name": "domain-join", "vars": {
+                            "DOMAIN": domain,
+                            "DC_IP": dc_ip,
+                            "DOMAIN_ADMIN_USER": WINDOWS_ADMIN_USER,
+                            "DOMAIN_ADMIN_PASS": box_password,
+                            "BOX_HOSTNAME": member_box["name"],
+                        }}],
+                        key, scoring_user, scoring_ip, comp_dir,
+                        tag=f"{team_key}-{member_box['name']}-join",
+                        strict=False,
+                    )
+                except Exception as e:
+                    # A failed linux join is scenario flavor (the box keeps local auth
+                    # and every scored service), not range infrastructure — the apt
+                    # install of the realmd stack can blow past nakon's per-step
+                    # timeout on small VMs. Log loudly and keep deploying.
+                    print(f"  WARNING: [{team_key}] {member_box['name']} domain-join failed "
+                          f"— continuing ({str(e)[:160]})")
