@@ -22,6 +22,7 @@ Usage:
       [--new NAME --from-template DIR] [--teams 2] [--duration-min 90]
       [--blue-model openai/gpt-5.6-luna] [--red-model openai/gpt-5.6-luna]
       [--reasoning-effort minimal] [--llm-base-url https://openrouter.ai/api/v1]
+      [--blue-base-url http://100.64.0.9:8080/v1]
       [--skip-deploy] [--keep-range]
       [--resume-from deploy|blues|red|run|teardown]
 
@@ -157,7 +158,10 @@ def stage_author(args):
     log(f"authoring {dst} from template {src}")
     (REPO / "competitions" / args.new).mkdir(parents=True)
     for item in src.iterdir():
-        if item.name in RUNTIME_FILES or item.name in ("injects",):
+        if item.name in RUNTIME_FILES or item.name in ("injects", "LOG.md") \
+                or item.name.startswith("sub-") or item.name.startswith(".nakon-domain-"):
+            continue
+        if item.name == ".phase6-swept":  # resume marker: must never leak into a fresh comp
             continue
         if item.is_dir():
             subprocess.run(["cp", "-r", str(item), str(dst / item.name)], check=True)
@@ -259,8 +263,9 @@ def team_down(creds, team):
 
 
 def stage_blues(args, comp, run_dir, creds, t0):
-    key = api_key()
+    api_key()
     blue_model = args.blue_model
+    local_blue = "openrouter" not in args.blue_base_url
     for n in (1, 2):
         wd = run_dir / f"blue-team{n}"
         wd.mkdir(parents=True, exist_ok=True)
@@ -278,15 +283,18 @@ def stage_blues(args, comp, run_dir, creds, t0):
             p.chmod(0o755)
         shutil_copy(comp / "packet.md", wd / "packet.md")
         (wd / "LOG.md").write_text(f"# Blue team {n} — defense log\n")
+        # Local llama.cpp endpoints have few slots and hard-reject prompts over
+        # the slot context: keep the advertised limit small; no reasoning_effort.
         (wd / "opencode.jsonc").write_text(
             OPENCODE_PROJECT_CFG
-            .replace("{PROVIDER_KEY}", provider_key(args))
-            .replace("{BASE_URL}", args.llm_base_url)
-            .replace("{API_KEY_FIELD}", "{env:OPENROUTER_API_KEY}")
+            .replace("{PROVIDER_KEY}", provider_key(args.blue_base_url))
+            .replace("{BASE_URL}", args.blue_base_url)
+            .replace("{API_KEY_FIELD}", "{env:OPENROUTER_API_KEY}" if not local_blue else "local")
             .replace("{MODEL_ID}", blue_model)
-            .replace("{CTX}", "120000").replace("{OUT}", "16000")
-            .replace("{EFFORT}", effort_json(args.reasoning_effort)))
-    log("blue workdirs ready")
+            .replace("{CTX}", "24000" if local_blue else "120000")
+            .replace("{OUT}", "4000" if local_blue else "16000")
+            .replace("{EFFORT}", "" if local_blue else effort_json(args.reasoning_effort)))
+    log(f"blue workdirs ready (model {blue_model} @ {args.blue_base_url})")
 
 
 def shutil_copy(src, dst):
@@ -305,8 +313,8 @@ def api_key():
     raise RuntimeError("no API key: set OPENROUTER_API_KEY or BAuto_LLM_API_KEY in bad-auto/.env")
 
 
-def provider_key(args):
-    return "openrouter" if "openrouter" in args.llm_base_url else "scrim-llm"
+def provider_key(base_url):
+    return "openrouter" if "openrouter" in base_url else "scrim-llm"
 
 
 def effort_json(effort):
@@ -378,7 +386,11 @@ CYCLE TASK (~5 minutes then STOP):
 4. Append one timestamped line to LOG.md. ROE: never attack the engine ($ENGINE_IP), never change the scoring-check accounts (triage/svc-imaging/wardops). Keep replies terse."""
 
 
-def blue_feed_loop(n, args, creds, t0, stop):
+def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
+    if first_delay:
+        stop.wait(first_delay)
+        if stop.is_set():
+            return
     while not stop.is_set() and (time.time() - t0) < (args.duration_min - 2) * 60:
         time.sleep(min(600, max(30, (args.duration_min * 60 - (time.time() - t0)) / 6)))
         if time.time() - t0 >= (args.duration_min - 2) * 60:
@@ -386,15 +398,22 @@ def blue_feed_loop(n, args, creds, t0, stop):
         elapsed = int((time.time() - t0) / 60)
         remain = args.duration_min - elapsed
         wd = Path(args.run_dir) / f"blue-team{n}"
-        env = {**os.environ, "OPENROUTER_API_KEY": api_key()}
+        env = {**os.environ}
+        try:
+            env["OPENROUTER_API_KEY"] = api_key()
+        except RuntimeError:
+            pass  # local endpoints need no key
         try:
             prompt = blue_cycle_prompt(n, creds, args, elapsed, remain)
             cycles = wd / "cycles"
             cycles.mkdir(exist_ok=True)
-            r = subprocess.run(["opencode", "run", "-m",
-                                f"{provider_key(args)}/{args.blue_model}", "--auto",
-                                prompt],
-                               cwd=wd, env=env, capture_output=True, text=True, timeout=1500)
+            # Serialize the two blues: the shared local endpoint has few slots,
+            # and even cloud runs shouldn't have opencode DBs racing.
+            with llm_lock:
+                r = subprocess.run(["opencode", "run", "-m",
+                                    f"{provider_key(args.blue_base_url)}/{args.blue_model}", "--auto",
+                                    prompt],
+                                   cwd=wd, env=env, capture_output=True, text=True, timeout=1500)
             out = re.sub(r"\x1b\[[0-9;]*m", "", (r.stdout or "") + (r.stderr or ""))
             # full transcript + exact prompt kept for the after-action report;
             # feed.log stays a short readable tail
@@ -423,6 +442,55 @@ def monitor_loop(args, creds, t0, stop):
             f"\n#### T+{int((time.time()-t0)/60)}min {time.strftime('%H:%M')}\n" +
             "\n".join(f"{t}:\n{s}" for t, s in snap.items()))
         log("monitor snapshot written")
+        # In-run red evidence: a teardown-time scp flake must not be able to
+        # lose events.jsonl a third time, so grab it every snapshot too.
+        if pull_red_snapshot(args, f"T+{int((time.time()-t0)/60):03d}"):
+            log("red events.jsonl snapshot pulled")
+        else:
+            log("WARNING: red events.jsonl snapshot unavailable")
+
+
+def _red_ssh_ctx(args):
+    """(target, common ssh/scp args, engine jump ProxyCommand or None) for red01."""
+    red_ip = "10.0.0.198"
+    try:
+        red_ip = json.loads((BAD_AUTO / "config.yaml").read_text())["deploy"]["red_ip"]
+    except Exception:
+        pass
+    key = str(REPO / "proxmox")
+    user = os.environ.get("TF_VAR_vm_username", "sysadmin")
+    engine = None
+    try:
+        cred_text = (REPO / "competitions" / args.competition / "credentials.txt").read_text()
+        engine = re.search(r"http://([0-9.]+)", cred_text).group(1)
+    except Exception:
+        pass
+    common = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+              "-o", "ConnectTimeout=15", "-i", key]
+    jump = (f"ProxyCommand=ssh -i {key} -o StrictHostKeyChecking=no "
+            f"-o UserKnownHostsFile=/dev/null -W %h:%p {user}@{engine}") if engine else None
+    return f"{user}@{red_ip}", common, jump
+
+
+def pull_red_snapshot(args, tag=None):
+    """Best-effort in-run events.jsonl pull from red01. Never raises."""
+    ev = Path(args.run_dir) / "evidence" / "red"
+    ev.mkdir(parents=True, exist_ok=True)
+    target, common, jump = _red_ssh_ctx(args)
+    dest = ev / "events.jsonl"
+    for extra in ([], (["-o", jump] if jump else [])):
+        try:
+            r = subprocess.run(["scp"] + common + extra +
+                               [f"{target}:/var/lib/bad-auto/events.jsonl", str(dest)],
+                               capture_output=True, timeout=75)
+        except subprocess.TimeoutExpired:
+            continue
+        if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
+            if tag:
+                shutil_copy(dest, ev / f"events-{tag}.jsonl")
+            return True
+        dest.unlink(missing_ok=True)
+    return False
 
 
 def stage_red(args, comp, creds, run_dir):
@@ -465,7 +533,12 @@ def stage_red(args, comp, creds, run_dir):
 
 def stage_run(args, creds, t0):
     stop = threading.Event()
-    threads = [threading.Thread(target=blue_feed_loop, args=(n, args, creds, t0, stop)) for n in (1, 2)]
+    blue_lock = threading.Lock()
+    # Blues staggered + LLM-call serialized (llm_lock): the shared local
+    # endpoint has few slots and rejects oversized prompts, so the two blues
+    # must never call it at the same time.
+    threads = [threading.Thread(target=blue_feed_loop, args=(1, args, creds, t0, stop, blue_lock, 0.0)),
+               threading.Thread(target=blue_feed_loop, args=(2, args, creds, t0, stop, blue_lock, 300.0))]
     threads.append(threading.Thread(target=monitor_loop, args=(args, creds, t0, stop)))
     for t in threads:
         t.start()
@@ -546,29 +619,12 @@ def pull_red_evidence(args):
     """
     ev = Path(args.run_dir) / "evidence" / "red"
     ev.mkdir(parents=True, exist_ok=True)
-    red_ip = "10.0.0.198"
-    try:
-        red_ip = json.loads((BAD_AUTO / "config.yaml").read_text())["deploy"]["red_ip"]
-    except Exception:
-        pass
-    key = str(REPO / "proxmox")
-    user = os.environ.get("TF_VAR_vm_username", "sysadmin")
-    engine = None
-    try:
-        cred_text = (REPO / "competitions" / args.competition / "credentials.txt").read_text()
-        engine = re.search(r"http://([0-9.]+)", cred_text).group(1)
-    except Exception:
-        pass
-    common = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-              "-o", "ConnectTimeout=15", "-i", key]
-    jump_proxy = (f"ProxyCommand=ssh -i {key} -o StrictHostKeyChecking=no "
-                  f"-o UserKnownHostsFile=/dev/null -W %h:%p {user}@{engine}") if engine else None
-    target = f"{user}@{red_ip}"
-    log(f"pulling red evidence from {target} before destroy (direct, then via engine {engine})")
+    target, common, jump = _red_ssh_ctx(args)
+    log(f"pulling red evidence from {target} before destroy (direct, then via engine jump host)")
 
     for remote, local in (("/var/lib/bad-auto/events.jsonl", "events.jsonl"),
                           ("/var/lib/bad-auto/world.json", "world.json")):
-        attempts = [[], (["-o", jump_proxy] if jump_proxy else [])]
+        attempts = [[], (["-o", jump] if jump else [])]
         ok = False
         for extra in attempts:
             r = subprocess.run(["scp"] + common + extra + [f"{target}:{remote}", str(ev / local)],
@@ -581,9 +637,9 @@ def pull_red_evidence(args):
             log(f"WARNING: could not pull {remote}")
 
     journal_cmds = [["sudo -n journalctl -u bad-auto --no-pager 2>/dev/null || true", []]]
-    if jump_proxy:
+    if jump:
         journal_cmds.append(["sudo -n journalctl -u bad-auto --no-pager 2>/dev/null || true",
-                             ["-o", jump_proxy]])
+                             ["-o", jump]])
     journal = ""
     for cmd, extra in journal_cmds:
         r = subprocess.run(["ssh"] + common + extra + [target, cmd],
@@ -629,12 +685,16 @@ def main():
     p.add_argument("--reasoning-effort", default="minimal",
                    help="reasoning effort sent to the LLM (GPT-5.x/o-series); '' disables")
     p.add_argument("--llm-base-url", default="https://openrouter.ai/api/v1")
+    p.add_argument("--blue-base-url", default=None,
+                   help="LLM base URL for blues only (defaults to --llm-base-url); "
+                        "e.g. the local qwen endpoint http://100.64.0.9:8080/v1")
     p.add_argument("--skip-deploy", action="store_true", help="competition already at phase 7")
     p.add_argument("--from-phase", dest="resume", type=int, default=None,
                    help="resume create-competition at this phase")
     p.add_argument("--keep-range", action="store_true", help="skip destroy-competition at teardown")
     p.add_argument("--run-dir", default=None)
     args = p.parse_args()
+    args.blue_base_url = args.blue_base_url or args.llm_base_url
 
     comp = REPO / "competitions" / args.competition
     if args.new:
