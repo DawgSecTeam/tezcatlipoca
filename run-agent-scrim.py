@@ -201,6 +201,10 @@ def stage_deploy(args, comp):
     if comp.joinpath(".deploy_state.json").exists() and args.resume:
         cmd += ["--from-phase", str(args.resume)]
     r = run(cmd, cwd=REPO, timeout=6 * 3600, check=False)
+    # keep the whole pipeline output — the tail-15 above is not enough to
+    # diagnose a mid-phase failure (e.g. the real terraform error)
+    if r.returncode != 0 and args.run_dir:
+        (Path(args.run_dir) / "deploy.log").write_text(r.stdout or "")
     for line in (r.stdout or "").splitlines()[-15:]:
         print("   ", line)
     if r.returncode != 0:
