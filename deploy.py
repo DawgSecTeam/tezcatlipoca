@@ -242,6 +242,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             # Destroy bridges
             for team in teams.values():
                 destroy_bridge_if_exists(node, f"vmbr{team['identifier']}")
+            # A fresh deploy must never inherit a previous deploy's sweep marker.
+            (comp_dir / ".phase6-swept").unlink(missing_ok=True)
             time.sleep(5)
             checkpoint(1)
         else:
@@ -344,24 +346,31 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
         # [6/7] Clone team1 boxes to other teams, fix DNS, harden services
         if from_phase <= 6:
             current_phase = 6
-            print("[6/7] Cloning team1 boxes to other teams, fixing DNS, hardening services...")
-            clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=box_creds,
-                              box_password=box_password)
-
-            # Deploy Nakon on team2+ boxes (team1 already done at [5/7])
-            if len(teams) > 1:
-                print("  Deploying Nakon on team2+ boxes...")
-                ensure_nat_forwarding(ctx)
-                all_machines = json.loads(nakon_config_path.read_text())["machines"]
-                run_nakon(key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
-                          timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(all_machines)))
-                print("  Nakon deployment on team2+ complete")
+            swept_marker = comp_dir / ".phase6-swept"
+            if swept_marker.exists():
+                print("[6/7] Resume marker present — clones + Nakon sweep already done; "
+                      "skipping straight to domains/beacons/hardening")
             else:
-                print("  Single team — hardening services on team1 boxes...")
-                fix_services_on_boxes(
-                    comp_dir, [t for t in all_targets if not is_windows_template(t["box"]["template"])],
-                    ctx, box_creds=box_creds,
-                )
+                print("[6/7] Cloning team1 boxes to other teams, fixing DNS, hardening services...")
+                clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=box_creds,
+                                  box_password=box_password)
+
+                # Deploy Nakon on team2+ boxes (team1 already done at [5/7])
+                if len(teams) > 1:
+                    print("  Deploying Nakon on team2+ boxes...")
+                    ensure_nat_forwarding(ctx)
+                    all_machines = json.loads(nakon_config_path.read_text())["machines"]
+                    run_nakon(key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
+                              timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(all_machines)))
+                    print("  Nakon deployment on team2+ complete")
+                else:
+                    print("  Single team — hardening services on team1 boxes...")
+                    fix_services_on_boxes(
+                        comp_dir, [t for t in all_targets if not is_windows_template(t["box"]["template"])],
+                        ctx, box_creds=box_creds,
+                    )
+                # Written only after a clean sweep so mid-phase-6 resumes don't re-run it.
+                swept_marker.write_text(time.strftime("%Y-%m-%d %H:%M:%S"))
 
             print("  Configuring Windows AD domains (if any)...")
             deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path,
@@ -371,7 +380,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             # the tz-ready snapshot so clones and restore points carry them.
             if compfile_flag(comp_dir / "Compfile", "team_beacons"):
                 print("  Planting team beacons (hunt artifacts)...")
-                plant_team_beacons(teams, boxes, ctx, box_username=box_username)
+                plant_team_beacons(teams, boxes, ctx, box_username=box_username,
+                                   box_password=box_password)
 
             print(f"  Snapshotting all boxes as '{SNAP_READY}' (as-delivered restore point)...")
             for t in all_targets:

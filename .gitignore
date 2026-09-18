@@ -31,3 +31,5 @@ competitions/*/nakon-config.json
 # Join/etc. step (see _run_single_nakon_config() in create-competition.py) — same per-run-secret
 # class as nakon-config.json above, just scoped to one machine/step instead of the whole comp.
 competitions/*/.nakon-domain-*.json
+# Phase-6 sweep marker (resume bookkeeping, per-deploy)
+competitions/*/.phase6-swept

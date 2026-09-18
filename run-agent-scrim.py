@@ -321,24 +321,32 @@ def status_text(creds, team):
     # Per-call jar: this runs concurrently from the monitor thread and both blue
     # feed loops; a shared jar lets one login clobber another's session cookie.
     jar = f"/tmp/scrim-status-jar.{team}.{threading.get_ident()}"
-    subprocess.run(["curl", "-s", "--max-time", "15", "-c", jar, "-X", "POST",
-                    f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
-                    "-d", json.dumps({"username": team, "password": creds[team.upper() + "_PW"]})],
-                   capture_output=True)
+    login = subprocess.run(["curl", "-s", "--max-time", "15", "-c", jar, "-X", "POST",
+                            f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
+                            "-d", json.dumps({"username": team, "password": creds[team.upper() + "_PW"]})],
+                           capture_output=True, text=True)
     tid = creds[team.upper() + "_ID"]
     r = subprocess.run(["curl", "-s", "--max-time", "15", "-b", jar,
                         f"http://{creds['ENGINE_IP']}/api/services/{tid}"],
                        capture_output=True, text=True)
     lines = []
     try:
-        for s in json.loads(r.stdout):
+        services = json.loads(r.stdout)
+        if not isinstance(services, list):
+            raise ValueError(f"unexpected payload: {str(services)[:80]}")
+        for s in services:
             rounds = s.get("Last10Rounds") or []
             checks = (rounds[0] if rounds else {}).get("Checks") or []
             ok = bool(checks) and all(c.get("Result") for c in checks)
             err = next((c.get("Error", "") for c in checks if c.get("Error") and not c.get("Result")), "")
             lines.append(f"{'UP  ' if ok else 'DOWN'} {s['ServiceName']:16s} {err[:60]}")
-    except Exception:
-        lines.append("scoreboard unreachable")
+    except Exception as e:
+        # Self-diagnosing failure line: the monitor.log entry then says WHY
+        # (login rejected vs empty body vs malformed payload).
+        reason = f"login rc={login.returncode} body={ (login.stdout or '')[:60]!r}" \
+            if login.returncode != 0 or "error" in (login.stdout or "").lower() else \
+            f"services rc={r.returncode} body={ (r.stdout or '')[:80]!r}"
+        lines.append(f"scoreboard unreachable ({type(e).__name__}: {e}; {reason})")
     return "\n".join(lines)
 
 
@@ -531,8 +539,10 @@ def stage_capture(args, creds):
 def pull_red_evidence(args):
     """Fetch the red agent's on-VM state before badauto destroy erases it.
 
-    red01 is reachable from the operator host (same path bad-auto's own deploy
-    uses); its events.jsonl is the only complete record of what red did.
+    red01's events.jsonl is the only complete record of what red did. The
+    direct operator->red01 path flaked in the 09-17b run (scp hung past 60s),
+    so fall back to the scoring engine as a jump host — the engine and red01
+    share a subnet by construction.
     """
     ev = Path(args.run_dir) / "evidence" / "red"
     ev.mkdir(parents=True, exist_ok=True)
@@ -543,19 +553,46 @@ def pull_red_evidence(args):
         pass
     key = str(REPO / "proxmox")
     user = os.environ.get("TF_VAR_vm_username", "sysadmin")
-    opts = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=10", "-i", key]
-    log(f"pulling red evidence from {user}@{red_ip} before destroy")
+    engine = None
+    try:
+        cred_text = (REPO / "competitions" / args.competition / "credentials.txt").read_text()
+        engine = re.search(r"http://([0-9.]+)", cred_text).group(1)
+    except Exception:
+        pass
+    common = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+              "-o", "ConnectTimeout=15", "-i", key]
+    jump_proxy = (f"ProxyCommand=ssh -i {key} -o StrictHostKeyChecking=no "
+                  f"-o UserKnownHostsFile=/dev/null -W %h:%p {user}@{engine}") if engine else None
+    target = f"{user}@{red_ip}"
+    log(f"pulling red evidence from {target} before destroy (direct, then via engine {engine})")
+
     for remote, local in (("/var/lib/bad-auto/events.jsonl", "events.jsonl"),
                           ("/var/lib/bad-auto/world.json", "world.json")):
-        subprocess.run(["scp"] + opts + [f"{user}@{red_ip}:{remote}", str(ev / local)],
-                       capture_output=True, timeout=60)
-    r = subprocess.run(["ssh"] + opts + [f"{user}@{red_ip}",
-                        "sudo -n journalctl -u bad-auto --no-pager 2>/dev/null || "
-                        "journalctl -u bad-auto --no-pager 2>/dev/null || true"],
-                       capture_output=True, text=True, timeout=60)
-    if r.stdout.strip():
-        (ev / "bad-auto-journal.log").write_text(r.stdout)
+        attempts = [[], (["-o", jump_proxy] if jump_proxy else [])]
+        ok = False
+        for extra in attempts:
+            r = subprocess.run(["scp"] + common + extra + [f"{target}:{remote}", str(ev / local)],
+                               capture_output=True, timeout=120)
+            if r.returncode == 0 and (ev / local).exists() and (ev / local).stat().st_size > 0:
+                ok = True
+                break
+            (ev / local).unlink(missing_ok=True)
+        if not ok:
+            log(f"WARNING: could not pull {remote}")
+
+    journal_cmds = [["sudo -n journalctl -u bad-auto --no-pager 2>/dev/null || true", []]]
+    if jump_proxy:
+        journal_cmds.append(["sudo -n journalctl -u bad-auto --no-pager 2>/dev/null || true",
+                             ["-o", jump_proxy]])
+    journal = ""
+    for cmd, extra in journal_cmds:
+        r = subprocess.run(["ssh"] + common + extra + [target, cmd],
+                           capture_output=True, text=True, timeout=90)
+        if (r.stdout or "").strip():
+            journal = r.stdout
+            break
+    if journal:
+        (ev / "bad-auto-journal.log").write_text(journal)
     got = sorted(p.name for p in ev.iterdir() if p.stat().st_size > 0)
     log(f"red evidence captured: {got}")
     return ev
