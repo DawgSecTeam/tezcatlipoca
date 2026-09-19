@@ -26,7 +26,7 @@ Usage:
       [--skip-deploy] [--keep-range]
       [--resume-from deploy|blues|red|run|teardown]
 
-Requires: .env (TF_VAR_*), vendor/nakon v0.1.4+, bad-auto checkout next to this
+Requires: .env (TF_VAR_*), vendor/nakon v0.1.5+, bad-auto checkout next to this
 repo, opencode on PATH, and BAuto_LLM_API_KEY (or OPENROUTER_API_KEY) in
 bad-auto/.env or the environment.
 """
@@ -40,6 +40,8 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+from utils import load_users_config
 
 REPO = Path(__file__).resolve().parent
 BAD_AUTO = REPO.parent / "bad-auto"
@@ -63,34 +65,78 @@ case "$BOX" in
   web01|app01|db01) case "$BOX" in web01) OCT=4;; app01) OCT=5;; db01) OCT=6;; esac
     exec ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
       -o "ProxyCommand=ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p $VM_USER@$ENGINE_IP" \\
-      "medic@192.168.$MY_TID.$OCT" "$@" ;;
+      "$BOX_USER@192.168.$MY_TID.$OCT" "$@" ;;
   *) echo "unknown box $BOX" >&2; exit 2 ;;
 esac
+"""
+
+QLOGIN = """#!/usr/bin/env bash
+# qlogin — refresh the shared team cookie jar ($JAR). Quotient allows ONE session
+# per account: every login kills that account's previous cookie, so NEVER log in
+# ad hoc; run ./qlogin only when a request returns {"error":"Forbidden"}.
+set -euo pipefail
+cd "$(dirname "$0")"
+source ./scrim.env
+tmp=$(mktemp)
+curl -s --max-time 15 -c "$tmp" -X POST "http://$ENGINE_IP/api/login" \\
+  -H 'Content-Type: application/json' \\
+  -d "{\\"username\\":\\"$MY_TEAM\\",\\"password\\":\\"$MY_PW\\"}" >/dev/null
+mv "$tmp" "$JAR"
 """
 
 SCORE_PY = '''#!/usr/bin/env python3
 """Print your team's live scoreboard status as plain text. Env from scrim.env (exported)."""
 import json
 import os
+import subprocess
 import urllib.request
 
 engine = os.environ["ENGINE_IP"]
 team = os.environ["MY_TEAM"]
-pw = os.environ["MY_PW"]
+jar = os.environ.get("JAR") or f"/tmp/jar.{team}"
+qlogin = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qlogin")
 
 
-def call(path, data=None, cookie=None):
+def call(path, cookie=None):
     req = urllib.request.Request(f"http://{engine}{path}",
-                                 data=json.dumps(data).encode() if data else None,
-                                 headers={"Content-Type": "application/json",
-                                          **({"Cookie": cookie} if cookie else {})})
+                                 headers={"Cookie": cookie} if cookie else {})
     return urllib.request.urlopen(req, timeout=15)
 
 
-cookie = call("/api/login", {"username": team, "password": pw}).headers.get("Set-Cookie", "").split(";")[0]
-teams = json.loads(call("/api/teams", cookie=cookie).read())
+def jar_cookie():
+    # curl Netscape jar: the session cookie is on the last non-comment line
+    try:
+        for line in reversed(open(jar).read().splitlines()):
+            if line and not line.startswith("#"):
+                name, value = line.split()[-2:]
+                return f"{name}={value}"
+    except OSError:
+        pass
+    return None
+
+
+def load_teams(cookie):
+    data = json.loads(call("/api/teams", cookie).read())
+    if not isinstance(data, list):
+        raise ValueError(f"unexpected payload: {str(data)[:80]}")
+    return data
+
+
+# Quotient allows ONE session per account (every login kills the previous
+# cookie) — read the shared jar, and on rejection refresh it via ./qlogin.
+# Never log in directly from this script.
+cookie = jar_cookie()
+if cookie:
+    try:
+        teams = load_teams(cookie)
+    except Exception:
+        cookie = None
+if not cookie:
+    subprocess.run([qlogin], check=False)
+    cookie = jar_cookie()
+teams = load_teams(cookie)
 tid = next(t["ID"] for t in teams if t["Name"] == team)
-for s in json.loads(call(f"/api/services/{tid}", cookie=cookie).read()):
+for s in json.loads(call(f"/api/services/{tid}", cookie).read()):
     rounds = s.get("Last10Rounds") or []
     checks = (rounds[0] if rounds else {}).get("Checks") or []
     up = bool(checks) and all(c.get("Result") for c in checks)
@@ -108,7 +154,12 @@ exec python3 "$(dirname "$0")/score.py"
 SUBMIT_INJECT = """#!/usr/bin/env bash
 # submit-inject <injectId> <file> — submit a written deliverable to the scoreboard.
 cd "$(dirname "$0")"; source ./scrim.env
-exec curl -s --max-time 30 -b /tmp/jar.$MY_TEAM -F "file=@$2" -X POST "http://$ENGINE_IP/api/injects/$1/submit"
+submit() { curl -s --max-time 30 -b "$JAR" -F "file=@$2" -X POST "http://$ENGINE_IP/api/injects/$1/submit"; }
+out=$(submit "$1" "$2")
+case "$out" in
+  *'"error"'*) ./qlogin; out=$(submit "$1" "$2") ;;
+esac
+echo "$out"
 """
 
 OPENCODE_PROJECT_CFG = """{
@@ -131,6 +182,9 @@ OPENCODE_PROJECT_CFG = """{
   }
 }
 """
+
+
+CYCLE_TIMEOUT = 1500
 
 
 def log(msg):
@@ -183,11 +237,13 @@ def creds_from_files(comp):
     state = json.loads((comp / ".deploy_state.json").read_text())
     teams = json.loads((comp / "teams.json").read_text())
     engine_ip = re.search(r"http://([0-9.]+)", (comp / "credentials.txt").read_text()).group(1)
+    box_username, _credlist = load_users_config(comp)
     return {
         "ENGINE_IP": engine_ip,
         "ADMIN_PW": state["admin_password"],
         "INJECT_PW": state.get("inject_password") or "",
         "BOX_PW": state["box_password"],
+        "BOX_USER": box_username,
         "KEY_PATH": str((REPO / "proxmox").resolve()),
         "VM_USER": os.environ.get("TF_VAR_vm_username", "sysadmin"),
         **{f"{k.upper()}_PW": v["password"] for k, v in teams.items()},
@@ -229,7 +285,7 @@ def stage_verify(args, comp, creds):
     base = ["ssh", "-i", creds["KEY_PATH"], "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null", "-o", f"ProxyCommand={proxy}"]
     def ssh_web01(cmd):
-        return subprocess.run(base + [f"medic@192.168.{creds['TEAM1_ID']}.4", cmd],
+        return subprocess.run(base + [f"{creds['BOX_USER']}@192.168.{creds['TEAM1_ID']}.4", cmd],
                               capture_output=True, text=True, timeout=60)
     ssh_web01("echo %s | sudo -S systemctl stop nginx" % creds["BOX_PW"])
     time.sleep(150)
@@ -242,21 +298,38 @@ def stage_verify(args, comp, creds):
         log("WARNING: fire test incomplete — scoring path may be broken")
 
 
+def _qlogin(creds, user, jar):
+    """Refresh a Quotient cookie jar for one account.
+
+    Quotient allows ONE session per account — every login invalidates the
+    account's previous cookie — so every client (monitor, status, blues,
+    capture) shares one jar per account and nobody logs in on the happy path.
+    The newest login always wins, so concurrent refreshes converge on the only
+    valid cookie; no locking needed.
+    """
+    subprocess.run(["curl", "-s", "--max-time", "15", "-c", jar, "-X", "POST",
+                    f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
+                    "-d", json.dumps({"username": user, "password": creds[user.upper() + "_PW"]})],
+                   capture_output=True)
+
+
+def qget(creds, user, jar, path):
+    """GET a Quotient path with the account's shared jar. An invalidated cookie
+    comes back as {"error": ...} — re-login into the jar and retry once."""
+    def _get():
+        return subprocess.run(["curl", "-s", "--max-time", "15", "-b", jar,
+                               f"http://{creds['ENGINE_IP']}{path}"],
+                              capture_output=True, text=True)
+    r = _get()
+    if '"error"' not in (r.stdout or ""):
+        return r
+    _qlogin(creds, user, jar)
+    return _get()
+
+
 def team_down(creds, team):
-    r = subprocess.run(
-        ["curl", "-s", "--max-time", "15", "-X", "POST", f"http://{creds['ENGINE_IP']}/api/login",
-         "-H", "Content-Type: application/json", "-d",
-         json.dumps({"username": team, "password": creds[team.upper() + "_PW"]})],
-        capture_output=True, text=True)
-    jar = subprocess.run(["mktemp"], capture_output=True, text=True).stdout.strip()
-    subprocess.run(["curl", "-s", "-c", jar, "-X", "POST", f"http://{creds['ENGINE_IP']}/api/login",
-                    "-H", "Content-Type: application/json", "-d",
-                    json.dumps({"username": team, "password": creds[team.upper() + "_PW"]})],
-                   capture_output=True, text=True)
-    r = subprocess.run(["curl", "-s", "--max-time", "15", "-b", jar,
-                        f"http://{creds['ENGINE_IP']}/api/services/"
-                        + ("1" if team == "team1" else "2")],
-                       capture_output=True, text=True)
+    r = qget(creds, team, f"/tmp/jar.{team}",
+             f"/api/services/{'1' if team == 'team1' else '2'}")
     try:
         svcs = json.loads(r.stdout)
         return any(not (s.get("Last10Rounds") and s["Last10Rounds"][0].get("Checks")
@@ -278,24 +351,26 @@ def stage_blues(args, comp, run_dir, creds, t0):
         (wd / "scrim.env").write_text(
             f"ENGINE_IP={creds['ENGINE_IP']}\nMY_TEAM=team{n}\nMY_PW={creds[f'TEAM{n}_PW']}\n"
             f"MY_TID={tid}\nBOX_PW={creds['BOX_PW']}\nINJECT_PW={creds['INJECT_PW']}\n"
-            f"KEY_PATH={creds['KEY_PATH']}\nVM_USER={creds['VM_USER']}\nJAR=/tmp/jar.team{n}\n")
+            f"KEY_PATH={creds['KEY_PATH']}\nVM_USER={creds['VM_USER']}\nBOX_USER={creds['BOX_USER']}\n"
+            f"JAR=/tmp/jar.team{n}\n")
         os.chmod(wd / "scrim.env", 0o600)
-        for helper, body in (("mybox", MYBOX), ("score.py", SCORE_PY), ("myscore", MYSCORE),
-                             ("submit-inject", SUBMIT_INJECT)):
+        for helper, body in (("mybox", MYBOX), ("qlogin", QLOGIN), ("score.py", SCORE_PY),
+                             ("myscore", MYSCORE), ("submit-inject", SUBMIT_INJECT)):
             p = wd / helper
             p.write_text(body)
             p.chmod(0o755)
         shutil_copy(comp / "packet.md", wd / "packet.md")
         (wd / "LOG.md").write_text(f"# Blue team {n} — defense log\n")
-        # Local llama.cpp endpoints have few slots and hard-reject prompts over
-        # the slot context: keep the advertised limit small; no reasoning_effort.
+        # Local llama.cpp endpoints: opencode's own base prompt is ~20k tokens, so
+        # the advertised context must leave room for it or opencode self-compacts
+        # fatally (60000 verified against the slot limit); no reasoning_effort.
         (wd / "opencode.jsonc").write_text(
             OPENCODE_PROJECT_CFG
             .replace("{PROVIDER_KEY}", provider_key(args.blue_base_url))
             .replace("{BASE_URL}", args.blue_base_url)
             .replace("{API_KEY_FIELD}", "{env:OPENROUTER_API_KEY}" if not local_blue else "local")
             .replace("{MODEL_ID}", blue_model)
-            .replace("{CTX}", "24000" if local_blue else "120000")
+            .replace("{CTX}", "60000" if local_blue else "120000")
             .replace("{OUT}", "4000" if local_blue else "16000")
             .replace("{EFFORT}", "" if local_blue else effort_json(args.reasoning_effort)))
     log(f"blue workdirs ready (model {blue_model} @ {args.blue_base_url})")
@@ -330,17 +405,8 @@ def effort_json(effort):
 
 def status_text(creds, team):
     """Compact plain-text scoreboard for the cycle prompt."""
-    # Per-call jar: this runs concurrently from the monitor thread and both blue
-    # feed loops; a shared jar lets one login clobber another's session cookie.
-    jar = f"/tmp/scrim-status-jar.{team}.{threading.get_ident()}"
-    login = subprocess.run(["curl", "-s", "--max-time", "15", "-c", jar, "-X", "POST",
-                            f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
-                            "-d", json.dumps({"username": team, "password": creds[team.upper() + "_PW"]})],
-                           capture_output=True, text=True)
     tid = creds[team.upper() + "_ID"]
-    r = subprocess.run(["curl", "-s", "--max-time", "15", "-b", jar,
-                        f"http://{creds['ENGINE_IP']}/api/services/{tid}"],
-                       capture_output=True, text=True)
+    r = qget(creds, team, f"/tmp/jar.{team}", f"/api/services/{tid}")
     lines = []
     try:
         services = json.loads(r.stdout)
@@ -354,11 +420,7 @@ def status_text(creds, team):
             lines.append(f"{'UP  ' if ok else 'DOWN'} {s['ServiceName']:16s} {err[:60]}")
     except Exception as e:
         # Self-diagnosing failure line: the monitor.log entry then says WHY
-        # (login rejected vs empty body vs malformed payload).
-        reason = f"login rc={login.returncode} body={ (login.stdout or '')[:60]!r}" \
-            if login.returncode != 0 or "error" in (login.stdout or "").lower() else \
-            f"services rc={r.returncode} body={ (r.stdout or '')[:80]!r}"
-        lines.append(f"scoreboard unreachable ({type(e).__name__}: {e}; {reason})")
+        lines.append(f"scoreboard unreachable ({type(e).__name__}: {e}; body={(r.stdout or '')[:80]!r})")
     return "\n".join(lines)
 
 
@@ -371,16 +433,16 @@ LIVE SCOREBOARD (your 8 scored services — availability is points every minute)
 {status_text(creds, f'team{n}')}
 
 REACH YOUR BOXES (subnet 192.168.{tid}.0/24):
-  Linux (medic, password in scrim.env, sudo: echo $BOX_PW | sudo -S <cmd>):  ./mybox web01 "<cmd>"   (also app01, db01)
+  Linux ({creds['BOX_USER']}, password in scrim.env, sudo: echo $BOX_PW | sudo -S <cmd>):  ./mybox web01 "<cmd>"   (also app01, db01)
   Windows (Administrator, same password):                                    ./mybox dc01 "<cmd>"    (also win01)
   ./mybox runs one command through the gateway and prints output — prefer it over hand-building ssh.
 
-SCOREBOARD + INJECTS (curl examples):
+SCOREBOARD + INJECTS — Quotient allows ONE session per account, so NEVER log in
+directly (that kills the shared jar's session). Use the jar; if a call answers
+{{"error":"Forbidden"}}, run ./qlogin once and retry:
   source ./scrim.env
-  curl -s -c /tmp/jar -X POST http://$ENGINE_IP/api/login -H 'Content-Type: application/json' \\
-       -d "{{\\"username\\":\\"$MY_TEAM\\",\\"password\\":\\"$MY_PW\\"}}"
-  curl -s -b /tmp/jar http://$ENGINE_IP/api/services/$MY_TID | python3 -m json.tool
-  curl -s -b /tmp/jar http://$ENGINE_IP/api/injects | python3 -c "import json,sys;[print(i['ID'],i['Title'],'due',i['DueTime'][11:16],'subs',len(i.get('Submissions') or [])) for i in json.load(sys.stdin)]"
+  curl -s -b "$JAR" http://$ENGINE_IP/api/services/$MY_TID | python3 -m json.tool
+  curl -s -b "$JAR" http://$ENGINE_IP/api/injects | python3 -c "import json,sys;[print(i['ID'],i['Title'],'due',i['DueTime'][11:16],'subs',len(i.get('Submissions') or [])) for i in json.load(sys.stdin)]"
   echo "## deliverable" > sub.md && ./submit-inject <injectId> sub.md     # submit BEFORE close time
 
 CYCLE TASK (~5 minutes then STOP):
@@ -388,6 +450,17 @@ CYCLE TASK (~5 minutes then STOP):
 2. Else: the most urgent OPEN inject (due soonest; schedule in packet.md) — investigate on the boxes, write the deliverable, ./submit-inject.
 3. Else: continue the misconfig hunt noted in LOG.md (planted rogue admins, backdoor services/tasks, bad firewall rules, exposed creds, SUID/sudo issues). Fix what is safe; never take a scored service down.
 4. Append one timestamped line to LOG.md. ROE: never attack the engine ($ENGINE_IP), never change the scoring-check accounts (triage/svc-imaging/wardops). Keep replies terse."""
+
+
+def _opencode_run(args, prompt, wd, env):
+    """One blue cycle. On failure the captured output.log holds opencode's real
+    error — the 17c run's 40/40 instant 'Unexpected server error' deaths never
+    reproduced (2026-09-19, same version/endpoint/context), so retry-and-record
+    is the strategy, not workarounds for an unconfirmed cause."""
+    return subprocess.run(["opencode", "run", "-m",
+                           f"{provider_key(args.blue_base_url)}/{args.blue_model}", "--auto",
+                           prompt],
+                          cwd=wd, env=env, capture_output=True, text=True, timeout=CYCLE_TIMEOUT)
 
 
 def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
@@ -414,10 +487,12 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
             # Serialize the two blues: the shared local endpoint has few slots,
             # and even cloud runs shouldn't have opencode DBs racing.
             with llm_lock:
-                r = subprocess.run(["opencode", "run", "-m",
-                                    f"{provider_key(args.blue_base_url)}/{args.blue_model}", "--auto",
-                                    prompt],
-                                   cwd=wd, env=env, capture_output=True, text=True, timeout=1500)
+                r = _opencode_run(args, prompt, wd, env)
+                if r.returncode != 0:
+                    # one immediate retry — a transient boot/endpoint failure
+                    # otherwise costs the whole cycle slot to the pacing sleep
+                    log(f"blue-team{n} cycle T+{elapsed} rc={r.returncode} — retrying once")
+                    r = _opencode_run(args, prompt, wd, env)
             out = re.sub(r"\x1b\[[0-9;]*m", "", (r.stdout or "") + (r.stderr or ""))
             # full transcript + exact prompt kept for the after-action report;
             # feed.log stays a short readable tail
@@ -555,44 +630,35 @@ def stage_run(args, creds, t0):
             t.join(timeout=10)
 
 
-def _quotient_login(args_ev, creds, user, pw_key):
-    jar = args_ev / f".jar-{user}"
-    subprocess.run(["curl", "-s", "--max-time", "15", "-c", str(jar), "-X", "POST",
-                    f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
-                    "-d", json.dumps({"username": user, "password": creds[pw_key]})],
-                   capture_output=True)
-    return jar
-
-
 def stage_capture(args, creds):
     log("capturing final evidence")
     ev = Path(args.run_dir) / "evidence"
     ev.mkdir(parents=True, exist_ok=True)
-    # Capture runs after the event window closes, when Quotient has invalidated
-    # team sessions — authenticate as admin (valid post-event, sees all teams),
-    # falling back to the team login if the admin fetch is rejected.
-    admin_jar = _quotient_login(ev, creds, "admin", "ADMIN_PW")
+    # Capture runs after the event window closes, when team sessions have been
+    # churned all event — qget re-logins and retries on {"error":"Forbidden"};
+    # fall back to the team account if admin itself is locked out.
     for team in ("team1", "team2"):
-        url = f"http://{creds['ENGINE_IP']}/api/services/{creds[team.upper() + '_ID']}"
-        r = subprocess.run(["curl", "-s", "--max-time", "15", "-b", str(admin_jar), url],
-                           capture_output=True, text=True)
+        path = f"/api/services/{creds[team.upper() + '_ID']}"
+        r = qget(creds, "admin", str(ev / ".jar-admin"), path)
         if '"error"' in (r.stdout or ""):
-            team_jar = _quotient_login(ev, creds, team, team.upper() + "_PW")
-            r = subprocess.run(["curl", "-s", "--max-time", "15", "-b", str(team_jar), url],
-                               capture_output=True, text=True)
+            r = qget(creds, team, str(ev / f".jar-{team}"), path)
         (ev / f"final-services-{team}.json").write_text(r.stdout or "")
         if '"error"' in (r.stdout or ""):
             log(f"WARNING: {team} services capture failed: {(r.stdout or '')[:120]}")
     # pause scoring (best-effort) to freeze the final state
-    jar = ev / ".jar-admin"
-    subprocess.run(["curl", "-s", "--max-time", "15", "-c", str(jar), "-X", "POST",
-                    f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
-                    "-d", json.dumps({"username": "admin", "password": creds["ADMIN_PW"]})],
-                   capture_output=True)
-    subprocess.run(["curl", "-s", "--max-time", "15", "-b", str(jar), "-X", "POST",
-                    f"http://{creds['ENGINE_IP']}/api/engine/pause",
-                    "-H", "Content-Type: application/json", "-d", '{"pause": true}'],
-                   capture_output=True)
+    jar = str(ev / ".jar-admin")
+
+    def _pause():
+        return subprocess.run(["curl", "-s", "--max-time", "15", "-b", jar, "-X", "POST",
+                               f"http://{creds['ENGINE_IP']}/api/engine/pause",
+                               "-H", "Content-Type: application/json", "-d", '{"pause": true}'],
+                              capture_output=True, text=True)
+
+    _qlogin(creds, "admin", jar)
+    r = _pause()
+    if '"error"' in (r.stdout or ""):
+        _qlogin(creds, "admin", jar)
+        _pause()
     log("engine paused (best-effort); services JSON captured")
     # Blue-side deliverables into evidence/: logs, transcripts, submissions
     for n in (1, 2):
