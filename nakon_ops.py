@@ -11,7 +11,6 @@ from constants import (
     DISRUPTIVE_CONFIGS,
     NAKON_DIR,
     PER_MACHINE_NAKON_BUDGET,
-    REBOOTS_BOX_CONFIGS,
     SLOW_SERVICES,
     WINDOWS_ADMIN_USER,
 )
@@ -89,7 +88,6 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
         )
 
     # Disruptive vulns break DNS/apt; sort them last so package installs still have network.
-    # DISRUPTIVE_CONFIGS imported from constants.py
 
     machines = []
     for i, (team, box) in enumerate(

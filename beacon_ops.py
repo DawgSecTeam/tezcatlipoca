@@ -76,7 +76,7 @@ def _ssh_box(ctx, box_username, ip, cmd, timeout=90, sudo_password=None):
     return subprocess.run(ssh_cmd, input=cmd, capture_output=True, text=True, timeout=timeout)
 
 
-def _unit(unit_name, box_name, target_ip, interval):
+def _unit(box_name, target_ip, interval):
     return (
         "[Unit]\n"
         "Description=Wardline Data Digest Agent\n"
@@ -110,7 +110,7 @@ def plant_team_beacons(teams, boxes, ctx, box_username="ubuntu", box_password=No
         ip, name = t["ip"], t["box_name"]
         gw = f"192.168.{t['identifier']}.1"
         interval = BEACON_INTERVALS[name]
-        unit = _unit(UNIT_NAME, name, gw, interval)
+        unit = _unit(name, gw, interval)
         try:
             if binary is not None:
                 r = _scp_to_box(ctx, box_username, ip, binary, "/tmp/.wda-b")

@@ -133,6 +133,18 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             name: random_password() for name in credlist_usernames
         }
         inject_password = state.get("inject_password")
+        # Persist any secret that had to be regenerated above (an older state file predating
+        # that field) so a second resume reuses the same value instead of minting a new one
+        # that would disagree with what's already on the engine/boxes.
+        state.update({
+            "admin_password": admin_password,
+            "postgres_password": postgres_password,
+            "redis_password": redis_password,
+            "box_password": box_password,
+            "box_creds": box_creds,
+            "inject_password": inject_password,
+        })
+        _save_state()
         print(f"  Resuming from phase {from_phase} "
               f"({number_of_teams} team(s), last completed phase {state.get('last_phase')})")
     else:

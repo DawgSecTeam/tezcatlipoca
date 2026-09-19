@@ -12,7 +12,7 @@ nakon SSHes into each box to install services and deploy misconfigs.
 
 > **Setup:** clone with submodules (`git clone --recurse-submodules …`, or
 > `git submodule update --init --recursive` in an existing checkout) — nakon is vendored at
-> `vendor/nakon` (pinned to a release; currently v0.1.3). For agent/integration context see
+> `vendor/nakon` (pinned to a release; currently v0.1.5). For agent/integration context see
 > **[AGENTS.md](AGENTS.md)**.
 
 ## How it works
@@ -109,7 +109,7 @@ a known-good point, not a repair.
 | `terraform/variables.tf` / `outputs.tf` | `TF_VAR_*` settings and `agent_context` JSON blob. |
 | `terraform/scripts/prepare_boxes.py` | Legacy DNS helper — superseded by `hardening_ops.fix_dns_on_boxes`. |
 | `quotient/setup.py` | Builds `event.conf`/`linux.credlist`, seeds/starts competition, uploads injects. |
-| `vendor/nakon/` | Submodule (v0.1.3) — CLI only (`randomize`/`build`/`deploy`), bundles under `bundles/`. |
+| `vendor/nakon/` | Submodule (v0.1.5) — CLI only (`randomize`/`build`/`deploy`), bundles under `bundles/`. |
 | `.env` / `.env.example` | Single config for Terraform + driver; `.env` gitignored. |
 | `competitions/<id>/` | Per-competition state: `Compfile`, `boxes.json`, `users.json`, `box_services.json`/`box_vulns.json`, `domain_roles.json`, `teams.json`, `nakon-config.json`, `credentials.txt`, etc. |
 

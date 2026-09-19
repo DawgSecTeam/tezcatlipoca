@@ -36,7 +36,7 @@ range_ops.py            Proxmox API, guest-agent exec, snapshots, enumerate_targ
 utils.py                Compfile/users/competition loading
 quotient/setup.py       event.conf/credlist/seed/injects setup
 terraform/main.tf       bridges, scoring VM (1000), team1 VMs, NIC wiring
-vendor/nakon/           SUBMODULE (v0.1.3) — CLI only (randomize/build/deploy)
+vendor/nakon/           SUBMODULE (v0.1.5) — CLI only (randomize/build/deploy)
 docs/architecture.md    architecture (phases, data flow, isolation)
 docs/                   usage-people.md, usage-agents.md
 destroy-competition.py  teardown (API clones + terraform destroy)
