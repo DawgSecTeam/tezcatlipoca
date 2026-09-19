@@ -25,7 +25,6 @@ from constants import (
     MAX_TEAMS,
     NAKON_DIR,
     PER_MACHINE_NAKON_BUDGET,
-    REBOOTS_BOX_CONFIGS,
     SCORING_ENGINE_VMID,
     SLOW_SERVICES,
     SNAP_BASE,
@@ -65,11 +64,8 @@ from ssh_ops import (
 from utils import BOX_USERNAME_DEFAULT, DNS_FIX_CMD, load_compfile, load_users_config, pick_competition
 from windows_ops import bootstrap_windows_box, dns_repoint_windows_box, is_windows_template as win_is_windows_template, wait_for_dc_dns, wait_for_windows_sshd
 
-# Re-export is_windows_template (all three definitions agree: "win" in lower)
-# Ensure driver.is_windows_template resolves (used by redeploy box_platform).
-# windows_ops / ssh_ops / nakon_ops each define it; expose one.
-# The imported `is_windows_template` from nakon_ops is already in scope as is_windows_template.
-# Also ensure bootstrap_windows_box etc. are at module scope for driver.* access.
+# is_windows_template (from nakon_ops, imported above) is what driver.is_windows_template
+# resolves to — used by redeploy's box_platform. All three definitions agree ("win" in lower).
 
 # For backwards compat, expose ENV_PATH like the original did (Path(".env"))
 from pathlib import Path

@@ -71,7 +71,6 @@ def ssh_on_gateway(ctx, cmd, timeout=30):
     )
 
 
-# Alias for future Phase 3: verify-competition uses ssh_to_engine name.
 def ssh_to_engine(ctx, cmd, timeout=30):
     """Alias for ssh_on_gateway — SSH directly to the scoring engine itself."""
     return ssh_on_gateway(ctx, cmd, timeout=timeout)
