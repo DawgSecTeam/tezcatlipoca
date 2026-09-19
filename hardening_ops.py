@@ -63,12 +63,15 @@ def fix_dns_on_boxes(targets, ctx):
         )
 
 
-def fix_services_on_boxes(comp_dir, targets, ctx, box_creds=None):
+def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
     """Post-nakon service hardening (bind address, mail, ftp, dns, etc).
-    Credlist accounts must match push_event_conf's linux.credlist.
+
+    box_creds is required — the same per-run secrets deploy() passed to push_event_conf(); a
+    fallback literal here would recreate the accounts with passwords Quotient's credlist
+    checks don't know, scoring healthy boxes as down.
     """
 
-    creds = box_creds or {"admin": "changeme123", "user1": "password1", "user2": "password2"}
+    creds = box_creds
     cred_items = list(creds.items())
 
     node = os.environ["TF_VAR_proxmox_node"]
@@ -346,4 +349,19 @@ def setup_ubuntu_auth(targets, ctx):
                     print(f"    Auth attempt {attempt}/8 failed for {ip}, retrying in 15s...")
                     time.sleep(15)
                 else:
-                    print(f"  WARNING: Auth setup failed for {ip} after 8 attempts — proceeding anyway")
+                    # Planted misconfigs (writable-sudoers et al) break sudo for this path;
+                    # retry once as root via the guest agent — the same fallback service
+                    # hardening uses — instead of burning 2 minutes and moving on.
+                    print(f"    Auth setup failed for {ip} after 8 attempts — retrying via guest agent (root)...")
+                    vmid = t["vmid"]
+                    root_script = re.sub(r"\bsudo ", "", auth_cmd)
+                    try:
+                        rc, out, err = guest_agent_exec_root(
+                            os.environ["TF_VAR_proxmox_node"], vmid, root_script, timeout=120)
+                        if rc == 0:
+                            print(f"    Auth configured on {ip} (via guest agent)")
+                        else:
+                            print(f"    WARNING: Auth setup still failing on {ip} via guest agent: "
+                                  f"rc={rc} {err.strip()[:200]} — proceeding anyway")
+                    except Exception as e:
+                        print(f"    WARNING: Auth guest-agent fallback failed for {ip} (vmid {vmid}): {e} — proceeding anyway")

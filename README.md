@@ -12,7 +12,7 @@ nakon SSHes into each box to install services and deploy misconfigs.
 
 > **Setup:** clone with submodules (`git clone --recurse-submodules …`, or
 > `git submodule update --init --recursive` in an existing checkout) — nakon is vendored at
-> `vendor/nakon` (pinned to a release; currently v0.1.3). For agent/integration context see
+> `vendor/nakon` (pinned to a release; currently v0.1.5). For agent/integration context see
 > **[AGENTS.md](AGENTS.md)**.
 
 ## How it works
@@ -109,7 +109,7 @@ a known-good point, not a repair.
 | `terraform/variables.tf` / `outputs.tf` | `TF_VAR_*` settings and `agent_context` JSON blob. |
 | `terraform/scripts/prepare_boxes.py` | Legacy DNS helper — superseded by `hardening_ops.fix_dns_on_boxes`. |
 | `quotient/setup.py` | Builds `event.conf`/`linux.credlist`, seeds/starts competition, uploads injects. |
-| `vendor/nakon/` | Submodule (v0.1.3) — CLI only (`randomize`/`build`/`deploy`), bundles under `bundles/`. |
+| `vendor/nakon/` | Submodule (v0.1.5) — CLI only (`randomize`/`build`/`deploy`), bundles under `bundles/`. |
 | `.env` / `.env.example` | Single config for Terraform + driver; `.env` gitignored. |
 | `competitions/<id>/` | Per-competition state: `Compfile`, `boxes.json`, `users.json`, `box_services.json`/`box_vulns.json`, `domain_roles.json`, `teams.json`, `nakon-config.json`, `credentials.txt`, etc. |
 
@@ -121,7 +121,6 @@ placeholder version of `.env`, safe to share). For shared environments, prefer r
 over writing secrets to disk at all:
 ```bash
 export TF_VAR_proxmox_api_token="..."
-export TF_VAR_quotient_admin_password="..."
 ```
 
 ## Known limitations
@@ -132,9 +131,9 @@ export TF_VAR_quotient_admin_password="..."
   [usage-people.md](docs/usage-people.md#theming-usernames)) — the names themselves aren't
   secret either way. The *passwords* are never fixed: generated fresh per competition
   (`box_password`/`box_creds` in `deploy()`) — see `credentials.txt` after a deploy.
-- **Hardcoded Quotient internals**: Postgres/Redis passwords for Quotient's own docker-compose
-  network are literals written into `/opt/quotient/.env` by the driver, not sourced from
-  `.env` — internal to that network, but not zero-hardcoded-secrets.
+- **Quotient's Postgres/Redis passwords live on the engine**: generated fresh per deploy by
+  the driver (`random_password()`), pushed over SSH into `/opt/quotient/.env` — not hardcoded
+  in this repo and not sourced from `.env`, but stored plaintext on the scoring engine.
 - **Windows scoring is port-open only**: Quotient has no native SMB/RDP/WinRM check type, so
   those get a generic `Tcp` check (dial-and-connect, same mechanism the Linux `telnet-service`
   config uses) — it can't tell a healthy service from one just listening. The Windows deploy path

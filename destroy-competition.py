@@ -52,6 +52,15 @@ def destroy_cloned_vms(cloned_vms_path):
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Destroy a deployed competition (VMs + bridges + terraform state).")
+    parser.add_argument("--competition", metavar="NAME",
+                        help="competition directory under competitions/ (skips the picker)")
+    parser.add_argument("--yes", action="store_true",
+                        help="skip the type-the-ID confirmation (for scripted teardown)")
+    args = parser.parse_args()
+
     print("=" * 64)
     print("  COMPETITION TEARDOWN TOOL")
     print("=" * 64)
@@ -65,7 +74,13 @@ def main():
         print("after teams.json support was added to qualify.)")
         sys.exit()
 
-    competition = pick_competition(competitions, label="destroyable", action="Select a competition to destroy")
+    if args.competition:
+        if args.competition not in competitions:
+            print(f"'{args.competition}' is not a destroyable competition. Found: {', '.join(competitions)}")
+            sys.exit(1)
+        competition = args.competition
+    else:
+        competition = pick_competition(competitions, label="destroyable", action="Select a competition to destroy")
     if competition is None:
         print("Quitting.")
         sys.exit()
@@ -86,10 +101,13 @@ def main():
     print("  All VMs and bridges for this competition will be permanently removed.")
     print()
 
-    confirm = input(f"  Type the competition ID to confirm ({competition}): ").strip()
-    if confirm != competition:
-        print("Cancelled — nothing was destroyed.")
-        sys.exit()
+    if args.yes:
+        print(f"  --yes: skipping confirmation for '{competition}'.")
+    else:
+        confirm = input(f"  Type the competition ID to confirm ({competition}): ").strip()
+        if confirm != competition:
+            print("Cancelled — nothing was destroyed.")
+            sys.exit()
 
     # Restore per-competition TF_VAR values from saved files so terraform destroy
     # uses the exact same resource keys as the original apply — for_each over

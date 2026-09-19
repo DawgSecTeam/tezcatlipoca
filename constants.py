@@ -22,6 +22,4 @@ DISRUPTIVE_CONFIGS = {"resolv-conf-null-dns", "apt-sources-empty", "apt-hold-all
 
 WINDOWS_ADMIN_USER = "Administrator"
 
-REBOOTS_BOX_CONFIGS = {"ADDS", "Domain Join"}
-
 NAKON_DIR = Path("vendor/nakon")

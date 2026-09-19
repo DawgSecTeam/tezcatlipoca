@@ -13,7 +13,6 @@ DNS_FIX_CMD = (
 
 # Fallback when no users.json exists; themeable per competition.
 BOX_USERNAME_DEFAULT = "ubuntu"
-BOX_PASSWORD = "ubuntu"
 CREDLIST_USERNAMES_DEFAULT = ["admin", "user1", "user2"]
 
 
@@ -52,6 +51,23 @@ def load_compfile(path):
                     difficulty = 0
 
     return name, scenario, difficulty
+
+
+def compfile_flag(path, key, default=0):
+    """Read an integer Compfile knob (e.g. `team_beacons 1`); default when the
+    key or the file is absent, so old Compfiles keep their behavior."""
+    try:
+        with open(path) as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith(key + " "):
+                    try:
+                        return int(stripped.split(" ", 1)[1].strip())
+                    except ValueError:
+                        return default
+    except FileNotFoundError:
+        pass
+    return default
 
 
 def pick_competition(competitions, label="saved", action="Select a competition"):

@@ -1,0 +1,7 @@
+{
+  "title": "Plaintext credentials found in HR share",
+  "description_file": "briefing.md",
+  "open_offset_min": 10,
+  "due_offset_min": 30,
+  "close_offset_min": 50
+}
