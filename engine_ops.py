@@ -120,7 +120,9 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
             f"{scoring_user}@{scoring_ip}",
             "cd /opt/quotient && sudo docker compose up -d",
         ],
-        check=True, timeout=60,
+        # first up after a --no-cache build cold-starts postgres (initdb) and
+        # recreates every container — measured >60 s twice on e2e-2026-09-19
+        check=True, timeout=600,
     )
 
     # Docker sets FORWARD policy to DROP; restore forwarding + isolation.
