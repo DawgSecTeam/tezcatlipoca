@@ -96,8 +96,8 @@ weekend and this must be flawless.
 
 - Author competitions/scrim-dress-2026-09-2X from competitions/agent-scrim-
   2026-09-17b — the ONLY agent-scrim comp that exists (17c was never git-
-  tracked and is gone; run-agent-scrim's DEFAULT_TEMPLATE points at
-  agent-scrim-2026-09-16, also gone — pinned to 17b on 2026-09-20).
+  tracked and is gone; run-agent-scrim's DEFAULT_TEMPLATE pointed at the also-
+  gone agent-scrim-2026-09-16 — repinned to 17b 2026-09-20).
   stage_author semantics: skip RUNTIME_FILES, sub-*, LOG.md, .nakon-domain-*,
   .phase6-swept; rewrite Compfile name. Authoring standalone via CLI is not
   wired (run-agent-scrim --new crashes in creds_from_files if you add

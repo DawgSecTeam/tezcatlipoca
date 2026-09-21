@@ -46,7 +46,7 @@ from utils import load_users_config
 
 REPO = Path(__file__).resolve().parent
 BAD_AUTO = REPO.parent / "bad-auto"
-DEFAULT_TEMPLATE = REPO / "competitions" / "agent-scrim-2026-09-16"
+DEFAULT_TEMPLATE = REPO / "competitions" / "agent-scrim-2026-09-17b"
 RUNTIME_FILES = {  # regenerated per deploy; never copied into a fresh competition
     "teams.json", ".deploy_state.json", "credentials.txt", "nakon-config.json",
     "cloned_vms.json", "packet.md", "event.conf",
