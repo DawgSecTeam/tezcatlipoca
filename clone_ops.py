@@ -103,7 +103,7 @@ def ensure_cloned_network(teams, boxes):
     boxes are skipped — bootstrap_windows_box does its own network config.
     """
     node = os.environ["TF_VAR_proxmox_node"]
-    for team in teams:
+    for team in teams.values():
         for box_idx, box in enumerate(boxes):
             if is_windows_template(box["template"]):
                 continue
@@ -133,7 +133,6 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
 
     team1 = team_ids[0]
 
-    # Step 1: cloud-init clean on team1 (Linux only; Windows uses sysprep).
     print("  Running cloud-init clean on team1 boxes...")
     for box in boxes:
         if is_windows_template(box["template"]):
@@ -152,9 +151,6 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
         except Exception as e:
             print(f"  WARNING: cloud-init clean failed for {box['name']}: {e}")
 
-    # Step 2: Stop team1 boxes
-    # Use 0-based box index for vm_id_for (Terraform creates VMs with 0-based index)
-    # while last_octet is used for IP addresses
     print("  Shutting down team1 boxes...")
     for box_idx, box in enumerate(boxes):
         vmid = vm_id_for(team1["identifier"], box_idx)
@@ -164,9 +160,7 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
             stop_vm(node, vmid)
         print(f"    team1-{box['name']} (vmid {vmid}) stopped")
 
-    # Step 3: Clone team1 boxes for each subsequent team
     print("  Cloning team1 boxes to other teams...")
-    # Track cloned VMIDs for destroy + resume (not in Terraform state).
     cloned_vms_path = comp_dir / "cloned_vms.json"
     cloned_vms = json.loads(cloned_vms_path.read_text()) if cloned_vms_path.exists() else {}
     existing_vmids = {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
@@ -205,7 +199,6 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
                     "net0": f"virtio,bridge={bridge}",
                 })
 
-    # Step 4: Start ALL team boxes (team1 + cloned)
     print("  Starting all team boxes...")
     for team in team_ids:
         for box_idx, box in enumerate(boxes):
@@ -220,14 +213,10 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
             except Exception as e:
                 print(f"  WARNING: Failed to start vmid {vmid}: {e}")
 
-    # Step 4.5: every box must actually have its IPv4 before anything SSHes
-    # into it — the cloud-init race / carrier-blip repair happens here instead
-    # of failing phase 6/7 an hour later.
     ensure_cloned_network(teams, boxes)
 
     all_targets = enumerate_targets(teams, boxes)
 
-    # Bootstrap cloned team2+ Windows boxes (team1 done in phase 4.5).
     for t in all_targets:
         if t["team_key"] == "team1" or not is_windows_template(t["box"]["template"]):
             continue
@@ -238,17 +227,13 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
     wait_for_boxes_ssh(ctx, all_targets, timeout=300)
     wait_for_cloud_init(ctx, all_targets, timeout=240)
 
-    # NOPASSWD sudo BEFORE the DNS fix: on fresh clones the DNS fix's sudo
-    # soft-fails 8x per box until the sudoers grant lands (D3), and the
-    # guest-agent fallback in fix_dns_on_boxes covers any remaining gap.
     setup_ubuntu_auth([t for t in all_targets if not is_windows_template(t["box"]["template"])], ctx)
     fix_dns_on_boxes([t for t in all_targets if not is_windows_template(t["box"]["template"])], ctx)
 
-    # Snapshot cloned team2+ boxes before phase-6 nakon (team1 already has tz-base).
     print(f"  Snapshotting cloned boxes as '{SNAP_BASE}' (pre-Nakon restore point)...")
     for t in all_targets:
         if t["team_key"] == "team1":
-            continue  # already snapshotted in phase [5/7]
+            continue
         take_snapshot(node, t["vmid"], SNAP_BASE,
                       description="tezcatlipoca: cloned, networked, pre-Nakon")
 
