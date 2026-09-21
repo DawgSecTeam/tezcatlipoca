@@ -385,11 +385,19 @@ def status_text(creds, team):
         return f"scoreboard unreachable ({type(e).__name__}: {e})"
 
 
+def blue_ep(args, n):
+    """Per-team blue endpoint: team2 can ride a separate LLM (--blue2-*),
+    splitting load across local boxes. Falls back to the shared args."""
+    if n == 2 and getattr(args, "blue2_base_url", None):
+        return args.blue2_base_url, (args.blue2_model or args.blue_model)
+    return args.blue_base_url, args.blue_model
+
+
 def stage_blues(args, comp, run_dir, creds, t0):
     api_key(local="openrouter" not in args.blue_base_url)
-    blue_model = args.blue_model
-    local_blue = "openrouter" not in args.blue_base_url
     for n in (1, 2):
+        base_url, blue_model = blue_ep(args, n)
+        local_blue = "openrouter" not in base_url
         wd = run_dir / f"blue-team{n}"
         wd.mkdir(parents=True, exist_ok=True)
         (wd / "submissions").mkdir(exist_ok=True)
@@ -414,14 +422,14 @@ def stage_blues(args, comp, run_dir, creds, t0):
         # fatally (60000 verified against the slot limit); no reasoning_effort.
         (wd / "opencode.jsonc").write_text(
             OPENCODE_PROJECT_CFG
-            .replace("{PROVIDER_KEY}", provider_key(args.blue_base_url))
-            .replace("{BASE_URL}", args.blue_base_url)
+            .replace("{PROVIDER_KEY}", provider_key(base_url))
+            .replace("{BASE_URL}", base_url)
             .replace("{API_KEY_FIELD}", "{env:OPENROUTER_API_KEY}" if not local_blue else "local")
             .replace("{MODEL_ID}", blue_model)
             .replace("{CTX}", "60000" if local_blue else "120000")
             .replace("{OUT}", "4000" if local_blue else "16000")
             .replace("{EFFORT}", "" if local_blue else effort_json(args.reasoning_effort)))
-    log(f"blue workdirs ready (model {blue_model} @ {args.blue_base_url})")
+        log(f"blue workdir team{n} ready ({blue_model} @ {base_url})")
 
 
 def shutil_copy(src, dst):
@@ -595,8 +603,10 @@ def _opencode_run(args, prompt, wd, env):
     trusted: no stdin, own process group, per-team HOME/XDG so opencode's state
     DB and server logs live inside the run dir (triage evidence instead of
     silent global state shared with whatever else runs under this user)."""
+    n_team = 2 if wd.name.endswith("team2") else 1
+    base_url, blue_model = blue_ep(args, n_team)
     return subprocess.run(["opencode", "run", "-m",
-                           f"{provider_key(args.blue_base_url)}/{args.blue_model}", "--auto",
+                           f"{provider_key(base_url)}/{blue_model}", "--auto",
                            prompt],
                           cwd=wd, env=env, capture_output=True, text=True,
                           stdin=subprocess.DEVNULL, start_new_session=True,
@@ -799,12 +809,16 @@ def stage_red(args, comp, creds, run_dir):
 
 def stage_run(args, creds, t0):
     stop = threading.Event()
+    # Serialize each endpoint's LLM calls (llm_lock): the shared local
+    # endpoint has few slots and rejects oversized prompts, so blues on the
+    # SAME endpoint must never call it at once — blues on separate endpoints
+    # (--blue2-base-url) get separate locks and run concurrently.
     blue_lock = threading.Lock()
-    # Blues staggered + LLM-call serialized (llm_lock): the shared local
-    # endpoint has few slots and rejects oversized prompts, so the two blues
-    # must never call it at the same time.
+    blue_lock2 = (blue_lock if not getattr(args, "blue2_base_url", None)
+                  or args.blue2_base_url == args.blue_base_url
+                  else threading.Lock())
     threads = [threading.Thread(target=blue_feed_loop, args=(1, args, creds, t0, stop, blue_lock, 0.0)),
-               threading.Thread(target=blue_feed_loop, args=(2, args, creds, t0, stop, blue_lock, 300.0))]
+               threading.Thread(target=blue_feed_loop, args=(2, args, creds, t0, stop, blue_lock2, 300.0))]
     threads.append(threading.Thread(target=monitor_loop, args=(args, creds, t0, stop)))
     for t in threads:
         t.start()
@@ -951,6 +965,10 @@ def main():
     p.add_argument("--blue-base-url", default=None,
                    help="LLM base URL for blues only (defaults to --llm-base-url); "
                         "e.g. the local qwen endpoint http://100.64.0.9:8080/v1")
+    p.add_argument("--blue2-base-url", default=None,
+                   help="separate LLM base URL for team2's blue (default: same as --blue-base-url)")
+    p.add_argument("--blue2-model", default=None,
+                   help="model for team2's blue when --blue2-base-url is set")
     p.add_argument("--skip-deploy", action="store_true", help="competition already at phase 7")
     p.add_argument("--from-phase", dest="resume", type=int, default=None,
                    help="resume create-competition at this phase")
