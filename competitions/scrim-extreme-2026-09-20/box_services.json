@@ -4,7 +4,6 @@
   ],
   "win01": [
     "Enable WinRM",
-    "New SMB Share",
     "RDP misconfigs"
   ],
   "web01": [

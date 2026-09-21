@@ -25,7 +25,19 @@ def load_previous_competitions():
 
 
 def random_password():
-    return "".join(random.choices(string.ascii_letters + string.digits, k=12))
+    """14 chars, guaranteed upper+lower+digit+symbol, unquoted-safe charset.
+
+    Windows guest boxes set this via `net user` and AD enforces complexity:
+    the old letters+digits pool produced digit-free passwords ~13% of runs
+    (scrim-extreme-2026-09-20) and the policy rejection killed every Windows
+    login downstream. Characters are cmd/PS-quoting safe (no &|<>^%$`"' or
+    whitespace)."""
+    pools = [string.ascii_uppercase, string.ascii_lowercase, string.digits,
+             "!@#*_-+=?"]
+    while True:
+        pw = "".join(random.choices("".join(pools) + "".join(pools), k=14))
+        if all(any(c in p for c in pw) for p in pools):
+            return pw
 
 
 def collect_teams(number_of_teams):

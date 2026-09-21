@@ -1,661 +1,4 @@
 {
- "web01": [
-  "apache-anon-upload-rce",
-  "apache-directory-listing",
-  {
-   "name": "apache-site",
-   "vars": {
-    "SITE_TITLE": "Portal Upgrade",
-    "SITE_BODY": "<h1>Upgrade in progress</h1>"
-   }
-  },
-  "apparmor-disabled",
-  "apt-sources-empty",
-  "aslr-disabled",
-  "at-job-any-user",
-  "attacker-authorized-keys",
-  "auditd-disabled",
-  "authorized-keys-backdoor",
-  {
-   "name": "backdoor-firewall-rule",
-   "vars": {
-    "SOURCE_IP": "198.51.100.77",
-    "DST_PORT": "22"
-   }
-  },
-  "backdoored-core-utils",
-  "bad-perms-userConfig",
-  "browser-malicious-extension",
-  "cockpit-installed",
-  "core-dump-world-readable",
-  "cron-d-rogue-job",
-  "desktop-autostart-backdoor",
-  "dnf-gpgcheck-disabled",
-  "dnf-gpgcheck-off",
-  "dnf-repos-disabled",
-  "docker-daemon-exposed",
-  "docker-group-member",
-  "docker-privileged-container",
-  "docker-untrusted-registry",
-  "docker-writable-etc-mount",
-  "dovecot-debug-plaintext",
-  "dpkg-broken-hold-state",
-  "empty-password-account",
-  "example-evil-image",
-  "exploit-file-on-disk",
-  "exploitable-cron-job",
-  "ftp-anonymous-write",
-  "git-daemon-secrets-repo",
-  "group-password-set",
-  "hacking-tools-installed",
-  "hidden-cron-persistence",
-  "hidden-hosts-entry",
-  "hidden-media-files",
-  "hostname-loop",
-  "initd-malware-script",
-  {
-   "name": "insecure-file-mode",
-   "vars": {
-    "FILE_PATH": "/opt/app/config.ini",
-    "FILE_MODE": "777",
-    "FILE_CONTENT": "debug=1\nadmin_pw=changeme\n"
-   }
-  },
-  "journal-disk-full",
-  "ld-so-preload-rootkit",
-  "leaked-deploy-keys",
-  "limits-max-processes-one",
-  "lingering-enabled",
-  {
-   "name": "local-user",
-   "vars": {
-    "USERNAME": "vendor-support",
-    "PASSWORD": "Meridian2026!",
-    "GROUPS_ADD": "sudo"
-   }
-  },
-  {
-   "name": "loosen-file-mode",
-   "vars": {
-    "FILE_PATH": "/srv/portal/.env",
-    "FILE_MODE": "666",
-    "FILE_CONTENT": "DB_PASSWORD=portal2026\n"
-   }
-  },
-  "malicious-autostart",
-  "malicious-factory-users",
-  "malicious-motd-script",
-  "malicious-pam-module",
-  "malicious-systemd-timer-service",
-  "minecraft-rcon-enabled",
-  "multiple-uid0-accounts",
-  "mysql-insecure-server-flags",
-  "mysql-remote-root",
-  "mysql-root-hash-reuse",
-  "mysql-root-nopassword",
-  "ncat-listener-autostart",
-  "nfs-no-root-squash",
-  "nginx-off-by-slash",
-  "nginx-server-tokens-on",
-  "nodejs-webshell",
-  "pam-auth-failure-bypass",
-  "pam-no-password-quality",
-  "pam-permit-auth",
-  "pam-permit-empty",
-  "passwd-world-readable",
-  "password-policy-missing",
-  "passwordless-sudo",
-  "php-webshell-webroot",
-  "polkit-passwordless-root-rule",
-  "polyglot-media",
-  "postfix-expn-vrfy",
-  "postgresql-no-auth",
-  "postgresql-remote-access",
-  "proftpd-weak-auth",
-  {
-   "name": "raw-socket-beacon",
-   "vars": {
-    "SERVICE_NAME": "kworker-monitor"
-   }
-  },
-  {
-   "name": "realm-beacon",
-   "vars": {
-    "SERVICE_NAME": "tide-syncd"
-   }
-  },
-  "redis-no-auth",
-  "remote-desktop-installed",
-  "resolv-conf-null-dns",
-  "root-nginx",
-  "secrets-in-webroot-env",
-  "selinux-permissive",
-  "service-account-shell",
-  "ssh-backdoor-listener-2222",
-  "ssh-empty-passwords",
-  "ssh-max-auth-retries-high",
-  "ssh-password-auth",
-  "ssh-root-login",
-  "ssh-x11-forwarding",
-  "sshd-force-sftp-broken-chroot",
-  "sssd-offline-ad-credentials",
-  "sudo-nopasswd",
-  "sudo-preserve-env",
-  "sudo-timestamp-never-expires",
-  "sudoers-extra-entries",
-  "sudoers-gtfobins-allowlist",
-  "suid-ed",
-  "suid-find",
-  "suid-nano",
-  "suid-python",
-  "suid-vim",
-  "suspicious-user-home-script",
-  "syncookies-disabled",
-  "sysctl-syn-cookies-disabled",
-  {
-   "name": "systemd-service",
-   "vars": {
-    "SERVICE_NAME": "portal-healthd",
-    "DESCRIPTION": "Portal health telemetry daemon",
-    "EXEC_START": "/bin/sh -c 'while true; do sleep 200; done'",
-    "EXTRA_LINE": "Environment=EXFIL_URL=http://feed.wardline-telemetry.net/collect"
-   }
-  },
-  "systemd-service-writable",
-  "systemd-system-masked",
-  "tftpd-hpa-anon-write",
-  "theme-motd",
-  "theme-readme",
-  "theme-shortcuts",
-  "theme-wallpaper",
-  "timezone-chaos",
-  "tor-exfil-daemon",
-  "ttyd-web-terminal",
-  "ufw-removed",
-  "uid0-backdoor-account",
-  {
-   "name": "uid0-user",
-   "vars": {
-    "USERNAME": "imaging-ops",
-    "PASSWORD": "Imaging2026!"
-   }
-  },
-  "unauthorized-admin-user",
-  "unauthorized-ftp-server",
-  "unauthorized-shipping-account",
-  "unauthorized-ssh-backup-listener",
-  "unprivileged-users-enabled",
-  "unrealircd-backdoor-container",
-  "untrusted-package-repo",
-  {
-   "name": "user-login-shell",
-   "vars": {
-    "USERNAME": "radiology-tech",
-    "LOGIN_SHELL": "/bin/bash",
-    "SYSTEM": "1",
-    "PASSWORD": "Radiology2026!"
-   }
-  },
-  {
-   "name": "user-sudo-nopasswd",
-   "vars": {
-    "USERNAME": "frontdesk",
-    "PASSWORD": "Frontdesk2026!"
-   }
-  },
-  "usr-share-implant-dir",
-  "vsftpd-anon-upload",
-  "weak-password-account",
-  "wildcard-sudo",
-  "world-readable-shadow-adjacent",
-  "world-writable-cron-d",
-  "world-writable-crond",
-  "world-writable-etc-hosts",
-  "world-writable-web-content",
-  "writable-bashrc",
-  "writable-etc-group",
-  "writable-sudoers",
-  "www-data-shell",
-  "x11vnc-root-nopassword"
- ],
- "app01": [
-  "apache-anon-upload-rce",
-  "apache-directory-listing",
-  {
-   "name": "apache-site",
-   "vars": {
-    "SITE_TITLE": "Portal Upgrade",
-    "SITE_BODY": "<h1>Upgrade in progress</h1>"
-   }
-  },
-  "apparmor-disabled",
-  "apt-sources-empty",
-  "aslr-disabled",
-  "at-job-any-user",
-  "attacker-authorized-keys",
-  "auditd-disabled",
-  "authorized-keys-backdoor",
-  {
-   "name": "backdoor-firewall-rule",
-   "vars": {
-    "SOURCE_IP": "198.51.100.77",
-    "DST_PORT": "22"
-   }
-  },
-  "backdoored-core-utils",
-  "bad-perms-userConfig",
-  "browser-malicious-extension",
-  "cockpit-installed",
-  "core-dump-world-readable",
-  "cron-d-rogue-job",
-  "desktop-autostart-backdoor",
-  "dnf-gpgcheck-disabled",
-  "dnf-gpgcheck-off",
-  "dnf-repos-disabled",
-  "docker-daemon-exposed",
-  "docker-group-member",
-  "docker-privileged-container",
-  "docker-untrusted-registry",
-  "docker-writable-etc-mount",
-  "dovecot-debug-plaintext",
-  "dpkg-broken-hold-state",
-  "empty-password-account",
-  "example-evil-image",
-  "exploit-file-on-disk",
-  "exploitable-cron-job",
-  "ftp-anonymous-write",
-  "git-daemon-secrets-repo",
-  "group-password-set",
-  "hacking-tools-installed",
-  "hidden-cron-persistence",
-  "hidden-hosts-entry",
-  "hidden-media-files",
-  "hostname-loop",
-  "initd-malware-script",
-  {
-   "name": "insecure-file-mode",
-   "vars": {
-    "FILE_PATH": "/opt/app/config.ini",
-    "FILE_MODE": "777",
-    "FILE_CONTENT": "debug=1\nadmin_pw=changeme\n"
-   }
-  },
-  "journal-disk-full",
-  "ld-so-preload-rootkit",
-  "leaked-deploy-keys",
-  "limits-max-processes-one",
-  "lingering-enabled",
-  {
-   "name": "local-user",
-   "vars": {
-    "USERNAME": "svc-imaging",
-    "PASSWORD": "Imaging2026!",
-    "GROUPS_ADD": "sudo"
-   }
-  },
-  {
-   "name": "loosen-file-mode",
-   "vars": {
-    "FILE_PATH": "/srv/portal/.env",
-    "FILE_MODE": "666",
-    "FILE_CONTENT": "DB_PASSWORD=portal2026\n"
-   }
-  },
-  "malicious-autostart",
-  "malicious-factory-users",
-  "malicious-motd-script",
-  "malicious-pam-module",
-  "malicious-systemd-timer-service",
-  "minecraft-rcon-enabled",
-  "multiple-uid0-accounts",
-  "mysql-insecure-server-flags",
-  "mysql-remote-root",
-  "mysql-root-hash-reuse",
-  "mysql-root-nopassword",
-  "ncat-listener-autostart",
-  "nfs-no-root-squash",
-  "nginx-off-by-slash",
-  "nginx-server-tokens-on",
-  "nodejs-webshell",
-  "pam-auth-failure-bypass",
-  "pam-no-password-quality",
-  "pam-permit-auth",
-  "pam-permit-empty",
-  "passwd-world-readable",
-  "password-policy-missing",
-  "passwordless-sudo",
-  "php-webshell-webroot",
-  "polkit-passwordless-root-rule",
-  "polyglot-media",
-  "postfix-expn-vrfy",
-  "postgresql-no-auth",
-  "postgresql-remote-access",
-  "proftpd-weak-auth",
-  {
-   "name": "raw-socket-beacon",
-   "vars": {
-    "SERVICE_NAME": "kworker-monitor"
-   }
-  },
-  {
-   "name": "realm-beacon",
-   "vars": {
-    "SERVICE_NAME": "tide-syncd"
-   }
-  },
-  "redis-no-auth",
-  "remote-desktop-installed",
-  "resolv-conf-null-dns",
-  "root-nginx",
-  "secrets-in-webroot-env",
-  "selinux-permissive",
-  "service-account-shell",
-  "ssh-backdoor-listener-2222",
-  "ssh-empty-passwords",
-  "ssh-max-auth-retries-high",
-  "ssh-password-auth",
-  "ssh-root-login",
-  "ssh-x11-forwarding",
-  "sshd-force-sftp-broken-chroot",
-  "sssd-offline-ad-credentials",
-  "sudo-nopasswd",
-  "sudo-preserve-env",
-  "sudo-timestamp-never-expires",
-  "sudoers-extra-entries",
-  "sudoers-gtfobins-allowlist",
-  "suid-ed",
-  "suid-find",
-  "suid-nano",
-  "suid-python",
-  "suid-vim",
-  "suspicious-user-home-script",
-  "syncookies-disabled",
-  "sysctl-syn-cookies-disabled",
-  {
-   "name": "systemd-service",
-   "vars": {
-    "SERVICE_NAME": "portal-healthd",
-    "DESCRIPTION": "Portal health telemetry daemon",
-    "EXEC_START": "/bin/sh -c 'while true; do sleep 200; done'",
-    "EXTRA_LINE": "Environment=EXFIL_URL=http://feed.wardline-telemetry.net/collect"
-   }
-  },
-  "systemd-service-writable",
-  "systemd-system-masked",
-  "tftpd-hpa-anon-write",
-  "theme-motd",
-  "theme-readme",
-  "theme-shortcuts",
-  "theme-wallpaper",
-  "timezone-chaos",
-  "tor-exfil-daemon",
-  "ttyd-web-terminal",
-  "ufw-removed",
-  "uid0-backdoor-account",
-  {
-   "name": "uid0-user",
-   "vars": {
-    "USERNAME": "dicom-sync",
-    "PASSWORD": "Dicom2026!"
-   }
-  },
-  "unauthorized-admin-user",
-  "unauthorized-ftp-server",
-  "unauthorized-shipping-account",
-  "unauthorized-ssh-backup-listener",
-  "unprivileged-users-enabled",
-  "unrealircd-backdoor-container",
-  "untrusted-package-repo",
-  {
-   "name": "user-login-shell",
-   "vars": {
-    "USERNAME": "backup-agent",
-    "LOGIN_SHELL": "/bin/bash",
-    "SYSTEM": "1",
-    "PASSWORD": "Backup2026!"
-   }
-  },
-  {
-   "name": "user-sudo-nopasswd",
-   "vars": {
-    "USERNAME": "wardline",
-    "PASSWORD": "Wardline2026!"
-   }
-  },
-  "usr-share-implant-dir",
-  "vsftpd-anon-upload",
-  "weak-password-account",
-  "wildcard-sudo",
-  "world-readable-shadow-adjacent",
-  "world-writable-cron-d",
-  "world-writable-crond",
-  "world-writable-etc-hosts",
-  "world-writable-web-content",
-  "writable-bashrc",
-  "writable-etc-group",
-  "writable-sudoers",
-  "www-data-shell",
-  "x11vnc-root-nopassword"
- ],
- "db01": [
-  "apache-anon-upload-rce",
-  "apache-directory-listing",
-  {
-   "name": "apache-site",
-   "vars": {
-    "SITE_TITLE": "Portal Upgrade",
-    "SITE_BODY": "<h1>Upgrade in progress</h1>"
-   }
-  },
-  "apparmor-disabled",
-  "apt-sources-empty",
-  "aslr-disabled",
-  "at-job-any-user",
-  "attacker-authorized-keys",
-  "auditd-disabled",
-  "authorized-keys-backdoor",
-  {
-   "name": "backdoor-firewall-rule",
-   "vars": {
-    "SOURCE_IP": "198.51.100.77",
-    "DST_PORT": "22"
-   }
-  },
-  "backdoored-core-utils",
-  "bad-perms-userConfig",
-  "browser-malicious-extension",
-  "cockpit-installed",
-  "core-dump-world-readable",
-  "cron-d-rogue-job",
-  "desktop-autostart-backdoor",
-  "dnf-gpgcheck-disabled",
-  "dnf-gpgcheck-off",
-  "dnf-repos-disabled",
-  "docker-daemon-exposed",
-  "docker-group-member",
-  "docker-privileged-container",
-  "docker-untrusted-registry",
-  "docker-writable-etc-mount",
-  "dovecot-debug-plaintext",
-  "dpkg-broken-hold-state",
-  "empty-password-account",
-  "example-evil-image",
-  "exploit-file-on-disk",
-  "exploitable-cron-job",
-  "ftp-anonymous-write",
-  "git-daemon-secrets-repo",
-  "group-password-set",
-  "hacking-tools-installed",
-  "hidden-cron-persistence",
-  "hidden-hosts-entry",
-  "hidden-media-files",
-  "hostname-loop",
-  "initd-malware-script",
-  {
-   "name": "insecure-file-mode",
-   "vars": {
-    "FILE_PATH": "/opt/app/config.ini",
-    "FILE_MODE": "777",
-    "FILE_CONTENT": "debug=1\nadmin_pw=changeme\n"
-   }
-  },
-  "journal-disk-full",
-  "ld-so-preload-rootkit",
-  "leaked-deploy-keys",
-  "limits-max-processes-one",
-  "lingering-enabled",
-  {
-   "name": "local-user",
-   "vars": {
-    "USERNAME": "records-admin",
-    "PASSWORD": "Records2026!",
-    "GROUPS_ADD": "sudo"
-   }
-  },
-  {
-   "name": "loosen-file-mode",
-   "vars": {
-    "FILE_PATH": "/srv/portal/.env",
-    "FILE_MODE": "666",
-    "FILE_CONTENT": "DB_PASSWORD=portal2026\n"
-   }
-  },
-  "malicious-autostart",
-  "malicious-factory-users",
-  "malicious-motd-script",
-  "malicious-pam-module",
-  "malicious-systemd-timer-service",
-  "minecraft-rcon-enabled",
-  "multiple-uid0-accounts",
-  "mysql-insecure-server-flags",
-  "mysql-remote-root",
-  "mysql-root-hash-reuse",
-  "mysql-root-nopassword",
-  "ncat-listener-autostart",
-  "nfs-no-root-squash",
-  "nginx-off-by-slash",
-  "nginx-server-tokens-on",
-  "nodejs-webshell",
-  "pam-auth-failure-bypass",
-  "pam-no-password-quality",
-  "pam-permit-auth",
-  "pam-permit-empty",
-  "passwd-world-readable",
-  "password-policy-missing",
-  "passwordless-sudo",
-  "php-webshell-webroot",
-  "polkit-passwordless-root-rule",
-  "polyglot-media",
-  "postfix-expn-vrfy",
-  "postgresql-no-auth",
-  "postgresql-remote-access",
-  "proftpd-weak-auth",
-  {
-   "name": "raw-socket-beacon",
-   "vars": {
-    "SERVICE_NAME": "kworker-monitor"
-   }
-  },
-  {
-   "name": "realm-beacon",
-   "vars": {
-    "SERVICE_NAME": "tide-syncd"
-   }
-  },
-  "redis-no-auth",
-  "remote-desktop-installed",
-  "resolv-conf-null-dns",
-  "root-nginx",
-  "secrets-in-webroot-env",
-  "selinux-permissive",
-  "service-account-shell",
-  "ssh-backdoor-listener-2222",
-  "ssh-empty-passwords",
-  "ssh-max-auth-retries-high",
-  "ssh-password-auth",
-  "ssh-root-login",
-  "ssh-x11-forwarding",
-  "sshd-force-sftp-broken-chroot",
-  "sssd-offline-ad-credentials",
-  "sudo-nopasswd",
-  "sudo-preserve-env",
-  "sudo-timestamp-never-expires",
-  "sudoers-extra-entries",
-  "sudoers-gtfobins-allowlist",
-  "suid-ed",
-  "suid-find",
-  "suid-nano",
-  "suid-python",
-  "suid-vim",
-  "suspicious-user-home-script",
-  "syncookies-disabled",
-  "sysctl-syn-cookies-disabled",
-  {
-   "name": "systemd-service",
-   "vars": {
-    "SERVICE_NAME": "portal-healthd",
-    "DESCRIPTION": "Portal health telemetry daemon",
-    "EXEC_START": "/bin/sh -c 'while true; do sleep 200; done'",
-    "EXTRA_LINE": "Environment=EXFIL_URL=http://feed.wardline-telemetry.net/collect"
-   }
-  },
-  "systemd-service-writable",
-  "systemd-system-masked",
-  "tftpd-hpa-anon-write",
-  "theme-motd",
-  "theme-readme",
-  "theme-shortcuts",
-  "theme-wallpaper",
-  "timezone-chaos",
-  "tor-exfil-daemon",
-  "ttyd-web-terminal",
-  "ufw-removed",
-  "uid0-backdoor-account",
-  {
-   "name": "uid0-user",
-   "vars": {
-    "USERNAME": "export-svc",
-    "PASSWORD": "Export2026!"
-   }
-  },
-  "unauthorized-admin-user",
-  "unauthorized-ftp-server",
-  "unauthorized-shipping-account",
-  "unauthorized-ssh-backup-listener",
-  "unprivileged-users-enabled",
-  "unrealircd-backdoor-container",
-  "untrusted-package-repo",
-  {
-   "name": "user-login-shell",
-   "vars": {
-    "USERNAME": "triage",
-    "LOGIN_SHELL": "/bin/bash",
-    "SYSTEM": "1",
-    "PASSWORD": "Triage2026!"
-   }
-  },
-  {
-   "name": "user-sudo-nopasswd",
-   "vars": {
-    "USERNAME": "report-runner",
-    "PASSWORD": "Report2026!"
-   }
-  },
-  "usr-share-implant-dir",
-  "vsftpd-anon-upload",
-  "weak-password-account",
-  "wildcard-sudo",
-  "world-readable-shadow-adjacent",
-  "world-writable-cron-d",
-  "world-writable-crond",
-  "world-writable-etc-hosts",
-  "world-writable-web-content",
-  "writable-bashrc",
-  "writable-etc-group",
-  "writable-sudoers",
-  "www-data-shell",
-  "x11vnc-root-nopassword"
- ],
  "dc01": [
   "Allow Remote Assistance",
   "Elevate Guest Account",
@@ -755,5 +98,579 @@
   "weak-password-policy-win",
   "windows-updates-frozen-win",
   "wing-ftp-server-win"
+ ],
+ "web01": [
+  "apparmor-disabled",
+  "aslr-disabled",
+  "at-job-any-user",
+  "attacker-authorized-keys",
+  "auditd-disabled",
+  "authorized-keys-backdoor",
+  {
+   "name": "backdoor-firewall-rule",
+   "vars": {
+    "SOURCE_IP": "198.51.100.77",
+    "DST_PORT": "22"
+   }
+  },
+  "bad-perms-userConfig",
+  "browser-malicious-extension",
+  "cockpit-installed",
+  "core-dump-world-readable",
+  "cron-d-rogue-job",
+  "desktop-autostart-backdoor",
+  "dnf-gpgcheck-disabled",
+  "dnf-gpgcheck-off",
+  "dnf-repos-disabled",
+  "docker-daemon-exposed",
+  "docker-group-member",
+  "docker-untrusted-registry",
+  "dovecot-debug-plaintext",
+  "empty-password-account",
+  "example-evil-image",
+  "exploit-file-on-disk",
+  "exploitable-cron-job",
+  "ftp-anonymous-write",
+  "hacking-tools-installed",
+  "hidden-cron-persistence",
+  "hidden-hosts-entry",
+  "hidden-media-files",
+  "hostname-loop",
+  "initd-malware-script",
+  {
+   "name": "insecure-file-mode",
+   "vars": {
+    "FILE_PATH": "/opt/app/config.ini",
+    "FILE_MODE": "777",
+    "FILE_CONTENT": "debug=1\nadmin_pw=changeme\n"
+   }
+  },
+  "journal-disk-full",
+  "leaked-deploy-keys",
+  "lingering-enabled",
+  {
+   "name": "local-user",
+   "vars": {
+    "USERNAME": "vendor-support",
+    "PASSWORD": "Meridian2026!",
+    "GROUPS_ADD": "sudo"
+   }
+  },
+  {
+   "name": "loosen-file-mode",
+   "vars": {
+    "FILE_PATH": "/srv/portal/.env",
+    "FILE_MODE": "666",
+    "FILE_CONTENT": "DB_PASSWORD=portal2026\n"
+   }
+  },
+  "malicious-autostart",
+  "malicious-factory-users",
+  "malicious-motd-script",
+  "malicious-systemd-timer-service",
+  "minecraft-rcon-enabled",
+  "multiple-uid0-accounts",
+  "mysql-insecure-server-flags",
+  "mysql-remote-root",
+  "mysql-root-hash-reuse",
+  "mysql-root-nopassword",
+  "ncat-listener-autostart",
+  "nfs-no-root-squash",
+  "nginx-off-by-slash",
+  "nginx-server-tokens-on",
+  "nodejs-webshell",
+  "pam-auth-failure-bypass",
+  "pam-no-password-quality",
+  "pam-permit-auth",
+  "pam-permit-empty",
+  "passwd-world-readable",
+  "password-policy-missing",
+  "passwordless-sudo",
+  "php-webshell-webroot",
+  "polkit-passwordless-root-rule",
+  "polyglot-media",
+  "postfix-expn-vrfy",
+  "postgresql-remote-access",
+  "proftpd-weak-auth",
+  {
+   "name": "raw-socket-beacon",
+   "vars": {
+    "SERVICE_NAME": "kworker-monitor"
+   }
+  },
+  {
+   "name": "realm-beacon",
+   "vars": {
+    "SERVICE_NAME": "tide-syncd"
+   }
+  },
+  "redis-no-auth",
+  "remote-desktop-installed",
+  "root-nginx",
+  "secrets-in-webroot-env",
+  "selinux-permissive",
+  "service-account-shell",
+  "ssh-backdoor-listener-2222",
+  "ssh-empty-passwords",
+  "ssh-max-auth-retries-high",
+  "ssh-password-auth",
+  "ssh-root-login",
+  "ssh-x11-forwarding",
+  "sshd-force-sftp-broken-chroot",
+  "sudo-nopasswd",
+  "sudo-preserve-env",
+  "sudo-timestamp-never-expires",
+  "sudoers-extra-entries",
+  "suid-ed",
+  "suid-find",
+  "suid-nano",
+  "suid-python",
+  "suid-vim",
+  "suspicious-user-home-script",
+  "syncookies-disabled",
+  "sysctl-syn-cookies-disabled",
+  {
+   "name": "systemd-service",
+   "vars": {
+    "SERVICE_NAME": "portal-healthd",
+    "DESCRIPTION": "Portal health telemetry daemon",
+    "EXEC_START": "/bin/sh -c 'while true; do sleep 200; done'",
+    "EXTRA_LINE": "Environment=EXFIL_URL=http://feed.wardline-telemetry.net/collect"
+   }
+  },
+  "systemd-service-writable",
+  "tftpd-hpa-anon-write",
+  "theme-motd",
+  "theme-readme",
+  "theme-shortcuts",
+  "theme-wallpaper",
+  "timezone-chaos",
+  "tor-exfil-daemon",
+  "ufw-removed",
+  "uid0-backdoor-account",
+  {
+   "name": "uid0-user",
+   "vars": {
+    "USERNAME": "imaging-ops",
+    "PASSWORD": "Imaging2026!"
+   }
+  },
+  "unauthorized-admin-user",
+  "unauthorized-ftp-server",
+  "unauthorized-shipping-account",
+  "unprivileged-users-enabled",
+  "untrusted-package-repo",
+  {
+   "name": "user-login-shell",
+   "vars": {
+    "USERNAME": "radiology-tech",
+    "LOGIN_SHELL": "/bin/bash",
+    "SYSTEM": "1",
+    "PASSWORD": "Radiology2026!"
+   }
+  },
+  {
+   "name": "user-sudo-nopasswd",
+   "vars": {
+    "USERNAME": "frontdesk",
+    "PASSWORD": "Frontdesk2026!"
+   }
+  },
+  "vsftpd-anon-upload",
+  "weak-password-account",
+  "wildcard-sudo",
+  "world-readable-shadow-adjacent",
+  "world-writable-cron-d",
+  "world-writable-crond",
+  "world-writable-etc-hosts",
+  "writable-bashrc",
+  "writable-etc-group",
+  "writable-sudoers",
+  "www-data-shell",
+  "x11vnc-root-nopassword"
+ ],
+ "app01": [
+  "apache-anon-upload-rce",
+  "apache-directory-listing",
+  {
+   "name": "apache-site",
+   "vars": {
+    "SITE_TITLE": "Portal Upgrade",
+    "SITE_BODY": "<h1>Upgrade in progress</h1>"
+   }
+  },
+  "apparmor-disabled",
+  "aslr-disabled",
+  "at-job-any-user",
+  "attacker-authorized-keys",
+  "auditd-disabled",
+  "authorized-keys-backdoor",
+  "bad-perms-userConfig",
+  "browser-malicious-extension",
+  "cockpit-installed",
+  "core-dump-world-readable",
+  "cron-d-rogue-job",
+  "desktop-autostart-backdoor",
+  "dnf-gpgcheck-disabled",
+  "dnf-gpgcheck-off",
+  "dnf-repos-disabled",
+  "docker-group-member",
+  "docker-untrusted-registry",
+  "dovecot-debug-plaintext",
+  "empty-password-account",
+  "example-evil-image",
+  "exploit-file-on-disk",
+  "exploitable-cron-job",
+  "ftp-anonymous-write",
+  "hacking-tools-installed",
+  "hidden-cron-persistence",
+  "hidden-hosts-entry",
+  "hidden-media-files",
+  "hostname-loop",
+  "initd-malware-script",
+  {
+   "name": "insecure-file-mode",
+   "vars": {
+    "FILE_PATH": "/opt/app/config.ini",
+    "FILE_MODE": "777",
+    "FILE_CONTENT": "debug=1\nadmin_pw=changeme\n"
+   }
+  },
+  "journal-disk-full",
+  "leaked-deploy-keys",
+  "lingering-enabled",
+  {
+   "name": "local-user",
+   "vars": {
+    "USERNAME": "svc-imaging",
+    "PASSWORD": "Imaging2026!",
+    "GROUPS_ADD": "sudo"
+   }
+  },
+  {
+   "name": "loosen-file-mode",
+   "vars": {
+    "FILE_PATH": "/srv/portal/.env",
+    "FILE_MODE": "666",
+    "FILE_CONTENT": "DB_PASSWORD=portal2026\n"
+   }
+  },
+  "malicious-autostart",
+  "malicious-factory-users",
+  "malicious-motd-script",
+  "malicious-systemd-timer-service",
+  "minecraft-rcon-enabled",
+  "multiple-uid0-accounts",
+  "mysql-insecure-server-flags",
+  "mysql-root-hash-reuse",
+  "ncat-listener-autostart",
+  "nfs-no-root-squash",
+  "nodejs-webshell",
+  "pam-auth-failure-bypass",
+  "pam-no-password-quality",
+  "pam-permit-auth",
+  "pam-permit-empty",
+  "passwd-world-readable",
+  "password-policy-missing",
+  "passwordless-sudo",
+  "php-webshell-webroot",
+  "polkit-passwordless-root-rule",
+  "polyglot-media",
+  "postfix-expn-vrfy",
+  "postgresql-remote-access",
+  "proftpd-weak-auth",
+  {
+   "name": "raw-socket-beacon",
+   "vars": {
+    "SERVICE_NAME": "kworker-monitor"
+   }
+  },
+  {
+   "name": "realm-beacon",
+   "vars": {
+    "SERVICE_NAME": "tide-syncd"
+   }
+  },
+  "redis-no-auth",
+  "remote-desktop-installed",
+  "secrets-in-webroot-env",
+  "selinux-permissive",
+  "service-account-shell",
+  "ssh-backdoor-listener-2222",
+  "ssh-empty-passwords",
+  "ssh-max-auth-retries-high",
+  "ssh-password-auth",
+  "ssh-root-login",
+  "ssh-x11-forwarding",
+  "sshd-force-sftp-broken-chroot",
+  "sudo-nopasswd",
+  "sudo-preserve-env",
+  "sudo-timestamp-never-expires",
+  "sudoers-extra-entries",
+  "suid-ed",
+  "suid-find",
+  "suid-nano",
+  "suid-python",
+  "suid-vim",
+  "suspicious-user-home-script",
+  "syncookies-disabled",
+  "sysctl-syn-cookies-disabled",
+  {
+   "name": "systemd-service",
+   "vars": {
+    "SERVICE_NAME": "portal-healthd",
+    "DESCRIPTION": "Portal health telemetry daemon",
+    "EXEC_START": "/bin/sh -c 'while true; do sleep 200; done'",
+    "EXTRA_LINE": "Environment=EXFIL_URL=http://feed.wardline-telemetry.net/collect"
+   }
+  },
+  "systemd-service-writable",
+  "tftpd-hpa-anon-write",
+  "theme-motd",
+  "theme-readme",
+  "theme-shortcuts",
+  "theme-wallpaper",
+  "timezone-chaos",
+  "tor-exfil-daemon",
+  "ufw-removed",
+  "uid0-backdoor-account",
+  {
+   "name": "uid0-user",
+   "vars": {
+    "USERNAME": "dicom-sync",
+    "PASSWORD": "Dicom2026!"
+   }
+  },
+  "unauthorized-admin-user",
+  "unauthorized-ftp-server",
+  "unauthorized-shipping-account",
+  "unprivileged-users-enabled",
+  "untrusted-package-repo",
+  {
+   "name": "user-login-shell",
+   "vars": {
+    "USERNAME": "backup-agent",
+    "LOGIN_SHELL": "/bin/bash",
+    "SYSTEM": "1",
+    "PASSWORD": "Backup2026!"
+   }
+  },
+  {
+   "name": "user-sudo-nopasswd",
+   "vars": {
+    "USERNAME": "wardline",
+    "PASSWORD": "Wardline2026!"
+   }
+  },
+  "vsftpd-anon-upload",
+  "weak-password-account",
+  "wildcard-sudo",
+  "world-readable-shadow-adjacent",
+  "world-writable-cron-d",
+  "world-writable-crond",
+  "world-writable-etc-hosts",
+  "world-writable-web-content",
+  "writable-bashrc",
+  "writable-etc-group",
+  "writable-sudoers",
+  "www-data-shell",
+  "x11vnc-root-nopassword"
+ ],
+ "db01": [
+  "apache-anon-upload-rce",
+  "apache-directory-listing",
+  {
+   "name": "apache-site",
+   "vars": {
+    "SITE_TITLE": "Portal Upgrade",
+    "SITE_BODY": "<h1>Upgrade in progress</h1>"
+   }
+  },
+  "apparmor-disabled",
+  "aslr-disabled",
+  "at-job-any-user",
+  "attacker-authorized-keys",
+  "auditd-disabled",
+  "authorized-keys-backdoor",
+  {
+   "name": "backdoor-firewall-rule",
+   "vars": {
+    "SOURCE_IP": "198.51.100.77",
+    "DST_PORT": "22"
+   }
+  },
+  "bad-perms-userConfig",
+  "browser-malicious-extension",
+  "cockpit-installed",
+  "core-dump-world-readable",
+  "cron-d-rogue-job",
+  "desktop-autostart-backdoor",
+  "dnf-gpgcheck-disabled",
+  "dnf-gpgcheck-off",
+  "dnf-repos-disabled",
+  "docker-daemon-exposed",
+  "docker-group-member",
+  "docker-untrusted-registry",
+  "dovecot-debug-plaintext",
+  "empty-password-account",
+  "example-evil-image",
+  "exploit-file-on-disk",
+  "exploitable-cron-job",
+  "ftp-anonymous-write",
+  "hacking-tools-installed",
+  "hidden-cron-persistence",
+  "hidden-hosts-entry",
+  "hidden-media-files",
+  "hostname-loop",
+  "initd-malware-script",
+  {
+   "name": "insecure-file-mode",
+   "vars": {
+    "FILE_PATH": "/opt/app/config.ini",
+    "FILE_MODE": "777",
+    "FILE_CONTENT": "debug=1\nadmin_pw=changeme\n"
+   }
+  },
+  "journal-disk-full",
+  "leaked-deploy-keys",
+  "lingering-enabled",
+  {
+   "name": "local-user",
+   "vars": {
+    "USERNAME": "records-admin",
+    "PASSWORD": "Records2026!",
+    "GROUPS_ADD": "sudo"
+   }
+  },
+  {
+   "name": "loosen-file-mode",
+   "vars": {
+    "FILE_PATH": "/srv/portal/.env",
+    "FILE_MODE": "666",
+    "FILE_CONTENT": "DB_PASSWORD=portal2026\n"
+   }
+  },
+  "malicious-autostart",
+  "malicious-factory-users",
+  "malicious-motd-script",
+  "malicious-systemd-timer-service",
+  "minecraft-rcon-enabled",
+  "multiple-uid0-accounts",
+  "mysql-insecure-server-flags",
+  "mysql-remote-root",
+  "mysql-root-hash-reuse",
+  "mysql-root-nopassword",
+  "ncat-listener-autostart",
+  "nfs-no-root-squash",
+  "nodejs-webshell",
+  "pam-auth-failure-bypass",
+  "pam-no-password-quality",
+  "pam-permit-auth",
+  "pam-permit-empty",
+  "passwd-world-readable",
+  "password-policy-missing",
+  "passwordless-sudo",
+  "php-webshell-webroot",
+  "polkit-passwordless-root-rule",
+  "polyglot-media",
+  "postfix-expn-vrfy",
+  "postgresql-remote-access",
+  "proftpd-weak-auth",
+  {
+   "name": "raw-socket-beacon",
+   "vars": {
+    "SERVICE_NAME": "kworker-monitor"
+   }
+  },
+  {
+   "name": "realm-beacon",
+   "vars": {
+    "SERVICE_NAME": "tide-syncd"
+   }
+  },
+  "redis-no-auth",
+  "remote-desktop-installed",
+  "secrets-in-webroot-env",
+  "selinux-permissive",
+  "service-account-shell",
+  "ssh-backdoor-listener-2222",
+  "ssh-empty-passwords",
+  "ssh-max-auth-retries-high",
+  "ssh-password-auth",
+  "ssh-root-login",
+  "ssh-x11-forwarding",
+  "sshd-force-sftp-broken-chroot",
+  "sudo-nopasswd",
+  "sudo-preserve-env",
+  "sudo-timestamp-never-expires",
+  "sudoers-extra-entries",
+  "suid-ed",
+  "suid-find",
+  "suid-nano",
+  "suid-python",
+  "suid-vim",
+  "suspicious-user-home-script",
+  "syncookies-disabled",
+  "sysctl-syn-cookies-disabled",
+  {
+   "name": "systemd-service",
+   "vars": {
+    "SERVICE_NAME": "portal-healthd",
+    "DESCRIPTION": "Portal health telemetry daemon",
+    "EXEC_START": "/bin/sh -c 'while true; do sleep 200; done'",
+    "EXTRA_LINE": "Environment=EXFIL_URL=http://feed.wardline-telemetry.net/collect"
+   }
+  },
+  "systemd-service-writable",
+  "tftpd-hpa-anon-write",
+  "theme-motd",
+  "theme-readme",
+  "theme-shortcuts",
+  "theme-wallpaper",
+  "timezone-chaos",
+  "tor-exfil-daemon",
+  "ufw-removed",
+  "uid0-backdoor-account",
+  {
+   "name": "uid0-user",
+   "vars": {
+    "USERNAME": "export-svc",
+    "PASSWORD": "Export2026!"
+   }
+  },
+  "unauthorized-admin-user",
+  "unauthorized-ftp-server",
+  "unauthorized-shipping-account",
+  "unprivileged-users-enabled",
+  "untrusted-package-repo",
+  {
+   "name": "user-login-shell",
+   "vars": {
+    "USERNAME": "triage",
+    "LOGIN_SHELL": "/bin/bash",
+    "SYSTEM": "1",
+    "PASSWORD": "Triage2026!"
+   }
+  },
+  {
+   "name": "user-sudo-nopasswd",
+   "vars": {
+    "USERNAME": "report-runner",
+    "PASSWORD": "Report2026!"
+   }
+  },
+  "vsftpd-anon-upload",
+  "weak-password-account",
+  "wildcard-sudo",
+  "world-readable-shadow-adjacent",
+  "world-writable-cron-d",
+  "world-writable-crond",
+  "world-writable-etc-hosts",
+  "world-writable-web-content",
+  "writable-bashrc",
+  "writable-etc-group",
+  "writable-sudoers",
+  "www-data-shell",
+  "x11vnc-root-nopassword"
  ]
 }
