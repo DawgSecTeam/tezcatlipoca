@@ -327,9 +327,22 @@ def qget(creds, user, jar, path):
     return _get()
 
 
+def _team_tid(creds, user, jar, team):
+    """Map a team name to Quotient's internal team ID via /api/teams.
+
+    The services API keys on the engine's own IDs (1, 2, …) — querying it with
+    the subnet identifier from teams.json (101, 102) answers {"error":
+    "Forbidden"} even with a valid cookie, which is the second half of the
+    three-round 'scoreboard unreachable' mystery.
+    """
+    r = qget(creds, user, jar, "/api/teams")
+    teams = json.loads(r.stdout)
+    return str(next(t["ID"] for t in teams if t["Name"] == team))
+
+
 def team_down(creds, team):
-    r = qget(creds, team, f"/tmp/jar.{team}",
-             f"/api/services/{'1' if team == 'team1' else '2'}")
+    jar = f"/tmp/jar.{team}"
+    r = qget(creds, team, jar, f"/api/services/{_team_tid(creds, team, jar, team)}")
     try:
         svcs = json.loads(r.stdout)
         return any(not (s.get("Last10Rounds") and s["Last10Rounds"][0].get("Checks")
@@ -405,8 +418,8 @@ def effort_json(effort):
 
 def status_text(creds, team):
     """Compact plain-text scoreboard for the cycle prompt."""
-    tid = creds[team.upper() + "_ID"]
-    r = qget(creds, team, f"/tmp/jar.{team}", f"/api/services/{tid}")
+    jar = f"/tmp/jar.{team}"
+    r = qget(creds, team, jar, f"/api/services/{_team_tid(creds, team, jar, team)}")
     lines = []
     try:
         services = json.loads(r.stdout)
@@ -637,9 +650,10 @@ def stage_capture(args, creds):
     # Capture runs after the event window closes, when team sessions have been
     # churned all event — qget re-logins and retries on {"error":"Forbidden"};
     # fall back to the team account if admin itself is locked out.
+    admin_jar = str(ev / ".jar-admin")
     for team in ("team1", "team2"):
-        path = f"/api/services/{creds[team.upper() + '_ID']}"
-        r = qget(creds, "admin", str(ev / ".jar-admin"), path)
+        path = f"/api/services/{_team_tid(creds, 'admin', admin_jar, team)}"
+        r = qget(creds, "admin", admin_jar, path)
         if '"error"' in (r.stdout or ""):
             r = qget(creds, team, str(ev / f".jar-{team}"), path)
         (ev / f"final-services-{team}.json").write_text(r.stdout or "")
