@@ -1,0 +1,7 @@
+{
+  "title": "Persistence sweep: tasks, run keys, and services",
+  "description_file": "briefing.md",
+  "open_offset_min": 25,
+  "due_offset_min": 50,
+  "close_offset_min": 75
+}
