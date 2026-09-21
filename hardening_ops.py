@@ -50,9 +50,6 @@ def fix_dns_on_boxes(targets, ctx):
                     print(f"    DNS fix attempt {attempt}/8 failed for {ip}, retrying in 15s...")
                     time.sleep(15)
                 else:
-                    # Guest-agent fallback: runs as root over virtio-serial, so
-                    # it needs neither working sudo (NOPASSWD may not be granted
-                    # yet on a fresh clone) nor the network the SSH path uses.
                     try:
                         rc, _out, err = guest_agent_exec_root(
                             node, t["vmid"], DNS_FIX_CMD_ROOT, timeout=40)
@@ -76,12 +73,7 @@ def fix_dns_on_boxes(targets, ctx):
 
 
 def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
-    """Post-nakon service hardening (bind address, mail, ftp, dns, etc).
-
-    box_creds is required — the same per-run secrets deploy() passed to push_event_conf(); a
-    fallback literal here would recreate the accounts with passwords Quotient's credlist
-    checks don't know, scoring healthy boxes as down.
-    """
+    """Post-nakon service hardening (bind address, mail, ftp, dns, etc.) using the per-run credlist secrets."""
 
     creds = box_creds
     cred_items = list(creds.items())
@@ -94,24 +86,14 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
         ip = t["ip"]
         services = box_services.get(t["box_name"], [])
 
-        # Build a per-box hardening script
         script_lines = ["#!/bin/bash", "set -e", ""]
 
-        # Always create credlist OS accounts (all auth checks need them).
         script_lines.append(f"# Credlist OS accounts ({'/'.join(creds)}) for all auth-based service checks")
         for username, password in cred_items:
             script_lines.append(f"sudo useradd -m -s /bin/bash {username} 2>/dev/null || true")
             script_lines.append(f"echo '{username}:{password}' | sudo chpasswd")
         script_lines.append("")
 
-        # Several catalog configs (ssh-root-login, ssh-empty-passwords, ssh-password-auth,
-        # ssh-max-auth-retries-high, ssh-x11-forwarding, ...) each independently
-        # `systemctl restart ssh`. Landing several on one box back-to-back with no delay
-        # can trip systemd's crash-loop protection (Result: start-limit-hit), leaving sshd
-        # down for the rest of the competition -- confirmed live 2026-09-03 (web01-team101,
-        # 5 ssh-* configs, journalctl showed 5 restarts inside the same second). This
-        # reaches the box over SSH when it's still up, and falls through to the guest-agent
-        # fallback below when it isn't -- either way sshd ends the pass running.
         script_lines.extend([
             "# Un-wedge sshd if a burst of ssh-* misconfig restarts tripped the start-limit",
             "sudo systemctl reset-failed ssh 2>/dev/null || true",
@@ -184,12 +166,10 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
             script_lines.extend([
                 "# Dovecot: enable plaintext auth, create mail dirs",
                 "sudo sed -i 's/^#*disable_plaintext_auth.*/disable_plaintext_auth = no/' /etc/dovecot/conf.d/10-auth.conf 2>/dev/null || true",
-                # Dovecot 2.4 uses different key; add only on 2.4+.
                 "dovecot --version 2>/dev/null | grep -qE '^(2\\.[4-9]|[3-9]\\.)' && "
                 "sudo bash -c \"echo 'auth_allow_cleartext = yes' > "
                 "/etc/dovecot/conf.d/99-allow-plaintext.conf\" || true",
             ])
-            # Mail dir for every credlist account.
             for username, _ in cred_items:
                 script_lines.append(f"sudo mkdir -p /home/{username}/mail")
                 script_lines.append(f"sudo chmod 700 /home/{username}/mail")
@@ -212,7 +192,6 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
                 "};",
                 "BIND9EOF",
                 "sudo cp /tmp/named.conf.options /etc/bind/named.conf.options",
-                # Fix missing named.conf.default-zones
                 "if [ ! -f /etc/bind/named.conf.default-zones ]; then",
                 "  cat > /tmp/named.conf.default-zones << 'BZEOF'",
                 'zone "." {',
@@ -230,7 +209,6 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
                 "BZEOF",
                 "  sudo cp /tmp/named.conf.default-zones /etc/bind/named.conf.default-zones",
                 "fi",
-                # Ensure db.local exists (some templates strip it)
                 "if [ ! -f /etc/bind/db.local ]; then",
                 "  cat > /tmp/db.local << 'DLEOF'",
                 '$TTL 86400',
@@ -271,7 +249,6 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
                 "",
             ])
 
-        # Always ensure all relevant services are started
         script_lines.extend([
             "# Ensure all installed services are running",
             "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
@@ -281,11 +258,9 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
             "done",
         ])
 
-        # Encode script as base64 to avoid ALL quoting issues
         script_content = "\n".join(script_lines)
         script_b64 = base64.b64encode(script_content.encode()).decode()
 
-        # Deploy and execute via gateway
         deploy_cmd = (
             f"echo '{script_b64}' | base64 -d > /tmp/harden.sh && "
             "chmod +x /tmp/harden.sh && "
@@ -296,12 +271,9 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
             result = ssh_via_gateway(ctx, ip, deploy_cmd, timeout=60,
                                       user=ctx.get("box_username", "ubuntu"))
             if result.returncode != 0:
-                # Writable-sudoers breaks sudo; fall back to guest agent (root, no sudo needed).
                 print(f"    Service hardening warning on {ip}: {result.stderr.strip()[:200]}")
                 print(f"    Retrying {ip} via guest agent (as root, no sudo needed)...")
                 vmid = t["vmid"]
-                # \b (not ^\s*) so this also catches mid-pipeline uses like
-                # "echo ... | sudo chpasswd", not just line-leading ones.
                 root_script = re.sub(r"\bsudo ", "", script_content)
                 try:
                     rc, out, err = guest_agent_exec_root(node, vmid, root_script, timeout=120)
@@ -361,9 +333,6 @@ def setup_ubuntu_auth(targets, ctx):
                     print(f"    Auth attempt {attempt}/8 failed for {ip}, retrying in 15s...")
                     time.sleep(15)
                 else:
-                    # Planted misconfigs (writable-sudoers et al) break sudo for this path;
-                    # retry once as root via the guest agent — the same fallback service
-                    # hardening uses — instead of burning 2 minutes and moving on.
                     print(f"    Auth setup failed for {ip} after 8 attempts — retrying via guest agent (root)...")
                     vmid = t["vmid"]
                     root_script = re.sub(r"\bsudo ", "", auth_cmd)

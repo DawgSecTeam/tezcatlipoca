@@ -11,10 +11,7 @@ def is_windows_template(template_name):
 
 
 def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, timeout=600):
-    """Post-clone Windows setup: static IP/gateway/DNS, admin password, sshd + guest agent
-    via QEMU guest agent (only channel before network/password exists). Waits for agent;
-    raises on timeout since downstream steps depend on it.
-    """
+    """Post-clone Windows setup (IP/gateway/DNS, admin password, sshd) via the QEMU guest agent."""
     if not wait_for_guest_agent(node, vmid, timeout=timeout):
         raise RuntimeError(f"vmid {vmid}: guest agent never became responsive within {timeout}s")
 
@@ -27,9 +24,6 @@ Remove-NetRoute -InterfaceIndex $adapter.ifIndex -Confirm:$false -ErrorAction Si
 New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress '{ip}' -PrefixLength 24 -DefaultGateway '{gateway}'
 Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses '{dns_server}'
 
-# nakon's paramiko connection authenticates with this password (see nakon/deploy/ssh.py) —
-# without this the account still has whatever the template baked in, which nothing downstream
-# knows.
 net user {WINDOWS_ADMIN_USER} "{admin_password}"
 
 Set-Service -Name sshd -StartupType Automatic -ErrorAction SilentlyContinue
@@ -46,9 +40,7 @@ if (-not (Get-NetFirewallRule -Name sshd -ErrorAction SilentlyContinue)) {{
 
 
 def dns_repoint_windows_box(node, vmid, dns_server, timeout=60):
-    """Point Windows DNS at the team's DC before domain join (Add-Computer needs SRV records
-    from an authoritative server). Guest-agent equivalent of Linux dns* repoint.
-    """
+    """Point Windows DNS at the team's DC before domain join."""
     ps_script = f"""
 $ErrorActionPreference = 'Stop'
 $adapter = Get-NetAdapter | Where-Object {{ $_.Status -eq 'Up' }} | Select-Object -First 1

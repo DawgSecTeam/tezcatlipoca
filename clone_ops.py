@@ -20,9 +20,7 @@ from windows_ops import bootstrap_windows_box, is_windows_template
 
 
 def _agent_ipv4_present(node, vmid, expected_ip, wait_seconds=0):
-    """True when the guest agent reports expected_ip on some interface. Agent
-    exceptions count as 'not yet' — a box still booting its agent must not be
-    'repaired' while cloud-init is simply slow."""
+    """True when the guest agent reports expected_ip; agent errors count as 'not yet'."""
     deadline = time.time() + wait_seconds
     while True:
         try:
@@ -42,17 +40,7 @@ def _agent_ipv4_present(node, vmid, expected_ip, wait_seconds=0):
 
 
 def _repair_box_network(node, vmid, expected_ip):
-    """Re-add the box's address live and persist it against future blips.
-
-    The e2e-2026-09-19 lesson (app01): clones can come up without the
-    ipconfig0 address (cloud-init race) and ifupdown loses the address on any
-    carrier blip. This is the repair that was never written down — it lives
-    here now: re-add address + default route via the guest agent (root, no
-    network or sudo needed), then persist a systemd-networkd .network with
-    KeepConfiguration (keeps the address through carrier/link churn) and, for
-    ifupdown systems, a static interfaces.d stanza. Both apply the same
-    address, so coexisting is harmless.
-    """
+    """Re-add the box's address live via the guest agent and persist it against carrier blips."""
     cidr = f"{expected_ip}/24"
     gw = f"192.168.{expected_ip.split('.')[2]}.1"
     ifaces = proxmox_api(
@@ -96,12 +84,7 @@ systemctl restart systemd-networkd >/dev/null 2>&1 || true
 
 
 def ensure_cloned_network(teams, boxes):
-    """Post-start IPv4 check + repair for every Linux box (D1/D2).
-
-    Runs right after the start loop and before the SSH waits: a clone without
-    a routable address would otherwise fail phase 6/7 an hour later. Windows
-    boxes are skipped — bootstrap_windows_box does its own network config.
-    """
+    """Post-start IPv4 check + repair for every Linux box, before any SSH wait."""
     node = os.environ["TF_VAR_proxmox_node"]
     for team in teams.values():
         for box_idx, box in enumerate(boxes):
@@ -120,11 +103,7 @@ def ensure_cloned_network(teams, boxes):
 
 
 def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=None):
-    """Clone team1 boxes to other teams and configure networking.
-
-    After cloning, reconfigures IP addresses, fixes DNS, and hardens services
-    on ALL team boxes (team1 + cloned teams).
-    """
+    """Clone team1 boxes to the other teams, then re-IP, DNS-fix, and harden all team boxes."""
     node = os.environ["TF_VAR_proxmox_node"]
     team_ids = list(teams.values())
     if len(team_ids) < 2:

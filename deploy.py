@@ -49,20 +49,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
-    """Main deployment pipeline.
-
-    num_teams / assume_yes let the tool run non-interactively (argparse in main()): when they're
-    None/False the function prompts exactly as it did before. from_phase (>1) resumes a partially
-    built range: it SKIPS the destructive [1/7] cleanup and [2/7] terraform apply, and reloads the
-    teams + per-run secrets from competitions/<id>/.deploy_state.json so a resume agrees with what
-    was already deployed. After each numbered phase completes, the last-completed phase number is
-    checkpointed to that state file; on failure the resume command is printed.
-    """
-    # Load competition configuration (Compfile is key=value format)
+    """Run the seven-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json."""
     name, scenario, difficulty = load_compfile(comp_dir / "Compfile")
-    # Themeable box login username + credlist account names (competitions/<id>/users.json,
-    # optional — defaults to ubuntu/admin/user1/user2 when absent, matching every pre-existing
-    # competition's behavior).
     box_username, credlist_usernames = load_users_config(comp_dir)
     comp_name = comp_dir.name
     print(f"\n{'='*60}")
@@ -74,12 +62,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
         print("  ERROR: No boxes.json found. Create a new competition or add boxes.json.")
         sys.exit(1)
 
-    # Warn (don't block) if this competition's boxes.json still names a template known to be
-    # broken (see docs/usage-people.md's "Adding a template VM" — 106/ubuntu24.04 and
-    # 920/debian13-lite have bad cloud-init and clones never get a working network/SSH). A
-    # reused competition replays its saved boxes.json exactly, so this can silently outlive the
-    # interactive box-picker warning that would otherwise catch it — unconditional here (not
-    # gated by --yes/confirm_deploy) since a non-interactive/CI deploy skips that prompt too.
     KNOWN_BROKEN_TEMPLATES = {"debian13-lite", "ubuntu24.04"}
     for b in boxes:
         if b.get("template") in KNOWN_BROKEN_TEMPLATES:
@@ -88,15 +70,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
                   f"Use '{b['template']}-fix' instead. See docs/usage-people.md's "
                   f"Troubleshooting table.")
 
-    # Resumable-phase state. Secrets (admin/inject/postgres/redis) and the team set are per-run;
-    # a resume MUST reuse the originals or the engine's already-written .env / already-seeded
-    # admin login won't match. Persist them here (gitignored, mode 0600) and reload on resume.
     state_path = comp_dir / ".deploy_state.json"
     if from_phase > 1 and not state_path.exists():
-        # Without this guard the else-branch below ran as if fresh — minting NEW passwords and
-        # overwriting teams.json — while from_phase still skipped the destructive phases 1-2,
-        # leaving the deployed range and its credentials silently out of sync (e.g. nakon
-        # authenticating with a password no box has).
         raise SystemExit(
             f"  ERROR: --from-phase {from_phase} but {state_path} doesn't exist — there are no "
             f"saved team passwords/secrets to resume with, and generating fresh ones while "
@@ -133,9 +108,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             name: random_password() for name in credlist_usernames
         }
         inject_password = state.get("inject_password")
-        # Persist any secret that had to be regenerated above (an older state file predating
-        # that field) so a second resume reuses the same value instead of minting a new one
-        # that would disagree with what's already on the engine/boxes.
         state.update({
             "admin_password": admin_password,
             "postgres_password": postgres_password,
@@ -168,19 +140,9 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
                 print(f"  Enter a number from 1 to {MAX_TEAMS} "
                       f"(team identifiers are 192.168.<101-254>.x).")
         teams = collect_teams(number_of_teams)
-        # Per-competition Quotient web-admin password (scoreboard/admin login only). Postgres and
-        # Redis passwords for the Quotient stack are generated once here and passed to both
-        # bootstrap_scoring_engine() and push_event_conf() so the two .env writes agree.
         admin_password = random_password()
         postgres_password = random_password()
         redis_password = random_password()
-        # Box login (box_username's cloud-init account every target box gets, themeable via
-        # users.json — see load_users_config() above) and the credlist accounts Quotient's
-        # Ssh/Smtp/Imap/Sql/Ftp checks authenticate WITH (credlist_usernames, also themeable)
-        # — passwords generated fresh per competition, same as admin/postgres/redis above,
-        # instead of the fixed ubuntu/ubuntu + admin/changeme123 literals this used to ship
-        # with. A fixed value across every deployment is guessable from this open-source repo,
-        # or from fingerprinting a past deploy — see utils.py's BOX_USERNAME_DEFAULT comment.
         box_password = random_password()
         box_creds = {name: random_password() for name in credlist_usernames}
         inject_password = random_password() if injects else None
@@ -196,18 +158,11 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
         }
         _save_state()
 
-    # Generate Nakon config
     nakon_config_path = generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password,
                                                box_username=box_username)
 
-    # Build the Nakon bundle here, on the operator machine, from the FULL machine list. This
-    # is the only step that needs the vulndb (MySQL + vulndb-ui/MinIO), and
-    # generate_nakon_config() above already proves it's reachable from here. Phases 5 and 6
-    # then deploy from this one bundle, so the scoring engine never sees vulndb credentials.
     nakon_bundle = build_nakon_bundle(nakon_config_path)
 
-    # Update environment variables for Terraform
-    # Terraform reads TF_VAR_teams and TF_VAR_boxes_per_team as JSON strings
     teams_json = json.dumps({
         team_key: {"identifier": team_data["identifier"], "password": team_data["password"]}
         for team_key, team_data in teams.items()
@@ -221,57 +176,40 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
         "TF_VAR_box_username": box_username,
     })
 
-    # Persist team credentials so destroy-competition.py can find and tear down this
-    # competition later (it requires teams.json to exist). Also lets us look up team
-    # logins for verification without re-deriving them.
     (comp_dir / "teams.json").write_text(teams_json)
 
-    # Confirm deployment (skipped by --yes and on resume — resuming implies prior confirmation)
     if not assume_yes and not resuming:
         if not confirm_deploy(name, scenario, difficulty, teams, boxes):
             print("  Deployment cancelled.")
             return
 
     node = os.environ["TF_VAR_proxmox_node"]
-    # Every (team, box) pair this deploy touches, with the vmid/IP/nakon-machine-name already
-    # derived. Built once from the FULL box list — see enumerate_targets()'s docstring for why
-    # nothing downstream may re-derive a vmid from a filtered `boxes`.
     all_targets = enumerate_targets(teams, boxes)
     team1_targets = [t for t in all_targets if t["team_key"] == "team1"]
 
-    # Tracks the phase currently executing so the failure handler can tell the operator exactly
-    # where to resume from.
     current_phase = max(from_phase, 1)
     try:
-        # [1/7] Clean up previous deployment (DESTRUCTIVE — skipped on resume)
         if from_phase <= 1:
             current_phase = 1
             print("[1/7] Cleaning up previous deployment...")
             for t in all_targets:
                 destroy_vm_if_exists(node, t["vmid"])
-            # Destroy scoring engine (vmid hardcoded in main.tf)
             destroy_vm_if_exists(node, SCORING_ENGINE_VMID)
-            # Destroy bridges
             for team in teams.values():
                 destroy_bridge_if_exists(node, f"vmbr{team['identifier']}")
-            # A fresh deploy must never inherit a previous deploy's sweep marker.
             (comp_dir / ".phase6-swept").unlink(missing_ok=True)
             time.sleep(5)
             checkpoint(1)
         else:
             print("[1/7] Skipped (resume) — leaving existing VMs/bridges in place.")
 
-        # [2/7] Terraform init & apply (DESTRUCTIVE rebuild — skipped on resume)
         if from_phase <= 2:
             current_phase = 2
             print("[2/7] Running Terraform init & apply...")
             subprocess.run(["terraform", "init"], cwd="terraform", check=True, timeout=120)
-            # -parallelism=1: concurrent full clones saturate datastore/API (HTTP 596).
-            # Scale timeout per Windows box (60GB vs 15GB Linux).
             apply_timeout = 2400 + 1800 * sum(1 for b in boxes if is_windows_template(b["template"]))
             subprocess.run(["terraform", "apply", "-auto-approve", "-parallelism=1"], cwd="terraform", check=True, timeout=apply_timeout)
 
-            # Poll the engine's SSH reachability instead of a blind post-apply sleep.
             apply_ctx = read_terraform_ctx()
             wait_for_ssh(apply_ctx["ssh_key_path"], apply_ctx["vm_username"],
                          apply_ctx["scoring_engine_ip"], timeout=300)
@@ -279,16 +217,11 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
         else:
             print("[2/7] Skipped (resume) — not re-running terraform apply.")
 
-        # Shared setup needed by every phase from [3/7] on. Runs even when phase 3 itself is
-        # skipped, because phases 4–7 all reference key/ctx/scoring_ip/scoring_user.
         ctx = read_terraform_ctx()
         key = Path(ctx["ssh_key_path"])
         scoring_user = os.environ["TF_VAR_vm_username"]
         scoring_ip = ctx["scoring_engine_ip"]
 
-        # [3/7] (was: copy SSH key to scoring engine — removed, nothing ever read the copy back;
-        # all SSH/SCP to team/scoring boxes uses the local key via ctx, and nakon authenticates
-        # to team boxes by password.)
         if from_phase <= 3:
             current_phase = 3
             print("[3/7] Skipped — remote key copy removed (was unused).")
@@ -296,13 +229,11 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
         else:
             print("[3/7] Skipped (resume).")
 
-        # [4/7] Bootstrap scoring engine
         if from_phase <= 4:
             current_phase = 4
             print("[4/7] Bootstrapping scoring engine (packages, Docker, Quotient)...")
             bootstrap_scoring_engine(ctx, postgres_password, redis_password)
 
-            # Push event.conf before nakon: prevents Quotient crash loop that wipes NAT.
             print("  Pushing event.conf early (stabilizes Quotient so NAT survives nakon)...")
             push_event_conf(comp_dir, teams, boxes, ctx, name,
                             inject_password=inject_password, admin_password=admin_password,
@@ -310,12 +241,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
                             box_creds=box_creds)
             ensure_nat_forwarding(ctx)
 
-            # [4.5/7] Bootstrap team1's Windows boxes (IP/DNS/credentials — no cloud-init to do
-            # this for them), then enable password auth + NOPASSWD sudo for box_username on the
-            # Linux ones.
             print(f"[4.5/7] Bootstrapping Windows boxes, enabling password auth + NOPASSWD "
                   f"sudo for {box_username} on Linux boxes (team1)...")
-            # Only team1 exists at this point (team2+ are cloned later)
             windows_team1_targets = [t for t in team1_targets if is_windows_template(t["box"]["template"])]
             linux_team1_targets = [t for t in team1_targets if not is_windows_template(t["box"]["template"])]
             for t in windows_team1_targets:
@@ -327,7 +254,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
         else:
             print("[4/7] Skipped (resume).")
 
-        # [5/7] Fix DNS on team1 boxes (needed for apt-get in Nakon) + run Nakon deployment
         if from_phase <= 5:
             current_phase = 5
             print("[5/7] Fixing DNS on team1 boxes, then running Nakon deployment...")
@@ -338,7 +264,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
                 take_snapshot(node, t["vmid"], SNAP_BASE,
                               description="tezcatlipoca: booted, networked, pre-Nakon")
 
-            # Scope deploy to team1 only (--only); bundle still full.
             team1_identifier = teams["team1"]["identifier"]
             team1_machines = [
                 m["name"] for m in json.loads(nakon_config_path.read_text())["machines"]
@@ -355,7 +280,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
         else:
             print("[5/7] Skipped (resume).")
 
-        # [6/7] Clone team1 boxes to other teams, fix DNS, harden services
         if from_phase <= 6:
             current_phase = 6
             swept_marker = comp_dir / ".phase6-swept"
@@ -367,7 +291,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
                 clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=box_creds,
                                   box_password=box_password)
 
-                # Deploy Nakon on team2+ boxes (team1 already done at [5/7])
                 if len(teams) > 1:
                     print("  Deploying Nakon on team2+ boxes...")
                     ensure_nat_forwarding(ctx)
@@ -381,15 +304,12 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
                         comp_dir, [t for t in all_targets if not is_windows_template(t["box"]["template"])],
                         ctx, box_creds=box_creds,
                     )
-                # Written only after a clean sweep so mid-phase-6 resumes don't re-run it.
                 swept_marker.write_text(time.strftime("%Y-%m-%d %H:%M:%S"))
 
             print("  Configuring Windows AD domains (if any)...")
             deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path,
                                            key, scoring_user, scoring_ip, box_password)
 
-            # Optional hunt artifacts (Compfile: team_beacons 1) — planted before
-            # the tz-ready snapshot so clones and restore points carry them.
             if compfile_flag(comp_dir / "Compfile", "team_beacons"):
                 print("  Planting team beacons (hunt artifacts)...")
                 plant_team_beacons(teams, boxes, ctx, box_username=box_username,
@@ -403,12 +323,10 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
         else:
             print("[6/7] Skipped (resume).")
 
-        # [7/7] Seed competition and create injects (event.conf was pushed at [4/7])
         if from_phase <= 7:
             current_phase = 7
             print("[7/7] Seeding competition and creating injects...")
 
-            # Poll Quotient's HTTP endpoint instead of a blind sleep before seeding.
             wait_for_http(f"http://{scoring_ip}/api/login", timeout=120)
 
             quotient_ctx = {
@@ -416,7 +334,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
                 "quotient_admin_password": admin_password,
             }
 
-            # Gate each sub-step on state flags (unpause_engine is not idempotent).
             if not state.get("seeded"):
                 print("  Seeding teams and starting the competition clock...")
                 seed_teams(scoring_ip, quotient_ctx)
@@ -434,7 +351,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
 
             if injects and not state.get("injects_created"):
                 print(f"  Creating {len(injects)} inject(s)...")
-                resolve_inject_times(injects)  # anchor offsets to actual competition start
+                resolve_inject_times(injects)
                 create_injects(scoring_ip, admin_password, injects)
                 state["injects_created"] = True
                 _save_state()
@@ -446,7 +363,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
     except BaseException as e:
         print(f"\n  [!] Deploy failed during phase {current_phase} of '{comp_name}'.")
         resume_phase = current_phase
-        # "already exists" suggests Proxmox/Terraform state mismatch; resume from phase 1.
         if current_phase >= 2 and "already exists" in str(e).lower():
             resume_phase = 1
             print("      This looks like a Proxmox/Terraform state mismatch (something the "
@@ -456,9 +372,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
               f"--competition {comp_name} --from-phase {resume_phase} --yes")
         raise
 
-    # Persist all credentials to a mode-0600 file so operators have a durable, non-log
-    # record (the summary below still prints them for convenience, but the file is the
-    # authoritative copy and is chmod 600 so it isn't world-readable).
     cred_lines = [
         f"# Credentials for {name} — generated {time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"Scoreboard:  http://{scoring_ip}",
@@ -468,10 +381,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
         cred_lines.append(f"inject  {inject_password}")
     for team_name, team_data in teams.items():
         cred_lines.append(f"{team_name}  {team_data['password']}  (192.168.{team_data['identifier']}.0/24)")
-    # Box login (box_username's cloud-init account, themeable — see users.json) and the
-    # credlist accounts Quotient's Ssh/Smtp/Imap/Sql/Ftp checks authenticate WITH — generated
-    # fresh per competition (see box_password/box_creds above), recorded here since this file
-    # is the one durable, non-log record of every secret this run generated.
     cred_lines.append(f"box-login ({box_username})  {box_password}")
     for user, pw in box_creds.items():
         cred_lines.append(f"box-credlist-{user}  {pw}")
@@ -479,7 +388,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
     cred_path.write_text("\n".join(cred_lines) + "\n")
     os.chmod(cred_path, 0o600)
 
-    # Print summary
     print(f"\n{'='*60}")
     print(f"  {name} is live")
     print(f"{'='*60}")
@@ -548,7 +456,6 @@ def main():
     print("Tezcatlipoca - CTF Range Deployment")
     print("=" * 40)
 
-    # Non-interactive path: --competition names the competition to deploy or create.
     if args.competition:
         comp_name = args.competition.strip().lower().replace(" ", "-")
         comp_dir = Path("competitions") / comp_name
@@ -556,12 +463,8 @@ def main():
         has_boxes = (comp_dir / "boxes.json").exists()
 
         if comp_dir.is_dir() and has_compfile and has_boxes:
-            # Reuse existing competition — straight to deploy(), no stdin needed.
             print(f"Reusing existing competition '{comp_name}'.")
         else:
-            # Create the competition. scenario/difficulty come from flags when given, otherwise
-            # we fall back to prompting for just the missing pieces. boxes are still collected
-            # interactively (there's no non-interactive box spec yet).
             print(f"Creating new competition '{comp_name}'.")
             comp_dir.mkdir(parents=True, exist_ok=True)
             scenario = args.scenario if args.scenario is not None else input("Scenario description: ").strip()
@@ -587,7 +490,6 @@ def main():
         deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase)
         return
 
-    # Interactive path (unchanged behavior when no --competition flag is given).
     previous = load_previous_competitions()
     if previous:
         print("\nPrevious competitions:")
@@ -605,7 +507,6 @@ def main():
         scenario = input("Scenario description: ").strip()
         difficulty = _prompt_difficulty()
 
-        # Write Compfile in key=value format (matching utils.load_compfile)
         (comp_dir / "Compfile").write_text(
             f"name {comp_name}\n"
             f"scenario {scenario}\n"
@@ -636,8 +537,6 @@ def main():
         _print_plan(comp_name, comp_dir)
         return
 
-    # Pass through --teams/--yes/--from-phase so they still work in interactive mode; they're
-    # None/False/1 by default, giving exactly the prior interactive behavior.
     deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase)
 
 

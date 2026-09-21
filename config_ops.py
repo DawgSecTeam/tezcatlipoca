@@ -39,15 +39,9 @@ def collect_teams(number_of_teams):
 
 
 def update_env(updates: dict):
-    # Rewrites TF_VAR_* lines in .env in place (preserving comments/order) and mirrors the
-    # change into os.environ so the `terraform` subprocess calls below see it immediately —
-    # they were already loaded once at import time, before these values were known.
     text = ENV_PATH.read_text()
     for key, value in updates.items():
         line = f"{key}={value}"
-        # Pass `line` as a function replacement, not a string: re.sub interprets
-        # backslashes/group refs (\1, \g<0>) in a string replacement, which would crash
-        # or corrupt .env for values like a free-form event_name containing a backslash.
         new_text, count = re.subn(rf"^{re.escape(key)}=.*$", lambda _m: line, text, flags=re.MULTILINE)
         text = new_text if count else text + f"\n{line}\n"
         os.environ[key] = value
@@ -55,10 +49,6 @@ def update_env(updates: dict):
 
 
 def list_proxmox_templates():
-    # Mirrors main.tf's own lookup (data.proxmox_virtual_environment_vms.templates filters on
-    # tag "template" alone) so the picker only ever offers names Terraform will actually
-    # resolve. The scoring engine's own template is excluded — it's looked up by
-    # TF_VAR_template_vm_id instead, even though it may carry the same tag.
     endpoint = os.environ["TF_VAR_proxmox_endpoint"].rstrip("/")
     scoring_template_id = int(os.environ["TF_VAR_template_vm_id"])
     try:
@@ -86,7 +76,6 @@ def destroy_bridge_if_exists(node, bridge_name):
     try:
         proxmox_api("DELETE", f"/nodes/{node}/network/{bridge_name}")
     except requests.exceptions.HTTPError as e:
-        # Only 404 means "no such bridge"; other errors must warn.
         if e.response is None or e.response.status_code != 404:
             print(f"    WARNING: could not delete bridge {bridge_name}: {e}")
     except Exception as e:
@@ -132,8 +121,6 @@ def _prompt_optional_int(prompt):
 
 
 def collect_boxes():
-    # boxes_per_team is per-competition, not global — different events get different boxes.
-    # Asked fresh every time a competition is created; reusing one replays its saved boxes.json.
     templates = list_proxmox_templates()
     if templates:
         print("Available box templates (tagged 'template' in Proxmox):")
@@ -177,8 +164,6 @@ def collect_boxes():
                         break
                 except ValueError:
                     pass
-                # Also accept a template name string that matches list_proxmox_templates()
-                # exactly — removes the fragile index-only selection. Index still works.
                 if raw in templates:
                     template = raw
                     break
@@ -190,9 +175,6 @@ def collect_boxes():
 
         cpu = _prompt_int("  CPU cores    [1]: ", 1)
         memory_mb = _prompt_int("  Memory (MB)  [2048]: ", 2048)
-        # Blank keeps the template's own disk. Terraform only emits a disk block when this is
-        # set (main.tf), because Proxmox cannot shrink a disk — a value below the template's
-        # own size fails the clone.
         disk_gb = _prompt_optional_int("  Disk (GB)    [keep template's]: ")
 
         box = {
@@ -204,9 +186,7 @@ def collect_boxes():
 
 
 def collect_users_config(box_username_flag=None, credlist_flag=None):
-    """Collect themeable box login + 3 credlist usernames (see utils.load_users_config).
-    Returns defaults when blank; always writes to users.json for pinning.
-    """
+    """Collect themeable box login + 3 credlist usernames; defaults when blank, always writes users.json."""
 
     if box_username_flag is not None:
         box_username = box_username_flag.strip() or BOX_USERNAME_DEFAULT
@@ -234,12 +214,7 @@ def collect_users_config(box_username_flag=None, credlist_flag=None):
 
 
 def load_injects(comp_dir):
-    """Load per-competition injects from competitions/<id>/injects/.
-    Each subdirectory with inject.json defines title/description/offsets (minutes
-    relative to competition start) and attachments. Offsets are resolved to
-    RFC3339 at creation time (phase 7) to avoid anchoring to deploy start.
-    Returns [] when no injects/ dir exists.
-    """
+    """Load per-competition injects (title/description/offsets/attachments); [] when no injects/ dir."""
     injects_dir = comp_dir / "injects"
     if not injects_dir.is_dir():
         return []
@@ -257,7 +232,6 @@ def load_injects(comp_dir):
             if desc_path.exists():
                 description = desc_path.read_text()
 
-        # Attachments: every file in the folder except the manifest / description source.
         skip = {"inject.json", meta.get("description_file")}
         files = [str(f) for f in sorted(sub.iterdir()) if f.is_file() and f.name not in skip]
 
@@ -289,7 +263,6 @@ def resolve_inject_times(injects):
 
 
 def load_boxes(comp_dir):
-    # Reusing a competition replays its saved boxes.json, not current .env.
     path = comp_dir / "boxes.json"
     return json.loads(path.read_text()) if path.exists() else None
 

@@ -1,71 +1,35 @@
-"""
-Drives Quotient (the scoring engine): build_event_conf() generates its TOML scoring
-config from Terraform's agent_context; seed_teams() logs into its admin API to seed team
-identifiers and start the competition clock once that config is live; unpause_engine()
-separately unblocks the scoring round loop (split out from seed_teams() because that one
-call isn't safely repeatable — see its docstring).
-"""
+"""Drives Quotient: build_event_conf(), seed_teams(), unpause_engine(), create_injects()."""
 
 import time
 from pathlib import Path
 
 import requests
 
-# Maps a nakon service name to its Quotient check key + config dict.
-# Keys and field names must match Quotient's Go struct TOML tags exactly (case-sensitive
-# for the check-type key on Box; field names are matched case-insensitively by BurntSushi).
-# A box can accumulate multiple checks (e.g. apache + bind → Web + Dns).
-# Vulns and unrecognised service names are skipped with a warning.
 _SERVICE_TO_CHECK = {
-    # Web (HTTP) — Box.Web field; Url is a required nested array of {Path, Status}
     "apache":    ("Web",  {"Display": "http",      "Port": 80,   "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
     "nginx":     ("Web",  {"Display": "http",      "Port": 80,   "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
     "httpd":     ("Web",  {"Display": "http",      "Port": 80,   "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
     "splunk":    ("Web",  {"Display": "splunk",    "Port": 8000, "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
     "roundcube": ("Web",  {"Display": "roundcube", "Port": 80,   "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
-    # DNS — Box.Dns field; Record is a required array of {Kind, Domain, Answer}
     "bind":      ("Dns",  {"Display": "dns",  "Port": 53, "Record": [{"Kind": "A", "Domain": "localhost", "Answer": ["127.0.0.1"]}]}),
     "named":     ("Dns",  {"Display": "dns",  "Port": 53, "Record": [{"Kind": "A", "Domain": "localhost", "Answer": ["127.0.0.1"]}]}),
-    # SSH — Box.Ssh field; CredLists required for login check
     "ssh":       ("Ssh",  {"Display": "ssh",  "Port": 22,  "CredLists": ["linux.credlist"]}),
     "openssh":   ("Ssh",  {"Display": "ssh",  "Port": 22,  "CredLists": ["linux.credlist"]}),
     "sshd":      ("Ssh",  {"Display": "ssh",  "Port": 22,  "CredLists": ["linux.credlist"]}),
-    # FTP — Box.Ftp field. Use an authenticated login against linux.credlist (the same
-    # admin/user1/user2 accounts SMTP scores against): the `unauthorized-ftp-server` config
-    # installs vsftpd with Ubuntu's default anonymous_enable=NO / local_enable=YES, so an
-    # anonymous check can never pass but a local login does. (Keep box config + check in sync.)
     "vsftpd":    ("Ftp",  {"Display": "ftp",  "Port": 21,  "CredLists": ["linux.credlist"]}),
     "ftpd":      ("Ftp",  {"Display": "ftp",  "Port": 21,  "CredLists": ["linux.credlist"]}),
     "ftp":       ("Ftp",  {"Display": "ftp",  "Port": 21,  "CredLists": ["linux.credlist"]}),
-    # SMTP — Box.Smtp field; smtp.go always calls getCreds so CredLists is required
     "postfix":   ("Smtp", {"Display": "smtp", "Port": 25,  "CredLists": ["linux.credlist"]}),
     "sendmail":  ("Smtp", {"Display": "smtp", "Port": 25,  "CredLists": ["linux.credlist"]}),
     "exim":      ("Smtp", {"Display": "smtp", "Port": 25,  "CredLists": ["linux.credlist"]}),
     "exim4":     ("Smtp", {"Display": "smtp", "Port": 25,  "CredLists": ["linux.credlist"]}),
-    # IMAP — Box.Imap field; CredLists triggers authenticated mailbox-list check
     "dovecot":   ("Imap", {"Display": "imap", "Port": 143, "CredLists": ["linux.credlist"]}),
     "cyrus":     ("Imap", {"Display": "imap", "Port": 143, "CredLists": ["linux.credlist"]}),
-    # SQL — Box.Sql field; Kind defaults to "mysql" but must be explicit; needs CredLists to login.
-    # Unlike the checks above, these authenticate against the database's own user table rather
-    # than a system account. create-competition.py's fix_services_on_boxes binds mariadb/mysql to
-    # 0.0.0.0 and creates the admin/user1/user2 DB users with the linux.credlist passwords
-    # (CREATE USER ... @'%' + GRANT ALL), so the same credlist that satisfies SSH/SMTP logs in
-    # here too and a healthy box scores UP. (Keep box config + check in sync — the box grants the
-    # DB users, so don't drop CredLists.)
     "mariadb":   ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
     "mysql":     ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
     "mysqld":    ("Sql",  {"Display": "sql",  "Port": 3306, "Kind": "mysql", "CredLists": ["linux.credlist"]}),
-    # Telnet — no protocol-aware Telnet check exists in Quotient, but it does ship a generic
-    # Box.Tcp check (engine/checks/tcp.go: dials the port, scores UP on connect) that's exactly
-    # enough to confirm the service is listening. Confirmed against /opt/quotient's own source
-    # and config/event.conf.example on the scoring engine (2026-08-07).
     "telnet-service": ("Tcp", {"Display": "telnet", "Port": 23}),
 
-    # Windows — Quotient has no SMB/RDP/WinRM-aware check type (only Web/Dns/Ssh/Ftp/Smtp/Imap/
-    # Sql/Tcp exist anywhere in its engine), so these use the same generic Tcp port-open check
-    # as telnet-service above. Keyed by the exact nakon catalog config name (these are
-    # service-category Windows configs, not generic service binary names like "nginx" above —
-    # box_services.json's entries for a Windows box are catalog config names verbatim).
     "Enable WinRM":   ("Tcp", {"Display": "winrm", "Port": 5985}),
     "New SMB Share":  ("Tcp", {"Display": "smb",   "Port": 445}),
     "RDP misconfigs": ("Tcp", {"Display": "rdp",   "Port": 3389}),
@@ -73,8 +37,8 @@ _SERVICE_TO_CHECK = {
 
 
 def build_event_conf(ctx: dict, box_services: dict) -> dict:
-    teams      = ctx["teams"]          # {"team1": "1", "team2": "2"}
-    boxes      = ctx["boxes_per_team"] # [{name, last_octet, cpu, ...}]
+    teams      = ctx["teams"]
+    boxes      = ctx["boxes_per_team"]
     passwords  = ctx["team_passwords"]
     event_name = ctx["event_name"]
 
@@ -98,10 +62,6 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
         "box": [],
     }
 
-    # Inject-manager account. Quotient's INJECTAUTH-guarded routes (POST /api/injects/create,
-    # announcements, submission downloads) accept the `admin` and `inject` roles; adding a
-    # dedicated inject manager lets an organizer run injects without the full admin login.
-    # Emitted whenever an inject password is supplied (i.e. the competition has an injects/ dir).
     if ctx.get("inject_password"):
         conf["inject"] = [{"name": "inject", "pw": ctx["inject_password"]}]
 
@@ -110,7 +70,7 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
     for box in boxes:
         box_entry = {
             "name": box["name"],
-            "ip":   f"192.168._.{box['last_octet']}",  # _ = team identifier placeholder
+            "ip":   f"192.168._.{box['last_octet']}",
         }
 
         seen_checks = set()
@@ -129,8 +89,6 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
 
         conf["box"].append(box_entry)
 
-    # box-level `credlists` entries are just names — Quotient resolves them against this
-    # top-level registry (config/credlists/<CredlistPath> on the scoring engine)
     if needs_linux_credlist:
         conf["CredlistSettings"] = {
             "Credlist": [{"CredlistName": "linux.credlist", "CredlistPath": "linux.credlist"}]
@@ -160,8 +118,6 @@ def _wait_for_quotient(host: str) -> None:
 
 def _admin_session(host: str, ctx: dict) -> requests.Session:
     session = requests.Session()
-    # Quotient's auth is cookie-based (POST /api/login sets a session cookie) — there's no
-    # bearer token anywhere in the API.
     r = session.post(f"{host}/api/login", json={"username": "admin", "password": ctx["quotient_admin_password"]})
     r.raise_for_status()
     print(f"[quotient] logged in as admin → {r.status_code}")
@@ -170,7 +126,6 @@ def _admin_session(host: str, ctx: dict) -> requests.Session:
 
 def seed_teams(host: str, ctx: dict) -> None:
     """Assign team identifiers and set started flag (idempotent)."""
-    # Look up IDs by name, then batch-update identifiers.
     host = _normalize_host(host)
     _wait_for_quotient(host)
     session = _admin_session(host, ctx)

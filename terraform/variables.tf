@@ -21,13 +21,13 @@ variable "vm_username" {
 }
 
 variable "box_username" {
-  description = "Username for the cloud-init account created on every team box clone. Themeable per competition via competitions/<id>/users.json (see utils.load_users_config()) — create-competition.py writes this into TF_VAR_box_username; defaults to 'ubuntu' when no users.json exists."
+  description = "Cloud-init account username on every team box clone (themeable via competitions/<id>/users.json; defaults to ubuntu)."
   type        = string
   default     = "ubuntu"
 }
 
 variable "box_password" {
-  description = "Password for var.box_username's cloud-init account created on every team box clone. Generated fresh per competition in deploy() (create-competition.py) — not a fixed literal — because nakon authenticates with password auth (see quotient/setup.py) rather than a key, and a fixed value across every deployment would be guessable from this open-source repo. The username may vary per competition (var.box_username); only this password rotates."
+  description = "Password for var.box_username's cloud-init account; generated fresh per competition in deploy(), never a fixed literal (nakon authenticates by password)."
   type        = string
   sensitive   = true
 }
@@ -40,10 +40,6 @@ variable "event_name" {
 variable "teams" {
   description = "Map of team key → identifier (used as subnet third octet)"
   type        = map(object({ identifier = string, password = string }))
-  # Identifiers follow the 192.168.<101-254>.x convention collect_teams() uses — the defaults
-  # are placeholders (create-competition.py always overwrites TF_VAR_teams), but keeping them
-  # realistic stops anyone hand-running `terraform apply` from building 192.168.1.x boxes the
-  # engine's NAT/isolation rules (192.168.0.0/16, with team subnets at 101+) don't expect.
   default = {
     team1 = { identifier = "101", password = "team1pass" }
     team2 = { identifier = "102", password = "team2pass" }
@@ -57,9 +53,9 @@ variable "boxes_per_team" {
     last_octet = number
     cpu        = number
     memory_mb  = number
-    disk_gb    = optional(number) # omit to keep the template's own disk size (no resize). NOTE: omitting it also leaves the disk on the template's storage pool (var.datastore only applies when this block is emitted).
-    disk_iface = optional(string) # interface for the disk block; defaults to scsi0. Set "sata0" for Windows templates that boot from SATA (scsi0 needs virtio-scsi drivers the image may lack).
-    template   = string           # e.g. "tmpl-ubuntu-22", "tmpl-debian-12", "tmpl-centos-9"
+    disk_gb    = optional(number)
+    disk_iface = optional(string)
+    template   = string
   }))
   default = [
     { name = "web01", last_octet = 2, cpu = 2, memory_mb = 2048, disk_gb = 20, template = "tmpl-ubuntu-22" },

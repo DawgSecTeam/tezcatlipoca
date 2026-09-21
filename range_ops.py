@@ -1,6 +1,4 @@
-"""Proxmox API layer, VM identity math, and (team, box) target abstraction.
-Reads TF_VAR_proxmox_* from environment; no prompts or phase logic.
-"""
+"""Proxmox API layer, VM identity math, and (team, box) target abstraction."""
 
 import os
 import time
@@ -9,18 +7,13 @@ import requests
 
 from constants import MAX_BOXES_PER_TEAM, MAX_TEAMS, SCORING_ENGINE_VMID, SNAP_BASE, SNAP_READY
 
-# Proxmox's API token auth talks straight to the API over the same self-signed cert main.tf's
-# provider block sets insecure=true for — same tradeoff, just from Python instead. Each entry
-# point that imports this module also calls urllib3.disable_warnings().
 
 
-### Proxmox API
 
 def proxmox_api(method, path, **kwargs):
     endpoint = os.environ["TF_VAR_proxmox_endpoint"].rstrip("/")
     url = f"{endpoint}/api2/json{path}"
     headers = {"Authorization": f"PVEAPIToken={os.environ['TF_VAR_proxmox_api_token']}"}
-    # Retry transient connection blips (pveproxy drop) without masking real failures.
     last_exc = None
     for attempt in range(4):
         try:
@@ -35,7 +28,6 @@ def proxmox_api(method, path, **kwargs):
 
 
 def wait_for_proxmox_task(node, upid, timeout=1800):
-    # Timeout must tolerate slow storage (clones/deletes can exceed 10 min on this host).
     deadline = time.time() + timeout
     while True:
         if time.time() > deadline:
@@ -81,15 +73,13 @@ def diagnose_unreachable_box(node, vmid):
                 break
             time.sleep(0.5)
     except Exception:
-        pass  # keep the default "(cloud-init status unavailable)" — non-fatal either way
+        pass
 
     return f"      guest agent (vmid {vmid}): {iface_summary}; cloud-init {cloud_init_summary}"
 
 
 def guest_agent_exec_root(node, vmid, script, timeout=60):
-    """Run bash as root via QEMU guest agent (virtio-serial; no sudo needed, bypasses broken sudo).
-    Returns (exit_code, stdout, stderr); raises on agent failure.
-    """
+    """Run bash as root via the QEMU guest agent; returns (exit_code, stdout, stderr)."""
     pid = proxmox_api(
         "POST", f"/nodes/{node}/qemu/{vmid}/agent/exec",
         data={"command": ["bash", "-c", script]},
@@ -107,9 +97,7 @@ def guest_agent_exec_root(node, vmid, script, timeout=60):
 
 
 def guest_agent_exec_windows(node, vmid, ps_script, timeout=120):
-    """Run PowerShell as SYSTEM via guest agent (-EncodedCommand avoids quoting issues).
-    Only channel before Windows bootstrap. Returns (exit_code, stdout, stderr).
-    """
+    """Run PowerShell as SYSTEM via the guest agent; only channel before Windows bootstrap."""
     import base64
     encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
     pid = proxmox_api(
@@ -145,15 +133,12 @@ def wait_for_guest_agent(node, vmid, timeout=300):
     return False
 
 
-### VM identity
-# (constants re-exported from constants.py for backwards compatibility)
 
 
 def vm_id_for(identifier, box_index):
     return 200 + int(identifier) * 10 + box_index
 
 
-### VM lifecycle
 
 def vm_status(node, vmid):
     """Current status string ('running'/'stopped'/...) or None if the VM doesn't exist."""
@@ -163,7 +148,6 @@ def vm_status(node, vmid):
 
 
 def stop_vm(node, vmid):
-    # Graceful ACPI first for filesystem consistency; force stop if ignored.
     try:
         upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/shutdown")["data"]
         wait_for_proxmox_task(node, upid, timeout=120)
@@ -194,12 +178,9 @@ def destroy_vm_if_exists(node, vmid):
     wait_for_proxmox_task(node, upid)
 
 
-### Targets — the (team, box) pair every per-box operation actually works on
 
 def enumerate_targets(teams, boxes):
-    """One target per (team, box) with correct vmid/IP/name derivations.
-    Build from full lists then filter; never filter boxes and re-enumerate (vmid is positional).
-    """
+    """One target per (team, box); build from full lists then filter — vmid is positional."""
     return [
         {
             "team_key": team_key,
@@ -209,12 +190,8 @@ def enumerate_targets(teams, boxes):
             "box_idx": box_idx,
             "ip": f"192.168.{team['identifier']}.{box['last_octet']}",
             "vmid": vm_id_for(team["identifier"], box_idx),
-            # Proxmox names team1's boxes "team1-<box>" (main.tf's local.team_vms) but the
-            # API-created clones "<identifier>-<box>" (clone_team_boxes). Record what this
-            # target's VM is actually called so nothing has to re-derive it.
             "vm_name": (f"{team_key}-{box['name']}" if team_key == "team1"
                         else f"{team['identifier']}-{box['name']}"),
-            # nakon's machine list uses the opposite order — see generate_nakon_config().
             "machine": f"{box['name']}-team{team['identifier']}",
         }
         for team_key, team in teams.items()
@@ -226,19 +203,10 @@ def describe_target(t):
     return f"{t['team_key']}/{t['box_name']}  vmid {t['vmid']}  {t['ip']}"
 
 
-### Snapshots
-# (SNAP_BASE/SNAP_READY re-exported from constants.py for backwards compatibility)
-# tz-base: booted, networked, pre-nakon. tz-ready: as-delivered post-nakon+hardening.
-# Note: team2+ tz-base is cloned after phase 5, so it carries team1's configs but is still
-# the per-box "before nakon" point for that team.
 
 
 def list_snapshots(node, vmid):
-    """Snapshot names on this VM, excluding Proxmox's synthetic `current` entry.
-
-    Returns an empty set if the VM is gone or the API refuses — callers treat "no snapshot" and
-    "couldn't ask" the same way (fall back to a mode that doesn't need one).
-    """
+    """Snapshot names on this VM, excluding Proxmox's synthetic `current`; empty set when unanswerable."""
     try:
         data = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/snapshot")["data"]
     except Exception:
@@ -252,9 +220,7 @@ def delete_snapshot(node, vmid, name, timeout=600):
 
 
 def take_snapshot(node, vmid, name, description="", timeout=900):
-    """Take disk-only snapshot (vmstate 0; fsfreeze via guest agent). Never raises;
-    snapshots are optional recovery (thick LVM can't snapshot). Replaces existing name.
-    """
+    """Take a disk-only snapshot, replacing any existing one; never raises."""
     try:
         if name in list_snapshots(node, vmid):
             delete_snapshot(node, vmid, name)
