@@ -127,10 +127,12 @@ weekend and this must be flawless.
   catalog-pinned package self-heals after the box's apt-daily refresh (retry);
   fresh Windows clones can need >90 s before the guest agent answers (resume);
   qemu-server lock timeouts are usually transient (recheck state, resume);
-  team2 Linux clones may come up without IPv4 (cloud-init race) — repair via
-  guest agent (address + default route; on the Debian app01 prefer a
-  systemd-networkd .network file with KeepConfiguration — ifupdown loses the
-  address on any carrier blip).
+  team2 Linux clones may come up without IPv4 (cloud-init race) —
+  clone_ops.ensure_cloned_network now auto-repairs this after the start loop
+  (guest-agent repair: re-add address + default route; persists a
+  systemd-networkd .network with KeepConfiguration plus an ifupdown stanza —
+  the exact .network body lives in clone_ops._repair_box_network). If you see
+  its WARNING line, fix the box by hand before continuing.
 
 ## Phase 2 — live-engine smoke (the checks that caught real bugs)
 
@@ -195,6 +197,10 @@ With the range up, from the operator:
     wrong-unit failures in events.jsonl).
   - Blue restoration behavior observed at least once (red takes a service
     down; a later snapshot shows a blue restore attempt).
+  - `python3 scrim-report.py /home/hna/dev/dawgsec/scrim-runs/scrim-dress-...`
+    runs clean and its INTERACTION.md is scored against
+    docs/rehearsal-gates.md — the interaction score (restorations + re-kill
+    reactions + injects + eradication), not red's kill log, decides GO/NO-GO.
   - The shared local endpoint survives red+blue concurrency (no slot
     starvation death spiral; if cycles stall, measure queue depth and
     document — do not silently widen the timeout).
@@ -216,7 +222,9 @@ With the range up, from the operator:
 
 ## Phase 5 — report
 
-Write scrim-runs/scrim-dress-.../FINDINGS.md: what passed, what broke, what
+Run `python3 scrim-report.py /home/hna/dev/dawgsec/scrim-runs/scrim-dress-...`
+first — its INTERACTION.md numbers (interaction score, gates, red/blue sides)
+belong in FINDINGS.md. Then write FINDINGS.md: what passed, what broke, what
 you fixed vs. what needs a human decision, and a GO / NO-GO verdict for the
 practice with the top 3 risks. Update the auto-memory files with anything
 load-bearing. Leave the range DOWN unless the operator said otherwise.
