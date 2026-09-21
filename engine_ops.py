@@ -31,7 +31,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
             "sudo dpkg --configure -a 2>/dev/null; "
             "sudo apt-get update && sudo apt-get install -y docker.io git curl python3-pip",
         ],
-        check=True, timeout=180,
+        check=True, timeout=600,
     )
 
     print("  Installing Docker Compose v2 plugin...")
@@ -51,7 +51,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
                 "sudo apt-get update && sudo apt-get install -y docker-compose-plugin"
             ),
         ],
-        check=True, timeout=180,
+        check=True, timeout=600,
     )
 
     print("  Starting Docker (already installed by Terraform)...")
