@@ -1,0 +1,7 @@
+{
+  "title": "DNS and name-resolution integrity check",
+  "description_file": "briefing.md",
+  "open_offset_min": 80,
+  "due_offset_min": 105,
+  "close_offset_min": 118
+}

@@ -1,0 +1,6 @@
+MERIDIAN NETFLOW SUMMARY (T+38 window)
+sensor: ward-gateway
+
+web01  -> 198.51.100.77:443   periodic 200s  NEW+ESTABLISHED  suspect
+app01  -> 198.51.100.77:53    bursts, high entropy TXT          suspect (dns exfil pattern)
+all    -> feed.wardline-telemetry.net (resolves 198.51.100.77)  suspect

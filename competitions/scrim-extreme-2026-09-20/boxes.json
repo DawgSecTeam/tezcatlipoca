@@ -1,0 +1,44 @@
+[
+  {
+    "name": "dc01",
+    "last_octet": 2,
+    "cpu": 2,
+    "memory_mb": 4096,
+    "disk_gb": 60,
+    "disk_iface": "sata0",
+    "template": "windows-server-fix"
+  },
+  {
+    "name": "win01",
+    "last_octet": 3,
+    "cpu": 2,
+    "memory_mb": 4096,
+    "disk_gb": 60,
+    "disk_iface": "sata0",
+    "template": "windows-server-fix"
+  },
+  {
+    "name": "web01",
+    "last_octet": 4,
+    "cpu": 1,
+    "memory_mb": 2048,
+    "disk_gb": 15,
+    "template": "ubuntu24.04-fix"
+  },
+  {
+    "name": "app01",
+    "last_octet": 5,
+    "cpu": 1,
+    "memory_mb": 2048,
+    "disk_gb": 10,
+    "template": "debian13-lite-fix"
+  },
+  {
+    "name": "db01",
+    "last_octet": 6,
+    "cpu": 1,
+    "memory_mb": 2048,
+    "disk_gb": 15,
+    "template": "ubuntu24.04-fix"
+  }
+]
