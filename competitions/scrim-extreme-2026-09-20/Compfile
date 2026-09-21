@@ -1,0 +1,4 @@
+name scrim-extreme-2026-09-20
+scenario FULL-DRESS EXTREME: Meridian Health's regional care network under a Code Silver incident. Same five-box Windows-AD topology as agent-scrim-2026-09-17b (dc01 fresh forest per team + win01/web01/app01/db01 joined), but the Wardline crew has hit EVERY box with the ENTIRE vetted catalog: 149 distinct Linux misconfigurations on web01/app01/db01 and 49 on the Windows boxes (545 planted artifacts per team) — rogue admins, persistence (services/cron/run-keys/scheduled tasks), raw-socket beacons, backdoor firewall rules, exposed stores, loosened policies, planted credentials, defaced themes. Hunt everything you can while keeping the scored services alive; the scoreboard only measures uptime, the misconfig hunt is the practice.
+difficulty 10
+team_beacons 1

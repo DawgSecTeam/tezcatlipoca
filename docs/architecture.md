@@ -10,6 +10,11 @@ provisions. The scoring engine is the only host with a NIC on every team bridge 
 jump host, the nakon execution host, and the NAT gateway. Team isolation is enforced by iptables on
 the engine, not by bridge separation.
 
+Per-symbol design notes and the "why" behind specific parameters and orderings live in
+[internals.md](internals.md); incidents and known-broken things in
+[known-issues.md](known-issues.md); the agent-scrim harness in
+[scrim-harness.md](scrim-harness.md).
+
 ## Component map
 
 | Path | Purpose |
@@ -34,6 +39,9 @@ the engine, not by bridge separation.
 | `redeploy-competition.py` | Filtered per-team/box rollback/reconfigure/rebuild using snapshots |
 | `destroy-competition.py` | Tears down API-cloned team2+ VMs + `terraform destroy` |
 | `generate-packet.py` | Renders `competitions/<id>/packet.md` from `Compfile`/`boxes.json`/`box_services.json` |
+| `beacon_ops.py` | Plants unscored, non-destructive C2-style beacons on team boxes (before `tz-ready`) for blue to hunt |
+| `run-agent-scrim.py` | Red-vs-blue agent scrim: cycles LLM agent sessions against the live range, snapshots the scoreboard |
+| `scrim-report.py` | Scores a scrim run from red's `events.jsonl` + scoreboard snapshots (interaction score, gates) |
 | `terraform/variables.tf` | `TF_VAR_*` inputs; `outputs.tf` exposes `agent_context` for the driver |
 
 ## Seven-phase deploy
@@ -136,8 +144,17 @@ gap before the timer is installed.
 
 ## Nakon contract
 
+```
+vulndb-ui (catalog) ── read by ──> nakon ── submodule + CLI ──> tezcatlipoca (this repo)
+                                                            │
+                                                            └── builds a bundle, ships it to the
+                                                                scoring engine, runs `nakon deploy` there
+```
+
 This repo consumes nakon only as a CLI, run with `cwd = vendor/nakon` so it reads
-`vendor/nakon/.env`:
+`vendor/nakon/.env`. It does **not** touch the vulndb directly (no MySQL), does **not** import
+nakon internals, and does **not** depend on vulndb-cli (no catalog CRUD/attachments). Scoring is
+**Quotient** (cloned to the engine), not huitzilopochtli:
 
 - `nakon randomize --platform <linux|windows> --services N --vulns N --exclude <slow> --source auto --json` → `{services, vulns}` per box type; called from `nakon_ops._nakon_randomize`. Budgets: `ceil(difficulty/3)` services, `difficulty` vulns, excluding `splunk`/`roundcube`.
 - `nakon build --config <abs-path> --out bundles --json` → `{bundle_id, path, cached, plans, machines}`; content-addressed under `vendor/nakon/bundles/` (cache hit when catalog unchanged; shared across competitions).
@@ -146,6 +163,10 @@ This repo consumes nakon only as a CLI, run with `cwd = vendor/nakon` so it read
 No in-process `import nakon` and no direct MySQL connection; `VULNDB_UI_URL` or `vendor/nakon/.env`
 supplies catalog access at build time only. The bundle carries no credentials. Re-exports remain
 via `create-competition.py` shim for `driver.os_to_platform` consumers.
+
+`vendor/nakon` is pinned to a release tag; bump it deliberately (`cd vendor/nakon &&
+git checkout vX.Y.Z`, then commit the new submodule pointer). Don't develop nakon inside this
+checkout — work in the nakon repo, tag a release, then pin it here.
 
 ## Secrets
 
@@ -162,18 +183,62 @@ Per-competition secrets are generated fresh in `deploy()` and persisted to
 (gitignored; `.env.example` is the committed template) holds `TF_VAR_*` and is updated in place by
 `config_ops.update_env`. `teams.json`, `nakon-config.json`, `event.conf` are also gitignored.
 `boxes.json`, `box_services.json`, `Compfile` are not secret; `vendor/nakon/.env` carries vulndb
-credentials for build-time only and never ships to the engine.
+credentials for build-time only and never ships to the engine. `.gitignore` keeps every per-run
+file out of git: `teams.json`, `event.conf`, `linux.credlist`, `cloned_vms.json`,
+`credentials.txt`, `.deploy_state.json` (the resume checkpoint holding those secrets),
+`nakon-config.json` (placeholder creds today, kept out for consistency with its siblings),
+`.nakon-domain-*.json` (single-machine nakon configs written per ADDS/Domain-Join step — same
+per-run-secret class), and `.phase6-swept` (sweep marker). Ad-hoc `logs/` and `deploy-*.log` are
+excluded on the same precedent.
 
+## Operational invariants
 
 - `terraform/main.tf` and `range_ops.vm_id_for` must agree on the `200 + identifier*10 + index`
-  stride; changing one without the other creates collisions.
-- `prepare_boxes.py` is legacy; DNS repair is now `hardening_ops.fix_dns_on_boxes` over the
-  gateway. The script remains for reference but is not invoked.
-- All `wait_for_*` helpers are poll-based with timeouts and never raise on transient
-  failures; deploy only aborts when every target of a phase is unreachable.
-- Pinned `box_services.json`/`box_vulns.json` make re-runs deterministic and enable
-  `bundles/` cache hits across competitions with identical selections.
-- `prepare_boxes.py` (terraform/scripts/) is legacy; current DNS repair is
-  `hardening_ops.fix_dns_on_boxes` over the gateway.
-- `vm_id_for` and the `MAX_*` constants are the single source of truth for VM identity;
-  `terraform/main.tf` mirrors the same arithmetic.
+  stride; changing one without the other creates collisions. `vm_id_for` is the sole derivation
+  point, and targets are built from the full lists then filtered (see Target abstraction).
+- **A resume must reuse the original per-run secrets.** The engine's already-written `.env`, the
+  already-seeded admin login, and the boxes' passwords were minted on the first run; regenerating
+  on resume silently desyncs the deployed range from its credentials. `deploy.py` refuses to
+  resume without `.deploy_state.json` rather than risk it.
+- `destroy-competition.py` restores the per-competition `TF_VAR_*` values before destroying:
+  `for_each` over `var.teams`/`var.boxes_per_team` must produce the exact resource keys of the
+  original apply, or resources are orphaned.
+- `terraform/main.tf` looks team1 up **by name** — the pipeline hard-assumes a team literally
+  named `team1`; a name lookup fails fast where sort order would build the wrong team.
+- `event.conf` reaches the engine **before** nakon runs, and phase-7 sub-steps are gated
+  individually on `.deploy_state.json` flags because `unpause_engine` is not idempotent.
+- On fresh clones the NOPASSWD sudoers grant lands **before** the DNS fix (whose `sudo` calls
+  soft-fail until the grant does); the guest-agent fallback covers any remaining gap.
+- A fresh deploy must never inherit a previous deploy's `.phase6-swept` marker; the marker is
+  written only after a clean sweep so mid-phase-6 resumes don't re-run the sweep.
+- The competitor packet is intentionally the same document for every team and intentionally
+  omits `box_vulns.json` — planted misconfigs would spoil the competition.
+- Pinned `box_services.json`/`box_vulns.json` make re-runs deterministic and enable `bundles/`
+  cache hits across competitions with identical selections.
+- All `wait_for_*` helpers are poll-based with timeouts; deploy aborts only when every target of
+  a phase is unreachable — that reads as systemic, not a timing fluke.
+
+## Timeouts & parameter rationale
+
+| Parameter | Value | Why |
+|---|---|---|
+| `terraform apply` parallelism | `1` | Concurrent full clones saturate the datastore/API (HTTP 596, pvestatd hangs) |
+| Apply timeout | `2400 + 1800`s per Windows box | 60 GB Windows images vs 15 GB Linux |
+| Proxmox task wait | 1800 s | Slow storage — clones/deletes can exceed 10 min on this host |
+| Clone retries (`main.tf`) | 15 (~2 min) | Proxmox locks the source template; a losing clone must out-wait the winner |
+| Engine `compose up` | 600 s | Cold-start runs Postgres initdb; measured >60 s twice (e2e-2026-09-19) |
+| ADDS promotion budget | 20 min | Domain promotion is slow |
+| `range-firewall.timer` | 30 s | Re-asserts NAT + isolation against Docker's iptables wipes |
+| `range-healthcheck.timer` | 60 s, offset from :00/:30 | Stays off range-firewall's cadence so the two never fire in the same tick |
+
+## Security rationale
+
+- **All passwords are generated fresh per competition.** This repo is public; the fixed literals
+  it once shipped (`ubuntu/ubuntu`, `admin/changeme123`) are guessable from the repo itself or
+  by fingerprinting any past deploy.
+- **`null_resource` triggers carry identifiers only** — `var.teams` values in triggers would
+  print team passwords in every `terraform plan`.
+- **The competitor packet omits `box_vulns.json`** — including planted misconfigs would spoil
+  the exercise.
+- The 2026-08-06 git-history secret disclosure is recorded in
+  [known-issues.md](known-issues.md).

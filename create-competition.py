@@ -1,6 +1,3 @@
-# Shim — actual implementation now in focused modules.
-# Keeps `import create-competition` via importlib working for redeploy.
-# All logic lives in deploy.py / nakon_ops.py / etc.; this file only re-exports.
 
 from config_ops import (
     _prompt_difficulty,
@@ -64,10 +61,7 @@ from ssh_ops import (
 from utils import BOX_USERNAME_DEFAULT, DNS_FIX_CMD, load_compfile, load_users_config, pick_competition
 from windows_ops import bootstrap_windows_box, dns_repoint_windows_box, is_windows_template as win_is_windows_template, wait_for_dc_dns, wait_for_windows_sshd
 
-# is_windows_template (from nakon_ops, imported above) is what driver.is_windows_template
-# resolves to — used by redeploy's box_platform. All three definitions agree ("win" in lower).
 
-# For backwards compat, expose ENV_PATH like the original did (Path(".env"))
 from pathlib import Path
 ENV_PATH = Path(".env")
 

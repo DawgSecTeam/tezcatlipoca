@@ -154,7 +154,7 @@ Two additional lines: a `no_default_creds` regression guard (part of the exit-co
 same as logins/isolation/misconfig/misconfig-survival/injects) confirming `credentials.txt`'s
 box-login/credlist lines aren't the old fixed literals, and a purely informational report of
 `range-healthcheck.timer`'s current status + any recent failures it logged (see
-`install_range_healthcheck()` in `create-competition.py`) — that one doesn't affect the exit
+`install_range_healthcheck()` in `engine_ops.py`) — that one doesn't affect the exit
 code, it's just visibility.
 
 Exit code is `0` only when logins all pass, no default creds remain, isolation holds, the

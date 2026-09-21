@@ -1,0 +1,7 @@
+{
+  "title": "Linux privilege-escalation audit",
+  "description_file": "briefing.md",
+  "open_offset_min": 65,
+  "due_offset_min": 90,
+  "close_offset_min": 115
+}

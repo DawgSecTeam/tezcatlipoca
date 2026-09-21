@@ -20,10 +20,7 @@ from windows_ops import (
 
 
 def _probe_joined(node, member_box, member_vmid, domain):
-    """Live membership probe via the guest agent (root truth, no SSH needed).
-    Joins are not idempotent (`realm join`/Add-Computer on an already-joined
-    member fails and the single-config pass is strict), so resumes must skip
-    members that are already in the domain."""
+    """Live membership probe via the guest agent; joins are not idempotent, so resumes skip joined members."""
     try:
         if is_windows_template(member_box["template"]):
             rc, out, _ = guest_agent_exec_windows(
@@ -45,10 +42,7 @@ def _probe_joined(node, member_box, member_vmid, domain):
 
 def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scoring_user,
                           scoring_ip, box_password, promote_dc=True):
-    """Per-team AD forest promotion + member joins. Runs after clone to avoid DC clone
-    duplication; reboot configs run isolated. Reads domain_roles.json; no-op if absent.
-    promote_dc=False only rejoins members (redeploy case).
-    """
+    """Per-team AD forest promotion + member joins from domain_roles.json; no-op when absent."""
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
         return
@@ -80,9 +74,6 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
             print(f"  [{team_key}] DC {dc_box['name']} left as-is — (re)joining member "
                   f"box(es) to existing {domain}...")
         elif (comp_dir / f".nakon-domain-{team_key}-adds.json").exists():
-            # Resume after a mid-phase-6 failure: the promotion artifact means ADDS
-            # already ran for this team — re-running Install-ADDSForest on a live DC
-            # would just fail. Joins below still run (they're the recoverable part).
             print(f"  [{team_key}] ADDS artifact present — DC {dc_box['name']} assumed "
                   f"promoted, skipping promotion (resume)")
         else:
@@ -102,12 +93,6 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
             wait_for_windows_sshd(node, dc_vmid, timeout=180)
 
             print(f"  [{team_key}] Planting AD-flavored misconfigs on {dc_box['name']}...")
-            # strict=False: this pass is scoring flavor, not range infrastructure, and it can
-            # still fail non-fatally even with nakon >= v0.1.3 (which fixed the duplicate
-            # vars-less dependency step): "Disable System Firewall" sweeps every AD computer
-            # over WinRM, and a Linux realmd member has no WinRM, so that step exits 1 on any
-            # mixed Windows/Linux domain after landing its own misconfig. Failures print in
-            # nakon's summary instead of aborting the deploy.
             _run_single_nakon_config(
                 dc_machine,
                 [
@@ -123,7 +108,6 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                 strict=False,
             )
 
-        # Wait for DC DNS SRV records before any member join.
         if member_boxes:
             print(f"  [{team_key}] Waiting for {dc_box['name']}'s DNS to serve {domain}...")
             if not wait_for_dc_dns(node, dc_vmid, domain, dc_ip):
@@ -167,7 +151,6 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                     continue
                 wait_for_windows_sshd(node, member_vmid, timeout=180)
             else:
-                # Linux member via realmd/sssd (no reboot, no separate DNS repoint).
                 if _probe_joined(node, member_box, member_vmid, domain):
                     print(f"  [{team_key}] Linux member {member_box['name']} already joined to "
                           f"{domain} — skipping join (resume)")
@@ -189,9 +172,5 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                         strict=False,
                     )
                 except Exception as e:
-                    # A failed linux join is scenario flavor (the box keeps local auth
-                    # and every scored service), not range infrastructure — the apt
-                    # install of the realmd stack can blow past nakon's per-step
-                    # timeout on small VMs. Log loudly and keep deploying.
                     print(f"  WARNING: [{team_key}] {member_box['name']} domain-join failed "
                           f"— continuing ({str(e)[:160]})")

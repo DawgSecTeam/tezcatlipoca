@@ -1,32 +1,5 @@
 #!/usr/bin/env python3
-"""Post-deploy verifier for a Quotient scoring range competition.
-
-Reproduces the manual smoke-checks we run by hand after a deploy:
-
-  1. LOGIN      — every team account and admin can POST /api/login (HTTP 200).
-  2. SERVICES   — each team's services report UP in the latest scored round (informational).
-  3. ISOLATION  — the team-to-team DROP rule (range-firewall.sh) is present in FORWARD, and
-                 (with >=2 teams) an actual cross-team connection is blocked while the
-                 internet is still reachable.
-  4. MISCONFIG  — at least one planted misconfig is present on a target box (SSH via gateway).
-  5. INJECTS    — if the competition ships an injects/ dir, the engine has that many injects.
-
-Usage:
-    python3 verify-competition.py competitions/<id> [options]
-
-Exit code is 0 only when logins all pass, isolation holds, the misconfig spot-check confirms,
-and injects (if any) are present. Service DOWN is reported but is NOT fatal unless
---strict-services.
-
-Data sources (all read at runtime, nothing hardcoded except sane fallbacks):
-  - engine IP        : `terraform output -json` .agent_context.value.scoring_engine_ip
-                       (override with --engine-ip)
-  - team creds       : competitions/<id>/teams.json
-  - admin password   : competitions/<id>/credentials.txt  (fallback: changeme123,
-                       override with --admin-password)
-  - ssh key / user   : .env  TF_VAR_ssh_private_key_path / TF_VAR_vm_username
-  - planted configs  : competitions/<id>/nakon-config.json
-"""
+"""Post-deploy verifier for a Quotient scoring range: logins, services, isolation, misconfig spot-check, injects."""
 
 import argparse
 import json
@@ -38,7 +11,7 @@ from pathlib import Path
 try:
     import requests
     import urllib3
-except ImportError as e:  # pragma: no cover
+except ImportError as e:
     print(f"ERROR: missing dependency ({e}). Need: requests, python-dotenv.", file=sys.stderr)
     sys.exit(2)
 
@@ -46,38 +19,26 @@ from dotenv import load_dotenv
 
 from utils import BOX_USERNAME_DEFAULT, load_users_config
 
-# The engine speaks plain HTTP, but Quotient's checks & the Proxmox API elsewhere use
-# self-signed TLS — silence the noise so output stays readable.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 REPO_ROOT = Path(__file__).resolve().parent
 ENV_PATH = REPO_ROOT / ".env"
 
-# Box login (see utils.py load_users_config() / competitions/<id>/users.json). We authenticate
-# to boxes with the proxmox key (cloud-init authorizes it for the configured box_username), so
-# the password is informational. BOX_USERNAME_DEFAULT is the fallback when a competition has no
-# users.json; main() overrides it with the competition's real value via build_ctx()'s box_username.
 DEFAULT_ADMIN_PASSWORD = "changeme123"
 
-# Planted-misconfig verifiers: config name -> (shell command, predicate on stdout).
-# Only a handful are mapped; the spot-check picks a box/config combination it can verify.
 MISCONFIG_CHECKS = {
-    # SUID bit set on find -> `ls -l` shows the 's' in the owner-exec slot (e.g. -rwsr-xr-x).
     "suid-find": (
         "ls -l $(which find)",
         lambda out: "rws" in out.split("\n")[0],
     ),
-    # www-data given an interactive login shell.
     "www-data-shell": (
         "grep '^www-data:' /etc/passwd",
         lambda out: out.strip().endswith("/bin/bash"),
     ),
-    # world-writable /etc/shadow.
     "bad-perms-userConfig": (
         "stat -c %a /etc/shadow",
         lambda out: out.strip() == "666",
     ),
-    # /etc/sudoers.d made world-writable (nakon's 004-writable-sudoers.sh: chmod 777).
     "writable-sudoers": (
         "stat -c %a /etc/sudoers.d",
         lambda out: out.strip() == "777",
@@ -90,7 +51,6 @@ def _config_name(entry):
     return entry if isinstance(entry, str) else entry.get("name")
 
 
-# --------------------------------------------------------------------------- helpers
 
 class CheckError(Exception):
     """A check could not run (missing data / unreachable infra) — clean message, no trace."""
@@ -128,7 +88,6 @@ def resolve_ssh_key():
         cand = (base / val).resolve()
         if cand.exists():
             return str(cand)
-    # Nothing on disk matched; return the repo-root interpretation so the error is legible.
     return str((REPO_ROOT / val).resolve())
 
 
@@ -137,17 +96,16 @@ def build_ctx(args, comp_dir):
     ctx = {}
     tf_error = None
     if not args.engine_ip:
-        ctx = read_terraform_ctx()  # only fatal path if we truly need the engine IP from TF
+        ctx = read_terraform_ctx()
     else:
         try:
             ctx = read_terraform_ctx()
         except CheckError as e:
-            tf_error = e  # fine — we have an override; fill the rest from .env
+            tf_error = e
     if args.engine_ip:
         ctx["scoring_engine_ip"] = args.engine_ip
     if not ctx.get("scoring_engine_ip"):
         raise CheckError("no scoring_engine_ip (Terraform gave none and no --engine-ip).")
-    # Prefer Terraform's resolved key/user; fall back to .env for override-only runs.
     if not ctx.get("ssh_key_path"):
         ctx["ssh_key_path"] = resolve_ssh_key()
     if not ctx.get("vm_username"):
@@ -226,7 +184,6 @@ def load_admin_password(comp_dir, override):
     if path.exists():
         for line in path.read_text().splitlines():
             parts = line.split()
-            # An admin line looks like:  admin  <password>
             if len(parts) >= 2 and parts[0] == "admin":
                 return parts[1]
     return DEFAULT_ADMIN_PASSWORD
@@ -246,9 +203,6 @@ def check_no_default_creds(comp_dir):
         print("  (credentials.txt has no box-login/box-credlist lines — pre-rotation "
               "competition, or credential rotation isn't wired up)")
         return True
-    # Check only the actual value token (last whitespace-separated field), not the whole
-    # line — "box-login (ubuntu)  <password>" legitimately contains the literal "ubuntu" as
-    # the (non-secret) username label, which isn't a rotation failure.
     bad = [l for l in box_lines if l.split()[-1] in _DEFAULT_CRED_LITERALS]
     if bad:
         print("  FAIL  credentials.txt still carries a default credential literal:")
@@ -263,7 +217,7 @@ def count_local_injects(comp_dir):
     """Number of inject subdirectories (each carrying an inject.json). 0 if no injects/ dir."""
     injects_dir = comp_dir / "injects"
     if not injects_dir.is_dir():
-        return None  # None == "competition ships no injects" (skip the check)
+        return None
     return sum(1 for sub in injects_dir.iterdir() if sub.is_dir() and (sub / "inject.json").exists())
 
 
@@ -282,7 +236,6 @@ def load_boxes(comp_dir):
         raise CheckError(f"{path} is not valid JSON: {e}")
 
 
-# --------------------------------------------------------------------------- checks
 
 def check_logins(base_url, teams, admin_password):
     """POST /api/login for admin + every team. Returns (all_ok, admin_session)."""
@@ -305,7 +258,6 @@ def check_logins(base_url, teams, admin_password):
     if admin_session is None:
         all_ok = False
     for team_name, data in teams.items():
-        # Quotient authenticates teams by their team name (see credentials.txt / seed_teams).
         if try_login(team_name, data.get("password", "")) is None:
             all_ok = False
     return all_ok, admin_session
@@ -358,7 +310,7 @@ def check_services(base_url, admin_session, teams, strict):
             checks = (first_round.get("Checks") if isinstance(first_round, dict) else None) or []
             if not checks:
                 unscored += 1
-                continue  # not yet scored — not a failure, don't count as down
+                continue
             if all(_check_passed(c) for c in checks):
                 up += 1
             else:
@@ -392,7 +344,7 @@ def check_isolation(ctx, teams, boxes):
         return False
     has_drop_rule = any(
         "-j DROP" in line and "192.168.0.0/16" in line
-        and line.count("192.168.0.0/16") >= 2  # both -s and -d, not just one
+        and line.count("192.168.0.0/16") >= 2
         for line in proc.stdout.splitlines()
     )
     if not has_drop_rule:
@@ -405,8 +357,6 @@ def check_isolation(ctx, teams, boxes):
         print("  (only 1 team — skipping the cross-team connection test)")
         return True
 
-    # Match nakon-config.json machines to teams by the subnet's third octet (each team's
-    # identifier), same scheme create-competition.py uses everywhere (192.168.<identifier>.x).
     identifiers = sorted({str(t["identifier"]) for t in teams.values()})
     team_ips = {}
     for box in boxes:
@@ -491,7 +441,6 @@ def report_healthcheck_status(ctx):
 def check_misconfig(ctx, boxes):
     """SSH via gateway to one box and confirm >=1 planted misconfig. Returns bool."""
     print("\n[4/5] MISCONFIG SPOT-CHECK")
-    # Pick the first box that has at least one config we know how to verify.
     target = None
     for box in boxes:
         verifiable = [c for c in map(_config_name, box.get("configurations", []))
@@ -560,9 +509,6 @@ def check_misconfig_survival(ctx, boxes):
     for box in boxes:
         if not box.get("ip"):
             continue
-        # Key the group on the normalized NAMES, not the raw entries: dict-form entries
-        # aren't hashable, and "the same box, different teams" means same names regardless
-        # of whether one team's copy carries vars.
         configs = tuple(_config_name(c) for c in box.get("configurations", []))
         verifiable = [c for c in configs if c in MISCONFIG_CHECKS]
         if not verifiable:
@@ -602,8 +548,6 @@ def check_misconfig_survival(ctx, boxes):
                 print(f"  PASS  '{config}' present on all {len(present)} team(s): {present}{note}")
             elif unknown and not present and not absent:
                 print(f"  WARN  '{config}' — could not verify on any team ({unknown})")
-            # absent-everywhere isn't this check's job — check_misconfig() above already covers
-            # "was it planted at all".
     return all_ok
 
 
@@ -633,7 +577,6 @@ def check_injects(base_url, admin_session, comp_dir):
     return True, ok
 
 
-# --------------------------------------------------------------------------- main
 
 def main():
     parser = argparse.ArgumentParser(description="Verify a deployed Quotient competition range.")
@@ -677,12 +620,6 @@ def main():
     report_beacons(ctx, boxes)
     injects_relevant, injects_ok = check_injects(base_url, admin_session, comp_dir)
 
-    # Exit-code gate: logins + isolation + misconfig + injects (if any). Services are
-    # informational, unless --strict-services promotes them. Isolation is NOT optional —
-    # unlike a down service, a failed isolation check means teams can reach each other right
-    # now, which is a correctness issue for the whole exercise, not a scoring nuisance.
-    # misconfig_survival is likewise not optional — a misconfig missing on one team's clone
-    # breaks the "every team defends the same misconfigs" fairness guarantee, not just scoring.
     gate = {
         "logins": logins_ok,
         "no_default_creds": no_default_creds_ok,

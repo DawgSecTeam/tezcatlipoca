@@ -42,7 +42,7 @@ def destroy_cloned_vms(cloned_vms_path):
             upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
             wait_for_proxmox_task(node, upid)
         except Exception:
-            pass  # already stopped or gone
+            pass
         try:
             upid = proxmox_api("DELETE", f"/nodes/{node}/qemu/{vmid}", params={"purge": 1})["data"]
             wait_for_proxmox_task(node, upid)
@@ -109,9 +109,6 @@ def main():
             print("Cancelled — nothing was destroyed.")
             sys.exit()
 
-    # Restore per-competition TF_VAR values from saved files so terraform destroy
-    # uses the exact same resource keys as the original apply — for_each over
-    # var.teams and var.boxes_per_team must match or some resources will be orphaned.
     env = {**os.environ}
     env["TF_VAR_teams"] = json.dumps(teams)
     env["TF_VAR_boxes_per_team"] = json.dumps(boxes)

@@ -51,7 +51,6 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
     services_path = comp_dir / "box_services.json"
     vulns_path = comp_dir / "box_vulns.json"
 
-    # Deterministic re-runs: honour pinned configs if either file exists.
     if services_path.exists() or vulns_path.exists():
         pinned = json.loads(services_path.read_text()) if services_path.exists() else {}
         pinned_vulns = json.loads(vulns_path.read_text()) if vulns_path.exists() else {}
@@ -63,7 +62,6 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             p.name for p in (services_path, vulns_path) if p.exists()
         )
         print(f"  Using pinned configurations from {pinned_from}")
-        # Always write both files so later unconditional reads don't fail.
         services_path.write_text(
             json.dumps({name: svcs for name, (svcs, _) in box_configs.items()}, indent=2)
         )
@@ -71,7 +69,6 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             json.dumps({name: vulns for name, (_, vulns) in box_configs.items()}, indent=2)
         )
     else:
-        # One randomization per box type so every team gets identical services (Quotient wildcard IP).
         box_configs = {}
         for box in boxes:
             platform = os_to_platform(box["template"])
@@ -87,7 +84,6 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             json.dumps({name: vulns for name, (_, vulns) in box_configs.items()}, indent=2)
         )
 
-    # Disruptive vulns break DNS/apt; sort them last so package installs still have network.
 
     machines = []
     for i, (team, box) in enumerate(
@@ -95,7 +91,6 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
     ):
         services, vulns = box_configs[box["name"]]
         configurations = services + vulns
-        # Entries may be string or {"name": ..., "vars": {...}}; normalize for sorting.
         configurations.sort(
             key=lambda c: (c if isinstance(c, str) else c["name"]) in DISRUPTIVE_CONFIGS
         )
@@ -110,16 +105,13 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             "configurations": configurations,
         })
 
-    # Machine list is per-competition (not shared nakon/config.json state).
     config_path = comp_dir / "nakon-config.json"
     config_path.write_text(json.dumps({"machines": machines}, indent=2))
     return config_path
 
 
 def build_nakon_bundle(config_path):
-    """Build (or reuse) the Nakon bundle for this competition. Content-addressed;
-    cached when catalog unchanged. Runs with cwd=NAKON_DIR for vulndb creds.
-    """
+    """Build (or reuse) the content-addressed Nakon bundle for this competition."""
     result = subprocess.run(
         [sys.executable, "-m", "nakon", "build",
          "--config", str(Path(config_path).resolve()),
@@ -144,10 +136,7 @@ def build_nakon_bundle(config_path):
 
 def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, timeout=2400,
               strict=True):
-    """Push bundle to scoring engine and run `nakon deploy` there.
-    `only` scopes to machine names without changing bundle content.
-    strict=True passes --strict so failures abort instead of reporting live.
-    """
+    """Push the bundle to the scoring engine and run `nakon deploy` there."""
     ssh_base = [
         "ssh", "-i", str(key),
         "-o", "StrictHostKeyChecking=no",
@@ -164,9 +153,9 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-r",
-            str(NAKON_DIR / "nakon"),           # the package itself
-            str(bundle),                        # bundles/<bundle_id>/
-            str(Path(config_path).resolve()),   # addresses + credentials only
+            str(NAKON_DIR / "nakon"),
+            str(bundle),
+            str(Path(config_path).resolve()),
             f"{scoring_user}@{scoring_ip}:/tmp/nakon/",
         ],
         check=True, timeout=600,
@@ -190,7 +179,6 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
             check=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        # Client timeout doesn't reliably kill remote `nakon deploy`; pkill to avoid racing second deploy.
         try:
             subprocess.run(ssh_base + ["sudo pkill -9 -f 'nakon deploy' || true"],
                            timeout=30)
@@ -210,6 +198,5 @@ def _run_single_nakon_config(machine, configurations, key, scoring_user, scoring
               only=[machine["name"]], timeout=timeout, strict=strict)
 
 
-# Backwards-compat alias: some callers import is_windows_template from nakon_ops
 def is_windows_template(template_name):
     return _is_windows_template(template_name)

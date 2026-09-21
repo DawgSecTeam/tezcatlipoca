@@ -1,7 +1,4 @@
-"""SSH helpers via scoring engine gateway and Terraform context.
-
-Shared by create-competition, redeploy, and verify — single source of truth.
-"""
+"""SSH helpers via the scoring-engine gateway and Terraform context."""
 
 import json
 import os
@@ -30,10 +27,7 @@ def read_terraform_ctx():
 
 
 def ssh_via_gateway(ctx, target_ip, cmd, timeout=60, user="ubuntu"):
-    """SSH to a target box via the scoring engine gateway (ProxyCommand -W).
-    Requires AllowTcpForwarding=yes on gateway. Windows uses password auth;
-    Linux uses key auth for box_username.
-    """
+    """SSH to a target box through the engine gateway (ProxyCommand -W)."""
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]
@@ -105,8 +99,7 @@ def wait_for_ssh(key, user, host, timeout=300):
 
 
 def wait_for_boxes_ssh(ctx, targets, timeout=300):
-    """Poll every target's reachability through gateway (shared timeout).
-    Windows via guest agent (no key auth). Raises if all boxes fail (systemic)."""
+    """Poll every target's reachability through the gateway; raises only if all boxes fail."""
     node = os.environ["TF_VAR_proxmox_node"]
     print("  Waiting for team boxes to accept SSH via gateway...")
     deadline = time.time() + timeout
@@ -145,20 +138,18 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
 
 
 def wait_for_cloud_init(ctx, targets, timeout=240):
-    """Wait for cloud-init to finish on all targets. Cloud-init can revert planted
-    perms after clone; wait for it before nakon. Never raises; warns on timeout.
-    """
+    """Wait for cloud-init to finish on all targets before nakon plants anything."""
     print("  Waiting for cloud-init to finish on all team boxes...")
     deadline = time.time() + timeout
     for t in targets:
         if is_windows_template(t["box"]["template"]):
-            continue  # no cloud-init on Windows — bootstrap_windows_box() is its equivalent
+            continue
         ip = t["ip"]
         remaining = max(int(deadline - time.time()), 15)
         try:
             r = ssh_via_gateway(ctx, ip, "cloud-init status --wait", timeout=remaining,
                                 user=ctx.get("box_username", "ubuntu"))
-            if r.returncode in (0, 2):  # 2 = done, with non-fatal warnings — still finished
+            if r.returncode in (0, 2):
                 print(f"    {ip}: cloud-init done (rc={r.returncode})")
             else:
                 print(f"  WARNING: {ip} cloud-init status --wait exited {r.returncode}: "
