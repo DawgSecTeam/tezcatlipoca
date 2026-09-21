@@ -1,5 +1,6 @@
 """Orchestrator: seven-phase deploy and CLI."""
 
+import fcntl
 import json
 import os
 import subprocess
@@ -48,8 +49,28 @@ load_dotenv(ENV_PATH)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
+_DEPLOY_LOCKS = {}  # path -> open fh (keep referenced so flock survives)
+
+
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
     """Run the seven-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json."""
+    # One driver per competition. Two concurrent deploys share the engine's
+    # /opt/nakon staging dir and each one's 'rm -rf /opt/nakon/*' wipes the
+    # other's plan archives mid-plant (scrim-extreme-2026-09-20: a pkill'd
+    # wrapper left run-2's python alive while run-3 started; both died with
+    # 'bundle is missing its plan archive').
+    lock_fh = open(comp_dir / ".deploy.lock", "w")
+    try:
+        fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        raise SystemExit(
+            f"  ERROR: another deploy already holds the lock on {comp_dir} — refusing to run "
+            "concurrently. Find it with pgrep -f create-competition; kill the PYTHON driver "
+            "itself (pkill -f 'python.*create-competition'), not just a wrapper, and confirm "
+            "with pgrep before retrying."
+        )
+    _DEPLOY_LOCKS[str(comp_dir)] = lock_fh
+
     name, scenario, difficulty = load_compfile(comp_dir / "Compfile")
     box_username, credlist_usernames = load_users_config(comp_dir)
     comp_name = comp_dir.name
