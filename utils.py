@@ -10,6 +10,10 @@ DNS_FIX_CMD = (
     "sudo systemctl restart systemd-resolved 2>/dev/null || true"
 )
 
+# Same fix for the QEMU-guest-agent path, which already runs as root (no sudo,
+# and no working network or sudoers needed — that's the whole point of it).
+DNS_FIX_CMD_ROOT = DNS_FIX_CMD.replace("sudo ", "")
+
 
 # Fallback when no users.json exists; themeable per competition.
 BOX_USERNAME_DEFAULT = "ubuntu"

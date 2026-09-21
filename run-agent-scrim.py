@@ -32,6 +32,7 @@ bad-auto/.env or the environment.
 """
 
 import argparse
+import calendar
 import json
 import os
 import re
@@ -185,6 +186,8 @@ OPENCODE_PROJECT_CFG = """{
 
 
 CYCLE_TIMEOUT = 1500
+CYCLE_TARGET_PERIOD = 600   # wall-clock target between blue cycle STARTS
+MONITOR_INTERVAL = 300      # scoreboard snapshot cadence
 
 
 def log(msg):
@@ -341,15 +344,45 @@ def _team_tid(creds, user, jar, team):
 
 
 def team_down(creds, team):
+    try:
+        return any(not s["up"] for s in parsed_status(creds, team))
+    except Exception:
+        return False
+
+
+def parsed_status(creds, team):
+    """Parsed scoreboard for one team: [{service, up, error}]. Raises on failure —
+    callers decide whether to render text or record a structured snapshot."""
     jar = f"/tmp/jar.{team}"
     r = qget(creds, team, jar, f"/api/services/{_team_tid(creds, team, jar, team)}")
     try:
-        svcs = json.loads(r.stdout)
-        return any(not (s.get("Last10Rounds") and s["Last10Rounds"][0].get("Checks")
-                        and all(c.get("Result") for c in s["Last10Rounds"][0]["Checks"]))
-                   for s in svcs)
+        services = json.loads(r.stdout)
     except Exception:
-        return False
+        raise ValueError(f"non-JSON body: {(r.stdout or '')[:80]!r}")
+    if not isinstance(services, list):
+        raise ValueError(f"unexpected payload: {str(services)[:80]}")
+    rows = []
+    for s in services:
+        rounds = s.get("Last10Rounds") or []
+        checks = (rounds[0] if rounds else {}).get("Checks") or []
+        up = bool(checks) and all(c.get("Result") for c in checks)
+        err = next((c.get("Error", "") for c in checks if c.get("Error") and not c.get("Result")), "")
+        rows.append({"service": s["ServiceName"], "up": bool(up), "error": err[:120]})
+    return rows
+
+
+def render_status(rows):
+    return "\n".join(f"{'UP  ' if s['up'] else 'DOWN'} {s['service']:16s} {s['error'][:60]}"
+                     for s in rows)
+
+
+def status_text(creds, team):
+    """Compact plain-text scoreboard for the cycle prompt."""
+    try:
+        return render_status(parsed_status(creds, team))
+    except Exception as e:
+        # Self-diagnosing failure line: the reader then says WHY
+        return f"scoreboard unreachable ({type(e).__name__}: {e})"
 
 
 def stage_blues(args, comp, run_dir, creds, t0):
@@ -374,6 +407,8 @@ def stage_blues(args, comp, run_dir, creds, t0):
             p.chmod(0o755)
         shutil_copy(comp / "packet.md", wd / "packet.md")
         (wd / "LOG.md").write_text(f"# Blue team {n} — defense log\n")
+        if not (wd / "NOTEBOOK.md").exists():
+            (wd / "NOTEBOOK.md").write_text(NOTEBOOK_TEMPLATE.format(n=n))
         # Local llama.cpp endpoints: opencode's own base prompt is ~20k tokens, so
         # the advertised context must leave room for it or opencode self-compacts
         # fatally (60000 verified against the slot limit); no reasoning_effort.
@@ -418,34 +453,25 @@ def effort_json(effort):
     return f',\n          "options": {{ "reasoning_effort": "{effort}" }}'
 
 
-def status_text(creds, team):
-    """Compact plain-text scoreboard for the cycle prompt."""
-    jar = f"/tmp/jar.{team}"
-    r = qget(creds, team, jar, f"/api/services/{_team_tid(creds, team, jar, team)}")
-    lines = []
-    try:
-        services = json.loads(r.stdout)
-        if not isinstance(services, list):
-            raise ValueError(f"unexpected payload: {str(services)[:80]}")
-        for s in services:
-            rounds = s.get("Last10Rounds") or []
-            checks = (rounds[0] if rounds else {}).get("Checks") or []
-            ok = bool(checks) and all(c.get("Result") for c in checks)
-            err = next((c.get("Error", "") for c in checks if c.get("Error") and not c.get("Result")), "")
-            lines.append(f"{'UP  ' if ok else 'DOWN'} {s['ServiceName']:16s} {err[:60]}")
-    except Exception as e:
-        # Self-diagnosing failure line: the monitor.log entry then says WHY
-        lines.append(f"scoreboard unreachable ({type(e).__name__}: {e}; body={(r.stdout or '')[:80]!r})")
-    return "\n".join(lines)
-
-
-def blue_cycle_prompt(n, creds, args, elapsed, remain):
+def blue_cycle_prompt(n, creds, args, elapsed, remain, delta_text, inject_text, notebook_text, log_tail):
     tid = creds[f"TEAM{n}_ID"]
     return f"""You are Blue Team {n} defending the Meridian Health ward network (practice competition).
 T+{elapsed}min of {args.duration_min} ({remain}min left). Work in THIS directory; everything you need is here.
 
+CHANGES SINCE LAST CYCLE (orchestrator scoreboard diff — act on these first):
+{delta_text}
+
 LIVE SCOREBOARD (your 8 scored services — availability is points every minute):
 {status_text(creds, f'team{n}')}
+
+INJECTS:
+{inject_text}
+
+TEAM NOTEBOOK (NOTEBOOK.md — your working memory; current content):
+{notebook_text}
+
+Last LOG.md lines:
+{log_tail}
 
 REACH YOUR BOXES (subnet 192.168.{tid}.0/24):
   Linux ({creds['BOX_USER']}, password in scrim.env, sudo: echo $BOX_PW | sudo -S <cmd>):  ./mybox web01 "<cmd>"   (also app01, db01)
@@ -460,22 +486,134 @@ directly (that kills the shared jar's session). Use the jar; if a call answers
   curl -s -b "$JAR" http://$ENGINE_IP/api/injects | python3 -c "import json,sys;[print(i['ID'],i['Title'],'due',i['DueTime'][11:16],'subs',len(i.get('Submissions') or [])) for i in json.load(sys.stdin)]"
   echo "## deliverable" > sub.md && ./submit-inject <injectId> sub.md     # submit BEFORE close time
 
-CYCLE TASK (~5 minutes then STOP):
-1. If any service above is DOWN: restore it NOW (./mybox web01 "echo $BOX_PW | sudo -S systemctl unmask nginx; echo $BOX_PW | sudo -S systemctl start nginx" for example). Availability beats everything.
-2. Else: the most urgent OPEN inject (due soonest; schedule in packet.md) — investigate on the boxes, write the deliverable, ./submit-inject.
-3. Else: continue the misconfig hunt noted in LOG.md (planted rogue admins, backdoor services/tasks, bad firewall rules, exposed creds, SUID/sudo issues). Fix what is safe; never take a scored service down.
-4. Append one timestamped line to LOG.md. ROE: never attack the engine ($ENGINE_IP), never change the scoring-check accounts (triage/svc-imaging/wardops). Keep replies terse."""
+CYCLE TASK — notebook first, then AT MOST TWO actions, then STOP:
+0. FIRST: update NOTEBOOK.md (move finished items to DONE, add new incidents/findings) and append one timestamped line to LOG.md.
+1. If any service above is DOWN (or CHANGES shows a new DOWN): restore it NOW (./mybox web01 "echo $BOX_PW | sudo -S systemctl unmask nginx; echo $BOX_PW | sudo -S systemctl start nginx" for example). Availability beats everything.
+2. Else if an inject is due within 30 minutes and unsubmitted: investigate on the boxes, write the deliverable, ./submit-inject.
+3. Else: ONE hunt item from the notebook checklist (rogue UID-0 users, cron, systemd units, sudoers, firewall rules, listeners, Windows services/tasks/run-keys). Fix what is safe; never take a scored service down.
+ROE: never attack the engine ($ENGINE_IP), never change the scoring-check accounts (triage/svc-imaging/wardops). Keep replies terse."""
+
+
+def scoreboard_delta(run_dir, team):
+    """CHANGES SINCE LAST CYCLE for one team, from scoreboard-state.jsonl."""
+    path = Path(run_dir) / "scoreboard-state.jsonl"
+    try:
+        recs = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    except (OSError, ValueError):
+        return "(no scoreboard history yet)"
+
+    def states(rec):
+        return {s["service"]: s["up"] for s in ((rec or {}).get("teams", {}).get(team) or [])}
+
+    cur = recs[-1]
+    curm = states(cur)
+    if len(recs) < 2:
+        downs = sorted(s for s, up in curm.items() if not up)
+        return f"baseline snapshot T+{cur['t_plus_sec'] // 60}; DOWN at baseline: {', '.join(downs) or 'none'}"
+    prevm = states(recs[-2])
+    lines = []
+    for svc, up in curm.items():
+        if svc not in prevm:
+            continue
+        if prevm[svc] and not up:
+            lines.append(f"{svc} DOWN (new since last cycle) — RESTORE IT FIRST")
+        elif not prevm[svc] and up:
+            lines.append(f"{svc} back UP — expect red to re-attack it")
+        elif not up:
+            since = cur["t_plus_sec"]
+            for r in recs:
+                if states(r).get(svc, True):
+                    continue
+                since = r["t_plus_sec"]
+                break
+            lines.append(f"{svc} still DOWN (since T+{since // 60})")
+    return "\n".join(lines) or "no changes since last cycle"
+
+
+def inject_brief(creds, team):
+    """One line per inject with submission state; flags due-within-30-min as task #1."""
+    jar = f"/tmp/jar.{team}"
+    try:
+        r = qget(creds, team, jar, "/api/injects")
+        injects = json.loads(r.stdout)
+        if not isinstance(injects, list):
+            raise ValueError(f"unexpected payload: {str(injects)[:80]}")
+    except Exception as e:
+        return f"(inject list unavailable: {type(e).__name__}: {e})"
+    if not injects:
+        return "(no injects published yet)"
+    now = time.time()
+    lines = []
+
+    def due_in_min(due):
+        # Engine timezone is not guaranteed; accept whichever of UTC/local
+        # interpretation lands in a sane window.
+        try:
+            naive = time.strptime(due[:19], "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            return None
+        for cand in (calendar.timegm(naive) - now, time.mktime(naive) - now):
+            if -15 * 60 <= cand <= 12 * 3600:
+                return cand / 60
+        return None
+
+    for i in sorted(injects, key=lambda x: x.get("DueTime") or ""):
+        subs = len(i.get("Submissions") or [])
+        due_in = due_in_min(i.get("DueTime") or "")
+        when = f"due in {due_in:.0f}min" if due_in is not None else f"due {(i.get('DueTime') or '')[11:16]}"
+        state = "submitted ✓" if subs else "OPEN"
+        urgent = (not subs) and due_in is not None and 0 <= due_in <= 30
+        lines.append(f"  #{i.get('ID')} {i.get('Title')} — {when} — {state}"
+                     + ("  << TASK #1: submit before close" if urgent else ""))
+    return "\n".join(lines)
+
+
+NOTEBOOK_TEMPLATE = """# NOTEBOOK — team {n} working memory (update FIRST every cycle)
+
+## OPEN INCIDENTS
+(none yet)
+
+## HUNT CHECKLIST
+- [ ] rogue users / UID-0 accounts (/etc/passwd, uid 0 duplicates, fresh /etc/shadow entries)
+- [ ] unexpected cron (/etc/cron.d/*, crontab -l, user crontabs)
+- [ ] rogue systemd units (/etc/systemd/system, list-unit-files, enabled-but-unfamiliar)
+- [ ] sudoers changes (/etc/sudoers, /etc/sudoers.d/*)
+- [ ] firewall tampering (iptables/nft rules dropping scored ports, ufw status)
+- [ ] unexpected listeners (ss -tlnp vs your known service list)
+- [ ] Windows: new local admins, odd services, scheduled tasks (schtasks), HKLM Run keys
+- [ ] credential exposure (world-readable files, shell history, stray keys in /root/.ssh)
+
+## DONE
+(finished items move here)
+"""
 
 
 def _opencode_run(args, prompt, wd, env):
-    """One blue cycle. On failure the captured output.log holds opencode's real
-    error — the 17c run's 40/40 instant 'Unexpected server error' deaths never
-    reproduced (2026-09-19, same version/endpoint/context), so retry-and-record
-    is the strategy, not workarounds for an unconfirmed cause."""
+    """One blue cycle. The 17c run died 40/40 with an instant opencode
+    'Unexpected server error' from a capture_output thread launch that never
+    reproduced in the foreground, so the launch context is hardened instead of
+    trusted: no stdin, own process group, per-team HOME/XDG so opencode's state
+    DB and server logs live inside the run dir (triage evidence instead of
+    silent global state shared with whatever else runs under this user)."""
     return subprocess.run(["opencode", "run", "-m",
                            f"{provider_key(args.blue_base_url)}/{args.blue_model}", "--auto",
                            prompt],
-                          cwd=wd, env=env, capture_output=True, text=True, timeout=CYCLE_TIMEOUT)
+                          cwd=wd, env=env, capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, start_new_session=True,
+                          timeout=CYCLE_TIMEOUT)
+
+
+def _opencode_log_tail(wd):
+    """Tail of the newest opencode server log under the team's isolated state."""
+    logdir = Path(wd) / ".opencode-home" / "data" / "opencode" / "log"
+    try:
+        logs = sorted(logdir.glob("*"), key=lambda p: p.stat().st_mtime)
+        if logs:
+            return ("\n[opencode server log tail]\n"
+                    + "\n".join(logs[-1].read_text(errors="replace").splitlines()[-15:]))
+    except OSError:
+        pass
+    return ""
 
 
 def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
@@ -484,19 +622,31 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
         if stop.is_set():
             return
     while not stop.is_set() and (time.time() - t0) < (args.duration_min - 2) * 60:
-        time.sleep(min(600, max(30, (args.duration_min * 60 - (time.time() - t0)) / 6)))
-        if time.time() - t0 >= (args.duration_min - 2) * 60:
-            break
+        started = time.time()
         elapsed = int((time.time() - t0) / 60)
         remain = args.duration_min - elapsed
         wd = Path(args.run_dir) / f"blue-team{n}"
-        env = {**os.environ}
+        home = wd / ".opencode-home"
+        for sub in ("data", "config", "cache"):
+            (home / sub).mkdir(parents=True, exist_ok=True)
+        env = {**os.environ,
+               "HOME": str(home), "XDG_DATA_HOME": str(home / "data"),
+               "XDG_CONFIG_HOME": str(home / "config"), "XDG_CACHE_HOME": str(home / "cache")}
         try:
             env["OPENROUTER_API_KEY"] = api_key()
         except RuntimeError:
             pass  # local endpoints need no key
         try:
-            prompt = blue_cycle_prompt(n, creds, args, elapsed, remain)
+            notebook = (wd / "NOTEBOOK.md").read_text()[:2500] if (wd / "NOTEBOOK.md").exists() \
+                else "(no notebook yet)"
+            try:
+                log_tail = "\n".join((wd / "LOG.md").read_text().splitlines()[-5:]) or "(empty)"
+            except OSError:
+                log_tail = "(no LOG.md yet)"
+            prompt = blue_cycle_prompt(n, creds, args, elapsed, remain,
+                                       scoreboard_delta(args.run_dir, f"team{n}"),
+                                       inject_brief(creds, f"team{n}"),
+                                       notebook, log_tail)
             cycles = wd / "cycles"
             cycles.mkdir(exist_ok=True)
             # Serialize the two blues: the shared local endpoint has few slots,
@@ -509,6 +659,8 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
                     log(f"blue-team{n} cycle T+{elapsed} rc={r.returncode} — retrying once")
                     r = _opencode_run(args, prompt, wd, env)
             out = re.sub(r"\x1b\[[0-9;]*m", "", (r.stdout or "") + (r.stderr or ""))
+            if r.returncode != 0:
+                out += _opencode_log_tail(wd)
             # full transcript + exact prompt kept for the after-action report;
             # feed.log stays a short readable tail
             (cycles / f"cycle-T+{elapsed:03d}.prompt.txt").write_text(prompt)
@@ -520,28 +672,43 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
             log(f"blue-team{n} cycle T+{elapsed} TIMED OUT")
         except Exception as e:
             log(f"blue-team{n} feed error: {e}")
+        # Pace off actual cycle duration: local qwen turns are slow, so a fixed
+        # pre-cycle sleep both starves throughput and can't know a cycle overran.
+        took = time.time() - started
+        stop.wait(min(600, max(30, CYCLE_TARGET_PERIOD - took)))
 
 
 def monitor_loop(args, creds, t0, stop):
+    """Snapshots every MONITOR_INTERVAL starting at T+0 (not T+15 — down-minute
+    math and the report need the full window). scoreboard-state.jsonl is the
+    structured source of truth for blue deltas, down-windows, and
+    scrim-report.py; monitor.log keeps the human-readable text."""
+    sb_path = Path(args.run_dir) / "scoreboard-state.jsonl"
     while not stop.is_set() and (time.time() - t0) < args.duration_min * 60:
-        time.sleep(900)
-        if stop.is_set():
-            break
-        try:
-            snap = {t: status_text(creds, t) for t in ("team1", "team2")}
-        except Exception as e:
-            log(f"monitor snapshot failed: {e}")
-            continue
+        parsed, texts = {}, {}
+        for t in ("team1", "team2"):
+            try:
+                parsed[t] = parsed_status(creds, t)
+                texts[t] = render_status(parsed[t])
+            except Exception as e:
+                texts[t] = f"scoreboard unreachable ({type(e).__name__}: {e})"
+        t_plus = int(time.time() - t0)
+        if parsed:
+            rec = {"t_plus_sec": t_plus, "wallclock": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                   "teams": parsed}
+            with sb_path.open("a") as f:
+                f.write(json.dumps(rec) + "\n")
         (Path(args.run_dir) / "monitor.log").open("a").write(
-            f"\n#### T+{int((time.time()-t0)/60)}min {time.strftime('%H:%M')}\n" +
-            "\n".join(f"{t}:\n{s}" for t, s in snap.items()))
+            f"\n#### T+{t_plus // 60}min {time.strftime('%H:%M')}\n" +
+            "\n".join(f"{t}:\n{s}" for t, s in texts.items()))
         log("monitor snapshot written")
         # In-run red evidence: a teardown-time scp flake must not be able to
         # lose events.jsonl a third time, so grab it every snapshot too.
-        if pull_red_snapshot(args, f"T+{int((time.time()-t0)/60):03d}"):
+        if pull_red_snapshot(args, f"T+{t_plus // 60:03d}"):
             log("red events.jsonl snapshot pulled")
         else:
             log("WARNING: red events.jsonl snapshot unavailable")
+        stop.wait(MONITOR_INTERVAL)
 
 
 def _red_ssh_ctx(args):
@@ -597,12 +764,17 @@ def stage_red(args, comp, creds, run_dir):
         "intel": "nakon",
         "competition_dir": str(comp.resolve()),
         "event": {"duration_min": args.duration_min},
-        "pacing": {"profile": "deadline", "decision_window_min": 3, "window_jitter_min": 1,
-                   "active_burst_min": 8, "burst_jitter_min": 2, "quiet_min": 2, "quiet_jitter_min": 1,
+        # Aggression posture (2026-09 revision): round 3 bound red at ~25-30
+        # decisions (3-min windows) and 1/3/4 simultaneous takedowns on 8
+        # services/team. Faster decisions + a higher ramp make the event a
+        # tug-of-war; min_standing_services=2 stays the floor so a team always
+        # keeps two lifelines. Re-tune after the first rehearsal, not before.
+        "pacing": {"decision_window_min": 2, "window_jitter_min": 1,
+                   "active_burst_min": 15, "burst_jitter_min": 2, "quiet_min": 2, "quiet_jitter_min": 1,
                    "focus_rotation_min": max(10, args.duration_min // 8),
-                   "max_concurrent_down_start": 1, "max_concurrent_down_end": 3,
-                   "max_concurrent_down_endgame": 4, "access_deadline_remaining_min": args.duration_min // 4,
-                   "endgame_start_remaining_min": args.duration_min // 8,
+                   "max_concurrent_down_start": 2, "max_concurrent_down_end": 4,
+                   "max_concurrent_down_endgame": 6, "access_deadline_remaining_min": args.duration_min // 4,
+                   "endgame_start_remaining_min": 15,
                    "endgame_decision_window_sec": 60, "endgame_force_active": True,
                    "min_standing_services": 2, "credlist_gate_min": args.duration_min // 4,
                    "credlist_max_per_team": 1, "lockout_gate_pct": 0.75},
@@ -676,6 +848,11 @@ def stage_capture(args, creds):
         _qlogin(creds, "admin", jar)
         _pause()
     log("engine paused (best-effort); services JSON captured")
+    # scoreboard history feeds the report's down-minutes/restore math — keep a
+    # frozen copy with the rest of the evidence
+    sb = Path(args.run_dir) / "scoreboard-state.jsonl"
+    if sb.exists():
+        shutil_copy(sb, ev / "scoreboard-state.jsonl")
     # Blue-side deliverables into evidence/: logs, transcripts, submissions
     for n in (1, 2):
         src = Path(args.run_dir) / f"blue-team{n}"
@@ -683,7 +860,7 @@ def stage_capture(args, creds):
         if not src.exists():
             continue
         dst.mkdir(parents=True, exist_ok=True)
-        for name in ("LOG.md", "feed.log"):
+        for name in ("LOG.md", "NOTEBOOK.md", "feed.log"):
             if (src / name).exists():
                 shutil_copy(src / name, dst / name)
         for pattern in ("sub-*.md", "sub-*.txt"):

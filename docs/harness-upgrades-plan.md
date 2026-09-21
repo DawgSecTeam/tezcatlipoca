@@ -1,204 +1,144 @@
-# Scrim harness upgrades — plan for a new session
+# Scrim harness upgrades — revision 2 (2026-09-21), implemented
 
-Paste everything below the line into a fresh agent session. Work through the
-workstreams in order (C is small but do it FIRST — it is the measuring stick
-for everything else). Everything lands in the two repos on main and gets
-pushed; nothing here needs a live range until the verification step.
+Supersedes the original 2026-09-20 plan (the version that said "paste into a
+fresh session"). This revision was verified against both repos and the 17c
+evidence before implementation, corrected several of the original claims, and
+has now been IMPLEMENTED. This doc is the map of where everything landed and
+what remains (live validation only).
 
----
+## Corrections the original plan got wrong
 
-## Context
+1. The sudo-nopasswd step is tezcatlipoca's `setup_ubuntu_auth`, not nakon's;
+   for cloned teams it runs inside `clone_team_boxes`. D3 was a reorder there
+   plus a guest-agent fallback in `fix_dns_on_boxes`, not a nakon change.
+2. The Windows pivot needed no new credential tactic — `cred_spray` already
+   attacks Windows over sshd. The path was dead because of three specific
+   blockers (see A5 below for how each was removed).
+3. `status_text` returns rendered text, so C1 needed a new parsed helper
+   rather than "parse status_text".
+4. Legacy run dirs have NO scoreboard series, no restore/inject records — half
+   the report's metrics are "n/a (pre-scoreboard-state run)" by design; the
+   honest red-side numbers carry the verdict there.
+5. events.jsonl originally had no structured service/impact field; red now
+   emits `data` on action events and `blue_restore`/`score` events.
+6. Stall detection excludes health_check actions AND counts the opening
+   (T0 → first successful action) — 17c's dead first 29 minutes was its
+   biggest stall and the naive gap-between-successes definition missed it.
 
-The scrim system simulates a CCDC-style competition: tezcatlipoca
-(/home/hna/dev/dawgsec/tezcatlipoca) deploys and runs the range; bad-auto
-(/home/hna/dev/dawgsec/bad-auto) is the red agent. The 2026-09-18 round-3 run
-(evidence: /home/hna/dev/dawgsec/scrim-runs/agent-scrim-2026-09-17c/, debrief:
-that dir's FINDINGS.md) proved red's machinery but exposed that **the
-competition itself is not real yet**:
+## Where things landed
 
-- Red: 26 attack actions, all one pattern (cred_spray → privesc → stop/mask),
-  3 of 16 scored services touched, 35 minutes lost to one repeated mistake,
-  and it re-attacked a blue restore exactly once, by accident.
-- Blue: 40/40 orchestrator cycles died instantly (opencode background bug —
-  retry logic has since landed but is NOT yet validated live), 2 manual cycles
-  did good detection but zero remediation, zero injects, empty notebooks.
-- Interaction: red took ~26 actions; blue affected the game once. That is the
-  number this plan exists to change.
+### C — measuring stick (this repo)
 
-Already fixed and validated on 2026-09-19/20 (do NOT redo): shared Quotient
-cookie jars, team-ID mapping in the scoreboard path, engine compose timeout,
-opencode cycle retry + 60k local ctx, keyless local LLM endpoints, bad-auto
-red01 stale-state archive, on-box systemd unit resolution (apache→apache2).
-Local LLM endpoint for both teams: http://100.64.0.9:8080/v1 (qwen3.6-35b-a3b;
-blues reach it directly, red01 needs a LAN address or a relay+tunnel — see
-docs/dress-rehearsal-prompt.md Phase 3).
+- `run-agent-scrim.py`: `parsed_status()` (parsed per-team service state,
+  shared by `status_text`/`team_down`), `monitor_loop` snapshots at T+0 then
+  every 300 s to `run_dir/scoreboard-state.jsonl` (t_plus_sec, wallclock,
+  per-team {service, up, error}); `stage_capture` freezes a copy in evidence/.
+- `scrim-report.py`: writes `INTERACTION.md` per run dir — red
+  takedowns/timeline/tactics/initial-access/targets/stalls/restore-reactions/
+  Windows footholds, blue rc=0 cycles/restorations/down-minutes/injects/
+  notebook liveliness/eradication, interaction score + FAILED-RUN verdict at
+  score 0, gate table. `--self-test` pins the 17c numbers (4 takedowns, 3
+  tactics, 1 re-kill, 1 inferred restoration, 0 injects, 2 stalls, score 2).
+- `docs/rehearsal-gates.md`: the numeric gates; `scrim-report.py` `GATES`
+  dict is the machine source. Tune after the first rehearsal, not before.
 
-## Workstream C (do first) — interaction metrics, so progress is measurable
+### Red aggression (both repos)
 
-Build `scrim-report.py` in the tezcatlipoca repo. Input: a run dir. Output:
-`INTERACTION.md` next to the run's FINDINGS.md, containing:
+- `run-agent-scrim.py stage_red`: decision_window 3→2 min, down ramp 1/3/4→
+  2/4/6 (min_standing_services floor stays 2), endgame at T-15, opening burst
+  15 min, dead `pacing.profile` key dropped. bad-auto library defaults moved
+  in parallel (window 2, quiet 1, ramp 2/4/5, `reimpact_after_min: 15`).
+- bad-auto `prompts.py`: pressure rule fires below cap (not just at zero),
+  "hold root + headroom → take it down this cycle", "if blue restores, break
+  it again", OPENING SWEEP (foothold on every box, Windows included), and the
+  restore-response doctrine with mechanism switching.
 
-- Red: takedown count + timeline, distinct tactics used, distinct initial-
-  access techniques, targets touched, stall periods (≥10 min without a
-  successful new action), restore-reactions (a service blue brought back that
-  red attacked again — detect via events.jsonl impacts on the same
-  target/service after an UP transition).
-- Blue: successful cycle count (feed.log rc=0), restorations performed and
-  time-to-restore (needs monitor data — see below), injects submitted, eradication
-  evidence (LOG.md/submissions mentions of planted artifacts being removed),
-  notebook liveliness (LOG.md entry count).
-- Availability damage: per-team service-down minutes. Source of truth: the
-  orchestrator should snapshot parsed scoreboard state (status_text →
-  services + UP/DOWN) to `run_dir/scoreboard-state.jsonl` on every monitor
-  pass — ADD THIS WRITE to monitor_loop. The report derives down-windows from it.
-- An interaction score with explicit components: restorations performed,
-  red restore-reactions, evictions, injects, eradication — each a count.
-  A run where this score is 0 is a failed run NO MATTER how good red's log
-  looks. Print that verdict line.
+### A — red capability (bad-auto repo, commits 3d747e8 / 7669599 / 2af28e4)
 
-Also write `docs/rehearsal-gates.md` (or extend docs/dress-rehearsal-prompt.md
-Phase 3) with the numeric gates a rehearsal must hit, e.g.: red ≥6 takedowns
-AND ≥3 restore-reactions AND ≥4 distinct tactics AND ≥1 pivot to a Windows
-box AND zero ≥10-min stalls; blue ≥8 rc=0 cycles AND ≥2 restorations AND
-≥2 injects AND LOG.md ≥10 entries. Tune the numbers after the first rehearsal,
-not before.
+- A1 restore-response: `Director._detect_restores` diffs consecutive
+  scoreboard polls (DOWN→UP = blue restore) → `World.blue_events` +
+  `blue_restore` log event + digest `blue_restores` block with a re-attack
+  directive; second restore of the same service switches the directive/ladder
+  to `impact_firewall`. `reimpact_after_min` (15) bounds impact exclusivity in
+  the fallback.
+- A2 `impact_firewall` tactic: on-box port resolution (MainPID → ss), iptables
+  / ufw / nft insert chain, `mode="firewall"` impact (counts against
+  `can_impact`), cleanup command in world notes, refuses port 22.
+- A3 credlist sabotage: already existed (`credlist_sabotage`), gated by
+  `credlist_gate_min`/`credlist_max_per_team`; organizer restore passwords in
+  `<state>/report-secrets.md` (0600).
+- A4 persistence: new `rekill` method — `/etc/cron.d/tznet-reaper` re-stops a
+  downed service every 5 min (survives blue restores); persistence
+  rate-limited to one artifact per foothold per hour.
+- A5 Windows: fallback `cred_spray`/`foothold_ssh` picks no longer filter
+  windows targets; `impact_service` takes the windows branch before the
+  unit-regex/`can_root` gates; Administrator is admin-equivalent
+  (`_can_admin`); `_WINDOWS_EFFECTS` maps the scored slugs (WinRM / SMB share
+  / RDP misconfigs) to PowerShell effects with verification checks.
+- A6 anti-stall: `World.tally_failure`/`failure_count` per (tactic, ip) fed
+  from `execute()`; policy blocks a third impact attempt where two failed;
+  digest exposes per-target `failed_attempts`.
+- A7 adaptive tempo: blue restoring → 1.5-min windows for 20 min; scoreboard
+  silent 30+ min → 4-min windows; persisted in `world.meta`, endgame wins.
+- Also landed from the parallel session: pressure override below cap (incl.
+  persistence as passive), structured `data` on action events, per-cycle
+  `score` events, and `badauto/report.py` (end-of-run vulnerability report).
 
-## Workstream A — red aggression (bad-auto repo)
+### B — blue effectiveness (this repo)
 
-Design principle: red's job is a sustained tug-of-war, not a single sweep.
-Every item keeps the existing guardrails (min_standing_services, don't kill
-red's own SSH path, endgame gates).
+- B1: `stage_blues` writes `NOTEBOOK.md` (OPEN INCIDENTS / HUNT CHECKLIST /
+  DONE); the cycle prompt embeds it + last 5 LOG.md lines; notebook update is
+  cycle step 0. `stage_capture` archives it.
+- B2: `scoreboard_delta()` renders CHANGES SINCE LAST CYCLE (new DOWN with
+  RESTORE FIRST, back-UP with expect-re-attack, still-DOWN with since-T+) at
+  the top of every cycle prompt.
+- B3: `inject_brief()` queries /api/injects per cycle through the team jar;
+  unsubmitted + due ≤30 min becomes TASK #1; submitted shows ✓.
+- B4: opencode launch hardened — `stdin=DEVNULL`, `start_new_session=True`,
+  per-team HOME/XDG under the run dir (state DB + server logs become
+  evidence; `_opencode_log_tail` appends the server log on failure). The
+  FIFO-supervisor fallback is NOT built — build it only if the hardened
+  launch still dies in the live triage (10 consecutive rc=0 cycles is the
+  gate).
+- B5: cycle scope is "AT MOST TWO actions" (restore > inject > one hunt item);
+  pacing measures actual cycle duration (sleep `clamp(30, 600 − took)`, first
+  cycle starts immediately instead of after a 10-min sleep).
 
-A1. **Restore-response loop.** bad-auto already polls the scoreboard via
-    QuotientSensor (badauto/quotient.py, admin session, per-team
-    /api/services). Extend it to diff consecutive polls: a service
-    transitioning DOWN→UP is a blue restore event. Persist it to world
-    (e.g. world.blue_events) and emit it into the director's digest as a
-    high-priority objective: re-attack that target within the pacing window.
-    Escalation ladder on re-attack — first re-kill (stop_mask), then if blue
-    restores AGAIN: switch mechanism (see A2/A3), never repeat the identical
-    action more than twice.
+### D — deploy flakes (this repo)
 
-A2. **New tactic: firewall tamper** (`impact_firewall`, new file in
-    badauto/tactics/, pattern-copy impact_service.py): with root, insert a
-    rule dropping the scored check port (e.g. `iptables -I INPUT -p tcp
-    --dport <port> -j REJECT` plus equivalents for ufw/firewalld). Service
-    stays "up", check fails — the most CCDC-authentic failure mode and the
-    one blue practice most needs. Must report which port/service it poisons
-    in the tactic result and world.note, and include a matching self-cleanup
-    note (blue-visible artifacts are the point). respects min_standing_services.
+- D1: `clone_ops.ensure_cloned_network` runs after the start loop: guest-agent
+  IPv4 check per Linux box (30 s grace), repair on miss.
+- D2: `clone_ops._repair_box_network` — live `ip addr/route` repair plus the
+  persisted networkd `.network` (KeepConfiguration) + ifupdown stanza; the
+  body is recorded in the function docstring and
+  `docs/dress-rehearsal-prompt.md`'s playbook.
+- D3: `setup_ubuntu_auth` now runs BEFORE `fix_dns_on_boxes` in
+  `clone_team_boxes`, and `fix_dns_on_boxes` falls back to
+  `guest_agent_exec_root` with `DNS_FIX_CMD_ROOT` (no sudo, no network) before
+  giving up on a box.
 
-A3. **New tactic: service-account credential rotation** (this is the already-
-    planned "credlist sabotage", gated by the existing credlist_gate_min /
-    credlist_max_per_team pacing knobs — implement the tactic those knobs were
-    waiting for): rotate the password of ONE credlist check user on one box
-    (the linux.credlist users the SSH/SMTP/IMAP/SQL checks authenticate as).
-    Availability check starts failing auth while the daemon runs. ONE user,
-    ONE box per gating window — full credlist destruction stays an endgame move.
+## What still needs a live range
 
-A4. **Live persistence planting** (`plant_persistence`): per foothold, during
-    the event (not pre-planted), one of: UID-0 user, /etc/cron.d re-kill job
-    (cron that re-stops a previously-downed service every N min — direct
-    counter to blue restores, self-healing pressure), or a systemd unit.
-    Rate-limit one artifact per foothold per hour; log to world so the report
-    can count eradication targets. This is what makes blue's hunt meaningful —
-    every artifact red plants is something blue can find and remove for credit.
+Nothing left in code. Remaining work is validation, in this order:
 
-A5. **Windows pivot.** Red never touched dc01/win01, which hold the richest
-    scenario material. Add a winrm/smb credential attack tactic (the transport
-    already supports windows=True; impact_service._windows shows the pattern;
-    the box password is in intel/credentials the same way the linux shared
-    cred was). Goal: foothold on at least one Windows box per team mid-event,
-    enabling the Windows impact path (WinRM stop/disable) and making blue
-    defend the DC — the actual CCDC heart.
+1. `python3 run-agent-scrim.py --competition scrim-dress-... --duration-min
+   90 ...` per docs/dress-rehearsal-prompt.md — the rehearsal itself.
+2. B4 live triage: blues must reach 10 consecutive rc=0 cycles on the local
+   endpoint. If the hardened launch still dies, read the per-team opencode
+   server logs (now under `blue-teamN/.opencode-home/`), then build the
+   `--blue-worker N` FIFO supervisor only if the error is in-opencode.
+3. Score the rehearsal with `scrim-report.py` → INTERACTION.md against
+   `docs/rehearsal-gates.md`. Only a green INTERACTION.md is "ready for the
+   practice". Retune gate numbers after the rehearsal, not before.
+4. Watch one risk: 2-min decision windows triple red's LLM load on the single
+   qwen endpoint shared with blues. If decision latency balloons, raise
+   `decision_window_min` to 2.5 — don't drop actions.
 
-A6. **Anti-stall director rule.** Generalize the round-3 unit-name lesson:
-    after 2 failed attempts of the same tactic on the same target, the
-    director must switch target or tactic (tracking in director.py; the
-    on-box unit resolution already removed the biggest cause). Also feed the
-    digest the resolved unit names A1 learns so the LLM stops re-guessing.
+## Guardrails (unchanged)
 
-A7. **Adaptive tempo.** Pacing knobs already model deadline/endgame; add a
-    blue-competence signal: if restores happen within 10 min of takedowns,
-    tighten decision_window_min (toward the burst profile); if blue is silent
-    for 30+ min, ease off (real red reconnoiters before pressing a silent
-    network). Keep this simple — two regime switches, not a controller.
-
-Acceptance for A (measured by scrim-report.py on a live run): ≥4 distinct
-tactics, ≥3 restore-reactions against a restoring blue, ≥1 Windows foothold,
-zero ≥10-min stalls, and blue's notebook/logs show artifacts red planted
-getting hunted.
-
-## Workstream B — blue effectiveness (tezcatlipoca repo)
-
-B1. **Persistent shared notebook.** Promote LOG.md from write-only diary to
-    the team's working memory:
-    - stage_blues writes a structured `NOTEBOOK.md` per team: sections
-      "OPEN INCIDENTS", "HUNT CHECKLIST" (generic CCDC hunt list: rogue
-      users/UID-0, cron, systemd units, sudoers, firewall, listeners,
-      Windows services/tasks/run-keys, scheduled tasks), "DONE".
-    - blue_cycle_prompt embeds the notebook's current content (it's small)
-      plus the last cycle's final 5 lines, and instructs: update the notebook
-      FIRST (move found items, add new incidents), then act.
-B2. **Scoreboard deltas in every cycle prompt.** monitor_loop (or each
-    blue_feed_loop iteration) diffs the parsed scoreboard against the
-    previous snapshot and renders "CHANGES SINCE LAST CYCLE: web01-http DOWN
-    (since T+63), db01-sql restored at T+71" at the top of the prompt, with
-    the down-service restoration as standing task #1. This single change is
-    what turns parallel monologues into a game: blue sees red's moves within
-    minutes.
-B3. **Injects that actually happen.** Cycle task ordering: if an inject is
-    due within 30 minutes and not yet submitted (query via the shared jar),
-    it becomes task #1 with the submit command inline. Track submissions per
-    team in the orchestrator (parse /api/injects once per cycle) so the
-    prompt can say "submitted ✓" instead of guessing.
-B4. **Live validation of the opencode launch path (do this FIRST in B).**
-    The retry landed but 40/40 still died in round 3. Before anything else:
-    reproduce the exact feed-loop invocation (python subprocess from a
-    thread, capture_output) against the local endpoint with a scratch
-    workdir. If it survives → good. If it dies → implement the fallback now,
-    while there's time: `run-agent-scrim.py --blue-worker N` child process
-    started via a foreground-owned supervisor, fed cycle requests over a
-    FIFO; the feed loop posts requests instead of spawning opencode. (The
-    pty hypothesis was already tested and the bug did not reproduce — but
-    "did not reproduce" is not "works"; round 3 taught us that.)
-B5. **Cycle length for local qwen.** Local turns take 30–60 s and qwen
-    thinks slowly; 5-minute tasks get cut mid-remediation (round 3's manual
-    cycles died hunting). Make the cycle task scope realistic: max 2 actions
-    per cycle (one incident OR one hunt item OR one inject), and pace cycle
-    frequency off actual cycle duration rather than fixed sleep math.
-
-Acceptance for B (live run): ≥8 rc=0 cycles per team, LOG.md/NOTEBOOK.md
-growing every cycle, ≥2 restorations with time-to-restore under 15 min,
-≥2 injects submitted, and the delta line visible in every prompt file in
-cycles/*.prompt.txt.
-
-## Workstream D — deploy-flake automation (small, do while deploys simmer)
-
-D1. In clone_ops/deploy: after team2 linux clones start, guest-agent check
-    for a routable IPv4; if missing, apply the known repair (ip addr + route +
-    persistent config) instead of failing phase 6/7 an hour later.
-D2. For Debian-based clones (app01), write the networkd .network file with
-    KeepConfiguration at clone-prep time (the ifupdown carrier-blip lesson
-    from e2e-2026-09-19).
-D3. Move the DNS fix (hardening_ops) to after nakon's sudo-nopasswd step for
-    cloned teams, or switch it to the guest-agent root path — it currently
-    soft-fails 8× per fresh clone because sudo needs a password.
-
-## Order and verification
-
-1. C (report + gates) — half a day, no range needed; test against the 17c
-   evidence in scrim-runs/agent-scrim-2026-09-17c/ (it must score that run's
-   interaction honestly: ~1 restoration, 0 re-kills, 0 injects).
-2. B4 (opencode liveness) — one hour, needs only the local LLM endpoint.
-3. A1–A7 and B1–B5 in parallel tracks; each tactic lands with a
-   `badauto run --once --dry-run` green and a unit-pattern-consistent file.
-4. D while a deploy runs.
-5. Final: run the dress rehearsal (docs/dress-rehearsal-prompt.md) with the
-   NEW gates from C, produce INTERACTION.md, and only a green INTERACTION.md
-   counts as "ready for the practice".
-
-Guardrails: node shared with the workshop portal (no workshop-* touches, hdd
-pool only); red keeps min_standing_services and never bricks blue's access
-path; new red tactics must be blue-discoverable (leave the artifact, note it
-in world) — the point is practice, not undeletable damage.
+Node shared with the workshop portal (no workshop-* touches, hdd pool only);
+`min_standing_services`=2 stays the floor and red never kills its own access
+path (port 22 / sshd refused in impact_firewall, impact_service, and rekill);
+firewall tamper and cred rotation count against the concurrent-down cap;
+every red tactic leaves a blue-discoverable artifact and a cleanup note —
+the point is practice, not undeletable damage.
