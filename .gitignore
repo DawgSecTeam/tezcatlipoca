@@ -21,3 +21,4 @@ competitions/*/.deploy_state.json
 competitions/*/nakon-config.json
 competitions/*/.nakon-domain-*.json
 competitions/*/.phase6-swept
+.deploy.lock
