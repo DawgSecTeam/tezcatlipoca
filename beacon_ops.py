@@ -1,15 +1,4 @@
-"""Plant raw-socket beacons on team Linux boxes as blue-team hunt artifacts.
-
-Each beacon is a compiled copy of artifacts/rawsockets-beacon/beacon.c run by
-an innocuous systemd unit (Restart=always), sending forged SYN packets with a
-BEA1 payload at the team gateway on a per-box interval. Not scored, not
-destructive — the exercise is for blue to find the process/unit/binary and its
-periodic egress and shut it down properly (stop alone won't stick).
-
-Enabled per-competition with Compfile `team_beacons 1`; deploy phase 6 plants
-beacons on every Linux box before the tz-ready snapshot, so team2+ clones
-inherit them.
-"""
+"""Plant raw-socket beacons on team Linux boxes as blue-team hunt artifacts (unscored, non-destructive)."""
 
 import os
 import subprocess
@@ -24,7 +13,6 @@ REMOTE_DIR = "/usr/local/lib/.sysmon"
 REMOTE_BIN = f"{REMOTE_DIR}/beacon"
 UNIT_NAME = "wda-digest.service"
 
-# Beacon cadence varies per box so the periodicity signature isn't uniform.
 BEACON_INTERVALS = {"web01": 45, "app01": 60, "db01": 90}
 BEACON_PORT = 4444
 
@@ -34,9 +22,7 @@ def _is_windows(template_name):
 
 
 def _build_beacon():
-    """Static build for the operator host if possible (no toolchain needed on
-    boxes); a dynamic local build won't run on the Ubuntu boxes, so failure
-    here means on-box compilation."""
+    """Static build for the operator host; failure here means on-box compilation."""
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     out = BUILD_DIR / "beacon"
     r = subprocess.run(
@@ -62,9 +48,7 @@ def _scp_to_box(ctx, box_username, ip, src, dst):
 
 
 def _ssh_box(ctx, box_username, ip, cmd, timeout=90, sudo_password=None):
-    """Run cmd on a team box via the gateway. With sudo_password, cmd runs as
-    root via `sudo -S bash -s` (password + script on stdin) — needed because the
-    planted writable-sudoers misconfig breaks passwordless sudo on some boxes."""
+    """Run cmd on a team box via the gateway; with sudo_password it runs as root via sudo -S."""
     ssh_cmd = ["ssh", "-i", ctx["ssh_key_path"],
                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
                "-o", "ConnectTimeout=10", "-o", f"ProxyCommand={_gateway_proxy(ctx)}",
@@ -93,8 +77,7 @@ def _unit(box_name, target_ip, interval):
 
 
 def plant_team_beacons(teams, boxes, ctx, box_username="ubuntu", box_password=None):
-    """Install beacons on every (team, linux box in BEACON_INTERVALS). Warns and
-    continues per box; beacons are scenario flavor and must never abort a deploy."""
+    """Install beacons on every (team, linux box); warns and continues — never aborts a deploy."""
     from range_ops import enumerate_targets
 
     binary, how = _build_beacon()
@@ -142,12 +125,6 @@ def plant_team_beacons(teams, boxes, ctx, box_username="ubuntu", box_password=No
                 f"systemctl is-active {UNIT_NAME} || true\n"
                 "rm -f /tmp/.wda-b /tmp/.wda.c\n"
             )
-            # Ship the script as a FILE and run it via `sudo -S bash <file>`:
-            # with the password on stdin, sudo consumes it only when prompted —
-            # when NOPASSWD applies the stdin line is unused, so the script must
-            # not travel on stdin or the password line would execute as a command
-            # on boxes where the planted writable-sudoers misconfig broke
-            # passwordless sudo.
             local_script = BUILD_DIR / "wda-install.sh"
             local_script.write_text(install_script)
             r = _scp_to_box(ctx, box_username, ip, local_script, "/tmp/.wda-install.sh")

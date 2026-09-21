@@ -29,7 +29,6 @@ output "team_passwords" {
   sensitive = true
 }
 
-# Written to disk for the agent
 output "agent_context" {
   value = jsonencode({
     scoring_engine_ip = local.scoring_ip

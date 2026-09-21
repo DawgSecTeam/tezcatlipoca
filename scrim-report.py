@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""scrim-report.py — interaction report for an agent-scrim run dir.
-
-Reads a run dir (evidence/red/events*.jsonl + world.json, blue-team*/{feed.log,
-LOG.md, NOTEBOOK.md, submissions/, sub-*.md}, scoreboard-state.jsonl when the
-run produced one) and writes INTERACTION.md next to FINDINGS.md.
-
-The interaction score is the number this report exists to move:
-
-    restorations + red restore-reactions + evictions + injects + eradication
-
-A run that scores 0 is a FAILED RUN no matter how good red's kill log looks —
-red-vs-empty-room is not a red success. Gates mirror docs/rehearsal-gates.md.
-
-Usage:
-  python3 scrim-report.py RUN_DIR [--stdout]
-  python3 scrim-report.py RUN_DIR --self-test   # pinned agent-scrim-2026-09-17c numbers
-"""
+"""Interaction report for an agent-scrim run dir — writes INTERACTION.md next to FINDINGS.md."""
 
 import argparse
 import calendar
@@ -25,15 +9,12 @@ import sys
 import time
 from pathlib import Path
 
-# last octet -> host (scrim subnets 192.168.10X.0/24; 101=team1, 102=team2)
 HOST_BY_OCTET = {"2": "dc01", "3": "win01", "4": "web01", "5": "app01", "6": "db01"}
 HEALTH_CHECK = "health_check"
-STALL_SEC = 600           # >=10 min without a successful new action
-REAKILL_GAP_SEC = 900     # re-attack on the same target after >=15 min implies blue restored
+STALL_SEC = 600
+REAKILL_GAP_SEC = 900
 RESTORE_TTR_GATE_MIN = 15
 
-# Gates a rehearsal must hit (docs/rehearsal-gates.md; tune after the first
-# rehearsal, not before).
 GATES = {
     "red": [("takedowns", 6, ">="), ("restore_reactions", 3, ">="),
             ("distinct_tactics", 4, ">="), ("windows_footholds", 1, ">="),
@@ -42,7 +23,7 @@ GATES = {
              ("injects", 2, ">="), ("notebook_entries", 10, ">=")],
 }
 
-EXPECTED_17C = {  # verified against that run's FINDINGS.md evidence
+EXPECTED_17C = {
     "takedowns": 4, "distinct_tactics": 3, "restore_reactions": 1,
     "restorations": 1, "injects": 0, "interaction_score": 2, "stalls": 2,
 }
@@ -70,12 +51,9 @@ def host_label(ip):
     return f"{team}:{host}" if team else host
 
 
-# -- loading ---------------------------------------------------------------------------
 
 def load_red_events(run_dir):
-    """Merge the final events.jsonl with the in-run snapshots, filtered to this
-    event's window (stale round-N leftovers sit outside [T0, T0+8h]) and
-    deduplicated (snapshots overlap the final file by construction)."""
+    """Merge final events.jsonl with in-run snapshots, window-filtered and deduplicated."""
     red = Path(run_dir) / "evidence" / "red"
     files = sorted(red.glob("events*.jsonl")) if red.is_dir() else []
     events, seen = [], set()
@@ -145,7 +123,6 @@ def load_scoreboard(run_dir):
     return sorted(out)
 
 
-# -- red metrics -----------------------------------------------------------------------
 
 def takedown_fields(ev):
     data = ev.get("data") or {}
@@ -196,9 +173,6 @@ def red_metrics(events, t0, world):
             m["takedowns"] += 1
             m["timeline"].append((tp, host_label(dip), svc, mode))
             takes.append((tp, dip))
-    # restore-reactions: a takedown on a target red already killed >=15 min ago
-    # implies blue restored it in between (works on legacy runs; new runs also
-    # carry explicit blue_restore events)
     per_ip = {}
     for tp, dip in takes:
         if dip is None:
@@ -208,9 +182,6 @@ def red_metrics(events, t0, world):
             m["restore_reactions"] += 1
         if earlier is None or tp > earlier:
             per_ip[dip] = tp
-    # stalls: gaps between successful non-health_check actions — and the opening
-    # (T0 -> first success) counts too, so a red that sleeps through its first
-    # 20 minutes can't hide behind a dense later log
     if ok_stamps and ok_stamps[0] >= STALL_SEC / 60.0:
         m["stalls"].append((0.0, ok_stamps[0], ok_stamps[0]))
     for a, b in zip(ok_stamps, ok_stamps[1:]):
@@ -219,7 +190,7 @@ def red_metrics(events, t0, world):
     for f in foothold_list(world):
         if isinstance(f, dict) and f.get("windows"):
             m["windows_footholds"] += 1
-    if not m["windows_footholds"]:  # legacy world.json missing: infer from events
+    if not m["windows_footholds"]:
         m["windows_footholds"] = len({ip for _, ip in m["initial_access"]
                                       if ip and ip.split(".")[-1] in ("2", "3")})
     m["distinct_tactics"] = sorted(m["distinct_tactics"])
@@ -250,7 +221,7 @@ def down_windows(snaps):
                     windows.append((down_at, tp, svc))
                     ttrs.append(tp - down_at)
                     down_at = None
-            if down_at is not None:  # still down at last snapshot / event end
+            if down_at is not None:
                 end = series[-1][0]
                 windows.append((down_at, end, svc))
                 down_sec += end - down_at
@@ -263,7 +234,6 @@ def down_windows(snaps):
     return out
 
 
-# -- blue metrics ----------------------------------------------------------------------
 
 def blue_metrics(run_dir):
     m = {"cycles_rc0": 0, "cycles_total": 0, "manual_rc0": 0, "injects": 0,
@@ -310,7 +280,6 @@ def blue_metrics(run_dir):
     return m
 
 
-# -- gates + report --------------------------------------------------------------------
 
 def evaluate(gm, bm):
     rows = []
@@ -334,8 +303,6 @@ def build_report(run_dir):
     bm = blue_metrics(run_dir)
 
     legacy = not snaps
-    # restorations: real DOWN->UP transitions when we have the series; on legacy
-    # runs a re-kill implies blue restored, so infer (marked as such).
     if down:
         restorations = sum(d["restorations"] for d in down.values())
         ttrs = [t for d in down.values() for t in d["ttrs_min"]]
@@ -346,7 +313,7 @@ def build_report(run_dir):
         restorations, ttrs, fast = rm["restore_reactions"], [], 0
         down_min, max_sim = None, None
     score = (restorations + rm["restore_reactions"]
-             + 0 + bm["injects"] + bm["eradication"])  # evictions not yet observable
+             + 0 + bm["injects"] + bm["eradication"])
     gates = evaluate(
         {"takedowns": rm["takedowns"], "restore_reactions": rm["restore_reactions"],
          "distinct_tactics": len(rm["distinct_tactics"]),

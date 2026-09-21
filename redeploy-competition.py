@@ -1,9 +1,5 @@
-# Author: Hamza
 
-"""Redeploy a subset of a live competition's boxes without tearing down the range.
-Modes: rollback-ready (tz-ready), rollback-base (tz-base+nakon), reconfigure (live),
-rebuild (from template). Rolling back discards team changes.
-"""
+"""Redeploy a subset of a live competition's boxes (rollback-ready/base, reconfigure, rebuild)."""
 
 import argparse
 import importlib.util
@@ -49,7 +45,6 @@ def _load_driver():
 driver = _load_driver()
 
 
-### Selection
 
 def parse_team_selector(raw, teams):
     """Parse team selector (team key, number, or subnet identifier)."""
@@ -108,7 +103,6 @@ def select_targets(teams, boxes, args):
     return targets
 
 
-### Modes
 
 def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon_bundle):
     """Configure half: DNS, auth, scoped nakon (--only), service hardening."""
@@ -314,7 +308,6 @@ def quote_sshkeys(public_key):
     return quote(public_key.strip(), safe="")
 
 
-### CLI
 
 def main():
     parser = argparse.ArgumentParser(
@@ -353,7 +346,6 @@ def main():
     parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
     args = parser.parse_args()
 
-    # Competition selection
     comp_name = args.competition
     if not comp_name:
         candidates = [
@@ -381,9 +373,6 @@ def main():
 
     teams = json.loads(teams_path.read_text())
     boxes = json.loads(boxes_path.read_text())
-    # Secrets (box_password, box_creds) have to be the originals: the credlist accounts this
-    # recreates must match what push_event_conf() wrote to Quotient's linux.credlist, or the
-    # recovered box scores down on every auth-based check even though it is healthy.
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
 
     targets = select_targets(teams, boxes, args)

@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a competition-wide packet — the network/system/services briefing handed to
-competitors ahead of time, before any real credentials exist.
-
-Unlike create-competition.py/verify-competition.py, this touches no live infrastructure at
-all: it's a pure local-file -> Markdown render, so it works the moment a competition's
-Compfile/boxes.json/box_services.json exist — whether from a partial create-competition.py run
-or fully hand-authored (see docs/usage-agents.md "Pre-authoring a competition" /
-"Pinning a competition's configuration").
-
-The packet is intentionally the SAME document for every team (no team-specific data — real
-per-team credentials are issued separately at competition start, see credentials.txt) and
-intentionally omits box_vulns.json (nakon's planted misconfigs) — including those would spoil
-the competition.
-
-Usage:
-    python3 generate-packet.py competitions/<id>
-"""
+"""Generate the competition-wide competitor packet (pure local-file -> Markdown render)."""
 
 import argparse
 import json
@@ -26,11 +10,6 @@ from utils import load_compfile, load_users_config
 
 REPO_ROOT = Path(__file__).resolve().parent
 
-# Mirrors quotient/setup.py's _SERVICE_TO_CHECK Display fields, so the packet shows the same
-# human-readable service names Quotient's scoreboard does (e.g. "apache" -> "http") instead of
-# raw catalog identifiers. Kept as a separate, smaller table here (display name only) rather
-# than importing the full _SERVICE_TO_CHECK dict, since this script has no dependency on
-# Quotient's TOML check shapes at all — just the name a competitor would recognize.
 _SERVICE_DISPLAY = {
     "apache": "http", "nginx": "http", "httpd": "http", "splunk": "splunk", "roundcube": "roundcube",
     "bind": "dns", "named": "dns",
@@ -48,8 +27,7 @@ def _service_display(name):
 
 
 def load_inject_schedule(comp_dir):
-    """Inject TITLES + timing offsets only (never prompt.md content) — see module docstring
-    and create-competition.py's load_injects() for the same inject.json shape."""
+    """Inject titles + timing offsets only (never prompt.md content)."""
     injects_dir = comp_dir / "injects"
     if not injects_dir.is_dir():
         return []

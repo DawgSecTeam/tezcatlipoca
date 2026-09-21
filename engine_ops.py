@@ -10,11 +10,7 @@ from quotient.setup import build_event_conf
 
 
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
-    """Bootstrap the scoring engine: install packages, Docker, Quotient.
-
-    postgres_password / redis_password are generated once per deploy() run and passed in so the
-    Quotient stack .env written here agrees with the same values push_event_conf() writes later.
-    """
+    """Bootstrap the scoring engine: install packages, Docker, Quotient."""
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]
@@ -78,7 +74,6 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
         check=True, timeout=60,
     )
 
-    # Write .env for Quotient (required before docker compose build/up)
     print("  Writing Quotient .env...")
     quotient_env = (
         f"POSTGRES_PASSWORD={postgres_password}\n"
@@ -120,12 +115,9 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
             f"{scoring_user}@{scoring_ip}",
             "cd /opt/quotient && sudo docker compose up -d",
         ],
-        # first up after a --no-cache build cold-starts postgres (initdb) and
-        # recreates every container — measured >60 s twice on e2e-2026-09-19
         check=True, timeout=600,
     )
 
-    # Docker sets FORWARD policy to DROP; restore forwarding + isolation.
     print("  Restoring network forwarding rules after Docker start...")
     subprocess.run(
         [
@@ -138,7 +130,6 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
                     "sudo iptables -C FORWARD -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP 2>/dev/null || "
                     "sudo iptables -I FORWARD 1 -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP && "
                 "sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE && "
-                # Enable TCP forwarding for ProxyCommand tunnels
                 "sudo sed -i 's/^#*AllowTcpForwarding.*/AllowTcpForwarding yes/' /etc/ssh/sshd_config && "
                 "sudo systemctl reload sshd 2>/dev/null || true"
             ),
@@ -147,7 +138,6 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
     )
     print("  Forwarding rules restored")
 
-    # Make NAT + isolation durable (Docker wipes iptables on restart).
     print("  Installing range-firewall systemd unit + timer (keeps team NAT + isolation durable)...")
     firewall_script = (
         "#!/bin/bash\n"
@@ -200,9 +190,6 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
 
     install_range_healthcheck(ctx)
 
-    # Team bridge NICs (ens19/ens20/...) are fully configured by Terraform's
-    # null_resource.team_nics + null_resource.reboot_scoring_engine (see terraform/main.tf) by
-    # the time this phase runs — no separate configuration needed here.
 
 
 def install_range_healthcheck(ctx):
@@ -256,8 +243,6 @@ def install_range_healthcheck(ctx):
         "Description=Periodically run the range live-ops health check\n"
         "\n"
         "[Timer]\n"
-        # Offset from range-firewall.timer's :00/:30-second cadence so the two don't fire in
-        # the same tick under systemd's default randomization-free scheduling.
         "OnBootSec=60\n"
         "OnUnitActiveSec=60\n"
         "\n"
@@ -288,18 +273,7 @@ def install_range_healthcheck(ctx):
 
 
 def ensure_nat_forwarding(ctx):
-    """Idempotently (re)assert the engine's team-subnet NAT + forwarding + team isolation.
-
-    The scoring engine is every team's NAT gateway to the internet, which nakon needs for
-    apt-get. But Docker re-syncs iptables on any container start/restart and drops the custom
-    team-subnet MASQUERADE, leaving boxes offline — and nakon swallows the resulting apt
-    failures, so services silently don't install. The same resync also drops the team-to-team
-    DROP rule (range-firewall.timer re-asserts both every 30s once the range is live, but that
-    timer isn't installed until later in bootstrap_scoring_engine() — this call is what covers
-    the gap during phases 4-6, before nakon runs). Call this right before any step that needs
-    the team boxes online (i.e. before each nakon run). Only the boxes→internet path needs
-    NAT; engine→box scoring is direct routing on the team bridge, so this is only about nakon.
-    """
+    """Idempotently (re)assert the engine's team-subnet NAT + forwarding + team isolation."""
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]
@@ -324,15 +298,7 @@ def ensure_nat_forwarding(ctx):
 
 def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
                     postgres_password, redis_password, box_creds, inject_password=None):
-    """Build event.conf and push it to the scoring engine.
-
-    admin_password / postgres_password / redis_password / box_creds come from deploy() — the
-    same per-run secrets passed to bootstrap_scoring_engine() (so the .env rewritten here
-    matches the one it wrote; Postgres and the app must agree) and to fix_services_on_boxes()
-    (which creates these OS accounts on the boxes). box_creds ({"admin": ..., "user1": ...})
-    is what Quotient's Ssh/Smtp/Imap/Sql/Ftp credlist checks authenticate WITH; any mismatch
-    or stale fallback literal silently scores healthy boxes as down, so there are no defaults.
-    """
+    """Build event.conf and push it to the scoring engine with the per-run secrets."""
 
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
@@ -340,7 +306,6 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
 
     box_services = json.loads((comp_dir / "box_services.json").read_text())
 
-    # Build the context dict that build_event_conf expects
     quotient_ctx = {
         "teams": {team_key: team_data["identifier"] for team_key, team_data in teams.items()},
         "boxes_per_team": boxes,
@@ -350,11 +315,9 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
         "inject_password": inject_password,
     }
 
-    # Build event.conf from box_services
     event_conf = build_event_conf(quotient_ctx, box_services)
     event_conf_toml = toml.dumps(event_conf)
 
-    # Write event.conf to scoring engine
     event_conf_b64 = base64.b64encode(event_conf_toml.encode()).decode()
     subprocess.run(
         [
@@ -367,9 +330,6 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
         check=True, timeout=30,
     )
 
-    # Write credlist. box_creds names the SAME accounts fix_services_on_boxes() creates on every
-    # box — the two have to agree or every credlist-based check (Ssh/Smtp/Imap/Sql/Ftp) scores a
-    # healthy box as down.
     credlist = "".join(f"{user},{pw}\n" for user, pw in box_creds.items())
     credlist_b64 = base64.b64encode(credlist.encode()).decode()
     subprocess.run(
@@ -383,7 +343,6 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
         check=True, timeout=30,
     )
 
-    # Write .env for Quotient (matches docker-compose.yml env_file expectations)
     env_content = (
         f"POSTGRES_PASSWORD={postgres_password}\n"
         "POSTGRES_USER=engineuser\n"
@@ -403,7 +362,6 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
         check=True, timeout=30,
     )
 
-    # Restart Quotient to pick up new config
     subprocess.run(
         [
             "ssh", "-i", key,

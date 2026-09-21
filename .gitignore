@@ -11,25 +11,13 @@ __pycache__/
 proxmox
 deploy.log
 deploy-*.log
-# Ad-hoc test-run logs (deploy/verify/destroy output saved during iteration) — never committed,
-# same precedent as the deploy-*.log rule above.
 logs/
-
-# Per-run competition secrets (random admin/team passwords) — never commit.
-# boxes.json / Compfile / box_services.json are non-secret and stay tracked.
 competitions/*/teams.json
 competitions/*/event.conf
 competitions/*/linux.credlist
 competitions/*/cloned_vms.json
 competitions/*/credentials.txt
-# Resumable-deploy checkpoint (holds per-run secrets so a resume matches the deployed range).
 competitions/*/.deploy_state.json
-# nakon config generated per-run — currently just placeholder creds, but keep it out of git
-# for consistency with its sibling per-run files above.
 competitions/*/nakon-config.json
-# Throwaway single-config nakon configs deploy_windows_domain_configs() writes per ADDS/Domain
-# Join/etc. step (see _run_single_nakon_config() in create-competition.py) — same per-run-secret
-# class as nakon-config.json above, just scoped to one machine/step instead of the whole comp.
 competitions/*/.nakon-domain-*.json
-# Phase-6 sweep marker (resume bookkeeping, per-deploy)
 competitions/*/.phase6-swept

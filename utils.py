@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 
-# cloud-init ignores dns.servers with static IP; fix via resolv.conf + systemd-resolved.
 DNS_FIX_CMD = (
     'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf; '
     'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf.head; '
@@ -10,12 +9,9 @@ DNS_FIX_CMD = (
     "sudo systemctl restart systemd-resolved 2>/dev/null || true"
 )
 
-# Same fix for the QEMU-guest-agent path, which already runs as root (no sudo,
-# and no working network or sudoers needed — that's the whole point of it).
 DNS_FIX_CMD_ROOT = DNS_FIX_CMD.replace("sudo ", "")
 
 
-# Fallback when no users.json exists; themeable per competition.
 BOX_USERNAME_DEFAULT = "ubuntu"
 CREDLIST_USERNAMES_DEFAULT = ["admin", "user1", "user2"]
 
@@ -42,7 +38,7 @@ def load_compfile(path):
         for line in f:
             stripped = line.strip()
             if not stripped or " " not in stripped:
-                continue  # skip blank lines and keys with no value
+                continue
             key, value = stripped.split(" ", 1)
             if key == "name":
                 name = value
@@ -58,8 +54,7 @@ def load_compfile(path):
 
 
 def compfile_flag(path, key, default=0):
-    """Read an integer Compfile knob (e.g. `team_beacons 1`); default when the
-    key or the file is absent, so old Compfiles keep their behavior."""
+    """Read an integer Compfile knob; default when the key or the file is absent."""
     try:
         with open(path) as f:
             for line in f:

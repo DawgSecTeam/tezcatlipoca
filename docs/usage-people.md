@@ -185,7 +185,7 @@ just similarly-shaped. `terraform/main.tf`'s `initialization` block is skipped e
 template whose name contains `win` (the same substring convention nakon's own `os_to_platform()`
 uses to route catalog configs, so name it consistently and every layer agrees). Windows boxes get
 their IP/gateway/DNS and local Administrator password set post-clone instead, over the QEMU guest
-agent (`bootstrap_windows_box()` in `create-competition.py`) — nakon authenticates by password
+agent (`bootstrap_windows_box()` in `windows_ops.py`) — nakon authenticates by password
 (see `nakon/deploy/ssh.py`), not a key, so there's no equivalent of pushing `ssh_public_key`.
 
 Building the template itself, verified end-to-end producing `windows-server-fix`:
@@ -299,7 +299,7 @@ everything else in this range); every `"member"`-role box in the same team is jo
 afterward. Members can be Windows (`Add-Computer`) **or Linux** (realmd/sssd, via nakon's
 `domain-join` catalog config — the platform is derived from the template name the usual way).
 A competition without this file is unaffected — this is purely additive. See
-`deploy_domain_configs()` in `create-competition.py` for the exact sequencing, and
+`deploy_domain_configs()` in `domain_ops.py` for the exact sequencing, and
 [Adding a template VM → Windows box templates](#windows-box-templates) for the template this
 needs.
 

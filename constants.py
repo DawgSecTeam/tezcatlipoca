@@ -1,7 +1,4 @@
-"""Central constants for vmid math, snapshots, budgets, naming, and nakon path.
-VM IDs use stride 10 (mirrored in terraform/main.tf); defines MAX_TEAMS, SNAP_*.
-Shared by range_ops, deploy, redeploy, and verify.
-"""
+"""Central constants for vmid math, snapshots, budgets, naming, and the nakon path."""
 
 from pathlib import Path
 
@@ -16,7 +13,7 @@ SNAP_READY = "tz-ready"
 
 PER_MACHINE_NAKON_BUDGET = 2400
 
-SLOW_SERVICES = ("splunk", "roundcube")  # excluded from auto randomize
+SLOW_SERVICES = ("splunk", "roundcube")
 
 DISRUPTIVE_CONFIGS = {"resolv-conf-null-dns", "apt-sources-empty", "apt-hold-all-packages", "dpkg-broken-hold-state"}
 
