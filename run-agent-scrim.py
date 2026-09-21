@@ -353,7 +353,7 @@ def team_down(creds, team):
 
 
 def stage_blues(args, comp, run_dir, creds, t0):
-    api_key()
+    api_key(local="openrouter" not in args.blue_base_url)
     blue_model = args.blue_model
     local_blue = "openrouter" not in args.blue_base_url
     for n in (1, 2):
@@ -393,7 +393,7 @@ def shutil_copy(src, dst):
     dst.write_bytes(src.read_bytes())
 
 
-def api_key():
+def api_key(local=False):
     for var in ("OPENROUTER_API_KEY",):
         if os.environ.get(var):
             return os.environ[var]
@@ -402,6 +402,8 @@ def api_key():
         for line in env_file.read_text().splitlines():
             if line.startswith("BAuto_LLM_API_KEY="):
                 return line.split("=", 1)[1].strip()
+    if local:
+        return "local"  # llama.cpp-style endpoints don't check the key
     raise RuntimeError("no API key: set OPENROUTER_API_KEY or BAuto_LLM_API_KEY in bad-auto/.env")
 
 
@@ -613,7 +615,7 @@ def stage_red(args, comp, creds, run_dir):
     # Operator-side bad-auto runs (validate/dry-run/deploy bookkeeping) need a writable
     # state dir — the VM's own config hardcodes /var/lib/bad-auto inside red01, so this
     # override only affects the host side.
-    env = {**os.environ, "BAuto_LLM_API_KEY": api_key(),
+    env = {**os.environ, "BAuto_LLM_API_KEY": api_key(local="openrouter" not in args.llm_base_url),
            "BAuto_STATE_DIR": str(Path(run_dir) / "bad-auto-state")}
     run(["python3", "-m", "badauto", "validate-llm"], cwd=BAD_AUTO, env=env, timeout=300, tail=3)
     run(["python3", "-m", "badauto", "run", "--once", "--dry-run",
@@ -745,7 +747,7 @@ def stage_teardown(args, creds=None):
         except Exception as e:
             log(f"WARNING: red evidence pull failed: {e}")
     log("teardown: red01 + NAT")
-    env = {**os.environ, "BAuto_LLM_API_KEY": api_key()}
+    env = {**os.environ, "BAuto_LLM_API_KEY": api_key(local=True)}
     run(["python3", "-m", "badauto", "destroy"], cwd=BAD_AUTO, env=env, timeout=900, check=False)
     if args.keep_range:
         log("--keep-range: leaving the competition range up")
