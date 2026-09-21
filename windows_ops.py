@@ -25,6 +25,10 @@ New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress '{ip}' -PrefixLengt
 Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses '{dns_server}'
 
 net user {WINDOWS_ADMIN_USER} "{admin_password}"
+# ErrorActionPreference doesn't abort on native exit codes — check it ourselves.
+# scrim-extreme-2026-09-20: a policy-rejected password here failed silently and
+# every downstream WinRM/paramiko login died with 'Authentication failed'.
+if ($LASTEXITCODE -ne 0) {{ throw "net user (admin password) failed, rc=$LASTEXITCODE" }}
 
 Set-Service -Name sshd -StartupType Automatic -ErrorAction SilentlyContinue
 Start-Service -Name sshd -ErrorAction SilentlyContinue
