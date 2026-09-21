@@ -9,7 +9,7 @@ import time
 
 from range_ops import diagnose_unreachable_box, guest_agent_exec_root
 from ssh_ops import ssh_via_gateway
-from utils import DNS_FIX_CMD
+from utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT
 
 
 def fix_dns_on_boxes(targets, ctx):
@@ -50,9 +50,21 @@ def fix_dns_on_boxes(targets, ctx):
                     print(f"    DNS fix attempt {attempt}/8 failed for {ip}, retrying in 15s...")
                     time.sleep(15)
                 else:
-                    print(f"  WARNING: DNS fix failed for {ip} after 8 attempts — proceeding anyway")
-                    print(diagnose_unreachable_box(node, t["vmid"]))
-                    failed += 1
+                    # Guest-agent fallback: runs as root over virtio-serial, so
+                    # it needs neither working sudo (NOPASSWD may not be granted
+                    # yet on a fresh clone) nor the network the SSH path uses.
+                    try:
+                        rc, _out, err = guest_agent_exec_root(
+                            node, t["vmid"], DNS_FIX_CMD_ROOT, timeout=40)
+                        if rc == 0:
+                            print(f"    DNS fixed on {ip} (via guest agent)")
+                            break
+                        raise RuntimeError(f"rc={rc}: {(err or '').strip()[:120]}")
+                    except Exception as agent_exc:
+                        print(f"  WARNING: DNS fix failed for {ip} after 8 attempts "
+                              f"and guest-agent fallback ({agent_exc}) — proceeding anyway")
+                        print(diagnose_unreachable_box(node, t["vmid"]))
+                        failed += 1
 
     if total > 0 and failed == total:
         raise RuntimeError(

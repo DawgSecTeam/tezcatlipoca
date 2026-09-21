@@ -26,12 +26,13 @@ Usage:
       [--skip-deploy] [--keep-range]
       [--resume-from deploy|blues|red|run|teardown]
 
-Requires: .env (TF_VAR_*), vendor/nakon v0.1.4+, bad-auto checkout next to this
+Requires: .env (TF_VAR_*), vendor/nakon v0.1.5+, bad-auto checkout next to this
 repo, opencode on PATH, and BAuto_LLM_API_KEY (or OPENROUTER_API_KEY) in
 bad-auto/.env or the environment.
 """
 
 import argparse
+import calendar
 import json
 import os
 import re
@@ -40,6 +41,8 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+from utils import load_users_config
 
 REPO = Path(__file__).resolve().parent
 BAD_AUTO = REPO.parent / "bad-auto"
@@ -63,34 +66,78 @@ case "$BOX" in
   web01|app01|db01) case "$BOX" in web01) OCT=4;; app01) OCT=5;; db01) OCT=6;; esac
     exec ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
       -o "ProxyCommand=ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p $VM_USER@$ENGINE_IP" \\
-      "medic@192.168.$MY_TID.$OCT" "$@" ;;
+      "$BOX_USER@192.168.$MY_TID.$OCT" "$@" ;;
   *) echo "unknown box $BOX" >&2; exit 2 ;;
 esac
+"""
+
+QLOGIN = """#!/usr/bin/env bash
+# qlogin — refresh the shared team cookie jar ($JAR). Quotient allows ONE session
+# per account: every login kills that account's previous cookie, so NEVER log in
+# ad hoc; run ./qlogin only when a request returns {"error":"Forbidden"}.
+set -euo pipefail
+cd "$(dirname "$0")"
+source ./scrim.env
+tmp=$(mktemp)
+curl -s --max-time 15 -c "$tmp" -X POST "http://$ENGINE_IP/api/login" \\
+  -H 'Content-Type: application/json' \\
+  -d "{\\"username\\":\\"$MY_TEAM\\",\\"password\\":\\"$MY_PW\\"}" >/dev/null
+mv "$tmp" "$JAR"
 """
 
 SCORE_PY = '''#!/usr/bin/env python3
 """Print your team's live scoreboard status as plain text. Env from scrim.env (exported)."""
 import json
 import os
+import subprocess
 import urllib.request
 
 engine = os.environ["ENGINE_IP"]
 team = os.environ["MY_TEAM"]
-pw = os.environ["MY_PW"]
+jar = os.environ.get("JAR") or f"/tmp/jar.{team}"
+qlogin = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qlogin")
 
 
-def call(path, data=None, cookie=None):
+def call(path, cookie=None):
     req = urllib.request.Request(f"http://{engine}{path}",
-                                 data=json.dumps(data).encode() if data else None,
-                                 headers={"Content-Type": "application/json",
-                                          **({"Cookie": cookie} if cookie else {})})
+                                 headers={"Cookie": cookie} if cookie else {})
     return urllib.request.urlopen(req, timeout=15)
 
 
-cookie = call("/api/login", {"username": team, "password": pw}).headers.get("Set-Cookie", "").split(";")[0]
-teams = json.loads(call("/api/teams", cookie=cookie).read())
+def jar_cookie():
+    # curl Netscape jar: the session cookie is on the last non-comment line
+    try:
+        for line in reversed(open(jar).read().splitlines()):
+            if line and not line.startswith("#"):
+                name, value = line.split()[-2:]
+                return f"{name}={value}"
+    except OSError:
+        pass
+    return None
+
+
+def load_teams(cookie):
+    data = json.loads(call("/api/teams", cookie).read())
+    if not isinstance(data, list):
+        raise ValueError(f"unexpected payload: {str(data)[:80]}")
+    return data
+
+
+# Quotient allows ONE session per account (every login kills the previous
+# cookie) — read the shared jar, and on rejection refresh it via ./qlogin.
+# Never log in directly from this script.
+cookie = jar_cookie()
+if cookie:
+    try:
+        teams = load_teams(cookie)
+    except Exception:
+        cookie = None
+if not cookie:
+    subprocess.run([qlogin], check=False)
+    cookie = jar_cookie()
+teams = load_teams(cookie)
 tid = next(t["ID"] for t in teams if t["Name"] == team)
-for s in json.loads(call(f"/api/services/{tid}", cookie=cookie).read()):
+for s in json.loads(call(f"/api/services/{tid}", cookie).read()):
     rounds = s.get("Last10Rounds") or []
     checks = (rounds[0] if rounds else {}).get("Checks") or []
     up = bool(checks) and all(c.get("Result") for c in checks)
@@ -108,7 +155,12 @@ exec python3 "$(dirname "$0")/score.py"
 SUBMIT_INJECT = """#!/usr/bin/env bash
 # submit-inject <injectId> <file> — submit a written deliverable to the scoreboard.
 cd "$(dirname "$0")"; source ./scrim.env
-exec curl -s --max-time 30 -b /tmp/jar.$MY_TEAM -F "file=@$2" -X POST "http://$ENGINE_IP/api/injects/$1/submit"
+submit() { curl -s --max-time 30 -b "$JAR" -F "file=@$2" -X POST "http://$ENGINE_IP/api/injects/$1/submit"; }
+out=$(submit "$1" "$2")
+case "$out" in
+  *'"error"'*) ./qlogin; out=$(submit "$1" "$2") ;;
+esac
+echo "$out"
 """
 
 OPENCODE_PROJECT_CFG = """{
@@ -131,6 +183,11 @@ OPENCODE_PROJECT_CFG = """{
   }
 }
 """
+
+
+CYCLE_TIMEOUT = 1500
+CYCLE_TARGET_PERIOD = 600   # wall-clock target between blue cycle STARTS
+MONITOR_INTERVAL = 300      # scoreboard snapshot cadence
 
 
 def log(msg):
@@ -183,11 +240,13 @@ def creds_from_files(comp):
     state = json.loads((comp / ".deploy_state.json").read_text())
     teams = json.loads((comp / "teams.json").read_text())
     engine_ip = re.search(r"http://([0-9.]+)", (comp / "credentials.txt").read_text()).group(1)
+    box_username, _credlist = load_users_config(comp)
     return {
         "ENGINE_IP": engine_ip,
         "ADMIN_PW": state["admin_password"],
         "INJECT_PW": state.get("inject_password") or "",
         "BOX_PW": state["box_password"],
+        "BOX_USER": box_username,
         "KEY_PATH": str((REPO / "proxmox").resolve()),
         "VM_USER": os.environ.get("TF_VAR_vm_username", "sysadmin"),
         **{f"{k.upper()}_PW": v["password"] for k, v in teams.items()},
@@ -229,7 +288,7 @@ def stage_verify(args, comp, creds):
     base = ["ssh", "-i", creds["KEY_PATH"], "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null", "-o", f"ProxyCommand={proxy}"]
     def ssh_web01(cmd):
-        return subprocess.run(base + [f"medic@192.168.{creds['TEAM1_ID']}.4", cmd],
+        return subprocess.run(base + [f"{creds['BOX_USER']}@192.168.{creds['TEAM1_ID']}.4", cmd],
                               capture_output=True, text=True, timeout=60)
     ssh_web01("echo %s | sudo -S systemctl stop nginx" % creds["BOX_PW"])
     time.sleep(150)
@@ -242,32 +301,92 @@ def stage_verify(args, comp, creds):
         log("WARNING: fire test incomplete — scoring path may be broken")
 
 
+def _qlogin(creds, user, jar):
+    """Refresh a Quotient cookie jar for one account.
+
+    Quotient allows ONE session per account — every login invalidates the
+    account's previous cookie — so every client (monitor, status, blues,
+    capture) shares one jar per account and nobody logs in on the happy path.
+    The newest login always wins, so concurrent refreshes converge on the only
+    valid cookie; no locking needed.
+    """
+    subprocess.run(["curl", "-s", "--max-time", "15", "-c", jar, "-X", "POST",
+                    f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
+                    "-d", json.dumps({"username": user, "password": creds[user.upper() + "_PW"]})],
+                   capture_output=True)
+
+
+def qget(creds, user, jar, path):
+    """GET a Quotient path with the account's shared jar. An invalidated cookie
+    comes back as {"error": ...} — re-login into the jar and retry once."""
+    def _get():
+        return subprocess.run(["curl", "-s", "--max-time", "15", "-b", jar,
+                               f"http://{creds['ENGINE_IP']}{path}"],
+                              capture_output=True, text=True)
+    r = _get()
+    if '"error"' not in (r.stdout or ""):
+        return r
+    _qlogin(creds, user, jar)
+    return _get()
+
+
+def _team_tid(creds, user, jar, team):
+    """Map a team name to Quotient's internal team ID via /api/teams.
+
+    The services API keys on the engine's own IDs (1, 2, …) — querying it with
+    the subnet identifier from teams.json (101, 102) answers {"error":
+    "Forbidden"} even with a valid cookie, which is the second half of the
+    three-round 'scoreboard unreachable' mystery.
+    """
+    r = qget(creds, user, jar, "/api/teams")
+    teams = json.loads(r.stdout)
+    return str(next(t["ID"] for t in teams if t["Name"] == team))
+
+
 def team_down(creds, team):
-    r = subprocess.run(
-        ["curl", "-s", "--max-time", "15", "-X", "POST", f"http://{creds['ENGINE_IP']}/api/login",
-         "-H", "Content-Type: application/json", "-d",
-         json.dumps({"username": team, "password": creds[team.upper() + "_PW"]})],
-        capture_output=True, text=True)
-    jar = subprocess.run(["mktemp"], capture_output=True, text=True).stdout.strip()
-    subprocess.run(["curl", "-s", "-c", jar, "-X", "POST", f"http://{creds['ENGINE_IP']}/api/login",
-                    "-H", "Content-Type: application/json", "-d",
-                    json.dumps({"username": team, "password": creds[team.upper() + "_PW"]})],
-                   capture_output=True, text=True)
-    r = subprocess.run(["curl", "-s", "--max-time", "15", "-b", jar,
-                        f"http://{creds['ENGINE_IP']}/api/services/"
-                        + ("1" if team == "team1" else "2")],
-                       capture_output=True, text=True)
     try:
-        svcs = json.loads(r.stdout)
-        return any(not (s.get("Last10Rounds") and s["Last10Rounds"][0].get("Checks")
-                        and all(c.get("Result") for c in s["Last10Rounds"][0]["Checks"]))
-                   for s in svcs)
+        return any(not s["up"] for s in parsed_status(creds, team))
     except Exception:
         return False
 
 
+def parsed_status(creds, team):
+    """Parsed scoreboard for one team: [{service, up, error}]. Raises on failure —
+    callers decide whether to render text or record a structured snapshot."""
+    jar = f"/tmp/jar.{team}"
+    r = qget(creds, team, jar, f"/api/services/{_team_tid(creds, team, jar, team)}")
+    try:
+        services = json.loads(r.stdout)
+    except Exception:
+        raise ValueError(f"non-JSON body: {(r.stdout or '')[:80]!r}")
+    if not isinstance(services, list):
+        raise ValueError(f"unexpected payload: {str(services)[:80]}")
+    rows = []
+    for s in services:
+        rounds = s.get("Last10Rounds") or []
+        checks = (rounds[0] if rounds else {}).get("Checks") or []
+        up = bool(checks) and all(c.get("Result") for c in checks)
+        err = next((c.get("Error", "") for c in checks if c.get("Error") and not c.get("Result")), "")
+        rows.append({"service": s["ServiceName"], "up": bool(up), "error": err[:120]})
+    return rows
+
+
+def render_status(rows):
+    return "\n".join(f"{'UP  ' if s['up'] else 'DOWN'} {s['service']:16s} {s['error'][:60]}"
+                     for s in rows)
+
+
+def status_text(creds, team):
+    """Compact plain-text scoreboard for the cycle prompt."""
+    try:
+        return render_status(parsed_status(creds, team))
+    except Exception as e:
+        # Self-diagnosing failure line: the reader then says WHY
+        return f"scoreboard unreachable ({type(e).__name__}: {e})"
+
+
 def stage_blues(args, comp, run_dir, creds, t0):
-    api_key()
+    api_key(local="openrouter" not in args.blue_base_url)
     blue_model = args.blue_model
     local_blue = "openrouter" not in args.blue_base_url
     for n in (1, 2):
@@ -278,24 +397,28 @@ def stage_blues(args, comp, run_dir, creds, t0):
         (wd / "scrim.env").write_text(
             f"ENGINE_IP={creds['ENGINE_IP']}\nMY_TEAM=team{n}\nMY_PW={creds[f'TEAM{n}_PW']}\n"
             f"MY_TID={tid}\nBOX_PW={creds['BOX_PW']}\nINJECT_PW={creds['INJECT_PW']}\n"
-            f"KEY_PATH={creds['KEY_PATH']}\nVM_USER={creds['VM_USER']}\nJAR=/tmp/jar.team{n}\n")
+            f"KEY_PATH={creds['KEY_PATH']}\nVM_USER={creds['VM_USER']}\nBOX_USER={creds['BOX_USER']}\n"
+            f"JAR=/tmp/jar.team{n}\n")
         os.chmod(wd / "scrim.env", 0o600)
-        for helper, body in (("mybox", MYBOX), ("score.py", SCORE_PY), ("myscore", MYSCORE),
-                             ("submit-inject", SUBMIT_INJECT)):
+        for helper, body in (("mybox", MYBOX), ("qlogin", QLOGIN), ("score.py", SCORE_PY),
+                             ("myscore", MYSCORE), ("submit-inject", SUBMIT_INJECT)):
             p = wd / helper
             p.write_text(body)
             p.chmod(0o755)
         shutil_copy(comp / "packet.md", wd / "packet.md")
         (wd / "LOG.md").write_text(f"# Blue team {n} — defense log\n")
-        # Local llama.cpp endpoints have few slots and hard-reject prompts over
-        # the slot context: keep the advertised limit small; no reasoning_effort.
+        if not (wd / "NOTEBOOK.md").exists():
+            (wd / "NOTEBOOK.md").write_text(NOTEBOOK_TEMPLATE.format(n=n))
+        # Local llama.cpp endpoints: opencode's own base prompt is ~20k tokens, so
+        # the advertised context must leave room for it or opencode self-compacts
+        # fatally (60000 verified against the slot limit); no reasoning_effort.
         (wd / "opencode.jsonc").write_text(
             OPENCODE_PROJECT_CFG
             .replace("{PROVIDER_KEY}", provider_key(args.blue_base_url))
             .replace("{BASE_URL}", args.blue_base_url)
             .replace("{API_KEY_FIELD}", "{env:OPENROUTER_API_KEY}" if not local_blue else "local")
             .replace("{MODEL_ID}", blue_model)
-            .replace("{CTX}", "24000" if local_blue else "120000")
+            .replace("{CTX}", "60000" if local_blue else "120000")
             .replace("{OUT}", "4000" if local_blue else "16000")
             .replace("{EFFORT}", "" if local_blue else effort_json(args.reasoning_effort)))
     log(f"blue workdirs ready (model {blue_model} @ {args.blue_base_url})")
@@ -305,7 +428,7 @@ def shutil_copy(src, dst):
     dst.write_bytes(src.read_bytes())
 
 
-def api_key():
+def api_key(local=False):
     for var in ("OPENROUTER_API_KEY",):
         if os.environ.get(var):
             return os.environ[var]
@@ -314,6 +437,8 @@ def api_key():
         for line in env_file.read_text().splitlines():
             if line.startswith("BAuto_LLM_API_KEY="):
                 return line.split("=", 1)[1].strip()
+    if local:
+        return "local"  # llama.cpp-style endpoints don't check the key
     raise RuntimeError("no API key: set OPENROUTER_API_KEY or BAuto_LLM_API_KEY in bad-auto/.env")
 
 
@@ -328,66 +453,167 @@ def effort_json(effort):
     return f',\n          "options": {{ "reasoning_effort": "{effort}" }}'
 
 
-def status_text(creds, team):
-    """Compact plain-text scoreboard for the cycle prompt."""
-    # Per-call jar: this runs concurrently from the monitor thread and both blue
-    # feed loops; a shared jar lets one login clobber another's session cookie.
-    jar = f"/tmp/scrim-status-jar.{team}.{threading.get_ident()}"
-    login = subprocess.run(["curl", "-s", "--max-time", "15", "-c", jar, "-X", "POST",
-                            f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
-                            "-d", json.dumps({"username": team, "password": creds[team.upper() + "_PW"]})],
-                           capture_output=True, text=True)
-    tid = creds[team.upper() + "_ID"]
-    r = subprocess.run(["curl", "-s", "--max-time", "15", "-b", jar,
-                        f"http://{creds['ENGINE_IP']}/api/services/{tid}"],
-                       capture_output=True, text=True)
-    lines = []
-    try:
-        services = json.loads(r.stdout)
-        if not isinstance(services, list):
-            raise ValueError(f"unexpected payload: {str(services)[:80]}")
-        for s in services:
-            rounds = s.get("Last10Rounds") or []
-            checks = (rounds[0] if rounds else {}).get("Checks") or []
-            ok = bool(checks) and all(c.get("Result") for c in checks)
-            err = next((c.get("Error", "") for c in checks if c.get("Error") and not c.get("Result")), "")
-            lines.append(f"{'UP  ' if ok else 'DOWN'} {s['ServiceName']:16s} {err[:60]}")
-    except Exception as e:
-        # Self-diagnosing failure line: the monitor.log entry then says WHY
-        # (login rejected vs empty body vs malformed payload).
-        reason = f"login rc={login.returncode} body={ (login.stdout or '')[:60]!r}" \
-            if login.returncode != 0 or "error" in (login.stdout or "").lower() else \
-            f"services rc={r.returncode} body={ (r.stdout or '')[:80]!r}"
-        lines.append(f"scoreboard unreachable ({type(e).__name__}: {e}; {reason})")
-    return "\n".join(lines)
-
-
-def blue_cycle_prompt(n, creds, args, elapsed, remain):
+def blue_cycle_prompt(n, creds, args, elapsed, remain, delta_text, inject_text, notebook_text, log_tail):
     tid = creds[f"TEAM{n}_ID"]
     return f"""You are Blue Team {n} defending the Meridian Health ward network (practice competition).
 T+{elapsed}min of {args.duration_min} ({remain}min left). Work in THIS directory; everything you need is here.
 
+CHANGES SINCE LAST CYCLE (orchestrator scoreboard diff — act on these first):
+{delta_text}
+
 LIVE SCOREBOARD (your 8 scored services — availability is points every minute):
 {status_text(creds, f'team{n}')}
 
+INJECTS:
+{inject_text}
+
+TEAM NOTEBOOK (NOTEBOOK.md — your working memory; current content):
+{notebook_text}
+
+Last LOG.md lines:
+{log_tail}
+
 REACH YOUR BOXES (subnet 192.168.{tid}.0/24):
-  Linux (medic, password in scrim.env, sudo: echo $BOX_PW | sudo -S <cmd>):  ./mybox web01 "<cmd>"   (also app01, db01)
+  Linux ({creds['BOX_USER']}, password in scrim.env, sudo: echo $BOX_PW | sudo -S <cmd>):  ./mybox web01 "<cmd>"   (also app01, db01)
   Windows (Administrator, same password):                                    ./mybox dc01 "<cmd>"    (also win01)
   ./mybox runs one command through the gateway and prints output — prefer it over hand-building ssh.
 
-SCOREBOARD + INJECTS (curl examples):
+SCOREBOARD + INJECTS — Quotient allows ONE session per account, so NEVER log in
+directly (that kills the shared jar's session). Use the jar; if a call answers
+{{"error":"Forbidden"}}, run ./qlogin once and retry:
   source ./scrim.env
-  curl -s -c /tmp/jar -X POST http://$ENGINE_IP/api/login -H 'Content-Type: application/json' \\
-       -d "{{\\"username\\":\\"$MY_TEAM\\",\\"password\\":\\"$MY_PW\\"}}"
-  curl -s -b /tmp/jar http://$ENGINE_IP/api/services/$MY_TID | python3 -m json.tool
-  curl -s -b /tmp/jar http://$ENGINE_IP/api/injects | python3 -c "import json,sys;[print(i['ID'],i['Title'],'due',i['DueTime'][11:16],'subs',len(i.get('Submissions') or [])) for i in json.load(sys.stdin)]"
+  curl -s -b "$JAR" http://$ENGINE_IP/api/services/$MY_TID | python3 -m json.tool
+  curl -s -b "$JAR" http://$ENGINE_IP/api/injects | python3 -c "import json,sys;[print(i['ID'],i['Title'],'due',i['DueTime'][11:16],'subs',len(i.get('Submissions') or [])) for i in json.load(sys.stdin)]"
   echo "## deliverable" > sub.md && ./submit-inject <injectId> sub.md     # submit BEFORE close time
 
-CYCLE TASK (~5 minutes then STOP):
-1. If any service above is DOWN: restore it NOW (./mybox web01 "echo $BOX_PW | sudo -S systemctl unmask nginx; echo $BOX_PW | sudo -S systemctl start nginx" for example). Availability beats everything.
-2. Else: the most urgent OPEN inject (due soonest; schedule in packet.md) — investigate on the boxes, write the deliverable, ./submit-inject.
-3. Else: continue the misconfig hunt noted in LOG.md (planted rogue admins, backdoor services/tasks, bad firewall rules, exposed creds, SUID/sudo issues). Fix what is safe; never take a scored service down.
-4. Append one timestamped line to LOG.md. ROE: never attack the engine ($ENGINE_IP), never change the scoring-check accounts (triage/svc-imaging/wardops). Keep replies terse."""
+CYCLE TASK — notebook first, then AT MOST TWO actions, then STOP:
+0. FIRST: update NOTEBOOK.md (move finished items to DONE, add new incidents/findings) and append one timestamped line to LOG.md.
+1. If any service above is DOWN (or CHANGES shows a new DOWN): restore it NOW (./mybox web01 "echo $BOX_PW | sudo -S systemctl unmask nginx; echo $BOX_PW | sudo -S systemctl start nginx" for example). Availability beats everything.
+2. Else if an inject is due within 30 minutes and unsubmitted: investigate on the boxes, write the deliverable, ./submit-inject.
+3. Else: ONE hunt item from the notebook checklist (rogue UID-0 users, cron, systemd units, sudoers, firewall rules, listeners, Windows services/tasks/run-keys). Fix what is safe; never take a scored service down.
+ROE: never attack the engine ($ENGINE_IP), never change the scoring-check accounts (triage/svc-imaging/wardops). Keep replies terse."""
+
+
+def scoreboard_delta(run_dir, team):
+    """CHANGES SINCE LAST CYCLE for one team, from scoreboard-state.jsonl."""
+    path = Path(run_dir) / "scoreboard-state.jsonl"
+    try:
+        recs = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    except (OSError, ValueError):
+        return "(no scoreboard history yet)"
+
+    def states(rec):
+        return {s["service"]: s["up"] for s in ((rec or {}).get("teams", {}).get(team) or [])}
+
+    cur = recs[-1]
+    curm = states(cur)
+    if len(recs) < 2:
+        downs = sorted(s for s, up in curm.items() if not up)
+        return f"baseline snapshot T+{cur['t_plus_sec'] // 60}; DOWN at baseline: {', '.join(downs) or 'none'}"
+    prevm = states(recs[-2])
+    lines = []
+    for svc, up in curm.items():
+        if svc not in prevm:
+            continue
+        if prevm[svc] and not up:
+            lines.append(f"{svc} DOWN (new since last cycle) — RESTORE IT FIRST")
+        elif not prevm[svc] and up:
+            lines.append(f"{svc} back UP — expect red to re-attack it")
+        elif not up:
+            since = cur["t_plus_sec"]
+            for r in recs:
+                if states(r).get(svc, True):
+                    continue
+                since = r["t_plus_sec"]
+                break
+            lines.append(f"{svc} still DOWN (since T+{since // 60})")
+    return "\n".join(lines) or "no changes since last cycle"
+
+
+def inject_brief(creds, team):
+    """One line per inject with submission state; flags due-within-30-min as task #1."""
+    jar = f"/tmp/jar.{team}"
+    try:
+        r = qget(creds, team, jar, "/api/injects")
+        injects = json.loads(r.stdout)
+        if not isinstance(injects, list):
+            raise ValueError(f"unexpected payload: {str(injects)[:80]}")
+    except Exception as e:
+        return f"(inject list unavailable: {type(e).__name__}: {e})"
+    if not injects:
+        return "(no injects published yet)"
+    now = time.time()
+    lines = []
+
+    def due_in_min(due):
+        # Engine timezone is not guaranteed; accept whichever of UTC/local
+        # interpretation lands in a sane window.
+        try:
+            naive = time.strptime(due[:19], "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            return None
+        for cand in (calendar.timegm(naive) - now, time.mktime(naive) - now):
+            if -15 * 60 <= cand <= 12 * 3600:
+                return cand / 60
+        return None
+
+    for i in sorted(injects, key=lambda x: x.get("DueTime") or ""):
+        subs = len(i.get("Submissions") or [])
+        due_in = due_in_min(i.get("DueTime") or "")
+        when = f"due in {due_in:.0f}min" if due_in is not None else f"due {(i.get('DueTime') or '')[11:16]}"
+        state = "submitted ✓" if subs else "OPEN"
+        urgent = (not subs) and due_in is not None and 0 <= due_in <= 30
+        lines.append(f"  #{i.get('ID')} {i.get('Title')} — {when} — {state}"
+                     + ("  << TASK #1: submit before close" if urgent else ""))
+    return "\n".join(lines)
+
+
+NOTEBOOK_TEMPLATE = """# NOTEBOOK — team {n} working memory (update FIRST every cycle)
+
+## OPEN INCIDENTS
+(none yet)
+
+## HUNT CHECKLIST
+- [ ] rogue users / UID-0 accounts (/etc/passwd, uid 0 duplicates, fresh /etc/shadow entries)
+- [ ] unexpected cron (/etc/cron.d/*, crontab -l, user crontabs)
+- [ ] rogue systemd units (/etc/systemd/system, list-unit-files, enabled-but-unfamiliar)
+- [ ] sudoers changes (/etc/sudoers, /etc/sudoers.d/*)
+- [ ] firewall tampering (iptables/nft rules dropping scored ports, ufw status)
+- [ ] unexpected listeners (ss -tlnp vs your known service list)
+- [ ] Windows: new local admins, odd services, scheduled tasks (schtasks), HKLM Run keys
+- [ ] credential exposure (world-readable files, shell history, stray keys in /root/.ssh)
+
+## DONE
+(finished items move here)
+"""
+
+
+def _opencode_run(args, prompt, wd, env):
+    """One blue cycle. The 17c run died 40/40 with an instant opencode
+    'Unexpected server error' from a capture_output thread launch that never
+    reproduced in the foreground, so the launch context is hardened instead of
+    trusted: no stdin, own process group, per-team HOME/XDG so opencode's state
+    DB and server logs live inside the run dir (triage evidence instead of
+    silent global state shared with whatever else runs under this user)."""
+    return subprocess.run(["opencode", "run", "-m",
+                           f"{provider_key(args.blue_base_url)}/{args.blue_model}", "--auto",
+                           prompt],
+                          cwd=wd, env=env, capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, start_new_session=True,
+                          timeout=CYCLE_TIMEOUT)
+
+
+def _opencode_log_tail(wd):
+    """Tail of the newest opencode server log under the team's isolated state."""
+    logdir = Path(wd) / ".opencode-home" / "data" / "opencode" / "log"
+    try:
+        logs = sorted(logdir.glob("*"), key=lambda p: p.stat().st_mtime)
+        if logs:
+            return ("\n[opencode server log tail]\n"
+                    + "\n".join(logs[-1].read_text(errors="replace").splitlines()[-15:]))
+    except OSError:
+        pass
+    return ""
 
 
 def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
@@ -396,29 +622,45 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
         if stop.is_set():
             return
     while not stop.is_set() and (time.time() - t0) < (args.duration_min - 2) * 60:
-        time.sleep(min(600, max(30, (args.duration_min * 60 - (time.time() - t0)) / 6)))
-        if time.time() - t0 >= (args.duration_min - 2) * 60:
-            break
+        started = time.time()
         elapsed = int((time.time() - t0) / 60)
         remain = args.duration_min - elapsed
         wd = Path(args.run_dir) / f"blue-team{n}"
-        env = {**os.environ}
+        home = wd / ".opencode-home"
+        for sub in ("data", "config", "cache"):
+            (home / sub).mkdir(parents=True, exist_ok=True)
+        env = {**os.environ,
+               "HOME": str(home), "XDG_DATA_HOME": str(home / "data"),
+               "XDG_CONFIG_HOME": str(home / "config"), "XDG_CACHE_HOME": str(home / "cache")}
         try:
             env["OPENROUTER_API_KEY"] = api_key()
         except RuntimeError:
             pass  # local endpoints need no key
         try:
-            prompt = blue_cycle_prompt(n, creds, args, elapsed, remain)
+            notebook = (wd / "NOTEBOOK.md").read_text()[:2500] if (wd / "NOTEBOOK.md").exists() \
+                else "(no notebook yet)"
+            try:
+                log_tail = "\n".join((wd / "LOG.md").read_text().splitlines()[-5:]) or "(empty)"
+            except OSError:
+                log_tail = "(no LOG.md yet)"
+            prompt = blue_cycle_prompt(n, creds, args, elapsed, remain,
+                                       scoreboard_delta(args.run_dir, f"team{n}"),
+                                       inject_brief(creds, f"team{n}"),
+                                       notebook, log_tail)
             cycles = wd / "cycles"
             cycles.mkdir(exist_ok=True)
             # Serialize the two blues: the shared local endpoint has few slots,
             # and even cloud runs shouldn't have opencode DBs racing.
             with llm_lock:
-                r = subprocess.run(["opencode", "run", "-m",
-                                    f"{provider_key(args.blue_base_url)}/{args.blue_model}", "--auto",
-                                    prompt],
-                                   cwd=wd, env=env, capture_output=True, text=True, timeout=1500)
+                r = _opencode_run(args, prompt, wd, env)
+                if r.returncode != 0:
+                    # one immediate retry — a transient boot/endpoint failure
+                    # otherwise costs the whole cycle slot to the pacing sleep
+                    log(f"blue-team{n} cycle T+{elapsed} rc={r.returncode} — retrying once")
+                    r = _opencode_run(args, prompt, wd, env)
             out = re.sub(r"\x1b\[[0-9;]*m", "", (r.stdout or "") + (r.stderr or ""))
+            if r.returncode != 0:
+                out += _opencode_log_tail(wd)
             # full transcript + exact prompt kept for the after-action report;
             # feed.log stays a short readable tail
             (cycles / f"cycle-T+{elapsed:03d}.prompt.txt").write_text(prompt)
@@ -430,28 +672,43 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
             log(f"blue-team{n} cycle T+{elapsed} TIMED OUT")
         except Exception as e:
             log(f"blue-team{n} feed error: {e}")
+        # Pace off actual cycle duration: local qwen turns are slow, so a fixed
+        # pre-cycle sleep both starves throughput and can't know a cycle overran.
+        took = time.time() - started
+        stop.wait(min(600, max(30, CYCLE_TARGET_PERIOD - took)))
 
 
 def monitor_loop(args, creds, t0, stop):
+    """Snapshots every MONITOR_INTERVAL starting at T+0 (not T+15 — down-minute
+    math and the report need the full window). scoreboard-state.jsonl is the
+    structured source of truth for blue deltas, down-windows, and
+    scrim-report.py; monitor.log keeps the human-readable text."""
+    sb_path = Path(args.run_dir) / "scoreboard-state.jsonl"
     while not stop.is_set() and (time.time() - t0) < args.duration_min * 60:
-        time.sleep(900)
-        if stop.is_set():
-            break
-        try:
-            snap = {t: status_text(creds, t) for t in ("team1", "team2")}
-        except Exception as e:
-            log(f"monitor snapshot failed: {e}")
-            continue
+        parsed, texts = {}, {}
+        for t in ("team1", "team2"):
+            try:
+                parsed[t] = parsed_status(creds, t)
+                texts[t] = render_status(parsed[t])
+            except Exception as e:
+                texts[t] = f"scoreboard unreachable ({type(e).__name__}: {e})"
+        t_plus = int(time.time() - t0)
+        if parsed:
+            rec = {"t_plus_sec": t_plus, "wallclock": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                   "teams": parsed}
+            with sb_path.open("a") as f:
+                f.write(json.dumps(rec) + "\n")
         (Path(args.run_dir) / "monitor.log").open("a").write(
-            f"\n#### T+{int((time.time()-t0)/60)}min {time.strftime('%H:%M')}\n" +
-            "\n".join(f"{t}:\n{s}" for t, s in snap.items()))
+            f"\n#### T+{t_plus // 60}min {time.strftime('%H:%M')}\n" +
+            "\n".join(f"{t}:\n{s}" for t, s in texts.items()))
         log("monitor snapshot written")
         # In-run red evidence: a teardown-time scp flake must not be able to
         # lose events.jsonl a third time, so grab it every snapshot too.
-        if pull_red_snapshot(args, f"T+{int((time.time()-t0)/60):03d}"):
+        if pull_red_snapshot(args, f"T+{t_plus // 60:03d}"):
             log("red events.jsonl snapshot pulled")
         else:
             log("WARNING: red events.jsonl snapshot unavailable")
+        stop.wait(MONITOR_INTERVAL)
 
 
 def _red_ssh_ctx(args):
@@ -507,12 +764,17 @@ def stage_red(args, comp, creds, run_dir):
         "intel": "nakon",
         "competition_dir": str(comp.resolve()),
         "event": {"duration_min": args.duration_min},
-        "pacing": {"profile": "deadline", "decision_window_min": 3, "window_jitter_min": 1,
-                   "active_burst_min": 8, "burst_jitter_min": 2, "quiet_min": 2, "quiet_jitter_min": 1,
+        # Aggression posture (2026-09 revision): round 3 bound red at ~25-30
+        # decisions (3-min windows) and 1/3/4 simultaneous takedowns on 8
+        # services/team. Faster decisions + a higher ramp make the event a
+        # tug-of-war; min_standing_services=2 stays the floor so a team always
+        # keeps two lifelines. Re-tune after the first rehearsal, not before.
+        "pacing": {"decision_window_min": 2, "window_jitter_min": 1,
+                   "active_burst_min": 15, "burst_jitter_min": 2, "quiet_min": 2, "quiet_jitter_min": 1,
                    "focus_rotation_min": max(10, args.duration_min // 8),
-                   "max_concurrent_down_start": 1, "max_concurrent_down_end": 3,
-                   "max_concurrent_down_endgame": 4, "access_deadline_remaining_min": args.duration_min // 4,
-                   "endgame_start_remaining_min": args.duration_min // 8,
+                   "max_concurrent_down_start": 2, "max_concurrent_down_end": 4,
+                   "max_concurrent_down_endgame": 6, "access_deadline_remaining_min": args.duration_min // 4,
+                   "endgame_start_remaining_min": 15,
                    "endgame_decision_window_sec": 60, "endgame_force_active": True,
                    "min_standing_services": 2, "credlist_gate_min": args.duration_min // 4,
                    "credlist_max_per_team": 1, "lockout_gate_pct": 0.75},
@@ -525,7 +787,7 @@ def stage_red(args, comp, creds, run_dir):
     # Operator-side bad-auto runs (validate/dry-run/deploy bookkeeping) need a writable
     # state dir — the VM's own config hardcodes /var/lib/bad-auto inside red01, so this
     # override only affects the host side.
-    env = {**os.environ, "BAuto_LLM_API_KEY": api_key(),
+    env = {**os.environ, "BAuto_LLM_API_KEY": api_key(local="openrouter" not in args.llm_base_url),
            "BAuto_STATE_DIR": str(Path(run_dir) / "bad-auto-state")}
     run(["python3", "-m", "badauto", "validate-llm"], cwd=BAD_AUTO, env=env, timeout=300, tail=3)
     run(["python3", "-m", "badauto", "run", "--once", "--dry-run",
@@ -555,45 +817,42 @@ def stage_run(args, creds, t0):
             t.join(timeout=10)
 
 
-def _quotient_login(args_ev, creds, user, pw_key):
-    jar = args_ev / f".jar-{user}"
-    subprocess.run(["curl", "-s", "--max-time", "15", "-c", str(jar), "-X", "POST",
-                    f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
-                    "-d", json.dumps({"username": user, "password": creds[pw_key]})],
-                   capture_output=True)
-    return jar
-
-
 def stage_capture(args, creds):
     log("capturing final evidence")
     ev = Path(args.run_dir) / "evidence"
     ev.mkdir(parents=True, exist_ok=True)
-    # Capture runs after the event window closes, when Quotient has invalidated
-    # team sessions — authenticate as admin (valid post-event, sees all teams),
-    # falling back to the team login if the admin fetch is rejected.
-    admin_jar = _quotient_login(ev, creds, "admin", "ADMIN_PW")
+    # Capture runs after the event window closes, when team sessions have been
+    # churned all event — qget re-logins and retries on {"error":"Forbidden"};
+    # fall back to the team account if admin itself is locked out.
+    admin_jar = str(ev / ".jar-admin")
     for team in ("team1", "team2"):
-        url = f"http://{creds['ENGINE_IP']}/api/services/{creds[team.upper() + '_ID']}"
-        r = subprocess.run(["curl", "-s", "--max-time", "15", "-b", str(admin_jar), url],
-                           capture_output=True, text=True)
+        path = f"/api/services/{_team_tid(creds, 'admin', admin_jar, team)}"
+        r = qget(creds, "admin", admin_jar, path)
         if '"error"' in (r.stdout or ""):
-            team_jar = _quotient_login(ev, creds, team, team.upper() + "_PW")
-            r = subprocess.run(["curl", "-s", "--max-time", "15", "-b", str(team_jar), url],
-                               capture_output=True, text=True)
+            r = qget(creds, team, str(ev / f".jar-{team}"), path)
         (ev / f"final-services-{team}.json").write_text(r.stdout or "")
         if '"error"' in (r.stdout or ""):
             log(f"WARNING: {team} services capture failed: {(r.stdout or '')[:120]}")
     # pause scoring (best-effort) to freeze the final state
-    jar = ev / ".jar-admin"
-    subprocess.run(["curl", "-s", "--max-time", "15", "-c", str(jar), "-X", "POST",
-                    f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
-                    "-d", json.dumps({"username": "admin", "password": creds["ADMIN_PW"]})],
-                   capture_output=True)
-    subprocess.run(["curl", "-s", "--max-time", "15", "-b", str(jar), "-X", "POST",
-                    f"http://{creds['ENGINE_IP']}/api/engine/pause",
-                    "-H", "Content-Type: application/json", "-d", '{"pause": true}'],
-                   capture_output=True)
+    jar = str(ev / ".jar-admin")
+
+    def _pause():
+        return subprocess.run(["curl", "-s", "--max-time", "15", "-b", jar, "-X", "POST",
+                               f"http://{creds['ENGINE_IP']}/api/engine/pause",
+                               "-H", "Content-Type: application/json", "-d", '{"pause": true}'],
+                              capture_output=True, text=True)
+
+    _qlogin(creds, "admin", jar)
+    r = _pause()
+    if '"error"' in (r.stdout or ""):
+        _qlogin(creds, "admin", jar)
+        _pause()
     log("engine paused (best-effort); services JSON captured")
+    # scoreboard history feeds the report's down-minutes/restore math — keep a
+    # frozen copy with the rest of the evidence
+    sb = Path(args.run_dir) / "scoreboard-state.jsonl"
+    if sb.exists():
+        shutil_copy(sb, ev / "scoreboard-state.jsonl")
     # Blue-side deliverables into evidence/: logs, transcripts, submissions
     for n in (1, 2):
         src = Path(args.run_dir) / f"blue-team{n}"
@@ -601,7 +860,7 @@ def stage_capture(args, creds):
         if not src.exists():
             continue
         dst.mkdir(parents=True, exist_ok=True)
-        for name in ("LOG.md", "feed.log"):
+        for name in ("LOG.md", "NOTEBOOK.md", "feed.log"):
             if (src / name).exists():
                 shutil_copy(src / name, dst / name)
         for pattern in ("sub-*.md", "sub-*.txt"):
@@ -665,7 +924,7 @@ def stage_teardown(args, creds=None):
         except Exception as e:
             log(f"WARNING: red evidence pull failed: {e}")
     log("teardown: red01 + NAT")
-    env = {**os.environ, "BAuto_LLM_API_KEY": api_key()}
+    env = {**os.environ, "BAuto_LLM_API_KEY": api_key(local=True)}
     run(["python3", "-m", "badauto", "destroy"], cwd=BAD_AUTO, env=env, timeout=900, check=False)
     if args.keep_range:
         log("--keep-range: leaving the competition range up")
