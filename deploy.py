@@ -316,8 +316,13 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
                     print("  Deploying Nakon on team2+ boxes...")
                     ensure_nat_forwarding(ctx)
                     all_machines = json.loads(nakon_config_path.read_text())["machines"]
+                    # strict=False: the phase-6 sweep re-runs every machine on every resume, and
+                    # one flaky plant (apt rotation, IIS Chocolatey state) must not kill a 2-hour
+                    # sweep after 98% of it landed. Phase 5 keeps strict — that's the first, and
+                    # authoritative, plant.
                     run_nakon(key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
-                              timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(all_machines)))
+                              timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(all_machines)),
+                              strict=False)
                     print("  Nakon deployment on team2+ complete")
                 else:
                     print("  Single team — hardening services on team1 boxes...")
