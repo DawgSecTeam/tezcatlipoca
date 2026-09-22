@@ -73,9 +73,15 @@ def call(path, cookie=None):
 def jar_cookie():
     try:
         for line in reversed(open(jar).read().splitlines()):
-            if line and not line.startswith("#"):
-                name, value = line.split()[-2:]
-                return f"{name}={value}"
+            # HttpOnly cookies land in the jar as "#HttpOnly_..." — that's not a
+            # comment; only "# "-prefixed lines are. Current Quotient sets HttpOnly.
+            if line.startswith("#HttpOnly_"):
+                line = line[len("#HttpOnly_"):]
+            elif not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 7:
+                return f"{parts[-2]}={parts[-1]}"
     except OSError:
         pass
     return None
