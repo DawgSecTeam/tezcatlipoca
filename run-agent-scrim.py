@@ -540,6 +540,11 @@ def _opencode_run(args, prompt, wd, env):
     """One blue cycle, launched in a hardened context (no stdin, own process group, per-team HOME/XDG)."""
     n_team = 2 if wd.name.endswith("team2") else 1
     base_url, blue_model = blue_ep(args, n_team)
+    # subprocess cwd= does not update $PWD; opencode resolves its project (and
+    # thus the per-workdir opencode.jsonc that defines the scrim-llm provider)
+    # from $PWD, so a stale PWD anchors the server in the orchestrator's cwd
+    # and every cycle dies with ProviderModelNotFoundError.
+    env = {**env, "PWD": str(wd)}
     return subprocess.run(["opencode", "run", "-m",
                            f"{provider_key(base_url)}/{blue_model}", "--auto",
                            prompt],
