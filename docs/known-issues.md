@@ -89,6 +89,62 @@ opencode's own base prompt is ~20k tokens; the endpoint's advertised context mus
 it or opencode self-compacts fatally. 60000 was verified against the slot limit — don't raise
 model context claims above what the slot actually holds, and don't set `reasoning_effort`.
 
+### Engine DB password with `#` crash-loops the scoring engine (scrim-extreme-cyberfield-2026-09-22)
+
+`quotient_server` restart-looped 620 times: the generated postgres password contained `#`, and
+`postgres://engineuser:#…@host/db` is a URL with a fragment — the DSN truncates at the password,
+the app connects to a garbage host, and dies in ~80 ms with zero DB-side auth attempts (DB
+healthy, psql fine, fresh container fine — only a malformed DSN explains all of it).
+`random_password()` now draws symbols from `!*_-+=` only: URL-grammar characters (`#/?@`) never
+enter anything that lands in `/opt/quotient/.env`.
+
+### The plant is NOT idempotent over a planted box (scrim-extreme-cyberfield-2026-09-22)
+
+Re-running phase 5 over already-planted boxes produced 11 new failures in two clean classes
+(Linux "transport shut down or saw EOF" once a planted pin breaks SSH, Windows idempotency
+errors on `Elevate Guest Account`/`never-expires-service-account-win`/`iis-webshell`) and burned
+a repair cycle. `deploy()` now auto-rolls team1 boxes back to `tz-base` on `--from-phase 5`
+re-entry before re-planting; `take_snapshot` replaces an existing snapshot, so the restore
+point is genuinely re-taken at the start of each phase-5 pass.
+
+### `sshd-force-sftp-broken-chroot` kills SSH on every Linux box (scrim-extreme-cyberfield-2026-09-22)
+
+The catalog script appends `Match Group sftpusers` to `sshd_config` but never creates the group;
+sshd treats a `Match` on a nonexistent group as a fatal config error, the script's
+`systemctl reload … || true` hides the failure, and SSH dies at the next sshd restart. This one
+pin blocked red's foothold expansion, blue's hunts on all 6 Linux boxes, the verifier's
+misconfig check, and phase-6's own DNS step (all fell back or failed). Dropped from both
+extreme pin sets until the script is fixed in the vulndb. Companion fixes: `verify-competition`'s
+misconfig check falls back to guest-agent exec when SSH is dead.
+
+### Noble dpkg-breakers: `tftpd-hpa-anon-write`, `postgresql-remote-access` (scrim-extreme-cyberfield-2026-09-22)
+
+`tftpd-hpa-anon-write`'s dpkg postinst exits 82 on Ubuntu Noble, wedging dpkg so every later
+apt/dpkg step on the box fails in cascade (looks like 8 broken configs, 1 real cause);
+`postgresql-remote-access` pulls the already-known-bad `postgresql-no-auth`. Both stay pruned
+from Noble boxes (Debian 13 boxes tolerate them) until their scripts get pre-seed fixes. The
+5 Windows user-policy pins (`local-user-win`, `powershell-execution-unrestricted`,
+`rpc-proxy-on-dc-web-win`, `unauth-kiosk-app-startup-win`, `mailenable-cleartext-mail-win`) stay
+pruned too — `Set-LocalUser`/password-policy failures on users their own config was supposed to
+create.
+
+### Blue cycles rc=1 without a shell parent; timeouts hung on the server grandchild (2026-09-22)
+
+Two more opencode launch lessons on top of the 17c hardening: opencode's server dies silently
+right after "llm runtime selected" when the CLI is exec'd directly from python (manual runs,
+pty, env — all fine; only a shell parent as the process's parent differs), so `_opencode_run`
+spawns `bash -c 'exec opencode run …'` with the prompt passed via `$CYCLE_PROMPT` (no
+shell-quoting of a multi-KB prompt). And `subprocess.run(timeout=…)` hung ~80 min past the
+timeout because opencode's server grandchild held the pipes — timeouts now `os.killpg()` the
+whole session. `CYCLE_TIMEOUT` is 1800 s.
+
+### Teardown dies half-done on out-of-band deleted VMs (scrim-dress-2026-09-20 run-12)
+
+`terraform destroy` failed partway when manually-deleted `-fix` templates were missing from the
+node; the range was left half-torn-down. `destroy-competition.py` now retries the destroy once
+(every pass makes progress on the remaining resources) before giving up with a pointer to
+`terraform state list`.
+
 ## Known-broken templates
 
 - **`106` / `ubuntu24.04`** and **`920` / `debian13-lite`**: bad cloud-init — clones never get a
