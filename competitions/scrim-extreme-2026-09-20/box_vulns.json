@@ -52,24 +52,6 @@
    "name": "audit-policy-off-win"
   },
   {
-   "name": "local-user-win",
-   "vars": {
-    "USERNAME": "svc_directory",
-    "PASSWORD": "Directory2026!",
-    "FULLNAME": "Directory Sync Service",
-    "DESCRIPTION": "AD directory sync agent",
-    "PASSWORD_NEVER_EXPIRES": "1"
-   }
-  },
-  {
-   "name": "local-user-win",
-   "vars": {
-    "USERNAME": "wardclerk",
-    "PASSWORD": "Wardclerk2026!",
-    "FULLNAME": "Ward Clerk Station"
-   }
-  },
-  {
    "name": "autologin-win",
    "vars": {
     "USERNAME": "wardclerk",
@@ -117,9 +99,6 @@
    "name": "llm-corpus-credentials-win"
   },
   {
-   "name": "mailenable-cleartext-mail-win"
-  },
-  {
    "name": "malicious-service-win",
    "vars": {
     "SERVICE_NAME": "MedArchiveSync",
@@ -136,9 +115,6 @@
    }
   },
   {
-   "name": "powershell-execution-unrestricted"
-  },
-  {
    "name": "rdp-group-member-win",
    "vars": {
     "USERNAME": "wardclerk"
@@ -152,9 +128,6 @@
    "vars": {
     "RDP_EXTRA_PORT": "3390"
    }
-  },
-  {
-   "name": "rpc-proxy-on-dc-web-win"
   },
   {
    "name": "runkey-persistence-win",
@@ -199,9 +172,6 @@
   },
   {
    "name": "uac-disabled-win"
-  },
-  {
-   "name": "unauth-kiosk-app-startup-win"
   },
   {
    "name": "weak-lm-authentication"
@@ -266,15 +236,6 @@
    "name": "audit-policy-off-win"
   },
   {
-   "name": "local-user-win",
-   "vars": {
-    "USERNAME": "kioskuser",
-    "PASSWORD": "Kioskuser2026!",
-    "FULLNAME": "Ward Kiosk",
-    "PASSWORD_NEVER_EXPIRES": "1"
-   }
-  },
-  {
    "name": "autologin-win",
    "vars": {
     "USERNAME": "kioskuser",
@@ -322,9 +283,6 @@
    "name": "llm-corpus-credentials-win"
   },
   {
-   "name": "mailenable-cleartext-mail-win"
-  },
-  {
    "name": "malicious-service-win",
    "vars": {
     "SERVICE_NAME": "ChartCacheSvc",
@@ -341,9 +299,6 @@
    }
   },
   {
-   "name": "powershell-execution-unrestricted"
-  },
-  {
    "name": "rdp-group-member-win",
    "vars": {
     "USERNAME": "kioskuser"
@@ -357,9 +312,6 @@
    "vars": {
     "RDP_EXTRA_PORT": "3391"
    }
-  },
-  {
-   "name": "rpc-proxy-on-dc-web-win"
   },
   {
    "name": "runkey-persistence-win",
@@ -404,9 +356,6 @@
   },
   {
    "name": "uac-disabled-win"
-  },
-  {
-   "name": "unauth-kiosk-app-startup-win"
   },
   {
    "name": "weak-lm-authentication"
@@ -628,9 +577,6 @@
    "name": "postfix-expn-vrfy"
   },
   {
-   "name": "postgresql-remote-access"
-  },
-  {
    "name": "proftpd-weak-auth"
   },
   {
@@ -682,9 +628,6 @@
    "name": "ssh-x11-forwarding"
   },
   {
-   "name": "sshd-force-sftp-broken-chroot"
-  },
-  {
    "name": "sudo-nopasswd"
   },
   {
@@ -731,9 +674,6 @@
   },
   {
    "name": "systemd-service-writable"
-  },
-  {
-   "name": "tftpd-hpa-anon-write"
   },
   {
    "name": "theme-motd"
@@ -1049,9 +989,6 @@
    "name": "postfix-expn-vrfy"
   },
   {
-   "name": "postgresql-remote-access"
-  },
-  {
    "name": "proftpd-weak-auth"
   },
   {
@@ -1100,9 +1037,6 @@
    "name": "ssh-x11-forwarding"
   },
   {
-   "name": "sshd-force-sftp-broken-chroot"
-  },
-  {
    "name": "sudo-nopasswd"
   },
   {
@@ -1149,9 +1083,6 @@
   },
   {
    "name": "systemd-service-writable"
-  },
-  {
-   "name": "tftpd-hpa-anon-write"
   },
   {
    "name": "theme-motd"
@@ -1479,9 +1410,6 @@
    "name": "postfix-expn-vrfy"
   },
   {
-   "name": "postgresql-remote-access"
-  },
-  {
    "name": "proftpd-weak-auth"
   },
   {
@@ -1530,9 +1458,6 @@
    "name": "ssh-x11-forwarding"
   },
   {
-   "name": "sshd-force-sftp-broken-chroot"
-  },
-  {
    "name": "sudo-nopasswd"
   },
   {
@@ -1579,9 +1504,6 @@
   },
   {
    "name": "systemd-service-writable"
-  },
-  {
-   "name": "tftpd-hpa-anon-write"
   },
   {
    "name": "theme-motd"
