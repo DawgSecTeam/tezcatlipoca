@@ -30,7 +30,7 @@ python3 create-competition.py           # interactive
 python3 create-competition.py --help    # flags documented in docs/usage-agents.md
 ```
 
-nakon is vendored at `vendor/nakon` (pinned to a release; currently v0.1.6) and needs
+nakon is vendored at `vendor/nakon` (pinned to a release; currently v0.1.7) and needs
 `vendor/nakon/.env` for build-time catalog access (or `VULNDB_UI_URL`). Never commit
 `competitions/*/` secrets or either `.env` — see
 [docs/architecture.md](docs/architecture.md#secrets) for the full inventory. For shared
