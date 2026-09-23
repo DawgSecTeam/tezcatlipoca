@@ -714,8 +714,12 @@ def pull_red_snapshot(args, tag=None):
 
 
 def stage_red(args, comp, creds, run_dir):
+    # Local endpoints (llama.cpp/qwen) are slow: tighter call timeout and no
+    # JSON-retry double-call, or one decision can eat 8-16 min of a 90-min event.
+    local_llm = "openrouter" not in args.llm_base_url
     llm = {"base_url": args.llm_base_url, "model": args.red_model,
-           "max_tokens": 4096, "timeout": 240}
+           "max_tokens": 4096, "timeout": 120 if local_llm else 240,
+           "json_retries": 0 if local_llm else 1}
     if args.reasoning_effort:
         llm["reasoning_effort"] = args.reasoning_effort
     cfg = {
