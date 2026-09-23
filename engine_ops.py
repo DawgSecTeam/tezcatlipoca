@@ -296,6 +296,59 @@ def ensure_nat_forwarding(ctx):
     print("  NAT/forwarding ensured on scoring engine")
 
 
+def read_event_conf(ctx):
+    """Pull the engine-authoritative secrets: /opt/quotient/config/event.conf
+    (TOML), the linux credlist, and /opt/quotient/.env.
+
+    The engine is the source of truth after any re-bootstrap or partially
+    applied seed — .deploy_state.json can drift, these files cannot (the
+    scrim-dress-2026-09-20 credential-drift incident). box_password itself is
+    baked into the boxes at bootstrap and lives nowhere on the engine, so it
+    is NOT recoverable here."""
+    import tomllib
+
+    key = ctx["ssh_key_path"]
+    scoring_ip = ctx["scoring_engine_ip"]
+    scoring_user = ctx["vm_username"]
+
+    def _read(path):
+        r = subprocess.run(
+            ["ssh", "-i", key, "-o", "StrictHostKeyChecking=no",
+             "-o", "UserKnownHostsFile=/dev/null",
+             f"{scoring_user}@{scoring_ip}", f"sudo cat {path}"],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+        return r.stdout
+
+    secrets = {}
+    event = tomllib.loads(_read("/opt/quotient/config/event.conf"))
+    admins = event.get("admin") or []
+    if admins:
+        secrets["admin_password"] = admins[0].get("pw")
+    team_pws = {t.get("name"): t.get("pw") for t in event.get("team") or []}
+    if team_pws:
+        secrets["team_passwords"] = team_pws
+    injects = event.get("inject") or []
+    if injects:
+        secrets["inject_password"] = injects[0].get("pw")
+
+    box_creds = {}
+    for line in _read("/opt/quotient/config/credlists/linux.credlist").splitlines():
+        line = line.strip()
+        if line and "," in line:
+            user, pw = line.split(",", 1)
+            box_creds[user] = pw
+    if box_creds:
+        secrets["box_creds"] = box_creds
+
+    for line in _read("/opt/quotient/.env").splitlines():
+        if line.startswith("POSTGRES_PASSWORD="):
+            secrets["postgres_password"] = line.split("=", 1)[1]
+        elif line.startswith("REDIS_PASSWORD="):
+            secrets["redis_password"] = line.split("=", 1)[1]
+    return secrets
+
+
 def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
                     postgres_password, redis_password, box_creds, inject_password=None):
     """Build event.conf and push it to the scoring engine with the per-run secrets."""

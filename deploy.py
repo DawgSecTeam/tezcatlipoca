@@ -38,7 +38,7 @@ from domain_ops import deploy_domain_configs
 from engine_ops import bootstrap_scoring_engine, ensure_nat_forwarding, push_event_conf
 from hardening_ops import fix_dns_on_boxes, fix_services_on_boxes, setup_ubuntu_auth
 from nakon_ops import build_nakon_bundle, generate_nakon_config, run_nakon
-from quotient.setup import create_injects, seed_teams, unpause_engine
+from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
 from range_ops import (destroy_vm_if_exists, enumerate_targets, list_snapshots,
                        rollback_snapshot, take_snapshot, vm_id_for)
 from ssh_ops import read_terraform_ctx, wait_for_boxes_ssh, wait_for_cloud_init, wait_for_http, wait_for_ssh
@@ -103,7 +103,11 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
     resuming = from_phase > 1
 
     def _save_state():
-        state_path.write_text(json.dumps(state, indent=2))
+        # Atomic rename: .deploy_state.json holds the only copy of the box
+        # passwords — a torn write here bricks both resume and redeploy.
+        tmp_path = state_path.with_name(state_path.name + ".tmp")
+        tmp_path.write_text(json.dumps(state, indent=2))
+        os.replace(tmp_path, state_path)
         try:
             os.chmod(state_path, 0o600)
         except OSError:
@@ -385,7 +389,14 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
                 print("  Teams already seeded (resume) — skipping.")
 
             if not state.get("engine_unpaused"):
-                unpause_engine(scoring_ip, quotient_ctx)
+                # The unpause POST isn't idempotent, so a resume in the crash
+                # window between POST and flag-save asks the engine first and
+                # re-POSTs only when it really is still paused.
+                paused = engine_paused(scoring_ip, quotient_ctx)
+                if paused is False:
+                    print("  Engine reports itself unpaused — recording and skipping.")
+                else:
+                    unpause_engine(scoring_ip, quotient_ctx)
                 state["engine_unpaused"] = True
                 _save_state()
             else:
@@ -394,9 +405,14 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             if injects and not state.get("injects_created"):
                 print(f"  Creating {len(injects)} inject(s)...")
                 resolve_inject_times(injects)
-                create_injects(scoring_ip, admin_password, injects)
-                state["injects_created"] = True
-                _save_state()
+                _created, failed_titles = create_injects(scoring_ip, admin_password, injects)
+                if failed_titles:
+                    print(f"  WARNING: {len(failed_titles)} inject(s) failed to create: "
+                          f"{', '.join(failed_titles)} — re-run --from-phase 7 to retry "
+                          f"(existing injects are deduped)")
+                else:
+                    state["injects_created"] = True
+                    _save_state()
             elif injects:
                 print("  Injects already created (resume) — skipping.")
             checkpoint(7)

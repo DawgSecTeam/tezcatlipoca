@@ -200,16 +200,23 @@ Anything that matches no team/box is a hard error, not a silent empty selection.
 | `rollback-base` | Roll back to `tz-base`, then re-run DNS/auth/`nakon deploy --only`/hardening and re-take `tz-ready`. | `tz-ready` is also bad. |
 | `reconfigure` | No rollback — re-run that same chain against the live box. | A service died but the box is otherwise the team's to keep. |
 | `rebuild` | Destroy the VM, re-clone it from its **box template**, configure from scratch, take both snapshots. Windows boxes are bootstrapped over the guest agent (`bootstrap_windows_box()`), Linux via cloud-init. | The VM is gone or won't boot. |
+| `resync` | Pull the engine-authoritative secrets (event.conf, credlist, `/opt/quotient/.env`) into `.deploy_state.json`, then re-set the selected boxes' passwords via the guest agent. Touches nothing else. | Credentials drifted (partially-applied seed, manual box fiddling) and you need state and boxes back in line without a rollback. |
 
 `rebuild` deliberately clones the template rather than team1's live box (which is what phase 6
 does at deploy time): mid-competition team1's box carries whatever team1's defenders have done
 to it. Rebuilding a **team1** box also puts it out of sync with Terraform state — the tool warns,
 and the next `terraform apply` will want to replace it.
 
+`resync` cannot recover `box_password` (the box login) — that is baked into the boxes at
+bootstrap and lives nowhere on the engine — so it aligns everything else and re-sets
+credlist accounts + the box login it knows, reporting any box the guest agent couldn't reach.
+
 `rollback-base` and `rebuild` also re-run the AD domain chain (`deploy_domain_configs()`) for
 any selected box with a role in `domain_roles.json` — restoring a pre-Nakon disk undoes the
 ADDS promotion/domain join too, so the affected team's DC is re-promoted (or its members
-re-joined, if only members were reset) before `tz-ready` is re-taken.
+re-joined, if only members were reset) before `tz-ready` is re-taken. The stale ADDS
+done-marker is deleted for a reset DC first, and if the domain chain can't run, `tz-ready` is
+deliberately NOT re-taken (snapshotting then would bake a broken state in as 'as delivered').
 
 `nakon deploy --only` is scoped to exactly the selected machines. *What* gets applied to each is
 fixed by the content-addressed bundle (built from the full machine list), so a partial redeploy

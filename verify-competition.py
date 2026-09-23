@@ -331,7 +331,11 @@ def check_services(base_url, admin_session, teams, strict):
 
 
 def check_isolation(ctx, teams, boxes):
-    """Confirm isolation DROP rule present and actually blocks cross-team traffic."""
+    """Confirm isolation DROP rule present and actually blocks cross-team traffic.
+
+    Returns True (verified), False (broken), or None (couldn't run the live
+    probe — reported as SKIP, never as a pass): a rule that exists but couldn't
+    be exercised must not read as verified isolation."""
 
     print("\n[3/5] ISOLATION")
     try:
@@ -376,15 +380,15 @@ def check_isolation(ctx, teams, boxes):
             f"timeout 3 bash -c 'echo > /dev/tcp/{to_ip}/22' 2>/dev/null; echo RC=$?"
         )
     except (CheckError, subprocess.TimeoutExpired) as e:
-        print(f"  WARN  — cross-team connection test couldn't run ({e}); rule-presence check "
-              "above already passed, not failing on this alone.")
-        return True
+        print(f"  SKIP  — cross-team connection test couldn't run ({e}); rule-presence "
+              "check above passed, but an untested rule is NOT a verified pass.")
+        return None
 
     if proc.returncode != 0:
-        print(f"  WARN  — couldn't SSH to {from_ip} to run the test "
+        print(f"  SKIP  — couldn't SSH to {from_ip} to run the test "
               f"(rc={proc.returncode}): {(proc.stderr or '').strip()[:150]}; rule-presence "
-              "check above already passed, not failing on this alone.")
-        return True
+              "check above passed, but an untested rule is NOT a verified pass.")
+        return None
 
     blocked = "RC=0" not in proc.stdout
 
@@ -674,7 +678,7 @@ def main():
     gate = {
         "logins": logins_ok,
         "no_default_creds": no_default_creds_ok,
-        "isolation": isolation_ok,
+        "isolation": isolation_ok is True,
         "misconfig": misconfig_ok,
         "misconfig_survival": misconfig_survival_ok,
         "injects": injects_ok,
@@ -692,7 +696,10 @@ def main():
         svc_note = "PASS" if (services_query_ok and services_all_up) else "FAIL"
     print(f"  services         : {'UP' if services_all_up else 'some DOWN'} "
           f"({'query ok' if services_query_ok else 'query failed'}) [{svc_note}]")
-    print(f"  isolation        : {'PASS' if isolation_ok else 'FAIL'}")
+    isolation_note = ("PASS" if isolation_ok is True
+                      else "SKIP — live probe couldn't run, unverified" if isolation_ok is None
+                      else "FAIL")
+    print(f"  isolation        : {isolation_note}")
     print(f"  misconfig        : {'PASS' if misconfig_ok else 'FAIL'}")
     print(f"  misconfig_surviv.: {'PASS' if misconfig_survival_ok else 'FAIL'}")
     print(f"  injects          : {'PASS' if injects_ok else 'FAIL'}"
