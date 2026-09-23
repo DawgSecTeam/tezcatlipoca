@@ -628,9 +628,6 @@
       "name": "ssh-x11-forwarding"
     },
     {
-      "name": "sshd-force-sftp-broken-chroot"
-    },
-    {
       "name": "sudo-nopasswd"
     },
     {
@@ -1041,9 +1038,6 @@
     },
     {
       "name": "ssh-x11-forwarding"
-    },
-    {
-      "name": "sshd-force-sftp-broken-chroot"
     },
     {
       "name": "sudo-nopasswd"
@@ -1468,9 +1462,6 @@
     },
     {
       "name": "ssh-x11-forwarding"
-    },
-    {
-      "name": "sshd-force-sftp-broken-chroot"
     },
     {
       "name": "sudo-nopasswd"
