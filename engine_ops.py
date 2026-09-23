@@ -89,7 +89,8 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
-            f"echo '{env_b64}' | base64 -d | sudo tee /opt/quotient/.env",
+            f"echo '{env_b64}' | base64 -d | sudo tee /opt/quotient/.env > /dev/null && "
+            "sudo chmod 600 /opt/quotient/.env",
         ],
         check=True, timeout=10,
     )
@@ -378,7 +379,8 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
-            f"echo '{event_conf_b64}' | base64 -d | sudo tee /opt/quotient/config/event.conf",
+            f"echo '{event_conf_b64}' | base64 -d | sudo tee /opt/quotient/config/event.conf > /dev/null && "
+            "sudo chmod 600 /opt/quotient/config/event.conf",
         ],
         check=True, timeout=30,
     )
@@ -391,7 +393,8 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
-            f"mkdir -p /opt/quotient/config/credlists && echo '{credlist_b64}' | base64 -d | sudo tee /opt/quotient/config/credlists/linux.credlist",
+            f"mkdir -p /opt/quotient/config/credlists && echo '{credlist_b64}' | base64 -d | sudo tee /opt/quotient/config/credlists/linux.credlist > /dev/null && "
+            "sudo chmod 600 /opt/quotient/config/credlists/linux.credlist",
         ],
         check=True, timeout=30,
     )
@@ -410,7 +413,8 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             f"{scoring_user}@{scoring_ip}",
-            f"echo '{env_b64}' | base64 -d | sudo tee /opt/quotient/.env",
+            f"echo '{env_b64}' | base64 -d | sudo tee /opt/quotient/.env > /dev/null && "
+            "sudo chmod 600 /opt/quotient/.env",
         ],
         check=True, timeout=30,
     )

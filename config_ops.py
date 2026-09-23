@@ -2,16 +2,16 @@
 
 import json
 import os
-import random
 import re
+import secrets
 import string
 from pathlib import Path
 
 import requests
 
-from constants import MAX_BOXES_PER_TEAM
+from constants import MAX_BOXES_PER_TEAM, SCORING_ENGINE_VMID
 from range_ops import proxmox_api
-from utils import BOX_USERNAME_DEFAULT, CREDLIST_USERNAMES_DEFAULT
+from utils import BOX_USERNAME_DEFAULT, CREDLIST_USERNAMES_DEFAULT, valid_unix_username
 
 ENV_PATH = Path(".env")
 
@@ -34,10 +34,10 @@ def random_password():
     whitespace) and URL-grammar free (no #/?@): these secrets land in
     postgres DSNs in /opt/quotient/.env, and `#` silently truncates the DSN
     at the password (scrim-extreme-cyberfield-2026-09-22 crash loop)."""
-    pools = [string.ascii_uppercase, string.ascii_lowercase, string.digits,
-             "!*_-+="]
+    pools = [string.ascii_uppercase, string.ascii_lowercase, string.digits, "!*_-+="]
+    alphabet = "".join(pools)
     while True:
-        pw = "".join(random.choices("".join(pools) + "".join(pools), k=14))
+        pw = "".join(secrets.choice(alphabet) for _ in range(14))
         if all(any(c in p for c in pw) for p in pools):
             return pw
 
@@ -51,9 +51,25 @@ def collect_teams(number_of_teams):
     ]
     if override and len(ids) < number_of_teams:
         ids += [str(100 + i) for i in range(len(ids) + 1, number_of_teams + 1)]
+    seen = set()
     for i in range(1, number_of_teams + 1):
         key = f"team{i}"
         identifier = ids[i - 1]
+        if not (identifier.isdigit() and 1 <= int(identifier) <= 254):
+            raise SystemExit(
+                f"  ERROR: team identifier {identifier!r} must be an integer in 1..254 "
+                f"(it becomes the 192.168.<id>.x subnet)."
+            )
+        if identifier in seen:
+            raise SystemExit(f"  ERROR: duplicate team identifier {identifier} — subnets/vmids would collide.")
+        seen.add(identifier)
+        base = 200 + int(identifier) * 10
+        if base <= SCORING_ENGINE_VMID <= base + MAX_BOXES_PER_TEAM - 1:
+            raise SystemExit(
+                f"  ERROR: team identifier {identifier} maps to vmids "
+                f"{base}..{base + MAX_BOXES_PER_TEAM - 1}, colliding with the scoring engine "
+                f"(vmid {SCORING_ENGINE_VMID})."
+            )
         password = random_password()
         teams[key] = {"identifier": identifier, "password": password}
     return teams
@@ -213,6 +229,9 @@ def collect_users_config(box_username_flag=None, credlist_flag=None):
         box_username = box_username_flag.strip() or BOX_USERNAME_DEFAULT
     else:
         box_username = input(f"  Box login username [{BOX_USERNAME_DEFAULT}]: ").strip() or BOX_USERNAME_DEFAULT
+    if not valid_unix_username(box_username):
+        print(f"  '{box_username}' is not a valid box username — using {BOX_USERNAME_DEFAULT}.")
+        box_username = BOX_USERNAME_DEFAULT
 
     if credlist_flag is not None:
         raw = credlist_flag
@@ -226,6 +245,10 @@ def collect_users_config(box_username_flag=None, credlist_flag=None):
         credlist_usernames = [n.strip() for n in raw.split(",") if n.strip()]
         if len(credlist_usernames) != 3:
             print(f"  Need exactly 3 credlist usernames — got {len(credlist_usernames)}, "
+                  f"falling back to the default {CREDLIST_USERNAMES_DEFAULT}.")
+            credlist_usernames = list(CREDLIST_USERNAMES_DEFAULT)
+        elif not all(valid_unix_username(n) for n in credlist_usernames):
+            print(f"  Credlist usernames must be lowercase [a-z_][a-z0-9_-]* — "
                   f"falling back to the default {CREDLIST_USERNAMES_DEFAULT}.")
             credlist_usernames = list(CREDLIST_USERNAMES_DEFAULT)
     else:

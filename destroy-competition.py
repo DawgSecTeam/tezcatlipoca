@@ -57,7 +57,7 @@ def destroy_cloned_vms(cloned_vms_path):
             if name is None:
                 print(f"    Skipping {vm_key} (vmid {vmid}) — VM does not exist on {node}")
                 continue
-            if vm_key not in name and name not in vm_key:
+            if name != vm_key:
                 print(f"    Skipping {vm_key} (vmid {vmid}) — VM exists as '{name}', which "
                       f"doesn't match this competition's clone name")
                 continue

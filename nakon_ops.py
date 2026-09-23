@@ -110,6 +110,7 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
 
     config_path = comp_dir / "nakon-config.json"
     config_path.write_text(json.dumps({"machines": machines}, indent=2))
+    os.chmod(config_path, 0o600)
     return config_path
 
 
@@ -236,6 +237,7 @@ def _run_single_nakon_config(machine, configurations, key, scoring_user, scoring
     final_path = comp_dir / f".nakon-domain-{tag}.json"
     pending_path = comp_dir / f".nakon-domain-{tag}.pending.json"
     pending_path.write_text(json.dumps({"machines": [tmp_machine]}, indent=2))
+    os.chmod(pending_path, 0o600)
     bundle = build_nakon_bundle(pending_path)
     try:
         run_nakon(key, scoring_user, scoring_ip, bundle, pending_path,

@@ -10,7 +10,7 @@ import time
 
 from range_ops import diagnose_unreachable_box, guest_agent_exec_root
 from ssh_ops import ssh_via_gateway
-from utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT
+from utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT, valid_unix_username
 
 
 def fix_dns_on_boxes(targets, ctx):
@@ -124,7 +124,9 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
             script_lines.extend([
                 "FLUSH PRIVILEGES;",
                 "SQLEOF",
+                "chmod 600 /tmp/setup_mysql.sql",
                 "sudo mysql < /tmp/setup_mysql.sql || true",
+                "rm -f /tmp/setup_mysql.sql",
                 "",
             ])
 
@@ -264,8 +266,8 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
 
         deploy_cmd = (
             f"echo '{script_b64}' | base64 -d > /tmp/harden.sh && "
-            "chmod +x /tmp/harden.sh && "
-            "bash /tmp/harden.sh"
+            "chmod 600 /tmp/harden.sh && "
+            "bash /tmp/harden.sh; rc=$?; rm -f /tmp/harden.sh; exit $rc"
         )
 
         try:
@@ -302,7 +304,7 @@ def setup_ubuntu_auth(targets, ctx):
     scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]
     box_username = ctx.get("box_username", "ubuntu")
-    if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", box_username):
+    if not valid_unix_username(box_username):
         raise RuntimeError(
             f"box_username {box_username!r} is not a safe sudoers filename/remote-shell token"
         )
