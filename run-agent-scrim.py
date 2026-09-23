@@ -3,9 +3,11 @@
 
 import argparse
 import calendar
+import contextlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -151,7 +153,7 @@ OPENCODE_PROJECT_CFG = """{
 """
 
 
-CYCLE_TIMEOUT = 1500
+CYCLE_TIMEOUT = 1800
 CYCLE_TARGET_PERIOD = 600
 MONITOR_INTERVAL = 300
 
@@ -436,11 +438,17 @@ directly (that kills the shared jar's session). Use the jar; if a call answers
   curl -s -b "$JAR" http://$ENGINE_IP/api/injects | python3 -c "import json,sys;[print(i['ID'],i['Title'],'due',i['DueTime'][11:16],'subs',len(i.get('Submissions') or [])) for i in json.load(sys.stdin)]"
   echo "## deliverable" > sub.md && ./submit-inject <injectId> sub.md     # submit BEFORE close time
 
-CYCLE TASK — notebook first, then AT MOST TWO actions, then STOP:
-0. FIRST: update NOTEBOOK.md (move finished items to DONE, add new incidents/findings) and append one timestamped line to LOG.md.
+CYCLE TASK — you have ~25 wall-clock minutes for this whole cycle; pace for it,
+update the notebook BEFORE acting (so an interrupted cycle still hands over context),
+then AT MOST TWO change/fix actions, then STOP. Read-only investigation (status queries,
+hunts) is fine inside your budget — two changes is the cap, not two commands:
+0. FIRST: update NOTEBOOK.md (SNAPSHOT line: current state + next action; move finished
+   items to DONE; add new incidents/findings) and append one timestamped line to LOG.md.
 1. If any service above is DOWN (or CHANGES shows a new DOWN): restore it NOW (./mybox web01 "echo $BOX_PW | sudo -S systemctl unmask nginx; echo $BOX_PW | sudo -S systemctl start nginx" for example). Availability beats everything.
 2. Else if an inject is due within 30 minutes and unsubmitted: investigate on the boxes, write the deliverable, ./submit-inject.
 3. Else: ONE hunt item from the notebook checklist (rogue UID-0 users, cron, systemd units, sudoers, firewall rules, listeners, Windows services/tasks/run-keys). Fix what is safe; never take a scored service down.
+4. Wrap up by minute 20: finish the current step, re-check the scoreboard, leave the
+   SNAPSHOT line + LOG.md current so the next cycle starts warm.
 ROE: never attack the engine ($ENGINE_IP), never change the scoring-check accounts (triage/svc-imaging/wardops). Keep replies terse."""
 
 
@@ -518,6 +526,9 @@ def inject_brief(creds, team):
 
 NOTEBOOK_TEMPLATE = """# NOTEBOOK — team {n} working memory (update FIRST every cycle)
 
+## SNAPSHOT (one line — current state + what you were about to do next)
+(none yet)
+
 ## OPEN INCIDENTS
 (none yet)
 
@@ -537,24 +548,31 @@ NOTEBOOK_TEMPLATE = """# NOTEBOOK — team {n} working memory (update FIRST ever
 
 
 def _opencode_run(args, prompt, wd, env):
-    """One blue cycle, launched in a hardened context (no stdin, own process group, per-team HOME/XDG).
-
-    Spawned via `bash -c 'exec opencode …'` with the prompt in CYCLE_PROMPT: opencode's
-    server dies silently right after selecting the LLM runtime when the CLI is exec'd
-    directly from python (works only under a shell parent) — via bash it is stable.
-    """
+    """One blue cycle in a hardened context; the whole process group dies on timeout."""
     n_team = 2 if wd.name.endswith("team2") else 1
     base_url, blue_model = blue_ep(args, n_team)
     # subprocess cwd= does not update $PWD and opencode resolves its project
     # (and thus the per-workdir opencode.jsonc defining the scrim-llm provider)
-    # from $PWD — see docs/scrim-harness.md for both launch-context lessons.
+    # from $PWD; it also needs a shell parent to survive — see docs/scrim-harness.md.
     child_env = {**env, "PWD": str(wd), "CYCLE_PROMPT": prompt}
-    return subprocess.run(["bash", "-c",
-                           "exec opencode run -m "
-                           f"{provider_key(base_url)}/{blue_model} --auto \"$CYCLE_PROMPT\""],
-                          cwd=wd, env=child_env, capture_output=True, text=True,
-                          stdin=subprocess.DEVNULL, start_new_session=True,
-                          timeout=CYCLE_TIMEOUT)
+    proc = subprocess.Popen(["bash", "-c",
+                             "exec opencode run -m "
+                             f"{provider_key(base_url)}/{blue_model} --auto \"$CYCLE_PROMPT\""],
+                            cwd=wd, env=child_env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                            text=True, start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=CYCLE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # opencode leaves a server grandchild holding the pipes; killing only the
+        # direct child made subprocess.run block for that grandchild's lifetime
+        # (run-12: one hung cycle held the shared lock ~80 min). bash is the
+        # session leader (start_new_session), so killpg takes the whole tree.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        out, err = proc.communicate()
+        raise
+    return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
 
 def _opencode_log_tail(wd):
