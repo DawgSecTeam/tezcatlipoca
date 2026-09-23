@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from utils import load_users_config
+from utils import load_users_config, valid_comp_name
 
 REPO = Path(__file__).resolve().parent
 BAD_AUTO = REPO.parent / "bad-auto"
@@ -1035,6 +1035,10 @@ def main():
     p.add_argument("--run-dir", default=None)
     args = p.parse_args()
     args.blue_base_url = args.blue_base_url or args.llm_base_url
+
+    for nm in (args.competition, args.new):
+        if nm and not valid_comp_name(nm):
+            sys.exit(f"invalid competition name {nm!r} — use [a-z0-9._-], no path separators.")
 
     comp = REPO / "competitions" / args.competition
     if args.new:

@@ -42,7 +42,7 @@ from quotient.setup import create_injects, engine_paused, seed_teams, unpause_en
 from range_ops import (destroy_vm_if_exists, enumerate_targets, list_snapshots,
                        rollback_snapshot, take_snapshot, vm_id_for)
 from ssh_ops import read_terraform_ctx, wait_for_boxes_ssh, wait_for_cloud_init, wait_for_http, wait_for_ssh
-from utils import compfile_flag, load_compfile, load_users_config
+from utils import compfile_flag, load_compfile, load_users_config, valid_comp_name
 from windows_ops import bootstrap_windows_box, is_windows_template
 
 ENV_PATH = Path(".env")
@@ -203,6 +203,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
     })
 
     (comp_dir / "teams.json").write_text(teams_json)
+    os.chmod(comp_dir / "teams.json", 0o600)
 
     if not assume_yes and not resuming:
         if not confirm_deploy(name, scenario, difficulty, teams, boxes):
@@ -516,6 +517,8 @@ def main():
 
     if args.competition:
         comp_name = args.competition.strip().lower().replace(" ", "-")
+        if not valid_comp_name(comp_name):
+            sys.exit(f"  ERROR: invalid competition name {comp_name!r} — use [a-z0-9._-], no path separators.")
         comp_dir = Path("competitions") / comp_name
         has_compfile = (comp_dir / "Compfile").exists()
         has_boxes = (comp_dir / "boxes.json").exists()
@@ -559,6 +562,8 @@ def main():
 
     if choice.lower() == "n":
         comp_name = input("Competition name: ").strip().lower().replace(" ", "-")
+        if not valid_comp_name(comp_name):
+            sys.exit(f"  ERROR: invalid competition name {comp_name!r} — use [a-z0-9._-], no path separators.")
         comp_dir = Path("competitions") / comp_name
         comp_dir.mkdir(parents=True, exist_ok=True)
 

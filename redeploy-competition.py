@@ -30,7 +30,7 @@ from range_ops import (
     take_snapshot,
     wait_for_proxmox_task,
 )
-from utils import load_compfile, load_users_config, pick_competition
+from utils import load_compfile, load_users_config, pick_competition, valid_comp_name
 
 ENV_PATH = Path(".env")
 load_dotenv(ENV_PATH)
@@ -450,6 +450,8 @@ def main():
     args = parser.parse_args()
 
     comp_name = args.competition
+    if comp_name is not None and not valid_comp_name(comp_name):
+        raise SystemExit(f"  ERROR: invalid competition name {comp_name!r} — use [a-z0-9._-], no path separators.")
     if not comp_name:
         candidates = [
             p.name for p in sorted(Path("competitions").iterdir())
