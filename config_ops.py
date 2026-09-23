@@ -42,9 +42,16 @@ def random_password():
 
 def collect_teams(number_of_teams):
     teams = {}
+    import os as _os
+    override = (_os.environ.get("TF_VAR_team_identifiers") or "").strip()
+    ids = [s.strip() for s in override.split(",")] if override else [
+        str(100 + i) for i in range(1, number_of_teams + 1)
+    ]
+    if override and len(ids) < number_of_teams:
+        ids += [str(100 + i) for i in range(len(ids) + 1, number_of_teams + 1)]
     for i in range(1, number_of_teams + 1):
         key = f"team{i}"
-        identifier = str(100 + i)
+        identifier = ids[i - 1]
         password = random_password()
         teams[key] = {"identifier": identifier, "password": password}
     return teams

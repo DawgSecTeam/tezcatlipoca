@@ -22,3 +22,5 @@ competitions/*/nakon-config.json
 competitions/*/.nakon-domain-*.json
 competitions/*/.phase6-swept
 .deploy.lock
+competitions/*/box_vulns.json.pre-cyberfield-prune1
+.env.*-backup
