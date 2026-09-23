@@ -18,14 +18,17 @@ RESTORE_TTR_GATE_MIN = 15
 GATES = {
     "red": [("takedowns", 6, ">="), ("restore_reactions", 3, ">="),
             ("distinct_tactics", 4, ">="), ("windows_footholds", 1, ">="),
-            ("max_simultaneous_down", 4, ">="), ("stalls", 0, "==")],
+            ("max_simultaneous_down", 4, ">="), ("stalls", 0, "=="),
+            ("evictions", 1, ">=")],
     "blue": [("cycles_rc0", 8, ">="), ("restorations", 2, ">="),
-             ("injects", 2, ">="), ("notebook_entries", 10, ">=")],
+             ("injects", 2, ">="), ("notebook_entries", 10, ">="),
+             ("timeouts", 0, "==")],
 }
 
 EXPECTED_17C = {
     "takedowns": 4, "distinct_tactics": 3, "restore_reactions": 1,
     "restorations": 1, "injects": 0, "interaction_score": 2, "stalls": 2,
+    "evictions": 0, "timeouts": 0,
 }
 
 
@@ -148,16 +151,30 @@ def foothold_list(world):
 def red_metrics(events, t0, world):
     m = {"takedowns": 0, "timeline": [], "distinct_tactics": set(), "initial_access": set(),
          "targets": set(), "stalls": [], "restore_reactions": 0, "blue_restore_events": 0,
-         "windows_footholds": 0, "actions_ok": 0, "actions_failed": 0}
+         "blue_restore_list": [], "windows_footholds": 0, "actions_ok": 0,
+         "actions_failed": 0, "evictions": 0}
     takes, ok_stamps = [], []
+    prev_evicted = 0
     for ev in events:
         if ev.get("kind") != "action":
             if ev.get("kind") == "blue_restore":
                 m["blue_restore_events"] += 1
+                m["blue_restore_list"].append(
+                    (t_plus(parse_ts(ev.get("ts", "1970")), t0), ev.get("team") or "?",
+                     ev.get("target") or "", ev.get("detail", "")))
             continue
         tactic = ev.get("tactic", "?")
         ok = bool(ev.get("ok"))
         m["actions_ok" if ok else "actions_failed"] += 1
+        # health_check's detail carries bad-auto's own eviction tally ("N footholds
+        # alive, M evicted"); each rise in M is blue removing access red had.
+        if tactic == HEALTH_CHECK and ok:
+            em = re.search(r"(\d+) evicted", ev.get("detail", ""))
+            if em:
+                cur = int(em.group(1))
+                if cur > prev_evicted:
+                    m["evictions"] += cur - prev_evicted
+                prev_evicted = cur
         ip = ev.get("target")
         tp = t_plus(parse_ts(ev.get("ts", "1970")), t0)
         if ok and tactic != HEALTH_CHECK:
@@ -236,7 +253,7 @@ def down_windows(snaps):
 
 
 def blue_metrics(run_dir):
-    m = {"cycles_rc0": 0, "cycles_total": 0, "manual_rc0": 0, "injects": 0,
+    m = {"cycles_rc0": 0, "cycles_total": 0, "manual_rc0": 0, "timeouts": 0, "injects": 0,
          "notebook_entries": 0, "eradication": 0}
     erad_re = re.compile(
         r"(tznet|svc-netupdate|TzNet|red_key|authorized_keys|backdoor|rogue|"
@@ -256,6 +273,8 @@ def blue_metrics(run_dir):
                         m["cycles_rc0"] += 1
                         if hdr.group(1):
                             m["manual_rc0"] += 1
+                elif re.match(r"===== cycle .* TIMEOUT", line.strip()):
+                    m["timeouts"] += 1
         log_text = ""
         for name in ("LOG.md", "NOTEBOOK.md"):
             p = wd / name
@@ -312,15 +331,18 @@ def build_report(run_dir):
     else:
         restorations, ttrs, fast = rm["restore_reactions"], [], 0
         down_min, max_sim = None, None
-    score = (restorations + rm["restore_reactions"]
-             + 0 + bm["injects"] + bm["eradication"])
+    empty_room = (bm["cycles_rc0"] == 0 and restorations == 0
+                  and rm["blue_restore_events"] == 0)
+    score = (restorations + rm["restore_reactions"] + rm["evictions"]
+             + bm["injects"] + bm["eradication"])
     gates = evaluate(
         {"takedowns": rm["takedowns"], "restore_reactions": rm["restore_reactions"],
          "distinct_tactics": len(rm["distinct_tactics"]),
          "windows_footholds": rm["windows_footholds"], "max_simultaneous_down": max_sim,
-         "stalls": len(rm["stalls"])},
+         "stalls": len(rm["stalls"]), "evictions": rm["evictions"]},
         {"cycles_rc0": bm["cycles_rc0"], "restorations": restorations,
-         "injects": bm["injects"], "notebook_entries": bm["notebook_entries"]})
+         "injects": bm["injects"], "notebook_entries": bm["notebook_entries"],
+         "timeouts": bm["timeouts"]})
     gates_failed = [r for r in gates if r[4] == "FAIL"]
 
     L = []
@@ -330,7 +352,11 @@ def build_report(run_dir):
              f"{len(events)} red events"
              + (f", {len(snaps)} scoreboard snapshots" if snaps else "") + ".\n")
     L.append("## Verdict\n")
-    if score == 0:
+    if empty_room:
+        verdict = ("**NO INTERACTION — blue never engaged** (0 successful cycles, no "
+                   "restorations, no blue_restore events). Red ran against an empty room; "
+                   "per the reporting rule this is not a red success, whatever the numbers say.")
+    elif score == 0:
         verdict = ("**FAILED RUN — interaction score 0: parallel monologues.** "
                    "Red and blue never touched the same game. No matter how good "
                    "red's log looks, this run taught nobody anything.")
@@ -342,7 +368,8 @@ def build_report(run_dir):
     L.append(f"{verdict}\n")
     L.append(f"Interaction score components: restorations {restorations}"
              + (" (inferred from re-kills; no scoreboard series)" if legacy else "")
-             + f", red restore-reactions {rm['restore_reactions']}, evictions n/a, "
+             + f", red restore-reactions {rm['restore_reactions']}, "
+             f"evictions {rm['evictions']}, "
              f"injects {bm['injects']}, eradication {bm['eradication']}.\n")
 
     L.append("## Red\n")
@@ -363,9 +390,19 @@ def build_report(run_dir):
         L.append(f"  - {fmt_t(a)} -> {fmt_t(b)} ({gap:.0f} min)")
     L.append(f"- actions: {rm['actions_ok']} ok / {rm['actions_failed']} failed\n")
 
+    L.append("## Blue interaction\n")
+    L.append(f"- explicit blue_restore events seen by red: **{rm['blue_restore_events']}**")
+    for tp, team, ip, detail in rm["blue_restore_list"]:
+        L.append(f"  - {fmt_t(tp)} {team} {host_label(ip)}: {detail}")
+    if not rm["blue_restore_list"]:
+        L.append("  (none — blue never restored while red was watching, or this run "
+                 "predates blue_restore logging)")
+    L.append(f"- evictions (footholds blue removed, from red's own health checks): "
+             f"**{rm['evictions']}**\n")
+
     L.append("## Blue\n")
     L.append(f"- cycles rc=0: **{bm['cycles_rc0']}** of {bm['cycles_total']} logged"
-             f" (manual rc=0: {bm['manual_rc0']})")
+             f" (manual rc=0: {bm['manual_rc0']}, timeouts: {bm['timeouts']})")
     if down:
         for team, d in sorted(down.items()):
             L.append(f"- {team}: restorations **{d['restorations']}**, "
@@ -373,6 +410,8 @@ def build_report(run_dir):
                      f"max simultaneous down {d['max_simultaneous_down']}")
             for t in d["ttrs_min"]:
                 L.append(f"  - time-to-restore {t:.0f} min")
+        if ttrs:
+            L.append(f"- time-to-restore <= {RESTORE_TTR_GATE_MIN} min: **{fast}** of {len(ttrs)}")
     else:
         L.append("- restorations/down-minutes: **n/a** (run predates scoreboard-state.jsonl; "
                  "restoration count above is inferred from red's re-kills)")
@@ -410,8 +449,9 @@ def compute_components(run_dir):
     return {"takedowns": rm["takedowns"], "distinct_tactics": len(rm["distinct_tactics"]),
             "restore_reactions": rm["restore_reactions"], "restorations": restorations,
             "injects": bm["injects"], "stalls": len(rm["stalls"]),
+            "evictions": rm["evictions"], "timeouts": bm["timeouts"],
             "interaction_score": restorations + rm["restore_reactions"]
-            + bm["injects"] + bm["eradication"]}
+            + rm["evictions"] + bm["injects"] + bm["eradication"]}
 
 
 def self_test(run_dir):
