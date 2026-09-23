@@ -30,12 +30,16 @@ address, `ensure_cloned_network` gates phase 6/7 on every box actually holding i
 guest-agent exceptions count as "not yet" so a merely-slow cloud-init is never "repaired".
 
 ### Quotient cold start exceeds 60 s (e2e-2026-09-19)
+*(fixed `63b9c31`/`0c0547e`, 2026-09-19)*
+
 
 The first `compose up` after a `--no-cache` build cold-starts Postgres (initdb) and recreates
 every container — measured >60 s twice in that run. The engine bootstrap timeout is therefore
 600 s (engine_ops), not a "generous" round number.
 
 ### opencode dies 40/40 with "Unexpected server error" (agent-scrim-2026-09-17c)
+*(fixed 2026-09-18 in the 17c launch hardening)*
+
 
 Every blue session launch in the 17c run failed instantly with an opencode server error caused
 by the launch context (a `capture_output` thread launch) — a failure that never reproduced when
@@ -51,6 +55,8 @@ operator→red01 scp hung past 60 s in the 09-17b run; the file had already been
 falls back to tunneling through the scoring engine as a jump host.
 
 ### "Scoreboard unreachable" / `{"error":"Forbidden"}` — three-round mystery
+*(fixed `f71a80a` + `a98ee49`, 2026-09-19/20)*
+
 
 Two independent causes, each of which produced weeks of confusing Forbidden errors:
 
@@ -90,6 +96,8 @@ it or opencode self-compacts fatally. 60000 was verified against the slot limit 
 model context claims above what the slot actually holds, and don't set `reasoning_effort`.
 
 ### Engine DB password with `#` crash-loops the scoring engine (scrim-extreme-cyberfield-2026-09-22)
+*(fixed `caf3dd0`, 2026-09-22)*
+
 
 `quotient_server` restart-looped 620 times: the generated postgres password contained `#`, and
 `postgres://engineuser:#…@host/db` is a URL with a fragment — the DSN truncates at the password,
@@ -99,6 +107,8 @@ healthy, psql fine, fresh container fine — only a malformed DSN explains all o
 enter anything that lands in `/opt/quotient/.env`.
 
 ### The plant is NOT idempotent over a planted box (scrim-extreme-cyberfield-2026-09-22)
+*(fixed `caf3dd0`, 2026-09-22)*
+
 
 Re-running phase 5 over already-planted boxes produced 11 new failures in two clean classes
 (Linux "transport shut down or saw EOF" once a planted pin breaks SSH, Windows idempotency
@@ -108,6 +118,8 @@ re-entry before re-planting; `take_snapshot` replaces an existing snapshot, so t
 point is genuinely re-taken at the start of each phase-5 pass.
 
 ### `sshd-force-sftp-broken-chroot` kills SSH on every Linux box (scrim-extreme-cyberfield-2026-09-22)
+*(pruned from pin sets `f05c661`, 2026-09-22; upstream vulndb script fix still pending)*
+
 
 The catalog script appends `Match Group sftpusers` to `sshd_config` but never creates the group;
 sshd treats a `Match` on a nonexistent group as a fatal config error, the script's
@@ -118,6 +130,8 @@ extreme pin sets until the script is fixed in the vulndb. Companion fixes: `veri
 misconfig check falls back to guest-agent exec when SSH is dead.
 
 ### Noble dpkg-breakers: `tftpd-hpa-anon-write`, `postgresql-remote-access` (scrim-extreme-cyberfield-2026-09-22)
+*(pruned from Noble pin sets `f05c661`, 2026-09-22)*
+
 
 `tftpd-hpa-anon-write`'s dpkg postinst exits 82 on Ubuntu Noble, wedging dpkg so every later
 apt/dpkg step on the box fails in cascade (looks like 8 broken configs, 1 real cause);
@@ -129,6 +143,8 @@ pruned too — `Set-LocalUser`/password-policy failures on users their own confi
 create.
 
 ### Blue cycles rc=1 without a shell parent; timeouts hung on the server grandchild (2026-09-22)
+*(fixed `2e5a976` (shell parent) + `beff624` (killpg timeouts), 2026-09-22/23)*
+
 
 Two more opencode launch lessons on top of the 17c hardening: opencode's server dies silently
 right after "llm runtime selected" when the CLI is exec'd directly from python (manual runs,
@@ -139,6 +155,8 @@ timeout because opencode's server grandchild held the pipes — timeouts now `os
 whole session. `CYCLE_TIMEOUT` is 1800 s.
 
 ### Teardown dies half-done on out-of-band deleted VMs (scrim-dress-2026-09-20 run-12)
+*(fixed 2026-09-23: destroy retries once before giving up)*
+
 
 `terraform destroy` failed partway when manually-deleted `-fix` templates were missing from the
 node; the range was left half-torn-down. `destroy-competition.py` now retries the destroy once
@@ -147,12 +165,16 @@ node; the range was left half-torn-down. `destroy-competition.py` now retries th
 
 ## Known-broken templates
 
-- **`106` / `ubuntu24.04`** and **`920` / `debian13-lite`**: bad cloud-init — clones never get a
-  working network/SSH. Use the `-fix` variants instead (see usage-people.md "Adding a template
-  VM"). `deploy()` warns but does not block: a reused competition replays its saved `boxes.json`
-  exactly, so the interactive box-picker warning can be silently outlived — the deploy-time
-  warning is unconditional (not gated by `--yes`) because non-interactive/CI deploys skip the
-  prompts too.
+- **`106` / `ubuntu24.04`** and **`920` / `debian13-lite`** (reworded 2026-09-23): these
+  templates are **not broken** — they simply ship without cloud-init, so tezcatlipoca clones
+  (which rely on cloud-init for network/SSH/user seeding) come up unreachable. For non-driver
+  uses (manual VMs, console-worked boxes) they are fine. Use the `-fix` variants for this
+  pipeline (see usage-people.md "Adding a template VM"). `deploy()` warns but does not block:
+  a reused competition replays its saved `boxes.json` exactly, so the interactive box-picker
+  warning can be silently outlived — the deploy-time warning is unconditional (not gated by
+  `--yes`) because non-interactive/CI deploys skip the prompts too. Since 2026-09-23 the
+  preflight gate additionally verifies every selected template actually resolves to a tagged
+  template on the cluster before terraform apply.
 
 ## Infrastructure failure modes
 
@@ -177,7 +199,8 @@ node; the range was left half-torn-down. `destroy-competition.py` now retries th
 - **Quotient crash-loops without `event.conf`, and every container restart drops the team-subnet
   NAT** — hence `event.conf` is pushed before nakon ever runs, and the firewall timer exists.
 - **Windows package-manager fallback untested**: nakon's `winget`/`choco` fallback path was never
-  exercised by any catalog config used in the verified Windows pass.
+  exercised by any catalog config used in the verified Windows pass. (E2E #3, 2026-09-23,
+  exercises the choco-backed pins — observation recorded in the e2e closeout.)
 
 ## Standing limitations
 
@@ -193,9 +216,16 @@ node; the range was left half-torn-down. `destroy-competition.py` now retries th
   that is merely listening.
 - **Nakon failures are silent by design.** `install_package` ignores apt exit status and the
   deploy never raises; a mis-seeded box looks exactly like a successful one from the deploy log.
-  `verify-competition.py` exists partly because of this.
-- **Scrim evictions are not yet observable** — `scrim-report.py` counts them as 0 (metric gap in
-  the interaction score), so the report understates blue activity by whatever evictions happened.
+  `verify-competition.py` exists partly because of this. Mitigated 2026-09-23: `run_nakon`
+  counts `FAILED` step lines and the tally lands in `.deploy_state.json`
+  (`nakon_failed_steps`), which `verify-competition.py` surfaces as a plant-integrity line;
+  it also verifies the staged bundle actually landed engine-side before starting a plant
+  (the scrim-extreme-2026-09-20 "missing plan archive" class now fails fast with the file
+  named).
+- **Scrim evictions were not observable** — fixed 2026-09-23: `scrim-report.py` derives
+  evictions from red's own health_check chain (each rise in the "N evicted" tally is blue
+  removing access red had), counts them in the interaction score and as a red gate, and the
+  self-test pin still reproduces the 17c numbers (evictions=0 there).
 
 ## Security disclosure history
 

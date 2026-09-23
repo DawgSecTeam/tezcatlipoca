@@ -47,10 +47,15 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   the real terraform error), so full stdout is written to `deploy.log` in the
   run dir. Success requires `last_phase: 7` / `Deploy complete` in stdout or
   `last_phase == 7` in `.deploy_state.json`; resume with `--from-phase`.
-- `stage_verify` — fire test: kill nginx on team1 web01, wait 150 s, expect
-  team1 DOWN; restore, wait 150 s, expect UP. Verify failures and a failed
-  fire test are WARNINGS, not aborts ("continuing — investigate before
-  event"; "scoring path may be broken").
+- `stage_verify` — fire test: stop nginx on team1 web01, wait 150 s, expect
+  team1 DOWN on the scoreboard AND a dead HTTP probe from the engine's network
+  path (the scoreboard alone lies twice: `team_down` swallows exceptions into
+  "up", and run-12's stop left the unit dead with nobody checking). Restore:
+  unmask + start with up to 3 attempts, then require scoreboard-up AND a live
+  probe — `fire test: down_detected=X restored=Y healed=Z`. Any miss ABORTS
+  with the manual fix (resume re-validates; failing closed before T0 is
+  cheap, discovering it at T0+40 is not). verify failures stay warnings.
+  Fixed 2026-09-23 (run-12 left team1's web01-http down at T0).
 - `QLOGIN` helper (shipped into each blue workdir) — Quotient allows ONE
   session per account: every login kills that account's previous cookie, so
   NEVER log in ad hoc; run `./qlogin` only when a request returns
@@ -183,7 +188,16 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   after the operator-side validate/dry-run used the real one. Then,
   post-deploy, `check_red_llm` curls `/models` FROM red01 (direct, then
   through the engine jump) and a non-200 aborts before T0: starting the event
-  red-LLM-less is the one failure this harness refuses to repeat.
+  red-LLM-less is the one failure this harness refuses to repeat. And because
+  the dress run's tunnel died MID-event unnoticed, `monitor_loop` now re-runs
+  that same from-red01 probe every 300 s tick (`red_llm_watch`) and alerts
+  once per failure episode — it complements, not replaces, the tunnel
+  supervisor.
+- `stage_red` (t0 honesty) — the event clock (t0) is captured AFTER stage_red
+  returns, not before: red01 deploy + validate-llm + dry-run + the LLM gate
+  can eat 5–30 min, and counting that against `--duration-min` made short
+  events shorter than advertised (fixed 2026-09-23; the T0 log line prints
+  how long red setup ran outside scored time).
 - `stage_red` (state dir) — operator-side bad-auto runs (validate-llm /
   dry-run / deploy bookkeeping) need a writable state dir: the VM's own
   config hardcodes `/var/lib/bad-auto` inside red01, so the `BAuto_STATE_DIR`

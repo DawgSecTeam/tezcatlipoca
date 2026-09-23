@@ -116,7 +116,11 @@ weekend and this must be flawless.
 - Optionally re-vet pins first (green on 2026-09-20, 0 errors): from
   vendor/nakon run `.venv/bin/python -m nakon catalog check --boxes-json
   ../../competitions/scrim-dress-.../boxes.json --box-vulns ... --box-services
-  ... --strict --json` against the NEW comp dir after authoring.
+  ... --strict --json` against the NEW comp dir after authoring. Since
+  2026-09-23 the deploy runs this check itself as a blocking preflight gate
+  (plus template resolution and datastore headroom) — a fresh deploy fails
+  fast on a bad pin instead of dying mid-plant; repair resumes skip the gate
+  so trim-then-resume still works.
 - Run `.venv/bin/python create-competition.py --competition scrim-dress-...
   --teams 2 --yes` in the background with a full log (venv python, NOT
   system python3).
@@ -164,19 +168,26 @@ With the range up, from the operator:
   Phase 0.5 CONFIRMED a LAN-reachable address (this operator box): pass
   `--llm-base-url http://10.0.0.143:8080/v1` (re-check `ip -4 addr` at run
   time in case DHCP moved the box) and SKIP the relay entirely. Fallback only
-  if that probe fails: bring up a relay BEFORE stage_red so both
-  operator-side (validate-llm/dry-run) and red01-side (director) can use the
-  SAME URL: socat TCP-LISTEN:8180,fork,reuseaddr TCP:100.64.0.9:8080 on the
-  operator, plus `ssh -N -R 8180:127.0.0.1:8180 -i proxmox
-  sysadmin@10.0.0.198` (keep it alive all event, autossh or a supervised
-  loop), then pass `--llm-base-url http://localhost:8180/v1`.
-  Verify from red01: curl the base URL through the tunnel before starting.
+  if that probe fails: pass `--red-tunnel on` — since 2026-09-23 RedTunnel
+  keepalives and self-restarts (15 s supervisor), and monitor_loop's
+  in-event red_llm_watch re-probes `/models` FROM red01 every 5 min and
+  alerts once per failure episode, so a mid-event tunnel death is loud within
+  one tick instead of silent for the whole event. The manual socat relay
+  (socat TCP-LISTEN:8180,fork,reuseaddr TCP:100.64.0.9:8080 on the operator,
+  then `--llm-base-url http://localhost:8180/v1`) is the last resort.
+  Verify from red01: curl the base URL before starting — the harness now does
+  this itself (`check_red_llm` hard-fails the run on a non-200 from red01).
+- Cloud option: a paid all-OpenRouter run is wired — `--llm-base-url
+  https://openrouter.ai/api/v1` (the default) with `OPENROUTER_API_KEY` in
+  the environment (falls back to `BAuto_LLM_API_KEY` in bad-auto/.env).
+  red01 reaches openrouter.ai directly; no tunnel, no relay. Use it when the
+  local slot is needed elsewhere or red/blue model diversity matters.
 - bad-auto side-gates before the run: write bad-auto/.env with
   `BAuto_LLM_API_KEY=local` (badauto's validate-llm hard-fails on an unset
   key even though llama.cpp ignores the value — run-agent-scrim only injects
   a key into ITS subprocess env, and a fresh clone has no .env); run
   `BAuto_STATE_DIR=/tmp/ba python3 -m badauto validate-llm` and confirm PASS;
-  `python3 -m unittest discover -s tests` green (52 tests as of 2026-09-20);
+  `python3 -m pytest tests` green (146 tests as of 2026-09-23);
   the Phase 4 `run --once --dry-run --competition <dir>` invocation is valid
   but must add `--state-dir /tmp/ba` (or BAuto_STATE_DIR) on the operator —
   the default /var/lib/bad-auto is root-owned and not writable.
@@ -186,6 +197,9 @@ With the range up, from the operator:
 - Run the orchestrator in the background with a full log; do not babysit each
   cycle, but check in at least every 15 minutes.
 - HARD GATES (every one must hold; a miss is a finding to fix and re-run):
+  - Fire test heals what it breaks: `fire test: down_detected=True restored=True
+    healed=True` in the launch log (it now unmasks, retries, and HTTP-probes;
+    any miss aborts before T0 — run-12's leave-it-down-at-T0 class).
   - Every monitor.log snapshot shows a real scoreboard for BOTH teams — the
     string "scoreboard unreachable" must appear ZERO times all event.
   - ≥8 orchestrator blue cycles complete rc=0 with real transcripts (local

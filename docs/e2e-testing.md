@@ -126,7 +126,7 @@ safe and takes effect immediately:
 Corollary: under `--strict`, pin density is risk. A full-catalog pin run (534 pins/team)
 should be expected to iterate; don't author it the night the range needs to be green.
 
-## 6. Upgrades that would make failures cheaper (spec — not yet implemented)
+## 6. Upgrades that would make failures cheaper
 
 1. **Per-phase snapshot checkpoints.** `checkpoint(n)` in `deploy.py` is the single choke
    point called exactly once per completed phase — the natural hook. Spec: after saving state,
@@ -143,13 +143,18 @@ should be expected to iterate; don't author it the night the range needs to be g
    there leaks nothing new). Until
    then, §7's launch commands include the capture explicitly. This is the cheapest fix on this
    list and retroactively enables every post-mortem.
-3. **Preflight pin lint.** `nakon catalog check --box-vulns` exists but isn't a gate. Run it
-   before every deploy (and wire it into `run-agent-scrim.py` pre-deploy), plus lint against a
-   maintained known-broken-rows list so the same vulndb row doesn't abort two runs in a row.
-4. **Datastore headroom check.** The worst incident on record (17c node crash) was local-lvm
-   saturation from clones landing on the template's pool. Preflight: check the target pool's
-   free space ≥ (number of Windows clones + margin) × 60 GB before phase 2, and confirm
-   templates/disks live on the intended pool.
+3. **Preflight pin lint** — **implemented 2026-09-23** (`config_ops.preflight_gates`, run
+   automatically before terraform apply on every fresh deploy): `nakon catalog check`
+   (boxes/services/vulns) is now a blocking gate, alongside template resolution (every
+   `boxes.json` template must resolve to a tagged template cluster-wide, engine template vmid
+   included) and a datastore-headroom check (free ≥ teams × Σ disk, unset disks counted at
+   40 GB). The remaining spec piece: linting against a maintained known-broken-rows list so
+   the same vulndb row doesn't abort two runs in a row.
+4. **Datastore headroom check** — **implemented 2026-09-23**, part of the same
+   `preflight_gates` (see item 3). The worst incident on record (17c node crash) was local-lvm
+   saturation from clones landing on the template's pool; the gate fails the deploy before
+   phase 1 teardown when headroom is short. Still manual: confirming templates/disks live on
+   the intended pool.
 
 ## 7. Step-by-step: an e2e test run
 
@@ -157,10 +162,13 @@ should be expected to iterate; don't author it the night the range needs to be g
 
 - [ ] Working tree has no deploy-path changes you can't attribute; note the current commit so
       the next triage has a `<last-green>` baseline.
-- [ ] `boxes.json` templates exist on the node and none are in the known-broken list — the
-      deploy only *warns* about broken templates (`debian13-lite`, `ubuntu24.04`).
-- [ ] `nakon catalog check --box-vulns` passes; no rows from a known-broken list are pinned.
-- [ ] Target datastore has headroom for all clones (esp. Windows, ~60 GB each).
+- [ ] `boxes.json` templates exist on the node and none are in the known-broken list — since
+      2026-09-23 the deploy itself gates template resolution before touching anything (§6.3);
+      the known-broken check (`debian13-lite`, `ubuntu24.04`) is still warn-only.
+- [ ] `nakon catalog check` passes — automatic on fresh deploys since 2026-09-23 (§6.3); for
+      repair resumes (which skip the gate so trim-then-resume stays workable), run it by hand.
+- [ ] Target datastore has headroom for all clones — automatic on fresh deploys since
+      2026-09-23 (§6.4); esp. Windows, ~60 GB each.
 - [ ] Nothing else is cloning on the node (workshop portal provisioner included).
 - [ ] `create-competition.py --competition <id> --plan-only` and actually read the plan.
 - [ ] Choose capture: harness run dir, or explicit tee (below).
@@ -184,6 +192,11 @@ python3 -u create-competition.py --competition <id> --teams 2 --yes 2>&1 | tee d
    then resume at the same phase.
 4. Resume `--from-phase N` where N is the phase that failed (§4 cost map). Only accept a
    `--from-phase 1` when Terraform state has actually diverged.
+5. **Bound the repair loop: max 2 repair-resume cycles, then stop and report.** The
+   cyberfield dress run (scrim-extreme-cyberfield-2026-09-22) burned 3 repair cycles chasing
+   an unsafe resume path before the honest move became obvious: fix the roots, make ONE
+   bounded attempt, and take a fresh full deploy if it fails. A third consecutive resume is
+   not a repair, it's a resume-loop.
 
 **After:**
 
