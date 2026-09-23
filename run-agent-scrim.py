@@ -158,6 +158,8 @@ CYCLE_TIMEOUT = 1800
 CYCLE_TARGET_PERIOD = 600
 MONITOR_INTERVAL = 300
 
+_llm_down_since = None
+
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -255,15 +257,56 @@ def stage_verify(args, comp, creds):
     def ssh_web01(cmd):
         return subprocess.run(base + [f"{creds['BOX_USER']}@192.168.{creds['TEAM1_ID']}.4", cmd],
                               capture_output=True, text=True, timeout=60)
+    port = os.environ.get("SCRIM_WEB01_PORT", "80")
+
+    def web01_http():
+        """HTTP code for web01 over the engine's network path ('' / 000 = no answer)."""
+        r = subprocess.run(["ssh", "-i", creds["KEY_PATH"], "-o", "StrictHostKeyChecking=no",
+                            "-o", "UserKnownHostsFile=/dev/null",
+                            f"{creds['VM_USER']}@{creds['ENGINE_IP']}",
+                            f"curl -sm 10 -o /dev/null -w '%{{http_code}}' "
+                            f"http://192.168.{creds['TEAM1_ID']}.4:{port}/"],
+                           capture_output=True, text=True, timeout=45)
+        return (r.stdout or "").strip()
+
+    def scoreboard_down():
+        """(down, err): down=True/False; err set when the scoreboard itself is unreadable."""
+        try:
+            return any(not s["up"] for s in parsed_status(creds, "team1")), None
+        except Exception as e:
+            return None, f"{type(e).__name__}: {e}"
+
     ssh_web01("echo %s | sudo -S systemctl stop nginx" % creds["BOX_PW"])
     time.sleep(150)
-    down = team_down(creds, "team1")
-    ssh_web01("echo %s | sudo -S systemctl start nginx" % creds["BOX_PW"])
-    time.sleep(150)
-    up = not team_down(creds, "team1")
-    log(f"fire test: down_detected={down} restored={up}")
-    if not (down and up):
-        log("WARNING: fire test incomplete — scoring path may be broken")
+    down, down_err = scoreboard_down()
+    http_down = web01_http()
+    log(f"fire test: after stop — scoreboard down={down}"
+        + (f" ({down_err})" if down_err else "")
+        + f", web01 http={http_down or 'no answer'}")
+
+    restored = healed = False
+    for attempt in (1, 2, 3):
+        # unmask first: run-12 left the unit unstartable and a plain start was a no-op
+        ssh_web01("echo %s | sudo -S systemctl unmask nginx" % creds["BOX_PW"])
+        ssh_web01("echo %s | sudo -S systemctl start nginx" % creds["BOX_PW"])
+        time.sleep(150 if attempt == 1 else 60)
+        up, up_err = scoreboard_down()
+        http_up = web01_http()
+        restored = up is False
+        healed = restored and http_up not in ("", "000")
+        log(f"fire test: restore attempt {attempt} — scoreboard "
+            f"{'up' if up is False else ('unreadable' if up is None else 'still down')}"
+            f"{f' ({up_err})' if up_err else ''}, web01 http={http_up or 'no answer'}")
+        if healed:
+            break
+    log(f"fire test: down_detected={down} restored={restored} healed={healed}")
+    if not (down and restored and healed):
+        raise RuntimeError(
+            "fire test failed — team1 web01-http was not verifiably down and restored, so the "
+            "scoring path is unproven. Manual fix: ./mybox web01 'echo $BOX_PW | sudo -S "
+            "systemctl unmask nginx && sudo systemctl start nginx', confirm "
+            f"http://192.168.{creds['TEAM1_ID']}.4/ answers from the engine, then re-run "
+            "(the fire test re-validates before T0).")
 
 
 def _qlogin(creds, user, jar):
@@ -668,6 +711,7 @@ def monitor_loop(args, creds, t0, stop):
             log("red events.jsonl snapshot pulled")
         else:
             log("WARNING: red events.jsonl snapshot unavailable")
+        red_llm_watch(args, t_plus)
         stop.wait(MONITOR_INTERVAL)
 
 
@@ -811,6 +855,29 @@ def check_red_llm(args, base_url):
         except subprocess.TimeoutExpired:
             log(f"red01 LLM probe ({path}) timed out")
     return False
+
+
+def red_llm_url(args):
+    """The LLM base URL as red01 dials it (tunnel-local when a tunnel is up)."""
+    tunnel = getattr(args, "red_tunnel", None)
+    return tunnel.red_base_url() if tunnel else args.llm_base_url
+
+
+def red_llm_watch(args, t_plus):
+    """In-event from-red01 LLM probe; alerts once per failure episode."""
+    global _llm_down_since
+    if check_red_llm(args, red_llm_url(args)):
+        if _llm_down_since is not None:
+            log(f"red LLM reachable again after {(time.time() - _llm_down_since) / 60:.0f} min")
+            _llm_down_since = None
+        return
+    if _llm_down_since is None:
+        _llm_down_since = time.time()
+        tunnel = getattr(args, "red_tunnel", None)
+        dead = tunnel is not None and tunnel.proc is not None and tunnel.proc.poll() is not None
+        log(f"WARNING: T+{t_plus // 60} — red01 cannot reach the LLM endpoint"
+            + (" (tunnel process dead; supervisor will respawn it)" if dead else "")
+            + " — red is making decisions blind until this recovers")
 
 
 def stage_red(args, comp, creds, run_dir):
@@ -1065,9 +1132,11 @@ def main():
     stage_verify(args, comp, creds)
     stage_blues(args, comp, run_dir, creds, time.time())
 
-    log("T0 — starting red, then feeding blues")
-    t0 = time.time()
+    red_setup_started = time.time()
     stage_red(args, comp, creds, run_dir)
+    t0 = time.time()
+    log(f"T0 — event clock starts now (red setup took {(t0 - red_setup_started) / 60:.0f} min, "
+        f"outside scored time)")
     stage_run(args, creds, t0)
 
     stage_capture(args, creds)
