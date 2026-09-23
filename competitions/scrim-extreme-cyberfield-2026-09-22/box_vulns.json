@@ -1,0 +1,1632 @@
+{
+  "dc01": [
+    {
+      "name": "Allow Remote Assistance"
+    },
+    {
+      "name": "Elevate Guest Account"
+    },
+    {
+      "name": "Enable WinRM"
+    },
+    {
+      "name": "Enabling Geolocation Server"
+    },
+    {
+      "name": "Enabling Plug and Play Service"
+    },
+    {
+      "name": "Enabling Print Spooler Service"
+    },
+    {
+      "name": "Net 3.5 and Powershell v2"
+    },
+    {
+      "name": "RDP misconfigs"
+    },
+    {
+      "name": "Run/RunOnce Keys",
+      "vars": {
+        "process": "TelemetrySync",
+        "process_path": "C:\\ProgramData\\Wardline\\tsync.ps1",
+        "command": "powershell.exe -WindowStyle Hidden -File C:\\ProgramData\\Wardline\\tsync.ps1"
+      }
+    },
+    {
+      "name": "Scheduled Tasks",
+      "vars": {
+        "task_name": "WardlineTelemetry",
+        "description": "Wardline telemetry upload"
+      }
+    },
+    {
+      "name": "TFTP"
+    },
+    {
+      "name": "Telnet"
+    },
+    {
+      "name": "UAC Disabled"
+    },
+    {
+      "name": "audit-policy-off-win"
+    },
+    {
+      "name": "autologin-win",
+      "vars": {
+        "USERNAME": "wardclerk",
+        "PASSWORD": "Wardclerk2026!"
+      }
+    },
+    {
+      "name": "defender-disabled-win"
+    },
+    {
+      "name": "firewall-disabled-win"
+    },
+    {
+      "name": "guest-enabled-win"
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "portal.meridian.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    {
+      "name": "iis-webshell"
+    },
+    {
+      "name": "insecure-file-acl-win",
+      "vars": {
+        "FILE_PATH": "C:\\ProgramData\\Meridian\\hr-credentials.txt",
+        "FILE_CONTENT": "Meridian payroll service account: mh-payroll / Payr0ll2026! (rotate quarterly)"
+      }
+    },
+    {
+      "name": "insecure-interactive-logon"
+    },
+    {
+      "name": "insecure-smb-share-win",
+      "vars": {
+        "SHARE_NAME": "WardShare",
+        "SHARE_PATH": "C:\\ProgramData\\Meridian",
+        "DESCRIPTION": "Meridian departmental share"
+      }
+    },
+    {
+      "name": "llm-corpus-credentials-win"
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "MedArchiveSync",
+        "DESCRIPTION": "Meridian archive synchronization",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\masync.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 600 }"
+      }
+    },
+    {
+      "name": "never-expires-service-account-win",
+      "vars": {
+        "USERNAME": "meridian_svc",
+        "PASSWORD": "Service2026!"
+      }
+    },
+    {
+      "name": "rdp-group-member-win",
+      "vars": {
+        "USERNAME": "wardclerk"
+      }
+    },
+    {
+      "name": "rdp-no-nla-win"
+    },
+    {
+      "name": "rdp-secondary-port-win",
+      "vars": {
+        "RDP_EXTRA_PORT": "3390"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "PulseSyncAgent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\psync.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 300 }"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "LedgerSync",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\ledger.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 2700"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\desk-reference.txt",
+        "FILE_CONTENT": "Front desk quick reference -- facility master code 7411, alarm vendor: vendor@meridian.example"
+      }
+    },
+    {
+      "name": "smb1-enabled-win"
+    },
+    {
+      "name": "theme-readme-win",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-shortcuts-win"
+    },
+    {
+      "name": "theme-wallpaper-win",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.png"
+      }
+    },
+    {
+      "name": "uac-disabled-win"
+    },
+    {
+      "name": "weak-lm-authentication"
+    },
+    {
+      "name": "weak-password-policy-win"
+    },
+    {
+      "name": "windows-updates-frozen-win"
+    }
+  ],
+  "win01": [
+    {
+      "name": "Allow Remote Assistance"
+    },
+    {
+      "name": "Elevate Guest Account"
+    },
+    {
+      "name": "Enable WinRM"
+    },
+    {
+      "name": "Enabling Geolocation Server"
+    },
+    {
+      "name": "Enabling Plug and Play Service"
+    },
+    {
+      "name": "Enabling Print Spooler Service"
+    },
+    {
+      "name": "Net 3.5 and Powershell v2"
+    },
+    {
+      "name": "RDP misconfigs"
+    },
+    {
+      "name": "Run/RunOnce Keys",
+      "vars": {
+        "process": "BadgeTelemetry",
+        "process_path": "C:\\ProgramData\\Wardline\\badge.ps1",
+        "command": "powershell.exe -WindowStyle Hidden -File C:\\ProgramData\\Wardline\\badge.ps1"
+      }
+    },
+    {
+      "name": "Scheduled Tasks",
+      "vars": {
+        "task_name": "WardlineBadgeSync",
+        "description": "Wardline badge sync"
+      }
+    },
+    {
+      "name": "TFTP"
+    },
+    {
+      "name": "Telnet"
+    },
+    {
+      "name": "UAC Disabled"
+    },
+    {
+      "name": "audit-policy-off-win"
+    },
+    {
+      "name": "autologin-win",
+      "vars": {
+        "USERNAME": "kioskuser",
+        "PASSWORD": "Kioskuser2026!"
+      }
+    },
+    {
+      "name": "defender-disabled-win"
+    },
+    {
+      "name": "firewall-disabled-win"
+    },
+    {
+      "name": "guest-enabled-win"
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "ehr.meridian.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    {
+      "name": "iis-webshell"
+    },
+    {
+      "name": "insecure-file-acl-win",
+      "vars": {
+        "FILE_PATH": "C:\\ProgramData\\Meridian\\donor-registry.csv",
+        "FILE_CONTENT": "donor_id,last4,ward\n8812,4471,ICU\n9037,2210,ONC\n"
+      }
+    },
+    {
+      "name": "insecure-interactive-logon"
+    },
+    {
+      "name": "insecure-smb-share-win",
+      "vars": {
+        "SHARE_NAME": "WardDocs",
+        "SHARE_PATH": "C:\\ProgramData\\Meridian",
+        "DESCRIPTION": "ward documents drop"
+      }
+    },
+    {
+      "name": "llm-corpus-credentials-win"
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "ChartCacheSvc",
+        "DESCRIPTION": "Medical chart cache service",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\charts.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 450 }"
+      }
+    },
+    {
+      "name": "never-expires-service-account-win",
+      "vars": {
+        "USERNAME": "meridian_ops",
+        "PASSWORD": "Ops2026!"
+      }
+    },
+    {
+      "name": "rdp-group-member-win",
+      "vars": {
+        "USERNAME": "kioskuser"
+      }
+    },
+    {
+      "name": "rdp-no-nla-win"
+    },
+    {
+      "name": "rdp-secondary-port-win",
+      "vars": {
+        "RDP_EXTRA_PORT": "3391"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "BadgeSyncAgent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\badgeagent.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 900 }"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "TelemetryFlush",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\tflush.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 1800"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\oncall-schedule.txt",
+        "FILE_CONTENT": "on-call rota export -- orion_portal key: orion2026! (shared) -- DO NOT FORWARD"
+      }
+    },
+    {
+      "name": "smb1-enabled-win"
+    },
+    {
+      "name": "theme-readme-win",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-shortcuts-win"
+    },
+    {
+      "name": "theme-wallpaper-win",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.png"
+      }
+    },
+    {
+      "name": "uac-disabled-win"
+    },
+    {
+      "name": "weak-lm-authentication"
+    },
+    {
+      "name": "weak-password-policy-win"
+    },
+    {
+      "name": "windows-updates-frozen-win"
+    }
+  ],
+  "web01": [
+    {
+      "name": "apparmor-disabled"
+    },
+    {
+      "name": "aslr-disabled"
+    },
+    {
+      "name": "at-job-any-user"
+    },
+    {
+      "name": "attacker-authorized-keys"
+    },
+    {
+      "name": "auditd-disabled"
+    },
+    {
+      "name": "authorized-keys-backdoor"
+    },
+    {
+      "name": "backdoor-firewall-rule",
+      "vars": {
+        "SOURCE_IP": "198.51.100.77",
+        "DST_PORT": "22"
+      }
+    },
+    {
+      "name": "bad-perms-userConfig"
+    },
+    {
+      "name": "browser-malicious-extension"
+    },
+    {
+      "name": "cockpit-installed"
+    },
+    {
+      "name": "core-dump-world-readable"
+    },
+    {
+      "name": "cron-d-rogue-job"
+    },
+    {
+      "name": "desktop-autostart-backdoor"
+    },
+    {
+      "name": "dnf-gpgcheck-disabled"
+    },
+    {
+      "name": "dnf-gpgcheck-off"
+    },
+    {
+      "name": "dnf-repos-disabled"
+    },
+    {
+      "name": "docker-daemon-exposed"
+    },
+    {
+      "name": "docker-group-member"
+    },
+    {
+      "name": "docker-untrusted-registry"
+    },
+    {
+      "name": "dovecot-debug-plaintext"
+    },
+    {
+      "name": "empty-password-account"
+    },
+    {
+      "name": "example-evil-image"
+    },
+    {
+      "name": "exploit-file-on-disk"
+    },
+    {
+      "name": "exploitable-cron-job"
+    },
+    {
+      "name": "ftp-anonymous-write"
+    },
+    {
+      "name": "hacking-tools-installed"
+    },
+    {
+      "name": "hidden-cron-persistence"
+    },
+    {
+      "name": "hidden-hosts-entry"
+    },
+    {
+      "name": "hidden-media-files"
+    },
+    {
+      "name": "hostname-loop"
+    },
+    {
+      "name": "initd-malware-script"
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/app/config.ini",
+        "FILE_MODE": "777",
+        "FILE_CONTENT": "debug=1\nadmin_pw=changeme\n"
+      }
+    },
+    {
+      "name": "journal-disk-full"
+    },
+    {
+      "name": "leaked-deploy-keys"
+    },
+    {
+      "name": "lingering-enabled"
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "vendor-support",
+        "PASSWORD": "Meridian2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "loosen-file-mode",
+      "vars": {
+        "FILE_PATH": "/srv/portal/.env",
+        "FILE_MODE": "666",
+        "FILE_CONTENT": "DB_PASSWORD=portal2026\n"
+      }
+    },
+    {
+      "name": "malicious-autostart"
+    },
+    {
+      "name": "malicious-factory-users"
+    },
+    {
+      "name": "malicious-motd-script"
+    },
+    {
+      "name": "malicious-systemd-timer-service"
+    },
+    {
+      "name": "minecraft-rcon-enabled"
+    },
+    {
+      "name": "multiple-uid0-accounts"
+    },
+    {
+      "name": "mysql-insecure-server-flags"
+    },
+    {
+      "name": "mysql-remote-root"
+    },
+    {
+      "name": "mysql-root-hash-reuse"
+    },
+    {
+      "name": "mysql-root-nopassword"
+    },
+    {
+      "name": "ncat-listener-autostart"
+    },
+    {
+      "name": "nfs-no-root-squash"
+    },
+    {
+      "name": "nginx-off-by-slash"
+    },
+    {
+      "name": "nginx-server-tokens-on"
+    },
+    {
+      "name": "nodejs-webshell"
+    },
+    {
+      "name": "pam-auth-failure-bypass"
+    },
+    {
+      "name": "pam-no-password-quality"
+    },
+    {
+      "name": "pam-permit-auth"
+    },
+    {
+      "name": "pam-permit-empty"
+    },
+    {
+      "name": "passwd-world-readable"
+    },
+    {
+      "name": "password-policy-missing"
+    },
+    {
+      "name": "passwordless-sudo"
+    },
+    {
+      "name": "php-webshell-webroot"
+    },
+    {
+      "name": "polkit-passwordless-root-rule"
+    },
+    {
+      "name": "polyglot-media"
+    },
+    {
+      "name": "postfix-expn-vrfy"
+    },
+    {
+      "name": "proftpd-weak-auth"
+    },
+    {
+      "name": "raw-socket-beacon",
+      "vars": {
+        "SERVICE_NAME": "kworker-monitor"
+      }
+    },
+    {
+      "name": "realm-beacon",
+      "vars": {
+        "SERVICE_NAME": "tide-syncd"
+      }
+    },
+    {
+      "name": "redis-no-auth"
+    },
+    {
+      "name": "remote-desktop-installed"
+    },
+    {
+      "name": "root-nginx"
+    },
+    {
+      "name": "secrets-in-webroot-env"
+    },
+    {
+      "name": "selinux-permissive"
+    },
+    {
+      "name": "service-account-shell"
+    },
+    {
+      "name": "ssh-backdoor-listener-2222"
+    },
+    {
+      "name": "ssh-empty-passwords"
+    },
+    {
+      "name": "ssh-max-auth-retries-high"
+    },
+    {
+      "name": "ssh-password-auth"
+    },
+    {
+      "name": "ssh-root-login"
+    },
+    {
+      "name": "ssh-x11-forwarding"
+    },
+    {
+      "name": "sshd-force-sftp-broken-chroot"
+    },
+    {
+      "name": "sudo-nopasswd"
+    },
+    {
+      "name": "sudo-preserve-env"
+    },
+    {
+      "name": "sudo-timestamp-never-expires"
+    },
+    {
+      "name": "sudoers-extra-entries"
+    },
+    {
+      "name": "suid-ed"
+    },
+    {
+      "name": "suid-find"
+    },
+    {
+      "name": "suid-nano"
+    },
+    {
+      "name": "suid-python"
+    },
+    {
+      "name": "suid-vim"
+    },
+    {
+      "name": "suspicious-user-home-script"
+    },
+    {
+      "name": "syncookies-disabled"
+    },
+    {
+      "name": "sysctl-syn-cookies-disabled"
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "portal-healthd",
+        "DESCRIPTION": "Portal health telemetry daemon",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 200; done'",
+        "EXTRA_LINE": "Environment=EXFIL_URL=http://feed.wardline-telemetry.net/collect"
+      }
+    },
+    {
+      "name": "systemd-service-writable"
+    },
+    {
+      "name": "theme-motd"
+    },
+    {
+      "name": "theme-readme"
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Incident README",
+        "SHORTCUT_EXEC": "xdg-open ~/Desktop/README.html"
+      }
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Meridian Portal",
+        "SHORTCUT_EXEC": "xdg-open http://localhost"
+      }
+    },
+    {
+      "name": "theme-wallpaper",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.png"
+      }
+    },
+    {
+      "name": "timezone-chaos"
+    },
+    {
+      "name": "tor-exfil-daemon"
+    },
+    {
+      "name": "ufw-removed"
+    },
+    {
+      "name": "uid0-backdoor-account"
+    },
+    {
+      "name": "uid0-user",
+      "vars": {
+        "USERNAME": "imaging-ops",
+        "PASSWORD": "Imaging2026!"
+      }
+    },
+    {
+      "name": "unauthorized-admin-user"
+    },
+    {
+      "name": "unauthorized-ftp-server"
+    },
+    {
+      "name": "unauthorized-shipping-account"
+    },
+    {
+      "name": "unprivileged-users-enabled"
+    },
+    {
+      "name": "untrusted-package-repo"
+    },
+    {
+      "name": "user-login-shell",
+      "vars": {
+        "USERNAME": "radiology-tech",
+        "LOGIN_SHELL": "/bin/bash",
+        "SYSTEM": "1",
+        "PASSWORD": "Radiology2026!"
+      }
+    },
+    {
+      "name": "user-sudo-nopasswd",
+      "vars": {
+        "USERNAME": "frontdesk",
+        "PASSWORD": "Frontdesk2026!"
+      }
+    },
+    {
+      "name": "vsftpd-anon-upload"
+    },
+    {
+      "name": "weak-password-account"
+    },
+    {
+      "name": "wildcard-sudo"
+    },
+    {
+      "name": "world-readable-shadow-adjacent"
+    },
+    {
+      "name": "world-writable-cron-d"
+    },
+    {
+      "name": "world-writable-crond"
+    },
+    {
+      "name": "world-writable-etc-hosts"
+    },
+    {
+      "name": "writable-bashrc"
+    },
+    {
+      "name": "writable-etc-group"
+    },
+    {
+      "name": "writable-sudoers"
+    },
+    {
+      "name": "www-data-shell"
+    },
+    {
+      "name": "x11vnc-root-nopassword"
+    }
+  ],
+  "app01": [
+    {
+      "name": "apache-anon-upload-rce"
+    },
+    {
+      "name": "apache-directory-listing"
+    },
+    {
+      "name": "apache-site",
+      "vars": {
+        "SITE_TITLE": "Portal Upgrade",
+        "SITE_BODY": "<h1>Upgrade in progress</h1>"
+      }
+    },
+    {
+      "name": "apparmor-disabled"
+    },
+    {
+      "name": "aslr-disabled"
+    },
+    {
+      "name": "at-job-any-user"
+    },
+    {
+      "name": "attacker-authorized-keys"
+    },
+    {
+      "name": "auditd-disabled"
+    },
+    {
+      "name": "authorized-keys-backdoor"
+    },
+    {
+      "name": "bad-perms-userConfig"
+    },
+    {
+      "name": "browser-malicious-extension"
+    },
+    {
+      "name": "cockpit-installed"
+    },
+    {
+      "name": "core-dump-world-readable"
+    },
+    {
+      "name": "cron-d-rogue-job"
+    },
+    {
+      "name": "desktop-autostart-backdoor"
+    },
+    {
+      "name": "dnf-gpgcheck-disabled"
+    },
+    {
+      "name": "dnf-gpgcheck-off"
+    },
+    {
+      "name": "dnf-repos-disabled"
+    },
+    {
+      "name": "docker-group-member"
+    },
+    {
+      "name": "docker-untrusted-registry"
+    },
+    {
+      "name": "dovecot-debug-plaintext"
+    },
+    {
+      "name": "empty-password-account"
+    },
+    {
+      "name": "example-evil-image"
+    },
+    {
+      "name": "exploit-file-on-disk"
+    },
+    {
+      "name": "exploitable-cron-job"
+    },
+    {
+      "name": "ftp-anonymous-write"
+    },
+    {
+      "name": "hacking-tools-installed"
+    },
+    {
+      "name": "hidden-cron-persistence"
+    },
+    {
+      "name": "hidden-hosts-entry"
+    },
+    {
+      "name": "hidden-media-files"
+    },
+    {
+      "name": "hostname-loop"
+    },
+    {
+      "name": "initd-malware-script"
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/app/config.ini",
+        "FILE_MODE": "777",
+        "FILE_CONTENT": "debug=1\nadmin_pw=changeme\n"
+      }
+    },
+    {
+      "name": "journal-disk-full"
+    },
+    {
+      "name": "leaked-deploy-keys"
+    },
+    {
+      "name": "lingering-enabled"
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "svc-imaging",
+        "PASSWORD": "Imaging2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "loosen-file-mode",
+      "vars": {
+        "FILE_PATH": "/srv/portal/.env",
+        "FILE_MODE": "666",
+        "FILE_CONTENT": "DB_PASSWORD=portal2026\n"
+      }
+    },
+    {
+      "name": "malicious-autostart"
+    },
+    {
+      "name": "malicious-factory-users"
+    },
+    {
+      "name": "malicious-motd-script"
+    },
+    {
+      "name": "malicious-systemd-timer-service"
+    },
+    {
+      "name": "minecraft-rcon-enabled"
+    },
+    {
+      "name": "multiple-uid0-accounts"
+    },
+    {
+      "name": "mysql-insecure-server-flags"
+    },
+    {
+      "name": "mysql-root-hash-reuse"
+    },
+    {
+      "name": "ncat-listener-autostart"
+    },
+    {
+      "name": "nfs-no-root-squash"
+    },
+    {
+      "name": "nodejs-webshell"
+    },
+    {
+      "name": "pam-auth-failure-bypass"
+    },
+    {
+      "name": "pam-no-password-quality"
+    },
+    {
+      "name": "pam-permit-auth"
+    },
+    {
+      "name": "pam-permit-empty"
+    },
+    {
+      "name": "passwd-world-readable"
+    },
+    {
+      "name": "password-policy-missing"
+    },
+    {
+      "name": "passwordless-sudo"
+    },
+    {
+      "name": "php-webshell-webroot"
+    },
+    {
+      "name": "polkit-passwordless-root-rule"
+    },
+    {
+      "name": "polyglot-media"
+    },
+    {
+      "name": "postfix-expn-vrfy"
+    },
+    {
+      "name": "postgresql-remote-access"
+    },
+    {
+      "name": "proftpd-weak-auth"
+    },
+    {
+      "name": "raw-socket-beacon",
+      "vars": {
+        "SERVICE_NAME": "kworker-monitor"
+      }
+    },
+    {
+      "name": "realm-beacon",
+      "vars": {
+        "SERVICE_NAME": "tide-syncd"
+      }
+    },
+    {
+      "name": "redis-no-auth"
+    },
+    {
+      "name": "remote-desktop-installed"
+    },
+    {
+      "name": "secrets-in-webroot-env"
+    },
+    {
+      "name": "selinux-permissive"
+    },
+    {
+      "name": "service-account-shell"
+    },
+    {
+      "name": "ssh-backdoor-listener-2222"
+    },
+    {
+      "name": "ssh-empty-passwords"
+    },
+    {
+      "name": "ssh-max-auth-retries-high"
+    },
+    {
+      "name": "ssh-password-auth"
+    },
+    {
+      "name": "ssh-root-login"
+    },
+    {
+      "name": "ssh-x11-forwarding"
+    },
+    {
+      "name": "sshd-force-sftp-broken-chroot"
+    },
+    {
+      "name": "sudo-nopasswd"
+    },
+    {
+      "name": "sudo-preserve-env"
+    },
+    {
+      "name": "sudo-timestamp-never-expires"
+    },
+    {
+      "name": "sudoers-extra-entries"
+    },
+    {
+      "name": "suid-ed"
+    },
+    {
+      "name": "suid-find"
+    },
+    {
+      "name": "suid-nano"
+    },
+    {
+      "name": "suid-python"
+    },
+    {
+      "name": "suid-vim"
+    },
+    {
+      "name": "suspicious-user-home-script"
+    },
+    {
+      "name": "syncookies-disabled"
+    },
+    {
+      "name": "sysctl-syn-cookies-disabled"
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "portal-healthd",
+        "DESCRIPTION": "Portal health telemetry daemon",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 200; done'",
+        "EXTRA_LINE": "Environment=EXFIL_URL=http://feed.wardline-telemetry.net/collect"
+      }
+    },
+    {
+      "name": "systemd-service-writable"
+    },
+    {
+      "name": "tftpd-hpa-anon-write"
+    },
+    {
+      "name": "theme-motd"
+    },
+    {
+      "name": "theme-readme"
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Incident README",
+        "SHORTCUT_EXEC": "xdg-open ~/Desktop/README.html"
+      }
+    },
+    {
+      "name": "theme-wallpaper",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.png"
+      }
+    },
+    {
+      "name": "timezone-chaos"
+    },
+    {
+      "name": "tor-exfil-daemon"
+    },
+    {
+      "name": "ufw-removed"
+    },
+    {
+      "name": "uid0-backdoor-account"
+    },
+    {
+      "name": "uid0-user",
+      "vars": {
+        "USERNAME": "dicom-sync",
+        "PASSWORD": "Dicom2026!"
+      }
+    },
+    {
+      "name": "unauthorized-admin-user"
+    },
+    {
+      "name": "unauthorized-ftp-server"
+    },
+    {
+      "name": "unauthorized-shipping-account"
+    },
+    {
+      "name": "unprivileged-users-enabled"
+    },
+    {
+      "name": "untrusted-package-repo"
+    },
+    {
+      "name": "user-login-shell",
+      "vars": {
+        "USERNAME": "backup-agent",
+        "LOGIN_SHELL": "/bin/bash",
+        "SYSTEM": "1",
+        "PASSWORD": "Backup2026!"
+      }
+    },
+    {
+      "name": "user-sudo-nopasswd",
+      "vars": {
+        "USERNAME": "wardline",
+        "PASSWORD": "Wardline2026!"
+      }
+    },
+    {
+      "name": "vsftpd-anon-upload"
+    },
+    {
+      "name": "weak-password-account"
+    },
+    {
+      "name": "wildcard-sudo"
+    },
+    {
+      "name": "world-readable-shadow-adjacent"
+    },
+    {
+      "name": "world-writable-cron-d"
+    },
+    {
+      "name": "world-writable-crond"
+    },
+    {
+      "name": "world-writable-etc-hosts"
+    },
+    {
+      "name": "world-writable-web-content"
+    },
+    {
+      "name": "writable-bashrc"
+    },
+    {
+      "name": "writable-etc-group"
+    },
+    {
+      "name": "writable-sudoers"
+    },
+    {
+      "name": "www-data-shell"
+    },
+    {
+      "name": "x11vnc-root-nopassword"
+    }
+  ],
+  "db01": [
+    {
+      "name": "apache-anon-upload-rce"
+    },
+    {
+      "name": "apache-directory-listing"
+    },
+    {
+      "name": "apache-site",
+      "vars": {
+        "SITE_TITLE": "Portal Upgrade",
+        "SITE_BODY": "<h1>Upgrade in progress</h1>"
+      }
+    },
+    {
+      "name": "apparmor-disabled"
+    },
+    {
+      "name": "aslr-disabled"
+    },
+    {
+      "name": "at-job-any-user"
+    },
+    {
+      "name": "attacker-authorized-keys"
+    },
+    {
+      "name": "auditd-disabled"
+    },
+    {
+      "name": "authorized-keys-backdoor"
+    },
+    {
+      "name": "backdoor-firewall-rule",
+      "vars": {
+        "SOURCE_IP": "198.51.100.77",
+        "DST_PORT": "22"
+      }
+    },
+    {
+      "name": "bad-perms-userConfig"
+    },
+    {
+      "name": "browser-malicious-extension"
+    },
+    {
+      "name": "cockpit-installed"
+    },
+    {
+      "name": "core-dump-world-readable"
+    },
+    {
+      "name": "cron-d-rogue-job"
+    },
+    {
+      "name": "desktop-autostart-backdoor"
+    },
+    {
+      "name": "dnf-gpgcheck-disabled"
+    },
+    {
+      "name": "dnf-gpgcheck-off"
+    },
+    {
+      "name": "dnf-repos-disabled"
+    },
+    {
+      "name": "docker-daemon-exposed"
+    },
+    {
+      "name": "docker-group-member"
+    },
+    {
+      "name": "docker-untrusted-registry"
+    },
+    {
+      "name": "dovecot-debug-plaintext"
+    },
+    {
+      "name": "empty-password-account"
+    },
+    {
+      "name": "example-evil-image"
+    },
+    {
+      "name": "exploit-file-on-disk"
+    },
+    {
+      "name": "exploitable-cron-job"
+    },
+    {
+      "name": "ftp-anonymous-write"
+    },
+    {
+      "name": "hacking-tools-installed"
+    },
+    {
+      "name": "hidden-cron-persistence"
+    },
+    {
+      "name": "hidden-hosts-entry"
+    },
+    {
+      "name": "hidden-media-files"
+    },
+    {
+      "name": "hostname-loop"
+    },
+    {
+      "name": "initd-malware-script"
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/app/config.ini",
+        "FILE_MODE": "777",
+        "FILE_CONTENT": "debug=1\nadmin_pw=changeme\n"
+      }
+    },
+    {
+      "name": "journal-disk-full"
+    },
+    {
+      "name": "leaked-deploy-keys"
+    },
+    {
+      "name": "lingering-enabled"
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "records-admin",
+        "PASSWORD": "Records2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "loosen-file-mode",
+      "vars": {
+        "FILE_PATH": "/srv/portal/.env",
+        "FILE_MODE": "666",
+        "FILE_CONTENT": "DB_PASSWORD=portal2026\n"
+      }
+    },
+    {
+      "name": "malicious-autostart"
+    },
+    {
+      "name": "malicious-factory-users"
+    },
+    {
+      "name": "malicious-motd-script"
+    },
+    {
+      "name": "malicious-systemd-timer-service"
+    },
+    {
+      "name": "minecraft-rcon-enabled"
+    },
+    {
+      "name": "multiple-uid0-accounts"
+    },
+    {
+      "name": "mysql-insecure-server-flags"
+    },
+    {
+      "name": "mysql-remote-root"
+    },
+    {
+      "name": "mysql-root-hash-reuse"
+    },
+    {
+      "name": "mysql-root-nopassword"
+    },
+    {
+      "name": "ncat-listener-autostart"
+    },
+    {
+      "name": "nfs-no-root-squash"
+    },
+    {
+      "name": "nodejs-webshell"
+    },
+    {
+      "name": "pam-auth-failure-bypass"
+    },
+    {
+      "name": "pam-no-password-quality"
+    },
+    {
+      "name": "pam-permit-auth"
+    },
+    {
+      "name": "pam-permit-empty"
+    },
+    {
+      "name": "passwd-world-readable"
+    },
+    {
+      "name": "password-policy-missing"
+    },
+    {
+      "name": "passwordless-sudo"
+    },
+    {
+      "name": "php-webshell-webroot"
+    },
+    {
+      "name": "polkit-passwordless-root-rule"
+    },
+    {
+      "name": "polyglot-media"
+    },
+    {
+      "name": "postfix-expn-vrfy"
+    },
+    {
+      "name": "proftpd-weak-auth"
+    },
+    {
+      "name": "raw-socket-beacon",
+      "vars": {
+        "SERVICE_NAME": "kworker-monitor"
+      }
+    },
+    {
+      "name": "realm-beacon",
+      "vars": {
+        "SERVICE_NAME": "tide-syncd"
+      }
+    },
+    {
+      "name": "redis-no-auth"
+    },
+    {
+      "name": "remote-desktop-installed"
+    },
+    {
+      "name": "secrets-in-webroot-env"
+    },
+    {
+      "name": "selinux-permissive"
+    },
+    {
+      "name": "service-account-shell"
+    },
+    {
+      "name": "ssh-backdoor-listener-2222"
+    },
+    {
+      "name": "ssh-empty-passwords"
+    },
+    {
+      "name": "ssh-max-auth-retries-high"
+    },
+    {
+      "name": "ssh-password-auth"
+    },
+    {
+      "name": "ssh-root-login"
+    },
+    {
+      "name": "ssh-x11-forwarding"
+    },
+    {
+      "name": "sshd-force-sftp-broken-chroot"
+    },
+    {
+      "name": "sudo-nopasswd"
+    },
+    {
+      "name": "sudo-preserve-env"
+    },
+    {
+      "name": "sudo-timestamp-never-expires"
+    },
+    {
+      "name": "sudoers-extra-entries"
+    },
+    {
+      "name": "suid-ed"
+    },
+    {
+      "name": "suid-find"
+    },
+    {
+      "name": "suid-nano"
+    },
+    {
+      "name": "suid-python"
+    },
+    {
+      "name": "suid-vim"
+    },
+    {
+      "name": "suspicious-user-home-script"
+    },
+    {
+      "name": "syncookies-disabled"
+    },
+    {
+      "name": "sysctl-syn-cookies-disabled"
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "portal-healthd",
+        "DESCRIPTION": "Portal health telemetry daemon",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 200; done'",
+        "EXTRA_LINE": "Environment=EXFIL_URL=http://feed.wardline-telemetry.net/collect"
+      }
+    },
+    {
+      "name": "systemd-service-writable"
+    },
+    {
+      "name": "theme-motd"
+    },
+    {
+      "name": "theme-readme"
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Incident README",
+        "SHORTCUT_EXEC": "xdg-open ~/Desktop/README.html"
+      }
+    },
+    {
+      "name": "theme-wallpaper",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.png"
+      }
+    },
+    {
+      "name": "timezone-chaos"
+    },
+    {
+      "name": "tor-exfil-daemon"
+    },
+    {
+      "name": "ufw-removed"
+    },
+    {
+      "name": "uid0-backdoor-account"
+    },
+    {
+      "name": "uid0-user",
+      "vars": {
+        "USERNAME": "export-svc",
+        "PASSWORD": "Export2026!"
+      }
+    },
+    {
+      "name": "unauthorized-admin-user"
+    },
+    {
+      "name": "unauthorized-ftp-server"
+    },
+    {
+      "name": "unauthorized-shipping-account"
+    },
+    {
+      "name": "unprivileged-users-enabled"
+    },
+    {
+      "name": "untrusted-package-repo"
+    },
+    {
+      "name": "user-login-shell",
+      "vars": {
+        "USERNAME": "triage",
+        "LOGIN_SHELL": "/bin/bash",
+        "SYSTEM": "1",
+        "PASSWORD": "Triage2026!"
+      }
+    },
+    {
+      "name": "user-sudo-nopasswd",
+      "vars": {
+        "USERNAME": "report-runner",
+        "PASSWORD": "Report2026!"
+      }
+    },
+    {
+      "name": "vsftpd-anon-upload"
+    },
+    {
+      "name": "weak-password-account"
+    },
+    {
+      "name": "wildcard-sudo"
+    },
+    {
+      "name": "world-readable-shadow-adjacent"
+    },
+    {
+      "name": "world-writable-cron-d"
+    },
+    {
+      "name": "world-writable-crond"
+    },
+    {
+      "name": "world-writable-etc-hosts"
+    },
+    {
+      "name": "world-writable-web-content"
+    },
+    {
+      "name": "writable-bashrc"
+    },
+    {
+      "name": "writable-etc-group"
+    },
+    {
+      "name": "writable-sudoers"
+    },
+    {
+      "name": "www-data-shell"
+    },
+    {
+      "name": "x11vnc-root-nopassword"
+    }
+  ]
+}

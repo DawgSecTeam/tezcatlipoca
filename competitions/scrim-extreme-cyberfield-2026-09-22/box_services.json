@@ -1,0 +1,19 @@
+{
+  "dc01": [
+    "Enable WinRM"
+  ],
+  "win01": [
+    "Enable WinRM",
+    "RDP misconfigs"
+  ],
+  "web01": [
+    "nginx"
+  ],
+  "app01": [
+    "apache",
+    "bind"
+  ],
+  "db01": [
+    "mysql"
+  ]
+}
