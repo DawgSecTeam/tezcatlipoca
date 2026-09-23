@@ -17,6 +17,7 @@ except ImportError as e:
 
 from dotenv import load_dotenv
 
+from range_ops import guest_agent_exec_root, vm_id_for
 from utils import BOX_USERNAME_DEFAULT, load_users_config
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -438,7 +439,51 @@ def report_healthcheck_status(ctx):
         print("  (no recent failures logged)")
 
 
-def check_misconfig(ctx, boxes):
+def _target_vmid(comp_dir, box):
+    """VMID for a nakon machine entry: base box name -> boxes.json index -> vm_id_for."""
+    try:
+        identifier = box["ip"].split(".")[2]
+        base_name = box["name"].rsplit("-team", 1)[0]
+        boxes_json = json.loads((Path(comp_dir) / "boxes.json").read_text())
+        idx = next(i for i, b in enumerate(boxes_json) if b.get("name") == base_name)
+        return vm_id_for(identifier, idx)
+    except Exception:
+        return None
+
+
+def misconfig_via_guest_agent(comp_dir, box, verifiable):
+    """SSH-dead fallback: run the same checks via the QEMU guest agent.
+
+    scrim-extreme-cyberfield-2026-09-22 lost its only verifier FAIL to dead
+    Linux SSH while the planted artifacts were independently confirmed fine —
+    the agent (virtio-serial, no network) reaches the box anyway."""
+    vmid = _target_vmid(comp_dir, box)
+    if vmid is None:
+        print("  (guest-agent fallback unavailable: could not resolve the box's vmid)")
+        return False
+    node = os.environ.get("TF_VAR_proxmox_node")
+    if not node:
+        print("  (guest-agent fallback unavailable: TF_VAR_proxmox_node not set)")
+        return False
+    print(f"  SSH unavailable — falling back to guest-agent exec on vmid {vmid}...")
+    for config in verifiable:
+        cmd, predicate = MISCONFIG_CHECKS[config]
+        try:
+            rc, out, err = guest_agent_exec_root(node, vmid, cmd)
+        except Exception as e:
+            print(f"  WARN  {config}: guest-agent exec failed ({e})")
+            continue
+        if rc != 0:
+            print(f"  ....  '{config}': guest rc={rc}: {(err or '').strip()[:80]}")
+            continue
+        if predicate(out):
+            print(f"  PASS  confirmed '{config}' via guest agent — `{cmd}` -> {out.strip()[:80]}")
+            return True
+        print(f"  ....  '{config}' not present: {out.strip()[:80]}")
+    return False
+
+
+def check_misconfig(ctx, boxes, comp_dir):
     """SSH via gateway to one box and confirm >=1 planted misconfig. Returns bool."""
     print("\n[4/5] MISCONFIG SPOT-CHECK")
     target = None
@@ -454,16 +499,19 @@ def check_misconfig(ctx, boxes):
     box, verifiable = target
     ip = box["ip"]
     print(f"  target: {box.get('name', ip)} ({ip}) — candidates: {', '.join(verifiable)}")
+    ssh_dead = False
     for config in verifiable:
         cmd, predicate = MISCONFIG_CHECKS[config]
         try:
             proc = ssh_via_gateway(ctx, ip, cmd)
         except subprocess.TimeoutExpired:
             print(f"  WARN  {config}: SSH timed out.")
+            ssh_dead = True
             continue
         except CheckError as e:
-            print(f"  FAIL  — {e}")
-            return False
+            print(f"  WARN  SSH to the box is unavailable ({e})")
+            ssh_dead = True
+            break
         if proc.returncode != 0:
             print(f"  WARN  {config}: command failed (rc={proc.returncode}): "
                   f"{(proc.stderr or '').strip()[:120]}")
@@ -473,6 +521,9 @@ def check_misconfig(ctx, boxes):
             print(f"  PASS  confirmed '{config}' — `{cmd}` -> {out.strip()[:80]}")
             return True
         print(f"  ....  '{config}' not present: {out.strip()[:80]}")
+    if ssh_dead:
+        if misconfig_via_guest_agent(comp_dir, box, verifiable):
+            return True
     print("  FAIL  — no planted misconfig could be confirmed on the target box.")
     return False
 
@@ -615,7 +666,7 @@ def main():
     isolation_ok = check_isolation(ctx, teams, boxes)
     print("\n  (live-ops health check status — informational)")
     report_healthcheck_status(ctx)
-    misconfig_ok = check_misconfig(ctx, boxes)
+    misconfig_ok = check_misconfig(ctx, boxes, comp_dir)
     misconfig_survival_ok = check_misconfig_survival(ctx, boxes)
     report_beacons(ctx, boxes)
     injects_relevant, injects_ok = check_injects(base_url, admin_session, comp_dir)

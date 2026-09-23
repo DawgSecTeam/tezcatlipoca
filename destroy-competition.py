@@ -119,12 +119,23 @@ def main():
         destroy_cloned_vms(cloned_vms_path)
 
     print(f"\nRunning terraform destroy for '{name}'...")
-    subprocess.run(
-        ["terraform", "destroy", "-parallelism=1", "-auto-approve"],
-        cwd="terraform",
-        env=env,
-        check=True,
-    )
+    # One destroy pass can die halfway when resources were deleted out-of-band
+    # (manually removed -fix templates/VMs, scrim-dress-2026-09-20 teardown):
+    # every pass still makes progress on the remaining resources, so retry
+    # once before giving up with the range half-torn-down.
+    for attempt in (1, 2):
+        proc = subprocess.run(
+            ["terraform", "destroy", "-parallelism=1", "-auto-approve"],
+            cwd="terraform",
+            env=env,
+        )
+        if proc.returncode == 0:
+            break
+        if attempt == 1:
+            print("  terraform destroy failed — retrying once (partial progress is kept)...")
+    else:
+        sys.exit(f"ERROR: terraform destroy failed twice (rc={proc.returncode}); "
+                 "inspect `terraform state list` under terraform/ and tear down the rest by hand.")
 
     print(f"\nInfrastructure for '{competition}' destroyed.")
     print(f"Competition files preserved at competitions/{competition}/")
