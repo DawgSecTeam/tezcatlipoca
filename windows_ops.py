@@ -74,10 +74,15 @@ def wait_for_windows_sshd(node, vmid, timeout=180):
 
 
 def wait_for_dc_dns(node, dc_vmid, domain, dc_ip, timeout=300):
-    """Poll DC DNS until it serves domain SRV records (DNS may lag guest-agent). Never raises."""
+    """Poll DC DNS until it serves domain SRV records (DNS may lag guest-agent). Never raises.
 
+    Agent errors don't consume the budget alongside real probes — a DC whose
+    agent never answers at all gets its own diagnosis, so 'DNS not up yet'
+    isn't confused with 'DC unreachable'."""
     record = f"_ldap._tcp.dc._msdcs.{domain}"
     deadline = time.time() + timeout
+    probes = 0
+    agent_errors = 0
     while time.time() < deadline:
         try:
             rc, out, _ = guest_agent_exec_windows(
@@ -86,9 +91,15 @@ def wait_for_dc_dns(node, dc_vmid, domain, dc_ip, timeout=300):
                 f"SilentlyContinue).Count -gt 0",
                 timeout=20,
             )
+            probes += 1
             if rc == 0 and out.strip().lower() == "true":
+                if agent_errors:
+                    print(f"    (DC DNS probe succeeded after {agent_errors} agent error(s))")
                 return True
         except Exception:
-            pass
+            agent_errors += 1
         time.sleep(10)
+    if probes == 0:
+        print(f"    WARNING: the DC's guest agent never answered a single DNS probe in "
+              f"{timeout}s — the DC is agent-unreachable, not merely DNS-slow")
     return False

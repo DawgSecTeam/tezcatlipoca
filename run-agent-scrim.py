@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 from utils import load_users_config
 
@@ -713,6 +714,105 @@ def pull_red_snapshot(args, tag=None):
     return False
 
 
+class RedTunnel:
+    """Reverse SSH tunnel so red01 can reach an operator-side LLM endpoint.
+
+    red01 sits on the node LAN with no tailscale, so a local endpoint is
+    unreachable from it: this ssh -N -R (run on the operator, binding on
+    red01) forwards red01's localhost:<remote_port> through the connection to
+    the endpoint. The dress rehearsal ran an event red-LLM-less because a
+    plain `ssh -R` died and nobody noticed — this one keepalives and has a
+    supervisor that restarts it until teardown."""
+
+    def __init__(self, llm_base_url, red_ip, key, user):
+        url = urlparse(llm_base_url if "//" in llm_base_url else f"http://{llm_base_url}")
+        host = url.hostname or "127.0.0.1"
+        port = url.port or (443 if url.scheme == "https" else 80)
+        if host in ("localhost", "127.0.0.1", "::1"):
+            # Base URL already names an operator-side relay — mirror that port.
+            self.remote_port, self.target = port, f"127.0.0.1:{port}"
+        else:
+            # Endpoint reachable only from the operator: bind 8180 on red01 and
+            # forward straight at it (no socat relay needed).
+            self.remote_port, self.target = 8180, f"{host}:{port}"
+        self.red_ip, self.key, self.user = red_ip, key, user
+        self.proc = None
+        self.stop = threading.Event()
+
+    def red_base_url(self):
+        return f"http://localhost:{self.remote_port}/v1"
+
+    def _spawn(self):
+        self.proc = subprocess.Popen(
+            ["ssh", "-N", "-T",
+             "-o", "ExitOnForwardFailure=yes",
+             "-o", "ServerAliveInterval=15",
+             "-o", "ServerAliveCountMax=3",
+             "-o", "StrictHostKeyChecking=no",
+             "-o", "UserKnownHostsFile=/dev/null",
+             "-o", "ConnectTimeout=15",
+             "-i", self.key,
+             "-R", f"{self.remote_port}:{self.target}",
+             f"{self.user}@{self.red_ip}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, start_new_session=True)
+
+    def start(self):
+        self._spawn()
+        threading.Thread(target=self._supervise, daemon=True).start()
+
+    def _supervise(self):
+        while not self.stop.wait(15):
+            if self.proc is None or self.proc.poll() is not None:
+                log("red LLM tunnel died — restarting")
+                self._spawn()
+
+    def shutdown(self):
+        self.stop.set()
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+
+
+def maybe_start_red_tunnel(args):
+    """auto: tunnel local (non-openrouter) endpoints; openrouter needs none."""
+    mode = getattr(args, "red_tunnel", "auto") or "auto"
+    local = "openrouter" not in args.llm_base_url
+    if mode == "off" or (mode == "auto" and not local):
+        return None
+    if mode == "on" and not local:
+        log("--red-tunnel ignored for an openrouter endpoint (red01 reaches it directly)")
+        return None
+    tunnel = RedTunnel(args.llm_base_url, args.red_ip, str(REPO / "proxmox"),
+                       os.environ.get("TF_VAR_vm_username", "sysadmin"))
+    tunnel.start()
+    log(f"red LLM tunnel up: red01 localhost:{tunnel.remote_port} -> {tunnel.target}")
+    return tunnel
+
+
+def check_red_llm(args, base_url):
+    """From-red01 LLM reachability gate.
+
+    validate-llm runs operator-side and proves nothing about what red01 can
+    reach — the dress run went red-LLM-less the whole event on exactly that
+    gap. Probes <base_url>/models from red01 itself (direct, then through the
+    engine jump host)."""
+    target, common, jump = _red_ssh_ctx(args)
+    probe = f"curl -sm 10 -o /dev/null -w '%{{http_code}}' {base_url.rstrip('/')}/models"
+    for path, extra in (("direct", []), ("engine jump", ["-o", jump] if jump else None)):
+        if extra is None:
+            continue
+        try:
+            r = subprocess.run(["ssh"] + common + extra + [target, probe],
+                               capture_output=True, text=True, timeout=45)
+            code = (r.stdout or "").strip()
+            if code == "200":
+                return True
+            log(f"red01 LLM probe ({path}) -> {code or (r.stderr or '').strip()[:80] or 'no answer'}")
+        except subprocess.TimeoutExpired:
+            log(f"red01 LLM probe ({path}) timed out")
+    return False
+
+
 def stage_red(args, comp, creds, run_dir):
     # Local endpoints (llama.cpp/qwen) are slow: tighter call timeout and no
     # JSON-retry double-call, or one decision can eat 8-16 min of a 90-min event.
@@ -749,9 +849,25 @@ def stage_red(args, comp, creds, run_dir):
     run(["python3", "-m", "badauto", "validate-llm"], cwd=BAD_AUTO, env=env, timeout=300, tail=3)
     run(["python3", "-m", "badauto", "run", "--once", "--dry-run",
          "--competition", str(comp.resolve())], cwd=BAD_AUTO, env=env, timeout=600, tail=6)
+
+    tunnel = maybe_start_red_tunnel(args)
+    if tunnel:
+        # The operator-side validate/dry-run above used the real URL on purpose;
+        # red01 itself can only dial the endpoint through the tunnel.
+        cfg["llm"]["base_url"] = tunnel.red_base_url()
+        (BAD_AUTO / "config.yaml").write_text(json.dumps(cfg, indent=2))
+        args.red_tunnel = tunnel
     log(f"deploying red01 at {args.red_ip} (storage {args.red_storage})")
     run(["python3", "-m", "badauto", "deploy", "--competition", str(comp.resolve()), "--start"],
         cwd=BAD_AUTO, env=env, timeout=1800)
+
+    red_base = cfg["llm"]["base_url"]
+    if not check_red_llm(args, red_base):
+        raise RuntimeError(
+            f"red01 cannot reach the LLM endpoint ({red_base}) — refusing to start the event "
+            f"red-LLM-less. Run a socat relay on this host and/or the reverse tunnel "
+            f"(--red-tunnel), then re-run. See docs/scrim-harness.md, 'stage_red (LLM gate)'.")
+    log(f"red01 reached the LLM at {red_base} — clear to start")
 
 
 def stage_run(args, creds, t0):
@@ -862,6 +978,10 @@ def pull_red_evidence(args):
 
 
 def stage_teardown(args, creds=None):
+    tunnel = getattr(args, "red_tunnel", None)
+    if tunnel:
+        tunnel.shutdown()
+        log("teardown: red LLM tunnel stopped")
     if creds:
         try:
             pull_red_evidence(args)
@@ -905,6 +1025,9 @@ def main():
                    help="red01 vmid when the cluster default collides (cyberfield used 999)")
     p.add_argument("--red-template", default=None,
                    help="red01 template name when it differs from the cluster default")
+    p.add_argument("--red-tunnel", choices=["auto", "on", "off"], default="auto",
+                   help="reverse-SSH tunnel so red01 can reach a local LLM endpoint "
+                        "(auto = on for non-openrouter endpoints)")
     p.add_argument("--skip-deploy", action="store_true", help="competition already at phase 7")
     p.add_argument("--from-phase", dest="resume", type=int, default=None,
                    help="resume create-competition at this phase")

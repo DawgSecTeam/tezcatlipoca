@@ -5,18 +5,23 @@ import argparse
 import importlib.util
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 
 import urllib3
 from dotenv import load_dotenv
 
+from constants import WINDOWS_ADMIN_USER
+from engine_ops import read_event_conf
 from range_ops import (
     SNAP_BASE,
     SNAP_READY,
     describe_target,
     destroy_vm_if_exists,
     enumerate_targets,
+    guest_agent_exec_root,
+    guest_agent_exec_windows,
     list_snapshots,
     proxmox_api,
     rollback_snapshot,
@@ -128,21 +133,26 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
 
 
 def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
-    """Re-run AD domain chain for affected teams (promote DC only if reset)."""
+    """Re-run AD domain chain for affected teams (promote DC only if reset).
+
+    Returns True when the boxes' domain state may be treated as settled — no
+    domain semantics at all, or the chain re-ran clean — and False when the
+    chain was supposed to run but could not. Callers must NOT re-take tz-ready
+    on False: snapshotting then would bake a broken state in as 'as delivered'."""
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
-        return
+        return True
     roles = json.loads(roles_path.read_text())
     domain_targets = [t for t in targets if roles.get(t["box_name"])]
     if not domain_targets:
-        return
+        return True
 
     box_password = state.get("box_password")
     if not box_password:
         print("  WARNING: .deploy_state.json has no box_password — cannot re-run domain "
               "configuration for the reset domain-role box(es). Rejoin by hand, or re-run "
               "create-competition.py --from-phase 6.")
-        return
+        return False
 
     teams = json.loads((comp_dir / "teams.json").read_text())
     boxes = json.loads((comp_dir / "boxes.json").read_text())
@@ -155,11 +165,84 @@ def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
             roles.get(t["box_name"]) == "dc" and t["team_key"] == team_key
             for t in domain_targets
         )
+        if dc_reset:
+            stale_marker = comp_dir / f".nakon-domain-{team_key}-adds.json"
+            if stale_marker.exists():
+                print(f"  Deleting stale ADDS marker for {team_key} — the DC was reset, so "
+                      "it must be re-promoted, not assumed promoted.")
+                stale_marker.unlink()
         driver.deploy_domain_configs(
             {team_key: teams[team_key]}, boxes, comp_dir, nakon_config_path,
             Path(ctx["ssh_key_path"]), os.environ["TF_VAR_vm_username"],
             ctx["scoring_engine_ip"], box_password, promote_dc=dc_reset,
         )
+    return True
+
+
+def mode_resync(targets, ctx, node, comp_dir, state, state_path):
+    """Engine-authoritative credential alignment — no rollback, no re-plant.
+
+    1. Pull the secrets the engine actually holds (event.conf, credlist,
+       /opt/quotient/.env) and align .deploy_state.json where they differ.
+    2. Re-set the selected boxes' passwords to the state values via the guest
+       agent, so drifted boxes come back in line without needing SSH.
+    box_password (the box login) exists nowhere on the engine — it is baked
+    into the boxes at bootstrap — so it is reported, not repaired."""
+    print("  Reading engine-authoritative secrets (event.conf, credlist, /opt/quotient/.env)...")
+    secrets = read_event_conf(ctx)
+
+    changed = []
+    for key in ("admin_password", "postgres_password", "redis_password", "inject_password"):
+        new = secrets.get(key)
+        if new and state.get(key) != new:
+            print(f"    {key}: state {'drifted' if state.get(key) else 'missing'} -> aligned with engine")
+            state[key] = new
+            changed.append(key)
+    if secrets.get("box_creds") and state.get("box_creds") != secrets["box_creds"]:
+        print("    box_creds: drifted -> aligned with engine credlist")
+        state["box_creds"] = secrets["box_creds"]
+        changed.append("box_creds")
+    for team_key, pw in (secrets.get("team_passwords") or {}).items():
+        entry = (state.get("teams") or {}).get(team_key)
+        if pw and entry and entry.get("password") != pw:
+            print(f"    {team_key} password: drifted -> aligned with engine")
+            entry["password"] = pw
+            changed.append(f"teams.{team_key}.password")
+    if not changed:
+        print("    .deploy_state.json already matches the engine.")
+    if changed:
+        tmp = state_path.with_name(state_path.name + ".tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        os.replace(tmp, state_path)
+        os.chmod(state_path, 0o600)
+
+    box_password = state.get("box_password")
+    if not box_password:
+        raise SystemExit(
+            "  ERROR: .deploy_state.json has no box_password — cannot re-set box logins. "
+            "Only the state alignment above was applied.")
+    box_username, _credlist = load_users_config(comp_dir)
+    for t in targets:
+        try:
+            if box_platform(t["box"]) == "windows":
+                rc, out, err = guest_agent_exec_windows(
+                    node, t["vmid"],
+                    f"net user {WINDOWS_ADMIN_USER} '{box_password}'", timeout=120)
+            else:
+                script = f"echo {shlex.quote(f'{box_username}:{box_password}')} | chpasswd"
+                for user, pw in (state.get("box_creds") or {}).items():
+                    script += f"; echo {shlex.quote(f'{user}:{pw}')} | chpasswd"
+                rc, out, err = guest_agent_exec_root(node, t["vmid"], script, timeout=120)
+            if rc == 0:
+                print(f"    {describe_target(t)}: passwords re-set (via guest agent)")
+            else:
+                print(f"    WARNING: {describe_target(t)}: guest agent rc={rc}: {(err or '').strip()[:120]}")
+        except Exception as e:
+            print(f"    WARNING: {describe_target(t)}: password re-set failed ({e})")
+
+    print("  NOTE: box_password itself cannot be recovered from the engine — if the box "
+          "login (as opposed to credlist accounts) is what drifted, reset it by hand.")
+    return targets
 
 
 def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_path,
@@ -183,11 +266,20 @@ def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_pa
     if reconfigure:
         driver.wait_for_cloud_init(ctx, restored, timeout=240)
         run_nakon_and_harden(restored, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
-        rerun_domain_configs(restored, ctx, comp_dir, state, nakon_config_path)
-        print(f"  Re-taking '{SNAP_READY}' for the recovered boxes...")
-        for t in restored:
-            take_snapshot(node, t["vmid"], SNAP_READY,
-                          description="tezcatlipoca: as delivered (re-taken by redeploy)")
+        try:
+            domain_settled = rerun_domain_configs(restored, ctx, comp_dir, state, nakon_config_path)
+        except Exception:
+            print(f"  tz-ready NOT re-taken — the domain chain failed above, so the boxes are "
+                  f"not in an 'as delivered' state.")
+            raise
+        if domain_settled:
+            print(f"  Re-taking '{SNAP_READY}' for the recovered boxes...")
+            for t in restored:
+                take_snapshot(node, t["vmid"], SNAP_READY,
+                              description="tezcatlipoca: as delivered (re-taken by redeploy)")
+        else:
+            print(f"  tz-ready NOT re-taken — domain configuration could not run (see above); "
+                  f"snapshotting now would bake a broken state in as 'as delivered'.")
 
     return restored
 
@@ -293,12 +385,20 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
                       description="tezcatlipoca: rebuilt from template, pre-Nakon")
 
     run_nakon_and_harden(rebuilt, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
-    rerun_domain_configs(rebuilt, ctx, comp_dir, state, nakon_config_path)
+    try:
+        domain_settled = rerun_domain_configs(rebuilt, ctx, comp_dir, state, nakon_config_path)
+    except Exception:
+        print(f"  tz-ready NOT re-taken — the domain chain failed above, so the boxes are "
+              f"not in an 'as delivered' state.")
+        raise
 
-    print(f"  Snapshotting rebuilt boxes as '{SNAP_READY}'...")
-    for t in rebuilt:
-        take_snapshot(node, t["vmid"], SNAP_READY,
-                      description="tezcatlipoca: as delivered (rebuilt by redeploy)")
+    if domain_settled:
+        print(f"  Snapshotting rebuilt boxes as '{SNAP_READY}'...")
+        for t in rebuilt:
+            take_snapshot(node, t["vmid"], SNAP_READY,
+                          description="tezcatlipoca: as delivered (rebuilt by redeploy)")
+    else:
+        print(f"  tz-ready NOT re-taken — domain configuration could not run (see above).")
     return rebuilt
 
 
@@ -339,8 +439,11 @@ def main():
     parser.add_argument("--platform", choices=["linux", "windows"],
                         help="Only boxes whose template is this platform.")
     parser.add_argument("--mode", default="rollback-ready",
-                        choices=["rollback-ready", "rollback-base", "reconfigure", "rebuild"],
-                        help="What to do to the selected boxes (default: rollback-ready).")
+                        choices=["rollback-ready", "rollback-base", "reconfigure", "rebuild",
+                                 "resync"],
+                        help="What to do to the selected boxes (default: rollback-ready). "
+                             "resync = align credentials with the engine and re-set box "
+                             "passwords via the guest agent, touching nothing else.")
     parser.add_argument("--dry-run", action="store_true", dest="dry_run",
                         help="Print the resolved targets and their snapshots, then exit.")
     parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
@@ -407,7 +510,7 @@ def main():
             raise SystemExit(1)
 
     if not args.yes:
-        if args.mode != "reconfigure":
+        if args.mode not in ("reconfigure", "resync"):
             print("  This DISCARDS everything the defending team(s) have done to these boxes.")
         answer = input(f"  Redeploy {len(targets)} box(es) in mode '{args.mode}'? [y/N] ").strip()
         if answer.lower() not in ("y", "yes"):
@@ -442,6 +545,8 @@ def main():
                              nakon_config_path, nakon_bundle, reconfigure=True)
     elif args.mode == "reconfigure":
         done = mode_reconfigure(targets, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
+    elif args.mode == "resync":
+        done = mode_resync(targets, ctx, node, comp_dir, state, state_path)
     else:
         done = mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_bundle)
 

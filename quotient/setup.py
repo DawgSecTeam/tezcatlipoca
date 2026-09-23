@@ -160,11 +160,34 @@ def unpause_engine(host: str, ctx: dict) -> None:
     print(f"[quotient] engine unpaused → {r.status_code}")
 
 
-def create_injects(host: str, admin_password: str, injects: list) -> None:
-    """Create injects via Quotient API (multipart POST). Skips titles already present."""
+def engine_paused(host: str, ctx: dict):
+    """The engine's actual pause state, or None when the endpoint won't say.
+
+    Lets a resume ask the engine instead of blindly re-POSTing after a crash
+    in the window between the unpause POST and the state-flag save."""
+    host = _normalize_host(host)
+    try:
+        session = _admin_session(host, ctx)
+        r = session.get(f"{host}/api/engine/pause", timeout=10)
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict) and "paused" in data:
+            return bool(data["paused"])
+        return None
+    except Exception:
+        return None
+
+
+def create_injects(host: str, admin_password: str, injects: list) -> tuple:
+    """Create injects via Quotient API (multipart POST). Skips titles already present.
+
+    Returns (created_count, failed_titles); a resume re-runs safely (dedup on
+    titles), so the deploy only records injects_created when nothing failed."""
 
     if not injects:
-        return
+        return 0, []
 
     host = _normalize_host(host)
     session = requests.Session()
@@ -180,6 +203,8 @@ def create_injects(host: str, admin_password: str, injects: list) -> None:
         print(f"[quotient] WARNING: couldn't fetch existing injects ({e}) — proceeding without "
               "dedup, a resume may create duplicates")
 
+    created = 0
+    failed = []
     for inj in injects:
         if inj["title"] in existing_titles:
             print(f"[quotient] inject '{inj['title']}' already exists — skipping")
@@ -204,5 +229,8 @@ def create_injects(host: str, admin_password: str, injects: list) -> None:
                 fh.close()
         if r.status_code >= 400:
             print(f"[quotient] WARNING: inject '{inj['title']}' failed → {r.status_code} {r.text[:200]}")
+            failed.append(inj["title"])
         else:
             print(f"[quotient] created inject '{inj['title']}' → {r.status_code}")
+            created += 1
+    return created, failed

@@ -171,6 +171,19 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   endpoints the generated bad-auto config uses `timeout: 120` and
   `json_retries: 0` (cloud keeps 240/1): one decision that can cost 8–16 min
   turned the cyberfield red into ~2 actions/hour.
+- `stage_red` (LLM gate) — `validate-llm` + the dry-run run on the OPERATOR
+  and prove nothing about what red01 can reach: the dress rehearsal ran a
+  whole event red-LLM-less because only the operator side was ever tested,
+  and the endpoint (tailnet llama box) has no route from red01's LAN. Two
+  closures: `--red-tunnel` (default `auto` = on for non-openrouter endpoints)
+  runs a reverse SSH forward — red01 dials `localhost:8180`, the tunnel
+  carries it to the endpoint, `ServerAliveInterval` + a 15 s supervisor
+  restart it if it dies (a dead plain `ssh -R` is how the dress lost red
+  mid-event) — and red01's config gets the localhost form of the URL only
+  after the operator-side validate/dry-run used the real one. Then,
+  post-deploy, `check_red_llm` curls `/models` FROM red01 (direct, then
+  through the engine jump) and a non-200 aborts before T0: starting the event
+  red-LLM-less is the one failure this harness refuses to repeat.
 - `stage_red` (state dir) — operator-side bad-auto runs (validate-llm /
   dry-run / deploy bookkeeping) need a writable state dir: the VM's own
   config hardcodes `/var/lib/bad-auto` inside red01, so the `BAuto_STATE_DIR`

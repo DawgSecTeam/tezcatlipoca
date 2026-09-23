@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 
@@ -291,23 +292,32 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
 
 
 def setup_ubuntu_auth(targets, ctx):
-    """Enable password auth + NOPASSWD sudo for box_username (nakon uses password auth + sudo)."""
+    """Enable password auth + NOPASSWD sudo for box_username (nakon uses password auth + sudo).
+
+    Raises when a box ends the pass without working auth: nakon authenticates
+    with these credentials, so marching into the plant against a box that
+    provably can't SSH just defers the failure into noisy per-config timeouts."""
 
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]
     box_username = ctx.get("box_username", "ubuntu")
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", box_username):
+        raise RuntimeError(
+            f"box_username {box_username!r} is not a safe sudoers filename/remote-shell token"
+        )
     proxy = (
         f"ssh -i {key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"-W %h:%p {scoring_user}@{scoring_ip}"
     )
 
     print(f"  Enabling password auth + NOPASSWD sudo for {box_username} on team boxes...")
+    sudoers_line = shlex.quote(f"{box_username} ALL=(ALL) NOPASSWD:ALL")
     auth_cmd = (
         "sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config; "
         "sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config; "
         "sudo systemctl restart sshd 2>/dev/null || true; "
-        f"echo '{box_username} ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/{box_username}; "
+        f"echo {sudoers_line} | sudo tee /etc/sudoers.d/{box_username}; "
         f"sudo chmod 440 /etc/sudoers.d/{box_username}"
     )
 
@@ -342,7 +352,12 @@ def setup_ubuntu_auth(targets, ctx):
                         if rc == 0:
                             print(f"    Auth configured on {ip} (via guest agent)")
                         else:
-                            print(f"    WARNING: Auth setup still failing on {ip} via guest agent: "
-                                  f"rc={rc} {err.strip()[:200]} — proceeding anyway")
+                            raise RuntimeError(
+                                f"auth setup failed on {ip} via guest agent too: "
+                                f"rc={rc} {err.strip()[:200]}")
+                    except RuntimeError:
+                        raise
                     except Exception as e:
-                        print(f"    WARNING: Auth guest-agent fallback failed for {ip} (vmid {vmid}): {e} — proceeding anyway")
+                        raise RuntimeError(
+                            f"auth setup failed on {ip}: SSH dead after 8 attempts and the "
+                            f"guest-agent fallback raised ({e})") from e

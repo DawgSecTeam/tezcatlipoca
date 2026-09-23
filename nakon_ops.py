@@ -2,6 +2,7 @@
 
 import json
 import math
+import os
 import shlex
 import socket
 import subprocess
@@ -225,13 +226,24 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
 
 def _run_single_nakon_config(machine, configurations, key, scoring_user, scoring_ip, comp_dir,
                               tag, timeout=1800, strict=True):
-    """Deploy one machine with overridden configs in isolation (reboot-safe)."""
+    """Deploy one machine with overridden configs in isolation (reboot-safe).
+
+    The config file doubles as a done-marker (deploy_domain_configs skips ADDS
+    promotion when .nakon-domain-<team>-adds.json exists), so it is written as
+    .pending and renamed into place only after the run succeeds — a failed
+    promotion must not read as done on the next resume."""
     tmp_machine = {**machine, "configurations": configurations}
-    tmp_config_path = comp_dir / f".nakon-domain-{tag}.json"
-    tmp_config_path.write_text(json.dumps({"machines": [tmp_machine]}, indent=2))
-    bundle = build_nakon_bundle(tmp_config_path)
-    run_nakon(key, scoring_user, scoring_ip, bundle, tmp_config_path,
-              only=[machine["name"]], timeout=timeout, strict=strict)
+    final_path = comp_dir / f".nakon-domain-{tag}.json"
+    pending_path = comp_dir / f".nakon-domain-{tag}.pending.json"
+    pending_path.write_text(json.dumps({"machines": [tmp_machine]}, indent=2))
+    bundle = build_nakon_bundle(pending_path)
+    try:
+        run_nakon(key, scoring_user, scoring_ip, bundle, pending_path,
+                  only=[machine["name"]], timeout=timeout, strict=strict)
+    except BaseException:
+        pending_path.unlink(missing_ok=True)
+        raise
+    os.replace(pending_path, final_path)
 
 
 def is_windows_template(template_name):

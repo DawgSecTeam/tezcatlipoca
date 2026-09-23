@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import urllib3
@@ -36,8 +37,30 @@ def destroy_cloned_vms(cloned_vms_path):
 
     node = os.environ.get("TF_VAR_proxmox_node", "pve")
 
+    # Only purge vmids that still exist AND whose VM name is obviously this
+    # competition's (clone names look like '102-dc01'): the deterministic vmid
+    # scheme collides across competitions, and cloned_vms.json can outlive the
+    # range — purging bare vmids on a stale file would hit someone else's VM.
+    live = {}
+    try:
+        for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]:
+            live[int(v["vmid"])] = v.get("name") or ""
+    except Exception as e:
+        print(f"  WARNING: could not list VMs on {node} — purging without existence "
+              f"checks: {e}")
+        live = None
+
     print(f"  Destroying {len(cloned_vms)} cloned VM(s) before terraform destroy...")
     for vm_key, vmid in cloned_vms.items():
+        if live is not None:
+            name = live.get(int(vmid))
+            if name is None:
+                print(f"    Skipping {vm_key} (vmid {vmid}) — VM does not exist on {node}")
+                continue
+            if vm_key not in name and name not in vm_key:
+                print(f"    Skipping {vm_key} (vmid {vmid}) — VM exists as '{name}', which "
+                      f"doesn't match this competition's clone name")
+                continue
         try:
             upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
             wait_for_proxmox_task(node, upid)
@@ -136,6 +159,14 @@ def main():
     else:
         sys.exit(f"ERROR: terraform destroy failed twice (rc={proc.returncode}); "
                  "inspect `terraform state list` under terraform/ and tear down the rest by hand.")
+
+    # Archive the clone map on success: a surviving cloned_vms.json next to a
+    # destroyed range is a loaded gun for the vmid-collision guard above.
+    if cloned_vms_path.exists():
+        archived = cloned_vms_path.with_name(
+            cloned_vms_path.name + f".destroyed-{time.strftime('%Y%m%d-%H%M%S')}")
+        cloned_vms_path.rename(archived)
+        print(f"  Clone map archived as {archived.name}")
 
     print(f"\nInfrastructure for '{competition}' destroyed.")
     print(f"Competition files preserved at competitions/{competition}/")
