@@ -25,15 +25,17 @@ def load_previous_competitions():
 
 
 def random_password():
-    """14 chars, guaranteed upper+lower+digit+symbol, unquoted-safe charset.
+    """14 chars, guaranteed upper+lower+digit+symbol, cmd/PS- and URL-safe charset.
 
     Windows guest boxes set this via `net user` and AD enforces complexity:
     the old letters+digits pool produced digit-free passwords ~13% of runs
     (scrim-extreme-2026-09-20) and the policy rejection killed every Windows
     login downstream. Characters are cmd/PS-quoting safe (no &|<>^%$`"' or
-    whitespace)."""
+    whitespace) and URL-grammar free (no #/?@): these secrets land in
+    postgres DSNs in /opt/quotient/.env, and `#` silently truncates the DSN
+    at the password (scrim-extreme-cyberfield-2026-09-22 crash loop)."""
     pools = [string.ascii_uppercase, string.ascii_lowercase, string.digits,
-             "!@#*_-+=?"]
+             "!*_-+="]
     while True:
         pw = "".join(random.choices("".join(pools) + "".join(pools), k=14))
         if all(any(c in p for c in pw) for p in pools):

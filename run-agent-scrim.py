@@ -717,8 +717,9 @@ def stage_red(args, comp, creds, run_dir):
         "limits": {"nmap_timing": "T3", "nmap_top_ports": 200,
                    "max_retries_per_service": 4, "spray_attempts_per_target": 24,
                    "action_timeout": 120, "scan_timeout": 900},
-        "deploy": {"red_ip": "10.0.0.244", "red_gw": "10.0.0.1", "red_storage": "hdrives-zfs",
-                   "red_vmid": 999, "template": "base-ubuntu24.04-fix"},  # cyberfield
+        "deploy": {"red_ip": args.red_ip, "red_gw": args.red_gw, "red_storage": args.red_storage,
+                   **({"red_vmid": args.red_vmid} if args.red_vmid else {}),
+                   **({"template": args.red_template} if args.red_template else {})},
     }
     (BAD_AUTO / "config.yaml").write_text(json.dumps(cfg, indent=2))
     env = {**os.environ, "BAuto_LLM_API_KEY": api_key(local="openrouter" not in args.llm_base_url),
@@ -726,7 +727,7 @@ def stage_red(args, comp, creds, run_dir):
     run(["python3", "-m", "badauto", "validate-llm"], cwd=BAD_AUTO, env=env, timeout=300, tail=3)
     run(["python3", "-m", "badauto", "run", "--once", "--dry-run",
          "--competition", str(comp.resolve())], cwd=BAD_AUTO, env=env, timeout=600, tail=6)
-    log("deploying red01 (cloud LLM goes direct from red01 — no tunnel needed)")
+    log(f"deploying red01 at {args.red_ip} (storage {args.red_storage})")
     run(["python3", "-m", "badauto", "deploy", "--competition", str(comp.resolve()), "--start"],
         cwd=BAD_AUTO, env=env, timeout=1800)
 
@@ -875,6 +876,13 @@ def main():
                    help="separate LLM base URL for team2's blue (default: same as --blue-base-url)")
     p.add_argument("--blue2-model", default=None,
                    help="model for team2's blue when --blue2-base-url is set")
+    p.add_argument("--red-ip", default="10.0.0.198", help="red01 IP on the cluster (realm default)")
+    p.add_argument("--red-gw", default="10.0.0.1", help="red01 gateway")
+    p.add_argument("--red-storage", default="hdd", help="storage pool red01 clones from")
+    p.add_argument("--red-vmid", type=int, default=None,
+                   help="red01 vmid when the cluster default collides (cyberfield used 999)")
+    p.add_argument("--red-template", default=None,
+                   help="red01 template name when it differs from the cluster default")
     p.add_argument("--skip-deploy", action="store_true", help="competition already at phase 7")
     p.add_argument("--from-phase", dest="resume", type=int, default=None,
                    help="resume create-competition at this phase")

@@ -39,7 +39,8 @@ from engine_ops import bootstrap_scoring_engine, ensure_nat_forwarding, push_eve
 from hardening_ops import fix_dns_on_boxes, fix_services_on_boxes, setup_ubuntu_auth
 from nakon_ops import build_nakon_bundle, generate_nakon_config, run_nakon
 from quotient.setup import create_injects, seed_teams, unpause_engine
-from range_ops import destroy_vm_if_exists, enumerate_targets, take_snapshot, vm_id_for
+from range_ops import (destroy_vm_if_exists, enumerate_targets, list_snapshots,
+                       rollback_snapshot, take_snapshot, vm_id_for)
 from ssh_ops import read_terraform_ctx, wait_for_boxes_ssh, wait_for_cloud_init, wait_for_http, wait_for_ssh
 from utils import compfile_flag, load_compfile, load_users_config
 from windows_ops import bootstrap_windows_box, is_windows_template
@@ -277,6 +278,21 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
 
         if from_phase <= 5:
             current_phase = 5
+            # A --from-phase 5 repair resume lands on boxes the previous attempt may
+            # have half-planted, and the plant is NOT idempotent over a planted box
+            # (scrim-extreme-cyberfield-2026-09-22 attempt 3 burned 11 configs this
+            # way). tz-base only exists once phase 5 got past its snapshot step, so
+            # its presence marks an earlier attempt — restore it before re-planting.
+            if from_phase == 5:
+                planted = [t for t in team1_targets
+                           if SNAP_BASE in list_snapshots(node, t["vmid"])]
+                for t in planted:
+                    print(f"  Phase-5 re-entry: rolling {t['vm_name']} back to "
+                          f"'{SNAP_BASE}' before re-planting...")
+                    rollback_snapshot(node, t["vmid"], SNAP_BASE)
+                if planted:
+                    wait_for_boxes_ssh(ctx, planted, timeout=300)
+
             print("[5/7] Fixing DNS on team1 boxes, then running Nakon deployment...")
             fix_dns_on_boxes([t for t in team1_targets if not is_windows_template(t["box"]["template"])], ctx)
 
