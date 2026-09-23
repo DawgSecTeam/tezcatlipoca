@@ -3,8 +3,10 @@
 import json
 import math
 import shlex
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from constants import (
@@ -134,6 +136,37 @@ def build_nakon_bundle(config_path):
     return NAKON_DIR / info["path"]
 
 
+def _deploy_owner_check(ssh_base, action="deploy"):
+    """Cross-host collision guard: tezcatlipoca's engine staging dir is a single
+    shared slot ('rm -rf /opt/nakon/*' per push), so two operators on two hosts
+    silently wipe each other's bundles mid-plant (scrim-extreme-2026-09-20: a
+    second operator at 10.0.0.159 ran a full deploy against the same engine;
+    their phase-7 pushes deleted our phase-5 plan archives while planting).
+    A fresh marker from a DIFFERENT hostname means stand down and escalate."""
+    import getpass
+    me = f"{getpass.getuser()}@{socket.gethostname()}"
+    try:
+        out = subprocess.run(
+            ssh_base + ["cat /opt/nakon/.deploy-owner 2>/dev/null || true"],
+            capture_output=True, text=True, timeout=30).stdout.strip()
+    except Exception:
+        out = ""
+    if out:
+        try:
+            holder, ts = out.split()
+            if holder != me and time.time() - float(ts) < 45 * 60:
+                raise SystemExit(
+                    f"  ERROR: the scoring engine's staging dir is claimed by '{holder}' "
+                    f"({int((time.time()-float(ts))/60)} min ago) — refusing to {action} "
+                    "concurrently from a different host. Coordinate with that operator "
+                    "(ssh engine: sudo cat /opt/nakon/.deploy-owner; sudo rm the marker "
+                    "only once they confirm they are done)."
+                )
+        except ValueError:
+            pass
+    return me
+
+
 def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, timeout=2400,
               strict=True):
     """Push the bundle to the scoring engine and run `nakon deploy` there."""
@@ -143,6 +176,8 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
         "-o", "UserKnownHostsFile=/dev/null",
         f"{scoring_user}@{scoring_ip}",
     ]
+
+    me = _deploy_owner_check(ssh_base, action=f"run Nakon config {Path(config_path).name}")
 
     subprocess.run(ssh_base + ["rm -rf /tmp/nakon && mkdir -p /tmp/nakon"],
                    check=True, timeout=60)
@@ -171,6 +206,7 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
         subprocess.run(
             ssh_base + [
                 "sudo mkdir -p /opt/nakon && sudo rm -rf /opt/nakon/* && "
+                f"echo '{me} {int(time.time())}' | sudo tee /opt/nakon/.deploy-owner > /dev/null && "
                 "sudo cp -r /tmp/nakon/. /opt/nakon/ && "
                 "sudo pip3 install --break-system-packages paramiko 2>/dev/null; "
                 "cd /opt/nakon && sudo python3 -m nakon deploy "

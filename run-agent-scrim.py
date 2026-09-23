@@ -73,9 +73,15 @@ def call(path, cookie=None):
 def jar_cookie():
     try:
         for line in reversed(open(jar).read().splitlines()):
-            if line and not line.startswith("#"):
-                name, value = line.split()[-2:]
-                return f"{name}={value}"
+            # HttpOnly cookies land in the jar as "#HttpOnly_..." — that's not a
+            # comment; only "# "-prefixed lines are. Current Quotient sets HttpOnly.
+            if line.startswith("#HttpOnly_"):
+                line = line[len("#HttpOnly_"):]
+            elif not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 7:
+                return f"{parts[-2]}={parts[-1]}"
     except OSError:
         pass
     return None
@@ -531,13 +537,22 @@ NOTEBOOK_TEMPLATE = """# NOTEBOOK — team {n} working memory (update FIRST ever
 
 
 def _opencode_run(args, prompt, wd, env):
-    """One blue cycle, launched in a hardened context (no stdin, own process group, per-team HOME/XDG)."""
+    """One blue cycle, launched in a hardened context (no stdin, own process group, per-team HOME/XDG).
+
+    Spawned via `bash -c 'exec opencode …'` with the prompt in CYCLE_PROMPT: opencode's
+    server dies silently right after selecting the LLM runtime when the CLI is exec'd
+    directly from python (works only under a shell parent) — via bash it is stable.
+    """
     n_team = 2 if wd.name.endswith("team2") else 1
     base_url, blue_model = blue_ep(args, n_team)
-    return subprocess.run(["opencode", "run", "-m",
-                           f"{provider_key(base_url)}/{blue_model}", "--auto",
-                           prompt],
-                          cwd=wd, env=env, capture_output=True, text=True,
+    # subprocess cwd= does not update $PWD and opencode resolves its project
+    # (and thus the per-workdir opencode.jsonc defining the scrim-llm provider)
+    # from $PWD — see docs/scrim-harness.md for both launch-context lessons.
+    child_env = {**env, "PWD": str(wd), "CYCLE_PROMPT": prompt}
+    return subprocess.run(["bash", "-c",
+                           "exec opencode run -m "
+                           f"{provider_key(base_url)}/{blue_model} --auto \"$CYCLE_PROMPT\""],
+                          cwd=wd, env=child_env, capture_output=True, text=True,
                           stdin=subprocess.DEVNULL, start_new_session=True,
                           timeout=CYCLE_TIMEOUT)
 
@@ -702,7 +717,8 @@ def stage_red(args, comp, creds, run_dir):
         "limits": {"nmap_timing": "T3", "nmap_top_ports": 200,
                    "max_retries_per_service": 4, "spray_attempts_per_target": 24,
                    "action_timeout": 120, "scan_timeout": 900},
-        "deploy": {"red_ip": "10.0.0.198", "red_gw": "10.0.0.1", "red_storage": "hdd"},
+        "deploy": {"red_ip": "10.0.0.244", "red_gw": "10.0.0.1", "red_storage": "hdrives-zfs",
+                   "red_vmid": 999, "template": "base-ubuntu24.04-fix"},  # cyberfield
     }
     (BAD_AUTO / "config.yaml").write_text(json.dumps(cfg, indent=2))
     env = {**os.environ, "BAuto_LLM_API_KEY": api_key(local="openrouter" not in args.llm_base_url),
