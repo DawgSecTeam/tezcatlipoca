@@ -323,11 +323,23 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             # tz-base snapshot) also means every later rollback restores a fresh
             # index, ending the class instead of re-arming it.
             print("  Refreshing apt indexes on team1 Linux boxes (plant prerequisite)...")
+            # apt-daily/unattended-upgrades grabs the lists lock right after boot and
+            # an apt-get update then fails rc=100 in a second (resume-final3: nginx
+            # planted against a stale index). Preempt the timers and wait the locks
+            # out before updating.
+            apt_refresh = (
+                "systemctl stop apt-daily.timer apt-daily-upgrade.timer apt-daily "
+                "apt-daily-upgrade 2>/dev/null; "
+                "for i in $(seq 1 60); do fuser /var/lib/dpkg/lock-frontend "
+                "/var/lib/apt/lists/lock >/dev/null 2>&1 || break; sleep 5; done; "
+                "apt-get update -qq; echo APT_REFRESH_RC=$?"
+            )
             for t in [t for t in team1_targets if not is_windows_template(t["box"]["template"])]:
-                r = ssh_via_gateway(ctx, t["ip"], "apt-get update -qq", timeout=180,
+                r = ssh_via_gateway(ctx, t["ip"], apt_refresh, timeout=600,
                                     user=ctx.get("box_username", "ubuntu"))
-                if r.returncode != 0:
-                    print(f"    WARNING: apt-get update on {t['ip']} rc={r.returncode} "
+                if "APT_REFRESH_RC=0" not in (r.stdout or ""):
+                    print(f"    WARNING: apt-get update on {t['ip']} did not complete: "
+                          f"{(r.stdout or '').strip()[-60:]!r} "
                           f"(continuing — the plant will surface real index problems)")
 
             print(f"  Snapshotting team1 boxes as '{SNAP_BASE}' (pre-Nakon restore point)...")
