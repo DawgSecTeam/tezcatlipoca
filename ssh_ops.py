@@ -17,11 +17,15 @@ def _engine_opts(known_hosts=None):
     """SSH -o options that authenticate the scoring engine: TOFU via a persistent known_hosts.
 
     accept-new pins the key on first connect and rejects a *changed* key afterwards (MITM
-    protection); the residual exposure is the very first connection only."""
+    protection); the residual exposure is the very first connection only. The keepalives
+    matter for long quiet steps (a plant can hold the channel idle well past NAT conntrack
+    timeouts — without them the operator-side ssh dies unnoticed and the driver blocks on
+    a dead read while the remote side finishes alone)."""
     kh = known_hosts or DEFAULT_KNOWN_HOSTS
     Path(kh).parent.mkdir(parents=True, exist_ok=True)
     return ["-o", f"UserKnownHostsFile={kh}", "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ConnectTimeout=10"]
+            "-o", "ConnectTimeout=10",
+            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=6"]
 
 
 def engine_ssh_opts(ctx):
@@ -120,10 +124,12 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
     """Poll every target's reachability through the gateway; raises only if all boxes fail."""
     node = os.environ["TF_VAR_proxmox_node"]
     print("  Waiting for team boxes to accept SSH via gateway...")
-    deadline = time.time() + timeout
     total = 0
     unreachable = 0
     for t in targets:
+        # per-target budget: a shared deadline let two slow post-rollback Windows
+        # boots burn the whole wait and starve the (healthy) Linux probes
+        deadline = time.time() + timeout
         total += 1
         ip = t["ip"]
         windows = is_windows_template(t["box"]["template"])
