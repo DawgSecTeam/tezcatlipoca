@@ -8,40 +8,69 @@ from pathlib import Path
 
 import requests
 
-from range_ops import diagnose_unreachable_box, wait_for_guest_agent
+from range_ops import diagnose_unreachable_box, terraform_dir, wait_for_guest_agent
+
+DEFAULT_KNOWN_HOSTS = str(Path.home() / ".tezcatlipoca" / "known_hosts")
+
+
+def _engine_opts(known_hosts=None):
+    """SSH -o options that authenticate the scoring engine: TOFU via a persistent known_hosts.
+
+    accept-new pins the key on first connect and rejects a *changed* key afterwards (MITM
+    protection); the residual exposure is the very first connection only."""
+    kh = known_hosts or DEFAULT_KNOWN_HOSTS
+    Path(kh).parent.mkdir(parents=True, exist_ok=True)
+    return ["-o", f"UserKnownHostsFile={kh}", "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "ConnectTimeout=10"]
+
+
+def engine_ssh_opts(ctx):
+    return _engine_opts(ctx.get("known_hosts"))
+
+
+def gateway_proxy(ctx):
+    """ProxyCommand that jumps through the engine. The engine hop is host-key pinned; the inner
+    box hop stays unverified (box keys rotate on clone/rebuild/rollback) but is tunneled inside
+    the now-authenticated engine channel."""
+    opts = " ".join(engine_ssh_opts(ctx))
+    return f"ssh -i {ctx['ssh_key_path']} {opts} -W %h:%p {ctx['vm_username']}@{ctx['scoring_engine_ip']}"
+
+
+def forget_engine_host_key(ip, known_hosts=None):
+    """Drop any pinned key for the engine IP so a freshly-rebuilt engine re-pins cleanly."""
+    kh = known_hosts or DEFAULT_KNOWN_HOSTS
+    if Path(kh).exists():
+        subprocess.run(["ssh-keygen", "-R", ip, "-f", kh], capture_output=True, text=True)
 
 
 def is_windows_template(template_name):
     return "win" in template_name.lower()
 
 
-def read_terraform_ctx():
+def read_terraform_ctx(comp_dir=None):
+    """Read agent_context from `terraform output -json`. With comp_dir, read the
+    competition's own per-comp state (competitions/<id>/terraform); without it,
+    fall back to the legacy shared terraform/ dir."""
+    tf_dir = str(terraform_dir(comp_dir)) if comp_dir else "terraform"
     raw = subprocess.run(
-        ["terraform", "output", "-json"], cwd="terraform", capture_output=True, text=True, check=True
+        ["terraform", "output", "-json"], cwd=tf_dir, capture_output=True, text=True, check=True
     ).stdout
     ctx = json.loads(json.loads(raw)["agent_context"]["value"])
     key_path = ctx["ssh_key_path"]
     if not os.path.isabs(key_path):
-        ctx = {**ctx, "ssh_key_path": str((Path("terraform") / key_path).resolve())}
+        ctx = {**ctx, "ssh_key_path": str((Path(tf_dir) / key_path).resolve())}
     return ctx
 
 
 def ssh_via_gateway(ctx, target_ip, cmd, timeout=60, user="ubuntu"):
     """SSH to a target box through the engine gateway (ProxyCommand -W)."""
-    key = ctx["ssh_key_path"]
-    scoring_ip = ctx["scoring_engine_ip"]
-    scoring_user = ctx["vm_username"]
-    proxy = (
-        f"ssh -i {key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-        f"-W %h:%p {scoring_user}@{scoring_ip}"
-    )
     return subprocess.run(
         [
-            "ssh", "-i", key,
+            "ssh", "-i", ctx["ssh_key_path"],
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ConnectTimeout=10",
-            "-o", f"ProxyCommand={proxy}",
+            "-o", f"ProxyCommand={gateway_proxy(ctx)}",
             f"{user}@{target_ip}", cmd,
         ],
         capture_output=True, text=True, timeout=timeout,
@@ -50,17 +79,9 @@ def ssh_via_gateway(ctx, target_ip, cmd, timeout=60, user="ubuntu"):
 
 def ssh_on_gateway(ctx, cmd, timeout=30):
     """Run a command directly on the scoring engine gateway."""
-    key = ctx["ssh_key_path"]
-    scoring_ip = ctx["scoring_engine_ip"]
-    scoring_user = ctx["vm_username"]
     return subprocess.run(
-        [
-            "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=10",
-            f"{scoring_user}@{scoring_ip}", cmd,
-        ],
+        ["ssh", "-i", ctx["ssh_key_path"], *engine_ssh_opts(ctx),
+         f"{ctx['vm_username']}@{ctx['scoring_engine_ip']}", cmd],
         capture_output=True, text=True, timeout=timeout,
     )
 
@@ -80,10 +101,7 @@ def wait_for_ssh(key, user, host, timeout=300):
         attempt += 1
         try:
             r = subprocess.run(
-                ["ssh", "-i", key,
-                 "-o", "StrictHostKeyChecking=no",
-                 "-o", "UserKnownHostsFile=/dev/null",
-                 "-o", "ConnectTimeout=10",
+                ["ssh", "-i", key, *_engine_opts(),
                  "-o", "BatchMode=yes",
                  f"{user}@{host}", "true"],
                 capture_output=True, text=True, timeout=20,

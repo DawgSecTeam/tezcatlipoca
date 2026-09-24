@@ -6,6 +6,7 @@ import os
 from constants import WINDOWS_ADMIN_USER
 from nakon_ops import _run_single_nakon_config
 from range_ops import (
+    box_index,
     guest_agent_exec_root,
     guest_agent_exec_windows,
     vm_id_for,
@@ -67,7 +68,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
             print(f"  WARNING: {team_key}: machine {dc_machine_name} not in nakon config — "
                   f"skipping domain setup for this team")
             continue
-        dc_vmid = vm_id_for(identifier, boxes.index(dc_box))
+        dc_vmid = vm_id_for(identifier, box_index(boxes, dc_box["name"]))
         dc_ip = dc_machine["ip"]
 
         if not promote_dc:
@@ -121,7 +122,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                 print(f"  WARNING: {team_key}: machine {member_machine_name} not in nakon "
                       f"config — skipping")
                 continue
-            member_vmid = vm_id_for(identifier, boxes.index(member_box))
+            member_vmid = vm_id_for(identifier, box_index(boxes, member_box["name"]))
             member_ip = member_machine["ip"]
 
             if is_windows_template(member_box["template"]):

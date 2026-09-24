@@ -73,3 +73,9 @@ variable "template_vm_id" {
   description = "VM ID of the base template the scoring engine is cloned from"
   type        = number
 }
+
+variable "scoring_vm_id" {
+  description = "VMID for THIS competition's scoring engine. Per-competition (default 1000) so multiple ranges can be deployed concurrently on one Proxmox node without their engines colliding."
+  type        = number
+  default     = 1000
+}

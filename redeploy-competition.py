@@ -14,15 +14,16 @@ from dotenv import load_dotenv
 
 from constants import WINDOWS_ADMIN_USER
 from engine_ops import read_event_conf
+from nakon_ops import acquire_engine_lock
 from range_ops import (
     SNAP_BASE,
     SNAP_READY,
     describe_target,
     destroy_vm_if_exists,
-    enumerate_targets,
     guest_agent_exec_root,
     guest_agent_exec_windows,
     list_snapshots,
+    load_targets,
     proxmox_api,
     rollback_snapshot,
     snapshot_support_hint,
@@ -91,9 +92,9 @@ def box_platform(box):
     return driver.os_to_platform(box.get("template", ""))
 
 
-def select_targets(teams, boxes, args):
+def select_targets(comp_dir, teams, boxes, args):
     """Full target list, narrowed by whichever filters were given (AND-combined)."""
-    targets = enumerate_targets(teams, boxes)
+    targets = load_targets(comp_dir, teams, boxes)
 
     if args.teams:
         keep = set(parse_team_selector(args.teams, teams))
@@ -123,11 +124,21 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
 
     machines = [t["machine"] for t in targets]
     print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
-    driver.run_nakon(
+    # strict=False, mirroring deploy.py's phase-6 stance: these re-plants hit live
+    # boxes mid-event, and one flaky/broken pin must not abort a repair sweep.
+    failed = driver.run_nakon(
         key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
         only=machines,
         timeout=max(2400, driver.PER_MACHINE_NAKON_BUDGET * len(machines)),
+        strict=False,
     )
+    state["nakon_failed_steps"] = failed[:20]
+    state_path = comp_dir / ".deploy_state.json"
+    if state_path.exists():
+        tmp = state_path.with_name(state_path.name + ".tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        os.replace(tmp, state_path)
+        os.chmod(state_path, 0o600)
 
     driver.fix_services_on_boxes(comp_dir, targets, ctx, box_creds=state.get("box_creds"))
 
@@ -480,7 +491,7 @@ def main():
     boxes = json.loads(boxes_path.read_text())
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
 
-    targets = select_targets(teams, boxes, args)
+    targets = select_targets(comp_dir, teams, boxes, args)
     if not targets:
         raise SystemExit("  No boxes matched the given filters — nothing to do.")
 
@@ -519,7 +530,8 @@ def main():
             print("  Cancelled — nothing was changed.")
             return
 
-    ctx = driver.read_terraform_ctx()
+    acquire_engine_lock(int(state.get("scoring_vm_id") or 1000))
+    ctx = driver.read_terraform_ctx(comp_dir)
 
     nakon_config_path = nakon_bundle = None
     if args.mode in ("rollback-base", "reconfigure", "rebuild"):
