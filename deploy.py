@@ -308,6 +308,20 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             print("[5/7] Fixing DNS on team1 boxes, then running Nakon deployment...")
             fix_dns_on_boxes([t for t in team1_targets if not is_windows_template(t["box"]["template"])], ctx)
 
+            # Fresh boxes' apt indexes go stale between image build and deploy
+            # (nginx 1.24.0-2ubuntu7.17 404'd against the rotated security mirror),
+            # and nakon's install_package doesn't run apt-get update first — so the
+            # plant must start against a fresh index. Doing it HERE (before the
+            # tz-base snapshot) also means every later rollback restores a fresh
+            # index, ending the class instead of re-arming it.
+            print("  Refreshing apt indexes on team1 Linux boxes (plant prerequisite)...")
+            for t in [t for t in team1_targets if not is_windows_template(t["box"]["template"])]:
+                r = ssh_via_gateway(ctx, t["ip"], "apt-get update -qq", timeout=180,
+                                    user=ctx.get("box_username", "ubuntu"))
+                if r.returncode != 0:
+                    print(f"    WARNING: apt-get update on {t['ip']} rc={r.returncode} "
+                          f"(continuing — the plant will surface real index problems)")
+
             print(f"  Snapshotting team1 boxes as '{SNAP_BASE}' (pre-Nakon restore point)...")
             for t in team1_targets:
                 take_snapshot(node, t["vmid"], SNAP_BASE,
