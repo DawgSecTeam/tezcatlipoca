@@ -17,6 +17,8 @@ except ImportError as e:
 
 from dotenv import load_dotenv
 
+from range_ops import guest_agent_exec_root, vm_id_for
+from ssh_ops import engine_ssh_opts, gateway_proxy
 from utils import BOX_USERNAME_DEFAULT, load_users_config
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -56,13 +58,20 @@ class CheckError(Exception):
     """A check could not run (missing data / unreachable infra) — clean message, no trace."""
 
 
-def read_terraform_ctx():
-    """Read agent_context from `terraform output -json`; resolve ssh_key_path absolute."""
+def read_terraform_ctx(comp_dir=None):
+    """Read agent_context from `terraform output -json`; resolve ssh_key_path absolute.
 
+    Prefer the competition's own per-comp state (competitions/<id>/terraform); fall
+    back to the legacy shared terraform/ dir when the per-comp dir has no state."""
+    tf_dir = REPO_ROOT / "terraform"
+    if comp_dir is not None:
+        per_comp = Path(comp_dir) / "terraform"
+        if (per_comp / "terraform.tfstate").exists():
+            tf_dir = per_comp
     try:
         raw = subprocess.run(
             ["terraform", "output", "-json"],
-            cwd=str(REPO_ROOT / "terraform"),
+            cwd=str(tf_dir),
             capture_output=True, text=True, check=True,
         ).stdout
     except FileNotFoundError:
@@ -75,7 +84,7 @@ def read_terraform_ctx():
         raise CheckError(f"could not parse agent_context from terraform output: {e}")
     key_path = ctx.get("ssh_key_path")
     if key_path and not os.path.isabs(key_path):
-        ctx["ssh_key_path"] = str((REPO_ROOT / "terraform" / key_path).resolve())
+        ctx["ssh_key_path"] = str((tf_dir / key_path).resolve())
     return ctx
 
 
@@ -96,10 +105,10 @@ def build_ctx(args, comp_dir):
     ctx = {}
     tf_error = None
     if not args.engine_ip:
-        ctx = read_terraform_ctx()
+        ctx = read_terraform_ctx(comp_dir)
     else:
         try:
-            ctx = read_terraform_ctx()
+            ctx = read_terraform_ctx(comp_dir)
         except CheckError as e:
             tf_error = e
     if args.engine_ip:
@@ -120,15 +129,10 @@ def build_ctx(args, comp_dir):
 def ssh_via_gateway(ctx, target_ip, cmd, timeout=60):
     """SSH to a target box via the scoring-engine gateway (mirrors create-competition.py)."""
     key = ctx["ssh_key_path"]
-    scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]
     box_username = ctx.get("box_username", BOX_USERNAME_DEFAULT)
     if not key or not scoring_user:
         raise CheckError("missing SSH key path or vm_username for gateway SSH.")
-    proxy = (
-        f"ssh -i {key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-        f"-W %h:%p {scoring_user}@{scoring_ip}"
-    )
     try:
         return subprocess.run(
             [
@@ -136,7 +140,7 @@ def ssh_via_gateway(ctx, target_ip, cmd, timeout=60):
                 "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null",
                 "-o", "ConnectTimeout=10",
-                "-o", f"ProxyCommand={proxy}",
+                "-o", f"ProxyCommand={gateway_proxy(ctx)}",
                 f"{box_username}@{target_ip}", cmd,
             ],
             capture_output=True, text=True, timeout=timeout,
@@ -154,13 +158,8 @@ def ssh_to_engine(ctx, cmd, timeout=30):
         raise CheckError("missing SSH key path or vm_username for engine SSH.")
     try:
         return subprocess.run(
-            [
-                "ssh", "-i", key,
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "ConnectTimeout=10",
-                f"{scoring_user}@{scoring_ip}", cmd,
-            ],
+            ["ssh", "-i", key, *engine_ssh_opts(ctx),
+             f"{scoring_user}@{scoring_ip}", cmd],
             capture_output=True, text=True, timeout=timeout,
         )
     except OSError as e:
@@ -330,7 +329,11 @@ def check_services(base_url, admin_session, teams, strict):
 
 
 def check_isolation(ctx, teams, boxes):
-    """Confirm isolation DROP rule present and actually blocks cross-team traffic."""
+    """Confirm isolation DROP rule present and actually blocks cross-team traffic.
+
+    Returns True (verified), False (broken), or None (couldn't run the live
+    probe — reported as SKIP, never as a pass): a rule that exists but couldn't
+    be exercised must not read as verified isolation."""
 
     print("\n[3/5] ISOLATION")
     try:
@@ -375,15 +378,15 @@ def check_isolation(ctx, teams, boxes):
             f"timeout 3 bash -c 'echo > /dev/tcp/{to_ip}/22' 2>/dev/null; echo RC=$?"
         )
     except (CheckError, subprocess.TimeoutExpired) as e:
-        print(f"  WARN  — cross-team connection test couldn't run ({e}); rule-presence check "
-              "above already passed, not failing on this alone.")
-        return True
+        print(f"  SKIP  — cross-team connection test couldn't run ({e}); rule-presence "
+              "check above passed, but an untested rule is NOT a verified pass.")
+        return None
 
     if proc.returncode != 0:
-        print(f"  WARN  — couldn't SSH to {from_ip} to run the test "
+        print(f"  SKIP  — couldn't SSH to {from_ip} to run the test "
               f"(rc={proc.returncode}): {(proc.stderr or '').strip()[:150]}; rule-presence "
-              "check above already passed, not failing on this alone.")
-        return True
+              "check above passed, but an untested rule is NOT a verified pass.")
+        return None
 
     blocked = "RC=0" not in proc.stdout
 
@@ -438,7 +441,56 @@ def report_healthcheck_status(ctx):
         print("  (no recent failures logged)")
 
 
-def check_misconfig(ctx, boxes):
+def _target_vmid(comp_dir, box):
+    """VMID for a nakon machine entry: frozen targets.json, falling back to boxes.json order."""
+    try:
+        identifier = box["ip"].split(".")[2]
+        base_name = box["name"].rsplit("-team", 1)[0]
+        targets_path = Path(comp_dir) / "targets.json"
+        if targets_path.exists():
+            for t in json.loads(targets_path.read_text()).get("targets", {}).values():
+                if str(t["identifier"]) == identifier and t["box_name"] == base_name:
+                    return t["vmid"]
+        boxes_json = json.loads((Path(comp_dir) / "boxes.json").read_text())
+        idx = next(i for i, b in enumerate(boxes_json) if b.get("name") == base_name)
+        return vm_id_for(identifier, idx)
+    except Exception:
+        return None
+
+
+def misconfig_via_guest_agent(comp_dir, box, verifiable):
+    """SSH-dead fallback: run the same checks via the QEMU guest agent.
+
+    scrim-extreme-cyberfield-2026-09-22 lost its only verifier FAIL to dead
+    Linux SSH while the planted artifacts were independently confirmed fine —
+    the agent (virtio-serial, no network) reaches the box anyway."""
+    vmid = _target_vmid(comp_dir, box)
+    if vmid is None:
+        print("  (guest-agent fallback unavailable: could not resolve the box's vmid)")
+        return False
+    node = os.environ.get("TF_VAR_proxmox_node")
+    if not node:
+        print("  (guest-agent fallback unavailable: TF_VAR_proxmox_node not set)")
+        return False
+    print(f"  SSH unavailable — falling back to guest-agent exec on vmid {vmid}...")
+    for config in verifiable:
+        cmd, predicate = MISCONFIG_CHECKS[config]
+        try:
+            rc, out, err = guest_agent_exec_root(node, vmid, cmd)
+        except Exception as e:
+            print(f"  WARN  {config}: guest-agent exec failed ({e})")
+            continue
+        if rc != 0:
+            print(f"  ....  '{config}': guest rc={rc}: {(err or '').strip()[:80]}")
+            continue
+        if predicate(out):
+            print(f"  PASS  confirmed '{config}' via guest agent — `{cmd}` -> {out.strip()[:80]}")
+            return True
+        print(f"  ....  '{config}' not present: {out.strip()[:80]}")
+    return False
+
+
+def check_misconfig(ctx, boxes, comp_dir):
     """SSH via gateway to one box and confirm >=1 planted misconfig. Returns bool."""
     print("\n[4/5] MISCONFIG SPOT-CHECK")
     target = None
@@ -454,16 +506,19 @@ def check_misconfig(ctx, boxes):
     box, verifiable = target
     ip = box["ip"]
     print(f"  target: {box.get('name', ip)} ({ip}) — candidates: {', '.join(verifiable)}")
+    ssh_dead = False
     for config in verifiable:
         cmd, predicate = MISCONFIG_CHECKS[config]
         try:
             proc = ssh_via_gateway(ctx, ip, cmd)
         except subprocess.TimeoutExpired:
             print(f"  WARN  {config}: SSH timed out.")
+            ssh_dead = True
             continue
         except CheckError as e:
-            print(f"  FAIL  — {e}")
-            return False
+            print(f"  WARN  SSH to the box is unavailable ({e})")
+            ssh_dead = True
+            break
         if proc.returncode != 0:
             print(f"  WARN  {config}: command failed (rc={proc.returncode}): "
                   f"{(proc.stderr or '').strip()[:120]}")
@@ -473,6 +528,9 @@ def check_misconfig(ctx, boxes):
             print(f"  PASS  confirmed '{config}' — `{cmd}` -> {out.strip()[:80]}")
             return True
         print(f"  ....  '{config}' not present: {out.strip()[:80]}")
+    if ssh_dead:
+        if misconfig_via_guest_agent(comp_dir, box, verifiable):
+            return True
     print("  FAIL  — no planted misconfig could be confirmed on the target box.")
     return False
 
@@ -615,7 +673,7 @@ def main():
     isolation_ok = check_isolation(ctx, teams, boxes)
     print("\n  (live-ops health check status — informational)")
     report_healthcheck_status(ctx)
-    misconfig_ok = check_misconfig(ctx, boxes)
+    misconfig_ok = check_misconfig(ctx, boxes, comp_dir)
     misconfig_survival_ok = check_misconfig_survival(ctx, boxes)
     report_beacons(ctx, boxes)
     injects_relevant, injects_ok = check_injects(base_url, admin_session, comp_dir)
@@ -623,7 +681,7 @@ def main():
     gate = {
         "logins": logins_ok,
         "no_default_creds": no_default_creds_ok,
-        "isolation": isolation_ok,
+        "isolation": isolation_ok is True,
         "misconfig": misconfig_ok,
         "misconfig_survival": misconfig_survival_ok,
         "injects": injects_ok,
@@ -641,11 +699,30 @@ def main():
         svc_note = "PASS" if (services_query_ok and services_all_up) else "FAIL"
     print(f"  services         : {'UP' if services_all_up else 'some DOWN'} "
           f"({'query ok' if services_query_ok else 'query failed'}) [{svc_note}]")
-    print(f"  isolation        : {'PASS' if isolation_ok else 'FAIL'}")
+    isolation_note = ("PASS" if isolation_ok is True
+                      else "SKIP — live probe couldn't run, unverified" if isolation_ok is None
+                      else "FAIL")
+    print(f"  isolation        : {isolation_note}")
     print(f"  misconfig        : {'PASS' if misconfig_ok else 'FAIL'}")
     print(f"  misconfig_surviv.: {'PASS' if misconfig_survival_ok else 'FAIL'}")
     print(f"  injects          : {'PASS' if injects_ok else 'FAIL'}"
           f"{'' if injects_relevant else ' (none — skipped)'}")
+    tally = None
+    state_path = comp_dir / ".deploy_state.json"
+    if state_path.exists():
+        try:
+            tally = json.loads(state_path.read_text()).get("nakon_failed_steps")
+        except (OSError, ValueError):
+            tally = None
+    if tally is None:
+        print("  plant integrity  : no nakon FAILED tally in .deploy_state.json "
+              "(pre-tally deploy)")
+    elif tally:
+        print(f"  plant integrity  : WARNING — last nakon plant recorded {len(tally)} "
+              f"FAILED step(s): {', '.join(s[:60] for s in tally[:3])}"
+              f"{' …' if len(tally) > 3 else ''}")
+    else:
+        print("  plant integrity  : last nakon plant recorded 0 FAILED steps")
 
     passed = all(gate.values())
     print("\n" + ("RESULT: PASS — competition looks healthy."

@@ -3,16 +3,19 @@
 
 import argparse
 import calendar
+import contextlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
-from utils import load_users_config
+from utils import load_users_config, valid_comp_name
 
 REPO = Path(__file__).resolve().parent
 BAD_AUTO = REPO.parent / "bad-auto"
@@ -151,9 +154,11 @@ OPENCODE_PROJECT_CFG = """{
 """
 
 
-CYCLE_TIMEOUT = 1500
+CYCLE_TIMEOUT = 1800
 CYCLE_TARGET_PERIOD = 600
 MONITOR_INTERVAL = 300
+
+_llm_down_since = None
 
 
 def log(msg):
@@ -252,15 +257,56 @@ def stage_verify(args, comp, creds):
     def ssh_web01(cmd):
         return subprocess.run(base + [f"{creds['BOX_USER']}@192.168.{creds['TEAM1_ID']}.4", cmd],
                               capture_output=True, text=True, timeout=60)
+    port = os.environ.get("SCRIM_WEB01_PORT", "80")
+
+    def web01_http():
+        """HTTP code for web01 over the engine's network path ('' / 000 = no answer)."""
+        r = subprocess.run(["ssh", "-i", creds["KEY_PATH"], "-o", "StrictHostKeyChecking=no",
+                            "-o", "UserKnownHostsFile=/dev/null",
+                            f"{creds['VM_USER']}@{creds['ENGINE_IP']}",
+                            f"curl -sm 10 -o /dev/null -w '%{{http_code}}' "
+                            f"http://192.168.{creds['TEAM1_ID']}.4:{port}/"],
+                           capture_output=True, text=True, timeout=45)
+        return (r.stdout or "").strip()
+
+    def scoreboard_down():
+        """(down, err): down=True/False; err set when the scoreboard itself is unreadable."""
+        try:
+            return any(not s["up"] for s in parsed_status(creds, "team1")), None
+        except Exception as e:
+            return None, f"{type(e).__name__}: {e}"
+
     ssh_web01("echo %s | sudo -S systemctl stop nginx" % creds["BOX_PW"])
     time.sleep(150)
-    down = team_down(creds, "team1")
-    ssh_web01("echo %s | sudo -S systemctl start nginx" % creds["BOX_PW"])
-    time.sleep(150)
-    up = not team_down(creds, "team1")
-    log(f"fire test: down_detected={down} restored={up}")
-    if not (down and up):
-        log("WARNING: fire test incomplete — scoring path may be broken")
+    down, down_err = scoreboard_down()
+    http_down = web01_http()
+    log(f"fire test: after stop — scoreboard down={down}"
+        + (f" ({down_err})" if down_err else "")
+        + f", web01 http={http_down or 'no answer'}")
+
+    restored = healed = False
+    for attempt in (1, 2, 3):
+        # unmask first: run-12 left the unit unstartable and a plain start was a no-op
+        ssh_web01("echo %s | sudo -S systemctl unmask nginx" % creds["BOX_PW"])
+        ssh_web01("echo %s | sudo -S systemctl start nginx" % creds["BOX_PW"])
+        time.sleep(150 if attempt == 1 else 60)
+        up, up_err = scoreboard_down()
+        http_up = web01_http()
+        restored = up is False
+        healed = restored and http_up not in ("", "000")
+        log(f"fire test: restore attempt {attempt} — scoreboard "
+            f"{'up' if up is False else ('unreadable' if up is None else 'still down')}"
+            f"{f' ({up_err})' if up_err else ''}, web01 http={http_up or 'no answer'}")
+        if healed:
+            break
+    log(f"fire test: down_detected={down} restored={restored} healed={healed}")
+    if not (down and restored and healed):
+        raise RuntimeError(
+            "fire test failed — team1 web01-http was not verifiably down and restored, so the "
+            "scoring path is unproven. Manual fix: ./mybox web01 'echo $BOX_PW | sudo -S "
+            "systemctl unmask nginx && sudo systemctl start nginx', confirm "
+            f"http://192.168.{creds['TEAM1_ID']}.4/ answers from the engine, then re-run "
+            "(the fire test re-validates before T0).")
 
 
 def _qlogin(creds, user, jar):
@@ -436,11 +482,17 @@ directly (that kills the shared jar's session). Use the jar; if a call answers
   curl -s -b "$JAR" http://$ENGINE_IP/api/injects | python3 -c "import json,sys;[print(i['ID'],i['Title'],'due',i['DueTime'][11:16],'subs',len(i.get('Submissions') or [])) for i in json.load(sys.stdin)]"
   echo "## deliverable" > sub.md && ./submit-inject <injectId> sub.md     # submit BEFORE close time
 
-CYCLE TASK — notebook first, then AT MOST TWO actions, then STOP:
-0. FIRST: update NOTEBOOK.md (move finished items to DONE, add new incidents/findings) and append one timestamped line to LOG.md.
+CYCLE TASK — you have ~25 wall-clock minutes for this whole cycle; pace for it,
+update the notebook BEFORE acting (so an interrupted cycle still hands over context),
+then AT MOST TWO change/fix actions, then STOP. Read-only investigation (status queries,
+hunts) is fine inside your budget — two changes is the cap, not two commands:
+0. FIRST: update NOTEBOOK.md (SNAPSHOT line: current state + next action; move finished
+   items to DONE; add new incidents/findings) and append one timestamped line to LOG.md.
 1. If any service above is DOWN (or CHANGES shows a new DOWN): restore it NOW (./mybox web01 "echo $BOX_PW | sudo -S systemctl unmask nginx; echo $BOX_PW | sudo -S systemctl start nginx" for example). Availability beats everything.
 2. Else if an inject is due within 30 minutes and unsubmitted: investigate on the boxes, write the deliverable, ./submit-inject.
 3. Else: ONE hunt item from the notebook checklist (rogue UID-0 users, cron, systemd units, sudoers, firewall rules, listeners, Windows services/tasks/run-keys). Fix what is safe; never take a scored service down.
+4. Wrap up by minute 20: finish the current step, re-check the scoreboard, leave the
+   SNAPSHOT line + LOG.md current so the next cycle starts warm.
 ROE: never attack the engine ($ENGINE_IP), never change the scoring-check accounts (triage/svc-imaging/wardops). Keep replies terse."""
 
 
@@ -518,6 +570,9 @@ def inject_brief(creds, team):
 
 NOTEBOOK_TEMPLATE = """# NOTEBOOK — team {n} working memory (update FIRST every cycle)
 
+## SNAPSHOT (one line — current state + what you were about to do next)
+(none yet)
+
 ## OPEN INCIDENTS
 (none yet)
 
@@ -537,24 +592,31 @@ NOTEBOOK_TEMPLATE = """# NOTEBOOK — team {n} working memory (update FIRST ever
 
 
 def _opencode_run(args, prompt, wd, env):
-    """One blue cycle, launched in a hardened context (no stdin, own process group, per-team HOME/XDG).
-
-    Spawned via `bash -c 'exec opencode …'` with the prompt in CYCLE_PROMPT: opencode's
-    server dies silently right after selecting the LLM runtime when the CLI is exec'd
-    directly from python (works only under a shell parent) — via bash it is stable.
-    """
+    """One blue cycle in a hardened context; the whole process group dies on timeout."""
     n_team = 2 if wd.name.endswith("team2") else 1
     base_url, blue_model = blue_ep(args, n_team)
     # subprocess cwd= does not update $PWD and opencode resolves its project
     # (and thus the per-workdir opencode.jsonc defining the scrim-llm provider)
-    # from $PWD — see docs/scrim-harness.md for both launch-context lessons.
+    # from $PWD; it also needs a shell parent to survive — see docs/scrim-harness.md.
     child_env = {**env, "PWD": str(wd), "CYCLE_PROMPT": prompt}
-    return subprocess.run(["bash", "-c",
-                           "exec opencode run -m "
-                           f"{provider_key(base_url)}/{blue_model} --auto \"$CYCLE_PROMPT\""],
-                          cwd=wd, env=child_env, capture_output=True, text=True,
-                          stdin=subprocess.DEVNULL, start_new_session=True,
-                          timeout=CYCLE_TIMEOUT)
+    proc = subprocess.Popen(["bash", "-c",
+                             "exec opencode run -m "
+                             f"{provider_key(base_url)}/{blue_model} --auto \"$CYCLE_PROMPT\""],
+                            cwd=wd, env=child_env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                            text=True, start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=CYCLE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # opencode leaves a server grandchild holding the pipes; killing only the
+        # direct child made subprocess.run block for that grandchild's lifetime
+        # (run-12: one hung cycle held the shared lock ~80 min). bash is the
+        # session leader (start_new_session), so killpg takes the whole tree.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        out, err = proc.communicate()
+        raise
+    return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
 
 def _opencode_log_tail(wd):
@@ -649,6 +711,7 @@ def monitor_loop(args, creds, t0, stop):
             log("red events.jsonl snapshot pulled")
         else:
             log("WARNING: red events.jsonl snapshot unavailable")
+        red_llm_watch(args, t_plus)
         stop.wait(MONITOR_INTERVAL)
 
 
@@ -695,9 +758,135 @@ def pull_red_snapshot(args, tag=None):
     return False
 
 
+class RedTunnel:
+    """Reverse SSH tunnel so red01 can reach an operator-side LLM endpoint.
+
+    red01 sits on the node LAN with no tailscale, so a local endpoint is
+    unreachable from it: this ssh -N -R (run on the operator, binding on
+    red01) forwards red01's localhost:<remote_port> through the connection to
+    the endpoint. The dress rehearsal ran an event red-LLM-less because a
+    plain `ssh -R` died and nobody noticed — this one keepalives and has a
+    supervisor that restarts it until teardown."""
+
+    def __init__(self, llm_base_url, red_ip, key, user):
+        url = urlparse(llm_base_url if "//" in llm_base_url else f"http://{llm_base_url}")
+        host = url.hostname or "127.0.0.1"
+        port = url.port or (443 if url.scheme == "https" else 80)
+        if host in ("localhost", "127.0.0.1", "::1"):
+            # Base URL already names an operator-side relay — mirror that port.
+            self.remote_port, self.target = port, f"127.0.0.1:{port}"
+        else:
+            # Endpoint reachable only from the operator: bind 8180 on red01 and
+            # forward straight at it (no socat relay needed).
+            self.remote_port, self.target = 8180, f"{host}:{port}"
+        self.red_ip, self.key, self.user = red_ip, key, user
+        self.proc = None
+        self.stop = threading.Event()
+
+    def red_base_url(self):
+        return f"http://localhost:{self.remote_port}/v1"
+
+    def _spawn(self):
+        self.proc = subprocess.Popen(
+            ["ssh", "-N", "-T",
+             "-o", "ExitOnForwardFailure=yes",
+             "-o", "ServerAliveInterval=15",
+             "-o", "ServerAliveCountMax=3",
+             "-o", "StrictHostKeyChecking=no",
+             "-o", "UserKnownHostsFile=/dev/null",
+             "-o", "ConnectTimeout=15",
+             "-i", self.key,
+             "-R", f"{self.remote_port}:{self.target}",
+             f"{self.user}@{self.red_ip}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, start_new_session=True)
+
+    def start(self):
+        self._spawn()
+        threading.Thread(target=self._supervise, daemon=True).start()
+
+    def _supervise(self):
+        while not self.stop.wait(15):
+            if self.proc is None or self.proc.poll() is not None:
+                log("red LLM tunnel died — restarting")
+                self._spawn()
+
+    def shutdown(self):
+        self.stop.set()
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+
+
+def maybe_start_red_tunnel(args):
+    """auto: tunnel local (non-openrouter) endpoints; openrouter needs none."""
+    mode = getattr(args, "red_tunnel", "auto") or "auto"
+    local = "openrouter" not in args.llm_base_url
+    if mode == "off" or (mode == "auto" and not local):
+        return None
+    if mode == "on" and not local:
+        log("--red-tunnel ignored for an openrouter endpoint (red01 reaches it directly)")
+        return None
+    tunnel = RedTunnel(args.llm_base_url, args.red_ip, str(REPO / "proxmox"),
+                       os.environ.get("TF_VAR_vm_username", "sysadmin"))
+    tunnel.start()
+    log(f"red LLM tunnel up: red01 localhost:{tunnel.remote_port} -> {tunnel.target}")
+    return tunnel
+
+
+def check_red_llm(args, base_url):
+    """From-red01 LLM reachability gate.
+
+    validate-llm runs operator-side and proves nothing about what red01 can
+    reach — the dress run went red-LLM-less the whole event on exactly that
+    gap. Probes <base_url>/models from red01 itself (direct, then through the
+    engine jump host)."""
+    target, common, jump = _red_ssh_ctx(args)
+    probe = f"curl -sm 10 -o /dev/null -w '%{{http_code}}' {base_url.rstrip('/')}/models"
+    for path, extra in (("direct", []), ("engine jump", ["-o", jump] if jump else None)):
+        if extra is None:
+            continue
+        try:
+            r = subprocess.run(["ssh"] + common + extra + [target, probe],
+                               capture_output=True, text=True, timeout=45)
+            code = (r.stdout or "").strip()
+            if code == "200":
+                return True
+            log(f"red01 LLM probe ({path}) -> {code or (r.stderr or '').strip()[:80] or 'no answer'}")
+        except subprocess.TimeoutExpired:
+            log(f"red01 LLM probe ({path}) timed out")
+    return False
+
+
+def red_llm_url(args):
+    """The LLM base URL as red01 dials it (tunnel-local when a tunnel is up)."""
+    tunnel = getattr(args, "red_tunnel", None)
+    return tunnel.red_base_url() if tunnel else args.llm_base_url
+
+
+def red_llm_watch(args, t_plus):
+    """In-event from-red01 LLM probe; alerts once per failure episode."""
+    global _llm_down_since
+    if check_red_llm(args, red_llm_url(args)):
+        if _llm_down_since is not None:
+            log(f"red LLM reachable again after {(time.time() - _llm_down_since) / 60:.0f} min")
+            _llm_down_since = None
+        return
+    if _llm_down_since is None:
+        _llm_down_since = time.time()
+        tunnel = getattr(args, "red_tunnel", None)
+        dead = tunnel is not None and tunnel.proc is not None and tunnel.proc.poll() is not None
+        log(f"WARNING: T+{t_plus // 60} — red01 cannot reach the LLM endpoint"
+            + (" (tunnel process dead; supervisor will respawn it)" if dead else "")
+            + " — red is making decisions blind until this recovers")
+
+
 def stage_red(args, comp, creds, run_dir):
+    # Local endpoints (llama.cpp/qwen) are slow: tighter call timeout and no
+    # JSON-retry double-call, or one decision can eat 8-16 min of a 90-min event.
+    local_llm = "openrouter" not in args.llm_base_url
     llm = {"base_url": args.llm_base_url, "model": args.red_model,
-           "max_tokens": 4096, "timeout": 240}
+           "max_tokens": 4096, "timeout": 120 if local_llm else 240,
+           "json_retries": 0 if local_llm else 1}
     if args.reasoning_effort:
         llm["reasoning_effort"] = args.reasoning_effort
     cfg = {
@@ -717,8 +906,9 @@ def stage_red(args, comp, creds, run_dir):
         "limits": {"nmap_timing": "T3", "nmap_top_ports": 200,
                    "max_retries_per_service": 4, "spray_attempts_per_target": 24,
                    "action_timeout": 120, "scan_timeout": 900},
-        "deploy": {"red_ip": "10.0.0.244", "red_gw": "10.0.0.1", "red_storage": "hdrives-zfs",
-                   "red_vmid": 999, "template": "base-ubuntu24.04-fix"},  # cyberfield
+        "deploy": {"red_ip": args.red_ip, "red_gw": args.red_gw, "red_storage": args.red_storage,
+                   **({"red_vmid": args.red_vmid} if args.red_vmid else {}),
+                   **({"template": args.red_template} if args.red_template else {})},
     }
     (BAD_AUTO / "config.yaml").write_text(json.dumps(cfg, indent=2))
     env = {**os.environ, "BAuto_LLM_API_KEY": api_key(local="openrouter" not in args.llm_base_url),
@@ -726,9 +916,25 @@ def stage_red(args, comp, creds, run_dir):
     run(["python3", "-m", "badauto", "validate-llm"], cwd=BAD_AUTO, env=env, timeout=300, tail=3)
     run(["python3", "-m", "badauto", "run", "--once", "--dry-run",
          "--competition", str(comp.resolve())], cwd=BAD_AUTO, env=env, timeout=600, tail=6)
-    log("deploying red01 (cloud LLM goes direct from red01 — no tunnel needed)")
+
+    tunnel = maybe_start_red_tunnel(args)
+    if tunnel:
+        # The operator-side validate/dry-run above used the real URL on purpose;
+        # red01 itself can only dial the endpoint through the tunnel.
+        cfg["llm"]["base_url"] = tunnel.red_base_url()
+        (BAD_AUTO / "config.yaml").write_text(json.dumps(cfg, indent=2))
+        args.red_tunnel = tunnel
+    log(f"deploying red01 at {args.red_ip} (storage {args.red_storage})")
     run(["python3", "-m", "badauto", "deploy", "--competition", str(comp.resolve()), "--start"],
         cwd=BAD_AUTO, env=env, timeout=1800)
+
+    red_base = cfg["llm"]["base_url"]
+    if not check_red_llm(args, red_base):
+        raise RuntimeError(
+            f"red01 cannot reach the LLM endpoint ({red_base}) — refusing to start the event "
+            f"red-LLM-less. Run a socat relay on this host and/or the reverse tunnel "
+            f"(--red-tunnel), then re-run. See docs/scrim-harness.md, 'stage_red (LLM gate)'.")
+    log(f"red01 reached the LLM at {red_base} — clear to start")
 
 
 def stage_run(args, creds, t0):
@@ -839,6 +1045,10 @@ def pull_red_evidence(args):
 
 
 def stage_teardown(args, creds=None):
+    tunnel = getattr(args, "red_tunnel", None)
+    if tunnel:
+        tunnel.shutdown()
+        log("teardown: red LLM tunnel stopped")
     if creds:
         try:
             pull_red_evidence(args)
@@ -875,6 +1085,16 @@ def main():
                    help="separate LLM base URL for team2's blue (default: same as --blue-base-url)")
     p.add_argument("--blue2-model", default=None,
                    help="model for team2's blue when --blue2-base-url is set")
+    p.add_argument("--red-ip", default="10.0.0.198", help="red01 IP on the cluster (realm default)")
+    p.add_argument("--red-gw", default="10.0.0.1", help="red01 gateway")
+    p.add_argument("--red-storage", default="hdd", help="storage pool red01 clones from")
+    p.add_argument("--red-vmid", type=int, default=None,
+                   help="red01 vmid when the cluster default collides (cyberfield used 999)")
+    p.add_argument("--red-template", default=None,
+                   help="red01 template name when it differs from the cluster default")
+    p.add_argument("--red-tunnel", choices=["auto", "on", "off"], default="auto",
+                   help="reverse-SSH tunnel so red01 can reach a local LLM endpoint "
+                        "(auto = on for non-openrouter endpoints)")
     p.add_argument("--skip-deploy", action="store_true", help="competition already at phase 7")
     p.add_argument("--from-phase", dest="resume", type=int, default=None,
                    help="resume create-competition at this phase")
@@ -882,6 +1102,10 @@ def main():
     p.add_argument("--run-dir", default=None)
     args = p.parse_args()
     args.blue_base_url = args.blue_base_url or args.llm_base_url
+
+    for nm in (args.competition, args.new):
+        if nm and not valid_comp_name(nm):
+            sys.exit(f"invalid competition name {nm!r} — use [a-z0-9._-], no path separators.")
 
     comp = REPO / "competitions" / args.competition
     if args.new:
@@ -908,9 +1132,11 @@ def main():
     stage_verify(args, comp, creds)
     stage_blues(args, comp, run_dir, creds, time.time())
 
-    log("T0 — starting red, then feeding blues")
-    t0 = time.time()
+    red_setup_started = time.time()
     stage_red(args, comp, creds, run_dir)
+    t0 = time.time()
+    log(f"T0 — event clock starts now (red setup took {(t0 - red_setup_started) / 60:.0f} min, "
+        f"outside scored time)")
     stage_run(args, creds, t0)
 
     stage_capture(args, creds)

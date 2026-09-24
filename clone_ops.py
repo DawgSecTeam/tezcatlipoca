@@ -149,6 +149,9 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
             dst_vmid = vm_id_for(team["identifier"], box_idx)
             clone_name = f"{team['identifier']}-{box['name']}"
 
+            cloned_vms[clone_name] = dst_vmid
+            cloned_vms_path.write_text(json.dumps(cloned_vms, indent=2))
+
             if dst_vmid in existing_vmids:
                 print(f"    {clone_name} (vmid {dst_vmid}) already exists — skipping clone (resume)")
             else:
@@ -159,9 +162,6 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
                 })["data"]
                 print(f"    team1-{box['name']} (vmid {src_vmid}) -> {clone_name} (vmid {dst_vmid})...")
                 wait_for_proxmox_task(node, upid)
-
-            cloned_vms[clone_name] = dst_vmid
-            cloned_vms_path.write_text(json.dumps(cloned_vms, indent=2))
 
             team_subnet = team["identifier"]
             box_octet = box["last_octet"]

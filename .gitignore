@@ -24,3 +24,5 @@ competitions/*/.phase6-swept
 .deploy.lock
 competitions/*/box_vulns.json.pre-cyberfield-prune1
 .env.*-backup
+competitions/*/targets.json
+competitions/*/known_hosts

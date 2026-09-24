@@ -15,6 +15,7 @@ nakon SSHes into each box to install services and deploy misconfigs.
 | [docs/architecture.md](docs/architecture.md) | Architecture: phases, component map, data flow, isolation, invariants, timeout rationale |
 | [docs/internals.md](docs/internals.md) | Per-module design notes — the "why" behind functions, parameters, and orderings |
 | [docs/known-issues.md](docs/known-issues.md) | Incident log, known-broken templates, failure modes, standing limitations |
+| [docs/e2e-testing.md](docs/e2e-testing.md) | Running e2e deploy tests: failure triage, per-phase recovery cost map, trim-then-resume, preflight checklist |
 | [docs/scrim-harness.md](docs/scrim-harness.md) | Red-vs-blue agent scrim harness (`run-agent-scrim.py`, `scrim-report.py`, beacons) |
 | [docs/rehearsal-gates.md](docs/rehearsal-gates.md) | Numeric pass/fail gates for a scrim run |
 | [docs/harness-upgrades-plan.md](docs/harness-upgrades-plan.md) | Scrim harness rev-2 upgrade record |
@@ -30,7 +31,7 @@ python3 create-competition.py           # interactive
 python3 create-competition.py --help    # flags documented in docs/usage-agents.md
 ```
 
-nakon is vendored at `vendor/nakon` (pinned to a release; currently v0.1.6) and needs
+nakon is vendored at `vendor/nakon` (pinned to a release; currently v0.1.7) and needs
 `vendor/nakon/.env` for build-time catalog access (or `VULNDB_UI_URL`). Never commit
 `competitions/*/` secrets or either `.env` — see
 [docs/architecture.md](docs/architecture.md#secrets) for the full inventory. For shared

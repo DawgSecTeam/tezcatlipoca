@@ -47,10 +47,15 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   the real terraform error), so full stdout is written to `deploy.log` in the
   run dir. Success requires `last_phase: 7` / `Deploy complete` in stdout or
   `last_phase == 7` in `.deploy_state.json`; resume with `--from-phase`.
-- `stage_verify` — fire test: kill nginx on team1 web01, wait 150 s, expect
-  team1 DOWN; restore, wait 150 s, expect UP. Verify failures and a failed
-  fire test are WARNINGS, not aborts ("continuing — investigate before
-  event"; "scoring path may be broken").
+- `stage_verify` — fire test: stop nginx on team1 web01, wait 150 s, expect
+  team1 DOWN on the scoreboard AND a dead HTTP probe from the engine's network
+  path (the scoreboard alone lies twice: `team_down` swallows exceptions into
+  "up", and run-12's stop left the unit dead with nobody checking). Restore:
+  unmask + start with up to 3 attempts, then require scoreboard-up AND a live
+  probe — `fire test: down_detected=X restored=Y healed=Z`. Any miss ABORTS
+  with the manual fix (resume re-validates; failing closed before T0 is
+  cheap, discovering it at T0+40 is not). verify failures stay warnings.
+  Fixed 2026-09-23 (run-12 left team1's web01-http down at T0).
 - `QLOGIN` helper (shipped into each blue workdir) — Quotient allows ONE
   session per account: every login kills that account's previous cookie, so
   NEVER log in ad hoc; run `./qlogin` only when a request returns
@@ -90,8 +95,18 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   (`start_new_session=True`), per-team HOME/XDG
   (`blue-team<n>/.opencode-home/`) so opencode's state DB and server logs
   live inside the run dir — triage evidence instead of silent global state
-  shared with whatever else runs under this user. `_opencode_log_tail`
-  appends the newest server-log tail to failed-cycle output.
+  shared with whatever else runs under this user. Two more lessons from the
+  cyberfield E2E: opencode's server dies silently right after "llm runtime
+  selected" when the CLI is exec'd straight from python (manual shell runs
+  and a pty both worked — the shell parent is the only working
+  differentiator), so the child is `bash -c 'exec opencode run …'` with the
+  prompt in `$CYCLE_PROMPT` (keeps the multi-KB prompt out of the command
+  line); and `subprocess.run(timeout=…)` hung ~80 min past the timeout
+  because opencode's server grandchild held the pipes (one hung cycle held
+  the shared lock, starving the other team), so the run is a `Popen` whose
+  timeout path `os.killpg()`s the whole session before draining.
+  `_opencode_log_tail` appends the newest server-log tail to failed-cycle
+  output.
 - `blue_feed_loop` — serialize the two blues behind `llm_lock`: the shared
   local endpoint has few slots (and rejects oversized prompts), and even
   cloud runs shouldn't have opencode DBs racing. Serialization is per
@@ -109,7 +124,9 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   turns are slow, so a fixed pre-cycle sleep both starves throughput and
   can't know a cycle overran; sleep = clamp(30..600 s,
   `CYCLE_TARGET_PERIOD` (600) − actual cycle time), capped by
-  `CYCLE_TIMEOUT` = 1500 s per opencode run.
+  `CYCLE_TIMEOUT` = 1800 s per opencode run (raised from 1500 once timeouts
+  actually kill the process tree — a timed-out cycle is expensive, an
+  orphaned one is worse).
 - `stage_run` — blues staggered (team1 at T+0, team2 at +300 s) AND LLM calls
   serialized via the lock; both are needed because the shared local endpoint
   has few slots and rejects oversized prompts, so the two blues must never
@@ -120,9 +137,13 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   down-windows, `scrim-report.py`); `monitor.log` keeps the human-readable
   text. In-run red evidence: `events.jsonl` is grabbed at EVERY snapshot too —
   a teardown-time scp flake must not be able to lose it a third time.
-- `blue_cycle_prompt` — cycle scope: notebook first, then AT MOST TWO actions,
-  then STOP; priority order is restore > inject due within 30 min > one hunt
-  item from the checklist. ROE embedded in every prompt: never attack the
+- `blue_cycle_prompt` — cycle scope: notebook first, then AT MOST TWO
+  change/fix actions (read-only investigation is budgeted but unlimited by
+  the cap — the cyberfield E2E showed blue's hunts are where the learning
+  is), then STOP; priority order is restore > inject due within 30 min > one
+  hunt item from the checklist. The prompt states an explicit ~25-minute
+  wall budget with a wrap-up-by-minute-20 mark so interrupted cycles still
+  leave the notebook current. ROE embedded in every prompt: never attack the
   engine (`$ENGINE_IP`), never change the scoring-check accounts
   (triage/svc-imaging/wardops). Exact reach-your-boxes and
   scoreboard/inject-submit commands embedded per the module lessons.
@@ -133,8 +154,11 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   unsubmitted + due ≤30 min is flagged "<< TASK #1: submit before close".
   `due_in_min`: the engine's timezone is not guaranteed, so accept whichever
   of the UTC/local interpretations lands in a sane window (−15 min … +12 h).
-- `NOTEBOOK_TEMPLATE` — blue working memory (OPEN INCIDENTS / HUNT CHECKLIST /
-  DONE); embedded in each cycle prompt (truncated to 2500 chars) plus the
+- `NOTEBOOK_TEMPLATE` — blue working memory (SNAPSHOT / OPEN INCIDENTS /
+  HUNT CHECKLIST / DONE); the SNAPSHOT line ("current state + next action")
+  is first because a new cycle needs warm context instantly — the winning
+  team1 notebook in the cyberfield E2E converged on exactly this shape on
+  its own. Embedded in each cycle prompt (truncated to 2500 chars) plus the
   last 5 `LOG.md` lines; the notebook update is cycle step 0. An existing
   `NOTEBOOK.md` is preserved across re-runs; `LOG.md` restarts each run.
 - `stage_red` — red aggression posture (2026-09 revision): round 3 bounded
@@ -143,7 +167,37 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   concurrent-down 2/4/6 (endgame 6 at T−15) because faster decisions + a
   higher ramp make the event a tug-of-war. `min_standing_services=2` stays
   the floor so a team always keeps two lifelines. Re-tune after the first
-  rehearsal, not before (see `docs/rehearsal-gates.md`).
+  rehearsal, not before (see `docs/rehearsal-gates.md`). Red01's cluster
+  wiring is flag-driven, not hardcoded: `--red-ip/--red-gw/--red-storage`
+  default to the Realm (10.0.0.198 / 10.0.0.1 / hdd) and
+  `--red-vmid/--red-template` exist for clusters where the defaults collide
+  (the cyberfield port needed vmid 999 + `base-ubuntu24.04-fix` +
+  `hdrives-zfs`; hardcoding those briefly broke Realm runs). Against local
+  endpoints the generated bad-auto config uses `timeout: 120` and
+  `json_retries: 0` (cloud keeps 240/1): one decision that can cost 8–16 min
+  turned the cyberfield red into ~2 actions/hour.
+- `stage_red` (LLM gate) — `validate-llm` + the dry-run run on the OPERATOR
+  and prove nothing about what red01 can reach: the dress rehearsal ran a
+  whole event red-LLM-less because only the operator side was ever tested,
+  and the endpoint (tailnet llama box) has no route from red01's LAN. Two
+  closures: `--red-tunnel` (default `auto` = on for non-openrouter endpoints)
+  runs a reverse SSH forward — red01 dials `localhost:8180`, the tunnel
+  carries it to the endpoint, `ServerAliveInterval` + a 15 s supervisor
+  restart it if it dies (a dead plain `ssh -R` is how the dress lost red
+  mid-event) — and red01's config gets the localhost form of the URL only
+  after the operator-side validate/dry-run used the real one. Then,
+  post-deploy, `check_red_llm` curls `/models` FROM red01 (direct, then
+  through the engine jump) and a non-200 aborts before T0: starting the event
+  red-LLM-less is the one failure this harness refuses to repeat. And because
+  the dress run's tunnel died MID-event unnoticed, `monitor_loop` now re-runs
+  that same from-red01 probe every 300 s tick (`red_llm_watch`) and alerts
+  once per failure episode — it complements, not replaces, the tunnel
+  supervisor.
+- `stage_red` (t0 honesty) — the event clock (t0) is captured AFTER stage_red
+  returns, not before: red01 deploy + validate-llm + dry-run + the LLM gate
+  can eat 5–30 min, and counting that against `--duration-min` made short
+  events shorter than advertised (fixed 2026-09-23; the T0 log line prints
+  how long red setup ran outside scored time).
 - `stage_red` (state dir) — operator-side bad-auto runs (validate-llm /
   dry-run / deploy bookkeeping) need a writable state dir: the VM's own
   config hardcodes `/var/lib/bad-auto` inside red01, so the `BAuto_STATE_DIR`

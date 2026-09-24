@@ -1,5 +1,19 @@
 import json
+import re
 from pathlib import Path
+
+_USERNAME_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
+_COMP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
+def valid_unix_username(name):
+    """Safe as a remote-shell token, useradd name, and sudoers filename."""
+    return bool(name) and _USERNAME_RE.fullmatch(name) is not None
+
+
+def valid_comp_name(name):
+    """Confines the competitions/<name> path — no traversal, no shell metachars."""
+    return bool(name) and ".." not in name and _COMP_NAME_RE.fullmatch(name) is not None
 
 DNS_FIX_CMD = (
     'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf; '
@@ -26,6 +40,10 @@ def load_users_config(comp_dir):
     data = json.loads(path.read_text())
     box_username = data.get("box_username") or BOX_USERNAME_DEFAULT
     credlist_usernames = data.get("credlist_usernames") or list(CREDLIST_USERNAMES_DEFAULT)
+    if not valid_unix_username(box_username):
+        box_username = BOX_USERNAME_DEFAULT
+    if not (len(credlist_usernames) == 3 and all(valid_unix_username(n) for n in credlist_usernames)):
+        credlist_usernames = list(CREDLIST_USERNAMES_DEFAULT)
     return box_username, credlist_usernames
 
 
