@@ -40,10 +40,11 @@ from engine_ops import bootstrap_scoring_engine, ensure_nat_forwarding, push_eve
 from hardening_ops import fix_dns_on_boxes, fix_services_on_boxes, prep_apt_on_boxes, setup_ubuntu_auth
 from nakon_ops import acquire_engine_lock, build_nakon_bundle, generate_nakon_config, run_nakon
 from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
-from range_ops import (destroy_vm_if_exists, ensure_terraform_workdir, enumerate_targets,
-                       list_snapshots, persist_targets, rollback_snapshot, take_snapshot,
-                       terraform_dir, terraform_plugin_cache_dir, vm_id_for)
-from ssh_ops import (forget_engine_host_key, read_terraform_ctx, wait_for_boxes_ssh,
+from range_ops import (delete_snapshot, destroy_vm_if_exists, ensure_terraform_workdir,
+                       enumerate_targets, list_snapshots, persist_targets, rollback_snapshot,
+                       take_snapshot, terraform_dir, terraform_plugin_cache_dir, vm_id_for)
+from ssh_ops import (forget_engine_host_key, read_terraform_ctx,
+                     wait_for_boxes_ssh,
                      wait_for_cloud_init, wait_for_http, wait_for_ssh)
 from utils import compfile_flag, load_compfile, load_users_config, valid_comp_name
 from windows_ops import bootstrap_windows_box, is_windows_template
@@ -348,11 +349,21 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                 planted = [t for t in team1_targets
                            if SNAP_BASE in list_snapshots(node, t["vmid"])]
                 for t in planted:
+                    # ZFS rollback requires the most-recent snapshot: tz-ready (taken
+                    # at phase-6 end or by a redeploy rebuild) blocks the tz-base
+                    # rollback — delete it first, phase 6 re-takes it.
+                    if SNAP_READY in list_snapshots(node, t["vmid"]):
+                        print(f"  Phase-5 re-entry: deleting '{SNAP_READY}' on "
+                              f"{t['vm_name']} (blocks the tz-base rollback; re-taken in phase 6)")
+                        delete_snapshot(node, t["vmid"], SNAP_READY)
                     print(f"  Phase-5 re-entry: rolling {t['vm_name']} back to "
                           f"'{SNAP_BASE}' before re-planting...")
                     rollback_snapshot(node, t["vmid"], SNAP_BASE)
                 if planted:
-                    wait_for_boxes_ssh(ctx, planted, timeout=300)
+                    # 900s: cold post-rollback boot of a heavily-planted disk
+                    # exceeds the 300s budget (resume-d/e aborted on all 5 while
+                    # every box was up minutes later)
+                    wait_for_boxes_ssh(ctx, planted, timeout=900)
 
             print("[5/7] Fixing DNS on team1 boxes, then running Nakon deployment...")
             team1_linux = [t for t in team1_targets if not is_windows_template(t["box"]["template"])]

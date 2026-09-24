@@ -297,7 +297,10 @@ def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_pa
 
 def mode_reconfigure(targets, ctx, comp_dir, state, nakon_config_path, nakon_bundle):
     """No rollback — re-run the configure chain against the boxes as they are right now."""
-    driver.wait_for_boxes_ssh(ctx, targets, timeout=300)
+    # 900s: the operator->engine->box jump path has banner-timeout flakiness
+    # windows; a shared short budget aborts scoping runs on boxes the engine
+    # reaches fine
+    driver.wait_for_boxes_ssh(ctx, targets, timeout=900)
     run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
     roles_path = comp_dir / "domain_roles.json"
     if roles_path.exists():
