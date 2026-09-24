@@ -123,11 +123,21 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
 
     machines = [t["machine"] for t in targets]
     print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
-    driver.run_nakon(
+    # strict=False, mirroring deploy.py's phase-6 stance: these re-plants hit live
+    # boxes mid-event, and one flaky/broken pin must not abort a repair sweep.
+    failed = driver.run_nakon(
         key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
         only=machines,
         timeout=max(2400, driver.PER_MACHINE_NAKON_BUDGET * len(machines)),
+        strict=False,
     )
+    state["nakon_failed_steps"] = failed[:20]
+    state_path = comp_dir / ".deploy_state.json"
+    if state_path.exists():
+        tmp = state_path.with_name(state_path.name + ".tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        os.replace(tmp, state_path)
+        os.chmod(state_path, 0o600)
 
     driver.fix_services_on_boxes(comp_dir, targets, ctx, box_creds=state.get("box_creds"))
 

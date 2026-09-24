@@ -23,6 +23,7 @@ from config_ops import (
     load_boxes,
     load_injects,
     load_previous_competitions,
+    preflight_gates,
     random_password,
     resolve_inject_times,
     update_env,
@@ -205,6 +206,9 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
     (comp_dir / "teams.json").write_text(teams_json)
     os.chmod(comp_dir / "teams.json", 0o600)
 
+    if from_phase <= 2:
+        preflight_gates(comp_dir, boxes, number_of_teams)
+
     if not assume_yes and not resuming:
         if not confirm_deploy(name, scenario, difficulty, teams, boxes):
             print("  Deployment cancelled.")
@@ -314,9 +318,11 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
 
             ensure_nat_forwarding(ctx)
 
-            run_nakon(key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
-                      only=team1_machines,
-                      timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(team1_machines)))
+            failed = run_nakon(key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
+                               only=team1_machines,
+                               timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(team1_machines)))
+            state["nakon_failed_steps"] = failed[:20]
+            _save_state()
             print("  Nakon deployment complete")
             checkpoint(5)
         else:
@@ -341,9 +347,11 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
                     # one flaky plant (apt rotation, IIS Chocolatey state) must not kill a 2-hour
                     # sweep after 98% of it landed. Phase 5 keeps strict — that's the first, and
                     # authoritative, plant.
-                    run_nakon(key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
-                              timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(all_machines)),
-                              strict=False)
+                    failed = run_nakon(key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
+                                       timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(all_machines)),
+                                       strict=False)
+                    state["nakon_failed_steps"] = failed[:20]
+                    _save_state()
                     print("  Nakon deployment on team2+ complete")
                 else:
                     print("  Single team — hardening services on team1 boxes...")

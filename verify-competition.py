@@ -704,6 +704,22 @@ def main():
     print(f"  misconfig_surviv.: {'PASS' if misconfig_survival_ok else 'FAIL'}")
     print(f"  injects          : {'PASS' if injects_ok else 'FAIL'}"
           f"{'' if injects_relevant else ' (none — skipped)'}")
+    tally = None
+    state_path = comp_dir / ".deploy_state.json"
+    if state_path.exists():
+        try:
+            tally = json.loads(state_path.read_text()).get("nakon_failed_steps")
+        except (OSError, ValueError):
+            tally = None
+    if tally is None:
+        print("  plant integrity  : no nakon FAILED tally in .deploy_state.json "
+              "(pre-tally deploy)")
+    elif tally:
+        print(f"  plant integrity  : WARNING — last nakon plant recorded {len(tally)} "
+              f"FAILED step(s): {', '.join(s[:60] for s in tally[:3])}"
+              f"{' …' if len(tally) > 3 else ''}")
+    else:
+        print("  plant integrity  : last nakon plant recorded 0 FAILED steps")
 
     passed = all(gate.values())
     print("\n" + ("RESULT: PASS — competition looks healthy."
