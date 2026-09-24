@@ -5,15 +5,84 @@ import os
 import re
 import secrets
 import string
+import subprocess
+import sys
 from pathlib import Path
 
 import requests
 
-from constants import MAX_BOXES_PER_TEAM, SCORING_ENGINE_VMID
+from constants import MAX_BOXES_PER_TEAM, NAKON_DIR, SCORING_ENGINE_VMID
 from range_ops import proxmox_api
 from utils import BOX_USERNAME_DEFAULT, CREDLIST_USERNAMES_DEFAULT, valid_unix_username
 
 ENV_PATH = Path(".env")
+
+
+def preflight_gates(comp_dir, boxes, num_teams):
+    """Blocking pre-apply gates: template resolution, datastore headroom, catalog check.
+
+    Each previously surfaced as a mid-deploy corpse (docs/e2e-testing.md §6): a
+    missing template died inside terraform apply, a full datastore died mid-clone,
+    a bad pin died mid-plant."""
+    node = os.environ["TF_VAR_proxmox_node"]
+    try:
+        vms = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
+    except Exception as e:
+        raise SystemExit(f"  ERROR: Proxmox API unreachable during preflight: {e}")
+    tagged = {vm.get("name") for vm in vms
+              if vm.get("template") == 1 and "template" in (vm.get("tags") or "").split(";")}
+    missing = sorted({b["template"] for b in boxes} - tagged)
+    if missing:
+        raise SystemExit(
+            "  ERROR: box template(s) with no tagged template on the cluster: "
+            + ", ".join(missing)
+            + ". Clones would fail mid-apply; available: "
+            + (", ".join(sorted(t for t in tagged if t)) or "(none)"))
+    engine_template = int(os.environ["TF_VAR_template_vm_id"])
+    if not any(vm.get("vmid") == engine_template for vm in vms):
+        raise SystemExit(
+            f"  ERROR: engine template vmid {engine_template} (TF_VAR_template_vm_id) does not "
+            f"exist on this cluster — the scoring engine clone would fail mid-apply.")
+    print(f"  Preflight: all {len(boxes)} box template(s) resolve; engine template vmid "
+          f"{engine_template} present")
+
+    datastore = os.environ.get("TF_VAR_datastore", "local-lvm")
+    # The storage LIST zeroes/omits free on some pools (cyberfield hdrives-zfs);
+    # the per-store STATUS endpoint's avail is the authoritative number.
+    try:
+        st = proxmox_api("GET", f"/nodes/{node}/storage/{datastore}/status")["data"]
+        free = st.get("avail")
+    except Exception:
+        free = None
+    if free is None:
+        print(f"  WARNING: could not read free space on datastore '{datastore}' — "
+              f"headroom unchecked")
+    else:
+        free_gb = free / 1024 ** 3
+        # disk_gb unset means "template's own disk", unknowable here; 40 GB is a
+        # conservative stand-in across the base templates.
+        need_gb = num_teams * sum(b.get("disk_gb") or 40 for b in boxes)
+        if free_gb < need_gb:
+            raise SystemExit(
+                f"  ERROR: datastore '{datastore}' has {free_gb:.0f} GB free; this deploy "
+                f"needs ~{need_gb:.0f} GB ({num_teams} teams x {len(boxes)} boxes, unset disk "
+                f"sizes counted as 40 GB). Free space or trim the competition first.")
+        print(f"  Preflight: datastore '{datastore}' {free_gb:.0f} GB free vs "
+              f"~{need_gb:.0f} GB needed")
+
+    catalog = subprocess.run(
+        [sys.executable, "-m", "nakon", "catalog", "check",
+         "--boxes-json", str((comp_dir / "boxes.json").resolve()),
+         "--box-services", str((comp_dir / "box_services.json").resolve()),
+         "--box-vulns", str((comp_dir / "box_vulns.json").resolve())],
+        cwd=str(NAKON_DIR), capture_output=True, text=True, timeout=600)
+    if catalog.returncode != 0:
+        print(catalog.stdout)
+        print(catalog.stderr)
+        raise SystemExit(
+            "  ERROR: nakon catalog check reported errors for this competition's pins — "
+            "fix or trim box_vulns.json/box_services.json before deploying (details above).")
+    print("  Preflight: nakon catalog check 0 errors")
 
 
 def load_previous_competitions():
