@@ -300,7 +300,10 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
                           f"'{SNAP_BASE}' before re-planting...")
                     rollback_snapshot(node, t["vmid"], SNAP_BASE)
                 if planted:
-                    wait_for_boxes_ssh(ctx, planted, timeout=300)
+                    # 900s: cold post-rollback boot of a heavily-planted disk
+                    # exceeds the 300s budget (resume-d/e aborted on all 5 while
+                    # every box was up minutes later)
+                    wait_for_boxes_ssh(ctx, planted, timeout=900)
 
             print("[5/7] Fixing DNS on team1 boxes, then running Nakon deployment...")
             fix_dns_on_boxes([t for t in team1_targets if not is_windows_template(t["box"]["template"])], ctx)
