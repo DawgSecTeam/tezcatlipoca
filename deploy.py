@@ -40,7 +40,7 @@ from engine_ops import bootstrap_scoring_engine, ensure_nat_forwarding, push_eve
 from hardening_ops import fix_dns_on_boxes, fix_services_on_boxes, setup_ubuntu_auth
 from nakon_ops import build_nakon_bundle, generate_nakon_config, run_nakon
 from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
-from range_ops import (destroy_vm_if_exists, enumerate_targets, list_snapshots,
+from range_ops import (delete_snapshot, destroy_vm_if_exists, enumerate_targets, list_snapshots,
                        rollback_snapshot, take_snapshot, vm_id_for)
 from ssh_ops import read_terraform_ctx, wait_for_boxes_ssh, wait_for_cloud_init, wait_for_http, wait_for_ssh
 from utils import compfile_flag, load_compfile, load_users_config, valid_comp_name
@@ -296,6 +296,13 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
                 planted = [t for t in team1_targets
                            if SNAP_BASE in list_snapshots(node, t["vmid"])]
                 for t in planted:
+                    # ZFS rollback requires the most-recent snapshot: tz-ready (taken
+                    # at phase-6 end or by a redeploy rebuild) blocks the tz-base
+                    # rollback — delete it first, phase 6 re-takes it.
+                    if SNAP_READY in list_snapshots(node, t["vmid"]):
+                        print(f"  Phase-5 re-entry: deleting '{SNAP_READY}' on "
+                              f"{t['vm_name']} (blocks the tz-base rollback; re-taken in phase 6)")
+                        delete_snapshot(node, t["vmid"], SNAP_READY)
                     print(f"  Phase-5 re-entry: rolling {t['vm_name']} back to "
                           f"'{SNAP_BASE}' before re-planting...")
                     rollback_snapshot(node, t["vmid"], SNAP_BASE)
