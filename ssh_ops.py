@@ -102,10 +102,12 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
     """Poll every target's reachability through the gateway; raises only if all boxes fail."""
     node = os.environ["TF_VAR_proxmox_node"]
     print("  Waiting for team boxes to accept SSH via gateway...")
-    deadline = time.time() + timeout
     total = 0
     unreachable = 0
     for t in targets:
+        # per-target budget: a shared deadline let two slow post-rollback Windows
+        # boots burn the whole wait and starve the (healthy) Linux probes
+        deadline = time.time() + timeout
         total += 1
         ip = t["ip"]
         windows = is_windows_template(t["box"]["template"])
