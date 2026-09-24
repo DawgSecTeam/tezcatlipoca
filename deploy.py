@@ -328,6 +328,11 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             # planted against a stale index). Preempt the timers and wait the locks
             # out before updating.
             apt_refresh = (
+                # mask, not just stop: the timers re-arm on the next rollback, and
+                # unattended-upgrade sessions that fire mid-plant grab the dpkg lock
+                # and break install steps hours in (resume-final4: db01's apache)
+                "systemctl mask apt-daily.timer apt-daily-upgrade.timer apt-daily "
+                "apt-daily-upgrade unattended-upgrade 2>/dev/null; "
                 "systemctl stop apt-daily.timer apt-daily-upgrade.timer apt-daily "
                 "apt-daily-upgrade 2>/dev/null; "
                 "for i in $(seq 1 60); do fuser /var/lib/dpkg/lock-frontend "
