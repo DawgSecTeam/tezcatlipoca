@@ -176,10 +176,15 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
 
     Returns the FAILED step lines from the deploy output ([] when the plant was
     clean, or when --strict aborted on the first one)."""
+    # keepalives: a plant's quiet steps can hold the channel idle well past NAT
+    # conntrack timeouts — without them the operator-side ssh dies unnoticed and
+    # the driver blocks on a dead read while the remote side finishes alone.
     ssh_base = [
         "ssh", "-i", str(key),
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=6",
         f"{scoring_user}@{scoring_ip}",
     ]
 
@@ -193,6 +198,8 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
             "scp", "-i", str(key),
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ServerAliveInterval=15",
+            "-o", "ServerAliveCountMax=6",
             "-r",
             str(NAKON_DIR / "nakon"),
             str(bundle),
