@@ -42,7 +42,8 @@ from nakon_ops import build_nakon_bundle, generate_nakon_config, run_nakon
 from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
 from range_ops import (delete_snapshot, destroy_vm_if_exists, enumerate_targets, list_snapshots,
                        rollback_snapshot, take_snapshot, vm_id_for)
-from ssh_ops import read_terraform_ctx, wait_for_boxes_ssh, wait_for_cloud_init, wait_for_http, wait_for_ssh
+from ssh_ops import (read_terraform_ctx, ssh_via_gateway, wait_for_boxes_ssh,
+                     wait_for_cloud_init, wait_for_http, wait_for_ssh)
 from utils import compfile_flag, load_compfile, load_users_config, valid_comp_name
 from windows_ops import bootstrap_windows_box, is_windows_template
 
