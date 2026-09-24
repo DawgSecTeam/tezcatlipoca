@@ -1,12 +1,15 @@
 """Nakon config generation, bundle building, and deployment via scoring engine."""
 
+import fcntl
 import json
 import math
 import os
+import re
 import shlex
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -14,9 +17,42 @@ from constants import (
     DISRUPTIVE_CONFIGS,
     NAKON_DIR,
     PER_MACHINE_NAKON_BUDGET,
+    SCORING_ENGINE_VMID,
     SLOW_SERVICES,
     WINDOWS_ADMIN_USER,
 )
+from ssh_ops import _engine_opts
+
+_ENGINE_LOCKS = {}  # lock path -> open fh (kept referenced so the flock survives)
+
+
+def acquire_engine_lock(engine_vmid=SCORING_ENGINE_VMID):
+    """Serialize deploys that share one scoring engine's /opt/nakon staging slot.
+
+    Keyed on (proxmox endpoint host, engine vmid) — both known before terraform
+    apply — so two different competitions on the same host can't race the engine's
+    single 'rm -rf /opt/nakon/*' push. Because the key includes the per-competition
+    engine vmid, two competitions with DIFFERENT engines (multi-tenant node) take
+    distinct locks and run concurrently. Complements _deploy_owner_check (cross-host).
+    Idempotent per process; the flock releases when the process exits or crashes."""
+    endpoint = os.environ.get("TF_VAR_proxmox_endpoint", "unknown")
+    host = re.sub(r"^https?://", "", endpoint).split("/")[0].split(":")[0] or "unknown"
+    slug = re.sub(r"[^A-Za-z0-9._-]", "_", f"{host}-{engine_vmid}")
+    lock_path = Path.home() / ".tezcatlipoca" / "locks" / f"engine-{slug}.lock"
+    if str(lock_path) in _ENGINE_LOCKS:
+        return
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        raise SystemExit(
+            f"  ERROR: another deploy on this host already holds the scoring-engine lock "
+            f"({lock_path.name}) — a different competition is targeting the same engine, and "
+            "its nakon push would wipe this one's /opt/nakon staging dir. Wait for it (find it "
+            "with pgrep -f 'create-competition|redeploy-competition')."
+        )
+    _ENGINE_LOCKS[str(lock_path)] = fh
 
 
 def _is_windows_template(template_name):
@@ -171,11 +207,12 @@ def _deploy_owner_check(ssh_base, action="deploy"):
 
 def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, timeout=2400,
               strict=True):
-    """Push the bundle to the scoring engine and run `nakon deploy` there."""
+    """Push the bundle to the scoring engine and run `nakon deploy` there.
+
+    Returns the FAILED step lines from the deploy output ([] when the plant was
+    clean, or when --strict aborted on the first one)."""
     ssh_base = [
-        "ssh", "-i", str(key),
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
+        "ssh", "-i", str(key), *_engine_opts(),
         f"{scoring_user}@{scoring_ip}",
     ]
 
@@ -186,9 +223,7 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
 
     subprocess.run(
         [
-            "scp", "-i", str(key),
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            "scp", "-i", str(key), *_engine_opts(),
             "-r",
             str(NAKON_DIR / "nakon"),
             str(bundle),
@@ -204,18 +239,55 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
         only_args = " --only " + " ".join(shlex.quote(name) for name in only)
     strict_arg = " --strict" if strict else ""
 
+    setup_cmd = (
+        "sudo mkdir -p /opt/nakon && sudo rm -rf /opt/nakon/* && "
+        f"echo '{me} {int(time.time())}' | sudo tee /opt/nakon/.deploy-owner > /dev/null && "
+        "sudo cp -r /tmp/nakon/. /opt/nakon/ && "
+        "sudo pip3 install --break-system-packages paramiko 2>/dev/null"
+    )
+    deploy_cmd = (
+        "cd /opt/nakon && sudo python3 -m nakon deploy "
+        f"--bundle /opt/nakon/{bundle.name} --config {remote_config}{only_args}{strict_arg}"
+    )
+
     try:
-        subprocess.run(
-            ssh_base + [
-                "sudo mkdir -p /opt/nakon && sudo rm -rf /opt/nakon/* && "
-                f"echo '{me} {int(time.time())}' | sudo tee /opt/nakon/.deploy-owner > /dev/null && "
-                "sudo cp -r /tmp/nakon/. /opt/nakon/ && "
-                "sudo pip3 install --break-system-packages paramiko 2>/dev/null; "
-                "cd /opt/nakon && sudo python3 -m nakon deploy "
-                f"--bundle /opt/nakon/{bundle.name} --config {remote_config}{only_args}{strict_arg}"
-            ],
-            check=True, timeout=timeout,
-        )
+        subprocess.run(ssh_base + [setup_cmd], check=True, timeout=300)
+        # A missing archive used to surface as a cryptic 'bundle is missing its plan
+        # archive' deep into the plant (scrim-extreme-2026-09-20); prove the staging
+        # landed intact before committing hours to it.
+        staged = subprocess.run(
+            ssh_base + [f"test -s /opt/nakon/{bundle.name} && test -s {remote_config}"],
+            capture_output=True, timeout=30)
+        if staged.returncode != 0:
+            raise RuntimeError(
+                f"staged files missing on the engine after the copy "
+                f"(/opt/nakon/{bundle.name}) — the staging push failed or was wiped; "
+                "refusing to start a plant that would die mid-way.")
+        failed_steps = []
+        proc = subprocess.Popen(ssh_base + [deploy_cmd], stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, bufsize=1)
+
+        def _pump():
+            for line in proc.stdout:
+                print(line, end="")
+                if "FAILED" in line:
+                    failed_steps.append(line.strip())
+
+        pump = threading.Thread(target=_pump, daemon=True)
+        pump.start()
+        try:
+            proc.wait(timeout=timeout)
+        finally:
+            pump.join(timeout=5)
+        if failed_steps:
+            print(f"\n  Nakon plant FAILED steps: {len(failed_steps)}")
+            for line in failed_steps[:10]:
+                print(f"    {line[:180]}")
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"nakon deploy failed rc={proc.returncode}"
+                + (f" ({len(failed_steps)} FAILED steps above)" if failed_steps else ""))
+        return failed_steps
     except subprocess.TimeoutExpired:
         try:
             subprocess.run(ssh_base + ["sudo pkill -9 -f 'nakon deploy' || true"],

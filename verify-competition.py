@@ -18,6 +18,7 @@ except ImportError as e:
 from dotenv import load_dotenv
 
 from range_ops import guest_agent_exec_root, vm_id_for
+from ssh_ops import engine_ssh_opts, gateway_proxy
 from utils import BOX_USERNAME_DEFAULT, load_users_config
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -57,13 +58,20 @@ class CheckError(Exception):
     """A check could not run (missing data / unreachable infra) — clean message, no trace."""
 
 
-def read_terraform_ctx():
-    """Read agent_context from `terraform output -json`; resolve ssh_key_path absolute."""
+def read_terraform_ctx(comp_dir=None):
+    """Read agent_context from `terraform output -json`; resolve ssh_key_path absolute.
 
+    Prefer the competition's own per-comp state (competitions/<id>/terraform); fall
+    back to the legacy shared terraform/ dir when the per-comp dir has no state."""
+    tf_dir = REPO_ROOT / "terraform"
+    if comp_dir is not None:
+        per_comp = Path(comp_dir) / "terraform"
+        if (per_comp / "terraform.tfstate").exists():
+            tf_dir = per_comp
     try:
         raw = subprocess.run(
             ["terraform", "output", "-json"],
-            cwd=str(REPO_ROOT / "terraform"),
+            cwd=str(tf_dir),
             capture_output=True, text=True, check=True,
         ).stdout
     except FileNotFoundError:
@@ -76,7 +84,7 @@ def read_terraform_ctx():
         raise CheckError(f"could not parse agent_context from terraform output: {e}")
     key_path = ctx.get("ssh_key_path")
     if key_path and not os.path.isabs(key_path):
-        ctx["ssh_key_path"] = str((REPO_ROOT / "terraform" / key_path).resolve())
+        ctx["ssh_key_path"] = str((tf_dir / key_path).resolve())
     return ctx
 
 
@@ -97,10 +105,10 @@ def build_ctx(args, comp_dir):
     ctx = {}
     tf_error = None
     if not args.engine_ip:
-        ctx = read_terraform_ctx()
+        ctx = read_terraform_ctx(comp_dir)
     else:
         try:
-            ctx = read_terraform_ctx()
+            ctx = read_terraform_ctx(comp_dir)
         except CheckError as e:
             tf_error = e
     if args.engine_ip:
@@ -121,15 +129,10 @@ def build_ctx(args, comp_dir):
 def ssh_via_gateway(ctx, target_ip, cmd, timeout=60):
     """SSH to a target box via the scoring-engine gateway (mirrors create-competition.py)."""
     key = ctx["ssh_key_path"]
-    scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]
     box_username = ctx.get("box_username", BOX_USERNAME_DEFAULT)
     if not key or not scoring_user:
         raise CheckError("missing SSH key path or vm_username for gateway SSH.")
-    proxy = (
-        f"ssh -i {key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-        f"-W %h:%p {scoring_user}@{scoring_ip}"
-    )
     try:
         return subprocess.run(
             [
@@ -137,7 +140,7 @@ def ssh_via_gateway(ctx, target_ip, cmd, timeout=60):
                 "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null",
                 "-o", "ConnectTimeout=10",
-                "-o", f"ProxyCommand={proxy}",
+                "-o", f"ProxyCommand={gateway_proxy(ctx)}",
                 f"{box_username}@{target_ip}", cmd,
             ],
             capture_output=True, text=True, timeout=timeout,
@@ -155,13 +158,8 @@ def ssh_to_engine(ctx, cmd, timeout=30):
         raise CheckError("missing SSH key path or vm_username for engine SSH.")
     try:
         return subprocess.run(
-            [
-                "ssh", "-i", key,
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "ConnectTimeout=10",
-                f"{scoring_user}@{scoring_ip}", cmd,
-            ],
+            ["ssh", "-i", key, *engine_ssh_opts(ctx),
+             f"{scoring_user}@{scoring_ip}", cmd],
             capture_output=True, text=True, timeout=timeout,
         )
     except OSError as e:
@@ -444,10 +442,15 @@ def report_healthcheck_status(ctx):
 
 
 def _target_vmid(comp_dir, box):
-    """VMID for a nakon machine entry: base box name -> boxes.json index -> vm_id_for."""
+    """VMID for a nakon machine entry: frozen targets.json, falling back to boxes.json order."""
     try:
         identifier = box["ip"].split(".")[2]
         base_name = box["name"].rsplit("-team", 1)[0]
+        targets_path = Path(comp_dir) / "targets.json"
+        if targets_path.exists():
+            for t in json.loads(targets_path.read_text()).get("targets", {}).values():
+                if str(t["identifier"]) == identifier and t["box_name"] == base_name:
+                    return t["vmid"]
         boxes_json = json.loads((Path(comp_dir) / "boxes.json").read_text())
         idx = next(i for i, b in enumerate(boxes_json) if b.get("name") == base_name)
         return vm_id_for(identifier, idx)
@@ -704,6 +707,22 @@ def main():
     print(f"  misconfig_surviv.: {'PASS' if misconfig_survival_ok else 'FAIL'}")
     print(f"  injects          : {'PASS' if injects_ok else 'FAIL'}"
           f"{'' if injects_relevant else ' (none — skipped)'}")
+    tally = None
+    state_path = comp_dir / ".deploy_state.json"
+    if state_path.exists():
+        try:
+            tally = json.loads(state_path.read_text()).get("nakon_failed_steps")
+        except (OSError, ValueError):
+            tally = None
+    if tally is None:
+        print("  plant integrity  : no nakon FAILED tally in .deploy_state.json "
+              "(pre-tally deploy)")
+    elif tally:
+        print(f"  plant integrity  : WARNING — last nakon plant recorded {len(tally)} "
+              f"FAILED step(s): {', '.join(s[:60] for s in tally[:3])}"
+              f"{' …' if len(tally) > 3 else ''}")
+    else:
+        print("  plant integrity  : last nakon plant recorded 0 FAILED steps")
 
     passed = all(gate.values())
     print("\n" + ("RESULT: PASS — competition looks healthy."

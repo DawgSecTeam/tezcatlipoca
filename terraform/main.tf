@@ -35,7 +35,7 @@ resource "proxmox_network_linux_bridge" "team_bridge" {
 resource "proxmox_virtual_environment_vm" "scoring_engine" {
   node_name = var.proxmox_node
   name      = "quotient-engine"
-  vm_id     = 1000
+  vm_id     = var.scoring_vm_id
 
   clone {
     vm_id = var.template_vm_id
@@ -119,7 +119,7 @@ resource "proxmox_virtual_environment_vm" "team_box" {
       condition = (200 + (tonumber(each.value.identifier) * 10) + index(
         [for b in var.boxes_per_team : b.name], each.value.box.name
       )) != proxmox_virtual_environment_vm.scoring_engine.vm_id
-      error_message = "Computed team_box vm_id collides with the scoring engine's fixed vm_id (1000). Adjust team identifiers or box count."
+      error_message = "Computed team_box vm_id collides with the scoring engine's vm_id (var.scoring_vm_id). Adjust team identifiers, box count, or --scoring-vmid."
     }
   }
 

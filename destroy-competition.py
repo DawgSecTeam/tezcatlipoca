@@ -141,7 +141,13 @@ def main():
     if cloned_vms_path.exists():
         destroy_cloned_vms(cloned_vms_path)
 
-    print(f"\nRunning terraform destroy for '{name}'...")
+    # Destroy from this competition's own per-comp state dir when it exists (multi-tenant
+    # deploys), so we tear down only this comp's engine/boxes/bridges; fall back to the
+    # legacy shared terraform/ dir for competitions deployed before per-comp isolation.
+    per_comp_tf = comp_dir / "terraform"
+    tf_cwd = str(per_comp_tf) if (per_comp_tf / "terraform.tfstate").exists() else "terraform"
+
+    print(f"\nRunning terraform destroy for '{name}' (state: {tf_cwd})...")
     # One destroy pass can die halfway when resources were deleted out-of-band
     # (manually removed -fix templates/VMs, scrim-dress-2026-09-20 teardown):
     # every pass still makes progress on the remaining resources, so retry
@@ -149,7 +155,7 @@ def main():
     for attempt in (1, 2):
         proc = subprocess.run(
             ["terraform", "destroy", "-parallelism=1", "-auto-approve"],
-            cwd="terraform",
+            cwd=tf_cwd,
             env=env,
         )
         if proc.returncode == 0:

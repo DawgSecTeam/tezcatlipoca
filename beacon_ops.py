@@ -5,6 +5,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from ssh_ops import gateway_proxy as _gateway_proxy
+
 REPO = Path(__file__).resolve().parent
 BEACON_SRC = REPO / "artifacts" / "rawsockets-beacon" / "beacon.c"
 BUILD_DIR = REPO / "artifacts" / "rawsockets-beacon" / "build"
@@ -31,12 +33,6 @@ def _build_beacon():
     if r.returncode == 0 and out.exists():
         return out, "static"
     return None, f"static build failed: {(r.stderr or '')[-200:]}"
-
-
-def _gateway_proxy(ctx):
-    return (f"ssh -i {ctx['ssh_key_path']} -o StrictHostKeyChecking=no "
-            f"-o UserKnownHostsFile=/dev/null -W %h:%p "
-            f"{ctx['vm_username']}@{ctx['scoring_engine_ip']}")
 
 
 def _scp_to_box(ctx, box_username, ip, src, dst):

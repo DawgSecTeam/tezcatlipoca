@@ -8,23 +8,90 @@ import shlex
 import subprocess
 import time
 
-from range_ops import diagnose_unreachable_box, guest_agent_exec_root
-from ssh_ops import ssh_via_gateway
+from range_ops import diagnose_unreachable_box, guest_agent_exec_root, wait_for_guest_agent
+from ssh_ops import gateway_proxy, ssh_via_gateway
 from utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT, valid_unix_username
+
+
+_APT_PREP_SCRIPT = r"""
+set +e
+# Fresh Ubuntu/Debian boots start apt-daily + unattended-upgrades, which (a) hold the
+# dpkg lock (nakon's install-package times out) and (b) leave the apt index pointing at a
+# package version the mirror has already rotated out (nakon's `apt-get install <svc>` then
+# 404s — e.g. nginx 1.24.0-2ubuntu7.17). Kill them FAST (mask --now stops immediately;
+# force-kill any stragglers) rather than waiting on the lock — a long-blocking script here
+# outlives the ssh -W / guest-agent channel and the whole prep is scored as a failure.
+systemctl mask --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service apt-daily.service apt-daily-upgrade.service 2>/dev/null
+# Match by exact process name (-x), NOT -f: a `-f unattended-upgr` pattern also matches THIS
+# script's own `bash -c` process (its command line contains the pattern), so the prep would
+# kill itself mid-run (ssh dies rc=255). systemctl mask --now already stopped the services.
+pkill -9 -x unattended-upgrade 2>/dev/null
+pkill -9 -x unattended-upgr 2>/dev/null
+sleep 2
+rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend 2>/dev/null
+dpkg --configure -a >/dev/null 2>&1
+apt-get -o DPkg::Lock::Timeout=120 update
+"""
+
+
+def prep_apt_on_boxes(targets, ctx):
+    """Quiesce apt-daily/unattended-upgrades and refresh the apt index on every Linux
+    target before a Nakon plant. SSH-via-gateway + sudo is the primary channel (the
+    guest agent is unreliable in the minute after a tz-base rollback/reboot, when the
+    box is busy with unattended-upgrades — it timed out on every box in one run); the
+    guest agent (root) is the fallback. Non-fatal per box, but reported clearly."""
+    key = ctx["ssh_key_path"]
+    box_username = ctx.get("box_username", "ubuntu")
+    node = os.environ["TF_VAR_proxmox_node"]
+    proxy = gateway_proxy(ctx)
+    remote_cmd = f"sudo bash -c {shlex.quote(_APT_PREP_SCRIPT)}"
+    print("  Prepping apt on Linux boxes (disable apt-daily/unattended-upgrades, refresh index)...")
+    # Boxes that just cold-booted from a tz-base rollback are saturated by the initial
+    # unattended-upgrades run, which starves BOTH the guest agent and the ssh -W forward for
+    # a couple of minutes. Let that settle first, or every prep below times out.
+    print("    (letting boxes settle after boot for 150s before prepping)")
+    time.sleep(150)
+    for t in targets:
+        ip = t["ip"]
+        wait_for_guest_agent(node, t["vmid"], timeout=120)
+        ok = False
+        for attempt in range(1, 6):
+            try:
+                subprocess.run(
+                    ["ssh", "-i", key,
+                     "-o", "StrictHostKeyChecking=no",
+                     "-o", "UserKnownHostsFile=/dev/null",
+                     "-o", "ConnectTimeout=10",
+                     "-o", f"ProxyCommand={proxy}",
+                     f"{box_username}@{ip}", remote_cmd],
+                    check=True, timeout=240,
+                )
+                print(f"    apt prepped on {ip}")
+                ok = True
+                break
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                if attempt < 5:
+                    print(f"    apt prep attempt {attempt}/5 failed for {ip}, retrying in 15s...")
+                    time.sleep(15)
+        if ok:
+            continue
+        try:
+            rc, _out, err = guest_agent_exec_root(node, t["vmid"], _APT_PREP_SCRIPT, timeout=240)
+            if rc == 0:
+                print(f"    apt prepped on {ip} (via guest agent)")
+            else:
+                print(f"    WARNING: apt prep rc={rc} on {ip}: {(err or '').strip()[:160]} — proceeding")
+        except Exception as exc:
+            print(f"    WARNING: apt prep failed on {ip} ({exc}) — proceeding")
 
 
 def fix_dns_on_boxes(targets, ctx):
     """Fix DNS on every target box. All-fail aborts (systemic vs transient)."""
 
     key = ctx["ssh_key_path"]
-    scoring_ip = ctx["scoring_engine_ip"]
-    scoring_user = ctx["vm_username"]
     box_username = ctx.get("box_username", "ubuntu")
     node = os.environ["TF_VAR_proxmox_node"]
-    proxy = (
-        f"ssh -i {key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-        f"-W %h:%p {scoring_user}@{scoring_ip}"
-    )
+    proxy = gateway_proxy(ctx)
     print("  Fixing DNS on all team boxes...")
     total = 0
     failed = 0
@@ -301,17 +368,12 @@ def setup_ubuntu_auth(targets, ctx):
     provably can't SSH just defers the failure into noisy per-config timeouts."""
 
     key = ctx["ssh_key_path"]
-    scoring_ip = ctx["scoring_engine_ip"]
-    scoring_user = ctx["vm_username"]
     box_username = ctx.get("box_username", "ubuntu")
     if not valid_unix_username(box_username):
         raise RuntimeError(
             f"box_username {box_username!r} is not a safe sudoers filename/remote-shell token"
         )
-    proxy = (
-        f"ssh -i {key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-        f"-W %h:%p {scoring_user}@{scoring_ip}"
-    )
+    proxy = gateway_proxy(ctx)
 
     print(f"  Enabling password auth + NOPASSWD sudo for {box_username} on team boxes...")
     sudoers_line = shlex.quote(f"{box_username} ALL=(ALL) NOPASSWD:ALL")

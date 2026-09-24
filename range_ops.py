@@ -1,13 +1,74 @@
 """Proxmox API layer, VM identity math, and (team, box) target abstraction."""
 
+import json
 import os
+import shutil
 import time
+from pathlib import Path
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.poolmanager import PoolManager
 
 from constants import MAX_BOXES_PER_TEAM, MAX_TEAMS, SCORING_ENGINE_VMID, SNAP_BASE, SNAP_READY
 
+REPO_ROOT = Path(__file__).resolve().parent
+_TF_TEMPLATE_DIR = REPO_ROOT / "terraform"
+# Only the .tf sources + provider lock are per-competition template files; the
+# state, .terraform plugin dir, and terraform.tfvars.json live locally per comp.
+_TF_TEMPLATE_FILES = ("main.tf", "variables.tf", "outputs.tf", ".terraform.lock.hcl")
 
+
+def terraform_dir(comp_dir):
+    """Per-competition Terraform working dir (its own state + lock), so two
+    competitions can `terraform apply` concurrently on one node instead of
+    contending on the single shared terraform/terraform.tfstate."""
+    return Path(comp_dir) / "terraform"
+
+
+def ensure_terraform_workdir(comp_dir):
+    """Materialize competitions/<id>/terraform/ from the canonical terraform/
+    template: (re)copy the .tf sources + provider lock, never touching the local
+    tfstate/.terraform/terraform.tfvars.json. Idempotent."""
+    dst = terraform_dir(comp_dir)
+    dst.mkdir(parents=True, exist_ok=True)
+    for name in _TF_TEMPLATE_FILES:
+        src = _TF_TEMPLATE_DIR / name
+        if src.exists():
+            shutil.copy2(src, dst / name)
+    return dst
+
+
+def terraform_plugin_cache_dir():
+    """Shared provider-plugin cache so each per-comp `terraform init` links the
+    provider from disk instead of re-downloading it."""
+    cache = _TF_TEMPLATE_DIR / ".terraform-plugin-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    return cache
+
+
+class _FingerprintAdapter(HTTPAdapter):
+    def __init__(self, fingerprint, **kw):
+        self._fingerprint = fingerprint
+        super().__init__(**kw)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **kw):
+        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block,
+                                       assert_fingerprint=self._fingerprint, **kw)
+
+
+def proxmox_request(method, url, **kwargs):
+    """requests wrapper honoring optional TLS pinning. PROXMOX_TLS_FINGERPRINT (sha256) pins the
+    cert; PROXMOX_CA_BUNDLE verifies against a CA path; neither set => verify=False (lab default)."""
+    fingerprint = os.environ.get("PROXMOX_TLS_FINGERPRINT")
+    ca = os.environ.get("PROXMOX_CA_BUNDLE")
+    session = requests.Session()
+    if fingerprint:
+        session.mount("https://", _FingerprintAdapter(fingerprint))
+        kwargs.setdefault("verify", False)
+    else:
+        kwargs.setdefault("verify", ca or False)
+    return session.request(method, url, **kwargs)
 
 
 def proxmox_api(method, path, **kwargs):
@@ -17,7 +78,7 @@ def proxmox_api(method, path, **kwargs):
     last_exc = None
     for attempt in range(4):
         try:
-            r = requests.request(method, url, headers=headers, verify=False, timeout=60, **kwargs)
+            r = proxmox_request(method, url, headers=headers, timeout=60, **kwargs)
             r.raise_for_status()
             return r.json()
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
@@ -137,6 +198,60 @@ def wait_for_guest_agent(node, vmid, timeout=300):
 
 def vm_id_for(identifier, box_index):
     return 200 + int(identifier) * 10 + box_index
+
+
+def box_index(boxes, box_name):
+    """Canonical position of a box by name — matches terraform's index(names, name)."""
+    for i, b in enumerate(boxes):
+        if b["name"] == box_name:
+            return i
+    raise KeyError(f"box {box_name!r} not in boxes list")
+
+
+def persist_targets(comp_dir, targets, boxes):
+    """Freeze (team,box)->vmid at deploy so later tools don't recompute it from boxes.json order."""
+    data = {
+        "box_order": [b["name"] for b in boxes],
+        "targets": {
+            t["vm_name"]: {
+                "team_key": t["team_key"],
+                "identifier": t["identifier"],
+                "box_name": t["box_name"],
+                "vmid": t["vmid"],
+                "ip": t["ip"],
+            }
+            for t in targets
+        },
+    }
+    (Path(comp_dir) / "targets.json").write_text(json.dumps(data, indent=2))
+
+
+def load_targets(comp_dir, teams, boxes):
+    """Targets with vmid read from targets.json (frozen at deploy); recompute if absent.
+
+    Refuses when boxes.json was reordered since deploy: vmid is positional, so a
+    reorder would silently retarget a different VM (and terraform would diverge too)."""
+    path = Path(comp_dir) / "targets.json"
+    if not path.exists():
+        print("  (targets.json absent — deriving vmids from boxes.json order; "
+              "reorder-unsafe for ranges deployed before this was added)")
+        return enumerate_targets(teams, boxes)
+    data = json.loads(path.read_text())
+    current = [b["name"] for b in boxes]
+    if data.get("box_order") != current:
+        raise SystemExit(
+            f"  ERROR: boxes.json box order changed since deploy (was {data.get('box_order')}, "
+            f"now {current}). VM identity (vmid) is positional — restore the original order in "
+            "boxes.json before redeploy/verify, or tear down and redeploy from scratch."
+        )
+    frozen = data.get("targets", {})
+    result = []
+    for t in enumerate_targets(teams, boxes):
+        f = frozen.get(t["vm_name"])
+        if f is not None:
+            t = {**t, "vmid": f["vmid"], "ip": f.get("ip", t["ip"])}
+        result.append(t)
+    return result
 
 
 

@@ -7,6 +7,7 @@ import subprocess
 import toml
 
 from quotient.setup import build_event_conf
+from ssh_ops import engine_ssh_opts
 
 
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
@@ -19,8 +20,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             "sudo killall apt-get apt dpkg 2>/dev/null; sleep 2; "
             "sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null; "
@@ -34,8 +34,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             (
                 "install -m 0755 -d /etc/apt/keyrings && "
@@ -54,8 +53,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             "sudo systemctl start docker && sudo systemctl enable docker && sleep 2 && sudo docker version",
         ],
@@ -66,8 +64,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             "sudo mkdir -p /opt/quotient && sudo git clone --depth 1 --recurse-submodules https://github.com/dbaseqp/Quotient.git /opt/quotient 2>/dev/null || (cd /opt/quotient && sudo git submodule update --init --recursive)",
         ],
@@ -86,8 +83,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             f"echo '{env_b64}' | base64 -d | sudo tee /opt/quotient/.env > /dev/null && "
             "sudo chmod 600 /opt/quotient/.env",
@@ -99,8 +95,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             "cd /opt/quotient && sudo docker compose build --no-cache",
         ],
@@ -111,8 +106,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             "cd /opt/quotient && sudo docker compose up -d",
         ],
@@ -123,8 +117,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             (
                     "sudo iptables -P FORWARD ACCEPT && "
@@ -174,8 +167,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             (
                 f"echo '{firewall_script_b64}' | base64 -d | sudo tee /usr/local/sbin/range-firewall.sh > /dev/null && "
@@ -256,8 +248,7 @@ def install_range_healthcheck(ctx):
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             (
                 f"echo '{healthcheck_script_b64}' | base64 -d | sudo tee /usr/local/sbin/range-healthcheck.sh > /dev/null && "
@@ -288,8 +279,7 @@ def ensure_nat_forwarding(ctx):
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}", cmd,
         ],
         check=False, timeout=30,
@@ -314,8 +304,7 @@ def read_event_conf(ctx):
 
     def _read(path):
         r = subprocess.run(
-            ["ssh", "-i", key, "-o", "StrictHostKeyChecking=no",
-             "-o", "UserKnownHostsFile=/dev/null",
+            ["ssh", "-i", key, *engine_ssh_opts(ctx),
              f"{scoring_user}@{scoring_ip}", f"sudo cat {path}"],
             capture_output=True, text=True, check=True, timeout=30,
         )
@@ -376,8 +365,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             f"echo '{event_conf_b64}' | base64 -d | sudo tee /opt/quotient/config/event.conf > /dev/null && "
             "sudo chmod 600 /opt/quotient/config/event.conf",
@@ -390,8 +378,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             f"mkdir -p /opt/quotient/config/credlists && echo '{credlist_b64}' | base64 -d | sudo tee /opt/quotient/config/credlists/linux.credlist > /dev/null && "
             "sudo chmod 600 /opt/quotient/config/credlists/linux.credlist",
@@ -410,8 +397,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             f"echo '{env_b64}' | base64 -d | sudo tee /opt/quotient/.env > /dev/null && "
             "sudo chmod 600 /opt/quotient/.env",
@@ -422,8 +408,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
     subprocess.run(
         [
             "ssh", "-i", key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
             "cd /opt/quotient && sudo docker compose restart",
         ],
