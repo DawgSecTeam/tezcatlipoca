@@ -327,17 +327,21 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1):
             # an apt-get update then fails rc=100 in a second (resume-final3: nginx
             # planted against a stale index). Preempt the timers and wait the locks
             # out before updating.
+            # every line needs sudo -n: the box user has NOPASSWD but no direct
+            # root — unprivileged apt-get update dies rc=100 on the lists lock
+            # (resume-final4/5: the refresh was a no-op and nginx planted against
+            # a stale index)
             apt_refresh = (
                 # mask, not just stop: the timers re-arm on the next rollback, and
                 # unattended-upgrade sessions that fire mid-plant grab the dpkg lock
                 # and break install steps hours in (resume-final4: db01's apache)
-                "systemctl mask apt-daily.timer apt-daily-upgrade.timer apt-daily "
+                "sudo -n systemctl mask apt-daily.timer apt-daily-upgrade.timer apt-daily "
                 "apt-daily-upgrade unattended-upgrade 2>/dev/null; "
-                "systemctl stop apt-daily.timer apt-daily-upgrade.timer apt-daily "
+                "sudo -n systemctl stop apt-daily.timer apt-daily-upgrade.timer apt-daily "
                 "apt-daily-upgrade 2>/dev/null; "
-                "for i in $(seq 1 60); do fuser /var/lib/dpkg/lock-frontend "
+                "for i in $(seq 1 60); do sudo -n fuser /var/lib/dpkg/lock-frontend "
                 "/var/lib/apt/lists/lock >/dev/null 2>&1 || break; sleep 5; done; "
-                "apt-get update -qq; echo APT_REFRESH_RC=$?"
+                "sudo -n apt-get update -qq; echo APT_REFRESH_RC=$?"
             )
             for t in [t for t in team1_targets if not is_windows_template(t["box"]["template"])]:
                 r = ssh_via_gateway(ctx, t["ip"], apt_refresh, timeout=600,
