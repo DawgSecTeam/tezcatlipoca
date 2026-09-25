@@ -75,9 +75,6 @@
       }
     },
     {
-      "name": "iis-webshell"
-    },
-    {
       "name": "insecure-file-acl-win",
       "vars": {
         "FILE_PATH": "C:\\ProgramData\\Meridian\\hr-credentials.txt",
@@ -257,9 +254,6 @@
         "HOSTNAME": "ehr.meridian.local",
         "IP": "198.51.100.77"
       }
-    },
-    {
-      "name": "iis-webshell"
     },
     {
       "name": "insecure-file-acl-win",
