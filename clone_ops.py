@@ -46,9 +46,17 @@ def _repair_box_network(node, vmid, expected_ip):
     ifaces = proxmox_api(
         "GET", f"/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"
     )["data"]["result"]
-    iface = next((i["name"] for i in ifaces if i.get("name") and i["name"] != "lo"), None)
+    # Skip virtual interfaces: docker0/br-*/veth* on boxes with docker would otherwise
+    # get the static address written onto them (and networkd restarted over it), flushing
+    # the real NIC's address — e2e #3, 2026-09-24.
+    virtual = ("lo", "docker", "br-", "veth", "virbr", "tun", "tap")
+    iface = next(
+        (i["name"] for i in ifaces
+         if i.get("name") and not i["name"].startswith(virtual)),
+        None,
+    )
     if not iface:
-        raise RuntimeError("no non-loopback interface reported by guest agent")
+        raise RuntimeError("no non-virtual interface reported by guest agent")
     script = f"""set -e
 ip addr add {cidr} dev {iface} 2>/dev/null || true
 ip link set {iface} up
