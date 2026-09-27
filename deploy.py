@@ -702,7 +702,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
             # Length must equal boxes_per_team (positional). Unmanaged boxes (pfSense) have
             # no golden — terraform's team_box unmanaged branch clones them from their own
             # base template instead, so their slot here carries that base template's vmid.
-            from golden_ops import _template_vmid_map
             _tmap = _template_vmid_map(node)
             tfvars["golden_template_ids"] = [
                 int(_tmap[b["template"]]) if is_unmanaged(b) else int(golden_ids[b["name"]])
