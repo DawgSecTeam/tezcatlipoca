@@ -69,7 +69,7 @@ from template_ops import (
     stored_template_hash,
 )
 from timing import print_timing_summary, timed
-from utils import (compfile_flag, compfile_value, load_compfile, load_users_config,
+from utils import (compfile_flag, compfile_value, is_unmanaged, load_compfile, load_users_config,
                    run_concurrent, run_terraform, valid_comp_name)
 from windows_ops import bootstrap_windows_box, is_windows_template
 
@@ -500,8 +500,12 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     node = os.environ["TF_VAR_proxmox_node"]
     all_targets = enumerate_targets(teams, boxes)
     persist_targets(comp_dir, all_targets, boxes)
-    linux_targets = [t for t in all_targets if not is_windows_template(t["box"]["template"])]
-    windows_targets = [t for t in all_targets if is_windows_template(t["box"]["template"])]
+    # Unmanaged boxes (pfSense/appliances) get no plant/repair/fix_services/cloud-init —
+    # they are cloned from their own template and self-configure. Keep them in all_targets
+    # (positional vmids) but out of the Linux/Windows work lists.
+    managed_targets = [t for t in all_targets if not is_unmanaged(t["box"])]
+    linux_targets = [t for t in managed_targets if not is_windows_template(t["box"]["template"])]
+    windows_targets = [t for t in managed_targets if is_windows_template(t["box"]["template"])]
 
     current_phase = max(from_phase, 1)
     try:
@@ -695,7 +699,15 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
             # Positional per box: two box types may share one base template, so a name-keyed
             # map would silently cross-wire golden disks (live-found 2026-09-24: web01
             # clones came from golden-db01's disk).
-            tfvars["golden_template_ids"] = [int(golden_ids[b["name"]]) for b in boxes]
+            # Length must equal boxes_per_team (positional). Unmanaged boxes (pfSense) have
+            # no golden — terraform's team_box unmanaged branch clones them from their own
+            # base template instead, so their slot here carries that base template's vmid.
+            from golden_ops import _template_vmid_map
+            _tmap = _template_vmid_map(node)
+            tfvars["golden_template_ids"] = [
+                int(_tmap[b["template"]]) if is_unmanaged(b) else int(golden_ids[b["name"]])
+                for b in boxes
+            ]
             tfvars["build_team_boxes"] = True
             tfvars_path.write_text(json.dumps(tfvars, indent=2))
             os.chmod(tfvars_path, 0o600)

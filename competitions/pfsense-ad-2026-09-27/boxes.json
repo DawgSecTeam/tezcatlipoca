@@ -1,0 +1,10 @@
+[
+  {"name": "fw01",  "last_octet": 1, "cpu": 1, "memory_mb": 1024, "disk_gb": null, "template": "pfsense-fix", "unmanaged": true,
+   "nics": [
+     {"role": "wan", "bridge": "transit", "cidr": "30"},
+     {"role": "lan", "bridge": "team", "ip_last_octet": 1, "cidr": "24"}
+   ]},
+  {"name": "dc01",  "last_octet": 2, "cpu": 2, "memory_mb": 4096, "disk_gb": 60, "disk_iface": "sata0", "template": "base-windows-server"},
+  {"name": "web01", "last_octet": 4, "cpu": 1, "memory_mb": 2048, "disk_gb": 15, "template": "base-ubuntu24.04-fix"},
+  {"name": "app01", "last_octet": 5, "cpu": 1, "memory_mb": 2048, "disk_gb": 15, "template": "base-fedora44"}
+]
