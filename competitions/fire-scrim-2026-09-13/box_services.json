@@ -1,0 +1,28 @@
+{
+  "dc01": [
+    "Enable WinRM"
+  ],
+  "web01": [
+    "nginx",
+    "dovecot"
+  ],
+  "app01": [
+    "apache",
+    "bind"
+  ],
+  "db01": [
+    "mysql"
+  ],
+  "mail01": [
+    "postfix",
+    "dovecot"
+  ],
+  "files01": [
+    "vsftpd",
+    "telnet-service"
+  ],
+  "monitor01": [
+    "bind",
+    "nginx"
+  ]
+}

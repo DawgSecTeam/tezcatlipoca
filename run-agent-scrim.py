@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -489,6 +490,11 @@ hunts) is fine inside your budget — two changes is the cap, not two commands:
 0. FIRST: update NOTEBOOK.md (SNAPSHOT line: current state + next action; move finished
    items to DONE; add new incidents/findings) and append one timestamped line to LOG.md.
 1. If any service above is DOWN (or CHANGES shows a new DOWN): restore it NOW (./mybox web01 "echo $BOX_PW | sudo -S systemctl unmask nginx; echo $BOX_PW | sudo -S systemctl start nginx" for example). Availability beats everything.
+   If the SAME service goes down again after you restored it, the attacker still has a way in —
+   close the ENTRY VECTOR in the same cycle (e.g. a harvested password over SSH: set
+   `PasswordAuthentication no` in sshd_config AND any sshd_config.d drop-in, reload ssh — your
+   own access is key-based; rotate/lock the abused account). Restoring the symptom alone gets
+   re-undone every minute.
 2. Else if an inject is due within 30 minutes and unsubmitted: investigate on the boxes, write the deliverable, ./submit-inject.
 3. Else: ONE hunt item from the notebook checklist (rogue UID-0 users, cron, systemd units, sudoers, firewall rules, listeners, Windows services/tasks/run-keys). Fix what is safe; never take a scored service down.
 4. Wrap up by minute 20: finish the current step, re-check the scoreboard, leave the
@@ -684,6 +690,72 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
             log(f"blue-team{n} feed error: {e}")
         took = time.time() - started
         stop.wait(min(600, max(30, CYCLE_TARGET_PERIOD - took)))
+
+
+# Scored service name (box_services.json) -> candidate systemd units, first existing wins.
+_WATCHDOG_UNITS = {
+    "nginx": ["nginx"], "apache": ["apache2", "httpd"], "httpd": ["httpd", "apache2"],
+    "bind": ["named", "bind9"], "named": ["named", "bind9"],
+    "mysql": ["mysql", "mariadb"], "mariadb": ["mariadb", "mysql"], "mysqld": ["mysql", "mariadb"],
+    "postfix": ["postfix"], "dovecot": ["dovecot"], "vsftpd": ["vsftpd"],
+    "ssh": ["ssh", "sshd"], "openssh": ["ssh", "sshd"], "sshd": ["ssh", "sshd"],
+    "splunk": ["Splunkd"], "exim4": ["exim4"], "exim": ["exim4"], "sendmail": ["sendmail"],
+}
+WATCHDOG_INTERVAL = 60
+
+
+def watchdog_script(services, box_pw):
+    """Idempotent: for each scored unit that exists and is not active, unmask + enable --now.
+    Prints one 'RESTORED <unit>' line per unit it had to bring back."""
+    units = []
+    for svc in services:
+        units.extend(_WATCHDOG_UNITS.get(svc, []))
+    lines = [f"S() {{ echo {shlex.quote(box_pw)} | sudo -S -p '' \"$@\"; }}"]
+    for u in dict.fromkeys(units):
+        lines.append(
+            f"if systemctl list-unit-files {u}.service --no-legend 2>/dev/null | grep -q . "
+            f"&& ! systemctl is-active --quiet {u}; then "
+            f"S systemctl unmask {u} >/dev/null 2>&1; S systemctl enable --now {u} >/dev/null 2>&1 "
+            f"&& echo RESTORED {u}; fi")
+    return "\n".join(lines)
+
+
+def blue_watchdog_loop(args, creds, t0, stop):
+    """Non-LLM dead-man's switch (winad-scrim2 rec 7): an account-wide rate limit killed BOTH
+    blue agents at once and web01 sat down ~2h, unwatched. Every WATCHDOG_INTERVAL this
+    restores any scored Linux unit that is stopped/masked, over the operator's key via the
+    engine. It only keeps availability up — it does not hunt or close the entry vector."""
+    comp = REPO / "competitions" / args.competition
+    boxes = json.loads((comp / "boxes.json").read_text())
+    box_services = json.loads((comp / "box_services.json").read_text())
+    linux = [b for b in boxes if any(s in _WATCHDOG_UNITS for s in box_services.get(b["name"], []))]
+    proxy = (f"ssh -i {creds['KEY_PATH']} -o StrictHostKeyChecking=no "
+             f"-o UserKnownHostsFile=/dev/null -W %h:%p {creds['VM_USER']}@{creds['ENGINE_IP']}")
+    base = ["ssh", "-i", creds["KEY_PATH"], "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15",
+            "-o", f"ProxyCommand={proxy}"]
+    wlog = Path(args.run_dir) / "watchdog.log"
+    team_ids = sorted(v for k, v in creds.items() if re.fullmatch(r"TEAM\d+_ID", k))
+    log(f"blue watchdog on: {[b['name'] for b in linux]} x {len(team_ids)} team(s)")
+    while not stop.is_set() and (time.time() - t0) < args.duration_min * 60:
+        for tid in team_ids:
+            for b in linux:
+                host = f"{creds['BOX_USER']}@192.168.{tid}.{b['last_octet']}"
+                try:
+                    r = subprocess.run(base + [host, "bash -s"],
+                                       input=watchdog_script(box_services[b["name"]], creds["BOX_PW"]),
+                                       capture_output=True, text=True, timeout=60)
+                    out = [l for l in (r.stdout or "").splitlines() if l.startswith("RESTORED")]
+                    msg = "; ".join(out) if out else ("" if r.returncode == 0 else
+                                                      f"ssh rc={r.returncode} {(r.stderr or '').strip()[-120:]}")
+                except subprocess.TimeoutExpired:
+                    msg = "timeout"
+                if msg:
+                    line = f"T+{int(time.time() - t0) // 60}min 192.168.{tid}.{b['last_octet']} {b['name']}: {msg}"
+                    with wlog.open("a") as f:
+                        f.write(line + "\n")
+                    log(f"watchdog {line}")
+        stop.wait(WATCHDOG_INTERVAL)
 
 
 def monitor_loop(args, creds, t0, stop):
@@ -946,6 +1018,8 @@ def stage_run(args, creds, t0):
     threads = [threading.Thread(target=blue_feed_loop, args=(1, args, creds, t0, stop, blue_lock, 0.0)),
                threading.Thread(target=blue_feed_loop, args=(2, args, creds, t0, stop, blue_lock2, 300.0))]
     threads.append(threading.Thread(target=monitor_loop, args=(args, creds, t0, stop)))
+    if getattr(args, "blue_watchdog", False):
+        threads.append(threading.Thread(target=blue_watchdog_loop, args=(args, creds, t0, stop)))
     for t in threads:
         t.start()
     try:
@@ -1100,6 +1174,9 @@ def main():
                    help="resume create-competition at this phase")
     p.add_argument("--keep-range", action="store_true", help="skip destroy-competition at teardown")
     p.add_argument("--run-dir", default=None)
+    p.add_argument("--blue-watchdog", action="store_true", dest="blue_watchdog",
+                   help="run a non-LLM loop that re-unmasks/starts stopped scored Linux units every "
+                        f"{WATCHDOG_INTERVAL}s — keeps availability up through a blue-agent API outage")
     args = p.parse_args()
     args.blue_base_url = args.blue_base_url or args.llm_base_url
 

@@ -18,8 +18,15 @@ competitions/*/linux.credlist
 competitions/*/cloned_vms.json
 competitions/*/credentials.txt
 competitions/*/.deploy_state.json
+competitions/*/.deploy-timings.jsonl
 competitions/*/nakon-config.json
 competitions/*/.nakon-domain-*.json
+competitions/*/.nakon-golden.json
+competitions/*/.nakon-postclone.json
+competitions/*/.nakon-repair.json
+competitions/*/.nakon-final.json
+competitions/*/.frozen.json
+competitions/*/.template-hashes.json
 competitions/*/.phase6-swept
 .deploy.lock
 competitions/*/box_vulns.json.pre-cyberfield-prune1

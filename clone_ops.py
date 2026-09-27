@@ -7,6 +7,9 @@ import time
 from constants import SNAP_BASE
 from hardening_ops import fix_dns_on_boxes, fix_services_on_boxes, setup_ubuntu_auth
 from range_ops import (
+    clone_marker,
+    destroy_vm_if_exists,
+    gc_orphan_volumes,
     enumerate_targets,
     guest_agent_exec_root,
     proxmox_api,
@@ -16,6 +19,8 @@ from range_ops import (
     wait_for_proxmox_task,
 )
 from ssh_ops import ssh_via_gateway, wait_for_boxes_ssh, wait_for_cloud_init
+from timing import timed
+from utils import PRINT_LOCK, run_concurrent
 from windows_ops import bootstrap_windows_box, is_windows_template
 
 
@@ -118,8 +123,9 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
             continue
         ip = f"192.168.{team1['identifier']}.{box['last_octet']}"
         try:
-            result = ssh_via_gateway(ctx, ip, "sudo cloud-init clean --logs --machine-id",
-                                      timeout=30, user=ctx.get("box_username", "ubuntu"))
+            with timed(comp_dir, 6, "cloud_init_clean", box["name"]):
+                result = ssh_via_gateway(ctx, ip, "sudo cloud-init clean --logs --machine-id",
+                                         timeout=30, user=ctx.get("box_username", "ubuntu"))
             if result.returncode != 0:
                 print(f"  WARNING: cloud-init clean FAILED for {box['name']} "
                       f"(rc={result.returncode}): {(result.stderr or '').strip()[:150]}")
@@ -136,13 +142,19 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
         vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
         vm = next((v for v in vms if v["vmid"] == vmid), None)
         if vm and vm.get("status") == "running":
-            stop_vm(node, vmid)
+            with timed(comp_dir, 6, "stop_vm", f"team1-{box['name']}"):
+                stop_vm(node, vmid)
         print(f"    team1-{box['name']} (vmid {vmid}) stopped")
 
     print("  Cloning team1 boxes to other teams...")
     cloned_vms_path = comp_dir / "cloned_vms.json"
     cloned_vms = json.loads(cloned_vms_path.read_text()) if cloned_vms_path.exists() else {}
     existing_vmids = {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
+    # Explicit ownership tags on every clone (matches main.tf's team_box/engine tags): the
+    # parallel cleanup sweep refuses to destroy tagged VMs outside this set. Clones of
+    # team1 would inherit its tags anyway, but the PUT keeps that true regardless of what
+    # the clone source is (golden templates in M3 carry a different tag).
+    ownership_tags = f"tezcatlipoca,comp-{comp_dir.name}"
     for team in team_ids[1:]:
         for box_idx, box in enumerate(boxes):
             src_vmid = vm_id_for(team1["identifier"], box_idx)
@@ -152,16 +164,25 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
             cloned_vms[clone_name] = dst_vmid
             cloned_vms_path.write_text(json.dumps(cloned_vms, indent=2))
 
+            if dst_vmid in existing_vmids and proxmox_api(
+                    "GET", f"/nodes/{node}/qemu/{dst_vmid}/config")["data"].get("lock"):
+                # An interrupted clone (host reboot / killed driver): the disk is
+                # half-copied — destroy and clone again rather than "resume" onto it.
+                destroy_vm_if_exists(node, dst_vmid, expect_tags=set())
+                existing_vmids.discard(dst_vmid)
             if dst_vmid in existing_vmids:
                 print(f"    {clone_name} (vmid {dst_vmid}) already exists — skipping clone (resume)")
             else:
+                gc_orphan_volumes(node, dst_vmid)
                 upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src_vmid}/clone", data={
                     "newid": dst_vmid,
                     "name": clone_name,
                     "full": 1,
+                    "description": clone_marker(comp_dir.name),
                 })["data"]
                 print(f"    team1-{box['name']} (vmid {src_vmid}) -> {clone_name} (vmid {dst_vmid})...")
-                wait_for_proxmox_task(node, upid)
+                with timed(comp_dir, 6, "clone_vm", f"{src_vmid}->{dst_vmid}"):
+                    wait_for_proxmox_task(node, upid)
 
             team_subnet = team["identifier"]
             box_octet = box["last_octet"]
@@ -170,53 +191,80 @@ def clone_team_boxes(teams, boxes, ctx, comp_dir, box_creds=None, box_password=N
             if is_windows_template(box["template"]):
                 proxmox_api("PUT", f"/nodes/{node}/qemu/{dst_vmid}/config", data={
                     "net0": f"virtio,bridge={bridge}",
+                    "tags": ownership_tags,
                 })
             else:
                 ipconfig = f"ip=192.168.{team_subnet}.{box_octet}/24,gw=192.168.{team_subnet}.1"
                 proxmox_api("PUT", f"/nodes/{node}/qemu/{dst_vmid}/config", data={
                     "ipconfig0": ipconfig,
                     "net0": f"virtio,bridge={bridge}",
+                    "tags": ownership_tags,
                 })
 
     print("  Starting all team boxes...")
-    for team in team_ids:
-        for box_idx, box in enumerate(boxes):
-            vmid = vm_id_for(team["identifier"], box_idx)
-            try:
-                vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
-                vm = next((v for v in vms if v["vmid"] == vmid), None)
-                if vm and vm.get("status") != "running":
-                    upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/start")["data"]
+    start_items = [(vm_id_for(team["identifier"], box_idx), f"{team['identifier']}-{box['name']}")
+                   for team in team_ids for box_idx, box in enumerate(boxes)]
+
+    def _start(item):
+        vmid, label = item
+        try:
+            vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
+            vm = next((v for v in vms if v["vmid"] == vmid), None)
+            if vm and vm.get("status") != "running":
+                upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/start")["data"]
+                with timed(comp_dir, 6, "start_vm", label):
                     wait_for_proxmox_task(node, upid, timeout=120)
-                print(f"    vmid {vmid} ({team['identifier']}-{box['name']}) started")
-            except Exception as e:
+            with PRINT_LOCK:
+                print(f"    vmid {vmid} ({label}) started")
+        except Exception as e:
+            with PRINT_LOCK:
                 print(f"  WARNING: Failed to start vmid {vmid}: {e}")
 
-    ensure_cloned_network(teams, boxes)
+    # Starts are light API operations (no bulk writes); 4 workers keeps the pvestatd
+    # load bounded on the shared node.
+    run_concurrent(start_items, _start, max_workers=4)
+
+    with timed(comp_dir, 6, "ensure_cloned_network"):
+        ensure_cloned_network(teams, boxes)
 
     all_targets = enumerate_targets(teams, boxes)
 
-    for t in all_targets:
-        if t["team_key"] == "team1" or not is_windows_template(t["box"]["template"]):
-            continue
+    windows_clone_targets = [t for t in all_targets
+                             if t["team_key"] != "team1" and is_windows_template(t["box"]["template"])]
+
+    def _boot_win(t):
         print(f"    Bootstrapping Windows box {t['ip']} (vmid {t['vmid']})...")
         gw = f"192.168.{t['identifier']}.1"
-        bootstrap_windows_box(node, t["vmid"], t["ip"], gw, "8.8.8.8", box_password)
+        with timed(comp_dir, 6, "bootstrap_windows", t["ip"]):
+            bootstrap_windows_box(node, t["vmid"], t["ip"], gw, "8.8.8.8", box_password)
 
-    wait_for_boxes_ssh(ctx, all_targets, timeout=300)
-    wait_for_cloud_init(ctx, all_targets, timeout=240)
+    win_results = run_concurrent(windows_clone_targets, _boot_win, max_workers=4)
+    for t, r in zip(windows_clone_targets, win_results):
+        if isinstance(r, Exception):
+            raise r
 
-    setup_ubuntu_auth([t for t in all_targets if not is_windows_template(t["box"]["template"])], ctx)
-    fix_dns_on_boxes([t for t in all_targets if not is_windows_template(t["box"]["template"])], ctx)
+    with timed(comp_dir, 6, "wait_boxes_ssh"):
+        wait_for_boxes_ssh(ctx, all_targets, timeout=300)
+    with timed(comp_dir, 6, "wait_cloud_init"):
+        wait_for_cloud_init(ctx, all_targets, timeout=240)
+
+    with timed(comp_dir, 6, "setup_auth"):
+        setup_ubuntu_auth([t for t in all_targets if not is_windows_template(t["box"]["template"])], ctx)
+    with timed(comp_dir, 6, "fix_dns"):
+        fix_dns_on_boxes([t for t in all_targets if not is_windows_template(t["box"]["template"])], ctx)
 
     print(f"  Snapshotting cloned boxes as '{SNAP_BASE}' (pre-Nakon restore point)...")
-    for t in all_targets:
-        if t["team_key"] == "team1":
-            continue
-        take_snapshot(node, t["vmid"], SNAP_BASE,
-                      description="tezcatlipoca: cloned, networked, pre-Nakon")
 
-    fix_services_on_boxes(
-        comp_dir, [t for t in all_targets if not is_windows_template(t["box"]["template"])],
-        ctx, box_creds=box_creds,
-    )
+    def _snap_base(t):
+        with timed(comp_dir, 6, "snapshot", t["vm_name"]):
+            take_snapshot(node, t["vmid"], SNAP_BASE,
+                          description="tezcatlipoca: cloned, networked, pre-Nakon")
+
+    run_concurrent([t for t in all_targets if t["team_key"] != "team1"],
+                   _snap_base, max_workers=4)
+
+    with timed(comp_dir, 6, "fix_services"):
+        fix_services_on_boxes(
+            comp_dir, [t for t in all_targets if not is_windows_template(t["box"]["template"])],
+            ctx, box_creds=box_creds,
+        )

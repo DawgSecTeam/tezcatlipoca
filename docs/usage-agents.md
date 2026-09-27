@@ -244,13 +244,31 @@ state, not a repair. Every mode except `reconfigure` says so and requires confir
 ## `destroy-competition.py`
 
 ```bash
-python3 destroy-competition.py
+python3 destroy-competition.py                                # teams-only (M4 default)
+python3 destroy-competition.py --competition <id> --full      # also destroy templates
+python3 destroy-competition.py --competition <id> --full --end-of-competition  # frozen comp
 ```
 
 Destroys the team2+ boxes cloned via the Proxmox API (reads
 `competitions/<id>/cloned_vms.json` — they're not in Terraform state, so `terraform destroy`
 alone can't remove them), then runs `terraform destroy`. Requires that competition's
-`teams.json` + `boxes.json` (both written by `deploy()`). Doesn't touch templates.
+`teams.json` + `boxes.json` (both written by `deploy()`).
+
+M4 teardown modes: the default is **teams-only** — team clones, the engine VM, and the
+bridges die; the competition's golden templates and engine template are KEPT and the next
+deploy reuses them by hash (test-run reuse). `--full` additionally destroys the templates
+(clones strictly first — linked clones die with their base disks) and removes
+`.template-hashes.json`. On a FROZEN competition `--full` refuses without
+`--end-of-competition`, so an accidental full teardown mid-event is impossible.
+
+Related M4 commands:
+
+```bash
+python3 verify-competition.py competitions/<id> --freeze --windows-domain-validated
+python3 verify-competition.py competitions/<id> --unfreeze --confirm-unfreeze
+python3 redeploy-competition.py --competition <id> --mode engine-recovery   # fresh engine from template
+python3 redeploy-competition.py --competition <id> --teams team2 --mode rebuild --yes  # team rebuild
+```
 
 ## `run-deploy.sh`
 

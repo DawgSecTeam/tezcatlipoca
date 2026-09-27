@@ -1,9 +1,43 @@
+import contextlib
 import json
+import os
 import re
+import signal
+import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 _USERNAME_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 _COMP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+PRINT_LOCK = threading.Lock()
+MAX_CONCURRENCY = 8
+
+
+def run_concurrent(items, fn, max_workers=MAX_CONCURRENCY):
+    """Run fn(item) for every item on a bounded thread pool.
+
+    M2.1's shared helper for per-box work. Returns a LIST aligned with `items`: each
+    slot holds fn's return value, or the exception fn raised — never raised here — so
+    each caller keeps its own aggregate semantics (all-fail abort vs warn-and-continue).
+    Items need not be hashable (they're target dicts). max_workers is capped at
+    MAX_CONCURRENCY (8), which stays far under the engine's raised sshd MaxSessions
+    (64), so the ControlMaster channel is never the bottleneck; the ceiling also keeps
+    the Proxmox API poll load bounded. Output interleaving is the caller's problem:
+    wrap prints in PRINT_LOCK."""
+    results = [None] * len(items)
+    if not items:
+        return results
+    workers = max(1, min(max_workers, len(items)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(fn, item): idx for idx, item in enumerate(items)}
+        for future, idx in futures.items():
+            try:
+                results[idx] = future.result()
+            except Exception as exc:
+                results[idx] = exc
+    return results
 
 
 def valid_unix_username(name):
@@ -87,6 +121,20 @@ def compfile_flag(path, key, default=0):
     return default
 
 
+def compfile_value(path, key, default=""):
+    """Read a string Compfile knob (e.g. `quotient_ref <sha-or-tag>`); default when
+    the key or the file is absent."""
+    try:
+        with open(path) as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith(key + " "):
+                    return stripped.split(" ", 1)[1].strip()
+    except FileNotFoundError:
+        pass
+    return default
+
+
 def pick_competition(competitions, label="saved", action="Select a competition"):
     print(f"Found {len(competitions)} {label} competition(s):\n")
     for i, comp in enumerate(competitions, 1):
@@ -108,3 +156,50 @@ def pick_competition(competitions, label="saved", action="Select a competition")
         except ValueError:
             pass
         print(f"  Please enter a number between 1 and {len(competitions)}, or 'exit'.")
+
+
+def run_terraform(args, cwd, env=None, timeout=None, check=True, grace=60):
+    """Run terraform in its own process group so a driver interruption can't orphan it.
+
+    A plain subprocess.run leaves `terraform apply` running as a grandchild holding the
+    state lock and still mutating infra if the Python driver is killed (winad-testrun
+    2026-09-25). Here SIGINT/SIGTERM/timeout/Ctrl-C all forward SIGINT to the group
+    (terraform's graceful stop: finishes in-flight ops, releases the lock), escalating to
+    SIGKILL after `grace` seconds. SIGKILL of the driver itself is not catchable.
+    Returns CompletedProcess (returncode only); raises CalledProcessError when check."""
+    cmd = ["terraform", *args]
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, start_new_session=True)
+
+    def _stop():
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGINT)
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        # terraform reaps its own provider plugins before exiting; sweep any straggler
+        # left in the group so nothing keeps mutating infra behind a released lock.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+
+    prev = None
+    if threading.current_thread() is threading.main_thread():
+        def _on_term(signum, frame):
+            raise KeyboardInterrupt(f"signal {signum}")
+        prev = signal.signal(signal.SIGTERM, _on_term)
+    try:
+        try:
+            rc = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _stop()
+            raise
+        except BaseException:
+            _stop()
+            raise
+    finally:
+        if prev is not None:
+            signal.signal(signal.SIGTERM, prev)
+    if check and rc != 0:
+        raise subprocess.CalledProcessError(rc, cmd)
+    return subprocess.CompletedProcess(cmd, rc)

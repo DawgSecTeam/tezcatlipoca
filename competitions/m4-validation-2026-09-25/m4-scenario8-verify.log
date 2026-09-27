@@ -1,0 +1,64 @@
+Verifying competition 'm4-validation-2026-09-25' against engine http://10.0.0.248
+
+[1/5] LOGIN
+  PASS  admin      — HTTP 200
+  PASS  team1      — HTTP 200
+
+  (default-credential regression guard)
+  PASS  4 box credential line(s), no default literals found
+
+[2/5] SERVICES
+  team1: 2/2 services UP
+
+[3/5] ISOLATION
+  PASS  isolation DROP rule present in FORWARD chain
+  (only 1 team — skipping the cross-team connection test)
+
+  (live-ops health check status — informational)
+  range-healthcheck.timer: active
+  recent log entries:
+      2026-09-26 03:53:01 FAIL quotient-api: http://localhost/api/login did not respond (curl code: 000)
+      2026-09-26 03:55:20 FAIL quotient-containers: no running container matching name=quotient
+      2026-09-26 03:55:20 FAIL quotient-api: http://localhost/api/login did not respond (curl code: 000)
+
+[4/5] MISCONFIG SPOT-CHECK
+  target: web01-team105 (192.168.105.4) — candidates: www-data-shell
+  PASS  confirmed 'www-data-shell' — `grep '^www-data:' /etc/passwd` -> www-data:x:33:33:www-data:/var/www:/bin/bash
+
+  (cross-team misconfig survival check)
+  SKIP  — fewer than 2 teams, or no box's misconfigs are both shared and verifiable.
+
+  (team beacons — informational)
+  ....  web01-team105 (192.168.105.4) — no beacon unit running (inactive)
+  ....  app01-team105 (192.168.105.5) — no beacon unit running (inactive)
+  beacons live: 0/2 linux boxes
+
+[5/5] INJECTS
+  SKIP  — competition ships no injects/ dir.
+
+  (M4 plant coverage — expected vs. actually planted, per machine)
+  PASS  all 4 machine(s) report full config coverage
+
+  (AD domains — promotion, joins, AD plants, DomainSID uniqueness)
+  PASS  team1/dc01: team105.local DomainSID S-1-5-21-2287377195-1353554657-36553089; svc-support present
+  PASS  team1/win01: joined to team105.local
+  PASS  team1/app01: realm-joined to team105.local
+  PASS  1 team domain(s), all DomainSIDs unique
+
+============================================================
+SUMMARY
+============================================================
+  logins           : PASS
+  no_default_creds : PASS
+  services         : UP (query ok) [informational]
+  isolation        : PASS
+  misconfig        : PASS
+  misconfig_surviv.: PASS
+  injects          : PASS (none — skipped)
+  plant integrity  : last nakon plant recorded 0 FAILED steps
+  domains          : PASS
+  plant coverage   : PASS
+  templates        : engine aaeb2487c2aa | golden {"web01": "396d8f212b28", "app01": "81fdb873b797", "dc01": "4ff5c50eeec6", "win01": "878c3c466f37"}
+  freeze           : FROZEN since 2026-09-26 00:50:09
+
+RESULT: PASS — competition looks healthy.

@@ -95,8 +95,13 @@ def wait_for_proxmox_task(node, upid, timeout=1800):
             raise RuntimeError(f"Proxmox task {upid} timed out after {timeout}s")
         data = proxmox_api("GET", f"/nodes/{node}/tasks/{upid}/status")["data"]
         if data["status"] == "stopped":
-            if data.get("exitstatus") != "OK":
-                raise RuntimeError(f"Proxmox task {upid} failed: {data.get('exitstatus')}")
+            exitstatus = data.get("exitstatus") or ""
+            # "WARNINGS: n" is PVE's completed-with-warnings exit — the task's work
+            # is done (live-found 2026-09-26: qmdestroy of a team clone whose
+            # cloud-init volume was already gone exits WARNINGS, VM verifiably
+            # destroyed). Only anything else is a failure.
+            if exitstatus != "OK" and not exitstatus.startswith("WARNINGS"):
+                raise RuntimeError(f"Proxmox task {upid} failed: {exitstatus}")
             return
         time.sleep(3)
 
@@ -281,15 +286,93 @@ def start_vm(node, vmid, timeout=120):
     wait_for_proxmox_task(node, upid, timeout=timeout)
 
 
-def destroy_vm_if_exists(node, vmid):
+def clone_marker(comp_name):
+    """Ownership marker written as the clone's `description` IN the clone POST itself.
+    /clone takes no `tags`, and the tagging PUT only lands after the clone task finishes —
+    a host reboot or kill mid-clone used to leave an untagged, clone-locked VM in our own
+    slot that preflight called "foreign" and blocked every later deploy (winad-testrun
+    2026-09-25). The description exists from the first instant of the clone."""
+    return f"tezcatlipoca-clone comp-{comp_name}"
+
+
+def has_clone_marker(node, vmid, comp_name):
+    try:
+        cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+    except Exception:
+        return False
+    return clone_marker(comp_name) in str(cfg.get("description") or "")
+
+
+def unlock_vm(node, vmid, lock):
+    """Clear a stale lock (an interrupted clone's 'clone'). PVE only lets root@pam touch
+    `lock`; with a token we fail loudly with the exact command instead of 'foreign VM'."""
+    try:
+        proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data={"delete": "lock"})
+        print(f"    vmid {vmid}: cleared stale '{lock}' lock (interrupted clone)")
+    except Exception as e:
+        raise RuntimeError(
+            f"vmid {vmid} is stuck with lock '{lock}' from an interrupted clone and this API "
+            f"token cannot clear it ({e}). On the node run:  qm unlock {vmid} && qm destroy "
+            f"{vmid} --destroy-unreferenced-disks 1 --purge 1   then re-run the deploy.") from e
+
+
+def gc_orphan_volumes(node, vmid):
+    """Delete disk volumes named for `vmid` when no VM with that vmid exists. An interrupted
+    clone/destroy can strand vm-<vmid>-disk-N zvols; the next clone into the slot then fails
+    with 'already exists'. Only called for vmids we just verified are empty and ours by
+    computed slot, so every volume here is a leftover of our own."""
+    removed = 0
+    for st in proxmox_api("GET", f"/nodes/{node}/storage", params={"content": "images"})["data"]:
+        try:
+            vols = proxmox_api("GET", f"/nodes/{node}/storage/{st['storage']}/content",
+                               params={"vmid": vmid})["data"]
+        except Exception:
+            continue
+        for v in vols:
+            if int(v.get("vmid") or -1) != vmid:
+                continue
+            upid = proxmox_api("DELETE", f"/nodes/{node}/storage/{st['storage']}/content/{v['volid']}")["data"]
+            if upid:
+                wait_for_proxmox_task(node, upid)
+            removed += 1
+    if removed:
+        print(f"    vmid {vmid}: removed {removed} orphaned disk volume(s) (no VM owns them)")
+    return removed
+
+
+def destroy_vm_if_exists(node, vmid, expect_tags=None, legacy_name=None):
     vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
     vm = next((v for v in vms if v["vmid"] == vmid), None)
     if vm is None:
+        gc_orphan_volumes(node, vmid)
         return
+    if expect_tags is not None:
+        # Defense in depth for the parallel cleanup sweep: a VM that carries tags without
+        # ours is not ours, whatever the vmid math says (the preflight vmid-clash gate is
+        # the other half of the ownership proof). Untagged VMs pass with a warning — the
+        # transition window covers ranges built before tagging existed; the vmid space was
+        # still exclusively ours because preflight checked it.
+        cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+        raw = str(cfg.get("tags") or "")
+        # PVE joins tags with ';' in some views and ',' in others — accept both.
+        tags = {t.strip() for t in raw.replace(";", ",").split(",") if t.strip()}
+        missing = set(expect_tags) - tags
+        if tags and missing:
+            if not (legacy_name and vm.get("name") == legacy_name and tags == {"template"}):
+                raise RuntimeError(
+                    f"refusing to destroy vmid {vmid} ({vm.get('name')}): its tags '{raw}' are "
+                    f"missing {sorted(missing)} — outside this deploy's ownership set")
+            print(f"    vmid {vmid} legacy golden '{legacy_name}' — adopting exact reserved slot")
+        if not tags:
+            print(f"    vmid {vmid} untagged (pre-tagging range) — destroying on computed-vmid ownership")
+    lock = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"].get("lock")
+    if lock:
+        unlock_vm(node, vmid, lock)
     if vm.get("status") == "running":
         upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
         wait_for_proxmox_task(node, upid)
-    upid = proxmox_api("DELETE", f"/nodes/{node}/qemu/{vmid}")["data"]
+    upid = proxmox_api("DELETE", f"/nodes/{node}/qemu/{vmid}",
+                       params={"destroy-unreferenced-disks": 1, "purge": 1})["data"]
     wait_for_proxmox_task(node, upid)
 
 

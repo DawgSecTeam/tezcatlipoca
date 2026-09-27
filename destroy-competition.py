@@ -2,7 +2,6 @@
 
 import json
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -10,8 +9,11 @@ from pathlib import Path
 import urllib3
 from dotenv import load_dotenv
 
+from constants import GOLDEN_TAG, SCORING_ENGINE_VMID
+from golden_ops import destroy_golden_set
 from range_ops import proxmox_api, wait_for_proxmox_task
-from utils import load_compfile, pick_competition
+from template_ops import destroy_engine_template, frozen_state
+from utils import load_compfile, pick_competition, run_terraform
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -77,11 +79,22 @@ def destroy_cloned_vms(cloned_vms_path):
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Destroy a deployed competition (VMs + bridges + terraform state).")
+    parser = argparse.ArgumentParser(
+        description="Destroy a deployed competition. Default (teams-only) keeps the "
+                    "competition's golden + engine templates for the next test run; "
+                    "--full removes them too.")
     parser.add_argument("--competition", metavar="NAME",
                         help="competition directory under competitions/ (skips the picker)")
     parser.add_argument("--yes", action="store_true",
                         help="skip the type-the-ID confirmation (for scripted teardown)")
+    parser.add_argument("--full", action="store_true",
+                        help="M4 full teardown: also destroy the golden templates and the "
+                             "engine template (after every clone is gone). Default is "
+                             "teams-only: templates are kept and the next deploy reuses "
+                             "or rebuilds them by hash.")
+    parser.add_argument("--end-of-competition", action="store_true", dest="end_of_competition",
+                        help="required with --full when the competition is FROZEN — an "
+                             "accidental full teardown during the event must be impossible.")
     args = parser.parse_args()
 
     print("=" * 64)
@@ -112,16 +125,50 @@ def main():
     name, scenario, difficulty = load_compfile(comp_dir / "Compfile")
     teams = json.loads((comp_dir / "teams.json").read_text())
     boxes = json.loads((comp_dir / "boxes.json").read_text())
+    frozen = frozen_state(comp_dir)
 
+    # The refusal must fire BEFORE any destruction — a frozen competition's templates
+    # are the verified artifacts the event runs on.
+    if args.full and frozen and not args.end_of_competition:
+        print(f"  ERROR: '{competition}' is FROZEN (frozen_at {frozen.get('frozen_at')}). "
+              f"A full teardown would destroy the verified templates mid-competition. "
+              f"Re-run with --end-of-competition if the event is genuinely over.")
+        sys.exit(1)
+
+    mode = "FULL (templates destroyed)" if args.full else "teams-only (templates kept)"
     print("─── About to destroy " + "─" * 42)
     print(f"  Competition : {name} ({competition})")
     print(f"  Teams       : {len(teams)}")
     print(f"  Boxes       : {len(boxes)} type(s)")
     for b in boxes:
         print(f"    {b['name']} — {b['template']}")
+    print(f"  Mode        : {mode}"
+          + ("  [FROZEN — end-of-competition flag present]" if frozen and args.end_of_competition else ""))
+    # The deploy's stale-state guard, mirrored: tearing down against a DIFFERENT
+    # host than the one recorded in state makes terraform reconcile foreign
+    # resources (live-found 2026-09-25: a realm-deployed comp destroyed with the
+    # repo .env loaded the primary's vars and died on "required variable" noise —
+    # the next host could be less lucky).
+    state_path = comp_dir / ".deploy_state.json"
+    if state_path.exists():
+        try:
+            deployed = (json.loads(state_path.read_text()).get("deployed_endpoint") or "").rstrip("/")
+        except (ValueError, OSError):
+            deployed = ""
+        current = os.environ.get("TF_VAR_proxmox_endpoint", "").rstrip("/")
+        if deployed and current and deployed != current:
+            raise SystemExit(
+                f"  ERROR: this competition was deployed against {deployed}, but the "
+                f"loaded env targets {current}. Point TF_VAR_* at the deployment's host "
+                f"(same overrides create-competition ran with) and re-run.")
     print()
     print("  This will run: terraform destroy -parallelism=1 -auto-approve")
-    print("  All VMs and bridges for this competition will be permanently removed.")
+    if args.full:
+        print("  Then the golden templates and the engine template are destroyed "
+              "(clones first — their base disks depend on them).")
+    else:
+        print("  The golden templates and the engine template are KEPT (M4 teams-only): "
+              "the next deploy reuses them by hash.")
     print()
 
     if args.yes:
@@ -153,10 +200,11 @@ def main():
     # every pass still makes progress on the remaining resources, so retry
     # once before giving up with the range half-torn-down.
     for attempt in (1, 2):
-        proc = subprocess.run(
-            ["terraform", "destroy", "-parallelism=1", "-auto-approve"],
+        proc = run_terraform(
+            ["destroy", "-parallelism=1", "-auto-approve"],
             cwd=tf_cwd,
             env=env,
+            check=False,
         )
         if proc.returncode == 0:
             break
@@ -173,6 +221,36 @@ def main():
             cloned_vms_path.name + f".destroyed-{time.strftime('%Y%m%d-%H%M%S')}")
         cloned_vms_path.rename(archived)
         print(f"  Clone map archived as {archived.name}")
+
+    # M3: the golden templates are API-created (not in terraform state) and are the
+    # linked clones' base disks — they die only after terraform destroy removed every
+    # clone. Empty for pre-golden ranges too: the vmids simply won't exist.
+    engine_vmid = SCORING_ENGINE_VMID
+    state_path = comp_dir / ".deploy_state.json"
+    if state_path.exists():
+        try:
+            engine_vmid = int(json.loads(state_path.read_text()).get("scoring_vm_id")
+                              or SCORING_ENGINE_VMID)
+        except (ValueError, OSError):
+            pass
+    node = os.environ.get("TF_VAR_proxmox_node", "pve")
+    if args.full:
+        print(f"  Destroying golden templates (engine vmid {engine_vmid} + 150 + i)...")
+        destroy_golden_set(node, engine_vmid, len(boxes),
+                           expect_tags={"tezcatlipoca", GOLDEN_TAG, f"comp-{competition}"})
+        print(f"  Destroying the engine template (vmid {engine_vmid} + 140)...")
+        destroy_engine_template(node, engine_vmid,
+                                expect_tags={"tezcatlipoca", f"comp-{competition}",
+                                             "engine-template"})
+        # A destroyed template's hash record is a loaded gun for the reuse path: the
+        # next deploy would 'reuse' a hash with nothing behind it and clone from a
+        # dead vmid. Drop the record alongside the templates.
+        hashes_path = comp_dir / ".template-hashes.json"
+        if hashes_path.exists():
+            hashes_path.unlink()
+            print("  Template hash record (.template-hashes.json) removed.")
+    else:
+        print("  Teams-only teardown — golden + engine templates kept for reuse.")
 
     print(f"\nInfrastructure for '{competition}' destroyed.")
     print(f"Competition files preserved at competitions/{competition}/")

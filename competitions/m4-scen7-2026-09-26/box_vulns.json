@@ -1,0 +1,26 @@
+{
+  "web01": [
+    "docker-untrusted-registry",
+    "journal-disk-full",
+    "www-data-shell",
+    "ttyd-web-terminal"
+  ],
+  "app01": [
+    "suid-find",
+    "bad-perms-userConfig",
+    {
+      "name": "sudoers-rule",
+      "vars": {
+        "DROPIN_NAME": "tz-scoring-systemctl",
+        "RULE": "ALL ALL=(ALL) NOPASSWD: /usr/bin/systemctl"
+      }
+    }
+  ],
+  "dc01": [
+    "Enable WinRM"
+  ],
+  "win01": [
+    "Enable WinRM",
+    "UAC Disabled"
+  ]
+}

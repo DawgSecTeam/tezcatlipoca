@@ -1,0 +1,11 @@
+{
+  "web01": [
+    "dovecot"
+  ],
+  "app01": [
+    "vsftpd"
+  ],
+  "db01": [
+    "dovecot"
+  ]
+}

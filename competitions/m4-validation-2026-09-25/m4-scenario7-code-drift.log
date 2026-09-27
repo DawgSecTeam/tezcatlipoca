@@ -1,0 +1,38 @@
+M4 LAUNCHER: template=955 vm_username=sysadmin ids=105,106 engine_ip=10.0.0.248 scoring_vmid=1090
+Tezcatlipoca - CTF Range Deployment
+========================================
+Reusing existing competition 'm4-validation-2026-09-25'.
+
+============================================================
+  Deploying m4-validation-2026-09-25
+============================================================
+
+  Using pinned configurations from box_services.json, box_vulns.json
+  Nakon bundle 523afe5cf583 (cached, 4 plan(s), 4 machine(s))
+  ERROR: golden template for 'web01' changed since FREEZE (2026-09-25 22:49:32): bundle_id, payload_hash. A frozen competition runs on the hashes that were verified — nothing was destroyed. Unfreeze explicitly (verify-competition.py --unfreeze --confirm-unfreeze) only BEFORE the competition starts.
+M4 LAUNCHER: template=955 vm_username=sysadmin ids=105,106 engine_ip=10.0.0.248 scoring_vmid=1090
+Tezcatlipoca - CTF Range Deployment
+========================================
+Reusing existing competition 'm4-validation-2026-09-25'.
+
+============================================================
+  Deploying m4-validation-2026-09-25
+============================================================
+
+  Using pinned configurations from box_services.json, box_vulns.json
+  Nakon bundle 523afe5cf583 (cached, 4 plan(s), 4 machine(s))
+  ERROR: golden template for 'web01' changed since FREEZE (2026-09-25 22:49:32): bundle_id, payload_hash. A frozen competition runs on the hashes that were verified — nothing was destroyed. Unfreeze explicitly (verify-competition.py --unfreeze --confirm-unfreeze) only BEFORE the competition starts.
+M4 LAUNCHER: template=955 vm_username=sysadmin ids=105,106 engine_ip=10.0.0.248 scoring_vmid=1090
+Tezcatlipoca - CTF Range Deployment
+========================================
+Reusing existing competition 'm4-validation-2026-09-25'.
+
+============================================================
+  Deploying m4-validation-2026-09-25
+============================================================
+
+  Using pinned configurations from box_services.json, box_vulns.json
+  Nakon bundle 523afe5cf583 (cached, 4 plan(s), 4 machine(s))
+  Preflight: all 4 box template(s) resolve; engine base image vmid 955 present
+  Preflight: engine template vmid 1230 present (M4 persistent — reused)
+  ERROR: this competition's infrastructure collides with VMs/bridges already on node 'proxmox' (another running competition?): golden vmid 1242 (dc01), bridge vmbr105. Pick a free --scoring-vmid and/or non-overlapping TF_VAR_team_identifiers. Note the golden block sits at <scoring-vmid>+150 — a colliding golden vmid also means picking a different engine vmid.

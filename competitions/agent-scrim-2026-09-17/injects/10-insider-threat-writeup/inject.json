@@ -1,0 +1,7 @@
+{
+  "title": "Insider-threat summary for the CISO",
+  "description_file": "briefing.md",
+  "open_offset_min": 70,
+  "due_offset_min": 95,
+  "close_offset_min": 115
+}

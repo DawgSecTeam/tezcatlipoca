@@ -1,0 +1,942 @@
+================================================================
+  COMPETITION TEARDOWN TOOL
+================================================================
+Selects a deployed competition and runs terraform destroy to
+remove all provisioned VMs, bridges, and networking.
+
+─── About to destroy ──────────────────────────────────────────
+  Competition : m4-validation-2026-09-25 (m4-validation-2026-09-25)
+  Teams       : 1
+  Boxes       : 4 type(s)
+    web01 — base-ubuntu24.04-fix
+    app01 — base-debian13-lite-fix
+    dc01 — base-windows-server
+    win01 — base-windows-server
+  Mode        : FULL (templates destroyed)  [FROZEN — end-of-competition flag present]
+
+  This will run: terraform destroy -parallelism=1 -auto-approve
+  Then the golden templates and the engine template are destroyed (clones first — their base disks depend on them).
+
+  --yes: skipping confirmation for 'm4-validation-2026-09-25'.
+
+Running terraform destroy for 'm4-validation-2026-09-25' (state: competitions/m4-validation-2026-09-25/terraform)...
+[0m[1mdata.proxmox_virtual_environment_vms.templates: Reading...[0m[0m
+[0m[1mdata.proxmox_virtual_environment_vms.templates: Read complete after 1s [id=c11f92e0-6853-450f-95b6-1811f47be75d][0m
+[0m[1mproxmox_network_linux_bridge.team_bridge["team1"]: Refreshing state... [id=proxmox:vmbr105][0m
+[0m[1mproxmox_virtual_environment_vm.scoring_engine: Refreshing state... [id=1090][0m
+[0m[1mproxmox_virtual_environment_vm.team_box["team1-app01"]: Refreshing state... [id=1251][0m
+[0m[1mproxmox_virtual_environment_vm.team_box["team1-web01"]: Refreshing state... [id=1250][0m
+[0m[1mproxmox_virtual_environment_vm.team_box["team1-dc01"]: Refreshing state... [id=1252][0m
+[0m[1mproxmox_virtual_environment_vm.team_box["team1-win01"]: Refreshing state... [id=1253][0m
+[0m[1mnull_resource.reboot_scoring_engine: Refreshing state... [id=6418903289718958994][0m
+[0m[1mnull_resource.team_nics: Refreshing state... [id=3045043660283729009][0m
+[0m[1mnull_resource.orchestrate: Refreshing state... [id=3789913912618708137][0m
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  [31m-[0m destroy[0m
+
+Terraform will perform the following actions:
+
+[1m  # null_resource.orchestrate[0m will be [1m[31mdestroyed[0m
+[0m  [31m-[0m[0m resource "null_resource" "orchestrate" {
+      [31m-[0m[0m id       = "3789913912618708137" [90m-> null[0m[0m
+      [31m-[0m[0m triggers = {
+          [31m-[0m[0m "box_ids"   = "1251,1252,1250,1253"
+          [31m-[0m[0m "engine_id" = "1090"
+        } [90m-> null[0m[0m
+    }
+
+[1m  # null_resource.reboot_scoring_engine[0m will be [1m[31mdestroyed[0m
+[0m  [31m-[0m[0m resource "null_resource" "reboot_scoring_engine" {
+      [31m-[0m[0m id       = "6418903289718958994" [90m-> null[0m[0m
+      [31m-[0m[0m triggers = {
+          [31m-[0m[0m "engine_id" = "1090"
+        } [90m-> null[0m[0m
+    }
+
+[1m  # null_resource.team_nics[0m will be [1m[31mdestroyed[0m
+[0m  [31m-[0m[0m resource "null_resource" "team_nics" {
+      [31m-[0m[0m id       = "3045043660283729009" [90m-> null[0m[0m
+      [31m-[0m[0m triggers = {
+          [31m-[0m[0m "engine_id"        = "1090"
+          [31m-[0m[0m "team_identifiers" = "105"
+        } [90m-> null[0m[0m
+    }
+
+[1m  # proxmox_network_linux_bridge.team_bridge["team1"][0m will be [1m[31mdestroyed[0m
+[0m  [31m-[0m[0m resource "proxmox_network_linux_bridge" "team_bridge" {
+      [31m-[0m[0m autostart      = true [90m-> null[0m[0m
+      [31m-[0m[0m comment        = "Quotient team team1 — isolated, no uplink" [90m-> null[0m[0m
+      [31m-[0m[0m id             = "proxmox:vmbr105" [90m-> null[0m[0m
+      [31m-[0m[0m name           = "vmbr105" [90m-> null[0m[0m
+      [31m-[0m[0m node_name      = "proxmox" [90m-> null[0m[0m
+      [31m-[0m[0m timeout_reload = 100 [90m-> null[0m[0m
+      [31m-[0m[0m vlan_aware     = false [90m-> null[0m[0m
+    }
+
+[1m  # proxmox_virtual_environment_vm.scoring_engine[0m will be [1m[31mdestroyed[0m
+[0m  [31m-[0m[0m resource "proxmox_virtual_environment_vm" "scoring_engine" {
+      [31m-[0m[0m acpi                                 = true [90m-> null[0m[0m
+      [31m-[0m[0m bios                                 = "seabios" [90m-> null[0m[0m
+      [31m-[0m[0m boot_order                           = [
+          [31m-[0m[0m "scsi0",
+          [31m-[0m[0m "net0",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m delete_unreferenced_disks_on_destroy = true [90m-> null[0m[0m
+      [31m-[0m[0m id                                   = "1090" [90m-> null[0m[0m
+      [31m-[0m[0m ipv4_addresses                       = [
+          [31m-[0m[0m [
+              [31m-[0m[0m "127.0.0.1",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "10.0.0.248",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "192.168.105.1",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "172.17.0.1",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "172.18.0.1",
+            ],
+          [31m-[0m[0m [],
+          [31m-[0m[0m [],
+          [31m-[0m[0m [],
+          [31m-[0m[0m [],
+          [31m-[0m[0m [],
+          [31m-[0m[0m [],
+          [31m-[0m[0m [],
+          [31m-[0m[0m [],
+          [31m-[0m[0m [],
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m ipv6_addresses                       = [
+          [31m-[0m[0m [
+              [31m-[0m[0m "::1",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "2601:14d:5300:75f0::7152",
+              [31m-[0m[0m "2601:14d:5300:75f0:be24:11ff:fe92:e3a2",
+              [31m-[0m[0m "fe80::be24:11ff:fe92:e3a2",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::be24:11ff:fe0c:2c1b",
+            ],
+          [31m-[0m[0m [],
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::ecf0:44ff:fe83:7055",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::fcd6:deff:fe26:d16d",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::f467:dff:fef3:ef23",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::8059:62ff:feb5:f639",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::eca4:c3ff:fe04:968c",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::8c1f:bfff:fe25:f0ac",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::c835:7fff:fe29:409c",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::4ab:4bff:feed:8acb",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::4c86:2bff:fe80:18c2",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::5cfe:c6ff:febb:e1e7",
+            ],
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m keyboard_layout                      = "en-us" [90m-> null[0m[0m
+      [31m-[0m[0m mac_addresses                        = [
+          [31m-[0m[0m "00:00:00:00:00:00",
+          [31m-[0m[0m "BC:24:11:92:E3:A2",
+          [31m-[0m[0m "BC:24:11:0C:2C:1B",
+          [31m-[0m[0m "06:B5:2D:79:47:D5",
+          [31m-[0m[0m "EE:F0:44:83:70:55",
+          [31m-[0m[0m "FE:D6:DE:26:D1:6D",
+          [31m-[0m[0m "F6:67:0D:F3:EF:23",
+          [31m-[0m[0m "82:59:62:B5:F6:39",
+          [31m-[0m[0m "EE:A4:C3:04:96:8C",
+          [31m-[0m[0m "8E:1F:BF:25:F0:AC",
+          [31m-[0m[0m "CA:35:7F:29:40:9C",
+          [31m-[0m[0m "06:AB:4B:ED:8A:CB",
+          [31m-[0m[0m "4E:86:2B:80:18:C2",
+          [31m-[0m[0m "5E:FE:C6:BB:E1:E7",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m migrate                              = false [90m-> null[0m[0m
+      [31m-[0m[0m name                                 = "quotient-engine" [90m-> null[0m[0m
+      [31m-[0m[0m network_device                       = [
+          [31m-[0m[0m {
+              [31m-[0m[0m bridge       = "vmbr0"
+              [31m-[0m[0m disconnected = false
+              [31m-[0m[0m enabled      = true
+              [31m-[0m[0m firewall     = false
+              [31m-[0m[0m mac_address  = "BC:24:11:92:E3:A2"
+              [31m-[0m[0m model        = "virtio"
+              [31m-[0m[0m mtu          = 0
+              [31m-[0m[0m queues       = 0
+              [31m-[0m[0m rate_limit   = 0
+              [31m-[0m[0m vlan_id      = 0
+                [90m# (1 unchanged attribute hidden)[0m[0m
+            },
+          [31m-[0m[0m {
+              [31m-[0m[0m bridge       = "vmbr105"
+              [31m-[0m[0m disconnected = false
+              [31m-[0m[0m enabled      = true
+              [31m-[0m[0m firewall     = false
+              [31m-[0m[0m mac_address  = "BC:24:11:0C:2C:1B"
+              [31m-[0m[0m model        = "virtio"
+              [31m-[0m[0m mtu          = 0
+              [31m-[0m[0m queues       = 0
+              [31m-[0m[0m rate_limit   = 0
+              [31m-[0m[0m vlan_id      = 0
+                [90m# (1 unchanged attribute hidden)[0m[0m
+            },
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m network_interface_names              = [
+          [31m-[0m[0m "lo",
+          [31m-[0m[0m "eth0",
+          [31m-[0m[0m "ens19",
+          [31m-[0m[0m "docker0",
+          [31m-[0m[0m "br-e9612f3bea3d",
+          [31m-[0m[0m "veth6253f20",
+          [31m-[0m[0m "veth0a3b2d7",
+          [31m-[0m[0m "vethc532a49",
+          [31m-[0m[0m "vethba2f627",
+          [31m-[0m[0m "veth6cfccf9",
+          [31m-[0m[0m "vethbb123b1",
+          [31m-[0m[0m "vethb6758bb",
+          [31m-[0m[0m "veth1bf61e6",
+          [31m-[0m[0m "divisor",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m node_name                            = "proxmox" [90m-> null[0m[0m
+      [31m-[0m[0m on_boot                              = true [90m-> null[0m[0m
+      [31m-[0m[0m protection                           = false [90m-> null[0m[0m
+      [31m-[0m[0m purge_on_destroy                     = true [90m-> null[0m[0m
+      [31m-[0m[0m reboot                               = false [90m-> null[0m[0m
+      [31m-[0m[0m reboot_after_update                  = true [90m-> null[0m[0m
+      [31m-[0m[0m scsi_hardware                        = "virtio-scsi-pci" [90m-> null[0m[0m
+      [31m-[0m[0m started                              = true [90m-> null[0m[0m
+      [31m-[0m[0m stop_on_destroy                      = false [90m-> null[0m[0m
+      [31m-[0m[0m tablet_device                        = true [90m-> null[0m[0m
+      [31m-[0m[0m tags                                 = [
+          [31m-[0m[0m "comp-m4-validation-2026-09-25",
+          [31m-[0m[0m "tezcatlipoca",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m template                             = false [90m-> null[0m[0m
+      [31m-[0m[0m timeout_clone                        = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_create                       = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_migrate                      = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_move_disk                    = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_reboot                       = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_shutdown_vm                  = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_start_vm                     = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_stop_vm                      = 300 [90m-> null[0m[0m
+      [31m-[0m[0m vm_id                                = 1090 [90m-> null[0m[0m
+        [90m# (1 unchanged attribute hidden)[0m[0m
+
+      [31m-[0m[0m agent {
+          [31m-[0m[0m enabled = true [90m-> null[0m[0m
+          [31m-[0m[0m timeout = "15m" [90m-> null[0m[0m
+          [31m-[0m[0m trim    = false [90m-> null[0m[0m
+          [31m-[0m[0m type    = "virtio" [90m-> null[0m[0m
+        }
+
+      [31m-[0m[0m clone {
+          [31m-[0m[0m full         = false [90m-> null[0m[0m
+          [31m-[0m[0m retries      = 1 [90m-> null[0m[0m
+          [31m-[0m[0m vm_id        = 1230 [90m-> null[0m[0m
+            [90m# (2 unchanged attributes hidden)[0m[0m
+        }
+
+      [31m-[0m[0m cpu {
+          [31m-[0m[0m cores        = 4 [90m-> null[0m[0m
+          [31m-[0m[0m flags        = [] [90m-> null[0m[0m
+          [31m-[0m[0m hotplugged   = 0 [90m-> null[0m[0m
+          [31m-[0m[0m limit        = 0 [90m-> null[0m[0m
+          [31m-[0m[0m numa         = false [90m-> null[0m[0m
+          [31m-[0m[0m sockets      = 1 [90m-> null[0m[0m
+          [31m-[0m[0m type         = "qemu64" [90m-> null[0m[0m
+          [31m-[0m[0m units        = 0 [90m-> null[0m[0m
+            [90m# (2 unchanged attributes hidden)[0m[0m
+        }
+
+      [31m-[0m[0m disk {
+          [31m-[0m[0m aio               = "io_uring" [90m-> null[0m[0m
+          [31m-[0m[0m backup            = true [90m-> null[0m[0m
+          [31m-[0m[0m cache             = "none" [90m-> null[0m[0m
+          [31m-[0m[0m datastore_id      = "hdd" [90m-> null[0m[0m
+          [31m-[0m[0m discard           = "on" [90m-> null[0m[0m
+          [31m-[0m[0m file_format       = "raw" [90m-> null[0m[0m
+          [31m-[0m[0m interface         = "scsi0" [90m-> null[0m[0m
+          [31m-[0m[0m iothread          = false [90m-> null[0m[0m
+          [31m-[0m[0m path_in_datastore = "vm-1090-disk-0" [90m-> null[0m[0m
+          [31m-[0m[0m queues            = 0 [90m-> null[0m[0m
+          [31m-[0m[0m replicate         = true [90m-> null[0m[0m
+          [31m-[0m[0m size              = 40 [90m-> null[0m[0m
+          [31m-[0m[0m ssd               = false [90m-> null[0m[0m
+            [90m# (3 unchanged attributes hidden)[0m[0m
+        }
+
+      [31m-[0m[0m initialization {
+          [31m-[0m[0m datastore_id         = "local-lvm" [90m-> null[0m[0m
+          [31m-[0m[0m interface            = "ide2" [90m-> null[0m[0m
+          [31m-[0m[0m upgrade              = true [90m-> null[0m[0m
+            [90m# (6 unchanged attributes hidden)[0m[0m
+
+          [31m-[0m[0m dns {
+              [31m-[0m[0m servers = [
+                  [31m-[0m[0m "8.8.8.8",
+                ] [90m-> null[0m[0m
+                [90m# (1 unchanged attribute hidden)[0m[0m
+            }
+
+          [31m-[0m[0m ip_config {
+              [31m-[0m[0m ipv4 {
+                  [31m-[0m[0m address = "10.0.0.248/24" [90m-> null[0m[0m
+                  [31m-[0m[0m gateway = "10.0.0.1" [90m-> null[0m[0m
+                }
+            }
+
+          [31m-[0m[0m user_account {
+              [31m-[0m[0m keys     = [
+                  [31m-[0m[0m "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8GWCTd+XRsSFpfRbBhGrvznYxRZIkmKNZmS5ieVofI sysadmin@localhost",
+                ] [90m-> null[0m[0m
+              [31m-[0m[0m password = (sensitive value) [90m-> null[0m[0m
+              [31m-[0m[0m username = "sysadmin" [90m-> null[0m[0m
+            }
+        }
+
+      [31m-[0m[0m memory {
+          [31m-[0m[0m dedicated      = 4096 [90m-> null[0m[0m
+          [31m-[0m[0m floating       = 0 [90m-> null[0m[0m
+          [31m-[0m[0m keep_hugepages = false [90m-> null[0m[0m
+          [31m-[0m[0m shared         = 0 [90m-> null[0m[0m
+            [90m# (1 unchanged attribute hidden)[0m[0m
+        }
+    }
+
+[1m  # proxmox_virtual_environment_vm.team_box["team1-app01"][0m will be [1m[31mdestroyed[0m
+[0m  [31m-[0m[0m resource "proxmox_virtual_environment_vm" "team_box" {
+      [31m-[0m[0m acpi                                 = true [90m-> null[0m[0m
+      [31m-[0m[0m bios                                 = "seabios" [90m-> null[0m[0m
+      [31m-[0m[0m boot_order                           = [
+          [31m-[0m[0m "scsi0",
+          [31m-[0m[0m "net0",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m delete_unreferenced_disks_on_destroy = true [90m-> null[0m[0m
+      [31m-[0m[0m id                                   = "1251" [90m-> null[0m[0m
+      [31m-[0m[0m ipv4_addresses                       = [
+          [31m-[0m[0m [
+              [31m-[0m[0m "127.0.0.1",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "192.168.105.5",
+            ],
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m ipv6_addresses                       = [
+          [31m-[0m[0m [
+              [31m-[0m[0m "::1",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::be24:11ff:fe4a:1603",
+            ],
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m keyboard_layout                      = "en-us" [90m-> null[0m[0m
+      [31m-[0m[0m mac_addresses                        = [
+          [31m-[0m[0m "00:00:00:00:00:00",
+          [31m-[0m[0m "BC:24:11:4A:16:03",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m migrate                              = false [90m-> null[0m[0m
+      [31m-[0m[0m name                                 = "team1-app01" [90m-> null[0m[0m
+      [31m-[0m[0m network_device                       = [
+          [31m-[0m[0m {
+              [31m-[0m[0m bridge       = "vmbr105"
+              [31m-[0m[0m disconnected = false
+              [31m-[0m[0m enabled      = true
+              [31m-[0m[0m firewall     = false
+              [31m-[0m[0m mac_address  = "BC:24:11:4A:16:03"
+              [31m-[0m[0m model        = "virtio"
+              [31m-[0m[0m mtu          = 0
+              [31m-[0m[0m queues       = 0
+              [31m-[0m[0m rate_limit   = 0
+              [31m-[0m[0m vlan_id      = 0
+                [90m# (1 unchanged attribute hidden)[0m[0m
+            },
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m network_interface_names              = [
+          [31m-[0m[0m "lo",
+          [31m-[0m[0m "eth0",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m node_name                            = "proxmox" [90m-> null[0m[0m
+      [31m-[0m[0m on_boot                              = false [90m-> null[0m[0m
+      [31m-[0m[0m protection                           = false [90m-> null[0m[0m
+      [31m-[0m[0m purge_on_destroy                     = true [90m-> null[0m[0m
+      [31m-[0m[0m reboot                               = false [90m-> null[0m[0m
+      [31m-[0m[0m reboot_after_update                  = true [90m-> null[0m[0m
+      [31m-[0m[0m scsi_hardware                        = "virtio-scsi-pci" [90m-> null[0m[0m
+      [31m-[0m[0m started                              = true [90m-> null[0m[0m
+      [31m-[0m[0m stop_on_destroy                      = false [90m-> null[0m[0m
+      [31m-[0m[0m tablet_device                        = true [90m-> null[0m[0m
+      [31m-[0m[0m tags                                 = [
+          [31m-[0m[0m "comp-m4-validation-2026-09-25",
+          [31m-[0m[0m "tezcatlipoca",
+          [31m-[0m[0m "tezcatlipoca-golden",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m template                             = false [90m-> null[0m[0m
+      [31m-[0m[0m timeout_clone                        = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_create                       = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_migrate                      = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_move_disk                    = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_reboot                       = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_shutdown_vm                  = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_start_vm                     = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_stop_vm                      = 300 [90m-> null[0m[0m
+      [31m-[0m[0m vm_id                                = 1251 [90m-> null[0m[0m
+        [90m# (1 unchanged attribute hidden)[0m[0m
+
+      [31m-[0m[0m clone {
+          [31m-[0m[0m full         = false [90m-> null[0m[0m
+          [31m-[0m[0m retries      = 1 [90m-> null[0m[0m
+          [31m-[0m[0m vm_id        = 1241 [90m-> null[0m[0m
+            [90m# (2 unchanged attributes hidden)[0m[0m
+        }
+
+      [31m-[0m[0m cpu {
+          [31m-[0m[0m cores        = 1 [90m-> null[0m[0m
+          [31m-[0m[0m flags        = [] [90m-> null[0m[0m
+          [31m-[0m[0m hotplugged   = 0 [90m-> null[0m[0m
+          [31m-[0m[0m limit        = 0 [90m-> null[0m[0m
+          [31m-[0m[0m numa         = false [90m-> null[0m[0m
+          [31m-[0m[0m sockets      = 1 [90m-> null[0m[0m
+          [31m-[0m[0m type         = "x86-64-v2-AES" [90m-> null[0m[0m
+          [31m-[0m[0m units        = 0 [90m-> null[0m[0m
+            [90m# (2 unchanged attributes hidden)[0m[0m
+        }
+
+      [31m-[0m[0m disk {
+          [31m-[0m[0m aio               = "io_uring" [90m-> null[0m[0m
+          [31m-[0m[0m backup            = true [90m-> null[0m[0m
+          [31m-[0m[0m cache             = "unsafe" [90m-> null[0m[0m
+          [31m-[0m[0m datastore_id      = "hdd" [90m-> null[0m[0m
+          [31m-[0m[0m discard           = "ignore" [90m-> null[0m[0m
+          [31m-[0m[0m file_format       = "raw" [90m-> null[0m[0m
+          [31m-[0m[0m interface         = "scsi0" [90m-> null[0m[0m
+          [31m-[0m[0m iothread          = true [90m-> null[0m[0m
+          [31m-[0m[0m path_in_datastore = "base-1241-disk-0/vm-1251-disk-0" [90m-> null[0m[0m
+          [31m-[0m[0m queues            = 0 [90m-> null[0m[0m
+          [31m-[0m[0m replicate         = true [90m-> null[0m[0m
+          [31m-[0m[0m size              = 10 [90m-> null[0m[0m
+          [31m-[0m[0m ssd               = false [90m-> null[0m[0m
+            [90m# (3 unchanged attributes hidden)[0m[0m
+        }
+
+      [31m-[0m[0m initialization {
+          [31m-[0m[0m datastore_id         = "local-lvm" [90m-> null[0m[0m
+          [31m-[0m[0m interface            = "ide2" [90m-> null[0m[0m
+          [31m-[0m[0m upgrade              = true [90m-> null[0m[0m
+            [90m# (6 unchanged attributes hidden)[0m[0m
+
+          [31m-[0m[0m dns {
+              [31m-[0m[0m servers = [
+                  [31m-[0m[0m "8.8.8.8",
+                ] [90m-> null[0m[0m
+                [90m# (1 unchanged attribute hidden)[0m[0m
+            }
+
+          [31m-[0m[0m ip_config {
+              [31m-[0m[0m ipv4 {
+                  [31m-[0m[0m address = "192.168.105.5/24" [90m-> null[0m[0m
+                  [31m-[0m[0m gateway = "192.168.105.1" [90m-> null[0m[0m
+                }
+            }
+
+          [31m-[0m[0m user_account {
+              [31m-[0m[0m keys     = [
+                  [31m-[0m[0m "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8GWCTd+XRsSFpfRbBhGrvznYxRZIkmKNZmS5ieVofI sysadmin@localhost",
+                ] [90m-> null[0m[0m
+              [31m-[0m[0m password = (sensitive value) [90m-> null[0m[0m
+              [31m-[0m[0m username = "ubuntu" [90m-> null[0m[0m
+            }
+        }
+
+      [31m-[0m[0m memory {
+          [31m-[0m[0m dedicated      = 2048 [90m-> null[0m[0m
+          [31m-[0m[0m floating       = 0 [90m-> null[0m[0m
+          [31m-[0m[0m keep_hugepages = false [90m-> null[0m[0m
+          [31m-[0m[0m shared         = 0 [90m-> null[0m[0m
+            [90m# (1 unchanged attribute hidden)[0m[0m
+        }
+    }
+
+[1m  # proxmox_virtual_environment_vm.team_box["team1-dc01"][0m will be [1m[31mdestroyed[0m
+[0m  [31m-[0m[0m resource "proxmox_virtual_environment_vm" "team_box" {
+      [31m-[0m[0m acpi                                 = true [90m-> null[0m[0m
+      [31m-[0m[0m bios                                 = "seabios" [90m-> null[0m[0m
+      [31m-[0m[0m boot_order                           = [
+          [31m-[0m[0m "sata0",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m delete_unreferenced_disks_on_destroy = true [90m-> null[0m[0m
+      [31m-[0m[0m id                                   = "1252" [90m-> null[0m[0m
+      [31m-[0m[0m ipv4_addresses                       = [
+          [31m-[0m[0m [
+              [31m-[0m[0m "192.168.105.6",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "127.0.0.1",
+            ],
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m ipv6_addresses                       = [
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::1078:a1a6:decb:7f71%3",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "::1",
+            ],
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m keyboard_layout                      = "en-us" [90m-> null[0m[0m
+      [31m-[0m[0m mac_addresses                        = [
+          [31m-[0m[0m "BC:24:11:4E:03:19",
+          [31m-[0m[0m [90mnull[0m[0m,
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m migrate                              = false [90m-> null[0m[0m
+      [31m-[0m[0m name                                 = "team1-dc01" [90m-> null[0m[0m
+      [31m-[0m[0m network_device                       = [
+          [31m-[0m[0m {
+              [31m-[0m[0m bridge       = "vmbr105"
+              [31m-[0m[0m disconnected = false
+              [31m-[0m[0m enabled      = true
+              [31m-[0m[0m firewall     = false
+              [31m-[0m[0m mac_address  = "BC:24:11:4E:03:19"
+              [31m-[0m[0m model        = "virtio"
+              [31m-[0m[0m mtu          = 0
+              [31m-[0m[0m queues       = 0
+              [31m-[0m[0m rate_limit   = 0
+              [31m-[0m[0m vlan_id      = 0
+                [90m# (1 unchanged attribute hidden)[0m[0m
+            },
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m network_interface_names              = [
+          [31m-[0m[0m "Ethernet",
+          [31m-[0m[0m "Loopback Pseudo-Interface 1",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m node_name                            = "proxmox" [90m-> null[0m[0m
+      [31m-[0m[0m on_boot                              = false [90m-> null[0m[0m
+      [31m-[0m[0m protection                           = false [90m-> null[0m[0m
+      [31m-[0m[0m purge_on_destroy                     = true [90m-> null[0m[0m
+      [31m-[0m[0m reboot                               = false [90m-> null[0m[0m
+      [31m-[0m[0m reboot_after_update                  = true [90m-> null[0m[0m
+      [31m-[0m[0m scsi_hardware                        = "virtio-scsi-pci" [90m-> null[0m[0m
+      [31m-[0m[0m started                              = true [90m-> null[0m[0m
+      [31m-[0m[0m stop_on_destroy                      = false [90m-> null[0m[0m
+      [31m-[0m[0m tablet_device                        = true [90m-> null[0m[0m
+      [31m-[0m[0m tags                                 = [
+          [31m-[0m[0m "comp-m4-validation-2026-09-25",
+          [31m-[0m[0m "tezcatlipoca",
+          [31m-[0m[0m "tezcatlipoca-golden",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m template                             = false [90m-> null[0m[0m
+      [31m-[0m[0m timeout_clone                        = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_create                       = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_migrate                      = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_move_disk                    = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_reboot                       = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_shutdown_vm                  = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_start_vm                     = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_stop_vm                      = 300 [90m-> null[0m[0m
+      [31m-[0m[0m vm_id                                = 1252 [90m-> null[0m[0m
+        [90m# (1 unchanged attribute hidden)[0m[0m
+
+      [31m-[0m[0m clone {
+          [31m-[0m[0m full         = false [90m-> null[0m[0m
+          [31m-[0m[0m retries      = 1 [90m-> null[0m[0m
+          [31m-[0m[0m vm_id        = 1242 [90m-> null[0m[0m
+            [90m# (2 unchanged attributes hidden)[0m[0m
+        }
+
+      [31m-[0m[0m cpu {
+          [31m-[0m[0m cores        = 2 [90m-> null[0m[0m
+          [31m-[0m[0m flags        = [] [90m-> null[0m[0m
+          [31m-[0m[0m hotplugged   = 0 [90m-> null[0m[0m
+          [31m-[0m[0m limit        = 0 [90m-> null[0m[0m
+          [31m-[0m[0m numa         = false [90m-> null[0m[0m
+          [31m-[0m[0m sockets      = 1 [90m-> null[0m[0m
+          [31m-[0m[0m type         = "host" [90m-> null[0m[0m
+          [31m-[0m[0m units        = 0 [90m-> null[0m[0m
+            [90m# (2 unchanged attributes hidden)[0m[0m
+        }
+
+      [31m-[0m[0m memory {
+          [31m-[0m[0m dedicated      = 3072 [90m-> null[0m[0m
+          [31m-[0m[0m floating       = 0 [90m-> null[0m[0m
+          [31m-[0m[0m keep_hugepages = false [90m-> null[0m[0m
+          [31m-[0m[0m shared         = 0 [90m-> null[0m[0m
+            [90m# (1 unchanged attribute hidden)[0m[0m
+        }
+    }
+
+[1m  # proxmox_virtual_environment_vm.team_box["team1-web01"][0m will be [1m[31mdestroyed[0m
+[0m  [31m-[0m[0m resource "proxmox_virtual_environment_vm" "team_box" {
+      [31m-[0m[0m acpi                                 = true [90m-> null[0m[0m
+      [31m-[0m[0m bios                                 = "seabios" [90m-> null[0m[0m
+      [31m-[0m[0m boot_order                           = [
+          [31m-[0m[0m "scsi0",
+          [31m-[0m[0m "net0",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m delete_unreferenced_disks_on_destroy = true [90m-> null[0m[0m
+      [31m-[0m[0m id                                   = "1250" [90m-> null[0m[0m
+      [31m-[0m[0m ipv4_addresses                       = [
+          [31m-[0m[0m [
+              [31m-[0m[0m "127.0.0.1",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "192.168.105.4",
+            ],
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m ipv6_addresses                       = [
+          [31m-[0m[0m [
+              [31m-[0m[0m "::1",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::be24:11ff:fee6:4634",
+            ],
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m keyboard_layout                      = "en-us" [90m-> null[0m[0m
+      [31m-[0m[0m mac_addresses                        = [
+          [31m-[0m[0m "00:00:00:00:00:00",
+          [31m-[0m[0m "BC:24:11:E6:46:34",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m migrate                              = false [90m-> null[0m[0m
+      [31m-[0m[0m name                                 = "team1-web01" [90m-> null[0m[0m
+      [31m-[0m[0m network_device                       = [
+          [31m-[0m[0m {
+              [31m-[0m[0m bridge       = "vmbr105"
+              [31m-[0m[0m disconnected = false
+              [31m-[0m[0m enabled      = true
+              [31m-[0m[0m firewall     = false
+              [31m-[0m[0m mac_address  = "BC:24:11:E6:46:34"
+              [31m-[0m[0m model        = "virtio"
+              [31m-[0m[0m mtu          = 0
+              [31m-[0m[0m queues       = 0
+              [31m-[0m[0m rate_limit   = 0
+              [31m-[0m[0m vlan_id      = 0
+                [90m# (1 unchanged attribute hidden)[0m[0m
+            },
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m network_interface_names              = [
+          [31m-[0m[0m "lo",
+          [31m-[0m[0m "eth0",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m node_name                            = "proxmox" [90m-> null[0m[0m
+      [31m-[0m[0m on_boot                              = false [90m-> null[0m[0m
+      [31m-[0m[0m protection                           = false [90m-> null[0m[0m
+      [31m-[0m[0m purge_on_destroy                     = true [90m-> null[0m[0m
+      [31m-[0m[0m reboot                               = false [90m-> null[0m[0m
+      [31m-[0m[0m reboot_after_update                  = true [90m-> null[0m[0m
+      [31m-[0m[0m scsi_hardware                        = "virtio-scsi-pci" [90m-> null[0m[0m
+      [31m-[0m[0m started                              = true [90m-> null[0m[0m
+      [31m-[0m[0m stop_on_destroy                      = false [90m-> null[0m[0m
+      [31m-[0m[0m tablet_device                        = true [90m-> null[0m[0m
+      [31m-[0m[0m tags                                 = [
+          [31m-[0m[0m "comp-m4-validation-2026-09-25",
+          [31m-[0m[0m "tezcatlipoca",
+          [31m-[0m[0m "tezcatlipoca-golden",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m template                             = false [90m-> null[0m[0m
+      [31m-[0m[0m timeout_clone                        = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_create                       = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_migrate                      = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_move_disk                    = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_reboot                       = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_shutdown_vm                  = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_start_vm                     = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_stop_vm                      = 300 [90m-> null[0m[0m
+      [31m-[0m[0m vm_id                                = 1250 [90m-> null[0m[0m
+        [90m# (1 unchanged attribute hidden)[0m[0m
+
+      [31m-[0m[0m clone {
+          [31m-[0m[0m full         = false [90m-> null[0m[0m
+          [31m-[0m[0m retries      = 1 [90m-> null[0m[0m
+          [31m-[0m[0m vm_id        = 1240 [90m-> null[0m[0m
+            [90m# (2 unchanged attributes hidden)[0m[0m
+        }
+
+      [31m-[0m[0m cpu {
+          [31m-[0m[0m cores        = 1 [90m-> null[0m[0m
+          [31m-[0m[0m flags        = [] [90m-> null[0m[0m
+          [31m-[0m[0m hotplugged   = 0 [90m-> null[0m[0m
+          [31m-[0m[0m limit        = 0 [90m-> null[0m[0m
+          [31m-[0m[0m numa         = false [90m-> null[0m[0m
+          [31m-[0m[0m sockets      = 1 [90m-> null[0m[0m
+          [31m-[0m[0m type         = "x86-64-v2-AES" [90m-> null[0m[0m
+          [31m-[0m[0m units        = 0 [90m-> null[0m[0m
+            [90m# (2 unchanged attributes hidden)[0m[0m
+        }
+
+      [31m-[0m[0m disk {
+          [31m-[0m[0m aio               = "io_uring" [90m-> null[0m[0m
+          [31m-[0m[0m backup            = true [90m-> null[0m[0m
+          [31m-[0m[0m cache             = "none" [90m-> null[0m[0m
+          [31m-[0m[0m datastore_id      = "ssd" [90m-> null[0m[0m
+          [31m-[0m[0m discard           = "ignore" [90m-> null[0m[0m
+          [31m-[0m[0m file_format       = "raw" [90m-> null[0m[0m
+          [31m-[0m[0m interface         = "scsi0" [90m-> null[0m[0m
+          [31m-[0m[0m iothread          = true [90m-> null[0m[0m
+          [31m-[0m[0m path_in_datastore = "base-1240-disk-0/vm-1250-disk-0" [90m-> null[0m[0m
+          [31m-[0m[0m queues            = 0 [90m-> null[0m[0m
+          [31m-[0m[0m replicate         = true [90m-> null[0m[0m
+          [31m-[0m[0m size              = 15 [90m-> null[0m[0m
+          [31m-[0m[0m ssd               = false [90m-> null[0m[0m
+            [90m# (3 unchanged attributes hidden)[0m[0m
+        }
+
+      [31m-[0m[0m initialization {
+          [31m-[0m[0m datastore_id         = "local-lvm" [90m-> null[0m[0m
+          [31m-[0m[0m interface            = "ide2" [90m-> null[0m[0m
+          [31m-[0m[0m upgrade              = true [90m-> null[0m[0m
+            [90m# (6 unchanged attributes hidden)[0m[0m
+
+          [31m-[0m[0m dns {
+              [31m-[0m[0m servers = [
+                  [31m-[0m[0m "8.8.8.8",
+                ] [90m-> null[0m[0m
+                [90m# (1 unchanged attribute hidden)[0m[0m
+            }
+
+          [31m-[0m[0m ip_config {
+              [31m-[0m[0m ipv4 {
+                  [31m-[0m[0m address = "192.168.105.4/24" [90m-> null[0m[0m
+                  [31m-[0m[0m gateway = "192.168.105.1" [90m-> null[0m[0m
+                }
+            }
+
+          [31m-[0m[0m user_account {
+              [31m-[0m[0m keys     = [
+                  [31m-[0m[0m "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8GWCTd+XRsSFpfRbBhGrvznYxRZIkmKNZmS5ieVofI sysadmin@localhost",
+                ] [90m-> null[0m[0m
+              [31m-[0m[0m password = (sensitive value) [90m-> null[0m[0m
+              [31m-[0m[0m username = "ubuntu" [90m-> null[0m[0m
+            }
+        }
+
+      [31m-[0m[0m memory {
+          [31m-[0m[0m dedicated      = 2048 [90m-> null[0m[0m
+          [31m-[0m[0m floating       = 0 [90m-> null[0m[0m
+          [31m-[0m[0m keep_hugepages = false [90m-> null[0m[0m
+          [31m-[0m[0m shared         = 0 [90m-> null[0m[0m
+            [90m# (1 unchanged attribute hidden)[0m[0m
+        }
+    }
+
+[1m  # proxmox_virtual_environment_vm.team_box["team1-win01"][0m will be [1m[31mdestroyed[0m
+[0m  [31m-[0m[0m resource "proxmox_virtual_environment_vm" "team_box" {
+      [31m-[0m[0m acpi                                 = true [90m-> null[0m[0m
+      [31m-[0m[0m bios                                 = "seabios" [90m-> null[0m[0m
+      [31m-[0m[0m boot_order                           = [
+          [31m-[0m[0m "sata0",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m delete_unreferenced_disks_on_destroy = true [90m-> null[0m[0m
+      [31m-[0m[0m id                                   = "1253" [90m-> null[0m[0m
+      [31m-[0m[0m ipv4_addresses                       = [
+          [31m-[0m[0m [
+              [31m-[0m[0m "192.168.105.7",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "127.0.0.1",
+            ],
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m ipv6_addresses                       = [
+          [31m-[0m[0m [
+              [31m-[0m[0m "fe80::7d7b:b46b:329f:2203%4",
+            ],
+          [31m-[0m[0m [
+              [31m-[0m[0m "::1",
+            ],
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m keyboard_layout                      = "en-us" [90m-> null[0m[0m
+      [31m-[0m[0m mac_addresses                        = [
+          [31m-[0m[0m "BC:24:11:ED:9A:8E",
+          [31m-[0m[0m [90mnull[0m[0m,
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m migrate                              = false [90m-> null[0m[0m
+      [31m-[0m[0m name                                 = "team1-win01" [90m-> null[0m[0m
+      [31m-[0m[0m network_device                       = [
+          [31m-[0m[0m {
+              [31m-[0m[0m bridge       = "vmbr105"
+              [31m-[0m[0m disconnected = false
+              [31m-[0m[0m enabled      = true
+              [31m-[0m[0m firewall     = false
+              [31m-[0m[0m mac_address  = "BC:24:11:ED:9A:8E"
+              [31m-[0m[0m model        = "virtio"
+              [31m-[0m[0m mtu          = 0
+              [31m-[0m[0m queues       = 0
+              [31m-[0m[0m rate_limit   = 0
+              [31m-[0m[0m vlan_id      = 0
+                [90m# (1 unchanged attribute hidden)[0m[0m
+            },
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m network_interface_names              = [
+          [31m-[0m[0m "Ethernet",
+          [31m-[0m[0m "Loopback Pseudo-Interface 1",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m node_name                            = "proxmox" [90m-> null[0m[0m
+      [31m-[0m[0m on_boot                              = false [90m-> null[0m[0m
+      [31m-[0m[0m protection                           = false [90m-> null[0m[0m
+      [31m-[0m[0m purge_on_destroy                     = true [90m-> null[0m[0m
+      [31m-[0m[0m reboot                               = false [90m-> null[0m[0m
+      [31m-[0m[0m reboot_after_update                  = true [90m-> null[0m[0m
+      [31m-[0m[0m scsi_hardware                        = "virtio-scsi-pci" [90m-> null[0m[0m
+      [31m-[0m[0m started                              = true [90m-> null[0m[0m
+      [31m-[0m[0m stop_on_destroy                      = false [90m-> null[0m[0m
+      [31m-[0m[0m tablet_device                        = true [90m-> null[0m[0m
+      [31m-[0m[0m tags                                 = [
+          [31m-[0m[0m "comp-m4-validation-2026-09-25",
+          [31m-[0m[0m "tezcatlipoca",
+          [31m-[0m[0m "tezcatlipoca-golden",
+        ] [90m-> null[0m[0m
+      [31m-[0m[0m template                             = false [90m-> null[0m[0m
+      [31m-[0m[0m timeout_clone                        = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_create                       = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_migrate                      = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_move_disk                    = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_reboot                       = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_shutdown_vm                  = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_start_vm                     = 1800 [90m-> null[0m[0m
+      [31m-[0m[0m timeout_stop_vm                      = 300 [90m-> null[0m[0m
+      [31m-[0m[0m vm_id                                = 1253 [90m-> null[0m[0m
+        [90m# (1 unchanged attribute hidden)[0m[0m
+
+      [31m-[0m[0m clone {
+          [31m-[0m[0m full         = false [90m-> null[0m[0m
+          [31m-[0m[0m retries      = 1 [90m-> null[0m[0m
+          [31m-[0m[0m vm_id        = 1243 [90m-> null[0m[0m
+            [90m# (2 unchanged attributes hidden)[0m[0m
+        }
+
+      [31m-[0m[0m cpu {
+          [31m-[0m[0m cores        = 2 [90m-> null[0m[0m
+          [31m-[0m[0m flags        = [] [90m-> null[0m[0m
+          [31m-[0m[0m hotplugged   = 0 [90m-> null[0m[0m
+          [31m-[0m[0m limit        = 0 [90m-> null[0m[0m
+          [31m-[0m[0m numa         = false [90m-> null[0m[0m
+          [31m-[0m[0m sockets      = 1 [90m-> null[0m[0m
+          [31m-[0m[0m type         = "host" [90m-> null[0m[0m
+          [31m-[0m[0m units        = 0 [90m-> null[0m[0m
+            [90m# (2 unchanged attributes hidden)[0m[0m
+        }
+
+      [31m-[0m[0m memory {
+          [31m-[0m[0m dedicated      = 3072 [90m-> null[0m[0m
+          [31m-[0m[0m floating       = 0 [90m-> null[0m[0m
+          [31m-[0m[0m keep_hugepages = false [90m-> null[0m[0m
+          [31m-[0m[0m shared         = 0 [90m-> null[0m[0m
+            [90m# (1 unchanged attribute hidden)[0m[0m
+        }
+    }
+
+[1mPlan:[0m 0 to add, 0 to change, 9 to destroy.
+[0m
+Changes to Outputs:
+  [31m-[0m[0m agent_context        = (sensitive value) [90m-> null[0m[0m
+  [31m-[0m[0m boxes_per_team       = [
+      [31m-[0m[0m {
+          [31m-[0m[0m cpu        = 1
+          [31m-[0m[0m disk_gb    = 15
+          [31m-[0m[0m disk_iface = [90mnull[0m[0m
+          [31m-[0m[0m last_octet = 4
+          [31m-[0m[0m memory_mb  = 2048
+          [31m-[0m[0m name       = "web01"
+          [31m-[0m[0m template   = "base-ubuntu24.04-fix"
+        },
+      [31m-[0m[0m {
+          [31m-[0m[0m cpu        = 1
+          [31m-[0m[0m disk_gb    = 10
+          [31m-[0m[0m disk_iface = [90mnull[0m[0m
+          [31m-[0m[0m last_octet = 5
+          [31m-[0m[0m memory_mb  = 2048
+          [31m-[0m[0m name       = "app01"
+          [31m-[0m[0m template   = "base-debian13-lite-fix"
+        },
+      [31m-[0m[0m {
+          [31m-[0m[0m cpu        = 2
+          [31m-[0m[0m disk_gb    = [90mnull[0m[0m
+          [31m-[0m[0m disk_iface = [90mnull[0m[0m
+          [31m-[0m[0m last_octet = 6
+          [31m-[0m[0m memory_mb  = 3072
+          [31m-[0m[0m name       = "dc01"
+          [31m-[0m[0m template   = "base-windows-server"
+        },
+      [31m-[0m[0m {
+          [31m-[0m[0m cpu        = 2
+          [31m-[0m[0m disk_gb    = [90mnull[0m[0m
+          [31m-[0m[0m disk_iface = [90mnull[0m[0m
+          [31m-[0m[0m last_octet = 7
+          [31m-[0m[0m memory_mb  = 3072
+          [31m-[0m[0m name       = "win01"
+          [31m-[0m[0m template   = "base-windows-server"
+        },
+    ] [90m-> null[0m[0m
+  [31m-[0m[0m scoring_engine_ip    = "10.0.0.248" [90m-> null[0m[0m
+  [31m-[0m[0m ssh_private_key_path = "/home/hna/dev/dawgsec/tezcatlipoca/proxmox" [90m-> null[0m[0m
+  [31m-[0m[0m team_passwords       = (sensitive value) [90m-> null[0m[0m
+  [31m-[0m[0m team_vms             = {
+      [31m-[0m[0m team1-app01 = {
+          [31m-[0m[0m box_name   = "app01"
+          [31m-[0m[0m identifier = "105"
+          [31m-[0m[0m ip         = "192.168.105.5"
+        }
+      [31m-[0m[0m team1-dc01  = {
+          [31m-[0m[0m box_name   = "dc01"
+          [31m-[0m[0m identifier = "105"
+          [31m-[0m[0m ip         = "192.168.105.6"
+        }
+      [31m-[0m[0m team1-web01 = {
+          [31m-[0m[0m box_name   = "web01"
+          [31m-[0m[0m identifier = "105"
+          [31m-[0m[0m ip         = "192.168.105.4"
+        }
+      [31m-[0m[0m team1-win01 = {
+          [31m-[0m[0m box_name   = "win01"
+          [31m-[0m[0m identifier = "105"
+          [31m-[0m[0m ip         = "192.168.105.7"
+        }
+    } [90m-> null[0m[0m
+  [31m-[0m[0m teams                = {
+      [31m-[0m[0m team1 = "105"
+    } [90m-> null[0m[0m
+[0m[1mnull_resource.orchestrate: Destroying... [id=3789913912618708137][0m[0m
+[0m[1mnull_resource.orchestrate: Destruction complete after 0s[0m
+[0m[1mnull_resource.team_nics: Destroying... [id=3045043660283729009][0m[0m
+[0m[1mnull_resource.team_nics: Destruction complete after 0s[0m
+[0m[1mnull_resource.reboot_scoring_engine: Destroying... [id=6418903289718958994][0m[0m
+[0m[1mnull_resource.reboot_scoring_engine: Destruction complete after 0s[0m
+[0m[1mproxmox_virtual_environment_vm.team_box["team1-win01"]: Destroying... [id=1253][0m[0m
+[0m[1mproxmox_virtual_environment_vm.team_box["team1-win01"]: Destruction complete after 6s[0m
+[0m[1mproxmox_virtual_environment_vm.team_box["team1-app01"]: Destroying... [id=1251][0m[0m
+[0m[1mproxmox_virtual_environment_vm.team_box["team1-app01"]: Destruction complete after 4s[0m
+[0m[1mproxmox_virtual_environment_vm.team_box["team1-dc01"]: Destroying... [id=1252][0m[0m
+[0m[1mproxmox_virtual_environment_vm.team_box["team1-dc01"]: Still destroying... [id=1252, 10s elapsed][0m[0m
+[0m[1mproxmox_virtual_environment_vm.team_box["team1-dc01"]: Destruction complete after 17s[0m
+[0m[1mproxmox_virtual_environment_vm.team_box["team1-web01"]: Destroying... [id=1250][0m[0m
+[0m[1mproxmox_virtual_environment_vm.team_box["team1-web01"]: Destruction complete after 7s[0m
+[0m[1mproxmox_virtual_environment_vm.scoring_engine: Destroying... [id=1090][0m[0m
+[0m[1mproxmox_virtual_environment_vm.scoring_engine: Destruction complete after 9s[0m
+[0m[1mproxmox_network_linux_bridge.team_bridge["team1"]: Destroying... [id=proxmox:vmbr105][0m[0m
+[0m[1mproxmox_network_linux_bridge.team_bridge["team1"]: Destruction complete after 1s[0m
+[0m[1m[32m
+Destroy complete! Resources: 9 destroyed.
+[0m  Destroying golden templates (engine vmid 1090 + 150 + i)...
+  Destroying the engine template (vmid 1090 + 140)...
+  Template hash record (.template-hashes.json) removed.
+
+Infrastructure for 'm4-validation-2026-09-25' destroyed.
+Competition files preserved at competitions/m4-validation-2026-09-25/

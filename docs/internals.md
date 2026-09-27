@@ -73,6 +73,14 @@ run without the package import.
 - **`ssh_via_gateway()`** — reaches team boxes through the engine with `ProxyCommand ssh -W %h:%p`.
   Requires `AllowTcpForwarding=yes` on the gateway (engine_ops sets it explicitly). Linux boxes
   authenticate with the Proxmox key as `box_username`; Windows uses password auth.
+- **Engine connection multiplexing (M1.5)** — `engine_ssh_opts` / `_engine_opts(host=…)` add
+  `ControlMaster=auto` + `ControlPath=~/.tezcatlipoca/cm-<ip>-22-%r` + `ControlPersist=900`:
+  every per-box ProxyCommand and every direct engine call reuses ONE authenticated engine
+  connection instead of a fresh double handshake per call. Two coupled requirements:
+  `forget_engine_host_key` retires the master socket (a surviving master would keep the old
+  host key after a rebuild), and engine_ops raises sshd `MaxSessions` to 64 (default 10 would
+  throttle M2's concurrent waits sharing the master) plus `MaxStartups 30:30:100` for
+  cold-start bursts.
 - **`ssh_on_gateway()` / `ssh_to_engine()`** — direct SSH to the engine itself (no hop — it *is*
   the gateway); the latter is an alias kept for readability.
 - **`wait_for_ssh()` / `wait_for_http()`** — poll-based, never raise, warn and continue on
@@ -123,6 +131,20 @@ logic.
 - **Snapshot semantics** — `tz-base` = booted, networked, pre-nakon; `tz-ready` = as-delivered
   post-nakon+hardening. Team2+ `tz-base` is taken *after* cloning (post phase 5), so it carries
   team1's configs on the cloned disk but is still that team's per-box "before nakon" point.
+- **`destroy_vm_if_exists()`** — stop (await) then delete (await). With `expect_tags` set, the
+  parallel cleanup sweep first checks the VM's config tags and **refuses to destroy a tagged VM
+  whose tags lack `tezcatlipoca` + `comp-<name>`** — a stray VM that happens to occupy a
+  computed vmid is never touched. Untagged VMs pass with a warning: the transition window
+  covers ranges built before tagging existed (main.tf and clone_ops both tag VMs now), and the
+  preflight vmid-clash gate is the other half of the ownership proof. Any other caller (redeploy
+  rebuild) passes no `expect_tags` and keeps the old unconditional behavior.
+- **Phase-1 cleanup runs as a worker pool of ≤8** over the ownership set: computed team vmids,
+  the engine vmid, and everything in `cloned_vms.json` (deliberately broader than Terraform
+  state — the clones are not in state, and skipping them would let phase 6 "resume" onto stale
+  disks with the previous run's passwords). Deletes are metadata-light on the API; the
+  datastore-saturation hazard (HTTP 596 / pvestatd hang) belongs to bulk clone *writes*, which
+  stay serial. Bridges stay serial after the pool. Wall time drops from the sum of ACPI
+  shutdowns to the slowest one.
 - **`list_snapshots()`** — returns an empty set when the VM is gone or the API refuses: callers
   treat "no snapshot" and "couldn't ask" the same way and fall back to a mode that doesn't need
   one.
@@ -169,6 +191,10 @@ persistence, `.env` updates.
 - **`load_injects()` / `resolve_inject_times()`** — inject offsets are minutes relative to
   competition start; they are resolved to RFC3339 timestamps at creation time (phase 7, right
   before `create_injects`) so they anchor to the actual start, not to deploy start.
+  Consequence: a `redeploy-competition.py --mode rollback-ready` reset does NOT reopen them —
+  offsets stay anchored at the original phase-7 time (winad-scrim2: all injects closed before
+  T0). Add `--reset-event` to re-clone the engine from its template (fresh DB) and re-run
+  phase 7, re-anchoring injects at now; `verify` WARNs on any inject already past close.
 - **`load_boxes()`** — reusing a competition replays its saved `boxes.json`, not anything derived
   from current `.env`.
 
@@ -193,15 +219,40 @@ Nakon is a subprocess with `cwd = NAKON_DIR`, never an import (see Conventions).
   be a string or `{"name": …, "vars": …}` — normalized for the sort): they break DNS/apt, so
   package installs must run before they land. The machine list is written per competition
   (`nakon-config.json`), not into shared nakon state.
+- **`generate_stage_configs()`** — the M3.2 split of `nakon-config.json` into the golden
+  pass and the two post-clone passes (four files: `.nakon-golden/-repair/-final/-postclone.json`).
+  `.nakon-golden.json`: ONE machine per box type (team1's copy of the full configuration
+  list minus the post-clone subset) placed at the golden IP (`192.168.<team1 id>.<240+i>`);
+  repair/final carry every team machine with only that stage's subset, and the combined
+  postclone view (`repair ∪ final`) feeds redeploy's convergence sweeps. `unbooted` box
+  types (DCs) get NO golden machine — everything that would have ridden their golden
+  plants per team in the **repair stage** instead (still pre-domain). Machines whose
+  subset for a stage is empty are dropped from that stage's file. Both post-clone files
+  carry `box_password` (same gitignored-secret class as `nakon-config.json`).
 - **`build_nakon_bundle()`** — `nakon build --config <abs> --out bundles --json`;
   content-addressed under `vendor/nakon/bundles/`, cached when the catalog is unchanged; runs with
-  `cwd=NAKON_DIR` for vulndb creds (same error-message contract as `_nakon_randomize`).
-- **`run_nakon()`** — scp's the nakon package, bundle, and config to `/tmp/nakon` on the engine,
-  then runs `nakon deploy` from `/opt/nakon`. `only=` scopes to machine names **without changing
+  `cwd=NAKON_DIR` for vulndb creds (same error-message contract as `_nakon_randomize`). The
+  subprocess is serialized by a module lock: concurrent domain passes (and the golden +
+  post-clone builds) build one at a time operator-side while their deploys run in parallel.
+- **`run_nakon()`** — scp's the nakon package, bundle, and config to a per-run
+  `/tmp/nakon-<tag>` on the engine, stages into per-run `/opt/nakon/<tag>/`, then runs
+  `nakon deploy` from there. **Staging is per-run (M2.3)**: the old shared
+  `rm -rf /opt/nakon/*` slot was what concurrent nakon runs raced on (the incident behind
+  the engine lock's deploy-owner check); each run now creates and removes only its own
+  dirs (`finally`), the timeout `pkill` is scoped to the run's staging path
+  (`pkill -9 -f '/opt/nakon/<tag>'` — the remote cmdline carries it), and the per-deploy
+  `pip3 install paramiko` became check-then-install (`sudo python3 -c 'import paramiko'`
+  first) so concurrent runs don't race the engine's pip. The global
+  `/opt/nakon/.deploy-owner` marker remains purely as a cross-HOST guard: same-host runs
+  share a holder identity and pass.
+  `only=` scopes to machine names **without changing
   bundle content**; `strict=True` passes `--strict` so failures abort instead of just reporting
-  live. On `TimeoutExpired`, the handler `pkill -9 -f 'nakon deploy'` on the engine: the client
-  timeout doesn't reliably kill the remote process, and a leftover deploy would race a second
-  one.
+  live. `jobs > 1` passes nakon's `--jobs` through (default via the `nakon_jobs` Compfile knob,
+  4): per-machine work is atomic in nakon's runner, so machines plant concurrently while each
+  machine's step order — disruptive configs last — is preserved. The concurrency ceiling is
+  engine egress/CPU and mirror throughput (see `apt_cache` below), never the datastore: plants
+  do no bulk storage writes. Redeploy deliberately keeps `jobs=1` — a mid-event repair sweep
+  stays maximally gentle on live boxes.
 - **`_run_single_nakon_config()`** — deploys one machine with an overridden configuration list in
   isolation (own temp config, own bundle, own `--only`), which is reboot-safe; used by the domain
   pass where each step (`ADDS`, `Domain Join`) reboots the box and would truncate a combined plan.
@@ -217,6 +268,16 @@ Scoring-engine bootstrap (Docker, Quotient), NAT/firewall durability, and the `e
   `push_event_conf()` writes later (Postgres and the app must see the same values). Also: apt
   locks are cleared first (`killall apt-get apt dpkg`, lock removal, `dpkg --configure -a`) to
   survive an interrupted first boot.
+- **apt-cacher-ng (M1.3)** — installed and enabled during engine bootstrap; it listens on 3142 on
+  all interfaces with zero config. `prep_apt_on_boxes(use_proxy=…)` writes
+  `/etc/apt/apt.conf.d/95tz-proxy` pointing each box at its own gateway IP
+  (`192.168.<id>.1:3142` = the engine's team NIC), gated by the Compfile `apt_cache` knob
+  (default on); `use_proxy=False` actively *removes* the file so toggling the flag between
+  deploys leaves no stale proxy. Packages cross the mirror once per competition and the LAN
+  after — that's what lets `nakon_jobs` scale past mirror throttling. Approved trade-off: the
+  proxy is an IP, so apt no longer needs box DNS — `resolv-conf-null-dns` still breaks name
+  resolution for everything else on the box but no longer breaks apt; `apt-sources-empty` and
+  the hold configs break apt either way.
 - **`docker compose up` timeout 600** — the first up after a `--no-cache` build cold-starts
   postgres (initdb) and recreates every container; measured >60 s twice on e2e-2026-09-19.
 - **Post-Docker iptables restore** — Docker sets the `FORWARD` policy to `DROP` and wipes custom
@@ -279,6 +340,12 @@ credentials exist.
 
 Post-nakon hardening and DNS/auth fixes over the gateway, with guest-agent fallback.
 
+- **`wait_boxes_settled()` / the old 150s sleep** — the sleep waited out the post-boot
+  unattended-upgrades storm that starves both the guest agent and the ssh forward; the probe
+  polls the actual condition per box instead (agent ping + no `unattended-upgr` process +
+  dpkg lock free via `apt-get check` with a 1s lock timeout — no psmisc dependency). Ceiling
+  240s; a box that never settles falls through to prep's own retry ladder, same as before.
+  Runs once per `prep_apt_on_boxes` call (twice per deploy).
 - **`fix_dns_on_boxes()`** — 8 attempts, 15 s apart, per box; after the last, falls back to
   `guest_agent_exec_root` with `DNS_FIX_CMD_ROOT`, which needs neither working sudo (NOPASSWD may
   not be granted yet on a fresh clone) nor the network the SSH path uses (it runs as root over
@@ -317,6 +384,122 @@ Post-nakon hardening and DNS/auth fixes over the gateway, with guest-agent fallb
   (nakon authenticates by password and runs sudo). 8 attempts, then the same guest-agent fallback
   as root: planted misconfigs (writable-sudoers et al) break sudo for the SSH path, and the
   fallback beats burning 2 minutes of retries and moving on.
+
+## golden_ops.py
+
+Golden-set build and template conversion (M3.1). One VM per box type is full-cloned from
+the base templates to `engine_vmid + 150 + box_idx`, planted with the **golden stage**
+(strict, tz-base rollback guard on re-entry), cloud-init-cleaned, stopped, and converted
+with `qm template`. Terraform apply #2 then link-clones every team from those templates.
+
+- **Why the API and not Terraform** — `qm template` conversion happens outside the VM
+  resource's lifecycle, so a Terraform-managed golden box would drift the moment it
+  converts. Terraform only consumes the finished templates as `clone { full = false }`
+  sources via the `golden_template_ids` tfvars map that `deploy()` persists.
+- **Golden placement** — IPs sit at `192.168.<team1 id>.<240+i>` on team1's bridge: above
+  the `.1` gateway, below `.255`, and free because golden boxes are converted to stopped
+  templates before any real team box exists. The vmid block is gated by preflight
+  (collisions with team space fail fast with a pointer to `--scoring-vmid`).
+- **Resume routing** — all golden vmids already templates → skip; some exist as plain VMs
+  → roll the tz-base-marked ones back and re-plant, clone the missing; a *partially
+  converted* set is fatal (templates can't be un-templated) — destroy and redeploy.
+  M4 exception: partial conversion is fine when every converted vmid's description hash
+  matches its expected hash (selective rebuild / added box type). Only **unconverted
+  slots** are worked on — a selective rebuild never starts, plants, or re-converts the
+  matching templates it keeps. Cold (unbooted DC) slots: any plain VM is a dead attempt
+  that may have booted and specialized, so it is destroyed and FULL-cloned from the
+  generalized base, then converted to a template **without ever booting** (no
+  start/bootstrap/snapshot/plant).
+- **`unbooted_golden_boxes()`** — absent `domain_roles.json` = no-domain lineup (empty
+  set). A present-but-invalid file (unparseable, non-map, role value outside
+  `dc`/`member`, or a name absent from `boxes.json`) raises rather than silently
+  widening the booted set — the silent fallback would hand the DC a booted shared
+  golden, the exact duplicate-DomainSID failure the unbooted split exists to prevent.
+- **Windows identity (plan 3.0)** — linked clones see the same bytes a full clone would;
+  SIDs already duplicate across teams today (only the original templates are sysprepped)
+  and stay unique within a team. Live-checked 2026-09-24: phase 6 never re-sysprepped.
+
+## template_ops.py (M4)
+
+Per-competition template lifecycle: `build → test runs (reuse; rebuild on config change)
+→ freeze → competition → destroy`. NOT a cross-competition cache — every template belongs
+to exactly one competition, dies at `--full` teardown, and is never patched in place.
+
+- **Hashes** — sha256 per template over only what affects disk contents; every input is
+  tagged **config-class** (base template vmid, golden-stage config list incl. pinned
+  `{name, vars}` values, the PER-BOX `payload_hash` — that box's golden plan's step
+  `script_sha256`s, content-addressed, so a web01 pin change does not rebuild
+  app01/dc01/win01 (matrix run 4: one change rebuilt all four) — box user/password,
+  SSH key, apt-proxy flag; engine: base image vmid + pinned `quotient_ref`) vs
+  **code-class** (the disk-affecting function sources — engine: bootstrap + clean step —
+  plus the engine's `scoring_engine` main.tf resource block only, so team-box edits
+  don't rebuild the engine). Frozen records written before the payload-hash migration
+  carried the whole-bundle `bundle_id`; `golden_freeze_gate` honors those only while
+  the bundle is still unchanged — a changed bundle enters the normal hard-fail path.
+  Excluded, with
+  reasons recorded in the module docstring: team count/identifiers/IPs, event.conf,
+  repair/final-stage configs, snapshot names, mgmt IPs, DB passwords (all applied after
+  cloning or cleaned from the template). Going 2-team test → 8-team competition rebuilds
+  nothing. Hashes live on the template **description** (node-side truth) and in
+  `.template-hashes.json` (survives `.deploy_state.json` resets; 0600, gitignored —
+  golden inputs embed box_password).
+- **Engine template** — built API-side like the goldens (terraform only consumes it as
+  `engine_clone_id`): full clone of the base image → bootstrap (pinned Quotient ref —
+  the hash input must be computable BEFORE building; the realized HEAD is recorded for
+  traceability only) → clean step (compose down -v, remove `.env`/event.conf/credlists,
+  truncate machine-id, cloud-init clean, remove SSH host keys; apt-cacher-ng stays installed
+  but its cache is empty at build time — the warm cache is built on the deployed clone and
+  dies with it, so the template gives no apt speedup) → `qm template`. The deployed engine is a linked clone with a
+  fresh identity and fresh host keys every run, and `.env` goes down BEFORE `compose up`
+  so the fresh postgres volume initializes with this competition's credentials.
+- **Reuse vs rebuild** — hash match → reuse (logged); differs + not frozen → destroy
+  that template's clones, destroy the template, rebuild; differs + frozen → see freeze
+  semantics; missing → build. Golden rebuild granularity is per box type (changing one
+  box's golden-stage pin rebuilds only that box's golden).
+- **Frozen semantics** — a frozen competition never rebuilds: **config-class drift
+  hard-fails naming the changed fields** (the event runs on the hashes that were
+  verified); **code-class drift warns and proceeds off the frozen template** — a
+  post-freeze log line must never break a mid-event team rebuild or engine recovery.
+  This holds fully for the ENGINE (the phase-2 gate runs before any engine destruction
+  and reuses the frozen template). Known gap, live-found 2026-09-26 (scenario-7 leg 2):
+  phase-1's golden keep/destroy compares record hash vs freshly computed hash WITHOUT
+  consulting the frozen gate, so a code-only drift of a golden's inputs (e.g. a
+  `build_golden_set` source change) destroys and rebuilds the affected goldens instead
+  of proceeding on the frozen template — the top-of-deploy warning fires, then phase 1
+  overrules it. Config drift still hard-refuses; fixing the golden side means letting
+  phase 1 ask the gate before destroying.
+  Mid-event rebuilds and recoveries also warn (not block) when the node's template hash
+  differs from the verified record.
+- **Freeze** — `verify-competition.py --freeze`: requires all gates PASS including the
+  plant-coverage gate, records hashes + git commit + dirty flag + timestamp + gate
+  results in `.frozen.json` (0600). Windows/domain lineups additionally require
+  `--windows-domain-validated` (the operator's attestation that the run exercised
+  DomainSID uniqueness, machine SIDs, and the three-pass ordering). `--unfreeze
+  --confirm-unfreeze` removes the record — pre-competition use only.
+- **Teardown modes** — destroy-competition defaults to **teams-only** (clones + engine
+  VM + bridges; templates kept for hash reuse); `--full` also destroys templates
+  (clones strictly first — linked clones die with their base disks); `--full` on a
+  FROZEN competition refuses without `--end-of-competition`. A full teardown also
+  removes `.template-hashes.json` — a surviving record would make the next deploy
+  "reuse" a hash with nothing behind it.
+- **Team rebuild** — redeploy `--mode rebuild` re-clones from the frozen goldens and
+  runs the POST-CLONE STAGES in deploy order (repair → domains → final), never the
+  full config — planting the disruptive/boot-hostile stage before the domain joins is
+  exactly the brick hazard the three-pass split removed. Timed to
+  `.deploy-timings.jsonl`.
+- **Engine recovery** — redeploy `--mode engine-recovery`: `terraform apply -replace`
+  on the engine resource only, re-cloned from the engine template, per-deploy state
+  reapplied (fresh empty scoring DB); re-seed with `--from-phase 7`.
+- **REQUIRED_VARS + bundle lint** — the catalog DB has no required-vars metadata, so
+  constants.py curates the table (`"ip"` = machine-identity: auto-filled per machine at
+  stage generation and banned from the golden stage — a golden-baked identity var would
+  clone the golden's IP into every team; `"literal"` = must be pinned as
+  `{"name", "vars"}`). Every built bundle is linted: payload blobs are scanned for
+  `$VAR` references that the step doesn't declare and the script doesn't
+  assign/guard/self-default — a catalog config that starts needing an undeclared var
+  fails at bundle build, before any plant time is spent (validated against all 123
+  existing bundles: zero false positives; the one real hit class is genuinely broken
+  bare pins like `install-package` without `PACKAGE`).
 
 ## clone_ops.py
 
@@ -362,19 +545,29 @@ Per-team AD forests: DC promotion and member joins, run after cloning. Driven by
   idempotent** (`realm join` / `Add-Computer` on an already-joined member fails, and the
   single-config pass runs strict), so resumes must skip members that are already in the domain.
 - **`deploy_domain_configs()`** — runs after clone to avoid DC clone duplication; each rebooting
-  step runs in its own isolated nakon pass (`_run_single_nakon_config`). `promote_dc=False` only
+  step runs in its own isolated nakon pass (`_run_single_nakon_config`). Teams run
+  **concurrently** (M2.4) — each team's chain is serial within itself (promotion must precede
+  joins) — safe only since M2.3 gave every nakon pass its own engine staging dir.
+  `promote_dc=False` only
   rejoins members (the redeploy case).
   - **ADDS resume artifact** (`.nakon-domain-<team>-adds.json`): its existence means ADDS already
     ran for this team — re-running `Install-ADDSForest` on a live DC would just fail. Promotion
     is skipped on resume; the joins below still run (they're the recoverable part).
   - **AD DS promotion budget: up to 20 min** (`wait_for_guest_agent` timeout 1200) — promotion is
     slow and ends in a reboot.
+  - **AD Web Services readiness precedes AD-aware plants**: after ADDS reboots, `sshd` can
+  return before the AD PowerShell cmdlets are ready. `wait_for_adws` polls `Get-ADDomain`
+  (and records the DomainSID) before `Add User Account` / `Elevate User Account` are planted.
+  The AD request order remains Add, Elevate, firewall, auditing; nakon's pinned dependency
+  handling emits one parameterized Add step rather than a duplicate vars-less Add.
   - **AD misconfigs run with `strict=False`**: this pass is scoring flavor, not range
-    infrastructure, and can fail non-fatally even with nakon ≥ v0.1.3 (which fixed the duplicate
-    vars-less dependency step): "Disable System Firewall" sweeps every AD computer over WinRM, and
-    a Linux realmd member has no WinRM, so that step exits 1 on any mixed Windows/Linux domain
-    after landing its own misconfig. Failures print in nakon's summary instead of aborting.
-  - DC DNS SRV records are awaited (`wait_for_dc_dns`) before any member join.
+  infrastructure, and can fail non-fatally even with nakon ≥ v0.1.3 (which fixed the duplicate
+  vars-less dependency step): "Disable System Firewall" sweeps every AD computer over WinRM, and
+  a Linux realmd member has no WinRM, so that step exits 1 on any mixed Windows/Linux domain
+  after landing its own misconfig. Failures print in nakon's summary instead of aborting.
+  - DC DNS SRV records are awaited (`wait_for_dc_dns`) before any member join; join membership
+  is then probed and transient join failures are retried up to three times.
+
   - **Windows members** get DNS repointed at the DC first, then `Domain Join` (reboots);
     **Linux members** join via nakon's `domain-join` (realmd/sssd) — no reboot and no separate
     DNS repoint needed.
@@ -382,10 +575,44 @@ Per-team AD forests: DC promotion and member joins, run after cloning. Driven by
     auth and every scored service. The apt install of the realmd stack can blow past nakon's
     per-step timeout on small VMs — log loudly and keep deploying (hence `strict=False` + catch).
 
+## timing.py
+
+Deploy timing instrumentation (M0.1). `timed(comp_dir, phase, op, target)` is a context
+manager appending one JSONL line per operation to `competitions/<id>/.deploy-timings.jsonl`
+(gitignored, no secrets — op names and durations only). Phases wrap their big-ticket ops
+(terraform apply, engine bootstrap, per-VM clone/start/destroy/snapshot, waits, apt prep,
+nakon passes with machine counts, ADDS/joins, seed) in `deploy.py`, `clone_ops.py`, and
+`domain_ops.py`. Appends are lock-serialized, so M2's concurrent workers can write the same
+file safely. `print_timing_summary` totals seconds per (phase, op) at deploy end. The
+baseline comes from a real competition deploy, not a synthetic one.
+
 ## deploy.py
 
 The seven-phase orchestrator and CLI. `deploy()` owns phase sequencing, resume, and credential
 generation.
+
+- **Pipeline v2 (M3) phase map, M4-revised** — [1] two-wave parallel cleanup (team boxes
+  + legacy clones, then engine + hash-mismatched/missing goldens — **matching golden
+  templates survive**: test-run reuse) · [2] engine-template lifecycle (hash → reuse or
+  rebuild; never on a frozen competition) + terraform apply #1 (engine as a *linked
+  clone of the engine template* + bridges, `build_team_boxes=false`) · [3]
+  prepare-engine-from-template (`.env` BEFORE `compose up`, fresh volumes ⇒ empty
+  scoring DB) + `event.conf` · [4] golden hash gate + golden build/convert (per-box
+  hash onto the template description) + terraform apply #2 (all teams as linked clones)
+  + waits/auth/DNS/apt/`tz-base` · [5] repair-stage sweep (sshd/sudoers, lenient,
+  `--jobs`) + `fix_services_on_boxes` (AFTER the sweep: it un-wedges the sshd the ssh-\*
+  configs just thrashed) · [6] domains (concurrent per team) → **final-stage pass**
+  (disruptive + boot-hostile, planted after the domain reboots) → beacons + `tz-ready`
+  · [7] seed. `.phase6-swept` became `.postclone-swept`. A state file with a different
+  `pipeline_version` refuses to resume — the phase numbers mean different things.
+- **The full nakon bundle is no longer built or deployed** — `generate_stage_configs`
+  splits `nakon-config.json` into `.nakon-golden.json` (one machine per box type at the
+  golden IP, golden-stage subset), `.nakon-repair.json` and `.nakon-final.json` (every
+  team machine, that stage's subset — the repair/final split exists because domain
+  joins reboot boxes and need DNS/apt; see constants.py), plus the combined
+  `.nakon-postclone.json` view for redeploy sweeps. All four are 0600 and gitignored
+  (they carry box_password). Only the stage bundles are built, content-addressed as
+  ever, and each is linted for undeclared `$VAR` references at build time.
 
 - **Resume semantics (`from_phase > 1`)** — skips the destructive [1/7] cleanup and [2/7]
   terraform apply, and reloads teams + per-run secrets from
@@ -412,40 +639,47 @@ generation.
   `-fix` variants). The warning is unconditional — not gated by `--yes`/`confirm_deploy` —
   because a reused competition replays its saved `boxes.json` exactly and can silently outlive
   the interactive box-picker warning, and a non-interactive/CI deploy skips that prompt anyway.
-- **Bundle built operator-side** — the nakon bundle is built here, on the operator machine, from
-  the FULL machine list: the only step that needs the vulndb (MySQL + vulndb-ui/MinIO), which
-  `generate_nakon_config()` has already proven reachable. Phases 5 and 6 both deploy from this one
-  bundle, so **the scoring engine never sees vulndb credentials**.
+- **Stage bundles built operator-side** — the nakon bundles are built on the operator machine:
+  the only steps that need the vulndb (MySQL + vulndb-ui/MinIO), which `generate_nakon_config()`
+  has already proven reachable. Pipeline v2 builds three stage bundles (golden + repair + final,
+  via `generate_stage_configs`), not one full bundle, so **the scoring engine never sees vulndb
+  credentials** and no full-machine pass is ever deployed.
 - **`teams.json` persisted** — `destroy-competition.py` requires it to tear the competition down
   later; verification also reads team logins from it instead of re-deriving.
 - **`all_targets` built once from the FULL box list** — see `enumerate_targets()`'s invariant:
   nothing downstream may re-derive a vmid from a filtered `boxes` (vmid is positional).
 - **`confirm_deploy()` skipped on resume** — resuming implies prior confirmation; `--yes` skips it
   outright on a fresh deploy.
-- **Sweep marker reset** — a fresh deploy unlinks `.phase6-swept` so it never inherits a previous
-  deploy's marker.
-- **[2/7]** — `terraform apply -parallelism=1`: concurrent full clones saturate the
-  datastore/API (HTTP 596). Apply timeout is `2400 + 1800` per Windows box (60 GB clones vs 15 GB
-  Linux). The engine's SSH reachability is **polled** (`wait_for_ssh`) instead of a blind
-  post-apply sleep.
-- **[3/7] removed** — the old phase copied an SSH key to the engine, but nothing ever read the
-  copy back: all SSH/SCP uses the local key via ctx, and nakon authenticates to team boxes by
-  password. The phase number is retained (as a no-op) for `--from-phase` stability. The shared
-  ctx/key/ip setup runs even when phase 3 itself is skipped, because phases 4–7 reference it.
-- **[4/7] ordering** — `event.conf` is pushed BEFORE nakon: that prevents the Quotient crash loop
-  that wipes NAT; `ensure_nat_forwarding()` immediately after.
-- **[4.5/7]** — team1 Windows boxes are bootstrapped here (no cloud-init on Windows to set
-  IP/DNS/credentials), and `setup_ubuntu_auth` runs for team1 Linux. Only team1 exists at this
-  point; team2+ are cloned later.
-- **[5/7]** — DNS fix on team1 (nakon needs working apt), `tz-base` snapshots (pre-nakon restore
-  point), team1's machine names filtered from the full nakon config by third octet, then
-  `run_nakon(only=…)` — `--only` scopes the deploy; the bundle is still the full one. Timeout is
-  `max(2400, PER_MACHINE_NAKON_BUDGET × len(team1_machines))`.
-- **[6/7]** — the clone + team2+-nakon sweep is gated by `.phase6-swept`, written only after a
-  clean sweep, so a mid-phase-6 resume skips straight to domains/beacons/hardening instead of
-  re-running the sweep. Single-team competitions harden team1 here instead of running nakon
-  again. Team beacons (if `team_beacons 1`) are planted **before** the `tz-ready` snapshot so
-  clones and restore points carry them.
+- **Sweep marker reset** — a fresh deploy unlinks `.postclone-swept` so it never inherits a
+  previous deploy's marker.
+- **[2/7] terraform apply #1** — `terraform apply -parallelism=1` with `build_team_boxes=false`:
+  the engine (full clone from the engine template) + all team bridges + the engine's team NICs
+  (netplan) + the cold boot. `parallelism=1` because concurrent full clones saturate the
+  datastore/API (HTTP 596); the engine's SSH reachability is **polled** (`wait_for_ssh`) instead
+  of a blind post-apply sleep.
+- **[3/7] engine bootstrap** — the old phase 3 (remote SSH-key copy) was removed as unused, and
+  v2 moved the engine bootstrap into its slot: the golden plant in phase 4 is a nakon run, so
+  the engine, `event.conf`, and NAT must all be live first (pushing `event.conf` before any
+  nakon run prevents the Quotient crash loop that wipes NAT).
+- **[4/7] golden build + apply #2** — `build_golden_set` (API clones at `engine+150+i`, golden
+  plant strict under the tz-base rollback guard, `cloud-init clean`, `qm template`), then
+  `build_team_boxes=true` and the second apply: every team's boxes as **linked clones** of the
+  golden templates. Windows bootstrap then covers ALL teams (guest agent is the only pre-network
+  channel; no cloud-init on Windows), followed by concurrent waits, `setup_ubuntu_auth`,
+  DNS fix, apt prep, and `tz-base` for every box. Clones boot with working DNS/apt because the
+  golden disk carries no disruptive configs — the pre-plant repair stage the v1 pipeline needed
+  after cloning is gone.
+- **[5/7] post-clone sweep** — nakon pass 2 over the post-clone stage (`.nakon-postclone.json`),
+  lenient (`strict=False`: one flaky plant must not kill the sweep after 98% landed), `--jobs N`,
+  gated by `.postclone-swept` so resumes skip it. `fix_services_on_boxes` runs **after** the
+  sweep, not before: the ssh-* configs in the post-clone set restart sshd and can trip the
+  start-limit, and the un-wedge + credlist accounts + service binds belong after the thing that
+  breaks them. (Historical note: through 2026-09-24 the equivalent phase-6 sweep passed no
+  `only=` at all — the monolith's comment said "team1 already done at [5/7]" but the filter was
+  never implemented, so team1 was re-planted over its finished strict plant on every deploy.)
+- **[6/7] domains + beacons + tz-ready** — `deploy_domain_configs` runs teams **concurrently**
+  (each team's ADDS→join chain serial within itself); team beacons (if `team_beacons 1`) are
+  planted **before** the `tz-ready` snapshot so restore points carry them.
 - **[7/7]** — Quotient's HTTP is polled (`wait_for_http` on `/api/login`) instead of a blind sleep
   before seeding. Each sub-step is gated on its own state flag (`seeded`, `engine_unpaused`,
   `injects_created`) because **`unpause_engine` is not idempotent**. `resolve_inject_times()` runs
@@ -494,7 +728,12 @@ Teardown: API-cloned VMs first, then `terraform destroy`.
   over `var.teams` and `var.boxes_per_team` must match, or resources are orphaned.
 - **`destroy_cloned_vms()`** — team2+ clones are not in Terraform state, so they're destroyed via
   the Proxmox API (stop, then delete with `purge=1`) before `terraform destroy`; already-stopped
-  or already-gone VMs are tolerated silently.
+  or already-gone VMs are tolerated silently. (Pipeline v2 keeps this path for legacy ranges;
+  v2 ranges have every team in Terraform state and skip it.)
+- **Golden wave last (v2)** — after `terraform destroy` removes every team box, engine, and
+  bridge, `destroy_golden_set` API-destroys the golden templates (`engine_vmid + 150 + i`), with
+  the ownership-tag check (`tezcatlipoca`, `tezcatlipoca-golden`, `comp-<name>`). Clones must
+  die before their templates' base disks.
 - **`load_destroyable_competitions()`** — requires `Compfile` + `teams.json` + `boxes.json`:
   competitions deployed before `teams.json` support can't be safely destroyed this way.
 - `terraform destroy -parallelism=1`, matching the apply.
@@ -504,9 +743,22 @@ Teardown: API-cloned VMs first, then `terraform destroy`.
 Filtered per-team/box rollback/reconfigure/rebuild against a live range, using snapshots.
 
 - **Modes** — `rollback-ready` (tz-ready, the default; seconds), `rollback-base` (tz-base, then
-  re-nakon + hardening + domain), `reconfigure` (no rollback — run the configure chain against
-  the live boxes), `rebuild` (recreate from template). Any rollback **discards everything the
-  defending team(s) did to those boxes** — the confirmation prompt says so.
+  re-run the **post-clone stage** + hardening + domain), `reconfigure` (no rollback — run the
+  configure chain against the live boxes), `rebuild` (recreate from template). Any rollback
+  **discards everything the defending team(s) did to those boxes** — the confirmation prompt
+  says so.
+- **Pipeline-v2 awareness** — when `.deploy_state.json` says `pipeline_version: 2`, repair
+  re-plants (`rollback-base`/`reconfigure`/`rebuild`) run the **post-clone stage**
+  (`.nakon-postclone.json`), not the full config: the golden-stage installs ride the linked
+  clone, and re-running them over live boxes is exactly what the stage split removed.
+  `rebuild` clones from the **golden template** (`state["golden_template_ids"]`, linked, so a
+  rebuilt box carries the golden-stage installs), and refuses with an explanation if the
+  golden template is gone — rebuilding from the ORIGINAL template would produce a box missing
+  every golden-stage install. Pre-golden ranges keep the old full-config behavior. The
+  Linux-only executors (`fix_dns_on_boxes`/`setup_ubuntu_auth`/`fix_services_on_boxes` — bash
+  against Ubuntu boxes) receive Linux targets only on every path: reconfigure/rollback use the
+  same `linux_targets` list deploy does, rebuild filters its `rebuilt` set, while Windows
+  boxes keep the guest-agent bootstrap, the domain chain, waits, snapshots, and nakon.
 - **`_load_driver()`** — `create-competition.py` has a hyphen, so it's loaded via
   `importlib.util.spec_from_file_location` and re-used as `driver`.
 - **`box_platform()`** — routes through `driver.os_to_platform` (must match nakon's
@@ -566,6 +818,17 @@ Post-deploy verifier: logins, services, isolation, misconfig spot-check, injects
   carries `vars`. Presence on some teams but missing on others fails (didn't survive cloning);
   **absent-everywhere is not this check's job** — `check_misconfig()` above already covers "was
   it planted at all".
+- **`check_domains()`** — the live replacement for the freeze's operator attestation. Per
+  team: the DC answers `Get-ADDomain` for `team<id>.local` **with a syntactically valid
+  `S-1-5-21-*` DomainSID** (a promoted DC that answers without one fails — with one team,
+  uniqueness alone is vacuous, so the DSID shape check is what actually gates), the planted
+  `svc-support` account exists, and every member is joined (Windows `PartOfDomain`+domain,
+  Linux realmd). Across teams: duplicate **DomainSIDs** fail (promotion reused image state);
+  duplicate member machine SIDs are INFO only (linked clones of one golden, harmless for
+  isolated forests). A single-team lineup PASSes with "uniqueness needs a second team".
+  Fail-closed on input: a present-but-malformed `domain_roles.json`, a role value outside
+  `dc`/`member`, or a role box absent from `boxes.json` FAIL the gate — nothing is silently
+  skipped; only file absence skips (no-domain lineup).
 - **Exit-code gate** — `isolation` and `misconfig_survival` are NOT optional: a failed isolation
   check means teams can reach each other *right now* (a correctness issue for the whole exercise,
   not a scoring nuisance), and a misconfig missing on one team's clone breaks the "every team
@@ -740,6 +1003,20 @@ TF_VAR inputs; the long descriptions carry rationale worth preserving.
   boot from SATA (scsi0 needs virtio-scsi drivers the image may lack).
 - **`boxes_per_team.template`** — must match a Proxmox VM tagged `template` exactly (see
   docs/usage-people.md, "Adding a template VM").
+
+- **Per-box work runs concurrently (M2.1)** — `utils.run_concurrent(items, fn, max_workers=8)`
+  is the one thread-pool helper. It returns an **index-aligned list** (each slot holds fn's
+  return value or the exception fn raised — never raised here); an earlier dict-keyed version
+  broke on unhashable items and was live-fixed 2026-09-24. Per-box budgets are independent
+  (a slow early box no longer
+  eats later boxes' patience), prints go through `utils.PRINT_LOCK`, and each function keeps
+  its original aggregate semantics: `wait_for_boxes_ssh` and `fix_dns_on_boxes` abort only
+  when **all** boxes fail; `prep_apt_on_boxes` / `fix_services_on_boxes` warn per box;
+  `setup_ubuntu_auth` raises when any box ends without working auth (all boxes still get
+  attempted — better diagnostics than the old first-failure abort). The pool cap (8) sits
+  well under the engine's raised sshd `MaxSessions` (64). `fix_services_on_boxes` keeps the
+  per-box script *construction* serial (pure string building) and parallelizes only the
+  SSH/guest-agent execution.
 
 ## Conventions
 

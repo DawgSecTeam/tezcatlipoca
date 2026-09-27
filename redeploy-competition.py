@@ -5,6 +5,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -13,8 +14,9 @@ import urllib3
 from dotenv import load_dotenv
 
 from constants import WINDOWS_ADMIN_USER
-from engine_ops import read_event_conf
-from nakon_ops import acquire_engine_lock
+from engine_ops import (ensure_nat_forwarding, prepare_engine_from_template,
+                        push_event_conf, read_event_conf)
+from nakon_ops import acquire_engine_lock, build_nakon_bundle
 from range_ops import (
     SNAP_BASE,
     SNAP_READY,
@@ -31,7 +33,11 @@ from range_ops import (
     take_snapshot,
     wait_for_proxmox_task,
 )
-from utils import load_compfile, load_users_config, pick_competition, valid_comp_name
+from template_ops import stored_template_hash
+from timing import timed
+from ssh_ops import forget_engine_host_key, wait_for_ssh
+from utils import (compfile_flag, load_compfile, load_users_config, pick_competition,
+                   run_terraform, valid_comp_name)
 
 ENV_PATH = Path(".env")
 load_dotenv(ENV_PATH)
@@ -126,13 +132,14 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
     print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
     # strict=False, mirroring deploy.py's phase-6 stance: these re-plants hit live
     # boxes mid-event, and one flaky/broken pin must not abort a repair sweep.
-    failed = driver.run_nakon(
+    nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
+    result = driver.run_nakon(
         key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
         only=machines,
         timeout=max(2400, driver.PER_MACHINE_NAKON_BUDGET * len(machines)),
-        strict=False,
+        strict=False, jobs=nakon_jobs,
     )
-    state["nakon_failed_steps"] = failed[:20]
+    state["nakon_failed_steps"] = [f"redeploy: {line}" for line in result.failed[:20]]
     state_path = comp_dir / ".deploy_state.json"
     if state_path.exists():
         tmp = state_path.with_name(state_path.name + ".tmp")
@@ -140,7 +147,12 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
         os.replace(tmp, state_path)
         os.chmod(state_path, 0o600)
 
-    driver.fix_services_on_boxes(comp_dir, targets, ctx, box_creds=state.get("box_creds"))
+    driver.fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=state.get("box_creds"))
+
+
+def _domain_config_path(comp_dir, fallback):
+    full_config = comp_dir / "nakon-config.json"
+    return full_config if full_config.exists() else fallback
 
 
 def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
@@ -171,6 +183,10 @@ def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
 
     print("  Domain-role box(es) were reset to a pre-domain state — re-running domain "
           "configuration for " + ", ".join(sorted(affected_teams)) + "...")
+    # The post-clone stage file may contain only the selected/rebuilt box types. Domain
+    # orchestration still needs every member machine in the affected team so it can
+    # rejoin them after a DC reset; use the full source-of-truth machine list here.
+    domain_config_path = _domain_config_path(comp_dir, nakon_config_path)
     for team_key in sorted(affected_teams):
         dc_reset = any(
             roles.get(t["box_name"]) == "dc" and t["team_key"] == team_key
@@ -183,7 +199,7 @@ def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
                       "it must be re-promoted, not assumed promoted.")
                 stale_marker.unlink()
         driver.deploy_domain_configs(
-            {team_key: teams[team_key]}, boxes, comp_dir, nakon_config_path,
+            {team_key: teams[team_key]}, boxes, comp_dir, domain_config_path,
             Path(ctx["ssh_key_path"]), os.environ["TF_VAR_vm_username"],
             ctx["scoring_engine_ip"], box_password, promote_dc=dc_reset,
         )
@@ -344,16 +360,44 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
     for t in targets:
         box = t["box"]
         windows = box_platform(box) == "windows"
-        src_vmid = template_vmid_for(box)
-        print(f"  Rebuilding {describe_target(t)} from template "
-              f"'{box['template']}' (vmid {src_vmid})...")
+        full_clone = True
+        src_vmid = None
+        src_label = None
+        if state.get("pipeline_version") == 2:
+            golden_ids = state.get("golden_template_ids") or {}
+            if box["name"] in golden_ids:
+                src_vmid = int(golden_ids[box["name"]])
+                full_clone = False
+                src_label = f"golden template '{box['template']}' (vmid {src_vmid}, linked clone)"
+                # M4 frozen semantics: the rebuild uses the frozen template as-is. A hash
+                # mismatch against the verified record is a WARNING, never a mid-event
+                # blocker — but it must be loud, because it means the node's template is
+                # not the one the verify PASS covered.
+                expected_hash = (state.get("golden_hashes") or {}).get(box["name"])
+                on_node = stored_template_hash(node, src_vmid)
+                if expected_hash and on_node and on_node != expected_hash:
+                    print(f"    WARNING: golden template for '{box['name']}' on the node "
+                          f"({on_node[:12]}) differs from the verified hash "
+                          f"({expected_hash[:12]}) — rebuilding from the node's template "
+                          f"anyway. If this competition is frozen, investigate after the "
+                          f"event.")
+            else:
+                raise SystemExit(
+                    f"  ERROR: pipeline v2 state has no golden template for '{box['template']}' "
+                    f"(golden_template_ids: {sorted(golden_ids)}) — a rebuild from the ORIGINAL "
+                    f"template would miss every golden-stage install (services, vulns). "
+                    f"Redeploy the range instead.")
+        else:
+            src_vmid = template_vmid_for(box)
+            src_label = f"template '{box['template']}' (vmid {src_vmid})"
+        print(f"  Rebuilding {describe_target(t)} from {src_label}...")
 
         destroy_vm_if_exists(node, t["vmid"])
 
         upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src_vmid}/clone", data={
             "newid": t["vmid"],
             "name": t["vm_name"],
-            "full": 1,
+            "full": 1 if full_clone else 0,
         })["data"]
         wait_for_proxmox_task(node, upid)
 
@@ -372,9 +416,16 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data=config)
 
         if box.get("disk_gb"):
-            proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/resize", data={
-                "disk": "scsi0", "size": f"{box['disk_gb']}G",
-            })
+            # The box's own disk interface (Windows boxes are sata0 — a hardcoded scsi0
+            # made every Windows rebuild die here), and only ever grow: a golden clone
+            # already carries the box's size, and PVE refuses a shrink.
+            iface = box.get("disk_iface") or "scsi0"
+            cur = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"].get(iface, "")
+            m = re.search(r"size=(\d+)G", cur)
+            if not m or int(m.group(1)) < int(box["disk_gb"]):
+                proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/resize", data={
+                    "disk": iface, "size": f"{box['disk_gb']}G",
+                })
 
         start_vm(node, t["vmid"])
 
@@ -393,26 +444,71 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
     driver.wait_for_boxes_ssh(ctx, rebuilt, timeout=600)
     driver.wait_for_cloud_init(ctx, rebuilt, timeout=300)
 
-    print(f"  Snapshotting rebuilt boxes as '{SNAP_BASE}'...")
-    for t in rebuilt:
-        take_snapshot(node, t["vmid"], SNAP_BASE,
-                      description="tezcatlipoca: rebuilt from template, pre-Nakon")
-
-    run_nakon_and_harden(rebuilt, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
-    try:
-        domain_settled = rerun_domain_configs(rebuilt, ctx, comp_dir, state, nakon_config_path)
-    except Exception:
-        print(f"  tz-ready NOT re-taken — the domain chain failed above, so the boxes are "
-              f"not in an 'as delivered' state.")
-        raise
-
-    if domain_settled:
-        print(f"  Snapshotting rebuilt boxes as '{SNAP_READY}'...")
+    with timed(comp_dir, "rebuild", "team_rebuild_total",
+               ",".join(t["vm_name"] for t in rebuilt)):
+        print(f"  Snapshotting rebuilt boxes as '{SNAP_BASE}'...")
         for t in rebuilt:
-            take_snapshot(node, t["vmid"], SNAP_READY,
-                          description="tezcatlipoca: as delivered (rebuilt by redeploy)")
-    else:
-        print(f"  tz-ready NOT re-taken — domain configuration could not run (see above).")
+            take_snapshot(node, t["vmid"], SNAP_BASE,
+                          description="tezcatlipoca: rebuilt from template, pre-Nakon")
+
+        # M4: the rebuild plants the POST-CLONE STAGES in the deploy's order, not the
+        # full config — the golden-stage work rides the clone, and planting the
+        # disruptive/boot-hostile final stage before the domain joins is exactly the
+        # brick hazard the three-pass split exists to prevent.
+        rebuilt_names = [t["machine"] for t in rebuilt]
+        repair_path = comp_dir / ".nakon-repair.json"
+        final_path = comp_dir / ".nakon-final.json"
+
+        def _stage_pass(path, stage):
+            if not path.exists():
+                print(f"  ({stage} stage file missing — skipping)")
+                return
+            machines = json.loads(path.read_text())["machines"]
+            names = [m["name"] for m in machines if m["name"] in rebuilt_names]
+            if not names:
+                print(f"  (no {stage}-stage configs for the selected boxes — skipping)")
+                return
+            bundle = build_nakon_bundle(path)
+            key = Path(ctx["ssh_key_path"])
+            scoring_user = os.environ["TF_VAR_vm_username"]
+            scoring_ip = ctx["scoring_engine_ip"]
+            nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
+            driver.ensure_nat_forwarding(ctx)
+            with timed(comp_dir, "rebuild", f"nakon_{stage}", f"x{len(names)}"):
+                result = driver.run_nakon(
+                    key, scoring_user, scoring_ip, bundle, path,
+                    only=names,
+                    timeout=max(2400, driver.PER_MACHINE_NAKON_BUDGET * len(names)),
+                    strict=False, jobs=nakon_jobs,
+                )
+            if result.failed:
+                print(f"  WARNING: {stage}-stage replant had {len(result.failed)} "
+                      f"FAILED step(s) (recorded in .deploy_state.json)")
+
+        print("  Repair-stage sweep (sshd/sudoers) on rebuilt boxes...")
+        _stage_pass(repair_path, "repair")
+        driver.fix_services_on_boxes(
+            comp_dir, [t for t in rebuilt if box_platform(t["box"]) == "linux"],
+            ctx, box_creds=state.get("box_creds"))
+
+        try:
+            domain_settled = rerun_domain_configs(rebuilt, ctx, comp_dir, state, nakon_config_path)
+        except Exception:
+            print(f"  tz-ready NOT re-taken — the domain chain failed above, so the boxes are "
+                  f"not in an 'as delivered' state.")
+            raise
+
+        if final_path.exists():
+            print("  Final-stage pass (disruption + boot-hostile) on rebuilt boxes...")
+            _stage_pass(final_path, "final")
+
+        if domain_settled:
+            print(f"  Snapshotting rebuilt boxes as '{SNAP_READY}'...")
+            for t in rebuilt:
+                take_snapshot(node, t["vmid"], SNAP_READY,
+                              description="tezcatlipoca: as delivered (rebuilt by redeploy)")
+        else:
+            print(f"  tz-ready NOT re-taken — domain configuration could not run (see above).")
     return rebuilt
 
 
@@ -421,6 +517,102 @@ def quote_sshkeys(public_key):
     from urllib.parse import quote
     return quote(public_key.strip(), safe="")
 
+
+
+def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
+    """M4 engine recovery: re-clone the engine VM from the competition's engine
+    template and apply per-deploy state fresh. Team boxes, golden templates, and the
+    engine template are untouched. The scoring DB starts EMPTY (fresh volumes) —
+    re-seed with create-competition.py --from-phase 7 afterwards."""
+    if not state.get("engine_template_vmid"):
+        raise SystemExit(
+            "  ERROR: .deploy_state.json has no engine_template_vmid — this competition "
+            "predates the M4 engine template; redeploy the range instead.")
+    engine_vmid = int(state.get("scoring_vm_id") or 1000)
+    acquire_engine_lock(engine_vmid)
+    node = os.environ["TF_VAR_proxmox_node"]
+
+    # Frozen semantics: recovery uses the node's template as-is; a hash mismatch is a
+    # loud warning, never a mid-event blocker.
+    expected = state.get("engine_template_hash")
+    on_node = stored_template_hash(node, int(state["engine_template_vmid"]))
+    if expected and on_node and on_node != expected:
+        print(f"  WARNING: engine template on the node ({on_node[:12]}) differs from the "
+              f"verified hash ({expected[:12]}) — recovering from the node's template "
+              f"anyway. If this competition is frozen, investigate after the event.")
+
+    if not assume_yes and not args_yes_engine_recovery():
+        return False
+
+    for p in ("postgres_password", "redis_password", "admin_password"):
+        if not state.get(p):
+            raise SystemExit(f"  ERROR: state has no {p} — cannot re-apply per-deploy "
+                             f"engine state. Redeploy the range instead.")
+
+    with timed(comp_dir, "recovery", "engine_recovery_total"):
+        env = {**os.environ}
+        env["TF_VAR_teams"] = json.dumps(teams)
+        env["TF_VAR_boxes_per_team"] = json.dumps(boxes)
+        env["TF_VAR_event_name"] = name
+        tf_cwd = str(comp_dir / "terraform") if (comp_dir / "terraform" / "terraform.tfstate").exists() else "terraform"
+        # -target scopes the plan to the engine + its post-boot null_resources so
+        # terraform CANNOT touch team_box. Without it, any team box that drifted from
+        # state — which a `--mode rebuild` does by design (API re-clone, not terraform) —
+        # gets destroyed/recreated during 'engine recovery', wiping defenders' boxes
+        # mid-event (winad-testrun 2026-09-25). -replace forces the engine rebuild.
+        with timed(comp_dir, "recovery", "terraform_replace_engine"):
+            run_terraform(
+                ["apply", "-auto-approve", "-parallelism=1",
+                 "-replace=proxmox_virtual_environment_vm.scoring_engine",
+                 "-target=proxmox_virtual_environment_vm.scoring_engine",
+                 "-target=null_resource.team_nics",
+                 "-target=null_resource.reboot_scoring_engine",
+                 "-target=null_resource.orchestrate"],
+                cwd=tf_cwd, env=env, timeout=2400)
+        ctx = driver.read_terraform_ctx(comp_dir)
+        forget_engine_host_key(ctx["scoring_engine_ip"])
+        wait_for_ssh(ctx["ssh_key_path"], ctx["vm_username"],
+                     ctx["scoring_engine_ip"], timeout=300)
+        with timed(comp_dir, "recovery", "engine_from_template"):
+            prepare_engine_from_template(ctx, state["postgres_password"],
+                                         state["redis_password"])
+        push_event_conf(comp_dir, teams, boxes, ctx, name,
+                        inject_password=state.get("inject_password"),
+                        admin_password=state["admin_password"],
+                        postgres_password=state["postgres_password"],
+                        redis_password=state["redis_password"],
+                        box_creds=state.get("box_creds") or {})
+        ensure_nat_forwarding(ctx)
+
+    # The scoring DB is empty now, so phase 7's per-step done-flags are stale: without
+    # clearing them the advertised --from-phase 7 re-seed skipped every step.
+    state_path = comp_dir / ".deploy_state.json"
+    for flag in ("seeded", "engine_unpaused", "injects_created"):
+        state.pop(flag, None)
+    state_path.write_text(json.dumps(state, indent=2))
+    os.chmod(state_path, 0o600)
+
+    print(f"\n  Engine recovered from template (vmid {state['engine_template_vmid']}).")
+    print(f"  The scoring DB is EMPTY — re-seed with:")
+    print(f"    python3 create-competition.py --competition {comp_dir.name} "
+          f"--from-phase 7 --yes")
+    return True
+
+
+def reseed_event(comp_dir):
+    """Phase 7 against the freshly recovered engine: seed, unpause, and create injects with
+    offsets anchored at NOW. This is how a reset-and-rerun gets a live inject window —
+    offsets resolve at phase-7 time, so a rollback-ready alone left every inject closed
+    (winad-scrim2 2026-09-26: all 12 closed ~1.5h before T0)."""
+    import subprocess
+    subprocess.run([sys.executable, "create-competition.py", "--competition", comp_dir.name,
+                    "--from-phase", "7", "--yes"], check=True)
+
+
+def args_yes_engine_recovery():
+    answer = input("  Recover the scoring engine from its template? The scoring DB "
+                   "(teams/scores/injects) is LOST and must be re-seeded. [y/N] ").strip()
+    return answer.lower() in ("y", "yes")
 
 
 def main():
@@ -454,13 +646,20 @@ def main():
                         help="Only boxes whose template is this platform.")
     parser.add_argument("--mode", default="rollback-ready",
                         choices=["rollback-ready", "rollback-base", "reconfigure", "rebuild",
-                                 "resync"],
+                                 "resync", "engine-recovery"],
                         help="What to do to the selected boxes (default: rollback-ready). "
                              "resync = align credentials with the engine and re-set box "
-                             "passwords via the guest agent, touching nothing else.")
+                             "passwords via the guest agent, touching nothing else. "
+                             "engine-recovery = re-clone the engine VM from the engine "
+                             "template (fresh empty scoring DB; re-seed with "
+                             "--from-phase 7); ignores box selection flags.")
     parser.add_argument("--dry-run", action="store_true", dest="dry_run",
                         help="Print the resolved targets and their snapshots, then exit.")
     parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
+    parser.add_argument("--reset-event", action="store_true", dest="reset_event",
+                        help="With rollback-ready/rollback-base: also restart the event from the "
+                             "engine template (fresh scoring DB) and re-run phase 7, so scores "
+                             "reset and injects re-open anchored at now. Use for scrim reruns.")
     args = parser.parse_args()
 
     comp_name = args.competition
@@ -493,6 +692,12 @@ def main():
     teams = json.loads(teams_path.read_text())
     boxes = json.loads(boxes_path.read_text())
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
+
+    if args.mode == "engine-recovery":
+        engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=args.yes)
+        return
+    if args.reset_event and args.mode not in ("rollback-ready", "rollback-base"):
+        raise SystemExit("  ERROR: --reset-event only applies to rollback-ready/rollback-base.")
 
     targets = select_targets(comp_dir, teams, boxes, args)
     if not targets:
@@ -538,8 +743,29 @@ def main():
 
     nakon_config_path = nakon_bundle = None
     if args.mode in ("rollback-base", "reconfigure", "rebuild"):
-        nakon_config_path = comp_dir / "nakon-config.json"
-        if not nakon_config_path.exists():
+        # Pipeline v2 (golden templates): repair re-plants run the POST-CLONE stage only —
+        # the golden-stage installs ride the linked clone and re-running them over live
+        # boxes mid-event is exactly what the stage split removed.
+        if state.get("pipeline_version") == 2:
+            postclone = comp_dir / ".nakon-postclone.json"
+            if postclone.exists():
+                nakon_config_path = postclone
+            else:
+                print("  WARNING: pipeline v2 state but .nakon-postclone.json is missing — "
+                      "regenerating the stage split from nakon-config.json")
+                nakon_config_path = comp_dir / "nakon-config.json"
+                if not nakon_config_path.exists():
+                    raise SystemExit(
+                        "  ERROR: neither .nakon-postclone.json nor nakon-config.json exists — "
+                        "cannot build the post-clone stage config for this mode.")
+                teams_v2 = json.loads((comp_dir / "teams.json").read_text())
+                driver.generate_stage_configs(comp_dir, teams_v2, boxes,
+                                              box_username=load_users_config(comp_dir)[0],
+                                              unbooted=driver.unbooted_golden_boxes(comp_dir))
+                nakon_config_path = postclone
+        else:
+            nakon_config_path = comp_dir / "nakon-config.json"
+        if not nakon_config_path.exists() and state.get("pipeline_version") != 2:
             box_password = state.get("box_password")
             if not box_password:
                 raise SystemExit(
@@ -566,6 +792,11 @@ def main():
         done = mode_resync(targets, ctx, node, comp_dir, state, state_path)
     else:
         done = mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_bundle)
+
+    if args.reset_event:
+        print("\n  --reset-event: restarting the event from the engine template...")
+        if engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=True):
+            reseed_event(comp_dir)
 
     print(f"\n{'='*64}")
     print(f"  Redeployed {len(done)} box(es) in mode '{args.mode}'")
