@@ -1,0 +1,7 @@
+{
+  "title": "Firewall anomaly review on Linux wards",
+  "description_file": "briefing.md",
+  "open_offset_min": 30,
+  "due_offset_min": 55,
+  "close_offset_min": 80
+}

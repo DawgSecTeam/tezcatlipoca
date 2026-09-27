@@ -1,0 +1,7 @@
+{
+  "title": "Hunt the rogue administrator on the domain controller",
+  "description_file": "briefing.md",
+  "open_offset_min": 15,
+  "due_offset_min": 40,
+  "close_offset_min": 60
+}

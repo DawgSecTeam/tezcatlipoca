@@ -163,6 +163,42 @@ node; the range was left half-torn-down. `destroy-competition.py` now retries th
 (every pass makes progress on the remaining resources) before giving up with a pointer to
 `terraform state list`.
 
+### Every inject "closed" after a rollback-ready rerun (winad-scrim2 2026-09-26)
+*(fixed 2026-09-26: `--reset-event`, verify WARN)*
+
+Inject offsets resolve to absolute times at phase 7. `redeploy-competition.py --mode
+rollback-ready` resets the boxes but not the engine, so a rerun hours later found all 12 injects
+closed ~1.5 h before T0. For a scrim rerun use `--mode rollback-ready --reset-event`: it
+re-clones the engine from its template (fresh scoring DB) and re-runs phase 7, re-anchoring
+injects at now. `verify-competition.py` WARNs on any inject already past close.
+
+### Killed driver left terraform running (winad-testrun 2026-09-25)
+*(fixed 2026-09-26: `utils.run_terraform`)*
+
+Killing the Python driver orphaned `terraform apply`, which kept the state lock and kept
+mutating infra. Terraform now runs in its own process group; SIGINT/SIGTERM/timeout forward
+SIGINT (graceful stop, lock released), then SIGKILL after 60 s. A SIGKILL of the driver itself
+still can't be caught — `pkill -INT terraform` by hand in that case.
+
+### Interrupted clone blocks every later deploy (winad-testrun 2026-09-25)
+*(fixed 2026-09-26: clone marker + unlock + orphan-disk GC)*
+
+A host reboot / kill mid-clone left an untagged, `lock: clone` VM in a golden/team slot that
+preflight called "foreign". Every clone POST now carries `description: tezcatlipoca-clone
+comp-<name>` (the clone API takes no tags), which preflight accepts as ours. Phase 1 clears the
+stale lock and destroys with `destroy-unreferenced-disks`; orphaned `vm-<vmid>-disk-N` volumes in
+an empty slot are deleted before cloning. PVE only lets `root@pam` clear `lock` — with a token
+the error names the exact `qm unlock <vmid> && qm destroy …` to run on the node.
+
+### Account-wide rate limit killed both blue agents at once (winad-scrim2 2026-09-26)
+*(mitigated: `run-agent-scrim.py --blue-watchdog`)*
+
+Bounded shifts don't help when one 429 session limit kills every agent until its reset; web01
+sat down ~2 h unwatched. `--blue-watchdog` runs a non-LLM loop (every 60 s) that
+unmasks/enables stopped scored Linux units over the operator key. It keeps services up; it does
+not hunt. Also leave slack against the account's usage window before committing to a fixed
+scrim end time — there is no automated guard for that.
+
 ## Known-broken templates
 
 - **`106` / `ubuntu24.04`** and **`920` / `debian13-lite`** (reworded 2026-09-23): these
@@ -226,6 +262,23 @@ node; the range was left half-torn-down. `destroy-competition.py` now retries th
   evictions from red's own health_check chain (each rise in the "N evicted" tally is blue
   removing access red had), counts them in the interaction score and as a red gate, and the
   self-test pin still reproduces the 17c numbers (evictions=0 there).
+- **randomize→pin flow drops required catalog vars** (RESOLVED at operator level,
+  2026-09-25; catalog-side resolution deferred to upstream nakon/vulndb).
+  `nakon randomize` returns vuln names without the vars some catalog configs require, and
+  the pinned `box_vulns.json` stores plain strings — so a config like
+  `hosts-redirect-linux` (requires `IP`) or `sudoers-rule` (requires a rule) plants rc=2
+  ("IP is required"). Surfaced by the strict golden plant (bench-parallel, 2026-09-24: 3
+  FAILED steps); the old pipeline carried the same gap. The M4 fix (constants
+  `REQUIRED_VARS` + `nakon_ops`): pins accept `{"name": ..., "vars": {...}}`; a bare-name
+  pin of a var-requiring config is a **generate-time error** with the exact fix;
+  machine-identity vars (`IP`) are auto-filled per machine and **banned from the golden
+  stage** (a golden-baked IP would clone into every team — such configs live in
+  REPAIR/FINAL_STAGE_CONFIGS, e.g. `hosts-redirect-linux` is now final-stage); and every
+  built bundle is **linted** for undeclared `$VAR` references so a catalog config that
+  starts needing a var fails at bundle build, not mid-plant (validated against all 123
+  existing bundles). `unrealircd-backdoor-container`'s rc=127 is NOT a pin-var problem —
+  it assumes docker on the box; it stays documented here and is caught by verify's
+  plant-coverage gate when the step fails.
 
 ## Security disclosure history
 

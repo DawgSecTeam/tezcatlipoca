@@ -1,0 +1,78 @@
+M4 LAUNCHER: template=955 vm_username=sysadmin ids=105,106 engine_ip=10.0.0.248 scoring_vmid=1090
+Tezcatlipoca - CTF Range Deployment
+========================================
+Reusing existing competition 'm4-validation-2026-09-25'.
+
+============================================================
+  Deploying m4-validation-2026-09-25
+============================================================
+
+  Using pinned configurations from box_services.json, box_vulns.json
+  Nakon bundle 6c013abb656d (cached, 4 plan(s), 4 machine(s))
+Traceback (most recent call last):
+  File "/home/hna/dev/dawgsec/tezcatlipoca/create-competition.py", line 69, in <module>
+    main()
+    ~~~~^^
+  File "/home/hna/dev/dawgsec/tezcatlipoca/deploy.py", line 976, in main
+    deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase, scoring_vmid=args.scoring_vmid)
+    ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/hna/dev/dawgsec/tezcatlipoca/deploy.py", line 321, in deploy
+    golden_payload_hash(golden_bundle, b["name"]),
+    ^^^^^^^^^^^^^^^^^^^
+NameError: name 'golden_payload_hash' is not defined
+M4 LAUNCHER: template=955 vm_username=sysadmin ids=105,106 engine_ip=10.0.0.248 scoring_vmid=1090
+Tezcatlipoca - CTF Range Deployment
+========================================
+Reusing existing competition 'm4-validation-2026-09-25'.
+
+============================================================
+  Deploying m4-validation-2026-09-25
+============================================================
+
+  Using pinned configurations from box_services.json, box_vulns.json
+  Nakon bundle 6c013abb656d (cached, 4 plan(s), 4 machine(s))
+Traceback (most recent call last):
+  File "/home/hna/dev/dawgsec/tezcatlipoca/create-competition.py", line 69, in <module>
+    main()
+    ~~~~^^
+  File "/home/hna/dev/dawgsec/tezcatlipoca/deploy.py", line 977, in main
+    deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase, scoring_vmid=args.scoring_vmid)
+    ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/hna/dev/dawgsec/tezcatlipoca/deploy.py", line 331, in deploy
+    frozen = frozen_state(comp_dir)
+             ^^^^^^^^^^^^
+NameError: name 'frozen_state' is not defined. Did you mean: 'frozen_gate'?
+M4 LAUNCHER: template=955 vm_username=sysadmin ids=105,106 engine_ip=10.0.0.248 scoring_vmid=1090
+Tezcatlipoca - CTF Range Deployment
+========================================
+Reusing existing competition 'm4-validation-2026-09-25'.
+
+============================================================
+  Deploying m4-validation-2026-09-25
+============================================================
+
+  Using pinned configurations from box_services.json, box_vulns.json
+  Nakon bundle 6c013abb656d (cached, 4 plan(s), 4 machine(s))
+Traceback (most recent call last):
+  File "/home/hna/dev/dawgsec/tezcatlipoca/create-competition.py", line 69, in <module>
+    main()
+    ~~~~^^
+  File "/home/hna/dev/dawgsec/tezcatlipoca/deploy.py", line 978, in main
+    deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase, scoring_vmid=args.scoring_vmid)
+    ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/hna/dev/dawgsec/tezcatlipoca/deploy.py", line 339, in deploy
+    drift = classify_drift((frozen_hashes.get("golden") or {}).get(name, {}).get("inputs"),
+            ^^^^^^^^^^^^^^
+NameError: name 'classify_drift' is not defined
+M4 LAUNCHER: template=955 vm_username=sysadmin ids=105,106 engine_ip=10.0.0.248 scoring_vmid=1090
+Tezcatlipoca - CTF Range Deployment
+========================================
+Reusing existing competition 'm4-validation-2026-09-25'.
+
+============================================================
+  Deploying m4-validation-2026-09-25
+============================================================
+
+  Using pinned configurations from box_services.json, box_vulns.json
+  Nakon bundle 6c013abb656d (cached, 4 plan(s), 4 machine(s))
+  ERROR: golden template for 'web01' changed since FREEZE (2026-09-25 22:49:32): bundle_id, golden_configs, payload_hash. A frozen competition runs on the hashes that were verified — nothing was destroyed. Unfreeze explicitly (verify-competition.py --unfreeze --confirm-unfreeze) only BEFORE the competition starts.

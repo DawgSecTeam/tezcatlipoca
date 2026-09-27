@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 
 from constants import WINDOWS_ADMIN_USER
 from nakon_ops import _run_single_nakon_config
@@ -15,9 +16,33 @@ from range_ops import (
 from windows_ops import (
     dns_repoint_windows_box,
     is_windows_template,
+    wait_for_adws,
     wait_for_dc_dns,
     wait_for_windows_sshd,
 )
+from timing import timed
+from utils import PRINT_LOCK, run_concurrent
+
+
+JOIN_ATTEMPTS = 3
+JOIN_RETRY_WAIT = 60
+
+
+def _dc_promoted(node, dc_vmid, domain, marker_present):
+    """Ask the DC whether it actually serves the team's domain before trusting a marker."""
+    try:
+        rc, out, _ = guest_agent_exec_windows(
+            node, dc_vmid,
+            "$cs = Get-WmiObject Win32_ComputerSystem; \"$($cs.DomainRole)|$($cs.Domain)\"",
+            timeout=60)
+        role, _, dom = (out or "").strip().partition("|")
+        promoted = rc == 0 and role.isdigit() and int(role) >= 4 and dom.lower() == domain.lower()
+        if marker_present and not promoted:
+            print(f"      (stale ADDS marker for {domain} ignored — the DC is not promoted)")
+        return promoted
+    except Exception as e:
+        print(f"      (DC promotion probe failed: {e} — trusting the local marker)")
+        return marker_present
 
 
 def _probe_joined(node, member_box, member_vmid, domain):
@@ -59,41 +84,58 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
         print("  WARNING: domain_roles.json has no 'dc' box — skipping domain configuration.")
         return
 
-    for team_key, team in teams.items():
+    def _deploy_team_domains(item):
+        team_key, team = item
         identifier = team["identifier"]
         domain = f"team{identifier}.local"
         dc_machine_name = f"{dc_box['name']}-team{identifier}"
         dc_machine = all_machines.get(dc_machine_name)
         if dc_machine is None:
-            print(f"  WARNING: {team_key}: machine {dc_machine_name} not in nakon config — "
-                  f"skipping domain setup for this team")
-            continue
+            with PRINT_LOCK:
+                print(f"  WARNING: {team_key}: machine {dc_machine_name} not in nakon config — "
+                      f"skipping domain setup for this team")
+            return
         dc_vmid = vm_id_for(identifier, box_index(boxes, dc_box["name"]))
         dc_ip = dc_machine["ip"]
 
         if not promote_dc:
-            print(f"  [{team_key}] DC {dc_box['name']} left as-is — (re)joining member "
-                  f"box(es) to existing {domain}...")
-        elif (comp_dir / f".nakon-domain-{team_key}-adds.json").exists():
-            print(f"  [{team_key}] ADDS artifact present — DC {dc_box['name']} assumed "
-                  f"promoted, skipping promotion (resume)")
+            with PRINT_LOCK:
+                print(f"  [{team_key}] DC {dc_box['name']} left as-is — (re)joining member "
+                      f"box(es) to existing {domain}...")
+        elif _dc_promoted(node, dc_vmid, domain,
+                          (comp_dir / f".nakon-domain-{team_key}-adds.json").exists()):
+            with PRINT_LOCK:
+                print(f"  [{team_key}] DC {dc_box['name']} already serves {domain} — "
+                      f"skipping promotion (resume)")
         else:
-            print(f"  [{team_key}] Promoting {dc_box['name']} ({dc_ip}) to a new AD forest "
-                  f"({domain})...")
-            _run_single_nakon_config(
-                dc_machine,
-                [{"name": "ADDS", "vars": {"domain": domain, "dsrm_password": box_password}}],
-                key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-adds",
-            )
-            print(f"    Waiting for {dc_box['name']} to reboot and come back (AD DS promotion "
-                  f"is slow — budgeting up to 20 min)...")
+            with PRINT_LOCK:
+                print(f"  [{team_key}] Promoting {dc_box['name']} ({dc_ip}) to a new AD forest "
+                      f"({domain})...")
+            with timed(comp_dir, 6, "domain_adds", team_key):
+                _run_single_nakon_config(
+                    dc_machine,
+                    [{"name": "ADDS", "vars": {"domain": domain, "dsrm_password": box_password}}],
+                    key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-adds",
+                )
+            with PRINT_LOCK:
+                print(f"    Waiting for {dc_box['name']} to reboot and come back (AD DS promotion "
+                      f"is slow — budgeting up to 20 min)...")
             if not wait_for_guest_agent(node, dc_vmid, timeout=1200):
-                print(f"  WARNING: {dc_box['name']} guest agent never came back after ADDS — "
-                      f"skipping the rest of {team_key}'s domain setup")
-                continue
+                with PRINT_LOCK:
+                    print(f"  WARNING: {dc_box['name']} guest agent never came back after ADDS — "
+                          f"skipping the rest of {team_key}'s domain setup")
+                return
             wait_for_windows_sshd(node, dc_vmid, timeout=180)
+            domain_sid = wait_for_adws(node, dc_vmid)
+            with PRINT_LOCK:
+                if domain_sid:
+                    print(f"  [{team_key}] {domain} is up (DomainSID {domain_sid})")
+                else:
+                    print(f"  WARNING: [{team_key}] AD Web Services never answered on "
+                          f"{dc_box['name']} — AD-flavored plants will likely fail")
 
-            print(f"  [{team_key}] Planting AD-flavored misconfigs on {dc_box['name']}...")
+            with PRINT_LOCK:
+                print(f"  [{team_key}] Planting AD-flavored misconfigs on {dc_box['name']}...")
             _run_single_nakon_config(
                 dc_machine,
                 [
@@ -110,68 +152,123 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
             )
 
         if member_boxes:
-            print(f"  [{team_key}] Waiting for {dc_box['name']}'s DNS to serve {domain}...")
+            with PRINT_LOCK:
+                print(f"  [{team_key}] Waiting for {dc_box['name']}'s DNS to serve {domain}...")
             if not wait_for_dc_dns(node, dc_vmid, domain, dc_ip):
-                print(f"  WARNING: {dc_box['name']} DNS never served SRV records for {domain} "
-                      f"— member joins may fail")
+                with PRINT_LOCK:
+                    print(f"  WARNING: {dc_box['name']} DNS never served SRV records for {domain} "
+                          f"— member joins may fail")
 
         for member_box in member_boxes:
             member_machine_name = f"{member_box['name']}-team{identifier}"
             member_machine = all_machines.get(member_machine_name)
             if member_machine is None:
-                print(f"  WARNING: {team_key}: machine {member_machine_name} not in nakon "
-                      f"config — skipping")
+                with PRINT_LOCK:
+                    print(f"  WARNING: {team_key}: machine {member_machine_name} not in nakon "
+                          f"config — skipping")
                 continue
             member_vmid = vm_id_for(identifier, box_index(boxes, member_box["name"]))
             member_ip = member_machine["ip"]
 
             if is_windows_template(member_box["template"]):
                 if _probe_joined(node, member_box, member_vmid, domain):
-                    print(f"  [{team_key}] {member_box['name']} already joined to {domain} — "
-                          f"skipping join (resume)")
+                    with PRINT_LOCK:
+                        print(f"  [{team_key}] {member_box['name']} already joined to {domain} — "
+                              f"skipping join (resume)")
                     continue
-                print(f"  [{team_key}] Repointing {member_box['name']}'s DNS at "
-                      f"{dc_box['name']} ({dc_ip}) so it can find the domain...")
+                with PRINT_LOCK:
+                    print(f"  [{team_key}] Repointing {member_box['name']}'s DNS at "
+                          f"{dc_box['name']} ({dc_ip}) so it can find the domain...")
                 dns_repoint_windows_box(node, member_vmid, dc_ip)
 
-                print(f"  [{team_key}] Joining {member_box['name']} to {domain}...")
-                _run_single_nakon_config(
-                    member_machine,
-                    [{"name": "Domain Join", "vars": {
-                        "domain": domain, "admin_user": WINDOWS_ADMIN_USER,
-                        "admin_pass": box_password,
-                    }}],
-                    key, scoring_user, scoring_ip, comp_dir,
-                    tag=f"{team_key}-{member_box['name']}-join",
-                )
-                print(f"    Waiting for {member_box['name']} to reboot and come back "
-                      f"(domain join)...")
-                if not wait_for_guest_agent(node, member_vmid, timeout=900):
-                    print(f"  WARNING: {member_box['name']} guest agent never came back after "
-                          f"Domain Join")
-                    continue
-                wait_for_windows_sshd(node, member_vmid, timeout=180)
+                with PRINT_LOCK:
+                    print(f"  [{team_key}] Joining {member_box['name']} to {domain}...")
+                # A DC that just answered DNS can still refuse a join ("domain does not
+                # exist or could not be contacted" — winad-testrun 2026-09-25), and a failed
+                # join looked identical to a good one here. Confirm with the live probe and
+                # retry.
+                for attempt in range(1, JOIN_ATTEMPTS + 1):
+                    try:
+                        with timed(comp_dir, 6, "domain_join", f"{team_key}/{member_box['name']}"):
+                            _run_single_nakon_config(
+                                member_machine,
+                                [{"name": "Domain Join", "vars": {
+                                    "domain": domain, "admin_user": WINDOWS_ADMIN_USER,
+                                    "admin_pass": box_password,
+                                }}],
+                                key, scoring_user, scoring_ip, comp_dir,
+                                tag=f"{team_key}-{member_box['name']}-join",
+                                strict=False,
+                            )
+                    except Exception as e:
+                        with PRINT_LOCK:
+                            print(f"  WARNING: [{team_key}] {member_box['name']} Domain Join failed "
+                                  f"— continuing ({str(e)[:160]})")
+                    with PRINT_LOCK:
+                        print(f"    Waiting for {member_box['name']} to reboot and come back "
+                              f"(domain join)...")
+                    time.sleep(30)  # Add-Computer -Restart: let the reboot begin first
+                    if not wait_for_guest_agent(node, member_vmid, timeout=900):
+                        with PRINT_LOCK:
+                            print(f"  WARNING: {member_box['name']} guest agent never came back after "
+                                  f"Domain Join")
+                        break
+                    wait_for_windows_sshd(node, member_vmid, timeout=180)
+                    if _probe_joined(node, member_box, member_vmid, domain):
+                        break
+                    if attempt < JOIN_ATTEMPTS:
+                        with PRINT_LOCK:
+                            print(f"  [{team_key}] {member_box['name']} not joined to {domain} "
+                                  f"after attempt {attempt} — retrying in {JOIN_RETRY_WAIT}s")
+                        time.sleep(JOIN_RETRY_WAIT)
+                else:
+                    with PRINT_LOCK:
+                        print(f"  WARNING: [{team_key}] {member_box['name']} NOT joined to "
+                              f"{domain} after {JOIN_ATTEMPTS} attempts")
             else:
                 if _probe_joined(node, member_box, member_vmid, domain):
-                    print(f"  [{team_key}] Linux member {member_box['name']} already joined to "
-                          f"{domain} — skipping join (resume)")
+                    with PRINT_LOCK:
+                        print(f"  [{team_key}] Linux member {member_box['name']} already joined to "
+                              f"{domain} — skipping join (resume)")
                     continue
-                print(f"  [{team_key}] Joining Linux member {member_box['name']} ({member_ip}) "
-                      f"to {domain} via realmd/sssd...")
-                try:
-                    _run_single_nakon_config(
-                        member_machine,
-                        [{"name": "domain-join", "vars": {
-                            "DOMAIN": domain,
-                            "DC_IP": dc_ip,
-                            "DOMAIN_ADMIN_USER": WINDOWS_ADMIN_USER,
-                            "DOMAIN_ADMIN_PASS": box_password,
-                            "BOX_HOSTNAME": member_box["name"],
-                        }}],
-                        key, scoring_user, scoring_ip, comp_dir,
-                        tag=f"{team_key}-{member_box['name']}-join",
-                        strict=False,
-                    )
-                except Exception as e:
-                    print(f"  WARNING: [{team_key}] {member_box['name']} domain-join failed "
-                          f"— continuing ({str(e)[:160]})")
+                with PRINT_LOCK:
+                    print(f"  [{team_key}] Joining Linux member {member_box['name']} ({member_ip}) "
+                          f"to {domain} via realmd/sssd...")
+                for attempt in range(1, JOIN_ATTEMPTS + 1):
+                    try:
+                        with timed(comp_dir, 6, "domain_join", f"{team_key}/{member_box['name']}"):
+                            _run_single_nakon_config(
+                                member_machine,
+                                [{"name": "domain-join", "vars": {
+                                    "DOMAIN": domain,
+                                    "DC_IP": dc_ip,
+                                    "DOMAIN_ADMIN_USER": WINDOWS_ADMIN_USER,
+                                    "DOMAIN_ADMIN_PASS": box_password,
+                                    "BOX_HOSTNAME": member_box["name"],
+                                }}],
+                                key, scoring_user, scoring_ip, comp_dir,
+                                tag=f"{team_key}-{member_box['name']}-join",
+                                strict=False,
+                            )
+                    except Exception as e:
+                        with PRINT_LOCK:
+                            print(f"  WARNING: [{team_key}] {member_box['name']} domain-join failed "
+                                  f"— continuing ({str(e)[:160]})")
+                    if _probe_joined(node, member_box, member_vmid, domain):
+                        break
+                    if attempt < JOIN_ATTEMPTS:
+                        with PRINT_LOCK:
+                            print(f"  [{team_key}] {member_box['name']} not joined to {domain} "
+                                  f"after attempt {attempt} — retrying in {JOIN_RETRY_WAIT}s")
+                        time.sleep(JOIN_RETRY_WAIT)
+                else:
+                    with PRINT_LOCK:
+                        print(f"  WARNING: [{team_key}] {member_box['name']} NOT joined to "
+                              f"{domain} after {JOIN_ATTEMPTS} attempts")
+
+    # Each team's ADDS/join chain is team-local, so the chains run concurrently (M2.4)
+    # while staying serial within a team (promotion must precede joins). Safe since M2.3:
+    # every nakon pass stages into its own run dir, and bundle builds are serialized
+    # operator-side by build_nakon_bundle's lock. Up to ~20 min of reboot-wait per DC
+    # team collapses from a sum into a max.
+    run_concurrent(list(teams.items()), _deploy_team_domains, max_workers=4)

@@ -1,0 +1,4 @@
+name bench-parallel-2026-09-24
+scenario M0.2 benchmark: 2 teams x 3 Linux boxes, exercises parallel cleanup/waits/--jobs/apt-cache
+difficulty 3
+team_beacons 0

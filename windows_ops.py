@@ -10,10 +10,38 @@ def is_windows_template(template_name):
     return "win" in template_name.lower()
 
 
-def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, timeout=600):
+_IMAGE_STATE_PS = (
+    "$s = Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Setup\\State' "
+    "-ErrorAction SilentlyContinue; if ($s) { $s.ImageState } else { 'IMAGE_STATE_COMPLETE' }"
+)
+
+
+def _wait_for_windows_setup_complete(node, vmid, deadline):
+    """Wait out a sysprepped image's first boot (specialize -> reboot -> OOBE).
+
+    The agent answers during specialize, but the box reboots (and renames itself)
+    minutes later — anything applied before that races the reboot. Live-found on the
+    golden path (winad-testrun 2026-09-25: exec timed out ~370s in, reboot at ~470s,
+    settled ~520s). A longer exec timeout alone still races the reboot; wait for the
+    image to actually report complete."""
+    while time.time() < deadline:
+        if wait_for_guest_agent(node, vmid, timeout=max(1, int(deadline - time.time()))):
+            try:
+                rc, out, _ = guest_agent_exec_windows(node, vmid, _IMAGE_STATE_PS, timeout=60)
+                if rc == 0 and "IMAGE_STATE_COMPLETE" in out:
+                    return True
+            except Exception:
+                pass  # agent busy/restarting mid-setup — keep waiting
+        time.sleep(15)
+    return False
+
+
+def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, timeout=900):
     """Post-clone Windows setup (IP/gateway/DNS, admin password, sshd) via the QEMU guest agent."""
-    if not wait_for_guest_agent(node, vmid, timeout=timeout):
-        raise RuntimeError(f"vmid {vmid}: guest agent never became responsive within {timeout}s")
+    deadline = time.time() + timeout
+    if not _wait_for_windows_setup_complete(node, vmid, deadline):
+        raise RuntimeError(f"vmid {vmid}: Windows setup (sysprep first boot) did not complete "
+                           f"within {timeout}s")
 
     ps_script = f"""
 $ErrorActionPreference = 'Stop'
@@ -38,7 +66,17 @@ if (-not (Get-NetFirewallRule -Name sshd -ErrorAction SilentlyContinue)) {{
     New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
 }}
 """
-    rc, out, err = guest_agent_exec_windows(node, vmid, ps_script, timeout=90)
+    # The script is idempotent; an agent drop (not a script error) is retried until the
+    # deadline. A nonzero rc is a real failure (e.g. password policy) — fail fast.
+    while True:
+        try:
+            rc, out, err = guest_agent_exec_windows(node, vmid, ps_script, timeout=120)
+            break
+        except Exception as e:
+            if time.time() >= deadline:
+                raise RuntimeError(f"vmid {vmid}: bootstrap exec never completed: {e}")
+            time.sleep(15)
+            wait_for_guest_agent(node, vmid, timeout=max(1, int(deadline - time.time())))
     if rc != 0:
         raise RuntimeError(f"vmid {vmid}: bootstrap script failed (rc={rc}): {err or out}")
 
@@ -54,6 +92,28 @@ Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses '{d
     rc, out, err = guest_agent_exec_windows(node, vmid, ps_script, timeout=timeout)
     if rc != 0:
         raise RuntimeError(f"vmid {vmid}: DNS repoint failed (rc={rc}): {err or out}")
+
+
+def wait_for_adws(node, vmid, timeout=900):
+    """Wait until the AD cmdlets work on a freshly promoted DC (ADWS up), returning the
+    DomainSID string, or None on timeout. Never raises.
+
+    sshd comes back well before Active Directory Web Services after the promotion
+    reboot; AD-flavored plants run in that window died with ADServerDownException
+    (winad-testrun 2026-09-25: svc-support never created, silently — the AD misconfig
+    pass is non-strict and outside nakon-config.json's coverage)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            rc, out, _ = guest_agent_exec_windows(
+                node, vmid, "(Get-ADDomain -ErrorAction Stop).DomainSID.Value", timeout=60)
+            sid = (out or "").strip()
+            if rc == 0 and sid.startswith("S-1-5-21-"):
+                return sid
+        except Exception:
+            pass
+        time.sleep(15)
+    return None
 
 
 def wait_for_windows_sshd(node, vmid, timeout=180):

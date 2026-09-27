@@ -1,0 +1,7 @@
+================================================================
+  COMPETITION TEARDOWN TOOL
+================================================================
+Selects a deployed competition and runs terraform destroy to
+remove all provisioned VMs, bridges, and networking.
+
+  ERROR: 'm4-validation-2026-09-25' is FROZEN (frozen_at 2026-09-26 01:23:25). A full teardown would destroy the verified templates mid-competition. Re-run with --end-of-competition if the event is genuinely over.

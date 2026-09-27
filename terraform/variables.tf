@@ -10,6 +10,18 @@ variable "proxmox_node" {
   default = "pve"
 }
 
+variable "engine_mgmt_ip" {
+  description = "Optional static mgmt IPv4 for the scoring engine. Set it on nodes where the guest-agent channel can't report addresses (the realm's PVE answers agent pings but returns null for every data call, so terraform's ipv4_addresses discovery is impossible there). Empty = template's own DHCP + agent discovery (primary-node behavior)."
+  type        = string
+  default     = ""
+}
+
+variable "engine_mgmt_gw" {
+  description = "Gateway for engine_mgmt_ip (only meaningful when it is set)."
+  type        = string
+  default     = ""
+}
+
 variable "ssh_public_key" { type = string }
 
 variable "ssh_private_key_path" { type = string }
@@ -35,6 +47,18 @@ variable "box_password" {
 variable "event_name" {
   type    = string
   default = "Range 2026"
+}
+
+variable "build_team_boxes" {
+  description = "M3.3 two-apply gate. Apply #1 (deploy phase 2) leaves this false: only the engine and bridges are built. Apply #2 (deploy phase 4) flips it true once golden_ops has planted and converted the golden set — team boxes then come up as LINKED clones of those templates, and every team enters Terraform state."
+  type        = bool
+  default     = false
+}
+
+variable "golden_template_ids" {
+  description = "Positional golden template vmid per box (same order as boxes_per_team), written by deploy() after the golden build. Keyed by POSITION, not template name: two box types may share one base template. Required (and only evaluated) when build_team_boxes is true."
+  type        = list(number)
+  default     = []
 }
 
 variable "teams" {
@@ -70,8 +94,14 @@ variable "datastore" {
 }
 
 variable "template_vm_id" {
-  description = "VM ID of the base template the scoring engine is cloned from"
+  description = "VM ID of the base template the scoring engine is cloned from (also the engine-template build's source; used directly only when engine_clone_id is 0)."
   type        = number
+}
+
+variable "engine_clone_id" {
+  description = "M4: vmid of this competition's engine TEMPLATE — the deployed engine is a linked clone of it (fresh identity/host keys per clone, empty scoring DB every run). 0 falls back to a full clone from template_vm_id (pre-M4 behavior; deploy() always sets this before apply)."
+  type        = number
+  default     = 0
 }
 
 variable "scoring_vm_id" {
