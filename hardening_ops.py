@@ -15,6 +15,10 @@ from utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT, PRINT_LOCK, run_concurrent, val
 
 _APT_PREP_BODY = r"""
 set +e
+# Non-Debian boxes (fedora/dnf, alpine/apk) have no apt at all — exit before the
+# mask/kill/purge noise so the prep is an honest rc=0 no-op instead of 5 retries of
+# command-not-found (live-found 2026-09-27, distro-matrix run).
+command -v apt-get >/dev/null 2>&1 || exit 0
 # Fresh Ubuntu/Debian boots start apt-daily + unattended-upgrades, which (a) hold the
 # dpkg lock (nakon's install-package times out) and (b) leave the apt index pointing at a
 # package version the mirror has already rotated out (nakon's `apt-get install <svc>` then
@@ -60,6 +64,10 @@ def _apt_prep_script(gateway=None):
 # pass burned the full settle budget (winad-testrun 2026-09-25). The [e] keeps the
 # pattern from matching this script's own shell.
 _SETTLE_CHECK = (
+    # Non-apt distro: nothing can hold a dpkg lock, so it is settled by definition —
+    # without this guard `apt-get check` is rc=127 BUSY forever and every such box
+    # burns the full 240s settle budget per pass (live-found 2026-09-27).
+    "command -v apt-get >/dev/null 2>&1 || { echo SETTLED; exit 0; }\n"
     "pgrep -f '/usr/bin/unattended-upgrad[e]( |$)' >/dev/null 2>&1 && echo BUSY\n"
     "apt-get -o DPkg::Lock::Timeout=1 check >/dev/null 2>&1 || echo BUSY\n"
     "echo SETTLED\n"
