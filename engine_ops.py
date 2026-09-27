@@ -69,13 +69,27 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
         # old libc6 under freshly unpacked -dev packages (live-found 2026-09-26, two
         # engine-template builds in a row: rc=100, first on the lock, then on the
         # half-upgrade; stopping only the TIMERS left an already-running
-        # apt-daily-upgrade.service free to spawn apt-get mid-bootstrap). Stopping the
-        # service units kills the running worker's cgroup. Upgrade first, then install,
-        # so the dependency set is deterministic; `dpkg --configure -a` + `-f install`
-        # repair whatever the interrupted upgrade left behind.
-        "sudo systemctl stop unattended-upgrades.service apt-daily.service "
+        # apt-daily-upgrade.service free to spawn apt-get mid-bootstrap).
+        #
+        # `systemctl stop` alone still lost the race (live-found 2026-09-27, cyberrange:
+        # rc=100, `/var/cache/apt/archives/lock` held by a fresh apt-get pid that
+        # apt-daily-upgrade.service spawned *between* the stop and our `upgrade`).
+        # DPkg::Lock::Timeout does NOT cover the archives-cache lock, so that timeout
+        # can't save us. Fix: MASK the units (a masked unit cannot be started or
+        # re-activated by the timer/dbus), kill their cgroups, then poll until every
+        # apt/dpkg lock is actually free before touching apt. Upgrade first, then
+        # install, so the dependency set is deterministic; `dpkg --configure -a` +
+        # `-f install` repair whatever an earlier interrupted upgrade left behind.
+        "sudo systemctl mask --now unattended-upgrades.service apt-daily.service "
         "apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer 2>/dev/null; "
-        "sudo killall apt-get apt dpkg 2>/dev/null; sleep 2; "
+        "sudo systemctl kill --kill-whom=all unattended-upgrades.service "
+        "apt-daily.service apt-daily-upgrade.service 2>/dev/null; "
+        "for i in $(seq 1 60); do "
+        "  if ! sudo fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock "
+        "/var/cache/apt/archives/lock >/dev/null 2>&1 "
+        "&& ! pgrep -x 'apt|apt-get|dpkg|unattended-upgr' >/dev/null; then break; fi; "
+        "  sudo killall -9 apt-get apt dpkg unattended-upgrade 2>/dev/null; sleep 3; "
+        "done; "
         "sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null; "
         "sudo dpkg --configure -a 2>/dev/null; "
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 -f install -y 2>/dev/null; "
