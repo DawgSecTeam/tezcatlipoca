@@ -7,6 +7,44 @@ harness); symptom-level fixes live in [usage-people.md](usage-people.md)'s Troub
 
 ## Live-confirmed incidents
 
+### box_username colliding with a legacy distro account bricks auth setup (distro-matrix-2026-09-27)
+
+`box_username operator` (a users.json choice) collides with Fedora's legacy `operator`
+system account (uid 11, shell `/usr/sbin/nologin`, home `/root`) — Debian-family images carry
+the same uid-11 `operator`. cloud-init finds the name already in `/etc/passwd` and adopts it:
+the sudoers rule and the SSH key land on a nologin root-homed shadow of the real account, no
+fresh user is created, and every `ssh operator@box` attempt fails no matter what. Phase 4's
+8-attempt auth ladder then burns out and aborts the deploy. The same seed on Alpine (no legacy
+`operator`) created a real user and passed instantly — the failure is purely per-distro
+`/etc/passwd` heritage, which is why it never surfaced on the ubuntu/debian lineup.
+
+The guest-agent fallback in `setup_ubuntu_auth` cannot rescue this on SELinux-enforcing guests
+(fedora): the qemu-ga SELinux context cannot write `/etc/ssh/` or `/etc/sudoers.d/`
+(`sed: couldn't open temporary file ... Permission denied`), so the fallback dies at rc=1 even
+as root.
+
+Mitigation: pick a `box_username` that is not a legacy account name on ANY target distro
+(`medic` is the proven safe choice; `operator`, `daemon`, `games`, `mail`, `news`, `sync` and
+friends are landmines). Documented here rather than linted — the collision set is distro-specific.
+
+### Alpine cloud-init never writes /etc/resolv.conf — package installs silently no-op (distro-matrix-2026-09-27)
+
+Alpine's cloud-init (v25.3, ENI renderer) writes `dns-nameservers` into
+`/etc/network/interfaces` but nothing on Alpine creates `/etc/resolv.conf` (no resolvconf
+hook — Debian's ifupdown handles that; Alpine's ifupdown-ng does not). Every DNS lookup in the
+guest then times out: `apk update`/`apk add` each burn ~10 s and fail with
+`unable to select packages: bash (no such package)` (empty index), so cloud-init's
+`packages:` directive installs nothing. Worse, the package module is once-per-instance, so
+rebooting and retrying does NOT retry the install — the instance semaphore is already written.
+
+This hits template BUILD bootstraps (the builder's `packages:` list silently missing) and any
+clone expected to use DNS before the driver's `fix_dns_on_boxes` runs (that pass writes
+`/etc/resolv.conf` directly, so in-range nakon plants are unaffected). Fix for template
+building: add `manage_resolv_conf: true` + `resolv_conf: {nameservers: [...]}` to the
+bootstrap user-data (it runs before the package module), or bake `/etc/resolv.conf` into the
+template via chroot. See `competitions/distro-matrix-2026-09-27/build_alpine_ci_template.sh`
+for the working Alpine 3.23 cloud-init template recipe.
+
 ### sshd start-limit crash loop (2026-09-03)
 
 Several catalog configs (`ssh-root-login`, `ssh-empty-passwords`, `ssh-password-auth`,
