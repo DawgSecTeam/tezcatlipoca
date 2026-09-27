@@ -199,6 +199,18 @@ unmasks/enables stopped scored Linux units over the operator key. It keeps servi
 not hunt. Also leave slack against the account's usage window before committing to a fixed
 scrim end time — there is no automated guard for that.
 
+### Bundle var-lint false-flagged a valid deploy (scrim-live 2026-09-27)
+*(fixed 2026-09-27: `nakon_ops.py` strips/guards + `tests/test_bundle_lint.py`)*
+
+A fresh deploy from the agent-scrim template aborted at bundle build: the var-lint reported
+theme-wallpaper `DEST`, local-user `GROUPS_ADD`, systemd-service `PAYLOAD_BODY/PATH/EXTRA_LINE`,
+apache-site `EXTRA_DIRECTIVES` as undeclared. All were false positives — the catalog scripts
+self-guard (`${VAR-}`, `[ -n "${VAR-}" ]`) or self-assign (`DEST=`). Four lint gaps: it only
+stripped the `${VAR:-}` expansion (not `-`/`:+`/`+`); its `[ -n ]` guard regex missed the braced
+`${VAR-}` form; its single-quote strip crossed newlines (an apostrophe in a comment ate the
+`DEST=` line); and it never stripped full-line comments (a var named only in prose). Fixed; a
+genuinely-required `${VAR:?}` is still caught (regression test).
+
 ## Known-broken templates
 
 - **`106` / `ubuntu24.04`** and **`920` / `debian13-lite`** (reworded 2026-09-23): these
