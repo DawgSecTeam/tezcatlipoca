@@ -33,7 +33,8 @@ from deploy import deploy, main
 from domain_ops import deploy_domain_configs
 from engine_ops import bootstrap_scoring_engine, ensure_nat_forwarding, install_range_healthcheck, push_event_conf
 from hardening_ops import fix_dns_on_boxes, fix_services_on_boxes, setup_ubuntu_auth
-from nakon_ops import _nakon_randomize, _run_single_nakon_config, build_nakon_bundle, generate_nakon_config, is_windows_template, os_to_platform, run_nakon
+from golden_ops import unbooted_golden_boxes
+from nakon_ops import _nakon_randomize, _run_single_nakon_config, build_nakon_bundle, generate_nakon_config, generate_stage_configs, is_windows_template, os_to_platform, run_nakon
 from range_ops import (
     destroy_vm_if_exists,
     diagnose_unreachable_box,

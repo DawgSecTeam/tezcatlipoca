@@ -1,0 +1,507 @@
+{
+  "dc01": [
+    {
+      "name": "weak-password-policy-win",
+      "vars": {
+        "MINPWLEN": "4",
+        "LOCKOUT_THRESHOLD": "0",
+        "MAXPWAGE": "unlimited"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "svc_backup",
+        "PASSWORD": "Backup2026!",
+        "FULLNAME": "Backup Service",
+        "DESCRIPTION": "hive backup agent service account",
+        "ADMIN_ADD": "1",
+        "PASSWORD_NEVER_EXPIRES": "1"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "audit_svc",
+        "FULLNAME": "Audit Agent",
+        "DESCRIPTION": "compliance audit agent service acct"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "frontdesk",
+        "PASSWORD": "Frontdesk2026!",
+        "FULLNAME": "Lobby Front Desk"
+      }
+    },
+    {
+      "name": "rdp-group-member-win",
+      "vars": {
+        "USERNAME": "frontdesk"
+      }
+    },
+    "guest-enabled-win",
+    "uac-disabled-win",
+    "rdp-no-nla-win",
+    "smb1-enabled-win",
+    "audit-policy-off-win",
+    {
+      "name": "autologin-win",
+      "vars": {
+        "USERNAME": "frontdesk",
+        "PASSWORD": "Frontdesk2026!"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "TicketSyncAgent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Hive\\tsync.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 300 }"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "CacheWarmer",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Hive\\warm.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 3600"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "HiveBackupSvc",
+        "DESCRIPTION": "Hive Interactive backup synchronization",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Hive\\hbackup.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 300 }"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "PWNEDSVC",
+        "DESCRIPTION": "system management broker",
+        "PAYLOAD_PATH": "C:\\Windows\\Temp\\pwned.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 120 }"
+      }
+    },
+    {
+      "name": "insecure-file-acl-win",
+      "vars": {
+        "FILE_PATH": "C:\\ProgramData\\Hive\\payroll-credentials.txt",
+        "FILE_CONTENT": "Hive payroll service account: hive-payroll / Payr0ll2026! (rotate quarterly)"
+      }
+    },
+    {
+      "name": "insecure-smb-share-win",
+      "vars": {
+        "SHARE_NAME": "HiveShare",
+        "SHARE_PATH": "C:\\ProgramData\\Hive",
+        "DESCRIPTION": "Hive departmental share"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\desk-reference.txt",
+        "FILE_CONTENT": "Front desk quick reference -- facility master code 4471, alarm vendor portal: vendor@hive.local / Vendor2026!"
+      }
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "intranet.hive.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    "Telnet",
+    "TFTP",
+    "Enabling Print Spooler Service"
+  ],
+  "web01": [
+    "sudo-nopasswd",
+    "writable-sudoers",
+    "bad-perms-userConfig",
+    "apparmor-disabled",
+    "world-writable-cron-d",
+    "writable-bashrc",
+    "suid-find",
+    "suid-nano",
+    "suid-vim",
+    "systemd-service-writable",
+    "multiple-uid0-accounts",
+    "uid0-backdoor-account",
+    "empty-password-account",
+    "weak-password-account",
+    "www-data-shell",
+    "root-nginx",
+    "authorized-keys-backdoor",
+    "sudo-timestamp-never-expires",
+    "wildcard-sudo",
+    "timezone-chaos",
+    "hostname-loop",
+    "unprivileged-users-enabled",
+    "journal-disk-full",
+    "core-dump-world-readable",
+    "writable-etc-group",
+    "world-writable-etc-hosts",
+    "sysctl-syn-cookies-disabled",
+    "auditd-disabled",
+    "pam-permit-empty",
+    "pam-no-password-quality",
+    {
+      "name": "uid0-user",
+      "vars": {
+        "USERNAME": "webkeeper",
+        "PASSWORD": "Webkeeper2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "deploy-bot",
+        "PASSWORD": "Deploy2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "cdn-prefetch",
+        "DESCRIPTION": "CDN content prefetch helper",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 300; done'"
+      }
+    },
+    {
+      "name": "backdoor-firewall-rule",
+      "vars": {
+        "SOURCE_IP": "198.51.100.77",
+        "DST_PORT": "22"
+      }
+    },
+    "ssh-root-login",
+    "ssh-password-auth",
+    "ssh-x11-forwarding"
+  ],
+  "app01": [
+    "sudo-nopasswd",
+    "writable-sudoers",
+    "bad-perms-userConfig",
+    "apparmor-disabled",
+    "world-writable-cron-d",
+    "writable-bashrc",
+    "suid-find",
+    "suid-python",
+    "systemd-service-writable",
+    "multiple-uid0-accounts",
+    "uid0-backdoor-account",
+    "empty-password-account",
+    "weak-password-account",
+    "www-data-shell",
+    "apache-directory-listing",
+    {
+      "name": "apache-site",
+      "vars": {
+        "SITE_TITLE": "Hive Interactive - Application Status",
+        "SITE_BODY": "<p>Hive app node: <b>OPERATIONAL</b> &middot; queue depth 3 &middot; last deploy 02:14</p><p>Internal status page. If you can read this from outside the VLAN, escalate.</p>"
+      }
+    },
+    "authorized-keys-backdoor",
+    "sudo-timestamp-never-expires",
+    "wildcard-sudo",
+    "timezone-chaos",
+    "unprivileged-users-enabled",
+    "journal-disk-full",
+    "core-dump-world-readable",
+    "writable-etc-group",
+    "world-writable-etc-hosts",
+    "sysctl-syn-cookies-disabled",
+    "auditd-disabled",
+    "pam-permit-empty",
+    "pam-no-password-quality",
+    "ufw-removed",
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "dns-cache-sync",
+        "DESCRIPTION": "Local resolver cache synchronizer",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 240; done'"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "SkiddiePwner3000",
+        "DESCRIPTION": "System Optimizer",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 300; done'"
+      }
+    },
+    "at-job-any-user",
+    "exploitable-cron-job",
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "release-eng",
+        "PASSWORD": "Release2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    "ssh-root-login",
+    "ssh-empty-passwords",
+    "ssh-x11-forwarding"
+  ],
+  "db01": [
+    "sudo-nopasswd",
+    "writable-sudoers",
+    "bad-perms-userConfig",
+    "world-writable-cron-d",
+    "writable-bashrc",
+    "suid-find",
+    "suid-vim",
+    "suid-python",
+    "systemd-service-writable",
+    "multiple-uid0-accounts",
+    "uid0-backdoor-account",
+    "empty-password-account",
+    "weak-password-account",
+    "mysql-remote-root",
+    "mysql-root-nopassword",
+    "redis-no-auth",
+    "postgresql-no-auth",
+    "postgresql-remote-access",
+    "nfs-no-root-squash",
+    "unauthorized-ftp-server",
+    "selinux-permissive",
+    "journal-disk-full",
+    "core-dump-world-readable",
+    "writable-etc-group",
+    "world-writable-etc-hosts",
+    "sysctl-syn-cookies-disabled",
+    "auditd-disabled",
+    "pam-permit-empty",
+    "pam-no-password-quality",
+    "sudo-timestamp-never-expires",
+    "wildcard-sudo",
+    {
+      "name": "hidden-cron-persistence",
+      "vars": {
+        "PAYLOAD": "/usr/local/sbin/db-health"
+      }
+    },
+    {
+      "name": "user-login-shell",
+      "vars": {
+        "USERNAME": "dbbackup_svc",
+        "LOGIN_SHELL": "/bin/bash",
+        "SYSTEM": "1"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/hive/db-credentials.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "mysql root (no password, remote enabled)\npostgres service key: pg-hive-2026-int"
+      }
+    },
+    "ssh-password-auth",
+    "ssh-empty-passwords",
+    "ssh-max-auth-retries-high"
+  ],
+  "mail01": [
+    "sudo-nopasswd",
+    "writable-sudoers",
+    "bad-perms-userConfig",
+    "apparmor-disabled",
+    "world-writable-cron-d",
+    "writable-bashrc",
+    "suid-find",
+    "suid-nano",
+    "systemd-service-writable",
+    "multiple-uid0-accounts",
+    "uid0-backdoor-account",
+    "empty-password-account",
+    "weak-password-account",
+    "authorized-keys-backdoor",
+    "sudo-timestamp-never-expires",
+    "wildcard-sudo",
+    "timezone-chaos",
+    "hostname-loop",
+    "unprivileged-users-enabled",
+    "journal-disk-full",
+    "core-dump-world-readable",
+    "writable-etc-group",
+    "world-writable-etc-hosts",
+    "sysctl-syn-cookies-disabled",
+    "auditd-disabled",
+    "pam-permit-empty",
+    "pam-no-password-quality",
+    "at-job-any-user",
+    "exploitable-cron-job",
+    {
+      "name": "polyglot-media",
+      "vars": {
+        "MEDIA": "/var/spool/mail/attachment.gif.jpg"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "mailq-metrics",
+        "DESCRIPTION": "Mail queue metrics exporter",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 180; done'"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "postmaster-int",
+        "PASSWORD": "Postmaster2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "loosen-file-mode",
+      "vars": {
+        "FILE_PATH": "/etc/shadow",
+        "FILE_MODE": "0666"
+      }
+    },
+    "ssh-root-login",
+    "ssh-password-auth",
+    "ssh-empty-passwords"
+  ],
+  "files01": [
+    "sudo-nopasswd",
+    "writable-sudoers",
+    "bad-perms-userConfig",
+    "world-writable-cron-d",
+    "writable-bashrc",
+    "suid-find",
+    "suid-vim",
+    "suid-python",
+    "systemd-service-writable",
+    "multiple-uid0-accounts",
+    "uid0-backdoor-account",
+    "empty-password-account",
+    "weak-password-account",
+    "unauthorized-ftp-server",
+    "nfs-no-root-squash",
+    "selinux-permissive",
+    "journal-disk-full",
+    "core-dump-world-readable",
+    "writable-etc-group",
+    "world-writable-etc-hosts",
+    "sysctl-syn-cookies-disabled",
+    "auditd-disabled",
+    "pam-permit-empty",
+    "pam-no-password-quality",
+    "sudo-timestamp-never-expires",
+    "wildcard-sudo",
+    "at-job-any-user",
+    "exploitable-cron-job",
+    "ncat-listener-autostart",
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/srv/share/hive-payroll.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "Hive payroll batch 7 -- bank transit 0441, ops override code 4471"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "archive-sync",
+        "DESCRIPTION": "Nightly archive synchronizer",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 300; done'"
+      }
+    },
+    "unauthorized-admin-user",
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "nightwatch",
+        "PASSWORD": ""
+      }
+    },
+    "ssh-root-login",
+    "ssh-max-auth-retries-high",
+    "ssh-x11-forwarding"
+  ],
+  "monitor01": [
+    "sudo-nopasswd",
+    "writable-sudoers",
+    "bad-perms-userConfig",
+    "apparmor-disabled",
+    "world-writable-cron-d",
+    "writable-bashrc",
+    "suid-find",
+    "suid-nano",
+    "suid-vim",
+    "systemd-service-writable",
+    "multiple-uid0-accounts",
+    "uid0-backdoor-account",
+    "empty-password-account",
+    "weak-password-account",
+    "www-data-shell",
+    "root-nginx",
+    "authorized-keys-backdoor",
+    "sudo-timestamp-never-expires",
+    "wildcard-sudo",
+    "timezone-chaos",
+    "hostname-loop",
+    "unprivileged-users-enabled",
+    "journal-disk-full",
+    "core-dump-world-readable",
+    "writable-etc-group",
+    "world-writable-etc-hosts",
+    "sysctl-syn-cookies-disabled",
+    "auditd-disabled",
+    "pam-permit-empty",
+    "pam-no-password-quality",
+    {
+      "name": "raw-socket-beacon",
+      "vars": {
+        "SERVICE_NAME": "metrics-probe",
+        "DESCRIPTION": "Network metrics probe"
+      }
+    },
+    {
+      "name": "backdoor-firewall-rule",
+      "vars": {
+        "SOURCE_IP": "198.51.100.77",
+        "DST_PORT": "31337"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "node-healthd",
+        "DESCRIPTION": "Node health telemetry daemon",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 200; done'",
+        "EXTRA_LINE": "Environment=EXFIL_URL=http://feed.hive-telemetry.net/collect"
+      }
+    },
+    {
+      "name": "user-sudo-nopasswd",
+      "vars": {
+        "USERNAME": "netops",
+        "DROPIN_NAME": "00-netops-nopasswd"
+      }
+    },
+    {
+      "name": "uid0-user",
+      "vars": {
+        "USERNAME": "watchdog",
+        "PASSWORD": "Watchdog2026!"
+      }
+    },
+    "ssh-password-auth",
+    "ssh-empty-passwords",
+    "ssh-x11-forwarding",
+    "ssh-max-auth-retries-high"
+  ]
+}

@@ -1,0 +1,3 @@
+name fire-scrim-2026-09-13
+scenario Fire scrim for the reigning champion team. Hive Interactive's perimeter collapsed overnight: the Windows domain controller (dc01, fresh AD forest team101.local) and six Linux members are riddled with adversary persistence - rogue admins, weak policies, backdoor services and scheduled tasks, raw-socket beacons, planted credentials, and loosened file permissions. Hunt down the planted misconfigurations and adversary artifacts while keeping the scored services alive.
+difficulty 10

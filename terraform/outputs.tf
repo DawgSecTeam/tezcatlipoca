@@ -16,7 +16,7 @@ output "ssh_private_key_path" {
 
 output "team_vms" {
   value = {
-    for k, v in local.team_vms : k => {
+    for k, v in local.all_team_vms : k => {
       ip         = v.ip
       identifier = v.identifier
       box_name   = v.box.name

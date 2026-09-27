@@ -10,10 +10,10 @@ import time
 
 from range_ops import diagnose_unreachable_box, guest_agent_exec_root, wait_for_guest_agent
 from ssh_ops import gateway_proxy, ssh_via_gateway
-from utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT, valid_unix_username
+from utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT, PRINT_LOCK, run_concurrent, valid_unix_username
 
 
-_APT_PREP_SCRIPT = r"""
+_APT_PREP_BODY = r"""
 set +e
 # Fresh Ubuntu/Debian boots start apt-daily + unattended-upgrades, which (a) hold the
 # dpkg lock (nakon's install-package times out) and (b) leave the apt index pointing at a
@@ -34,27 +34,123 @@ apt-get -o DPkg::Lock::Timeout=120 update
 """
 
 
-def prep_apt_on_boxes(targets, ctx):
+def _apt_prep_script(gateway=None):
+    """The apt-prep script, optionally pointing apt at the engine's apt-cacher-ng cache.
+
+    gateway=None actively REMOVES any proxy file a previous prep wrote, so toggling the
+    Compfile's `apt_cache` flag between deploys can't leave stale proxying behind. The
+    proxy is an IP (the box's own gateway = the engine's team NIC), so apt-through-proxy
+    keeps working when a planted resolv-conf-null-dns breaks the box's DNS — the one
+    approved realism trade-off of the cache (see docs/internals.md); the other disruptive
+    apt configs (empty sources, package holds) break apt through the proxy too."""
+    if gateway:
+        proxy_lines = (
+            "mkdir -p /etc/apt/apt.conf.d\n"
+            f"echo 'Acquire::http::Proxy \"http://{gateway}:3142\";' > /etc/apt/apt.conf.d/95tz-proxy\n"
+            f"echo 'Acquire::https::Proxy \"http://{gateway}:3142\";' >> /etc/apt/apt.conf.d/95tz-proxy\n"
+        )
+    else:
+        proxy_lines = "rm -f /etc/apt/apt.conf.d/95tz-proxy\n"
+    return proxy_lines + _APT_PREP_BODY
+
+
+# Match the upgrade WORKER by full command line. `pgrep -x unattended-upgr` (the
+# 15-char truncated comm) ALSO matches Ubuntu's permanent unattended-upgrade-shutdown
+# --wait-for-signal daemon, so every Ubuntu box read BUSY forever and each prep_apt
+# pass burned the full settle budget (winad-testrun 2026-09-25). The [e] keeps the
+# pattern from matching this script's own shell.
+_SETTLE_CHECK = (
+    "pgrep -f '/usr/bin/unattended-upgrad[e]( |$)' >/dev/null 2>&1 && echo BUSY\n"
+    "apt-get -o DPkg::Lock::Timeout=1 check >/dev/null 2>&1 || echo BUSY\n"
+    "echo SETTLED\n"
+)
+
+
+def _box_settled(node, vmid):
+    """True once a freshly booted box has settled: guest agent responds, no
+    unattended-upgrades process, dpkg lock free. All via the guest agent (root,
+    virtio-serial) — SSH is exactly the channel the boot storm starves. The lock check
+    is `apt-get check` with a 1s lock timeout rather than `fuser`: same condition, no
+    psmisc dependency on minimal cloud images.
+
+    Returns None (not False) when the agent channel is alive but its data calls are
+    useless — the realm node answers pings and returns NULL for every exec result, so
+    "no SETTLED seen" there means 'cannot verify', not 'busy'. Treating that as False
+    burned the whole 240s settle budget per prep_apt pass on realm (2026-09-25);
+    callers fall back to the SSH probe on None."""
+    try:
+        if not wait_for_guest_agent(node, vmid, timeout=20):
+            return False
+        _rc, out, _err = guest_agent_exec_root(
+            node, vmid, _SETTLE_CHECK, timeout=30)
+        out = out or ""
+        if "SETTLED" in out:
+            return "BUSY" not in out
+        return None  # agent ping ok, data channel dead (realm) — let the caller probe SSH
+    except Exception:
+        return None
+
+
+def _box_settled_via_ssh(ctx, t):
+    """SSH fallback of the settle check, for nodes whose guest agent won't return data."""
+    script = _SETTLE_CHECK
+    try:
+        r = ssh_via_gateway(ctx, t["ip"], f"sudo bash -c {shlex.quote(script)}",
+                            timeout=20, user=ctx.get("box_username", "ubuntu"))
+    except Exception:
+        return False
+    return r.returncode == 0 and "SETTLED" in (r.stdout or "") and "BUSY" not in (r.stdout or "")
+
+
+def wait_boxes_settled(targets, node, timeout=240, ssh_fallback=None):
+    """Poll every box until it settles after boot — the real condition the old blind
+    150s sleep waited out (the initial unattended-upgrades run starves both the guest
+    agent and the ssh -W forward). Boxes poll concurrently, each with the full budget.
+    Returns the vmids that never settled; that is not fatal — the caller's per-box
+    retry ladder covers a stubborn box exactly as before."""
+    deadline = time.time() + timeout
+
+    def _wait(t):
+        while time.time() < deadline:
+            settled = _box_settled(node, t["vmid"])
+            if settled is True:
+                return True
+            if settled is None and ssh_fallback is not None and ssh_fallback(t):
+                return True
+            time.sleep(10)
+        return False
+
+    results = run_concurrent(targets, _wait)
+    return {t["vmid"] for t, r in zip(targets, results) if r is not True}
+
+
+def prep_apt_on_boxes(targets, ctx, use_proxy=True):
     """Quiesce apt-daily/unattended-upgrades and refresh the apt index on every Linux
     target before a Nakon plant. SSH-via-gateway + sudo is the primary channel (the
     guest agent is unreliable in the minute after a tz-base rollback/reboot, when the
     box is busy with unattended-upgrades — it timed out on every box in one run); the
-    guest agent (root) is the fallback. Non-fatal per box, but reported clearly."""
+    guest agent (root) is the fallback. Non-fatal per box, but reported clearly.
+    use_proxy writes the engine's apt-cacher-ng proxy (Compfile `apt_cache`)."""
     key = ctx["ssh_key_path"]
     box_username = ctx.get("box_username", "ubuntu")
     node = os.environ["TF_VAR_proxmox_node"]
     proxy = gateway_proxy(ctx)
-    remote_cmd = f"sudo bash -c {shlex.quote(_APT_PREP_SCRIPT)}"
     print("  Prepping apt on Linux boxes (disable apt-daily/unattended-upgrades, refresh index)...")
-    # Boxes that just cold-booted from a tz-base rollback are saturated by the initial
-    # unattended-upgrades run, which starves BOTH the guest agent and the ssh -W forward for
-    # a couple of minutes. Let that settle first, or every prep below times out.
-    print("    (letting boxes settle after boot for 150s before prepping)")
-    time.sleep(150)
-    for t in targets:
+    # Replaces the old blind 150s sleep: wait for the actual settle condition instead.
+    # Runs once; a box that never settles still gets its full retry ladder below.
+    # On agentless-data nodes (realm) the settle check falls back to SSH — otherwise
+    # every box burns the full budget returning 'cannot verify' forever.
+    unsettled = wait_boxes_settled(targets, node, timeout=240,
+                                   ssh_fallback=lambda t: _box_settled_via_ssh(ctx, t))
+    if unsettled:
+        print(f"    WARNING: {len(unsettled)} box(es) never settled after boot — proceeding")
+
+    def _prep(t):
         ip = t["ip"]
+        gateway = f"192.168.{t['identifier']}.1" if use_proxy else None
+        script = _apt_prep_script(gateway)
+        remote_cmd = f"sudo bash -c {shlex.quote(script)}"
         wait_for_guest_agent(node, t["vmid"], timeout=120)
-        ok = False
         for attempt in range(1, 6):
             try:
                 subprocess.run(
@@ -66,37 +162,41 @@ def prep_apt_on_boxes(targets, ctx):
                      f"{box_username}@{ip}", remote_cmd],
                     check=True, timeout=240,
                 )
-                print(f"    apt prepped on {ip}")
-                ok = True
-                break
+                with PRINT_LOCK:
+                    print(f"    apt prepped on {ip}")
+                return True
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 if attempt < 5:
-                    print(f"    apt prep attempt {attempt}/5 failed for {ip}, retrying in 15s...")
+                    with PRINT_LOCK:
+                        print(f"    apt prep attempt {attempt}/5 failed for {ip}, retrying in 15s...")
                     time.sleep(15)
-        if ok:
-            continue
         try:
-            rc, _out, err = guest_agent_exec_root(node, t["vmid"], _APT_PREP_SCRIPT, timeout=240)
+            rc, _out, err = guest_agent_exec_root(node, t["vmid"], script, timeout=240)
             if rc == 0:
-                print(f"    apt prepped on {ip} (via guest agent)")
+                with PRINT_LOCK:
+                    print(f"    apt prepped on {ip} (via guest agent)")
             else:
-                print(f"    WARNING: apt prep rc={rc} on {ip}: {(err or '').strip()[:160]} — proceeding")
+                with PRINT_LOCK:
+                    print(f"    WARNING: apt prep rc={rc} on {ip}: {(err or '').strip()[:160]} — proceeding")
         except Exception as exc:
-            print(f"    WARNING: apt prep failed on {ip} ({exc}) — proceeding")
+            with PRINT_LOCK:
+                print(f"    WARNING: apt prep failed on {ip} ({exc}) — proceeding")
+        return False
+
+    run_concurrent(targets, _prep)
 
 
 def fix_dns_on_boxes(targets, ctx):
-    """Fix DNS on every target box. All-fail aborts (systemic vs transient)."""
+    """Fix DNS on every target box concurrently, each box with its own full retry ladder.
+    All-fail aborts (systemic vs transient)."""
 
     key = ctx["ssh_key_path"]
     box_username = ctx.get("box_username", "ubuntu")
     node = os.environ["TF_VAR_proxmox_node"]
     proxy = gateway_proxy(ctx)
     print("  Fixing DNS on all team boxes...")
-    total = 0
-    failed = 0
-    for t in targets:
-        total += 1
+
+    def _fix(t):
         ip = t["ip"]
         for attempt in range(1, 9):
             try:
@@ -111,29 +211,37 @@ def fix_dns_on_boxes(targets, ctx):
                     ],
                     check=True, timeout=40,
                 )
-                print(f"    DNS fixed on {ip}")
-                break
+                with PRINT_LOCK:
+                    print(f"    DNS fixed on {ip}")
+                return True
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 if attempt < 8:
-                    print(f"    DNS fix attempt {attempt}/8 failed for {ip}, retrying in 15s...")
+                    with PRINT_LOCK:
+                        print(f"    DNS fix attempt {attempt}/8 failed for {ip}, retrying in 15s...")
                     time.sleep(15)
                 else:
                     try:
                         rc, _out, err = guest_agent_exec_root(
                             node, t["vmid"], DNS_FIX_CMD_ROOT, timeout=40)
                         if rc == 0:
-                            print(f"    DNS fixed on {ip} (via guest agent)")
-                            break
+                            with PRINT_LOCK:
+                                print(f"    DNS fixed on {ip} (via guest agent)")
+                            return True
                         raise RuntimeError(f"rc={rc}: {(err or '').strip()[:120]}")
                     except Exception as agent_exc:
-                        print(f"  WARNING: DNS fix failed for {ip} after 8 attempts "
-                              f"and guest-agent fallback ({agent_exc}) — proceeding anyway")
-                        print(diagnose_unreachable_box(node, t["vmid"]))
-                        failed += 1
+                        with PRINT_LOCK:
+                            print(f"  WARNING: DNS fix failed for {ip} after 8 attempts "
+                                  f"and guest-agent fallback ({agent_exc}) — proceeding anyway")
+                            print(diagnose_unreachable_box(node, t["vmid"]))
+                        return False
+        return False
 
-    if total > 0 and failed == total:
+    results = run_concurrent(targets, _fix)
+    failed = sum(1 for r in results if r is not True)
+
+    if targets and failed == len(targets):
         raise RuntimeError(
-            f"DNS fix failed on all {total} team box(es) after 8 attempts each — this looks "
+            f"DNS fix failed on all {len(targets)} team box(es) after 8 attempts each — this looks "
             f"systemic (see the guest-agent diagnosis above for each box), not a one-off timing "
             f"fluke. Aborting rather than proceeding into Nakon against boxes that are already "
             f"known unreachable."
@@ -150,8 +258,10 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
     print("  Hardening services on all team boxes...")
     box_services = json.loads((comp_dir / "box_services.json").read_text())
 
+    # Script construction is pure string building (fast, no I/O) and stays serial;
+    # the SSH/guest-agent execution per box is what runs concurrently.
+    scripts = []
     for t in targets:
-        ip = t["ip"]
         services = box_services.get(t["box_name"], [])
 
         script_lines = ["#!/bin/bash", "set -e", ""]
@@ -328,7 +438,11 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
             "done",
         ])
 
-        script_content = "\n".join(script_lines)
+        scripts.append((t, "\n".join(script_lines)))
+
+    def _exec(item):
+        t, script_content = item
+        ip = t["ip"]
         script_b64 = base64.b64encode(script_content.encode()).decode()
 
         deploy_cmd = (
@@ -341,23 +455,31 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
             result = ssh_via_gateway(ctx, ip, deploy_cmd, timeout=60,
                                       user=ctx.get("box_username", "ubuntu"))
             if result.returncode != 0:
-                print(f"    Service hardening warning on {ip}: {result.stderr.strip()[:200]}")
-                print(f"    Retrying {ip} via guest agent (as root, no sudo needed)...")
+                with PRINT_LOCK:
+                    print(f"    Service hardening warning on {ip}: {result.stderr.strip()[:200]}")
+                    print(f"    Retrying {ip} via guest agent (as root, no sudo needed)...")
                 vmid = t["vmid"]
                 root_script = re.sub(r"\bsudo ", "", script_content)
                 try:
                     rc, out, err = guest_agent_exec_root(node, vmid, root_script, timeout=120)
                     if rc == 0:
-                        print(f"    Services hardened on {ip} (via guest agent)")
+                        with PRINT_LOCK:
+                            print(f"    Services hardened on {ip} (via guest agent)")
                     else:
-                        print(f"    Service hardening still failing on {ip} via guest agent: "
-                              f"rc={rc} {err.strip()[:200]}")
+                        with PRINT_LOCK:
+                            print(f"    Service hardening still failing on {ip} via guest agent: "
+                                  f"rc={rc} {err.strip()[:200]}")
                 except Exception as e:
-                    print(f"    Guest-agent fallback failed for {ip} (vmid {vmid}): {e}")
+                    with PRINT_LOCK:
+                        print(f"    Guest-agent fallback failed for {ip} (vmid {vmid}): {e}")
             else:
-                print(f"    Services hardened on {ip}")
+                with PRINT_LOCK:
+                    print(f"    Services hardened on {ip}")
         except Exception as e:
-            print(f"    Service hardening error on {ip}: {e}")
+            with PRINT_LOCK:
+                print(f"    Service hardening error on {ip}: {e}")
+
+    run_concurrent(scripts, _exec)
 
 
 def setup_ubuntu_auth(targets, ctx):
@@ -385,7 +507,7 @@ def setup_ubuntu_auth(targets, ctx):
         f"sudo chmod 440 /etc/sudoers.d/{box_username}"
     )
 
-    for t in targets:
+    def _auth(t):
         ip = t["ip"]
         for attempt in range(1, 9):
             try:
@@ -400,28 +522,41 @@ def setup_ubuntu_auth(targets, ctx):
                     ],
                     check=True, timeout=40,
                 )
-                print(f"    Auth configured on {ip}")
-                break
+                with PRINT_LOCK:
+                    print(f"    Auth configured on {ip}")
+                return True
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 if attempt < 8:
-                    print(f"    Auth attempt {attempt}/8 failed for {ip}, retrying in 15s...")
+                    with PRINT_LOCK:
+                        print(f"    Auth attempt {attempt}/8 failed for {ip}, retrying in 15s...")
                     time.sleep(15)
                 else:
-                    print(f"    Auth setup failed for {ip} after 8 attempts — retrying via guest agent (root)...")
+                    with PRINT_LOCK:
+                        print(f"    Auth setup failed for {ip} after 8 attempts — retrying via guest agent (root)...")
                     vmid = t["vmid"]
                     root_script = re.sub(r"\bsudo ", "", auth_cmd)
                     try:
                         rc, out, err = guest_agent_exec_root(
                             os.environ["TF_VAR_proxmox_node"], vmid, root_script, timeout=120)
                         if rc == 0:
-                            print(f"    Auth configured on {ip} (via guest agent)")
-                        else:
-                            raise RuntimeError(
-                                f"auth setup failed on {ip} via guest agent too: "
-                                f"rc={rc} {err.strip()[:200]}")
+                            with PRINT_LOCK:
+                                print(f"    Auth configured on {ip} (via guest agent)")
+                            return True
+                        raise RuntimeError(
+                            f"auth setup failed on {ip} via guest agent too: "
+                            f"rc={rc} {err.strip()[:200]}")
                     except RuntimeError:
                         raise
                     except Exception as e:
                         raise RuntimeError(
                             f"auth setup failed on {ip}: SSH dead after 8 attempts and the "
                             f"guest-agent fallback raised ({e})") from e
+        return False
+
+    results = run_concurrent(targets, _auth)
+    for t, r in zip(targets, results):
+        if r is True:
+            continue
+        if isinstance(r, Exception):
+            raise r
+        raise RuntimeError(f"auth setup failed on {t['ip']} after 8 attempts and the fallback")

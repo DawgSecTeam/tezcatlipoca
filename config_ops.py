@@ -11,8 +11,9 @@ from pathlib import Path
 
 import requests
 
-from constants import MAX_BOXES_PER_TEAM, NAKON_DIR, SCORING_ENGINE_VMID
-from range_ops import proxmox_api, proxmox_request, vm_id_for
+from constants import (ENGINE_TEMPLATE_VMID_OFFSET, MAX_BOXES_PER_TEAM, NAKON_DIR,
+                       SCORING_ENGINE_VMID)
+from range_ops import has_clone_marker, proxmox_api, proxmox_request, vm_id_for
 from utils import BOX_USERNAME_DEFAULT, CREDLIST_USERNAMES_DEFAULT, valid_unix_username
 
 ENV_PATH = Path(".env")
@@ -42,24 +43,76 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
             + ", ".join(missing)
             + ". Clones would fail mid-apply; available: "
             + (", ".join(sorted(t for t in tagged if t)) or "(none)"))
-    engine_template = int(os.environ["TF_VAR_template_vm_id"])
-    if not any(vm.get("vmid") == engine_template for vm in vms):
+    engine_base = int(os.environ["TF_VAR_template_vm_id"])
+    if not any(vm.get("vmid") == engine_base for vm in vms):
         raise SystemExit(
-            f"  ERROR: engine template vmid {engine_template} (TF_VAR_template_vm_id) does not "
-            f"exist on this cluster — the scoring engine clone would fail mid-apply.")
-    print(f"  Preflight: all {len(boxes)} box template(s) resolve; engine template vmid "
-          f"{engine_template} present")
+            f"  ERROR: engine base image vmid {engine_base} (TF_VAR_template_vm_id) does "
+            f"not exist on this cluster — the engine-template build and the scoring "
+            f"engine clone would fail mid-apply.")
+    print(f"  Preflight: all {len(boxes)} box template(s) resolve; engine base image vmid "
+          f"{engine_base} present")
 
     if check_free and teams:
         existing_vmids = {vm.get("vmid") for vm in vms}
+        vm_by_vmid = {vm.get("vmid"): vm for vm in vms}
+        # A retry of THIS competition's failed deploy meets its own leftovers. A VM tagged
+        # tezcatlipoca + comp-<name> is ours by creation (main.tf / clone_ops / golden_ops
+        # all tag); phase 1's ownership-checked cleanup destroys it. Anything else on our
+        # vmids is genuinely foreign and stays fatal.
+        our_tags = {"tezcatlipoca", f"comp-{comp_dir.name}"}
+
+        def _is_ours(vmid, expected_name=None):
+            vm = vm_by_vmid.get(vmid)
+            if vm is None:
+                return False
+            vtags = {t.strip() for t in str(vm.get("tags") or "").replace(";", ",").split(",") if t.strip()}
+            if our_tags <= vtags:
+                return True
+            # Interrupted clone: untagged (the tag PUT never ran) but carrying the clone
+            # marker written in the clone POST itself — ours; phase 1 unlocks + destroys it.
+            if not vtags and has_clone_marker(node, vmid, comp_dir.name):
+                print(f"  Preflight: vmid {vmid} is an interrupted clone of this competition "
+                      f"(lock={vm.get('lock') or 'none'}) — phase 1 will clean it")
+                return True
+            # Legacy M4 golden slots predate ownership tags. Adopt only the exact
+            # reserved golden VM/name pair; all other untagged resources remain foreign.
+            return (expected_name is not None and vm.get("name") == expected_name
+                    and vtags == {"template"})
+
         clashes = []
+        foreign = 0
+        ours = 0
+
+        def _clash(label, vmid, expected_name=None):
+            nonlocal foreign, ours
+            if _is_ours(vmid, expected_name=expected_name):
+                ours += 1
+            else:
+                foreign += 1
+                clashes.append(label)
+
         if engine_vmid in existing_vmids:
-            clashes.append(f"scoring engine vmid {engine_vmid}")
+            _clash(f"scoring engine vmid {engine_vmid}", engine_vmid)
+        # M4: the engine template's reserved slot (just below the golden block). A VM
+        # there tagged as ours is the competition's persistent template — expected to
+        # survive phase 1 and be reused, NOT a leftover to clean. Foreign = fatal.
+        et_vmid = engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET
+        if et_vmid in existing_vmids:
+            if _is_ours(et_vmid):
+                print(f"  Preflight: engine template vmid {et_vmid} present (M4 persistent — reused)")
+            else:
+                foreign += 1
+                clashes.append(f"engine template vmid {et_vmid}")
         for team_key, team in teams.items():
             for box_idx in range(len(boxes)):
                 vid = vm_id_for(team["identifier"], box_idx)
                 if vid in existing_vmids:
-                    clashes.append(f"team vmid {vid} ({team_key}/{boxes[box_idx]['name']})")
+                    _clash(f"team vmid {vid} ({team_key}/{boxes[box_idx]['name']})", vid)
+        for box_idx in range(len(boxes)):
+            vid = engine_vmid + 150 + box_idx
+            if vid in existing_vmids:
+                _clash(f"golden vmid {vid} ({boxes[box_idx]['name']})", vid,
+                       expected_name=f"golden-{boxes[box_idx]['name']}")
         try:
             nets = proxmox_api("GET", f"/nodes/{node}/network")["data"]
             existing_bridges = {n.get("iface") for n in nets}
@@ -67,14 +120,26 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
             existing_bridges = set()
         for team in teams.values():
             bridge = f"vmbr{team['identifier']}"
+            # Bridges carry no per-comp tags. Tolerate one only when the VM leftovers are
+            # unambiguously all ours (a retry) — a foreign bridge stays fatal.
             if bridge in existing_bridges:
-                clashes.append(f"bridge {bridge}")
+                if foreign == 0 and ours > 0:
+                    ours += 1
+                else:
+                    clashes.append(f"bridge {bridge}")
         if clashes:
             raise SystemExit(
                 "  ERROR: this competition's infrastructure collides with VMs/bridges already "
                 "on node '" + node + "' (another running competition?): " + ", ".join(clashes)
-                + ". Pick a free --scoring-vmid and/or non-overlapping TF_VAR_team_identifiers.")
-        print(f"  Preflight: engine vmid {engine_vmid}, all team vmids, and team bridges are free")
+                + ". Pick a free --scoring-vmid and/or non-overlapping TF_VAR_team_identifiers. "
+                "Note the golden block sits at <scoring-vmid>+150 — a colliding golden vmid "
+                "also means picking a different engine vmid.")
+        if ours:
+            print(f"  Preflight: {ours} leftover VM(s)/bridge(s) tagged as this "
+                  f"competition's — phase 1 cleans or (M4 hash-matching templates) reuses them")
+        else:
+            print(f"  Preflight: engine vmid {engine_vmid}, engine template vmid {et_vmid}, "
+                  f"golden vmids {engine_vmid + 150}+, all team vmids, and team bridges are free")
 
     datastore = os.environ.get("TF_VAR_datastore", "local-lvm")
     # The storage LIST zeroes/omits free on some pools (cyberfield hdrives-zfs);
@@ -208,8 +273,14 @@ def list_proxmox_templates():
 
 
 def destroy_bridge_if_exists(node, bridge_name):
-    """Delete a Proxmox Linux bridge if it exists."""
+    """Delete a Proxmox Linux bridge if it exists. A GET-first existence check keeps
+    a fresh deploy (whose bridges are all new) from spraying spurious 400s — PVE
+    rejects DELETE with "Parameter verification failed" rather than 404 for an
+    absent iface (live noise, m4-validation-2026-09-25 phase 1)."""
     try:
+        existing = {n.get("iface") for n in proxmox_api("GET", f"/nodes/{node}/network")["data"]}
+        if bridge_name not in existing:
+            return
         proxmox_api("DELETE", f"/nodes/{node}/network/{bridge_name}")
     except requests.exceptions.HTTPError as e:
         if e.response is None or e.response.status_code != 404:

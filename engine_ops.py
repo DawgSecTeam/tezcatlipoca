@@ -2,6 +2,7 @@
 
 import base64
 import json
+import re
 import subprocess
 
 import toml
@@ -10,126 +11,145 @@ from quotient.setup import build_event_conf
 from ssh_ops import engine_ssh_opts
 
 
-def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
-    """Bootstrap the scoring engine: install packages, Docker, Quotient."""
-    key = ctx["ssh_key_path"]
-    scoring_ip = ctx["scoring_engine_ip"]
-    scoring_user = ctx["vm_username"]
+def _run_engine_cmd(ctx, cmd, check=True, timeout=60, capture=False):
+    """One SSH command to the scoring engine — the shared body of every bootstrap step."""
+    argv = ["ssh", "-i", ctx["ssh_key_path"], *engine_ssh_opts(ctx),
+            f"{ctx['vm_username']}@{ctx['scoring_engine_ip']}", cmd]
+    # Guard: _fork_exec dies with an opaque "expected str, bytes or os.PathLike
+    # object, not tuple" when a non-string sneaks into the argv (live-found
+    # 2026-09-25, first engine-template build). Fail with the full context instead.
+    bad = [(i, repr(a)) for i, a in enumerate(argv) if not isinstance(a, str)]
+    if bad:
+        raise RuntimeError(
+            f"engine SSH argv has non-string element(s) {bad} — ctx keys "
+            f"{sorted(ctx)}: ssh_key_path={ctx.get('ssh_key_path')!r:.120} "
+            f"vm_username={ctx.get('vm_username')!r} "
+            f"scoring_engine_ip={ctx.get('scoring_engine_ip')!r}")
+    return subprocess.run(argv, check=check, timeout=timeout,
+                          capture_output=capture, text=capture)
 
-    print("  Installing packages on scoring engine...")
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            *engine_ssh_opts(ctx),
-            f"{scoring_user}@{scoring_ip}",
-            "sudo killall apt-get apt dpkg 2>/dev/null; sleep 2; "
-            "sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null; "
-            "sudo dpkg --configure -a 2>/dev/null; "
-            "sudo apt-get update && sudo apt-get install -y docker.io git curl python3-pip",
-        ],
-        check=True, timeout=600,
-    )
+
+def _clone_quotient_cmd(quotient_ref):
+    """The git clone command for the pinned Quotient ref.
+
+    A 40-hex commit can't be `git clone --branch`ed, so it goes through an explicit
+    fetch + checkout (GitHub serves arbitrary SHA fetches at depth 1). Branch/tag refs
+    clone directly. Empty ref = historical behavior: depth-1 HEAD of the default
+    branch (deterministic only because the template freezes whatever it built)."""
+    url = "https://github.com/dbaseqp/Quotient.git"
+    ref = (quotient_ref or "").strip()
+    if re.fullmatch(r"[0-9a-f]{40}", ref):
+        return (
+            f"sudo mkdir -p /opt/quotient && cd /opt/quotient && "
+            f"sudo git init -q && sudo git remote add origin {url} && "
+            f"sudo git fetch --depth 1 origin {ref} && "
+            f"sudo git checkout -q FETCH_HEAD && "
+            f"sudo git submodule update --init --recursive"
+        )
+    if ref:
+        return (f"sudo mkdir -p /opt/quotient && "
+                f"sudo git clone --depth 1 --branch {ref} --recurse-submodules {url} /opt/quotient "
+                f"2>/dev/null || (cd /opt/quotient && sudo git submodule update --init --recursive)")
+    return (f"sudo mkdir -p /opt/quotient && "
+            f"sudo git clone --depth 1 --recurse-submodules {url} /opt/quotient "
+            f"2>/dev/null || (cd /opt/quotient && sudo git submodule update --init --recursive)")
+
+
+def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_ref=None):
+    """Bootstrap the scoring engine: install packages, Docker, Quotient.
+
+    M4: runs on the engine-TEMPLATE build VM (never on the deployed engine, which
+    clones from that template). Returns build info {"quotient_head": ...} for
+    traceability record; the HASH input is the pinned ref from config, not this
+    realized HEAD."""
+    _run_engine_cmd(ctx, (
+        # Stop the apt machinery for the build window: unattended-upgrades both holds
+        # the dpkg lock past Lock::Timeout and re-fires when `apt-get update` refreshes
+        # the lists — and the preamble's killall can catch it mid-upgrade, leaving an
+        # old libc6 under freshly unpacked -dev packages (live-found 2026-09-26, two
+        # engine-template builds in a row: rc=100, first on the lock, then on the
+        # half-upgrade; stopping only the TIMERS left an already-running
+        # apt-daily-upgrade.service free to spawn apt-get mid-bootstrap). Stopping the
+        # service units kills the running worker's cgroup. Upgrade first, then install,
+        # so the dependency set is deterministic; `dpkg --configure -a` + `-f install`
+        # repair whatever the interrupted upgrade left behind.
+        "sudo systemctl stop unattended-upgrades.service apt-daily.service "
+        "apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer 2>/dev/null; "
+        "sudo killall apt-get apt dpkg 2>/dev/null; sleep 2; "
+        "sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null; "
+        "sudo dpkg --configure -a 2>/dev/null; "
+        "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 -f install -y 2>/dev/null; "
+        "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update && "
+        "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 upgrade -y && "
+        "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y "
+        "docker.io git curl python3-pip apt-cacher-ng"
+    ), timeout=1800)
+
+    # apt-cacher-ng defaults to port 3142 on all interfaces; the boxes' gateway IP is the
+    # engine's team-NIC address, so no listener change is needed. Enable it here so it is
+    # serving before the first box-side apt prep (phase 5). Not fatal if the probe fails:
+    # the per-box proxy write in hardening_ops is gated by the same Compfile flag and apt
+    # works unproxied, just slower.
+    print("  Enabling apt-cacher-ng (package mirror cache for team boxes)...")
+    _run_engine_cmd(ctx, (
+        "sudo systemctl enable --now apt-cacher-ng && "
+        "ss -ltn | grep -q ':3142 ' && echo '    apt-cacher-ng listening on 3142' "
+        "|| echo '    WARNING: apt-cacher-ng not listening on 3142 yet'"
+    ), check=False, timeout=60)
 
     print("  Installing Docker Compose v2 plugin...")
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            *engine_ssh_opts(ctx),
-            f"{scoring_user}@{scoring_ip}",
-            (
-                "install -m 0755 -d /etc/apt/keyrings && "
-                "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc > /dev/null && "
-                "sudo chmod a+r /etc/apt/keyrings/docker.asc && "
-                "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] "
-                "https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable\" "
-                "| sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && "
-                "sudo apt-get update && sudo apt-get install -y docker-compose-plugin"
-            ),
-        ],
-        check=True, timeout=600,
-    )
+    _run_engine_cmd(ctx, (
+        "install -m 0755 -d /etc/apt/keyrings && "
+        "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc > /dev/null && "
+        "sudo chmod a+r /etc/apt/keyrings/docker.asc && "
+        "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] "
+        "https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable\" "
+        "| sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && "
+        "sudo apt-get update && sudo apt-get install -y docker-compose-plugin"
+    ), timeout=600)
 
     print("  Starting Docker (already installed by Terraform)...")
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            *engine_ssh_opts(ctx),
-            f"{scoring_user}@{scoring_ip}",
-            "sudo systemctl start docker && sudo systemctl enable docker && sleep 2 && sudo docker version",
-        ],
-        check=True, timeout=30,
-    )
+    _run_engine_cmd(ctx, (
+        "sudo systemctl start docker && sudo systemctl enable docker && sleep 2 && sudo docker version"
+    ), timeout=30)
 
-    print("  Cloning Quotient...")
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            *engine_ssh_opts(ctx),
-            f"{scoring_user}@{scoring_ip}",
-            "sudo mkdir -p /opt/quotient && sudo git clone --depth 1 --recurse-submodules https://github.com/dbaseqp/Quotient.git /opt/quotient 2>/dev/null || (cd /opt/quotient && sudo git submodule update --init --recursive)",
-        ],
-        check=True, timeout=60,
-    )
+    print(f"  Cloning Quotient ({quotient_ref or 'default branch'})...")
+    _run_engine_cmd(ctx, _clone_quotient_cmd(quotient_ref), timeout=120)
 
-    print("  Writing Quotient .env...")
-    quotient_env = (
-        f"POSTGRES_PASSWORD={postgres_password}\n"
-        "POSTGRES_USER=engineuser\n"
-        "POSTGRES_HOST=quotient_database\n"
-        "POSTGRES_DB=engine\n"
-        f"REDIS_PASSWORD={redis_password}\n"
-    )
-    env_b64 = base64.b64encode(quotient_env.encode()).decode()
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            *engine_ssh_opts(ctx),
-            f"{scoring_user}@{scoring_ip}",
-            f"echo '{env_b64}' | base64 -d | sudo tee /opt/quotient/.env > /dev/null && "
-            "sudo chmod 600 /opt/quotient/.env",
-        ],
-        check=True, timeout=10,
-    )
+    realized = _run_engine_cmd(ctx, "git -C /opt/quotient rev-parse HEAD 2>/dev/null || true",
+                               check=False, timeout=10, capture=True)
+    quotient_head = (realized.stdout or "").strip()
+
+    push_quotient_env(ctx, postgres_password, redis_password)
 
     print("  Building Quotient Docker images...")
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            *engine_ssh_opts(ctx),
-            f"{scoring_user}@{scoring_ip}",
-            "cd /opt/quotient && sudo docker compose build --no-cache",
-        ],
-        check=True, timeout=1800,
-    )
+    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose build --no-cache", timeout=1800)
 
     print("  Starting Quotient Docker containers...")
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            *engine_ssh_opts(ctx),
-            f"{scoring_user}@{scoring_ip}",
-            "cd /opt/quotient && sudo docker compose up -d",
-        ],
-        check=True, timeout=600,
-    )
+    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose up -d", timeout=600)
 
+    _install_firewall_and_healthcheck(ctx)
+    return {"quotient_head": quotient_head, "quotient_ref": quotient_ref or ""}
+
+
+def _install_firewall_and_healthcheck(ctx):
+    """Disk state every engine carries: forwarding rules, sshd multiplexing headroom,
+    the range-firewall + range-healthcheck units. Runs at template build; the firewall
+    timer re-asserts the rules on every clone."""
     print("  Restoring network forwarding rules after Docker start...")
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            *engine_ssh_opts(ctx),
-            f"{scoring_user}@{scoring_ip}",
-            (
-                    "sudo iptables -P FORWARD ACCEPT && "
-                    "sudo iptables -C FORWARD -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP 2>/dev/null || "
-                    "sudo iptables -I FORWARD 1 -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP && "
-                "sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE && "
-                "sudo sed -i 's/^#*AllowTcpForwarding.*/AllowTcpForwarding yes/' /etc/ssh/sshd_config && "
-                "sudo systemctl reload sshd 2>/dev/null || true"
-            ),
-        ],
-        check=True, timeout=15,
-    )
+    _run_engine_cmd(ctx, (
+            "sudo iptables -P FORWARD ACCEPT && "
+            "sudo iptables -C FORWARD -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP 2>/dev/null || "
+            "sudo iptables -I FORWARD 1 -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP && "
+            "sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE && "
+            # MaxSessions raised for the operator's ControlMaster multiplexing (M1.5): every
+            # per-box ProxyCommand shares one engine connection, and the default 10 would
+            # throttle M2's concurrent waits; MaxStartups absorbs cold-start bursts.
+            "sudo sed -i -e 's/^#*AllowTcpForwarding.*/AllowTcpForwarding yes/' "
+            "-e 's/^#*MaxSessions.*/MaxSessions 64/' "
+            "-e 's/^#*MaxStartups.*/MaxStartups 30:30:100/' /etc/ssh/sshd_config && "
+            "sudo systemctl reload sshd 2>/dev/null || true"
+    ), timeout=15)
     print("  Forwarding rules restored")
 
     print("  Installing range-firewall systemd unit + timer (keeps team NAT + isolation durable)...")
@@ -164,24 +184,95 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password):
     firewall_script_b64 = base64.b64encode(firewall_script.encode()).decode()
     firewall_service_b64 = base64.b64encode(firewall_service.encode()).decode()
     firewall_timer_b64 = base64.b64encode(firewall_timer.encode()).decode()
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            *engine_ssh_opts(ctx),
-            f"{scoring_user}@{scoring_ip}",
-            (
-                f"echo '{firewall_script_b64}' | base64 -d | sudo tee /usr/local/sbin/range-firewall.sh > /dev/null && "
-                "sudo chmod +x /usr/local/sbin/range-firewall.sh && "
-                f"echo '{firewall_service_b64}' | base64 -d | sudo tee /etc/systemd/system/range-firewall.service > /dev/null && "
-                f"echo '{firewall_timer_b64}' | base64 -d | sudo tee /etc/systemd/system/range-firewall.timer > /dev/null && "
-                "sudo systemctl daemon-reload && sudo systemctl enable --now range-firewall.timer"
-            ),
-        ],
-        check=True, timeout=30,
-    )
+    _run_engine_cmd(ctx, (
+        f"echo '{firewall_script_b64}' | base64 -d | sudo tee /usr/local/sbin/range-firewall.sh > /dev/null && "
+        "sudo chmod +x /usr/local/sbin/range-firewall.sh && "
+        f"echo '{firewall_service_b64}' | base64 -d | sudo tee /etc/systemd/system/range-firewall.service > /dev/null && "
+        f"echo '{firewall_timer_b64}' | base64 -d | sudo tee /etc/systemd/system/range-firewall.timer > /dev/null && "
+        "sudo systemctl daemon-reload && sudo systemctl enable --now range-firewall.timer"
+    ), timeout=30)
     print("  range-firewall.timer enabled (re-asserts NAT + isolation every 30s)")
 
     install_range_healthcheck(ctx)
+
+
+def push_quotient_env(ctx, postgres_password, redis_password):
+    """Write /opt/quotient/.env (per-competition DB secrets). Extracted from bootstrap:
+    the template build removes this file before conversion, and every engine clone
+    re-writes it BEFORE compose up so the fresh postgres volume initializes with the
+    right credentials."""
+    print("  Writing Quotient .env...")
+    quotient_env = (
+        f"POSTGRES_PASSWORD={postgres_password}\n"
+        "POSTGRES_USER=engineuser\n"
+        "POSTGRES_HOST=quotient_database\n"
+        "POSTGRES_DB=engine\n"
+        f"REDIS_PASSWORD={redis_password}\n"
+    )
+    env_b64 = base64.b64encode(quotient_env.encode()).decode()
+    _run_engine_cmd(ctx, (
+        f"echo '{env_b64}' | base64 -d | sudo tee /opt/quotient/.env > /dev/null && "
+        "sudo chmod 600 /opt/quotient/.env"
+    ), timeout=10)
+
+
+def clean_engine_for_template(ctx):
+    """Strip every per-deploy / per-competition trace before qm template (M4 template
+    point): containers + data volumes (no scoring DB, teams or injects baked), .env and
+    event.conf secrets, machine-id, cloud-init state, SSH host keys. The apt-cacher-ng
+    package cache is deliberately KEPT — a warm cache speeds up every later run."""
+    _run_engine_cmd(ctx, (
+        "cd /opt/quotient && sudo docker compose down -v --remove-orphans 2>/dev/null; "
+        # ~1 GB of image build cache is dead weight once the images exist.
+        "sudo docker builder prune -af >/dev/null 2>&1; "
+        "sudo rm -f /opt/quotient/.env /opt/quotient/config/event.conf && "
+        "sudo rm -rf /opt/quotient/config/credlists && "
+        "sudo truncate -s 0 /etc/machine-id && "
+        "sudo rm -f /var/lib/dbus/machine-id && "
+        "sudo cloud-init clean --logs --machine-id && "
+        "sudo rm -f /etc/ssh/ssh_host_* && "
+        "echo '    engine template cleaned (volumes, secrets, identity, host keys)'"
+    ), timeout=300)
+
+
+# Grow / to the whole disk. Terraform resizes the engine's virtual disk (main.tf: 40 GB)
+# but nothing grew the partition/PV/LV/filesystem, so the engine ran on the base image's
+# 10 GB root — full within one Windows+Linux deploy (winad-testrun 2026-09-25: 100% used,
+# apt-cacher-ng answering 500 to every box; Postgres would be next). Idempotent: growpart
+# exits nonzero ("NOCHANGE") once the partition already fills the disk.
+_GROW_ROOT_CMD = (
+    "ROOT=$(findmnt -no SOURCE /); "
+    "if sudo lvs \"$ROOT\" >/dev/null 2>&1; then "
+    "PV=$(sudo pvs --noheadings -o pv_name | head -1 | xargs); "
+    "DISK=/dev/$(lsblk -no pkname \"$PV\" | head -1); "
+    "PART=$(cat /sys/class/block/$(basename \"$PV\")/partition); "
+    "sudo growpart \"$DISK\" \"$PART\" >/dev/null; "
+    "sudo pvresize \"$PV\" >/dev/null && sudo lvextend -r -l +100%FREE \"$ROOT\" >/dev/null 2>&1; "
+    "else "
+    "DISK=/dev/$(lsblk -no pkname \"$ROOT\" | head -1); "
+    "PART=$(cat /sys/class/block/$(basename \"$ROOT\")/partition); "
+    "sudo growpart \"$DISK\" \"$PART\" >/dev/null && sudo resize2fs \"$ROOT\" >/dev/null 2>&1; "
+    "fi; "
+    "echo \"  engine root: $(df -h / | awk 'NR==2 {print $2\" total, \"$4\" free\"}')\""
+)
+
+
+def prepare_engine_from_template(ctx, postgres_password, redis_password):
+    """Per-deploy steps on an engine cloned from the engine template (M4).
+
+    The clone boots with a fresh identity and fresh host keys (baked by the template's
+    clean step). .env goes down BEFORE compose up: the fresh postgres volume must
+    initialize with this competition's credentials — up-then-rewrite would leave a
+    volume initialized with an empty password. compose up on a template with no
+    volumes creates exactly that: an empty scoring DB every run."""
+    print("  Preparing engine from template (.env + fresh-volume compose up)...")
+    _run_engine_cmd(ctx, _GROW_ROOT_CMD, check=False, timeout=120)
+    push_quotient_env(ctx, postgres_password, redis_password)
+    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose up -d", timeout=600)
+    _run_engine_cmd(ctx, (
+        "ss -ltn | grep -q ':3142 ' && echo '  apt-cacher-ng listening on 3142' "
+        "|| sudo systemctl enable --now apt-cacher-ng"
+    ), check=False, timeout=60)
 
 
 
@@ -367,6 +458,11 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
             "ssh", "-i", key,
             *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
+            # /opt/quotient is root-owned (sudo git clone at template build); the
+            # config dir must be created with sudo too — the clean step removes
+            # event.conf/credlists, and an unsudo'd mkdir here died with rc=1 on
+            # the M4 validation run (live-found 2026-09-25).
+            f"sudo mkdir -p /opt/quotient/config && "
             f"echo '{event_conf_b64}' | base64 -d | sudo tee /opt/quotient/config/event.conf > /dev/null && "
             "sudo chmod 600 /opt/quotient/config/event.conf",
         ],
@@ -380,7 +476,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
             "ssh", "-i", key,
             *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
-            f"mkdir -p /opt/quotient/config/credlists && echo '{credlist_b64}' | base64 -d | sudo tee /opt/quotient/config/credlists/linux.credlist > /dev/null && "
+            f"sudo mkdir -p /opt/quotient/config/credlists && echo '{credlist_b64}' | base64 -d | sudo tee /opt/quotient/config/credlists/linux.credlist > /dev/null && "
             "sudo chmod 600 /opt/quotient/config/credlists/linux.credlist",
         ],
         check=True, timeout=30,

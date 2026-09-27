@@ -1,0 +1,9 @@
+{
+  "dc01": "dc",
+  "web01": "member",
+  "app01": "member",
+  "db01": "member",
+  "mail01": "member",
+  "files01": "member",
+  "monitor01": "member"
+}

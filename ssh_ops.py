@@ -9,27 +9,38 @@ from pathlib import Path
 import requests
 
 from range_ops import diagnose_unreachable_box, terraform_dir, wait_for_guest_agent
+from utils import PRINT_LOCK, run_concurrent
 
 DEFAULT_KNOWN_HOSTS = str(Path.home() / ".tezcatlipoca" / "known_hosts")
 
 
-def _engine_opts(known_hosts=None):
+def _engine_opts(known_hosts=None, host=None):
     """SSH -o options that authenticate the scoring engine: TOFU via a persistent known_hosts.
 
     accept-new pins the key on first connect and rejects a *changed* key afterwards (MITM
-    protection); the residual exposure is the very first connection only. The keepalives
-    matter for long quiet steps (a plant can hold the channel idle well past NAT conntrack
-    timeouts — without them the operator-side ssh dies unnoticed and the driver blocks on
-    a dead read while the remote side finishes alone)."""
+    protection); the residual exposure is the very first connection only.
+
+    With host, the options multiplex over one ControlMaster socket (M1.5): every per-box
+    ProxyCommand and every direct engine call reuses a single authenticated engine
+    connection instead of paying a fresh double handshake per call. engine_ops raises
+    sshd's MaxSessions to 64 so M2's concurrent workers can share the master."""
     kh = known_hosts or DEFAULT_KNOWN_HOSTS
     Path(kh).parent.mkdir(parents=True, exist_ok=True)
-    return ["-o", f"UserKnownHostsFile={kh}", "-o", "StrictHostKeyChecking=accept-new",
+    opts = ["-o", f"UserKnownHostsFile={kh}", "-o", "StrictHostKeyChecking=accept-new",
             "-o", "ConnectTimeout=10",
-            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=6"]
+            # Dead-peer detection: a silently dropped node link otherwise leaves an
+            # established TCP session hanging until the caller's full timeout (live:
+            # a docker build burned its whole 1800s budget against a dead node).
+            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
+    if host:
+        opts += ["-o", "ControlMaster=auto",
+                 "-o", f"ControlPath={Path(kh).parent / f'cm-{host}-22-%r'}",
+                 "-o", "ControlPersist=900"]
+    return opts
 
 
 def engine_ssh_opts(ctx):
-    return _engine_opts(ctx.get("known_hosts"))
+    return _engine_opts(ctx.get("known_hosts"), host=ctx.get("scoring_engine_ip"))
 
 
 def gateway_proxy(ctx):
@@ -41,10 +52,22 @@ def gateway_proxy(ctx):
 
 
 def forget_engine_host_key(ip, known_hosts=None):
-    """Drop any pinned key for the engine IP so a freshly-rebuilt engine re-pins cleanly."""
+    """Drop any pinned key for the engine IP so a freshly-rebuilt engine re-pins cleanly,
+    and retire the ControlMaster socket — a surviving master would keep speaking with the
+    old host key and old session."""
     kh = known_hosts or DEFAULT_KNOWN_HOSTS
     if Path(kh).exists():
         subprocess.run(["ssh-keygen", "-R", ip, "-f", kh], capture_output=True, text=True)
+    for sock in Path(kh).parent.glob(f"cm-{ip}-*"):
+        try:
+            subprocess.run(["ssh", "-o", f"ControlPath={sock}", "-O", "exit", f"x@{ip}"],
+                           capture_output=True, timeout=5)
+        except subprocess.SubprocessError:
+            pass
+        try:
+            sock.unlink()
+        except OSError:
+            pass
 
 
 def is_windows_template(template_name):
@@ -105,7 +128,7 @@ def wait_for_ssh(key, user, host, timeout=300):
         attempt += 1
         try:
             r = subprocess.run(
-                ["ssh", "-i", key, *_engine_opts(),
+                ["ssh", "-i", key, *_engine_opts(host=host),
                  "-o", "BatchMode=yes",
                  f"{user}@{host}", "true"],
                 capture_output=True, text=True, timeout=20,
@@ -121,24 +144,17 @@ def wait_for_ssh(key, user, host, timeout=300):
 
 
 def wait_for_boxes_ssh(ctx, targets, timeout=300):
-    """Poll every target's reachability through the gateway; raises only if all boxes fail."""
+    """Poll every target's reachability through the gateway, all boxes concurrently, each
+    with its own full budget (a slow early box no longer eats later boxes' patience).
+    Raises only if all boxes fail."""
     node = os.environ["TF_VAR_proxmox_node"]
     print("  Waiting for team boxes to accept SSH via gateway...")
-    total = 0
-    unreachable = 0
-    for t in targets:
-        # per-target budget: a shared deadline let two slow post-rollback Windows
-        # boots burn the whole wait and starve the (healthy) Linux probes
-        deadline = time.time() + timeout
-        total += 1
+    deadline = time.time() + timeout
+
+    def _probe(t):
         ip = t["ip"]
         windows = is_windows_template(t["box"]["template"])
-        while True:
-            if time.time() > deadline:
-                print(f"    WARNING: {ip} not reachable within timeout — continuing")
-                print(diagnose_unreachable_box(node, t["vmid"]))
-                unreachable += 1
-                break
+        while time.time() < deadline:
             try:
                 if windows:
                     ok = wait_for_guest_agent(node, t["vmid"], timeout=20)
@@ -146,15 +162,21 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
                     ok = ssh_via_gateway(ctx, ip, "true", timeout=20,
                                          user=ctx.get("box_username", "ubuntu")).returncode == 0
                 if ok:
-                    print(f"    {ip} reachable")
-                    break
+                    with PRINT_LOCK:
+                        print(f"    {ip} reachable")
+                    return True
             except Exception:
                 pass
             time.sleep(10)
+        with PRINT_LOCK:
+            print(f"    WARNING: {ip} not reachable within timeout — continuing")
+            print(diagnose_unreachable_box(node, t["vmid"]))
+        return False
 
-    if total > 0 and unreachable == total:
+    results = run_concurrent(targets, _probe)
+    if targets and all(r is not True for r in results):
         raise RuntimeError(
-            f"All {total} team box(es) failed to become SSH-reachable — this looks systemic "
+            f"All {len(targets)} team box(es) failed to become SSH-reachable — this looks systemic "
             f"(see the guest-agent diagnosis above for each box), not a one-off timing fluke. "
             f"Aborting rather than burning through the DNS/auth/nakon retry loops for boxes "
             f"that are already known unreachable."
@@ -162,26 +184,37 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
 
 
 def wait_for_cloud_init(ctx, targets, timeout=240):
-    """Wait for cloud-init to finish on all targets before nakon plants anything."""
+    """Wait for cloud-init to finish on all targets before nakon plants anything, concurrently:
+    each box gets the full budget from its own thread."""
     print("  Waiting for cloud-init to finish on all team boxes...")
     deadline = time.time() + timeout
-    for t in targets:
+
+    def _wait(t):
         if is_windows_template(t["box"]["template"]):
-            continue
+            return "skipped"
         ip = t["ip"]
         remaining = max(int(deadline - time.time()), 15)
         try:
             r = ssh_via_gateway(ctx, ip, "cloud-init status --wait", timeout=remaining,
                                 user=ctx.get("box_username", "ubuntu"))
             if r.returncode in (0, 2):
-                print(f"    {ip}: cloud-init done (rc={r.returncode})")
-            else:
+                with PRINT_LOCK:
+                    print(f"    {ip}: cloud-init done (rc={r.returncode})")
+                return "ok"
+            with PRINT_LOCK:
                 print(f"  WARNING: {ip} cloud-init status --wait exited {r.returncode}: "
                       f"{(r.stdout or '').strip()[:150]}")
+            return f"rc={r.returncode}"
         except subprocess.TimeoutExpired:
-            print(f"  WARNING: {ip} cloud-init still running after {remaining}s — continuing anyway")
+            with PRINT_LOCK:
+                print(f"  WARNING: {ip} cloud-init still running after {remaining}s — continuing anyway")
+            return "timeout"
         except Exception as e:
-            print(f"  WARNING: cloud-init wait failed for {ip}: {e}")
+            with PRINT_LOCK:
+                print(f"  WARNING: cloud-init wait failed for {ip}: {e}")
+            return "error"
+
+    run_concurrent(targets, _wait)
 
 
 def wait_for_http(url, timeout=120):

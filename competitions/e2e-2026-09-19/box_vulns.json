@@ -1,0 +1,940 @@
+{
+  "dc01": [
+    {
+      "name": "weak-password-policy-win",
+      "vars": {
+        "MINPWLEN": "4",
+        "LOCKOUT_THRESHOLD": "0",
+        "MAXPWAGE": "unlimited"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "svc_imaging",
+        "PASSWORD": "Imaging2026!",
+        "FULLNAME": "Imaging Sync Service",
+        "DESCRIPTION": "DICOM imaging sync agent",
+        "ADMIN_ADD": "1",
+        "PASSWORD_NEVER_EXPIRES": "1"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "audit_svc",
+        "FULLNAME": "Audit Agent",
+        "DESCRIPTION": "compliance audit agent service acct"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "wardclerk",
+        "PASSWORD": "Wardclerk2026!",
+        "FULLNAME": "Ward Clerk Station"
+      }
+    },
+    {
+      "name": "rdp-group-member-win",
+      "vars": {
+        "USERNAME": "wardclerk"
+      }
+    },
+    "guest-enabled-win",
+    "uac-disabled-win",
+    "rdp-no-nla-win",
+    "smb1-enabled-win",
+    "audit-policy-off-win",
+    {
+      "name": "autologin-win",
+      "vars": {
+        "USERNAME": "wardclerk",
+        "PASSWORD": "Wardclerk2026!"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "PulseSyncAgent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\psync.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 300 }"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "DicomsSync",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\dsync.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 3600"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "MedArchiveSync",
+        "DESCRIPTION": "Meridian archive synchronization",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\masync.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 300 }"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "WARDLINE",
+        "DESCRIPTION": "system management broker",
+        "PAYLOAD_PATH": "C:\\Windows\\Temp\\wardline.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 120 }"
+      }
+    },
+    {
+      "name": "insecure-file-acl-win",
+      "vars": {
+        "FILE_PATH": "C:\\ProgramData\\Meridian\\hr-credentials.txt",
+        "FILE_CONTENT": "Meridian payroll service account: mh-payroll / Payr0ll2026! (rotate quarterly)"
+      }
+    },
+    {
+      "name": "insecure-smb-share-win",
+      "vars": {
+        "SHARE_NAME": "WardShare",
+        "SHARE_PATH": "C:\\ProgramData\\Meridian",
+        "DESCRIPTION": "Meridian departmental share"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\desk-reference.txt",
+        "FILE_CONTENT": "Front desk quick reference -- facility master code 7411, alarm vendor portal: vendor@meridian.local / Vendor2026!"
+      }
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "portal.meridian.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    "Telnet",
+    "TFTP",
+    "Enabling Print Spooler Service",
+    "firewall-disabled-win",
+    "weak-lm-authentication",
+    "windows-updates-frozen-win",
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "svc_sterile",
+        "PASSWORD": "Sterile2026!",
+        "FULLNAME": "Sterile Supply Service",
+        "DESCRIPTION": "sterile supply monitor service",
+        "PASSWORD_NEVER_EXPIRES": "1"
+      }
+    },
+    "Allow Remote Assistance",
+    {
+      "name": "Run/RunOnce Keys",
+      "vars": {
+        "process": "TelemetrySync",
+        "process_path": "C:\\ProgramData\\Wardline\\tsync.ps1",
+        "command": "powershell.exe -WindowStyle Hidden -File C:\\ProgramData\\Wardline\\tsync.ps1"
+      }
+    },
+    {
+      "name": "theme-readme-win",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-wallpaper-win",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.png"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "LedgerSync",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\ledger.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 2700"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\pharmacy-codes.txt",
+        "FILE_CONTENT": "narcotics cabinet master code 9902 -- audit log rotation paused -- pharmacy@meridian.local / Pharm2026!"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "wardvol",
+        "PASSWORD": "Volunteer2026!",
+        "FULLNAME": "Volunteer Kiosk",
+        "PASSWORD_NEVER_EXPIRES": "1"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "pharmacy",
+        "PASSWORD": "Pharm2026!",
+        "FULLNAME": "Pharmacy Front Desk"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "transit",
+        "PASSWORD": "Transit2026!",
+        "FULLNAME": "Patient Transit Coordinator",
+        "ADMIN_ADD": "1",
+        "PASSWORD_NEVER_EXPIRES": "1"
+      }
+    },
+    {
+      "name": "rdp-group-member-win",
+      "vars": {
+        "USERNAME": "transit"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "VitalsRelay",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\vitals.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 600"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "WardIndexer",
+        "DESCRIPTION": "ward records indexer",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\windex.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 240 }"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "LabFeedAgent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\labfeed.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 1200"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\it-vendor-notes.txt",
+        "FILE_CONTENT": "portal vendor support login (shared): vendor-support / Meridian2026! -- works on web01, app01 AND db01 per ticket #4187"
+      }
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "lab.meridian.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    {
+      "name": "autologin-win",
+      "vars": {
+        "USERNAME": "pharmacy",
+        "PASSWORD": "Pharm2026!"
+      }
+    }
+  ],
+  "win01": [
+    {
+      "name": "weak-password-policy-win",
+      "vars": {
+        "MINPWLEN": "5",
+        "LOCKOUT_THRESHOLD": "0",
+        "MAXPWAGE": "unlimited"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "wardvol",
+        "PASSWORD": "Volunteer2026!",
+        "FULLNAME": "Volunteer Kiosk"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "nightnurse",
+        "FULLNAME": "Night Nurse Station",
+        "DESCRIPTION": "night shift nursing station account"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "svc_biomed",
+        "PASSWORD": "Sterile2026!",
+        "FULLNAME": "Sterile Supply Service",
+        "DESCRIPTION": "sterile supply monitor service",
+        "PASSWORD_NEVER_EXPIRES": "1"
+      }
+    },
+    {
+      "name": "rdp-group-member-win",
+      "vars": {
+        "USERNAME": "wardvol"
+      }
+    },
+    "guest-enabled-win",
+    "uac-disabled-win",
+    {
+      "name": "autologin-win",
+      "vars": {
+        "USERNAME": "wardvol",
+        "PASSWORD": "Volunteer2026!"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "NurseCallSync",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\ncall.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 240 }"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "TelemetryFlush",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\tflush.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 1800"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "ChartCacheSvc",
+        "DESCRIPTION": "Medical chart cache service",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\charts.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 300 }"
+      }
+    },
+    {
+      "name": "insecure-file-acl-win",
+      "vars": {
+        "FILE_PATH": "C:\\ProgramData\\Meridian\\donor-registry.csv",
+        "FILE_CONTENT": "donor_id,last4,ward\n8812,4471,ICU\n9037,2210,ONC\n9121,8802,ED\n"
+      }
+    },
+    {
+      "name": "insecure-smb-share-win",
+      "vars": {
+        "SHARE_NAME": "WardDocs",
+        "SHARE_PATH": "C:\\ProgramData\\Meridian",
+        "DESCRIPTION": "ward documents drop"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\biomed-contacts.txt",
+        "FILE_CONTENT": "biomed vendor VPN: biomed@meridian.local / Bi0med2026! -- device controller default: admin / infuse2026"
+      }
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "records.meridian.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    "Telnet",
+    "TFTP",
+    "Enabling Print Spooler Service",
+    "firewall-disabled-win",
+    "weak-lm-authentication",
+    "windows-updates-frozen-win",
+    "Allow Remote Assistance",
+    {
+      "name": "theme-readme-win",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-wallpaper-win",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.png"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\oncall-schedule.txt",
+        "FILE_CONTENT": "on-call rota export -- orion_portal key: orion2026! (shared) -- DO NOT FORWARD"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "LabResultsSync",
+        "DESCRIPTION": "lab results sync agent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\lab.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 600 }"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "BadgeSyncAgent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\badge.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 900 }"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "pharmtech",
+        "FULLNAME": "Pharmacy Tech Station",
+        "DESCRIPTION": "pharmacy tech kiosk account"
+      }
+    },
+    {
+      "name": "insecure-file-acl-win",
+      "vars": {
+        "FILE_PATH": "C:\\ProgramData\\Meridian\\imaging-queue.csv",
+        "FILE_CONTENT": "study_id,patient_last4,modality\n5512,7410,CT\n5513,8802,MR\n"
+      }
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "ehr.meridian.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "wardclerk",
+        "PASSWORD": "Wardclerk2026!",
+        "FULLNAME": "Ward Clerk Station",
+        "PASSWORD_NEVER_EXPIRES": "1"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "sterilenurse",
+        "PASSWORD": "Sterile2026!",
+        "FULLNAME": "Sterile Supply Nurse Station"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "itintern",
+        "PASSWORD": "Intern2026!",
+        "FULLNAME": "IT Intern Workstation"
+      }
+    },
+    {
+      "name": "rdp-group-member-win",
+      "vars": {
+        "USERNAME": "wardclerk"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "PharmacyAudit",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\pharmudit.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 900"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "BedBoardSync",
+        "DESCRIPTION": "bed board synchronization",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\bedboard.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 300 }"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "ImagingQueueAgent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\imgq.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 1800"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\shared-vendor-access.txt",
+        "FILE_CONTENT": "ALL SITES shared vendor login: vendor-support / Meridian2026! -- DO NOT REMOVE (facility master 7411)"
+      }
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "pharmacy.meridian.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    {
+      "name": "autologin-win",
+      "vars": {
+        "USERNAME": "itintern",
+        "PASSWORD": "Intern2026!"
+      }
+    }
+  ],
+  "web01": [
+    "sudo-nopasswd",
+    "writable-sudoers",
+    "bad-perms-userConfig",
+    "world-writable-cron-d",
+    "writable-bashrc",
+    "suid-find",
+    "suid-nano",
+    "suid-vim",
+    "systemd-service-writable",
+    "multiple-uid0-accounts",
+    "uid0-backdoor-account",
+    "empty-password-account",
+    "weak-password-account",
+    "www-data-shell",
+    "root-nginx",
+    "authorized-keys-backdoor",
+    "sudo-timestamp-never-expires",
+    "wildcard-sudo",
+    "timezone-chaos",
+    "hostname-loop",
+    "unprivileged-users-enabled",
+    "journal-disk-full",
+    "core-dump-world-readable",
+    "writable-etc-group",
+    "world-writable-etc-hosts",
+    "sysctl-syn-cookies-disabled",
+    "auditd-disabled",
+    "pam-permit-empty",
+    "pam-no-password-quality",
+    {
+      "name": "uid0-user",
+      "vars": {
+        "USERNAME": "wardline",
+        "PASSWORD": "Wardline2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "vendor-support",
+        "PASSWORD": "Meridian2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "portal-healthd",
+        "DESCRIPTION": "Portal health telemetry daemon",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 200; done'",
+        "EXTRA_LINE": "Environment=EXFIL_URL=http://feed.wardline-telemetry.net/collect"
+      }
+    },
+    {
+      "name": "backdoor-firewall-rule",
+      "vars": {
+        "SOURCE_IP": "198.51.100.77",
+        "DST_PORT": "22"
+      }
+    },
+    {
+      "name": "theme-motd",
+      "vars": {
+        "MOTD_TEXT": "Meridian Health -- patient portal (web01). CODE SILVER in effect. Authorized staff only.",
+        "ISSUE_TEXT": "Meridian Health web01 -- authorized access only. All activity is monitored during CODE SILVER."
+      }
+    },
+    {
+      "name": "theme-readme",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-wallpaper",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.png"
+      }
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Incident README",
+        "SHORTCUT_EXEC": "xdg-open ~/Desktop/README.html"
+      }
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Meridian Portal",
+        "SHORTCUT_EXEC": "xdg-open http://localhost"
+      }
+    },
+    {
+      "name": "polyglot-media",
+      "vars": {
+        "MEDIA": "/var/www/portal/logo.svg.jpg"
+      }
+    },
+    "ssh-root-login",
+    "ssh-password-auth",
+    "ssh-x11-forwarding",
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "vendor-support",
+        "PASSWORD": "Meridian2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "imaging-ops",
+        "PASSWORD": "Imaging2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "radiology-tech",
+        "PASSWORD": "Radiology2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "frontdesk",
+        "PASSWORD": "Frontdesk2026!"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "portal-metrics",
+        "DESCRIPTION": "Portal metrics collector",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 150; done'",
+        "EXTRA_LINE": "Environment=EXFIL_URL=http://wardline-collect.net/ingest"
+      }
+    },
+    {
+      "name": "hidden-cron-persistence",
+      "vars": {
+        "PAYLOAD": "/usr/local/sbin/.portal-sync"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/meridian/portal-db.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "portal db user: portal_rw / P0rtal2026! -- staging creds identical to prod (do not leak)"
+      }
+    },
+    "ssh-max-auth-retries-high",
+    "at-job-any-user",
+    "exploitable-cron-job"
+  ],
+  "app01": [
+    "sudo-nopasswd",
+    "writable-sudoers",
+    "bad-perms-userConfig",
+    "apparmor-disabled",
+    "world-writable-cron-d",
+    "writable-bashrc",
+    "suid-find",
+    "suid-python",
+    "systemd-service-writable",
+    "multiple-uid0-accounts",
+    "uid0-backdoor-account",
+    "empty-password-account",
+    "weak-password-account",
+    "www-data-shell",
+    "apache-directory-listing",
+    {
+      "name": "apache-site",
+      "vars": {
+        "SITE_TITLE": "Meridian Radiology - Imaging Status",
+        "SITE_BODY": "<p>Meridian imaging node: <b>OPERATIONAL</b> &middot; DICOM queue depth 3 &middot; last study synced 02:14</p><p>Internal status page. If you can read this from outside the VLAN, escalate.</p>"
+      }
+    },
+    "authorized-keys-backdoor",
+    "sudo-timestamp-never-expires",
+    "wildcard-sudo",
+    "timezone-chaos",
+    "unprivileged-users-enabled",
+    "journal-disk-full",
+    "core-dump-world-readable",
+    "writable-etc-group",
+    "world-writable-etc-hosts",
+    "sysctl-syn-cookies-disabled",
+    "auditd-disabled",
+    "pam-permit-empty",
+    "pam-no-password-quality",
+    "ufw-removed",
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "dns-cache-sync",
+        "DESCRIPTION": "Local resolver cache synchronizer",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 240; done'"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "WardOptimizer",
+        "DESCRIPTION": "System Optimizer",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 300; done'"
+      }
+    },
+    "at-job-any-user",
+    "exploitable-cron-job",
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "imaging-ops",
+        "PASSWORD": "Imaging2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "theme-motd",
+      "vars": {
+        "MOTD_TEXT": "Meridian Health -- imaging & DNS (app01). CODE SILVER in effect. Authorized staff only.",
+        "ISSUE_TEXT": "Meridian Health app01 -- authorized access only. All activity is monitored during CODE SILVER."
+      }
+    },
+    {
+      "name": "theme-readme",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-wallpaper",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.png"
+      }
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Incident README",
+        "SHORTCUT_EXEC": "xdg-open ~/Desktop/README.html"
+      }
+    },
+    "ssh-root-login",
+    "ssh-empty-passwords",
+    "ssh-x11-forwarding",
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "vendor-support",
+        "PASSWORD": "Meridian2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "wardline",
+        "PASSWORD": "Wardline2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "pacs-agent",
+        "PASSWORD": "Pacs2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "dnsops",
+        "PASSWORD": "Dnsops2026!"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "dicom-relay",
+        "DESCRIPTION": "DICOM relay agent",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 210; done'",
+        "EXTRA_LINE": "Environment=C2=http://198.51.100.77:8443/beacon"
+      }
+    },
+    {
+      "name": "hidden-cron-persistence",
+      "vars": {
+        "PAYLOAD": "/usr/local/sbin/.dicom-sync"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/meridian/pacs-creds.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "PACS service: pacs_svc / Pacs2026! -- also works on the imaging workstation (win01 wardvol same password policy)"
+      }
+    },
+    "ssh-max-auth-retries-high",
+    "selinux-permissive",
+    "nfs-no-root-squash"
+  ],
+  "db01": [
+    "sudo-nopasswd",
+    "writable-sudoers",
+    "bad-perms-userConfig",
+    "world-writable-cron-d",
+    "writable-bashrc",
+    "suid-find",
+    "suid-vim",
+    "suid-python",
+    "systemd-service-writable",
+    "multiple-uid0-accounts",
+    "uid0-backdoor-account",
+    "empty-password-account",
+    "weak-password-account",
+    "mysql-remote-root",
+    "mysql-root-nopassword",
+    "redis-no-auth",
+    "postgresql-no-auth",
+    "postgresql-remote-access",
+    "nfs-no-root-squash",
+    "unauthorized-ftp-server",
+    "selinux-permissive",
+    "journal-disk-full",
+    "core-dump-world-readable",
+    "writable-etc-group",
+    "world-writable-etc-hosts",
+    "sysctl-syn-cookies-disabled",
+    "auditd-disabled",
+    "pam-permit-empty",
+    "pam-no-password-quality",
+    "sudo-timestamp-never-expires",
+    "wildcard-sudo",
+    {
+      "name": "hidden-cron-persistence",
+      "vars": {
+        "PAYLOAD": "/usr/local/sbin/ehr-health"
+      }
+    },
+    {
+      "name": "user-login-shell",
+      "vars": {
+        "USERNAME": "ehr_backup",
+        "LOGIN_SHELL": "/bin/bash",
+        "SYSTEM": "1"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/meridian/db-credentials.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "mysql root (no password, remote enabled)\npostgres service key: pg-meridian-2026-int"
+      }
+    },
+    {
+      "name": "theme-motd",
+      "vars": {
+        "MOTD_TEXT": "Meridian Health -- EHR database (db01). CODE SILVER in effect. Authorized staff only.",
+        "ISSUE_TEXT": "Meridian Health db01 -- authorized access only. All activity is monitored during CODE SILVER."
+      }
+    },
+    {
+      "name": "theme-readme",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-wallpaper",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.png"
+      }
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Incident README",
+        "SHORTCUT_EXEC": "xdg-open ~/Desktop/README.html"
+      }
+    },
+    "ssh-password-auth",
+    "ssh-empty-passwords",
+    "ssh-max-auth-retries-high",
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "vendor-support",
+        "PASSWORD": "Meridian2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "imaging-ops",
+        "PASSWORD": "Imaging2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "wardline",
+        "PASSWORD": "Wardline2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "reportwriter",
+        "PASSWORD": "Reports2026!"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "ehr-replicator",
+        "DESCRIPTION": "EHR replica pusher",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 180; done'",
+        "EXTRA_LINE": "Environment=DUMP_TARGET=198.51.100.77:8443"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/meridian/etl-credentials.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "ETL operator: etl-ops / Etl2026! -- vendor-support / Meridian2026! shared across all meridian sites"
+      }
+    },
+    "at-job-any-user",
+    "authorized-keys-backdoor",
+    "core-dump-world-readable"
+  ]
+}

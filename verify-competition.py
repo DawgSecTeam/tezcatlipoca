@@ -17,7 +17,7 @@ except ImportError as e:
 
 from dotenv import load_dotenv
 
-from range_ops import guest_agent_exec_root, vm_id_for
+from range_ops import guest_agent_exec_root, guest_agent_exec_windows, vm_id_for
 from ssh_ops import engine_ssh_opts, gateway_proxy
 from utils import BOX_USERNAME_DEFAULT, load_users_config
 
@@ -632,7 +632,300 @@ def check_injects(base_url, admin_session, comp_dir):
     ok = len(injects) == expected
     print(f"  {'PASS' if ok else 'FAIL'}  engine has {len(injects)} inject(s), "
           f"expected {expected} from injects/ dir")
+    closed = closed_injects(injects)
+    if closed:
+        print(f"  WARN  {len(closed)} inject(s) already CLOSED — submissions return 'Inject is closed'. "
+              "Offsets are anchored at the phase-7 deploy time, so a reset/rerun long after "
+              f"deploy finds them expired: {', '.join(t for t, _ in closed)}")
     return True, ok
+
+
+_INJECT_CLOSE_KEYS = ("CloseTime", "close_time", "CloseAt", "close_at", "Close", "close")
+
+
+def closed_injects(injects, now=None):
+    """[(title, close_time)] for injects whose close time is already past. Tolerant of the
+    engine's JSON key casing; injects with no parseable close time are ignored."""
+    from datetime import datetime, timezone
+    now = now or datetime.now(timezone.utc)
+    out = []
+    for inj in injects:
+        raw = next((inj[k] for k in _INJECT_CLOSE_KEYS if inj.get(k)), None)
+        if not isinstance(raw, str):
+            continue
+        try:
+            when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if when < now:
+            out.append((inj.get("Title") or inj.get("title") or "?", raw))
+    return out
+
+
+
+_WIN_DOMAIN_PS = (
+    "$cs = Get-WmiObject Win32_ComputerSystem; "
+    "'ROLE=' + $cs.DomainRole; 'DOMAIN=' + $cs.Domain; 'PARTOF=' + $cs.PartOfDomain; "
+    "'MSID=' + (New-Object System.Security.Principal.NTAccount('Administrator'))"
+    ".Translate([System.Security.Principal.SecurityIdentifier]).AccountDomainSid.Value; "
+    "if ($cs.DomainRole -ge 4) { try { $d = Get-ADDomain -ErrorAction Stop; "
+    "'DSID=' + $d.DomainSID.Value; 'DNSROOT=' + $d.DNSRoot; "
+    "'SVC=' + [bool](Get-ADUser -Filter \"SamAccountName -eq 'svc-support'\" -ErrorAction Stop) "
+    "} catch { 'ADERR=' + $_.Exception.Message } }"
+)
+
+
+def _kv(out):
+    return dict(l.split("=", 1) for l in (out or "").splitlines() if "=" in l)
+
+
+def _valid_domain_sid(sid):
+    """S-1-5-21-<a>-<b>-<c> — a DOMAIN SID has exactly three sub-authorities and no
+    trailing RID (an 8-part value is an account SID, not a domain SID)."""
+    parts = (sid or "").split("-")
+    return (len(parts) == 7 and sid.startswith("S-1-5-21-")
+            and all(p.isdigit() for p in parts[3:]))
+
+
+def check_domains(comp_dir, teams, boxes):
+    """Domain gate (replaces the freeze's operator attestation with a live check).
+
+    Per team: the DC answers Get-ADDomain for team<id>.local with a syntactically
+    valid DomainSID, the planted AD misconfig (svc-support) exists, and every member
+    box is actually joined. Across teams: DomainSIDs must be unique (a collision
+    means DC promotion reused image state — winad-testrun 2026-09-25 found exactly
+    that); with a single team uniqueness cannot be exercised, so the PASS says so
+    instead of claiming it. Member machine SIDs are reported, not gated: members
+    linked-cloned from one golden share them by design, which is harmless for
+    isolated forests. A present-but-malformed domain_roles.json fails closed.
+    Returns None when the lineup has no domain_roles.json."""
+    roles_path = comp_dir / "domain_roles.json"
+    if not roles_path.exists():
+        print("  SKIP  — no domain_roles.json")
+        return None
+    try:
+        roles = json.loads(roles_path.read_text())
+    except (OSError, ValueError) as e:
+        print(f"  FAIL  domain_roles.json is unreadable/malformed ({str(e)[:80]})")
+        return False
+    if not isinstance(roles, dict) or not all(
+            isinstance(name, str) and isinstance(role, str)
+            for name, role in roles.items()):
+        print("  FAIL  domain_roles.json must map box names to 'dc' or 'member' strings")
+        return False
+    bad = {name: role for name, role in roles.items() if role not in ("dc", "member")}
+    if bad:
+        print("  FAIL  domain_roles.json has invalid role value(s): "
+              + ", ".join(f"{name}={role!r}" for name, role in sorted(bad.items()))
+              + " (expected 'dc' or 'member')")
+        return False
+    node = os.environ.get("TF_VAR_proxmox_node")
+    # Box TYPES (boxes.json order = vmid order), not verify's per-team nakon machines.
+    try:
+        boxes = json.loads((comp_dir / "boxes.json").read_text())
+    except (OSError, ValueError) as e:
+        print(f"  FAIL  boxes.json is unreadable/malformed ({str(e)[:80]})")
+        return False
+    idx = {b["name"]: i for i, b in enumerate(boxes)}
+    unknown = [name for name in roles if name not in idx]
+    if unknown:
+        print("  FAIL  domain_roles.json names box(es) absent from boxes.json: "
+              + ", ".join(sorted(unknown)))
+        return False
+    if not teams:
+        print("  FAIL  no teams loaded — nothing to check domain roles against")
+        return False
+    dc_name = next((n for n, r in roles.items() if r == "dc"), None)
+    ok = True
+    domain_sids, machine_sids = {}, {}
+    for team_key, team in sorted(teams.items()):
+        ident = team["identifier"]
+        domain = f"team{ident}.local"
+        for name, role in roles.items():
+            vmid = vm_id_for(ident, idx[name])
+            windows = "win" in (boxes[idx[name]].get("template") or "").lower()
+            try:
+                if windows:
+                    rc, out, err = guest_agent_exec_windows(node, vmid, _WIN_DOMAIN_PS, timeout=120)
+                    kv = _kv(out)
+                else:
+                    rc, out, err = guest_agent_exec_root(
+                        node, vmid, f"realm list 2>/dev/null | grep -qi 'domain-name: *{domain}' "
+                                    f"&& echo JOINED=1 || echo JOINED=0", timeout=60)
+                    kv = _kv(out)
+            except Exception as e:
+                print(f"  FAIL  {team_key}/{name}: guest-agent probe failed ({str(e)[:80]})")
+                ok = False
+                continue
+            if role == "dc":
+                if kv.get("ADERR") or kv.get("DNSROOT", "").lower() != domain:
+                    print(f"  FAIL  {team_key}/{name}: DC not serving {domain} "
+                          f"({kv.get('ADERR') or kv.get('DNSROOT') or (err or '').strip()[:80]})")
+                    ok = False
+                    continue
+                dsid = kv.get("DSID") or ""
+                if not _valid_domain_sid(dsid):
+                    print(f"  FAIL  {team_key}/{name}: {domain} reports no valid "
+                          f"DomainSID ({dsid or 'DSID missing'} — a promoted DC must "
+                          f"answer Get-ADDomain with an S-1-5-21-* SID)")
+                    ok = False
+                    continue
+                domain_sids.setdefault(dsid, []).append(team_key)
+                svc = kv.get("SVC", "").lower() == "true"
+                print(f"  {'PASS' if svc else 'FAIL'}  {team_key}/{name}: {domain} "
+                      f"DomainSID {dsid}; svc-support {'present' if svc else 'MISSING'}")
+                ok &= svc
+            elif windows:
+                joined = kv.get("PARTOF", "").lower() == "true" and kv.get("DOMAIN", "").lower() == domain
+                machine_sids.setdefault(kv.get("MSID"), []).append(f"{team_key}/{name}")
+                print(f"  {'PASS' if joined else 'FAIL'}  {team_key}/{name}: "
+                      f"{'joined' if joined else 'NOT joined'} to {domain}")
+                ok &= joined
+            else:
+                joined = kv.get("JOINED") == "1"
+                print(f"  {'PASS' if joined else 'FAIL'}  {team_key}/{name}: "
+                      f"{'realm-joined' if joined else 'NOT realm-joined'} to {domain}")
+                ok &= joined
+    dupes = {sid: t for sid, t in domain_sids.items() if len(t) > 1}
+    if dupes:
+        for sid, t in dupes.items():
+            print(f"  FAIL  DomainSID {sid} shared by {', '.join(t)} — DC promotion reused "
+                  f"image state (the DC box type must use an unbooted golden)")
+        ok = False
+    elif domain_sids and dc_name:
+        if len(teams) > 1:
+            print(f"  PASS  {len(domain_sids)} team domain(s), all DomainSIDs unique")
+        else:
+            print(f"  PASS  1 team domain, DomainSID well-formed "
+                  f"(uniqueness needs a second team to exercise)")
+    shared = {sid: v for sid, v in machine_sids.items() if len(v) > 1}
+    for sid, v in shared.items():
+        print(f"  INFO  member machine SID {sid} shared by {', '.join(v)} "
+              f"(linked clones of one golden — harmless for isolated forests)")
+    return ok
+
+
+def check_plant_coverage(comp_dir):
+    """M4 plant-coverage gate: every machine's FULL expected configuration list
+    (nakon-config.json) must have actually planted.
+
+    Deploy records failures per machine in .deploy_state.json["plant_coverage_failed"]
+    (machine -> [config names whose nakon step reported rc != 0], or every config when
+    a machine died before reporting any step). Golden-stage entries map onto every team
+    copy of that box (a golden failure means the clones inherited the gap). This is the
+    backstop that catches a broken/undeclared-var config the moment it fails to plant,
+    instead of a mid-competition discovery."""
+    state_path = comp_dir / ".deploy_state.json"
+    state = {}
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text())
+        except (OSError, ValueError):
+            state = {}
+    failed = state.get("plant_coverage_failed") or {}
+    config_path = comp_dir / "nakon-config.json"
+    if not config_path.exists():
+        print("  SKIP  — no nakon-config.json (nothing expected).")
+        return True, None
+    try:
+        machines = json.loads(config_path.read_text())["machines"]
+    except (OSError, ValueError, KeyError) as e:
+        print(f"  FAIL  — cannot read nakon-config.json: {e}")
+        return True, False
+
+    def cfg_name(c):
+        return c if isinstance(c, str) else c["name"]
+
+    unplanted = {}
+    for m in machines:
+        expected = {cfg_name(c) for c in m["configurations"]}
+        bad = set(failed.get(m["name"]) or [])
+        golden_key = f"{m['name'].rsplit('-team', 1)[0]}-golden"
+        bad |= {f"{c} (golden-stage)" for c in (failed.get(golden_key) or [])}
+        missing = sorted(bad & expected | {c for c in bad if c.startswith("<machine")})
+        if bad:
+            unplanted[m["name"]] = sorted(bad)
+    if unplanted:
+        for name, cfgs in sorted(unplanted.items()):
+            print(f"  FAIL  {name}: not planted: {', '.join(cfgs)}")
+        return True, False
+    print(f"  PASS  all {len(machines)} machine(s) report full config coverage")
+    return True, True
+
+
+def freeze_hashes(comp_dir):
+    """The template hashes a freeze would record (None when nothing is recorded yet)."""
+    path = comp_dir / ".template-hashes.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def do_freeze(comp_dir, args, gate, coverage_ok):
+    """M4 freeze: record the template hashes this verify just passed against, plus the
+    code commit, timestamp, and gate results. Preconditions: every gate PASS including
+    plant-coverage and services; Windows/domain lineups additionally require the
+    operator's --windows-domain-validated attestation (that the run exercised them)."""
+    from template_ops import git_commit_info
+    import time as _time
+
+    hashes = freeze_hashes(comp_dir)
+    if not hashes or not (hashes.get("engine") or {}).get("hash") or not hashes.get("golden"):
+        print("  FREEZE refused — no template hash record (.template-hashes.json); "
+              "deploy once on the M4 pipeline first.")
+        return False
+    if not coverage_ok:
+        print("  FREEZE refused — plant-coverage did not pass.")
+        return False
+    if not all(gate.values()):
+        print(f"  FREEZE refused — failing gates: "
+              f"{', '.join(k for k, v in gate.items() if not v)}")
+        return False
+    boxes = load_boxes(comp_dir)
+    roles = comp_dir / "domain_roles.json"
+    needs_domain = (roles.exists()
+                    or any("win" in (b.get("template") or "").lower() for b in (boxes or [])))
+    if needs_domain and "domains" not in gate and not args.windows_domain_validated:
+        print("  FREEZE refused — this lineup uses Windows/domains; pass "
+              "--windows-domain-validated to attest that this run's Windows/domain "
+              "validation (DomainSIDs, machine SIDs, three-pass ordering) passed.")
+        return False
+    record = {
+        "frozen_at": _time.strftime("%Y-%m-%d %H:%M:%S"),
+        "code": git_commit_info(),
+        "hashes": {"engine": hashes["engine"], "golden": hashes["golden"]},
+        "verify_report": {"gates": gate, "plant_coverage": coverage_ok},
+        "windows_domain_validated": bool(args.windows_domain_validated),
+    }
+    path = comp_dir / ".frozen.json"
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(record, indent=2))
+    import os as _os
+    _os.replace(tmp, path)
+    _os.chmod(path, 0o600)
+    print(f"  FROZEN — {path} written. Engine + {len(hashes['golden'])} golden hash(es) "
+          f"recorded. Rebuild is now refused on config drift; --full teardown needs "
+          f"--end-of-competition.")
+    return True
+
+
+def do_unfreeze(comp_dir, confirm):
+    if not confirm:
+        print("  UNFREEZE refused — pass --confirm-unfreeze. Unfreezing mid-event "
+              "defeats the freeze; it is meant for use BEFORE the competition starts.")
+        return False
+    path = comp_dir / ".frozen.json"
+    if not path.exists():
+        print("  Nothing to unfreeze.")
+        return True
+    path.unlink()
+    print("  UNFROZEN — .frozen.json removed.")
+    return True
 
 
 
@@ -643,6 +936,19 @@ def main():
     parser.add_argument("--admin-password", help="override the Quotient admin password")
     parser.add_argument("--strict-services", action="store_true",
                         help="also require every service UP for a passing exit code")
+    parser.add_argument("--freeze", action="store_true",
+                        help="M4: after a PASSING verify (all gates + plant-coverage), "
+                             "record the template hashes + code commit in .frozen.json. "
+                             "Windows/domain lineups also need --windows-domain-validated.")
+    parser.add_argument("--windows-domain-validated", action="store_true", dest="windows_domain_validated",
+                        help="operator attestation that this run exercised the Windows/"
+                             "domain validation (DomainSIDs unique per team, machine SIDs "
+                             "assessed, three-pass ordering held) — required to freeze "
+                             "such lineups.")
+    parser.add_argument("--unfreeze", action="store_true",
+                        help="M4: remove .frozen.json (needs --confirm-unfreeze; for use "
+                             "BEFORE the competition starts).")
+    parser.add_argument("--confirm-unfreeze", action="store_true", dest="confirm_unfreeze")
     args = parser.parse_args()
 
     load_dotenv(ENV_PATH)
@@ -665,6 +971,9 @@ def main():
     base_url = f"http://{engine_ip}"
     print(f"Verifying competition '{comp_dir.name}' against engine {base_url}")
 
+    if args.unfreeze:
+        return 0 if do_unfreeze(comp_dir, args.confirm_unfreeze) else 1
+
     logins_ok, admin_session = check_logins(base_url, teams, admin_password)
     print("\n  (default-credential regression guard)")
     no_default_creds_ok = check_no_default_creds(comp_dir)
@@ -677,6 +986,10 @@ def main():
     misconfig_survival_ok = check_misconfig_survival(ctx, boxes)
     report_beacons(ctx, boxes)
     injects_relevant, injects_ok = check_injects(base_url, admin_session, comp_dir)
+    print("\n  (M4 plant coverage — expected vs. actually planted, per machine)")
+    coverage_checked, coverage_ok = check_plant_coverage(comp_dir)
+    print("\n  (AD domains — promotion, joins, AD plants, DomainSID uniqueness)")
+    domains_ok = check_domains(comp_dir, teams, boxes)
 
     gate = {
         "logins": logins_ok,
@@ -688,6 +1001,10 @@ def main():
     }
     if args.strict_services:
         gate["services(strict)"] = services_query_ok and services_all_up
+    if coverage_checked and coverage_ok is not None:
+        gate["plant_coverage"] = coverage_ok
+    if domains_ok is not None:
+        gate["domains"] = domains_ok
 
     print("\n" + "=" * 60)
     print("SUMMARY")
@@ -723,10 +1040,30 @@ def main():
               f"{' …' if len(tally) > 3 else ''}")
     else:
         print("  plant integrity  : last nakon plant recorded 0 FAILED steps")
+    if domains_ok is not None:
+        print(f"  domains          : {'PASS' if domains_ok else 'FAIL'}")
+    if coverage_checked and coverage_ok is not None:
+        print(f"  plant coverage   : {'PASS' if coverage_ok else 'FAIL'}"
+              + ("" if coverage_ok else " — unplanted configs above"))
+    hashes = freeze_hashes(comp_dir)
+    if hashes and (hashes.get("engine") or {}).get("hash"):
+        golden_short = {k: v["hash"][:12] for k, v in (hashes.get("golden") or {}).items()}
+        print(f"  templates        : engine {hashes['engine']['hash'][:12]} | "
+              f"golden {json.dumps(golden_short)}")
+    frozen = (comp_dir / ".frozen.json").exists()
+    if frozen:
+        try:
+            frozen_at = json.loads((comp_dir / ".frozen.json").read_text()).get("frozen_at")
+        except (OSError, ValueError):
+            frozen_at = "?"
+        print(f"  freeze           : FROZEN since {frozen_at}")
 
     passed = all(gate.values())
     print("\n" + ("RESULT: PASS — competition looks healthy."
                   if passed else "RESULT: FAIL — see failing checks above."))
+    if args.freeze:
+        ok = do_freeze(comp_dir, args, gate, coverage_ok if coverage_checked else None)
+        return 0 if (passed and ok) else 1
     return 0 if passed else 1
 
 
