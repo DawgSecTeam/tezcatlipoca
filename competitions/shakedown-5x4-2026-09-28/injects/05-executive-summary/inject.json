@@ -1,0 +1,7 @@
+{
+  "title": "Executive incident summary due",
+  "description_file": "briefing.md",
+  "open_offset_min": 150,
+  "due_offset_min": 170,
+  "close_offset_min": 180
+}

@@ -52,7 +52,7 @@ qm disk resize "$NEWID" scsi0 15G || true
 
 echo "== Cloud-init drive + bootstrap snippet"
 qm set "$NEWID" --ide2 "${STORAGE}:cloudinit" --ciupgrade 0
-cat > "$SNIPPET" <<YAML
+cat > "$SNIPPET" <<'YAML'
 #cloud-config
 package_update: true
 packages: [bash, shadow, sudo, qemu-guest-agent, cloud-utils-growpart, e2fsprogs]
@@ -94,7 +94,22 @@ for i in $(seq 1 24); do
 done
 
 echo "== Verifying bootstrap packages"
-qm guest exec "$NEWID" -- sh -c 'command -v bash useradd chpasswd sudo rc-service && apk info -e qemu-guest-agent cloud-utils-growpart && cloud-init status --long'
+# qm guest exec exits 0 even when the guest command fails — gate on the JSON
+# exitcode, or a broken bootstrap (missing shadow/sudo) seals silently.
+# Check binaries ONE per command -v: busybox ash's multi-arg `command -v`
+# exits 2 even when everything is installed (live-found 2026-09-28 — the
+# original run "passed" only because nothing looked at the exit code).
+VERIFY_OUT=$(qm guest exec "$NEWID" -- sh -c '
+    for b in bash useradd chpasswd sudo rc-service; do
+        command -v "$b" >/dev/null || { echo "MISSING:$b"; exit 1; }
+    done
+    apk info -e qemu-guest-agent cloud-utils-growpart e2fsprogs || exit 1
+    cloud-init status --long' 2>/dev/null)
+echo "$VERIFY_OUT"
+echo "$VERIFY_OUT" | python3 -c 'import json,sys; exit(json.load(sys.stdin)["exitcode"])' || {
+    echo "bootstrap verification FAILED — packages missing, refusing to seal" >&2
+    exit 1
+}
 
 echo "== Wiping cloud-init state and sealing"
 qm guest exec "$NEWID" -- cloud-init clean --logs --seed
