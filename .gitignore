@@ -33,3 +33,8 @@ competitions/*/box_vulns.json.pre-cyberfield-prune1
 .env.*-backup
 competitions/*/targets.json
 competitions/*/known_hosts
+terraform/.terraform-plugin-cache/
+competitions/distro-matrix-2026-09-27/terraform/
+.env.realm-backup*
+.zcode/
+artifacts/rawsockets-beacon/build/

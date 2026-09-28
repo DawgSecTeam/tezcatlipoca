@@ -7,6 +7,44 @@ harness); symptom-level fixes live in [usage-people.md](usage-people.md)'s Troub
 
 ## Live-confirmed incidents
 
+### box_username colliding with a legacy distro account bricks auth setup (distro-matrix-2026-09-27)
+
+`box_username operator` (a users.json choice) collides with Fedora's legacy `operator`
+system account (uid 11, shell `/usr/sbin/nologin`, home `/root`) — Debian-family images carry
+the same uid-11 `operator`. cloud-init finds the name already in `/etc/passwd` and adopts it:
+the sudoers rule and the SSH key land on a nologin root-homed shadow of the real account, no
+fresh user is created, and every `ssh operator@box` attempt fails no matter what. Phase 4's
+8-attempt auth ladder then burns out and aborts the deploy. The same seed on Alpine (no legacy
+`operator`) created a real user and passed instantly — the failure is purely per-distro
+`/etc/passwd` heritage, which is why it never surfaced on the ubuntu/debian lineup.
+
+The guest-agent fallback in `setup_ubuntu_auth` cannot rescue this on SELinux-enforcing guests
+(fedora): the qemu-ga SELinux context cannot write `/etc/ssh/` or `/etc/sudoers.d/`
+(`sed: couldn't open temporary file ... Permission denied`), so the fallback dies at rc=1 even
+as root.
+
+Mitigation: pick a `box_username` that is not a legacy account name on ANY target distro
+(`medic` is the proven safe choice; `operator`, `daemon`, `games`, `mail`, `news`, `sync` and
+friends are landmines). Documented here rather than linted — the collision set is distro-specific.
+
+### Alpine cloud-init never writes /etc/resolv.conf — package installs silently no-op (distro-matrix-2026-09-27)
+
+Alpine's cloud-init (v25.3, ENI renderer) writes `dns-nameservers` into
+`/etc/network/interfaces` but nothing on Alpine creates `/etc/resolv.conf` (no resolvconf
+hook — Debian's ifupdown handles that; Alpine's ifupdown-ng does not). Every DNS lookup in the
+guest then times out: `apk update`/`apk add` each burn ~10 s and fail with
+`unable to select packages: bash (no such package)` (empty index), so cloud-init's
+`packages:` directive installs nothing. Worse, the package module is once-per-instance, so
+rebooting and retrying does NOT retry the install — the instance semaphore is already written.
+
+This hits template BUILD bootstraps (the builder's `packages:` list silently missing) and any
+clone expected to use DNS before the driver's `fix_dns_on_boxes` runs (that pass writes
+`/etc/resolv.conf` directly, so in-range nakon plants are unaffected). Fix for template
+building: add `manage_resolv_conf: true` + `resolv_conf: {nameservers: [...]}` to the
+bootstrap user-data (it runs before the package module), or bake `/etc/resolv.conf` into the
+template via chroot. See `competitions/distro-matrix-2026-09-27/build_alpine_ci_template.sh`
+for the working Alpine 3.23 cloud-init template recipe.
+
 ### sshd start-limit crash loop (2026-09-03)
 
 Several catalog configs (`ssh-root-login`, `ssh-empty-passwords`, `ssh-password-auth`,
@@ -28,6 +66,50 @@ address on any later carrier blip. First seen on app01; before the fix this surf
 6/7 failure an hour after cloning. Mitigation (clone_ops): `_repair_box_network` re-writes the
 address, `ensure_cloned_network` gates phase 6/7 on every box actually holding its IPv4, and
 guest-agent exceptions count as "not yet" so a merely-slow cloud-init is never "repaired".
+
+*(extended 2026-09-24, e2e #3)*: two deeper causes surfaced behind the same symptom. **(1) Full
+clones get a NEW NIC MAC, but cloud-init's `50-cloud-init.yaml` still matches the SOURCE's MAC**
+— `ipconfig0` notwithstanding, no address ever applies; the box boots addressless on every boot.
+**(2) `_repair_box_network`'s "first non-loopback interface" selection can pick `docker0`**
+(web01/db01 run docker), persisting the static config onto the wrong interface, and the real NIC
+flaps between `eth0`/`ens18` (netplan `set-name` vs predictable naming), so even a correct
+runtime `ip addr add` gets flushed by the helper's own `systemctl restart systemd-networkd`.
+Repair that survives (guest-agent exec, no SSH needed): write `/etc/netplan/99-tz-static.yaml`
+matching the MAC read from `/sys/class/net/<if>/address` (no `set-name`, single default route),
+`rm -f /etc/systemd/network/90-tz-static.network`, `netplan apply`. The old netplan must be
+replaced entirely if it declares a second default route — `netplan apply` errors out on the
+conflict and applies nothing.
+
+### Planted Linux boxes deny all SSH at PAM account stage after a restart (e2e #3, 2026-09-24)
+*(root cause UNSOLVED — workaround: rebuild the box, or never restart a planted one)*
+
+Phase-5-planted team1 Linux boxes (web01, db01, and app01 in its first life) stop accepting SSH
+entirely after their next stop/start: the TCP handshake completes, the connection dies at
+preauth — paramiko reports "Authentication failed: transport shut down or saw EOF", sshd logs
+`fatal: Access denied for user <u> by PAM account configuration [preauth]`, and the audit record
+says `op=PAM:accounting grantors=?`. Everything that could explain it verifies clean: sshd binary
+and config (`dpkg -V`, `sshd -t` rc=0), PAM modules, stock `common-account` (pam_unix →
+pam_permit cannot fail), no nologin files, valid shadow, and `unix_chkpwd <u> chkexpiry` returns
+rc=0 for every user. strace shows pam_unix read the whole shadow, then fail with no syscall in
+between. The box's sshd works immediately after its plant and breaks on the next boot; a full
+disk rebuild (`redeploy --mode rebuild`) fixes it, so the damage is disk-persistent but
+boot-triggered. The planted backdoors (`auth sufficient pam_permit.so` prepended to
+`common-auth`, su's `[success=done] pam_permit`) are scoring vulns, NOT the cause. Diagnostic kit
+that got this far — all guest-agent-driven (SSH is the thing that's broken): agent-exec
+`sshd -t`/`journalctl -u ssh`; a debug daemon on an alt port via `cp /usr/sbin/sshd /tmp/sshd2`
+(the PAM service name is argv[0] — `-o PAMServiceName` does not exist in OpenSSH 9.6) launched
+with `setsid` (guest-agent exec kills its children when the exec session ends); `strace -f`
+around the failing connect; a `pam_exec`-probed copy of the account stack on the `sshd2` service
+to bisect. A bisect that survives the next outage window is the standing follow-up.
+
+### Phase-6 mid-crash resume is safe; Windows-clone bootstrap needs the agent up (~8 min) (e2e #3, 2026-09-24)
+
+`clone_team_boxes` skips existing clone vmids on resume ("already exists — skipping clone
+(resume)") and re-applies `net0`/`ipconfig0` idempotently, so a crash mid-phase-6 resumes clean.
+The one sharp edge: `bootstrap_windows_box`'s 90 s guest-agent timeout against a Windows clone
+whose agent takes ~8 minutes to appear — the first post-crash resume died exactly there (vmid
+1340). Re-running the resume once the clone has been up a few minutes works; bootstraps re-run
+idempotently.
 
 ### Quotient cold start exceeds 60 s (e2e-2026-09-19)
 *(fixed `63b9c31`/`0c0547e`, 2026-09-19)*
@@ -199,6 +281,18 @@ unmasks/enables stopped scored Linux units over the operator key. It keeps servi
 not hunt. Also leave slack against the account's usage window before committing to a fixed
 scrim end time — there is no automated guard for that.
 
+### Bundle var-lint false-flagged a valid deploy (scrim-live 2026-09-27)
+*(fixed 2026-09-27: `nakon_ops.py` strips/guards + `tests/test_bundle_lint.py`)*
+
+A fresh deploy from the agent-scrim template aborted at bundle build: the var-lint reported
+theme-wallpaper `DEST`, local-user `GROUPS_ADD`, systemd-service `PAYLOAD_BODY/PATH/EXTRA_LINE`,
+apache-site `EXTRA_DIRECTIVES` as undeclared. All were false positives — the catalog scripts
+self-guard (`${VAR-}`, `[ -n "${VAR-}" ]`) or self-assign (`DEST=`). Four lint gaps: it only
+stripped the `${VAR:-}` expansion (not `-`/`:+`/`+`); its `[ -n ]` guard regex missed the braced
+`${VAR-}` form; its single-quote strip crossed newlines (an apostrophe in a comment ate the
+`DEST=` line); and it never stripped full-line comments (a var named only in prose). Fixed; a
+genuinely-required `${VAR:?}` is still caught (regression test).
+
 ## Known-broken templates
 
 - **`106` / `ubuntu24.04`** and **`920` / `debian13-lite`** (reworded 2026-09-23): these
@@ -237,6 +331,14 @@ scrim end time — there is no automated guard for that.
 - **Windows package-manager fallback untested**: nakon's `winget`/`choco` fallback path was never
   exercised by any catalog config used in the verified Windows pass. (E2E #3, 2026-09-23,
   exercises the choco-backed pins — observation recorded in the e2e closeout.)
+- **Site-level lab outage (e2e #3, 2026-09-24, ~10 h)**: the whole lab segment vanished from
+  off-site while the operator sat on a guest Wi-Fi network — and the tailnet subnet bridge kept
+  answering ICMP *for itself* while forwarding nothing, so "ping works" recovered hours before
+  any TCP did. Ping is NOT a liveness signal for the node; probe the API port
+  (`curl -k https://<node>:8006/` — any HTTP code, not `000`). Deploy state survives such an
+  outage: `.deploy_state.json`, snapshots and VM disks are on the node. On recovery, first check
+  engine-side nakon tsvs (the remote sweep process may outlive the dead operator SSH), then
+  resume `--from-phase` — do not restart the pipeline from scratch.
 
 ## Standing limitations
 

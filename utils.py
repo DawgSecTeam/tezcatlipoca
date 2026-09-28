@@ -40,6 +40,15 @@ def run_concurrent(items, fn, max_workers=MAX_CONCURRENCY):
     return results
 
 
+def is_unmanaged(box):
+    """True for a box the pipeline must not plant/configure/score/domain-join — e.g. an
+    in-path pfSense firewall (FreeBSD): no nakon plant, no golden, no repair/fix_services,
+    no cloud-init identity, no scored check, no domain role. It is cloned straight from its
+    own template with operator-specified NICs. Kept in boxes.json so per-box-index vmids
+    stay positional; every plant/config/scoring path skips it via this predicate."""
+    return bool(box.get("unmanaged"))
+
+
 def valid_unix_username(name):
     """Safe as a remote-shell token, useradd name, and sudoers filename."""
     return bool(name) and _USERNAME_RE.fullmatch(name) is not None

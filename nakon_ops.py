@@ -26,6 +26,7 @@ from constants import (
     WINDOWS_ADMIN_USER,
 )
 from ssh_ops import _engine_opts
+from utils import is_unmanaged
 
 _ENGINE_LOCKS = {}  # lock path -> open fh (kept referenced so the flock survives)
 
@@ -292,7 +293,7 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
         pinned_vulns = json.loads(vulns_path.read_text()) if vulns_path.exists() else {}
         box_configs = {
             box["name"]: (pinned.get(box["name"], []), pinned_vulns.get(box["name"], []))
-            for box in boxes
+            for box in boxes if not is_unmanaged(box)
         }
         pinned_from = ", ".join(
             p.name for p in (services_path, vulns_path) if p.exists()
@@ -307,6 +308,8 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
     else:
         box_configs = {}
         for box in boxes:
+            if is_unmanaged(box):
+                continue  # firewall/appliance: no scored services, no planted vulns
             platform = os_to_platform(box["template"])
             services, vulns = _nakon_randomize(
                 platform, max(math.ceil(difficulty / 3), 1), max(difficulty, 1)
@@ -330,6 +333,8 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
     for i, (team, box) in enumerate(
         ((t, b) for t in teams.values() for b in boxes), start=1
     ):
+        if is_unmanaged(box):
+            continue  # firewall/appliance: no nakon plant (see utils.is_unmanaged)
         services, vulns = box_configs[box["name"]]
         configurations = services + vulns
         configurations.sort(

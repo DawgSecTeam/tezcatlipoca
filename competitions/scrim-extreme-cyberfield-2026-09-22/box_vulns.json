@@ -75,9 +75,6 @@
       }
     },
     {
-      "name": "iis-webshell"
-    },
-    {
       "name": "insecure-file-acl-win",
       "vars": {
         "FILE_PATH": "C:\\ProgramData\\Meridian\\hr-credentials.txt",
@@ -257,9 +254,6 @@
         "HOSTNAME": "ehr.meridian.local",
         "IP": "198.51.100.77"
       }
-    },
-    {
-      "name": "iis-webshell"
     },
     {
       "name": "insecure-file-acl-win",
@@ -503,9 +497,6 @@
     },
     {
       "name": "malicious-factory-users"
-    },
-    {
-      "name": "malicious-motd-script"
     },
     {
       "name": "malicious-systemd-timer-service"
@@ -929,9 +920,6 @@
       "name": "malicious-factory-users"
     },
     {
-      "name": "malicious-motd-script"
-    },
-    {
       "name": "malicious-systemd-timer-service"
     },
     {
@@ -1348,9 +1336,6 @@
     },
     {
       "name": "malicious-factory-users"
-    },
-    {
-      "name": "malicious-motd-script"
     },
     {
       "name": "malicious-systemd-timer-service"
