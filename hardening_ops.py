@@ -58,6 +58,15 @@ def _apt_prep_script(gateway=None):
     return proxy_lines + _APT_PREP_BODY
 
 
+# Pinned scored service -> (apk package, OpenRC service) for the alpine_services shim
+# (ensure_alpine_services). The vulndb catalog service scripts are apt/dnf/yum-only, so
+# Alpine boxes get their services here instead (distro-matrix-2026-09-27).
+ALPINE_SERVICES = {
+    "nginx": ("nginx", "nginx"),
+    "apache": ("apache2", "apache2"),
+    "bind": ("bind", "named"),
+}
+
 # Match the upgrade WORKER by full command line. `pgrep -x unattended-upgr` (the
 # 15-char truncated comm) ALSO matches Ubuntu's permanent unattended-upgrade-shutdown
 # --wait-for-signal daemon, so every Ubuntu box read BUSY forever and each prep_apt
@@ -256,6 +265,85 @@ def fix_dns_on_boxes(targets, ctx):
         )
 
 
+# Alpine's nginx package ships a stub vhost that returns 404 for everything — the
+# Quotient web check needs 200 on /. This conf (base64 to survive the ssh quoting
+# layers) replaces the stub.
+_ALPINE_NGINX_200_VHOST_B64 = ("c2VydmVyIHsKICAgIGxpc3RlbiA4MCBkZWZhdWx0X3NlcnZlcjsKICAgIGxpc3Rl"
+                               "biBbOjpdOjgwIGRlZmF1bHRfc2VydmVyOwogICAgbG9jYXRpb24gLyB7IHJldHVy"
+                               "biAyMDAgInR6LWFscGluZSB1cFxuIjsgYWRkX2hlYWRlciBDb250ZW50LVR5cGUg"
+                               "dGV4dC9wbGFpbjsgfQp9Cg==")
+
+
+def ensure_alpine_services(comp_dir, targets, ctx):
+    """Install + enable pinned scored services on Alpine boxes via apk + OpenRC.
+
+    The vulndb service configs only speak apt/dnf/yum (and systemd), so on Alpine every
+    catalog service step exits 1 in 0 seconds (distro-matrix-2026-09-27). With the
+    Compfile `alpine_services` knob set, the golden plant runs non-strict and this shim
+    owns Alpine services instead: apk add, rc-update add default, rc-service start, and
+    a status probe as the pass condition. Idempotent — clones inherit the golden disk,
+    so phase 5's pass usually confirms rather than installs. Unknown pinned services
+    are reported, not silently skipped."""
+    proxy = gateway_proxy(ctx)
+    box_username = ctx.get("box_username", "ubuntu")
+    pins = json.loads((comp_dir / "box_services.json").read_text())
+    alpine = [t for t in targets
+              if "alpine" in str(t.get("box", {}).get("template") or t.get("template", "")).lower()]
+    if not alpine:
+        return
+
+    print("  Ensuring pinned services on Alpine boxes (apk + OpenRC shim)...")
+    pending = []
+    for t in alpine:
+        box_name = t.get("box_name") or t["box"]["name"]
+        unknown = [s for s in pins.get(box_name, []) if isinstance(s, str) and s not in ALPINE_SERVICES]
+        if unknown:
+            raise RuntimeError(
+                f"alpine_services shim has no apk mapping for {unknown} pinned on {box_name} — "
+                f"add it to hardening_ops.ALPINE_SERVICES or drop the pin")
+        wanted = [ALPINE_SERVICES[s] for s in pins.get(box_name, [])]
+        if wanted:
+            pending.append((t, wanted))
+
+    def _ensure(t_wanted):
+        t, wanted = t_wanted
+        ip = t["ip"]
+        markers = " ".join(f"TZ-SVC-OK-{pkg}" for pkg, _svc in wanted)
+        blocks = []
+        for pkg, svc in wanted:
+            block = (f"echo \"TZ-SVC-TRY-{pkg}\"; apk add --no-cache {pkg} && rc-update add {svc} default && "
+                     f"{{ rc-service {svc} restart >/dev/null 2>&1 || rc-service {svc} start; }} && ")
+            if pkg == "nginx":
+                block += (f"echo {_ALPINE_NGINX_200_VHOST_B64} | base64 -d > /etc/nginx/http.d/tz-default.conf && "
+                          "rm -f /etc/nginx/http.d/default.conf && ")
+            block += f"rc-service {svc} status >/dev/null && echo \"TZ-SVC-OK-{pkg}\""
+            blocks.append(block)
+        script = "; ".join(blocks)
+        for attempt in range(1, 5):
+            try:
+                r = ssh_via_gateway(ctx, ip, f"sudo sh -c {shlex.quote(script)}",
+                                    timeout=180, user=box_username)
+                missing = [m for m in markers.split() if m not in (r.stdout or "")]
+                if r.returncode == 0 and not missing:
+                    with PRINT_LOCK:
+                        print(f"    Alpine services ensured on {ip} ({', '.join(p for p, _ in wanted)})")
+                    return True
+                err = (r.stderr or "").strip()[:160]
+                with PRINT_LOCK:
+                    print(f"    Alpine shim attempt {attempt}/4 failed for {ip} "
+                          f"(rc={r.returncode}, missing={missing}) {err}")
+            except Exception as exc:
+                with PRINT_LOCK:
+                    print(f"    Alpine shim attempt {attempt}/4 failed for {ip}: {exc}")
+            time.sleep(10)
+        return False
+
+    results = run_concurrent(pending, _ensure)
+    failed = sorted({t["ip"] for (t, _w), r in zip(pending, results) if r is not True})
+    if failed:
+        raise RuntimeError(f"Alpine service shim failed on {failed} — nginx/scores would be DOWN")
+
+
 def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
     """Post-nakon service hardening (bind address, mail, ftp, dns, etc.) using the per-run credlist secrets."""
 
@@ -286,6 +374,31 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
             "sudo systemctl is-active --quiet ssh || sudo systemctl start ssh 2>/dev/null || true",
             "",
         ])
+
+        # Catalog scoreability gaps on non-Debian packagings (distro-matrix-2026-09-27):
+        # the apache/bind dnf/yum branches install+start but never touch distro defaults,
+        # so the checks they're pinned for still fail — fedora httpd serves an EMPTY
+        # docroot (403 on /) and fedora named listens on 127.0.0.1 behind the
+        # systemd-resolved stub (refused from the scoring engine). Idempotent; no-ops on
+        # Debian packagings (index.html already exists; the catalog's apt branch already
+        # did the resolved/named work).
+        if any(s in ("apache", "httpd") for s in services):
+            script_lines.extend([
+                "if [ -d /var/www/html ] && [ ! -f /var/www/html/index.html ]; then "
+                "echo '<html><body>tz</body></html>' | sudo tee /var/www/html/index.html >/dev/null; fi || true",
+                "",
+            ])
+        if "bind" in services:
+            script_lines.extend([
+                "if [ -f /etc/named.conf ]; then "
+                "sudo sed -i 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' /etc/named.conf; "
+                "sudo sed -i 's/allow-query\\(.*\\) { localhost; };/allow-query\\1 { any; };/' /etc/named.conf; "
+                "sudo mkdir -p /etc/systemd/resolved.conf.d; "
+                "printf '[Resolve]\\nDNSStubListener=no\\n' | sudo tee /etc/systemd/resolved.conf.d/no-stub.conf >/dev/null; "
+                "sudo systemctl restart systemd-resolved 2>/dev/null || true; "
+                "sudo systemctl restart named 2>/dev/null || true; fi || true",
+                "",
+            ])
 
         if "mysql" in services or "mariadb" in services:
             script_lines.extend([
@@ -507,9 +620,16 @@ def setup_ubuntu_auth(targets, ctx):
 
     print(f"  Enabling password auth + NOPASSWD sudo for {box_username} on team boxes...")
     sudoers_line = shlex.quote(f"{box_username} ALL=(ALL) NOPASSWD:ALL")
+    # sshd_config.d drop-in: cloud-init ships `PasswordAuthentication no` in
+    # /etc/ssh/sshd_config.d/50-cloud-init.conf (alpine; distro-matrix-2026-09-27), and
+    # OpenSSH keeps the FIRST value seen — the Include beats the main-file sed lines
+    # below. A 00- drop-in wins on every distro with the include; the sed lines still
+    # cover distros whose sshd_config has no include.
     auth_cmd = (
         "sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config; "
         "sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config; "
+        "sudo mkdir -p /etc/ssh/sshd_config.d; "
+        "printf 'PasswordAuthentication yes\\n' | sudo tee /etc/ssh/sshd_config.d/00-tz-password-auth.conf >/dev/null; "
         "sudo systemctl restart sshd 2>/dev/null || true; "
         f"echo {sudoers_line} | sudo tee /etc/sudoers.d/{box_username}; "
         f"sudo chmod 440 /etc/sudoers.d/{box_username}"
