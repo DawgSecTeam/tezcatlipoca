@@ -319,7 +319,14 @@ differs from Ubuntu in ways that broke the plant and the scored services: SSH pa
 `00-*`); `named` binds `127.0.0.1` only; `httpd` hangs at boot resolving its `ServerName` against
 the not-yet-up DC; the qemu-guest-agent flaps after reboot. Resolved by building `base-fedora44-fix`
 (cloud-init + `00-tzc-pwauth.conf`) and, per box, `ServerName localhost` + `named listen-on { any; }`.
-**Still a TODO to fold the per-box fixes into the golden/catalog** so they survive a fresh clone.
+**Still a TODO to fold the httpd/named per-box fixes into the golden/catalog** so they survive a
+fresh clone.
+
+Related, in the vuln catalog (pfsense-rvb 2026-09-28): the linux `local-user` vuln did
+`usermod -a -G sudo`, which fails rc=6 on Fedora (no `sudo` group — RHEL/Fedora use `wheel`).
+**Fixed durably in the vulndb `configurations` catalog** (distro-aware `sudo`↔`wheel` map + create
+missing groups); the change is recorded in `docs/vulndb-fixes/`. The general lesson for
+distro-agnostic vuln curation: never hard-code a distro's admin-group name.
 
 ### terraform destroy hangs on a Windows DC with a dead guest-agent (pfsense-rvb 2026-09-28)
 `terraform destroy` sat "Still destroying… 6m+ elapsed" on a DC. The bpg provider issues a
