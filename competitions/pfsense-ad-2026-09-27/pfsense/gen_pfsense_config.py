@@ -68,7 +68,7 @@ wan_rule = f"""<rule>
 				<any></any>
 			</source>
 			<destination>
-				<network>192.168.{tid}.0/24</network>
+				<network>lan</network>
 			</destination>
 		</rule>
 		"""
