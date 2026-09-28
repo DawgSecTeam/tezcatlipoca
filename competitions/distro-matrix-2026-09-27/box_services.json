@@ -1,0 +1,4 @@
+{
+  "web01": ["apache", "bind"],
+  "app01": ["nginx"]
+}
