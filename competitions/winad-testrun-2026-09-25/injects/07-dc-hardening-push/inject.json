@@ -1,0 +1,7 @@
+{
+  "title": "Domain controller hardening directive",
+  "description_file": "briefing.md",
+  "open_offset_min": 50,
+  "due_offset_min": 75,
+  "close_offset_min": 100
+}
