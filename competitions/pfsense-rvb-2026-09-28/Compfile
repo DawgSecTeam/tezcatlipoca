@@ -1,0 +1,3 @@
+name pfsense-rvb-2026-09-28
+scenario Meridian Health regional clinic: a small Active Directory network behind a pfSense perimeter firewall. The Windows domain controller (dc01) fronts two domain-joined Linux servers of different distributions (web01 Ubuntu, app01 Fedora). An in-path pfSense firewall (fw01) routes all team traffic and is left clean/undamaged. Defenders keep the scored AD + Linux services alive and hunt planted misconfigurations. The firewall is infrastructure, not a target.
+difficulty 5
