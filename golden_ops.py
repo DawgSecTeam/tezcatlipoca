@@ -41,7 +41,7 @@ from range_ops import (
 )
 from ssh_ops import ssh_via_gateway, wait_for_boxes_ssh, wait_for_cloud_init
 from template_ops import stored_template_hash, write_template_hash
-from utils import run_concurrent
+from utils import is_unmanaged, run_concurrent
 from windows_ops import bootstrap_windows_box, is_windows_template
 
 
@@ -140,6 +140,7 @@ def golden_targets(engine_vmid, teams, boxes):
             "bridge": f"vmbr{team1_identifier}",
         }
         for box_idx, box in enumerate(boxes)
+        if not is_unmanaged(box)  # no golden for firewall/appliance boxes; box_idx stays positional
     ]
 
 
