@@ -293,6 +293,59 @@ stripped the `${VAR:-}` expansion (not `-`/`:+`/`+`); its `[ -n ]` guard regex m
 `DEST=` line); and it never stripped full-line comments (a var named only in prose). Fixed; a
 genuinely-required `${VAR:?}` is still caught (regression test).
 
+### Engine bootstrap loses the apt archives lock (pfsense-ad 2026-09-27)
+*(fixed 2026-09-27: `engine_ops.py`)*
+
+Phase 2 engine-template build failed `rc=100`, `E: Could not get lock
+/var/cache/apt/archives/lock … held by process NNNN (apt-get)`. First-boot
+`apt-daily-upgrade.service` re-spawns an apt-get *between* the preamble's killall and the
+bootstrap's `apt-get upgrade`, and `DPkg::Lock::Timeout` only covers the dpkg frontend lock, not
+the archives-cache lock. `systemctl stop` lost the race twice in a row. Fix: `systemctl mask
+--now` the apt-daily/unattended-upgrades units (a masked unit can't be re-activated), kill their
+cgroups, then poll `fuser` on all three locks until free before touching apt.
+
+### apt-prep + settle-check assumed Debian (distro-matrix / pfsense-ad 2026-09-27)
+*(fixed 2026-09-27: `hardening_ops.py`, `tests/test_non_apt_prep.py`)*
+
+On a fedora (dnf) or alpine (apk) box the per-box apt-prep printed `apt-get: command not found`
+five times and the settle-check burned the full 240 s budget every pass. Both now short-circuit
+with `command -v apt-get >/dev/null 2>&1 || exit 0` before any apt call — a non-apt box is an
+honest rc=0 no-op.
+
+### Fedora member needs a "-fix" template + per-box service fixes (pfsense-ad 2026-09-27)
+The stock `base-fedora44` has no cloud-init (can't take identity), and the Fedora Cloud image
+differs from Ubuntu in ways that broke the plant and the scored services: SSH password-auth is off
+(`/etc/ssh/sshd_config.d/50-cloud-init.conf`, and sshd is first-match-wins so the override must be
+`00-*`); `named` binds `127.0.0.1` only; `httpd` hangs at boot resolving its `ServerName` against
+the not-yet-up DC; the qemu-guest-agent flaps after reboot. Resolved by building `base-fedora44-fix`
+(cloud-init + `00-tzc-pwauth.conf`) and, per box, `ServerName localhost` + `named listen-on { any; }`.
+**Still a TODO to fold the per-box fixes into the golden/catalog** so they survive a fresh clone.
+
+### terraform destroy hangs on a Windows DC with a dead guest-agent (pfsense-rvb 2026-09-28)
+`terraform destroy` sat "Still destroying… 6m+ elapsed" on a DC. The bpg provider issues a
+*graceful* shutdown with a long `timeout_shutdown_vm`, and a DC whose qemu-guest-agent is down
+never shuts down, holding the qm lock (so `qm unlock`/`qm stop` also time out). Break it by killing
+the qemu process directly: `kill -9 $(cat /var/run/qemu-server/<vmid>.pid)` — terraform then
+deletes the stopped VM. Pre-`qm stop` the other DCs so they don't repeat it.
+
+### Scoring round loop doesn't auto-resume after an engine reboot (pfsense-ad 2026-09-28)
+After the engine VM rebooted, the scoreboard stayed frozen: `/api/engine` showed a stale
+`last_round.StartTime` and a zero `current_round_time`. The Docker containers restart but the round
+loop stays stopped. Restart it: `POST /api/competition/start {"started":true}` then `POST
+/api/engine/pause {"pause":false}`; a fresh round lands within `Delay` seconds. (Symptom trap:
+`verify-competition` reads the *last scored* round, so it reports stale DOWN as if live.)
+
+### In-path pfSense: host-ZFS injection breaks boot; WAN rule needs a keyword (pfsense-ad 2026-09-28)
+*(full runbook: `docs/pfsense-inpath-2026-09-28.md`)*
+
+Two traps. (1) Writing the per-team `config.xml` by importing the pfSense ZFS pool on the Proxmox
+host makes the pool unmountable by pfSense's FreeBSD loader — `Mounting from zfs:pfSense/ROOT/default
+failed with error 22` — because the host's OpenZFS (2.4.4) is newer than the guest's; and renaming
+the pool also breaks boot (the loader hardcodes `pfSense`). Inject **guest-side** instead (console
+`fetch` over the LAN). (2) `gen_pfsense_config.py` emitted the WAN pass rule with a raw CIDR
+`<destination><network>192.168.x.0/24</network>`; pfSense's `<network>` takes a keyword, so it
+silently dropped the rule and engine→box scoring timed out. Fixed to `<network>lan</network>`.
+
 ## Known-broken templates
 
 - **`106` / `ubuntu24.04`** and **`920` / `debian13-lite`** (reworded 2026-09-23): these
