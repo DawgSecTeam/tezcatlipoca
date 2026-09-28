@@ -930,9 +930,13 @@ def check_red_llm(args, base_url):
 
 
 def red_llm_url(args):
-    """The LLM base URL as red01 dials it (tunnel-local when a tunnel is up)."""
+    """The LLM base URL as red01 dials it (tunnel-local when a tunnel is up).
+
+    args.red_tunnel holds the CLI string until stage_red overwrites it with the
+    live RedTunnel object (local endpoints only) — a truthy string must not be
+    mistaken for a tunnel (openrouter run crashed at the first monitor tick)."""
     tunnel = getattr(args, "red_tunnel", None)
-    return tunnel.red_base_url() if tunnel else args.llm_base_url
+    return tunnel.red_base_url() if hasattr(tunnel, "red_base_url") else args.llm_base_url
 
 
 def red_llm_watch(args, t_plus):
@@ -946,7 +950,7 @@ def red_llm_watch(args, t_plus):
     if _llm_down_since is None:
         _llm_down_since = time.time()
         tunnel = getattr(args, "red_tunnel", None)
-        dead = tunnel is not None and tunnel.proc is not None and tunnel.proc.poll() is not None
+        dead = hasattr(tunnel, "proc") and tunnel.proc is not None and tunnel.proc.poll() is not None
         log(f"WARNING: T+{t_plus // 60} — red01 cannot reach the LLM endpoint"
             + (" (tunnel process dead; supervisor will respawn it)" if dead else "")
             + " — red is making decisions blind until this recovers")
@@ -1120,7 +1124,7 @@ def pull_red_evidence(args):
 
 def stage_teardown(args, creds=None):
     tunnel = getattr(args, "red_tunnel", None)
-    if tunnel:
+    if hasattr(tunnel, "shutdown"):
         tunnel.shutdown()
         log("teardown: red LLM tunnel stopped")
     if creds:

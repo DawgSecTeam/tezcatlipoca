@@ -499,9 +499,6 @@
       "name": "malicious-factory-users"
     },
     {
-      "name": "malicious-motd-script"
-    },
-    {
       "name": "malicious-systemd-timer-service"
     },
     {
@@ -923,9 +920,6 @@
       "name": "malicious-factory-users"
     },
     {
-      "name": "malicious-motd-script"
-    },
-    {
       "name": "malicious-systemd-timer-service"
     },
     {
@@ -1342,9 +1336,6 @@
     },
     {
       "name": "malicious-factory-users"
-    },
-    {
-      "name": "malicious-motd-script"
     },
     {
       "name": "malicious-systemd-timer-service"
