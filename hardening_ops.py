@@ -265,6 +265,15 @@ def fix_dns_on_boxes(targets, ctx):
         )
 
 
+# Alpine's nginx package ships a stub vhost that returns 404 for everything — the
+# Quotient web check needs 200 on /. This conf (base64 to survive the ssh quoting
+# layers) replaces the stub.
+_ALPINE_NGINX_200_VHOST_B64 = ("c2VydmVyIHsKICAgIGxpc3RlbiA4MCBkZWZhdWx0X3NlcnZlcjsKICAgIGxpc3Rl"
+                               "biBbOjpdOjgwIGRlZmF1bHRfc2VydmVyOwogICAgbG9jYXRpb24gLyB7IHJldHVy"
+                               "biAyMDAgInR6LWFscGluZSB1cFxuIjsgYWRkX2hlYWRlciBDb250ZW50LVR5cGUg"
+                               "dGV4dC9wbGFpbjsgfQp9Cg==")
+
+
 def ensure_alpine_services(comp_dir, targets, ctx):
     """Install + enable pinned scored services on Alpine boxes via apk + OpenRC.
 
@@ -300,11 +309,16 @@ def ensure_alpine_services(comp_dir, targets, ctx):
         t, wanted = t_wanted
         ip = t["ip"]
         markers = " ".join(f"TZ-SVC-OK-{pkg}" for pkg, _svc in wanted)
-        script = "; ".join(
-            f"echo \"TZ-SVC-TRY-{pkg}\"; apk add --no-cache {pkg} && rc-update add {svc} default && "
-            f"{{ rc-service {svc} restart >/dev/null 2>&1 || rc-service {svc} start; }} && "
-            f"rc-service {svc} status >/dev/null && echo \"TZ-SVC-OK-{pkg}\""
-            for pkg, svc in wanted)
+        blocks = []
+        for pkg, svc in wanted:
+            block = (f"echo \"TZ-SVC-TRY-{pkg}\"; apk add --no-cache {pkg} && rc-update add {svc} default && "
+                     f"{{ rc-service {svc} restart >/dev/null 2>&1 || rc-service {svc} start; }} && ")
+            if pkg == "nginx":
+                block += (f"echo {_ALPINE_NGINX_200_VHOST_B64} | base64 -d > /etc/nginx/http.d/tz-default.conf && "
+                          "rm -f /etc/nginx/http.d/default.conf && ")
+            block += f"rc-service {svc} status >/dev/null && echo \"TZ-SVC-OK-{pkg}\""
+            blocks.append(block)
+        script = "; ".join(blocks)
         for attempt in range(1, 5):
             try:
                 r = ssh_via_gateway(ctx, ip, f"sudo sh -c {shlex.quote(script)}",
@@ -360,6 +374,31 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
             "sudo systemctl is-active --quiet ssh || sudo systemctl start ssh 2>/dev/null || true",
             "",
         ])
+
+        # Catalog scoreability gaps on non-Debian packagings (distro-matrix-2026-09-27):
+        # the apache/bind dnf/yum branches install+start but never touch distro defaults,
+        # so the checks they're pinned for still fail — fedora httpd serves an EMPTY
+        # docroot (403 on /) and fedora named listens on 127.0.0.1 behind the
+        # systemd-resolved stub (refused from the scoring engine). Idempotent; no-ops on
+        # Debian packagings (index.html already exists; the catalog's apt branch already
+        # did the resolved/named work).
+        if any(s in ("apache", "httpd") for s in services):
+            script_lines.extend([
+                "if [ -d /var/www/html ] && [ ! -f /var/www/html/index.html ]; then "
+                "echo '<html><body>tz</body></html>' | sudo tee /var/www/html/index.html >/dev/null; fi || true",
+                "",
+            ])
+        if "bind" in services:
+            script_lines.extend([
+                "if [ -f /etc/named.conf ]; then "
+                "sudo sed -i 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' /etc/named.conf; "
+                "sudo sed -i 's/allow-query\\(.*\\) { localhost; };/allow-query\\1 { any; };/' /etc/named.conf; "
+                "sudo mkdir -p /etc/systemd/resolved.conf.d; "
+                "printf '[Resolve]\\nDNSStubListener=no\\n' | sudo tee /etc/systemd/resolved.conf.d/no-stub.conf >/dev/null; "
+                "sudo systemctl restart systemd-resolved 2>/dev/null || true; "
+                "sudo systemctl restart named 2>/dev/null || true; fi || true",
+                "",
+            ])
 
         if "mysql" in services or "mariadb" in services:
             script_lines.extend([
