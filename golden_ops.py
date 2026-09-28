@@ -24,7 +24,7 @@ import os
 
 from constants import GOLDEN_TAG, SNAP_BASE
 from engine_ops import ensure_nat_forwarding
-from hardening_ops import fix_dns_on_boxes, prep_apt_on_boxes, setup_ubuntu_auth
+from hardening_ops import ensure_alpine_services, fix_dns_on_boxes, prep_apt_on_boxes, setup_ubuntu_auth
 from nakon_ops import build_nakon_bundle, run_nakon
 from range_ops import (
     clone_marker,
@@ -41,7 +41,7 @@ from range_ops import (
 )
 from ssh_ops import ssh_via_gateway, wait_for_boxes_ssh, wait_for_cloud_init
 from template_ops import stored_template_hash, write_template_hash
-from utils import is_unmanaged, run_concurrent
+from utils import compfile_flag, is_unmanaged, run_concurrent
 from windows_ops import bootstrap_windows_box, is_windows_template
 
 
@@ -297,13 +297,23 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
 
     ensure_nat_forwarding(ctx)
 
+    # With the alpine_services knob, catalog service steps are EXPECTED to fail on
+    # Alpine (vulndb scripts are apt/dnf/yum-only) — the plant runs non-strict and
+    # ensure_alpine_services owns those services, with its own hard pass/fail.
+    alpine_shim = compfile_flag(comp_dir / "Compfile", "alpine_services")
     bundle = build_nakon_bundle(golden_config_path)
     result = run_nakon(key, scoring_user, scoring_ip, bundle, golden_config_path,
                        only=[t["machine"] for t in targets],
-                       timeout=max(2400, 2400 * len(targets)), strict=True,
+                       timeout=max(2400, 2400 * len(targets)), strict=not alpine_shim,
                        jobs=jobs, run_tag="golden")
     if result.failed:
-        raise RuntimeError(f"golden plant had {len(result.failed)} FAILED step(s) — strict mode requires green")
+        if alpine_shim:
+            print(f"  WARNING: golden plant had {len(result.failed)} FAILED step(s) — "
+                  f"alpine_services shim owns those (apk/OpenRC)")
+        else:
+            raise RuntimeError(f"golden plant had {len(result.failed)} FAILED step(s) — strict mode requires green")
+    if alpine_shim:
+        ensure_alpine_services(comp_dir, targets, ctx)
 
     print("  Cleaning cloud-init state on golden Linux boxes (clones must re-init)...")
     for t in linux_targets:

@@ -170,6 +170,27 @@ Destroy the scratch clone once confirmed. A template with broken/disabled cloud-
 that skips reapplying network config because its instance-id was never reset, fails silently
 when Terraform clones it for real and just leaves you locked out.
 
+#### Non-Ubuntu Linux box templates (Fedora, Alpine)
+
+The generic steps above assume Debian-family behavior. Two live-found traps from the
+distro-matrix run (2026-09-27), both solved by `competitions/distro-matrix-2026-09-27/build_alpine_ci_template.sh`
+— a one-shot `ssh root@<node> 'bash -s' < ...` builder that downloads the official cloud
+image, boot-once bootstraps it via a `cicustom` snippet, seals it, and tags it:
+
+- **Alpine**: the official `*-cloudinit` qcow2 lacks `bash` (nakon bundles are bash),
+  `shadow` (`useradd`/`chpasswd` for credlist accounts), `sudo`, and `qemu-guest-agent` —
+  the bootstrap installs them. It must ALSO set `manage_resolv_conf: true`: Alpine's
+  cloud-init never creates `/etc/resolv.conf`, so `apk` dies of DNS timeouts and the
+  `packages:` directive silently no-ops (once-per-instance — reboots don't retry; see
+  known-issues).
+- **Pick the box_username before building**: `setup_ubuntu_auth` assumes the username is not
+  a legacy system account on the target distro (`operator` is a nologin uid-11 account on
+  Fedora/Debian-classic and bricks auth setup; `medic` is proven safe).
+
+Fedora needs no boot-once step — the official Cloud Base qcow2 already ships cloud-init and
+qemu-guest-agent (the `base-fedora44-fix` template was sealed unbooted, mirroring the
+`cloud-init;general;template` tag set used by this cluster's library).
+
 ### 5. Wire it in
 
 - Scoring engine: set `TF_VAR_template_vm_id` in `.env` to the template's numeric Proxmox VM
