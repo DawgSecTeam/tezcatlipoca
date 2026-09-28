@@ -65,6 +65,9 @@ ALPINE_SERVICES = {
     "nginx": ("nginx", "nginx"),
     "apache": ("apache2", "apache2"),
     "bind": ("bind", "named"),
+    # sshd ships in the -fix template (nakon's own transport); the shim entry just
+    # re-asserts it so an `ssh` pin scores a credlist Ssh check on Alpine boxes.
+    "ssh": ("openssh", "sshd"),
 }
 
 # Match the upgrade WORKER by full command line. `pgrep -x unattended-upgr` (the

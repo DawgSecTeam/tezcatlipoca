@@ -33,6 +33,11 @@ _SERVICE_TO_CHECK = {
     "Enable WinRM":   ("Tcp", {"Display": "winrm", "Port": 5985}),
     "New SMB Share":  ("Tcp", {"Display": "smb",   "Port": 445}),
     "RDP misconfigs": ("Tcp", {"Display": "rdp",   "Port": 3389}),
+    "IIS HTTP":       ("Web", {"Display": "iis",   "Port": 80, "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
+
+    # Scored but not nakon-planted: domain_ops owns ADDS/Domain Join (phase 6 injects
+    # them with per-team vars); generate_nakon_config strips them from machine lists.
+    "ADDS":           ("Tcp", {"Display": "ldap",  "Port": 389}),
 }
 
 
