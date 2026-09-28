@@ -362,10 +362,19 @@ def check_isolation(ctx, teams, boxes):
 
     identifiers = sorted({str(t["identifier"]) for t in teams.values()})
     team_ips = {}
+    box_os = {}
     for box in boxes:
         parts = box.get("ip", "").split(".")
-        if len(parts) == 4 and parts[2] in identifiers and parts[2] not in team_ips:
+        if len(parts) != 4 or parts[2] not in identifiers:
+            continue
+        # Prefer a Linux box per team: the probe authenticates as the linux
+        # box_username and Windows boxes want Administrator (a medic probe there
+        # always 255s — live-found 2026-09-29 on the dc01-first lineup).
+        is_linux = "win" not in str(box.get("os", "")).lower()
+        cur = team_ips.get(parts[2])
+        if cur is None or (is_linux and "win" in str(box_os.get(cur, "")).lower()):
             team_ips[parts[2]] = box["ip"]
+        box_os[box["ip"]] = str(box.get("os", ""))
     if len(team_ips) < 2:
         print("  (couldn't identify 2 distinct teams' boxes from nakon-config.json — skipping "
           "the cross-team connection test)")

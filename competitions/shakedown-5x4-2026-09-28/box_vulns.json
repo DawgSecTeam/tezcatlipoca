@@ -143,12 +143,6 @@
       }
     },
     {
-      "name": "theme-wallpaper-win",
-      "vars": {
-        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.jpg"
-      }
-    },
-    {
       "name": "scheduled-task-persistence-win",
       "vars": {
         "TASK_NAME": "LedgerSync",
@@ -788,12 +782,8 @@
     "writable-sudoers",
     "wildcard-sudo",
     "sudo-timestamp-never-expires",
-    "bad-perms-userConfig",
-    "writable-bashrc",
-    "world-writable-cron-d",
     "world-writable-etc-hosts",
     "writable-etc-group",
-    "sysctl-syn-cookies-disabled",
     {
       "name": "local-user",
       "vars": {
@@ -916,12 +906,6 @@
       }
     },
     {
-      "name": "theme-wallpaper",
-      "vars": {
-        "WALLPAPER_FILENAME": "626948136b9138bb-wallpaper.jpg"
-      }
-    },
-    {
       "name": "theme-shortcuts",
       "vars": {
         "SHORTCUT_NAME": "Incident README",
@@ -942,31 +926,110 @@
       }
     },
     "authorized-keys-backdoor",
-    "ssh-root-login",
-    "ssh-password-auth",
-    "ssh-x11-forwarding",
-    "ssh-max-auth-retries-high",
-    {
-      "name": "crontab-persistence",
-      "vars": {
-        "USERNAME": "cachestalker",
-        "SCHEDULE": "*/15 * * * *",
-        "JOB_COMMAND": "/usr/local/sbin/.edge-sync"
-      }
-    },
-    {
-      "name": "hidden-cron-persistence",
-      "vars": {
-        "PAYLOAD": "/usr/local/sbin/.edge-sync"
-      }
-    },
-    "cron-d-rogue-job",
     {
       "name": "user-sudo-nopasswd",
       "vars": {
         "USERNAME": "cache-ops"
       }
     },
-    "nfs-no-root-squash"
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "swarm-agent",
+        "PASSWORD": "Swarm2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "gate-ops",
+        "PASSWORD": "Gate2026!",
+        "GROUPS_ADD": "wheel"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "jit-ops",
+        "PASSWORD": "Jit2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "tape-mon",
+        "PASSWORD": "Tape2026!",
+        "GROUPS_ADD": "wheel"
+      }
+    },
+    {
+      "name": "weak-password-account",
+      "vars": {
+        "USERNAME": "service2",
+        "PASSWORD": "service2"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/helios/origin-pull.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "origin pull token: op_5f31bb -- internal edge only"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/helios/noc-escalation.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "noc escalation: ring 2 pin 7741"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/helios/warranty.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "edge appliance vendor portal: edge_svc / E9ge2026!"
+      }
+    },
+    {
+      "name": "theme-shortcuts",
+      "vars": {
+        "SHORTCUT_NAME": "Cache Status",
+        "SHORTCUT_EXEC": "xdg-open http://localhost/cache"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "bgpull",
+        "PASSWORD": "Bgpull2026!",
+        "GROUPS_ADD": "wheel"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "snmp-ro",
+        "PASSWORD": "Snmp2026!"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/helios/edr-exclude.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "EDR exclusion list: exclude /opt/helios/bin -- vendor directive"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/helios/firmware.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "edge firmware upgrade key: fw_9d18cc -- do not distribute"
+      }
+    }
   ]
 }
