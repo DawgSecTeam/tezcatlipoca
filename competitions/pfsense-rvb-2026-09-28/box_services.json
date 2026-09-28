@@ -1,0 +1,12 @@
+{
+  "dc01": [
+    "Enable WinRM"
+  ],
+  "web01": [
+    "nginx"
+  ],
+  "app01": [
+    "apache",
+    "bind"
+  ]
+}

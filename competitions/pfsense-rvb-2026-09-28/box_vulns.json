@@ -1,0 +1,309 @@
+{
+  "dc01": [
+    {
+      "name": "weak-password-policy-win",
+      "vars": {
+        "MINPWLEN": "4",
+        "LOCKOUT_THRESHOLD": "0",
+        "MAXPWAGE": "unlimited"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "svc_imaging",
+        "PASSWORD": "Imaging2026!",
+        "FULLNAME": "Imaging Sync Service",
+        "DESCRIPTION": "DICOM imaging sync agent",
+        "ADMIN_ADD": "1",
+        "PASSWORD_NEVER_EXPIRES": "1"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "audit_svc",
+        "FULLNAME": "Audit Agent",
+        "DESCRIPTION": "compliance audit agent service acct"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "wardclerk",
+        "PASSWORD": "Wardclerk2026!",
+        "FULLNAME": "Ward Clerk Station"
+      }
+    },
+    {
+      "name": "rdp-group-member-win",
+      "vars": {
+        "USERNAME": "wardclerk"
+      }
+    },
+    {
+      "name": "autologin-win",
+      "vars": {
+        "USERNAME": "wardclerk",
+        "PASSWORD": "Wardclerk2026!"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "PulseSyncAgent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\psync.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 300 }"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "DicomsSync",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\dsync.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 3600"
+      }
+    },
+    {
+      "name": "malicious-service-win",
+      "vars": {
+        "SERVICE_NAME": "MedArchiveSync",
+        "DESCRIPTION": "Meridian archive synchronization",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Wardline\\masync.ps1",
+        "PAYLOAD_BODY": "while ($true) { Start-Sleep -Seconds 300 }"
+      }
+    },
+    {
+      "name": "insecure-file-acl-win",
+      "vars": {
+        "FILE_PATH": "C:\\ProgramData\\Meridian\\hr-credentials.txt",
+        "FILE_CONTENT": "Meridian payroll service account: mh-payroll / Payr0ll2026! (rotate quarterly)"
+      }
+    },
+    {
+      "name": "insecure-smb-share-win",
+      "vars": {
+        "SHARE_NAME": "WardShare",
+        "SHARE_PATH": "C:\\ProgramData\\Meridian",
+        "DESCRIPTION": "Meridian departmental share"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\desk-reference.txt",
+        "FILE_CONTENT": "Front desk quick reference -- facility master code 7411, alarm vendor portal: vendor@meridian.local / Vendor2026!"
+      }
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "HOSTNAME": "portal.meridian.local",
+        "IP": "198.51.100.77"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "svc_sterile",
+        "PASSWORD": "Sterile2026!",
+        "FULLNAME": "Sterile Supply Service",
+        "DESCRIPTION": "sterile supply monitor service",
+        "PASSWORD_NEVER_EXPIRES": "1"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "wardvol",
+        "PASSWORD": "Volunteer2026!",
+        "FULLNAME": "Volunteer Kiosk",
+        "PASSWORD_NEVER_EXPIRES": "1"
+      }
+    },
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "pharmacy",
+        "PASSWORD": "Pharm2026!",
+        "FULLNAME": "Pharmacy Front Desk"
+      }
+    }
+  ],
+  "web01": [
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "vendor-support",
+        "PASSWORD": "Meridian2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "portal-healthd",
+        "DESCRIPTION": "Portal health telemetry daemon",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 200; done'",
+        "EXTRA_LINE": "Environment=EXFIL_URL=http://feed.wardline-telemetry.net/collect"
+      }
+    },
+    {
+      "name": "theme-motd",
+      "vars": {
+        "MOTD_TEXT": "Meridian Health -- patient portal (web01). CODE SILVER in effect. Authorized staff only.",
+        "ISSUE_TEXT": "Meridian Health web01 -- authorized access only. All activity is monitored during CODE SILVER."
+      }
+    },
+    {
+      "name": "theme-readme",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "vendor-support",
+        "PASSWORD": "Meridian2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "imaging-ops",
+        "PASSWORD": "Imaging2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "radiology-tech",
+        "PASSWORD": "Radiology2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "frontdesk",
+        "PASSWORD": "Frontdesk2026!"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "portal-metrics",
+        "DESCRIPTION": "Portal metrics collector",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 150; done'",
+        "EXTRA_LINE": "Environment=EXFIL_URL=http://wardline-collect.net/ingest"
+      }
+    },
+    {
+      "name": "hidden-cron-persistence",
+      "vars": {
+        "PAYLOAD": "/usr/local/sbin/.portal-sync"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/meridian/portal-db.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "portal db user: portal_rw / P0rtal2026! -- staging creds identical to prod (do not leak)"
+      }
+    }
+  ],
+  "app01": [
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "dns-cache-sync",
+        "DESCRIPTION": "Local resolver cache synchronizer",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 240; done'"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "WardOptimizer",
+        "DESCRIPTION": "System Optimizer",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 300; done'"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "imaging-ops",
+        "PASSWORD": "Imaging2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "theme-motd",
+      "vars": {
+        "MOTD_TEXT": "Meridian Health -- imaging & DNS (app01). CODE SILVER in effect. Authorized staff only.",
+        "ISSUE_TEXT": "Meridian Health app01 -- authorized access only. All activity is monitored during CODE SILVER."
+      }
+    },
+    {
+      "name": "theme-readme",
+      "vars": {
+        "README_FILENAME": "47f7ab11ae35fea5-README.html"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "vendor-support",
+        "PASSWORD": "Meridian2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "wardline",
+        "PASSWORD": "Wardline2026!"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "pacs-agent",
+        "PASSWORD": "Pacs2026!",
+        "GROUPS_ADD": "sudo"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "dnsops",
+        "PASSWORD": "Dnsops2026!"
+      }
+    },
+    {
+      "name": "systemd-service",
+      "vars": {
+        "SERVICE_NAME": "dicom-relay",
+        "DESCRIPTION": "DICOM relay agent",
+        "EXEC_START": "/bin/sh -c 'while true; do sleep 210; done'",
+        "EXTRA_LINE": "Environment=C2=http://198.51.100.77:8443/beacon"
+      }
+    },
+    {
+      "name": "hidden-cron-persistence",
+      "vars": {
+        "PAYLOAD": "/usr/local/sbin/.dicom-sync"
+      }
+    },
+    {
+      "name": "insecure-file-mode",
+      "vars": {
+        "FILE_PATH": "/opt/meridian/pacs-creds.txt",
+        "FILE_MODE": "0666",
+        "FILE_CONTENT": "PACS service: pacs_svc / Pacs2026! -- also works on the imaging workstation (win01 wardvol same password policy)"
+      }
+    }
+  ]
+}
