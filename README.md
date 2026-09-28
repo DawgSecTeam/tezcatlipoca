@@ -15,7 +15,8 @@ nakon SSHes into each box to install services and deploy misconfigs.
 | [docs/architecture.md](docs/architecture.md) | Architecture: phases, component map, data flow, isolation, invariants, timeout rationale |
 | [docs/internals.md](docs/internals.md) | Per-module design notes — the "why" behind functions, parameters, and orderings |
 | [docs/known-issues.md](docs/known-issues.md) | Incident log, known-broken templates, failure modes, standing limitations |
-| [docs/e2e-testing.md](docs/e2e-testing.md) | Running e2e deploy tests: failure triage, per-phase recovery cost map, trim-then-resume, preflight checklist |
+| [docs/e2e-testing.md](docs/e2e-testing.md) | Running e2e deploy tests: failure triage, per-phase recovery cost map, trim-then-resume, preflight checklist, multi-host / pfSense / red-team runs (§8) |
+| [docs/pfsense-inpath-2026-09-28.md](docs/pfsense-inpath-2026-09-28.md) | In-path pfSense firewall: topology, the reproducible guest-side config-injection method, and the dead-ends |
 | [docs/scrim-harness.md](docs/scrim-harness.md) | Red-vs-blue agent scrim harness (`run-agent-scrim.py`, `scrim-report.py`, beacons) |
 | [docs/rehearsal-gates.md](docs/rehearsal-gates.md) | Numeric pass/fail gates for a scrim run |
 | [docs/harness-upgrades-plan.md](docs/harness-upgrades-plan.md) | Scrim harness rev-2 upgrade record |
@@ -37,6 +38,8 @@ nakon is vendored at `vendor/nakon` (pinned to a release; currently v0.1.7) and 
 [docs/architecture.md](docs/architecture.md#secrets) for the full inventory. For shared
 environments prefer real env vars over writing secrets to disk (`export TF_VAR_proxmox_api_token=…`).
 
-There is no test suite. Verify a change by running `verify-competition.py` against a deployed
-range, and/or exercising the nakon CLI directly from `vendor/nakon`
+Tests are offline unit tests over the deploy-path helpers (`python3 -m pytest tests/` — bundle
+lint, non-apt-distro prep, unmanaged box, interrupted-clone, run-terraform, repeat-run), not a
+full pipeline suite. The real integration gate is `verify-competition.py` against a deployed
+range; you can also exercise the nakon CLI directly from `vendor/nakon`
 (`python3 -m nakon randomize --json …`).
