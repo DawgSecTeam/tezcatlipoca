@@ -3,3 +3,4 @@ scenario Distro matrix smoke: all-Linux two-distro lineup (fedora web01, alpine 
 difficulty 3
 team_beacons 0
 apt_cache 0
+alpine_services 1

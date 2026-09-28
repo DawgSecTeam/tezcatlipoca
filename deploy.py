@@ -41,8 +41,9 @@ from engine_ops import (bootstrap_scoring_engine, ensure_nat_forwarding,
                         prepare_engine_from_template, push_event_conf)
 from golden_ops import (_is_template, _quote_sshkeys, _template_vmid_map,
                         build_golden_set, golden_vmid_for, unbooted_golden_boxes)
-from hardening_ops import (_APT_PREP_BODY, _apt_prep_script, fix_dns_on_boxes,
-                           fix_services_on_boxes, prep_apt_on_boxes, setup_ubuntu_auth)
+from hardening_ops import (_APT_PREP_BODY, _apt_prep_script, ensure_alpine_services,
+                           fix_dns_on_boxes, fix_services_on_boxes, prep_apt_on_boxes,
+                           setup_ubuntu_auth)
 from nakon_ops import (acquire_engine_lock, build_nakon_bundle, generate_nakon_config,
                        generate_stage_configs, run_nakon)
 from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
@@ -786,6 +787,10 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                 # pass (whose disruptive configs would break its apt/SSH needs).
                 with timed(comp_dir, 5, "fix_services"):
                     fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=box_creds)
+                    if compfile_flag(comp_dir / "Compfile", "alpine_services"):
+                        # Clones usually inherit the shim-installed services from the
+                        # golden disk; this pass is the idempotent safety net.
+                        ensure_alpine_services(comp_dir, linux_targets, ctx)
                 swept_marker.write_text(time.strftime("%Y-%m-%d %H:%M:%S"))
             checkpoint(5)
         else:

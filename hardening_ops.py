@@ -58,6 +58,15 @@ def _apt_prep_script(gateway=None):
     return proxy_lines + _APT_PREP_BODY
 
 
+# Pinned scored service -> (apk package, OpenRC service) for the alpine_services shim
+# (ensure_alpine_services). The vulndb catalog service scripts are apt/dnf/yum-only, so
+# Alpine boxes get their services here instead (distro-matrix-2026-09-27).
+ALPINE_SERVICES = {
+    "nginx": ("nginx", "nginx"),
+    "apache": ("apache2", "apache2"),
+    "bind": ("bind", "named"),
+}
+
 # Match the upgrade WORKER by full command line. `pgrep -x unattended-upgr` (the
 # 15-char truncated comm) ALSO matches Ubuntu's permanent unattended-upgrade-shutdown
 # --wait-for-signal daemon, so every Ubuntu box read BUSY forever and each prep_apt
@@ -254,6 +263,71 @@ def fix_dns_on_boxes(targets, ctx):
             f"fluke. Aborting rather than proceeding into Nakon against boxes that are already "
             f"known unreachable."
         )
+
+
+def ensure_alpine_services(comp_dir, targets, ctx):
+    """Install + enable pinned scored services on Alpine boxes via apk + OpenRC.
+
+    The vulndb service configs only speak apt/dnf/yum (and systemd), so on Alpine every
+    catalog service step exits 1 in 0 seconds (distro-matrix-2026-09-27). With the
+    Compfile `alpine_services` knob set, the golden plant runs non-strict and this shim
+    owns Alpine services instead: apk add, rc-update add default, rc-service start, and
+    a status probe as the pass condition. Idempotent — clones inherit the golden disk,
+    so phase 5's pass usually confirms rather than installs. Unknown pinned services
+    are reported, not silently skipped."""
+    proxy = gateway_proxy(ctx)
+    box_username = ctx.get("box_username", "ubuntu")
+    pins = json.loads((comp_dir / "box_services.json").read_text())
+    alpine = [t for t in targets
+              if "alpine" in str(t.get("box", {}).get("template") or t.get("template", "")).lower()]
+    if not alpine:
+        return
+
+    print("  Ensuring pinned services on Alpine boxes (apk + OpenRC shim)...")
+    pending = []
+    for t in alpine:
+        box_name = t.get("box_name") or t["box"]["name"]
+        unknown = [s for s in pins.get(box_name, []) if isinstance(s, str) and s not in ALPINE_SERVICES]
+        if unknown:
+            raise RuntimeError(
+                f"alpine_services shim has no apk mapping for {unknown} pinned on {box_name} — "
+                f"add it to hardening_ops.ALPINE_SERVICES or drop the pin")
+        wanted = [ALPINE_SERVICES[s] for s in pins.get(box_name, [])]
+        if wanted:
+            pending.append((t, wanted))
+
+    def _ensure(t_wanted):
+        t, wanted = t_wanted
+        ip = t["ip"]
+        markers = " ".join(f"TZ-SVC-OK-{pkg}" for pkg, _svc in wanted)
+        script = "; ".join(
+            f"echo \"TZ-SVC-TRY-{pkg}\"; apk add --no-cache {pkg} && rc-update add {svc} default && "
+            f"{{ rc-service {svc} restart >/dev/null 2>&1 || rc-service {svc} start; }} && "
+            f"rc-service {svc} status >/dev/null && echo \"TZ-SVC-OK-{pkg}\""
+            for pkg, svc in wanted)
+        for attempt in range(1, 5):
+            try:
+                r = ssh_via_gateway(ctx, ip, f"sudo sh -c {shlex.quote(script)}",
+                                    timeout=180, user=box_username)
+                missing = [m for m in markers.split() if m not in (r.stdout or "")]
+                if r.returncode == 0 and not missing:
+                    with PRINT_LOCK:
+                        print(f"    Alpine services ensured on {ip} ({', '.join(p for p, _ in wanted)})")
+                    return True
+                err = (r.stderr or "").strip()[:160]
+                with PRINT_LOCK:
+                    print(f"    Alpine shim attempt {attempt}/4 failed for {ip} "
+                          f"(rc={r.returncode}, missing={missing}) {err}")
+            except Exception as exc:
+                with PRINT_LOCK:
+                    print(f"    Alpine shim attempt {attempt}/4 failed for {ip}: {exc}")
+            time.sleep(10)
+        return False
+
+    results = run_concurrent(pending, _ensure)
+    failed = sorted({t["ip"] for (t, _w), r in zip(pending, results) if r is not True})
+    if failed:
+        raise RuntimeError(f"Alpine service shim failed on {failed} — nginx/scores would be DOWN")
 
 
 def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):

@@ -10,7 +10,14 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from hardening_ops import _APT_PREP_BODY, _SETTLE_CHECK
+from hardening_ops import ALPINE_SERVICES, _APT_PREP_BODY, _SETTLE_CHECK
+
+
+class AlpineShim(unittest.TestCase):
+    def test_map_covers_the_realistic_service_pins(self):
+        for svc in ("nginx", "apache", "bind"):
+            pkg, openrc = ALPINE_SERVICES[svc]
+            self.assertTrue(pkg and openrc)
 
 
 class NonAptPrep(unittest.TestCase):
