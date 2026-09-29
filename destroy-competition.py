@@ -81,8 +81,10 @@ def main():
 
     parser = argparse.ArgumentParser(
         description="Destroy a deployed competition. Default (teams-only) keeps the "
-                    "competition's golden + engine templates for the next test run; "
-                    "--full removes them too.")
+                    "competition's golden + engine templates for the next test run of "
+                    "the SAME competition; --full removes them too. Goldens never "
+                    "carry across competitions — tear down --full once the run's "
+                    "goal is met.")
     parser.add_argument("--competition", metavar="NAME",
                         help="competition directory under competitions/ (skips the picker)")
     parser.add_argument("--yes", action="store_true",
@@ -250,7 +252,8 @@ def main():
             hashes_path.unlink()
             print("  Template hash record (.template-hashes.json) removed.")
     else:
-        print("  Teams-only teardown — golden + engine templates kept for reuse.")
+        print("  Teams-only teardown — templates kept for THIS competition's next run only.")
+        print("  Goldens never carry across competitions; tear down --full once the run's goal is met.")
 
     print(f"\nInfrastructure for '{competition}' destroyed.")
     print(f"Competition files preserved at competitions/{competition}/")
