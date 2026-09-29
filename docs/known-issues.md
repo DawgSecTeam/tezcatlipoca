@@ -516,3 +516,86 @@ silently dropped the rule and engine→box scoring timed out. Fixed to `<network
   exposed passwords were rotated and are unused. No real Proxmox API token or nakon/vulndb
   password was found anywhere in this repo's history. A separate `nakon` checkout must audit its
   own history independently.
+
+## shakedown-5x4-2026-09-28 (5-box × 4-team on cyberfield/.193)
+
+- **ifupdown2 stale `/run/network/ifstatenew` breaks every network reload** (2026-09-28).
+  After team bridges are removed with `ip link del` (instead of `ifdown`), ifupdown2's
+  pickled state still lists the deleted bridges; every later `ifreload -a` (including the
+  one the terraform proxmox provider runs per bridge create) dies with
+  `[Errno 2] ... /sys/class/net/vmbrNNN/brif/` — deploy phase 2 fails on all four bridge
+  creates. Fix on the node: `rm /run/network/ifstatenew && ifreload -a`. Rule: tear bridges
+  down with `ifdown` (state-updating), not raw `ip link del`. The node's ifstatenew dated
+  from the Sep 27 pfsense churn — the rot predated us; our `ip link del` merely exposed it.
+
+- **challenge-* templates occupy vmids 1210–1211** — default team identifiers 101–104
+  collide on .193 (team1 = 1210–1214). The vmid-collision preflight gate catches it and
+  tells you exactly which vmids; always pass `TF_VAR_team_identifiers` (120–123 →
+  1400–1434 is the proven choice) when the node hosts challenge templates.
+
+- **`build_alpine_ci_template.sh` needed five fixes** (shakedown-5x4): (1) the cloud-init
+  snippet heredoc was unquoted (`<<YAML`), so backticks in a *comment* ran as command
+  substitution; (2) the bootstrap verify used busybox multi-arg `command -v`, which exits 2
+  even when everything is installed — the old run "passed" only because nothing read the
+  exit code; the gate now checks binaries one `command -v` per item and skips
+  `cloud-init status`'s own nonzero exit on "degraded"; (3) cloud-init's `packages:` races
+  first-boot network — the full set is re-asserted via `apk add` in runcmd; (4) an unquoted
+  YAML scalar containing `NOPASSWD: ALL` parses as a **mapping** (colon-space) and
+  cloud-init silently drops the whole runcmd — scalars are quoted now and the snippet
+  shape is gated through pyyaml at build time; (5) dl-cdn resolves AAAA and the lab has no
+  v6 egress — apk hangs on v6 connects (the "random missing packages per boot" flake);
+  bootcmd disables ipv6 (persists to clones, which also fixes the shim's apk).
+
+- **Alpine clones need PERSISTENT `ssh_pwauth` + a `%wheel` sudoers rule in the MAIN
+  sudoers file.** The image ships `PasswordAuthentication no` and `ssh_pwauth: false`;
+  a clone's first-boot cloud-init re-disables password auth even if the template fixed
+  sshd_config, so the golden plant dies with "Bad authentication type". And alpine's sudo
+  ships with no `%wheel` rule — the box user's NOPASSWD lives only in sudoers.d, so the
+  moment a plant like `writable-sudoers` makes sudoers.d world-writable, sudo ignores the
+  entire dir and the pipeline (shim, fix_services, beacons, nakon) loses root. Both are
+  baked into the -fix template now (`99-tz-pwauth.cfg`, main-sudoers wheel line).
+
+- **`writable-sudoers` plants sudoers.d as 0777 → sudo refuses the whole dir.** ubuntu/
+  fedora survive because medic is in the `sudo`/`wheel` group and nakon authenticates with
+  `sudo -S` (password via stdin); alpine needed the template fix above. The **alpine
+  service shim now prefers the guest-agent root channel** (ssh+sudo is the fallback);
+  `fix_services_on_boxes` already had the same fallback. Anything new that sh-commands
+  `sudo` on a post-sweep box must assume password-sudo at best.
+
+- **The `.postclone-swept` marker is not invalidated when a resume re-clones team boxes**
+  (phase 4 re-entry). A resume from phase 5 then skips the sweep and the fresh clones get
+  no repair configs, no credlist users, no shim. Hit twice on shakedown-5x4; workaround:
+  `rm competitions/<id>/.postclone-swept` before any `--from-phase 4|5` resume that
+  re-created boxes. Proper fix (TODO): unlink the marker whenever apply #2 creates boxes.
+
+- **Engine VM DHCP drift + full-content reversion.** The engine runs `ipconfig0 ip=dhcp`;
+  an unexplained reboot (during a heavily-loaded churn window) brought it back on a
+  different IP (.221→.243→.233) while terraform's saved output — which deploy/verify/
+  credentials all consume — stayed stale, and the fresh boot had *lost* the whole
+  post-clone system state (no docker, no /opt/quotient, no paramiko; only /opt/nakon from
+  the sweeps). Recovery that worked: pin the guest static via netplan +
+  `cloud-init network: {config: disabled}` (state output patched to match), then
+  `--from-phase 3` to re-prep the engine, `--from-phase 5` after clearing the swept marker
+  (clones were re-cloned by the same churn), and re-run the AD-misconfig pass (it only
+  runs with first promotion — resume skips it; replayed via
+  `domain_ops._run_single_nakon_config` with the 4 AD configs per DC). Follow-up: the
+  engine should get a static IP from the template and phase 6 should replay AD plants when
+  the marker is missing but the domain is up.
+
+- **Freeze gate vs commits:** the frozen record includes the code tree state; committing
+  after `--freeze` trips the drift gate on the next deploy ("golden template changed
+  since FREEZE: golden_configs"). Freeze LAST, after the final commit; if you must,
+  `--unfreeze --confirm-unfreeze` (pre-competition only) and re-freeze.
+
+- **bad-auto red01 bootstrap has no retry on transient pvestatd 596s.** The node threw
+  HTTP 596 (broken pipe) on `qemu/999/agent/exec` bursts under load ~28, killing bad-auto's
+  deploy mid-bootstrap four times; each relaunch got a bit further (idempotent), but a
+  wedged apt inside red01 (stale lock from a killed attempt) also needed
+  `pkill -9 apt-get; dpkg --configure -a` through the guest agent. Follow-up for bad-auto:
+  retry the agent execs, and treat "apt lock held" as wait-and-retry rather than failure.
+
+- **Node .193 went hard-down** (no ping/SSH/API from inside the lab either — .150 cannot
+  see it) after a sustained load-28 evening: ~27 VMs, repeated clone storms, template
+  rebuilds and the red01 bootstrap attempts. Needs physical/IPMI intervention; nothing on
+  this host can reach it. The deployed range (27 VMs) is presumably still running on it,
+  frozen and verified as of the last green verify; the 3h red-vs-blue event never started.
