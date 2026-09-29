@@ -65,6 +65,10 @@ Start-Service -Name QEMU-GA -ErrorAction SilentlyContinue
 if (-not (Get-NetFirewallRule -Name sshd -ErrorAction SilentlyContinue)) {{
     New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
 }}
+# The scored RDP check is a plain Tcp dial on 3389; the Remote Desktop rule
+# group ships disabled on the template even after the RDP plant flips the
+# registry, so the listener is up but every external dial is filtered.
+Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMode-In-UDP -ErrorAction SilentlyContinue
 """
     # The script is idempotent; an agent drop (not a script error) is retried until the
     # deadline. A nonzero rc is a real failure (e.g. password policy) — fail fast.

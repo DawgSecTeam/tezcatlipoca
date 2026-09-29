@@ -886,11 +886,20 @@ Drives Quotient: event.conf generation, team seeding, engine unpause, inject cre
     (engine/checks/tcp.go: dials the port, scores UP on connect) is exactly enough to confirm the
     service is listening. Confirmed against `/opt/quotient`'s own source and
     `config/event.conf.example` on the scoring engine (2026-08-07).
-  - **Windows entries** (`Enable WinRM`, `New SMB Share`, `RDP misconfigs`) — Quotient has no
-    SMB/RDP/WinRM-aware check type at all (only Web/Dns/Ssh/Ftp/Smtp/Imap/Sql/Tcp exist), so
-    these use the same generic Tcp port-open check. They're keyed by the exact nakon catalog
-    config name: these are service-category Windows configs, not generic binary names, and
-    `box_services.json` entries for a Windows box are catalog config names verbatim.
+  - **Windows entries** (`Enable WinRM`, `New SMB Share`, `RDP misconfigs`, `IIS HTTP`) — Quotient
+    has no SMB/RDP/WinRM-aware check type at all (only Web/Dns/Ssh/Ftp/Smtp/Imap/Sql/Tcp exist),
+    so WinRM/SMB/RDP use the generic Tcp port-open check. `IIS HTTP` is the exception: it's
+    scored as a real Web check (`Url / → 200`) against the IIS site the catalog config installs.
+    These are keyed by the exact nakon catalog config name: they're service-category Windows
+    configs, not generic binary names, and `box_services.json` entries for a Windows box are
+    catalog config names verbatim.
+  - **`ADDS`** — scored (Tcp :389, LDAP) but **never planted from `box_services.json`**: the pin
+    exists so `build_event_conf` emits the check, while `DOMAIN_INFRA_CONFIGS` (constants.py)
+    makes `generate_nakon_config` strip it from every nakon machine list. The actual promotion is
+    `domain_ops` at phase 6, which injects ADDS per team with the per-team domain + DSRM vars a
+    golden-stage plant can't carry — a bare ADDS riding the golden machine list would run dcpromo
+    without them. Scoreboard ServiceName is `<box>-<Display>` (`dc01-ldap`, `win01-rdp`, …) —
+    relevant to anything that watches `/api/services/<tid>`.
 - **`build_event_conf()`** — box IPs use `192.168._.<last_octet>` where `_` is the team
   identifier placeholder (the wildcard every team's check matches). `StartPaused = true` keeps
   scoring held until `unpause_engine()`; `Delay 60` / `Jitter 10` / `Points 5` are the round

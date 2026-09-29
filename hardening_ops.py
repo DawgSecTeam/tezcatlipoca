@@ -513,6 +513,15 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
         if "bind" in services or "named" in services or "dns" in services:
             script_lines.extend([
                 "# Bind9: allow queries from anywhere",
+                # The nakon bind plant declares zone "localhost" in
+                # named.conf.local; on Ubuntu named.conf.default-zones already
+                # declares it and named refuses to start on the duplicate. The
+                # default-zones copy serves db.local (A localhost -> 127.0.0.1),
+                # which is what the scored Dns check resolves.
+                "sudo python3 -c \"import re; p='/etc/bind/named.conf.local'; \""
+                "\"s=open(p).read(); \""
+                "\"open(p,'w').write(re.sub(r'zone \\\"localhost\\\" \\{[^}]*\\};\\\\n?', '', s))\""
+                " 2>/dev/null || true",
                 "cat > /tmp/named.conf.options << 'BIND9EOF'",
                 "options {",
                 '  directory "/var/cache/bind";',
@@ -574,7 +583,9 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
                 "sudo apt-get install -y lighttpd 2>/dev/null || true",
                 "sudo sed -i 's/server.port.*/server.port = 8000/' /etc/lighttpd/lighttpd.conf 2>/dev/null || true",
                 "sudo systemctl enable lighttpd 2>/dev/null || true",
-                "sudo systemctl start lighttpd 2>/dev/null || true",
+                "# restart, not start: lighttpd may already be running on :80 from the",
+                "# plant — start is a no-op on an active unit and the port move never lands",
+                "sudo systemctl restart lighttpd 2>/dev/null || true",
                 "sleep 1",
                 "",
             ])
