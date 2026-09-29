@@ -61,6 +61,10 @@ REPAIR_STAGE_CONFIGS = {
     "ssh-root-login", "ssh-x11-forwarding", "sshd-config-weak",
     "sshd-force-sftp-broken-chroot", "ssh-backdoor-listener-2222",
     "writable-sudoers",
+    # Cross-box identity (amongus-cde-2026): airship-webapp writes the app's SQL
+    # config with DB_HOST = its team's polus address (REQUIRED_VARS "ip:polus"), so
+    # it must plant per machine post-clone — apache itself rides the golden disk.
+    "airship-webapp",
 }
 FINAL_STAGE_CONFIGS = DISRUPTIVE_CONFIGS | {
     # Boot-hostile (live-found 2026-09-24: baked into the golden disk, it left every
@@ -72,6 +76,16 @@ FINAL_STAGE_CONFIGS = DISRUPTIVE_CONFIGS | {
     # Identity-dependent (see REQUIRED_VARS): writes a machine-specific /etc/hosts
     # entry, so it must plant per machine post-clone, never ride the golden disk.
     "hosts-redirect-linux",
+    # AD-dependent / domain-identity Windows configs (amongus-cde-2026): each only does
+    # the right thing on a PROMOTED DC (AD module present, policy now domain-scoped,
+    # zone DNSRoot resolvable). The DC's per-team pass for its otherwise golden-stage
+    # configs still runs pre-promotion (repair stage), so these plant per team after
+    # the domain pass in phase 6 instead. Members never pin them.
+    "ad-color-fleet-win",
+    "ad-dns-localhost",
+    "guest-enabled-win",
+    "Elevate Guest Account",
+    "weak-password-policy-win",
 }
 # Combined view: what a convergence sweep (redeploy rollback-base/rebuild) must plant.
 POST_CLONE_CONFIGS = REPAIR_STAGE_CONFIGS | FINAL_STAGE_CONFIGS
@@ -85,6 +99,10 @@ POST_CLONE_CONFIGS = REPAIR_STAGE_CONFIGS | FINAL_STAGE_CONFIGS
 #               generation, and ONLY in the repair/final stages. A golden-stage plant
 #               would bake the golden box's IP into every linked clone (generate
 #               enforces this hard).
+#   "ip:<box>"— cross-box identity: auto-filled with the SAME TEAM's copy of <box>'s
+#               IP (e.g. a web box pointed at its team's database box). Same repair/
+#               final-stage-only rule as "ip"; the target box name must exist in
+#               boxes.json or generate fails loudly.
 #   "literal" — operator-supplied: pin as {"name": ..., "vars": {...}} in
 #               box_services.json / box_vulns.json; a bare name is a generate error.
 # Catalog-side resolution is deferred to upstream nakon/vulndb (see known-issues).
@@ -96,6 +114,10 @@ REQUIRED_VARS = {
     # live-found 2026-09-25 (M4 validation run 1): the payload checks BOTH vars
     # uppercase via :?-required expansions — lowercase "rule" dies rc=2 in 0s.
     "sudoers-rule": {"DROPIN_NAME": "literal", "RULE": "literal"},
+    # airship-webapp (amongus-cde-2026) writes the app's SQL connection config; DB_HOST
+    # is the DATABASE box's address on the same team subnet, not the web box's own.
+    "airship-webapp": {"DB_USER": "literal", "DB_PASS": "literal",
+                       "DB_HOST": "ip:polus"},
 }
 # unrealircd-backdoor-container (rc=127: assumes docker on the box) has no pin var —
 # it is a box-prerequisite gap, caught by the verify plant-coverage gate when the

@@ -36,10 +36,21 @@ _SERVICE_TO_CHECK = {
     "New SMB Share":  ("Tcp", {"Display": "smb",   "Port": 445}),
     "RDP misconfigs": ("Tcp", {"Display": "rdp",   "Port": 3389}),
     "IIS HTTP":       ("Web", {"Display": "iis",   "Port": 80, "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
+    # amongus-cde-2026: skeld's IIS FTP scores port-open only. Quotient's Ftp check
+    # authenticates against the linux.credlist accounts, which only exist on Linux
+    # boxes — a credlist-backed Ftp check on Windows would score DOWN forever.
+    "IIS FTP":        ("Tcp", {"Display": "ftp",   "Port": 21}),
 
     # Scored but not nakon-planted: domain_ops owns ADDS/Domain Join (phase 6 injects
     # them with per-team vars); generate_nakon_config strips them from machine lists.
     "ADDS":           ("Tcp", {"Display": "ldap",  "Port": 389}),
+
+    # amongus-cde-2026: AD DNS on the DC, scored with the same localhost A-record
+    # query the bind/named plants satisfy. The config plants post-promotion
+    # (FINAL_STAGE_CONFIGS) so the zone exists to hold the record.
+    "ad-dns-localhost": ("Dns", {"Display": "dns", "Port": 53,
+                                 "Record": [{"Kind": "A", "Domain": "localhost",
+                                             "Answer": ["127.0.0.1"]}]}),
 }
 
 

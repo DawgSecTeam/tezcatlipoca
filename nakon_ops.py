@@ -92,6 +92,23 @@ def _config_name(c):
     return c if isinstance(c, str) else c["name"]
 
 
+def _cross_box_ip(machines, machine_name, target_box):
+    """Same team's copy of target_box's IP, for REQUIRED_VARS "ip:<box>" vars."""
+    _, _, identifier = machine_name.rpartition("-team")
+    for other in machines:
+        box, _, team = other["name"].rpartition("-team")
+        if box == target_box and team == identifier:
+            return other["ip"]
+    raise SystemExit(
+        f"  ERROR: cross-box var wants {target_box}'s IP for '{machine_name}' but no "
+        f"machine '{target_box}-team{identifier}' exists in nakon-config.json — check "
+        f"the box name in the REQUIRED_VARS \"ip:<box>\" kind.")
+
+
+def _is_identity_kind(kind):
+    return str(kind) == "ip" or str(kind).startswith("ip:")
+
+
 def _validate_pin_vars(configurations, where):
     """Reject bare-name (or var-incomplete) selections of configs that require vars.
 
@@ -397,7 +414,8 @@ def generate_stage_configs(comp_dir, teams, boxes, box_username="ubuntu", unboot
     # address into the disk. Planted on the golden they would bake the golden's IP
     # into every linked clone, so generate refuses them there and fills them per
     # machine in the repair/final stages instead.
-    identity_banned = {name for name, kinds in REQUIRED_VARS.items() if "ip" in kinds.values()}
+    identity_banned = {name for name, kinds in REQUIRED_VARS.items()
+                       if any(_is_identity_kind(kind) for kind in kinds.values())}
 
     seen_types = set()
     golden_machines = []
@@ -438,8 +456,13 @@ def generate_stage_configs(comp_dir, teams, boxes, box_username="ubuntu", unboot
                 required = REQUIRED_VARS.get(name) or {}
                 if required:
                     # Machine identity wins: fill/overwrite "ip"-kind vars with THIS
-                    # machine's address, whatever the pin said.
+                    # machine's address, and "ip:<box>"-kind vars with the same team's
+                    # copy of that box — whatever the pin said.
                     filled = {v: m["ip"] for v, kind in required.items() if kind == "ip"}
+                    for v, kind in required.items():
+                        if str(kind).startswith("ip:"):
+                            filled[v] = _cross_box_ip(full, m["name"],
+                                                      str(kind).split(":", 1)[1])
                     if filled:
                         pinned = (c.get("vars") or {}) if isinstance(c, dict) else {}
                         c = {"name": name, "vars": {**pinned, **filled}}
