@@ -146,7 +146,8 @@ conflict and applies nothing.
 ### Planted Linux boxes deny all SSH at PAM account stage after a restart (e2e #3, 2026-09-24)
 *(root cause UNSOLVED — workaround: rebuild the box, or never restart a planted one.
 2026-09-29 research pass: the visible pin set does NOT reproduce it; the prior session's
-bisect results recovered; standing instrument now lives on pam-lab vmid 1181 on .150)*
+bisect results recovered; the pam-lab built for it (vmid 1181) was destroyed in the same
+day's cleanup — rebuild from a base-ubuntu24.04-fix clone + the plant rungs below)*
 
 Phase-5-planted team1 Linux boxes (web01, db01, and app01 in its first life) stop accepting SSH
 entirely after their next stop/start: the TCP handshake completes, the connection dies at
@@ -195,9 +196,10 @@ to bisect.
   the account stage *touches* at boot — /run state (fresh tmpfs each boot), NSS module
   resolution, or something rewriting `/etc/pam.d/*` at boot that was never identified. The
   heal-by-rebuild is consistent with a boot-ordering race rather than deterministic state.
-- **Standing instrument:** pam-lab vmid 1181 (10.0.0.249, ubuntu24.04-fix + the FULL plant
-  already applied) carries the corrected bisect harness — `/etc/pam.d/sshd2` probes the
-  account stage stage-by-stage via `pam_exec`, sshd2 debug daemon on port 2225; healthy
+- **Standing instrument (destroyed 2026-09-29 in the range cleanup — rebuild on demand):**
+  the pam-lab was ubuntu24.04-fix + the FULL plant above, with the corrected bisect harness
+  — `/etc/pam.d/sshd2` probes the account stage stage-by-stage via `pam_exec`, sshd2 debug
+  daemon on port 2225; healthy
   signature is `probe-step0/1/3` in `/tmp/pam-bisect.log` with **step2 ABSENT** (pam_unix
   success skips it via `[success=1]`); a broken box shows `probe-step2-*` (and the failing
   step before it missing). Reproduce with the next real phase-5 plant + restart, then dial
