@@ -144,3 +144,10 @@ outpace re-kills, fix phantom `db01` target name in the intel model.
 services evidence still loop over 2 teams; end-of-event teams-only teardown destroys the
 engine (and its scoring DB) *before* the report can read the final scores — capture the
 final scoreboard dump into the evidence dir first.
+
+*All of the above landed 2026-09-29* — bad-auto 642675c (90 s first-decision budget;
+restore-aware reimpact cooldown + same-cycle press bursts up to `press_impacts_per_cycle`;
+phantom box names flagged in report summaries) and tezcatlipoca ce491e9/8a83b05 (T0 inject
+re-anchor via UpdateInject; every scoreboard/teardown/report loop scaled past 2 teams;
+`evidence/final-scoreboard.json` dumped before teardown; details in
+[known-issues.md](known-issues.md) § shakedown-5x4 event).

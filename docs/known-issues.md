@@ -384,8 +384,9 @@ differs from Ubuntu in ways that broke the plant and the scored services: SSH pa
 `00-*`); `named` binds `127.0.0.1` only; `httpd` hangs at boot resolving its `ServerName` against
 the not-yet-up DC; the qemu-guest-agent flaps after reboot. Resolved by building `base-fedora44-fix`
 (cloud-init + `00-tzc-pwauth.conf`) and, per box, `ServerName localhost` + `named listen-on { any; }`.
-**Still a TODO to fold the httpd/named per-box fixes into the golden/catalog** so they survive a
-fresh clone.
+The per-box httpd/named fixes are folded into `fix_services_on_boxes` (docroot + `ServerName
+localhost` + named listen-on/allow-query + resolved stub-off), so they re-apply on every fresh
+clone — the old "fold into the golden/catalog" TODO is retired.
 
 Related, in the vuln catalog (pfsense-rvb 2026-09-28): the linux `local-user` vuln did
 `usermod -a -G sudo`, which fails rc=6 on Fedora (no `sudo` group — RHEL/Fedora use `wheel`).
@@ -394,18 +395,27 @@ missing groups); the change is recorded in `docs/vulndb-fixes/`. The general les
 distro-agnostic vuln curation: never hard-code a distro's admin-group name.
 
 ### terraform destroy hangs on a Windows DC with a dead guest-agent (pfsense-rvb 2026-09-28)
+*(mitigated 2026-09-29: `destroy-competition.py` pre-stops Windows team clones via a hard API
+stop before terraform destroy — an already-stopped box skips the graceful path entirely)*
+
 `terraform destroy` sat "Still destroying… 6m+ elapsed" on a DC. The bpg provider issues a
 *graceful* shutdown with a long `timeout_shutdown_vm`, and a DC whose qemu-guest-agent is down
 never shuts down, holding the qm lock (so `qm unlock`/`qm stop` also time out). Break it by killing
 the qemu process directly: `kill -9 $(cat /var/run/qemu-server/<vmid>.pid)` — terraform then
-deletes the stopped VM. Pre-`qm stop` the other DCs so they don't repeat it.
+deletes the stopped VM. The pre-stop covers clones known to teams×boxes naming; anything it
+couldn't stop prints the kill -9 recipe.
 
 ### Scoring round loop doesn't auto-resume after an engine reboot (pfsense-ad 2026-09-28)
+*(detected 2026-09-29: `verify-competition` checks the round loop; `--fix-round-loop` runs the fix)*
+
 After the engine VM rebooted, the scoreboard stayed frozen: `/api/engine` showed a stale
 `last_round.StartTime` and a zero `current_round_time`. The Docker containers restart but the round
 loop stays stopped. Restart it: `POST /api/competition/start {"started":true}` then `POST
-/api/engine/pause {"pause":false}`; a fresh round lands within `Delay` seconds. (Symptom trap:
-`verify-competition` reads the *last scored* round, so it reports stale DOWN as if live.)
+/api/engine/pause {"pause":false}`; a fresh round lands within `Delay` seconds. verify now detects
+the stale signature (old StartTime + zero current_round_time, engine unpaused) and warns with those
+exact POSTs; `--fix-round-loop` issues them directly. (Symptom trap remains worth knowing:
+verify reads the *last scored* round, so a stopped loop reports stale DOWN as if live — the round
+check is what disambiguates.)
 
 ### In-path pfSense: host-ZFS injection breaks boot; WAN rule needs a keyword (pfsense-ad 2026-09-28)
 *(full runbook: `docs/pfsense-inpath-2026-09-28.md`)*
@@ -468,6 +478,43 @@ needs a distinct scoreboard Display** — same-TYPE pins on one box are fine, bu
 the plant actually gives them distinct ports/processes they still share a failure
 domain (stopping apache2 takes every Web vhost on it down at once, which bad-auto's
 roundcube→apache2 alias already models).
+
+### shakedown-5x4 event (2026-09-29): the three failed gates and the evidence gaps — all FIXED
+
+The first 4-team event (gates 9/12, [report](shakedown-5x4-2026-09-28-report.md)) failed three
+gates for reasons that were all fixable driver/harness defects, not scenario problems:
+
+1. **Blue injects = 0 — inject clocks anchored at phase-7 deploy time.** `resolve_inject_times`
+   anchors offsets at phase 7; a `--skip-deploy` restart (or a long staging gap) reaches T0 with
+   every inject already expired. This is the same disease as the winad-scrim2 closed-injects
+   incident, on the scrim path. FIXED (tezcatlipoca ce491e9): `run-agent-scrim` re-anchors at T0
+   unconditionally — `POST /api/injects/{id}` (the engine's UpdateInject; keep-files re-lists
+   attachments because unlisted files get deleted) with times recomputed from the comp's
+   `injects/*/inject.json` offsets, matched by title. Unordered offsets fail before the event.
+   `redeploy --reset-event` (engine re-clone) remains the heavy fallback, no longer required.
+2. **Red max_simultaneous_down = 1 + a 315s opening quiet period.** Two bad-auto defects
+   (fixed in bad-auto 642675c): (a) the FIRST decision could legally run the full 360 s LLM
+   budget before the first attack action — the first decision now gets a 90 s budget
+   (`first_decision_budget_sec`) and the deterministic fallback acts on expiry; (b) the loop is
+   one-action-per-cycle with a flat 15-min `reimpact_after_min` exclusivity per unit, so blue's
+   restorations outpaced re-kills — a detected restore now cancels that unit's exclusivity
+   immediately, and while press tempo is active red chains up to `press_impacts_per_cycle` (3)
+   additional DISTINCT unit kills in the same cycle (still through validate_decision, with
+   per-team headroom tracked between the scoreboard's ~70 s polls).
+3. **Teams 3/4 invisible to the evidence loops.** `monitor_loop`, `stage_capture`, the blue
+   endpoint/lock selection, `scrim-report`'s `host_label` + `blue_metrics`, and the final-scores
+   read all assumed 2 teams — 4-team runs got scoreboard jsonl, final-services JSON, and gate
+   counts for teams 1/2 only, and teams 3/4 silently shared team1's LLM endpoint and lock.
+   FIXED (ce491e9): everything scales with `--teams` (`_cred_team_names`; per-team
+   `--blue{N}-base-url/--blue{N}-model`, one lock per distinct endpoint), and identifiers
+   100+i map to team i generically.
+
+Also fixed that night: **teardown destroyed the engine (and its scoring DB) before the report
+could read final scores** — `stage_capture` now dumps `evidence/final-scoreboard.json` (teams,
+injects, per-team services) BEFORE teardown, and `scrim-report` renders a "Final scores" section
+from it; and **bad-auto's report could name boxes that never existed** (a `db01` in the
+shakedown report for a range of dc01/win01/web01/app01/edge01) — LLM executive summaries get
+phantom box names flagged in place (bad-auto 642675c).
 
 ## Known-broken templates
 
@@ -613,13 +660,13 @@ roundcube→apache2 alias already models).
   `fix_services_on_boxes` already had the same fallback. Anything new that sh-commands
   `sudo` on a post-sweep box must assume password-sudo at best.
 
-- **The `.postclone-swept` marker is not invalidated when a resume re-clones team boxes**
-  (phase 4 re-entry). A resume from phase 5 then skips the sweep and the fresh clones get
-  no repair configs, no credlist users, no shim. Hit twice on shakedown-5x4; workaround:
-  `rm competitions/<id>/.postclone-swept` before any `--from-phase 4|5` resume that
-  re-created boxes. Proper fix (TODO): unlink the marker whenever apply #2 creates boxes.
+- **The `.postclone-swept` marker was not invalidated when a resume re-cloned team boxes**
+  (phase 4 re-entry) — FIXED 2026-09-29 (8a83b05): deploy unlinks the marker right after
+  apply #2 succeeds, so a following phase-5 always re-sweeps the fresh clones. Hit twice on
+  shakedown-5x4; the old workaround (`rm competitions/<id>/.postclone-swept` before any
+  `--from-phase 4|5` resume that re-created boxes) is no longer needed.
 
-- **Engine VM DHCP drift + full-content reversion.** The engine runs `ipconfig0 ip=dhcp`;
+- **Engine VM DHCP drift + full-content reversion.** The engine ran `ipconfig0 ip=dhcp`;
   an unexplained reboot (during a heavily-loaded churn window) brought it back on a
   different IP (.221→.243→.233) while terraform's saved output — which deploy/verify/
   credentials all consume — stayed stale, and the fresh boot had *lost* the whole
@@ -628,22 +675,26 @@ roundcube→apache2 alias already models).
   `cloud-init network: {config: disabled}` (state output patched to match), then
   `--from-phase 3` to re-prep the engine, `--from-phase 5` after clearing the swept marker
   (clones were re-cloned by the same churn), and re-run the AD-misconfig pass (it only
-  runs with first promotion — resume skips it; replayed via
-  `domain_ops._run_single_nakon_config` with the 4 AD configs per DC). Follow-up: the
-  engine should get a static IP from the template and phase 6 should replay AD plants when
-  the marker is missing but the domain is up.
+  runs with first promotion — replayed via
+  `domain_ops._run_single_nakon_config` with the 4 AD configs per DC). Both follow-ups
+  landed 2026-09-29 (8a83b05): the engine gets a STATIC mgmt IP by default
+  (`10.0.0.250`, `TF_VAR_engine_mgmt_ip` override, `''` = DHCP, preflight refuses a
+  colliding address), and phase 6 replays the AD plants whenever the
+  `.nakon-domain-<team>-ad-misconfigs` marker is missing, even when the domain is up.
 
 - **Freeze gate vs commits:** the frozen record includes the code tree state; committing
   after `--freeze` trips the drift gate on the next deploy ("golden template changed
   since FREEZE: golden_configs"). Freeze LAST, after the final commit; if you must,
   `--unfreeze --confirm-unfreeze` (pre-competition only) and re-freeze.
 
-- **bad-auto red01 bootstrap has no retry on transient pvestatd 596s.** The node threw
+- **bad-auto red01 bootstrap vs transient pvestatd 596s — FIXED.** The node threw
   HTTP 596 (broken pipe) on `qemu/999/agent/exec` bursts under load ~28, killing bad-auto's
   deploy mid-bootstrap four times; each relaunch got a bit further (idempotent), but a
   wedged apt inside red01 (stale lock from a killed attempt) also needed
-  `pkill -9 apt-get; dpkg --configure -a` through the guest agent. Follow-up for bad-auto:
-  retry the agent execs, and treat "apt lock held" as wait-and-retry rather than failure.
+  `pkill -9 apt-get; dpkg --configure -a` through the guest agent. Both follow-ups landed:
+  agent execs retry through 596/5xx bursts (bad-auto a542df7), and the apt install loop now
+  clears a stale dpkg/apt lock (`pkill -9 apt-get` + `dpkg --configure -a`) before each
+  retry instead of burning all six attempts on "Could not get lock" (bad-auto 642675c).
 
 - **Node .193 hard-downs are a KNOWN HARDWARE ISSUE of the cyberfield box** (owner
   confirmed 2026-09-29 — not load-related; the shakedown evening hit load 28 with ~27 VMs
