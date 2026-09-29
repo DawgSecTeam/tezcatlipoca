@@ -144,7 +144,9 @@ replaced entirely if it declares a second default route — `netplan apply` erro
 conflict and applies nothing.
 
 ### Planted Linux boxes deny all SSH at PAM account stage after a restart (e2e #3, 2026-09-24)
-*(root cause UNSOLVED — workaround: rebuild the box, or never restart a planted one)*
+*(root cause UNSOLVED — workaround: rebuild the box, or never restart a planted one.
+2026-09-29 research pass: the visible pin set does NOT reproduce it; the prior session's
+bisect results recovered; standing instrument now lives on pam-lab vmid 1181 on .150)*
 
 Phase-5-planted team1 Linux boxes (web01, db01, and app01 in its first life) stop accepting SSH
 entirely after their next stop/start: the TCP handshake completes, the connection dies at
@@ -163,7 +165,44 @@ that got this far — all guest-agent-driven (SSH is the thing that's broken): a
 (the PAM service name is argv[0] — `-o PAMServiceName` does not exist in OpenSSH 9.6) launched
 with `setsid` (guest-agent exec kills its children when the exec session ends); `strace -f`
 around the failing connect; a `pam_exec`-probed copy of the account stack on the `sshd2` service
-to bisect. A bisect that survives the next outage window is the standing follow-up.
+to bisect.
+
+**2026-09-29 research pass** (fresh noble 24.04 lab, vmid 1181 "tzlive-pamlab" on .150):
+
+- **The visible catalog cannot produce the failure.** The complete e2e-09-19 web01 pin set
+  (36 scripts planted verbatim: pam-permit-empty, pam-no-password-quality, pam-permit-auth's
+  common-auth prepend, 4× uid-0 users, 666 shadow/passwd/crontab, cron persistence, journald
+  100%, the +12h `date -s` clock shift, the five ssh-* pins with their restart storm, …)
+  followed by a hard `qm stop/start` cycles cleanly — pubkey AND paramiko-password dials work
+  for the operator and freshly planted users. Note the two pam pins are also *incapable* of
+  touching sshd's chain on Ubuntu: `pam-permit-empty` only edits `su`/`login` (no
+  `system-auth` here) and `pam-no-password-quality` matches no Ubuntu file; the only
+  common-auth toucher (`pam-permit-auth`) is auth-stage and cannot yield an *account*-stage
+  sshd refusal.
+- **The prior session's bisect conclusions (recovered from its scripts in
+  `scrim-runs/patch-*.py`, Sep 25): the failure was SYSTEM-WIDE account-stage misbehavior** —
+  `pam_nologin` failed with no nologin file present, `pam_unix` account failed while
+  `unix_chkpwd` passed, and **sudo's account stage was broken too**; the verified-working
+  repair was replacing `common-account` with a single `account required pam_permit.so`
+  (`patch-common-account.py`, which also left `common-account.tz-backup` — no such backup
+  survives on any live box; the incident VMs are gone and vmids 1332/1333 were recycled to
+  the pfsense-rvb range). Every individual account module failing against verifiably-clean
+  inputs rules out pin content and module logic: the fault is stack-level (config parsing,
+  NSS resolution, or module loading) inside the account stage's environment.
+- **Boot-triggered + per-invocation reads is the key tension.** PAM configs are read
+  per-invocation (the patch heals in-flight plants immediately), so a purely corrupt config
+  file would fail at plant time, not after a reboot. The boot trigger therefore lives in what
+  the account stage *touches* at boot — /run state (fresh tmpfs each boot), NSS module
+  resolution, or something rewriting `/etc/pam.d/*` at boot that was never identified. The
+  heal-by-rebuild is consistent with a boot-ordering race rather than deterministic state.
+- **Standing instrument:** pam-lab vmid 1181 (10.0.0.249, ubuntu24.04-fix + the FULL plant
+  already applied) carries the corrected bisect harness — `/etc/pam.d/sshd2` probes the
+  account stage stage-by-stage via `pam_exec`, sshd2 debug daemon on port 2225; healthy
+  signature is `probe-step0/1/3` in `/tmp/pam-bisect.log` with **step2 ABSENT** (pam_unix
+  success skips it via `[success=1]`); a broken box shows `probe-step2-*` (and the failing
+  step before it missing). Reproduce with the next real phase-5 plant + restart, then dial
+  2225 and read the log. (pam_exec probes must be argument-direct — `/bin/echo probe-x` —
+  the old `/bin/sh -c 'echo x'` form loses its quotes through every transport.)
 
 ### Phase-6 mid-crash resume is safe; Windows-clone bootstrap needs the agent up (~8 min) (e2e #3, 2026-09-24)
 *(fixed 2026-09-27 in d1e5763: `bootstrap_windows_box` polls setup-complete + retries the exec within a 900 s deadline instead of one 90 s shot)*
