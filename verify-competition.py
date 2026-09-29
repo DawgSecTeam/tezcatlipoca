@@ -673,6 +673,59 @@ def check_injects(base_url, admin_session, comp_dir):
 _INJECT_CLOSE_KEYS = ("CloseTime", "close_time", "CloseAt", "close_at", "Close", "close")
 
 
+def check_round_loop(base_url, admin_session, fix=False):
+    """Scoring round loop vs an engine reboot. The Docker containers restart after
+    a reboot but the round loop stays stopped (pfsense-ad: frozen scoreboard, stale
+    last_round.StartTime, zero current_round_time) — and verify reads the LAST
+    SCORED round, reporting stale DOWN as if live. Informational: WARN with the
+    exact remediation; --fix-round-loop runs the two POSTs."""
+    print("\n  (scoring round loop — stops silently after an engine reboot)")
+    if admin_session is None:
+        print("  SKIP  — no admin session.")
+        return True
+    try:
+        r = admin_session.get(f"{base_url}/api/engine", timeout=10)
+        r.raise_for_status()
+        eng = r.json()
+    except (requests.RequestException, ValueError) as e:
+        print(f"  WARN  — could not read /api/engine: {e}")
+        return True
+    if not isinstance(eng, dict):
+        return True
+    if eng.get("Paused") or eng.get("paused"):
+        print("  PASS  — engine paused (round loop not expected to advance)")
+        return True
+    last = eng.get("last_round") or eng.get("LastRound") or {}
+    start = last.get("StartTime") or last.get("startTime") or last.get("start_time")
+    current = eng.get("current_round_time", eng.get("CurrentRoundTime"))
+    if not start or current:
+        print("  PASS  — round loop advancing")
+        return True
+    from datetime import datetime, timezone
+    try:
+        started = datetime.fromisoformat(str(start).replace("Z", "+00:00"))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        age_min = (datetime.now(timezone.utc) - started).total_seconds() / 60
+    except ValueError:
+        return True
+    if age_min < 10:
+        print("  PASS  — round loop starting (first round pending within Delay)")
+        return True
+    print(f"  WARN  — round loop looks STOPPED: last round started {age_min:.0f} min ago "
+          "and current_round_time is 0 (engine rebooted? the loop does not self-resume)")
+    print('         fix: POST /api/competition/start {"started":true} then '
+          'POST /api/engine/pause {"pause":false} — a fresh round lands within Delay s')
+    if fix:
+        r1 = admin_session.post(f"{base_url}/api/competition/start",
+                                json={"started": True}, timeout=10)
+        r2 = admin_session.post(f"{base_url}/api/engine/pause",
+                                json={"pause": False}, timeout=10)
+        print(f"  --fix-round-loop: start={r1.status_code} unpause={r2.status_code} — "
+              f"re-run verify to confirm a fresh round landed")
+    return True
+
+
 def closed_injects(injects, now=None):
     """[(title, close_time)] for injects whose close time is already past. Tolerant of the
     engine's JSON key casing; injects with no parseable close time are ignored."""
@@ -966,6 +1019,9 @@ def main():
     parser.add_argument("--admin-password", help="override the Quotient admin password")
     parser.add_argument("--strict-services", action="store_true",
                         help="also require every service UP for a passing exit code")
+    parser.add_argument("--fix-round-loop", action="store_true", dest="fix_round_loop",
+                        help="when the scoring round loop looks stopped after an engine "
+                             "reboot, run the start/unpause POSTs instead of only warning")
     parser.add_argument("--expect-no-vulns", action="store_true", dest="expect_no_vulns",
                         help="validation comps that deliberately plant zero misconfigurations "
                              "(box_vulns.json all-empty): skip the misconfig gates instead of "
@@ -1031,6 +1087,7 @@ def main():
         misconfig_survival_ok = check_misconfig_survival(ctx, boxes)
     report_beacons(ctx, boxes)
     injects_relevant, injects_ok = check_injects(base_url, admin_session, comp_dir)
+    check_round_loop(base_url, admin_session, fix=args.fix_round_loop)
     print("\n  (M4 plant coverage — expected vs. actually planted, per machine)")
     coverage_checked, coverage_ok = check_plant_coverage(comp_dir)
     print("\n  (AD domains — promotion, joins, AD plants, DomainSID uniqueness)")
