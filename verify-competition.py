@@ -1067,11 +1067,14 @@ def main():
     logins_ok, admin_session = check_logins(base_url, teams, admin_password)
     print("\n  (default-credential regression guard)")
     no_default_creds_ok = check_no_default_creds(comp_dir)
+    # boxes.json (box TYPES, keyed by name in box_services.json) — nakon-config
+    # machines carry team-suffixed names the pin map doesn't use
     try:
+        box_list = json.loads((comp_dir / "boxes.json").read_text())
         pinned_services = json.loads((comp_dir / "box_services.json").read_text())
     except (OSError, ValueError):
-        pinned_services = {}
-    expected_names = expected_service_names(pinned_services, boxes) if pinned_services else set()
+        box_list, pinned_services = [], {}
+    expected_names = expected_service_names(pinned_services, box_list) if pinned_services else set()
     services_query_ok, services_all_up, pins_registered = check_services(
         base_url, admin_session, teams, args.strict_services, expected_names)
     isolation_ok = check_isolation(ctx, teams, boxes)
