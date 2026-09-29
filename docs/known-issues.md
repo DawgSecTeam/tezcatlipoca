@@ -499,6 +499,12 @@ Two operator traps from the same night, both now guarded in bad-auto (commit 8b9
    deploy: verify the on-red01 config's `quotient.base_url` names YOUR engine, fix
    config.yaml's `competition_dir` to the live pairing, then `destroy --competition
    <that-dir> --yes`.
+   Fixed 2026-09-29 (bad-auto 196846f): deploy stamps red01's identity — VM
+   description `bad-auto red01 comp=<name> id=<uuid>` plus a host-side
+   `.deploy-stamp.json` — and destroy cross-checks config.yaml, the stamp, and the
+   live VM marker before deleting, refusing any disagreement (`--dry-run` rehearses
+   all three read-only; `--force` overrides after manual verification). The manual
+   recipe above remains the fallback for pre-stamp deployments.
 
 ### Two pins of the same check TYPE on one box collapsed to ONE scoreboard check (regression-4x1-2026-09-28) — FIXED 2026-09-29
 
@@ -664,6 +670,24 @@ phantom box names flagged in place (bad-auto 642675c).
   exposed passwords were rotated and are unused. No real Proxmox API token or nakon/vulndb
   password was found anywhere in this repo's history. A separate `nakon` checkout must audit its
   own history independently.
+
+- **2026-09-29 tracked terraform artifacts audit**: 21 files tracked on the PUBLIC GitHub remote
+  carried real per-competition credentials — 9 `terraform.tfvars.json` (`box_password`,
+  `teams.teamN.password`), 9 tfstate files (`team_passwords` outputs), and three
+  `competitions/m4-validation-2026-09-25/` run logs (`m4-resume-current.log` with three
+  `.deploy_state.json` values, plus `m4-scenario8-team-rebuild.log` and `m4-verify-current.log`
+  with one each). No standing infrastructure secrets were exposed (no Proxmox API token or current
+  `.env` value appears anywhere in the tracked tree), and every affected competition was already
+  torn down, so the passwords were operationally dead — nothing to rotate. Resolved by
+  curation: the three best-documented competitions keep their terraform artifacts tracked as
+  reference (shakedown-5x4-2026-09-28, pfsense-ad-2026-09-27, scrim-extreme-cyberfield-2026-09-22);
+  everything else is untracked, and the gitignore now covers the layouts that slipped through
+  (comp-dir top-level `*.tfstate*`/`terraform.tfvars*` — exactly how
+  `scrim-dress-2026-09-20/terraform.tfstate` got committed — plus `competitions/*/*.log` and
+  root `terraform/terraform.tfvars*`). History keeps the removed passwords (same policy as the
+  2026-08-06 audit: treat as permanently public; they are dead). Separately, the
+  same-type-2box closeout's terraform commit was amended out pre-push — its content never
+  reached the remote; 0787d42's rules predate this wider gap closure.
 
 ## shakedown-5x4-2026-09-28 (5-box × 4-team on cyberfield/.193)
 

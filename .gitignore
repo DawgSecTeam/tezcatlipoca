@@ -40,3 +40,14 @@ competitions/distro-matrix-2026-09-27/terraform/
 artifacts/rawsockets-beacon/build/
 competitions/*/terraform/
 competitions/*/.postclone-swept
+
+# competition terraform artifacts carry dead per-comp passwords — three
+# reference comps keep theirs tracked on purpose (force-add to refresh a
+# snapshot); these close the layouts that slipped through: comp-dir
+# top-level tfstate/tfvars (how scrim-dress-2026-09-20/terraform.tfstate got
+# committed), per-comp logs (m4-resume-current.log carried deploy-state
+# passwords), and root terraform/ tfvars variants
+competitions/*/*.tfstate*
+competitions/*/terraform.tfvars*
+competitions/*/*.log
+terraform/terraform.tfvars*
