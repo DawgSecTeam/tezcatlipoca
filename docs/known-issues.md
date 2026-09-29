@@ -449,6 +449,15 @@ Two operator traps from the same night, both now guarded in bad-auto (commit 8b9
    named. Fixed: `destroy --competition <dir> --yes` where --competition must MATCH
    config.yaml (mismatch refuses), `--skip-vm` for shared/repurposed red VMs; the
    harness passes both (tezcatlipoca db5a689).
+   New facet (same-type-2box closeout, 2026-09-29): **plain `badauto deploy` never
+   touches host-side config.yaml** — that's run-agent-scrim's `stage_red` — so after a
+   deploy + coverage flow the guard compares against the PREVIOUS run's
+   competition_dir. Worse, red vmids recycle: the stale entry named vmid 999, which
+   was now the NEW comp's red01 at the same .244. The matching-dir guard can't catch
+   this (the identity it checks is itself stale). Before destroying after a plain
+   deploy: verify the on-red01 config's `quotient.base_url` names YOUR engine, fix
+   config.yaml's `competition_dir` to the live pairing, then `destroy --competition
+   <that-dir> --yes`.
 
 ### Two pins of the same check TYPE on one box collapsed to ONE scoreboard check (regression-4x1-2026-09-28) — FIXED 2026-09-29
 

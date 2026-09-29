@@ -1,0 +1,15 @@
+{
+  "web01": [
+    "apache",
+    "roundcube",
+    "bind"
+  ],
+  "win01": [
+    "Enable WinRM",
+    "IIS HTTP",
+    {
+      "name": "IIS HTTP",
+      "display": "iis-alt"
+    }
+  ]
+}
