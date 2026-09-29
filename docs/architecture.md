@@ -57,7 +57,10 @@ state file written by the same pipeline version; cross-version resumes are refus
    builds them all now) plus any legacy `cloned_vms.json` entries; wave 2 destroys the
    scoring engine plus every golden template that is missing, hash-mismatched, or a
    stale slot beyond the lineup. M4: **hash-matching golden templates survive cleanup** —
-   that is the test-run reuse (build once per competition, reuse across its runs). The
+   that is the test-run reuse (build once per competition, reuse across ITS runs — never
+   across competitions: the hash inputs are per-competition, so a different competition
+   always rebuilds them; when a run has achieved its goal, `destroy-competition.py --full`
+   tears the golden range down). The
    engine template is never touched here. Linked clones must die before their
    templates. Bridges serial. Skipped on `--from-phase >1`.
 2. **Engine template + Terraform apply #1** — M4 first computes the engine template
@@ -295,6 +298,11 @@ durations only, no secrets), and `.postclone-swept` (sweep marker). Ad-hoc `logs
 - **Destroy order: linked clones before golden templates.** Clones depend on the template's
   base disk; deleting a template with live clones orphans them. Phase 1 runs two waves,
   `destroy-competition.py` destroys golden templates after `terraform destroy`.
+- **Golden reuse is per-competition only.** A golden set built for competition A can never
+  serve competition B (tags `comp-a`, per-competition hash inputs — B's phase 1 would
+  rebuild it anyway), so once a run has achieved its goal the golden range is torn down
+  with `--full` rather than left on the datastore "for reuse". Teams-only teardown is a
+  mid-run mode, not an end state.
 - **Never deploy over a per-comp terraform state from another host or engine vmid** — the
   stale-state guard refuses; terraform would otherwise "reconcile" old state and destroy
   whatever now sits at the old vmid on the new host (live-confirmed on realm, 2026-09-24).

@@ -594,7 +594,9 @@ generation.
 
 - **Pipeline v2 (M3) phase map, M4-revised** — [1] two-wave parallel cleanup (team boxes
   + legacy clones, then engine + hash-mismatched/missing goldens — **matching golden
-  templates survive**: test-run reuse) · [2] engine-template lifecycle (hash → reuse or
+  templates survive**: test-run reuse, and only that — the reuse never crosses
+  competitions (per-competition hash inputs; once a run achieved its goal the golden
+  range goes with `--full`, see usage-agents "Lifecycle rule")) · [2] engine-template lifecycle (hash → reuse or
   rebuild; never on a frozen competition) + terraform apply #1 (engine as a *linked
   clone of the engine template* + bridges, `build_team_boxes=false`) · [3]
   prepare-engine-from-template (`.env` BEFORE `compose up`, fresh volumes ⇒ empty
