@@ -936,6 +936,10 @@ def main():
     parser.add_argument("--admin-password", help="override the Quotient admin password")
     parser.add_argument("--strict-services", action="store_true",
                         help="also require every service UP for a passing exit code")
+    parser.add_argument("--expect-no-vulns", action="store_true", dest="expect_no_vulns",
+                        help="validation comps that deliberately plant zero misconfigurations "
+                             "(box_vulns.json all-empty): skip the misconfig gates instead of "
+                             "failing on them")
     parser.add_argument("--freeze", action="store_true",
                         help="M4: after a PASSING verify (all gates + plant-coverage), "
                              "record the template hashes + code commit in .frozen.json. "
@@ -982,8 +986,14 @@ def main():
     isolation_ok = check_isolation(ctx, teams, boxes)
     print("\n  (live-ops health check status — informational)")
     report_healthcheck_status(ctx)
-    misconfig_ok = check_misconfig(ctx, boxes, comp_dir)
-    misconfig_survival_ok = check_misconfig_survival(ctx, boxes)
+    if args.expect_no_vulns:
+        print("\n[4/5] MISCONFIG SPOT-CHECK")
+        print("  SKIP  — --expect-no-vulns: this comp deliberately plants no misconfigurations")
+        misconfig_ok = True
+        misconfig_survival_ok = True
+    else:
+        misconfig_ok = check_misconfig(ctx, boxes, comp_dir)
+        misconfig_survival_ok = check_misconfig_survival(ctx, boxes)
     report_beacons(ctx, boxes)
     injects_relevant, injects_ok = check_injects(base_url, admin_session, comp_dir)
     print("\n  (M4 plant coverage — expected vs. actually planted, per machine)")
@@ -1020,8 +1030,11 @@ def main():
                       else "SKIP — live probe couldn't run, unverified" if isolation_ok is None
                       else "FAIL")
     print(f"  isolation        : {isolation_note}")
-    print(f"  misconfig        : {'PASS' if misconfig_ok else 'FAIL'}")
-    print(f"  misconfig_surviv.: {'PASS' if misconfig_survival_ok else 'FAIL'}")
+    misconfig_note = "PASS"
+    if args.expect_no_vulns:
+        misconfig_note = "SKIP (--expect-no-vulns)"
+    print(f"  misconfig        : {misconfig_note}")
+    print(f"  misconfig_surviv.: {misconfig_note}")
     print(f"  injects          : {'PASS' if injects_ok else 'FAIL'}"
           f"{'' if injects_relevant else ' (none — skipped)'}")
     tally = None
