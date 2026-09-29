@@ -38,3 +38,5 @@ competitions/distro-matrix-2026-09-27/terraform/
 .env.realm-backup*
 .zcode/
 artifacts/rawsockets-beacon/build/
+competitions/*/terraform/
+competitions/*/.postclone-swept
