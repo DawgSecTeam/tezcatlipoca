@@ -1,0 +1,137 @@
+{
+  "ok": false,
+  "rows": [
+    {
+      "team": "team1",
+      "box": "dc01",
+      "pin": "ADDS",
+      "display": "dc01-ldap",
+      "takedown": true,
+      "down_after": "DOWN after 60s",
+      "restore": true,
+      "up_after": "UP after 30s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "dc01",
+      "pin": "Enable WinRM",
+      "display": "dc01-winrm",
+      "takedown": true,
+      "down_after": "DOWN after 90s",
+      "restore": true,
+      "up_after": "UP after 30s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "win01",
+      "pin": "New SMB Share",
+      "display": "win01-smb",
+      "takedown": true,
+      "down_after": "DOWN after 60s",
+      "restore": true,
+      "up_after": "UP after 30s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "win01",
+      "pin": "RDP misconfigs",
+      "display": "win01-rdp",
+      "takedown": true,
+      "down_after": "DOWN after 60s",
+      "restore": true,
+      "up_after": "UP after 30s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "win01",
+      "pin": "IIS HTTP",
+      "display": "win01-iis",
+      "takedown": true,
+      "down_after": "DOWN after 90s",
+      "restore": true,
+      "up_after": "UP after 30s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "web01",
+      "pin": "apache",
+      "display": "web01-http",
+      "takedown": true,
+      "down_after": "DOWN after 60s",
+      "restore": true,
+      "up_after": "UP after 60s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "web01",
+      "pin": "roundcube",
+      "display": "web01-roundcube",
+      "takedown": false,
+      "down_after": "timeout (takedown: display 'web01-roundcube' down=0, baseline=0)",
+      "restore": true,
+      "up_after": "UP after 0s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "web01",
+      "pin": "splunk",
+      "display": "web01-splunk",
+      "takedown": true,
+      "down_after": "DOWN after 30s",
+      "restore": true,
+      "up_after": "UP after 60s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "web01",
+      "pin": "bind",
+      "display": "web01-dns",
+      "takedown": true,
+      "down_after": "DOWN after 30s",
+      "restore": true,
+      "up_after": "UP after 90s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "ssh01",
+      "pin": "ssh",
+      "display": "ssh01-ssh",
+      "takedown": false,
+      "down_after": null,
+      "restore": false,
+      "up_after": null,
+      "detail": "foothold failed: medic@192.168.125.5 unreachable"
+    },
+    {
+      "team": "team1",
+      "box": "ssh01",
+      "pin": "telnet-service",
+      "display": "ssh01-telnet",
+      "takedown": false,
+      "down_after": null,
+      "restore": false,
+      "up_after": null,
+      "detail": "foothold failed: medic@192.168.125.5 unreachable"
+    },
+    {
+      "team": "team1",
+      "box": "ssh01",
+      "pin": "vsftpd",
+      "display": "ssh01-ftp",
+      "takedown": false,
+      "down_after": null,
+      "restore": false,
+      "up_after": null,
+      "detail": "foothold failed: medic@192.168.125.5 unreachable"
+    }
+  ]
+}
