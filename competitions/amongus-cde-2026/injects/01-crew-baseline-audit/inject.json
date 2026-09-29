@@ -1,0 +1,7 @@
+{
+  "title": "Crew Tasking — Baseline Security Audit",
+  "description_file": "briefing.md",
+  "open_offset_min": 0,
+  "due_offset_min": 60,
+  "close_offset_min": 90
+}

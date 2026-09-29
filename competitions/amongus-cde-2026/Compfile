@@ -1,0 +1,4 @@
+name amongus-cde-2026
+scenario The Skeld CDE: mira (Windows Server 2019 DC, forest team<id>.local — the CDE spec's mira-01.corp.sus theme) with a deliberately wide-open user fleet and guest admin; skeld (IIS FTP + wide-open C share) carries the inject drop; airship (CentOS 8) serves the crew web app through Apache against polus's MariaDB. Defend the crew: keep scored services up while hunting the planted misconfigurations.
+difficulty 6
+nakon_jobs 4

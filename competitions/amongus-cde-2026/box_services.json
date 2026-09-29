@@ -1,0 +1,19 @@
+{
+  "mira": [
+    "ad-dns-localhost",
+    "New SMB Share",
+    "Enable WinRM"
+  ],
+  "skeld": [
+    "IIS FTP",
+    "New SMB Share"
+  ],
+  "airship": [
+    "apache",
+    "ssh"
+  ],
+  "polus": [
+    "mysql",
+    "ssh"
+  ]
+}
