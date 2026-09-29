@@ -419,6 +419,12 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
             script_lines.extend([
                 "if [ -d /var/www/html ] && [ ! -f /var/www/html/index.html ]; then "
                 "echo '<html><body>tz</body></html>' | sudo tee /var/www/html/index.html >/dev/null; fi || true",
+                "# httpd resolves its (unset) ServerName against DNS at boot and can hang "
+                "when the resolver isn't up yet (pfsense-ad fedora member); localhost "
+                "short-circuits that on every later boot",
+                "if [ -d /etc/httpd/conf.d ] && [ ! -f /etc/httpd/conf.d/00-tzc-servername.conf ]; then "
+                "echo 'ServerName localhost' | sudo tee /etc/httpd/conf.d/00-tzc-servername.conf >/dev/null; "
+                "sudo systemctl restart httpd 2>/dev/null || true; fi || true",
                 "",
             ])
         if "bind" in services:

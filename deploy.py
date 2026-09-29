@@ -28,6 +28,8 @@ from config_ops import (
     update_env,
 )
 from constants import (
+    DEFAULT_ENGINE_MGMT_GW,
+    DEFAULT_ENGINE_MGMT_IP,
     GOLDEN_TAG,
     MAX_BOXES_PER_TEAM,
     MAX_TEAMS,
@@ -473,6 +475,19 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 
     raw_key = os.environ["TF_VAR_ssh_private_key_path"]
     ssh_key_abs = raw_key if os.path.isabs(raw_key) else str((Path("terraform") / raw_key).resolve())
+    # Engine mgmt IP: static by default. The DHCP engine rebooted onto a different
+    # address mid-event while terraform's saved output — which deploy/verify/
+    # credentials all consume — stayed stale (shakedown-5x4: .221→.243→.233).
+    # An explicit TF_VAR_engine_mgmt_ip="" keeps the old DHCP behavior; the
+    # chosen value is also exported for template_ops (build-VM ipconfig0).
+    engine_mgmt_ip = os.environ.get("TF_VAR_engine_mgmt_ip")
+    if engine_mgmt_ip is None:
+        engine_mgmt_ip = DEFAULT_ENGINE_MGMT_IP
+        print(f"  Engine mgmt IP: static {engine_mgmt_ip} (default — override "
+              f"TF_VAR_engine_mgmt_ip, set '' for DHCP)")
+        os.environ["TF_VAR_engine_mgmt_ip"] = engine_mgmt_ip
+        if not os.environ.get("TF_VAR_engine_mgmt_gw"):
+            os.environ["TF_VAR_engine_mgmt_gw"] = DEFAULT_ENGINE_MGMT_GW
     tfvars = {
         "teams": {k: {"identifier": v["identifier"], "password": v["password"]}
                   for k, v in teams.items()},
@@ -494,7 +509,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
         "engine_clone_id": int(state.get("engine_template_vmid") or 0),
         # Portable-node mode (realm): static engine mgmt IP instead of agent discovery.
         # Persisted via tfvars so resumes don't depend on the env var being re-exported.
-        "engine_mgmt_ip": os.environ.get("TF_VAR_engine_mgmt_ip", ""),
+        "engine_mgmt_ip": engine_mgmt_ip,
         "engine_mgmt_gw": os.environ.get("TF_VAR_engine_mgmt_gw", ""),
     }
     tfvars_path = tf_dir / "terraform.tfvars.json"
@@ -503,7 +518,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 
     if from_phase <= 2:
         preflight_gates(comp_dir, boxes, number_of_teams, teams=teams,
-                        engine_vmid=engine_vmid, check_free=not resuming)
+                        engine_vmid=engine_vmid, check_free=not resuming,
+                        engine_mgmt_ip=engine_mgmt_ip)
 
     if not assume_yes and not resuming:
         if not confirm_deploy(name, scenario, difficulty, teams, boxes):
@@ -731,6 +747,12 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
             with timed(comp_dir, 4, "terraform_apply_teams"):
                 run_terraform(["apply", "-auto-approve", "-parallelism=1"],
                               cwd=tf_cwd, env=tf_env, timeout=apply_timeout)
+
+            # Apply #2 (re-)created the team boxes: any surviving .postclone-swept
+            # marker describes the OLD clones, and a phase-5 resume would skip the
+            # repair sweep/credlist/shim on the fresh ones (hit twice on
+            # shakedown-5x4; the workaround was deleting the marker by hand).
+            (comp_dir / ".postclone-swept").unlink(missing_ok=True)
 
             def _boot_win(t):
                 print(f"    Bootstrapping Windows box {t['ip']} (vmid {t['vmid']})...")

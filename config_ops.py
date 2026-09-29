@@ -21,7 +21,8 @@ ENV_PATH = Path(".env")
 
 
 def preflight_gates(comp_dir, boxes, num_teams, teams=None,
-                    engine_vmid=SCORING_ENGINE_VMID, check_free=True):
+                    engine_vmid=SCORING_ENGINE_VMID, check_free=True,
+                    engine_mgmt_ip=None):
     """Blocking pre-apply gates: template resolution, vmid/bridge collisions,
     datastore headroom, catalog check.
 
@@ -165,6 +166,37 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
                 f"sizes counted as 40 GB). Free space or trim the competition first.")
         print(f"  Preflight: datastore '{datastore}' {free_gb:.0f} GB free vs "
               f"~{need_gb:.0f} GB needed")
+
+    if engine_mgmt_ip:
+        # Static engine mgmt IP must not collide with any running guest on the node's
+        # mgmt L2 — two boxes answering one address is the DHCP-drift incident class
+        # with a guaranteed bad ending. Guests without a working agent can't be
+        # checked; count them out loud instead of claiming the range is clean.
+        unchecked, taken = 0, set()
+        for vm in vms:
+            if vm.get("status") != "running" or vm.get("template") == 1:
+                continue
+            if vm.get("node") and vm["node"] != node:
+                continue
+            try:
+                result = proxmox_api(
+                    "GET", f"/nodes/{node}/qemu/{vm['vmid']}/agent/network-get-interfaces"
+                )["data"]["result"]
+            except Exception:
+                unchecked += 1
+                continue
+            for ifc in result or []:
+                for addr in ifc.get("ip-addresses") or []:
+                    if addr.get("ip-address-type") == "ipv4":
+                        taken.add(addr.get("ip-address"))
+        if engine_mgmt_ip in taken:
+            raise SystemExit(
+                f"  ERROR: static engine mgmt IP {engine_mgmt_ip} is already answered by "
+                f"a running guest on {node}. Pick another TF_VAR_engine_mgmt_ip (or set "
+                f"it to '' for DHCP).")
+        note = (f" ({unchecked} running guest(s) unverifiable — agent down)"
+                if unchecked else "")
+        print(f"  Preflight: engine mgmt IP {engine_mgmt_ip} is free{note}")
 
     catalog = subprocess.run(
         [sys.executable, "-m", "nakon", "catalog", "check",
