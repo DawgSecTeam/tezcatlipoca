@@ -34,6 +34,20 @@ defects, each of which took a scored service DOWN on both teams until fixed:
    AFTER rolling back to tz-base (a rollback reverts a pre-snapshot resize), then delete
    tz-base so a phase-4 resume keeps the grown disk.
 
+### Golden disk resize never reaches an LVM root fs — big plants die with ENOSPC (regression-4x1-2026-09-28)
+*(fixed 2026-09-28: `golden_ops.expand_guest_root_disks` — growpart + pvresize + lvextend + resize2fs post-boot, before the pre-plant snapshot)*
+
+`ensure_golden_disk_size` grows the hypervisor disk correctly, but the guest-side
+expansion premise ("cloud-init growpart expands natively") only holds for PLAIN
+partition layouts. Ubuntu cloud images run root on LVM: sda3 keeps its original size,
+pvresize/lvextend never run, and the root LV stays at its template size (10G on
+base-ubuntu24.04-fix) no matter how big the disk grows. svc-matrix masked this —
+web03 ran splunk alone (~3G) under the ceiling — but four services on one box
+(apache + roundcube + splunk + bind) filled the 10G LV and bind's apt died with
+`E: Write error - write (28: No space left on device)`. The expand step runs after
+first boot and before the pre-plant `tz-base` snapshot, so the rollback point carries
+the expanded fs and re-entry replants cleanly.
+
 ### DC template ships all firewall profiles disabled (svc-matrix-2026-09-28)
 *(fixed 2026-09-28: `bootstrap_windows_box` runs `Set-NetFirewallProfile -All -Enabled True` before its rule enables)*
 

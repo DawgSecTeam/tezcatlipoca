@@ -22,6 +22,7 @@ per-team repair stage (nakon_ops.generate_stage_configs), which still runs pre-d
 import json
 import os
 import re
+import shlex
 
 from constants import GOLDEN_TAG, SNAP_BASE
 from engine_ops import ensure_nat_forwarding
@@ -274,6 +275,9 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     wait_for_boxes_ssh(ctx, targets, timeout=300)
     wait_for_cloud_init(ctx, targets, timeout=240)
     setup_ubuntu_auth(linux_targets, ctx)
+    if linux_targets:
+        print("  Expanding guest root filesystems (LVM layouts need pvresize+lvextend)...")
+        expand_guest_root_disks(linux_targets, ctx)
 
     # Nakon authenticates to the golden boxes by PASSWORD, and an API clone of a base
     # template has no password set (terraform's user_account normally supplies it at
@@ -372,8 +376,9 @@ def ensure_golden_disk_size(node, vmid, disk_gb):
     Golden clones inherit the base template's disk verbatim (terraform only
     sizes the team clones), so a big plant payload (splunk) can fill the
     template-sized disk mid-golden-build. Grow-only — a shrink would destroy
-    data — and before start_vm: cloud-init's growpart expands the guest fs
-    natively on the golden's first boot."""
+    data — and before start_vm. Guest-side expansion is a separate post-boot
+    step (expand_guest_root_disks): cloud-init only grows a plain partition+fs,
+    so LVM layouts need growpart + pvresize + lvextend + resize2fs."""
     if not disk_gb:
         return
     cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
@@ -386,6 +391,53 @@ def ensure_golden_disk_size(node, vmid, disk_gb):
     proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/resize",
                 data={"disk": key, "size": f"{disk_gb}G"})
     print(f"    golden {vmid}: {key} grown {cur_gb}G -> {disk_gb}G")
+
+
+def expand_guest_root_disks(targets, ctx):
+    """Guest-side companion to ensure_golden_disk_size: cloud-init only expands a
+    PLAIN partition+fs on first boot — LVM layouts (ubuntu cloud images) keep their
+    original root LV, so the hypervisor-side grow buys nothing and the first big
+    plant dies with ENOSPC (regression-4x1-2026-09-28: four services on one box
+    filled the 10G LV inside a 30G disk). growpart + pvresize + lvextend +
+    resize2fs/xfs_growfs after first boot; every step no-ops when there is nothing
+    to grow, and boxes without growpart (Alpine) are skipped. Windows goldens are
+    out of scope (they boot at their template's own size)."""
+    script = (
+        "command -v growpart >/dev/null || { echo 'growpart unavailable - skipping'; exit 0; }; "
+        "set -e; "
+        "ROOT_SRC=$(findmnt -no SOURCE /); "
+        "case \"$ROOT_SRC\" in "
+        "/dev/mapper/*|/dev/dm-*) "
+        "PV=$(pvs --noheadings -o pv_name | tr -d ' ' | head -1); "
+        "DISK=$(basename \"$PV\" | sed 's/[0-9]*$//'); "
+        "PART=$(basename \"$PV\" | grep -o '[0-9]*$'); "
+        "growpart \"/dev/$DISK\" \"$PART\" || true; "
+        "pvresize \"$PV\" || true; "
+        "LV=$(lvs --noheadings -o lv_path | tr -d ' ' | head -1); "
+        "lvextend -l +100%FREE \"$LV\" || true; "
+        "TARGET=\"$LV\"; "
+        ";; "
+        "/dev/*) "
+        "DISK=$(basename \"$ROOT_SRC\" | sed 's/[0-9]*$//'); "
+        "PART=$(basename \"$ROOT_SRC\" | grep -o '[0-9]*$'); "
+        "growpart \"/dev/$DISK\" \"$PART\" || true; "
+        "TARGET=\"$ROOT_SRC\"; "
+        ";; "
+        "*) echo 'unrecognized root layout - skipping'; exit 0; ;; "
+        "esac; "
+        "if [ \"$(stat -f -c %T /)\" = xfs ]; then xfs_growfs /; else resize2fs \"$TARGET\"; fi; "
+        "df -h /"
+    )
+    for t in targets:
+        r = ssh_via_gateway(ctx, t["ip"], f"sudo -H sh -c {shlex.quote(script)}",
+                            timeout=120, user=ctx.get("box_username", "ubuntu"))
+        out = (r.stdout or "").strip()
+        if r.returncode != 0:
+            raise RuntimeError(f"root-disk expansion failed on golden {t['ip']} "
+                               f"(rc={r.returncode}): {(r.stderr or out).strip()[:200]}")
+        df_lines = [l for l in out.splitlines() if l.startswith("/dev/")]
+        print(f"    {t['ip']}: root-disk expansion done"
+              + (f" ({df_lines[-1].split()[2] if len(df_lines[-1].split()) > 2 else 'used=?'} used)" if df_lines else ""))
 
 
 def destroy_golden_set(node, engine_vmid, num_box_types, expect_tags=None):
