@@ -387,7 +387,7 @@ def blue_ep(args, n):
 
 def stage_blues(args, comp, run_dir, creds, t0):
     api_key(local="openrouter" not in args.blue_base_url)
-    for n in (1, 2):
+    for n in range(1, args.teams + 1):
         base_url, blue_model = blue_ep(args, n)
         local_blue = "openrouter" not in base_url
         wd = run_dir / f"blue-team{n}"
@@ -651,6 +651,9 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
         home = wd / ".opencode-home"
         for sub in ("data", "config", "cache"):
             (home / sub).mkdir(parents=True, exist_ok=True)
+        svc_cfg = home / "config" / "opencode"
+        svc_cfg.mkdir(parents=True, exist_ok=True)
+        (svc_cfg / "service.json").write_text(json.dumps({"port": 49370 + n}))
         env = {**os.environ,
                "HOME": str(home), "XDG_DATA_HOME": str(home / "data"),
                "XDG_CONFIG_HOME": str(home / "config"), "XDG_CACHE_HOME": str(home / "cache")}
@@ -1019,8 +1022,11 @@ def stage_run(args, creds, t0):
     blue_lock2 = (blue_lock if not getattr(args, "blue2_base_url", None)
                   or args.blue2_base_url == args.blue_base_url
                   else threading.Lock())
-    threads = [threading.Thread(target=blue_feed_loop, args=(1, args, creds, t0, stop, blue_lock, 0.0)),
-               threading.Thread(target=blue_feed_loop, args=(2, args, creds, t0, stop, blue_lock2, 300.0))]
+    threads = []
+    for n in range(1, args.teams + 1):
+        lock = blue_lock2 if (n == 2 and blue_lock2 is not blue_lock) else blue_lock
+        threads.append(threading.Thread(target=blue_feed_loop,
+                                        args=(n, args, creds, t0, stop, lock, 300.0 * (n - 1))))
     threads.append(threading.Thread(target=monitor_loop, args=(args, creds, t0, stop)))
     if getattr(args, "blue_watchdog", False):
         threads.append(threading.Thread(target=blue_watchdog_loop, args=(args, creds, t0, stop)))
@@ -1065,7 +1071,7 @@ def stage_capture(args, creds):
     sb = Path(args.run_dir) / "scoreboard-state.jsonl"
     if sb.exists():
         shutil_copy(sb, ev / "scoreboard-state.jsonl")
-    for n in (1, 2):
+    for n in range(1, args.teams + 1):
         src = Path(args.run_dir) / f"blue-team{n}"
         dst = ev / f"blue-team{n}"
         if not src.exists():

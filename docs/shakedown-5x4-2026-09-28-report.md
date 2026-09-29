@@ -102,3 +102,43 @@ Roughly 7 wall hours of which ~5 were diagnosis/repair of the four genuine pipel
 above — exactly the class of thing this shakedown existed to catch before a real
 competition. The alternative (finding the alpine template gaps and the sudoers/swep
 interactions mid-event with 4 teams waiting) would have cost the event.
+
+## EVENT RESULTS (2026-09-29 04:32–07:32 UTC, after node recovery)
+
+The 3-hour event ran to completion after the node power cycle. All fixes from the
+pre-event churn held; two more red-auto fixes landed during launch (596-retry in
+`badauto/deploy/proxmox.py`, and intel files now ship to red01 via scp — the agent-exec
+base64 channel 596s on multi-hundred-KB bodies). Harness fixes for 4-team runs: blue
+staging/threads/evidence now scale with `--teams` (was hardcoded to 2), and each team's
+isolated opencode HOME gets a unique service port (opencode's background service binds
+one fixed port per instance — teams 2+ all died with port-in-use).
+
+**Red (bad-auto)**: 129 ok / 16 failed actions; 21 takedowns (nginx ×16, httpd ×5 via
+stop_mask + firewall blocks); 6 distinct tactics (cred_spray, foothold_ssh, privesc_linux,
+beacon_plant, impact_service, impact_firewall); 2 initial-access techniques; **2 Windows
+footholds**; touched every box. 12 red-observed blue restorations, 3 re-kill reactions.
+Gate fails: max_simultaneous_down 1 (never got 2+ services down at once — the watchdog+
+blues outpaced it) and 2 stalls (a 315s opening quiet period + one 13-min mid-event lull).
+
+**Blue**: 39/42 cycles rc=0 (the 3 fails were team4's port collision before the orphan
+kill); 10 restorations with 5–15 min time-to-restore; **2 evictions** (footholds removed);
+92 notebook entries; 0 timeouts; down-minutes ≈ 0 on teams 1/2. Final: team1 10/10 UP,
+team2 10/10 UP (after absorbing 8 of red's takedowns), team3 9/10 (one late web01-http
+kill at T+170), team4 10/10 UP. A notable real dynamic: team2's web01 stopped accepting
+password SSH at ~T+125 — the blue closed the entry vector after repeated restores
+(exactly the behavior the cycle prompt prescribes).
+
+**Gates: 9/12 PASS.** The 3 fails: red max_simultaneous_down (blue won availability),
+red stalls (opening quiet period — the known bad-auto "too quiet" issue), and blue
+injects 0 — the injects' clocks were anchored at the original phase-7 seed hours before
+T0, so all 5 were already expired at T0 (`--skip-deploy` restarts don't re-anchor
+injects; use `redeploy --reset-event`, or re-anchor injects at T0 — harness TODO).
+
+**bad-auto red-auto follow-ups**: opening stall (first decision ~5 min late), escalate
+from single-target nginx loops toward simultaneous multi-service impact when restorations
+outpace re-kills, fix phantom `db01` target name in the intel model.
+
+**Harness follow-ups**: re-anchor injects at T0; monitor scoreboard capture + final
+services evidence still loop over 2 teams; end-of-event teams-only teardown destroys the
+engine (and its scoring DB) *before* the report can read the final scores — capture the
+final scoreboard dump into the evidence dir first.

@@ -123,7 +123,7 @@ def load_scoreboard(run_dir):
         out.append((rec.get("t_plus_sec", 0),
                     {t: {s["service"]: s["up"] for s in (svcs or [])}
                      for t, svcs in (rec.get("teams") or {}).items()}))
-    return sorted(out)
+    return sorted(out, key=lambda rec: rec[0])
 
 
 
