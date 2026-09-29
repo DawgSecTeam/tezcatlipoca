@@ -62,6 +62,10 @@ Set-Service -Name sshd -StartupType Automatic -ErrorAction SilentlyContinue
 Start-Service -Name sshd -ErrorAction SilentlyContinue
 Set-Service -Name QEMU-GA -StartupType Automatic -ErrorAction SilentlyContinue
 Start-Service -Name QEMU-GA -ErrorAction SilentlyContinue
+# The template ships all three firewall profiles disabled, so every rule below
+# (and any later firewall-rule effect or blue hardening) is dead paper until the
+# profiles are on. Idempotent; svc-matrix-2026-09-28.
+Set-NetFirewallProfile -All -Enabled True -ErrorAction SilentlyContinue | Out-Null
 if (-not (Get-NetFirewallRule -Name sshd -ErrorAction SilentlyContinue)) {{
     New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
 }}

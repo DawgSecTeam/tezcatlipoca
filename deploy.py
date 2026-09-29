@@ -106,7 +106,7 @@ def _record_coverage(state, stage_machines, result):
 
 
 def phase1_destroy_waves(node_vms, all_targets, legacy_clones, engine_vmid, boxes, comp_tags,
-                         is_template, stored_hashes, golden_hashes):
+                         is_template, stored_hashes, golden_hashes, frozen_keep=()):
     """Phase 1's teardown decision, pure so the teardown→redeploy loop is testable offline.
 
     Wave 1: every team box (the computed set covers ALL teams now that terraform builds
@@ -118,7 +118,11 @@ def phase1_destroy_waves(node_vms, all_targets, legacy_clones, engine_vmid, boxe
     Wave 2: the engine (a linked clone of the engine template — it dies and re-clones
     cheaply every run), then every golden template that is missing, hash-mismatched, or a
     stale slot beyond the current lineup. MATCHING golden templates survive — that is the
-    whole test-run reuse (build once per competition, reuse across its test runs)."""
+    whole test-run reuse (build once per competition, reuse across its test runs). A
+    frozen competition's code-only-drifted goldens (names in frozen_keep, as classified
+    by the pre-phase-1 golden_freeze_gate) also survive: the gate already said
+    "proceeding on the frozen template", so destroying the golden here would rebuild it
+    and silently break freeze semantics (internals "frozen-gate golden keep")."""
     wave1 = {t["vmid"]: t["vm_name"] for t in all_targets}
     for vmid, vm_name in legacy_clones.items():
         wave1.setdefault(vmid, vm_name)
@@ -144,6 +148,10 @@ def phase1_destroy_waves(node_vms, all_targets, legacy_clones, engine_vmid, boxe
                 and stored_hashes.get("golden", {}).get(b["name"], {}).get("hash")
                 == golden_hashes[b["name"]]):
             print(f"  golden-{b['name']} hash matches — keeping template (test-run reuse)")
+            continue
+        if b["name"] in frozen_keep and is_template(vid):
+            print(f"  golden-{b['name']} frozen with code-only drift — keeping the frozen "
+                  f"template (rebuild would break freeze semantics)")
             continue
         wave2[vid] = f"golden-{b['name']}"
     return wave1, wave2
@@ -402,15 +410,19 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
         golden_hashes[b["name"]] = hash_from_inputs(inputs)
 
     frozen = frozen_state(comp_dir)
+    frozen_keep = set()
     if frozen:
         # Goldens now: config-class drift refuses BEFORE phase 1 destroys anything.
         # The engine's gate still runs at phase 2 (its inputs are computed there),
-        # likewise before any engine destruction.
+        # likewise before any engine destruction. Code-only drift keeps the golden:
+        # phase1_destroy_waves must not rebuild what the gate said to proceed on.
         frozen_hashes = (frozen.get("hashes") or {})
         for name in golden_hashes:
             stored_inputs = (frozen_hashes.get("golden") or {}).get(name, {}).get("inputs") or {}
-            golden_freeze_gate(name, stored_inputs, golden_inputs[name],
-                               frozen.get("frozen_at"), golden_bundle)
+            drift = golden_freeze_gate(name, stored_inputs, golden_inputs[name],
+                                       frozen.get("frozen_at"), golden_bundle)
+            if drift["code"]:
+                frozen_keep.add(name)
 
     teams_json = json.dumps({
         team_key: {"identifier": team_data["identifier"], "password": team_data["password"]}
@@ -548,7 +560,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
             wave1, wave2 = phase1_destroy_waves(
                 node_vms, all_targets, legacy_clones, engine_vmid, boxes, comp_tags,
                 lambda vid: _is_template(node, vid), load_template_hashes(comp_dir),
-                golden_hashes)
+                golden_hashes, frozen_keep=frozen_keep)
             _destroy_pool(wave1)
             _destroy_pool(wave2)
             for team in teams.values():
