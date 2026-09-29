@@ -627,8 +627,12 @@ proved the mechanism live in the same run.
   `pkill -9 apt-get; dpkg --configure -a` through the guest agent. Follow-up for bad-auto:
   retry the agent execs, and treat "apt lock held" as wait-and-retry rather than failure.
 
-- **Node .193 went hard-down** (no ping/SSH/API from inside the lab either — .150 cannot
-  see it) after a sustained load-28 evening: ~27 VMs, repeated clone storms, template
-  rebuilds and the red01 bootstrap attempts. Needs physical/IPMI intervention; nothing on
-  this host can reach it. The deployed range (27 VMs) is presumably still running on it,
-  frozen and verified as of the last green verify; the 3h red-vs-blue event never started.
+- **Node .193 hard-downs are a KNOWN HARDWARE ISSUE of the cyberfield box** (owner
+  confirmed 2026-09-29 — not load-related; the shakedown evening hit load 28 with ~27 VMs
+  and the node stayed up through all of it). Failure mode observed 2026-09-28: complete
+  loss of ping/SSH/API (even .150 on the same lab segment cannot see it) with no
+  self-recovery for 1.5+ h; a manual power cycle brought it back, and every running VM
+  (the full 27-VM range) came back intact. Plan around it: anything deployed there can
+  vanish with the node at any time; recovery = physical power cycle + re-verify (the
+  scoring loop needs `POST /api/competition/start` + `/api/engine/pause` after the
+  engine reboots).
