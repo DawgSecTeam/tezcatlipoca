@@ -19,6 +19,7 @@ from constants import (
     FINAL_STAGE_CONFIGS,
     GOLDEN_IP_BASE,
     NAKON_DIR,
+    PIN_CHECK_OVERRIDES,
     POST_CLONE_CONFIGS,
     REPAIR_STAGE_CONFIGS,
     REQUIRED_VARS,
@@ -337,8 +338,14 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
         if is_unmanaged(box):
             continue  # firewall/appliance: no nakon plant (see utils.is_unmanaged)
         services, vulns = box_configs[box["name"]]
+        # Scoring-only override keys (PIN_CHECK_OVERRIDES) never ride the machine list:
+        # nakon plants the catalog config once per (name, vars); the overrides shape
+        # only the Quotient check (quotient/setup.py). The box_services.json write-back
+        # above keeps them, so push_event_conf still sees them later in the deploy.
         configurations = [
-            c for c in services + vulns
+            c if isinstance(c, str)
+            else {k: v for k, v in c.items() if k not in PIN_CHECK_OVERRIDES}
+            for c in services + vulns
             if (c if isinstance(c, str) else c["name"]) not in DOMAIN_INFRA_CONFIGS
         ]
         configurations.sort(

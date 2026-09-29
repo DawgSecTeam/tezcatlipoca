@@ -18,6 +18,7 @@ except ImportError as e:
 from dotenv import load_dotenv
 
 from range_ops import guest_agent_exec_root, guest_agent_exec_windows, vm_id_for
+from quotient.setup import expected_service_names
 from ssh_ops import engine_ssh_opts, gateway_proxy
 from utils import BOX_USERNAME_DEFAULT, load_users_config
 
@@ -270,12 +271,17 @@ def _check_passed(check):
     return bool(result)
 
 
-def check_services(base_url, admin_session, teams, strict):
-    """Report per-team service UP/DOWN from the latest scored round. Returns (query_ok, all_up)."""
+def check_services(base_url, admin_session, teams, strict, expected_names=frozenset()):
+    """Report per-team service UP/DOWN from the latest scored round.
+
+    Returns (query_ok, all_up, pins_registered). pins_registered gates the scoreboard's
+    actual ServiceName set against the pins' expected set — a pin that never registered
+    (the regression-4x1 same-TYPE collapse: 12 pins, 11 checks) scores nothing and
+    silent-tallies as UP-absent, so it fails the exit code regardless of --strict."""
     print("\n[2/5] SERVICES")
     if admin_session is None:
         print("  SKIP  — no admin session (login failed).")
-        return False, False
+        return False, False, True
     try:
         r = admin_session.get(f"{base_url}/api/teams", timeout=10)
         r.raise_for_status()
@@ -286,6 +292,7 @@ def check_services(base_url, admin_session, teams, strict):
 
     query_ok = True
     all_up = True
+    actual_names = set()
     any_service = False
     for t in api_teams:
         tid, tname = t.get("ID"), t.get("Name", t.get("Identifier"))
@@ -298,6 +305,7 @@ def check_services(base_url, admin_session, teams, strict):
             query_ok = False
             all_up = False
             continue
+        actual_names |= {svc.get("ServiceName", "?") for svc in services or []}
         up = 0
         unscored = 0
         down_names = []
@@ -325,7 +333,20 @@ def check_services(base_url, admin_session, teams, strict):
         print("  (no services reported yet — engine may not have scored a round)")
     if strict and not all_up:
         print("  --strict-services: some services DOWN -> counts against exit code")
-    return query_ok, all_up
+    pins_ok = True
+    if expected_names:
+        missing = sorted(expected_names - actual_names)
+        extras = sorted(actual_names - expected_names)
+        if missing:
+            print(f"  FAIL  pin(s) never registered on the scoreboard: {', '.join(missing)}")
+            print("        (a pin whose check never registered scores nothing — the "
+                  "regression-4x1 same-TYPE collapse shape)")
+            pins_ok = False
+        else:
+            print(f"  EXPECTED-PINS  all {len(expected_names)} pinned checks registered")
+        if extras:
+            print(f"  WARN  scoreboard services not derived from box_services.json: {', '.join(extras)}")
+    return query_ok, all_up, pins_ok
 
 
 def check_isolation(ctx, teams, boxes):
@@ -990,8 +1011,13 @@ def main():
     logins_ok, admin_session = check_logins(base_url, teams, admin_password)
     print("\n  (default-credential regression guard)")
     no_default_creds_ok = check_no_default_creds(comp_dir)
-    services_query_ok, services_all_up = check_services(base_url, admin_session, teams,
-                                                         args.strict_services)
+    try:
+        pinned_services = json.loads((comp_dir / "box_services.json").read_text())
+    except (OSError, ValueError):
+        pinned_services = {}
+    expected_names = expected_service_names(pinned_services, boxes) if pinned_services else set()
+    services_query_ok, services_all_up, pins_registered = check_services(
+        base_url, admin_session, teams, args.strict_services, expected_names)
     isolation_ok = check_isolation(ctx, teams, boxes)
     print("\n  (live-ops health check status — informational)")
     report_healthcheck_status(ctx)
@@ -1020,6 +1046,8 @@ def main():
     }
     if args.strict_services:
         gate["services(strict)"] = services_query_ok and services_all_up
+    if expected_names:
+        gate["pins_registered"] = pins_registered
     if coverage_checked and coverage_ok is not None:
         gate["plant_coverage"] = coverage_ok
     if domains_ok is not None:
@@ -1035,6 +1063,9 @@ def main():
         svc_note = "PASS" if (services_query_ok and services_all_up) else "FAIL"
     print(f"  services         : {'UP' if services_all_up else 'some DOWN'} "
           f"({'query ok' if services_query_ok else 'query failed'}) [{svc_note}]")
+    if expected_names:
+        print(f"  pins_registered  : "
+              f"{'PASS' if pins_registered else 'FAIL'} ({len(expected_names)} pinned checks)")
     isolation_note = ("PASS" if isolation_ok is True
                       else "SKIP — live probe couldn't run, unverified" if isolation_ok is None
                       else "FAIL")
