@@ -15,6 +15,7 @@ from pathlib import Path
 
 from constants import (
     DISRUPTIVE_CONFIGS,
+    DOMAIN_INFRA_CONFIGS,
     FINAL_STAGE_CONFIGS,
     GOLDEN_IP_BASE,
     NAKON_DIR,
@@ -336,7 +337,10 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
         if is_unmanaged(box):
             continue  # firewall/appliance: no nakon plant (see utils.is_unmanaged)
         services, vulns = box_configs[box["name"]]
-        configurations = services + vulns
+        configurations = [
+            c for c in services + vulns
+            if (c if isinstance(c, str) else c["name"]) not in DOMAIN_INFRA_CONFIGS
+        ]
         configurations.sort(
             key=lambda c: (c if isinstance(c, str) else c["name"]) in DISRUPTIVE_CONFIGS
         )

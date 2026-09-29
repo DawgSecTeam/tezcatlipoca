@@ -276,3 +276,33 @@ A minimal example wrapper around `create-competition.py`'s old stdin-driven inte
 to a gitignored file — not a documented interface in its own right. Prefer the flags above
 directly; adapt the wrapper's `printf`/logging pattern only if you specifically need
 stdin-driven prompt answers instead.
+
+## Deploying from a worktree (svc-matrix checklist)
+
+A linked worktree has none of the gitignored local state the deploy reads, and every path
+resolves from the worktree root — run all commands from there. Pre-flight list:
+
+```bash
+git worktree add -b <branch> ../tezcatlipoca-<branch> main
+cd ../tezcatlipoca-<branch>
+git submodule update --init                          # vendor/nakon — every nakon call needs it
+cp /path/to/main-tree/.env .env                      # the NODE-PROPER env variant (see below)
+cp /path/to/main-tree/vendor/nakon/.env vendor/nakon/.env
+cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxmox` against terraform/
+```
+
+- Pick the env file that matches the target node and **check the stale-var traps**: the
+  `.env.realm-backup-20260923` (.150) variant shipped `TF_VAR_template_vm_id=9106` (dead vmid —
+  the engine-base preflight hard-fails; correct value is 955) and no
+  `TF_VAR_team_identifiers` (default identifiers 101… collide with nothing by themselves, but
+  set it explicitly, e.g. `TF_VAR_team_identifiers=130,131`, for predictable vmids).
+- `TF_VAR_teams` / `TF_VAR_boxes_per_team` in an old env are overridden by the comp dir at
+  terraform time — stale values there are cosmetic, not fatal.
+- The sibling-repo tools have their own env fallback: `bad-auto/deploy` loads
+  `../tezcatlipoca/.env` via `setdefault`, so export the worktree's `TF_VAR_proxmox_*` trio
+  before calling it if the main tree points at a different node.
+
+Then the normal flow: `create-competition.py --competition <id> --scoring-vmid <free> --plan-only`,
+real `--teams N --yes`, verify, destroy (all from the worktree root). Worked example:
+[svc-matrix-2026-09-28-report.md](svc-matrix-2026-09-28-report.md).
+

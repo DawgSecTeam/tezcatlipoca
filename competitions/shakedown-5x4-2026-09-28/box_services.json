@@ -1,0 +1,22 @@
+{
+  "dc01": [
+    "ADDS",
+    "Enable WinRM"
+  ],
+  "win01": [
+    "IIS HTTP",
+    "New SMB Share"
+  ],
+  "web01": [
+    "nginx",
+    "ssh"
+  ],
+  "app01": [
+    "apache",
+    "bind"
+  ],
+  "edge01": [
+    "nginx",
+    "ssh"
+  ]
+}

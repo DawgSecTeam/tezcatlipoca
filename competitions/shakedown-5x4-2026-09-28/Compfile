@@ -1,0 +1,5 @@
+name shakedown-5x4-2026-09-28
+scenario Helios Robotics regional engineering site: an Active Directory domain fronted by a domain controller (dc01) with a domain-joined Windows application and file server (win01), an Ubuntu public web tier (web01), a Fedora build and internal-DNS server (app01), and an Alpine Linux edge cache appliance (edge01). An intrusion crew has been quiet-staging across the site for weeks; blue teams keep the ten scored services alive, hunt planted persistence, and work injects while an automated red operator presses every team simultaneously.
+difficulty 5
+team_beacons 1
+alpine_services 1

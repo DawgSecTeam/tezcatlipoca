@@ -41,12 +41,12 @@ def node_after_run(idents):
 
 
 class RepeatRun(unittest.TestCase):
-    def waves(self, node_vms, idents, stored):
+    def waves(self, node_vms, idents, stored, frozen_keep=()):
         goldens = {golden_vmid_for(ENGINE, i) for i in range(len(BOXES))}
         with contextlib.redirect_stdout(io.StringIO()):
             return deploy.phase1_destroy_waves(
                 node_vms, targets(idents), {}, ENGINE, BOXES, COMP_TAGS,
-                lambda vid: vid in goldens, stored, HASHES)
+                lambda vid: vid in goldens, stored, HASHES, frozen_keep=frozen_keep)
 
     def test_second_run_with_fewer_teams(self):
         stored = {"golden": {n: {"hash": h} for n, h in HASHES.items()}}
@@ -65,6 +65,29 @@ class RepeatRun(unittest.TestCase):
         stored = {"golden": {"dc01": {"hash": "h-dc"}, "web01": {"hash": "OLD"}}}
         _w1, wave2 = self.waves(node_after_run([101, 102]), [101, 102], stored)
         self.assertNotIn(golden_vmid_for(ENGINE, 0), wave2)
+        self.assertIn(golden_vmid_for(ENGINE, 1), wave2)
+
+    def test_frozen_code_only_drift_keeps_the_golden(self):
+        # Frozen comp, code-only drift: the pre-phase-1 gate said "proceeding on the
+        # frozen template", so phase 1 must not destroy+rebuild the golden out from
+        # under that decision (internals "frozen-gate golden keep").
+        stored = {"golden": {"dc01": {"hash": "h-dc"}, "web01": {"hash": "OLD"}}}
+        _w1, wave2 = self.waves(node_after_run([101, 102]), [101, 102], stored,
+                                frozen_keep={"web01"})
+        self.assertNotIn(golden_vmid_for(ENGINE, 1), wave2)
+        self.assertNotIn(golden_vmid_for(ENGINE, 0), wave2)  # hash still matches
+        self.assertIn(ENGINE, wave2)                          # engine still re-clones
+
+    def test_frozen_keep_ignores_a_missing_template(self):
+        # frozen_keep only protects an existing template; a deleted golden slot is
+        # still rebuilt (there is nothing frozen to proceed on).
+        stored = {"golden": {"dc01": {"hash": "h-dc"}, "web01": {"hash": "OLD"}}}
+        goldens = {golden_vmid_for(ENGINE, 0)}  # web01's golden template is gone
+        with contextlib.redirect_stdout(io.StringIO()):
+            _w1, wave2 = deploy.phase1_destroy_waves(
+                node_after_run([101, 102]), targets([101, 102]), {}, ENGINE, BOXES,
+                COMP_TAGS, lambda vid: vid in goldens, stored, HASHES,
+                frozen_keep={"web01"})
         self.assertIn(golden_vmid_for(ENGINE, 1), wave2)
 
     def test_domain_markers_reset_but_template_hashes_kept(self):

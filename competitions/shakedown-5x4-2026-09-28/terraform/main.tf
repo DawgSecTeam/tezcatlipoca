@@ -1,0 +1,331 @@
+terraform {
+  required_providers {
+    proxmox = { source = "bpg/proxmox", version = "~> 0.101" }
+  }
+  backend "local" {}
+}
+
+locals {
+  proxmox_host = regex("^https?://([^/:]+)", var.proxmox_endpoint)[0]
+}
+
+provider "proxmox" {
+  endpoint  = var.proxmox_endpoint
+  api_token = var.proxmox_api_token
+  insecure  = true
+  ssh {
+    agent       = false
+    username    = "root"
+    private_key = file(var.ssh_private_key_path)
+    node {
+      name    = var.proxmox_node
+      address = local.proxmox_host
+    }
+  }
+}
+
+
+resource "proxmox_network_linux_bridge" "team_bridge" {
+  for_each  = var.teams
+  node_name = var.proxmox_node
+  name      = "vmbr${each.value.identifier}"
+  comment   = "Quotient team ${each.key} — isolated, no uplink"
+}
+
+locals {
+  # Ownership tags for the parallel cleanup sweep's defense-in-depth check (M1.4):
+  # phase 1 refuses to destroy a tagged VM whose tags lack these. event_name is the
+  # competition name (validated [a-z0-9._-] at creation); the replace() only matters
+  # for hand-written tfvars.
+  comp_tag = "comp-${replace(lower(var.event_name), " ", "-")}"
+}
+
+resource "proxmox_virtual_environment_vm" "scoring_engine" {
+  node_name = var.proxmox_node
+  name      = "quotient-engine"
+  vm_id     = var.scoring_vm_id
+  tags      = ["tezcatlipoca", local.comp_tag]
+
+  clone {
+    # M4: the deployed engine is a linked clone of the competition's engine template
+    # (fresh identity + host keys via the template's clean step, empty scoring DB per
+    # run). 0 = pre-M4 fallback: full clone straight from the base image.
+    vm_id = var.engine_clone_id != 0 ? var.engine_clone_id : var.template_vm_id
+    full  = var.engine_clone_id == 0
+  }
+
+  agent {
+    enabled = true
+  }
+
+  # Cloud-init mgmt setup, used only when engine_mgmt_ip is set (portable-node mode):
+  # writes the sysadmin key and a static mgmt address, since agent-based IP discovery is
+  # unavailable there. On the primary (empty var) nothing is emitted and the dedicated
+  # scoring-engine image behaves exactly as before.
+  dynamic "initialization" {
+    for_each = var.engine_mgmt_ip != "" ? [1] : []
+    content {
+      user_account {
+        username = var.vm_username
+        keys     = [var.ssh_public_key]
+      }
+      ip_config {
+        ipv4 {
+          address = "${var.engine_mgmt_ip}/24"
+          gateway = var.engine_mgmt_gw
+        }
+      }
+      dns {
+        servers = ["8.8.8.8"]
+      }
+    }
+  }
+
+  cpu { cores = 4 }
+  memory { dedicated = 4096 }
+
+  disk {
+    datastore_id = var.datastore
+    interface    = "scsi0"
+    size         = 40
+    discard      = "on"
+  }
+
+  network_device {
+    bridge = "vmbr0"
+    model  = "virtio"
+  }
+
+  dynamic "network_device" {
+    for_each = var.teams
+    content {
+      bridge = "vmbr${network_device.value.identifier}"
+      model  = "virtio"
+    }
+  }
+
+
+  depends_on = [proxmox_network_linux_bridge.team_bridge]
+}
+
+data "proxmox_virtual_environment_vms" "templates" {
+  node_name = var.proxmox_node
+  tags      = ["template"]
+}
+
+locals {
+  template_ids = {
+    for vm in data.proxmox_virtual_environment_vms.templates.vms :
+    vm.name => vm.vm_id
+    # Templates are stopped by definition (qm template requires it). A running box with
+    # a stray `template` tag (live-confirmed 2026-09-24: three running competition boxes
+    # carried it, duping names in this map and failing every new apply) must not resolve
+    # as a clone source.
+    if vm.status == "stopped"
+  }
+
+  sorted_team_keys = sort(keys(var.teams))
+  team1_key        = "team1"
+
+  # M3.3: every team is Terraform-managed now. Keys keep the historical naming
+  # (team1-<box>, <identifier>-<box>) so enumerate_targets' vm_name matches.
+  all_team_vms = merge([
+    for team_key, team in var.teams : {
+      for box in var.boxes_per_team :
+      (team_key == local.team1_key ? "team1-${box.name}" : "${team.identifier}-${box.name}") => ({
+        key        = (team_key == local.team1_key ? "team1-${box.name}" : "${team.identifier}-${box.name}")
+        team_key   = team_key
+        identifier = tostring(team.identifier)
+        box        = box
+        ip         = "192.168.${team.identifier}.${box.last_octet}"
+        gw         = "192.168.${team.identifier}.1"
+        bridge     = "vmbr${team.identifier}"
+      })
+    }
+  ]...)
+}
+
+resource "proxmox_virtual_environment_vm" "team_box" {
+  for_each  = var.build_team_boxes ? local.all_team_vms : {}
+  node_name = var.proxmox_node
+  name      = each.key
+  vm_id = 200 + (tonumber(each.value.identifier) * 10) + index(
+    [for b in var.boxes_per_team : b.name], each.value.box.name
+  )
+  tags = ["tezcatlipoca", local.comp_tag]
+
+  # The golden templates carry agent=1, so bpg would otherwise wait its default 15 min
+  # per box for an agent IP — serially under -parallelism=1. An unbooted DC golden's
+  # clone is in sysprep specialize for ~10 min (winad-testrun 2026-09-25: two DCs = 20+
+  # min of pure waiting). A timeout here is only a warning; deploy's own readiness waits
+  # (SSH / the Windows setup-complete gate) are what gate the next steps.
+  agent {
+    enabled = true
+    timeout = "30s"
+  }
+
+  # Linked clone of this box type's golden template (planted by golden_ops in phase 4,
+  # strictly green before conversion). No retries: templates aren't locked the way a
+  # clone-source VM is, and linked clones are seconds of metadata work, not bulk writes.
+  clone {
+    vm_id = var.golden_template_ids[index(
+      [for b in var.boxes_per_team : b.name], each.value.box.name
+    )]
+    full = false
+  }
+
+  lifecycle {
+    precondition {
+      condition     = !var.build_team_boxes || length(var.golden_template_ids) == length(var.boxes_per_team)
+      error_message = "build_team_boxes is true but golden_template_ids doesn't have one entry per box — the golden build (deploy phase 4) must run before apply #2."
+    }
+    precondition {
+      condition = (200 + (tonumber(each.value.identifier) * 10) + index(
+        [for b in var.boxes_per_team : b.name], each.value.box.name
+      )) != proxmox_virtual_environment_vm.scoring_engine.vm_id
+      error_message = "Computed team_box vm_id collides with the scoring engine's vm_id (var.scoring_vm_id). Adjust team identifiers, box count, or --scoring-vmid."
+    }
+  }
+
+  cpu { cores = each.value.box.cpu }
+  memory { dedicated = each.value.box.memory_mb }
+
+  dynamic "disk" {
+    for_each = each.value.box.disk_gb != null ? [each.value.box.disk_gb] : []
+    content {
+      datastore_id = var.datastore
+      interface    = coalesce(each.value.box.disk_iface, "scsi0")
+      size         = disk.value
+      discard      = "on"
+    }
+  }
+
+  network_device {
+    bridge = each.value.bridge
+    model  = "virtio"
+  }
+
+  dynamic "initialization" {
+    for_each = strcontains(lower(each.value.box.template), "win") ? [] : [1]
+    content {
+      ip_config {
+        ipv4 {
+          address = "${each.value.ip}/24"
+          gateway = each.value.gw
+        }
+      }
+      user_account {
+        username = var.box_username
+        keys     = [var.ssh_public_key]
+        password = var.box_password
+      }
+      dns {
+        servers = ["8.8.8.8"]
+      }
+    }
+  }
+
+  depends_on = [proxmox_network_linux_bridge.team_bridge]
+}
+
+locals {
+  scoring_mgmt_ips = [
+    for ip in flatten(proxmox_virtual_environment_vm.scoring_engine.ipv4_addresses) :
+    ip if(
+      !startswith(ip, "127.") &&
+      !startswith(ip, "192.168.") &&
+      !(startswith(ip, "172.") && tonumber(split(".", ip)[1]) >= 16 && tonumber(split(".", ip)[1]) <= 31) &&
+      !(startswith(ip, "100.") && tonumber(split(".", ip)[1]) >= 64 && tonumber(split(".", ip)[1]) <= 127)
+    )
+  ]
+  # Portable-node override first (agent channel broken on the realm → discovery is
+  # impossible); the guard keeps evaluate-time totals so a destroy against a dead/agentless
+  # engine can't die on an empty tuple.
+  scoring_ip = var.engine_mgmt_ip != "" ? var.engine_mgmt_ip : (
+    length(local.scoring_mgmt_ips) > 0 ? local.scoring_mgmt_ips[0] : "127.0.0.1"
+  )
+  ssh_cmd = "ssh -i ${var.ssh_private_key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${var.vm_username}@${local.scoring_ip}"
+}
+
+resource "null_resource" "team_nics" {
+  triggers = {
+    engine_id        = proxmox_virtual_environment_vm.scoring_engine.id
+    team_identifiers = join(",", [for k in local.sorted_team_keys : var.teams[k].identifier])
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "sudo tee /etc/netplan/60-team-ifaces.yaml << 'EOF'",
+      "network:",
+      "  version: 2",
+      "  ethernets:",
+      join("\n", [for idx, team in local.sorted_team_keys :
+        "    ens${18 + idx + 1}:\n      addresses: [\"192.168.${var.teams[team].identifier}.1/24\"]"
+      ]),
+      "EOF",
+      "sudo chmod 600 /etc/netplan/60-team-ifaces.yaml",
+      "sudo netplan apply",
+      "printf 'net.ipv4.ip_forward=1\\nnet.ipv4.conf.all.rp_filter=2\\nnet.ipv4.conf.default.rp_filter=2\\n' | sudo tee /etc/sysctl.d/99-range-forward.conf",
+      "sudo sysctl -p /etc/sysctl.d/99-range-forward.conf",
+    ]
+    connection {
+      type        = "ssh"
+      user        = var.vm_username
+      private_key = file(var.ssh_private_key_path)
+      host        = local.scoring_ip
+    }
+  }
+
+  depends_on = [
+    proxmox_virtual_environment_vm.scoring_engine,
+    null_resource.reboot_scoring_engine,
+  ]
+}
+
+resource "null_resource" "reboot_scoring_engine" {
+  triggers = {
+    engine_id = proxmox_virtual_environment_vm.scoring_engine.id
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Hard-stopping scoring engine VM ${proxmox_virtual_environment_vm.scoring_engine.id} via Proxmox API..."
+      curl -sk -X POST \
+        -H "Authorization: PVEAPIToken $${TF_VAR_proxmox_api_token}" \
+        "${var.proxmox_endpoint}api2/json/nodes/${var.proxmox_node}/qemu/${proxmox_virtual_environment_vm.scoring_engine.id}/status/stop" \
+        -d "shutdown=0"
+      echo ""
+      echo "Waiting for VM to fully stop..."
+      sleep 15
+      echo "Starting scoring engine VM ${proxmox_virtual_environment_vm.scoring_engine.id} via Proxmox API..."
+      curl -sk -X POST \
+        -H "Authorization: PVEAPIToken $${TF_VAR_proxmox_api_token}" \
+        "${var.proxmox_endpoint}api2/json/nodes/${var.proxmox_node}/qemu/${proxmox_virtual_environment_vm.scoring_engine.id}/status/start"
+      echo ""
+      echo "Cold-boot complete — PCI bus scan will detect new VirtIO NICs."
+    EOT
+  }
+
+  depends_on = [
+    proxmox_virtual_environment_vm.scoring_engine,
+    proxmox_virtual_environment_vm.team_box,
+  ]
+}
+
+resource "null_resource" "orchestrate" {
+  triggers = {
+    engine_id = proxmox_virtual_environment_vm.scoring_engine.id
+    box_ids   = join(",", [for vm in proxmox_virtual_environment_vm.team_box : vm.id])
+  }
+
+  provisioner "local-exec" {
+    command = "for i in $(seq 1 30); do if ssh -i ${var.ssh_private_key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes ${var.vm_username}@${local.scoring_ip} echo ok 2>/dev/null | grep -q ok; then echo 'Scoring engine online'; break; fi; echo \"Waiting for scoring engine ($i/30)\"; sleep 10; done; sleep 30"
+  }
+
+  depends_on = [
+    proxmox_virtual_environment_vm.scoring_engine,
+    proxmox_virtual_environment_vm.team_box,
+    null_resource.reboot_scoring_engine,
+    null_resource.team_nics,
+  ]
+}

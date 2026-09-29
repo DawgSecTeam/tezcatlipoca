@@ -2,9 +2,10 @@
 
 How to run a full pipeline test (`create-competition.py` / `run-agent-scrim.py`) so that
 failures are triaged once, recovered cheaply, and never debugged twice. This doc condenses
-every deploy failure from the July 2026 shakedown through the September scrim/dress runs;
-`docs/known-issues.md` stays the canonical incident log, `docs/architecture.md` explains the
-phases, and `docs/usage-agents.md` documents the flags.
+every deploy failure from the July 2026 shakedown through the September scrim / winad / pfSense
+red-vs-blue runs; `docs/known-issues.md` stays the canonical incident log, `docs/architecture.md`
+explains the phases, `docs/usage-agents.md` documents the flags, and `docs/pfsense-inpath-2026-09-28.md`
+is the in-path-firewall runbook. For a pfSense-fronted, multi-host, or red-team run also read §8.
 
 The three habits this doc exists to enforce:
 
@@ -34,6 +35,12 @@ Before debugging a failed deploy, answer: *what changed since the last green run
 | domain-join vs ADDS race | Domain Join fails "domain does not exist" right after promotion | Timing race — dc01 still settling | Mitigated (`487b977`: skip re-promotion via ADDS artifact + live membership probes); resume phase 6 and retry |
 | deploy-path regression | anything unclassifiable, correlates with a logic-touching commit | Real regression | One on record: `2662fb7` iterated dict keys → `TypeError` in `ensure_cloned_network` at phase 6; fixed `9015f06` same day |
 | event-side (not deploy) | opencode cycle deaths, scoreboard `Forbidden`, red-evidence scp hangs, wrong systemd unit names | Harness/agent-side, not the deploy pipeline | Fixed + policed by `docs/rehearsal-gates.md` |
+| engine apt-lock race | phase 2 engine bootstrap `rc=100`, `Could not get lock /var/cache/apt/archives/lock` held by a fresh apt-get | First-boot `unattended-upgrades`/`apt-daily-upgrade` re-spawns apt *after* the preamble's killall; `DPkg::Lock::Timeout` doesn't cover the archives-cache lock | Fixed 2026-09-27 (`engine_ops.py`): `systemctl mask` the units + poll `fuser` on all three locks until free before touching apt |
+| non-apt distro prep | fedora/alpine box: `apt-get: command not found` ×5 retries, 240 s settle burned per pass | Box apt-prep + settle-check assumed Debian | Fixed 2026-09-27 (`hardening_ops.py`): `command -v apt-get \|\| exit 0` guard before any apt call |
+| Fedora member gaps | app01 (Fedora) golden plant `Bad authentication type`; post-boot httpd/named DOWN; guest-agent flaps | Fedora Cloud image ≠ Ubuntu: SSH password-auth off (`50-cloud-init.conf`), `named` binds localhost-only, httpd hangs on `ServerName` DNS at boot before the DC is up | Fixed by baking `base-fedora44-fix` (cloud-init + `00-tzc-pwauth.conf`) and, per box, `ServerName localhost` + `named listen-on { any; }`. Fold into the template/catalog (still a TODO) |
+| teardown stuck DC | `terraform destroy` hangs "Still destroying… Nm elapsed" on a Windows DC | bpg provider does a *graceful* shutdown (long `timeout_shutdown_vm`); a DC whose qemu-guest-agent is down never shuts down | Hard-kill the qemu process: `kill -9 $(cat /var/run/qemu-server/<vmid>.pid)` — terraform then deletes the stopped VM. Pre-`qm stop` the other DCs first |
+| scoring stopped post-reboot | scoreboard frozen; `/api/engine` `last_round.StartTime` is stale, `current_round_time` zero | The round loop does not auto-resume after an engine VM reboot | `POST /api/competition/start {started:true}` then `POST /api/engine/pause {pause:false}`; a fresh round appears within `Delay` seconds |
+| pfSense in-path | engine→box scoring times out through pfSense, or the firewall clone won't boot | WAN pass rule used a raw CIDR `<network>` (silently dropped); host-side ZFS config-write breaks pfSense boot (OpenZFS 2.4.4 > pfSense's loader) | See §8 and `docs/pfsense-inpath-2026-09-28.md`: `<network>lan</network>`, and inject config guest-side (console `fetch`), never host-side ZFS |
 
 ## 2. Failure history digest
 
@@ -54,6 +61,10 @@ pipeline does *not* break on.
 | agent-scrim-2026-09-17c | 09-18 | ~17.5 h wall (normal: 3–5 h) | Node crash / local-lvm saturation (596), join race ×2, strict ×2 | Disk moves, console unlock, `--from-phase 2` |
 | e2e-2026-09-19 | 09-19→20 | Full pass + verify PASS | Timeout sizing (apt 180s, compose 60s ×2) | `--from-phase 4` ×3; budgets raised |
 | scrim-dress-2026-09-20 | 09-20→21 | Max-vuln rehearsal; repeated strict aborts | strict × 16 broken rows + 1 real regression (phase-6 `TypeError`) | Trim-then-resume; regression fixed `9015f06` |
+| winad-testrun-2026-09-25 | 09-25 | Windows-heavy AD comp, live | ADDS/join timing | Resume phase 6 |
+| scrim-live-2026-09-26 | 09-26 | Subagent-blue vs OpenRouter-red, both 8/8 | bundle var-lint false positives blocked deploy | Lint fix (`nakon_ops.py`) + regression test |
+| pfsense-ad-2026-09-27 | 09-27→28 | 4-team AD + in-path pfSense, all green | apt-lock race; Fedora member gaps; pfSense in-path (host-ZFS dead end) | Fixes above; pfSense inserted guest-side (§8) |
+| pfsense-rvb-2026-09-28 | 09-28 | 2-team AD + pfSense + bad-auto red, 60 min | (see this run's report) | — |
 
 Ranked recurring modes (most frequent first): strict × pin density → cloud-init clone race →
 phase-4 timeout sizing (now fixed) → domain-join/ADDS race → vulndb row bugs surfacing only
@@ -206,3 +217,64 @@ python3 -u create-competition.py --competition <id> --teams 2 --yes 2>&1 | tee d
   near-miss → check whether `docs/rehearsal-gates.md` needs a new gate.
 - Trims and repairs: record them; every trimmed row is a vulndb bug someone should see.
 - Teardown unless the next step needs the range live (`destroy-competition.py --yes`).
+
+## 8. Multi-host, pfSense-fronted, and red-team runs
+
+Everything above assumes one host and a bare AD/Linux range. Three add-ons have their own gotchas.
+
+### 8.1 Which host (cyberfield vs cyberrange)
+
+Two non-clustered Proxmox hosts, each with its **own** `.env`, node name, template vmids, and
+datastore. Never assume a vmid across hosts.
+
+| | endpoint | node | datastore | env file | Windows / Ubuntu / Fedora tmpl |
+|---|---|---|---|---|---|
+| cyberfield | `10.0.0.193` | `pve` | `hdrives-zfs` | `.env` | 1008 / 1007 / 1015 |
+| cyberrange | `10.0.0.150` | `proxmox` | `hdd` | `.env.realm-backup-20260923` (secrets — never commit) | 953 / 955 / 1016 |
+
+- Load the env safely — the file has unquoted JSON/pubkey values that break naive `source`; parse
+  it (`shlex.quote` per `TF_VAR_*` line) into a sourced file, and **`unset TF_VAR_teams
+  TF_VAR_boxes_per_team TF_VAR_scoring_vm_id`** so the stale range values don't override what the
+  deploy generates. Set `TF_VAR_template_vm_id` to a real engine-base on that host (cyberrange has
+  no dedicated one — use the ubuntu base, e.g. 955), and pick a `--scoring-vmid` that is **not**
+  1000 (the cyberrange's live `quotient-engine`).
+- The cyberrange is a busy production host (~70 VMs, a live comp, infra). Pick free vmid blocks
+  (`200 + id*10 + box_index`) and identifiers whose blocks are clear; the preflight collision gate
+  catches overlaps but choose deliberately.
+- Cross-host template move: `vzdump` → transfer → `qmrestore` (keep the original vzdump filename
+  pattern or `qmrestore` says "couldn't determine archive info").
+- A host reboot that must come back: boot is ext4/LVM (a suspended ZFS *data* pool can't block it);
+  confirm the bad pool isn't in `zdb -C`; `onboot=1` VMs auto-start but **snapshot the full running
+  set first** (`/root/running-before-reboot.txt`) and restart the rest, throttled, afterward.
+
+### 8.2 In-path pfSense (full runbook: `docs/pfsense-inpath-2026-09-28.md`)
+
+Per team: `engine → transit<id> (172.31.<id>.1/30) → pfSense WAN .2 / LAN 192.168.<id>.1 → boxes`,
+pure router, outbound NAT off. The two traps, both fixed/known:
+
+- **Never inject config host-side** (import the pfSense ZFS pool on the Proxmox host) — OpenZFS
+  2.4.4 makes the pool unmountable by pfSense's loader (`mountroot error 22`). Inject **guest-side**:
+  boot the clone, drop to the console shell (option 8), `ifconfig vtnet1` a temp IP on the
+  *unassigned* LAN NIC (pfSense won't revert it), `fetch` the per-team `config.xml` from an HTTP
+  server on the engine's team `.1`, reboot. Keep the pool name `pfSense` (the loader hardcodes it).
+- **WAN pass rule** in `gen_pfsense_config.py` must be `<network>lan</network>`, not a raw CIDR, or
+  pfSense silently drops it and scoring times out.
+- Engine cutover, persistently: one engine reboot with all transit NICs added and the netplan
+  MAC-matching each (`set-name: transit<id>`, `172.31.<id>.1/30`, route via `.2`) and **no** `.1`
+  on the team NICs. NIC hotplug past the first NIC is unreliable — reboot, don't hotplug.
+- Firewalls need `onboot=1`. The Windows-DC guest-agent may be down after a reboot — that only
+  breaks `verify-competition`'s agent probe, not scoring (WinRM is a network check).
+
+### 8.3 bad-auto red teamer against a pfSense range
+
+`../bad-auto`, OpenRouter LLM, `python3 -m badauto {deploy,run,status,destroy}`, `config.yaml`
+(`competition_dir`, `event.duration_min`, `deploy.red_*`). Point it at the comp dir and set the
+duration before `deploy`.
+
+- The engine-side NAT (`badauto/deploy/engine_nat.py`) MASQUERADEs `red_ip → 192.168.0.0/16`, which
+  is **route-based** — with pfSense it sources attacks from the transit IP (`172.31.<id>.1`), which
+  the WAN pass rule already allows, so the **attack path works through pfSense unchanged**.
+- The **raw-socket beacon C2 does not** survive pfSense: blue boxes beacon to their gateway `.1`,
+  which is now pfSense (not the engine that DNATs the beacon port to red01). Deploy without the
+  beacon, or add a matching pfSense LAN→red01 port-forward. Core attacks (recon/spray/exploit)
+  don't need it.

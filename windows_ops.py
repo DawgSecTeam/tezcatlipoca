@@ -62,9 +62,17 @@ Set-Service -Name sshd -StartupType Automatic -ErrorAction SilentlyContinue
 Start-Service -Name sshd -ErrorAction SilentlyContinue
 Set-Service -Name QEMU-GA -StartupType Automatic -ErrorAction SilentlyContinue
 Start-Service -Name QEMU-GA -ErrorAction SilentlyContinue
+# The template ships all three firewall profiles disabled, so every rule below
+# (and any later firewall-rule effect or blue hardening) is dead paper until the
+# profiles are on. Idempotent; svc-matrix-2026-09-28.
+Set-NetFirewallProfile -All -Enabled True -ErrorAction SilentlyContinue | Out-Null
 if (-not (Get-NetFirewallRule -Name sshd -ErrorAction SilentlyContinue)) {{
     New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
 }}
+# The scored RDP check is a plain Tcp dial on 3389; the Remote Desktop rule
+# group ships disabled on the template even after the RDP plant flips the
+# registry, so the listener is up but every external dial is filtered.
+Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMode-In-UDP -ErrorAction SilentlyContinue
 """
     # The script is idempotent; an agent drop (not a script error) is retried until the
     # deadline. A nonzero rc is a real failure (e.g. password policy) — fail fast.

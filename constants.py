@@ -17,6 +17,12 @@ SLOW_SERVICES = ("splunk", "roundcube")
 
 DISRUPTIVE_CONFIGS = {"resolv-conf-null-dns", "apt-sources-empty", "apt-hold-all-packages", "dpkg-broken-hold-state"}
 
+# Domain infrastructure is scored (ADDS maps to a Quotient Tcp check) but never
+# nakon-planted from box_services.json: domain_ops.injects ADDS/Domain Join/domain-join
+# per team at phase 6 with the per-team domain/credential vars. A bare ADDS riding the
+# golden-stage machine list would run dcpromo without those vars.
+DOMAIN_INFRA_CONFIGS = {"ADDS", "Domain Join", "domain-join"}
+
 # M3.2 stage split, in THREE passes (see generate_stage_configs):
 #
 #   golden   — everything identity-free and non-disruptive/non-boot-hostile: planted once

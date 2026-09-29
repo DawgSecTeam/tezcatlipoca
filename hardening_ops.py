@@ -65,6 +65,9 @@ ALPINE_SERVICES = {
     "nginx": ("nginx", "nginx"),
     "apache": ("apache2", "apache2"),
     "bind": ("bind", "named"),
+    # sshd ships in the -fix template (nakon's own transport); the shim entry just
+    # re-asserts it so an `ssh` pin scores a credlist Ssh check on Alpine boxes.
+    "ssh": ("openssh", "sshd"),
 }
 
 # Match the upgrade WORKER by full command line. `pgrep -x unattended-upgr` (the
@@ -319,11 +322,37 @@ def ensure_alpine_services(comp_dir, targets, ctx):
             block += f"rc-service {svc} status >/dev/null && echo \"TZ-SVC-OK-{pkg}\""
             blocks.append(block)
         script = "; ".join(blocks)
+
+        def _markers_ok(stdout):
+            missing = [m for m in markers.split() if m not in (stdout or "")]
+            return missing
+
+        # Primary channel: guest agent as root. The repair sweep's writable-sudoers
+        # pin makes sudoers.d world-writable post-clone, sudo then ignores the whole
+        # dir and `sudo sh -c` as medic demands a password it can't answer
+        # (live-found 2026-09-28). The -fix alpine template ships the agent.
+        node = os.environ["TF_VAR_proxmox_node"]
+        vmid = t.get("vmid")
+        if vmid is not None:
+            try:
+                wait_for_guest_agent(node, vmid, timeout=120)
+                rc, out, err = guest_agent_exec_root(node, vmid, script, timeout=180)
+                missing = _markers_ok(out)
+                if rc == 0 and not missing:
+                    with PRINT_LOCK:
+                        print(f"    Alpine services ensured on {ip} ({', '.join(p for p, _ in wanted)}) [guest-agent]")
+                    return True
+                with PRINT_LOCK:
+                    print(f"    Alpine shim guest-agent attempt failed for {ip} "
+                          f"(rc={rc}, missing={missing}) {(err or '').strip()[:160]}")
+            except Exception as exc:
+                with PRINT_LOCK:
+                    print(f"    Alpine shim guest-agent channel failed for {ip} (vmid {vmid}): {exc} — falling back to ssh")
         for attempt in range(1, 5):
             try:
                 r = ssh_via_gateway(ctx, ip, f"sudo sh -c {shlex.quote(script)}",
                                     timeout=180, user=box_username)
-                missing = [m for m in markers.split() if m not in (r.stdout or "")]
+                missing = _markers_ok(r.stdout)
                 if r.returncode == 0 and not missing:
                     with PRINT_LOCK:
                         print(f"    Alpine services ensured on {ip} ({', '.join(p for p, _ in wanted)})")
@@ -484,6 +513,15 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
         if "bind" in services or "named" in services or "dns" in services:
             script_lines.extend([
                 "# Bind9: allow queries from anywhere",
+                # The nakon bind plant declares zone "localhost" in
+                # named.conf.local; on Ubuntu named.conf.default-zones already
+                # declares it and named refuses to start on the duplicate. The
+                # default-zones copy serves db.local (A localhost -> 127.0.0.1),
+                # which is what the scored Dns check resolves.
+                "sudo python3 -c \"import re; p='/etc/bind/named.conf.local'; \""
+                "\"s=open(p).read(); \""
+                "\"open(p,'w').write(re.sub(r'zone \\\"localhost\\\" \\{[^}]*\\};\\\\n?', '', s))\""
+                " 2>/dev/null || true",
                 "cat > /tmp/named.conf.options << 'BIND9EOF'",
                 "options {",
                 '  directory "/var/cache/bind";',
@@ -545,7 +583,9 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
                 "sudo apt-get install -y lighttpd 2>/dev/null || true",
                 "sudo sed -i 's/server.port.*/server.port = 8000/' /etc/lighttpd/lighttpd.conf 2>/dev/null || true",
                 "sudo systemctl enable lighttpd 2>/dev/null || true",
-                "sudo systemctl start lighttpd 2>/dev/null || true",
+                "# restart, not start: lighttpd may already be running on :80 from the",
+                "# plant — start is a no-op on an active unit and the port move never lands",
+                "sudo systemctl restart lighttpd 2>/dev/null || true",
                 "sleep 1",
                 "",
             ])

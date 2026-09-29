@@ -1,0 +1,7 @@
+{
+  "title": "Persistence sweep across all systems",
+  "description_file": "briefing.md",
+  "open_offset_min": 110,
+  "due_offset_min": 140,
+  "close_offset_min": 160
+}
