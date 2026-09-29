@@ -346,9 +346,10 @@ def team_down(creds, team):
 
 
 def services_to_rows(services):
-    """Engine /api/services payload -> [{service, up, error}] (parsed_status + final capture)."""
+    """Engine /api/services payload -> [{service, up, error}] (parsed_status + final capture).
+    A team with no registered/scored services is a legitimate `null` body."""
     rows = []
-    for s in services:
+    for s in services or []:
         rounds = s.get("Last10Rounds") or []
         checks = (rounds[0] if rounds else {}).get("Checks") or []
         up = bool(checks) and all(c.get("Result") for c in checks)

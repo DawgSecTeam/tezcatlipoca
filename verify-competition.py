@@ -675,10 +675,13 @@ _INJECT_CLOSE_KEYS = ("CloseTime", "close_time", "CloseAt", "close_at", "Close",
 
 def check_round_loop(base_url, admin_session, fix=False):
     """Scoring round loop vs an engine reboot. The Docker containers restart after
-    a reboot but the round loop stays stopped (pfsense-ad: frozen scoreboard, stale
-    last_round.StartTime, zero current_round_time) — and verify reads the LAST
-    SCORED round, reporting stale DOWN as if live. Informational: WARN with the
-    exact remediation; --fix-round-loop runs the two POSTs."""
+    a reboot but the round loop stays stopped (pfsense-ad: frozen scoreboard) —
+    and verify reads the LAST SCORED round, reporting stale DOWN as if live.
+    /api/engine is snake_case (live-confirmed 2026-09-29): `running` (False =
+    paused), `competition_started`, `current_round_time` (RFC3339; the Go zero
+    time "0001-01-01T00:00:00Z" means the loop is NOT cycling), and
+    `last_round.StartTime`. Informational: WARN with the exact remediation;
+    --fix-round-loop runs the two POSTs."""
     print("\n  (scoring round loop — stops silently after an engine reboot)")
     if admin_session is None:
         print("  SKIP  — no admin session.")
@@ -692,28 +695,35 @@ def check_round_loop(base_url, admin_session, fix=False):
         return True
     if not isinstance(eng, dict):
         return True
-    if eng.get("Paused") or eng.get("paused"):
+    if eng.get("running") is False:
         print("  PASS  — engine paused (round loop not expected to advance)")
         return True
-    last = eng.get("last_round") or eng.get("LastRound") or {}
-    start = last.get("StartTime") or last.get("startTime") or last.get("start_time")
-    current = eng.get("current_round_time", eng.get("CurrentRoundTime"))
-    if not start or current:
+
+    from datetime import datetime, timezone
+
+    def _rfc3339(value):
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return when.replace(tzinfo=timezone.utc) if when.tzinfo is None else when
+
+    cur_when = _rfc3339(eng.get("current_round_time"))
+    if cur_when is not None and cur_when.year <= 1:
+        cur_when = None  # the Go zero time — the loop is not cycling
+    started = _rfc3339((eng.get("last_round") or {}).get("StartTime"))
+    if started is None or cur_when is not None:
         print("  PASS  — round loop advancing")
         return True
-    from datetime import datetime, timezone
-    try:
-        started = datetime.fromisoformat(str(start).replace("Z", "+00:00"))
-        if started.tzinfo is None:
-            started = started.replace(tzinfo=timezone.utc)
-        age_min = (datetime.now(timezone.utc) - started).total_seconds() / 60
-    except ValueError:
-        return True
+    age_min = (datetime.now(timezone.utc) - started).total_seconds() / 60
     if age_min < 10:
         print("  PASS  — round loop starting (first round pending within Delay)")
         return True
     print(f"  WARN  — round loop looks STOPPED: last round started {age_min:.0f} min ago "
-          "and current_round_time is 0 (engine rebooted? the loop does not self-resume)")
+          "and current_round_time is the zero time (engine rebooted? the loop does not "
+          "self-resume)")
     print('         fix: POST /api/competition/start {"started":true} then '
           'POST /api/engine/pause {"pause":false} — a fresh round lands within Delay s')
     if fix:
