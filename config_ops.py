@@ -14,7 +14,8 @@ import requests
 from constants import (ENGINE_TEMPLATE_VMID_OFFSET, MAX_BOXES_PER_TEAM, NAKON_DIR,
                        SCORING_ENGINE_VMID)
 from range_ops import has_clone_marker, proxmox_api, proxmox_request, vm_id_for
-from utils import BOX_USERNAME_DEFAULT, CREDLIST_USERNAMES_DEFAULT, valid_unix_username
+from utils import (BOX_USERNAME_DEFAULT, CREDLIST_USERNAMES_DEFAULT, is_legacy_account_name,
+                   valid_unix_username)
 
 ENV_PATH = Path(".env")
 
@@ -401,6 +402,10 @@ def collect_users_config(box_username_flag=None, credlist_flag=None):
         box_username = input(f"  Box login username [{BOX_USERNAME_DEFAULT}]: ").strip() or BOX_USERNAME_DEFAULT
     if not valid_unix_username(box_username):
         print(f"  '{box_username}' is not a valid box username — using {BOX_USERNAME_DEFAULT}.")
+        box_username = BOX_USERNAME_DEFAULT
+    elif is_legacy_account_name(box_username):
+        print(f"  '{box_username}' collides with a legacy distro system account (cloud-init "
+              f"would adopt it and brick auth) — using {BOX_USERNAME_DEFAULT} instead.")
         box_username = BOX_USERNAME_DEFAULT
 
     if credlist_flag is not None:

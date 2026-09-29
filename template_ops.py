@@ -262,7 +262,8 @@ def golden_freeze_gate(name, stored_inputs, current_inputs, frozen_at, golden_bu
     whole-bundle bundle_id. Preserve such a record only when the bundle itself is
     unchanged; a changed bundle still enters the normal hard-fail path. Config-class
     drift raises (naming the fields — nothing was destroyed); code-class drift warns
-    and proceeds off the frozen template."""
+    and proceeds off the frozen template. Returns the drift classification so
+    callers can act on code-only drift (phase 1 keeps the frozen golden)."""
     stored_config = (stored_inputs or {}).get("config") or {}
     current_config = (current_inputs or {}).get("config") or {}
     if (stored_config.get("bundle_id")
@@ -286,6 +287,7 @@ def golden_freeze_gate(name, stored_inputs, current_inputs, frozen_at, golden_bu
     if drift["code"]:
         print(f"  WARNING: '{name}' golden code drifted since freeze "
               f"({', '.join(drift['code'])}) — proceeding on the frozen template.")
+    return drift
 
 
 def frozen_gate(comp_dir, stored_inputs, current_inputs, what):

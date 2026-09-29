@@ -35,6 +35,7 @@ defects, each of which took a scored service DOWN on both teams until fixed:
    tz-base so a phase-4 resume keeps the grown disk.
 
 ### DC template ships all firewall profiles disabled (svc-matrix-2026-09-28)
+*(fixed 2026-09-28: `bootstrap_windows_box` runs `Set-NetFirewallProfile -All -Enabled True` before its rule enables)*
 
 `base-windows-server`-derived DCs come up with Domain/Private/Public firewall profiles all
 `False`. Consequences: firewall-rule effects (and any blue hardening that assumes rule state
@@ -55,6 +56,7 @@ and needed a host-side VM reset; its ADDS effect is a port-block rule + profile 
   to 955 (`base-ubuntu24.04-fix`).
 
 ### box_username colliding with a legacy distro account bricks auth setup (distro-matrix-2026-09-27)
+*(fixed 2026-09-28: generate-time + users.json lint `is_legacy_account_name` falls back to the default with a warning)*
 
 `box_username operator` (a users.json choice) collides with Fedora's legacy `operator`
 system account (uid 11, shell `/usr/sbin/nologin`, home `/root`) — Debian-family images carry
@@ -150,6 +152,8 @@ around the failing connect; a `pam_exec`-probed copy of the account stack on the
 to bisect. A bisect that survives the next outage window is the standing follow-up.
 
 ### Phase-6 mid-crash resume is safe; Windows-clone bootstrap needs the agent up (~8 min) (e2e #3, 2026-09-24)
+*(fixed 2026-09-27 in d1e5763: `bootstrap_windows_box` polls setup-complete + retries the exec within a 900 s deadline instead of one 90 s shot)*
+
 
 `clone_team_boxes` skips existing clone vmids on resume ("already exists — skipping clone
 (resume)") and re-applies `net0`/`ipconfig0` idempotently, so a crash mid-phase-6 resumes clean.

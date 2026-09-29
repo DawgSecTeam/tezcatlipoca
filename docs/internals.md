@@ -461,13 +461,14 @@ to exactly one competition, dies at `--full` teardown, and is never patched in p
   verified); **code-class drift warns and proceeds off the frozen template** — a
   post-freeze log line must never break a mid-event team rebuild or engine recovery.
   This holds fully for the ENGINE (the phase-2 gate runs before any engine destruction
-  and reuses the frozen template). Known gap, live-found 2026-09-26 (scenario-7 leg 2):
-  phase-1's golden keep/destroy compares record hash vs freshly computed hash WITHOUT
-  consulting the frozen gate, so a code-only drift of a golden's inputs (e.g. a
-  `build_golden_set` source change) destroys and rebuilds the affected goldens instead
-  of proceeding on the frozen template — the top-of-deploy warning fires, then phase 1
-  overrules it. Config drift still hard-refuses; fixing the golden side means letting
-  phase 1 ask the gate before destroying.
+  and reuses the frozen template), and since 2026-09-28 for the goldens too: the
+  pre-phase-1 `golden_freeze_gate` classifies each golden's drift and hands the
+  code-only-drifted names to `phase1_destroy_waves` as `frozen_keep`, which keeps the
+  frozen template instead of destroying it (the old behavior destroyed the golden
+  right after the gate warned "proceeding on the frozen template" — live-found
+  2026-09-26, scenario-7 leg 2). A frozen_keep golden whose template is MISSING from
+  the node is still rebuilt (there is nothing frozen to proceed on). Config drift
+  still hard-refuses before anything is destroyed.
   Mid-event rebuilds and recoveries also warn (not block) when the node's template hash
   differs from the verified record.
 - **Freeze** — `verify-competition.py --freeze`: requires all gates PASS including the

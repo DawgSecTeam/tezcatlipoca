@@ -54,6 +54,28 @@ def valid_unix_username(name):
     return bool(name) and _USERNAME_RE.fullmatch(name) is not None
 
 
+# Legacy distro system accounts (uid<=100 on the Debian and Fedora families): cloud-init
+# adopts a colliding name instead of creating it, so the sudoers rule and SSH key land on
+# a nologin root-homed shadow and every ssh <name>@box fails no matter what
+# (distro-matrix-2026-09-27: box_username operator). Alpine lacks most of these, which is
+# why the collision never surfaced on the ubuntu/debian lineup.
+LEGACY_ACCOUNT_NAMES = frozenset({
+    "root", "bin", "daemon", "adm", "lp", "sync", "shutdown", "halt", "mail",
+    "news", "uucp", "operator", "games", "man", "ftp", "proxy", "www-data",
+    "backup", "list", "irc", "gnats", "nobody", "systemd-network",
+    "systemd-resolve", "systemd-timesync", "messagebus", "sshd", "dbus",
+    "avahi", "avahi-autoipd", "tty", "disk", "kmem", "mem", "wheel", "shadow",
+    "utmp", "video", "audio", "floppy", "tape", "uuidd", "tcpdump", "tss",
+    "polkitd", "rtkit", "pulse", "qemu", "gdm",
+})
+
+
+def is_legacy_account_name(name):
+    """True when the name collides with a legacy distro system account — auth setup
+    bricks on the distros that carry it, so both users.json paths reject the name."""
+    return name in LEGACY_ACCOUNT_NAMES
+
+
 def valid_comp_name(name):
     """Confines the competitions/<name> path — no traversal, no shell metachars."""
     return bool(name) and ".." not in name and _COMP_NAME_RE.fullmatch(name) is not None
@@ -84,6 +106,11 @@ def load_users_config(comp_dir):
     box_username = data.get("box_username") or BOX_USERNAME_DEFAULT
     credlist_usernames = data.get("credlist_usernames") or list(CREDLIST_USERNAMES_DEFAULT)
     if not valid_unix_username(box_username):
+        box_username = BOX_USERNAME_DEFAULT
+    elif is_legacy_account_name(box_username):
+        print(f"  WARNING: users.json box_username '{box_username}' collides with a legacy "
+              f"distro system account (cloud-init would adopt it and brick auth) — using "
+              f"{BOX_USERNAME_DEFAULT} instead (docs/known-issues.md).")
         box_username = BOX_USERNAME_DEFAULT
     if not (len(credlist_usernames) == 3 and all(valid_unix_username(n) for n in credlist_usernames)):
         credlist_usernames = list(CREDLIST_USERNAMES_DEFAULT)
