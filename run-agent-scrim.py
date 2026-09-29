@@ -345,6 +345,18 @@ def team_down(creds, team):
         return False
 
 
+def services_to_rows(services):
+    """Engine /api/services payload -> [{service, up, error}] (parsed_status + final capture)."""
+    rows = []
+    for s in services:
+        rounds = s.get("Last10Rounds") or []
+        checks = (rounds[0] if rounds else {}).get("Checks") or []
+        up = bool(checks) and all(c.get("Result") for c in checks)
+        err = next((c.get("Error", "") for c in checks if c.get("Error") and not c.get("Result")), "")
+        rows.append({"service": s["ServiceName"], "up": bool(up), "error": err[:120]})
+    return rows
+
+
 def parsed_status(creds, team):
     """Parsed scoreboard for one team: [{service, up, error}]; raises on failure."""
     jar = f"/tmp/jar.{team}"
@@ -355,14 +367,7 @@ def parsed_status(creds, team):
         raise ValueError(f"non-JSON body: {(r.stdout or '')[:80]!r}")
     if not isinstance(services, list):
         raise ValueError(f"unexpected payload: {str(services)[:80]}")
-    rows = []
-    for s in services:
-        rounds = s.get("Last10Rounds") or []
-        checks = (rounds[0] if rounds else {}).get("Checks") or []
-        up = bool(checks) and all(c.get("Result") for c in checks)
-        err = next((c.get("Error", "") for c in checks if c.get("Error") and not c.get("Result")), "")
-        rows.append({"service": s["ServiceName"], "up": bool(up), "error": err[:120]})
-    return rows
+    return services_to_rows(services)
 
 
 def render_status(rows):
@@ -379,9 +384,10 @@ def status_text(creds, team):
 
 
 def blue_ep(args, n):
-    """Per-team blue endpoint (--blue2-*); falls back to the shared endpoint."""
-    if n == 2 and getattr(args, "blue2_base_url", None):
-        return args.blue2_base_url, (args.blue2_model or args.blue_model)
+    """Per-team blue endpoint (--blue{N}-base-url/--blue{N}-model); shared endpoint fallback."""
+    base = getattr(args, f"blue{n}_base_url", None)
+    if base:
+        return base, (getattr(args, f"blue{n}_model", None) or args.blue_model)
     return args.blue_base_url, args.blue_model
 
 
@@ -538,6 +544,85 @@ def scoreboard_delta(run_dir, team):
     return "\n".join(lines) or "no changes since last cycle"
 
 
+def _inject_reanchor_plan(comp_injects, remote_injects):
+    """Match comp injects to engine injects by title; return (updates, missing_titles).
+
+    Each update is (engine_id, form_fields, keep_files) with times already RFC3339.
+    Matching mirrors create_injects' title dedup — title is the join key.
+    """
+    by_title = {}
+    for r in remote_injects or []:
+        title = r.get("Title")
+        if title:
+            by_title.setdefault(title, r)
+    updates, missing = [], []
+    for inj in comp_injects:
+        r = by_title.get(inj["title"])
+        if r is None:
+            missing.append(inj["title"])
+            continue
+        updates.append((str(r["ID"]),
+                        {"open-time": inj["open_time"],
+                         "due-time": inj["due_time"],
+                         "close-time": inj["close_time"]},
+                        list(r.get("InjectFileNames") or [])))
+    return updates, missing
+
+
+def reanchor_injects(args, comp, creds):
+    """Re-anchor the engine's inject clocks at T0 (idempotent; run right before stage_run).
+
+    Inject offsets resolve to absolute times at phase-7 deploy time, so a --skip-deploy
+    restart or a long staging gap reaches T0 with every inject already expired
+    (shakedown-5x4: blue inject score was a guaranteed 0). UpdateInject deletes any
+    attachment NOT listed under keep-files, so every existing InjectFileNames entry is
+    re-listed on each POST.
+    """
+    from config_ops import load_injects, resolve_inject_times
+
+    injects = load_injects(comp)
+    if not injects:
+        return
+    for inj in injects:
+        if not (inj["open_offset_min"] <= inj["due_offset_min"] <= inj["close_offset_min"]):
+            raise SystemExit(
+                f"  ERROR: inject {inj['title']!r} offsets are unordered — need "
+                f"open {inj['open_offset_min']} <= due {inj['due_offset_min']} <= close "
+                f"{inj['close_offset_min']}; fix competitions/{comp.name}/injects/.")
+    resolve_inject_times(injects)
+    jar = str(Path(args.run_dir) / ".jar-reanchor")
+    _qlogin(creds, "admin", jar)
+    r = qget(creds, "admin", jar, "/api/injects")
+    try:
+        remote = json.loads(r.stdout)
+        if not isinstance(remote, list):
+            raise ValueError(str(remote)[:80])
+    except Exception:
+        log(f"WARNING: inject re-anchor skipped — /api/injects unreadable: {(r.stdout or '')[:120]}")
+        return
+    updates, missing = _inject_reanchor_plan(injects, remote)
+    for title in missing:
+        log(f"WARNING: inject {title!r} has no engine counterpart — deploy phase 7 never created it?")
+    n_ok = 0
+    for inject_id, fields, keep_files in updates:
+        cmd = ["curl", "-s", "--max-time", "15", "-b", jar, "-X", "POST",
+               f"http://{creds['ENGINE_IP']}/api/injects/{inject_id}"]
+        for key, value in fields.items():
+            cmd += ["-F", f"{key}={value}"]
+        for fn in keep_files:
+            cmd += ["-F", f"keep-files={fn}"]
+        out = subprocess.run(cmd, capture_output=True, text=True).stdout or ""
+        if '"error"' in out:
+            log(f"WARNING: re-anchoring inject {inject_id} failed: {out[:120]}")
+        else:
+            n_ok += 1
+    if updates:
+        log(f"inject clocks re-anchored at T0 ({n_ok}/{len(updates)} updated, "
+            f"first opens {updates[0][1]['open-time']})")
+    else:
+        log("no engine injects matched competitions/%s/injects/ — nothing re-anchored" % comp.name)
+
+
 def inject_brief(creds, team):
     """One line per inject with submission state; flags due-within-30-min as task #1."""
     jar = f"/tmp/jar.{team}"
@@ -599,7 +684,8 @@ NOTEBOOK_TEMPLATE = """# NOTEBOOK — team {n} working memory (update FIRST ever
 
 def _opencode_run(args, prompt, wd, env):
     """One blue cycle in a hardened context; the whole process group dies on timeout."""
-    n_team = 2 if wd.name.endswith("team2") else 1
+    m = re.search(r"team(\d+)$", wd.name)
+    n_team = int(m.group(1)) if m else 1
     base_url, blue_model = blue_ep(args, n_team)
     # subprocess cwd= does not update $PWD and opencode resolves its project
     # (and thus the per-workdir opencode.jsonc defining the scrim-llm provider)
@@ -761,12 +847,18 @@ def blue_watchdog_loop(args, creds, t0, stop):
         stop.wait(WATCHDOG_INTERVAL)
 
 
+def _cred_team_names(args, creds):
+    """Team names this run has creds for, bounded by --teams."""
+    return [f"team{i}" for i in range(1, args.teams + 1) if f"TEAM{i}_PW" in creds]
+
+
 def monitor_loop(args, creds, t0, stop):
     """Snapshot scoreboard + evidence every MONITOR_INTERVAL starting at T+0."""
     sb_path = Path(args.run_dir) / "scoreboard-state.jsonl"
+    teams = _cred_team_names(args, creds)
     while not stop.is_set() and (time.time() - t0) < args.duration_min * 60:
         parsed, texts = {}, {}
-        for t in ("team1", "team2"):
+        for t in teams:
             try:
                 parsed[t] = parsed_status(creds, t)
                 texts[t] = render_status(parsed[t])
@@ -1018,15 +1110,18 @@ def stage_red(args, comp, creds, run_dir):
 
 def stage_run(args, creds, t0):
     stop = threading.Event()
-    blue_lock = threading.Lock()
-    blue_lock2 = (blue_lock if not getattr(args, "blue2_base_url", None)
-                  or args.blue2_base_url == args.blue_base_url
-                  else threading.Lock())
+    # One lock per distinct LLM endpoint — teams sharing an endpoint share its
+    # concurrency cap; teams 3/4 used to silently inherit team1's endpoint + lock.
+    endpoint_locks = {}
+    for n in range(1, args.teams + 1):
+        base_url, _ = blue_ep(args, n)
+        endpoint_locks.setdefault(base_url, threading.Lock())
     threads = []
     for n in range(1, args.teams + 1):
-        lock = blue_lock2 if (n == 2 and blue_lock2 is not blue_lock) else blue_lock
+        base_url, _ = blue_ep(args, n)
         threads.append(threading.Thread(target=blue_feed_loop,
-                                        args=(n, args, creds, t0, stop, lock, 300.0 * (n - 1))))
+                                        args=(n, args, creds, t0, stop,
+                                              endpoint_locks[base_url], 300.0 * (n - 1))))
     threads.append(threading.Thread(target=monitor_loop, args=(args, creds, t0, stop)))
     if getattr(args, "blue_watchdog", False):
         threads.append(threading.Thread(target=blue_watchdog_loop, args=(args, creds, t0, stop)))
@@ -1046,14 +1141,30 @@ def stage_capture(args, creds):
     ev = Path(args.run_dir) / "evidence"
     ev.mkdir(parents=True, exist_ok=True)
     admin_jar = str(ev / ".jar-admin")
-    for team in ("team1", "team2"):
+    teams = _cred_team_names(args, creds)
+    # Final scoreboard dump goes to evidence BEFORE anything can tear the engine
+    # down — teardown destroys the scoring DB, and the report reads this file.
+    final = {"captured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+             "teams": [], "injects": [], "services": {}}
+    for path, key in (("/api/teams", "teams"), ("/api/injects", "injects")):
+        r = qget(creds, "admin", admin_jar, path)
+        try:
+            final[key] = json.loads(r.stdout)
+        except Exception:
+            log(f"WARNING: final {key} capture failed: {(r.stdout or '')[:120]}")
+    for team in teams:
         path = f"/api/services/{_team_tid(creds, 'admin', admin_jar, team)}"
         r = qget(creds, "admin", admin_jar, path)
         if '"error"' in (r.stdout or ""):
             r = qget(creds, team, str(ev / f".jar-{team}"), path)
         (ev / f"final-services-{team}.json").write_text(r.stdout or "")
-        if '"error"' in (r.stdout or ""):
+        try:
+            final["services"][team] = services_to_rows(json.loads(r.stdout))
+        except Exception:
+            final["services"][team] = None
             log(f"WARNING: {team} services capture failed: {(r.stdout or '')[:120]}")
+    (ev / "final-scoreboard.json").write_text(json.dumps(final, indent=1))
+    log("final scoreboard dumped to evidence")
     jar = str(ev / ".jar-admin")
 
     def _pause():
@@ -1170,6 +1281,11 @@ def main():
                    help="separate LLM base URL for team2's blue (default: same as --blue-base-url)")
     p.add_argument("--blue2-model", default=None,
                    help="model for team2's blue when --blue2-base-url is set")
+    for n in (3, 4):
+        p.add_argument(f"--blue{n}-base-url", default=None,
+                       help=f"separate LLM base URL for team{n}'s blue (default: --blue-base-url)")
+        p.add_argument(f"--blue{n}-model", default=None,
+                       help=f"model for team{n}'s blue when --blue{n}-base-url is set")
     p.add_argument("--red-ip", default="10.0.0.198", help="red01 IP on the cluster (realm default)")
     p.add_argument("--red-gw", default="10.0.0.1", help="red01 gateway")
     p.add_argument("--red-storage", default="hdd", help="storage pool red01 clones from")
@@ -1225,6 +1341,7 @@ def main():
     t0 = time.time()
     log(f"T0 — event clock starts now (red setup took {(t0 - red_setup_started) / 60:.0f} min, "
         f"outside scored time)")
+    reanchor_injects(args, comp, creds)
     stage_run(args, creds, t0)
 
     stage_capture(args, creds)

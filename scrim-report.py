@@ -50,7 +50,10 @@ def host_label(ip):
         return "?"
     octets = ip.split(".")
     host = HOST_BY_OCTET.get(octets[-1], f".{octets[-1]}" if len(octets) == 4 else ip)
-    team = {"101": "1", "102": "2"}.get(octets[2], "") if len(octets) == 4 else ""
+    # team identifiers are 100+i (101 -> team1, ...); anything else isn't a team box
+    team = ""
+    if len(octets) == 4 and octets[2].isdigit() and 100 < int(octets[2]) < 200:
+        team = str(int(octets[2]) - 100)
     return f"{team}:{host}" if team else host
 
 
@@ -124,6 +127,15 @@ def load_scoreboard(run_dir):
                     {t: {s["service"]: s["up"] for s in (svcs or [])}
                      for t, svcs in (rec.get("teams") or {}).items()}))
     return sorted(out, key=lambda rec: rec[0])
+
+
+def load_final_scoreboard(run_dir):
+    """The stage_capture evidence dump (all teams, taken before teardown destroys the DB)."""
+    try:
+        data = json.loads((Path(run_dir) / "evidence" / "final-scoreboard.json").read_text())
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
 
 
 
@@ -259,8 +271,7 @@ def blue_metrics(run_dir):
         r"(tznet|svc-netupdate|TzNet|red_key|authorized_keys|backdoor|rogue|"
         r"uid\s*=?\s*0|unauthorized)", re.I)
     erad_verbs = re.compile(r"(removed|deleted|disabled|uninstalled|locked|changed.*back|reset)", re.I)
-    for n in (1, 2):
-        wd = Path(run_dir) / f"blue-team{n}"
+    for wd in sorted(Path(run_dir).glob("blue-team*")):
         if not wd.is_dir():
             continue
         feed = wd / "feed.log"
@@ -417,6 +428,20 @@ def build_report(run_dir):
                  "restoration count above is inferred from red's re-kills)")
     L.append(f"- injects submitted: **{bm['injects']}**")
     L.append(f"- notebook liveliness: **{bm['notebook_entries']}** entries\n")
+
+    final = load_final_scoreboard(run_dir)
+    if final:
+        L.append("## Final scores (evidence dump at capture, before teardown)\n")
+        for team, rows in sorted((final.get("services") or {}).items()):
+            if rows is None:
+                L.append(f"- {team}: capture failed")
+                continue
+            downs = [r["service"] for r in rows if not r.get("up")]
+            L.append(f"- {team}: {len(rows) - len(downs)} up / {len(downs)} down"
+                     + (f" — down: {', '.join(downs)}" if downs else ""))
+        injects = final.get("injects") or []
+        subs = sum(1 for inj in injects for s in (inj.get("Submissions") or []))
+        L.append(f"- injects at capture: {len(injects)} published, {subs} submissions\n")
 
     L.append("## Gates (docs/rehearsal-gates.md)\n")
     L.append("| side | gate | value | threshold | verdict |")
