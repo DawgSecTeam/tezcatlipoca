@@ -1134,7 +1134,8 @@ def stage_teardown(args, creds=None):
             log(f"WARNING: red evidence pull failed: {e}")
     log("teardown: red01 + NAT")
     env = {**os.environ, "BAuto_LLM_API_KEY": api_key(local=True)}
-    run(["python3", "-m", "badauto", "destroy"], cwd=BAD_AUTO, env=env, timeout=900, check=False)
+    run(["python3", "-m", "badauto", "destroy", "--competition", args.competition, "--yes"],
+        cwd=BAD_AUTO, env=env, timeout=900, check=False)
     if args.keep_range:
         log("--keep-range: leaving the competition range up")
         return
