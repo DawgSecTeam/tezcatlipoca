@@ -440,18 +440,36 @@ Two operator traps from the same night, both now guarded in bad-auto (commit 8b9
    config.yaml (mismatch refuses), `--skip-vm` for shared/repurposed red VMs; the
    harness passes both (tezcatlipoca db5a689).
 
-## Known-broken templates
-
-### Two pins of the same check TYPE on one box collapse to ONE scoreboard check (regression-4x1-2026-09-28)
+### Two pins of the same check TYPE on one box collapsed to ONE scoreboard check (regression-4x1-2026-09-28) — FIXED 2026-09-29
 
 `box_services.json` pinned apache AND roundcube on the same box and the scoreboard only
 registered `web01-http` — `web01-roundcube` never existed (11 checks for 12 pins), so its
-bad-auto coverage row can never flip (baseline=0, down=0 forever). Quotient's check setup
-keys per box+check-type and silently drops the duplicate; svc-matrix never hit this because
-every service type sat on its own box. Rule for comp authors: **at most one pin per check
-TYPE per box** — two HTTP-flavored pins must live on different boxes. The bad-auto
-roundcube→apache2 alias itself is sound; the splunk→lighttpd and telnet→inetd aliases
-proved the mechanism live in the same run.
+bad-auto coverage row could never flip (baseline=0, down=0 forever). Root cause was
+**driver-side**: `build_event_conf` deduped checks per box keyed `(check TYPE, port)`, and
+apache + roundcube both map to `("Web", 80)` — the second pin was silently dropped at
+generate time. The upstream attribution in this entry's first draft was wrong: Quotient's
+Box config holds a SLICE per check type (`engine/config/config.go`) and registers every
+entry; its only constraint is globally-unique check names built `<box>-<Display>`
+(`checks/web.go`), with duplicates a loud config-load error, not a silent drop. svc-matrix
+never hit the collapse only because no box carried two `(TYPE, port)`-equal pins. The
+bad-auto roundcube→apache2 alias itself is sound; the splunk→lighttpd and telnet→inetd
+aliases proved the mechanism live in the same run.
+
+Fixed 2026-09-29 (`build_event_conf` rework + verify `pins_registered` gate): multiple
+same-TYPE pins on one box register as separate checks. Identity is `(box, Display)` —
+matching Quotient's uniqueness domain — duplicate Displays on a box are rejected at
+generate time with the fix in the message, and verify compares the live scoreboard's
+ServiceName set against the pins so an unregistered pin FAILs instead of silently
+tallying 11-for-12. Dict pins also take per-check overrides (`PIN_CHECK_OVERRIDES`:
+display/port/path/scheme/status) so one catalog config can plant once and score twice,
+e.g. `{"name": "IIS HTTP", "display": "iis-alt"}`; nakon machine lists strip the
+overrides (plants resolve by name+vars). Rule for comp authors: **per box, each pin
+needs a distinct scoreboard Display** — same-TYPE pins on one box are fine, but unless
+the plant actually gives them distinct ports/processes they still share a failure
+domain (stopping apache2 takes every Web vhost on it down at once, which bad-auto's
+roundcube→apache2 alias already models).
+
+## Known-broken templates
 
 - **`106` / `ubuntu24.04`** and **`920` / `debian13-lite`** (reworded 2026-09-23): these
   templates are **not broken** — they simply ship without cloud-init, so tezcatlipoca clones

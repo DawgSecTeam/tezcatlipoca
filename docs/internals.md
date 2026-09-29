@@ -910,7 +910,14 @@ Drives Quotient: event.conf generation, team seeding, engine unpause, inject cre
   supplied (i.e. the competition has an `injects/` dir): Quotient's INJECTAUTH-guarded routes
   (POST /api/injects/create, announcements, submission downloads) accept `admin` and `inject`
   roles, so a dedicated inject manager lets an organizer run injects without the full admin
-  login. Duplicate checks per box are deduped by (check key, port). `CredlistSettings` is emitted
+  login. Check identity per box is the `Display` — Quotient holds a slice per check type and
+  registers every entry, naming checks `<box>-<Display>` with duplicates a config-load error,
+  so multiple same-TYPE pins on one box are fine as long as Displays differ (a collision is a
+  generate-time `SystemExit`, never a silent drop — see known-issues regression-4x1). Dict pins
+  take per-check overrides (`PIN_CHECK_OVERRIDES` in constants.py: display/port/path/scheme/
+  status) merged over the service's base config; nakon machine lists strip them, so one catalog
+  config plants once but can score under several Displays. `expected_service_names()` shares the
+  pin resolution for verify's `pins_registered` gate. `CredlistSettings` is emitted
   only when some check needs it — box-level `credlists` entries are just names, resolved by
   Quotient against the top-level registry (`config/credlists/<CredlistPath>` on the engine).
 - **`_normalize_host()`** — Quotient's address comes off Terraform as a bare IP; requests needs a
