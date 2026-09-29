@@ -420,6 +420,17 @@ silently dropped the rule and engine→box scoring timed out. Fixed to `<network
 
 ## Known-broken templates
 
+### Two pins of the same check TYPE on one box collapse to ONE scoreboard check (regression-4x1-2026-09-28)
+
+`box_services.json` pinned apache AND roundcube on the same box and the scoreboard only
+registered `web01-http` — `web01-roundcube` never existed (11 checks for 12 pins), so its
+bad-auto coverage row can never flip (baseline=0, down=0 forever). Quotient's check setup
+keys per box+check-type and silently drops the duplicate; svc-matrix never hit this because
+every service type sat on its own box. Rule for comp authors: **at most one pin per check
+TYPE per box** — two HTTP-flavored pins must live on different boxes. The bad-auto
+roundcube→apache2 alias itself is sound; the splunk→lighttpd and telnet→inetd aliases
+proved the mechanism live in the same run.
+
 - **`106` / `ubuntu24.04`** and **`920` / `debian13-lite`** (reworded 2026-09-23): these
   templates are **not broken** — they simply ship without cloud-init, so tezcatlipoca clones
   (which rely on cloud-init for network/SSH/user seeding) come up unreachable. For non-driver
