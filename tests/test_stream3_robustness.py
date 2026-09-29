@@ -110,17 +110,22 @@ class _Session:
 
 
 class RoundLoopCheck(unittest.TestCase):
+    # /api/engine real schema (live-confirmed 2026-09-29 on the .150 orphan engine):
+    # snake_case, current_round_time is an RFC3339 string whose Go zero value
+    # ("0001-01-01T00:00:00Z") means the loop is stopped; paused = running: false.
     def test_paused_engine_not_warned(self):
-        s = _Session({"Paused": True})
+        s = _Session({"running": False, "competition_started": True,
+                      "current_round_time": "0001-01-01T00:00:00Z"})
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             verify.check_round_loop("http://e", s)
         self.assertIn("paused", out.getvalue())
         self.assertEqual(s.posts, [])
 
-    def test_stale_loop_warns_with_remediation(self):
-        s = _Session({"last_round": {"StartTime": "2020-01-01T00:00:00Z"},
-                      "current_round_time": 0})
+    def test_stale_zero_time_warns_with_remediation(self):
+        s = _Session({"running": True, "competition_started": True,
+                      "last_round": {"StartTime": "2020-01-01T00:00:00Z"},
+                      "current_round_time": "0001-01-01T00:00:00Z"})
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             verify.check_round_loop("http://e", s)
@@ -129,8 +134,9 @@ class RoundLoopCheck(unittest.TestCase):
         self.assertEqual(s.posts, [])
 
     def test_fix_round_loop_runs_both_posts(self):
-        s = _Session({"last_round": {"StartTime": "2020-01-01T00:00:00Z"},
-                      "current_round_time": 0})
+        s = _Session({"running": True, "competition_started": True,
+                      "last_round": {"StartTime": "2020-01-01T00:00:00Z"},
+                      "current_round_time": "0001-01-01T00:00:00Z"})
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             verify.check_round_loop("http://e", s, fix=True)
@@ -139,8 +145,9 @@ class RoundLoopCheck(unittest.TestCase):
                                                    "http://e/api/engine/pause"])
 
     def test_healthy_loop_passes(self):
-        s = _Session({"last_round": {"StartTime": "2020-01-01T00:00:00Z"},
-                      "current_round_time": 42})
+        s = _Session({"running": True, "competition_started": True,
+                      "last_round": {"StartTime": "2020-01-01T00:00:00Z"},
+                      "current_round_time": "2026-09-29T07:00:00Z"})
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             verify.check_round_loop("http://e", s)
