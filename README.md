@@ -16,6 +16,7 @@ nakon SSHes into each box to install services and deploy misconfigs.
 | [docs/internals.md](docs/internals.md) | Per-module design notes — the "why" behind functions, parameters, and orderings |
 | [docs/known-issues.md](docs/known-issues.md) | Incident log, known-broken templates, failure modes, standing limitations |
 | [docs/e2e-testing.md](docs/e2e-testing.md) | Running e2e deploy tests: failure triage, per-phase recovery cost map, trim-then-resume, preflight checklist, multi-host / pfSense / red-team runs (§8) |
+| [docs/svc-matrix-2026-09-28-report.md](docs/svc-matrix-2026-09-28-report.md) | All-scored-services matrix comp (16 pins, win+linux): lineup, 16/16 UP verify, bad-auto 16/16 takedown validation |
 | [docs/pfsense-inpath-2026-09-28.md](docs/pfsense-inpath-2026-09-28.md) | In-path pfSense firewall: topology, the reproducible guest-side config-injection method, and the dead-ends |
 | [docs/scrim-harness.md](docs/scrim-harness.md) | Red-vs-blue agent scrim harness (`run-agent-scrim.py`, `scrim-report.py`, beacons) |
 | [docs/rehearsal-gates.md](docs/rehearsal-gates.md) | Numeric pass/fail gates for a scrim run |

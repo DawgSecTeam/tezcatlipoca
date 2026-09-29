@@ -7,6 +7,53 @@ harness); symptom-level fixes live in [usage-people.md](usage-people.md)'s Troub
 
 ## Live-confirmed incidents
 
+### svc-matrix-2026-09-28: four plant/bring-up defects on the all-services matrix (all FIXED)
+
+The full 16-pin service matrix (every `_SERVICE_TO_CHECK` entry, see the run report
+[svc-matrix-2026-09-28-report.md](svc-matrix-2026-09-28-report.md)) surfaced four independent
+defects, each of which took a scored service DOWN on both teams until fixed:
+
+1. **nakon bind plant duplicates `zone "localhost"`** — the catalog's bind config declares
+   `zone "localhost"` in `named.conf.local`; Ubuntu's `named.conf.default-zones` already
+   declares it, and named exits at config parse (rc=1, no journal). FIXED in
+   `fix_services_on_boxes` (strips the duplicate; the default-zones copy serves db.local,
+   whose `A localhost → 127.0.0.1` is exactly what the Dns check resolves).
+2. **lighttpd port move never landed** — the splunk shim edits `server.port = 8000` then
+   `systemctl start`s lighttpd, but the plant had already started it on :80 and `start` is a
+   no-op on an active unit. FIXED: `restart`.
+3. **RDP: registry flip ≠ reachable** — the `RDP misconfigs` plant sets `fDenyTSConnections=0`
+   but the template ships the RemoteDesktop firewall rule group disabled, so :3389 listens and
+   still drops every external dial. FIXED: `bootstrap_windows_box` enables
+   `RemoteDesktop-UserMode-In-TCP/UDP`.
+4. **Golden clones inherit the template disk with no resize** — terraform sizes team clones
+   from `disk_gb` but goldens are plain clones, so a splunk golden ran on the 15 GB ubuntu
+   template disk and the .deb unpack hit ENOSPC mid-plant (golden aborted, deploy died at
+   phase 4). FIXED: `golden_ops.ensure_golden_disk_size` grows the clone to `disk_gb`
+   (grow-only) before first boot, so cloud-init's growpart expands the guest fs natively.
+   Manual-recovery note if you ever meet the old state on a deployed range: resize the golden
+   AFTER rolling back to tz-base (a rollback reverts a pre-snapshot resize), then delete
+   tz-base so a phase-4 resume keeps the grown disk.
+
+### DC template ships all firewall profiles disabled (svc-matrix-2026-09-28)
+
+`base-windows-server`-derived DCs come up with Domain/Private/Public firewall profiles all
+`False`. Consequences: firewall-rule effects (and any blue hardening that assumes rule state
+matters) do nothing on a DC until `Set-NetFirewallProfile -All -Enabled True`; and the ADDS
+takedown must NEVER stop NTDS — on a DC the Administrator login authenticates against the AD
+database NTDS serves, so stopping it locks out every SSH foothold (bad-auto locked itself out
+and needed a host-side VM reset; its ADDS effect is a port-block rule + profile enable now).
+
+### cyberrange (.150) operational notes (svc-matrix-2026-09-28)
+
+- An **orphan `quotient-engine` runs at vmid 1000** on node proxmox — the default
+  `--scoring-vmid`. Always pass an explicit free `--scoring-vmid` on this node.
+- Datastore reality vs the preflight gate (need ≈ teams × Σdisk_gb): hdd 380 GB, ssd 365 GB,
+  wkshp-pool ~748 GB free. A 10-box × 2-team comp only fits **wkshp-pool** (user-approved for
+  svc-matrix; thin-provisioned actual usage is far below the provisioned gate number).
+- The realm env variant `.env.realm-backup-20260923` (targets .150) carried a stale
+  `TF_VAR_template_vm_id=9106` (the engine base preflight hard-fails on it) — fixed in place
+  to 955 (`base-ubuntu24.04-fix`).
+
 ### box_username colliding with a legacy distro account bricks auth setup (distro-matrix-2026-09-27)
 
 `box_username operator` (a users.json choice) collides with Fedora's legacy `operator`
