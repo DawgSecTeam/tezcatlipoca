@@ -418,6 +418,28 @@ the pool also breaks boot (the loader hardcodes `pfSense`). Inject **guest-side*
 `<destination><network>192.168.x.0/24</network>`; pfSense's `<network>` takes a keyword, so it
 silently dropped the rule and engine→box scoring timed out. Fixed to `<network>lan</network>`.
 
+### badauto director off red01 silently burns the event; destroy follows config.yaml (pfsense-rvb 2026-09-29)
+
+Two operator traps from the same night, both now guarded in bad-auto (commit 8b93de0):
+
+1. **`python3 -m badauto run` from the dev host does not error.** The loop cycles, the
+   scoreboard sensor works (the engine is reachable over mgmt), and every attack tactic
+   fails "unreachable over SSH" while LLM spend burns — 26 minutes of fake run and a
+   report that looks real (pfsense-rvb session, 01:30-01:56Z). The director's home is
+   red01 (`bad-auto deploy --start`); `run --once --dry-run` remains the probe path.
+   Fixed: `ensure_on_range` refuses without `/etc/bad-auto/config.yaml` unless
+   `BAuto_ALLOW_OFFRANGE=1`, plus a circuit breaker that halts after 8 consecutive
+   unreachable attack results (wrong host or route lost mid-event).
+2. **`badauto destroy` follows `config.yaml` (`deploy.red_vmid`) with no flags and no
+   confirmation.** The README documented a `--competition` flag argparse rejected, and
+   config.yaml is machine-written per harness run (run-agent-scrim `stage_red`), so a
+   stale config points destroy at whatever VM it names. The regression-4x1 closeout
+   worked around exactly this by tearing down manually (beacon STOP + engine NAT
+   removal + VM delete) rather than risk the shakedown red01 (999/.244) the config
+   named. Fixed: `destroy --competition <dir> --yes` where --competition must MATCH
+   config.yaml (mismatch refuses), `--skip-vm` for shared/repurposed red VMs; the
+   harness passes both (tezcatlipoca db5a689).
+
 ## Known-broken templates
 
 ### Two pins of the same check TYPE on one box collapse to ONE scoreboard check (regression-4x1-2026-09-28)
