@@ -195,6 +195,12 @@ persistence, `.env` updates.
   offsets stay anchored at the original phase-7 time (winad-scrim2: all injects closed before
   T0). Add `--reset-event` to re-clone the engine from its template (fresh DB) and re-run
   phase 7, re-anchoring injects at now; `verify` WARNs on any inject already past close.
+  Second consequence (shakedown-5x4: blue inject score 0): the scrim path re-anchors at T0 —
+  `run-agent-scrim.reanchor_injects()` runs unconditionally right after the event clock starts,
+  re-resolving the comp's offsets at now and pushing them via the engine's UpdateInject
+  (`POST /api/injects/{id}`; every existing `InjectFileNames` entry is re-listed under
+  keep-files, because UpdateInject deletes any attachment not listed). The heavy
+  `--reset-event` re-clone is no longer required for a rerun.
 - **`load_boxes()`** — reusing a competition replays its saved `boxes.json`, not anything derived
   from current `.env`.
 
@@ -948,6 +954,13 @@ Bridges, scoring VM (1000), team1 VMs, NIC wiring, cold-boot + netplan.
 - **No cloud-init on the engine** — it has a dynamic IP and the template's baked-in netplan
   (dhcp4 on the mgmt NIC) suffices on its own; the template's own cloud-init build already baked
   in `var.ssh_public_key` and passwordless sudo for `var.vm_username`, so no bootstrap is needed
+  — **superseded 2026-09-29: the engine mgmt IP is STATIC by default** (`10.0.0.250`, written
+  into tfvars by deploy; `TF_VAR_engine_mgmt_ip=''` restores DHCP). The DHCP engine rebooted
+  onto a different address mid-event while terraform's saved output stayed stale
+  (shakedown-5x4: .221→.243→.233), so deploy defaults `engine_mgmt_ip` (and exports it for
+  `template_ops`, which sets the build VM's `ipconfig0`), and preflight sweeps running guests'
+  agent-reported IPs to refuse a colliding address. The agent block stays — team-NIC DHCP and
+  the build VM still use it.
   before the driver connects.
 - **Terraform provisions ONLY team1's boxes** — `create-competition.py` clones them to other
   teams via the Proxmox API after nakon has run. All bridges are still created here, because the
