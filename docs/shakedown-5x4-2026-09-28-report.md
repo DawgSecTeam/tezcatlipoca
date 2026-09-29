@@ -66,9 +66,11 @@ fixed.**
 7. bad-auto's red01 bootstrap has no retry on transient pvestatd 596s; four launches
    each died on one 596. Follow-up: retry/await in bad-auto's agent execs.
 8. Freezing is not commit-safe: committing after `--freeze` trips the drift gate.
-9. **Node .193 went hard-down** under a sustained load-28 evening (unreachable from
-   inside the lab as well). Needs physical/IPMI. Suspect the sustained 27-VM clone-storm
-   churn; watch for a repeat on the next big deploy.
+9. **Node .193 went hard-down** mid-prep (unreachable from inside the lab as well).
+   Root cause is a **known hardware issue of the cyberfield box** (owner-confirmed) — not
+   the deploy load; the node stayed up through the whole load-28 evening and died
+   afterwards. Needs a physical power cycle; everything deployed came back intact. The
+   event was merely delayed by it (see Event Results).
 
 ## Readiness verdict
 
