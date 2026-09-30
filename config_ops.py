@@ -281,7 +281,7 @@ def _catalog_gate(comp_dir):
 
 
 def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
-                              engine_mgmt_ip=None):
+                              engine_mgmt_ip=None, check_free=True):
     """Per-node preflight for a multi-node placement: every hosting node gets its own
     template/collision/headroom gate scoped to exactly what it will hold (engine node:
     engine base + slot-0 goldens + its teams; each satellite: its slot's goldens, the
@@ -327,6 +327,9 @@ def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
 
         if not node_teams and slot > 0:
             continue  # unused satellite — nothing else to check there
+
+        if not check_free:
+            continue  # resume: this competition's own leftovers are phase-1/terraform's to reconcile
 
         # Collision gate scoped to this node's share.
         our_tags = {"tezcatlipoca", f"comp-{comp_name}"}

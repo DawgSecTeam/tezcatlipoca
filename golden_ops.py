@@ -330,19 +330,28 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     # Alpine (vulndb scripts are apt/dnf/yum-only) — the plant runs non-strict and
     # ensure_alpine_services owns those services, with its own hard pass/fail.
     alpine_shim = compfile_flag(comp_dir / "Compfile", "alpine_services")
-    bundle = build_nakon_bundle(golden_config_path)
-    result = run_nakon(key, scoring_user, scoring_ip, bundle, golden_config_path,
-                       only=[t["machine"] for t in targets],
-                       timeout=max(2400, 2400 * len(targets)), strict=not alpine_shim,
-                       jobs=jobs, run_tag="golden")
-    if result.failed:
+    # Score-only lineups carry no plantable golden configurations — the golden is a
+    # pristine disk by design. An empty plan makes nakon report "no output from the
+    # remote plan" per machine, so the plant is skipped outright (live-found
+    # 2026-09-30 multinode-spread).
+    golden_cfg = json.loads(golden_config_path.read_text())["machines"]
+    if not any(m.get("configurations") for m in golden_cfg):
+        print("  Golden stage carries no plantable configurations — skipping the "
+              "nakon plant; converting pristine goldens")
+    else:
+        bundle = build_nakon_bundle(golden_config_path)
+        result = run_nakon(key, scoring_user, scoring_ip, bundle, golden_config_path,
+                           only=[t["machine"] for t in targets],
+                           timeout=max(2400, 2400 * len(targets)), strict=not alpine_shim,
+                           jobs=jobs, run_tag="golden")
+        if result.failed:
+            if alpine_shim:
+                print(f"  WARNING: golden plant had {len(result.failed)} FAILED step(s) — "
+                      f"alpine_services shim owns those (apk/OpenRC)")
+            else:
+                raise RuntimeError(f"golden plant had {len(result.failed)} FAILED step(s) — strict mode requires green")
         if alpine_shim:
-            print(f"  WARNING: golden plant had {len(result.failed)} FAILED step(s) — "
-                  f"alpine_services shim owns those (apk/OpenRC)")
-        else:
-            raise RuntimeError(f"golden plant had {len(result.failed)} FAILED step(s) — strict mode requires green")
-    if alpine_shim:
-        ensure_alpine_services(comp_dir, targets, ctx)
+            ensure_alpine_services(comp_dir, targets, ctx)
 
     print("  Cleaning cloud-init state on golden Linux boxes (clones must re-init)...")
     for t in linux_targets:

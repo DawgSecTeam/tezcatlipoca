@@ -24,12 +24,118 @@ provider "proxmox" {
   }
 }
 
+# Satellite providers (multi-node). Exactly MAX_SATELLITES=4 aliases; unused slots
+# carry dummy settings and are never configured because no resource references them.
+# Tokens arrive via tfvars.json (0600, written per competition by deploy()).
+provider "proxmox" {
+  alias     = "sat1"
+  endpoint  = try(var.satellites[0].endpoint, "https://sat1.invalid")
+  api_token = try(var.satellites[0].api_token, "root@pam!dummy=00000000-0000-0000-0000-000000000000")
+  insecure  = true
+  ssh {
+    agent       = false
+    username    = "root"
+    private_key = file(var.ssh_private_key_path)
+    node {
+      name    = try(var.satellites[0].node, "unused")
+      address = try(regex("^https?://([^/:]+)", var.satellites[0].endpoint)[0], "sat1.invalid")
+    }
+  }
+}
+
+provider "proxmox" {
+  alias     = "sat2"
+  endpoint  = try(var.satellites[1].endpoint, "https://sat2.invalid")
+  api_token = try(var.satellites[1].api_token, "root@pam!dummy=00000000-0000-0000-0000-000000000000")
+  insecure  = true
+  ssh {
+    agent       = false
+    username    = "root"
+    private_key = file(var.ssh_private_key_path)
+    node {
+      name    = try(var.satellites[1].node, "unused")
+      address = try(regex("^https?://([^/:]+)", var.satellites[1].endpoint)[0], "sat2.invalid")
+    }
+  }
+}
+
+provider "proxmox" {
+  alias     = "sat3"
+  endpoint  = try(var.satellites[2].endpoint, "https://sat3.invalid")
+  api_token = try(var.satellites[2].api_token, "root@pam!dummy=00000000-0000-0000-0000-000000000000")
+  insecure  = true
+  ssh {
+    agent       = false
+    username    = "root"
+    private_key = file(var.ssh_private_key_path)
+    node {
+      name    = try(var.satellites[2].node, "unused")
+      address = try(regex("^https?://([^/:]+)", var.satellites[2].endpoint)[0], "sat3.invalid")
+    }
+  }
+}
+
+provider "proxmox" {
+  alias     = "sat4"
+  endpoint  = try(var.satellites[3].endpoint, "https://sat4.invalid")
+  api_token = try(var.satellites[3].api_token, "root@pam!dummy=00000000-0000-0000-0000-000000000000")
+  insecure  = true
+  ssh {
+    agent       = false
+    username    = "root"
+    private_key = file(var.ssh_private_key_path)
+    node {
+      name    = try(var.satellites[3].node, "unused")
+      address = try(regex("^https?://([^/:]+)", var.satellites[3].endpoint)[0], "sat4.invalid")
+    }
+  }
+}
+
+locals {
+  # Teams split by hosting slot. t.slot defaults to 0 (variables.tf optional field),
+  # so legacy tfvars without the key place every team on the engine node — the
+  # single-node behavior, unchanged.
+  slot_teams = [for s in range(5) : { for k, t in var.teams : k => t if try(t.slot, 0) == s }]
+}
+
 
 resource "proxmox_network_linux_bridge" "team_bridge" {
-  for_each  = var.teams
+  for_each  = local.slot_teams[0]
   node_name = var.proxmox_node
   name      = "vmbr${each.value.identifier}"
   comment   = "Quotient team ${each.key} — isolated, no uplink"
+}
+
+resource "proxmox_network_linux_bridge" "team_bridge_sat1" {
+  provider  = proxmox.sat1
+  for_each  = local.slot_teams[1]
+  node_name = try(var.satellites[0].node, "unused")
+  name      = "vmbr${each.value.identifier}"
+  comment   = "Quotient team ${each.key} — isolated, no uplink (satellite 1)"
+}
+
+resource "proxmox_network_linux_bridge" "team_bridge_sat2" {
+  provider  = proxmox.sat2
+  for_each  = local.slot_teams[2]
+  node_name = try(var.satellites[1].node, "unused")
+  name      = "vmbr${each.value.identifier}"
+  comment   = "Quotient team ${each.key} — isolated, no uplink (satellite 2)"
+}
+
+resource "proxmox_network_linux_bridge" "team_bridge_sat3" {
+  provider  = proxmox.sat3
+  for_each  = local.slot_teams[3]
+  node_name = try(var.satellites[2].node, "unused")
+  name      = "vmbr${each.value.identifier}"
+  comment   = "Quotient team ${each.key} — isolated, no uplink (satellite 3)"
+}
+
+resource "proxmox_network_linux_bridge" "team_bridge_sat4" {
+  provider  = proxmox.sat4
+  for_each  = local.slot_teams[4]
+  node_name = try(var.satellites[3].node, "unused")
+  name      = "vmbr${each.value.identifier}"
+  comment   = "Quotient team ${each.key} — isolated, no uplink (satellite 4)"
 }
 
 locals {
@@ -97,7 +203,9 @@ resource "proxmox_virtual_environment_vm" "scoring_engine" {
   }
 
   dynamic "network_device" {
-    for_each = var.teams
+    # Only slot-0 teams get a NIC on the engine — satellite bridges live on other
+    # hosts; the engine reaches their subnets via the jump routes (satellite_routes).
+    for_each = local.slot_teams[0]
     content {
       bridge = "vmbr${network_device.value.identifier}"
       model  = "virtio"
@@ -124,13 +232,30 @@ locals {
     if vm.status == "stopped"
   }
 
-  sorted_team_keys = sort(keys(var.teams))
-  team1_key        = "team1"
+  sorted_team_keys = sort(keys(local.slot_teams[0]))
+
+  # Satellite routes for the engine: runtime `ip route replace` (apply #1 lands them
+  # immediately, after the cold boot) plus a oneshot systemd unit so an operator
+  # engine reboot mid-event re-asserts them instead of silently stranding satellite
+  # scoring. Empty in single-node deploys — no extra guest state.
+  satellite_route_cmds = length(var.satellite_routes) == 0 ? [] : concat(
+    [for r in var.satellite_routes : ["sudo ip route replace ${r.subnet} via ${r.via} || true"]],
+    [[
+      "printf '%s\\n' '#!/bin/sh' ${join(" ", [for r in var.satellite_routes : "'ip route replace ${r.subnet} via ${r.via} || true'"])} | sudo tee /usr/local/sbin/satellite-routes.sh > /dev/null",
+      "sudo chmod +x /usr/local/sbin/satellite-routes.sh",
+      "printf '%s\\n' '[Unit]' 'Description=Tezcatlipoca satellite team routes' 'After=network-online.target' '' '[Service]' 'Type=oneshot' 'ExecStart=/usr/local/sbin/satellite-routes.sh' 'RemainAfterExit=yes' '' '[Install]' 'WantedBy=multi-user.target' | sudo tee /etc/systemd/system/satellite-routes.service > /dev/null",
+      "sudo systemctl daemon-reload",
+      "sudo systemctl enable --now satellite-routes.service",
+    ]]
+  )
+  team1_key = "team1"
 
   # M3.3: every team is Terraform-managed now. Keys keep the historical naming
   # (team1-<box>, <identifier>-<box>) so enumerate_targets' vm_name matches.
-  all_team_vms = merge([
-    for team_key, team in var.teams : {
+  # Split by hosting slot: slot 0's map keeps the legacy `all_team_vms` name/address;
+  # satellite slots clone from their own node's golden copies (golden_ids_for_slot).
+  all_team_vms_by_slot = [for s in range(5) : merge([
+    for team_key, team in local.slot_teams[s] : {
       for box in var.boxes_per_team :
       (team_key == local.team1_key ? "team1-${box.name}" : "${team.identifier}-${box.name}") => ({
         key        = (team_key == local.team1_key ? "team1-${box.name}" : "${team.identifier}-${box.name}")
@@ -142,7 +267,9 @@ locals {
         bridge     = "vmbr${team.identifier}"
       })
     }
-  ]...)
+  ]...)]
+  all_team_vms = local.all_team_vms_by_slot[0]
+
 }
 
 resource "proxmox_virtual_environment_vm" "team_box" {
@@ -228,6 +355,281 @@ resource "proxmox_virtual_environment_vm" "team_box" {
   depends_on = [proxmox_network_linux_bridge.team_bridge]
 }
 
+# Satellite team boxes: same shape, hosted on the satellite's node and linked from
+# that node's own golden copies (jump routes carry the engine's plant/scoring there).
+# Addresses team_box_sat1..4 exist only in multi-node deploys.
+resource "proxmox_virtual_environment_vm" "team_box_sat1" {
+  provider  = proxmox.sat1
+  for_each  = var.build_team_boxes ? local.all_team_vms_by_slot[1] : {}
+  node_name = try(var.satellites[0].node, "unused")
+  name      = each.key
+  vm_id = 200 + (tonumber(each.value.identifier) * 10) + index(
+    [for b in var.boxes_per_team : b.name], each.value.box.name
+  )
+  tags = ["tezcatlipoca", local.comp_tag]
+
+  agent {
+    enabled = true
+    timeout = "30s"
+  }
+
+  clone {
+    vm_id = try(
+      var.golden_template_ids_by_slot[tostring(1)][index(
+        [for b in var.boxes_per_team : b.name], each.value.box.name
+      )],
+      var.golden_template_ids[index(
+        [for b in var.boxes_per_team : b.name], each.value.box.name
+      )]
+    )
+    full = false
+  }
+
+  cpu { cores = each.value.box.cpu }
+  memory { dedicated = each.value.box.memory_mb }
+
+  dynamic "disk" {
+    for_each = each.value.box.disk_gb != null ? [each.value.box.disk_gb] : []
+    content {
+      datastore_id = try(var.satellites[0].datastore, "unused")
+      interface    = coalesce(each.value.box.disk_iface, "scsi0")
+      size         = disk.value
+      discard      = "on"
+    }
+  }
+
+  network_device {
+    bridge = each.value.bridge
+    model  = "virtio"
+  }
+
+  dynamic "initialization" {
+    for_each = strcontains(lower(each.value.box.template), "win") ? [] : [1]
+    content {
+      ip_config {
+        ipv4 {
+          address = "${each.value.ip}/24"
+          gateway = each.value.gw
+        }
+      }
+      user_account {
+        username = var.box_username
+        keys     = [var.ssh_public_key]
+        password = var.box_password
+      }
+      dns {
+        servers = ["8.8.8.8"]
+      }
+    }
+  }
+
+  depends_on = [proxmox_network_linux_bridge.team_bridge_sat1]
+}
+
+resource "proxmox_virtual_environment_vm" "team_box_sat2" {
+  provider  = proxmox.sat2
+  for_each  = var.build_team_boxes ? local.all_team_vms_by_slot[2] : {}
+  node_name = try(var.satellites[1].node, "unused")
+  name      = each.key
+  vm_id = 200 + (tonumber(each.value.identifier) * 10) + index(
+    [for b in var.boxes_per_team : b.name], each.value.box.name
+  )
+  tags = ["tezcatlipoca", local.comp_tag]
+
+  agent {
+    enabled = true
+    timeout = "30s"
+  }
+
+  clone {
+    vm_id = try(
+      var.golden_template_ids_by_slot[tostring(2)][index(
+        [for b in var.boxes_per_team : b.name], each.value.box.name
+      )],
+      var.golden_template_ids[index(
+        [for b in var.boxes_per_team : b.name], each.value.box.name
+      )]
+    )
+    full = false
+  }
+
+  cpu { cores = each.value.box.cpu }
+  memory { dedicated = each.value.box.memory_mb }
+
+  dynamic "disk" {
+    for_each = each.value.box.disk_gb != null ? [each.value.box.disk_gb] : []
+    content {
+      datastore_id = try(var.satellites[1].datastore, "unused")
+      interface    = coalesce(each.value.box.disk_iface, "scsi0")
+      size         = disk.value
+      discard      = "on"
+    }
+  }
+
+  network_device {
+    bridge = each.value.bridge
+    model  = "virtio"
+  }
+
+  dynamic "initialization" {
+    for_each = strcontains(lower(each.value.box.template), "win") ? [] : [1]
+    content {
+      ip_config {
+        ipv4 {
+          address = "${each.value.ip}/24"
+          gateway = each.value.gw
+        }
+      }
+      user_account {
+        username = var.box_username
+        keys     = [var.ssh_public_key]
+        password = var.box_password
+      }
+      dns {
+        servers = ["8.8.8.8"]
+      }
+    }
+  }
+
+  depends_on = [proxmox_network_linux_bridge.team_bridge_sat2]
+}
+
+resource "proxmox_virtual_environment_vm" "team_box_sat3" {
+  provider  = proxmox.sat3
+  for_each  = var.build_team_boxes ? local.all_team_vms_by_slot[3] : {}
+  node_name = try(var.satellites[2].node, "unused")
+  name      = each.key
+  vm_id = 200 + (tonumber(each.value.identifier) * 10) + index(
+    [for b in var.boxes_per_team : b.name], each.value.box.name
+  )
+  tags = ["tezcatlipoca", local.comp_tag]
+
+  agent {
+    enabled = true
+    timeout = "30s"
+  }
+
+  clone {
+    vm_id = try(
+      var.golden_template_ids_by_slot[tostring(3)][index(
+        [for b in var.boxes_per_team : b.name], each.value.box.name
+      )],
+      var.golden_template_ids[index(
+        [for b in var.boxes_per_team : b.name], each.value.box.name
+      )]
+    )
+    full = false
+  }
+
+  cpu { cores = each.value.box.cpu }
+  memory { dedicated = each.value.box.memory_mb }
+
+  dynamic "disk" {
+    for_each = each.value.box.disk_gb != null ? [each.value.box.disk_gb] : []
+    content {
+      datastore_id = try(var.satellites[2].datastore, "unused")
+      interface    = coalesce(each.value.box.disk_iface, "scsi0")
+      size         = disk.value
+      discard      = "on"
+    }
+  }
+
+  network_device {
+    bridge = each.value.bridge
+    model  = "virtio"
+  }
+
+  dynamic "initialization" {
+    for_each = strcontains(lower(each.value.box.template), "win") ? [] : [1]
+    content {
+      ip_config {
+        ipv4 {
+          address = "${each.value.ip}/24"
+          gateway = each.value.gw
+        }
+      }
+      user_account {
+        username = var.box_username
+        keys     = [var.ssh_public_key]
+        password = var.box_password
+      }
+      dns {
+        servers = ["8.8.8.8"]
+      }
+    }
+  }
+
+  depends_on = [proxmox_network_linux_bridge.team_bridge_sat3]
+}
+
+resource "proxmox_virtual_environment_vm" "team_box_sat4" {
+  provider  = proxmox.sat4
+  for_each  = var.build_team_boxes ? local.all_team_vms_by_slot[4] : {}
+  node_name = try(var.satellites[3].node, "unused")
+  name      = each.key
+  vm_id = 200 + (tonumber(each.value.identifier) * 10) + index(
+    [for b in var.boxes_per_team : b.name], each.value.box.name
+  )
+  tags = ["tezcatlipoca", local.comp_tag]
+
+  agent {
+    enabled = true
+    timeout = "30s"
+  }
+
+  clone {
+    vm_id = try(
+      var.golden_template_ids_by_slot[tostring(4)][index(
+        [for b in var.boxes_per_team : b.name], each.value.box.name
+      )],
+      var.golden_template_ids[index(
+        [for b in var.boxes_per_team : b.name], each.value.box.name
+      )]
+    )
+    full = false
+  }
+
+  cpu { cores = each.value.box.cpu }
+  memory { dedicated = each.value.box.memory_mb }
+
+  dynamic "disk" {
+    for_each = each.value.box.disk_gb != null ? [each.value.box.disk_gb] : []
+    content {
+      datastore_id = try(var.satellites[3].datastore, "unused")
+      interface    = coalesce(each.value.box.disk_iface, "scsi0")
+      size         = disk.value
+      discard      = "on"
+    }
+  }
+
+  network_device {
+    bridge = each.value.bridge
+    model  = "virtio"
+  }
+
+  dynamic "initialization" {
+    for_each = strcontains(lower(each.value.box.template), "win") ? [] : [1]
+    content {
+      ip_config {
+        ipv4 {
+          address = "${each.value.ip}/24"
+          gateway = each.value.gw
+        }
+      }
+      user_account {
+        username = var.box_username
+        keys     = [var.ssh_public_key]
+        password = var.box_password
+      }
+      dns {
+        servers = ["8.8.8.8"]
+      }
+    }
+  }
+
+  depends_on = [proxmox_network_linux_bridge.team_bridge_sat4]
+}
+
 locals {
   scoring_mgmt_ips = [
     for ip in flatten(proxmox_virtual_environment_vm.scoring_engine.ipv4_addresses) :
@@ -251,23 +653,30 @@ resource "null_resource" "team_nics" {
   triggers = {
     engine_id        = proxmox_virtual_environment_vm.scoring_engine.id
     team_identifiers = join(",", [for k in local.sorted_team_keys : var.teams[k].identifier])
+    satellite_routes = join(",", [for r in var.satellite_routes : "${r.subnet}@${r.via}"])
   }
 
   provisioner "remote-exec" {
-    inline = [
-      "sudo tee /etc/netplan/60-team-ifaces.yaml << 'EOF'",
-      "network:",
-      "  version: 2",
-      "  ethernets:",
-      join("\n", [for idx, team in local.sorted_team_keys :
-        "    ens${18 + idx + 1}:\n      addresses: [\"192.168.${var.teams[team].identifier}.1/24\"]"
-      ]),
-      "EOF",
-      "sudo chmod 600 /etc/netplan/60-team-ifaces.yaml",
-      "sudo netplan apply",
-      "printf 'net.ipv4.ip_forward=1\\nnet.ipv4.conf.all.rp_filter=2\\nnet.ipv4.conf.default.rp_filter=2\\n' | sudo tee /etc/sysctl.d/99-range-forward.conf",
-      "sudo sysctl -p /etc/sysctl.d/99-range-forward.conf",
-    ]
+    # Netplan block only when the engine has local (slot-0) teams — an all-satellite
+    # spread has none, and an empty string in a remote-exec script list is fatal.
+    inline = concat(
+      length(local.sorted_team_keys) == 0 ? [] : [
+        "sudo tee /etc/netplan/60-team-ifaces.yaml << 'EOF'",
+        "network:",
+        "  version: 2",
+        "  ethernets:",
+        join("\n", [for idx, team in local.sorted_team_keys :
+          "    ens${18 + idx + 1}:\n      addresses: [\"192.168.${var.teams[team].identifier}.1/24\"]"
+        ]),
+        "EOF",
+        "sudo chmod 600 /etc/netplan/60-team-ifaces.yaml",
+        "sudo netplan apply",
+      ],
+      [
+        "printf 'net.ipv4.ip_forward=1\\nnet.ipv4.conf.all.rp_filter=2\\nnet.ipv4.conf.default.rp_filter=2\\n' | sudo tee /etc/sysctl.d/99-range-forward.conf",
+        "sudo sysctl -p /etc/sysctl.d/99-range-forward.conf",
+      ],
+    flatten(local.satellite_route_cmds))
     connection {
       type        = "ssh"
       user        = var.vm_username

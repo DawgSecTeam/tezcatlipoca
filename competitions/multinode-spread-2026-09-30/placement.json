@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "comp": "multinode-spread-2026-09-30",
+  "engine_vmid": 1120,
+  "engine_node": "hdd-150",
+  "nodes": {
+    "hdd-150": {
+      "name": "hdd-150",
+      "endpoint": "https://10.0.0.150:8006",
+      "node": "proxmox",
+      "datastore": "hdd",
+      "token_env": "TF_VAR_proxmox_api_token",
+      "engine_base_vmid": 955,
+      "engine_mgmt_ip": "",
+      "engine_mgmt_gw": "",
+      "jump_mgmt_ip": "",
+      "ssh_host": "10.0.0.150",
+      "jump_template": "alpine",
+      "weight": 1.0,
+      "max_teams": 8,
+      "tls_fingerprint": ""
+    },
+    "zfs-193": {
+      "name": "zfs-193",
+      "endpoint": "https://10.0.0.193:8006",
+      "node": "pve",
+      "datastore": "hdrives-zfs",
+      "token_env": "TF_VAR_proxmox_api_token_193",
+      "engine_base_vmid": 1007,
+      "engine_mgmt_ip": "",
+      "engine_mgmt_gw": "",
+      "jump_mgmt_ip": "10.0.0.248",
+      "ssh_host": "10.0.0.193",
+      "jump_template": "alpine",
+      "weight": 1.0,
+      "max_teams": 8,
+      "tls_fingerprint": ""
+    }
+  },
+  "slots": {
+    "hdd-150": 0,
+    "zfs-193": 1
+  },
+  "team_nodes": {
+    "team1": "zfs-193",
+    "team2": "zfs-193",
+    "team3": "zfs-193",
+    "team4": "zfs-193"
+  },
+  "team_slots": {
+    "team1": 1,
+    "team2": 1,
+    "team3": 1,
+    "team4": 1
+  },
+  "team_identifiers": {
+    "team1": "150",
+    "team2": "151",
+    "team3": "152",
+    "team4": "153"
+  },
+  "satellites": [
+    {
+      "name": "zfs-193",
+      "slot": 1,
+      "teams": [
+        "team1",
+        "team2",
+        "team3",
+        "team4"
+      ],
+      "jump_vmid": 1251,
+      "jump_mgmt_ip": "10.0.0.248",
+      "anchor_identifier": "150"
+    }
+  ],
+  "jump_mgmt_ips": {
+    "zfs-193": "10.0.0.248"
+  },
+  "probe_summary": {
+    "hdd-150": {
+      "ok": false,
+      "reasons": [
+        "vmid collisions: [1120, 1260, 1271, 1700, 1701, 1710]...",
+        "bridge collisions: ['vmbr150', 'vmbr151']"
+      ],
+      "missing_templates": [],
+      "collisions": [
+        1120,
+        1260,
+        1271,
+        1700,
+        1701,
+        1710,
+        1711
+      ],
+      "mem_free_bytes": 36073426944,
+      "datastore_free": 52048175104,
+      "running_ours": 55
+    },
+    "zfs-193": {
+      "ok": false,
+      "reasons": [
+        "vmid collisions: [1251, 1280, 1281, 1720, 1721, 1730]...",
+        "bridge collisions: ['vmbr152', 'vmbr153']"
+      ],
+      "missing_templates": [],
+      "collisions": [
+        1251,
+        1280,
+        1281,
+        1720,
+        1721,
+        1730,
+        1731
+      ],
+      "mem_free_bytes": 151541891072,
+      "datastore_free": 2384110271600,
+      "running_ours": 12
+    }
+  },
+  "computed_at": "2026-09-30 17:52:48"
+}

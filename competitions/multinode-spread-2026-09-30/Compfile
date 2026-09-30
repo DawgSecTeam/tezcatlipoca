@@ -1,0 +1,3 @@
+name multinode-spread-2026-09-30
+scenario Multi-node spread validation: one competition's four teams span two Proxmox hosts — engine + teams 150/151 on hdd-150, teams 152/153 on zfs-193 behind an alpine jump router. Two linux boxes per team (fedora web01, alpine app01), score-only SSH pins — proves routed scoring, satellite golden builds, jump NAT and two-point isolation with zero catalog plants.
+difficulty 1

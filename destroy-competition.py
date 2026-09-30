@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 
 from constants import GOLDEN_TAG, SCORING_ENGINE_VMID
 from golden_ops import destroy_golden_set
+from jump_ops import destroy_jump_vms
+from nodes_ops import activate_placement, read_placement, record_of
 from range_ops import proxmox_api, wait_for_proxmox_task
 from template_ops import destroy_engine_template, frozen_state
 from utils import load_compfile, pick_competition, run_terraform
@@ -32,28 +34,42 @@ def load_destroyable_competitions():
     ]
 
 
-def destroy_cloned_vms(cloned_vms_path):
+def _entry_node(entry, fallback):
+    """Per-VM node: targets.json carries 'node' for multi-node ranges; the env node
+    (engine node when a placement is active) covers single-node entries."""
+    return entry.get("node") or fallback if isinstance(entry, dict) else fallback
+
+
+def destroy_cloned_vms(cloned_vms_path, default_node):
     cloned_vms = json.loads(cloned_vms_path.read_text())
     if not cloned_vms:
         return
-
-    node = os.environ.get("TF_VAR_proxmox_node", "pve")
 
     # Only purge vmids that still exist AND whose VM name is obviously this
     # competition's (clone names look like '102-dc01'): the deterministic vmid
     # scheme collides across competitions, and cloned_vms.json can outlive the
     # range — purging bare vmids on a stale file would hit someone else's VM.
-    live = {}
-    try:
-        for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]:
-            live[int(v["vmid"])] = v.get("name") or ""
-    except Exception as e:
-        print(f"  WARNING: could not list VMs on {node} — purging without existence "
-              f"checks: {e}")
-        live = None
+    # Multi-node: each entry names its own node; listings come per node.
+    live_by_node = {}
+    for entry in cloned_vms.values():
+        n = _entry_node(entry, default_node)
+        if n not in live_by_node:
+            vmid = entry["vmid"] if isinstance(entry, dict) else entry
+            try:
+                live_by_node[n] = {
+                    int(v["vmid"]): (v.get("name") or "")
+                    for v in proxmox_api("GET", f"/nodes/{n}/qemu")["data"]
+                }
+            except Exception as e:
+                print(f"  WARNING: could not list VMs on {n} — purging without existence "
+                      f"checks: {e}")
+                live_by_node[n] = None
 
     print(f"  Destroying {len(cloned_vms)} cloned VM(s) before terraform destroy...")
-    for vm_key, vmid in cloned_vms.items():
+    for vm_key, entry in cloned_vms.items():
+        vmid = entry["vmid"] if isinstance(entry, dict) else entry
+        node = _entry_node(entry, default_node)
+        live = live_by_node.get(node)
         if live is not None:
             name = live.get(int(vmid))
             if name is None:
@@ -69,33 +85,43 @@ def destroy_cloned_vms(cloned_vms_path):
         except Exception:
             pass
         try:
-            upid = proxmox_api("DELETE", f"/nodes/{node}/qemu/{vmid}", params={"purge": 1})["data"]
+            upid = proxmox_api("DELETE", f"/nodes/{node}/qemu/{vmid}",
+                               params={"purge": 1})["data"]
             wait_for_proxmox_task(node, upid)
             print(f"    Deleted {vm_key} (vmid {vmid})")
         except Exception as e:
             print(f"    WARNING: could not delete {vm_key} (vmid {vmid}): {e}")
 
 
-def pre_stop_windows_boxes(teams, boxes):
+def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None):
     """Hard-stop Windows team clones before terraform destroy. The bpg provider
     issues a graceful shutdown with a long timeout; a DC whose guest agent is
     down never complies and holds the qm lock, hanging the whole destroy
     (pfsense-rvb: 6m+ 'Still destroying', qm unlock/stop timing out behind it).
     A hard API stop needs no agent, and an already-stopped box skips the
     graceful path entirely. Clones already stopped/deleted by
-    destroy_cloned_vms are simply not running here."""
-    node = os.environ.get("TF_VAR_proxmox_node", "pve")
+    destroy_cloned_vms are simply not running here. team_nodes (multi-node)
+    routes each team's sweep to its hosting node."""
     windows = [b["name"] for b in boxes if "win" in (b.get("template") or "").lower()]
     if not windows:
         return
-    try:
-        live = {v.get("name"): int(v["vmid"])
-                for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
-    except Exception as e:
-        print(f"  WARNING: could not list VMs on {node} — skipping the Windows "
-              f"pre-stop: {e}")
-        return
-    for team in teams.values():
+    live_by_node = {}
+
+    def _live(node):
+        if node not in live_by_node:
+            try:
+                live_by_node[node] = {
+                    v.get("name"): int(v["vmid"])
+                    for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
+            except Exception as e:
+                print(f"  WARNING: could not list VMs on {node} — skipping the Windows "
+                      f"pre-stop: {e}")
+                live_by_node[node] = {}
+        return live_by_node[node]
+
+    for team_key, team in teams.items():
+        node = (team_nodes or {}).get(team_key, default_node)
+        live = _live(node)
         for box in windows:
             vm_name = f"{team['identifier']}-{box}"
             vmid = live.get(vm_name)
@@ -164,6 +190,18 @@ def main():
     boxes = json.loads((comp_dir / "boxes.json").read_text())
     frozen = frozen_state(comp_dir)
 
+    # Multi-node: the placement record is authoritative — point the env at the
+    # engine's host and register the node routes before anything node-scoped runs.
+    placement = read_placement(comp_dir)
+    team_nodes = {}
+    if placement:
+        activate_placement(placement)
+        team_nodes = placement["team_nodes"]
+        sats = ", ".join(f"{s['name']} (slot {s['slot']}, teams {','.join(s['teams'])})"
+                         for s in placement["satellites"])
+        print(f"  Multi-node placement: engine on '{placement['engine_node']}'"
+              + (f"; satellites: {sats}" if sats else ""))
+
     # The refusal must fire BEFORE any destruction — a frozen competition's templates
     # are the verified artifacts the event runs on.
     if args.full and frozen and not args.end_of_competition:
@@ -223,8 +261,9 @@ def main():
 
     cloned_vms_path = comp_dir / "cloned_vms.json"
     if cloned_vms_path.exists():
-        destroy_cloned_vms(cloned_vms_path)
-    pre_stop_windows_boxes(teams, boxes)
+        destroy_cloned_vms(cloned_vms_path, os.environ.get("TF_VAR_proxmox_node", "pve"))
+    pre_stop_windows_boxes(teams, boxes, os.environ.get("TF_VAR_proxmox_node", "pve"),
+                           team_nodes=team_nodes)
 
     # Destroy from this competition's own per-comp state dir when it exists (multi-tenant
     # deploys), so we tear down only this comp's engine/boxes/bridges; fall back to the
@@ -274,8 +313,19 @@ def main():
     node = os.environ.get("TF_VAR_proxmox_node", "pve")
     if args.full:
         print(f"  Destroying golden templates (engine vmid {engine_vmid} + 150 + i)...")
-        destroy_golden_set(node, engine_vmid, len(boxes),
+        destroy_golden_set(node, engine_vmid, len(boxes), slot=0,
                            expect_tags={"tezcatlipoca", GOLDEN_TAG, f"comp-{competition}"})
+        if placement and placement["satellites"]:
+            # Multi-node: each satellite's golden copies and the jump VMs die on
+            # their own hosts, then the engine template here.
+            for sat in placement["satellites"]:
+                sat_rec = record_of(placement, sat["name"])
+                print(f"  Destroying satellite '{sat['name']}' golden set (slot "
+                      f"{sat['slot']}) + jump vmid {sat['jump_vmid']}...")
+                destroy_golden_set(sat_rec.node, engine_vmid, len(boxes), slot=sat["slot"],
+                                   expect_tags={"tezcatlipoca", GOLDEN_TAG,
+                                                f"comp-{competition}"})
+            destroy_jump_vms(placement, {"tezcatlipoca", f"comp-{competition}"})
         print(f"  Destroying the engine template (vmid {engine_vmid} + 140)...")
         destroy_engine_template(node, engine_vmid,
                                 expect_tags={"tezcatlipoca", f"comp-{competition}",

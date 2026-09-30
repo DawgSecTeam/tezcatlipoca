@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -11,6 +12,35 @@ from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 
 from constants import MAX_BOXES_PER_TEAM, MAX_TEAMS, SCORING_ENGINE_VMID, SNAP_BASE, SNAP_READY
+
+# Multi-node placement routes, registered by nodes_ops.activate_placement(): node
+# name -> (endpoint, api_token). proxmox_api consults this table for node-scoped
+# paths, so the ~50 existing call sites — which all pass the right per-node name —
+# reach the owning host unchanged. Empty table = single-node legacy behavior.
+_NODE_ROUTES = {}
+_NODE_PATH_RE = re.compile(r"^/nodes/([^/]+)(?:/|$)")
+
+
+def register_node_routes(routes):
+    _NODE_ROUTES.clear()
+    _NODE_ROUTES.update(routes)
+
+
+def clear_node_routes():
+    _NODE_ROUTES.clear()
+
+
+def node_routes_active():
+    return bool(_NODE_ROUTES)
+
+
+def _route_for_path(path):
+    """(endpoint, token) override for a node-scoped path, or None (env endpoint)."""
+    if _NODE_ROUTES:
+        m = _NODE_PATH_RE.match(path)
+        if m:
+            return _NODE_ROUTES.get(m.group(1))
+    return None
 
 REPO_ROOT = Path(__file__).resolve().parent
 _TF_TEMPLATE_DIR = REPO_ROOT / "terraform"
@@ -71,10 +101,11 @@ def proxmox_request(method, url, **kwargs):
     return session.request(method, url, **kwargs)
 
 
-def proxmox_api(method, path, **kwargs):
-    endpoint = os.environ["TF_VAR_proxmox_endpoint"].rstrip("/")
-    url = f"{endpoint}/api2/json{path}"
-    headers = {"Authorization": f"PVEAPIToken={os.environ['TF_VAR_proxmox_api_token']}"}
+def proxmox_api_for(endpoint, token, method, path, **kwargs):
+    """Parameterized core of proxmox_api: explicit endpoint+token instead of env.
+    Used by the multi-node placement probes and by proxmox_api's route overrides."""
+    url = f"{endpoint.rstrip('/')}/api2/json{path}"
+    headers = {"Authorization": f"PVEAPIToken={token}"}
     last_exc = None
     for attempt in range(4):
         try:
@@ -86,6 +117,32 @@ def proxmox_api(method, path, **kwargs):
             if attempt < 3:
                 time.sleep(2 * (attempt + 1))
     raise last_exc
+
+
+def proxmox_api(method, path, **kwargs):
+    override = _route_for_path(path)
+    if override:
+        endpoint, token = override
+    else:
+        endpoint = os.environ["TF_VAR_proxmox_endpoint"]
+        token = os.environ["TF_VAR_proxmox_api_token"]
+    return proxmox_api_for(endpoint, token, method, path, **kwargs)
+
+
+def cluster_vms_for(node):
+    """Cluster-wide VM list as seen from the host that owns `node`.
+
+    Single-node: the env endpoint. With a multi-node placement active: the owning
+    node's own endpoint — on independent hosts its /cluster/resources sees only its
+    own VMs, so per-node template maps (golden_ops._template_vmid_map, preflight)
+    must ask the right host. The node filter in the callers stays harmless either
+    way (a one-node cluster view always matches)."""
+    override = _route_for_path(f"/nodes/{node}/x")
+    if override:
+        endpoint, token = override
+        return proxmox_api_for(endpoint, token, "GET", "/cluster/resources",
+                               params={"type": "vm"})["data"]
+    return proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
 
 
 def wait_for_proxmox_task(node, upid, timeout=1800):
@@ -144,11 +201,12 @@ def diagnose_unreachable_box(node, vmid):
     return f"      guest agent (vmid {vmid}): {iface_summary}; cloud-init {cloud_init_summary}"
 
 
-def guest_agent_exec_root(node, vmid, script, timeout=60):
-    """Run bash as root via the QEMU guest agent; returns (exit_code, stdout, stderr)."""
+def guest_agent_exec_root(node, vmid, script, timeout=60, shell="bash"):
+    """Run a shell script as root via the QEMU guest agent; returns (exit_code, stdout,
+    stderr). shell="sh" for guests without bash (the alpine jump VM)."""
     pid = proxmox_api(
         "POST", f"/nodes/{node}/qemu/{vmid}/agent/exec",
-        data={"command": ["bash", "-c", script]},
+        data={"command": [shell, "-c", script]},
     )["data"]["pid"]
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -224,6 +282,7 @@ def persist_targets(comp_dir, targets, boxes):
                 "box_name": t["box_name"],
                 "vmid": t["vmid"],
                 "ip": t["ip"],
+                **({"node": t["node"]} if t.get("node") else {}),
             }
             for t in targets
         },
@@ -377,8 +436,14 @@ def destroy_vm_if_exists(node, vmid, expect_tags=None, legacy_name=None):
 
 
 
-def enumerate_targets(teams, boxes):
-    """One target per (team, box); build from full lists then filter — vmid is positional."""
+def enumerate_targets(teams, boxes, placement=None, default_node=None):
+    """One target per (team, box); build from full lists then filter — vmid is positional.
+
+    With a multi-node placement, each target carries `node` + `slot` from its team's
+    placement; without one, `default_node` (the env node) is stamped so downstream
+    node-scoped calls have one uniform field."""
+    team_node = placement.get("team_nodes") if placement else None
+    team_slot = placement.get("team_slots") if placement else None
     return [
         {
             "team_key": team_key,
@@ -391,6 +456,8 @@ def enumerate_targets(teams, boxes):
             "vm_name": (f"{team_key}-{box['name']}" if team_key == "team1"
                         else f"{team['identifier']}-{box['name']}"),
             "machine": f"{box['name']}-team{team['identifier']}",
+            "node": (team_node or {}).get(team_key, default_node),
+            "slot": (team_slot or {}).get(team_key, 0 if placement else None),
         }
         for team_key, team in teams.items()
         for box_idx, box in enumerate(boxes)

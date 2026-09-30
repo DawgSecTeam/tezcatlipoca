@@ -623,7 +623,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
         if placement:
             from config_ops import preflight_gates_multinode
             preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
-                                      engine_mgmt_ip=engine_mgmt_ip)
+                                      engine_mgmt_ip=engine_mgmt_ip,
+                                      check_free=not resuming)
         else:
             preflight_gates(comp_dir, boxes, number_of_teams, teams=teams,
                             engine_vmid=engine_vmid, check_free=not resuming,
@@ -863,11 +864,21 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                             "tezcatlipoca", GOLDEN_TAG, f"comp-{comp_name}"},
                             legacy_name=f"golden-{b['name']}")
 
-            _golden_rebuild_gate(node, 0)
-            golden_ids = build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid,
-                                          box_password, golden_config_path, key, scoring_user,
-                                          scoring_ip, jobs=nakon_jobs,
-                                          golden_hashes=golden_hashes, unbooted=unbooted)
+            # Slot-0 goldens only exist when the engine node actually hosts teams —
+            # an all-satellite spread leaves the engine with no local bridges to
+            # anchor them on (their vmbr<id> lives on the satellite's host).
+            engine_has_teams = bool(
+                placement is None
+                or placement["team_nodes"] and any(
+                    n == placement["engine_node"]
+                    for n in placement["team_nodes"].values()))
+            golden_ids = {}
+            if engine_has_teams:
+                _golden_rebuild_gate(node, 0)
+                golden_ids = build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid,
+                                              box_password, golden_config_path, key, scoring_user,
+                                              scoring_ip, jobs=nakon_jobs,
+                                              golden_hashes=golden_hashes, unbooted=unbooted)
             golden_ids_by_slot = {0: golden_ids}
             if placement and placement["satellites"]:
                 # Satellite goldens: identical planted content (same hashes), built ON
@@ -908,7 +919,10 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
             # locally).
             _tmap = _template_vmid_map(node)
             tfvars["golden_template_ids"] = [
-                int(_tmap[b["template"]]) if is_unmanaged(b) else int(golden_ids[b["name"]])
+                int(_tmap[b["template"]]) if is_unmanaged(b)
+                # 0 placeholder when the engine hosts no teams (all-satellite spread):
+                # the slot-0 team_box for_each is empty then, so nothing reads it.
+                else int(golden_ids.get(b["name"]) or 0)
                 for b in boxes
             ]
             if placement and placement["satellites"]:
@@ -918,7 +932,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                     slot = sat["slot"]
                     sat_node = record_of(placement, sat["name"]).node
                     stmap = _template_vmid_map(sat_node)
-                    slot_ids = by_slot_ids[str(slot)]
+                    slot_ids = by_slot_ids.get(str(slot)) or {}
                     tfvars["golden_template_ids_by_slot"][str(slot)] = [
                         int(stmap[b["template"]]) if is_unmanaged(b) else int(slot_ids[b["name"]])
                         for b in boxes

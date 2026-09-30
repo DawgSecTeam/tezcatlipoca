@@ -1,0 +1,38 @@
+{
+  "balancing": {
+    "strategy": "capacity-fill",
+    "prefer": [
+      "hdd-150"
+    ]
+  },
+  "nodes": [
+    {
+      "name": "hdd-150",
+      "endpoint": "https://10.0.0.150:8006",
+      "token_env": "TF_VAR_proxmox_api_token",
+      "node": "proxmox",
+      "datastore": "hdd",
+      "engine_base_vmid": 955,
+      "engine_mgmt_ip": "",
+      "jump_mgmt_ip": "",
+      "ssh_host": "10.0.0.150",
+      "jump_template": "alpine",
+      "weight": 1.0,
+      "max_teams": 8
+    },
+    {
+      "name": "zfs-193",
+      "endpoint": "https://10.0.0.193:8006",
+      "token_env": "TF_VAR_proxmox_api_token_193",
+      "node": "pve",
+      "datastore": "hdrives-zfs",
+      "engine_base_vmid": 1007,
+      "engine_mgmt_ip": "",
+      "jump_mgmt_ip": "10.0.0.248",
+      "ssh_host": "10.0.0.193",
+      "jump_template": "alpine",
+      "weight": 1.0,
+      "max_teams": 8
+    }
+  ]
+}

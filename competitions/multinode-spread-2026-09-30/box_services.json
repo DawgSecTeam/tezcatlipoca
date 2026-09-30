@@ -1,0 +1,20 @@
+{
+  "web01": [
+    {
+      "name": "score/tcp",
+      "score_only": true,
+      "check": "Tcp",
+      "display": "ssh",
+      "port": 22
+    }
+  ],
+  "app01": [
+    {
+      "name": "score/tcp",
+      "score_only": true,
+      "check": "Tcp",
+      "display": "ssh",
+      "port": 22
+    }
+  ]
+}
