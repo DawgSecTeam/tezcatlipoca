@@ -90,6 +90,9 @@ Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMod
 """
     # The script is idempotent; an agent drop (not a script error) is retried until the
     # deadline. A nonzero rc is a real failure (e.g. password policy) — fail fast.
+    # Fresh budget: the setup waits above may have consumed the entry deadline (the
+    # hard-cycle path waits out its own 900s), and the exec phase needs its own.
+    deadline = time.time() + timeout
     while True:
         try:
             rc, out, err = guest_agent_exec_windows(node, vmid, ps_script, timeout=120)
