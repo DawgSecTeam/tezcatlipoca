@@ -216,6 +216,15 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   override under the run dir affects the HOST side only.
 - `stage_red` (network) — cloud LLM goes direct from red01, no tunnel needed;
   reverse tunnels exist only for tailnet-local endpoints.
+- `stage_red` (red identity) — red's network mode comes from bad-auto's
+  `deploy.red_mode` (flags `--red-mode/--red-subnet/--red-seg-ip` pass
+  through): **routed** (default) gives red01 a dedicated segment (default
+  `10.200.0.0/24`, red01 at `.10`, engine holds `.1` on its mgmt iface) and
+  forwards attacks with the source address intact, so blue can hunt and
+  firewall red while scoring keeps sourcing from the team gateway; **masq**
+  (legacy) masquerades red as the team gateway, unblockable-by-IP. Verify a
+  routed event with `verify-competition.py --red-identity` (holds a red01→box
+  connection and checks the box sees the segment IP as the peer).
 - `pull_red_evidence` — red01's `events.jsonl` is the only complete record of
   what red did; fetch it (plus `world.json` and the bad-auto journal via
   `sudo -n journalctl -u bad-auto`) BEFORE `badauto destroy` erases it. The
@@ -238,7 +247,8 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   stage_teardown destroys the scoring DB and the report renders its "Final
   scores" section from that dump.
 - `stage_teardown` — red evidence pull first, then `badauto destroy` (red01 +
-  NAT, best-effort), then `destroy-competition.py` unless `--keep-range`.
+  engine firewall rules, best-effort — strips both routed- and masq-mode rule
+  families), then `destroy-competition.py` unless `--keep-range`.
 - `MYBOX` helper — Linux boxes over key auth, Windows over password
   (sshpass), all through the engine ProxyCommand gateway; blues are told to
   prefer it over hand-building ssh.

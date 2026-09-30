@@ -1080,7 +1080,10 @@ def stage_red(args, comp, creds, run_dir):
                    "action_timeout": 120, "scan_timeout": 900},
         "deploy": {"red_ip": args.red_ip, "red_gw": args.red_gw, "red_storage": args.red_storage,
                    **({"red_vmid": args.red_vmid} if args.red_vmid else {}),
-                   **({"template": args.red_template} if args.red_template else {})},
+                   **({"template": args.red_template} if args.red_template else {}),
+                   **({"red_mode": args.red_mode} if args.red_mode else {}),
+                   **({"red_subnet": args.red_subnet} if args.red_subnet else {}),
+                   **({"red_seg_ip": args.red_seg_ip} if args.red_seg_ip else {})},
     }
     (BAD_AUTO / "config.yaml").write_text(json.dumps(cfg, indent=2))
     env = {**os.environ, "BAuto_LLM_API_KEY": api_key(local="openrouter" not in args.llm_base_url),
@@ -1096,7 +1099,8 @@ def stage_red(args, comp, creds, run_dir):
         cfg["llm"]["base_url"] = tunnel.red_base_url()
         (BAD_AUTO / "config.yaml").write_text(json.dumps(cfg, indent=2))
         args.red_tunnel = tunnel
-    log(f"deploying red01 at {args.red_ip} (storage {args.red_storage})")
+    red_mode = args.red_mode or "routed (bad-auto default)"
+    log(f"deploying red01 at {args.red_ip} (storage {args.red_storage}, mode {red_mode})")
     run(["python3", "-m", "badauto", "deploy", "--competition", str(comp.resolve()), "--start"],
         cwd=BAD_AUTO, env=env, timeout=1800)
 
@@ -1294,6 +1298,18 @@ def main():
                    help="red01 vmid when the cluster default collides (cyberfield used 999)")
     p.add_argument("--red-template", default=None,
                    help="red01 template name when it differs from the cluster default")
+    p.add_argument("--red-mode", choices=["routed", "masq"], default=None,
+                   help="red's network identity: routed (bad-auto default) gives red01 a "
+                        "dedicated segment and keeps its source IP visible end-to-end, so "
+                        "blue can hunt and firewall the attacker while scoring keeps "
+                        "sourcing from the team gateway; masq = legacy gateway masquerade "
+                        "(red unblockable-by-IP, indistinguishable from scoring)")
+    p.add_argument("--red-subnet", default=None,
+                   help="red segment CIDR in routed mode (bad-auto default 10.200.0.0/24); "
+                        "must not overlap the team 192.168.0.0/16 or the mgmt LAN")
+    p.add_argument("--red-seg-ip", default=None,
+                   help="red01's address on the red segment (bad-auto default 10.200.0.10; "
+                        "the engine takes the segment gateway x.x.x.1)")
     p.add_argument("--red-tunnel", choices=["auto", "on", "off"], default="auto",
                    help="reverse-SSH tunnel so red01 can reach a local LLM endpoint "
                         "(auto = on for non-openrouter endpoints)")

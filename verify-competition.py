@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 try:
@@ -443,6 +444,91 @@ def check_isolation(ctx, teams, boxes):
         print(f"  ....  control check ok: {from_ip} can still reach the internet")
 
     return blocked
+
+
+def _default_red_seg_ip():
+    """--red-seg-ip fallback: bad-auto's config.yaml, else the routed default."""
+    cfg_path = REPO_ROOT.parent / "bad-auto" / "config.yaml"
+    try:
+        deploy = json.loads(cfg_path.read_text()).get("deploy") or {}
+        return deploy.get("red_seg_ip") or "10.200.0.10"
+    except (OSError, ValueError):
+        return "10.200.0.10"
+
+
+def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
+    """--red-identity: prove red's attack traffic arrives at boxes carrying
+    its red-segment source address (routed mode), not the team gateway the
+    scoring checks source from. Holds a TCP connection open from red01 to a
+    Linux box's :22 and reads the box's connection table (ss) while it's up.
+
+    Returns True/False/None tri-state like check_isolation. Gateway-peer
+    lines in the ss output are the verify jump itself (ProxyCommand enters
+    through the engine) — expected, not a red sighting."""
+    print(f"\n[+RED] RED IDENTITY (routed-mode source address; red01 {red_ip}, "
+          f"expecting source {seg_ip})")
+    linux_ips = [b["ip"] for b in boxes
+                 if b.get("ip") and "win" not in str(b.get("os", "")).lower()]
+    if not linux_ips:
+        print("  SKIP  — no Linux box to observe the connection from (ss)")
+        return None
+    box_ip = linux_ips[0]
+
+    try:
+        hold = subprocess.Popen(
+            ["ssh", "-i", ctx["ssh_key_path"],
+             "-o", "StrictHostKeyChecking=no",
+             "-o", "UserKnownHostsFile=/dev/null",
+             "-o", "ConnectTimeout=10",
+             f"{red_user}@{red_ip}",
+             f"timeout 25 bash -c 'exec 3<>/dev/tcp/{box_ip}/22; sleep 22'"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        print(f"  SKIP  — couldn't spawn the red01 probe ssh: {e}")
+        return None
+
+    try:
+        observed = ""
+        for _ in range(5):
+            if hold.poll() is not None:
+                break  # probe died early — red01 unreachable or box refused
+            time.sleep(2)
+            try:
+                proc = ssh_via_gateway(
+                    ctx, box_ip, "ss -tn state established '( sport = :22 )'",
+                    timeout=20)
+            except (CheckError, subprocess.TimeoutExpired) as e:
+                print(f"  SKIP  — couldn't read {box_ip}'s connection table: {e}")
+                return None
+            if proc.returncode != 0:
+                continue
+            observed = proc.stdout
+            if seg_ip in observed:
+                break
+        if hold.poll() is None:
+            hold.kill()
+    finally:
+        hold.wait()
+
+    # rc 0/-9/-15/-None: connected (or we killed the holder mid-sleep — fine).
+    # A positive rc means the remote bash died, i.e. the /dev/tcp connect to
+    # the box failed — red cannot reach the team subnet at all.
+    if hold.returncode is not None and hold.returncode > 0:
+        print(f"  FAIL  — red01 could not open the probe connection to "
+              f"{box_ip}:22 at all (probe rc={hold.returncode}): red cannot "
+              "reach the team subnet, routed firewall rules missing/wrong?")
+        return False
+    if seg_ip in observed:
+        print(f"  PASS  {seg_ip} visible on {box_ip} as an established :22 peer — "
+              "red's source address survives end-to-end")
+        return True
+    print(f"  FAIL  — {seg_ip} never appeared among {box_ip}'s established :22 "
+          f"peers while red01 held a connection open. Observed peers:\n"
+          f"{observed.strip() or '    (none)'}\n"
+          "        If the only peers are the team gateway (192.168.<tid>.1), red "
+          "is still masqueraded — bad-auto deployed in masq mode or the routed "
+          "FORWARD rules are shadowed.")
+    return False
 
 
 def report_healthcheck_status(ctx):
@@ -1049,6 +1135,15 @@ def main():
                         help="M4: remove .frozen.json (needs --confirm-unfreeze; for use "
                              "BEFORE the competition starts).")
     parser.add_argument("--confirm-unfreeze", action="store_true", dest="confirm_unfreeze")
+    parser.add_argument("--red-identity", action="store_true", dest="red_identity",
+                        help="also verify red's routed identity: red01 must reach a box with "
+                             "its red-segment source IP (not the team gateway). Needs red01 "
+                             "deployed; seg IP falls back to ../bad-auto/config.yaml")
+    parser.add_argument("--red-ip", default="10.0.0.198", help="red01 mgmt IP for --red-identity")
+    parser.add_argument("--red-user", default="sysadmin", help="red01 SSH user for --red-identity")
+    parser.add_argument("--red-seg-ip", default=None,
+                        help="red01's red-segment address for --red-identity "
+                             "(default: ../bad-auto/config.yaml, else 10.200.0.10)")
     args = parser.parse_args()
 
     load_dotenv(ENV_PATH)
@@ -1088,6 +1183,15 @@ def main():
     services_query_ok, services_all_up, pins_registered = check_services(
         base_url, admin_session, teams, args.strict_services, expected_names)
     isolation_ok = check_isolation(ctx, teams, boxes)
+    red_identity_ok = None
+    if args.red_identity:
+        seg_ip = args.red_seg_ip or _default_red_seg_ip()
+        try:
+            red_identity_ok = check_red_identity(ctx, boxes, args.red_ip, seg_ip,
+                                                 red_user=args.red_user)
+        except CheckError as e:
+            print(f"  SKIP  — red identity check couldn't run: {e}")
+            red_identity_ok = None
     print("\n  (live-ops health check status — informational)")
     report_healthcheck_status(ctx)
     if args.expect_no_vulns:
@@ -1122,6 +1226,11 @@ def main():
         gate["plant_coverage"] = coverage_ok
     if domains_ok is not None:
         gate["domains"] = domains_ok
+    if args.red_identity:
+        gate["red_identity"] = red_identity_ok is True
+    if packet_profile is not None:
+        gate["packet_creds"] = packet_creds_ok
+        gate["packet_accounts"] = packet_accounts_ok
 
     print("\n" + "=" * 60)
     print("SUMMARY")
@@ -1140,6 +1249,11 @@ def main():
                       else "SKIP — live probe couldn't run, unverified" if isolation_ok is None
                       else "FAIL")
     print(f"  isolation        : {isolation_note}")
+    if args.red_identity:
+        red_note = ("PASS" if red_identity_ok is True
+                    else "SKIP — couldn't run, unverified" if red_identity_ok is None
+                    else "FAIL — red source IP not visible end-to-end")
+        print(f"  red_identity     : {red_note}")
     misconfig_note = "PASS"
     if args.expect_no_vulns:
         misconfig_note = "SKIP (--expect-no-vulns)"
