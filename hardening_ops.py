@@ -299,12 +299,13 @@ def ensure_alpine_services(comp_dir, targets, ctx):
     pending = []
     for t in alpine:
         box_name = t.get("box_name") or t["box"]["name"]
-        unknown = [s for s in pins.get(box_name, []) if isinstance(s, str) and s not in ALPINE_SERVICES]
+        pin_names = [s if isinstance(s, str) else s.get("name") for s in pins.get(box_name, [])]
+        unknown = [s for s in pin_names if s not in ALPINE_SERVICES]
         if unknown:
             raise RuntimeError(
                 f"alpine_services shim has no apk mapping for {unknown} pinned on {box_name} — "
                 f"add it to hardening_ops.ALPINE_SERVICES or drop the pin")
-        wanted = [ALPINE_SERVICES[s] for s in pins.get(box_name, [])]
+        wanted = [ALPINE_SERVICES[s] for s in pin_names]
         if wanted:
             pending.append((t, wanted))
 
@@ -387,7 +388,10 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
     # the SSH/guest-agent execution per box is what runs concurrently.
     scripts = []
     for t in targets:
-        services = box_services.get(t["box_name"], [])
+        # per-pin override dicts ride box_services.json for scoring only; fixups key
+        # on the catalog config name
+        services = [s if isinstance(s, str) else s.get("name")
+                    for s in box_services.get(t["box_name"], [])]
 
         script_lines = ["#!/bin/bash", "set -e", ""]
 
@@ -415,6 +419,12 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
             script_lines.extend([
                 "if [ -d /var/www/html ] && [ ! -f /var/www/html/index.html ]; then "
                 "echo '<html><body>tz</body></html>' | sudo tee /var/www/html/index.html >/dev/null; fi || true",
+                "# httpd resolves its (unset) ServerName against DNS at boot and can hang "
+                "when the resolver isn't up yet (pfsense-ad fedora member); localhost "
+                "short-circuits that on every later boot",
+                "if [ -d /etc/httpd/conf.d ] && [ ! -f /etc/httpd/conf.d/00-tzc-servername.conf ]; then "
+                "echo 'ServerName localhost' | sudo tee /etc/httpd/conf.d/00-tzc-servername.conf >/dev/null; "
+                "sudo systemctl restart httpd 2>/dev/null || true; fi || true",
                 "",
             ])
         if "bind" in services:

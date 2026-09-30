@@ -22,8 +22,12 @@ _SERVICE_DISPLAY = {
 }
 
 
-def _service_display(name):
-    return _SERVICE_DISPLAY.get(name, name)
+def _service_display(pin):
+    if not isinstance(pin, str):
+        if pin.get("display"):
+            return pin["display"]
+        pin = pin.get("name")
+    return _SERVICE_DISPLAY.get(pin, pin)
 
 
 def load_inject_schedule(comp_dir):

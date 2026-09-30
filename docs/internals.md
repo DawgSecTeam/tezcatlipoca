@@ -195,6 +195,12 @@ persistence, `.env` updates.
   offsets stay anchored at the original phase-7 time (winad-scrim2: all injects closed before
   T0). Add `--reset-event` to re-clone the engine from its template (fresh DB) and re-run
   phase 7, re-anchoring injects at now; `verify` WARNs on any inject already past close.
+  Second consequence (shakedown-5x4: blue inject score 0): the scrim path re-anchors at T0 —
+  `run-agent-scrim.reanchor_injects()` runs unconditionally right after the event clock starts,
+  re-resolving the comp's offsets at now and pushing them via the engine's UpdateInject
+  (`POST /api/injects/{id}`; every existing `InjectFileNames` entry is re-listed under
+  keep-files, because UpdateInject deletes any attachment not listed). The heavy
+  `--reset-event` re-clone is no longer required for a rerun.
 - **`load_boxes()`** — reusing a competition replays its saved `boxes.json`, not anything derived
   from current `.env`.
 
@@ -594,7 +600,9 @@ generation.
 
 - **Pipeline v2 (M3) phase map, M4-revised** — [1] two-wave parallel cleanup (team boxes
   + legacy clones, then engine + hash-mismatched/missing goldens — **matching golden
-  templates survive**: test-run reuse) · [2] engine-template lifecycle (hash → reuse or
+  templates survive**: test-run reuse, and only that — the reuse never crosses
+  competitions (per-competition hash inputs; once a run achieved its goal the golden
+  range goes with `--full`, see usage-agents "Lifecycle rule")) · [2] engine-template lifecycle (hash → reuse or
   rebuild; never on a frozen competition) + terraform apply #1 (engine as a *linked
   clone of the engine template* + bridges, `build_team_boxes=false`) · [3]
   prepare-engine-from-template (`.env` BEFORE `compose up`, fresh volumes ⇒ empty
@@ -908,7 +916,14 @@ Drives Quotient: event.conf generation, team seeding, engine unpause, inject cre
   supplied (i.e. the competition has an `injects/` dir): Quotient's INJECTAUTH-guarded routes
   (POST /api/injects/create, announcements, submission downloads) accept `admin` and `inject`
   roles, so a dedicated inject manager lets an organizer run injects without the full admin
-  login. Duplicate checks per box are deduped by (check key, port). `CredlistSettings` is emitted
+  login. Check identity per box is the `Display` — Quotient holds a slice per check type and
+  registers every entry, naming checks `<box>-<Display>` with duplicates a config-load error,
+  so multiple same-TYPE pins on one box are fine as long as Displays differ (a collision is a
+  generate-time `SystemExit`, never a silent drop — see known-issues regression-4x1). Dict pins
+  take per-check overrides (`PIN_CHECK_OVERRIDES` in constants.py: display/port/path/scheme/
+  status) merged over the service's base config; nakon machine lists strip them, so one catalog
+  config plants once but can score under several Displays. `expected_service_names()` shares the
+  pin resolution for verify's `pins_registered` gate. `CredlistSettings` is emitted
   only when some check needs it — box-level `credlists` entries are just names, resolved by
   Quotient against the top-level registry (`config/credlists/<CredlistPath>` on the engine).
 - **`_normalize_host()`** — Quotient's address comes off Terraform as a bare IP; requests needs a
@@ -939,6 +954,13 @@ Bridges, scoring VM (1000), team1 VMs, NIC wiring, cold-boot + netplan.
 - **No cloud-init on the engine** — it has a dynamic IP and the template's baked-in netplan
   (dhcp4 on the mgmt NIC) suffices on its own; the template's own cloud-init build already baked
   in `var.ssh_public_key` and passwordless sudo for `var.vm_username`, so no bootstrap is needed
+  — **superseded 2026-09-29: the engine mgmt IP is STATIC by default** (`10.0.0.250`, written
+  into tfvars by deploy; `TF_VAR_engine_mgmt_ip=''` restores DHCP). The DHCP engine rebooted
+  onto a different address mid-event while terraform's saved output stayed stale
+  (shakedown-5x4: .221→.243→.233), so deploy defaults `engine_mgmt_ip` (and exports it for
+  `template_ops`, which sets the build VM's `ipconfig0`), and preflight sweeps running guests'
+  agent-reported IPs to refuse a colliding address. The agent block stays — team-NIC DHCP and
+  the build VM still use it.
   before the driver connects.
 - **Terraform provisions ONLY team1's boxes** — `create-competition.py` clones them to other
   teams via the Proxmox API after nakon has run. All bridges are still created here, because the

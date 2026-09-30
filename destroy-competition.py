@@ -76,13 +76,50 @@ def destroy_cloned_vms(cloned_vms_path):
             print(f"    WARNING: could not delete {vm_key} (vmid {vmid}): {e}")
 
 
+def pre_stop_windows_boxes(teams, boxes):
+    """Hard-stop Windows team clones before terraform destroy. The bpg provider
+    issues a graceful shutdown with a long timeout; a DC whose guest agent is
+    down never complies and holds the qm lock, hanging the whole destroy
+    (pfsense-rvb: 6m+ 'Still destroying', qm unlock/stop timing out behind it).
+    A hard API stop needs no agent, and an already-stopped box skips the
+    graceful path entirely. Clones already stopped/deleted by
+    destroy_cloned_vms are simply not running here."""
+    node = os.environ.get("TF_VAR_proxmox_node", "pve")
+    windows = [b["name"] for b in boxes if "win" in (b.get("template") or "").lower()]
+    if not windows:
+        return
+    try:
+        live = {v.get("name"): int(v["vmid"])
+                for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
+    except Exception as e:
+        print(f"  WARNING: could not list VMs on {node} — skipping the Windows "
+              f"pre-stop: {e}")
+        return
+    for team in teams.values():
+        for box in windows:
+            vm_name = f"{team['identifier']}-{box}"
+            vmid = live.get(vm_name)
+            if vmid is None:
+                continue
+            try:
+                upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
+                wait_for_proxmox_task(node, upid)
+                print(f"  Pre-stopped {vm_name} (vmid {vmid}) — graceful-shutdown hang avoided")
+            except Exception as e:
+                print(f"  WARNING: pre-stop of {vm_name} failed ({e}). If terraform "
+                      f"destroy hangs on it: kill -9 $(cat /var/run/qemu-server/"
+                      f"{vmid}.pid) on the node, then re-run.")
+
+
 def main():
     import argparse
 
     parser = argparse.ArgumentParser(
         description="Destroy a deployed competition. Default (teams-only) keeps the "
-                    "competition's golden + engine templates for the next test run; "
-                    "--full removes them too.")
+                    "competition's golden + engine templates for the next test run of "
+                    "the SAME competition; --full removes them too. Goldens never "
+                    "carry across competitions — tear down --full once the run's "
+                    "goal is met.")
     parser.add_argument("--competition", metavar="NAME",
                         help="competition directory under competitions/ (skips the picker)")
     parser.add_argument("--yes", action="store_true",
@@ -187,6 +224,7 @@ def main():
     cloned_vms_path = comp_dir / "cloned_vms.json"
     if cloned_vms_path.exists():
         destroy_cloned_vms(cloned_vms_path)
+    pre_stop_windows_boxes(teams, boxes)
 
     # Destroy from this competition's own per-comp state dir when it exists (multi-tenant
     # deploys), so we tear down only this comp's engine/boxes/bridges; fall back to the
@@ -250,7 +288,8 @@ def main():
             hashes_path.unlink()
             print("  Template hash record (.template-hashes.json) removed.")
     else:
-        print("  Teams-only teardown — golden + engine templates kept for reuse.")
+        print("  Teams-only teardown — templates kept for THIS competition's next run only.")
+        print("  Goldens never carry across competitions; tear down --full once the run's goal is met.")
 
     print(f"\nInfrastructure for '{competition}' destroyed.")
     print(f"Competition files preserved at competitions/{competition}/")

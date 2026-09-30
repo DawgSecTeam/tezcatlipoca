@@ -1,0 +1,22 @@
+{
+  "dc01": [
+    "ADDS",
+    "Enable WinRM"
+  ],
+  "win01": [
+    "New SMB Share",
+    "RDP misconfigs",
+    "IIS HTTP"
+  ],
+  "web01": [
+    "apache",
+    "roundcube",
+    "splunk",
+    "bind"
+  ],
+  "ssh01": [
+    "ssh",
+    "telnet-service",
+    "vsftpd"
+  ]
+}

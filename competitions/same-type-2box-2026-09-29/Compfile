@@ -1,0 +1,3 @@
+name same-type-2box-2026-09-29
+scenario Validates multiple same-check-TYPE pins on one box: web01 (ubuntu) carries apache + roundcube (two Web checks — the exact regression-4x1 collapse shape) plus bind as an independent control; win01 (plain Windows, no AD) carries IIS HTTP plus a display-overridden second IIS pin, the only way to express two Windows Web checks with today's catalog. Six pins must register as six scoreboard checks (verify pins_registered gate) and all six must take down + restore under bad-auto coverage.
+difficulty 1

@@ -57,7 +57,10 @@ state file written by the same pipeline version; cross-version resumes are refus
    builds them all now) plus any legacy `cloned_vms.json` entries; wave 2 destroys the
    scoring engine plus every golden template that is missing, hash-mismatched, or a
    stale slot beyond the lineup. M4: **hash-matching golden templates survive cleanup** —
-   that is the test-run reuse (build once per competition, reuse across its runs). The
+   that is the test-run reuse (build once per competition, reuse across ITS runs — never
+   across competitions: the hash inputs are per-competition, so a different competition
+   always rebuilds them; when a run has achieved its goal, `destroy-competition.py --full`
+   tears the golden range down). The
    engine template is never touched here. Linked clones must die before their
    templates. Bridges serial. Skipped on `--from-phase >1`.
 2. **Engine template + Terraform apply #1** — M4 first computes the engine template
@@ -199,6 +202,26 @@ Docker resets `FORWARD` policy to `DROP` and wipes custom rules on every start/r
 `ensure_nat_forwarding` re-asserts the same rules idempotently before each nakon run, covering the
 gap before the timer is installed.
 
+### Red team identity (bad-auto side, not this pipeline)
+
+Red's network mode is owned by `../bad-auto` (`badauto/deploy/engine_nat.py`, `deploy.red_mode`
+in its config), installed onto the engine at red-deploy time as its own `bad-auto-firewall`
+unit + 30s timer alongside `range-firewall`:
+
+- **routed** (default): red01 carries a secondary address on a dedicated segment (default
+  `10.200.0.0/24`; the engine's mgmt iface holds the gateway `.1` via an idempotent `ip addr
+  add` in the re-assert script — never a netplan override, which would replace the mgmt
+  iface's address list). Attacks keep the red-segment source end-to-end, so blue can hunt and
+  firewall the attacker; scoring still sources from the team gateway.
+- **masq** (legacy): red01 is MASQUERADEd into the team gateways — red unblockable-by-IP
+  (indistinguishable from scoring).
+
+Both modes: `FORWARD ACCEPT red→192.168.0.0/16`, an ESTABLISHED accept for return traffic
+(ordered before the DROP), and `FORWARD DROP toward red` so blue cannot counterattack red
+infrastructure. The raw-socket beacon C2 DNAT (boxes → their gateway `:port` → red01) rides
+the same engine. `verify-competition.py --red-identity` proves the routed source address
+survives to the boxes.
+
 ## Snapshots
 
 | Snapshot | When | Content | Scope |
@@ -295,6 +318,11 @@ durations only, no secrets), and `.postclone-swept` (sweep marker). Ad-hoc `logs
 - **Destroy order: linked clones before golden templates.** Clones depend on the template's
   base disk; deleting a template with live clones orphans them. Phase 1 runs two waves,
   `destroy-competition.py` destroys golden templates after `terraform destroy`.
+- **Golden reuse is per-competition only.** A golden set built for competition A can never
+  serve competition B (tags `comp-a`, per-competition hash inputs — B's phase 1 would
+  rebuild it anyway), so once a run has achieved its goal the golden range is torn down
+  with `--full` rather than left on the datastore "for reuse". Teams-only teardown is a
+  mid-run mode, not an end state.
 - **Never deploy over a per-comp terraform state from another host or engine vmid** — the
   stale-state guard refuses; terraform would otherwise "reconcile" old state and destroy
   whatever now sits at the old vmid on the new host (live-confirmed on realm, 2026-09-24).

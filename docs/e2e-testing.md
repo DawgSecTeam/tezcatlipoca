@@ -271,10 +271,17 @@ pure router, outbound NAT off. The two traps, both fixed/known:
 (`competition_dir`, `event.duration_min`, `deploy.red_*`). Point it at the comp dir and set the
 duration before `deploy`.
 
-- The engine-side NAT (`badauto/deploy/engine_nat.py`) MASQUERADEs `red_ip → 192.168.0.0/16`, which
-  is **route-based** — with pfSense it sources attacks from the transit IP (`172.31.<id>.1`), which
-  the WAN pass rule already allows, so the **attack path works through pfSense unchanged**.
-- The **raw-socket beacon C2 does not** survive pfSense: blue boxes beacon to their gateway `.1`,
-  which is now pfSense (not the engine that DNATs the beacon port to red01). Deploy without the
-  beacon, or add a matching pfSense LAN→red01 port-forward. Core attacks (recon/spray/exploit)
-  don't need it.
+- The engine-side firewall (`badauto/deploy/engine_nat.py`) has two modes (`deploy.red_mode`):
+  **routed** (default) keeps red's source address from a dedicated segment (`red_subnet`,
+  default `10.200.0.0/24`; the engine holds the segment gateway on its mgmt iface) — blue can
+  see, hunt, and firewall red while scoring keeps sourcing from the team gateway. **masq**
+  (legacy) MASQUERADEs `red_ip → 192.168.0.0/16`, sourcing attacks from the team gateway IP,
+  which is unblockable-by-IP by design (blocking it cuts blue's own gateway + scoring).
+- **pfSense caveat (both modes):** neither mode is validated against the pfSense in-path
+  topology. Routed mode needs a red-segment → transit route on pfSense (engine transit
+  `172.31.<id>.1` sources attack traffic as before — the WAN pass rule allows it — but return
+  traffic to `10.200.0.0/24` needs a route back via the engine). The **raw-socket beacon C2
+  does not** survive pfSense in either mode: blue boxes beacon to their gateway `.1`, which is
+  now pfSense (not the engine that DNATs the beacon port to red01). Deploy without the beacon,
+  or add a matching pfSense LAN→red01 port-forward. Core attacks (recon/spray/exploit) don't
+  need it.

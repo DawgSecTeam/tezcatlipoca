@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 try:
@@ -18,6 +19,7 @@ except ImportError as e:
 from dotenv import load_dotenv
 
 from range_ops import guest_agent_exec_root, guest_agent_exec_windows, vm_id_for
+from quotient.setup import expected_service_names
 from ssh_ops import engine_ssh_opts, gateway_proxy
 from utils import BOX_USERNAME_DEFAULT, load_users_config
 
@@ -270,12 +272,17 @@ def _check_passed(check):
     return bool(result)
 
 
-def check_services(base_url, admin_session, teams, strict):
-    """Report per-team service UP/DOWN from the latest scored round. Returns (query_ok, all_up)."""
+def check_services(base_url, admin_session, teams, strict, expected_names=frozenset()):
+    """Report per-team service UP/DOWN from the latest scored round.
+
+    Returns (query_ok, all_up, pins_registered). pins_registered gates the scoreboard's
+    actual ServiceName set against the pins' expected set — a pin that never registered
+    (the regression-4x1 same-TYPE collapse: 12 pins, 11 checks) scores nothing and
+    silent-tallies as UP-absent, so it fails the exit code regardless of --strict."""
     print("\n[2/5] SERVICES")
     if admin_session is None:
         print("  SKIP  — no admin session (login failed).")
-        return False, False
+        return False, False, True
     try:
         r = admin_session.get(f"{base_url}/api/teams", timeout=10)
         r.raise_for_status()
@@ -286,6 +293,7 @@ def check_services(base_url, admin_session, teams, strict):
 
     query_ok = True
     all_up = True
+    actual_names = set()
     any_service = False
     for t in api_teams:
         tid, tname = t.get("ID"), t.get("Name", t.get("Identifier"))
@@ -298,6 +306,7 @@ def check_services(base_url, admin_session, teams, strict):
             query_ok = False
             all_up = False
             continue
+        actual_names |= {svc.get("ServiceName", "?") for svc in services or []}
         up = 0
         unscored = 0
         down_names = []
@@ -325,7 +334,20 @@ def check_services(base_url, admin_session, teams, strict):
         print("  (no services reported yet — engine may not have scored a round)")
     if strict and not all_up:
         print("  --strict-services: some services DOWN -> counts against exit code")
-    return query_ok, all_up
+    pins_ok = True
+    if expected_names:
+        missing = sorted(expected_names - actual_names)
+        extras = sorted(actual_names - expected_names)
+        if missing:
+            print(f"  FAIL  pin(s) never registered on the scoreboard: {', '.join(missing)}")
+            print("        (a pin whose check never registered scores nothing — the "
+                  "regression-4x1 same-TYPE collapse shape)")
+            pins_ok = False
+        else:
+            print(f"  EXPECTED-PINS  all {len(expected_names)} pinned checks registered")
+        if extras:
+            print(f"  WARN  scoreboard services not derived from box_services.json: {', '.join(extras)}")
+    return query_ok, all_up, pins_ok
 
 
 def check_isolation(ctx, teams, boxes):
@@ -422,6 +444,91 @@ def check_isolation(ctx, teams, boxes):
         print(f"  ....  control check ok: {from_ip} can still reach the internet")
 
     return blocked
+
+
+def _default_red_seg_ip():
+    """--red-seg-ip fallback: bad-auto's config.yaml, else the routed default."""
+    cfg_path = REPO_ROOT.parent / "bad-auto" / "config.yaml"
+    try:
+        deploy = json.loads(cfg_path.read_text()).get("deploy") or {}
+        return deploy.get("red_seg_ip") or "10.200.0.10"
+    except (OSError, ValueError):
+        return "10.200.0.10"
+
+
+def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
+    """--red-identity: prove red's attack traffic arrives at boxes carrying
+    its red-segment source address (routed mode), not the team gateway the
+    scoring checks source from. Holds a TCP connection open from red01 to a
+    Linux box's :22 and reads the box's connection table (ss) while it's up.
+
+    Returns True/False/None tri-state like check_isolation. Gateway-peer
+    lines in the ss output are the verify jump itself (ProxyCommand enters
+    through the engine) — expected, not a red sighting."""
+    print(f"\n[+RED] RED IDENTITY (routed-mode source address; red01 {red_ip}, "
+          f"expecting source {seg_ip})")
+    linux_ips = [b["ip"] for b in boxes
+                 if b.get("ip") and "win" not in str(b.get("os", "")).lower()]
+    if not linux_ips:
+        print("  SKIP  — no Linux box to observe the connection from (ss)")
+        return None
+    box_ip = linux_ips[0]
+
+    try:
+        hold = subprocess.Popen(
+            ["ssh", "-i", ctx["ssh_key_path"],
+             "-o", "StrictHostKeyChecking=no",
+             "-o", "UserKnownHostsFile=/dev/null",
+             "-o", "ConnectTimeout=10",
+             f"{red_user}@{red_ip}",
+             f"timeout 25 bash -c 'exec 3<>/dev/tcp/{box_ip}/22; sleep 22'"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        print(f"  SKIP  — couldn't spawn the red01 probe ssh: {e}")
+        return None
+
+    try:
+        observed = ""
+        for _ in range(5):
+            if hold.poll() is not None:
+                break  # probe died early — red01 unreachable or box refused
+            time.sleep(2)
+            try:
+                proc = ssh_via_gateway(
+                    ctx, box_ip, "ss -tn state established '( sport = :22 )'",
+                    timeout=20)
+            except (CheckError, subprocess.TimeoutExpired) as e:
+                print(f"  SKIP  — couldn't read {box_ip}'s connection table: {e}")
+                return None
+            if proc.returncode != 0:
+                continue
+            observed = proc.stdout
+            if seg_ip in observed:
+                break
+        if hold.poll() is None:
+            hold.kill()
+    finally:
+        hold.wait()
+
+    # rc 0/-9/-15/-None: connected (or we killed the holder mid-sleep — fine).
+    # A positive rc means the remote bash died, i.e. the /dev/tcp connect to
+    # the box failed — red cannot reach the team subnet at all.
+    if hold.returncode is not None and hold.returncode > 0:
+        print(f"  FAIL  — red01 could not open the probe connection to "
+              f"{box_ip}:22 at all (probe rc={hold.returncode}): red cannot "
+              "reach the team subnet, routed firewall rules missing/wrong?")
+        return False
+    if seg_ip in observed:
+        print(f"  PASS  {seg_ip} visible on {box_ip} as an established :22 peer — "
+              "red's source address survives end-to-end")
+        return True
+    print(f"  FAIL  — {seg_ip} never appeared among {box_ip}'s established :22 "
+          f"peers while red01 held a connection open. Observed peers:\n"
+          f"{observed.strip() or '    (none)'}\n"
+          "        If the only peers are the team gateway (192.168.<tid>.1), red "
+          "is still masqueraded — bad-auto deployed in masq mode or the routed "
+          "FORWARD rules are shadowed.")
+    return False
 
 
 def report_healthcheck_status(ctx):
@@ -650,6 +757,69 @@ def check_injects(base_url, admin_session, comp_dir):
 
 
 _INJECT_CLOSE_KEYS = ("CloseTime", "close_time", "CloseAt", "close_at", "Close", "close")
+
+
+def check_round_loop(base_url, admin_session, fix=False):
+    """Scoring round loop vs an engine reboot. The Docker containers restart after
+    a reboot but the round loop stays stopped (pfsense-ad: frozen scoreboard) —
+    and verify reads the LAST SCORED round, reporting stale DOWN as if live.
+    /api/engine is snake_case (live-confirmed 2026-09-29): `running` (False =
+    paused), `competition_started`, `current_round_time` (RFC3339; the Go zero
+    time "0001-01-01T00:00:00Z" means the loop is NOT cycling), and
+    `last_round.StartTime`. Informational: WARN with the exact remediation;
+    --fix-round-loop runs the two POSTs."""
+    print("\n  (scoring round loop — stops silently after an engine reboot)")
+    if admin_session is None:
+        print("  SKIP  — no admin session.")
+        return True
+    try:
+        r = admin_session.get(f"{base_url}/api/engine", timeout=10)
+        r.raise_for_status()
+        eng = r.json()
+    except (requests.RequestException, ValueError) as e:
+        print(f"  WARN  — could not read /api/engine: {e}")
+        return True
+    if not isinstance(eng, dict):
+        return True
+    if eng.get("running") is False:
+        print("  PASS  — engine paused (round loop not expected to advance)")
+        return True
+
+    from datetime import datetime, timezone
+
+    def _rfc3339(value):
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return when.replace(tzinfo=timezone.utc) if when.tzinfo is None else when
+
+    cur_when = _rfc3339(eng.get("current_round_time"))
+    if cur_when is not None and cur_when.year <= 1:
+        cur_when = None  # the Go zero time — the loop is not cycling
+    started = _rfc3339((eng.get("last_round") or {}).get("StartTime"))
+    if started is None or cur_when is not None:
+        print("  PASS  — round loop advancing")
+        return True
+    age_min = (datetime.now(timezone.utc) - started).total_seconds() / 60
+    if age_min < 10:
+        print("  PASS  — round loop starting (first round pending within Delay)")
+        return True
+    print(f"  WARN  — round loop looks STOPPED: last round started {age_min:.0f} min ago "
+          "and current_round_time is the zero time (engine rebooted? the loop does not "
+          "self-resume)")
+    print('         fix: POST /api/competition/start {"started":true} then '
+          'POST /api/engine/pause {"pause":false} — a fresh round lands within Delay s')
+    if fix:
+        r1 = admin_session.post(f"{base_url}/api/competition/start",
+                                json={"started": True}, timeout=10)
+        r2 = admin_session.post(f"{base_url}/api/engine/pause",
+                                json={"pause": False}, timeout=10)
+        print(f"  --fix-round-loop: start={r1.status_code} unpause={r2.status_code} — "
+              f"re-run verify to confirm a fresh round landed")
+    return True
 
 
 def closed_injects(injects, now=None):
@@ -945,6 +1115,9 @@ def main():
     parser.add_argument("--admin-password", help="override the Quotient admin password")
     parser.add_argument("--strict-services", action="store_true",
                         help="also require every service UP for a passing exit code")
+    parser.add_argument("--fix-round-loop", action="store_true", dest="fix_round_loop",
+                        help="when the scoring round loop looks stopped after an engine "
+                             "reboot, run the start/unpause POSTs instead of only warning")
     parser.add_argument("--expect-no-vulns", action="store_true", dest="expect_no_vulns",
                         help="validation comps that deliberately plant zero misconfigurations "
                              "(box_vulns.json all-empty): skip the misconfig gates instead of "
@@ -962,6 +1135,15 @@ def main():
                         help="M4: remove .frozen.json (needs --confirm-unfreeze; for use "
                              "BEFORE the competition starts).")
     parser.add_argument("--confirm-unfreeze", action="store_true", dest="confirm_unfreeze")
+    parser.add_argument("--red-identity", action="store_true", dest="red_identity",
+                        help="also verify red's routed identity: red01 must reach a box with "
+                             "its red-segment source IP (not the team gateway). Needs red01 "
+                             "deployed; seg IP falls back to ../bad-auto/config.yaml")
+    parser.add_argument("--red-ip", default="10.0.0.198", help="red01 mgmt IP for --red-identity")
+    parser.add_argument("--red-user", default="sysadmin", help="red01 SSH user for --red-identity")
+    parser.add_argument("--red-seg-ip", default=None,
+                        help="red01's red-segment address for --red-identity "
+                             "(default: ../bad-auto/config.yaml, else 10.200.0.10)")
     args = parser.parse_args()
 
     load_dotenv(ENV_PATH)
@@ -990,9 +1172,26 @@ def main():
     logins_ok, admin_session = check_logins(base_url, teams, admin_password)
     print("\n  (default-credential regression guard)")
     no_default_creds_ok = check_no_default_creds(comp_dir)
-    services_query_ok, services_all_up = check_services(base_url, admin_session, teams,
-                                                         args.strict_services)
+    # boxes.json (box TYPES, keyed by name in box_services.json) — nakon-config
+    # machines carry team-suffixed names the pin map doesn't use
+    try:
+        box_list = json.loads((comp_dir / "boxes.json").read_text())
+        pinned_services = json.loads((comp_dir / "box_services.json").read_text())
+    except (OSError, ValueError):
+        box_list, pinned_services = [], {}
+    expected_names = expected_service_names(pinned_services, box_list) if pinned_services else set()
+    services_query_ok, services_all_up, pins_registered = check_services(
+        base_url, admin_session, teams, args.strict_services, expected_names)
     isolation_ok = check_isolation(ctx, teams, boxes)
+    red_identity_ok = None
+    if args.red_identity:
+        seg_ip = args.red_seg_ip or _default_red_seg_ip()
+        try:
+            red_identity_ok = check_red_identity(ctx, boxes, args.red_ip, seg_ip,
+                                                 red_user=args.red_user)
+        except CheckError as e:
+            print(f"  SKIP  — red identity check couldn't run: {e}")
+            red_identity_ok = None
     print("\n  (live-ops health check status — informational)")
     report_healthcheck_status(ctx)
     if args.expect_no_vulns:
@@ -1005,6 +1204,7 @@ def main():
         misconfig_survival_ok = check_misconfig_survival(ctx, boxes)
     report_beacons(ctx, boxes)
     injects_relevant, injects_ok = check_injects(base_url, admin_session, comp_dir)
+    check_round_loop(base_url, admin_session, fix=args.fix_round_loop)
     print("\n  (M4 plant coverage — expected vs. actually planted, per machine)")
     coverage_checked, coverage_ok = check_plant_coverage(comp_dir)
     print("\n  (AD domains — promotion, joins, AD plants, DomainSID uniqueness)")
@@ -1020,10 +1220,17 @@ def main():
     }
     if args.strict_services:
         gate["services(strict)"] = services_query_ok and services_all_up
+    if expected_names:
+        gate["pins_registered"] = pins_registered
     if coverage_checked and coverage_ok is not None:
         gate["plant_coverage"] = coverage_ok
     if domains_ok is not None:
         gate["domains"] = domains_ok
+    if args.red_identity:
+        gate["red_identity"] = red_identity_ok is True
+    if packet_profile is not None:
+        gate["packet_creds"] = packet_creds_ok
+        gate["packet_accounts"] = packet_accounts_ok
 
     print("\n" + "=" * 60)
     print("SUMMARY")
@@ -1035,10 +1242,18 @@ def main():
         svc_note = "PASS" if (services_query_ok and services_all_up) else "FAIL"
     print(f"  services         : {'UP' if services_all_up else 'some DOWN'} "
           f"({'query ok' if services_query_ok else 'query failed'}) [{svc_note}]")
+    if expected_names:
+        print(f"  pins_registered  : "
+              f"{'PASS' if pins_registered else 'FAIL'} ({len(expected_names)} pinned checks)")
     isolation_note = ("PASS" if isolation_ok is True
                       else "SKIP — live probe couldn't run, unverified" if isolation_ok is None
                       else "FAIL")
     print(f"  isolation        : {isolation_note}")
+    if args.red_identity:
+        red_note = ("PASS" if red_identity_ok is True
+                    else "SKIP — couldn't run, unverified" if red_identity_ok is None
+                    else "FAIL — red source IP not visible end-to-end")
+        print(f"  red_identity     : {red_note}")
     misconfig_note = "PASS"
     if args.expect_no_vulns:
         misconfig_note = "SKIP (--expect-no-vulns)"

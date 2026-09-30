@@ -8,12 +8,27 @@ MAX_TEAMS = 154
 
 SCORING_ENGINE_VMID = 1000
 
+# Engine mgmt IP, static by default (deploy.py): the DHCP engine rebooted onto a
+# different address mid-event while terraform's saved output stayed stale
+# (shakedown-5x4: .221→.243→.233). High in the lab's 10.0.0.0/24 mgmt range, clear
+# of the red01 slots (.198/.199/.244) and the observed engine drift (.22x/.23x).
+# The preflight sweeps running guests' agent-reported IPs to refuse a collision.
+DEFAULT_ENGINE_MGMT_IP = "10.0.0.250"
+DEFAULT_ENGINE_MGMT_GW = "10.0.0.1"
+
 SNAP_BASE = "tz-base"
 SNAP_READY = "tz-ready"
 
 PER_MACHINE_NAKON_BUDGET = 2400
 
 SLOW_SERVICES = ("splunk", "roundcube")
+
+# Per-pin scoring overrides for dict-form box_services.json pins, e.g.
+# {"name": "IIS HTTP", "display": "iis-alt"}. quotient/setup.py merges them over the
+# service's base check config (event.conf); nakon_ops.py strips them from machine lists,
+# so nakon plants the catalog config once while the SCORED CHECK differs. Quotient
+# requires unique <box>-<Display> check names — display is how same-TYPE pins coexist.
+PIN_CHECK_OVERRIDES = ("display", "port", "path", "scheme", "status")
 
 DISRUPTIVE_CONFIGS = {"resolv-conf-null-dns", "apt-sources-empty", "apt-hold-all-packages", "dpkg-broken-hold-state"}
 

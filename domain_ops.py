@@ -102,54 +102,63 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
             with PRINT_LOCK:
                 print(f"  [{team_key}] DC {dc_box['name']} left as-is — (re)joining member "
                       f"box(es) to existing {domain}...")
-        elif _dc_promoted(node, dc_vmid, domain,
-                          (comp_dir / f".nakon-domain-{team_key}-adds.json").exists()):
-            with PRINT_LOCK:
-                print(f"  [{team_key}] DC {dc_box['name']} already serves {domain} — "
-                      f"skipping promotion (resume)")
         else:
-            with PRINT_LOCK:
-                print(f"  [{team_key}] Promoting {dc_box['name']} ({dc_ip}) to a new AD forest "
-                      f"({domain})...")
-            with timed(comp_dir, 6, "domain_adds", team_key):
+            if _dc_promoted(node, dc_vmid, domain,
+                            (comp_dir / f".nakon-domain-{team_key}-adds.json").exists()):
+                with PRINT_LOCK:
+                    print(f"  [{team_key}] DC {dc_box['name']} already serves {domain} — "
+                          f"skipping promotion (resume)")
+            else:
+                with PRINT_LOCK:
+                    print(f"  [{team_key}] Promoting {dc_box['name']} ({dc_ip}) to a new AD "
+                          f"forest ({domain})...")
+                with timed(comp_dir, 6, "domain_adds", team_key):
+                    _run_single_nakon_config(
+                        dc_machine,
+                        [{"name": "ADDS", "vars": {"domain": domain, "dsrm_password": box_password}}],
+                        key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-adds",
+                    )
+                with PRINT_LOCK:
+                    print(f"    Waiting for {dc_box['name']} to reboot and come back (AD DS "
+                          f"promotion is slow — budgeting up to 20 min)...")
+                if not wait_for_guest_agent(node, dc_vmid, timeout=1200):
+                    with PRINT_LOCK:
+                        print(f"  WARNING: {dc_box['name']} guest agent never came back after "
+                              f"ADDS — skipping the rest of {team_key}'s domain setup")
+                    return
+                wait_for_windows_sshd(node, dc_vmid, timeout=180)
+                domain_sid = wait_for_adws(node, dc_vmid)
+                with PRINT_LOCK:
+                    if domain_sid:
+                        print(f"  [{team_key}] {domain} is up (DomainSID {domain_sid})")
+                    else:
+                        print(f"  WARNING: [{team_key}] AD Web Services never answered on "
+                              f"{dc_box['name']} — AD-flavored plants will likely fail")
+
+            # The AD plants key on their OWN marker, not on first promotion: a resume
+            # that finds the domain already up (lost marker, re-clone churn) used to
+            # skip the 4 plants with the promotion — shakedown-5x4 recovery had to
+            # replay them by hand via _run_single_nakon_config.
+            if (comp_dir / f".nakon-domain-{team_key}-ad-misconfigs.json").exists():
+                with PRINT_LOCK:
+                    print(f"  [{team_key}] AD misconfigs already planted (resume marker)")
+            else:
+                with PRINT_LOCK:
+                    print(f"  [{team_key}] Planting AD-flavored misconfigs on {dc_box['name']}...")
                 _run_single_nakon_config(
                     dc_machine,
-                    [{"name": "ADDS", "vars": {"domain": domain, "dsrm_password": box_password}}],
-                    key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-adds",
+                    [
+                        {"name": "Add User Account", "vars": {
+                            "username": "svc-support", "password": box_password,
+                            "full_name": "IT Support", "domain_address": domain,
+                        }},
+                        {"name": "Elevate User Account", "vars": {"username": "svc-support"}},
+                        {"name": "Disable System Firewall"},
+                        {"name": "Removing all auditing"},
+                    ],
+                    key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-ad-misconfigs",
+                    strict=False,
                 )
-            with PRINT_LOCK:
-                print(f"    Waiting for {dc_box['name']} to reboot and come back (AD DS promotion "
-                      f"is slow — budgeting up to 20 min)...")
-            if not wait_for_guest_agent(node, dc_vmid, timeout=1200):
-                with PRINT_LOCK:
-                    print(f"  WARNING: {dc_box['name']} guest agent never came back after ADDS — "
-                          f"skipping the rest of {team_key}'s domain setup")
-                return
-            wait_for_windows_sshd(node, dc_vmid, timeout=180)
-            domain_sid = wait_for_adws(node, dc_vmid)
-            with PRINT_LOCK:
-                if domain_sid:
-                    print(f"  [{team_key}] {domain} is up (DomainSID {domain_sid})")
-                else:
-                    print(f"  WARNING: [{team_key}] AD Web Services never answered on "
-                          f"{dc_box['name']} — AD-flavored plants will likely fail")
-
-            with PRINT_LOCK:
-                print(f"  [{team_key}] Planting AD-flavored misconfigs on {dc_box['name']}...")
-            _run_single_nakon_config(
-                dc_machine,
-                [
-                    {"name": "Add User Account", "vars": {
-                        "username": "svc-support", "password": box_password,
-                        "full_name": "IT Support", "domain_address": domain,
-                    }},
-                    {"name": "Elevate User Account", "vars": {"username": "svc-support"}},
-                    {"name": "Disable System Firewall"},
-                    {"name": "Removing all auditing"},
-                ],
-                key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-ad-misconfigs",
-                strict=False,
-            )
 
         if member_boxes:
             with PRINT_LOCK:

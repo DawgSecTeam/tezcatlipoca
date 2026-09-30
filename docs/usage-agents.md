@@ -261,6 +261,15 @@ deploy reuses them by hash (test-run reuse). `--full` additionally destroys the 
 `.template-hashes.json`. On a FROZEN competition `--full` refuses without
 `--end-of-competition`, so an accidental full teardown mid-event is impossible.
 
+**Lifecycle rule: tear the golden range down once the run has achieved its goal.** Teams-only
+exists for the mid-run loop only — crash resume, iterate, re-run the SAME competition; that
+is the only reuse a golden set supports. It can never serve a DIFFERENT competition: the
+templates are tagged `comp-<id>` and every M4 hash input (box list, pins, box_password, ssh
+key) is this competition's, so another competition's phase-1 hash gate would destroy and
+rebuild them regardless. Once the goal is reached (validation pass done, event over, evidence
+captured), run `--full` (add `--end-of-competition` if frozen) — leaving goldens behind just
+strands templates on the datastore squatting on the competition's golden vmids.
+
 Related M4 commands:
 
 ```bash

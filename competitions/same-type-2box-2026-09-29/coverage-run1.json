@@ -1,0 +1,71 @@
+{
+  "ok": true,
+  "rows": [
+    {
+      "team": "team1",
+      "box": "web01",
+      "pin": "apache",
+      "display": "web01-http",
+      "takedown": true,
+      "down_after": "DOWN after 60s",
+      "restore": true,
+      "up_after": "UP after 60s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "web01",
+      "pin": "roundcube",
+      "display": "web01-roundcube",
+      "takedown": true,
+      "down_after": "DOWN after 60s",
+      "restore": true,
+      "up_after": "UP after 60s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "web01",
+      "pin": "bind",
+      "display": "web01-dns",
+      "takedown": true,
+      "down_after": "DOWN after 60s",
+      "restore": true,
+      "up_after": "UP after 60s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "win01",
+      "pin": "Enable WinRM",
+      "display": "win01-winrm",
+      "takedown": true,
+      "down_after": "DOWN after 60s",
+      "restore": true,
+      "up_after": "UP after 30s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "win01",
+      "pin": "IIS HTTP",
+      "display": "win01-iis",
+      "takedown": true,
+      "down_after": "DOWN after 90s",
+      "restore": true,
+      "up_after": "UP after 30s",
+      "detail": "ok"
+    },
+    {
+      "team": "team1",
+      "box": "win01",
+      "pin": "IIS HTTP",
+      "display": "win01-iis-alt",
+      "takedown": true,
+      "down_after": "DOWN after 90s",
+      "restore": true,
+      "up_after": "UP after 30s",
+      "detail": "ok"
+    }
+  ]
+}

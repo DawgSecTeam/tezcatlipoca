@@ -5,6 +5,8 @@ from pathlib import Path
 
 import requests
 
+from constants import PIN_CHECK_OVERRIDES
+
 _SERVICE_TO_CHECK = {
     "apache":    ("Web",  {"Display": "http",      "Port": 80,   "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
     "nginx":     ("Web",  {"Display": "http",      "Port": 80,   "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
@@ -39,6 +41,54 @@ _SERVICE_TO_CHECK = {
     # them with per-team vars); generate_nakon_config strips them from machine lists.
     "ADDS":           ("Tcp", {"Display": "ldap",  "Port": 389}),
 }
+
+
+def _resolve_pin(pin):
+    """(svc_name, check_key, check_cfg) for one box_services.json pin.
+
+    Pins are a bare catalog name or {"name": ..., "vars": {...}} plus optional scoring
+    overrides (PIN_CHECK_OVERRIDES). Unknown service names return check_key=None (the
+    caller warns). check_cfg is a fresh dict whenever overrides apply."""
+    svc_name = pin if isinstance(pin, str) else pin.get("name")
+    check_key, base_cfg = _SERVICE_TO_CHECK.get(svc_name, (None, None))
+    if check_key is None:
+        return svc_name, None, None
+    cfg = dict(base_cfg)
+    if isinstance(pin, dict):
+        for key in ("display", "port", "scheme"):
+            if key in pin:
+                cfg[{"display": "Display", "port": "Port", "scheme": "Scheme"}[key]] = pin[key]
+        if "path" in pin or "status" in pin:
+            if not cfg.get("Url"):
+                raise SystemExit(
+                    f"[event.conf] pin {pin!r} sets path/status but '{svc_name}' checks are not "
+                    "URL-based — drop the override")
+            url = dict(cfg["Url"][0])
+            if "path" in pin:
+                url["Path"] = pin["path"]
+            if "status" in pin:
+                url["Status"] = pin["status"]
+            cfg["Url"] = [url]
+        unknown = set(pin) - {"name", "vars", *PIN_CHECK_OVERRIDES}
+        if unknown:
+            print(f"[event.conf] WARNING: ignoring unknown key(s) {sorted(unknown)} in pin "
+                  f"{pin!r} — did you mean one of {PIN_CHECK_OVERRIDES}?")
+    return svc_name, check_key, cfg
+
+
+def expected_service_names(box_services: dict, boxes: list) -> set:
+    """Scoreboard ServiceNames the current pins must produce (<box>-<Display>).
+
+    Quotient registers every emitted check (Box.Web etc. are slices); these names are
+    its global uniqueness domain, so verify gates the live set against this."""
+    names = set()
+    for box in boxes:
+        for pin in box_services.get(box["name"], []):
+            _, check_key, cfg = _resolve_pin(pin)
+            if check_key is None:
+                continue
+            names.add(f"{box['name']}-{cfg['Display']}")
+    return names
 
 
 def build_event_conf(ctx: dict, box_services: dict) -> dict:
@@ -78,16 +128,20 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
             "ip":   f"192.168._.{box['last_octet']}",
         }
 
-        seen_checks = set()
-        for svc_name in box_services.get(box["name"], []):
-            if svc_name not in _SERVICE_TO_CHECK:
+        seen_displays = set()
+        for pin in box_services.get(box["name"], []):
+            svc_name, check_key, check_cfg = _resolve_pin(pin)
+            if check_key is None:
                 print(f"[event.conf] WARNING: no Quotient check type for '{svc_name}' on box '{box['name']}' — skipping")
                 continue
-            check_key, check_cfg = _SERVICE_TO_CHECK[svc_name]
-            dedup_key = (check_key, check_cfg.get("Port"))
-            if dedup_key in seen_checks:
-                continue
-            seen_checks.add(dedup_key)
+            display = check_cfg["Display"]
+            if display in seen_displays:
+                raise SystemExit(
+                    f"[event.conf] two pins on '{box['name']}' both render scoreboard name "
+                    f"'{box['name']}-{display}' — Quotient requires unique <box>-<Display> check "
+                    f"names. Differentiate one via a display override, e.g. "
+                    f'{{"name": "{svc_name}", "display": "<alt>"}} in box_services.json.')
+            seen_displays.add(display)
             box_entry.setdefault(check_key, []).append(check_cfg)
             if check_cfg.get("CredLists"):
                 needs_linux_credlist = True

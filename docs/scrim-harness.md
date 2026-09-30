@@ -107,14 +107,17 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   timeout path `os.killpg()`s the whole session before draining.
   `_opencode_log_tail` appends the newest server-log tail to failed-cycle
   output.
-- `blue_feed_loop` — serialize the two blues behind `llm_lock`: the shared
+- `blue_feed_loop` — serialize the blues behind a per-endpoint lock: the shared
   local endpoint has few slots (and rejects oversized prompts), and even
   cloud runs shouldn't have opencode DBs racing. Serialization is per
-  ENDPOINT: `blue_lock2` reuses the shared lock unless `--blue2-base-url`
-  points somewhere different, in which case team2 gets its own lock and the
-  two blues run concurrently (`blue_ep` resolves team2's endpoint/model,
-  falling back to the shared one; `RUNTIME_FILES` is the per-deploy
-  regenerated file set never copied into a fresh competition). One immediate
+  ENDPOINT (`stage_run` builds one lock per distinct base URL): teams sharing
+  an endpoint share its lock; a team with its own `--blue{N}-base-url`
+  (any N — `--blue2-*`, `--blue3-*`, `--blue4-*` are defined; blue_ep falls
+  back to the shared endpoint for anything unset) runs concurrently
+  (`blue_ep` resolves the team's endpoint/model; `RUNTIME_FILES` is the
+  per-deploy regenerated file set never copied into a fresh competition).
+  Before 2026-09-29 the lock/endpoint choice was hardcoded 2-team — teams 3/4
+  silently shared team1's endpoint AND lock. One immediate
   retry per
   failed cycle — a transient boot/endpoint failure otherwise costs the whole
   cycle slot to the pacing sleep. Full transcript + exact prompt are kept per
@@ -198,12 +201,30 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   can eat 5–30 min, and counting that against `--duration-min` made short
   events shorter than advertised (fixed 2026-09-23; the T0 log line prints
   how long red setup ran outside scored time).
+- `reanchor_injects` (T0 honesty for inject clocks) — inject offsets resolve to
+  absolute times at phase-7 deploy time, so a `--skip-deploy` restart or a long
+  staging gap reaches T0 with every inject already expired (shakedown-5x4:
+  blue's inject score was a guaranteed 0). Right after t0 is captured, the
+  comp's offsets are re-resolved at now and pushed to the engine via
+  UpdateInject (`POST /api/injects/{id}`), matched by title, every existing
+  attachment re-listed under keep-files (unlisted attachments get deleted).
+  Unconditional and idempotent — a fresh deploy with a fast staging re-anchors
+  to the same values; unordered offsets abort before the event.
 - `stage_red` (state dir) — operator-side bad-auto runs (validate-llm /
   dry-run / deploy bookkeeping) need a writable state dir: the VM's own
   config hardcodes `/var/lib/bad-auto` inside red01, so the `BAuto_STATE_DIR`
   override under the run dir affects the HOST side only.
 - `stage_red` (network) — cloud LLM goes direct from red01, no tunnel needed;
   reverse tunnels exist only for tailnet-local endpoints.
+- `stage_red` (red identity) — red's network mode comes from bad-auto's
+  `deploy.red_mode` (flags `--red-mode/--red-subnet/--red-seg-ip` pass
+  through): **routed** (default) gives red01 a dedicated segment (default
+  `10.200.0.0/24`, red01 at `.10`, engine holds `.1` on its mgmt iface) and
+  forwards attacks with the source address intact, so blue can hunt and
+  firewall red while scoring keeps sourcing from the team gateway; **masq**
+  (legacy) masquerades red as the team gateway, unblockable-by-IP. Verify a
+  routed event with `verify-competition.py --red-identity` (holds a red01→box
+  connection and checks the box sees the segment IP as the peer).
 - `pull_red_evidence` — red01's `events.jsonl` is the only complete record of
   what red did; fetch it (plus `world.json` and the bad-auto journal via
   `sudo -n journalctl -u bad-auto`) BEFORE `badauto destroy` erases it. The
@@ -221,8 +242,13 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   to freeze the final state, freezes `scoreboard-state.jsonl` into evidence
   (it feeds the report's down-minutes/restore math), and archives blue
   LOG/NOTEBOOK/feed.log, `sub-*` deliverables, and submissions/cycles dirs.
+  Since 2026-09-29 it also dumps `evidence/final-scoreboard.json` (teams,
+  injects, per-team service states — all `--teams`) BEFORE the pause, because
+  stage_teardown destroys the scoring DB and the report renders its "Final
+  scores" section from that dump.
 - `stage_teardown` — red evidence pull first, then `badauto destroy` (red01 +
-  NAT, best-effort), then `destroy-competition.py` unless `--keep-range`.
+  engine firewall rules, best-effort — strips both routed- and masq-mode rule
+  families), then `destroy-competition.py` unless `--keep-range`.
 - `MYBOX` helper — Linux boxes over key auth, Windows over password
   (sshpass), all through the engine ProxyCommand gateway; blues are told to
   prefer it over hand-building ssh.
@@ -266,7 +292,9 @@ Reads a run dir (`evidence/red/events*.jsonl` + `world.json`,
   is inferred from red's re-kills and marked as such, and the honest red-side
   numbers carry the verdict.
 - `HOST_BY_OCTET` — last octet → host for the scrim subnets
-  192.168.10X.0/24 (101=team1, 102=team2): 2=dc01, 3=win01, 4=web01, 5=app01,
+  192.168.10X.0/24 (identifier 10X = team X−100, generic since 2026-09-29 —
+  `host_label` maps any 101–199 third octet; the old table only knew
+  101=team1, 102=team2): 2=dc01, 3=win01, 4=web01, 5=app01,
   6=db01.
 - `takedown_fields` — prefers structured `data` (ip/unit/service/mode); falls
   back to regexing the detail string ("X is DOWN on ", first IPv4); mode
