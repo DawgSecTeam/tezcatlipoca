@@ -1,0 +1,10 @@
+{
+  "pikachu": [
+    "roundcube",
+    "bind"
+  ],
+  "raichu": [
+    "splunk",
+    "nginx"
+  ]
+}

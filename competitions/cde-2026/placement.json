@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "comp": "cde-2026",
+  "engine_vmid": 1080,
+  "engine_node": "hdd-150",
+  "nodes": {
+    "hdd-150": {
+      "name": "hdd-150",
+      "endpoint": "https://10.0.0.150:8006",
+      "node": "proxmox",
+      "datastore": "hdd",
+      "token_env": "TF_VAR_proxmox_api_token",
+      "engine_base_vmid": 955,
+      "engine_mgmt_ip": "",
+      "engine_mgmt_gw": "",
+      "jump_mgmt_ip": "10.0.0.249",
+      "ssh_host": "10.0.0.150",
+      "jump_template": "alpine",
+      "weight": 1.0,
+      "max_teams": 8,
+      "tls_fingerprint": ""
+    },
+    "zfs-193": {
+      "name": "zfs-193",
+      "endpoint": "https://10.0.0.193:8006",
+      "node": "pve",
+      "datastore": "hdrives-zfs",
+      "token_env": "TF_VAR_proxmox_api_token_193",
+      "engine_base_vmid": 1007,
+      "engine_mgmt_ip": "",
+      "engine_mgmt_gw": "",
+      "jump_mgmt_ip": "10.0.0.248",
+      "ssh_host": "10.0.0.193",
+      "jump_template": "alpine",
+      "weight": 1.0,
+      "max_teams": 8,
+      "tls_fingerprint": ""
+    }
+  },
+  "slots": {
+    "hdd-150": 0
+  },
+  "team_nodes": {
+    "team1": "hdd-150",
+    "team2": "hdd-150"
+  },
+  "team_slots": {
+    "team1": 0,
+    "team2": 0
+  },
+  "team_identifiers": {
+    "team1": "120",
+    "team2": "121"
+  },
+  "satellites": [],
+  "jump_mgmt_ips": {},
+  "probe_summary": {
+    "hdd-150": {
+      "ok": false,
+      "reasons": [
+        "vmid collisions: [1080, 1220, 1231, 1232, 1233, 1234]...",
+        "bridge collisions: ['vmbr120', 'vmbr121']"
+      ],
+      "missing_templates": [],
+      "collisions": [
+        1080,
+        1220,
+        1231,
+        1232,
+        1233,
+        1234,
+        1400,
+        1401,
+        1402,
+        1403,
+        1404,
+        1410,
+        1411,
+        1412,
+        1413,
+        1414
+      ],
+      "mem_free_bytes": 22634754048,
+      "datastore_free": 276985222208,
+      "running_ours": 42
+    },
+    "zfs-193": {
+      "ok": false,
+      "reasons": [
+        "vmid collisions: [1210, 1211, 1400, 1401, 1402, 1403]...",
+        "bridge collisions: ['vmbr120']"
+      ],
+      "missing_templates": [
+        "pfsense"
+      ],
+      "collisions": [
+        1210,
+        1211,
+        1400,
+        1401,
+        1402,
+        1403,
+        1404,
+        1405,
+        1410
+      ],
+      "mem_free_bytes": 181678546944,
+      "datastore_free": 2618943081616,
+      "running_ours": 7
+    }
+  },
+  "computed_at": "2026-09-30 12:18:45"
+}

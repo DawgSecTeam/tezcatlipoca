@@ -1,0 +1,223 @@
+# Packet profile — CDE 2026 (UMBC CyberDawgs internal Cyber Defense Exercise)
+#
+# Encoded from "CDE 2026 Blue Team Packet with some white team stuff too!" v1.0.
+# Every packet fact maps to a fidelity status in the compiled packet-fidelity.md;
+# misconfigurations are deliberately absent (black-team layer, authored after compile).
+
+packet:
+  source: "CDE 2026 Blue Team Packet v1.0 (Among Us / MIRA Corp)"
+
+event:
+  comp_id: cde-2026
+  name: CDE 2026
+  scenario: >-
+    MIRA Corp incident response (Among Us themed): investigate the Imposter activity
+    on MIRA's systems while defending them and upholding business operations.
+  difficulty: 5
+  teams_suggested: 4
+  team_identifiers: [120, 121, 122, 123]   # deploy-time TF_VAR_team_identifiers suggestion
+
+domain:
+  # Packet: domain-joined everything, accounts look like mira-XX\blueteam,
+  # SSH domain logins blueteam@mira-XX.corp.sus
+  name_template: "mira-{team}.corp.sus"
+
+credentials:
+  # Packet "Default Credentials" tables, verbatim (public by design — teams rotate
+  # at minute zero).
+  note: >-
+    Packet local-account password is n0t_sus1 (trailing one) while the domain password
+    is n0t_sus! (bang) — encoded exactly as published. MySQL root/n0t_sus1 exists in
+    the packet table; the engine's Sql check authenticates as credlist users, and
+    fix_services grants credlist users full MySQL privileges.
+  box_username: blueteam
+  box_password: "n0t_sus1"
+  credlists:
+    linux:
+      blueteam: "n0t_sus1"   # local account (packet misc table)
+      airship: "airship"     # database user (packet misc table)
+    domain:
+      blueteam: "n0t_sus!"   # domain admin (packet domain table)
+  domain_accounts:
+    - {username: blueteam, password: "n0t_sus!", admin: true, full_name: Blue Team Lead}
+    - {username: Red,    password: "Red123!",    admin: true, full_name: Red Team}
+    - {username: Blue,   password: "Blue123!",   admin: true, full_name: Blue Team}
+    - {username: Green,  password: "Green123!",  admin: true, full_name: Green Team}
+    - {username: Pink,   password: "Pink123!",   admin: true, full_name: Pink Team}
+    - {username: Orange, password: "Orange123!", admin: true, full_name: Orange Team}
+    - {username: Yellow, password: "Yellow123!", admin: true, full_name: Yellow Team}
+    - {username: Black,  password: "Black123!",  admin: true, full_name: Black Team}
+    - {username: White,  password: "White123!",  admin: true, full_name: White Team}
+    - {username: Purple, password: "Purple123!", admin: true, full_name: Purple Team}
+    - {username: Brown,  password: "Brown123!",  admin: true, full_name: Brown Team}
+  # Packet rule VI: 100% out of scope, never used for harm, do not attend to them.
+  out_of_scope: [scorebot, blackteam, red_scoring]
+
+boxes:
+  - name: fw01
+    packet_os: "pfSense firewall — 192.168.[Team#].1, mgmt SSH 22 / web 80+443, 0 scored services"
+    template: pfsense
+    unmanaged: true
+    last_octet: 1
+    cpu: 1
+    memory_mb: 2048
+    fidelity: substituted
+    note: >-
+      In-path pfSense owns .1 as teams' gateway (matches the packet) but the wiring is
+      the manual runbook (docs/pfsense-inpath-2026-09-28.md), not terraform. For a
+      validation deploy the box can sit idle while the engine holds .1; wire it in-path
+      before the real event.
+  - name: ad01
+    packet_os: "Windows Server 2019 — ADDS, LDAP 389 / DNS 53 / SMB 445"
+    template: base-windows-server
+    last_octet: 2
+    cpu: 2
+    memory_mb: 4096
+    disk_gb: 60
+    disk_iface: sata0
+    domain_role: dc
+    fidelity: substituted
+    note: "2022-eval lineage template, not 2019; ADDS/DNS/SMB all present"
+  - name: ftp01
+    packet_os: "Windows Server 2022 — FTP server, FTP 20/21 / SMB 445"
+    template: base-windows-server
+    last_octet: 3
+    cpu: 2
+    memory_mb: 4096
+    disk_gb: 60
+    disk_iface: sata0
+    domain_role: member
+    fidelity: substituted
+    note: "2022-eval lineage (same base as ad01, distinct box/SID); IIS FTP + SMB share planted"
+  - name: web01
+    packet_os: "CentOS 8 — Apache ecommerce web page, HTTP 80 / SSH 22"
+    template: base-fedora44-fix
+    last_octet: 4
+    cpu: 1
+    memory_mb: 2048
+    disk_gb: 15
+    fidelity: substituted
+    note: "no CentOS 8 template; Fedora 44 is the proven dnf-family stand-in (apache+bind live-validated)"
+  - name: db01
+    packet_os: "Ubuntu 20.04 — O2 control systems, MySQL (MariaDB) 3306 / SSH 22"
+    template: base-ubuntu24.04-fix
+    last_octet: 5
+    cpu: 1
+    memory_mb: 2048
+    disk_gb: 15
+    fidelity: substituted
+    note: "no 20.04 template with working cloud-init; 24.04 carries MariaDB identically"
+
+services:
+  # Packet: 9 scored services; score bot checks via domain account first (full), then
+  # local (half). The engine scores flat 5/check, so dual-credit services carry paired
+  # checks (both-up 10 : local-only 5 = the packet's 2:1).
+  - box: ad01
+    name: "LDAP for directory services"
+    port: 389
+    pin: ADDS
+    display: ldap
+    fidelity: exact
+    note: "Tcp port-open check — Windows scoring is port-open-only (known-issues standing limit)"
+  - box: ad01
+    name: "DNS for domain name resolution"
+    port: 53
+    pin: score/tcp
+    display: dns
+    fidelity: substituted
+    note: "native AD DNS needs no plant; port-open check, not a protocol-aware DNS query"
+  - box: ad01
+    name: "SMB for filesharing (AD SYSVOL/NETLOGON)"
+    port: 445
+    pin: score/tcp
+    display: smb
+    fidelity: substituted
+    note: "native AD share; port-open check"
+  - box: ftp01
+    name: "FTP server for file transfer and storage (site)"
+    port: 21
+    pin: IIS FTP
+    scored: false
+    fidelity: exact
+    note: >-
+      plants the IIS FTP site (teams log in with the packet's local account exactly
+      like the real event); scored by the port-open companion below
+  - box: ftp01
+    name: "FTP server for file transfer and storage"
+    port: 21
+    pin: score/tcp
+    display: ftp
+    fidelity: substituted
+    note: >-
+      live validation 2026-09-30: the IIS FTP site enforces SSL (534) — the engine's
+      plain-FTP check cannot authenticate against it, so the auth dimension collapses
+      to a port-open check over the planted site
+  - box: ftp01
+    name: "SMB for filesharing (planted share)"
+    port: 445
+    pin: "New SMB Share"
+    display: smb
+    fidelity: exact
+    note: "same-TYPE-as-ad01 pin scores separately per box (unique Display rule)"
+  - box: web01
+    name: "Ecommerce web page (Apache)"
+    port: 80
+    pin: apache
+    display: http
+    fidelity: exact
+    note: "Web check: GET / must answer 200"
+  - box: web01
+    name: "System management SSH"
+    port: 22
+    pin: ssh
+    display: ssh
+    fidelity: substituted
+    note: >-
+      local-credlist check. The packet's domain dimension is NOT expressible here
+      (live validation 2026-09-30): the local blueteam (n0t_sus1) shadows the domain
+      blueteam of the same name (NSS resolves files before sssd), and the engine's
+      shared credlist cannot carry per-team qualified names (blueteam@mira-120 vs
+      mira-121). Single check scores the service; credlists match the packet.
+  - box: db01
+    name: "MySQL database (MariaDB)"
+    port: 3306
+    pin: mysql
+    display: sql
+    fidelity: exact
+    note: "authenticates as airship (credlist; fix_services creates the DB user)"
+  - box: db01
+    name: "System management SSH"
+    port: 22
+    pin: ssh
+    display: ssh
+    fidelity: substituted
+    note: "local-credlist check (same domain-dimension limit as web01 SSH)"
+
+schedule:
+  # Packet schedule, T0 = 9:30 am competition-active
+  - {label: check-in,       at_min: null, note: "08:00 arrive (packet schedule)"}
+  - {label: system-tests,   at_min: null, note: "09:00-09:30 — before T0; deploy finishes ahead of this"}
+  - {label: start,          at_min: 0,    note: "09:30 competition active — engine unpauses (run-schedule.py start)"}
+  - {label: lunch-freeze,   at_min: 150,  note: "12:00 lunch, hands-off keyboards — engine pause"}
+  - {label: lunch-resume,   at_min: 195,  note: "12:45 competition active — engine unpause"}
+  - {label: ceo-meetings,   at_min: 210,  note: "13:00-15:00 CEO meetings (injects still flow)"}
+  - {label: end,            at_min: 390,  note: "16:00 scoring ends — engine pause + final scoreboard dump"}
+
+scoring:
+  weights: {uptime: 40, injects: 30, red: 30}
+
+injects:
+  - slug: 01-welcome
+    title: "CDE 2026 — Welcome, crew check-in"
+    open_offset_min: 0
+    due_offset_min: 30
+    close_offset_min: 60
+    briefing: |
+      Welcome aboard MIRA Corp's Incident Response Team.
+
+      Confirm you can reach your crew's systems (SSH/RDP into all five boxes) and
+      reply with your crew name plus the hostname of each box. This mirrors the
+      NISE-style welcome inject: it proves your access works before the Imposters
+      start.
+
+      Reply through the inject portal. Partial credit for partial confirmations.

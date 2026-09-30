@@ -1,0 +1,10 @@
+{
+  "webmail": [
+    "suid-find",
+    "ssh-root-login"
+  ],
+  "core": [
+    "bad-perms-userConfig",
+    "www-data-shell"
+  ]
+}

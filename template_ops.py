@@ -352,6 +352,21 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     # rebuild it from scratch rather than resuming a half-bootstrapped disk. An
     # untagged leftover passes with the ownership warning; anything tagged without
     # ours is refused — the reserved slot is not a license to destroy foreign VMs.
+    # Exception (live-found 2026-09-29): a full clone inherits the BASE image's tags,
+    # so a config-PUT failure between the clone and the tag PUT leaves a leftover
+    # wearing 'cloud-init;template' — the strict guard would refuse it forever. A
+    # NOT-yet-converted VM on the reserved slot carrying the reserved NAME is our
+    # dead attempt; adopt it loudly. Converted templates keep the strict check.
+    from golden_ops import _is_template  # local: golden_ops imports this module back
+
+    if vmid in {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]} \
+            and not _is_template(node, vmid):
+        vm = next(v for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
+                  if v["vmid"] == vmid)
+        if (vm.get("name") or "") == ENGINE_TEMPLATE_NAME:
+            print(f"    vmid {vmid}: unconverted '{ENGINE_TEMPLATE_NAME}' leftover from a "
+                  f"dead template build — adopting and rebuilding")
+            destroy_vm_if_exists(node, vmid, expect_tags=None)
     destroy_vm_if_exists(node, vmid, expect_tags=expect_tags)
 
     live_vmids = {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
@@ -379,7 +394,8 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
         # Portable-node mode (realm): boot the build VM on the PLANNED engine mgmt IP —
         # the deployed engine is destroyed by phase 1 by now, so the address is free,
         # and the converted template's config then matches what apply #1 sets on clones.
-        cfg["ipconfig0"] = f"ip={mgmt_ip}/24,gw={os.environ.get('TF_VAR_engine_mgmt_gw', '')}"
+        gw = os.environ.get("TF_VAR_engine_mgmt_gw", "")
+        cfg["ipconfig0"] = f"ip={mgmt_ip}/24" + (f",gw={gw}" if gw else "")
     proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data=cfg)
     print(f"    {vm_name} cloned from base image (vmid {vmid})")
 

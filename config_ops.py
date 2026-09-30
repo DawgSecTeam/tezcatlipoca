@@ -11,13 +11,64 @@ from pathlib import Path
 
 import requests
 
-from constants import (ENGINE_TEMPLATE_VMID_OFFSET, MAX_BOXES_PER_TEAM, NAKON_DIR,
-                       SCORING_ENGINE_VMID)
+from constants import (ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_VMID_OFFSET,
+                       MAX_BOXES_PER_TEAM, NAKON_DIR, SCORING_ENGINE_VMID)
 from range_ops import has_clone_marker, proxmox_api, proxmox_request, vm_id_for
 from utils import (BOX_USERNAME_DEFAULT, CREDLIST_USERNAMES_DEFAULT, is_legacy_account_name,
                    valid_unix_username)
 
 ENV_PATH = Path(".env")
+
+
+def load_packet_passwords(comp_dir):
+    """Packet-published credentials from passwords.json (compile-packet.py output), or None.
+
+    Present means the deploy uses the packet's default credentials verbatim (that IS the
+    competition: teams get them in the packet and rotate at minute zero) instead of
+    minting random ones. 0600 + gitignored — future profiles may carry private secrets."""
+    path = Path(comp_dir) / "passwords.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except ValueError as e:
+        raise SystemExit(f"  ERROR: {path} is not valid JSON: {e}")
+    if not isinstance(data, dict):
+        raise SystemExit(f"  ERROR: {path} must be a JSON object")
+    return data
+
+
+def _catalog_check_paths(comp_dir):
+    """Paths for `nakon catalog check`, filtered when the bundle uses constructs the
+    catalog can't know about. Score-only pins ({"score_only": true}) name no catalog
+    config; box_baseline.json pins plant like vulns but live in their own file. When
+    neither is present the bundle's real files pass straight through. Returns
+    (services_path, vulns_path, cleanup_fn)."""
+    services = json.loads((comp_dir / "box_services.json").read_text())
+    vulns = json.loads((comp_dir / "box_vulns.json").read_text())
+    baseline_path = comp_dir / "box_baseline.json"
+    baseline = json.loads(baseline_path.read_text()) if baseline_path.exists() else {}
+
+    def _is_score_only(c):
+        return isinstance(c, dict) and c.get("score_only")
+
+    filtered_services = {box: [p for p in pins if not _is_score_only(p)]
+                         for box, pins in services.items()}
+    merged_vulns = {box: list(v) + list(baseline.get(box, []))
+                    for box, v in vulns.items()}
+    if filtered_services == services and merged_vulns == vulns:
+        return (comp_dir / "box_services.json", comp_dir / "box_vulns.json", None)
+
+    tmp_services = comp_dir / ".catalog-check-services.json"
+    tmp_vulns = comp_dir / ".catalog-check-vulns.json"
+    tmp_services.write_text(json.dumps(filtered_services, indent=2))
+    tmp_vulns.write_text(json.dumps(merged_vulns, indent=2))
+
+    def cleanup():
+        tmp_services.unlink(missing_ok=True)
+        tmp_vulns.unlink(missing_ok=True)
+
+    return tmp_services, tmp_vulns, cleanup
 
 
 def preflight_gates(comp_dir, boxes, num_teams, teams=None,
@@ -168,42 +219,58 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
               f"~{need_gb:.0f} GB needed")
 
     if engine_mgmt_ip:
-        # Static engine mgmt IP must not collide with any running guest on the node's
-        # mgmt L2 — two boxes answering one address is the DHCP-drift incident class
-        # with a guaranteed bad ending. Guests without a working agent can't be
-        # checked; count them out loud instead of claiming the range is clean.
-        unchecked, taken = 0, set()
-        for vm in vms:
-            if vm.get("status") != "running" or vm.get("template") == 1:
-                continue
-            if vm.get("node") and vm["node"] != node:
-                continue
-            try:
-                result = proxmox_api(
-                    "GET", f"/nodes/{node}/qemu/{vm['vmid']}/agent/network-get-interfaces"
-                )["data"]["result"]
-            except Exception:
-                unchecked += 1
-                continue
-            for ifc in result or []:
-                for addr in ifc.get("ip-addresses") or []:
-                    if addr.get("ip-address-type") == "ipv4":
-                        taken.add(addr.get("ip-address"))
-        if engine_mgmt_ip in taken:
-            raise SystemExit(
-                f"  ERROR: static engine mgmt IP {engine_mgmt_ip} is already answered by "
-                f"a running guest on {node}. Pick another TF_VAR_engine_mgmt_ip (or set "
-                f"it to '' for DHCP).")
-        note = (f" ({unchecked} running guest(s) unverifiable — agent down)"
-                if unchecked else "")
-        print(f"  Preflight: engine mgmt IP {engine_mgmt_ip} is free{note}")
+        _engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip)
+    _catalog_gate(comp_dir)
 
+
+def _engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip):
+    """Static engine mgmt IP must not collide with any running guest on the node's
+    mgmt L2 — two boxes answering one address is the DHCP-drift incident class with
+    a guaranteed bad ending. Guests without a working agent can't be checked; count
+    them out loud instead of claiming the range is clean."""
+    unchecked, taken = 0, set()
+    for vm in vms:
+        if vm.get("status") != "running" or vm.get("template") == 1:
+            continue
+        if vm.get("node") and vm["node"] != node:
+            continue
+        if vm.get("vmid") == engine_vmid:
+            # Our own engine from a prior failed attempt — it holds the planned
+            # mgmt IP until phase 1 destroys it seconds from now (live-found
+            # 2026-09-29: every retry after a phase-2+ failure re-tripped this
+            # gate against our own leftover).
+            continue
+        try:
+            result = proxmox_api(
+                "GET", f"/nodes/{node}/qemu/{vm['vmid']}/agent/network-get-interfaces"
+            )["data"]["result"]
+        except Exception:
+            unchecked += 1
+            continue
+        for ifc in result or []:
+            for addr in ifc.get("ip-addresses") or []:
+                if addr.get("ip-address-type") == "ipv4":
+                    taken.add(addr.get("ip-address"))
+    if engine_mgmt_ip in taken:
+        raise SystemExit(
+            f"  ERROR: static engine mgmt IP {engine_mgmt_ip} is already answered by "
+            f"a running guest on {node}. Pick another TF_VAR_engine_mgmt_ip (or set "
+            f"it to '' for DHCP).")
+    note = (f" ({unchecked} running guest(s) unverifiable — agent down)"
+            if unchecked else "")
+    print(f"  Preflight: engine mgmt IP {engine_mgmt_ip} is free{note}")
+
+
+def _catalog_gate(comp_dir):
+    svc_path, vuln_path, cleanup = _catalog_check_paths(comp_dir)
     catalog = subprocess.run(
         [sys.executable, "-m", "nakon", "catalog", "check",
          "--boxes-json", str((comp_dir / "boxes.json").resolve()),
-         "--box-services", str((comp_dir / "box_services.json").resolve()),
-         "--box-vulns", str((comp_dir / "box_vulns.json").resolve())],
+         "--box-services", str(svc_path.resolve()),
+         "--box-vulns", str(vuln_path.resolve())],
         cwd=str(NAKON_DIR), capture_output=True, text=True, timeout=600)
+    if cleanup:
+        cleanup()
     if catalog.returncode != 0:
         print(catalog.stdout)
         print(catalog.stderr)
@@ -211,6 +278,182 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
             "  ERROR: nakon catalog check reported errors for this competition's pins — "
             "fix or trim box_vulns.json/box_services.json before deploying (details above).")
     print("  Preflight: nakon catalog check 0 errors")
+
+
+def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
+                              engine_mgmt_ip=None):
+    """Per-node preflight for a multi-node placement: every hosting node gets its own
+    template/collision/headroom gate scoped to exactly what it will hold (engine node:
+    engine base + slot-0 goldens + its teams; each satellite: its slot's goldens, the
+    jump VM, its teams). Same failure classes as preflight_gates, caught per node —
+    a satellite that would have died mid-clone on another host fails here instead."""
+    from jump_ops import find_jump_template
+    from nodes_ops import record_of, teams_on_node
+    from range_ops import cluster_vms_for
+
+    comp_name = comp_dir.name
+    engine_name = placement["engine_node"]
+    for node_name in placement["slots"]:
+        rec = record_of(placement, node_name)
+        slot = placement["slots"][node_name]
+        node = rec.node
+        node_team_keys = teams_on_node(placement, node_name)
+        node_teams = {k: teams[k] for k in node_team_keys}
+        vms = cluster_vms_for(node)
+        node_vms = [vm for vm in vms if vm.get("node") == node]
+
+        # Template resolution scoped to this node (its clones can only use its own
+        # templates): engine base on the engine node, every box template on any
+        # node hosting teams, and a jump clone source on satellites.
+        if node_name == engine_name:
+            base = rec.engine_base_vmid
+            if not any(vm.get("vmid") == base for vm in node_vms):
+                raise SystemExit(
+                    f"  ERROR: engine base image vmid {base} does not exist on engine "
+                    f"node '{node_name}' ({node}) — the engine-template build would fail.")
+        if node_teams:
+            tagged = {vm.get("name") for vm in node_vms
+                      if vm.get("template") == 1 and "template" in (vm.get("tags") or "").split(";")}
+            missing = sorted({b["template"] for b in boxes} - tagged)
+            if missing:
+                raise SystemExit(
+                    f"  ERROR: box template(s) with no tagged template on node "
+                    f"'{node_name}' ({node}): " + ", ".join(missing)
+                    + f". Available there: {sorted(t for t in tagged if t) or '(none)'}. "
+                      "Sync with sync-template.py or move the teams.")
+            if slot > 0:
+                find_jump_template(node, rec.jump_template)  # raises with remedy
+                print(f"  Preflight[{node_name}]: box templates + jump clone source present")
+
+        if not node_teams and slot > 0:
+            continue  # unused satellite — nothing else to check there
+
+        # Collision gate scoped to this node's share.
+        our_tags = {"tezcatlipoca", f"comp-{comp_name}"}
+        existing_vmids = {vm.get("vmid") for vm in node_vms}
+        vm_by_vmid = {vm.get("vmid"): vm for vm in node_vms}
+
+        def _is_ours(vmid, expected_name=None):
+            vm = vm_by_vmid.get(vmid)
+            if vm is None:
+                return False
+            vtags = {t.strip() for t in str(vm.get("tags") or "").replace(";", ",").split(",") if t.strip()}
+            if our_tags <= vtags:
+                return True
+            if not vtags and has_clone_marker(node, vmid, comp_name):
+                return True
+            return (expected_name is not None and vm.get("name") == expected_name
+                    and vtags == {"template"})
+
+        clashes, foreign, ours = [], 0, 0
+
+        def _clash(label, vmid, expected_name=None):
+            nonlocal foreign, ours
+            if _is_ours(vmid, expected_name=expected_name):
+                ours += 1
+            else:
+                foreign += 1
+                clashes.append(label)
+
+        checked = []
+        if node_name == engine_name:
+            checked.append((engine_vmid, f"scoring engine vmid {engine_vmid}", None))
+            et_vmid = engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET
+            checked.append((et_vmid, f"engine template vmid {et_vmid}", None))
+        for box_idx in range(len(boxes)):
+            checked.append((engine_vmid + GOLDEN_VMID_OFFSET + slot * MAX_BOXES_PER_TEAM + box_idx,
+                            f"golden vmid (slot {slot}) #{engine_vmid + GOLDEN_VMID_OFFSET + slot * MAX_BOXES_PER_TEAM + box_idx}",
+                            f"golden-{boxes[box_idx]['name']}"))
+        if slot > 0:
+            checked.append((engine_vmid + 130 + slot, f"jump vmid {engine_vmid + 130 + slot}",
+                            f"jump-{comp_name}-{slot}"))
+        for team_key, team in node_teams.items():
+            for box_idx in range(len(boxes)):
+                vid = vm_id_for(team["identifier"], box_idx)
+                checked.append((vid, f"team vmid {vid} ({team_key}/{boxes[box_idx]['name']})", None))
+        for vmid, label, expected_name in checked:
+            if vmid in existing_vmids:
+                _clash(label, vmid, expected_name)
+
+        try:
+            nets = proxmox_api("GET", f"/nodes/{node}/network")["data"]
+            existing_bridges = {n.get("iface") for n in nets}
+        except Exception:
+            existing_bridges = set()
+        node_bridges = [f"vmbr{t['identifier']}" for t in node_teams.values()]
+        for bridge in node_bridges:
+            if bridge in existing_bridges:
+                if foreign == 0 and ours > 0:
+                    ours += 1
+                else:
+                    clashes.append(f"bridge {bridge}")
+        if clashes:
+            raise SystemExit(
+                f"  ERROR: this competition's infrastructure collides with VMs/bridges "
+                f"already on node '{node_name}' ({node}): " + ", ".join(clashes)
+                + ". Pick a free --scoring-vmid and/or non-overlapping team identifiers.")
+        if ours:
+            print(f"  Preflight[{node_name}]: {ours} leftover VM(s)/bridge(s) tagged as "
+                  f"this competition's — phase 1 cleans or reuses them")
+
+        # Headroom scoped to this node's share.
+        datastore = rec.datastore
+        try:
+            st = proxmox_api("GET", f"/nodes/{node}/storage/{datastore}/status")["data"]
+            free = st.get("avail")
+        except Exception:
+            free = None
+        if free is None:
+            print(f"  Preflight[{node_name}]: WARNING could not read free space on "
+                  f"'{datastore}' — headroom unchecked")
+        else:
+            free_gb = free / 1024 ** 3
+            need_gb = len(node_teams) * sum(b.get("disk_gb") or 40 for b in boxes)
+            if free_gb < need_gb:
+                raise SystemExit(
+                    f"  ERROR: datastore '{datastore}' on '{node_name}' has {free_gb:.0f} GB "
+                    f"free; this deploy needs ~{need_gb:.0f} GB there "
+                    f"({len(node_teams)} teams x {len(boxes)} boxes).")
+            print(f"  Preflight[{node_name}]: datastore '{datastore}' {free_gb:.0f} GB free "
+                  f"vs ~{need_gb:.0f} GB needed")
+
+    # mgmt-IP sweeps: the engine IP on the engine node; every satellite's jump IP
+    # against guests on ALL hosting nodes (they share one mgmt L2).
+    engine_rec = record_of(placement, engine_name)
+    if engine_mgmt_ip:
+        node = engine_rec.node
+        vms = cluster_vms_for(node)
+        _engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip)
+    jump_ips = [s["jump_mgmt_ip"] for s in placement["satellites"]]
+    if jump_ips:
+        taken, unchecked = set(), 0
+        for name in placement["slots"]:
+            node = record_of(placement, name).node
+            for vm in cluster_vms_for(node):
+                if vm.get("node") != node or vm.get("status") != "running" or vm.get("template") == 1:
+                    continue
+                if vm.get("vmid") in {engine_vmid} | {s["jump_vmid"] for s in placement["satellites"]}:
+                    continue
+                try:
+                    result = proxmox_api(
+                        "GET", f"/nodes/{node}/qemu/{vm['vmid']}/agent/network-get-interfaces"
+                    )["data"]["result"]
+                except Exception:
+                    unchecked += 1
+                    continue
+                for ifc in result or []:
+                    for addr in ifc.get("ip-addresses") or []:
+                        if addr.get("ip-address-type") == "ipv4":
+                            taken.add(addr.get("ip-address"))
+        dupes = sorted(set(jump_ips) & taken)
+        if dupes:
+            raise SystemExit(
+                f"  ERROR: jump mgmt IP(s) {dupes} already answered by a running guest "
+                "on the mgmt LAN — set explicit jump_mgmt_ip values in nodes.json.")
+        note = (f" ({unchecked} guest(s) unverifiable — agent down)" if unchecked else "")
+        print(f"  Preflight: jump mgmt IP(s) {jump_ips} free{note}")
+
+    _catalog_gate(comp_dir)
 
 
 def load_previous_competitions():
@@ -261,12 +504,28 @@ def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID):
             raise SystemExit(f"  ERROR: duplicate team identifier {identifier} — subnets/vmids would collide.")
         seen.add(identifier)
         base = 200 + int(identifier) * 10
-        if base <= engine_vmid <= base + MAX_BOXES_PER_TEAM - 1:
+        # A team's vmid block must clear not just the engine but its DERIVED slots:
+        # engine template (engine+140) and the golden block (engine+150..+159). The
+        # old check covered the engine alone (live-found 2026-09-29: engine 1080 +
+        # default identifiers put team2's first box vmid exactly on the engine
+        # template slot at 1220 — the collision only surfaces at terraform apply #2,
+        # hours into the deploy). Phase 1's wave logic treats all 10 slots per block,
+        # so the guard is full-width.
+        reserved = ({engine_vmid}
+                    | set(range(engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET,
+                                engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET + MAX_BOXES_PER_TEAM))
+                    | set(range(engine_vmid + GOLDEN_VMID_OFFSET,
+                                engine_vmid + GOLDEN_VMID_OFFSET + MAX_BOXES_PER_TEAM)))
+        block = set(range(base, base + MAX_BOXES_PER_TEAM))
+        if block & reserved:
             raise SystemExit(
                 f"  ERROR: team identifier {identifier} maps to vmids "
-                f"{base}..{base + MAX_BOXES_PER_TEAM - 1}, colliding with the scoring engine "
-                f"(vmid {engine_vmid})."
-            )
+                f"{base}..{base + MAX_BOXES_PER_TEAM - 1}, overlapping this engine's "
+                f"reserved slots (engine {engine_vmid}, engine template "
+                f"{engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET}, goldens "
+                f"{engine_vmid + GOLDEN_VMID_OFFSET}+) — terraform apply #2 would "
+                f"clone a team box onto one of them. Pick different "
+                f"TF_VAR_team_identifiers or --scoring-vmid.")
         password = random_password()
         teams[key] = {"identifier": identifier, "password": password}
     return teams

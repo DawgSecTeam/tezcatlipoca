@@ -250,16 +250,17 @@ def mode_resync(targets, ctx, node, comp_dir, state, state_path):
             "Only the state alignment above was applied.")
     box_username, _credlist = load_users_config(comp_dir)
     for t in targets:
+        tnode = t.get("node") or node
         try:
             if box_platform(t["box"]) == "windows":
                 rc, out, err = guest_agent_exec_windows(
-                    node, t["vmid"],
+                    tnode, t["vmid"],
                     f"net user {WINDOWS_ADMIN_USER} '{box_password}'", timeout=120)
             else:
                 script = f"echo {shlex.quote(f'{box_username}:{box_password}')} | chpasswd"
                 for user, pw in (state.get("box_creds") or {}).items():
                     script += f"; echo {shlex.quote(f'{user}:{pw}')} | chpasswd"
-                rc, out, err = guest_agent_exec_root(node, t["vmid"], script, timeout=120)
+                rc, out, err = guest_agent_exec_root(tnode, t["vmid"], script, timeout=120)
             if rc == 0:
                 print(f"    {describe_target(t)}: passwords re-set (via guest agent)")
             else:
@@ -279,7 +280,7 @@ def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_pa
     for t in targets:
         print(f"  Rolling back {describe_target(t)} to '{snapshot}'...")
         try:
-            rollback_snapshot(node, t["vmid"], snapshot)
+            rollback_snapshot(t.get("node") or node, t["vmid"], snapshot)
             restored.append(t)
             print(f"    {t['vm_name']} restored")
         except Exception as e:
@@ -302,7 +303,7 @@ def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_pa
         if domain_settled:
             print(f"  Re-taking '{SNAP_READY}' for the recovered boxes...")
             for t in restored:
-                take_snapshot(node, t["vmid"], SNAP_READY,
+                take_snapshot(t.get("node") or node, t["vmid"], SNAP_READY,
                               description="tezcatlipoca: as delivered (re-taken by redeploy)")
         else:
             print(f"  tz-ready NOT re-taken — domain configuration could not run (see above); "
@@ -358,15 +359,25 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
 
     rebuilt = []
     for t in targets:
+        tnode = t.get("node") or node
         box = t["box"]
         windows = box_platform(box) == "windows"
         full_clone = True
         src_vmid = None
         src_label = None
         if state.get("pipeline_version") == 2:
-            golden_ids = state.get("golden_template_ids") or {}
-            if box["name"] in golden_ids:
-                src_vmid = int(golden_ids[box["name"]])
+            # Multi-node: the box's golden is its own node's slot copy (state carries
+            # per-slot ids); single-node keeps the flat map.
+            by_slot = state.get("golden_ids_by_slot") or {}
+            if by_slot:
+                from nodes_ops import read_placement, slot_of_team
+                pl = read_placement(comp_dir)
+                slot = slot_of_team(pl, t["team_key"]) if pl else 0
+                slot_ids = by_slot.get(str(slot)) or {}
+            else:
+                slot_ids = state.get("golden_template_ids") or {}
+            if box["name"] in slot_ids:
+                src_vmid = int(slot_ids[box["name"]])
                 full_clone = False
                 src_label = f"golden template '{box['template']}' (vmid {src_vmid}, linked clone)"
                 # M4 frozen semantics: the rebuild uses the frozen template as-is. A hash
@@ -374,7 +385,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
                 # blocker — but it must be loud, because it means the node's template is
                 # not the one the verify PASS covered.
                 expected_hash = (state.get("golden_hashes") or {}).get(box["name"])
-                on_node = stored_template_hash(node, src_vmid)
+                on_node = stored_template_hash(tnode, src_vmid)
                 if expected_hash and on_node and on_node != expected_hash:
                     print(f"    WARNING: golden template for '{box['name']}' on the node "
                           f"({on_node[:12]}) differs from the verified hash "
@@ -384,7 +395,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
             else:
                 raise SystemExit(
                     f"  ERROR: pipeline v2 state has no golden template for '{box['template']}' "
-                    f"(golden_template_ids: {sorted(golden_ids)}) — a rebuild from the ORIGINAL "
+                    f"(slot golden ids: {sorted(slot_ids)}) — a rebuild from the ORIGINAL "
                     f"template would miss every golden-stage install (services, vulns). "
                     f"Redeploy the range instead.")
         else:
@@ -392,14 +403,14 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
             src_label = f"template '{box['template']}' (vmid {src_vmid})"
         print(f"  Rebuilding {describe_target(t)} from {src_label}...")
 
-        destroy_vm_if_exists(node, t["vmid"])
+        destroy_vm_if_exists(tnode, t["vmid"])
 
-        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src_vmid}/clone", data={
+        upid = proxmox_api("POST", f"/nodes/{tnode}/qemu/{src_vmid}/clone", data={
             "newid": t["vmid"],
             "name": t["vm_name"],
             "full": 1 if full_clone else 0,
         })["data"]
-        wait_for_proxmox_task(node, upid)
+        wait_for_proxmox_task(tnode, upid)
 
         config = {
             "net0": f"virtio,bridge=vmbr{t['identifier']}",
@@ -413,26 +424,26 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
                 "cipassword": box_password,
                 "sshkeys": quote_sshkeys(ssh_public_key),
             })
-        proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data=config)
+        proxmox_api("PUT", f"/nodes/{tnode}/qemu/{t['vmid']}/config", data=config)
 
         if box.get("disk_gb"):
             # The box's own disk interface (Windows boxes are sata0 — a hardcoded scsi0
             # made every Windows rebuild die here), and only ever grow: a golden clone
             # already carries the box's size, and PVE refuses a shrink.
             iface = box.get("disk_iface") or "scsi0"
-            cur = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"].get(iface, "")
+            cur = proxmox_api("GET", f"/nodes/{tnode}/qemu/{t['vmid']}/config")["data"].get(iface, "")
             m = re.search(r"size=(\d+)G", cur)
             if not m or int(m.group(1)) < int(box["disk_gb"]):
-                proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/resize", data={
+                proxmox_api("PUT", f"/nodes/{tnode}/qemu/{t['vmid']}/resize", data={
                     "disk": iface, "size": f"{box['disk_gb']}G",
                 })
 
-        start_vm(node, t["vmid"])
+        start_vm(tnode, t["vmid"])
 
         if windows:
             print(f"    Bootstrapping Windows box {t['ip']} (vmid {t['vmid']})...")
             gw = f"192.168.{t['identifier']}.1"
-            driver.bootstrap_windows_box(node, t["vmid"], t["ip"], gw, "8.8.8.8", box_password)
+            driver.bootstrap_windows_box(tnode, t["vmid"], t["ip"], gw, "8.8.8.8", box_password)
 
         rebuilt.append(t)
 
@@ -448,7 +459,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
                ",".join(t["vm_name"] for t in rebuilt)):
         print(f"  Snapshotting rebuilt boxes as '{SNAP_BASE}'...")
         for t in rebuilt:
-            take_snapshot(node, t["vmid"], SNAP_BASE,
+            take_snapshot(t.get("node") or node, t["vmid"], SNAP_BASE,
                           description="tezcatlipoca: rebuilt from template, pre-Nakon")
 
         # M4: the rebuild plants the POST-CLONE STAGES in the deploy's order, not the
@@ -505,7 +516,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         if domain_settled:
             print(f"  Snapshotting rebuilt boxes as '{SNAP_READY}'...")
             for t in rebuilt:
-                take_snapshot(node, t["vmid"], SNAP_READY,
+                take_snapshot(t.get("node") or node, t["vmid"], SNAP_READY,
                               description="tezcatlipoca: as delivered (rebuilt by redeploy)")
         else:
             print(f"  tz-ready NOT re-taken — domain configuration could not run (see above).")
@@ -581,7 +592,9 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
                         admin_password=state["admin_password"],
                         postgres_password=state["postgres_password"],
                         redis_password=state["redis_password"],
-                        box_creds=state.get("box_creds") or {})
+                        box_creds=state.get("box_creds") or {},
+                        extra_credlists=({"domain": state["domain_creds"]}
+                                         if state.get("domain_creds") else None))
         ensure_nat_forwarding(ctx)
 
     # The scoring DB is empty now, so phase 7's per-step done-flags are stale: without
@@ -693,6 +706,13 @@ def main():
     boxes = json.loads(boxes_path.read_text())
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
 
+    # Multi-node: the placement record is authoritative — env -> engine host and
+    # node routes registered before anything node-scoped (snapshots, clones).
+    from nodes_ops import activate_placement, read_placement
+    placement = read_placement(comp_dir)
+    if placement:
+        activate_placement(placement)
+
     if args.mode == "engine-recovery":
         engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=args.yes)
         return
@@ -711,7 +731,7 @@ def main():
     print(f"  Mode: {args.mode}")
     print(f"  {len(targets)} of {len(teams) * len(boxes)} box(es) selected:\n")
     for t in targets:
-        snaps = list_snapshots(node, t["vmid"])
+        snaps = list_snapshots(t.get("node") or node, t["vmid"])
         have = ", ".join(sorted(snaps)) if snaps else "none"
         print(f"    {describe_target(t)}  [snapshots: {have}]")
     print()
@@ -722,7 +742,7 @@ def main():
 
     needed = {"rollback-ready": SNAP_READY, "rollback-base": SNAP_BASE}.get(args.mode)
     if needed:
-        missing = [t for t in targets if needed not in list_snapshots(node, t["vmid"])]
+        missing = [t for t in targets if needed not in list_snapshots(t.get("node") or node, t["vmid"])]
         if missing:
             print(f"  ERROR: {len(missing)} selected box(es) have no '{needed}' snapshot:")
             for t in missing:

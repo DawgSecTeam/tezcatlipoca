@@ -1,0 +1,213 @@
+# Packet profile — 2026 MACCDC Qualifier (rehearsal shape)
+#
+# Encoded from "2026 Mid-Atlantic Collegiate Cyber Defense Competition Qualifier —
+# Team Packet" (National CyberWatch Center). This is a REHEARSAL profile: the real
+# qualifier runs on NETLAB+ VE with Palo Alto + Cisco FTD + VyOS and a NISE inject
+# portal, none of which this pipeline can express. Every substitution is recorded in
+# the compiled packet-fidelity.md — use it to drill the shape (dual-firewall-era
+# service lineup, drop-flag flow, HTTP/SMTP/mail checks), not to claim parity.
+
+packet:
+  source: "2026 MACCDC Qualifier Team Packet (National CyberWatch Center)"
+
+event:
+  comp_id: maccdc-q-2026
+  name: MACCDC Qualifier Rehearsal
+  scenario: >-
+    IT service company takes administration of an IT infrastructure: keep services
+    operational and prevent unauthorized access while responding to business tasks
+    (MACCDC qualifier rehearsal).
+  difficulty: 5
+  teams_suggested: 2
+  team_identifiers: [130, 131]
+
+domain:
+  # The qualifier packet never publishes a domain name; the pipeline default keeps
+  # the rehearsal self-contained.
+  name_template: "team{team}.local"
+
+credentials:
+  note: >-
+    One box_password serves every box (packet's per-OS split — sysadmin/changeme on
+    Linux vs administrator/Password123 on Windows — is not expressible, so the
+    Windows value wins). Domain Administrator carries Password123 natively.
+  box_username: sysadmin
+  box_password: "Password123"
+  credlists:
+    linux:
+      sysadmin: "Password123"
+
+boxes:
+  - name: fw01
+    packet_os: "Palo Alto 11.0.2 + Cisco FTD 7.2.9 + VyOS 1.4.3 perimeter"
+    template: pfsense
+    unmanaged: true
+    last_octet: 1
+    cpu: 1
+    memory_mb: 2048
+    fidelity: unsupported
+    note: >-
+      PA/FTD/VyOS templates do not exist here; a single in-path pfSense (manual
+      runbook) stands in for the whole perimeter. Real qualifier = 3 managed network
+      devices + no team access to the L2 switch.
+  - name: ad01
+    packet_os: "Server 2019 Std — AD/DNS"
+    template: base-windows-server
+    last_octet: 2
+    cpu: 2
+    memory_mb: 4096
+    disk_gb: 60
+    disk_iface: sata0
+    domain_role: dc
+    fidelity: substituted
+    note: "2022-eval lineage template"
+  - name: web01
+    packet_os: "Server 2019 Std — Web"
+    template: base-windows-server
+    last_octet: 3
+    cpu: 2
+    memory_mb: 4096
+    disk_gb: 60
+    disk_iface: sata0
+    domain_role: member
+    fidelity: substituted
+    note: "IIS web server; 'public' IP pool/NAT (172.25.2x.x) not expressible — scored in-subnet"
+  - name: ftp01
+    packet_os: "Server 2022 Std — FTP"
+    template: base-windows-server
+    last_octet: 4
+    cpu: 2
+    memory_mb: 4096
+    disk_gb: 60
+    disk_iface: sata0
+    domain_role: member
+    fidelity: substituted
+    note: "IIS FTP on the 2022-eval lineage"
+  - name: ecom01
+    packet_os: "Ubuntu Ecom Server 24.04.3"
+    template: base-ubuntu24.04-fix
+    last_octet: 5
+    cpu: 1
+    memory_mb: 2048
+    disk_gb: 15
+    fidelity: exact
+  - name: mail01
+    packet_os: "Fedora Webmail 42"
+    template: base-fedora44-fix
+    last_octet: 6
+    cpu: 1
+    memory_mb: 2048
+    disk_gb: 15
+    fidelity: substituted
+    note: "Fedora 44; postfix+dovecot stand in for the packet's SMTP+POP3 webmail"
+  - name: splunk01
+    packet_os: "Splunk 10.0.2 on Oracle Linux 9.2"
+    template: base-ubuntu24.04-fix
+    last_octet: 7
+    cpu: 2
+    memory_mb: 4096
+    disk_gb: 20
+    fidelity: substituted
+    note: "no Oracle Linux template; Splunk itself is the catalog config (slow install)"
+  - name: wks01
+    packet_os: "Ubuntu Wks Desktop 24.04 (+ Windows 11 wks)"
+    template: base-ubuntu24.04-fix
+    last_octet: 8
+    cpu: 1
+    memory_mb: 2048
+    disk_gb: 15
+    fidelity: substituted
+    note: >-
+      packet carries 2 workstations (Ubuntu + Win11); one Linux workstation stands in
+      (no Win11 template). 11-VM pod collapses to 8 boxes — MAX_BOXES_PER_TEAM is 10.
+
+services:
+  # Packet "Functional Services": HTTP/HTTPS content-matched, SMTP, POP3, DNS lookups;
+  # precise scored set is "delineated via the ISE/Team Portal" (never published).
+  - box: ecom01
+    name: "Ecommerce web page"
+    port: 80
+    pin: apache
+    display: http
+    fidelity: exact
+  - box: ecom01
+    name: "Ecommerce database"
+    port: 3306
+    pin: mysql
+    display: sql
+    fidelity: substituted
+    note: "MariaDB behind the ecom page (packet doesn't publish its scored set)"
+  - box: web01
+    name: "Web server (IIS)"
+    port: 80
+    pin: IIS HTTP
+    display: http
+    fidelity: exact
+  - box: ftp01
+    name: "FTP server"
+    port: 21
+    pin: IIS FTP
+    display: ftp
+    fidelity: exact
+  - box: mail01
+    name: "SMTP mail"
+    port: 25
+    pin: postfix
+    display: smtp
+    fidelity: exact
+  - box: mail01
+    name: "Mail retrieval"
+    port: 143
+    pin: dovecot
+    display: imap
+    fidelity: unsupported
+    note: "packet scores POP3 (110); the engine has no POP3 check — IMAP 143 is the closest cred-carrying mail check"
+  - box: ad01
+    name: "DNS"
+    port: 53
+    pin: score/tcp
+    display: dns
+    fidelity: substituted
+    note: "native AD DNS, port-open check (packet scores real DNS lookups)"
+  - box: ad01
+    name: "LDAP/AD"
+    port: 389
+    pin: ADDS
+    display: ldap
+    fidelity: substituted
+    note: "packet doesn't publish AD scoring; kept for AD realism"
+  - box: splunk01
+    name: "Splunk web"
+    port: 8000
+    pin: splunk
+    display: splunk
+    fidelity: substituted
+    note: "Splunk :8000 web check; slow install budgeted by nakon"
+
+schedule:
+  # Packet schedule (Jan 17, 2026, EST; NISE itself is CST — a rehearsal just uses T0)
+  - {label: welcome-inject, at_min: null, note: "08:00 welcome inject + survey part 1 (pre-T0)"}
+  - {label: start,          at_min: 0,    note: "09:00 drop flag — stadium access + active scoring"}
+  - {label: end,            at_min: 420,  note: "16:00 active scoring ends (~16:30 debrief)"}
+
+scoring:
+  weights: {uptime: "35-50", injects: "35-50", red: "10-20"}
+
+injects:
+  - slug: 01-welcome
+    title: "Welcome — confirm stadium access"
+    open_offset_min: 0
+    due_offset_min: 20
+    close_offset_min: 40
+    briefing: |
+      Respond to confirm your team can reach the competition environment and is ready
+      to compete (the NISE "Welcome" inject pattern). Include your team name.
+  - slug: 02-closing-survey
+    title: "Closing survey (part 2)"
+    open_offset_min: 360
+    due_offset_min: 400
+    close_offset_min: 420
+    briefing: |
+      The qualifier administers a performance survey in two parts; this is the closing
+      installment. Summarize: what your team defended well, what fell, and what you
+      would do differently in the first hour.

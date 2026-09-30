@@ -7,6 +7,10 @@ import requests
 
 from constants import PIN_CHECK_OVERRIDES
 
+# The event.conf box slices Quotient understands — also the valid `check` values for
+# score-only pins (upstream has only these; docs/internals.md).
+_CHECK_SLICES = frozenset({"Web", "Dns", "Ssh", "Ftp", "Smtp", "Imap", "Sql", "Tcp"})
+
 _SERVICE_TO_CHECK = {
     "apache":    ("Web",  {"Display": "http",      "Port": 80,   "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
     "nginx":     ("Web",  {"Display": "http",      "Port": 80,   "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
@@ -36,10 +40,16 @@ _SERVICE_TO_CHECK = {
     "New SMB Share":  ("Tcp", {"Display": "smb",   "Port": 445}),
     "RDP misconfigs": ("Tcp", {"Display": "rdp",   "Port": 3389}),
     "IIS HTTP":       ("Web", {"Display": "iis",   "Port": 80, "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
+    "IIS FTP":        ("Ftp", {"Display": "ftp",   "Port": 21,  "CredLists": ["linux.credlist"]}),
 
     # Scored but not nakon-planted: domain_ops owns ADDS/Domain Join (phase 6 injects
     # them with per-team vars); generate_nakon_config strips them from machine lists.
     "ADDS":           ("Tcp", {"Display": "ldap",  "Port": 389}),
+
+    # Score-only pins ({"name": "score/tcp", "score_only": true, "display": ..., "port":
+    # ...}) never appear here — _resolve_pin builds their check directly. They score a
+    # NATIVE service the catalog can't plant (AD's own DNS on 53, the AD SYSVOL share on
+    # 445): no nakon plant, no catalog-check entry, a real scored check.
 }
 
 
@@ -47,9 +57,26 @@ def _resolve_pin(pin):
     """(svc_name, check_key, check_cfg) for one box_services.json pin.
 
     Pins are a bare catalog name or {"name": ..., "vars": {...}} plus optional scoring
-    overrides (PIN_CHECK_OVERRIDES). Unknown service names return check_key=None (the
-    caller warns). check_cfg is a fresh dict whenever overrides apply."""
+    overrides (PIN_CHECK_OVERRIDES); score-only pins ({"score_only": true, "check":
+    "Tcp", "display": ..., "port": ...}) carry no plant at all. Unknown service names
+    return check_key=None (the caller warns). check_cfg is a fresh dict whenever
+    overrides apply."""
     svc_name = pin if isinstance(pin, str) else pin.get("name")
+    if isinstance(pin, dict) and pin.get("plant_only"):
+        # Mirror of score_only: the pin rides the machine list (a real plant) but
+        # emits no scored check — the service is scored by a separate score-only pin
+        # (e.g. IIS FTP plants the site, score/tcp:21 scores the port).
+        return svc_name, None, None
+    if isinstance(pin, dict) and pin.get("score_only"):
+        check_key = pin.get("check") or "Tcp"
+        if check_key not in _CHECK_SLICES:
+            raise SystemExit(
+                f"[event.conf] score-only pin {pin!r}: check must be one of "
+                f"{sorted(_CHECK_SLICES)}")
+        if not pin.get("port"):
+            raise SystemExit(f"[event.conf] score-only pin {pin!r} must set a port")
+        return svc_name, check_key, {"Display": pin.get("display") or "score",
+                                     "Port": pin["port"]}
     check_key, base_cfg = _SERVICE_TO_CHECK.get(svc_name, (None, None))
     if check_key is None:
         return svc_name, None, None
@@ -69,7 +96,14 @@ def _resolve_pin(pin):
             if "status" in pin:
                 url["Status"] = pin["status"]
             cfg["Url"] = [url]
-        unknown = set(pin) - {"name", "vars", *PIN_CHECK_OVERRIDES}
+        if "credlist" in pin:
+            if not cfg.get("CredLists"):
+                raise SystemExit(
+                    f"[event.conf] pin {pin!r} sets credlist but '{svc_name}' checks don't "
+                    "authenticate — drop the override")
+            cfg["CredLists"] = [f"{pin['credlist']}.credlist"]
+        unknown = set(pin) - {"name", "vars", "score_only", "plant_only", "check",
+                              *PIN_CHECK_OVERRIDES}
         if unknown:
             print(f"[event.conf] WARNING: ignoring unknown key(s) {sorted(unknown)} in pin "
                   f"{pin!r} — did you mean one of {PIN_CHECK_OVERRIDES}?")
@@ -120,7 +154,7 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
     if ctx.get("inject_password"):
         conf["inject"] = [{"name": "inject", "pw": ctx["inject_password"]}]
 
-    needs_linux_credlist = False
+    referenced_credlists = set()
 
     for box in boxes:
         box_entry = {
@@ -132,7 +166,8 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
         for pin in box_services.get(box["name"], []):
             svc_name, check_key, check_cfg = _resolve_pin(pin)
             if check_key is None:
-                print(f"[event.conf] WARNING: no Quotient check type for '{svc_name}' on box '{box['name']}' — skipping")
+                if not (isinstance(pin, dict) and pin.get("plant_only")):
+                    print(f"[event.conf] WARNING: no Quotient check type for '{svc_name}' on box '{box['name']}' — skipping")
                 continue
             display = check_cfg["Display"]
             if display in seen_displays:
@@ -144,13 +179,17 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
             seen_displays.add(display)
             box_entry.setdefault(check_key, []).append(check_cfg)
             if check_cfg.get("CredLists"):
-                needs_linux_credlist = True
+                referenced_credlists.update(check_cfg["CredLists"])
 
         conf["box"].append(box_entry)
 
-    if needs_linux_credlist:
+    if referenced_credlists:
+        # Every credlist a check names must be declared AND pushed (push_event_conf
+        # writes the matching file). Historically that was always linux.credlist;
+        # packet dual-credit adds e.g. domain.credlist twins.
         conf["CredlistSettings"] = {
-            "Credlist": [{"CredlistName": "linux.credlist", "CredlistPath": "linux.credlist"}]
+            "Credlist": [{"CredlistName": name, "CredlistPath": name}
+                         for name in sorted(referenced_credlists)]
         }
 
     return conf

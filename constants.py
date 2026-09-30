@@ -28,7 +28,9 @@ SLOW_SERVICES = ("splunk", "roundcube")
 # service's base check config (event.conf); nakon_ops.py strips them from machine lists,
 # so nakon plants the catalog config once while the SCORED CHECK differs. Quotient
 # requires unique <box>-<Display> check names — display is how same-TYPE pins coexist.
-PIN_CHECK_OVERRIDES = ("display", "port", "path", "scheme", "status")
+# "credlist" swaps which credlist file the check authenticates with (packet dual-credit:
+# a domain-account twin check scores the domain dimension of a service).
+PIN_CHECK_OVERRIDES = ("display", "port", "path", "scheme", "status", "credlist")
 
 DISRUPTIVE_CONFIGS = {"resolv-conf-null-dns", "apt-sources-empty", "apt-hold-all-packages", "dpkg-broken-hold-state"}
 

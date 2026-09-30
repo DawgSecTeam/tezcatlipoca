@@ -12,6 +12,8 @@ nakon SSHes into each box to install services and deploy misconfigs.
 |---|---|
 | [docs/usage-people.md](docs/usage-people.md) | Interactive setup + operation: prerequisites, templates, `.env`, running, teardown, recovery, troubleshooting |
 | [docs/usage-agents.md](docs/usage-agents.md) | Non-interactive/agent operation: CLI flags, pre-authored configs, verify/redeploy/destroy |
+| [docs/multi-node.md](docs/multi-node.md) | One competition across multiple Proxmox hosts: `nodes.json`, capacity-fill placement, the satellite jump router, slot vmid scheme, `sync-template.py` |
+| [docs/packet-profiles.md](docs/packet-profiles.md) | Competition packets → ranges: profile schema, `compile-packet.py`, score-only pins, packet credentials, `--packet` verify gates, `run-schedule.py` |
 | [docs/architecture.md](docs/architecture.md) | Architecture: phases, component map, data flow, isolation, invariants, timeout rationale |
 | [docs/internals.md](docs/internals.md) | Per-module design notes — the "why" behind functions, parameters, and orderings |
 | [docs/known-issues.md](docs/known-issues.md) | Incident log, known-broken templates, failure modes, standing limitations |
