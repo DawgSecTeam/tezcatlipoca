@@ -2,8 +2,10 @@
 
 import json
 import os
+import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import urllib3
@@ -21,6 +23,11 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 ENV_PATH = Path(".env")
 load_dotenv(ENV_PATH)
+
+# Concurrent stop/delete worker count for teardown sweeps. Deletes are
+# metadata-light on ZFS (the documented datastore-saturation hazard belongs to
+# bulk clone writes, not deletes); 4 keeps even a shared node comfortable.
+TEARDOWN_WORKERS = 4
 
 
 def load_destroyable_competitions():
@@ -65,20 +72,21 @@ def destroy_cloned_vms(cloned_vms_path, default_node):
                       f"checks: {e}")
                 live_by_node[n] = None
 
-    print(f"  Destroying {len(cloned_vms)} cloned VM(s) before terraform destroy...")
-    for vm_key, entry in cloned_vms.items():
+    print(f"  Destroying {len(cloned_vms)} cloned VM(s) before terraform destroy "
+          f"({TEARDOWN_WORKERS} workers)...")
+
+    def _destroy_clone(item):
+        vm_key, entry = item
         vmid = entry["vmid"] if isinstance(entry, dict) else entry
         node = _entry_node(entry, default_node)
         live = live_by_node.get(node)
         if live is not None:
             name = live.get(int(vmid))
             if name is None:
-                print(f"    Skipping {vm_key} (vmid {vmid}) — VM does not exist on {node}")
-                continue
+                return f"    Skipping {vm_key} (vmid {vmid}) — VM does not exist on {node}"
             if name != vm_key:
-                print(f"    Skipping {vm_key} (vmid {vmid}) — VM exists as '{name}', which "
-                      f"doesn't match this competition's clone name")
-                continue
+                return (f"    Skipping {vm_key} (vmid {vmid}) — VM exists as '{name}', which "
+                        f"doesn't match this competition's clone name")
         try:
             upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
             wait_for_proxmox_task(node, upid)
@@ -88,9 +96,13 @@ def destroy_cloned_vms(cloned_vms_path, default_node):
             upid = proxmox_api("DELETE", f"/nodes/{node}/qemu/{vmid}",
                                params={"purge": 1})["data"]
             wait_for_proxmox_task(node, upid)
-            print(f"    Deleted {vm_key} (vmid {vmid})")
+            return f"    Deleted {vm_key} (vmid {vmid})"
         except Exception as e:
-            print(f"    WARNING: could not delete {vm_key} (vmid {vmid}): {e}")
+            return f"    WARNING: could not delete {vm_key} (vmid {vmid}): {e}"
+
+    with ThreadPoolExecutor(max_workers=TEARDOWN_WORKERS) as pool:
+        for line in pool.map(_destroy_clone, cloned_vms.items()):
+            print(line, flush=True)
 
 
 def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None):
@@ -119,22 +131,121 @@ def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None):
                 live_by_node[node] = {}
         return live_by_node[node]
 
+    targets = []
     for team_key, team in teams.items():
         node = (team_nodes or {}).get(team_key, default_node)
         live = _live(node)
         for box in windows:
             vm_name = f"{team['identifier']}-{box}"
             vmid = live.get(vm_name)
-            if vmid is None:
-                continue
-            try:
-                upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
-                wait_for_proxmox_task(node, upid)
-                print(f"  Pre-stopped {vm_name} (vmid {vmid}) — graceful-shutdown hang avoided")
-            except Exception as e:
-                print(f"  WARNING: pre-stop of {vm_name} failed ({e}). If terraform "
-                      f"destroy hangs on it: kill -9 $(cat /var/run/qemu-server/"
-                      f"{vmid}.pid) on the node, then re-run.")
+            if vmid is not None:
+                targets.append((vm_name, vmid, node))
+
+    def _hard_stop(item):
+        vm_name, vmid, node = item
+        try:
+            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
+            wait_for_proxmox_task(node, upid)
+            return f"  Pre-stopped {vm_name} (vmid {vmid}) — graceful-shutdown hang avoided"
+        except Exception as e:
+            return (f"  WARNING: pre-stop of {vm_name} failed ({e}). If terraform "
+                    f"destroy hangs on it: kill -9 $(cat /var/run/qemu-server/"
+                    f"{vmid}.pid) on the node, then re-run.")
+
+    # status/stop is the hard API stop (no guest agent involved) — a VM we are
+    # about to destroy gets no graceful shutdown.
+    with ThreadPoolExecutor(max_workers=TEARDOWN_WORKERS) as pool:
+        for line in pool.map(_hard_stop, targets):
+            print(line, flush=True)
+
+
+def clear_stale_state_lock(tf_cwd):
+    """A SIGKILLed deploy/destroy leaves .terraform.tfstate.lock.info behind; every
+    later destroy then dies on 'Error acquiring the state lock'. The lock is only
+    real while a terraform process is alive — with none running, remove it.
+    Returns True when a stale lock was cleared."""
+    lock_file = Path(tf_cwd) / ".terraform.tfstate.lock.info"
+    if not lock_file.exists():
+        return False
+    running = subprocess.run(["pgrep", "-x", "terraform"], capture_output=True)
+    if running.returncode == 0:
+        print("  state lock present AND a terraform process is alive — not touching "
+              "it; settle that process first")
+        return False
+    lock_file.unlink()
+    print("  removed stale terraform state lock (no terraform process running)")
+    return True
+
+
+def sweep_tagged_leftovers(nodes, competition):
+    """Completeness pass for a failed/interrupted teardown: destroy every VM still
+    carrying this competition's FULL tag set (`tezcatlipoca` AND `comp-<name>`) —
+    e.g. clones a killed deploy left out of terraform state. Foreign VMs are never
+    candidates: partial tag overlap does not count (loadtest-2026-09-30). Multi-node:
+    every host in `nodes` is swept."""
+    comp_tags = {"tezcatlipoca", f"comp-{competition}"}
+    ours = []
+    for node in nodes:
+        try:
+            vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
+        except Exception as e:
+            print(f"  WARNING: leftover sweep skipped on {node} — listing failed: {e}")
+            continue
+        ours += [dict(v, _node=node) for v in vms
+                 if comp_tags <= {t.strip() for t in str(v.get("tags") or "")
+                                  .replace(";", ",").split(",") if t.strip()}]
+    if not ours:
+        return
+    print(f"  Leftover sweep: {len(ours)} VM(s) still tagged comp-{competition} — "
+          f"destroying ({TEARDOWN_WORKERS} workers)...")
+
+    def _kill(v):
+        vmid, node = v["vmid"], v["_node"]
+        try:
+            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
+            wait_for_proxmox_task(node, upid)
+        except Exception:
+            pass
+        try:
+            upid = proxmox_api("DELETE", f"/nodes/{node}/qemu/{vmid}",
+                               params={"purge": 1})["data"]
+            wait_for_proxmox_task(node, upid)
+            return f"    swept {v.get('name')} (vmid {vmid}) on {node}"
+        except Exception as e:
+            return f"    WARNING: sweep could not delete vmid {vmid}: {e}"
+
+    with ThreadPoolExecutor(max_workers=TEARDOWN_WORKERS) as pool:
+        for line in pool.map(_kill, ours):
+            print(line, flush=True)
+
+
+def report_remaining(nodes, competition, teams):
+    """Final accounting after every recovery attempt failed: exactly what is still
+    standing (per node), so a human decides — nothing is force-deleted here."""
+    comp_tag = f"comp-{competition}"
+    left_total = 0
+    for node in nodes:
+        try:
+            vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
+            left = [v for v in vms if comp_tag in str(v.get("tags") or "")]
+            for v in left:
+                print(f"    still standing on {node}: {v.get('name')} (vmid {v['vmid']})")
+            left_total += len(left)
+            if not left:
+                print(f"    no competition-tagged VMs remain on {node}")
+        except Exception as e:
+            print(f"    WARNING: could not list remaining VMs on {node}: {e}")
+        try:
+            idents = {str(t["identifier"]) for t in teams.values()}
+            nets = proxmox_api("GET", f"/nodes/{node}/network")["data"]
+            bridges = [n["iface"] for n in nets
+                       if n.get("type") == "bridge"
+                       and n["iface"] in {f"vmbr{i}" for i in idents}]
+            for b in bridges:
+                print(f"    bridge still present on {node}: {b} (terraform state "
+                      f"should own it — resolve the state, then re-run)")
+        except Exception as e:
+            print(f"    WARNING: could not list bridges on {node}: {e}")
 
 
 def main():
@@ -194,6 +305,11 @@ def main():
     # engine's host and register the node routes before anything node-scoped runs.
     placement = read_placement(comp_dir)
     team_nodes = {}
+    default_node = os.environ.get("TF_VAR_proxmox_node", "pve")
+    placement_nodes = [default_node]
+    if placement:
+        placement_nodes = [placement["engine_node"]] + [
+            record_of(placement, s["name"]).node for s in placement["satellites"]]
     if placement:
         activate_placement(placement)
         team_nodes = placement["team_nodes"]
@@ -237,7 +353,7 @@ def main():
                 f"loaded env targets {current}. Point TF_VAR_* at the deployment's host "
                 f"(same overrides create-competition ran with) and re-run.")
     print()
-    print("  This will run: terraform destroy -parallelism=1 -auto-approve")
+    print("  This will run: terraform destroy -parallelism=4 -auto-approve")
     if args.full:
         print("  Then the golden templates and the engine template are destroyed "
               "(clones first — their base disks depend on them).")
@@ -261,9 +377,8 @@ def main():
 
     cloned_vms_path = comp_dir / "cloned_vms.json"
     if cloned_vms_path.exists():
-        destroy_cloned_vms(cloned_vms_path, os.environ.get("TF_VAR_proxmox_node", "pve"))
-    pre_stop_windows_boxes(teams, boxes, os.environ.get("TF_VAR_proxmox_node", "pve"),
-                           team_nodes=team_nodes)
+        destroy_cloned_vms(cloned_vms_path, default_node)
+    pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=team_nodes)
 
     # Destroy from this competition's own per-comp state dir when it exists (multi-tenant
     # deploys), so we tear down only this comp's engine/boxes/bridges; fall back to the
@@ -272,24 +387,31 @@ def main():
     tf_cwd = str(per_comp_tf) if (per_comp_tf / "terraform.tfstate").exists() else "terraform"
 
     print(f"\nRunning terraform destroy for '{name}' (state: {tf_cwd})...")
-    # One destroy pass can die halfway when resources were deleted out-of-band
-    # (manually removed -fix templates/VMs, scrim-dress-2026-09-20 teardown):
-    # every pass still makes progress on the remaining resources, so retry
-    # once before giving up with the range half-torn-down.
-    for attempt in (1, 2):
+    # Teardown is resumable: every pass makes progress, and each failure gets
+    # (a) stale state-lock recovery (a SIGKILLed deploy leaves the lock behind),
+    # (b) a tag-scoped sweep of clones a killed deploy left out of terraform state,
+    # then a retry — until terraform completes or nothing of ours is left standing.
+    node = os.environ.get("TF_VAR_proxmox_node", "pve")
+    destroyed = False
+    for attempt in (1, 2, 3, 4):
+        if attempt > 1:
+            clear_stale_state_lock(tf_cwd)
+            sweep_tagged_leftovers(placement_nodes, competition)
         proc = run_terraform(
-            ["destroy", "-parallelism=1", "-auto-approve"],
+            ["destroy", "-parallelism=4", "-auto-approve"],
             cwd=tf_cwd,
             env=env,
             check=False,
         )
         if proc.returncode == 0:
+            destroyed = True
             break
-        if attempt == 1:
-            print("  terraform destroy failed — retrying once (partial progress is kept)...")
-    else:
-        sys.exit(f"ERROR: terraform destroy failed twice (rc={proc.returncode}); "
-                 "inspect `terraform state list` under terraform/ and tear down the rest by hand.")
+        print(f"  terraform destroy failed (attempt {attempt}/4, partial progress kept)...")
+    if not destroyed:
+        report_remaining(placement_nodes, competition, teams)
+        sys.exit("ERROR: terraform destroy did not complete after recovery attempts — "
+                 "resolve what is listed above, then re-run this command (it is safe "
+                 "to re-run: teardown is idempotent).")
 
     # Archive the clone map on success: a surviving cloned_vms.json next to a
     # destroyed range is a loaded gun for the vmid-collision guard above.

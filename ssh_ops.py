@@ -91,17 +91,23 @@ def read_terraform_ctx(comp_dir=None):
 
 def ssh_via_gateway(ctx, target_ip, cmd, timeout=60, user="ubuntu"):
     """SSH to a target box through the engine gateway (ProxyCommand -W)."""
-    return subprocess.run(
-        [
-            "ssh", "-i", ctx["ssh_key_path"],
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=10",
-            "-o", f"ProxyCommand={gateway_proxy(ctx)}",
-            f"{user}@{target_ip}", cmd,
-        ],
-        capture_output=True, text=True, timeout=timeout,
-    )
+    args = [
+        "ssh", "-i", ctx["ssh_key_path"],
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=10",
+        "-o", f"ProxyCommand={gateway_proxy(ctx)}",
+        f"{user}@{target_ip}", cmd,
+    ]
+    r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    if r.returncode == 255 and "REMOTE HOST IDENTIFICATION HAS CHANGED" in (r.stderr or ""):
+        # Live-found 2026-09-29 (cyberrange loadtest): a re-cloned engine served a new
+        # host key on a re-run while the TOFU pin survived, hard-failing every proxied
+        # call. Re-pin once and retry — the box hop inside the tunnel is unverified
+        # anyway, so the pin guards a lab-internal hop, not an internet path.
+        forget_engine_host_key(ctx["scoring_engine_ip"])
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    return r
 
 
 def ssh_on_gateway(ctx, cmd, timeout=30):

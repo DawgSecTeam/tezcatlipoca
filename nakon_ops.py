@@ -625,43 +625,54 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
                 "refusing to start a plant that would die mid-way.")
         failed_steps = []
         machines_json = None
-        proc = subprocess.Popen(ssh_base + [deploy_cmd], stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, bufsize=1)
+        # Long plants (minutes, over the operator's LAN) sometimes lose the outer
+        # ssh session outright — rc=255 with no FAILED step is a transport death,
+        # not a plant verdict. Re-run the bundle: steps are idempotent re-plants.
+        for attempt in range(1, 4):
+            proc = subprocess.Popen(ssh_base + [deploy_cmd], stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, bufsize=1)
 
-        def _pump():
-            nonlocal machines_json
-            for line in proc.stdout:
-                print(line, end="")
-                if "FAILED" in line:
-                    failed_steps.append(line.strip())
-                # nakon deploy --json prints the structured outcomes as the final
-                # line: one JSON object with a "machines" key. Older nakon versions
-                # (or a failed bootstrap) simply never emit it — coverage then falls
-                # back to the failed-lines tally only.
-                stripped = line.strip()
-                if stripped.startswith("{") and '"machines"' in stripped:
-                    try:
-                        parsed = json.loads(stripped)
-                        if isinstance(parsed.get("machines"), list):
-                            machines_json = parsed["machines"]
-                    except ValueError:
-                        pass
+            def _pump():
+                nonlocal machines_json
+                for line in proc.stdout:
+                    print(line, end="")
+                    if "FAILED" in line:
+                        failed_steps.append(line.strip())
+                    # nakon deploy --json prints the structured outcomes as the final
+                    # line: one JSON object with a "machines" key. Older nakon versions
+                    # (or a failed bootstrap) simply never emit it — coverage then falls
+                    # back to the failed-lines tally only.
+                    stripped = line.strip()
+                    if stripped.startswith("{") and '"machines"' in stripped:
+                        try:
+                            parsed = json.loads(stripped)
+                            if isinstance(parsed.get("machines"), list):
+                                machines_json = parsed["machines"]
+                        except ValueError:
+                            pass
 
-        pump = threading.Thread(target=_pump, daemon=True)
-        pump.start()
-        try:
-            proc.wait(timeout=timeout)
-        finally:
-            pump.join(timeout=5)
+            pump = threading.Thread(target=_pump, daemon=True)
+            pump.start()
+            try:
+                proc.wait(timeout=timeout)
+            finally:
+                pump.join(timeout=5)
+            if proc.returncode == 0:
+                return NakonResult(failed_steps, machines_json)
+            if failed_steps or attempt == 3:
+                break
+            print(f"\n  nakon ssh session died (rc=255, no FAILED steps) — "
+                  f"retry {attempt}/3 in 20s...")
+            failed_steps = []
+            machines_json = None
+            time.sleep(20)
         if failed_steps:
             print(f"\n  Nakon plant FAILED steps: {len(failed_steps)}")
             for line in failed_steps[:10]:
                 print(f"    {line[:180]}")
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"nakon deploy failed rc={proc.returncode}"
-                + (f" ({len(failed_steps)} FAILED steps above)" if failed_steps else ""))
-        return NakonResult(failed_steps, machines_json)
+        raise RuntimeError(
+            f"nakon deploy failed rc={proc.returncode}"
+            + (f" ({len(failed_steps)} FAILED steps above)" if failed_steps else ""))
     except subprocess.TimeoutExpired:
         try:
             # Scoped to THIS run's staging path: the remote cmdline carries

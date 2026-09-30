@@ -173,23 +173,28 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
         wait_for_guest_agent(node, t["vmid"], timeout=120)
         for attempt in range(1, 6):
             try:
-                subprocess.run(
+                r = subprocess.run(
                     ["ssh", "-i", key,
                      "-o", "StrictHostKeyChecking=no",
                      "-o", "UserKnownHostsFile=/dev/null",
                      "-o", "ConnectTimeout=10",
                      "-o", f"ProxyCommand={proxy}",
                      f"{box_username}@{ip}", remote_cmd],
-                    check=True, timeout=240,
+                    capture_output=True, text=True, timeout=240,
                 )
-                with PRINT_LOCK:
-                    print(f"    apt prepped on {ip}")
-                return True
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                if attempt < 5:
+                if r.returncode == 0:
                     with PRINT_LOCK:
-                        print(f"    apt prep attempt {attempt}/5 failed for {ip}, retrying in 15s...")
-                    time.sleep(15)
+                        print(f"    apt prepped on {ip}")
+                    return True
+                err = r.stderr or ""
+                if "Permission denied" in err or "Host key verification failed" in err:
+                    break  # definitive rejection: retries can't help — go to the agent
+            except subprocess.TimeoutExpired:
+                pass  # box still booting — retry
+            if attempt < 5:
+                with PRINT_LOCK:
+                    print(f"    apt prep attempt {attempt}/5 failed for {ip}, retrying in 15s...")
+                time.sleep(15)
         try:
             rc, _out, err = guest_agent_exec_root(node, t["vmid"], script, timeout=240)
             if rc == 0:
@@ -220,7 +225,7 @@ def fix_dns_on_boxes(targets, ctx):
         ip = t["ip"]
         for attempt in range(1, 9):
             try:
-                subprocess.run(
+                r = subprocess.run(
                     [
                         "ssh", "-i", key,
                         "-o", "StrictHostKeyChecking=no",
@@ -229,32 +234,35 @@ def fix_dns_on_boxes(targets, ctx):
                         "-o", f"ProxyCommand={proxy}",
                         f"{box_username}@{ip}", DNS_FIX_CMD,
                     ],
-                    check=True, timeout=40,
+                    capture_output=True, text=True, timeout=40,
                 )
-                with PRINT_LOCK:
-                    print(f"    DNS fixed on {ip}")
-                return True
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                if attempt < 8:
+                if r.returncode == 0:
                     with PRINT_LOCK:
-                        print(f"    DNS fix attempt {attempt}/8 failed for {ip}, retrying in 15s...")
-                    time.sleep(15)
-                else:
-                    try:
-                        rc, _out, err = guest_agent_exec_root(
-                            node, t["vmid"], DNS_FIX_CMD_ROOT, timeout=40)
-                        if rc == 0:
-                            with PRINT_LOCK:
-                                print(f"    DNS fixed on {ip} (via guest agent)")
-                            return True
-                        raise RuntimeError(f"rc={rc}: {(err or '').strip()[:120]}")
-                    except Exception as agent_exc:
-                        with PRINT_LOCK:
-                            print(f"  WARNING: DNS fix failed for {ip} after 8 attempts "
-                                  f"and guest-agent fallback ({agent_exc}) — proceeding anyway")
-                            print(diagnose_unreachable_box(node, t["vmid"]))
-                        return False
-        return False
+                        print(f"    DNS fixed on {ip}")
+                    return True
+                err = r.stderr or ""
+                if "Permission denied" in err or "Host key verification failed" in err:
+                    break  # definitive rejection: retries can't help — go to the agent
+            except subprocess.TimeoutExpired:
+                pass  # box still booting — retry
+            if attempt < 8:
+                with PRINT_LOCK:
+                    print(f"    DNS fix attempt {attempt}/8 failed for {ip}, retrying in 15s...")
+                time.sleep(15)
+        try:
+            rc, _out, err = guest_agent_exec_root(
+                node, t["vmid"], DNS_FIX_CMD_ROOT, timeout=40)
+            if rc == 0:
+                with PRINT_LOCK:
+                    print(f"    DNS fixed on {ip} (via guest agent)")
+                return True
+            raise RuntimeError(f"rc={rc}: {(err or '').strip()[:120]}")
+        except Exception as agent_exc:
+            with PRINT_LOCK:
+                print(f"  WARNING: DNS fix failed for {ip} after 8 attempts "
+                      f"and guest-agent fallback ({agent_exc}) — proceeding anyway")
+                print(diagnose_unreachable_box(node, t["vmid"]))
+            return False
 
     results = run_concurrent(targets, _fix)
     failed = sum(1 for r in results if r is not True)
@@ -687,9 +695,32 @@ def setup_ubuntu_auth(targets, ctx):
 
     def _auth(t):
         ip = t["ip"]
+
+        def _via_agent(reason):
+            with PRINT_LOCK:
+                print(f"    Auth setup for {ip} fell back to guest agent (root): {reason}")
+            vmid = t["vmid"]
+            root_script = re.sub(r"\bsudo ", "", auth_cmd)
+            try:
+                rc, out, err = guest_agent_exec_root(
+                    os.environ["TF_VAR_proxmox_node"], vmid, root_script, timeout=120)
+                if rc == 0:
+                    with PRINT_LOCK:
+                        print(f"    Auth configured on {ip} (via guest agent)")
+                    return True
+                raise RuntimeError(
+                    f"auth setup failed on {ip} via guest agent too: "
+                    f"rc={rc} {err.strip()[:200]}")
+            except RuntimeError:
+                raise
+            except Exception as e:
+                raise RuntimeError(
+                    f"auth setup failed on {ip}: SSH unusable ({reason}) and the "
+                    f"guest-agent fallback raised ({e})") from e
+
         for attempt in range(1, 9):
             try:
-                subprocess.run(
+                r = subprocess.run(
                     [
                         "ssh", "-i", key,
                         "-o", "StrictHostKeyChecking=no",
@@ -698,38 +729,27 @@ def setup_ubuntu_auth(targets, ctx):
                         "-o", f"ProxyCommand={proxy}",
                         f"{box_username}@{ip}", auth_cmd,
                     ],
-                    check=True, timeout=40,
+                    capture_output=True, text=True, timeout=40,
                 )
+                if r.returncode == 0:
+                    with PRINT_LOCK:
+                        print(f"    Auth configured on {ip}")
+                    return True
+                err = r.stderr or ""
+                # Definitive rejections can't heal by waiting: a rejected key/password
+                # or a dead gateway leg stays rejected on every retry. Straight to the
+                # agent fallback instead of burning 8x15s (live: cyberrange loadtest).
+                if ("Permission denied" in err or "REMOTE HOST IDENTIFICATION" in err
+                        or "Host key verification failed" in err):
+                    return _via_agent(err.strip().splitlines()[-1][:120]
+                                      if err.strip() else "rejected")
+            except subprocess.TimeoutExpired:
+                pass  # box still booting — retry
+            if attempt < 8:
                 with PRINT_LOCK:
-                    print(f"    Auth configured on {ip}")
-                return True
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                if attempt < 8:
-                    with PRINT_LOCK:
-                        print(f"    Auth attempt {attempt}/8 failed for {ip}, retrying in 15s...")
-                    time.sleep(15)
-                else:
-                    with PRINT_LOCK:
-                        print(f"    Auth setup failed for {ip} after 8 attempts — retrying via guest agent (root)...")
-                    vmid = t["vmid"]
-                    root_script = re.sub(r"\bsudo ", "", auth_cmd)
-                    try:
-                        rc, out, err = guest_agent_exec_root(
-                            os.environ["TF_VAR_proxmox_node"], vmid, root_script, timeout=120)
-                        if rc == 0:
-                            with PRINT_LOCK:
-                                print(f"    Auth configured on {ip} (via guest agent)")
-                            return True
-                        raise RuntimeError(
-                            f"auth setup failed on {ip} via guest agent too: "
-                            f"rc={rc} {err.strip()[:200]}")
-                    except RuntimeError:
-                        raise
-                    except Exception as e:
-                        raise RuntimeError(
-                            f"auth setup failed on {ip}: SSH dead after 8 attempts and the "
-                            f"guest-agent fallback raised ({e})") from e
-        return False
+                    print(f"    Auth attempt {attempt}/8 failed for {ip}, retrying in 15s...")
+                time.sleep(15)
+        return _via_agent("unreachable after 8 attempts")
 
     results = run_concurrent(targets, _auth)
     for t, r in zip(targets, results):

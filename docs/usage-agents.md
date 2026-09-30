@@ -288,6 +288,19 @@ stdin-driven prompt answers instead.
 
 ## Deploying from a worktree (svc-matrix checklist)
 
+**RULE — any practice run (capacity tests, canaries, shakedowns, any deploy whose goal is
+testing the pipeline rather than hosting an event) MUST run from a NEW worktree cut off
+main** (`git worktree add -b <branch> ../tezcatlipoca-<branch> main`), never from the main
+tree and never from another run's worktree. Practice deploys are exactly the runs that
+crash, get killed, and leave half-built state behind; isolating them keeps main's tree,
+state, and node view clean, gives the run its own branch to discard or merge, and stops two
+sessions from driving the same checkout. Teardown after a practice run is
+`destroy-competition.py` — it is resumable (stale-lock recovery, tag-scoped leftover sweep,
+foreign VMs skip-and-continue); re-run it until it exits clean. **Never substitute ad-hoc
+destroy scripts**: sweep predicates that match names or partial tags will destroy other
+sessions' infrastructure (live-found 2026-09-30 — an over-broad sweep took out two other
+comps' engines and goldens).
+
 A linked worktree has none of the gitignored local state the deploy reads, and every path
 resolves from the worktree root — run all commands from there. Pre-flight list:
 
@@ -307,6 +320,11 @@ cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxm
   set it explicitly, e.g. `TF_VAR_team_identifiers=130,131`, for predictable vmids).
 - `TF_VAR_teams` / `TF_VAR_boxes_per_team` in an old env are overridden by the comp dir at
   terraform time — stale values there are cosmetic, not fatal.
+- `TEZ_THIN_HEADROOM=<0..1>` relaxes the datastore headroom gate on thin-provisioned pools
+  (ZFS, lvmthin): the gate counts that fraction of the provisioned team-disk math, because
+  linked clones only allocate written blocks (goldens + engine are the only full copies).
+  Unset keeps the strict provisioned-bytes gate. Size the factor to the pool, not to hope:
+  0.25 has been enough for Windows-heavy comps on cyberrange `hdd`.
 - The sibling-repo tools have their own env fallback: `bad-auto/deploy` loads
   `../tezcatlipoca/.env` via `setdefault`, so export the worktree's `TF_VAR_proxmox_*` trio
   before calling it if the main tree points at a different node.

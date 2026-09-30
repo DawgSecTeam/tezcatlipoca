@@ -464,8 +464,14 @@ def _discover_vm_ipv4(node, vmid):
 
 
 def destroy_engine_template(node, engine_vmid, expect_tags=None):
-    """Remove this competition's engine template. Callers destroy its clones first."""
-    destroy_vm_if_exists(node, engine_template_vmid(engine_vmid), expect_tags=expect_tags)
+    """Remove this competition's engine template. Callers destroy its clones first.
+    A FOREIGN VM in the slot is skipped with a loud warning instead of aborting the
+    teardown — same policy as destroy_golden_set."""
+    try:
+        destroy_vm_if_exists(node, engine_template_vmid(engine_vmid), expect_tags=expect_tags)
+    except RuntimeError as e:
+        print(f"    WARNING: engine template slot is FOREIGN — skipping it and "
+              f"continuing: {e}")
 
 
 def git_commit_info():

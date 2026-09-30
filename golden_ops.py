@@ -515,7 +515,19 @@ def expand_guest_root_disks(targets, ctx):
 def destroy_golden_set(node, engine_vmid, num_box_types, expect_tags=None, slot=0):
     """Tear the golden templates down. Destroy order: AFTER the linked clones (they
     depend on the template's base disk). Slot-aware: each node's copy of the golden
-    set dies on its own host."""
+    set dies on its own host. A slot held by a FOREIGN VM (ownership guard refusal)
+    is skipped with a loud warning — one squatted vmid must not strand the rest of
+    the teardown (loadtest-2026-09-30: a satellite template squatting golden slot
+    1333 aborted the whole pass, leaving everything else half-destroyed)."""
+    skipped = []
     for box_idx in range(num_box_types):
-        destroy_vm_if_exists(node, golden_vmid_for_slot(engine_vmid, slot, box_idx),
-                             expect_tags=expect_tags)
+        try:
+            destroy_vm_if_exists(node, golden_vmid_for_slot(engine_vmid, slot, box_idx),
+                                 expect_tags=expect_tags)
+        except RuntimeError as e:
+            skipped.append(str(e))
+            print(f"    WARNING: golden slot {box_idx} is FOREIGN — skipping it and "
+                  f"continuing: {e}")
+    if skipped:
+        print(f"  {len(skipped)} golden slot(s) skipped as foreign — they belong to "
+              f"another deployment; inspect them manually.")

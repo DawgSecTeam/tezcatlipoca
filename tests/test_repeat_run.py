@@ -90,6 +90,23 @@ class RepeatRun(unittest.TestCase):
                 frozen_keep={"web01"})
         self.assertIn(golden_vmid_for(ENGINE, 1), wave2)
 
+    def test_unmanaged_box_slot_needs_no_hash_and_cleans_stale_golden(self):
+        # Unmanaged boxes (pfSense) have no golden and no hash entry; the wave-2
+        # decision must not KeyError on them and must treat a templated leftover in
+        # their slot as stale (nothing references it).
+        boxes = BOXES + [{"name": "fw01", "unmanaged": True}]
+        goldens = {golden_vmid_for(ENGINE, i) for i in range(len(boxes))}
+        fw_slot = golden_vmid_for(ENGINE, 2)
+        vms = node_after_run([101]) + [{"vmid": fw_slot, "tags": TAGS + ";template"}]
+        with contextlib.redirect_stdout(io.StringIO()):
+            _w1, wave2 = deploy.phase1_destroy_waves(
+                vms, targets([101]), {}, ENGINE, boxes, COMP_TAGS,
+                lambda vid: vid in goldens,
+                {"golden": {n: {"hash": h} for n, h in HASHES.items()}}, HASHES)
+        self.assertIn(fw_slot, wave2)
+        self.assertNotIn(golden_vmid_for(ENGINE, 0), wave2)
+        self.assertNotIn(golden_vmid_for(ENGINE, 1), wave2)
+
     def test_domain_markers_reset_but_template_hashes_kept(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)

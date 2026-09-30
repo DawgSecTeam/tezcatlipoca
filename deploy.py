@@ -158,6 +158,11 @@ def phase1_destroy_waves(node_vms, all_targets, legacy_clones, engine_vmid, boxe
         if b is None:
             wave2[vid] = f"golden-slot-{i} (stale)"
             continue
+        if is_unmanaged(b):
+            # Unmanaged boxes have no golden; anything templated in the slot is a
+            # stale leftover from an earlier lineup and nothing references it.
+            wave2[vid] = f"golden-slot-{i} (stale, unmanaged box)"
+            continue
         if (is_template(vid)
                 and stored_hashes.get("golden", {}).get(b["name"], {}).get("hash")
                 == golden_hashes[b["name"]]):
@@ -470,6 +475,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     base_template_ids = _template_vmid_map(node)
     golden_inputs, golden_hashes = {}, {}
     for b in boxes:
+        if is_unmanaged(b):
+            continue  # no golden, no plant: terraform clones it from its own template
         if b["name"] in unbooted:
             inputs = {"config": {"base_template_vmid": base_template_ids.get(b["template"]),
                                   "disk_gb": b.get("disk_gb"), "golden": "unbooted"},
