@@ -50,9 +50,12 @@ def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, t
         stop_vm(node, vmid)
         time.sleep(3)
         start_vm(node, vmid)
-        if not _wait_for_windows_setup_complete(node, vmid, deadline):
+        # a fresh full budget: the first-boot wedge clears on the SECOND boot (the
+        # second boot's specialize completes — amongus-cde-2026 2026-09-30), and the
+        # first wait consumed the original deadline
+        if not _wait_for_windows_setup_complete(node, vmid, time.time() + timeout):
             raise RuntimeError(f"vmid {vmid}: Windows setup (sysprep first boot) did not complete "
-                               f"within {timeout}s")
+                               f"within {timeout}s (after one hard-cycle)")
 
     ps_script = f"""
 $ErrorActionPreference = 'Stop'
