@@ -416,8 +416,11 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                                "set TF_VAR_engine_mgmt_ip (portable-node mode) or fix "
                                "the agent channel")
     forget_engine_host_key(build_ip)
+    # 300s lost twice to first-boot-under-load (parallel deploy saturating the node
+    # while this clone regenerates host keys + applies cloud-init; amongus-cde-2026
+    # 2026-09-30 — manual SSH succeeded minutes after each timed-out wait).
     if not wait_for_ssh(ctx["ssh_key_path"], ctx.get("vm_username", "ubuntu"), build_ip,
-                        timeout=300):
+                        timeout=900):
         raise RuntimeError(f"engine-template build VM {build_ip} never accepted SSH")
     build_ctx = {**ctx, "scoring_engine_ip": build_ip,
                  # the settle probe and every bootstrap SSH authenticate as the
