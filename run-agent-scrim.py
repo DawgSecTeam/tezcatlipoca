@@ -26,23 +26,35 @@ RUNTIME_FILES = {
     "cloned_vms.json", "packet.md", "event.conf",
 }
 
-MYBOX = """#!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "$0")"
-BOX=${1:?box: dc01|win01|web01|app01|db01}; shift
-source ./scrim.env
-case "$BOX" in
-  dc01|win01) OCT=2; [ "$BOX" = win01 ] && OCT=3
-    exec sshpass -p "$BOX_PW" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-      -o "ProxyCommand=ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p $VM_USER@$ENGINE_IP" \\
-      "Administrator@192.168.$MY_TID.$OCT" "$@" ;;
-  web01|app01|db01) case "$BOX" in web01) OCT=4;; app01) OCT=5;; db01) OCT=6;; esac
-    exec ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-      -o "ProxyCommand=ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p $VM_USER@$ENGINE_IP" \\
-      "$BOX_USER@192.168.$MY_TID.$OCT" "$@" ;;
-  *) echo "unknown box $BOX" >&2; exit 2 ;;
-esac
-"""
+SSH_OPTS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+
+def mybox_script(comp):
+    """Per-comp mybox helper: one case branch per box from boxes.json.
+
+    The helper used to hardcode the 5-box dc01/win01/web01/app01/db01 lineup with
+    fixed octets — on any other comp (cde-2026: ad01/ftp01/web01/db01, db01 at .5)
+    it silently targeted the wrong hosts or refused known boxes. Windows = boxes
+    whose template name contains "windows" (password auth as Administrator);
+    everything else = key auth as the provisioning user."""
+    boxes = json.loads((comp / "boxes.json").read_text())
+    proxy = f'"ProxyCommand=ssh -i $KEY_PATH {SSH_OPTS} -W %h:%p $VM_USER@$ENGINE_IP"'
+    lines = ["#!/usr/bin/env bash", "set -euo pipefail", 'cd "$(dirname "$0")"',
+             f'BOX=${{1:?box: {"|".join(b["name"] for b in boxes)}}}; shift',
+             "source ./scrim.env", 'case "$BOX" in']
+    for b in boxes:
+        target = f"192.168.$MY_TID.{b['last_octet']}"
+        if "windows" in str(b.get("template") or ""):
+            lines.append(
+                f'  {b["name"]}) exec sshpass -p "$BOX_PW" ssh {SSH_OPTS} -o {proxy} '
+                f'"Administrator@{target}" "$@" ;;')
+        else:
+            lines.append(
+                f'  {b["name"]}) exec ssh -i "$KEY_PATH" {SSH_OPTS} -o {proxy} '
+                f'"$BOX_USER@{target}" "$@" ;;')
+    lines.append('  *) echo "unknown box $BOX" >&2; exit 2 ;;')
+    lines.append("esac")
+    return "\n".join(lines) + "\n"
 
 QLOGIN = """#!/usr/bin/env bash
 set -euo pipefail
@@ -243,6 +255,53 @@ def stage_deploy(args, comp):
             raise RuntimeError("deploy did not reach phase 7")
 
 
+def _web01_units(comp):
+    """(candidate systemd units, scored port) for the fire test's stop/restore on web01.
+
+    Returns every unit the web01 pins map to — which one actually exists is resolved
+    on the box (apache2 vs httpd across distros) by the caller. The old code
+    hardcoded nginx, which doesn't exist on comps whose web box runs apache
+    (cde-2026: Fedora httpd) — the fire test would stop a non-existent unit, see no
+    scoreboard change, and abort."""
+    pins = json.loads((comp / "box_services.json").read_text()).get("web01", [])
+    candidates = []
+    for pin in pins:
+        if isinstance(pin, str):
+            pin = {"name": pin}
+        mapped = _WATCHDOG_UNITS.get(pin.get("name", ""), [])
+        if not mapped:
+            continue
+        httpish = pin.get("port") == 80 or pin.get("display") in ("http", "https")
+        candidates.append((httpish, pin.get("port") or 80, mapped))
+    if not candidates:
+        raise SystemExit("  ERROR: no serviceable web01 unit for the fire test — "
+                         "web01 pins in box_services.json map to nothing in _WATCHDOG_UNITS")
+    candidates.sort(key=lambda c: (not c[0], c[1]))
+    return candidates[0][2], candidates[0][1]
+
+
+def comp_world(comp):
+    """Box/scenario facts for the blue cycle prompt, from the comp's own files.
+
+    The prompt used to hardcode the Meridian 5-box world (box names, '8 scored
+    services', nginx restore example, wardops ROE) and lied on every other lineup."""
+    boxes = json.loads((comp / "boxes.json").read_text())
+    windows = [b["name"] for b in boxes if "windows" in str(b.get("template") or "")]
+    linux = [b["name"] for b in boxes if b["name"] not in windows]
+    meta = {}
+    for line in (comp / "Compfile").read_text().splitlines():
+        key, _, value = line.partition(" ")
+        if key in ("name", "scenario"):
+            meta[key] = value.strip()
+    try:
+        units, _ = _web01_units(comp)
+    except SystemExit:
+        units = None
+    return {"name": meta.get("name", ""), "scenario": meta.get("scenario", ""),
+            "linux": linux, "windows": windows,
+            "web_unit": units[0] if units else None}
+
+
 def stage_verify(args, comp, creds):
     log("verify-competition + fire test")
     r = run(["python3", "verify-competition.py", str(comp.relative_to(REPO)),
@@ -255,10 +314,22 @@ def stage_verify(args, comp, creds):
              f"-o UserKnownHostsFile=/dev/null -W %h:%p {creds['VM_USER']}@{creds['ENGINE_IP']}")
     base = ["ssh", "-i", creds["KEY_PATH"], "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null", "-o", f"ProxyCommand={proxy}"]
+    web_ip = (json.loads((comp / "targets.json").read_text()).get("targets", {})
+              .get("team1-web01", {}).get("ip"))
+    web_ip = web_ip or f"192.168.{creds['TEAM1_ID']}.4"
+    units, svc_port = _web01_units(comp)
+
     def ssh_web01(cmd):
-        return subprocess.run(base + [f"{creds['BOX_USER']}@192.168.{creds['TEAM1_ID']}.4", cmd],
+        return subprocess.run(base + [f"{creds['BOX_USER']}@{web_ip}", cmd],
                               capture_output=True, text=True, timeout=60)
-    port = os.environ.get("SCRIM_WEB01_PORT", "80")
+    # pick the unit that actually exists on this box (apache2 vs httpd across distros)
+    probe = ('u=""; for c in %s; do systemctl list-unit-files "$c.service" --no-legend '
+             '2>/dev/null | grep -q . && u=$c && break; done; echo "$u"' % " ".join(units))
+    r = ssh_web01(probe)
+    unit = (r.stdout or "").strip().splitlines()[-1] if (r.stdout or "").strip() else units[0]
+    args.web_unit = unit
+    log(f"fire test unit: {unit} on {web_ip} (port {svc_port})")
+    port = os.environ.get("SCRIM_WEB01_PORT", str(svc_port))
 
     def web01_http():
         """HTTP code for web01 over the engine's network path ('' / 000 = no answer)."""
@@ -277,7 +348,7 @@ def stage_verify(args, comp, creds):
         except Exception as e:
             return None, f"{type(e).__name__}: {e}"
 
-    ssh_web01("echo %s | sudo -S systemctl stop nginx" % creds["BOX_PW"])
+    ssh_web01("echo %s | sudo -S systemctl stop %s" % (creds["BOX_PW"], unit))
     time.sleep(150)
     down, down_err = scoreboard_down()
     http_down = web01_http()
@@ -288,8 +359,8 @@ def stage_verify(args, comp, creds):
     restored = healed = False
     for attempt in (1, 2, 3):
         # unmask first: run-12 left the unit unstartable and a plain start was a no-op
-        ssh_web01("echo %s | sudo -S systemctl unmask nginx" % creds["BOX_PW"])
-        ssh_web01("echo %s | sudo -S systemctl start nginx" % creds["BOX_PW"])
+        ssh_web01("echo %s | sudo -S systemctl unmask %s" % (creds["BOX_PW"], unit))
+        ssh_web01("echo %s | sudo -S systemctl start %s" % (creds["BOX_PW"], unit))
         time.sleep(150 if attempt == 1 else 60)
         up, up_err = scoreboard_down()
         http_up = web01_http()
@@ -305,7 +376,7 @@ def stage_verify(args, comp, creds):
         raise RuntimeError(
             "fire test failed — team1 web01-http was not verifiably down and restored, so the "
             "scoring path is unproven. Manual fix: ./mybox web01 'echo $BOX_PW | sudo -S "
-            "systemctl unmask nginx && sudo systemctl start nginx', confirm "
+            f"systemctl unmask {unit} && sudo systemctl start {unit}', confirm "
             f"http://192.168.{creds['TEAM1_ID']}.4/ answers from the engine, then re-run "
             "(the fire test re-validates before T0).")
 
@@ -407,8 +478,9 @@ def stage_blues(args, comp, run_dir, creds, t0):
             f"KEY_PATH={creds['KEY_PATH']}\nVM_USER={creds['VM_USER']}\nBOX_USER={creds['BOX_USER']}\n"
             f"JAR=/tmp/jar.team{n}\n")
         os.chmod(wd / "scrim.env", 0o600)
-        for helper, body in (("mybox", MYBOX), ("qlogin", QLOGIN), ("score.py", SCORE_PY),
-                             ("myscore", MYSCORE), ("submit-inject", SUBMIT_INJECT)):
+        for helper, body in (("mybox", mybox_script(comp)), ("qlogin", QLOGIN),
+                             ("score.py", SCORE_PY), ("myscore", MYSCORE),
+                             ("submit-inject", SUBMIT_INJECT)):
             p = wd / helper
             p.write_text(body)
             p.chmod(0o755)
@@ -459,13 +531,35 @@ def effort_json(effort):
 
 def blue_cycle_prompt(n, creds, args, elapsed, remain, delta_text, inject_text, notebook_text, log_tail):
     tid = creds[f"TEAM{n}_ID"]
-    return f"""You are Blue Team {n} defending the Meridian Health ward network (practice competition).
+    world = comp_world(REPO / "competitions" / args.competition)
+    lin, win = world["linux"], world["windows"]
+    unit = getattr(args, "web_unit", None) or world["web_unit"]
+    title = world["name"] or "the company network"
+    header = f"You are Blue Team {n} defending {title} (practice competition)."
+    if world["scenario"]:
+        header += f"\nScenario: {world['scenario']}"
+    reach = [f"REACH YOUR BOXES (subnet 192.168.{tid}.0/24):"]
+    if lin:
+        rest = ", ".join(lin[1:]) or "none"
+        reach.append(f"  Linux ({creds['BOX_USER']}, password in scrim.env, sudo: echo $BOX_PW | sudo -S <cmd>):"
+                     f"  ./mybox {lin[0]} \"<cmd>\"   (also: {rest})")
+    if win:
+        rest = ", ".join(win[1:]) or "none"
+        reach.append(f"  Windows (Administrator, same password):"
+                     f"  ./mybox {win[0]} \"<cmd>\"   (also: {rest})")
+    reach.append("  ./mybox runs one command through the gateway and prints output — prefer it over hand-building ssh.")
+    if unit and lin:
+        restore_example = (f'(./mybox {lin[0]} "echo $BOX_PW | sudo -S systemctl unmask {unit}; '
+                           f'echo $BOX_PW | sudo -S systemctl start {unit}" for example)')
+    else:
+        restore_example = "(restart the failed unit over ./mybox for example)"
+    return f"""{header}
 T+{elapsed}min of {args.duration_min} ({remain}min left). Work in THIS directory; everything you need is here.
 
 CHANGES SINCE LAST CYCLE (orchestrator scoreboard diff — act on these first):
 {delta_text}
 
-LIVE SCOREBOARD (your 8 scored services — availability is points every minute):
+LIVE SCOREBOARD (your scored services — availability is points every minute):
 {status_text(creds, f'team{n}')}
 
 INJECTS:
@@ -477,10 +571,7 @@ TEAM NOTEBOOK (NOTEBOOK.md — your working memory; current content):
 Last LOG.md lines:
 {log_tail}
 
-REACH YOUR BOXES (subnet 192.168.{tid}.0/24):
-  Linux ({creds['BOX_USER']}, password in scrim.env, sudo: echo $BOX_PW | sudo -S <cmd>):  ./mybox web01 "<cmd>"   (also app01, db01)
-  Windows (Administrator, same password):                                    ./mybox dc01 "<cmd>"    (also win01)
-  ./mybox runs one command through the gateway and prints output — prefer it over hand-building ssh.
+{chr(10).join(reach)}
 
 SCOREBOARD + INJECTS — Quotient allows ONE session per account, so NEVER log in
 directly (that kills the shared jar's session). Use the jar; if a call answers
@@ -496,7 +587,7 @@ then AT MOST TWO change/fix actions, then STOP. Read-only investigation (status 
 hunts) is fine inside your budget — two changes is the cap, not two commands:
 0. FIRST: update NOTEBOOK.md (SNAPSHOT line: current state + next action; move finished
    items to DONE; add new incidents/findings) and append one timestamped line to LOG.md.
-1. If any service above is DOWN (or CHANGES shows a new DOWN): restore it NOW (./mybox web01 "echo $BOX_PW | sudo -S systemctl unmask nginx; echo $BOX_PW | sudo -S systemctl start nginx" for example). Availability beats everything.
+1. If any service above is DOWN (or CHANGES shows a new DOWN): restore it NOW {restore_example}. Availability beats everything.
    If the SAME service goes down again after you restored it, the attacker still has a way in —
    close the ENTRY VECTOR in the same cycle (e.g. a harvested password over SSH: set
    `PasswordAuthentication no` in sshd_config AND any sshd_config.d drop-in, reload ssh — your
@@ -506,7 +597,9 @@ hunts) is fine inside your budget — two changes is the cap, not two commands:
 3. Else: ONE hunt item from the notebook checklist (rogue UID-0 users, cron, systemd units, sudoers, firewall rules, listeners, Windows services/tasks/run-keys). Fix what is safe; never take a scored service down.
 4. Wrap up by minute 20: finish the current step, re-check the scoreboard, leave the
    SNAPSHOT line + LOG.md current so the next cycle starts warm.
-ROE: never attack the engine ($ENGINE_IP), never change the scoring-check accounts (triage/svc-imaging/wardops). Keep replies terse."""
+ROE: never attack the engine ($ENGINE_IP) or the scoring path; never lock out, rename, or
+rotate {creds['BOX_USER']}/Administrator — those are the credentials your own helpers use.
+Keep replies terse."""
 
 
 def scoreboard_delta(run_dir, team):
