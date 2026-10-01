@@ -504,13 +504,22 @@ def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
         else:
             free_gb = free / 1024 ** 3
             need_gb = len(node_teams) * sum(b.get("disk_gb") or 40 for b in boxes)
-            if free_gb < need_gb:
+            # Same thin-pool factor as the single-node headroom gate: linked clones
+            # on ZFS/lvmthin only allocate written blocks (TEZ_THIN_HEADROOM, 0<x<=1).
+            thin = float(os.environ.get("TEZ_THIN_HEADROOM") or 1.0)
+            if not 0 < thin <= 1:
+                raise SystemExit(f"  ERROR: TEZ_THIN_HEADROOM must be in (0, 1], got {thin}")
+            counted_gb = need_gb * thin
+            if free_gb < counted_gb:
                 raise SystemExit(
                     f"  ERROR: datastore '{datastore}' on '{node_name}' has {free_gb:.0f} GB "
                     f"free; this deploy needs ~{need_gb:.0f} GB there "
-                    f"({len(node_teams)} teams x {len(boxes)} boxes).")
+                    f"({len(node_teams)} teams x {len(boxes)} boxes"
+                    + (f", x{thin} thin factor" if thin != 1.0 else "")
+                    + "). Free space or trim the competition first.")
             print(f"  Preflight[{node_name}]: datastore '{datastore}' {free_gb:.0f} GB free "
-                  f"vs ~{need_gb:.0f} GB needed")
+                  f"vs ~{counted_gb:.0f} GB needed"
+                  + (f" (provisioned ~{need_gb:.0f} GB x{thin} thin)" if thin != 1.0 else ""))
 
     # mgmt-IP sweeps: the engine IP on the engine node; every satellite's jump IP
     # against guests on ALL hosting nodes (they share one mgmt L2).
