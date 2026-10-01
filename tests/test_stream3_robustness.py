@@ -155,7 +155,10 @@ class RoundLoopCheck(unittest.TestCase):
 
 
 class WindowsPreStop(unittest.TestCase):
-    def test_stops_only_windows_team_clones(self):
+    def test_hard_stops_every_team_clone(self):
+        """Operator call 2026-09-30: forced stop + remove, no clean shutdowns —
+        the pre-stop covers Linux clones too (their ACPI path just burns minutes
+        on a disk that is about to be destroyed)."""
         calls = []
 
         def fake_api(method, path, **kwargs):
@@ -177,9 +180,12 @@ class WindowsPreStop(unittest.TestCase):
                 [{"name": "dc01", "template": "base-windows-server"},
                  {"name": "web01", "template": "base-ubuntu24.04-fix"}],
                 default_node="node")
-        stops = [p for m, p in calls if m == "POST" and "/status/stop" in p]
-        self.assertEqual(stops, ["/nodes/node/qemu/1400/status/stop"])
+        stops = sorted(p for m, p in calls if m == "POST" and "/status/stop" in p)
+        # dc01 (windows) AND web01 (linux) — every team clone, foreign VMs untouched
+        self.assertEqual(stops, ["/nodes/node/qemu/1400/status/stop",
+                                 "/nodes/node/qemu/1402/status/stop"])
         self.assertIn("Pre-stopped 120-dc01", out.getvalue())
+        self.assertIn("Pre-stopped 120-web01", out.getvalue())
 
 
 if __name__ == "__main__":

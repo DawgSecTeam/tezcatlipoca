@@ -106,15 +106,17 @@ def destroy_cloned_vms(cloned_vms_path, default_node):
 
 
 def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None):
-    """Hard-stop Windows team clones before terraform destroy. The bpg provider
-    issues a graceful shutdown with a long timeout; a DC whose guest agent is
-    down never complies and holds the qm lock, hanging the whole destroy
-    (pfsense-rvb: 6m+ 'Still destroying', qm unlock/stop timing out behind it).
-    A hard API stop needs no agent, and an already-stopped box skips the
-    graceful path entirely. Clones already stopped/deleted by
+    """Hard-stop EVERY team clone before terraform destroy. The bpg provider issues
+    a graceful shutdown with a long timeout: a DC whose guest agent is down never
+    complies and holds the qm lock, hanging the whole destroy (pfsense-rvb: 6m+
+    'Still destroying', qm unlock/stop timing out behind it) — and even a well-
+    behaved Linux box burns minutes in ACPI shutdown it doesn't need, since the
+    disk is about to be destroyed (operator call 2026-09-30: forced stop + remove,
+    not clean shutdown). A hard API stop needs no agent; an already-stopped box
+    skips the graceful path entirely. Clones already stopped/deleted by
     destroy_cloned_vms are simply not running here. team_nodes (multi-node)
     routes each team's sweep to its hosting node."""
-    windows = [b["name"] for b in boxes if "win" in (b.get("template") or "").lower()]
+    windows = [b["name"] for b in boxes]  # all clones hard-stop, not just Windows
     if not windows:
         return
     live_by_node = {}

@@ -136,6 +136,11 @@ ENGINE_TEMPLATE_NAME = "engine-template"
 # IPs sit above the .1 gateway and below .255 on team1's subnet (192.168.<team1 id>.<240+i>),
 # free because golden boxes are long gone by the time real team boxes come up.
 GOLDEN_VMID_OFFSET = 150
+
+# Full 60G Windows-template clones land on whatever pool the node offers; on
+# HDD-ZFS the same template has measured 13 min and >30 min (live-found 2026-09-30,
+# cyberfield hdrives-zfs) — the 1800s task-wait default aborted a healthy clone.
+GOLDEN_CLONE_TIMEOUT = 5400
 GOLDEN_IP_BASE = 240
 GOLDEN_TAG = "tezcatlipoca-golden"
 
