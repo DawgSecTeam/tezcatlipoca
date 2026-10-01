@@ -113,3 +113,70 @@ never gets an IP; do not reuse. Server 2019 / CentOS 8 / focal images were absen
 - `ad-dns-localhost` — localhost→127.0.0.1 A record in the AD zone (Dns check target).
 - `ftp-content-win` — TASKS.txt / CREW_MANIFEST.csv / INJECT_DROP_README.txt seeded
   into the IIS FTP root + anonymous-read authorization (deps: IIS FTP).
+
+## Deploy + validation (2026-09-30 → 10-01)
+
+2 teams (identifiers 113/114), engine vmid 1500 at 10.0.0.251, goldens 1650–1653,
+team vmids 1330s/1340s. Final `verify-competition.py --strict-services`: **ALL GATES
+PASS** — logins, no_default_creds, services 9/9 UP ×2 teams, pins_registered (9),
+isolation, misconfig + survival, injects (2), plant integrity 0 failed, domains
+(unique DomainSIDs ×2 forests, all four members joined), plant coverage.
+
+**Reboot test (CDE checklist):** all 8 team boxes rebooted (DCs staggered last);
+9/9 services UP on both teams afterwards — services return on their own.
+
+### Live-found fixes during the deploy (all committed + pushed on the branch)
+
+- `template_ops.build_engine_template`: retry the post-clone config PUT through PVE's
+  transient-400 window; 900s SSH budget (300s lost twice to first-boot under the
+  parallel deploy's node load).
+- `tools/engine_finish.py`: finish + convert the engine template on an already-up
+  build VM (recovery path when a resume would destroy a working clone); writes the
+  hash to BOTH `.deploy_state.json` and `.template-hashes.json` (the reuse check
+  reads the latter).
+- `windows_ops.bootstrap_windows_box`: hard-cycle once (fresh full budget) when the
+  sysprep first-boot wait expires — golden-skeld deadlocked pre-specialize on every
+  snapshot-rollback boot; the forced stop/start cleared it. Also a fresh exec-phase
+  budget (the setup waits consume the entry deadline).
+- `deploy._record_coverage`: clear a machine's stale failures when its stage replants
+  clean — SMB v1 stayed "failed" across three green replants otherwise.
+- `nakon_ops.generate_nakon_config`: fill REQUIRED_VARS identity vars in the BASE
+  machine list (second pass) — the bundle lint rejects a script referencing a var the
+  base list doesn't declare, even when every stage file carries it.
+- `verify-competition.check_domains`: gateway-SSH fallback for the Linux realm probe —
+  the PVE agent channel has a per-instance exec breaker that stayed tripped on both
+  airships after the deploy-time join-probe failures.
+- vulndb rows fixed live: `ftp-content-win` (WebAdministration needs the -Location
+  form / applicationHost XML for fresh FTP sites; appcmd exits 13), `SMB v1` (SMB1 is
+  a removable FEATURE on 2019/2022 — install it, then the registry flag; the WMI
+  provider is a terminating error until the pending restart), `airship-webapp`
+  (systemctl stop before cp — ETXTBSY over a running binary), `domain-join` (nmcli
+  branch must never be fatal under set -e — fall back to the resolv.conf insert).
+
+### Known gaps / deferred
+
+- **airship domain join via the pipeline**: the fixed `domain-join` row joins cleanly
+  now (verified in the phase-6 replay), but the airships were joined by hand first —
+  their PVE agent-exec breakers stayed tripped, so verify probes them over gateway SSH.
+- **bad-auto coverage**: deferred — this lineup has no red box; red runs coverage from
+  its own box after bring-up (`python3 -m badauto coverage` derives rows from
+  box_services.json; Windows effects needed: FTPSVC stop/start for skeld-ftp, DNS
+  service for mira-dns).
+- **inject T0**: offsets anchored at deploy time; one inject is already past close —
+  re-anchor at event start via run-agent-scrim's `reanchor_injects()` (UpdateInject
+  multipart: re-list every attachment under keep-files or they are deleted).
+- **Windows FTP scoring is port-open only** (Tcp 21) — an authenticated Ftp check has
+  no Windows credlist provisioning.
+
+## Red-team handoff
+
+- Freeze state: `.frozen.json` (mode 0600) — unfreeze needs `--confirm-unfreeze`,
+  pre-competition only.
+- Adding misconfigs/malware post-freeze: unfreeze → author catalog rows → pin them in
+  `box_vulns.json` → `redeploy-competition.py --mode reconfigure` (keeps teams up).
+- The inject drop is skeld's anonymous-read FTP root (`C:\inetpub\ftproot\MyFtpSite`);
+  submissions land there per the inject briefings.
+- Credentials: `competitions/amongus-cde-2026/credentials.txt` (0600, gitignored).
+  AD fleet passwords are the spec's (Red123! …), blackteam = TOcpACdpCPAt; everything
+  else is per-competition generated.
+- Event day: re-anchor injects at T0, then `POST /api/competition/start` + unpause.
