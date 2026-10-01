@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import re
+import socket
 import shlex
 import signal
 import subprocess
@@ -858,7 +859,13 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
             (home / sub).mkdir(parents=True, exist_ok=True)
         svc_cfg = home / "config" / "opencode"
         svc_cfg.mkdir(parents=True, exist_ok=True)
-        (svc_cfg / "service.json").write_text(json.dumps({"port": 49370 + n}))
+        # Fresh OS-assigned port every cycle: the fixed 49370+n collides with any
+        # orphaned opencode service left by an earlier run/team on this host
+        # (cde-2026 T+0: a Sep-30 orphan held 49371 and burned team1's first cycle).
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            svc_port = sock.getsockname()[1]
+        (svc_cfg / "service.json").write_text(json.dumps({"port": svc_port}))
         env = {**os.environ,
                "HOME": str(home), "XDG_DATA_HOME": str(home / "data"),
                "XDG_CONFIG_HOME": str(home / "config"), "XDG_CACHE_HOME": str(home / "cache")}
