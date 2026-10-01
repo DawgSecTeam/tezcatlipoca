@@ -268,11 +268,14 @@ class TfvarsHelpersTest(unittest.TestCase):
         self.assertEqual(out[0]["api_token"], "tok")
         self.assertEqual(out[1]["endpoint"], "https://sat2.invalid")
 
-    def test_routes_per_satellite_anchor(self):
-        placement = {"satellites": [
-            {"name": "n2", "slot": 1, "jump_mgmt_ip": "10.0.0.248", "anchor_identifier": "103"}]}
+    def test_routes_cover_every_team_subnet_behind_the_jump(self):
+        placement = {"team_identifiers": {"team1": "103", "team2": "107"},
+                     "satellites": [
+            {"name": "n2", "slot": 1, "jump_mgmt_ip": "10.0.0.248",
+             "anchor_identifier": "103", "teams": ["team1", "team2"]}]}
         self.assertEqual(nodes_ops.satellite_routes_for(placement),
-                         [{"subnet": "192.168.103.0/24", "via": "10.0.0.248"}])
+                         [{"subnet": "192.168.103.0/24", "via": "10.0.0.248"},
+                          {"subnet": "192.168.107.0/24", "via": "10.0.0.248"}])
 
 
 class JumpRulesTest(unittest.TestCase):

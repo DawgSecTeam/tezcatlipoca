@@ -542,13 +542,21 @@ def satellite_tfvars(placement):
 
 
 def satellite_routes_for(placement):
-    """Engine static routes: one per satellite (its anchor team's subnet via the
-    jump's mgmt IP). Written into the engine's netplan by the team_nics provisioner."""
+    """Engine static routes: one per TEAM SUBNET behind each satellite's jump (not
+    just the golden anchor — every team box on the satellite is reached through the
+    same jump, and the engine's default gw blackholes the un-routed subnets).
+    Written into the engine by the team_nics provisioner (trigger-keyed, so changed
+    routes re-apply on the next apply #1)."""
     routes = []
     for sat in placement["satellites"]:
         anchor = sat.get("anchor_identifier")
         if anchor:
             routes.append({"subnet": f"192.168.{anchor}.0/24", "via": sat["jump_mgmt_ip"]})
+        for k in sat.get("teams") or []:
+            ident = placement["team_identifiers"][k]
+            route = {"subnet": f"192.168.{ident}.0/24", "via": sat["jump_mgmt_ip"]}
+            if route not in routes:
+                routes.append(route)
     return routes
 
 
