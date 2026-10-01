@@ -281,6 +281,72 @@ def _web01_units(comp):
     return candidates[0][2], candidates[0][1]
 
 
+def scorch_script(comp):
+    """Per-comp scored-check oracle: runs each pinned check the way the engine does,
+    from the engine's vantage (HTTP GET / credlist password login / TCP connect), so
+    blue can reconcile 'locally healthy but scorer DOWN' — run 1 showed both teams
+    flying blind on exactly that after sshd hardening broke the scored ssh check."""
+    boxes = {b["name"]: b for b in json.loads((comp / "boxes.json").read_text())}
+    pins = json.loads((comp / "box_services.json").read_text())
+    http_specs, port_specs, ssh_specs = [], [], []
+    for box, services in pins.items():
+        b = boxes.get(box)
+        if not b:
+            continue
+        ip = f"192.168.$MY_TID.{b['last_octet']}"
+        for pin in services:
+            if isinstance(pin, str):
+                pin = {"name": pin}
+            port = pin.get("port")
+            if not port:
+                continue  # plant_only software with no listener isn't externally checkable
+            if pin.get("score_only") or pin.get("plant_only"):
+                kind = "code" if pin.get("display") in ("http", "https") else "port"
+            else:
+                kind = "code" if pin.get("display") in ("http", "https") else (
+                    "ssh" if pin.get("display") == "ssh" else "port")
+            if kind == "code":
+                http_specs.append(f"{box}|{ip}|{port}")
+            elif kind == "ssh":
+                ssh_specs.append(f"{box}|{ip}|{port}")
+            else:
+                port_specs.append(f"{box}|{ip}|{port}")
+    lines = ["#!/usr/bin/env bash", "set -uo pipefail", 'cd "$(dirname "$0")"',
+             "source ./scrim.env",
+             'ENGINE_RUN="ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no '
+             '-o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$VM_USER@$ENGINE_IP""',
+             'echo "== scored-check oracle (engine vantage) — team $MY_TEAM =="']
+    if http_specs:
+        lines.append("for spec in " + " ".join(f'"{x}"' for x in http_specs) + "; do")
+        lines.append('  IFS="|" read -r box ip port <<<"$spec"')
+        lines.append('  r=$($ENGINE_RUN "curl -sm 5 -o /dev/null -w \'%{http_code}\' http://$ip:$port/" 2>/dev/null)')
+        lines.append('  if [ "$r" = 200 ]; then echo "UP   $box http:$port (HTTP $r)"; '
+                     'else echo "DOWN $box http:$port (HTTP ${r:-no answer})"; fi; done')
+    if port_specs:
+        lines.append("for spec in " + " ".join(f'"{x}"' for x in port_specs) + "; do")
+        lines.append('  IFS="|" read -r box ip port <<<"$spec"')
+        lines.append('  if $ENGINE_RUN "nc -w 5 $ip $port </dev/null >/dev/null 2>&1"; '
+                     'then echo "UP   $box tcp:$port open"; else echo "DOWN $box tcp:$port closed"; fi; done')
+    if ssh_specs:
+        lines.append("for spec in " + " ".join(f'"{x}"' for x in ssh_specs) + "; do")
+        lines.append('  IFS="|" read -r box ip port <<<"$spec"')
+        lines.append('  ok=""')
+        lines.append('  for pair in "${CREDLIST[@]}"; do')
+        lines.append('    user=${pair%%:*}; pw=${pair#*:}')
+        lines.append('    if sshpass -p "$pw" ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR '
+                     '-o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 '
+                     '-o "ProxyCommand=ssh -i $KEY_PATH -o StrictHostKeyChecking=no '
+                     '-o UserKnownHostsFile=/dev/null -W %h:%p $VM_USER@$ENGINE_IP" '
+                     '"$user@$ip" true 2>/dev/null; then ok=$user; break; fi; done')
+        lines.append('  if [ -n "$ok" ]; then echo "UP   $box ssh:$port (credlist login: $ok)"; '
+                     'else echo "DOWN $box ssh:$port — port may be open but the scored credlist '
+                     'LOGIN FAILS. If you hardened sshd: allow password auth for the credlist '
+                     'account from the gateway only (Match User <acct> Address 192.168.$MY_TID.1 '
+                     '/ PasswordAuthentication yes), sshd -t, reload, re-run ./scorch."; fi; done')
+    lines.append('echo "(checks replicate the engine vantage; a pin DOWN here means the scorer sees it DOWN)"')
+    return "\n".join(lines) + "\n"
+
+
 def comp_world(comp):
     """Box/scenario facts for the blue cycle prompt, from the comp's own files.
 
@@ -498,14 +564,17 @@ def stage_blues(args, comp, run_dir, creds, t0):
         wd.mkdir(parents=True, exist_ok=True)
         (wd / "submissions").mkdir(exist_ok=True)
         tid = creds[f"TEAM{n}_ID"]
+        state = json.loads((comp / ".deploy_state.json").read_text())
+        credlist = ";".join(f"{u}:{pw}" for u, pw in (state.get("box_creds") or {}).items())
         (wd / "scrim.env").write_text(
             f"ENGINE_IP={creds['ENGINE_IP']}\nMY_TEAM=team{n}\nMY_PW={creds[f'TEAM{n}_PW']}\n"
             f"MY_TID={tid}\nBOX_PW={creds['BOX_PW']}\nINJECT_PW={creds['INJECT_PW']}\n"
             f"KEY_PATH={creds['KEY_PATH']}\nVM_USER={creds['VM_USER']}\nBOX_USER={creds['BOX_USER']}\n"
-            f"JAR=/tmp/jar.team{n}\n")
+            f"JAR=/tmp/jar.team{n}\n"
+            f"CREDLIST=({credlist})\n")
         os.chmod(wd / "scrim.env", 0o600)
-        for helper, body in (("mybox", mybox_script(comp)), ("qlogin", QLOGIN),
-                             ("score.py", SCORE_PY), ("myscore", MYSCORE),
+        for helper, body in (("mybox", mybox_script(comp)), ("scorch", scorch_script(comp)),
+                             ("qlogin", QLOGIN), ("score.py", SCORE_PY), ("myscore", MYSCORE),
                              ("submit-inject", SUBMIT_INJECT)):
             p = wd / helper
             p.write_text(body)
@@ -574,6 +643,14 @@ def blue_cycle_prompt(n, creds, args, elapsed, remain, delta_text, inject_text, 
         reach.append(f"  Windows (Administrator, same password):"
                      f"  ./mybox {win[0]} \"<cmd>\"   (also: {rest})")
     reach.append("  ./mybox runs one command through the gateway and prints output — prefer it over hand-building ssh.")
+    scoring = [f"HOW THE SCORER SEES YOUR BOXES — check with ./scorch after ANY change to sshd, a firewall, or a scored service:",
+               "  ./scorch runs every scored check from the engine's vantage. The ssh pins log in as a credlist",
+               f"  account (airship/blueteam) WITH A PASSWORD from the gateway 192.168.{tid}.1 — if you set",
+               "  PasswordAuthentication no, the scored check itself fails and the pin shows DOWN forever even",
+               "  though sshd is healthy locally. Safe hardening is a gateway-only exception:",
+               f"    Match User airship Address 192.168.{tid}.1",
+               "        PasswordAuthentication yes",
+               "  (global PasswordAuthentication no), then sshd -t, reload ssh, and ./scorch must show the ssh pin UP."]
     if unit and lin:
         restore_example = (f'(./mybox {lin[0]} "echo $BOX_PW | sudo -S systemctl unmask {unit}; '
                            f'echo $BOX_PW | sudo -S systemctl start {unit}" for example)')
@@ -598,6 +675,8 @@ Last LOG.md lines:
 {log_tail}
 
 {chr(10).join(reach)}
+
+{chr(10).join(scoring)}
 
 SCOREBOARD + INJECTS — Quotient allows ONE session per account, so NEVER log in
 directly (that kills the shared jar's session). Use the jar; if a call answers
@@ -1439,6 +1518,10 @@ def main():
                    help="reverse-SSH tunnel so red01 can reach a local LLM endpoint "
                         "(auto = on for non-openrouter endpoints)")
     p.add_argument("--skip-deploy", action="store_true", help="competition already at phase 7")
+    p.add_argument("--resume-event", action="store_true", dest="resume_event",
+                   help="the driver died mid-event: skip staging entirely and re-run the blue "
+                        "feeds + monitor + capture + teardown from the T0 recorded in "
+                        "run_dir/T0.txt (badauto red keeps running on red01 regardless)")
     p.add_argument("--from-phase", dest="resume", type=int, default=None,
                    help="resume create-competition at this phase")
     p.add_argument("--keep-range", action="store_true", help="skip destroy-competition at teardown")
@@ -1454,6 +1537,22 @@ def main():
             sys.exit(f"invalid competition name {nm!r} — use [a-z0-9._-], no path separators.")
 
     comp = REPO / "competitions" / args.competition
+    if args.resume_event:
+        t0_file = Path(args.run_dir or f"/home/hna/dev/dawgsec/scrim-runs/{args.competition}") / "T0.txt"
+        if not t0_file.exists():
+            sys.exit(f"--resume-event needs {t0_file} (written at T0 by the original run)")
+        rec = json.loads(t0_file.read_text().strip())
+        t0 = float(rec["t0"])
+        args.duration_min = int(rec.get("duration_min") or args.duration_min)
+        args.run_dir = str(t0_file.parent)
+        log(f"RESUME: re-entering stage_run at T+{int((time.time() - t0) / 60)}min "
+            f"({args.duration_min - int((time.time() - t0) / 60)}min left)")
+        creds = creds_from_files(comp)
+        stage_run(args, creds, t0)
+        stage_capture(args, creds)
+        stage_teardown(args, creds)
+        log("DONE — resumed event captured and torn down")
+        return
     if args.new:
         args.competition = args.new
         comp = REPO / "competitions" / args.new
@@ -1481,6 +1580,7 @@ def main():
     red_setup_started = time.time()
     stage_red(args, comp, creds, run_dir)
     t0 = time.time()
+    (run_dir / "T0.txt").write_text(json.dumps({"t0": t0, "duration_min": args.duration_min}))
     log(f"T0 — event clock starts now (red setup took {(t0 - red_setup_started) / 60:.0f} min, "
         f"outside scored time)")
     reanchor_injects(args, comp, creds)
