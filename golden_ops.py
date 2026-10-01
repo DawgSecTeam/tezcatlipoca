@@ -25,7 +25,7 @@ import re
 import shlex
 import time
 
-from constants import GOLDEN_TAG, SNAP_BASE
+from constants import GOLDEN_CLONE_TIMEOUT, GOLDEN_TAG, SNAP_BASE
 from engine_ops import ensure_nat_forwarding
 from hardening_ops import ensure_alpine_services, fix_dns_on_boxes, prep_apt_on_boxes, setup_ubuntu_auth
 from nakon_ops import build_nakon_bundle, run_nakon
@@ -214,6 +214,23 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     for t in cold:
         # Any plain VM here is a dead attempt that may have booted (and specialized) —
         # never reuse it; the whole point of this slot is a generalized disk.
+        # Adoption exception (live-found 2026-09-30, same shape as the engine-template
+        # leftover): a clone task that outlived its 1800s task-wait completes AFTER
+        # the driver raised, leaving the VM with only the BASE image's inherited tags
+        # — the strict guard would refuse it forever. A not-yet-converted VM on the
+        # reserved slot carrying our clone-marker description is ours; adopt it loudly.
+        try:
+            cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"]
+            desc = str(cfg.get("description") or "")
+            raw_tags = str(cfg.get("tags") or "")
+            tags = {x.strip() for x in raw_tags.replace(";", ",").split(",") if x.strip()}
+            if (cfg.get("name") == t["vm_name"] and clone_marker(comp_dir.name) in desc
+                    and "tezcatlipoca" not in tags):
+                print(f"    vmid {t['vmid']}: untagged dead-attempt clone of "
+                      f"'{t['vm_name']}' (our clone marker in description) — adopting")
+                destroy_vm_if_exists(node, t["vmid"], expect_tags=None)
+        except Exception:
+            pass  # slot empty, or unreadable — the strict destroy below decides
         destroy_vm_if_exists(node, t["vmid"], expect_tags={"tezcatlipoca", f"comp-{comp_dir.name}"},
                              legacy_name=t["vm_name"])
         src = templates.get(t["box"]["template"])
@@ -222,7 +239,7 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
         upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone", data={
             "newid": t["vmid"], "name": t["vm_name"], "full": 1,
             "description": clone_marker(comp_dir.name)})["data"]
-        wait_for_proxmox_task(node, upid)
+        wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
             "net0": f"virtio,bridge={t['bridge']}", "tags": ownership_tags})
         proxmox_api("POST", f"/nodes/{node}/qemu/{t['vmid']}/template")
@@ -257,7 +274,7 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
                 "full": 1,
                 "description": clone_marker(comp_dir.name),
             })["data"]
-            wait_for_proxmox_task(node, upid)
+            wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
             proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
                 "ipconfig0": f"ip={t['ip']}/24,gw={t['gateway']}",
                 "net0": f"virtio,bridge={t['bridge']}",
