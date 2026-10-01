@@ -1,23 +1,56 @@
 {
   "mira": [
     "SMB v1",
-    {"name": "weak-password-policy-win", "vars": {"MINPWLEN": "0"}},
+    {
+      "name": "weak-password-policy-win",
+      "vars": {
+        "MINPWLEN": "0"
+      }
+    },
     "guest-enabled-win",
     "Elevate Guest Account",
     "ad-color-fleet-win"
   ],
   "skeld": [
     "ftp-content-win",
-    {"name": "firewall-allow-rule-win", "vars": {"RULE_NAME": "FTP-In", "LOCAL_PORT": "21", "PROTOCOL": "TCP"}}
+    {
+      "name": "firewall-allow-rule-win",
+      "vars": {
+        "RULE_NAME": "FTP-In",
+        "LOCAL_PORT": "21",
+        "PROTOCOL": "TCP"
+      }
+    }
   ],
   "airship": [
     "centos-vault-repos",
     "selinux-permissive",
-    {"name": "airship-webapp", "vars": {"DB_USER": "airship", "DB_PASS": "airship"}}
+    {
+      "name": "airship-webapp",
+      "vars": {
+        "DB_USER": "airship",
+        "DB_PASS": "airship"
+      }
+    }
   ],
   "polus": [
     "mysql-remote-access",
-    {"name": "mysql-db-user", "vars": {"DB_USER": "airship", "DB_PASS": "airship", "DB_NAME": "airship", "DB_HOST": "%"}},
-    {"name": "local-user", "vars": {"USERNAME": "engineer", "PASSWORD": "engineer1"}}
+    {
+      "name": "mysql-db-user",
+      "vars": {
+        "DB_USER": "airship",
+        "DB_PASS": "airship",
+        "DB_NAME": "airship",
+        "DB_HOST": "%"
+      }
+    },
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "engineer",
+        "PASSWORD": "engineer1"
+      }
+    },
+    "suid-find"
   ]
 }
