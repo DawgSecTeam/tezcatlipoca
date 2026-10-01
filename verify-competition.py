@@ -856,10 +856,8 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
                         # over gateway SSH — fall back to it before failing the gate.
                         try:
                             box_ip = f"192.168.{ident}.{boxes[idx[name]]['last_octet']}"
-                            _box_user = load_users_config(comp_dir)[0]
                             proc = ssh_via_gateway(ctx or {"ssh_key_path": str(resolve_ssh_key())},
-                                                   box_ip, _realm_cmd, timeout=60,
-                                                   user=_box_user)
+                                                   box_ip, _realm_cmd, timeout=60)
                             kv = _kv(proc.stdout)
                             if kv.get("JOINED") is None:
                                 raise CheckError(f"unparseable realm probe: {proc.stdout[:80]}")
