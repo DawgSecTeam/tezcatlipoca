@@ -401,7 +401,8 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             "password": box_password,
             "configurations": configurations,
         })
-        _fill_identity_vars(machines[-1], machines)
+    for machine in machines:
+        _fill_identity_vars(machine, machines)
 
     config_path = comp_dir / "nakon-config.json"
     config_path.write_text(json.dumps({"machines": machines}, indent=2))
