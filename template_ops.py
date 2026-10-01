@@ -22,6 +22,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import requests
+
 from constants import (
     ENGINE_TEMPLATE_NAME,
     ENGINE_TEMPLATE_VMID_OFFSET,
@@ -352,6 +354,21 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     # rebuild it from scratch rather than resuming a half-bootstrapped disk. An
     # untagged leftover passes with the ownership warning; anything tagged without
     # ours is refused — the reserved slot is not a license to destroy foreign VMs.
+    # Exception (live-found 2026-09-29): a full clone inherits the BASE image's tags,
+    # so a config-PUT failure between the clone and the tag PUT leaves a leftover
+    # wearing 'cloud-init;template' — the strict guard would refuse it forever. A
+    # NOT-yet-converted VM on the reserved slot carrying the reserved NAME is our
+    # dead attempt; adopt it loudly. Converted templates keep the strict check.
+    from golden_ops import _is_template  # local: golden_ops imports this module back
+
+    if vmid in {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]} \
+            and not _is_template(node, vmid):
+        vm = next(v for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
+                  if v["vmid"] == vmid)
+        if (vm.get("name") or "") == ENGINE_TEMPLATE_NAME:
+            print(f"    vmid {vmid}: unconverted '{ENGINE_TEMPLATE_NAME}' leftover from a "
+                  f"dead template build — adopting and rebuilding")
+            destroy_vm_if_exists(node, vmid, expect_tags=None)
     destroy_vm_if_exists(node, vmid, expect_tags=expect_tags)
 
     live_vmids = {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
@@ -379,8 +396,27 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
         # Portable-node mode (realm): boot the build VM on the PLANNED engine mgmt IP —
         # the deployed engine is destroyed by phase 1 by now, so the address is free,
         # and the converted template's config then matches what apply #1 sets on clones.
-        cfg["ipconfig0"] = f"ip={mgmt_ip}/24,gw={os.environ.get('TF_VAR_engine_mgmt_gw', '')}"
-    proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data=cfg)
+        gw = os.environ.get("TF_VAR_engine_mgmt_gw", "")
+        cfg["ipconfig0"] = f"ip={mgmt_ip}/24" + (f",gw={gw}" if gw else "")
+    # A PUT landing immediately after the clone task commits can 400 with a bare
+    # "Parameter verification failed" while pvefs finishes publishing the new VM's
+    # config (amongus-cde-2026 2026-09-30: three deploys in a row died here; the
+    # identical payload succeeded against the same vmid seconds later). Retry the
+    # transient window, and surface the response body if it's a real rejection.
+    for attempt in range(4):
+        try:
+            proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data=cfg)
+            break
+        except requests.HTTPError as e:
+            body = ""
+            if e.response is not None:
+                body = e.response.text[:300]
+                if e.response.status_code != 400:
+                    raise
+            if attempt == 3:
+                raise RuntimeError(
+                    f"engine-template config PUT kept failing on vmid {vmid}: {body}") from e
+            time.sleep(2 * (attempt + 1))
     print(f"    {vm_name} cloned from base image (vmid {vmid})")
 
     start_vm(node, vmid)
@@ -396,8 +432,11 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                                "set TF_VAR_engine_mgmt_ip (portable-node mode) or fix "
                                "the agent channel")
     forget_engine_host_key(build_ip)
+    # 300s lost twice to first-boot-under-load (parallel deploy saturating the node
+    # while this clone regenerates host keys + applies cloud-init; amongus-cde-2026
+    # 2026-09-30 — manual SSH succeeded minutes after each timed-out wait).
     if not wait_for_ssh(ctx["ssh_key_path"], ctx.get("vm_username", "ubuntu"), build_ip,
-                        timeout=300):
+                        timeout=900):
         raise RuntimeError(f"engine-template build VM {build_ip} never accepted SSH")
     build_ctx = {**ctx, "scoring_engine_ip": build_ip,
                  # the settle probe and every bootstrap SSH authenticate as the
@@ -448,8 +487,14 @@ def _discover_vm_ipv4(node, vmid):
 
 
 def destroy_engine_template(node, engine_vmid, expect_tags=None):
-    """Remove this competition's engine template. Callers destroy its clones first."""
-    destroy_vm_if_exists(node, engine_template_vmid(engine_vmid), expect_tags=expect_tags)
+    """Remove this competition's engine template. Callers destroy its clones first.
+    A FOREIGN VM in the slot is skipped with a loud warning instead of aborting the
+    teardown — same policy as destroy_golden_set."""
+    try:
+        destroy_vm_if_exists(node, engine_template_vmid(engine_vmid), expect_tags=expect_tags)
+    except RuntimeError as e:
+        print(f"    WARNING: engine template slot is FOREIGN — skipping it and "
+              f"continuing: {e}")
 
 
 def git_commit_info():

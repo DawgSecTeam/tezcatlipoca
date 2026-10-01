@@ -1,0 +1,7 @@
+{
+  "title": "CDE 2026 \u2014 Welcome, crew check-in",
+  "open_offset_min": 0,
+  "due_offset_min": 30,
+  "close_offset_min": 60,
+  "description_file": "briefing.md"
+}

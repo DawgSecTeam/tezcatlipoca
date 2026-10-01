@@ -436,6 +436,27 @@ def read_event_conf(ctx):
     if box_creds:
         secrets["box_creds"] = box_creds
 
+    # Packet dual-credit adds further credlists (e.g. domain.credlist); recover them all.
+    extra = {}
+    listing = subprocess.run(
+        ["ssh", "-i", key, *engine_ssh_opts(ctx),
+         f"{scoring_user}@{scoring_ip}",
+         "ls /opt/quotient/config/credlists/ 2>/dev/null || true"],
+        capture_output=True, text=True, check=False, timeout=30).stdout
+    for fname in listing.split():
+        if fname == "linux.credlist" or not fname.endswith(".credlist"):
+            continue
+        pairs = {}
+        for line in _read(f"/opt/quotient/config/credlists/{fname}").splitlines():
+            line = line.strip()
+            if line and "," in line:
+                user, pw = line.split(",", 1)
+                pairs[user] = pw
+        if pairs:
+            extra[fname[:-len(".credlist")]] = pairs
+    if extra:
+        secrets["extra_credlists"] = extra
+
     for line in _read("/opt/quotient/.env").splitlines():
         if line.startswith("POSTGRES_PASSWORD="):
             secrets["postgres_password"] = line.split("=", 1)[1]
@@ -445,8 +466,14 @@ def read_event_conf(ctx):
 
 
 def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
-                    postgres_password, redis_password, box_creds, inject_password=None):
-    """Build event.conf and push it to the scoring engine with the per-run secrets."""
+                    postgres_password, redis_password, box_creds, inject_password=None,
+                    extra_credlists=None):
+    """Build event.conf and push it to the scoring engine with the per-run secrets.
+
+    extra_credlists maps additional credlist names to {user: pw} (packet dual-credit's
+    domain.credlist); each is pushed as <name>.credlist next to linux.credlist and must
+    be referenced by some check's credlist override so build_event_conf declares it in
+    CredlistSettings."""
 
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
@@ -495,6 +522,21 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
         ],
         check=True, timeout=30,
     )
+
+    for list_name, pairs in (extra_credlists or {}).items():
+        content = "".join(f"{user},{pw}\n" for user, pw in pairs.items())
+        content_b64 = base64.b64encode(content.encode()).decode()
+        subprocess.run(
+            [
+                "ssh", "-i", key,
+                *engine_ssh_opts(ctx),
+                f"{scoring_user}@{scoring_ip}",
+                f"sudo mkdir -p /opt/quotient/config/credlists && echo '{content_b64}' | base64 -d | sudo tee /opt/quotient/config/credlists/{list_name}.credlist > /dev/null && "
+                f"sudo chmod 600 /opt/quotient/config/credlists/{list_name}.credlist",
+            ],
+            check=True, timeout=30,
+        )
+        print(f"  Pushed credlist {list_name}.credlist ({len(pairs)} account(s))")
 
     env_content = (
         f"POSTGRES_PASSWORD={postgres_password}\n"

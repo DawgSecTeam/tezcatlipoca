@@ -18,6 +18,7 @@ except ImportError as e:
 
 from dotenv import load_dotenv
 
+from domain_ops import team_domain
 from range_ops import guest_agent_exec_root, guest_agent_exec_windows, vm_id_for
 from quotient.setup import expected_service_names
 from ssh_ops import engine_ssh_opts, gateway_proxy
@@ -211,6 +212,80 @@ def check_no_default_creds(comp_dir):
             print(f"      {l}")
         return False
     print(f"  PASS  {len(box_lines)} box credential line(s), no default literals found")
+    return True
+
+
+def check_packet_creds(comp_dir, profile):
+    """--packet gate: credentials.txt must carry the packet's published default
+    credentials verbatim. In a packet-driven competition the packet IS the credential
+    distribution — teams rotate at minute zero — so the guard inverts: instead of
+    rejecting known-default literals, every published pair must match exactly."""
+    creds = profile.get("credentials") or {}
+    credlists = creds.get("credlists") or {}
+    expected_pw = creds.get("box_password")
+    path = comp_dir / "credentials.txt"
+    if not path.exists():
+        print("  FAIL  — no credentials.txt to check against the packet")
+        return False
+    lines = path.read_text().splitlines()
+    ok = True
+    checked = 0
+    if expected_pw:
+        login = next((l for l in lines if l.startswith("box-login")), None)
+        got = login.split()[-1] if login else None
+        if got != str(expected_pw):
+            print(f"  FAIL  box-login password != packet default "
+                  f"(for `{creds.get('box_username')}`)")
+            ok = False
+        checked += 1
+    for prefix, users in (("box-credlist-", credlists.get("linux") or {}),
+                          ("box-credlist-domain-", credlists.get("domain") or {})):
+        for user, pw in users.items():
+            line = next((l for l in lines if l.startswith(f"{prefix}{user} ")), None)
+            got = line.split()[-1] if line else None
+            if got != str(pw):
+                print(f"  FAIL  credlist account `{user}` "
+                      f"({'domain' if 'domain' in prefix else 'local'}) "
+                      "password != packet default")
+                ok = False
+            checked += 1
+    if ok:
+        print(f"  PASS  {checked} packet-published credential(s) match credentials.txt")
+    return ok
+
+
+def check_packet_accounts(ctx, profile, boxes):
+    """--packet gate: out-of-scope decoy accounts (scorebot/blackteam/red_scoring) exist
+    on a Linux box. The packet promises these accounts exist and stay untouched — teams
+    enumerate local accounts in minute-zero IR, and a missing decoy breaks that promise.
+    Unprovable (SSH dead) is a SKIP, not a pass."""
+    users = list((profile.get("credentials") or {}).get("out_of_scope") or [])
+    if not users:
+        return True
+    linux_boxes = [b for b in boxes if "win" not in str(b.get("os", "")).lower()]
+    if not linux_boxes:
+        print("  SKIP  — no Linux box to probe for out-of-scope accounts")
+        return True
+    target = linux_boxes[0]
+    probe = "; ".join(
+        f"id -u {u} >/dev/null 2>&1 && echo {u}=1 || echo {u}=0" for u in users)
+    try:
+        proc = ssh_via_gateway(ctx, target["ip"], probe)
+    except (CheckError, subprocess.TimeoutExpired) as e:
+        print(f"  SKIP  — couldn't probe {target.get('name', target['ip'])} ({e})")
+        return True
+    if proc.returncode != 0:
+        print(f"  SKIP  — probe failed rc={proc.returncode}: "
+              f"{(proc.stderr or '').strip()[:120]}")
+        return True
+    kv = dict(l.split("=", 1) for l in proc.stdout.split() if "=" in l)
+    missing = [u for u in users if kv.get(u) != "1"]
+    if missing:
+        print(f"  FAIL  out-of-scope account(s) missing on "
+              f"{target.get('name', target['ip'])}: {', '.join(missing)}")
+        return False
+    print(f"  PASS  {len(users)} out-of-scope account(s) present on "
+          f"{target.get('name', target['ip'])}")
     return True
 
 
@@ -868,7 +943,7 @@ def _valid_domain_sid(sid):
             and all(p.isdigit() for p in parts[3:]))
 
 
-def check_domains(comp_dir, teams, boxes):
+def check_domains(comp_dir, teams, boxes, ctx=None):
     """Domain gate (replaces the freeze's operator attestation with a live check).
 
     Per team: the DC answers Get-ADDomain for team<id>.local with a syntactically
@@ -921,7 +996,7 @@ def check_domains(comp_dir, teams, boxes):
     domain_sids, machine_sids = {}, {}
     for team_key, team in sorted(teams.items()):
         ident = team["identifier"]
-        domain = f"team{ident}.local"
+        domain = team_domain(comp_dir, ident)
         for name, role in roles.items():
             vmid = vm_id_for(ident, idx[name])
             windows = "win" in (boxes[idx[name]].get("template") or "").lower()
@@ -930,10 +1005,31 @@ def check_domains(comp_dir, teams, boxes):
                     rc, out, err = guest_agent_exec_windows(node, vmid, _WIN_DOMAIN_PS, timeout=120)
                     kv = _kv(out)
                 else:
-                    rc, out, err = guest_agent_exec_root(
-                        node, vmid, f"realm list 2>/dev/null | grep -qi 'domain-name: *{domain}' "
-                                    f"&& echo JOINED=1 || echo JOINED=0", timeout=60)
-                    kv = _kv(out)
+                    _realm_cmd = (f"realm list 2>/dev/null | grep -qi 'domain-name: *{domain}' "
+                                  f"&& echo JOINED=1 || echo JOINED=0")
+                    try:
+                        rc, out, err = guest_agent_exec_root(node, vmid, _realm_cmd, timeout=60)
+                        kv = _kv(out)
+                    except Exception as agent_err:
+                        # The PVE agent channel has a per-instance exec breaker that can
+                        # stay tripped (amongus-cde 2026-09-30: airship's failed join
+                        # probes tripped it permanently). Linux boxes are still reachable
+                        # over gateway SSH — fall back to it before failing the gate.
+                        try:
+                            box_ip = f"192.168.{ident}.{boxes[idx[name]]['last_octet']}"
+                            proc = ssh_via_gateway(ctx or {"ssh_key_path": str(resolve_ssh_key())},
+                                                   box_ip, _realm_cmd, timeout=60)
+                            kv = _kv(proc.stdout)
+                            if kv.get("JOINED") is None:
+                                raise CheckError(f"unparseable realm probe: {proc.stdout[:80]}")
+                            print(f"  INFO  {team_key}/{name}: agent channel unavailable, "
+                                  f"probed over gateway SSH")
+                        except Exception as ssh_err:
+                            print(f"  FAIL  {team_key}/{name}: guest-agent probe failed "
+                                  f"({str(agent_err)[:80]}) and gateway-SSH fallback failed "
+                                  f"({str(ssh_err)[:60]})")
+                            ok = False
+                            continue
             except Exception as e:
                 print(f"  FAIL  {team_key}/{name}: guest-agent probe failed ({str(e)[:80]})")
                 ok = False
@@ -1122,6 +1218,11 @@ def main():
                         help="validation comps that deliberately plant zero misconfigurations "
                              "(box_vulns.json all-empty): skip the misconfig gates instead of "
                              "failing on them")
+    parser.add_argument("--packet", dest="packet_profile", default=None,
+                        help="packet profile (packets/<event>/packet.yaml): adds packet-"
+                             "fidelity gates — credentials.txt must match the packet's "
+                             "published default credentials, and the packet's out-of-scope "
+                             "accounts must exist on the boxes")
     parser.add_argument("--freeze", action="store_true",
                         help="M4: after a PASSING verify (all gates + plant-coverage), "
                              "record the template hashes + code commit in .frozen.json. "
@@ -1153,6 +1254,13 @@ def main():
         print(f"ERROR: competition directory not found: {comp_dir}", file=sys.stderr)
         return 2
 
+    # Multi-node: activate the recorded placement (env -> engine host, node routes
+    # for any node-scoped API call) before anything talks to Proxmox.
+    from nodes_ops import activate_placement, read_placement
+    placement = read_placement(comp_dir)
+    if placement:
+        activate_placement(placement)
+
     try:
         ctx = build_ctx(args, comp_dir)
         teams = load_teams(comp_dir)
@@ -1172,6 +1280,17 @@ def main():
     logins_ok, admin_session = check_logins(base_url, teams, admin_password)
     print("\n  (default-credential regression guard)")
     no_default_creds_ok = check_no_default_creds(comp_dir)
+    packet_profile = None
+    if args.packet_profile:
+        try:
+            from packet_ops import load_profile
+            packet_profile = load_profile(args.packet_profile)
+        except SystemExit as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+        print("\n  (packet fidelity — credentials + out-of-scope accounts)")
+        packet_creds_ok = check_packet_creds(comp_dir, packet_profile)
+        packet_accounts_ok = check_packet_accounts(ctx, packet_profile, boxes)
     # boxes.json (box TYPES, keyed by name in box_services.json) — nakon-config
     # machines carry team-suffixed names the pin map doesn't use
     try:
@@ -1208,7 +1327,7 @@ def main():
     print("\n  (M4 plant coverage — expected vs. actually planted, per machine)")
     coverage_checked, coverage_ok = check_plant_coverage(comp_dir)
     print("\n  (AD domains — promotion, joins, AD plants, DomainSID uniqueness)")
-    domains_ok = check_domains(comp_dir, teams, boxes)
+    domains_ok = check_domains(comp_dir, teams, boxes, ctx=ctx)
 
     gate = {
         "logins": logins_ok,
@@ -1282,6 +1401,9 @@ def main():
     if coverage_checked and coverage_ok is not None:
         print(f"  plant coverage   : {'PASS' if coverage_ok else 'FAIL'}"
               + ("" if coverage_ok else " — unplanted configs above"))
+    if packet_profile is not None:
+        print(f"  packet_creds     : {'PASS' if packet_creds_ok else 'FAIL'}")
+        print(f"  packet_accounts  : {'PASS' if packet_accounts_ok else 'FAIL'}")
     hashes = freeze_hashes(comp_dir)
     if hashes and (hashes.get("engine") or {}).get("hash"):
         golden_short = {k: v["hash"][:12] for k, v in (hashes.get("golden") or {}).items()}

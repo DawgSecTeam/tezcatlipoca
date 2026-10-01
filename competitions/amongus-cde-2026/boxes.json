@@ -1,0 +1,36 @@
+[
+  {
+    "name": "mira",
+    "last_octet": 2,
+    "cpu": 2,
+    "memory_mb": 4096,
+    "disk_gb": 60,
+    "disk_iface": "sata0",
+    "template": "base-windows-server-2019"
+  },
+  {
+    "name": "skeld",
+    "last_octet": 3,
+    "cpu": 2,
+    "memory_mb": 4096,
+    "disk_gb": 60,
+    "disk_iface": "sata0",
+    "template": "base-windows-server"
+  },
+  {
+    "name": "airship",
+    "last_octet": 4,
+    "cpu": 2,
+    "memory_mb": 2048,
+    "disk_gb": 20,
+    "template": "base-centos8-fix"
+  },
+  {
+    "name": "polus",
+    "last_octet": 5,
+    "cpu": 1,
+    "memory_mb": 2048,
+    "disk_gb": 20,
+    "template": "base-ubuntu20.04-fix"
+  }
+]

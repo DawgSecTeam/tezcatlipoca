@@ -51,3 +51,8 @@ competitions/*/*.tfstate*
 competitions/*/terraform.tfvars*
 competitions/*/*.log
 terraform/terraform.tfvars*
+# packet-compiled secrets (compile-packet.py): packet-published creds, decoy
+# account passwords, AD account passwords
+competitions/*/passwords.json
+competitions/*/box_baseline.json
+competitions/*/domain_accounts.json

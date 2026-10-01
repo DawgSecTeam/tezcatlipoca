@@ -175,7 +175,8 @@ class WindowsPreStop(unittest.TestCase):
             destroy.pre_stop_windows_boxes(
                 {"team1": {"identifier": "120"}},
                 [{"name": "dc01", "template": "base-windows-server"},
-                 {"name": "web01", "template": "base-ubuntu24.04-fix"}])
+                 {"name": "web01", "template": "base-ubuntu24.04-fix"}],
+                default_node="node")
         stops = [p for m, p in calls if m == "POST" and "/status/stop" in p]
         self.assertEqual(stops, ["/nodes/node/qemu/1400/status/stop"])
         self.assertIn("Pre-stopped 120-dc01", out.getvalue())

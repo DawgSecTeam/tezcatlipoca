@@ -62,12 +62,42 @@ variable "golden_template_ids" {
 }
 
 variable "teams" {
-  description = "Map of team key → identifier (used as subnet third octet)"
-  type        = map(object({ identifier = string, password = string }))
+  description = "Map of team key → identifier (used as subnet third octet). slot picks the hosting node: 0 = engine node (default — every legacy team), 1..4 = satellite index into var.satellites."
+  type = map(object({
+    identifier = string
+    password   = string
+    slot       = optional(number, 0)
+  }))
   default = {
     team1 = { identifier = "101", password = "team1pass" }
     team2 = { identifier = "102", password = "team2pass" }
   }
+}
+
+variable "satellites" {
+  description = "Exactly 4 entries (deploy pads unused slots with dummies; providers of resource-less slots are never configured). Index i-1 backs provider alias sat{i} and every slot-i resource group."
+  type = list(object({
+    endpoint  = string
+    api_token = string
+    node      = string
+    datastore = string
+  }))
+  default = []
+}
+
+variable "golden_template_ids_by_slot" {
+  description = "Per-slot positional golden template vmids (same order as boxes_per_team). '0' is the engine node. Legacy fallback: when a slot is missing here, team_box_satN falls back to var.golden_template_ids (pre-multi-node tfvars)."
+  type        = map(list(number))
+  default     = {}
+}
+
+variable "satellite_routes" {
+  description = "Engine static routes, one per satellite: its anchor team's subnet via the jump's mgmt IP. Written + persisted on the engine by the team_nics provisioner; empty in single-node deploys."
+  type = list(object({
+    subnet = string
+    via    = string
+  }))
+  default = []
 }
 
 variable "boxes_per_team" {

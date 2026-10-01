@@ -112,7 +112,11 @@ def load_users_config(comp_dir):
               f"distro system account (cloud-init would adopt it and brick auth) — using "
               f"{BOX_USERNAME_DEFAULT} instead (docs/known-issues.md).")
         box_username = BOX_USERNAME_DEFAULT
-    if not (len(credlist_usernames) == 3 and all(valid_unix_username(n) for n in credlist_usernames)):
+    # 1..8 (was exactly 3): packet-compiled bundles carry whatever accounts the packet
+    # publishes (CDE ships 2). fix_services_on_boxes iterates the pairs, so the count
+    # was never load-bearing — only the interactive prompt kept the 3.
+    if not (1 <= len(credlist_usernames) <= 8
+            and all(valid_unix_username(n) for n in credlist_usernames)):
         credlist_usernames = list(CREDLIST_USERNAMES_DEFAULT)
     return box_username, credlist_usernames
 

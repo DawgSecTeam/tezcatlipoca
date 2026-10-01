@@ -1,3 +1,6 @@
 name CDE 2026
-scenario Cyber defense exercise by UMBC Cyberdawgs
-difficulty 4
+scenario MIRA Corp incident response (Among Us themed): investigate the Imposter activity on MIRA's systems while defending them and upholding business operations.
+difficulty 5
+domain_prefix mira-
+domain_suffix .corp.sus
+packet_source packets/cde-2026/packet.yaml

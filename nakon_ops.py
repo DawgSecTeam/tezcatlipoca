@@ -92,6 +92,46 @@ def _config_name(c):
     return c if isinstance(c, str) else c["name"]
 
 
+def _cross_box_ip(machines, machine_name, target_box):
+    """Same team's copy of target_box's IP, for REQUIRED_VARS "ip:<box>" vars."""
+    _, _, identifier = machine_name.rpartition("-team")
+    for other in machines:
+        box, _, team = other["name"].rpartition("-team")
+        if box == target_box and team == identifier:
+            return other["ip"]
+    raise SystemExit(
+        f"  ERROR: cross-box var wants {target_box}'s IP for '{machine_name}' but no "
+        f"machine '{target_box}-team{identifier}' exists in nakon-config.json — check "
+        f"the box name in the REQUIRED_VARS \"ip:<box>\" kind.")
+
+
+def _is_identity_kind(kind):
+    return str(kind) == "ip" or str(kind).startswith("ip:")
+
+
+def _fill_identity_vars(machine, machines):
+    """Fill REQUIRED_VARS identity vars in the BASE machine list (generate time).
+
+    The stage-file generation fills per stage too, but the bundle is built from THIS
+    list — a config whose script reads an identity var (airship-webapp's $DB_HOST)
+    needs it declared here or the bundle lint rejects the whole build."""
+    for c in machine["configurations"]:
+        if isinstance(c, str):
+            continue
+        required = REQUIRED_VARS.get(c["name"]) or {}
+        if not required:
+            continue
+        vars_ = c.setdefault("vars", {})
+        for var, kind in required.items():
+            if not _is_identity_kind(kind):
+                continue
+            if str(kind) == "ip":
+                vars_[var] = machine["ip"]
+            else:
+                vars_[var] = _cross_box_ip(machines, machine["name"],
+                                           str(kind).split(":", 1)[1])
+
+
 def _validate_pin_vars(configurations, where):
     """Reject bare-name (or var-incomplete) selections of configs that require vars.
 
@@ -327,9 +367,14 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
 
 
     # Pin-var gate (M4): bare-name selections of var-requiring configs die here, at
-    # generate time, instead of as a mid-plant rc=2/rc=127.
+    # generate time, instead of as a mid-plant rc=2/rc=127. Baseline pins
+    # (box_baseline.json — packet-promised decoy/local accounts) plant like vulns and
+    # get the same gate.
+    baseline_path = comp_dir / "box_baseline.json"
+    baseline = json.loads(baseline_path.read_text()) if baseline_path.exists() else {}
     for box_name, (services, vulns) in box_configs.items():
-        _validate_pin_vars(list(services) + list(vulns), f"pins for '{box_name}'")
+        _validate_pin_vars(list(services) + list(vulns) + list(baseline.get(box_name, [])),
+                           f"pins for '{box_name}'")
 
     machines = []
     for i, (team, box) in enumerate(
@@ -338,16 +383,26 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
         if is_unmanaged(box):
             continue  # firewall/appliance: no nakon plant (see utils.is_unmanaged)
         services, vulns = box_configs[box["name"]]
-        # Scoring-only override keys (PIN_CHECK_OVERRIDES) never ride the machine list:
-        # nakon plants the catalog config once per (name, vars); the overrides shape
-        # only the Quotient check (quotient/setup.py). The box_services.json write-back
-        # above keeps them, so push_event_conf still sees them later in the deploy.
-        configurations = [
-            c if isinstance(c, str)
-            else {k: v for k, v in c.items() if k not in PIN_CHECK_OVERRIDES}
-            for c in services + vulns
-            if (c if isinstance(c, str) else c["name"]) not in DOMAIN_INFRA_CONFIGS
-        ]
+        # Three kinds of pin never ride the machine list:
+        #   DOMAIN_INFRA_CONFIGS — domain_ops re-injects them per team with real vars;
+        #   score-only pins      — scoring constructs with no catalog config (native
+        #                          services like AD's own DNS); quotient/setup builds
+        #                          their event.conf check directly;
+        #   PIN_CHECK_OVERRIDES  — scoring-only keys on a real plant (strip the keys,
+        #                          keep the config). The box_services.json write-back
+        #                          above keeps them, so push_event_conf still sees them
+        #                          later in the deploy.
+        configurations = []
+        for c in services + vulns + list(baseline.get(box["name"], [])):
+            name = c if isinstance(c, str) else c["name"]
+            if name in DOMAIN_INFRA_CONFIGS:
+                continue
+            if isinstance(c, dict) and c.get("score_only"):
+                continue
+            configurations.append(
+                c if isinstance(c, str)
+                else {k: v for k, v in c.items()
+                      if k not in PIN_CHECK_OVERRIDES and k != "plant_only"})
         configurations.sort(
             key=lambda c: (c if isinstance(c, str) else c["name"]) in DISRUPTIVE_CONFIGS
         )
@@ -361,11 +416,64 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             "password": box_password,
             "configurations": configurations,
         })
+    for machine in machines:
+        _fill_identity_vars(machine, machines)
 
     config_path = comp_dir / "nakon-config.json"
     config_path.write_text(json.dumps({"machines": machines}, indent=2))
     os.chmod(config_path, 0o600)
     return config_path
+
+
+def _golden_stage_machines(full, boxes, unbooted, anchor_identifier, box_index_by_name,
+                           identity_banned):
+    """One machine per box type at the anchor subnet's golden IP. The anchor is
+    team1 for slot 0 (historical math) and the satellite's first local team for
+    satellite slots — the golden must sit on a bridge that exists on the host
+    building it, with that node's jump routing the engine's plant there."""
+    seen_types = set()
+    golden_machines = []
+    for m in full:
+        box_name = m["name"].rsplit("-team", 1)[0]
+        if (m["ip"].split(".")[2] != str(anchor_identifier) or box_name in seen_types
+                or box_name in unbooted):
+            continue
+        seen_types.add(box_name)
+        box_idx = box_index_by_name[box_name]
+        golden_kept = [c for c in m["configurations"]
+                       if (c if isinstance(c, str) else c["name"]) not in POST_CLONE_CONFIGS]
+        banned = sorted({(c if isinstance(c, str) else c["name"]) for c in golden_kept}
+                        & identity_banned)
+        if banned:
+            raise SystemExit(
+                f"  ERROR: identity-dependent config(s) {banned} would ride the golden "
+                f"disk of '{box_name}' and clone the golden box's address into every "
+                f"team. Add them to REPAIR_STAGE_CONFIGS or FINAL_STAGE_CONFIGS "
+                f"(constants.py) so they plant per machine post-clone.")
+        golden_machines.append({
+            **m,
+            "id": len(golden_machines) + 1,
+            "name": f"{box_name}-golden",
+            "ip": f"192.168.{anchor_identifier}.{GOLDEN_IP_BASE + box_idx}",
+            "configurations": golden_kept,
+        })
+    return golden_machines
+
+
+def generate_slot_golden_config(comp_dir, teams, boxes, unbooted, anchor_identifier, slot):
+    """The satellite slot's golden-stage config: identical planted content to slot 0
+    (per-box golden hashes stay identical across slots), different transport IPs —
+    the anchor team's subnet, reachable from the engine via the jump. Returns the
+    path (0600, per-run-secret class)."""
+    full = json.loads((comp_dir / "nakon-config.json").read_text())["machines"]
+    identity_banned = {name for name, kinds in REQUIRED_VARS.items() if "ip" in kinds.values()}
+    box_index_by_name = {b["name"]: i for i, b in enumerate(boxes)}
+    machines = _golden_stage_machines(full, boxes, unbooted, anchor_identifier,
+                                      box_index_by_name, identity_banned)
+    path = comp_dir / f".nakon-golden-slot{slot}.json"
+    path.write_text(json.dumps({"machines": machines}, indent=2))
+    os.chmod(path, 0o600)
+    return path
 
 
 def generate_stage_configs(comp_dir, teams, boxes, box_username="ubuntu", unbooted=frozenset()):
@@ -397,33 +505,11 @@ def generate_stage_configs(comp_dir, teams, boxes, box_username="ubuntu", unboot
     # address into the disk. Planted on the golden they would bake the golden's IP
     # into every linked clone, so generate refuses them there and fills them per
     # machine in the repair/final stages instead.
-    identity_banned = {name for name, kinds in REQUIRED_VARS.items() if "ip" in kinds.values()}
+    identity_banned = {name for name, kinds in REQUIRED_VARS.items()
+                       if any(_is_identity_kind(kind) for kind in kinds.values())}
 
-    seen_types = set()
-    golden_machines = []
-    for m in full:
-        box_name = m["name"].rsplit("-team", 1)[0]
-        if (m["ip"].split(".")[2] != team1_identifier or box_name in seen_types
-                or box_name in unbooted):
-            continue
-        seen_types.add(box_name)
-        box_idx = box_index_by_name[box_name]
-        golden_kept = [c for c in m["configurations"]
-                       if config_name(c) not in POST_CLONE_CONFIGS]
-        banned = sorted({config_name(c) for c in golden_kept} & identity_banned)
-        if banned:
-            raise SystemExit(
-                f"  ERROR: identity-dependent config(s) {banned} would ride the golden "
-                f"disk of '{box_name}' and clone the golden box's address into every "
-                f"team. Add them to REPAIR_STAGE_CONFIGS or FINAL_STAGE_CONFIGS "
-                f"(constants.py) so they plant per machine post-clone.")
-        golden_machines.append({
-            **m,
-            "id": len(golden_machines) + 1,
-            "name": f"{box_name}-golden",
-            "ip": f"192.168.{team1_identifier}.{GOLDEN_IP_BASE + box_idx}",
-            "configurations": golden_kept,
-        })
+    golden_machines = _golden_stage_machines(full, boxes, unbooted, team1_identifier,
+                                             box_index_by_name, identity_banned)
 
     def stage_machines(want, include_golden_stage=False):
         out = []
@@ -438,8 +524,13 @@ def generate_stage_configs(comp_dir, teams, boxes, box_username="ubuntu", unboot
                 required = REQUIRED_VARS.get(name) or {}
                 if required:
                     # Machine identity wins: fill/overwrite "ip"-kind vars with THIS
-                    # machine's address, whatever the pin said.
+                    # machine's address, and "ip:<box>"-kind vars with the same team's
+                    # copy of that box — whatever the pin said.
                     filled = {v: m["ip"] for v, kind in required.items() if kind == "ip"}
+                    for v, kind in required.items():
+                        if str(kind).startswith("ip:"):
+                            filled[v] = _cross_box_ip(full, m["name"],
+                                                      str(kind).split(":", 1)[1])
                     if filled:
                         pinned = (c.get("vars") or {}) if isinstance(c, dict) else {}
                         c = {"name": name, "vars": {**pinned, **filled}}
@@ -582,43 +673,54 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
                 "refusing to start a plant that would die mid-way.")
         failed_steps = []
         machines_json = None
-        proc = subprocess.Popen(ssh_base + [deploy_cmd], stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, bufsize=1)
+        # Long plants (minutes, over the operator's LAN) sometimes lose the outer
+        # ssh session outright — rc=255 with no FAILED step is a transport death,
+        # not a plant verdict. Re-run the bundle: steps are idempotent re-plants.
+        for attempt in range(1, 4):
+            proc = subprocess.Popen(ssh_base + [deploy_cmd], stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, bufsize=1)
 
-        def _pump():
-            nonlocal machines_json
-            for line in proc.stdout:
-                print(line, end="")
-                if "FAILED" in line:
-                    failed_steps.append(line.strip())
-                # nakon deploy --json prints the structured outcomes as the final
-                # line: one JSON object with a "machines" key. Older nakon versions
-                # (or a failed bootstrap) simply never emit it — coverage then falls
-                # back to the failed-lines tally only.
-                stripped = line.strip()
-                if stripped.startswith("{") and '"machines"' in stripped:
-                    try:
-                        parsed = json.loads(stripped)
-                        if isinstance(parsed.get("machines"), list):
-                            machines_json = parsed["machines"]
-                    except ValueError:
-                        pass
+            def _pump():
+                nonlocal machines_json
+                for line in proc.stdout:
+                    print(line, end="")
+                    if "FAILED" in line:
+                        failed_steps.append(line.strip())
+                    # nakon deploy --json prints the structured outcomes as the final
+                    # line: one JSON object with a "machines" key. Older nakon versions
+                    # (or a failed bootstrap) simply never emit it — coverage then falls
+                    # back to the failed-lines tally only.
+                    stripped = line.strip()
+                    if stripped.startswith("{") and '"machines"' in stripped:
+                        try:
+                            parsed = json.loads(stripped)
+                            if isinstance(parsed.get("machines"), list):
+                                machines_json = parsed["machines"]
+                        except ValueError:
+                            pass
 
-        pump = threading.Thread(target=_pump, daemon=True)
-        pump.start()
-        try:
-            proc.wait(timeout=timeout)
-        finally:
-            pump.join(timeout=5)
+            pump = threading.Thread(target=_pump, daemon=True)
+            pump.start()
+            try:
+                proc.wait(timeout=timeout)
+            finally:
+                pump.join(timeout=5)
+            if proc.returncode == 0:
+                return NakonResult(failed_steps, machines_json)
+            if failed_steps or attempt == 3:
+                break
+            print(f"\n  nakon ssh session died (rc=255, no FAILED steps) — "
+                  f"retry {attempt}/3 in 20s...")
+            failed_steps = []
+            machines_json = None
+            time.sleep(20)
         if failed_steps:
             print(f"\n  Nakon plant FAILED steps: {len(failed_steps)}")
             for line in failed_steps[:10]:
                 print(f"    {line[:180]}")
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"nakon deploy failed rc={proc.returncode}"
-                + (f" ({len(failed_steps)} FAILED steps above)" if failed_steps else ""))
-        return NakonResult(failed_steps, machines_json)
+        raise RuntimeError(
+            f"nakon deploy failed rc={proc.returncode}"
+            + (f" ({len(failed_steps)} FAILED steps above)" if failed_steps else ""))
     except subprocess.TimeoutExpired:
         try:
             # Scoped to THIS run's staging path: the remote cmdline carries

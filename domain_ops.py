@@ -3,6 +3,7 @@
 import json
 import os
 import time
+from pathlib import Path
 
 from constants import WINDOWS_ADMIN_USER
 from nakon_ops import _run_single_nakon_config
@@ -21,11 +22,20 @@ from windows_ops import (
     wait_for_windows_sshd,
 )
 from timing import timed
-from utils import PRINT_LOCK, run_concurrent
+from utils import PRINT_LOCK, compfile_value, run_concurrent
 
 
 JOIN_ATTEMPTS = 3
 JOIN_RETRY_WAIT = 60
+
+
+def team_domain(comp_dir, identifier):
+    """Per-team AD domain name. Compfile knobs domain_prefix/domain_suffix (packet
+    profiles: `mira-{team}.corp.sus` compiles to prefix 'mira-' + suffix '.corp.sus');
+    default stays the historical team<identifier>.local."""
+    prefix = compfile_value(Path(comp_dir) / "Compfile", "domain_prefix", "team")
+    suffix = compfile_value(Path(comp_dir) / "Compfile", "domain_suffix", ".local")
+    return f"{prefix}{identifier}{suffix}"
 
 
 def _dc_promoted(node, dc_vmid, domain, marker_present):
@@ -83,11 +93,22 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
     if dc_box is None:
         print("  WARNING: domain_roles.json has no 'dc' box — skipping domain configuration.")
         return
+    # Packet-published AD accounts (domain_accounts.json): planted per team right after
+    # the domain is up, before the misconfig pass. The CDE packet publishes blueteam +
+    # the color accounts as Domain Admins — teams enumerate them in minute zero IR.
+    packet_accounts = []
+    accounts_path = comp_dir / "domain_accounts.json"
+    if accounts_path.exists():
+        try:
+            packet_accounts = json.loads(accounts_path.read_text()).get("accounts") or []
+        except (OSError, ValueError) as e:
+            print(f"  WARNING: could not read domain_accounts.json ({e}) — no packet AD "
+                  "accounts will be planted")
 
     def _deploy_team_domains(item):
         team_key, team = item
         identifier = team["identifier"]
-        domain = f"team{identifier}.local"
+        domain = team_domain(comp_dir, identifier)
         dc_machine_name = f"{dc_box['name']}-team{identifier}"
         dc_machine = all_machines.get(dc_machine_name)
         if dc_machine is None:
@@ -159,6 +180,31 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                     key, scoring_user, scoring_ip, comp_dir, tag=f"{team_key}-ad-misconfigs",
                     strict=False,
                 )
+
+            # Packet-published AD accounts (marker-gated like the misconfigs, so a resume
+            # never re-adds). Each account is Add User Account + Elevate when admin.
+            if packet_accounts:
+                if (comp_dir / f".nakon-domain-{team_key}-ad-accounts.json").exists():
+                    with PRINT_LOCK:
+                        print(f"  [{team_key}] packet AD accounts already planted (resume marker)")
+                else:
+                    pins = []
+                    for acct in packet_accounts:
+                        pins.append({"name": "Add User Account", "vars": {
+                            "username": acct["username"], "password": acct["password"],
+                            "full_name": acct.get("full_name") or acct["username"],
+                            "domain_address": domain,
+                        }})
+                        if acct.get("admin"):
+                            pins.append({"name": "Elevate User Account",
+                                         "vars": {"username": acct["username"]}})
+                    with PRINT_LOCK:
+                        print(f"  [{team_key}] Planting {len(packet_accounts)} packet AD "
+                              f"account(s) on {dc_box['name']}...")
+                    _run_single_nakon_config(
+                        dc_machine, pins,
+                        key, scoring_user, scoring_ip, comp_dir,
+                        tag=f"{team_key}-ad-accounts", strict=False)
 
         if member_boxes:
             with PRINT_LOCK:
@@ -280,4 +326,18 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
     # every nakon pass stages into its own run dir, and bundle builds are serialized
     # operator-side by build_nakon_bundle's lock. Up to ~20 min of reboot-wait per DC
     # team collapses from a sum into a max.
-    run_concurrent(list(teams.items()), _deploy_team_domains, max_workers=4)
+    results = run_concurrent(list(teams.items()), _deploy_team_domains, max_workers=4)
+    # run_concurrent never raises — a team chain that blew up mid-flight (ADDS planted
+    # but misconfigs/joins skipped) used to vanish silently here and only surface as a
+    # verify domains FAIL an hour later (live-found 2026-09-30). Surface every failure,
+    # then fail the phase: resume re-enters per team via the promotion/marker probes.
+    failures = [(item[0], r) for item, r in zip(list(teams.items()), results)
+                if isinstance(r, Exception)]
+    for team_key, exc in failures:
+        with PRINT_LOCK:
+            print(f"  ERROR: [{team_key}] domain chain failed: {str(exc)[:300]}")
+    if failures:
+        raise SystemExit(
+            f"  ERROR: {len(failures)} team domain chain(s) failed (above). Resume with "
+            f"--from-phase 6 — completed promotions are detected and skipped, the "
+            f"remaining misconfigs/accounts/joins re-run per team.")

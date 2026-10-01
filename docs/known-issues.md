@@ -65,6 +65,10 @@ and needed a host-side VM reset; its ADDS effect is a port-block rule + profile 
 - Datastore reality vs the preflight gate (need ≈ teams × Σdisk_gb): hdd 380 GB, ssd 365 GB,
   wkshp-pool ~748 GB free. A 10-box × 2-team comp only fits **wkshp-pool** (user-approved for
   svc-matrix; thin-provisioned actual usage is far below the provisioned gate number).
+  *(update 2026-09-29: hdd has since recovered to ~900 GB free, and the gate accepts an
+  opt-in `TEZ_THIN_HEADROOM` factor — [usage-agents.md](usage-agents.md) — that counts that
+  fraction of the provisioned math, since linked clones on ZFS only allocate written
+  blocks.)*
 - The realm env variant `.env.realm-backup-20260923` (targets .150) carried a stale
   `TF_VAR_template_vm_id=9106` (the engine base preflight hard-fails on it) — fixed in place
   to 955 (`base-ubuntu24.04-fix`).
@@ -587,6 +591,38 @@ phantom box names flagged in place (bad-auto 642675c).
 
 ## Infrastructure failure modes
 
+- **Stale ifupdown2 runtime state breaks `ifreload -a` node-wide** (cyberrange .150,
+  loadtest-2026-09-29): `/run/network/ifstatenew` carried dead bridges from long-gone comps
+  (`vmbr113/120/121/W120/W121`); every API-driven network change on the node then failed with
+  `/sys/class/net/vmbr120/brif/: No such file or directory` — including terraform bridge
+  creates for any comp. Fix applied live: clear `/run/network/ifstatenew` (regenerates from
+  current config), then `ifreload -a`. Any comp on a shared node can re-create this by
+  deleting bridges out-of-band; the API list does NOT show the stale state.
+- **Golden auth cannot complete on SELinux-enforcing templates via the guest agent**
+  (fedora on .150): the qemu-guest-agent domain is confined — `setenforce 0` is denied
+  (`security_setenforce() failed`) and `sed -i` cannot write `/etc/ssh`
+  (`couldn't open temporary file /etc/ssh/...: Permission denied`). Since gateway-proxied SSH
+  may be unavailable during golden build, the agent path is the only path, and fedora goldens
+  cannot be built. Either keep fedora out of lineups on such nodes or flip the template's
+  `/etc/selinux/config` to permissive at template-build time.
+- **`clean_engine_for_template` can hit the WRONG machine on shared mgmt IPs**: the
+  engine-template build VM is booted on the planned engine mgmt IP (static `.250` class), and
+  the cleanup (compose down -v, `.env`/`event.conf` deletion, host-key wipe) is delivered by
+  SSH to that IP. With two engines of two comps (or engine + build VM) up on one node, ARP
+  flaps and the cleanup can land on a LIVE foreign engine — observed: an engine lost
+  `/etc/ssh/ssh_host_*` (every session reset at kex while the listener stayed up) and its
+  `/opt/quotient/.env` + containers. Mitigations until this is structurally fixed: give each
+  concurrent comp its own `TF_VAR_engine_mgmt_ip`, and `ssh_via_gateway` now self-heals the
+  resulting stale TOFU pin. Recovery of a hit engine: `ssh-keygen -A` + `systemctl restart
+  ssh` via the guest agent, then re-run phase 3 (`--from-phase 3`) to restore `.env`,
+  containers, and event.conf.
+- **Concurrent comps race over unclaimed golden/satellite vmids.** Two sessions' automation
+  both allocated ad-hoc template vmids in the same 13xx block within minutes; one comp's
+  golden slot then held a FOREIGN `template`-tagged VM, which the destroy ownership guard
+  correctly refuses to touch — the affected comp must pick a different `--scoring-vmid` (its
+  preflight refuses the squat). Coordinate engine/golden blocks between concurrent sessions
+  before deploying.
+
 - **Fresh clones boot with an empty `/etc/resolv.conf`** (cloud-init ignores `dns.servers` when
   the IP is static), and nakon installs every service with `apt-get`. `fix_dns_on_boxes` exists
   because of a now-deleted helper (`terraform/scripts/prepare_boxes.py`) whose write-up is the
@@ -779,3 +815,53 @@ phantom box names flagged in place (bad-auto 642675c).
   vanish with the node at any time; recovery = physical power cycle + re-verify (the
   scoring loop needs `POST /api/competition/start` + `/api/engine/pause` after the
   engine reboots).
+
+## packet-profile validation (cde-2026 on cyberrange/.150, 2026-09-29/30)
+
+The first packet-compiled deploy (see docs/packet-profiles.md) surfaced nine pipeline
+failures, all fixed in the same commit; recorded here with the shapes that produced
+them, since each is reachable without the packet layer:
+
+- **Unmanaged boxes vs the M4 golden-hash loop** — the first bundle ever carrying an
+  `unmanaged: true` box through phase 4 KeyError'd (`golden_machines_by_box['fw01']`):
+  every prior pfsense comp carried its firewall outside boxes.json. Unmanaged slots
+  now get stable hash entries like unbooted DCs.
+- **Static engine mgmt IP skips the gateway default** — setting
+  `TF_VAR_engine_mgmt_ip` explicitly skipped the branch that defaulted
+  `TF_VAR_engine_mgmt_gw`, so the engine-template build PUT `ipconfig0` with an empty
+  `gw=` → PVE 400 "Parameter verification failed" mid-phase-2. The gw now defaults
+  whenever the IP is static.
+- **Engine-template leftover adoption** — a config-PUT failure between clone and tag
+  PUT leaves a leftover wearing the BASE image's tags (`cloud-init;template`), which
+  the ownership guard then refused forever. Unconverted VMs on the reserved slot with
+  the reserved name are adopted (loudly); converted templates keep the strict check.
+- **Team identifiers vs engine-derived vmid slots** — engine 1080 + default
+  identifiers 101/102 put team2's first box vmid exactly on the engine-template slot
+  (engine+140). `collect_teams` now refuses any identifier whose full 10-slot block
+  overlaps the engine, engine-template, or golden block — the old check covered the
+  engine only, and this collision surfaces hours later at apply #2.
+- **Fedora cloud btrfs root breaks root-disk expansion** — `findmnt -no SOURCE /`
+  reports `/dev/sda3[/root]`; the bracketed suffix broke the partition-digit parse AND
+  resize2fs can't grow btrfs. Expansion now strips the suffix, grows btrfs natively,
+  and tolerates late `/dev/dm-N` (`dmsetup mknodes`) — the base-ubuntu24.04-fix golden
+  ran minutes with the LV mounted but no device node. Failures retry, then fail hard
+  only when the root fs is measurably too small (regression-4x1 shape); unmeasurable
+  warns and continues (the boot-window instability that broke the grow breaks the
+  probe too).
+- **Windows account caps vs packet credentials** — `New-LocalUser -Description` caps
+  at 48 chars (54-57-char decoy descriptions died in ParameterBindingValidation), and
+  local-account creation enforces min length 8 (`airship`/`airship` →
+  InvalidPasswordException while `n0t_sus1` passed). The compiler shortens baseline
+  descriptions and filters sub-8-char credlist passwords out of Windows baseline pins.
+- **Swallowed domain-chain failures** — `deploy_domain_configs` discarded
+  `run_concurrent` results; a team chain that raised right after ADDS promotion left
+  the AD misconfig pass, packet accounts, and member joins silently unplantable (only
+  an hour-later verify domains FAIL revealed it). Failures are now aggregated and fail
+  the phase; `--from-phase 6` re-enters safely (promotion probes + markers).
+- **IIS FTP enforces SSL** — the planted site answers `534 Policy requires SSL`, so
+  the engine's plain-FTP check can never pass. The CDE profile plants the site
+  (`plant_only` pin) and scores port 21 with a score-only Tcp check.
+- **Windows golden first-boot vs node contention** — with a second deploy saturating
+  .150 (load ~20), a fresh sysprep-specialize first boot exceeded 900s AND 1800s.
+  Golden Windows bootstrap timeout raised to 1800s; under contention, wait the load
+  out before rebuilding Windows goldens rather than looping.
