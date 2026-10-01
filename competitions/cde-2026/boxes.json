@@ -1,14 +1,5 @@
 [
   {
-    "name": "fw01",
-    "last_octet": 1,
-    "cpu": 1,
-    "memory_mb": 2048,
-    "disk_gb": null,
-    "template": "pfsense",
-    "unmanaged": true
-  },
-  {
     "name": "ad01",
     "last_octet": 2,
     "cpu": 2,
