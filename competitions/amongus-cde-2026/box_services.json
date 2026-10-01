@@ -1,0 +1,29 @@
+{
+  "mira": [
+    "ad-dns-localhost",
+    "New SMB Share",
+    "Enable WinRM"
+  ],
+  "skeld": [
+    {
+      "name": "IIS FTP",
+      "plant_only": true
+    },
+    {
+      "name": "score/tcp",
+      "score_only": true,
+      "check": "Tcp",
+      "display": "ftp",
+      "port": 21
+    },
+    "New SMB Share"
+  ],
+  "airship": [
+    "apache",
+    "ssh"
+  ],
+  "polus": [
+    "mysql",
+    "ssh"
+  ]
+}

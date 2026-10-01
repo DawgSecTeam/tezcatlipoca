@@ -22,6 +22,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import requests
+
 from constants import (
     ENGINE_TEMPLATE_NAME,
     ENGINE_TEMPLATE_VMID_OFFSET,
@@ -396,7 +398,25 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
         # and the converted template's config then matches what apply #1 sets on clones.
         gw = os.environ.get("TF_VAR_engine_mgmt_gw", "")
         cfg["ipconfig0"] = f"ip={mgmt_ip}/24" + (f",gw={gw}" if gw else "")
-    proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data=cfg)
+    # A PUT landing immediately after the clone task commits can 400 with a bare
+    # "Parameter verification failed" while pvefs finishes publishing the new VM's
+    # config (amongus-cde-2026 2026-09-30: three deploys in a row died here; the
+    # identical payload succeeded against the same vmid seconds later). Retry the
+    # transient window, and surface the response body if it's a real rejection.
+    for attempt in range(4):
+        try:
+            proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data=cfg)
+            break
+        except requests.HTTPError as e:
+            body = ""
+            if e.response is not None:
+                body = e.response.text[:300]
+                if e.response.status_code != 400:
+                    raise
+            if attempt == 3:
+                raise RuntimeError(
+                    f"engine-template config PUT kept failing on vmid {vmid}: {body}") from e
+            time.sleep(2 * (attempt + 1))
     print(f"    {vm_name} cloned from base image (vmid {vmid})")
 
     start_vm(node, vmid)
@@ -412,8 +432,11 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                                "set TF_VAR_engine_mgmt_ip (portable-node mode) or fix "
                                "the agent channel")
     forget_engine_host_key(build_ip)
+    # 300s lost twice to first-boot-under-load (parallel deploy saturating the node
+    # while this clone regenerates host keys + applies cloud-init; amongus-cde-2026
+    # 2026-09-30 — manual SSH succeeded minutes after each timed-out wait).
     if not wait_for_ssh(ctx["ssh_key_path"], ctx.get("vm_username", "ubuntu"), build_ip,
-                        timeout=300):
+                        timeout=900):
         raise RuntimeError(f"engine-template build VM {build_ip} never accepted SSH")
     build_ctx = {**ctx, "scoring_engine_ip": build_ip,
                  # the settle probe and every bootstrap SSH authenticate as the

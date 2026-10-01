@@ -40,8 +40,22 @@ def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, t
     """Post-clone Windows setup (IP/gateway/DNS, admin password, sshd) via the QEMU guest agent."""
     deadline = time.time() + timeout
     if not _wait_for_windows_setup_complete(node, vmid, deadline):
-        raise RuntimeError(f"vmid {vmid}: Windows setup (sysprep first boot) did not complete "
-                           f"within {timeout}s")
+        # A clone's first boot can deadlock pre-specialize at IDLE cpu with no agent
+        # (amongus-cde-2026 2026-09-30: golden-skeld wedged identically on every
+        # snapshot-rollback re-boot; a forced stop/start cleared it and specialize
+        # then completed). Hard-cycle once and re-wait within the same budget —
+        # the physical-power-cycle remedy from known-issues, automated.
+        from range_ops import stop_vm, start_vm
+        print(f"    vmid {vmid}: setup wait expired with no agent — hard-cycling once")
+        stop_vm(node, vmid)
+        time.sleep(3)
+        start_vm(node, vmid)
+        # a fresh full budget: the first-boot wedge clears on the SECOND boot (the
+        # second boot's specialize completes — amongus-cde-2026 2026-09-30), and the
+        # first wait consumed the original deadline
+        if not _wait_for_windows_setup_complete(node, vmid, time.time() + timeout):
+            raise RuntimeError(f"vmid {vmid}: Windows setup (sysprep first boot) did not complete "
+                               f"within {timeout}s (after one hard-cycle)")
 
     ps_script = f"""
 $ErrorActionPreference = 'Stop'
@@ -76,6 +90,9 @@ Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMod
 """
     # The script is idempotent; an agent drop (not a script error) is retried until the
     # deadline. A nonzero rc is a real failure (e.g. password policy) — fail fast.
+    # Fresh budget: the setup waits above may have consumed the entry deadline (the
+    # hard-cycle path waits out its own 900s), and the exec phase needs its own.
+    deadline = time.time() + timeout
     while True:
         try:
             rc, out, err = guest_agent_exec_windows(node, vmid, ps_script, timeout=120)

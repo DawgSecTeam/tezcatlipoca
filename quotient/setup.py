@@ -40,11 +40,22 @@ _SERVICE_TO_CHECK = {
     "New SMB Share":  ("Tcp", {"Display": "smb",   "Port": 445}),
     "RDP misconfigs": ("Tcp", {"Display": "rdp",   "Port": 3389}),
     "IIS HTTP":       ("Web", {"Display": "iis",   "Port": 80, "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
+    # CredLists authenticate against the linux.credlist accounts, which only exist on
+    # Linux boxes — a Windows box wanting port-open-only FTP scoring uses a plant_only
+    # pin plus a score-only {"check": "Tcp"} pin instead (cde-2026 ftp01,
+    # amongus-cde-2026 skeld).
     "IIS FTP":        ("Ftp", {"Display": "ftp",   "Port": 21,  "CredLists": ["linux.credlist"]}),
 
     # Scored but not nakon-planted: domain_ops owns ADDS/Domain Join (phase 6 injects
     # them with per-team vars); generate_nakon_config strips them from machine lists.
     "ADDS":           ("Tcp", {"Display": "ldap",  "Port": 389}),
+
+    # amongus-cde-2026: AD DNS on the DC, scored with the same localhost A-record
+    # query the bind/named plants satisfy. The config plants post-promotion
+    # (FINAL_STAGE_CONFIGS) so the zone exists to hold the record.
+    "ad-dns-localhost": ("Dns", {"Display": "dns", "Port": 53,
+                                 "Record": [{"Kind": "A", "Domain": "localhost",
+                                             "Answer": ["127.0.0.1"]}]}),
 
     # Score-only pins ({"name": "score/tcp", "score_only": true, "display": ..., "port":
     # ...}) never appear here — _resolve_pin builds their check directly. They score a

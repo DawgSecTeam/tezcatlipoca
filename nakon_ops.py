@@ -92,6 +92,46 @@ def _config_name(c):
     return c if isinstance(c, str) else c["name"]
 
 
+def _cross_box_ip(machines, machine_name, target_box):
+    """Same team's copy of target_box's IP, for REQUIRED_VARS "ip:<box>" vars."""
+    _, _, identifier = machine_name.rpartition("-team")
+    for other in machines:
+        box, _, team = other["name"].rpartition("-team")
+        if box == target_box and team == identifier:
+            return other["ip"]
+    raise SystemExit(
+        f"  ERROR: cross-box var wants {target_box}'s IP for '{machine_name}' but no "
+        f"machine '{target_box}-team{identifier}' exists in nakon-config.json — check "
+        f"the box name in the REQUIRED_VARS \"ip:<box>\" kind.")
+
+
+def _is_identity_kind(kind):
+    return str(kind) == "ip" or str(kind).startswith("ip:")
+
+
+def _fill_identity_vars(machine, machines):
+    """Fill REQUIRED_VARS identity vars in the BASE machine list (generate time).
+
+    The stage-file generation fills per stage too, but the bundle is built from THIS
+    list — a config whose script reads an identity var (airship-webapp's $DB_HOST)
+    needs it declared here or the bundle lint rejects the whole build."""
+    for c in machine["configurations"]:
+        if isinstance(c, str):
+            continue
+        required = REQUIRED_VARS.get(c["name"]) or {}
+        if not required:
+            continue
+        vars_ = c.setdefault("vars", {})
+        for var, kind in required.items():
+            if not _is_identity_kind(kind):
+                continue
+            if str(kind) == "ip":
+                vars_[var] = machine["ip"]
+            else:
+                vars_[var] = _cross_box_ip(machines, machine["name"],
+                                           str(kind).split(":", 1)[1])
+
+
 def _validate_pin_vars(configurations, where):
     """Reject bare-name (or var-incomplete) selections of configs that require vars.
 
@@ -376,6 +416,8 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             "password": box_password,
             "configurations": configurations,
         })
+    for machine in machines:
+        _fill_identity_vars(machine, machines)
 
     config_path = comp_dir / "nakon-config.json"
     config_path.write_text(json.dumps({"machines": machines}, indent=2))
@@ -463,7 +505,8 @@ def generate_stage_configs(comp_dir, teams, boxes, box_username="ubuntu", unboot
     # address into the disk. Planted on the golden they would bake the golden's IP
     # into every linked clone, so generate refuses them there and fills them per
     # machine in the repair/final stages instead.
-    identity_banned = {name for name, kinds in REQUIRED_VARS.items() if "ip" in kinds.values()}
+    identity_banned = {name for name, kinds in REQUIRED_VARS.items()
+                       if any(_is_identity_kind(kind) for kind in kinds.values())}
 
     golden_machines = _golden_stage_machines(full, boxes, unbooted, team1_identifier,
                                              box_index_by_name, identity_banned)
@@ -481,8 +524,13 @@ def generate_stage_configs(comp_dir, teams, boxes, box_username="ubuntu", unboot
                 required = REQUIRED_VARS.get(name) or {}
                 if required:
                     # Machine identity wins: fill/overwrite "ip"-kind vars with THIS
-                    # machine's address, whatever the pin said.
+                    # machine's address, and "ip:<box>"-kind vars with the same team's
+                    # copy of that box — whatever the pin said.
                     filled = {v: m["ip"] for v, kind in required.items() if kind == "ip"}
+                    for v, kind in required.items():
+                        if str(kind).startswith("ip:"):
+                            filled[v] = _cross_box_ip(full, m["name"],
+                                                      str(kind).split(":", 1)[1])
                     if filled:
                         pinned = (c.get("vars") or {}) if isinstance(c, dict) else {}
                         c = {"name": name, "vars": {**pinned, **filled}}

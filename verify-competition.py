@@ -943,7 +943,7 @@ def _valid_domain_sid(sid):
             and all(p.isdigit() for p in parts[3:]))
 
 
-def check_domains(comp_dir, teams, boxes):
+def check_domains(comp_dir, teams, boxes, ctx=None):
     """Domain gate (replaces the freeze's operator attestation with a live check).
 
     Per team: the DC answers Get-ADDomain for team<id>.local with a syntactically
@@ -1005,10 +1005,31 @@ def check_domains(comp_dir, teams, boxes):
                     rc, out, err = guest_agent_exec_windows(node, vmid, _WIN_DOMAIN_PS, timeout=120)
                     kv = _kv(out)
                 else:
-                    rc, out, err = guest_agent_exec_root(
-                        node, vmid, f"realm list 2>/dev/null | grep -qi 'domain-name: *{domain}' "
-                                    f"&& echo JOINED=1 || echo JOINED=0", timeout=60)
-                    kv = _kv(out)
+                    _realm_cmd = (f"realm list 2>/dev/null | grep -qi 'domain-name: *{domain}' "
+                                  f"&& echo JOINED=1 || echo JOINED=0")
+                    try:
+                        rc, out, err = guest_agent_exec_root(node, vmid, _realm_cmd, timeout=60)
+                        kv = _kv(out)
+                    except Exception as agent_err:
+                        # The PVE agent channel has a per-instance exec breaker that can
+                        # stay tripped (amongus-cde 2026-09-30: airship's failed join
+                        # probes tripped it permanently). Linux boxes are still reachable
+                        # over gateway SSH — fall back to it before failing the gate.
+                        try:
+                            box_ip = f"192.168.{ident}.{boxes[idx[name]]['last_octet']}"
+                            proc = ssh_via_gateway(ctx or {"ssh_key_path": str(resolve_ssh_key())},
+                                                   box_ip, _realm_cmd, timeout=60)
+                            kv = _kv(proc.stdout)
+                            if kv.get("JOINED") is None:
+                                raise CheckError(f"unparseable realm probe: {proc.stdout[:80]}")
+                            print(f"  INFO  {team_key}/{name}: agent channel unavailable, "
+                                  f"probed over gateway SSH")
+                        except Exception as ssh_err:
+                            print(f"  FAIL  {team_key}/{name}: guest-agent probe failed "
+                                  f"({str(agent_err)[:80]}) and gateway-SSH fallback failed "
+                                  f"({str(ssh_err)[:60]})")
+                            ok = False
+                            continue
             except Exception as e:
                 print(f"  FAIL  {team_key}/{name}: guest-agent probe failed ({str(e)[:80]})")
                 ok = False
@@ -1306,7 +1327,7 @@ def main():
     print("\n  (M4 plant coverage — expected vs. actually planted, per machine)")
     coverage_checked, coverage_ok = check_plant_coverage(comp_dir)
     print("\n  (AD domains — promotion, joins, AD plants, DomainSID uniqueness)")
-    domains_ok = check_domains(comp_dir, teams, boxes)
+    domains_ok = check_domains(comp_dir, teams, boxes, ctx=ctx)
 
     gate = {
         "logins": logins_ok,
