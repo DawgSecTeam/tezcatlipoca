@@ -1376,8 +1376,8 @@ def main():
     misconfig_note = "PASS"
     if args.expect_no_vulns:
         misconfig_note = "SKIP (--expect-no-vulns)"
-    print(f"  misconfig        : {misconfig_note}")
-    print(f"  misconfig_surviv.: {misconfig_note}")
+    print(f"  misconfig        : {misconfig_note if misconfig_note.startswith('SKIP') else ('PASS' if misconfig_ok else 'FAIL')}")
+    print(f"  misconfig_surviv.: {misconfig_note if misconfig_note.startswith('SKIP') else ('PASS' if misconfig_survival_ok else 'FAIL')}")
     print(f"  injects          : {'PASS' if injects_ok else 'FAIL'}"
           f"{'' if injects_relevant else ' (none — skipped)'}")
     tally = None

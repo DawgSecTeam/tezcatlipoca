@@ -302,10 +302,35 @@ def comp_world(comp):
             "web_unit": units[0] if units else None}
 
 
+def _verify_flags(comp):
+    """Packet/no-vuln flags for verify-competition, derived from the comp's files.
+
+    A packet-sourced comp gets the packet fidelity gates; an empty box_vulns.json
+    means the misconfig spot-check has nothing to confirm and must be skipped
+    (cde-2026 failed verify as 'FAIL' with every summary line PASS — the packet
+    AD-misconfig model plants no box configurations)."""
+    flags = []
+    try:
+        src = next((l.split(None, 1)[1].strip() for l in (comp / "Compfile").read_text().splitlines()
+                    if l.startswith("packet_source")), None)
+    except OSError:
+        src = None
+    if src:
+        flags += ["--packet", src]
+    try:
+        vulns = json.loads((comp / "box_vulns.json").read_text())
+        if not any(vulns.values()):
+            flags.append("--expect-no-vulns")
+    except (OSError, ValueError):
+        pass
+    return flags
+
+
 def stage_verify(args, comp, creds):
     log("verify-competition + fire test")
     r = run(["python3", "verify-competition.py", str(comp.relative_to(REPO)),
-             "--engine-ip", creds["ENGINE_IP"], "--admin-password", creds["ADMIN_PW"]],
+             "--engine-ip", creds["ENGINE_IP"], "--admin-password", creds["ADMIN_PW"],
+             *_verify_flags(comp)],
             cwd=REPO, timeout=1800, check=False)
     print("\n".join((r.stdout or "").splitlines()[-25:]))
     if r.returncode != 0:
