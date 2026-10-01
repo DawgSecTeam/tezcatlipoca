@@ -7,6 +7,17 @@ harness); symptom-level fixes live in [usage-people.md](usage-people.md)'s Troub
 
 ## Live-confirmed incidents
 
+### redeploy --reset-event self-deadlock on the phase-7 reseed (FIXED 2026-10-01)
+
+`--reset-event` took the scoring-engine flock, then `reseed_event` spawned
+`create-competition --from-phase 7` as a child, whose own `acquire_engine_lock` failed
+against its parent's hold — every reset-event died right after the engine rebuild with
+"another deploy on this host already holds the scoring-engine lock". Boxes were already
+rolled back at that point, so the recovery was manual: re-run the phase-7 reseed by hand.
+Fix: `nakon_ops.release_engine_lock()` drops the parent's flock just before the reseed
+child takes it (cde-2026 run-2 reset, live-confirmed).
+
+
 ### svc-matrix-2026-09-28: four plant/bring-up defects on the all-services matrix (all FIXED)
 
 The full 16-pin service matrix (every `_SERVICE_TO_CHECK` entry, see the run report

@@ -1,6 +1,7 @@
 """Nakon config generation, bundle building, and deployment via scoring engine."""
 
 import fcntl
+import contextlib
 import json
 import math
 import os
@@ -293,6 +294,18 @@ def acquire_engine_lock(engine_vmid=SCORING_ENGINE_VMID):
             "with pgrep -f 'create-competition|redeploy-competition')."
         )
     _ENGINE_LOCKS[str(lock_path)] = fh
+
+
+def release_engine_lock():
+    """Drop every engine flock this process holds. Needed whenever this process is
+    about to spawn create-competition as a child (redeploy --reset-event's reseed):
+    the child takes the lock itself, so a parent still holding it self-deadlocks
+    the reseed (live-found 2026-10-01, cde-2026 reset-event)."""
+    for path, fh in list(_ENGINE_LOCKS.items()):
+        with contextlib.suppress(OSError):
+            fcntl.flock(fh, fcntl.LOCK_UN)
+        fh.close()
+        del _ENGINE_LOCKS[path]
 
 
 def _is_windows_template(template_name):

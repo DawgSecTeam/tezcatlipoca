@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from constants import WINDOWS_ADMIN_USER
 from engine_ops import (ensure_nat_forwarding, prepare_engine_from_template,
                         push_event_conf, read_event_conf)
-from nakon_ops import acquire_engine_lock, build_nakon_bundle
+from nakon_ops import acquire_engine_lock, build_nakon_bundle, release_engine_lock
 from range_ops import (
     SNAP_BASE,
     SNAP_READY,
@@ -816,6 +816,7 @@ def main():
     if args.reset_event:
         print("\n  --reset-event: restarting the event from the engine template...")
         if engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=True):
+            release_engine_lock()  # the reseed child takes the engine lock itself
             reseed_event(comp_dir)
 
     print(f"\n{'='*64}")
