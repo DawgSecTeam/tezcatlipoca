@@ -109,6 +109,29 @@ def _is_identity_kind(kind):
     return str(kind) == "ip" or str(kind).startswith("ip:")
 
 
+def _fill_identity_vars(machine, machines):
+    """Fill REQUIRED_VARS identity vars in the BASE machine list (generate time).
+
+    The stage-file generation fills per stage too, but the bundle is built from THIS
+    list — a config whose script reads an identity var (airship-webapp's $DB_HOST)
+    needs it declared here or the bundle lint rejects the whole build."""
+    for c in machine["configurations"]:
+        if isinstance(c, str):
+            continue
+        required = REQUIRED_VARS.get(c["name"]) or {}
+        if not required:
+            continue
+        vars_ = c.setdefault("vars", {})
+        for var, kind in required.items():
+            if not _is_identity_kind(kind):
+                continue
+            if str(kind) == "ip":
+                vars_[var] = machine["ip"]
+            else:
+                vars_[var] = _cross_box_ip(machines, machine["name"],
+                                           str(kind).split(":", 1)[1])
+
+
 def _validate_pin_vars(configurations, where):
     """Reject bare-name (or var-incomplete) selections of configs that require vars.
 
@@ -378,6 +401,7 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             "password": box_password,
             "configurations": configurations,
         })
+        _fill_identity_vars(machines[-1], machines)
 
     config_path = comp_dir / "nakon-config.json"
     config_path.write_text(json.dumps({"machines": machines}, indent=2))
