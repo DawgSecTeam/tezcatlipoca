@@ -365,15 +365,28 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
 
 
 def _engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
-    """Static engine mgmt IP must not collide with any running guest on the node's
-    mgmt L2 — two boxes answering one address is the DHCP-drift incident class with
-    a guaranteed bad ending. Guests without a working agent can't be checked; count
-    them out loud instead of claiming the range is clean."""
-    unchecked, taken = 0, set()
+    """Static engine mgmt IP must not collide with any running guest on the mgmt L2.
+
+    Two things this gate got wrong, both live-found on the 2026-10-02 same-type-2box
+    practice run — where it printed "engine mgmt IP 10.0.0.250 is free" while a FOREIGN
+    live `quotient-engine` was answering that exact address:
+
+    * **The mgmt L2 spans nodes.** The scan did `vm["node"] != node: continue`, but
+      10.0.0.0/24 is one flat segment: the foreign engine was on .193 and this deploy
+      was on .150. The data was already cluster-wide (`/cluster/resources`) — the filter
+      threw away the rows that mattered. The scan is now cluster-wide.
+    * **Unverifiable is not free.** A guest whose agent is down was counted and skipped,
+      and the gate then claimed the address was free from an absence of evidence. When
+      any running guest cannot be checked the address is *unknown*: refusing is correct
+      for the DEFAULT ip (it is what every comp gets, and nobody chose it), while an IP
+      the operator set explicitly gets a loud warning instead, because they have taken
+      responsibility for it.
+
+    Guests without a working agent can't be checked; count them out loud instead of
+    claiming the range is clean."""
+    unchecked, taken, takers = [], set(), {}
     for vm in vms:
         if vm.get("status") != "running" or vm.get("template") == 1:
-            continue
-        if vm.get("node") and vm["node"] != node:
             continue
         if vm.get("vmid") == engine_vmid:
             # Our own engine from a prior failed attempt — it holds the planned
@@ -389,25 +402,41 @@ def _engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None)
                        .replace(";", ",").split(",") if t.strip()}
             if ours_tags <= vm_tags:
                 continue
+        label = f"{vm.get('vmid')} ({vm.get('name') or '?'} on {vm.get('node') or '?'})"
         try:
             result = proxmox_api(
-                "GET", f"/nodes/{node}/qemu/{vm['vmid']}/agent/network-get-interfaces"
+                "GET", f"/nodes/{vm['node']}/qemu/{vm['vmid']}/agent/network-get-interfaces"
             )["data"]["result"]
         except Exception:
-            unchecked += 1
+            unchecked.append(label)
             continue
         for ifc in result or []:
             for addr in ifc.get("ip-addresses") or []:
                 if addr.get("ip-address-type") == "ipv4":
                     taken.add(addr.get("ip-address"))
+                    takers.setdefault(addr.get("ip-address"), label)
     if engine_mgmt_ip in taken:
         raise SystemExit(
-            f"  ERROR: static engine mgmt IP {engine_mgmt_ip} is already answered by "
-            f"a running guest on {node}. Pick another TF_VAR_engine_mgmt_ip (or set "
-            f"it to '' for DHCP).")
-    note = (f" ({unchecked} running guest(s) unverifiable — agent down)"
-            if unchecked else "")
-    print(f"  Preflight: engine mgmt IP {engine_mgmt_ip} is free{note}")
+            f"  ERROR: static engine mgmt IP {engine_mgmt_ip} is already answered by a "
+            f"running guest ({takers.get(engine_mgmt_ip, 'unknown')}). Pick another "
+            f"TF_VAR_engine_mgmt_ip (or set it to '' for DHCP). The management network is "
+            f"shared across nodes, so a guest on ANY node counts.")
+    explicit = bool((os.environ.get("TF_VAR_engine_mgmt_ip") or "").strip())
+    if unchecked:
+        listing = ", ".join(unchecked[:5]) + ("..." if len(unchecked) > 5 else "")
+        if not explicit:
+            raise SystemExit(
+                f"  ERROR: cannot verify the engine mgmt IP {engine_mgmt_ip} — "
+                f"{len(unchecked)} running guest(s) have no working agent to ask "
+                f"({listing}). This is the DEFAULT address, and on this estate the "
+                f"default has already been a live foreign engine's address once "
+                f"(2026-10-02). Set TF_VAR_engine_mgmt_ip to an address you have checked "
+                f"yourself (or '' for DHCP).")
+        print(f"  Preflight: engine mgmt IP {engine_mgmt_ip} — UNVERIFIED "
+              f"({len(unchecked)} running guest(s) have no agent: {listing}); proceeding "
+              f"because TF_VAR_engine_mgmt_ip is set explicitly")
+        return
+    print(f"  Preflight: engine mgmt IP {engine_mgmt_ip} is free")
 
 
 def _catalog_gate(comp_dir):
