@@ -69,13 +69,15 @@ class DeployPersists(unittest.TestCase):
     def _ctx(self, comp_dir):
         return types.SimpleNamespace(state={}, comp_name="probe", comp_dir=comp_dir)
 
-    def test_nothing_recorded_writes_nothing(self):
+    def test_a_clean_run_records_an_empty_ledger(self):
+        """Verify must be able to tell "clean" from "never ran". The 2026-10-02 live
+        run left the key absent and verify reported it as a pre-ledger state file."""
         with tempfile.TemporaryDirectory() as d:
             ctx = self._ctx(Path(d))
             with contextlib.redirect_stdout(io.StringIO()) as out:
                 deploy._record_degradations(ctx)
-        self.assertNotIn("degradations", ctx.state)
-        self.assertNotIn("tolerated", out.getvalue())
+        self.assertEqual(ctx.state["degradations"], [])
+        self.assertNotIn("tolerated", out.getvalue())   # nothing to print
 
     def test_recorded_entries_land_in_state_and_are_printed_once(self):
         utils.record_degradation("apt prep failed", "box1 rc=100")

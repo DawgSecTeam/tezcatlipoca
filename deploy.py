@@ -160,9 +160,14 @@ def _record_degradations(ctx):
     named cause. Now they land in .deploy_state.json and verify can read them.
     """
     entries = degradations()
+    # ALWAYS record the key, even when empty. A gate cannot tell "clean" from "never
+    # ran" if the success path writes nothing: verify reported the 2026-10-02 live
+    # run's ledger as "not recorded by this deploy (pre-dates the ledger)", which reads
+    # as a stale state file rather than the clean run it actually was. Same trap the
+    # plant-coverage gate had to learn — and which verify caught on that same run.
+    ctx.state["degradations"] = entries
     if not entries:
         return
-    ctx.state["degradations"] = entries
     print(f"\n  [!] {len(entries)} tolerated failure(s) this run — the deploy continued "
           f"past each of them:")
     for item in degradation_summary():
