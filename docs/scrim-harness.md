@@ -13,7 +13,7 @@ pass/fail gates, `docs/reports/harness-upgrades-plan.md` owns the rev-2 upgrade
 record (what changed, where it landed, what's left), and
 `docs/reports/dress-rehearsal-prompt.md` owns the rehearsal runbook. Incident-level
 detail (the three-round scoreboard mystery, the scp flakes, run post-mortems)
-lives in `docs/known-issues.md`.
+lives in `docs/incident-archive.md`.
 
 **Contents:** [run-agent-scrim.py](#run-agent-scrimpy) · [scrim-report.py](#scrim-reportpy) ·
 [beacon_ops.py](#beacon_opspy)
@@ -45,7 +45,7 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   never leak into a fresh competition; `stage_author` skips that name (fixed 2026-10-01 — it used
   to skip the retired `.phase6-swept`, so the real marker was copied into every competition
   authored from a swept template; see
-  [known-issues.md](known-issues.md#scrim-stage_author-skipped-the-sweep-marker-fixed-2026-10-01)).
+  [incident-archive.md](incident-archive.md#scrim-stage_author-skipped-the-sweep-marker-fixed-2026-10-01)).
   `RUNTIME_FILES`, `LOG.md`, `sub-*`, `.nakon-domain-*` are also skipped, and `injects/` is
   re-copied deliberately. The template's `Compfile` first line is rewritten to the new name.
 - `creds_from_files` — all secrets/logins come from the post-deploy artifacts
@@ -83,7 +83,7 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   querying it with the subnet identifier from `teams.json` (101, 102) answers
   `{"error":"Forbidden"}` even with a valid cookie. That was the second half
   of the three-round "scoreboard unreachable" mystery (first half: session
-  clobbering — see `docs/known-issues.md`).
+  clobbering — see `docs/incident-archive.md`).
 - `parsed_status` / `status_text` — `parsed_status` raises on failure so
   callers decide whether to render text or record a structured snapshot;
   `status_text` (for the cycle prompt) renders a self-diagnosing failure line

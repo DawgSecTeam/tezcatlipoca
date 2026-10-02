@@ -1,7 +1,6 @@
 """Repo hygiene gates: no secret-bearing file is tracked, and no env var drifts.
 
-Two independent incidents motivate this file, both recorded in docs/known-issues.md
-("Security disclosure history"):
+Two independent incidents motivate this file, both recorded in docs/security-disclosures.md:
 
   1. 2026-09-29 — 21 tracked terraform artifacts carried real per-competition
      passwords. Closed by gitignore curation.
@@ -99,7 +98,7 @@ class NoTrackedSecrets(unittest.TestCase):
         self.assertEqual(
             offenders, [],
             "secret-bearing env file(s) tracked — they hold the Proxmox API token and "
-            "box/team passwords. Untrack and rotate. See docs/known-issues.md "
+            "box/team passwords. Untrack and rotate. See docs/security-disclosures.md "
             "'Security disclosure history':\n  " + "\n  ".join(offenders),
         )
 

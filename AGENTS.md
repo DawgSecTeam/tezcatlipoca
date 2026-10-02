@@ -14,7 +14,11 @@ All guidance lives in `docs/` — start with:
 - [docs/usage-people.md](docs/usage-people.md) — setup/operation by hand, env-var reference, troubleshooting
 - [docs/multi-node.md](docs/multi-node.md) — one competition across multiple Proxmox hosts (nodes.json placement, jump routing, per-slot goldens, sync-template)
 - [docs/packet-profiles.md](docs/packet-profiles.md) — competition packets → ranges (profiles, compile-packet, packet verify gates)
-- [docs/known-issues.md](docs/known-issues.md) — incidents, known-broken templates, failure modes
+- [docs/known-issues.md](docs/known-issues.md) — **open/pending issues only**
+- [docs/incident-archive.md](docs/incident-archive.md) — resolved incidents, kept for the why
+- [docs/environment-facts.md](docs/environment-facts.md) — node/storage/template/vmid ground truth
+- [docs/security-disclosures.md](docs/security-disclosures.md) — credential exposures + the open rotation
+- [docs/upstream-defects-handoff.md](docs/upstream-defects-handoff.md) — catalog/nakon defects to hand off
 
 ## Practice runs must run from a new worktree
 
@@ -45,9 +49,12 @@ cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxm
 
 - Pick the env file matching the target node and **check the stale-var traps**: the
   `.env.realm-backup-20260923` (.150) variant shipped `TF_VAR_template_vm_id=9106` (dead vmid — the
-  engine-base preflight hard-fails; correct value is 955) and no `TF_VAR_team_identifiers` (default
-  identifiers 101… collide with nothing by themselves, but set it explicitly, e.g.
-  `TF_VAR_team_identifiers=130,131`, for predictable vmids).
+  engine-base preflight hard-fails; correct value is **955**) and no `TF_VAR_team_identifiers`
+  (default identifiers 101… collide with nothing by themselves, but on a shared node 100–124 are
+  *all* occupied — set it explicitly, e.g. `TF_VAR_team_identifiers=130,131`). The main `.env`
+  (targets .193) shipped `9088`, which exists on neither node; for cyberfield the ubuntu fix template
+  is **1007**. Correct template vmids by node: 955/1007 ubuntu, 951/1006 debian-lite, 1016/1015 fedora,
+  127/1019 alpine — see [docs/environment-facts.md](docs/environment-facts.md#templates).
 - `TF_VAR_teams` / `TF_VAR_boxes_per_team` in an old env are overridden by the comp dir at terraform
   time — stale values there are cosmetic, not fatal.
 - `TEZ_THIN_HEADROOM=<0..1>` relaxes the datastore headroom gate on thin-provisioned pools (ZFS,

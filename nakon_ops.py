@@ -19,6 +19,7 @@ from constants import (
     DOMAIN_INFRA_CONFIGS,
     FINAL_STAGE_CONFIGS,
     GOLDEN_IP_BASE,
+    KNOWN_BROKEN_CONFIGS,
     NAKON_DIR,
     PIN_CHECK_OVERRIDES,
     POST_CLONE_CONFIGS,
@@ -199,6 +200,30 @@ def _validate_pin_vars(configurations, where):
                     f"in {where} — add them to the \"vars\" object.")
 
 
+def _validate_known_broken_pins(configurations, where, exempt=frozenset()):
+    """Reject a *new* pin of a catalog config with a live-confirmed defect.
+
+    constants.KNOWN_BROKEN_CONFIGS is the curated, machine-readable replacement for the
+    prose + per-competition-JSON pruning that let a new comp silently re-pin one of these
+    (tftpd's Noble dpkg wedge, sshd-force-sftp killing SSH, the Windows user-policy set).
+    `exempt` is the escape hatch for a competition that already records the pin — the
+    historical comps that predate this gate (cde-2026, pfsense-rvb, scrim-live all pin
+    local-user-win) must stay re-deployable; they get a warning instead of an error."""
+    for c in configurations:
+        name = _config_name(c)
+        reason = KNOWN_BROKEN_CONFIGS.get(name)
+        if not reason:
+            continue
+        if name in exempt:
+            print(f"  WARNING: '{name}' is a known-broken catalog config, kept because this "
+                  f"competition already records it ({where}): {reason}")
+            continue
+        raise SystemExit(
+            f"  ERROR: '{name}' is a known-broken catalog config and cannot be pinned "
+            f"({where}): {reason} Unpin it from box_vulns.json/box_services.json "
+            f"(the list lives in constants.KNOWN_BROKEN_CONFIGS; it shrinks as upstream "
+            f"fixes land — see docs/upstream-defects-handoff.md).")
+
 
 def build_nakon_bundle(config_path):
     """Build (or reuse) the content-addressed Nakon bundle for this competition."""
@@ -375,7 +400,8 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
     services_path = comp_dir / "box_services.json"
     vulns_path = comp_dir / "box_vulns.json"
 
-    if services_path.exists() or vulns_path.exists():
+    reused = services_path.exists() or vulns_path.exists()
+    if reused:
         pinned = json.loads(services_path.read_text()) if services_path.exists() else {}
         pinned_vulns = json.loads(vulns_path.read_text()) if vulns_path.exists() else {}
         box_configs = {
@@ -411,15 +437,22 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
         )
 
 
-    # Pin-var gate (M4): bare-name selections of var-requiring configs die here, at
-    # generate time, instead of as a mid-plant rc=2/rc=127. Baseline pins
-    # (box_baseline.json — packet-promised decoy/local accounts) plant like vulns and
-    # get the same gate.
+    # Pin gates, at generate time instead of mid-plant:
+    #   - var gate (M4): bare-name selections of var-requiring configs (rc=2/rc=127);
+    #   - known-broken gate: constants.KNOWN_BROKEN_CONFIGS, the machine-readable
+    #     replacement for the per-competition-JSON pruning.
+    # Baseline pins (box_baseline.json — packet-promised decoy/local accounts) plant like
+    # vulns and get the same gates. On the reuse path every pin is one this competition
+    # already records, so the known-broken gate exempts the box (historical comps stay
+    # re-deployable); a fresh randomize selection has nothing recorded and is refused.
     baseline_path = comp_dir / "box_baseline.json"
     baseline = json.loads(baseline_path.read_text()) if baseline_path.exists() else {}
     for box_name, (services, vulns) in box_configs.items():
-        _validate_pin_vars(list(services) + list(vulns) + list(baseline.get(box_name, [])),
-                           f"pins for '{box_name}'")
+        configs = list(services) + list(vulns) + list(baseline.get(box_name, []))
+        where = f"pins for '{box_name}'"
+        _validate_pin_vars(configs, where)
+        reused_names = {_config_name(c) for c in configs} if reused else frozenset()
+        _validate_known_broken_pins(configs, where, exempt=reused_names)
 
     machines = []
     for i, (team, box) in enumerate(

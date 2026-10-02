@@ -47,6 +47,7 @@ from range_ops import (destroy_vm_if_exists, ensure_terraform_workdir, enumerate
 from template_ops import (
     code_hash,
     engine_template_vmid,
+    frozen_code_drift,
     frozen_gate,
     frozen_state,
     golden_freeze_gate,
@@ -777,6 +778,13 @@ def _generate_stage_configs_and_hashes(generated, comp_dir, spec, secrets):
     frozen = frozen_state(comp_dir)
     generated.frozen_keep = set()
     if frozen:
+        # The frozen record's `code` (commit + dirty) was written but never read: the
+        # per-template drift gate below keys on input hashes and its code-class verdict
+        # is warn-only, so a commit after --freeze used to run silently on unverified
+        # code. Warn once here, before the golden loop, naming both commits.
+        code_warning = frozen_code_drift(frozen)
+        if code_warning:
+            print(code_warning)
         # Goldens now: config-class drift refuses BEFORE phase 1 destroys anything.
         # The engine's gate still runs at phase 2 (its inputs are computed there),
         # likewise before any engine destruction. Code-only drift keeps the golden:

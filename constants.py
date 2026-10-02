@@ -121,6 +121,48 @@ REQUIRED_VARS = {
     "airship-webapp": {"DB_USER": "literal", "DB_PASS": "literal",
                        "DB_HOST": "ip:polus"},
 }
+# Catalog configs that must never be *newly* pinned: each has a live-confirmed defect in
+# vendor/nakon's catalog (or the shared vulndb) that takes a scored service — or SSH
+# itself — down until it is fixed upstream. Pinning one is a generate-time error
+# (nakon_ops._validate_known_broken_pins, packet_ops' compiler) instead of a mid-plant
+# rc=82/rc=2/rc=127 surprise. Pin sets used to carry this as prose + per-competition JSON
+# pruning, so a new comp could silently re-pin them. Reasons: docs/known-issues.md and
+# docs/upstream-defects-handoff.md (which expects this table — see its "Definition of
+# done"); shrink the table when an upstream fix lands.
+KNOWN_BROKEN_CONFIGS = {
+    "tftpd-hpa-anon-write":
+        "dpkg postinst exits 82 on Ubuntu Noble, leaving dpkg half-configured so every "
+        "later apt/dpkg step on the box fails in cascade.",
+    "postgresql-remote-access":
+        "depends on the already-known-bad postgresql-no-auth; its Debian-only unit names "
+        "and pg_hba sed patterns silently no-op on other distros/versions.",
+    "postgresql-no-auth":
+        "known-bad: sed-based pg_hba rewrite silently no-ops (scram-sha-256 vs md5, peer "
+        "vs ident) and the unit/cluster names are Debian-only.",
+    "sshd-force-sftp-broken-chroot":
+        "appends `Match Group sftpusers` without creating the group; sshd treats a Match "
+        "on a nonexistent group as a fatal config error and the reload failure is "
+        "swallowed, so SSH dies at the next sshd restart.",
+    "local-user-win":
+        "Windows user-policy pin: Set-LocalUser/password-policy changes are applied "
+        "before the account its own config was supposed to create.",
+    "powershell-execution-unrestricted":
+        "Windows user-policy pin: Set-LocalUser/password-policy failures on accounts its "
+        "own config was supposed to create.",
+    "rpc-proxy-on-dc-web-win":
+        "Windows user-policy pin: Set-LocalUser/password-policy failures on accounts its "
+        "own config was supposed to create.",
+    "unauth-kiosk-app-startup-win":
+        "Windows user-policy pin: Set-LocalUser/password-policy failures on accounts its "
+        "own config was supposed to create.",
+    "mailenable-cleartext-mail-win":
+        "Windows user-policy pin: Set-LocalUser/password-policy failures on accounts its "
+        "own config was supposed to create.",
+}
+# NOT in KNOWN_BROKEN_CONFIGS: unrealircd-backdoor-container. It fails rc=127 only when
+# the box has no docker (a box-prerequisite gap, conditional on the lineup), and verify's
+# plant-coverage gate already catches the failed step — so it stays a warning-level entry
+# rather than a hard pin ban.
 # unrealircd-backdoor-container (rc=127: assumes docker on the box) has no pin var —
 # it is a box-prerequisite gap, caught by the verify plant-coverage gate when the
 # step fails, not by this table.

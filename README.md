@@ -23,7 +23,10 @@ Operations / Reports, one line each on when to read it. The most-used entry poin
 | [docs/usage-agents.md](docs/usage-agents.md) | Non-interactive/agent operation: CLI flags, pre-authored configs, verify/redeploy/destroy, operational modes |
 | [docs/architecture.md](docs/architecture.md) | Architecture: phases (+ the v1→v2 migration), component map, data flow, isolation, state files, invariants, timeout rationale |
 | [docs/internals.md](docs/internals.md) | Per-module design notes — the "why" behind functions, parameters, and orderings |
-| [docs/known-issues.md](docs/known-issues.md) | Open/live issues, fixed incidents kept for the why, known-broken templates, failure modes, limitations |
+| [docs/known-issues.md](docs/known-issues.md) | **Open and pending issues only** — what is not fixed and needs a decision |
+| [docs/incident-archive.md](docs/incident-archive.md) | Resolved incidents, kept for the *why* behind each mitigation |
+| [docs/environment-facts.md](docs/environment-facts.md) | Node/storage/template/vmid ground truth, each fact marked **[live]** / **[code]** / **[doc]** |
+| [docs/security-disclosures.md](docs/security-disclosures.md) | Credential-exposure history and the current open rotation |
 | [docs/e2e-testing.md](docs/e2e-testing.md) | Running e2e deploy tests: failure triage, per-phase recovery cost map, trim-then-resume, preflight checklist, multi-host / pfSense / red-team runs (§8) |
 | [docs/packet-profiles.md](docs/packet-profiles.md) | Competition packets → ranges: profile schema, authoring walkthrough, `compile-packet.py`, packet verify gates |
 | [docs/multi-node.md](docs/multi-node.md) | One competition across multiple Proxmox hosts: `nodes.json`, capacity-fill placement, the satellite jump router, slot vmid scheme, `sync-template.py` |

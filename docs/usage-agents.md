@@ -253,7 +253,7 @@ Anything that matches no team/box is a hard error, not a silent empty selection.
 `--reset-event` (with `rollback-ready`/`rollback-base` only) additionally restarts the event from
 the engine template — a fresh scoring DB and a phase-7 re-run — so scores reset and injects re-open
 anchored at now. Use it for scrim reruns; the deadlock that used to kill it was fixed 2026-10-01
-(see `known-issues.md`).
+(see `incident-archive.md`).
 
 `rebuild` deliberately clones the **golden template** rather than the anchor team's live box, so a
 rebuilt box carries the golden-stage installs without inheriting whatever the defenders did. This is

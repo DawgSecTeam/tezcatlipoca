@@ -74,7 +74,8 @@ v2 pipeline no longer does at all.
   resets passwords pre-plant.
 - `qm template` refuses VMs holding snapshots — tz-base is deleted before conversion.
 - Engine bootstrap needs `apt -f install` for half-configured base images.
-- Open (documented in known-issues): the randomize→pin flow drops required catalog vars.
+- Open (upstream; the driver half is closed): the randomize→pin flow drops required catalog vars —
+  [upstream-defects-handoff.md](upstream-defects-handoff.md).
 
 ## Residual risks before a real competition
 

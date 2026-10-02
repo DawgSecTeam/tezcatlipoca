@@ -282,7 +282,7 @@ def _boot_smoke_error(box, target, status, detail, planted_configs):
         "plant after cloning; the 2026-09-24 incident was 'systemd-system-masked', which "
         "returns rc=0 while masking multi-user/graphical/default targets — systemd then "
         "boots with no multi-user.target, so no cloud-init and no network "
-        "(docs/benchmark-m02.md; see also docs/known-issues.md). strict=True cannot see "
+        "(docs/benchmark-m02.md; see also docs/incident-archive.md). strict=True cannot see "
         "it because the plant step exits 0.",
     ]
     if hostile:

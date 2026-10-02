@@ -109,6 +109,62 @@ def check_datastore_headroom(node, datastore, boxes, num_teams):
           + (f" (provisioned ~{need_gb:.0f} GB x{thin} thin)" if thin != 1.0 else ""))
 
 
+_CLOUDINIT_DISK_RE = re.compile(r"^(?:ide|scsi|sata)\d+$")
+
+
+def template_cloudinit_missing(config):
+    """True when a Linux-ostype VM config carries no cloud-init drive.
+
+    A template can be tagged `template` and still be cloud-init-less — .150 vmid 920 is
+    literally named `base-debian13-cloudinit` and ships none — so its linked clones boot
+    with no network and no identity and the failure only surfaces an hour later at
+    wait_for_boxes_ssh. Windows ostypes never carry one (identity comes from
+    bootstrap_windows_box), so they and every other non-Linux ostype are exempt."""
+    ostype = str((config or {}).get("ostype") or "").strip().lower()
+    if not ostype.startswith("l"):
+        return False
+    for key, value in (config or {}).items():
+        if _CLOUDINIT_DISK_RE.match(str(key)) and "cloudinit" in str(value).lower():
+            return False
+    return True
+
+
+def _cloudinit_gate(tagged_by_name, boxes, label=""):
+    """Refuse a selected Linux template that has no cloud-init drive.
+
+    `tagged_by_name` maps template name -> cluster-resource entry (vmid + node). A config
+    read that fails is warned about, not fatal — a transient API error must not block a
+    deploy, but the template's cloud-init drive stays marked UNVERIFIED. Returns the
+    number of distinct templates whose config was actually read and checked."""
+    seen = set()
+    verified = 0
+    for box in boxes:
+        name = box.get("template")
+        vm = tagged_by_name.get(name)
+        if vm is None or name in seen:
+            continue
+        seen.add(name)
+        vmid, node = vm.get("vmid"), vm.get("node")
+        try:
+            config = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+        except Exception as e:
+            print(f"  WARNING: could not read template '{name}' (vmid {vmid}) config — its "
+                  f"cloud-init drive is UNVERIFIED ({str(e)[:80]})")
+            continue
+        if template_cloudinit_missing(config):
+            fix = name if str(name).endswith("-fix") else f"{name}-fix"
+            raise SystemExit(
+                f"  ERROR: box template '{name}' (vmid {vmid}, node {node}, ostype "
+                f"{config.get('ostype') or '?'}) is Linux but has no cloud-init drive — "
+                f"its linked clones would boot with no network or identity and fail an "
+                f"hour later at wait_for_boxes_ssh. Use a cloud-init-capable template "
+                f"(e.g. the '{fix}' variant) or add a cloud-init drive to it.")
+        verified += 1
+    if verified:
+        print(f"  Preflight{label}: {verified} box template(s) carry a cloud-init drive")
+    return verified
+
+
 def preflight_gates(comp_dir, boxes, num_teams, teams=None,
                     engine_vmid=SCORING_ENGINE_VMID, check_free=True,
                     engine_mgmt_ip=None):
@@ -125,8 +181,12 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
         vms = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
     except Exception as e:
         raise SystemExit(f"  ERROR: Proxmox API unreachable during preflight: {e}")
-    tagged = {vm.get("name") for vm in vms
-              if vm.get("template") == 1 and "template" in (vm.get("tags") or "").split(";")}
+    tagged = set()
+    tagged_by_name = {}
+    for vm in vms:
+        if vm.get("template") == 1 and "template" in (vm.get("tags") or "").split(";"):
+            tagged.add(vm.get("name"))
+            tagged_by_name.setdefault(vm.get("name"), vm)
     missing = sorted({b["template"] for b in boxes} - tagged)
     if missing:
         raise SystemExit(
@@ -134,6 +194,7 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
             + ", ".join(missing)
             + ". Clones would fail mid-apply; available: "
             + (", ".join(sorted(t for t in tagged if t)) or "(none)"))
+    _cloudinit_gate(tagged_by_name, boxes)
     engine_base = int(os.environ["TF_VAR_template_vm_id"])
     if not any(vm.get("vmid") == engine_base for vm in vms):
         raise SystemExit(
@@ -338,8 +399,12 @@ def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
                     f"  ERROR: engine base image vmid {base} does not exist on engine "
                     f"node '{node_name}' ({node}) — the engine-template build would fail.")
         if node_teams:
-            tagged = {vm.get("name") for vm in node_vms
-                      if vm.get("template") == 1 and "template" in (vm.get("tags") or "").split(";")}
+            tagged = set()
+            tagged_by_name = {}
+            for vm in node_vms:
+                if vm.get("template") == 1 and "template" in (vm.get("tags") or "").split(";"):
+                    tagged.add(vm.get("name"))
+                    tagged_by_name.setdefault(vm.get("name"), vm)
             missing = sorted({b["template"] for b in boxes} - tagged)
             if missing:
                 raise SystemExit(
@@ -347,6 +412,7 @@ def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
                     f"'{node_name}' ({node}): " + ", ".join(missing)
                     + f". Available there: {sorted(t for t in tagged if t) or '(none)'}. "
                       "Sync with sync-template.py or move the teams.")
+            _cloudinit_gate(tagged_by_name, boxes, label=f"[{node_name}]")
             if slot > 0:
                 find_jump_template(node, rec.jump_template)  # raises with remedy
                 print(f"  Preflight[{node_name}]: box templates + jump clone source present")

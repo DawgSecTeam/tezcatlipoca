@@ -419,6 +419,8 @@ class MultinodePreflightResumeTest(unittest.TestCase):
         # Colliding VMs on n2 would fatal under check_free=True; must pass on resume.
         {"n1": _probe("n1", templates=["ubuntu-fix"]),
          "n2": _probe("n2", templates=["ubuntu-fix"], collisions=[1700])}
+        # proxmox_api is stubbed because the template preflight reads each template's
+        # config for the cloud-init gate (test_template_cloudinit covers that gate).
         with patch.dict(os.environ, {"TOK_N1": "t", "TOK_N2": "t"}), \
                 patch.object(nodes_ops, "record_of", side_effect=lambda pl, n: _rec(n)), \
                 patch.object(nodes_ops, "teams_on_node",
@@ -433,6 +435,9 @@ class MultinodePreflightResumeTest(unittest.TestCase):
                                             "tags": "template", "template": 1,
                                             "status": "stopped"}]), \
                 patch.object(config_ops, "has_clone_marker", return_value=False), \
+                patch.object(config_ops, "proxmox_api",
+                             return_value={"data": {"ostype": "l26",
+                                                    "ide2": "local:vm-901-cloudinit"}}), \
                 patch.object(config_ops, "_catalog_gate"), \
                 patch("jump_ops.find_jump_template", return_value={"alpine": 900}):
             config_ops.preflight_gates_multinode(

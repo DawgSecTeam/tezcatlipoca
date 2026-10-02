@@ -22,7 +22,7 @@ from pathlib import Path
 import yaml
 
 from config_ops import random_password
-from constants import MAX_BOXES_PER_TEAM, REQUIRED_VARS
+from constants import KNOWN_BROKEN_CONFIGS, MAX_BOXES_PER_TEAM, REQUIRED_VARS
 from nakon_ops import os_to_platform
 from quotient.setup import _SERVICE_TO_CHECK
 from utils import is_legacy_account_name, valid_comp_name, valid_unix_username
@@ -281,6 +281,13 @@ def validate_profile(p):
             err(f"service {s.get('name')!r}: pin {pin!r} has no Quotient check mapping — it "
                 f"would plant but score nothing. Fix the name, use a score-only pin "
                 f"({SCORE_PIN_PREFIX}<check>), or mark it `scored: false` (plant-only)")
+        # Known-broken gate: same list the deploy-time pin gate enforces
+        # (nakon_ops._validate_known_broken_pins). A packet that pins one of these
+        # would compile into a bundle the deploy then refuses, so fail at compile time.
+        broken = KNOWN_BROKEN_CONFIGS.get(str(pin))
+        if broken:
+            err(f"service {s.get('name')!r}: pin {pin!r} is a known-broken catalog config: "
+                f"{broken}")
         # fidelity is required like boxes[].fidelity: the honesty report defaults a
         # missing value to "exact" (render_fidelity), silently claiming parity the
         # packet may not have (audit-found 2026-10-02).

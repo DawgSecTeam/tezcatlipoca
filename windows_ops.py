@@ -51,7 +51,7 @@ def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, t
         # (amongus-cde-2026 2026-09-30: golden-skeld wedged identically on every
         # snapshot-rollback re-boot; a forced stop/start cleared it and specialize
         # then completed). Hard-cycle once and re-wait within the same budget —
-        # the physical-power-cycle remedy from known-issues, automated.
+        # the physical-power-cycle remedy from environment-facts, automated.
         from range_ops import stop_vm, start_vm
         print(f"    vmid {vmid}: setup wait expired with no agent — hard-cycling once")
         stop_vm(node, vmid)

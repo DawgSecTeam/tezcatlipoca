@@ -29,7 +29,12 @@ passage written against the pre-golden pipeline is a bug — see [AGENTS.md](../
 | [usage-people.md](usage-people.md) | You are setting up or driving a deploy by hand — prerequisites, template building (incl. the Windows traps), the **env-var reference**, running, teardown, mid-competition recovery, troubleshooting |
 | [usage-agents.md](usage-agents.md) | You are driving the pipeline non-interactively — CLI flags, pre-authored configs, verify/redeploy/destroy, operational modes |
 | [e2e-testing.md](e2e-testing.md) | A deploy failed and you need to triage it, or you are planning a full pipeline test (§1 triage, §4 cost map, §5 trim-then-resume, §7 checklist, §8 multi-host/pfSense/red) |
-| [known-issues.md](known-issues.md) | Something is broken, or you are about to rely on a subsystem. Open/live issues first, then fixed incidents kept for the why, known-broken templates, failure modes, standing limitations, security history |
+| [known-issues.md](known-issues.md) | Something is broken, or you need a decision. **Open/pending issues only** |
+| [known-issues-triage-2026-10-02.md](known-issues-triage-2026-10-02.md) | You want to know why an issue is (or is not) on the open list — the full 69-entry triage that produced the current split |
+| [incident-archive.md](incident-archive.md) | A failure looks familiar — resolved incidents kept for the *why* behind each mitigation |
+| [environment-facts.md](environment-facts.md) | You are about to pick a template, pool, vmid block, or node — node/storage/template ground truth with verification status |
+| [security-disclosures.md](security-disclosures.md) | You touch credentials, `.env` variants, or git history — exposures, and the open token rotation |
+| [upstream-defects-handoff.md](upstream-defects-handoff.md) | You own the vulndb catalog or nakon — the defects not fixable from this repo |
 | [scrim-harness.md](scrim-harness.md) | You are running or modifying the red-vs-blue agent scrim (`run-agent-scrim.py`, `scrim-report.py`, `beacon_ops.py`) |
 | [tests.md](tests.md) | You are running the offline suite, adding a test, or wondering what the suite does *not* cover |
 | [pfsense-inpath-2026-09-28.md](pfsense-inpath-2026-09-28.md) | You are wiring an in-path pfSense firewall per team (topology + the reproducible guest-side config-injection method). Dated, but an operational runbook, not a run report |

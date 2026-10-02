@@ -110,7 +110,7 @@ def load_users_config(comp_dir):
     elif is_legacy_account_name(box_username):
         print(f"  WARNING: users.json box_username '{box_username}' collides with a legacy "
               f"distro system account (cloud-init would adopt it and brick auth) — using "
-              f"{BOX_USERNAME_DEFAULT} instead (docs/known-issues.md).")
+              f"{BOX_USERNAME_DEFAULT} instead (docs/e2e-testing.md §0).")
         box_username = BOX_USERNAME_DEFAULT
     # 1..8 (was exactly 3): packet-compiled bundles carry whatever accounts the packet
     # publishes (CDE ships 2). fix_services_on_boxes iterates the pairs, so the count
