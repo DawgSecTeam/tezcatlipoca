@@ -38,6 +38,19 @@ Measured 2026-10-02 **[live]**:
 | `local-lvm` | lvmthin | .193 | 117 GiB / 137 GiB |
 | `local` | dir | .193 | 12 GiB / 66 GiB |
 
+- **The headroom preflight under-counts by design, and Windows-heavy comps pay for it.**
+  It compares free space against `teams × Σdisk_gb` of the *team* disks, but the real
+  allocation is the **full clones**: one golden per box type plus the engine template.
+  Live 2026-10-02, `same-type-2box-2026-09-29` on `hdd` (1 team × 90 GB provisioned):
+  the preflight said "189 GB free vs ~90 GB needed" and the pool reached **0.2 GiB free**
+  mid-run, at which point both `tz-base` and `tz-ready` snapshots failed with
+  `zfs error: cannot create snapshot … out of space` — silently, leaving the range with
+  **no rollback point**. Teardown returned it to 154.5 GiB, so the run itself consumed
+  roughly 155 GiB: two goldens (30 + 60 GB) plus a ~40 GB engine template, i.e. the
+  full clones dominate. `TEZ_THIN_HEADROOM` does not help here — these are full copies,
+  not linked clones. Budget for goldens + engine template before trusting the gate, and
+  tear down with `destroy-competition.py --full` as soon as a run's goal is met. **[live]**
+
 - **The preflight headroom gate counts provisioned bytes** (≈ teams × Σ`disk_gb`), which does not
   match what linked clones actually allocate. `TEZ_THIN_HEADROOM=<0..1>` relaxes it by counting that
   fraction of the provisioned math. Size the factor to the pool (0.25 has been enough for
