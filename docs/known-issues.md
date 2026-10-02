@@ -38,9 +38,16 @@ stopped loop reports stale DOWN as if live).
 Mitigated: `verify-competition.py` detects the signature (old StartTime + zero current_round_time,
 engine unpaused), **FAILs** the run, and `--fix-round-loop` issues the two POSTs
 (`/api/competition/start {"started":true}`, then `/api/engine/pause {"pause":false}`); re-run verify
-to confirm a fresh round. **Next action:** an engine-side watchdog that issues the same POSTs when
-the stale signature appears (same pattern as the live `range-firewall.timer`), so a reboot — including
-the owner-confirmed .193 hardware hard-downs — heals without an operator.
+to confirm a fresh round.
+
+**Next action:** an engine-side watchdog that issues the same POSTs when the stale signature appears
+(same pattern as the live `range-firewall.timer`), so a reboot — including the owner-confirmed .193
+hard-downs — heals without an operator. **Its one blocker is gone (2026-10-02):** a watchdog could not
+simply log in, because Quotient allows one session per account and the login would evict whichever
+operator, `verify-competition` or harness session held `admin`. Every competition now seeds a
+**separate `scoring` admin account** for exactly this (`event.conf`'s `admin` list; per-competition
+password in `credentials.txt`), so the watchdog authenticates on its own account and cannot disturb a
+human or harness session. Remaining work is the timer itself.
 
 ### Fedora goldens cannot be built on SELinux-enforcing nodes
 
