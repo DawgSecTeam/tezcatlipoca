@@ -45,8 +45,7 @@ from domain_ops import deploy_domain_configs
 from engine_ops import ensure_nat_forwarding
 from golden_ops import (_is_template, _template_vmid_map, build_golden_set,
                         unbooted_golden_boxes)
-from hardening_ops import (_APT_PREP_BODY, _apt_prep_script, ensure_alpine_services,
-                           fix_services_on_boxes)
+from hardening_ops import _APT_PREP_BODY, _apt_prep_script
 from nakon_ops import (acquire_engine_lock, build_nakon_bundle, generate_nakon_config,
                        generate_stage_configs, run_nakon)
 from nodes_ops import (activate_placement, golden_vmid_for_slot, resolve_placement,
@@ -886,7 +885,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     # module-level import would be circular (and `python3 deploy.py` would trip over a
     # partially-initialised deploy_phases).
     from deploy_phases import (phase1_cleanup, phase2_engine_template,
-                           phase3_prepare_engine, phase4_golden_set)
+                           phase3_prepare_engine, phase4_golden_set,
+                           phase5_repair_sweep)
 
     # One driver per competition. Two concurrent deploys share the engine's
     # /opt/nakon staging dir and each one's 'rm -rf /opt/nakon/*' wipes the
@@ -950,43 +950,10 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 
         if ctx.from_phase <= 5:
             current_phase = 5
-            swept_marker = ctx.comp_dir / ".postclone-swept"
-            if swept_marker.exists():
-                print("[5/7] Resume marker present — post-clone sweep already done; skipping")
-            else:
-                print("[5/7] Repair-stage sweep (sshd/sudoers) on every team box...")
-                ensure_nat_forwarding(ctx.tf_ctx)
-                repair_machines = json.loads(ctx.repair_config_path.read_text())["machines"]
-                if repair_machines:
-                    repair_bundle = build_nakon_bundle(ctx.repair_config_path)
-                    # strict=False: the sweep re-runs on every resume, and one flaky plant
-                    # must not kill the sweep after 98% of it landed. The golden plant
-                    # (phase 4) is the strict, authoritative one.
-                    with timed(ctx.comp_dir, 5, "nakon", f"repair x{len(repair_machines)}"):
-                        result = run_nakon(ctx.ssh_key, ctx.scoring_user, ctx.scoring_ip, repair_bundle,
-                                           ctx.repair_config_path,
-                                           timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(repair_machines)),
-                                           strict=False, jobs=ctx.nakon_jobs)
-                    # Stage-prefixed tally (verify's plant-integrity line names the pass)
-                    # and the structured coverage record (verify's plant-coverage gate).
-                    ctx.state["nakon_failed_steps"] = [f"repair: {line}" for line in result.failed[:20]]
-                    record_stage_coverage(ctx.state, repair_machines, result, ctx.save_state)
-                else:
-                    print("  No repair-stage configurations in this lineup — sweep skipped")
-                # fix_services right after the repair pass: it un-wedges sshd (the ssh-*
-                # configs above restart sshd and can trip the start-limit), creates the
-                # credlist OS accounts, and binds the services the golden stage installed.
-                # It must run BEFORE domains (nakon joins over SSH) and before the final
-                # pass (whose disruptive configs would break its apt/SSH needs).
-                with timed(ctx.comp_dir, 5, "fix_services"):
-                    fix_services_on_boxes(ctx.comp_dir, ctx.linux_targets, ctx.tf_ctx, box_creds=ctx.box_creds)
-                    if compfile_flag(ctx.comp_dir / "Compfile", "alpine_services"):
-                        # Clones usually inherit the shim-installed services from the
-                        # golden disk; this pass is the idempotent safety net.
-                        ensure_alpine_services(ctx.comp_dir, ctx.linux_targets, ctx.tf_ctx)
-                swept_marker.write_text(time.strftime("%Y-%m-%d %H:%M:%S"))
+            phase5_repair_sweep(ctx)
             ctx.checkpoint(5)
         else:
+            print("[5/7] Skipped (resume).")
             print("[5/7] Skipped (resume).")
 
         if ctx.from_phase <= 6:

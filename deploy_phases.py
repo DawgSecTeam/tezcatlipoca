@@ -30,15 +30,18 @@ from pathlib import Path
 
 import deploy
 from config_ops import destroy_bridge_if_exists, write_text_atomic
-from constants import DEFAULT_ENGINE_MGMT_GW, SNAP_BASE
+from constants import (DEFAULT_ENGINE_MGMT_GW, PER_MACHINE_NAKON_BUDGET,
+                       SNAP_BASE)
 from engine_ops import (bootstrap_scoring_engine, ensure_nat_forwarding,
                         prepare_engine_from_template, push_event_conf)
 from golden_ops import (_is_template, _quote_sshkeys, _template_vmid_map,
                         build_golden_set)
-from hardening_ops import (fix_dns_on_boxes, prep_apt_on_boxes,
+from hardening_ops import (ensure_alpine_services, fix_dns_on_boxes,
+                           fix_services_on_boxes, prep_apt_on_boxes,
                            setup_ubuntu_auth)
 from jump_ops import build_jump_vms
-from nakon_ops import generate_slot_golden_config
+from nakon_ops import (build_nakon_bundle, generate_slot_golden_config,
+                       run_nakon)
 from nodes_ops import record_of
 from range_ops import (destroy_vm_if_exists, proxmox_api, take_snapshot,
                        terraform_dir, terraform_plugin_cache_dir)
@@ -50,7 +53,8 @@ from template_ops import (build_engine_template, destroy_engine_template,
                           hash_from_inputs, load_template_hashes,
                           save_template_hashes, stored_template_hash)
 from timing import timed
-from utils import compfile_value, is_unmanaged, run_concurrent, run_terraform
+from utils import (compfile_flag, compfile_value, is_unmanaged, run_concurrent,
+                   run_terraform)
 from windows_ops import bootstrap_windows_box
 
 
@@ -399,3 +403,46 @@ def phase4_golden_set(ctx):
 
     print(f"  Snapshotting all boxes as '{SNAP_BASE}' (pre-sweep restore point)...")
     run_concurrent(ctx.all_targets, partial(snap_base, ctx), max_workers=4)
+
+
+def phase5_repair_sweep(ctx):
+    """[5/7] Post-clone repair sweep: sshd/sudoers plants, then fix_services.
+
+    Re-runnable by design: the .postclone-swept marker makes a resume skip the
+    whole sweep, and the nakon pass itself is strict=False (see the comment at the
+    call) because one flaky plant must not kill a sweep that 98% landed."""
+    swept_marker = ctx.comp_dir / ".postclone-swept"
+    if swept_marker.exists():
+        print("[5/7] Resume marker present — post-clone sweep already done; skipping")
+    else:
+        print("[5/7] Repair-stage sweep (sshd/sudoers) on every team box...")
+        ensure_nat_forwarding(ctx.tf_ctx)
+        repair_machines = json.loads(ctx.repair_config_path.read_text())["machines"]
+        if repair_machines:
+            repair_bundle = build_nakon_bundle(ctx.repair_config_path)
+            # strict=False: the sweep re-runs on every resume, and one flaky plant
+            # must not kill the sweep after 98% of it landed. The golden plant
+            # (phase 4) is the strict, authoritative one.
+            with timed(ctx.comp_dir, 5, "nakon", f"repair x{len(repair_machines)}"):
+                result = run_nakon(ctx.ssh_key, ctx.scoring_user, ctx.scoring_ip, repair_bundle,
+                                   ctx.repair_config_path,
+                                   timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(repair_machines)),
+                                   strict=False, jobs=ctx.nakon_jobs)
+            # Stage-prefixed tally (verify's plant-integrity line names the pass)
+            # and the structured coverage record (verify's plant-coverage gate).
+            ctx.state["nakon_failed_steps"] = [f"repair: {line}" for line in result.failed[:20]]
+            deploy.record_stage_coverage(ctx.state, repair_machines, result, ctx.save_state)
+        else:
+            print("  No repair-stage configurations in this lineup — sweep skipped")
+        # fix_services right after the repair pass: it un-wedges sshd (the ssh-*
+        # configs above restart sshd and can trip the start-limit), creates the
+        # credlist OS accounts, and binds the services the golden stage installed.
+        # It must run BEFORE domains (nakon joins over SSH) and before the final
+        # pass (whose disruptive configs would break its apt/SSH needs).
+        with timed(ctx.comp_dir, 5, "fix_services"):
+            fix_services_on_boxes(ctx.comp_dir, ctx.linux_targets, ctx.tf_ctx, box_creds=ctx.box_creds)
+            if compfile_flag(ctx.comp_dir / "Compfile", "alpine_services"):
+                # Clones usually inherit the shim-installed services from the
+                # golden disk; this pass is the idempotent safety net.
+                ensure_alpine_services(ctx.comp_dir, ctx.linux_targets, ctx.tf_ctx)
+        swept_marker.write_text(time.strftime("%Y-%m-%d %H:%M:%S"))
