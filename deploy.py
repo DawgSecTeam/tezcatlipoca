@@ -583,16 +583,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     terraform = TerraformInputs()
     _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity, place, from_phase)
 
-    if from_phase <= 2:
-        if place.placement:
-            from config_ops import preflight_gates_multinode
-            preflight_gates_multinode(comp_dir, spec.boxes, secrets.teams, identity.engine_vmid, place.placement,
-                                      engine_mgmt_ip=terraform.engine_mgmt_ip,
-                                      check_free=not prior.resuming)
-        else:
-            preflight_gates(comp_dir, spec.boxes, secrets.number_of_teams, teams=secrets.teams,
-                            engine_vmid=identity.engine_vmid, check_free=not prior.resuming,
-                            engine_mgmt_ip=terraform.engine_mgmt_ip)
+    _run_competition_preflight(comp_dir, spec, secrets, identity, place, terraform,
+                               prior, from_phase)
 
     if not assume_yes and not prior.resuming:
         if not confirm_deploy(spec.name, spec.scenario, spec.difficulty, secrets.teams, spec.boxes):
@@ -950,6 +942,27 @@ def _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity,
     terraform.tfvars_path = terraform.tf_dir / "terraform.tfvars.json"
     # Carries TF_VAR_box_password + the per-team passwords.
     write_text_atomic(terraform.tfvars_path, json.dumps(terraform.tfvars, indent=2))
+
+
+def _run_competition_preflight(comp_dir, spec, secrets, identity, place, terraform,
+                               prior, from_phase):
+    """Run the competition preflight gates, at the phase-2 boundary.
+
+    Gated on from_phase <= 2 because the gates check free capacity and template
+    reachability for the work phases 1-2 do; a later resume must not re-refuse against
+    an already-deployed range, which is also why check_free is off on a resume. The
+    multinode gate is imported locally: only this branch pulls in the placement
+    preflight machinery."""
+    if from_phase <= 2:
+        if place.placement:
+            from config_ops import preflight_gates_multinode
+            preflight_gates_multinode(comp_dir, spec.boxes, secrets.teams, identity.engine_vmid, place.placement,
+                                      engine_mgmt_ip=terraform.engine_mgmt_ip,
+                                      check_free=not prior.resuming)
+        else:
+            preflight_gates(comp_dir, spec.boxes, secrets.number_of_teams, teams=secrets.teams,
+                            engine_vmid=identity.engine_vmid, check_free=not prior.resuming,
+                            engine_mgmt_ip=terraform.engine_mgmt_ip)
 
 
 def _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid):
