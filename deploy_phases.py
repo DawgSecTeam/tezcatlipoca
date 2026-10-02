@@ -30,7 +30,8 @@ from pathlib import Path
 
 import deploy
 from beacon_ops import plant_team_beacons
-from config_ops import destroy_bridge_if_exists, write_text_atomic
+from config_ops import (destroy_bridge_if_exists, resolve_inject_times,
+                        write_text_atomic)
 from domain_ops import deploy_domain_configs
 from constants import (DEFAULT_ENGINE_MGMT_GW, PER_MACHINE_NAKON_BUDGET,
                        SNAP_BASE, SNAP_READY)
@@ -45,11 +46,14 @@ from jump_ops import build_jump_vms
 from nakon_ops import (build_nakon_bundle, generate_slot_golden_config,
                        run_nakon)
 from nodes_ops import record_of
+from quotient.setup import (create_injects, engine_paused, seed_teams,
+                            unpause_engine)
 from range_ops import (destroy_vm_if_exists, proxmox_api, take_snapshot,
                        terraform_dir, terraform_plugin_cache_dir)
 from routing_ops import verify_satellite_routing
 from ssh_ops import (forget_engine_host_key, read_terraform_ctx,
-                     wait_for_boxes_ssh, wait_for_cloud_init, wait_for_ssh)
+                     wait_for_boxes_ssh, wait_for_cloud_init, wait_for_http,
+                     wait_for_ssh)
 from template_ops import (build_engine_template, destroy_engine_template,
                           engine_hash_inputs, find_engine_template, frozen_gate,
                           hash_from_inputs, load_template_hashes,
@@ -504,3 +508,60 @@ def phase6_domains_and_final(ctx):
 
     print(f"  Snapshotting all boxes as '{SNAP_READY}' (as-delivered restore point)...")
     run_concurrent(ctx.all_targets, partial(snap_ready, ctx), max_workers=4)
+
+
+def phase7_seed(ctx):
+    """[7/7] Seed teams, unpause the engine, create injects — each once.
+
+    None of the three POSTs is idempotent, so each is guarded by its own state
+    flag: a resume in the crash window between a POST and the flag-save must not
+    repeat it. The unpause window is the one that asks the engine first
+    (engine_paused) because a re-POST there is the visible failure mode."""
+    print("[7/7] Seeding competition and creating injects...")
+
+    with timed(ctx.comp_dir, 7, "wait_quotient_http"):
+        wait_for_http(f"http://{ctx.scoring_ip}/api/login", timeout=120)
+
+    quotient_ctx = {
+        "teams": {team_key: team_data["identifier"] for team_key, team_data in ctx.teams.items()},
+        "quotient_admin_password": ctx.admin_password,
+    }
+
+    if not ctx.state.get("seeded"):
+        print("  Seeding teams and starting the competition clock...")
+        with timed(ctx.comp_dir, 7, "seed_teams"):
+            seed_teams(ctx.scoring_ip, quotient_ctx)
+        ctx.state["seeded"] = True
+        ctx.save_state()
+    else:
+        print("  Teams already seeded (resume) — skipping.")
+
+    if not ctx.state.get("engine_unpaused"):
+        # The unpause POST isn't idempotent, so a resume in the crash
+        # window between POST and flag-save asks the engine first and
+        # re-POSTs only when it really is still paused.
+        paused = engine_paused(ctx.scoring_ip, quotient_ctx)
+        if paused is False:
+            print("  Engine reports itself unpaused — recording and skipping.")
+        else:
+            with timed(ctx.comp_dir, 7, "unpause_engine"):
+                unpause_engine(ctx.scoring_ip, quotient_ctx)
+        ctx.state["engine_unpaused"] = True
+        ctx.save_state()
+    else:
+        print("  Engine already unpaused (resume) — skipping.")
+
+    if ctx.injects and not ctx.state.get("injects_created"):
+        print(f"  Creating {len(ctx.injects)} inject(s)...")
+        resolve_inject_times(ctx.injects)
+        with timed(ctx.comp_dir, 7, "create_injects", f"x{len(ctx.injects)}"):
+            _created, failed_titles = create_injects(ctx.scoring_ip, ctx.admin_password, ctx.injects)
+        if failed_titles:
+            print(f"  WARNING: {len(failed_titles)} inject(s) failed to create: "
+                  f"{', '.join(failed_titles)} — re-run --from-phase 7 to retry "
+                  f"(existing injects are deduped)")
+        else:
+            ctx.state["injects_created"] = True
+            ctx.save_state()
+    elif ctx.injects:
+        print("  Injects already created (resume) — skipping.")

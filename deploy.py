@@ -24,7 +24,6 @@ from config_ops import (
     load_previous_competitions,
     preflight_gates,
     random_password,
-    resolve_inject_times,
     update_env,
     write_state,
     write_text_atomic,
@@ -44,10 +43,9 @@ from nakon_ops import (acquire_engine_lock, build_nakon_bundle, generate_nakon_c
                        generate_stage_configs)
 from nodes_ops import (activate_placement, golden_vmid_for_slot, resolve_placement,
                        satellite_routes_for, satellite_tfvars)
-from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
 from range_ops import (destroy_vm_if_exists, ensure_terraform_workdir, enumerate_targets,
                        persist_targets)
-from ssh_ops import read_terraform_ctx, wait_for_http
+from ssh_ops import read_terraform_ctx
 from template_ops import (
     code_hash,
     engine_template_vmid,
@@ -59,7 +57,7 @@ from template_ops import (
     hash_from_inputs,
     stored_template_hash,
 )
-from timing import print_timing_summary, timed
+from timing import print_timing_summary
 from utils import (compfile_flag, is_unmanaged, load_compfile, load_users_config,
                    valid_comp_name)
 from windows_ops import is_windows_template
@@ -873,7 +871,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     # partially-initialised deploy_phases).
     from deploy_phases import (phase1_cleanup, phase2_engine_template,
                            phase3_prepare_engine, phase4_golden_set,
-                           phase5_repair_sweep, phase6_domains_and_final)
+                           phase5_repair_sweep, phase6_domains_and_final,
+                           phase7_seed)
 
     # One driver per competition. Two concurrent deploys share the engine's
     # /opt/nakon staging dir and each one's 'rm -rf /opt/nakon/*' wipes the
@@ -953,56 +952,10 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 
         if ctx.from_phase <= 7:
             current_phase = 7
-            print("[7/7] Seeding competition and creating injects...")
-
-            with timed(ctx.comp_dir, 7, "wait_quotient_http"):
-                wait_for_http(f"http://{ctx.scoring_ip}/api/login", timeout=120)
-
-            quotient_ctx = {
-                "teams": {team_key: team_data["identifier"] for team_key, team_data in ctx.teams.items()},
-                "quotient_admin_password": ctx.admin_password,
-            }
-
-            if not ctx.state.get("seeded"):
-                print("  Seeding teams and starting the competition clock...")
-                with timed(ctx.comp_dir, 7, "seed_teams"):
-                    seed_teams(ctx.scoring_ip, quotient_ctx)
-                ctx.state["seeded"] = True
-                ctx.save_state()
-            else:
-                print("  Teams already seeded (resume) — skipping.")
-
-            if not ctx.state.get("engine_unpaused"):
-                # The unpause POST isn't idempotent, so a resume in the crash
-                # window between POST and flag-save asks the engine first and
-                # re-POSTs only when it really is still paused.
-                paused = engine_paused(ctx.scoring_ip, quotient_ctx)
-                if paused is False:
-                    print("  Engine reports itself unpaused — recording and skipping.")
-                else:
-                    with timed(ctx.comp_dir, 7, "unpause_engine"):
-                        unpause_engine(ctx.scoring_ip, quotient_ctx)
-                ctx.state["engine_unpaused"] = True
-                ctx.save_state()
-            else:
-                print("  Engine already unpaused (resume) — skipping.")
-
-            if ctx.injects and not ctx.state.get("injects_created"):
-                print(f"  Creating {len(ctx.injects)} inject(s)...")
-                resolve_inject_times(ctx.injects)
-                with timed(ctx.comp_dir, 7, "create_injects", f"x{len(ctx.injects)}"):
-                    _created, failed_titles = create_injects(ctx.scoring_ip, ctx.admin_password, ctx.injects)
-                if failed_titles:
-                    print(f"  WARNING: {len(failed_titles)} inject(s) failed to create: "
-                          f"{', '.join(failed_titles)} — re-run --from-phase 7 to retry "
-                          f"(existing injects are deduped)")
-                else:
-                    ctx.state["injects_created"] = True
-                    ctx.save_state()
-            elif ctx.injects:
-                print("  Injects already created (resume) — skipping.")
+            phase7_seed(ctx)
             ctx.checkpoint(7)
         else:
+            print("[7/7] Skipped (resume).")
             print("[7/7] Skipped (resume).")
     except BaseException as e:
         print(f"\n  [!] Deploy failed during phase {current_phase} of '{ctx.comp_name}'.")
