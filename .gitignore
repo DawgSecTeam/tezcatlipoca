@@ -1,4 +1,12 @@
+# Blanket rule, deliberately: every .env variant is secret-bearing (Proxmox API
+# token, box + per-team passwords). The old rule listed ".env" and
+# ".env.realm-backup*" by name, so a hand-made backup called
+# ".env.pre-cde-20260929" stayed tracked for weeks and reached the public remote.
+# Only the placeholder template ships. Enforced by tests/test_secret_hygiene.py.
 .env
+.env.*
+!.env.example
+.tez-backups/
 venv/
 terraform/terraform.tfvars
 terraform/.terraform/
@@ -30,12 +38,10 @@ competitions/*/.template-hashes.json
 competitions/*/.phase6-swept
 .deploy.lock
 competitions/*/box_vulns.json.pre-cyberfield-prune1
-.env.*-backup
 competitions/*/targets.json
 competitions/*/known_hosts
 terraform/.terraform-plugin-cache/
 competitions/distro-matrix-2026-09-27/terraform/
-.env.realm-backup*
 .zcode/
 artifacts/rawsockets-beacon/build/
 competitions/*/terraform/
