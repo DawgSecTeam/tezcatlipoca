@@ -121,51 +121,48 @@ REQUIRED_VARS = {
     "airship-webapp": {"DB_USER": "literal", "DB_PASS": "literal",
                        "DB_HOST": "ip:polus"},
 }
-# Catalog configs that must never be *newly* pinned: each has a live-confirmed defect in
-# vendor/nakon's catalog (or the shared vulndb) that takes a scored service — or SSH
-# itself — down until it is fixed upstream. Pinning one is a generate-time error
-# (nakon_ops._validate_known_broken_pins, packet_ops' compiler) instead of a mid-plant
-# rc=82/rc=2/rc=127 surprise. Pin sets used to carry this as prose + per-competition JSON
+# Catalog configs that must never be *newly* pinned: each is a live-confirmed defect in the
+# shared vulndb catalog that takes a scored service down until it is fixed upstream. Pinning
+# one is a generate-time error (nakon_ops._validate_known_broken_pins, packet_ops' compiler)
+# instead of a mid-plant surprise. Pin sets used to carry this as prose + per-competition JSON
 # pruning, so a new comp could silently re-pin them. Reasons: docs/known-issues.md and
-# docs/upstream-defects-handoff.md (which expects this table — see its "Definition of
-# done"); shrink the table when an upstream fix lands.
+# docs/upstream-defects-handoff.md; shrink the table as upstream fixes land.
+#
+# History: the four Linux rows (tftpd-hpa-anon-write, postgresql-no-auth,
+# postgresql-remote-access, sshd-force-sftp-broken-chroot) were fixed and verified live on
+# noble/debian13/fedora44 on 2026-10-02 and removed from this table — bodies and evidence in
+# docs/vulndb-fixes/. The five Windows rows it used to carry were NOT user-policy defects at
+# all: four of them never touch an account or password policy, and the fifth already created
+# its account first and re-ran clean (measured live 2026-10-02 on lab vmid 131 — the whole
+# "Set-LocalUser/password-policy ordering" diagnosis in upstream-defects-handoff §5 was wrong).
+# Those four are fixed and removed below. mailenable-cleartext-mail-win is the one real
+# Windows defect found and is STILL BROKEN: `choco install mailenable` names a package the
+# community feed does not have, so the row plants no mail service at all.
 KNOWN_BROKEN_CONFIGS = {
-    "tftpd-hpa-anon-write":
-        "dpkg postinst exits 82 on Ubuntu Noble, leaving dpkg half-configured so every "
-        "later apt/dpkg step on the box fails in cascade.",
-    "postgresql-remote-access":
-        "depends on the already-known-bad postgresql-no-auth; its Debian-only unit names "
-        "and pg_hba sed patterns silently no-op on other distros/versions.",
-    "postgresql-no-auth":
-        "known-bad: sed-based pg_hba rewrite silently no-ops (scram-sha-256 vs md5, peer "
-        "vs ident) and the unit/cluster names are Debian-only.",
-    "sshd-force-sftp-broken-chroot":
-        "appends `Match Group sftpusers` without creating the group; sshd treats a Match "
-        "on a nonexistent group as a fatal config error and the reload failure is "
-        "swallowed, so SSH dies at the next sshd restart.",
-    "local-user-win":
-        "Windows user-policy pin: Set-LocalUser/password-policy changes are applied "
-        "before the account its own config was supposed to create.",
-    "powershell-execution-unrestricted":
-        "Windows user-policy pin: Set-LocalUser/password-policy failures on accounts its "
-        "own config was supposed to create.",
-    "rpc-proxy-on-dc-web-win":
-        "Windows user-policy pin: Set-LocalUser/password-policy failures on accounts its "
-        "own config was supposed to create.",
-    "unauth-kiosk-app-startup-win":
-        "Windows user-policy pin: Set-LocalUser/password-policy failures on accounts its "
-        "own config was supposed to create.",
     "mailenable-cleartext-mail-win":
-        "Windows user-policy pin: Set-LocalUser/password-policy failures on accounts its "
-        "own config was supposed to create.",
+        "Planted cleartext-mail finding never lands: `choco install mailenable` is a "
+        "wrong package id (no such package in the community feed), so nothing installs and "
+        "only the firewall rule is created. Fix candidate (unverified) in "
+        "docs/vulndb-fixes/mailenable-cleartext-mail-win.candidate.",
 }
-# NOT in KNOWN_BROKEN_CONFIGS: unrealircd-backdoor-container. It fails rc=127 only when
-# the box has no docker (a box-prerequisite gap, conditional on the lineup), and verify's
-# plant-coverage gate already catches the failed step — so it stays a warning-level entry
-# rather than a hard pin ban.
-# unrealircd-backdoor-container (rc=127: assumes docker on the box) has no pin var —
-# it is a box-prerequisite gap, caught by the verify plant-coverage gate when the
-# step fails, not by this table.
+# NOT in KNOWN_BROKEN_CONFIGS: unrealircd-backdoor-container. Its rc=127 (docker absent) was
+# fixed 2026-10-02 — the body now installs/detects docker or podman and otherwise exits rc=1
+# with a MISSING DEPENDENCY message — so it is a normal pin again; verify's plant-coverage
+# gate still catches a failed step. See docs/vulndb-fixes/unrealircd-backdoor-container-linux.sh.
+#
+# Also removed 2026-10-02 after live verification on lab vmid 131 (tz-vulnlab-w1), bodies and
+# evidence in docs/vulndb-fixes/:
+#   local-user-win — account was already created before its flags; the real bug was
+#     `PASSWORD_NEVER_EXPIRES -eq 1` comparing nakon's string "1" to an integer, so the flag
+#     silently no-opped.
+#   powershell-execution-unrestricted — `Set-ExecutionPolicy -Scope LocalMachine` raised a
+#     terminating SecurityException under nakon's Process-scope Bypass, so the step scored rc=1
+#     and the registry writes below it never ran (no account or password policy involved).
+#   rpc-proxy-on-dc-web-win — no account involved; RSAT-Rpc-Proxy is not a Server feature and
+#     `poolManagementMode` is not an IIS property, so the plant was dirty but landed.
+#   unauth-kiosk-app-startup-win — no account involved; worked as intended where its declared
+#     app tree existed (0.0.0.0:80, HTTP 200, rc=0 twice); now reports a missing interpreter
+#     explicitly instead of a bare Start-Process argument error.
 
 # M4 per-competition templates: the engine template sits just below the golden block
 # so one preflight scan covers both. Not a cross-competition cache: every template

@@ -504,3 +504,60 @@ evictions were invisible in the interaction score and as a red gate. **Fixed 202
 `scrim-report.py` derives evictions from red's own `health_check` chain (each rise in the "N
 evicted" tally is blue removing access red had), counts them in the interaction score and as a red
 gate; the self-test pin still reproduces the 17c numbers (evictions=0 there).
+
+### Five vulndb catalog rows fixed and verified live (2026-10-02)
+
+Four long-pruned Linux catalog defects plus `unrealircd-backdoor-container` were reproduced on lab
+clones of `base-ubuntu24.04-fix` (vmid 125), `base-debian13-lite-fix` (129) and `base-fedora44-fix`
+(130), fixed, and re-verified on all three. Catalog backup taken before any write:
+`vulndb-backup-2026-10-02T05-05-09-397Z.sql.gz`. Two of the recorded root causes turned out to be
+**wrong**, and the docs were corrected rather than the code being written to match them:
+
+- `sshd-force-sftp-broken-chroot` — the documented "`Match` on a nonexistent group is a fatal sshd
+  config error that kills SSH" did **not** reproduce on OpenSSH 9.6p1 / 10.0p2 / 10.2p1. The real
+  defect was the inverse: the group was never created, so the Match block could never match anyone
+  (an inert plant), and `reload || true` hid the reload result.
+- `tftpd-hpa-anon-write` — no postinst exit 82 and no dpkg wedge on noble. The real defect: the
+  package postinst starts the daemon with shipped options and `systemctl enable --now` is a no-op on
+  an already-running unit, so the rewritten `/etc/default/tftpd-hpa` never loaded and anonymous
+  **write** was refused (`curl -T` rc=68).
+- `postgresql-no-auth` / `postgresql-remote-access` — reproduced, and worse on Fedora than the brief
+  said: the Debian-only `pg_ctlcluster`/`pg_lsclusters` path left the cluster uninitialised and the
+  service `failed`, all swallowed by `|| true`. On noble/debian the local-trust `sed` missed the
+  shipped `local all postgres peer` line, and `listen_addresses` never applied because the shipped
+  conf writes `#listen_addresses = 'localhost'` with spaces around `=`.
+- `unrealircd-backdoor-container` — reproduced as rc=127 with no container; now detects or installs a
+  runtime (docker/podman) and otherwise exits rc=1 with a `MISSING DEPENDENCY` message.
+
+Every finding was preserved and proven live (SFTP member gets `forcecommand internal-sftp` +
+`chrootdirectory /`, non-member `none`; TFTP round-trips an anonymous upload and download; Postgres
+binds wildcard with `trust`, confirmed off-box with the raw v3 protocol; the container impersonates
+`unrealircd-backdoor:3.2.8.1` with the `com.starbars.service=irc` label and returns `uid=0(root)` on
+6667). Bodies and per-row rationale: [vulndb-fixes/](vulndb-fixes/). Driver effect: the four names
+left `constants.KNOWN_BROKEN_CONFIGS`, so they are pinnable again.
+
+### Windows pin round: one real defect, four bogus ones (2026-10-02)
+
+The five Windows pins that `scrim-extreme-cyberfield-2026-09-22` pruned as "Set-LocalUser /
+password-policy failures on users their own config was supposed to create" were tested live on a
+Windows Server 2022 clone (lab vmid 131). **That diagnosis was an inference, not a measurement**: it
+borrowed second-pass failures observed for three unrelated names (`Elevate Guest Account`,
+`never-expires-service-account-win`, `iis-webshell`) and attached them to five rows nobody had read.
+Four of the five never touch an account or password policy at all, and `local-user-win` already
+created its account before applying flags.
+
+Measured and fixed: `local-user-win` compared the baked var as `'1' -eq 1`, which is **False** in
+PowerShell, so `PASSWORD_NEVER_EXPIRES` silently no-opped and the account kept an expiry;
+`powershell-execution-unrestricted` raised a terminating `SecurityException` because nakon launches
+steps with Process-scope `-ExecutionPolicy Bypass`, so `Set-ExecutionPolicy -Scope LocalMachine`
+failed, aborted the registry writes (`EnableScripts` was never planted) and returned rc=1;
+`rpc-proxy-on-dc-web-win` named a feature that exists on no Server SKU and set a non-existent IIS
+property; `unauth-kiosk-app-startup-win` works as intended and its only change turns a missing app
+tree into a clear prerequisite message instead of a misleading `Start-Process` argument error.
+
+`mailenable-cleartext-mail-win` is **genuinely broken and stays listed**: `choco install mailenable`
+names a package the community feed does not have, so the row plants no mail service at all (only its
+firewall rule lands). MailEnable's own installer is reachable, but `/S` completes only the
+MAPI-connector component, so a full install needs the interactive or response-file path; a candidate
+body is recorded **unapplied**. Detail, rc traces and before/after states:
+[vulndb-fixes/windows-pins-2026-10-02.md](vulndb-fixes/windows-pins-2026-10-02.md).

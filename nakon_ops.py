@@ -225,6 +225,43 @@ def _validate_known_broken_pins(configurations, where, exempt=frozenset()):
             f"fixes land — see docs/upstream-defects-handoff.md).")
 
 
+def _bare_unplantable_reason(name):
+    """Why a *freshly randomized* bare-name pin cannot be planted, or None if it can.
+
+    Two classes: a known-broken catalog config (constants.KNOWN_BROKEN_CONFIGS) and a config
+    whose REQUIRED_VARS include a literal — randomize returns bare names with no vars, so the
+    generate-time var gate below would abort the whole run for a pin nobody chose."""
+    if name in KNOWN_BROKEN_CONFIGS:
+        return "known-broken"
+    required = REQUIRED_VARS.get(name)
+    if required and any(kind == "literal" for kind in required.values()):
+        return "requires operator vars"
+    return None
+
+
+def _drop_unplantable_bare(names, where):
+    """Drop unplantable bare names from a freshly randomized selection, with a notice.
+
+    nakon's randomize (>= d5a443a) already skips configs whose vars it cannot satisfy, but the
+    vendored copy may predate that and it has no knowledge of the driver-side broken table, so
+    filter here rather than aborting `create-competition` mid-flow. Recorded pins (reuse path)
+    are still gated by the two validators below."""
+    kept, dropped = [], []
+    for c in names:
+        name = _config_name(c)
+        reason = _bare_unplantable_reason(name)
+        if reason:
+            dropped.append((name, reason))
+        else:
+            kept.append(c)
+    if dropped:
+        detail = "; ".join(f"{n} ({r})" for n, r in dropped)
+        print(f"  Skipping {len(dropped)} unplantable bare config(s) in {where}: {detail} — "
+              f"pin them explicitly with vars, or see constants.KNOWN_BROKEN_CONFIGS / "
+              f"docs/upstream-defects-handoff.md")
+    return kept
+
+
 def build_nakon_bundle(config_path):
     """Build (or reuse) the content-addressed Nakon bundle for this competition."""
     with _BUNDLE_BUILD_LOCK:
@@ -427,6 +464,11 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             services, vulns = _nakon_randomize(
                 platform, max(math.ceil(difficulty / 3), 1), max(difficulty, 1)
             )
+            # randomize cannot know this driver-side broken list, so drop those names here
+            # rather than aborting the run in the generate-time gate below.
+            where = f"fresh selection for '{box['name']}'"
+            services = _drop_unplantable_bare(services, where)
+            vulns = _drop_unplantable_bare(vulns, where)
             box_configs[box["name"]] = (services, vulns)
 
         services_path.write_text(

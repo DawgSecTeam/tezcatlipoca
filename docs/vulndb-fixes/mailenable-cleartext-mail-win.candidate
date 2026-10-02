@@ -1,0 +1,58 @@
+# NOT APPLIED to the live catalog — CANDIDATE body, unverified end-to-end (2026-10-02).
+#
+# Why this is a candidate and not an applied fix:
+#   * The current catalog body's acquisition step is a wrong-package-ID bug, not the
+#     network/TLS failure the handoff anticipated. `choco install mailenable` cannot work:
+#     the community feed has no `mailenable` package
+#     (`choco search mailenable --exact --limit-output` -> empty; verified 2026-10-02).
+#     Chocolatey itself installs fine on the lab box
+#     (https://community.chocolatey.org/api/v2/ -> 200, TLS 1.2 bootstrapper 2.7.4 OK).
+#   * The body below replaces acquisition with MailEnable's own installer (reachable, 29.5 MB,
+#     Authenticode Valid) and fixes the service names (MEMTAS / MEPOPS / MEIMAPS; the catalog's
+#     MESMTPC / MEIA / MEPOP3S are not the installed names).
+#   * It is NOT verified: `MESetup.exe /S` exits 0 but only completes the bundled MAPI-connector
+#     component (C:\Program Files (x86)\Mail Enable\Bin ends up with just MEINSTALLER.DLL +
+#     MEMAPIClean.exe, no services, no listeners). Completing the full mail-server install needs
+#     the interactive Wise installer / a response file, which is outside this round's budget.
+#     Do NOT apply it until a full install has been observed once and the service list snapped.
+#
+# What IS settled: the row as written plants NO mail service at all. Only the
+# `MailEnable-Cleartext` firewall rule lands, so the documented cleartext POP3/IMAP weakness is
+# absent from every box. The row should stay on the broken list until this body is verified.
+$ErrorActionPreference = 'Continue'
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+$setup = Join-Path $env:TEMP 'MESetup.exe'
+if (-not (Test-Path -LiteralPath $setup)) {
+    Invoke-WebRequest -Uri 'https://www.mailenable.com/MESetup.exe' -OutFile $setup -UseBasicParsing -TimeoutSec 600
+}
+
+# MailEnable's POP3/IMAP/SMTP/MTA/IA services, by their real installed names.
+$meServices = @('MESMTPC','MEMTAS','MEPOPS','MEIMAPS','MEIA')
+$missing = @($meServices | Where-Object { -not (Get-Service $_ -ErrorAction Ignore) })
+if ($missing.Count -gt 0) {
+    $proc = Start-Process -FilePath $setup -ArgumentList '/S' -PassThru -Wait
+    $deadline = (Get-Date).AddMinutes(5)
+    do {
+        Start-Sleep -Seconds 5
+        $missing = @($meServices | Where-Object { -not (Get-Service $_ -ErrorAction Ignore) })
+    } while ($missing.Count -gt 0 -and (Get-Date) -lt $deadline)
+}
+if ($missing.Count -gt 0) {
+    throw ("MailEnable mail-server services are still absent after running $setup /S " +
+           "($($missing -join ', ')). The silent switch only installs the MAPI connector on this " +
+           "build; the full install needs the interactive installer. Refusing to leave a half-planted " +
+           "cleartext-mail finding behind.")
+}
+
+foreach ($svc in $meServices) {
+    Set-Service $svc -StartupType Automatic -ErrorAction SilentlyContinue
+    Start-Service $svc -ErrorAction SilentlyContinue
+}
+if (-not (Get-NetFirewallRule -DisplayName 'MailEnable-Cleartext' -ErrorAction Ignore)) {
+    New-NetFirewallRule -DisplayName 'MailEnable-Cleartext' -Direction Inbound -Action Allow `
+        -Protocol TCP -LocalPort 25,110,143,587 | Out-Null
+}
+# Credentials cross the wire in plaintext on 110/143 and the admin web interface is
+# protected only by the local IME_ADMIN account.

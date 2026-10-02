@@ -97,10 +97,14 @@ preflights read each selected Linux template's config and refuse one with no clo
   ships no `%wheel` rule, so a NOPASSWD entry living only in `sudoers.d` vanishes the moment a
   `writable-sudoers`-class plant makes that dir 0777. Anything that sh-commands `sudo` on a
   post-sweep box must assume password-sudo at best. **[doc]**
-- **Fedora goldens cannot be built on an SELinux-enforcing node through the guest agent alone**: the
-  qemu-ga domain is confined, so `setenforce 0` is denied and `sed -i` cannot write `/etc/ssh`. Keep
-  Fedora out of lineups on such nodes, or flip `/etc/selinux/config` to permissive at template-build
-  time. **[doc]**
+- **Fedora + the guest agent = confined.** Live-confirmed 2026-10-02 on a Fedora 44 clone on .150:
+  guest-exec runs as root but inside `virt_qemu_ga_t` (SELinux enforcing), where `dnf`/`rpm` are
+  `Permission denied`, `/etc` is unwritable, `systemctl` is `Access denied`, and both `setenforce 0`
+  and the `virt_qemu_ga_run_unconfined` boolean are denied. **SSH is the working path** — logging in
+  as the image's cloud user with the repo key lands in `unconfined_t` with passwordless sudo, i.e.
+  real root. Since the pipeline plants over SSH, this only blocks agent-only flows (the golden-build
+  fallback): keep Fedora out of lineups where the agent is the only path, or flip
+  `/etc/selinux/config` to permissive at template-build time. **[live]**
 - **Windows:** the stock template ships all firewall profiles disabled, so firewall-rule effects do
   nothing until `Set-NetFirewallProfile -All -Enabled True` (now done by `bootstrap_windows_box`,
   along with enabling `RemoteDesktop-UserMode-In-TCP/UDP` — the DC template ships that rule group

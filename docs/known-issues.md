@@ -59,11 +59,15 @@ via the guest agent, then `--from-phase 3`. **Next action:** address the target 
 
 ### Fedora goldens cannot be built on SELinux-enforcing nodes
 
-**Status: OPEN — workaround.** The qemu-guest-agent domain is confined, so the golden build's
-`setenforce 0` is denied and `sed -i` cannot write `/etc/ssh` (`Permission denied`). Gateway-proxied
-SSH may be unavailable during golden build, leaving the agent as the only path. Workaround: keep
-Fedora out of lineups on such nodes. **Fix (cheap, not yet applied):** flip the template's
-`/etc/selinux/config` to permissive at template-build time.
+**Status: OPEN — workaround; live-confirmed 2026-10-02.** The qemu-guest-agent domain is confined:
+on a Fedora 44 clone, guest-exec is root inside `virt_qemu_ga_t`, where `dnf`/`rpm` and writes under
+`/etc` are `Permission denied`, `systemctl` is `Access denied`, and `setenforce 0` plus the
+`virt_qemu_ga_run_unconfined` boolean are denied. Golden build reaches the box by SSH when the
+gateway path works, and **SSH is the escape hatch** — the image's cloud user with the repo key lands
+in `unconfined_t` with passwordless sudo (verified). So the block is agent-only flows; keep Fedora out
+of lineups where the agent is the only path. **Fix (cheap, not yet applied):** flip the template's
+`/etc/selinux/config` to permissive at template-build time. Detail and the verified SSH route:
+[environment-facts.md](environment-facts.md#templates).
 
 ### llama.cpp local-blue context ceiling
 
@@ -105,39 +109,47 @@ the code did. Fix, in two parts:
 
 ## Pending upstream — owned by the catalog / nakon
 
-These are not fixable from this repo; the driver-side workaround is to prune the config from pin sets,
-which is why they keep resurfacing. The full handoff (symptoms, captured script bodies, required fix,
-acceptance criteria) is **[upstream-defects-handoff.md](upstream-defects-handoff.md)**:
+The four Linux catalog rows that were listed here were **fixed and verified live** on 2026-10-02
+(noble/debian13/fedora44), removed from `constants.KNOWN_BROKEN_CONFIGS`, and archived with their
+corrected root causes: [vulndb-fixes/](vulndb-fixes/), [incident-archive.md](incident-archive.md).
+What remains:
 
-- `sshd-force-sftp-broken-chroot` — appends `Match Group sftpusers` without creating the group; sshd
-  treats it as a fatal config error and `reload || true` hides it. Killed SSH on every Linux box.
-- `tftpd-hpa-anon-write` — dpkg postinst exits 82 on Noble and wedges dpkg, cascading into every later
-  apt step.
-- `postgresql-no-auth` / `postgresql-remote-access` — the known-bad pair behind the Noble prune.
-- `unrealircd-backdoor-container` — assumes docker; fails `rc=127` on a box without it.
+- `mailenable-cleartext-mail-win` — the only Windows pin still in `KNOWN_BROKEN_CONFIGS`. The row
+  plants no mail service at all: `choco install mailenable` names a package the community feed does
+  not have, so only its firewall rule lands. A fix candidate (MailEnable's own installer + the real
+  service names) is recorded in [vulndb-fixes/mailenable-cleartext-mail-win.candidate](vulndb-fixes/)
+  but is **unverified** — the silent install only completes the MAPI-connector component.
+  Handoff: [upstream-defects-handoff.md §5](upstream-defects-handoff.md).
 - `local-user-win`, `powershell-execution-unrestricted`, `rpc-proxy-on-dc-web-win`,
-  `unauth-kiosk-app-startup-win`, `mailenable-cleartext-mail-win` — `Set-LocalUser`/password-policy
-  failures on the accounts their own config was meant to create.
-- `local-user` (linux) — fixed in the live catalog and recorded in
-  [vulndb-fixes/](vulndb-fixes/); needs to be fixed in the *source of truth* so a fresh catalog load
-  does not revert it.
-- `nakon randomize` returns names without the vars some configs require, so a var-requiring pin plants
-  `rc=2`. Driver side is closed (`constants.REQUIRED_VARS` → generate-time error with the fix); the
-  catalog/selection half is upstream.
-- Windows package-manager fallback (`winget` → `choco`) in `nakon/gen/powershell.py` has never been
-  exercised.
-- `install_package` ignores the package-manager exit status, so a box that failed every install looks
-  healthy in the deploy log (driver-side `nakon_failed_steps` tally is the mitigation).
+  `unauth-kiosk-app-startup-win` — **fixed, verified live and removed** from
+  `KNOWN_BROKEN_CONFIGS` on 2026-10-02 (lab vmid 131). The old
+  "Set-LocalUser/password-policy ordering" story was an inference from three unrelated names and
+  was wrong: none of these four touches an account or password policy. Real defects were a
+  string-vs-integer flag comparison, a terminating `Set-ExecutionPolicy` under nakon's
+  Process-scope Bypass, non-existent feature/property names, and a prerequisite gap reported as a
+  script bug. Bodies and evidence: [vulndb-fixes/](vulndb-fixes/).
+- `local-user` (linux) — **closed**: the live catalog already carries the portable fix, and there is
+  no seed file anywhere (`vulndb-interfaces/schema.sql` is schema only), so nothing can revert it;
+  the nightly dumps in the vulndb VM are the only restore path.
+- `nakon randomize` handing out names whose script needs vars it cannot supply — **catalog half
+  fixed**: `nakon catalog check` now reports `missing-vars` (`f86c11d`), and the driver additionally
+  filters unplantable bare names on the fresh path (`nakon_ops._drop_unplantable_bare`). `randomize`
+  itself was deliberately left unchanged, so a direct `nakon randomize` can still return such a name;
+  `catalog check` is the gate.
+- Windows package-manager fallback — the step now writes `.nakon-step-rc` and states plainly that it
+  has never run against real winget/chocolatey (`12c3195`). Still not live-verified on Windows.
+- `install_package` — **stale doc, no defect**: the function no longer exists, and the current package
+  step records its rc into `report.tsv` and the FAILED tally.
 
-The repo-side guard for the broken catalog names is `constants.KNOWN_BROKEN_CONFIGS` (added
-2026-10-02), enforced by `nakon_ops._validate_known_broken_pins` at generate time and by `packet_ops`
-at packet-compile time. Scoping, deliberately: a **fresh selection** (`nakon randomize`, nothing
-recorded yet) is a hard error; a competition that **already records** the pin (any comp dir with
-`box_services.json`/`box_vulns.json`) gets a WARNING, so the 16 historical comps stay re-deployable —
-`local-user-win` alone is pinned by cde-2026, pfsense-rvb and scrim-live. Residual gap: a brand-new
-hand-authored comp dir is on that "reuse" path and therefore warns rather than errors (packet comps
-are caught at compile). Tighten to "error unless the comp has `.deploy_state.json`/`.frozen.json`" if
-that gap matters more than re-deploying history. Shrink the list as the handoff items are fixed.
+The repo-side guard for the broken catalog names is `constants.KNOWN_BROKEN_CONFIGS`, enforced by
+`nakon_ops._validate_known_broken_pins` at generate time and by `packet_ops` at packet-compile time.
+It is now down to the single Windows row above (`mailenable-cleartext-mail-win`). Scoping,
+deliberately: a **fresh selection** that gets past
+the driver's `_drop_unplantable_bare` filter is a hard error; a competition that **already records**
+the pin (any comp dir with `box_services.json`/`box_vulns.json`) gets a WARNING, so the historical
+comps stay re-deployable. Residual gap: a brand-new hand-authored comp dir is on that "reuse" path
+and therefore warns rather than errors (packet comps are caught at compile). The list is down to the
+one row above; it shrinks further when `mailenable` is fixed.
 
 ## Standing limitations — not fixable here
 
