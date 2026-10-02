@@ -28,7 +28,6 @@ from constants import (
     SNAP_READY,
     WINDOWS_ADMIN_USER,
 )
-from clone_ops import clone_team_boxes
 from deploy import deploy, main
 from domain_ops import deploy_domain_configs
 from engine_ops import bootstrap_scoring_engine, ensure_nat_forwarding, install_range_healthcheck, push_event_conf
