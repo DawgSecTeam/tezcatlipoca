@@ -6,6 +6,7 @@ from pathlib import Path
 import requests
 
 from constants import PIN_CHECK_OVERRIDES
+from utils import record_degradation
 
 # The event.conf box slices Quotient understands — also the valid `check` values for
 # score-only pins (upstream has only these; docs/internals.md).
@@ -311,6 +312,7 @@ def create_injects(host: str, admin_password: str, injects: list) -> tuple:
     except requests.RequestException as e:
         print(f"[quotient] WARNING: couldn't fetch existing injects ({e}) — proceeding without "
               "dedup, a resume may create duplicates")
+        record_degradation("could not list existing injects (dedup off)", str(e))
 
     created = 0
     failed = []

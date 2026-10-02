@@ -60,8 +60,8 @@ from template_ops import (
     hash_from_inputs,
     stored_template_hash,
 )
-from utils import (compfile_flag, is_unmanaged, load_compfile, load_users_config,
-                   mint_run_id, valid_comp_name)
+from utils import (compfile_flag, degradation_summary, degradations, is_unmanaged,
+                   load_compfile, load_users_config, mint_run_id, valid_comp_name)
 from windows_ops import is_windows_template
 
 ENV_PATH = Path(".env")
@@ -148,6 +148,28 @@ def guard_resume_from_phase(from_phase, last_phase, state_path, force=False):
         f"Resume at --from-phase {last + 1} (re-runs the phase that died), or pass "
         f"--force-from-phase to skip ahead deliberately."
     )
+
+
+def _record_degradations(ctx):
+    """Persist tolerated-prerequisite failures into the state and print them once.
+
+    Every entry is something that failed while the deploy continued: apt prep that
+    installed nothing, an auth ladder that failed on both transports, a box that never
+    settled, a node scan that never happened. They used to exist only as WARNING lines
+    in the scrollback — which is why "the range came up with every service down" had no
+    named cause. Now they land in .deploy_state.json and verify can read them.
+    """
+    entries = degradations()
+    if not entries:
+        return
+    ctx.state["degradations"] = entries
+    print(f"\n  [!] {len(entries)} tolerated failure(s) this run — the deploy continued "
+          f"past each of them:")
+    for item in degradation_summary():
+        count = f" x{item['count']}" if item["count"] > 1 else ""
+        print(f"      - {item['what']}{count}: {item['detail'][:120]}")
+    print("      (recorded in .deploy_state.json as `degradations`; verify-competition "
+          "surfaces them)")
 
 
 def failure_signature(exc):
@@ -1330,6 +1352,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                 # asked to resume at rather than phase 2.
                 connect_terraform(ctx)
     except BaseException as e:
+        _record_degradations(ctx)
         print(f"\n  [!] Deploy failed during phase {current_phase} of '{ctx.comp_name}'.")
         try:
             count = record_failure(ctx.state, current_phase, e)
@@ -1351,6 +1374,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
         raise
 
     clear_failure_streak(ctx.state)
+    _record_degradations(ctx)
     ctx.save_state()
     finish_deploy(ctx)
 

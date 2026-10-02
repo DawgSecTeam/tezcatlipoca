@@ -15,6 +15,51 @@ _COMP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
 PRINT_LOCK = threading.Lock()
 MAX_CONCURRENCY = 8
 
+# Failures a caller chose to tolerate. Every entry is a prerequisite that did NOT
+# succeed while the deploy continued anyway — historically a WARNING line in a
+# scrollback and nothing else, which is how "the range came up with every service down"
+# had no named cause (nakon's install failures are silent by design, and apt prep that
+# installed nothing looked exactly like apt prep that worked).
+_DEGRADATIONS = []
+_DEGRADATION_LOCK = threading.Lock()
+
+
+def record_degradation(what, detail=""):
+    """Note that a prerequisite failed and execution continued anyway.
+
+    The deploy still continues — each site has its own reason for tolerating the
+    failure — but the fact is collected, written into `.deploy_state.json` and printed
+    once in a summary, so it survives the scrollback and can be surfaced by verify.
+    """
+    import time
+
+    entry = {"what": str(what), "detail": str(detail)[:300],
+             "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    with _DEGRADATION_LOCK:
+        _DEGRADATIONS.append(entry)
+    return entry
+
+
+def degradations():
+    """The degradations recorded so far in this process, oldest first."""
+    with _DEGRADATION_LOCK:
+        return [dict(entry) for entry in _DEGRADATIONS]
+
+
+def clear_degradations():
+    with _DEGRADATION_LOCK:
+        _DEGRADATIONS.clear()
+
+
+def degradation_summary():
+    """One line per distinct degradation, with a count — for the end-of-run print."""
+    seen = {}
+    for entry in degradations():
+        key = (entry["what"], entry["detail"])
+        seen[key] = seen.get(key, 0) + 1
+    return [{"what": what, "detail": detail, "count": count}
+            for (what, detail), count in seen.items()]
+
 
 def mint_run_id():
     """Per-deploy run identity: `run-` + 8 hex chars, minted once per competition

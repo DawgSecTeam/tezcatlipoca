@@ -27,7 +27,8 @@ from domain_ops import team_domain
 from range_ops import guest_agent_exec_root, guest_agent_exec_windows, vm_id_for
 from quotient.setup import expected_service_names
 from ssh_ops import engine_ssh_opts, gateway_proxy
-from utils import BOX_USERNAME_DEFAULT, MAX_CONCURRENCY, PRINT_LOCK, load_users_config, run_concurrent
+from utils import (BOX_USERNAME_DEFAULT, MAX_CONCURRENCY, PRINT_LOCK, load_users_config,
+                   run_concurrent)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -1307,6 +1308,42 @@ def _valid_domain_sid(sid):
             and all(p.isdigit() for p in parts[3:]))
 
 
+def check_degradations(comp_dir):
+    """Surface the prerequisites that failed while the deploy continued anyway.
+
+    The deploy tolerates some failures on purpose (each site has its own reason), but
+    it records every one of them in `.deploy_state.json["degradations"]` — apt prep that
+    installed nothing, an auth ladder that failed on both transports, a box that never
+    settled, a node scan that never happened. Without this line those exist only as
+    WARNING text in a scrollback nobody reads, which is how a range can come up "green"
+    with every service down. Warning-level, not gating: the deploy did survive them, and
+    the plant-coverage/service gates are what decide whether the range actually works.
+    """
+    state_path = comp_dir / ".deploy_state.json"
+    try:
+        state = json.loads(state_path.read_text())
+    except (OSError, ValueError):
+        return _skip("degradations", "no readable .deploy_state.json", gating=False)
+    entries = state.get("degradations")
+    if entries is None:
+        print("  SKIP  — this deploy recorded no degradation ledger "
+              "(pre-dates the ledger, or state was rewritten).")
+        return _skip("degradations", "not recorded by this deploy", gating=False)
+    if not entries:
+        print("  PASS  — no tolerated failures recorded.")
+        return _pass("degradations", "none recorded")
+    seen = {}
+    for entry in entries:
+        seen[entry.get("what", "?")] = seen.get(entry.get("what", "?"), 0) + 1
+    detail = ", ".join(f"{what} x{count}" if count > 1 else what
+                       for what, count in sorted(seen.items()))
+    for entry in entries:
+        print(f"  WARN  — {entry.get('what')}: {str(entry.get('detail', ''))[:110]}")
+    print(f"  WARN  — {len(entries)} tolerated failure(s) recorded; see "
+          f".deploy_state.json['degradations']")
+    return _pass("degradations", f"{len(entries)} tolerated: {detail[:150]}")
+
+
 def check_domains(comp_dir, teams, boxes, ctx=None):
     """Domain gate (replaces the freeze's operator attestation with a live check).
 
@@ -1882,6 +1919,8 @@ def main():
     if not _spent("plant_coverage"):
         coverage_result = check_plant_coverage(comp_dir)
         results.append(coverage_result)
+    print("\n  (Tolerated failures — prerequisites that failed while the deploy continued)")
+    results.append(check_degradations(comp_dir))
     print("\n  (AD domains — promotion, joins, AD plants, DomainSID uniqueness)")
     if not _spent("domains"):
         results.append(check_domains(comp_dir, teams, boxes, ctx=ctx))

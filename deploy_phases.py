@@ -59,8 +59,8 @@ from template_ops import (build_engine_template, destroy_engine_template,
                           hash_from_inputs, load_template_hashes,
                           save_template_hashes, stored_template_hash)
 from timing import print_timing_summary, timed
-from utils import (compfile_flag, compfile_value, is_unmanaged, run_concurrent,
-                   run_terraform)
+from utils import (compfile_flag, compfile_value, is_unmanaged, record_degradation,
+                   run_concurrent, run_terraform)
 from windows_ops import bootstrap_windows_box
 
 
@@ -94,6 +94,7 @@ def destroy_node_waves(ctx, destroy_node, node_targets, slot, extra_destroy=None
     except Exception as e:
         print(f"  WARNING: could not scan {destroy_node} for stranded "
               f"clones ({e}) — proceeding")
+        record_degradation("could not scan node for stranded clones", f"{destroy_node}: {e}")
         node_vms = []
     wave1, wave2 = deploy.phase1_destroy_waves(
         node_vms, node_targets, ctx.legacy_clones if slot == 0 else {},

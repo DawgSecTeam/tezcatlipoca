@@ -11,7 +11,8 @@ from typing import Callable, NamedTuple
 
 from range_ops import diagnose_unreachable_box, guest_agent_exec_root, wait_for_guest_agent
 from ssh_ops import gateway_proxy, ssh_via_gateway
-from utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT, PRINT_LOCK, run_concurrent, valid_unix_username
+from utils import (DNS_FIX_CMD, DNS_FIX_CMD_ROOT, PRINT_LOCK, record_degradation,
+                   run_concurrent, valid_unix_username)
 
 
 _APT_PREP_BODY = r"""
@@ -165,6 +166,8 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
                                    ssh_fallback=lambda t: _box_settled_via_ssh(ctx, t))
     if unsettled:
         print(f"    WARNING: {len(unsettled)} box(es) never settled after boot — proceeding")
+        record_degradation("boxes never settled after boot",
+                           ", ".join(str(t.get("ip")) for t in unsettled)[:200])
 
     def _prep(t):
         ip = t["ip"]
@@ -204,9 +207,11 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
             else:
                 with PRINT_LOCK:
                     print(f"    WARNING: apt prep rc={rc} on {ip}: {(err or '').strip()[:160]} — proceeding")
+                    record_degradation("apt prep failed", f"{ip}: rc={rc} {(err or '').strip()[:160]}")
         except Exception as exc:
             with PRINT_LOCK:
                 print(f"    WARNING: apt prep failed on {ip} ({exc}) — proceeding")
+                record_degradation("apt prep failed", f"{ip}: {exc}")
         return False
 
     run_concurrent(targets, _prep)
@@ -262,6 +267,7 @@ def fix_dns_on_boxes(targets, ctx):
             with PRINT_LOCK:
                 print(f"  WARNING: DNS fix failed for {ip} after 8 attempts "
                       f"and guest-agent fallback ({agent_exc}) — proceeding anyway")
+                record_degradation("DNS fix failed", f"{ip}: {agent_exc}")
                 print(diagnose_unreachable_box(node, t["vmid"]))
             return False
 

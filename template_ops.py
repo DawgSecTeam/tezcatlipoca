@@ -36,6 +36,7 @@ from range_ops import (
     stop_vm,
     wait_for_proxmox_task,
 )
+from utils import record_degradation
 
 FROZEN_FILE = ".frozen.json"
 HASHES_FILE = ".template-hashes.json"
@@ -516,6 +517,8 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     if unsettled:
         print("    WARNING: build VM never fully settled — proceeding (the bootstrap's "
               "Lock::Timeout covers a straggler)")
+        record_degradation("engine build VM never fully settled",
+                           f"vmid {vmid}")
 
     print("    Bootstrapping engine template (packages, Docker, Quotient, apt-cacher-ng)...")
     build_info = bootstrap_scoring_engine(build_ctx, postgres_password, redis_password,
