@@ -464,6 +464,19 @@ class PriorDeployState:
     resuming: bool = False
 
 
+@dataclass
+class CompetitionInputs:
+    """Per-competition inputs loaded after the resume guards: injects and the packet.
+
+    The packet-published credentials (compile-packet.py -> passwords.json) are the one
+    input that outranks both state and a fresh mint, so they are materialised here as a
+    unit; packet_credlists is the derived view the secrets step reads."""
+
+    injects: list = field(default_factory=list)
+    packet_pw: Optional[dict] = None
+    packet_credlists: dict = field(default_factory=dict)
+
+
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
             team_node=None, engine_node=None, force_from_phase=False):
     """Everything deploy() must do before phase 1, as one testable step.
@@ -489,14 +502,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     prior = PriorDeployState()
     _load_prior_deploy_state(prior, comp_dir, from_phase, force_from_phase)
 
-    injects = load_injects(comp_dir)
-    # Packet-published credentials (compile-packet.py -> passwords.json): when present,
-    # box_password and the credlists are the packet's default credentials verbatim, not
-    # random mints. Teams get them in the packet and rotate at minute zero — that IS the
-    # competition. Also makes redeploy deterministic (no re-minted secret drifting from
-    # the packet).
-    packet_pw = load_packet_passwords(comp_dir)
-    packet_credlists = (packet_pw or {}).get("credlists") or {}
+    inputs = CompetitionInputs()
+    _load_competition_inputs(inputs, comp_dir)
 
     if prior.resuming:
         state = json.loads(prior.state_path.read_text())
@@ -559,15 +566,15 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         # new competition. passwords.json (packet profile) outranks both: the
         # packet's default credentials ARE the competition, and an operator edit
         # to passwords.json is a deliberate re-key (goldens rebuild — correct).
-        box_password = ((packet_pw or {}).get("box_password")
+        box_password = ((inputs.packet_pw or {}).get("box_password")
                         or carry_box_password(prior.previous_state))
-        if packet_pw:
+        if inputs.packet_pw:
             print("  Box credentials come from passwords.json (packet profile) — "
                   "not re-minted")
-        box_creds = (dict(packet_credlists.get("linux") or {})
+        box_creds = (dict(inputs.packet_credlists.get("linux") or {})
                      or {name: random_password() for name in spec.credlist_usernames})
-        domain_creds = (dict(packet_credlists.get("domain") or {}) or None)
-        inject_password = random_password() if injects else None
+        domain_creds = (dict(inputs.packet_credlists.get("domain") or {}) or None)
+        inject_password = random_password() if inputs.injects else None
         state = {
             "last_phase": 0,
             "pipeline_version": PIPELINE_VERSION,
@@ -793,8 +800,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         credlist_usernames=spec.credlist_usernames,
         nakon_jobs=spec.nakon_jobs,
         apt_cache=spec.apt_cache,
-        injects=injects,
-        packet_pw=packet_pw,
+        injects=inputs.injects,
+        packet_pw=inputs.packet_pw,
         state=state,
         teams=teams,
         number_of_teams=number_of_teams,
@@ -930,6 +937,22 @@ def _load_prior_deploy_state(prior, comp_dir, from_phase, force_from_phase):
         # the machines the later ones target (see guard_resume_from_phase).
         guard_resume_from_phase(from_phase, prior.previous_state.get("last_phase"), prior.state_path,
                                 force=force_from_phase)
+
+
+def _load_competition_inputs(inputs, comp_dir):
+    """Load injects and the packet-published credentials into `inputs`.
+
+    Loaded after the resume guards and before the secrets step: passwords.json outranks
+    both state and a fresh mint, and the secrets step needs the packet's derived
+    credlists, so the two inputs are materialised together in one place."""
+    inputs.injects = load_injects(comp_dir)
+    # Packet-published credentials (compile-packet.py -> passwords.json): when present,
+    # box_password and the credlists are the packet's default credentials verbatim, not
+    # random mints. Teams get them in the packet and rotate at minute zero — that IS the
+    # competition. Also makes redeploy deterministic (no re-minted secret drifting from
+    # the packet).
+    inputs.packet_pw = load_packet_passwords(comp_dir)
+    inputs.packet_credlists = (inputs.packet_pw or {}).get("credlists") or {}
 
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
