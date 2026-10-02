@@ -143,12 +143,12 @@ class StateWriteCallSiteTests(unittest.TestCase):
             state_path.write_text(json.dumps({"box_password": "pw"}))
             state = {"box_password": "pw"}
             with patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
-                 patch.object(redeploy.driver, "setup_ubuntu_auth"), \
-                 patch.object(redeploy.driver, "fix_dns_on_boxes"), \
-                 patch.object(redeploy.driver, "ensure_nat_forwarding"), \
-                 patch.object(redeploy.driver, "run_nakon",
+                 patch.object(redeploy.pipeline_api, "setup_ubuntu_auth"), \
+                 patch.object(redeploy.pipeline_api, "fix_dns_on_boxes"), \
+                 patch.object(redeploy.pipeline_api, "ensure_nat_forwarding"), \
+                 patch.object(redeploy.pipeline_api, "run_nakon",
                               return_value=MagicMock(failed=[])), \
-                 patch.object(redeploy.driver, "fix_services_on_boxes"), \
+                 patch.object(redeploy.pipeline_api, "fix_services_on_boxes"), \
                  patch.object(redeploy, "write_state") as p_write:
                 redeploy.run_nakon_and_harden(
                     [LINUX], ctx, comp_dir, state,
@@ -193,7 +193,7 @@ class StateWriteCallSiteTests(unittest.TestCase):
                  patch.object(redeploy, "timed", return_value=nullcontext()), \
                  patch.object(redeploy, "run_terraform",
                               return_value=MagicMock(returncode=0)), \
-                 patch.object(redeploy.driver, "read_terraform_ctx",
+                 patch.object(redeploy.pipeline_api, "read_terraform_ctx",
                               return_value={"scoring_engine_ip": "10.0.0.9",
                                             "ssh_key_path": "/k", "vm_username": "ops"}), \
                  patch.object(redeploy, "forget_engine_host_key"), \
@@ -219,12 +219,12 @@ class HardeningOrderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             with patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
-                 patch.object(redeploy.driver, "setup_ubuntu_auth") as p_auth, \
-                 patch.object(redeploy.driver, "fix_dns_on_boxes") as p_dns, \
-                 patch.object(redeploy.driver, "ensure_nat_forwarding"), \
-                 patch.object(redeploy.driver, "run_nakon",
+                 patch.object(redeploy.pipeline_api, "setup_ubuntu_auth") as p_auth, \
+                 patch.object(redeploy.pipeline_api, "fix_dns_on_boxes") as p_dns, \
+                 patch.object(redeploy.pipeline_api, "ensure_nat_forwarding"), \
+                 patch.object(redeploy.pipeline_api, "run_nakon",
                               return_value=MagicMock(failed=[])), \
-                 patch.object(redeploy.driver, "fix_services_on_boxes"):
+                 patch.object(redeploy.pipeline_api, "fix_services_on_boxes"):
                 p_auth.side_effect = lambda *a, **k: order.append("auth")
                 p_dns.side_effect = lambda *a, **k: order.append("dns")
                 redeploy.run_nakon_and_harden(

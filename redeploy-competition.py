@@ -2,7 +2,6 @@
 """Redeploy a subset of a live competition's boxes (rollback-ready/base, reconfigure, rebuild)."""
 
 import argparse
-import importlib.util
 import json
 import os
 import re
@@ -13,6 +12,7 @@ from pathlib import Path
 import urllib3
 from dotenv import load_dotenv
 
+import pipeline_api
 from config_ops import write_state
 from constants import SNAP_BASE, SNAP_READY, WINDOWS_ADMIN_USER
 from engine_ops import (ensure_nat_forwarding, prepare_engine_from_template,
@@ -41,20 +41,6 @@ from utils import (compfile_flag, load_compfile, load_users_config, pick_competi
 ENV_PATH = Path(".env")
 load_dotenv(ENV_PATH)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-
-def _load_driver():
-    """Import create-competition.py as module (hyphen requires importlib)."""
-    path = Path(__file__).parent / "create-competition.py"
-    spec = importlib.util.spec_from_file_location("create_competition", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["create_competition"] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-driver = _load_driver()
-
 
 
 def parse_team_selector(raw, teams):
@@ -93,8 +79,8 @@ def parse_box_selector(raw, boxes):
 
 
 def box_platform(box):
-    """Platform via driver's os_to_platform (must match nakon)."""
-    return driver.os_to_platform(box.get("template", ""))
+    """Platform via pipeline_api.os_to_platform (the single map nakon also uses)."""
+    return pipeline_api.os_to_platform(box.get("template", ""))
 
 
 def select_targets(comp_dir, teams, boxes, args):
@@ -129,20 +115,20 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
     # sudo is rejected, so fix_dns_on_boxes burns its full 8x15s retry ladder before
     # falling back to the root guest agent (hardening_ops.py), which is the only reason
     # the wrong order "works" at all.
-    driver.setup_ubuntu_auth(linux_targets, ctx)
-    driver.fix_dns_on_boxes(linux_targets, ctx)
+    pipeline_api.setup_ubuntu_auth(linux_targets, ctx)
+    pipeline_api.fix_dns_on_boxes(linux_targets, ctx)
 
-    driver.ensure_nat_forwarding(ctx)
+    pipeline_api.ensure_nat_forwarding(ctx)
 
     machines = [t["machine"] for t in targets]
     print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
     # strict=False, mirroring deploy.py's phase-6 stance: these re-plants hit live
     # boxes mid-event, and one flaky/broken pin must not abort a repair sweep.
     nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
-    result = driver.run_nakon(
+    result = pipeline_api.run_nakon(
         key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
         only=machines,
-        timeout=max(2400, driver.PER_MACHINE_NAKON_BUDGET * len(machines)),
+        timeout=max(2400, pipeline_api.PER_MACHINE_NAKON_BUDGET * len(machines)),
         strict=False, jobs=nakon_jobs,
     )
     state["nakon_failed_steps"] = [f"redeploy: {line}" for line in result.failed[:20]]
@@ -154,7 +140,7 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
         # atomic-rename note; winad-testrun 2026-09-25).
         write_state(state_path, state)
 
-    driver.fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=state.get("box_creds"))
+    pipeline_api.fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=state.get("box_creds"))
 
 
 def _domain_config_path(comp_dir, fallback):
@@ -205,7 +191,7 @@ def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
                 print(f"  Deleting stale ADDS marker for {team_key} — the DC was reset, so "
                       "it must be re-promoted, not assumed promoted.")
                 stale_marker.unlink()
-        driver.deploy_domain_configs(
+        pipeline_api.deploy_domain_configs(
             {team_key: teams[team_key]}, boxes, comp_dir, domain_config_path,
             Path(ctx["ssh_key_path"]), os.environ["TF_VAR_vm_username"],
             ctx["scoring_engine_ip"], box_password, promote_dc=dc_reset,
@@ -294,10 +280,10 @@ def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_pa
     if not restored:
         raise SystemExit("  ERROR: no box was rolled back successfully — nothing to do.")
 
-    driver.wait_for_boxes_ssh(ctx, restored, timeout=300)
+    pipeline_api.wait_for_boxes_ssh(ctx, restored, timeout=300)
 
     if reconfigure:
-        driver.wait_for_cloud_init(ctx, restored, timeout=240)
+        pipeline_api.wait_for_cloud_init(ctx, restored, timeout=240)
         run_nakon_and_harden(restored, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
         try:
             domain_settled = rerun_domain_configs(restored, ctx, comp_dir, state, nakon_config_path)
@@ -322,7 +308,7 @@ def mode_reconfigure(targets, ctx, comp_dir, state, nakon_config_path, nakon_bun
     # 900s: the operator->engine->box jump path has banner-timeout flakiness
     # windows; a shared short budget aborts scoping runs on boxes the engine
     # reaches fine
-    driver.wait_for_boxes_ssh(ctx, targets, timeout=900)
+    pipeline_api.wait_for_boxes_ssh(ctx, targets, timeout=900)
     run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
     roles_path = comp_dir / "domain_roles.json"
     if roles_path.exists():
@@ -346,7 +332,7 @@ def template_vmid_for(box):
             return vm["vmid"]
     raise SystemExit(
         f"  ERROR: no Proxmox template named '{box['template']}' (tagged 'template'). "
-        f"Available: " + ", ".join(driver.list_proxmox_templates())
+        f"Available: " + ", ".join(pipeline_api.list_proxmox_templates())
     )
 
 
@@ -447,7 +433,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         if windows:
             print(f"    Bootstrapping Windows box {t['ip']} (vmid {t['vmid']})...")
             gw = f"192.168.{t['identifier']}.1"
-            driver.bootstrap_windows_box(tnode, t["vmid"], t["ip"], gw, "8.8.8.8", box_password)
+            pipeline_api.bootstrap_windows_box(tnode, t["vmid"], t["ip"], gw, "8.8.8.8", box_password)
 
         rebuilt.append(t)
 
@@ -456,8 +442,8 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
                   f"outside Terraform, so the next `terraform apply` will see drift and want to "
                   f"replace it. Fine mid-event; re-import or accept the replacement afterwards.")
 
-    driver.wait_for_boxes_ssh(ctx, rebuilt, timeout=600)
-    driver.wait_for_cloud_init(ctx, rebuilt, timeout=300)
+    pipeline_api.wait_for_boxes_ssh(ctx, rebuilt, timeout=600)
+    pipeline_api.wait_for_cloud_init(ctx, rebuilt, timeout=300)
 
     with timed(comp_dir, "rebuild", "team_rebuild_total",
                ",".join(t["vm_name"] for t in rebuilt)):
@@ -488,12 +474,12 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
             scoring_user = os.environ["TF_VAR_vm_username"]
             scoring_ip = ctx["scoring_engine_ip"]
             nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
-            driver.ensure_nat_forwarding(ctx)
+            pipeline_api.ensure_nat_forwarding(ctx)
             with timed(comp_dir, "rebuild", f"nakon_{stage}", f"x{len(names)}"):
-                result = driver.run_nakon(
+                result = pipeline_api.run_nakon(
                     key, scoring_user, scoring_ip, bundle, path,
                     only=names,
-                    timeout=max(2400, driver.PER_MACHINE_NAKON_BUDGET * len(names)),
+                    timeout=max(2400, pipeline_api.PER_MACHINE_NAKON_BUDGET * len(names)),
                     strict=False, jobs=nakon_jobs,
                 )
             if result.failed:
@@ -502,7 +488,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
 
         print("  Repair-stage sweep (sshd/sudoers) on rebuilt boxes...")
         _stage_pass(repair_path, "repair")
-        driver.fix_services_on_boxes(
+        pipeline_api.fix_services_on_boxes(
             comp_dir, [t for t in rebuilt if box_platform(t["box"]) == "linux"],
             ctx, box_creds=state.get("box_creds"))
 
@@ -584,7 +570,7 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
                  "-target=null_resource.reboot_scoring_engine",
                  "-target=null_resource.orchestrate"],
                 cwd=tf_cwd, env=env, timeout=2400)
-        ctx = driver.read_terraform_ctx(comp_dir)
+        ctx = pipeline_api.read_terraform_ctx(comp_dir)
         forget_engine_host_key(ctx["scoring_engine_ip"])
         wait_for_ssh(ctx["ssh_key_path"], ctx["vm_username"],
                      ctx["scoring_engine_ip"], timeout=300)
@@ -766,7 +752,7 @@ def main():
             return
 
     acquire_engine_lock(int(state.get("scoring_vm_id") or 1000))
-    ctx = driver.read_terraform_ctx(comp_dir)
+    ctx = pipeline_api.read_terraform_ctx(comp_dir)
 
     nakon_config_path = nakon_bundle = None
     if args.mode in ("rollback-base", "reconfigure", "rebuild"):
@@ -786,8 +772,9 @@ def main():
                         "  ERROR: neither .nakon-postclone.json nor nakon-config.json exists — "
                         "cannot build the post-clone stage config for this mode.")
                 teams_v2 = json.loads((comp_dir / "teams.json").read_text())
-                driver.generate_stage_configs(comp_dir, teams_v2, boxes,
-                                              unbooted=driver.unbooted_golden_boxes(comp_dir))
+                pipeline_api.generate_stage_configs(
+                    comp_dir, teams_v2, boxes,
+                    unbooted=pipeline_api.unbooted_golden_boxes(comp_dir))
                 nakon_config_path = postclone
         else:
             nakon_config_path = comp_dir / "nakon-config.json"
@@ -801,10 +788,10 @@ def main():
                 )
             print("  nakon-config.json missing — regenerating from the pinned service/vuln sets...")
             box_username, _credlist = load_users_config(comp_dir)
-            nakon_config_path = driver.generate_nakon_config(
+            nakon_config_path = pipeline_api.generate_nakon_config(
                 teams, boxes, difficulty, comp_dir, box_password, box_username=box_username
             )
-        nakon_bundle = driver.build_nakon_bundle(nakon_config_path)
+        nakon_bundle = pipeline_api.build_nakon_bundle(nakon_config_path)
 
     if args.mode == "rollback-ready":
         done = mode_rollback(targets, ctx, node, SNAP_READY, comp_dir, state,

@@ -1,69 +1,24 @@
+#!/usr/bin/env python3
+"""Entry point for the tezcatlipoca deploy pipeline.
 
-from config_ops import (
-    _prompt_difficulty,
-    _prompt_int,
-    _prompt_optional_int,
-    collect_boxes,
-    collect_teams,
-    collect_users_config,
-    confirm_deploy,
-    destroy_bridge_if_exists,
-    list_proxmox_templates,
-    load_boxes,
-    load_injects,
-    load_previous_competitions,
-    random_password,
-    resolve_inject_times,
-    update_env,
-)
-from constants import (
-    DISRUPTIVE_CONFIGS,
-    MAX_BOXES_PER_TEAM,
-    MAX_TEAMS,
-    NAKON_DIR,
-    PER_MACHINE_NAKON_BUDGET,
-    SCORING_ENGINE_VMID,
-    SLOW_SERVICES,
-    SNAP_BASE,
-    SNAP_READY,
-    WINDOWS_ADMIN_USER,
-)
-from deploy import deploy, main
-from domain_ops import deploy_domain_configs
-from engine_ops import bootstrap_scoring_engine, ensure_nat_forwarding, install_range_healthcheck, push_event_conf
-from hardening_ops import fix_dns_on_boxes, fix_services_on_boxes, setup_ubuntu_auth
-from golden_ops import unbooted_golden_boxes
-from nakon_ops import _nakon_randomize, _run_single_nakon_config, build_nakon_bundle, generate_nakon_config, generate_stage_configs, is_windows_template, os_to_platform, run_nakon
-from range_ops import (
-    destroy_vm_if_exists,
-    diagnose_unreachable_box,
-    enumerate_targets,
-    guest_agent_exec_root,
-    guest_agent_exec_windows,
-    proxmox_api,
-    stop_vm,
-    take_snapshot,
-    vm_id_for,
-    wait_for_guest_agent,
-    wait_for_proxmox_task,
-)
-from ssh_ops import (
-    is_windows_template as _ssh_is_windows_template,
-    read_terraform_ctx,
-    ssh_on_gateway,
-    ssh_to_engine,
-    ssh_via_gateway,
-    wait_for_boxes_ssh,
-    wait_for_cloud_init,
-    wait_for_http,
-    wait_for_ssh,
-)
-from utils import BOX_USERNAME_DEFAULT, DNS_FIX_CMD, load_compfile, load_users_config, pick_competition
-from windows_ops import bootstrap_windows_box, dns_repoint_windows_box, is_windows_template as win_is_windows_template, wait_for_dc_dns, wait_for_windows_sshd
-
+Thin CLI by design (it keeps the repo's dash-named entry-point shape): the hyphen makes
+this filename unimportable as a module, so there is no library surface to expose here.
+Consumers import pipeline_api instead. The previous build re-exported all 74 names it
+happened to import so that redeploy-competition.py could load it via importlib — that
+left redeploy's real dependency set invisible and let this file's surface drift silently.
+"""
 
 from pathlib import Path
-ENV_PATH = Path(".env")
+
+from dotenv import load_dotenv  # noqa: E402
+
+# Load .env before deploy is imported: the pipeline reads TF_VAR_* and Proxmox creds from
+# the environment at import time. deploy.py loads the same file at its own module scope,
+# but owning it here keeps the entry point self-describing. load_dotenv does not overwrite
+# variables that are already set, so the second load is a no-op.
+load_dotenv(Path(".env"))
+
+import deploy  # noqa: E402
 
 if __name__ == "__main__":
-    main()
+    deploy.main()
