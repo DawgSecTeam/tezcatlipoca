@@ -27,6 +27,7 @@ import requests
 from constants import (
     ENGINE_TEMPLATE_NAME,
     ENGINE_TEMPLATE_VMID_OFFSET,
+    ownership_tags,
 )
 from range_ops import (
     destroy_vm_if_exists,
@@ -369,7 +370,7 @@ def find_engine_template(node, engine_vmid):
 
 def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                           postgres_password, redis_password, quotient_ref,
-                          hash_value, inputs):
+                          hash_value, inputs, run_id=None):
     """Build the per-competition engine template (API-driven, mirroring golden_ops —
     terraform only consumes the finished template as apply #1's clone source).
 
@@ -385,8 +386,8 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 
     vmid = engine_template_vmid(engine_vmid)
     vm_name = ENGINE_TEMPLATE_NAME
-    tags = f"tezcatlipoca,comp-{Path(comp_dir).name},engine-template"
-    expect_tags = {"tezcatlipoca", f"comp-{Path(comp_dir).name}", "engine-template"}
+    expect_tags = ownership_tags(Path(comp_dir).name, run_id, "engine-template")
+    tags = ",".join(sorted(expect_tags))
 
     # A previous build's leftover (plain VM, never converted) is a dead attempt:
     # rebuild it from scratch rather than resuming a half-bootstrapped disk. An
@@ -524,12 +525,13 @@ def _discover_vm_ipv4(node, vmid):
     return None
 
 
-def destroy_engine_template(node, engine_vmid, expect_tags=None):
+def destroy_engine_template(node, engine_vmid, expect_tags=None, allow_untagged=False):
     """Remove this competition's engine template. Callers destroy its clones first.
     A FOREIGN VM in the slot is skipped with a loud warning instead of aborting the
     teardown — same policy as destroy_golden_set."""
     try:
-        destroy_vm_if_exists(node, engine_template_vmid(engine_vmid), expect_tags=expect_tags)
+        destroy_vm_if_exists(node, engine_template_vmid(engine_vmid), expect_tags=expect_tags,
+                             allow_untagged=allow_untagged)
     except RuntimeError as e:
         print(f"    WARNING: engine template slot is FOREIGN — skipping it and "
               f"continuing: {e}")

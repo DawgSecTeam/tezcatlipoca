@@ -97,12 +97,13 @@ class PhaseResumeGuards(unittest.TestCase):
 
 
 class Phase1Cleanup(unittest.TestCase):
-    def _run(self, ctx):
+    def _run(self, ctx, bridge_in_use=False):
         calls = types.SimpleNamespace(waves=[], bridges=[], markers=[], sleeps=[])
         with patch.object(deploy_phases, "destroy_node_waves",
                           side_effect=lambda *a, **k: calls.waves.append((a, k))), \
                 patch.object(deploy_phases, "destroy_bridge_if_exists",
                              side_effect=lambda *a: calls.bridges.append(a)), \
+                patch.object(deploy_phases, "_bridge_in_use", return_value=bridge_in_use), \
                 patch.object(deploy_phases, "timed",
                              side_effect=lambda *a, **k: contextlib.nullcontext()), \
                 patch.object(deploy_phases, "time") as p_time, \
@@ -176,6 +177,21 @@ class Phase1Cleanup(unittest.TestCase):
         self.assertEqual(sat_kwargs["extra_destroy"], {9001: "jump-probe-1"})
         # satellite team's bridge dies on the satellite host; engine-node team's on pve
         self.assertEqual(calls.bridges, [("sat-node", "vmbr101"), ("pve", "vmbr102")])
+
+    def test_bridge_with_attached_vms_is_not_destroyed(self):
+        # 2026-10-02: bridge names (vmbr<identifier>) collide across same-comp deploys
+        # sharing team identifiers — a bridge with ANY attached VM survives phase 1.
+        placement = {
+            "engine_node": "pve", "team_nodes": {"team1": "pve"},
+            "satellites": [], "nodes": {"pve": {}}, "team_slots": {"team1": 0},
+        }
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = Path(d)
+            ctx = _ctx(comp_dir, comp_name="probe", placement=placement,
+                       teams={"team1": {"identifier": "101", "password": "x"}},
+                       all_targets=[])
+            calls = self._run(ctx, bridge_in_use=True)
+        self.assertEqual(calls.bridges, [])
 
 
 class Phase3Order(unittest.TestCase):
@@ -329,38 +345,51 @@ class Phase2EngineTemplate(unittest.TestCase):
             self.skipTest("needs the repo as CWD (reads terraform/main.tf)")
 
     def _run(self, ctx, stored_node_hash):
-        record = types.SimpleNamespace(destroyed=[], built=0, tf=[])
-        with patch.dict(os.environ, self.ENV), \
-                patch.object(deploy_phases, "compfile_value", return_value=""), \
-                patch.object(deploy_phases, "engine_hash_inputs", return_value={"a": 1}), \
-                patch.object(deploy_phases, "hash_from_inputs", return_value="HASH"), \
-                patch.object(deploy_phases, "load_template_hashes",
-                             return_value={"engine": {"hash": "HASH", "inputs": {}}}), \
-                patch.object(deploy_phases, "find_engine_template", return_value=900), \
-                patch.object(deploy_phases, "stored_template_hash",
-                             return_value=stored_node_hash), \
-                patch.object(deploy_phases, "frozen_gate", return_value=True), \
-                patch.object(deploy_phases, "save_template_hashes"), \
-                patch.object(deploy_phases, "destroy_vm_if_exists",
-                             side_effect=lambda *a, **k: record.destroyed.append(a[1])), \
-                patch.object(deploy_phases, "destroy_engine_template",
-                             side_effect=lambda *a, **k: record.destroyed.append(a[1])), \
-                patch.object(deploy_phases, "build_engine_template",
-                             side_effect=lambda *a, **k: (record.__setattr__("built", record.built + 1)
-                                                          or (901, {"built": True}))), \
-                patch.object(deploy_phases, "write_text_atomic"), \
-                patch.object(deploy_phases, "run_terraform",
-                             side_effect=lambda argv, **k: record.tf.append(argv)), \
-                patch.object(deploy_phases, "terraform_dir", return_value=ctx.comp_dir), \
-                patch.object(deploy_phases, "terraform_plugin_cache_dir",
-                             return_value=ctx.comp_dir), \
-                patch.object(deploy_phases, "read_terraform_ctx",
-                             return_value={"scoring_engine_ip": "10.0.0.99",
-                                           "ssh_key_path": "/k", "vm_username": "ubuntu"}), \
-                patch.object(deploy_phases, "forget_engine_host_key"), \
-                patch.object(deploy_phases, "wait_for_ssh"), \
-                _nulltimed(), \
-                contextlib.redirect_stdout(io.StringIO()) as out:
+        record = types.SimpleNamespace(destroyed=[], built=0, tf=[], retagged=[])
+        # ExitStack, not one giant with: this harness sits at Python's 20-block
+        # compile limit, and a 20th statically nested with-item is a SyntaxError.
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.dict(os.environ, self.ENV))
+            for target, kwargs in [
+                ("compfile_value", dict(return_value="")),
+                ("engine_hash_inputs", dict(return_value={"a": 1})),
+                ("hash_from_inputs", dict(return_value="HASH")),
+                ("load_template_hashes",
+                 dict(return_value={"engine": {"hash": "HASH", "inputs": {}}})),
+                ("find_engine_template", dict(return_value=900)),
+                ("stored_template_hash", dict(return_value=stored_node_hash)),
+                ("frozen_gate", dict(return_value=True)),
+                ("save_template_hashes", {}),
+                ("write_text_atomic", {}),
+                ("terraform_dir", dict(return_value=ctx.comp_dir)),
+                ("terraform_plugin_cache_dir", dict(return_value=ctx.comp_dir)),
+                ("forget_engine_host_key", {}),
+                ("wait_for_ssh", {}),
+            ]:
+                stack.enter_context(patch.object(deploy_phases, target, **kwargs))
+            stack.enter_context(patch.object(
+                deploy_phases, "destroy_vm_if_exists",
+                side_effect=lambda *a, **k: record.destroyed.append(a[1])))
+            stack.enter_context(patch.object(
+                deploy_phases, "destroy_engine_template",
+                side_effect=lambda *a, **k: record.destroyed.append(a[1])))
+            stack.enter_context(patch.object(
+                deploy_phases, "retag_ownership",
+                side_effect=lambda *a, **k: record.retagged.append(a[1])))
+            stack.enter_context(patch.object(
+                deploy_phases, "build_engine_template",
+                side_effect=lambda *a, **k: (record.__setattr__("built", record.built + 1)
+                                             or (901, {"built": True}))))
+            stack.enter_context(patch.object(
+                deploy_phases, "run_terraform",
+                side_effect=lambda argv, **k: record.tf.append(argv)))
+            stack.enter_context(patch.object(
+                deploy_phases, "read_terraform_ctx",
+                side_effect=lambda *a, **k: {"scoring_engine_ip": "10.0.0.99",
+                                             "ssh_key_path": "/k", "vm_username": "ubuntu"}))
+            stack.enter_context(_nulltimed())
+            out = io.StringIO()
+            stack.enter_context(contextlib.redirect_stdout(out))
             deploy_phases.phase2_engine_template(ctx)
         return record, out.getvalue()
 
@@ -370,6 +399,9 @@ class Phase2EngineTemplate(unittest.TestCase):
             record, _out = self._run(ctx, stored_node_hash="HASH")
         self.assertEqual(record.destroyed, [])
         self.assertEqual(record.built, 0)
+        # Reuse re-stamps ownership to this run (a template adopted from a
+        # pre-run-id deploy carries no run tag).
+        self.assertEqual(record.retagged, [900])
         self.assertEqual(ctx.state["engine_template_vmid"], 900)
         self.assertEqual(ctx.tfvars["engine_clone_id"], 900)
         self.assertEqual(ctx.state["deployed_endpoint"], "https://pve:8006")

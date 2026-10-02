@@ -29,6 +29,14 @@ get killed, and leave half-built state behind; isolating them keeps main's tree,
 clean, gives the run its own branch to discard or merge, and stops two sessions from driving the same
 checkout.
 
+Run identity makes this safe on the host too (2026-10-02): each deploy stamps a per-comp-dir
+`run-<id>` tag on everything it creates and every destroy path requires the full ownership set, so
+two worktrees may deploy the SAME competition ID without their teardowns eating each other's VMs —
+coexistence still needs distinct `--scoring-vmid` + team identifiers (preflight refuses real
+collisions). Legacy state without a run id: teardown's sweep stays OFF until `--legacy-tags`, and
+untagged VMs need `--allow-untagged`. Details:
+[docs/usage-agents.md](docs/usage-agents.md#run-ownership-teardown-only-touches-this-deploys-vms-2026-10-02).
+
 Teardown after a practice run is `destroy-competition.py` — it is resumable (stale-lock recovery,
 tag-scoped leftover sweep, foreign VMs skip-and-continue); re-run it until it exits clean. **Never
 substitute ad-hoc destroy scripts**: sweep predicates that match names or partial tags will destroy

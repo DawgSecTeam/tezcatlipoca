@@ -149,7 +149,7 @@ class GoldenBuildHarness:
         self.events.record("snapshot", str(vmid), sleep=self.snapshot_sleep)
         return True
 
-    def _smoke(self, node, target, ctx, comp_dir, timeout=None, poll=0, planted_configs=()):
+    def _smoke(self, node, target, ctx, comp_dir, timeout=None, poll=0, planted_configs=(), run_id=None):
         name = target["box"]["name"]
         self.events.record("smoke", name)
         if name in self.smoke_raises:

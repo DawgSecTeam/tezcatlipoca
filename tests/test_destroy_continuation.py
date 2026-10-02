@@ -55,14 +55,14 @@ class LeftoverSweep(unittest.TestCase):
         ]
         with patch.object(destroy, "proxmox_api", fake_api(vms, deleted)), \
              patch.object(destroy, "wait_for_proxmox_task"):
-            destroy.sweep_tagged_leftovers(["proxmox"], "loadtest-cr-a")
+            destroy.sweep_tagged_leftovers(["proxmox"], "loadtest-cr-a", legacy=True)
         self.assertEqual(sorted(deleted), [2300, 2313])
 
     def test_sweep_is_silent_when_nothing_matches(self):
         deleted = []
         vms = [vm(1080, "quotient-engine", "tezcatlipoca;comp-multinode")]
         with patch.object(destroy, "proxmox_api", fake_api(vms, deleted)):
-            destroy.sweep_tagged_leftovers(["proxmox"], "loadtest-cr-a")
+            destroy.sweep_tagged_leftovers(["proxmox"], "loadtest-cr-a", legacy=True)
         self.assertEqual(deleted, [])
 
 
@@ -94,7 +94,7 @@ class GoldenDestroySkipsForeign(unittest.TestCase):
     def test_foreign_slot_skips_and_remaining_slots_continue(self):
         calls = []
 
-        def fake_destroy(node, vmid, expect_tags=None, legacy_name=None):
+        def fake_destroy(node, vmid, expect_tags=None, legacy_name=None, allow_untagged=False):
             calls.append(vmid)
             if vmid == 1331:
                 raise RuntimeError("refusing to destroy vmid 1331: foreign tags")
@@ -106,7 +106,7 @@ class GoldenDestroySkipsForeign(unittest.TestCase):
         self.assertEqual(calls, [1330, 1331, 1332])
 
     def test_engine_template_foreign_skip_does_not_raise(self):
-        def fake_destroy(node, vmid, expect_tags=None, legacy_name=None):
+        def fake_destroy(node, vmid, expect_tags=None, legacy_name=None, allow_untagged=False):
             raise RuntimeError("refusing to destroy vmid 1320: foreign tags")
 
         import template_ops

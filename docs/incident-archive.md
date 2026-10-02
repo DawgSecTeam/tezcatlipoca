@@ -561,3 +561,30 @@ firewall rule lands). MailEnable's own installer is reachable, but `/S` complete
 MAPI-connector component, so a full install needs the interactive or response-file path; a candidate
 body is recorded **unapplied**. Detail, rc traces and before/after states:
 [vulndb-fixes/windows-pins-2026-10-02.md](vulndb-fixes/windows-pins-2026-10-02.md).
+
+### Two worktrees deploying the same competition ID were indistinguishable to every destroy guard (2026-10-02) — FIXED same day
+
+A smoke run of `same-type-2box-2026-09-29` (worktree `tezcatlipoca-smoke`, engine vmid 1100) and a
+live-2box deploy of the SAME competition ID (worktree `.worktrees/live-2box`, engine vmid 2400) ran
+concurrently on the same node. Destruction identity was `comp-<comp_dir.name>` — shared by both —
+so every guard built to stop the 2026-09-30 over-broad sweep (full-tag-set matching, the
+`destroy_vm_if_exists` ownership check, phase-1's stranded-clone sweep) classified each session's
+VMs as the other's. Nothing was destroyed this time: the runs chose different engine vmids, and
+preflight's vmid-clash gate is the only thing that kept it that way — an operator picking the same
+`--scoring-vmid` would have had one session's phase 1 reclaim the other's range, with the ownership
+guard approving every delete. The smoke run's phase-4 failure (stale SSH host key at the recycled
+engine IP 10.0.0.250) is what surfaced the situation while investigating.
+
+Fix (same day): per-deploy **run id** (`run-<8 hex>`, minted once per competition directory in
+`utils.mint_run_id`, persisted in `.deploy_state.json`, reused by resume/redeploy) stamped as a PVE
+tag on everything the deploy creates (terraform `run_tag` var + golden/jump/engine-template/
+boot-smoke creation). Every destruction path — `destroy_vm_if_exists`, both leftover sweeps,
+phase-1 reclamation, `pre_stop_windows_boxes`, the `--full` template destroys, redeploy's rebuild —
+now requires the FULL set `tezcatlipoca` + `comp-<name>` + `run-<id>`; a same-comp VM carrying a
+different (or no) run id is refused with a warning naming the remedy. Untagged VMs on computed
+vmids went from destroy-with-warning to refuse-by-default (`--allow-untagged` /
+`TEZ_ALLOW_UNTAGGED_RECLAIM=1` escape hatches); legacy state without a run id keeps recorded-vmid
+deletes under the comp-tag guard but the tag sweep needs `--legacy-tags`; kept templates are
+re-tagged on adoption (`range_ops.retag_ownership`) so they stay recognizable; phase-1 tears bridges
+down only when nothing is still attached. Model: docs/internals.md "Run ownership"; operator
+behavior: docs/usage-agents.md. Tests: tests/test_run_ownership.py.

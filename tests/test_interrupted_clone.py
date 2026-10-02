@@ -46,7 +46,8 @@ class InterruptedClone(unittest.TestCase):
         fake = FakePVE(vms=[{"vmid": 4150, "name": "golden-web01", "status": "stopped"}],
                        cfgs={4150: {"lock": "clone"}})
         with patch.object(range_ops, "proxmox_api", fake):
-            range_ops.destroy_vm_if_exists("n", 4150, expect_tags={"tezcatlipoca"})
+            range_ops.destroy_vm_if_exists("n", 4150, expect_tags={"tezcatlipoca"},
+                                           allow_untagged=True)
         methods = [(m, p) for m, p, _ in fake.calls]
         self.assertIn(("PUT", "/nodes/n/qemu/4150/config"), methods)
         delete = [kw for m, p, kw in fake.calls if m == "DELETE"]
@@ -57,7 +58,8 @@ class InterruptedClone(unittest.TestCase):
                        cfgs={4150: {"lock": "clone"}}, unlock_ok=False)
         with patch.object(range_ops, "proxmox_api", fake):
             with self.assertRaisesRegex(RuntimeError, "qm unlock 4150"):
-                range_ops.destroy_vm_if_exists("n", 4150, expect_tags=set())
+                range_ops.destroy_vm_if_exists("n", 4150, expect_tags=set(),
+                                               allow_untagged=True)
 
     def test_orphan_volumes_gc_only_matching_vmid(self):
         fake = FakePVE(vols={4150: [{"vmid": 4150, "volid": "local-zfs:vm-4150-disk-0"},

@@ -85,6 +85,7 @@ class BuildGoldenSetTests(unittest.TestCase):
                  patch.object(golden_ops, "_template_vmid_map",
                               return_value=template_map), \
                  patch.object(golden_ops, "destroy_vm_if_exists") as p_destroy, \
+                 patch.object(golden_ops, "retag_ownership") as p_retag, \
                  patch.object(golden_ops, "wait_for_proxmox_task"), \
                  patch.object(golden_ops, "write_template_hash") as p_hash, \
                  patch.object(golden_ops, "stored_template_hash",
@@ -102,7 +103,8 @@ class BuildGoldenSetTests(unittest.TestCase):
                     comp_dir / "nakon-golden.json", None, "ops", "10.0.0.9",
                     golden_hashes=hashes, unbooted=unbooted)
         return result, SimpleNamespace(api=p_api, destroy=p_destroy, hash=p_hash,
-                                       start=p_start, snap=p_snap, nakon=p_nakon)
+                                       start=p_start, snap=p_snap, nakon=p_nakon,
+                                       retag=p_retag)
 
     def test_dc_golden_full_cloned_and_converted_without_booting(self):
         dc_only = [BOXES[0]]

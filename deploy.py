@@ -34,6 +34,7 @@ from constants import (
     MAX_BOXES_PER_TEAM,
     MAX_TEAMS,
     SCORING_ENGINE_VMID,
+    ownership_tags,
 )
 from golden_ops import (_is_template, _template_vmid_map, build_golden_set,
                         unbooted_golden_boxes)
@@ -57,7 +58,7 @@ from template_ops import (
     stored_template_hash,
 )
 from utils import (compfile_flag, is_unmanaged, load_compfile, load_users_config,
-                   valid_comp_name)
+                   mint_run_id, valid_comp_name)
 from windows_ops import is_windows_template
 
 ENV_PATH = Path(".env")
@@ -194,7 +195,7 @@ def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden
 
 
 def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored,
-                        golden_hashes, golden_inputs, comp_name):
+                        golden_hashes, golden_inputs, comp_name, run_tag=None):
     """Destroy each golden template in `slot` whose stored M4 hash no longer matches.
 
     A slot with no hash/inputs entry is SKIPPED, not subscripted. The unconditional
@@ -219,8 +220,8 @@ def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored
         if frozen_gate(comp_dir, entry.get("inputs"), box_inputs,
                        f"golden template for '{b['name']}'"):
             print(f"  golden-{b['name']} hash differs — rebuilding...")
-            destroy_vm_if_exists(destroy_node, vid, expect_tags={
-                "tezcatlipoca", GOLDEN_TAG, f"comp-{comp_name}"},
+            destroy_vm_if_exists(destroy_node, vid, expect_tags=ownership_tags(
+                comp_name, run_tag, GOLDEN_TAG),
                 legacy_name=f"golden-{b['name']}")
 
 
@@ -397,6 +398,14 @@ class DeployContext:
     scoring_user: str = ""
     scoring_ip: str = ""
     ssh_key: Optional[Path] = None
+    # --- run identity (constants.ownership_tags) ---
+    # run_id: stamped on everything this run creates. reclaim_run_id: the PRIOR
+    # state's run id — the only id that authorizes destroying a pre-existing VM in
+    # phase 1 / the rebuild gates. They differ only on a fresh deploy whose state
+    # predates run ids; post-change deploys always reuse the prior id.
+    run_id: str = ""
+    reclaim_run_id: str = ""
+    allow_untagged_reclaim: bool = False
 
     def save_state(self):
         """Persist .deploy_state.json through the shared config_ops writer."""
@@ -415,8 +424,22 @@ class DeployContext:
 
     @property
     def comp_tags(self):
-        """The tags every VM this competition owns carries (destroy's ownership guard)."""
-        return {"tezcatlipoca", f"comp-{self.comp_name}"}
+        """The tags every VM CREATED THIS RUN carries (constants.ownership_tags):
+        comp tag + this run's run-id tag."""
+        return ownership_tags(self.comp_name, self.run_id)
+
+    @property
+    def reclaim_tags(self):
+        """The tags that authorize destroying a PRE-EXISTING VM (phase 1, rebuild
+        gates): the prior run's full ownership set. A same-comp VM without this tag
+        belongs to a DIFFERENT worktree's run and is refused, not reclaimed
+        (2026-10-02 near-miss)."""
+        return ownership_tags(self.comp_name, self.reclaim_run_id or self.run_id)
+
+    @property
+    def reclaim_tag(self):
+        """The run-id tag alone that phase-1-style reclamation requires."""
+        return self.reclaim_run_id or self.run_id
 
 
 @dataclass
@@ -497,6 +520,11 @@ class CompetitionSecrets:
     box_creds: dict = field(default_factory=dict)
     domain_creds: Optional[dict] = None
     inject_password: Optional[str] = None
+    # Per-deploy identity tag (utils.mint_run_id): stamped on every VM this run
+    # creates and required by every destruction guard. Minted once per competition
+    # directory — a resume, a crash-loop re-run and a redeploy all reuse it, so
+    # kept templates keep matching the ownership set.
+    run_id: str = ""
 
 
 @dataclass
@@ -621,6 +649,11 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
     fresh deploy mints them, except where a carried box_password or the packet's
     passwords.json outranks the mint. From here on `secrets` is the single source for
     teams, passwords and the persisted .deploy_state.json dict itself."""
+    # Run identity comes first so BOTH branches persist the same id (utils.mint_run_id):
+    # reused from prior state when the competition directory has one — a resume, a
+    # crash-loop re-run and a redeploy must reclaim and re-tag the SAME lineage, and a
+    # fresh mint would orphan every kept template's ownership.
+    secrets.run_id = prior.previous_state.get("run_id") or mint_run_id()
     if prior.resuming:
         secrets.state = json.loads(prior.state_path.read_text())
         secrets.teams = {
@@ -646,6 +679,7 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
             "domain_creds": secrets.domain_creds,
             "inject_password": secrets.inject_password,
             "scoring_vm_id": identity.engine_vmid,
+            "run_id": secrets.run_id,
         })
         write_state(prior.state_path, secrets.state)
         print(f"  Resuming from phase {from_phase} "
@@ -703,6 +737,7 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
             "box_creds": secrets.box_creds,
             "domain_creds": secrets.domain_creds,
             "scoring_vm_id": identity.engine_vmid,
+            "run_id": secrets.run_id,
         }
         write_state(prior.state_path, secrets.state)
 
@@ -915,6 +950,9 @@ def _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity,
         # Persisted via tfvars so resumes don't depend on the env var being re-exported.
         "engine_mgmt_ip": terraform.engine_mgmt_ip,
         "engine_mgmt_gw": os.environ.get("TF_VAR_engine_mgmt_gw", ""),
+        # Per-deploy identity: terraform stamps it onto the engine and every team box
+        # (main.tf tags), making them reclaimable by THIS run's teardown only.
+        "run_tag": secrets.run_id,
     }
     if place.placement:
         # Multi-node: per-slot satellite providers and the engine's jump routes.
@@ -935,15 +973,21 @@ def _run_competition_preflight(comp_dir, spec, secrets, identity, place, terrafo
     multinode gate is imported locally: only this branch pulls in the placement
     preflight machinery."""
     if from_phase <= 2:
+        # The clash gates' "ours" exemption must be run-aware: the prior state's run
+        # id is what marks THIS competition directory's leftovers ours. On a state
+        # predating run ids it falls back to the minted id — pre-existing comp-tagged
+        # VMs then classify as foreign and the gate refuses, pointing at the
+        # --legacy-tags teardown (fail-closed beats guessing whose VM it is).
+        reclaim_tag = prior.previous_state.get("run_id") or secrets.run_id
         if place.placement:
             from config_ops import preflight_gates_multinode
             preflight_gates_multinode(comp_dir, spec.boxes, secrets.teams, identity.engine_vmid, place.placement,
                                       engine_mgmt_ip=terraform.engine_mgmt_ip,
-                                      check_free=not prior.resuming)
+                                      check_free=not prior.resuming, our_run_tag=reclaim_tag)
         else:
             preflight_gates(comp_dir, spec.boxes, secrets.number_of_teams, teams=secrets.teams,
                             engine_vmid=identity.engine_vmid, check_free=not prior.resuming,
-                            engine_mgmt_ip=terraform.engine_mgmt_ip)
+                            engine_mgmt_ip=terraform.engine_mgmt_ip, our_run_tag=reclaim_tag)
 
 
 def _enumerate_deploy_targets(targets, comp_dir, spec, secrets, place):
@@ -1020,6 +1064,9 @@ def _assemble_deploy_context(comp_dir, from_phase, assume_yes, identity, spec, p
         managed_targets=targets.managed_targets,
         linux_targets=targets.linux_targets,
         windows_targets=targets.windows_targets,
+        run_id=secrets.run_id,
+        reclaim_run_id=(prior.previous_state.get("run_id") or ""),
+        allow_untagged_reclaim=(os.environ.get("TEZ_ALLOW_UNTAGGED_RECLAIM") == "1"),
     )
 
 
@@ -1279,6 +1326,15 @@ def main():
         for b in boxes:
             disk = f"{b['disk_gb']} GB disk" if b.get("disk_gb") else "template's own disk"
             print(f"    {b['name']:<12} {b['template']:<20} {b['cpu']} CPU, {b['memory_mb']} MB, {disk}")
+        try:
+            state_run = (json.loads((comp_dir / ".deploy_state.json").read_text()).get("run_id") or "")
+        except (ValueError, OSError):
+            state_run = ""
+        if state_run:
+            print(f"  Run identity: {state_run} (reused from this competition's state)")
+        else:
+            print("  Run identity: minted at deploy time (run-<id>, stored in "
+                  ".deploy_state.json) — destruction paths require it")
         print("\n  Team count is decided at deploy time (--teams N, or the prompt).")
         print("  Nothing was deployed — no teardown, no terraform apply.")
         print(f"  Deploy for real with: python3 create-competition.py --competition {comp_name} "
