@@ -932,14 +932,12 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
             ctx.checkpoint(4)
         else:
             print("[4/7] Skipped (resume).")
-            print("[4/7] Skipped (resume).")
 
         if ctx.from_phase <= 5:
             current_phase = 5
             phase5_repair_sweep(ctx)
             ctx.checkpoint(5)
         else:
-            print("[5/7] Skipped (resume).")
             print("[5/7] Skipped (resume).")
 
         if ctx.from_phase <= 6:
@@ -948,14 +946,12 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
             ctx.checkpoint(6)
         else:
             print("[6/7] Skipped (resume).")
-            print("[6/7] Skipped (resume).")
 
         if ctx.from_phase <= 7:
             current_phase = 7
             phase7_seed(ctx)
             ctx.checkpoint(7)
         else:
-            print("[7/7] Skipped (resume).")
             print("[7/7] Skipped (resume).")
     except BaseException as e:
         print(f"\n  [!] Deploy failed during phase {current_phase} of '{ctx.comp_name}'.")
