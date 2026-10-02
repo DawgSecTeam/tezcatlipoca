@@ -609,54 +609,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     targets = DeployTargets()
     _enumerate_deploy_targets(targets, comp_dir, spec, secrets, place)
 
-    return DeployContext(
-        comp_dir=comp_dir,
-        comp_name=spec.comp_name,
-        state_path=prior.state_path,
-        from_phase=from_phase,
-        resuming=prior.resuming,
-        assume_yes=assume_yes,
-        name=spec.name,
-        scenario=spec.scenario,
-        box_username=spec.box_username,
-        credlist_usernames=spec.credlist_usernames,
-        nakon_jobs=spec.nakon_jobs,
-        apt_cache=spec.apt_cache,
-        injects=inputs.injects,
-        packet_pw=inputs.packet_pw,
-        state=secrets.state,
-        teams=secrets.teams,
-        number_of_teams=secrets.number_of_teams,
-        admin_password=secrets.admin_password,
-        postgres_password=secrets.postgres_password,
-        redis_password=secrets.redis_password,
-        box_password=secrets.box_password,
-        box_creds=secrets.box_creds,
-        domain_creds=secrets.domain_creds,
-        inject_password=secrets.inject_password,
-        placement=place.placement,
-        node=targets.node,
-        engine_vmid=identity.engine_vmid,
-        engine_mgmt_ip=terraform.engine_mgmt_ip,
-        boxes=spec.boxes,
-        boxes_by_name={b["name"]: b for b in spec.boxes},
-        unbooted=generated.unbooted,
-        nakon_config_path=generated.nakon_config_path,
-        golden_config_path=generated.golden_config_path,
-        repair_config_path=generated.repair_config_path,
-        final_config_path=generated.final_config_path,
-        golden_inputs=generated.golden_inputs,
-        golden_hashes=generated.golden_hashes,
-        frozen_keep=generated.frozen_keep,
-        tf_dir=terraform.tf_dir,
-        tfvars_path=terraform.tfvars_path,
-        tfvars=terraform.tfvars,
-        ssh_key_abs=terraform.ssh_key_abs,
-        all_targets=targets.all_targets,
-        managed_targets=targets.managed_targets,
-        linux_targets=targets.linux_targets,
-        windows_targets=targets.windows_targets,
-    )
+    return _assemble_deploy_context(comp_dir, from_phase, assume_yes, identity, spec, prior,
+                                    inputs, secrets, place, generated, terraform, targets)
 
 
 def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identity, from_phase):
@@ -991,6 +945,63 @@ def _enumerate_deploy_targets(targets, comp_dir, spec, secrets, place):
     targets.managed_targets = [t for t in targets.all_targets if not is_unmanaged(t["box"])]
     targets.linux_targets = [t for t in targets.managed_targets if not is_windows_template(t["box"]["template"])]
     targets.windows_targets = [t for t in targets.managed_targets if is_windows_template(t["box"]["template"])]
+
+
+def _assemble_deploy_context(comp_dir, from_phase, assume_yes, identity, spec, prior, inputs,
+                             secrets, place, generated, terraform, targets):
+    """Expand the prepared stages onto DeployContext's flat fields.
+
+    Kept out of prepare() so the sequencer reads as the ordered steps it is: this is the
+    one place that maps the stage objects onto DeployContext, whose field order follows
+    the pipeline."""
+    return DeployContext(
+        comp_dir=comp_dir,
+        comp_name=spec.comp_name,
+        state_path=prior.state_path,
+        from_phase=from_phase,
+        resuming=prior.resuming,
+        assume_yes=assume_yes,
+        name=spec.name,
+        scenario=spec.scenario,
+        box_username=spec.box_username,
+        credlist_usernames=spec.credlist_usernames,
+        nakon_jobs=spec.nakon_jobs,
+        apt_cache=spec.apt_cache,
+        injects=inputs.injects,
+        packet_pw=inputs.packet_pw,
+        state=secrets.state,
+        teams=secrets.teams,
+        number_of_teams=secrets.number_of_teams,
+        admin_password=secrets.admin_password,
+        postgres_password=secrets.postgres_password,
+        redis_password=secrets.redis_password,
+        box_password=secrets.box_password,
+        box_creds=secrets.box_creds,
+        domain_creds=secrets.domain_creds,
+        inject_password=secrets.inject_password,
+        placement=place.placement,
+        node=targets.node,
+        engine_vmid=identity.engine_vmid,
+        engine_mgmt_ip=terraform.engine_mgmt_ip,
+        boxes=spec.boxes,
+        boxes_by_name={b["name"]: b for b in spec.boxes},
+        unbooted=generated.unbooted,
+        nakon_config_path=generated.nakon_config_path,
+        golden_config_path=generated.golden_config_path,
+        repair_config_path=generated.repair_config_path,
+        final_config_path=generated.final_config_path,
+        golden_inputs=generated.golden_inputs,
+        golden_hashes=generated.golden_hashes,
+        frozen_keep=generated.frozen_keep,
+        tf_dir=terraform.tf_dir,
+        tfvars_path=terraform.tfvars_path,
+        tfvars=terraform.tfvars,
+        ssh_key_abs=terraform.ssh_key_abs,
+        all_targets=targets.all_targets,
+        managed_targets=targets.managed_targets,
+        linux_targets=targets.linux_targets,
+        windows_targets=targets.windows_targets,
+    )
 
 
 def _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid):
