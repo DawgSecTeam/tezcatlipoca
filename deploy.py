@@ -543,6 +543,21 @@ class TerraformInputs:
     engine_mgmt_ip: Optional[str] = None
 
 
+@dataclass
+class DeployTargets:
+    """Every VM this deploy touches, split into the work lists the phases consume.
+
+    node is the engine's host (read from the env after placement selected it);
+    all_targets keeps positional vmids for every box including unmanaged ones, while
+    the Linux/Windows lists are what plant/repair/fix_services iterate."""
+
+    node: str = ""
+    all_targets: list = field(default_factory=list)
+    managed_targets: list = field(default_factory=list)
+    linux_targets: list = field(default_factory=list)
+    windows_targets: list = field(default_factory=list)
+
+
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
             team_node=None, engine_node=None, force_from_phase=False):
     """Everything deploy() must do before phase 1, as one testable step.
@@ -591,15 +606,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
             print("  Deployment cancelled.")
             return None
 
-    node = os.environ["TF_VAR_proxmox_node"]
-    all_targets = enumerate_targets(secrets.teams, spec.boxes, placement=place.placement, default_node=node)
-    persist_targets(comp_dir, all_targets, spec.boxes)
-    # Unmanaged boxes (pfSense/appliances) get no plant/repair/fix_services/cloud-init —
-    # they are cloned from their own template and self-configure. Keep them in all_targets
-    # (positional vmids) but out of the Linux/Windows work lists.
-    managed_targets = [t for t in all_targets if not is_unmanaged(t["box"])]
-    linux_targets = [t for t in managed_targets if not is_windows_template(t["box"]["template"])]
-    windows_targets = [t for t in managed_targets if is_windows_template(t["box"]["template"])]
+    targets = DeployTargets()
+    _enumerate_deploy_targets(targets, comp_dir, spec, secrets, place)
 
     return DeployContext(
         comp_dir=comp_dir,
@@ -627,7 +635,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         domain_creds=secrets.domain_creds,
         inject_password=secrets.inject_password,
         placement=place.placement,
-        node=node,
+        node=targets.node,
         engine_vmid=identity.engine_vmid,
         engine_mgmt_ip=terraform.engine_mgmt_ip,
         boxes=spec.boxes,
@@ -644,10 +652,10 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         tfvars_path=terraform.tfvars_path,
         tfvars=terraform.tfvars,
         ssh_key_abs=terraform.ssh_key_abs,
-        all_targets=all_targets,
-        managed_targets=managed_targets,
-        linux_targets=linux_targets,
-        windows_targets=windows_targets,
+        all_targets=targets.all_targets,
+        managed_targets=targets.managed_targets,
+        linux_targets=targets.linux_targets,
+        windows_targets=targets.windows_targets,
     )
 
 
@@ -963,6 +971,26 @@ def _run_competition_preflight(comp_dir, spec, secrets, identity, place, terrafo
             preflight_gates(comp_dir, spec.boxes, secrets.number_of_teams, teams=secrets.teams,
                             engine_vmid=identity.engine_vmid, check_free=not prior.resuming,
                             engine_mgmt_ip=terraform.engine_mgmt_ip)
+
+
+def _enumerate_deploy_targets(targets, comp_dir, spec, secrets, place):
+    """Enumerate every VM this deploy will touch, into `targets`.
+
+    node is read from the env here (the engine's host, already selected by placement);
+    all_targets keeps every positional vmid, while the Linux/Windows work lists drop
+    unmanaged boxes — pfSense/appliances have no plant/repair/fix_services/cloud-init,
+    they clone from their own template and self-configure (but must stay in all_targets
+    for vmid arithmetic)."""
+    targets.node = os.environ["TF_VAR_proxmox_node"]
+    targets.all_targets = enumerate_targets(secrets.teams, spec.boxes,
+                                           placement=place.placement, default_node=targets.node)
+    persist_targets(comp_dir, targets.all_targets, spec.boxes)
+    # Unmanaged boxes (pfSense/appliances) get no plant/repair/fix_services/cloud-init —
+    # they are cloned from their own template and self-configure. Keep them in all_targets
+    # (positional vmids) but out of the Linux/Windows work lists.
+    targets.managed_targets = [t for t in targets.all_targets if not is_unmanaged(t["box"])]
+    targets.linux_targets = [t for t in targets.managed_targets if not is_windows_template(t["box"]["template"])]
+    targets.windows_targets = [t for t in targets.managed_targets if is_windows_template(t["box"]["template"])]
 
 
 def _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid):
