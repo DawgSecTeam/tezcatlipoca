@@ -508,6 +508,24 @@ class EnginePlacement:
     placement: Optional[dict] = None
 
 
+@dataclass
+class GeneratedConfigs:
+    """The generated stage configs and the golden hash/gate results.
+
+    unbooted is the domain-controller set the stage configs key the repair stage on;
+    golden_inputs/golden_hashes feed phase 1's waves and the phase-4 rebuild gate;
+    frozen_keep names the goldens a code-only freeze must not rebuild."""
+
+    unbooted: set = field(default_factory=set)
+    nakon_config_path: Optional[Path] = None
+    golden_config_path: Optional[Path] = None
+    repair_config_path: Optional[Path] = None
+    final_config_path: Optional[Path] = None
+    golden_inputs: dict = field(default_factory=dict)
+    golden_hashes: dict = field(default_factory=dict)
+    frozen_keep: set = field(default_factory=set)
+
+
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
             team_node=None, engine_node=None, force_from_phase=False):
     """Everything deploy() must do before phase 1, as one testable step.
@@ -542,49 +560,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     place = EnginePlacement()
     _apply_engine_placement(place, prior, secrets, spec, identity, comp_dir, team_node, engine_node)
 
-    nakon_config_path = generate_nakon_config(secrets.teams, spec.boxes, spec.difficulty, comp_dir, secrets.box_password,
-                                               box_username=spec.box_username)
-    # M3.2: the full bundle is never deployed as one pass anymore. The golden-stage
-    # bundle is built inside golden_ops at plant time; the repair bundle in phase 5 and
-    # the final bundle in phase 6 (all content-addressed, so resumes hit the cache).
-    # Domain controllers keep an unbooted golden so each team's forest specializes its
-    # own machine SID before promotion; their configs move to the repair stage.
-    unbooted = unbooted_golden_boxes(comp_dir)
-    golden_config_path, repair_config_path, final_config_path, _postclone_path = generate_stage_configs(
-        comp_dir, secrets.teams, spec.boxes, unbooted=unbooted)
-
-    # M4: template hashes are computed BEFORE phase 1 — cleanup must know which golden
-    # templates survive (test-run reuse) and which rebuild. The golden bundle is built
-    # now (content-addressed; the phase-4 plant reuses the cache) because each box's
-    # hash consumes its plan's payload shas. The frozen gate also fires HERE — before
-    # phase 1 destroys anything ("nothing destroyed" is the whole point of the
-    # freeze; the phase-4 per-box gate alone was too late, matrix run 4).
-    node = os.environ["TF_VAR_proxmox_node"]
-    golden_bundle = build_nakon_bundle(golden_config_path)
-    golden_machines_by_box = {
-        m["name"].rsplit("-golden", 1)[0]: m
-        for m in json.loads(golden_config_path.read_text())["machines"]
-    }
-    base_template_ids = _template_vmid_map(node)
-    golden_inputs, golden_hashes = golden_hash_entries(
-        spec.boxes, base_template_ids, golden_machines_by_box, golden_bundle,
-        secrets.box_password, spec.box_username, os.environ.get("TF_VAR_ssh_public_key", ""),
-        spec.apt_cache, unbooted=unbooted)
-
-    frozen = frozen_state(comp_dir)
-    frozen_keep = set()
-    if frozen:
-        # Goldens now: config-class drift refuses BEFORE phase 1 destroys anything.
-        # The engine's gate still runs at phase 2 (its inputs are computed there),
-        # likewise before any engine destruction. Code-only drift keeps the golden:
-        # phase1_destroy_waves must not rebuild what the gate said to proceed on.
-        frozen_hashes = (frozen.get("hashes") or {})
-        for spec.name in golden_hashes:
-            stored_inputs = (frozen_hashes.get("golden") or {}).get(spec.name, {}).get("inputs") or {}
-            drift = golden_freeze_gate(spec.name, stored_inputs, golden_inputs[spec.name],
-                                       frozen.get("frozen_at"), golden_bundle)
-            if drift["code"]:
-                frozen_keep.add(spec.name)
+    generated = GeneratedConfigs()
+    _generate_stage_configs_and_hashes(generated, comp_dir, spec, secrets)
 
     teams_json_src = {
         team_key: {"identifier": team_data["identifier"], "password": team_data["password"]}
@@ -748,14 +725,14 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         engine_mgmt_ip=engine_mgmt_ip,
         boxes=spec.boxes,
         boxes_by_name={b["name"]: b for b in spec.boxes},
-        unbooted=unbooted,
-        nakon_config_path=nakon_config_path,
-        golden_config_path=golden_config_path,
-        repair_config_path=repair_config_path,
-        final_config_path=final_config_path,
-        golden_inputs=golden_inputs,
-        golden_hashes=golden_hashes,
-        frozen_keep=frozen_keep,
+        unbooted=generated.unbooted,
+        nakon_config_path=generated.nakon_config_path,
+        golden_config_path=generated.golden_config_path,
+        repair_config_path=generated.repair_config_path,
+        final_config_path=generated.final_config_path,
+        golden_inputs=generated.golden_inputs,
+        golden_hashes=generated.golden_hashes,
+        frozen_keep=generated.frozen_keep,
         tf_dir=tf_dir,
         tfvars_path=tfvars_path,
         tfvars=tfvars,
@@ -888,6 +865,60 @@ def _apply_engine_placement(place, prior, secrets, spec, identity, comp_dir, tea
     secrets.state["multi_node"] = bool(place.placement)
     write_state(prior.state_path, secrets.state)
     acquire_engine_lock(identity.engine_vmid)
+
+
+def _generate_stage_configs_and_hashes(generated, comp_dir, spec, secrets):
+    """Write the nakon/stage configs and compute every golden hash, into `generated`.
+
+    The M4 golden hashes are computed BEFORE phase 1 — cleanup must know which golden
+    templates survive (test-run reuse) and which rebuild — and the frozen gate fires
+    here for the same reason: a config-class freeze must be able to say "nothing
+    destroyed" before phase 1 starts deleting. The golden bundle is built now (content
+    addressed; the phase-4 plant reuses the cache) because each box's hash consumes its
+    plan's payload shas. See the comments on each sub-block for the incident history."""
+    generated.nakon_config_path = generate_nakon_config(secrets.teams, spec.boxes, spec.difficulty, comp_dir, secrets.box_password,
+                                               box_username=spec.box_username)
+    # M3.2: the full bundle is never deployed as one pass anymore. The golden-stage
+    # bundle is built inside golden_ops at plant time; the repair bundle in phase 5 and
+    # the final bundle in phase 6 (all content-addressed, so resumes hit the cache).
+    # Domain controllers keep an unbooted golden so each team's forest specializes its
+    # own machine SID before promotion; their configs move to the repair stage.
+    generated.unbooted = unbooted_golden_boxes(comp_dir)
+    generated.golden_config_path, generated.repair_config_path, generated.final_config_path, _postclone_path = generate_stage_configs(
+        comp_dir, secrets.teams, spec.boxes, unbooted=generated.unbooted)
+
+    # M4: template hashes are computed BEFORE phase 1 — cleanup must know which golden
+    # templates survive (test-run reuse) and which rebuild. The golden bundle is built
+    # now (content-addressed; the phase-4 plant reuses the cache) because each box's
+    # hash consumes its plan's payload shas. The frozen gate also fires HERE — before
+    # phase 1 destroys anything ("nothing destroyed" is the whole point of the
+    # freeze; the phase-4 per-box gate alone was too late, matrix run 4).
+    node = os.environ["TF_VAR_proxmox_node"]
+    golden_bundle = build_nakon_bundle(generated.golden_config_path)
+    golden_machines_by_box = {
+        m["name"].rsplit("-golden", 1)[0]: m
+        for m in json.loads(generated.golden_config_path.read_text())["machines"]
+    }
+    base_template_ids = _template_vmid_map(node)
+    generated.golden_inputs, generated.golden_hashes = golden_hash_entries(
+        spec.boxes, base_template_ids, golden_machines_by_box, golden_bundle,
+        secrets.box_password, spec.box_username, os.environ.get("TF_VAR_ssh_public_key", ""),
+        spec.apt_cache, unbooted=generated.unbooted)
+
+    frozen = frozen_state(comp_dir)
+    generated.frozen_keep = set()
+    if frozen:
+        # Goldens now: config-class drift refuses BEFORE phase 1 destroys anything.
+        # The engine's gate still runs at phase 2 (its inputs are computed there),
+        # likewise before any engine destruction. Code-only drift keeps the golden:
+        # phase1_destroy_waves must not rebuild what the gate said to proceed on.
+        frozen_hashes = (frozen.get("hashes") or {})
+        for spec.name in generated.golden_hashes:
+            stored_inputs = (frozen_hashes.get("golden") or {}).get(spec.name, {}).get("inputs") or {}
+            drift = golden_freeze_gate(spec.name, stored_inputs, generated.golden_inputs[spec.name],
+                                       frozen.get("frozen_at"), golden_bundle)
+            if drift["code"]:
+                generated.frozen_keep.add(spec.name)
 
 
 def _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid):
