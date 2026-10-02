@@ -48,7 +48,7 @@ from range_ops import (
 from nodes_ops import golden_vmid_for_slot
 from ssh_ops import ssh_via_gateway, wait_for_boxes_ssh, wait_for_cloud_init
 from template_ops import stored_template_hash, write_template_hash
-from utils import compfile_flag, is_unmanaged, run_concurrent
+from utils import PRINT_LOCK, compfile_flag, is_unmanaged, run_concurrent
 from windows_ops import bootstrap_windows_box, is_windows_template
 
 
@@ -543,12 +543,23 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     # team-box creation). Reset it over the key-auth SSH channel before the plant.
     box_username = ctx.get("box_username", "ubuntu")
     print(f"  Setting box passwords on golden Linux boxes (nakon authenticates as {box_username})...")
-    for t in linux_targets:
+
+    def _set_box_password(t):
         r = ssh_via_gateway(ctx, t["ip"], f"echo '{box_username}:{box_password}' | sudo chpasswd",
                             timeout=30, user=box_username)
         if r.returncode != 0:
             raise RuntimeError(f"password reset failed on golden {t['ip']}: "
                                f"{(r.stderr or '').strip()[:120]}")
+
+    # Parallel since W11 (2026-10-01): one independent SSH round trip per box, so an
+    # 8-box-type build paid ~8-16s of pure waiting for no reason (each box's reset is
+    # independent of every other box's). Same bound and same zip-and-raise aggregation
+    # as the Windows bootstrap above: a single failure still aborts the build with the
+    # identical message.
+    pw_results = run_concurrent(linux_targets, _set_box_password, max_workers=4)
+    for _t, r in zip(linux_targets, pw_results):
+        if isinstance(r, Exception):
+            raise r
 
     fix_dns_on_boxes(linux_targets, ctx)
 
@@ -556,9 +567,27 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     prep_apt_on_boxes(linux_targets, ctx)
 
     print(f"  Snapshotting golden boxes as '{SNAP_BASE}' (pre-plant rollback point)...")
-    for t in targets:
+
+    def _snap_base(t):
         take_snapshot(node, t["vmid"], SNAP_BASE,
                       description="tezcatlipoca golden: booted, networked, pre-plant")
+
+    # Parallel since W11 (2026-10-01): deploy.py's tz-base/tz-ready passes have run this
+    # exact op through run_concurrent(..., max_workers=4) since M2.1, so the serial loop
+    # here was an inconsistency as much as a slow path. The per-box snapshot wall,
+    # measured over 13 competitions (.deploy-timings.jsonl: 460 successful records, 16
+    # sub-second warn-path records excluded) is median 7.4s / mean 12.1s / p95 33.8s /
+    # max 103.3s — bench-parallel-2026-09-24 phase 4 alone was 12 snapshots / 135s — so
+    # an 8-box-type golden build paid ~60-100s of serial waiting. Bound 4, the same
+    # per-box bound deploy.py validated. run_concurrent joins the whole pool before it
+    # returns, so every box's snapshot still exists before the plant, the smoke gate,
+    # and the conversion that follow: the rollback-guard ordering is unchanged.
+    snap_results = run_concurrent(targets, _snap_base, max_workers=4)
+    # take_snapshot warns and returns False instead of raising, so the serial semantics
+    # are warn-and-continue; anything that still escaped it must keep propagating.
+    for _t, r in zip(targets, snap_results):
+        if isinstance(r, Exception):
+            raise r
 
     ensure_nat_forwarding(ctx)
 
@@ -590,11 +619,21 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
             ensure_alpine_services(comp_dir, targets, ctx)
 
     print("  Cleaning cloud-init state on golden Linux boxes (clones must re-init)...")
-    for t in linux_targets:
-        result = ssh_via_gateway(ctx, t["ip"], "sudo cloud-init clean --logs --machine-id",
-                                 timeout=30, user=ctx.get("box_username", "ubuntu"))
-        if result.returncode != 0:
-            print(f"    WARNING: cloud-init clean rc={result.returncode} on {t['ip']} "
+
+    def _cloud_init_clean(t):
+        return ssh_via_gateway(ctx, t["ip"], "sudo cloud-init clean --logs --machine-id",
+                               timeout=30, user=ctx.get("box_username", "ubuntu"))
+
+    # Parallel since W11 (2026-10-01): same ~1-2s independent SSH round trip as the
+    # password reset. The serial loop never let a non-zero rc abort — it warned — so
+    # the warnings are printed from the collected results in box order, keeping the log
+    # deterministic; a transport exception still propagates exactly as it did serially.
+    clean_results = run_concurrent(linux_targets, _cloud_init_clean, max_workers=4)
+    for t, r in zip(linux_targets, clean_results):
+        if isinstance(r, Exception):
+            raise r
+        if r.returncode != 0:
+            print(f"    WARNING: cloud-init clean rc={r.returncode} on {t['ip']} "
                   f"— clones may inherit golden's machine-id")
 
     # The golden is stopped BEFORE the smoke check: PVE only linked-clones templates, so
@@ -615,9 +654,12 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
             golden_boot_smoke(node, t, ctx, comp_dir, planted_configs=planted_configs)
 
     print("  Converting golden boxes to templates...")
-    for t in targets:
+
+    def _convert(t):
         # qm template refuses a VM holding snapshots — and the tz-base rollback guard's
         # purpose ends with the plant: a converted set is fatal on re-entry by design.
+        # Delete-then-convert stays INSIDE one worker, so a box's snapshot is always
+        # gone before the POST /template that needs it gone.
         if SNAP_BASE in list_snapshots(node, t["vmid"]):
             delete_snapshot(node, t["vmid"], SNAP_BASE)
         proxmox_api("POST", f"/nodes/{node}/qemu/{t['vmid']}/template")["data"]
@@ -627,7 +669,25 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
         if golden_hashes:
             write_template_hash(node, t["vmid"], golden_hashes[t["box"]["name"]],
                                 extra=f"box={t['box']['name']}")
-        print(f"    {t['vm_name']} (vmid {t['vmid']}) is now a template")
+        with PRINT_LOCK:
+            print(f"    {t['vm_name']} (vmid {t['vmid']}) is now a template")
+
+    # Parallel since W11 (2026-10-01): 4-5 API calls plus a snapshot-delete task wait
+    # per box (the converting POST itself returns no task to wait on), which is ~5-10s
+    # per box, so an 8-box-type build paid ~30-60s serially. Bound 4, NOT
+    # MAX_CONCURRENCY's 8: each unit drives Proxmox tasks and 4 is the validated
+    # per-box VM-work bound (deploy.py's snapshot/Windows-bootstrap pools, jump_ops).
+    #
+    # The `if boot_smoke:` block ABOVE is a hard phase barrier: it runs first and
+    # raises on any non-PASS verdict, so a golden that failed its boot smoke can never
+    # reach POST /template no matter how this pool schedules. The clone loops (cold
+    # path, and `missing`) are deliberately NOT parallel: full clones are
+    # crash-consistent copies and saturate the datastore (see the module note on the
+    # cold path and deploy.py's -parallelism=1).
+    conv_results = run_concurrent(targets, _convert, max_workers=4)
+    for _t, r in zip(targets, conv_results):
+        if isinstance(r, Exception):
+            raise r
 
     return {t["box"]["name"]: t["vmid"] for t in targets_all}
 
