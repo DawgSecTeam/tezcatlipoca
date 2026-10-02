@@ -66,6 +66,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 _DEPLOY_LOCKS = {}  # path -> open fh (keep referenced so flock survives)
 
+# Code-level, not run-level state: the .deploy_state.json resume guard and the fresh
+# state writer must record the same version, and both now live in different steps.
+PIPELINE_VERSION = 2
+
 
 def _record_coverage(state, stage_machines, result):
     """Record per-machine unplanted configs in state (M4 plant-coverage source).
@@ -414,6 +418,146 @@ class DeployContext:
         return {"tezcatlipoca", f"comp-{self.comp_name}"}
 
 
+@dataclass
+class RunIdentity:
+    """The run's engine identity, settled before anything else keys on it.
+
+    prepare() resolves the scoring-engine VMID first because the engine lock is keyed on
+    it and phase-1 cleanup destroys by it. On a resume it is authoritative from
+    .deploy_state.json; on a fresh deploy it comes from the --scoring-vmid flag/arg
+    (default SCORING_ENGINE_VMID)."""
+
+    engine_vmid: int = SCORING_ENGINE_VMID
+
+
+@dataclass
+class CompetitionSpec:
+    """The competition's static definition: Compfile + users.json + boxes.json.
+
+    nakon_jobs and apt_cache are Compfile knobs materialised here so every step that
+    consumes them (the nakon config, the golden-hash inputs) reads the spec instead of
+    re-parsing the file."""
+
+    name: str = ""
+    scenario: str = ""
+    difficulty: int = 0
+    box_username: str = ""
+    credlist_usernames: list = field(default_factory=list)
+    nakon_jobs: int = 4
+    apt_cache: bool = True
+    comp_name: str = ""
+    boxes: list = field(default_factory=list)
+
+
+@dataclass
+class PriorDeployState:
+    """What the previous run left in .deploy_state.json, plus the resume decision.
+
+    previous_state is the raw dict the secrets step reuses (box_password, the packet
+    credentials' fallback); resuming is from_phase > 1. The file is read BEFORE the
+    guard that refuses a resume without one, because that guard's message names the
+    path it looked for. The pipeline-version refusal also lives here: a v1 file's phase
+    numbers mean different things, and the guard must fire before anything resumes."""
+
+    state_path: Optional[Path] = None
+    previous_state: dict = field(default_factory=dict)
+    resuming: bool = False
+
+
+@dataclass
+class CompetitionInputs:
+    """Per-competition inputs loaded after the resume guards: injects and the packet.
+
+    The packet-published credentials (compile-packet.py -> passwords.json) are the one
+    input that outranks both state and a fresh mint, so they are materialised here as a
+    unit; packet_credlists is the derived view the secrets step reads."""
+
+    injects: list = field(default_factory=list)
+    packet_pw: Optional[dict] = None
+    packet_credlists: dict = field(default_factory=dict)
+
+
+@dataclass
+class CompetitionSecrets:
+    """Every secret the run needs, minted or reused once by the secrets step.
+
+    state is the .deploy_state.json dict itself (mutated as the run progresses and
+    checkpointed by DeployContext); the rest are its decoded pieces. A resume fills them
+    from state, a fresh deploy mints them, and the packet/carried-password overrides are
+    applied before state is written (never after a golden consumes box_password)."""
+
+    state: dict = field(default_factory=dict)
+    teams: dict = field(default_factory=dict)
+    number_of_teams: int = 0
+    admin_password: str = ""
+    postgres_password: str = ""
+    redis_password: str = ""
+    box_password: str = ""
+    box_creds: dict = field(default_factory=dict)
+    domain_creds: Optional[dict] = None
+    inject_password: Optional[str] = None
+
+
+@dataclass
+class EnginePlacement:
+    """Where the competition's VMs live (None = single-node), resolved once.
+
+    Resolving it is also when the endpoint-keyed engine lock is taken, so `placement` is
+    read by every later node-scoped step and by terraform's satellite inputs."""
+
+    placement: Optional[dict] = None
+
+
+@dataclass
+class GeneratedConfigs:
+    """The generated stage configs and the golden hash/gate results.
+
+    unbooted is the domain-controller set the stage configs key the repair stage on;
+    golden_inputs/golden_hashes feed phase 1's waves and the phase-4 rebuild gate;
+    frozen_keep names the goldens a code-only freeze must not rebuild."""
+
+    unbooted: set = field(default_factory=set)
+    nakon_config_path: Optional[Path] = None
+    golden_config_path: Optional[Path] = None
+    repair_config_path: Optional[Path] = None
+    final_config_path: Optional[Path] = None
+    golden_inputs: dict = field(default_factory=dict)
+    golden_hashes: dict = field(default_factory=dict)
+    frozen_keep: set = field(default_factory=set)
+
+
+@dataclass
+class TerraformInputs:
+    """The per-competition terraform workdir and its authoritative tfvars.
+
+    terraform.tfvars.json outranks TF_VAR_* env, so `tfvars` is the copy terraform
+    actually reads; engine_mgmt_ip is both a tfvars value and the exported
+    TF_VAR_engine_mgmt_ip that template_ops builds the engine VM with (build-VM
+    ipconfig0). The ssh key path is absolute because it was ../proxmox-relative to the
+    now-deeper per-competition workdir."""
+
+    tf_dir: Optional[Path] = None
+    tfvars_path: Optional[Path] = None
+    tfvars: dict = field(default_factory=dict)
+    ssh_key_abs: str = ""
+    engine_mgmt_ip: Optional[str] = None
+
+
+@dataclass
+class DeployTargets:
+    """Every VM this deploy touches, split into the work lists the phases consume.
+
+    node is the engine's host (read from the env after placement selected it);
+    all_targets keeps positional vmids for every box including unmanaged ones, while
+    the Linux/Windows lists are what plant/repair/fix_services iterate."""
+
+    node: str = ""
+    all_targets: list = field(default_factory=list)
+    managed_targets: list = field(default_factory=list)
+    linux_targets: list = field(default_factory=list)
+    windows_targets: list = field(default_factory=list)
+
+
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
             team_node=None, engine_node=None, force_from_phase=False):
     """Everything deploy() must do before phase 1, as one testable step.
@@ -428,126 +572,83 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     The write lock is deliberately NOT taken here: deploy() holds it across the whole
     run, phases included. Nothing here destroys anything — the frozen gate runs before
     phase 1 precisely so a freeze can still say "nothing destroyed"."""
-    # Resolve this competition's scoring-engine VMID before taking the engine lock
-    # (the lock is keyed on it) and before phase-1 cleanup destroys it. On resume it
-    # is authoritative from .deploy_state.json; on a fresh deploy it comes from the
-    # flag/arg (default SCORING_ENGINE_VMID).
-    _early_state = comp_dir / ".deploy_state.json"
-    if from_phase > 1 and _early_state.exists():
-        try:
-            engine_vmid = int(json.loads(_early_state.read_text()).get("scoring_vm_id", SCORING_ENGINE_VMID))
-        except (ValueError, json.JSONDecodeError):
-            engine_vmid = SCORING_ENGINE_VMID
-    else:
-        engine_vmid = int(scoring_vmid) if scoring_vmid is not None else SCORING_ENGINE_VMID
+    identity = RunIdentity()
+    _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid)
     # (The engine lock itself is taken further down — multi-node placement must point
     # the env at the engine's host first, and that needs teams+boxes resolved.)
 
-    name, scenario, difficulty = load_compfile(comp_dir / "Compfile")
-    box_username, credlist_usernames = load_users_config(comp_dir)
-    # nakon --jobs pass-through (M1.2): per-machine work is atomic in nakon's runner, so N
-    # machines plant concurrently with each machine's step order (disruptive last) intact.
-    # The ceiling is engine egress/CPU and mirror throughput, not the datastore (no bulk
-    # writes) — start at 4 and judge against the M0.2 timings.
-    nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
-    # apt_cache (M1.3): point each box's apt at the engine's apt-cacher-ng mirror cache.
-    # Approved trade-off: through the IP-based proxy, resolv-conf-null-dns no longer breaks
-    # apt (it still breaks every other resolver user on the box); empty-sources/hold
-    # configs break apt either way. Set `apt_cache 0` in the Compfile for full realism.
-    apt_cache = bool(compfile_flag(comp_dir / "Compfile", "apt_cache", 1))
-    comp_name = comp_dir.name
-    print(f"\n{'='*60}")
-    print(f"  Deploying {comp_name}")
-    print(f"{'='*60}\n")
+    spec = CompetitionSpec()
+    _load_competition_spec(spec, comp_dir)
 
-    boxes = load_boxes(comp_dir)
-    if not boxes:
-        print("  ERROR: No boxes.json found. Create a new competition or add boxes.json.")
-        sys.exit(1)
+    prior = PriorDeployState()
+    _load_prior_deploy_state(prior, comp_dir, from_phase, force_from_phase)
 
-    KNOWN_BROKEN_TEMPLATES = {"debian13-lite", "ubuntu24.04"}
-    for b in boxes:
-        if b.get("template") in KNOWN_BROKEN_TEMPLATES:
-            print(f"  WARNING: box '{b['name']}' uses template '{b['template']}', which is "
-                  f"known broken (bad cloud-init — clones won't get a working network/SSH). "
-                  f"Use '{b['template']}-fix' instead. See docs/usage-people.md's "
-                  f"Troubleshooting table.")
+    inputs = CompetitionInputs()
+    _load_competition_inputs(inputs, comp_dir)
 
-    state_path = comp_dir / ".deploy_state.json"
-    previous_state = {}
-    if state_path.exists():
-        try:
-            previous_state = json.loads(state_path.read_text())
-        except (ValueError, OSError):
-            previous_state = {}
-    if from_phase > 1 and not state_path.exists():
-        raise SystemExit(
-            f"  ERROR: --from-phase {from_phase} but {state_path} doesn't exist — there are no "
-            f"saved team passwords/secrets to resume with, and generating fresh ones while "
-            f"skipping the destructive phases would leave the deployed range and its credentials "
-            f"out of sync. Re-run without --from-phase for a clean redeploy."
-        )
-    resuming = from_phase > 1
+    secrets = CompetitionSecrets()
+    _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identity, from_phase)
 
-    # Pipeline v2 (M3): golden templates + linked clones, phases renumbered. A v1 state
-    # file's phase numbers mean different things, so resuming across the boundary is
-    # refused rather than silently misinterpreted.
-    PIPELINE_VERSION = 2
-    if resuming:
-        _pv = None
-        try:
-            _pv = json.loads(state_path.read_text()).get("pipeline_version")
-        except (ValueError, OSError):
-            pass
-        if _pv != PIPELINE_VERSION:
-            raise SystemExit(
-                f"  ERROR: {state_path} was written by pipeline v{_pv if _pv is not None else '1'} "
-                f"(pre-golden-template phases) — this code is pipeline v{PIPELINE_VERSION} and its "
-                f"--from-phase numbers mean different things. Run a fresh deploy (no --from-phase)."
-            )
-        # Refuse to skip a phase that never completed: the skipped phases are what build
-        # the machines the later ones target (see guard_resume_from_phase).
-        guard_resume_from_phase(from_phase, previous_state.get("last_phase"), state_path,
-                                force=force_from_phase)
+    place = EnginePlacement()
+    _apply_engine_placement(place, prior, secrets, spec, identity, comp_dir, team_node, engine_node)
 
-    injects = load_injects(comp_dir)
-    # Packet-published credentials (compile-packet.py -> passwords.json): when present,
-    # box_password and the credlists are the packet's default credentials verbatim, not
-    # random mints. Teams get them in the packet and rotate at minute zero — that IS the
-    # competition. Also makes redeploy deterministic (no re-minted secret drifting from
-    # the packet).
-    packet_pw = load_packet_passwords(comp_dir)
-    packet_credlists = (packet_pw or {}).get("credlists") or {}
+    generated = GeneratedConfigs()
+    _generate_stage_configs_and_hashes(generated, comp_dir, spec, secrets)
 
-    if resuming:
-        state = json.loads(state_path.read_text())
-        teams = {
+    terraform = TerraformInputs()
+    _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity, place, from_phase)
+
+    _run_competition_preflight(comp_dir, spec, secrets, identity, place, terraform,
+                               prior, from_phase)
+
+    if not assume_yes and not prior.resuming:
+        if not confirm_deploy(spec.name, spec.scenario, spec.difficulty, secrets.teams, spec.boxes):
+            print("  Deployment cancelled.")
+            return None
+
+    targets = DeployTargets()
+    _enumerate_deploy_targets(targets, comp_dir, spec, secrets, place)
+
+    return _assemble_deploy_context(comp_dir, from_phase, assume_yes, identity, spec, prior,
+                                    inputs, secrets, place, generated, terraform, targets)
+
+
+def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identity, from_phase):
+    """Mint or reuse every secret the competition needs, into `secrets`.
+
+    A resume reuses state's secrets (minting only what an older state predates); a
+    fresh deploy mints them, except where a carried box_password or the packet's
+    passwords.json outranks the mint. From here on `secrets` is the single source for
+    teams, passwords and the persisted .deploy_state.json dict itself."""
+    if prior.resuming:
+        secrets.state = json.loads(prior.state_path.read_text())
+        secrets.teams = {
             k: {"identifier": v["identifier"], "password": v["password"]}
-            for k, v in state["teams"].items()
+            for k, v in secrets.state["teams"].items()
         }
-        number_of_teams = len(teams)
-        admin_password = state.get("admin_password") or random_password()
-        postgres_password = state.get("postgres_password") or random_password()
-        redis_password = state.get("redis_password") or random_password()
-        box_password = state.get("box_password") or random_password()
-        box_creds = state.get("box_creds") or {
-            name: random_password() for name in credlist_usernames
+        secrets.number_of_teams = len(secrets.teams)
+        secrets.admin_password = secrets.state.get("admin_password") or random_password()
+        secrets.postgres_password = secrets.state.get("postgres_password") or random_password()
+        secrets.redis_password = secrets.state.get("redis_password") or random_password()
+        secrets.box_password = secrets.state.get("box_password") or random_password()
+        secrets.box_creds = secrets.state.get("box_creds") or {
+            name: random_password() for name in spec.credlist_usernames
         }
-        domain_creds = state.get("domain_creds")
-        inject_password = state.get("inject_password")
-        state.update({
-            "admin_password": admin_password,
-            "postgres_password": postgres_password,
-            "redis_password": redis_password,
-            "box_password": box_password,
-            "box_creds": box_creds,
-            "domain_creds": domain_creds,
-            "inject_password": inject_password,
-            "scoring_vm_id": engine_vmid,
+        secrets.domain_creds = secrets.state.get("domain_creds")
+        secrets.inject_password = secrets.state.get("inject_password")
+        secrets.state.update({
+            "admin_password": secrets.admin_password,
+            "postgres_password": secrets.postgres_password,
+            "redis_password": secrets.redis_password,
+            "box_password": secrets.box_password,
+            "box_creds": secrets.box_creds,
+            "domain_creds": secrets.domain_creds,
+            "inject_password": secrets.inject_password,
+            "scoring_vm_id": identity.engine_vmid,
         })
-        write_state(state_path, state)
+        write_state(prior.state_path, secrets.state)
         print(f"  Resuming from phase {from_phase} "
-              f"({number_of_teams} team(s), last completed phase {state.get('last_phase')})")
+              f"({secrets.number_of_teams} team(s), last completed phase {secrets.state.get('last_phase')})")
     else:
         if num_teams is not None:
             if not (1 <= num_teams <= MAX_TEAMS):
@@ -555,23 +656,23 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
                     f"--teams must be between 1 and {MAX_TEAMS} (team identifiers are "
                     f"192.168.<101-254>.x)"
                 )
-            number_of_teams = num_teams
+            secrets.number_of_teams = num_teams
         else:
             while True:
                 raw = input("How many teams? ").strip()
                 try:
-                    number_of_teams = int(raw)
+                    secrets.number_of_teams = int(raw)
                 except ValueError:
                     print("  Enter a whole number.")
                     continue
-                if 1 <= number_of_teams <= MAX_TEAMS:
+                if 1 <= secrets.number_of_teams <= MAX_TEAMS:
                     break
                 print(f"  Enter a number from 1 to {MAX_TEAMS} "
                       f"(team identifiers are 192.168.<101-254>.x).")
-        teams = collect_teams(number_of_teams, engine_vmid)
-        admin_password = random_password()
-        postgres_password = random_password()
-        redis_password = random_password()
+        secrets.teams = collect_teams(secrets.number_of_teams, identity.engine_vmid)
+        secrets.admin_password = random_password()
+        secrets.postgres_password = random_password()
+        secrets.redis_password = random_password()
         # M4: box_password is a golden-hash INPUT (baked into /etc/shadow +
         # cloud-init on the golden disk) — a fresh deploy that re-minted it would
         # rebuild every golden and break the lifecycle's "2-team test run → 8-team
@@ -580,62 +681,80 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         # new competition. passwords.json (packet profile) outranks both: the
         # packet's default credentials ARE the competition, and an operator edit
         # to passwords.json is a deliberate re-key (goldens rebuild — correct).
-        box_password = ((packet_pw or {}).get("box_password")
-                        or carry_box_password(previous_state))
-        if packet_pw:
+        secrets.box_password = ((inputs.packet_pw or {}).get("box_password")
+                                or carry_box_password(prior.previous_state))
+        if inputs.packet_pw:
             print("  Box credentials come from passwords.json (packet profile) — "
                   "not re-minted")
-        box_creds = (dict(packet_credlists.get("linux") or {})
-                     or {name: random_password() for name in credlist_usernames})
-        domain_creds = (dict(packet_credlists.get("domain") or {}) or None)
-        inject_password = random_password() if injects else None
-        state = {
+        secrets.box_creds = (dict(inputs.packet_credlists.get("linux") or {})
+                             or {name: random_password() for name in spec.credlist_usernames})
+        secrets.domain_creds = (dict(inputs.packet_credlists.get("domain") or {}) or None)
+        secrets.inject_password = random_password() if inputs.injects else None
+        secrets.state = {
             "last_phase": 0,
             "pipeline_version": PIPELINE_VERSION,
-            "teams": teams,
-            "admin_password": admin_password,
-            "inject_password": inject_password,
-            "postgres_password": postgres_password,
-            "redis_password": redis_password,
-            "box_password": box_password,
-            "box_creds": box_creds,
-            "domain_creds": domain_creds,
-            "scoring_vm_id": engine_vmid,
+            "teams": secrets.teams,
+            "admin_password": secrets.admin_password,
+            "inject_password": secrets.inject_password,
+            "postgres_password": secrets.postgres_password,
+            "redis_password": secrets.redis_password,
+            "box_password": secrets.box_password,
+            "box_creds": secrets.box_creds,
+            "domain_creds": secrets.domain_creds,
+            "scoring_vm_id": identity.engine_vmid,
         }
-        write_state(state_path, state)
+        write_state(prior.state_path, secrets.state)
 
+
+def _apply_engine_placement(place, prior, secrets, spec, identity, comp_dir, team_node, engine_node):
+    """Resolve multi-node placement, point the env at the engine's host, take the lock.
+
+    Resolution happens now because teams and boxes are known and the Proxmox env must
+    point at the engine's host BEFORE the endpoint-keyed lock and any node-scoped call.
+    The lock is taken last, on the identity prepare() resolved first; it stays held for
+    the whole process (deploy() relies on that)."""
     # Multi-node placement (no-op without nodes.json/placement.json): resolved now —
     # teams and boxes are known, and the env must point at the engine's host BEFORE
     # the endpoint-keyed engine lock and anything node-scoped. An existing
     # placement.json always wins (authoritative); a resume without one adopts its
     # deployed endpoint rather than re-balancing a live range.
-    placement, _resolved_engine_record = resolve_placement(
-        comp_dir, engine_vmid, teams, boxes, comp_name,
+    place.placement, _resolved_engine_record = resolve_placement(
+        comp_dir, identity.engine_vmid, secrets.teams, spec.boxes, spec.comp_name,
         team_overrides=_parse_team_node(team_node), engine_override=engine_node,
-        resume_endpoint=(previous_state.get("deployed_endpoint") if resuming else None))
-    if placement:
+        resume_endpoint=(prior.previous_state.get("deployed_endpoint") if prior.resuming else None))
+    if place.placement:
         # Stays active for the whole deploy: every later node-scoped call and the
         # terraform env point at the placement's hosts.
-        activate_placement(placement)
+        activate_placement(place.placement)
         if _resolved_engine_record is not None and _resolved_engine_record.engine_mgmt_ip:
             os.environ["TF_VAR_engine_mgmt_ip"] = _resolved_engine_record.engine_mgmt_ip
             if _resolved_engine_record.engine_mgmt_gw:
                 os.environ.setdefault("TF_VAR_engine_mgmt_gw",
                                       _resolved_engine_record.engine_mgmt_gw)
-    state["multi_node"] = bool(placement)
-    write_state(state_path, state)
-    acquire_engine_lock(engine_vmid)
+    secrets.state["multi_node"] = bool(place.placement)
+    write_state(prior.state_path, secrets.state)
+    acquire_engine_lock(identity.engine_vmid)
 
-    nakon_config_path = generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password,
-                                               box_username=box_username)
+
+def _generate_stage_configs_and_hashes(generated, comp_dir, spec, secrets):
+    """Write the nakon/stage configs and compute every golden hash, into `generated`.
+
+    The M4 golden hashes are computed BEFORE phase 1 — cleanup must know which golden
+    templates survive (test-run reuse) and which rebuild — and the frozen gate fires
+    here for the same reason: a config-class freeze must be able to say "nothing
+    destroyed" before phase 1 starts deleting. The golden bundle is built now (content
+    addressed; the phase-4 plant reuses the cache) because each box's hash consumes its
+    plan's payload shas. See the comments on each sub-block for the incident history."""
+    generated.nakon_config_path = generate_nakon_config(secrets.teams, spec.boxes, spec.difficulty, comp_dir, secrets.box_password,
+                                               box_username=spec.box_username)
     # M3.2: the full bundle is never deployed as one pass anymore. The golden-stage
     # bundle is built inside golden_ops at plant time; the repair bundle in phase 5 and
     # the final bundle in phase 6 (all content-addressed, so resumes hit the cache).
     # Domain controllers keep an unbooted golden so each team's forest specializes its
     # own machine SID before promotion; their configs move to the repair stage.
-    unbooted = unbooted_golden_boxes(comp_dir)
-    golden_config_path, repair_config_path, final_config_path, _postclone_path = generate_stage_configs(
-        comp_dir, teams, boxes, unbooted=unbooted)
+    generated.unbooted = unbooted_golden_boxes(comp_dir)
+    generated.golden_config_path, generated.repair_config_path, generated.final_config_path, _postclone_path = generate_stage_configs(
+        comp_dir, secrets.teams, spec.boxes, unbooted=generated.unbooted)
 
     # M4: template hashes are computed BEFORE phase 1 — cleanup must know which golden
     # templates survive (test-run reuse) and which rebuild. The golden bundle is built
@@ -644,49 +763,59 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     # phase 1 destroys anything ("nothing destroyed" is the whole point of the
     # freeze; the phase-4 per-box gate alone was too late, matrix run 4).
     node = os.environ["TF_VAR_proxmox_node"]
-    golden_bundle = build_nakon_bundle(golden_config_path)
+    golden_bundle = build_nakon_bundle(generated.golden_config_path)
     golden_machines_by_box = {
         m["name"].rsplit("-golden", 1)[0]: m
-        for m in json.loads(golden_config_path.read_text())["machines"]
+        for m in json.loads(generated.golden_config_path.read_text())["machines"]
     }
     base_template_ids = _template_vmid_map(node)
-    golden_inputs, golden_hashes = golden_hash_entries(
-        boxes, base_template_ids, golden_machines_by_box, golden_bundle,
-        box_password, box_username, os.environ.get("TF_VAR_ssh_public_key", ""),
-        apt_cache, unbooted=unbooted)
+    generated.golden_inputs, generated.golden_hashes = golden_hash_entries(
+        spec.boxes, base_template_ids, golden_machines_by_box, golden_bundle,
+        secrets.box_password, spec.box_username, os.environ.get("TF_VAR_ssh_public_key", ""),
+        spec.apt_cache, unbooted=generated.unbooted)
 
     frozen = frozen_state(comp_dir)
-    frozen_keep = set()
+    generated.frozen_keep = set()
     if frozen:
         # Goldens now: config-class drift refuses BEFORE phase 1 destroys anything.
         # The engine's gate still runs at phase 2 (its inputs are computed there),
         # likewise before any engine destruction. Code-only drift keeps the golden:
         # phase1_destroy_waves must not rebuild what the gate said to proceed on.
         frozen_hashes = (frozen.get("hashes") or {})
-        for name in golden_hashes:
-            stored_inputs = (frozen_hashes.get("golden") or {}).get(name, {}).get("inputs") or {}
-            drift = golden_freeze_gate(name, stored_inputs, golden_inputs[name],
+        for spec.name in generated.golden_hashes:
+            stored_inputs = (frozen_hashes.get("golden") or {}).get(spec.name, {}).get("inputs") or {}
+            drift = golden_freeze_gate(spec.name, stored_inputs, generated.golden_inputs[spec.name],
                                        frozen.get("frozen_at"), golden_bundle)
             if drift["code"]:
-                frozen_keep.add(name)
+                generated.frozen_keep.add(spec.name)
 
+
+def _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity, place, from_phase):
+    """Assemble terraform.tfvars.json + the workdir/ssh fields, into `terraform`.
+
+    terraform.tfvars.json outranks TF_VAR_* env, so it is the authoritative copy of
+    this competition's teams/boxes/engine-vmid (concurrent comps on one node must not
+    clobber each other through the shared .env). The stale-state guard runs BEFORE the
+    file is written: the per-comp workdir carries state from wherever the last deploy
+    ran, and pointing terraform at a different host/vmid would make it reconcile that
+    state and destroy whatever sits at the old resources on the new host."""
     teams_json_src = {
         team_key: {"identifier": team_data["identifier"], "password": team_data["password"]}
-        for team_key, team_data in teams.items()
+        for team_key, team_data in secrets.teams.items()
     }
-    if placement:
+    if place.placement:
         # terraform's per-slot resources key on this: which host builds each team.
         for team_key in teams_json_src:
-            teams_json_src[team_key]["slot"] = placement["team_slots"][team_key]
+            teams_json_src[team_key]["slot"] = place.placement["team_slots"][team_key]
     teams_json = json.dumps(teams_json_src)
-    boxes_json = json.dumps(boxes)
+    boxes_json = json.dumps(spec.boxes)
 
     update_env({
         "TF_VAR_teams": teams_json,
         "TF_VAR_boxes_per_team": boxes_json,
-        "TF_VAR_box_password": box_password,
-        "TF_VAR_box_username": box_username,
-        "TF_VAR_scoring_vm_id": str(engine_vmid),
+        "TF_VAR_box_password": secrets.box_password,
+        "TF_VAR_box_username": spec.box_username,
+        "TF_VAR_scoring_vm_id": str(identity.engine_vmid),
     })
 
     # teams.json holds every team password: write it with 0600 applied at creation
@@ -699,7 +828,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     # is authoritative for this comp's teams/boxes/engine-vmid regardless of what
     # another concurrent deploy wrote to .env. The ssh key path is made absolute
     # because it was ../proxmox-relative to the (now deeper) working dir.
-    tf_dir = ensure_terraform_workdir(comp_dir)
+    terraform.tf_dir = ensure_terraform_workdir(comp_dir)
 
     # Stale-state guard: the per-competition terraform workdir carries state from
     # wherever the LAST deploy ran. Pointing terraform at a different host (or engine
@@ -707,51 +836,52 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     # whatever now sits at the old vmid there (2026-09-24: a realm run deleted that
     # host's existing 1090 engine because a dead primary attempt left 1090 in this
     # comp's state). Refuse unless the recorded host and vmid agree.
-    if from_phase <= 2 and (tf_dir / "terraform.tfstate").exists() and previous_state:
+    if from_phase <= 2 and (terraform.tf_dir / "terraform.tfstate").exists() and prior.previous_state:
         cur_endpoint = os.environ.get("TF_VAR_proxmox_endpoint", "").rstrip("/")
-        prev_endpoint = (previous_state.get("deployed_endpoint") or "").rstrip("/")
-        prev_engine = previous_state.get("scoring_vm_id")
+        prev_endpoint = (prior.previous_state.get("deployed_endpoint") or "").rstrip("/")
+        prev_engine = prior.previous_state.get("scoring_vm_id")
         host_mismatch = bool(prev_endpoint) and prev_endpoint != cur_endpoint
-        vmid_mismatch = prev_engine is not None and int(prev_engine) != engine_vmid
+        vmid_mismatch = prev_engine is not None and int(prev_engine) != identity.engine_vmid
         if host_mismatch or vmid_mismatch:
             raise SystemExit(
-                f"  ERROR: {tf_dir}/terraform.tfstate holds state from a deploy against "
+                f"  ERROR: {terraform.tf_dir}/terraform.tfstate holds state from a deploy against "
                 f"{prev_endpoint or 'another host'} (engine vmid {prev_engine}); this run "
-                f"targets {cur_endpoint} (engine vmid {engine_vmid}). Terraform would "
+                f"targets {cur_endpoint} (engine vmid {identity.engine_vmid}). Terraform would "
                 f"reconcile the stale state and destroy whatever sits at those resources "
                 f"on the new host. Destroy this competition first: python3 "
-                f"destroy-competition.py --competition {comp_name} --yes"
+                f"destroy-competition.py --competition {spec.comp_name} --yes"
             )
 
     raw_key = os.environ["TF_VAR_ssh_private_key_path"]
-    ssh_key_abs = raw_key if os.path.isabs(raw_key) else str((Path("terraform") / raw_key).resolve())
+    terraform.ssh_key_abs = (raw_key if os.path.isabs(raw_key)
+                             else str((Path("terraform") / raw_key).resolve()))
     # Engine mgmt IP: static by default. The DHCP engine rebooted onto a different
     # address mid-event while terraform's saved output — which deploy/verify/
     # credentials all consume — stayed stale (shakedown-5x4: .221→.243→.233).
     # An explicit TF_VAR_engine_mgmt_ip="" keeps the old DHCP behavior; the
     # chosen value is also exported for template_ops (build-VM ipconfig0).
-    engine_mgmt_ip = os.environ.get("TF_VAR_engine_mgmt_ip")
-    if engine_mgmt_ip is None:
-        engine_mgmt_ip = DEFAULT_ENGINE_MGMT_IP
-        print(f"  Engine mgmt IP: static {engine_mgmt_ip} (default — override "
+    terraform.engine_mgmt_ip = os.environ.get("TF_VAR_engine_mgmt_ip")
+    if terraform.engine_mgmt_ip is None:
+        terraform.engine_mgmt_ip = DEFAULT_ENGINE_MGMT_IP
+        print(f"  Engine mgmt IP: static {terraform.engine_mgmt_ip} (default — override "
               f"TF_VAR_engine_mgmt_ip, set '' for DHCP)")
-        os.environ["TF_VAR_engine_mgmt_ip"] = engine_mgmt_ip
+        os.environ["TF_VAR_engine_mgmt_ip"] = terraform.engine_mgmt_ip
     # Default the gateway whenever the engine mgmt IP is static (live-found 2026-09-29:
     # an explicitly-set mgmt IP skipped this branch on the .150 env, and the engine
     # template build's ipconfig0 went out with an empty gw= — PVE 400 "Parameter
     # verification failed").
     if not os.environ.get("TF_VAR_engine_mgmt_gw"):
         os.environ["TF_VAR_engine_mgmt_gw"] = DEFAULT_ENGINE_MGMT_GW
-    tfvars = {
+    terraform.tfvars = {
         # teams_json_src carries the placement slot per team (multi-node) — tfvars
         # outranks the env, so this is the copy terraform actually reads.
         "teams": teams_json_src,
-        "boxes_per_team": boxes,
-        "box_password": box_password,
-        "box_username": box_username,
-        "event_name": name,
-        "scoring_vm_id": engine_vmid,
-        "ssh_private_key_path": ssh_key_abs,
+        "boxes_per_team": spec.boxes,
+        "box_password": secrets.box_password,
+        "box_username": spec.box_username,
+        "event_name": spec.name,
+        "scoring_vm_id": identity.engine_vmid,
+        "ssh_private_key_path": terraform.ssh_key_abs,
         # M3.3 two-apply: apply #1 (phase 2) builds the engine + bridges with an empty
         # team_box for_each; apply #2 (phase 4) flips this to true once the golden
         # templates exist. team_nics/reboot keep their full-teams config in apply #1 so
@@ -761,94 +891,235 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         # M4: apply #2 rewrites tfvars with this intact — a resume that skips phase 2
         # must not let the engine clone source fall back to the base image (which would
         # replace the engine with an unbootstrapped full clone mid-pipeline).
-        "engine_clone_id": int(state.get("engine_template_vmid") or 0),
+        "engine_clone_id": int(secrets.state.get("engine_template_vmid") or 0),
         # Portable-node mode (realm): static engine mgmt IP instead of agent discovery.
         # Persisted via tfvars so resumes don't depend on the env var being re-exported.
-        "engine_mgmt_ip": engine_mgmt_ip,
+        "engine_mgmt_ip": terraform.engine_mgmt_ip,
         "engine_mgmt_gw": os.environ.get("TF_VAR_engine_mgmt_gw", ""),
     }
-    if placement:
+    if place.placement:
         # Multi-node: per-slot satellite providers and the engine's jump routes.
-        tfvars["satellites"] = satellite_tfvars(placement)
-        tfvars["satellite_routes"] = satellite_routes_for(placement)
-    tfvars_path = tf_dir / "terraform.tfvars.json"
+        terraform.tfvars["satellites"] = satellite_tfvars(place.placement)
+        terraform.tfvars["satellite_routes"] = satellite_routes_for(place.placement)
+    terraform.tfvars_path = terraform.tf_dir / "terraform.tfvars.json"
     # Carries TF_VAR_box_password + the per-team passwords.
-    write_text_atomic(tfvars_path, json.dumps(tfvars, indent=2))
+    write_text_atomic(terraform.tfvars_path, json.dumps(terraform.tfvars, indent=2))
 
+
+def _run_competition_preflight(comp_dir, spec, secrets, identity, place, terraform,
+                               prior, from_phase):
+    """Run the competition preflight gates, at the phase-2 boundary.
+
+    Gated on from_phase <= 2 because the gates check free capacity and template
+    reachability for the work phases 1-2 do; a later resume must not re-refuse against
+    an already-deployed range, which is also why check_free is off on a resume. The
+    multinode gate is imported locally: only this branch pulls in the placement
+    preflight machinery."""
     if from_phase <= 2:
-        if placement:
+        if place.placement:
             from config_ops import preflight_gates_multinode
-            preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
-                                      engine_mgmt_ip=engine_mgmt_ip,
-                                      check_free=not resuming)
+            preflight_gates_multinode(comp_dir, spec.boxes, secrets.teams, identity.engine_vmid, place.placement,
+                                      engine_mgmt_ip=terraform.engine_mgmt_ip,
+                                      check_free=not prior.resuming)
         else:
-            preflight_gates(comp_dir, boxes, number_of_teams, teams=teams,
-                            engine_vmid=engine_vmid, check_free=not resuming,
-                            engine_mgmt_ip=engine_mgmt_ip)
+            preflight_gates(comp_dir, spec.boxes, secrets.number_of_teams, teams=secrets.teams,
+                            engine_vmid=identity.engine_vmid, check_free=not prior.resuming,
+                            engine_mgmt_ip=terraform.engine_mgmt_ip)
 
-    if not assume_yes and not resuming:
-        if not confirm_deploy(name, scenario, difficulty, teams, boxes):
-            print("  Deployment cancelled.")
-            return None
 
-    node = os.environ["TF_VAR_proxmox_node"]
-    all_targets = enumerate_targets(teams, boxes, placement=placement, default_node=node)
-    persist_targets(comp_dir, all_targets, boxes)
+def _enumerate_deploy_targets(targets, comp_dir, spec, secrets, place):
+    """Enumerate every VM this deploy will touch, into `targets`.
+
+    node is read from the env here (the engine's host, already selected by placement);
+    all_targets keeps every positional vmid, while the Linux/Windows work lists drop
+    unmanaged boxes — pfSense/appliances have no plant/repair/fix_services/cloud-init,
+    they clone from their own template and self-configure (but must stay in all_targets
+    for vmid arithmetic)."""
+    targets.node = os.environ["TF_VAR_proxmox_node"]
+    targets.all_targets = enumerate_targets(secrets.teams, spec.boxes,
+                                           placement=place.placement, default_node=targets.node)
+    persist_targets(comp_dir, targets.all_targets, spec.boxes)
     # Unmanaged boxes (pfSense/appliances) get no plant/repair/fix_services/cloud-init —
     # they are cloned from their own template and self-configure. Keep them in all_targets
     # (positional vmids) but out of the Linux/Windows work lists.
-    managed_targets = [t for t in all_targets if not is_unmanaged(t["box"])]
-    linux_targets = [t for t in managed_targets if not is_windows_template(t["box"]["template"])]
-    windows_targets = [t for t in managed_targets if is_windows_template(t["box"]["template"])]
+    targets.managed_targets = [t for t in targets.all_targets if not is_unmanaged(t["box"])]
+    targets.linux_targets = [t for t in targets.managed_targets if not is_windows_template(t["box"]["template"])]
+    targets.windows_targets = [t for t in targets.managed_targets if is_windows_template(t["box"]["template"])]
 
+
+def _assemble_deploy_context(comp_dir, from_phase, assume_yes, identity, spec, prior, inputs,
+                             secrets, place, generated, terraform, targets):
+    """Expand the prepared stages onto DeployContext's flat fields.
+
+    Kept out of prepare() so the sequencer reads as the ordered steps it is: this is the
+    one place that maps the stage objects onto DeployContext, whose field order follows
+    the pipeline."""
     return DeployContext(
         comp_dir=comp_dir,
-        comp_name=comp_name,
-        state_path=state_path,
+        comp_name=spec.comp_name,
+        state_path=prior.state_path,
         from_phase=from_phase,
-        resuming=resuming,
+        resuming=prior.resuming,
         assume_yes=assume_yes,
-        name=name,
-        scenario=scenario,
-        box_username=box_username,
-        credlist_usernames=credlist_usernames,
-        nakon_jobs=nakon_jobs,
-        apt_cache=apt_cache,
-        injects=injects,
-        packet_pw=packet_pw,
-        state=state,
-        teams=teams,
-        number_of_teams=number_of_teams,
-        admin_password=admin_password,
-        postgres_password=postgres_password,
-        redis_password=redis_password,
-        box_password=box_password,
-        box_creds=box_creds,
-        domain_creds=domain_creds,
-        inject_password=inject_password,
-        placement=placement,
-        node=node,
-        engine_vmid=engine_vmid,
-        engine_mgmt_ip=engine_mgmt_ip,
-        boxes=boxes,
-        boxes_by_name={b["name"]: b for b in boxes},
-        unbooted=unbooted,
-        nakon_config_path=nakon_config_path,
-        golden_config_path=golden_config_path,
-        repair_config_path=repair_config_path,
-        final_config_path=final_config_path,
-        golden_inputs=golden_inputs,
-        golden_hashes=golden_hashes,
-        frozen_keep=frozen_keep,
-        tf_dir=tf_dir,
-        tfvars_path=tfvars_path,
-        tfvars=tfvars,
-        ssh_key_abs=ssh_key_abs,
-        all_targets=all_targets,
-        managed_targets=managed_targets,
-        linux_targets=linux_targets,
-        windows_targets=windows_targets,
+        name=spec.name,
+        scenario=spec.scenario,
+        box_username=spec.box_username,
+        credlist_usernames=spec.credlist_usernames,
+        nakon_jobs=spec.nakon_jobs,
+        apt_cache=spec.apt_cache,
+        injects=inputs.injects,
+        packet_pw=inputs.packet_pw,
+        state=secrets.state,
+        teams=secrets.teams,
+        number_of_teams=secrets.number_of_teams,
+        admin_password=secrets.admin_password,
+        postgres_password=secrets.postgres_password,
+        redis_password=secrets.redis_password,
+        box_password=secrets.box_password,
+        box_creds=secrets.box_creds,
+        domain_creds=secrets.domain_creds,
+        inject_password=secrets.inject_password,
+        placement=place.placement,
+        node=targets.node,
+        engine_vmid=identity.engine_vmid,
+        engine_mgmt_ip=terraform.engine_mgmt_ip,
+        boxes=spec.boxes,
+        boxes_by_name={b["name"]: b for b in spec.boxes},
+        unbooted=generated.unbooted,
+        nakon_config_path=generated.nakon_config_path,
+        golden_config_path=generated.golden_config_path,
+        repair_config_path=generated.repair_config_path,
+        final_config_path=generated.final_config_path,
+        golden_inputs=generated.golden_inputs,
+        golden_hashes=generated.golden_hashes,
+        frozen_keep=generated.frozen_keep,
+        tf_dir=terraform.tf_dir,
+        tfvars_path=terraform.tfvars_path,
+        tfvars=terraform.tfvars,
+        ssh_key_abs=terraform.ssh_key_abs,
+        all_targets=targets.all_targets,
+        managed_targets=targets.managed_targets,
+        linux_targets=targets.linux_targets,
+        windows_targets=targets.windows_targets,
     )
+
+
+def _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid):
+    """Settle the scoring-engine VMID into `identity` (see RunIdentity for why first).
+
+    A corrupt or absent .deploy_state.json here falls back to the default rather than
+    raising: _load_prior_deploy_state reads the same file a few steps later and does the
+    refusing, with a message that names the actual problem."""
+    # Resolve this competition's scoring-engine VMID before taking the engine lock
+    # (the lock is keyed on it) and before phase-1 cleanup destroys it. On resume it
+    # is authoritative from .deploy_state.json; on a fresh deploy it comes from the
+    # flag/arg (default SCORING_ENGINE_VMID).
+    _early_state = comp_dir / ".deploy_state.json"
+    if from_phase > 1 and _early_state.exists():
+        try:
+            identity.engine_vmid = int(
+                json.loads(_early_state.read_text()).get("scoring_vm_id", SCORING_ENGINE_VMID))
+        except (ValueError, json.JSONDecodeError):
+            identity.engine_vmid = SCORING_ENGINE_VMID
+    else:
+        identity.engine_vmid = int(scoring_vmid) if scoring_vmid is not None else SCORING_ENGINE_VMID
+
+
+def _load_competition_spec(spec, comp_dir):
+    """Load the Compfile, users.json and boxes.json into `spec`; print the banner.
+
+    A missing boxes.json is fatal here: every later step (and every phase) enumerates
+    boxes. Known-broken templates only warn — the competition may predate the fix, and
+    the deploy still has to be able to refuse later on its own terms."""
+    spec.name, spec.scenario, spec.difficulty = load_compfile(comp_dir / "Compfile")
+    spec.box_username, spec.credlist_usernames = load_users_config(comp_dir)
+    # nakon --jobs pass-through (M1.2): per-machine work is atomic in nakon's runner, so N
+    # machines plant concurrently with each machine's step order (disruptive last) intact.
+    # The ceiling is engine egress/CPU and mirror throughput, not the datastore (no bulk
+    # writes) — start at 4 and judge against the M0.2 timings.
+    spec.nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
+    # apt_cache (M1.3): point each box's apt at the engine's apt-cacher-ng mirror cache.
+    # Approved trade-off: through the IP-based proxy, resolv-conf-null-dns no longer breaks
+    # apt (it still breaks every other resolver user on the box); empty-sources/hold
+    # configs break apt either way. Set `apt_cache 0` in the Compfile for full realism.
+    spec.apt_cache = bool(compfile_flag(comp_dir / "Compfile", "apt_cache", 1))
+    spec.comp_name = comp_dir.name
+    print(f"\n{'='*60}")
+    print(f"  Deploying {spec.comp_name}")
+    print(f"{'='*60}\n")
+
+    spec.boxes = load_boxes(comp_dir)
+    if not spec.boxes:
+        print("  ERROR: No boxes.json found. Create a new competition or add boxes.json.")
+        sys.exit(1)
+
+    KNOWN_BROKEN_TEMPLATES = {"debian13-lite", "ubuntu24.04"}
+    for b in spec.boxes:
+        if b.get("template") in KNOWN_BROKEN_TEMPLATES:
+            print(f"  WARNING: box '{b['name']}' uses template '{b['template']}', which is "
+                  f"known broken (bad cloud-init — clones won't get a working network/SSH). "
+                  f"Use '{b['template']}-fix' instead. See docs/usage-people.md's "
+                  f"Troubleshooting table.")
+
+
+def _load_prior_deploy_state(prior, comp_dir, from_phase, force_from_phase):
+    """Read .deploy_state.json into `prior` and run the two resume refusals.
+
+    Refuses a resume with no state file (there are no saved secrets to resume with) and
+    refuses to resume across the pipeline-v1/v2 boundary (the phase numbers changed
+    meaning). guard_resume_from_phase then refuses a --from-phase that skips phases the
+    state never saw complete; force_from_phase is the operator's explicit override."""
+    prior.state_path = comp_dir / ".deploy_state.json"
+    prior.previous_state = {}
+    if prior.state_path.exists():
+        try:
+            prior.previous_state = json.loads(prior.state_path.read_text())
+        except (ValueError, OSError):
+            prior.previous_state = {}
+    if from_phase > 1 and not prior.state_path.exists():
+        raise SystemExit(
+            f"  ERROR: --from-phase {from_phase} but {prior.state_path} doesn't exist — there are no "
+            f"saved team passwords/secrets to resume with, and generating fresh ones while "
+            f"skipping the destructive phases would leave the deployed range and its credentials "
+            f"out of sync. Re-run without --from-phase for a clean redeploy."
+        )
+    prior.resuming = from_phase > 1
+
+    # Pipeline v2 (M3): golden templates + linked clones, phases renumbered. A v1 state
+    # file's phase numbers mean different things, so resuming across the boundary is
+    # refused rather than silently misinterpreted.
+    if prior.resuming:
+        _pv = None
+        try:
+            _pv = json.loads(prior.state_path.read_text()).get("pipeline_version")
+        except (ValueError, OSError):
+            pass
+        if _pv != PIPELINE_VERSION:
+            raise SystemExit(
+                f"  ERROR: {prior.state_path} was written by pipeline v{_pv if _pv is not None else '1'} "
+                f"(pre-golden-template phases) — this code is pipeline v{PIPELINE_VERSION} and its "
+                f"--from-phase numbers mean different things. Run a fresh deploy (no --from-phase)."
+            )
+        # Refuse to skip a phase that never completed: the skipped phases are what build
+        # the machines the later ones target (see guard_resume_from_phase).
+        guard_resume_from_phase(from_phase, prior.previous_state.get("last_phase"), prior.state_path,
+                                force=force_from_phase)
+
+
+def _load_competition_inputs(inputs, comp_dir):
+    """Load injects and the packet-published credentials into `inputs`.
+
+    Loaded after the resume guards and before the secrets step: passwords.json outranks
+    both state and a fresh mint, and the secrets step needs the packet's derived
+    credlists, so the two inputs are materialised together in one place."""
+    inputs.injects = load_injects(comp_dir)
+    # Packet-published credentials (compile-packet.py -> passwords.json): when present,
+    # box_password and the credlists are the packet's default credentials verbatim, not
+    # random mints. Teams get them in the packet and rotate at minute zero — that IS the
+    # competition. Also makes redeploy deterministic (no re-minted secret drifting from
+    # the packet).
+    inputs.packet_pw = load_packet_passwords(comp_dir)
+    inputs.packet_credlists = (inputs.packet_pw or {}).get("credlists") or {}
 
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
