@@ -99,8 +99,8 @@ weekend and this must be flawless.
   tracked and is gone; run-agent-scrim's DEFAULT_TEMPLATE pointed at the also-
   gone agent-scrim-2026-09-16 — repinned to 17b 2026-09-20).
   stage_author semantics: skip RUNTIME_FILES, sub-*, LOG.md, .nakon-domain-*,
-  the sweep marker (named `.phase6-swept` when this was written; the pipeline now
-  writes `.postclone-swept` and the code has not caught up — see known-issues);
+  the sweep marker (`.postclone-swept`; when this prompt was written the code
+  still named the retired `.phase6-swept` — fixed 2026-10-01, see known-issues);
   rewrite Compfile name. Authoring standalone via CLI is not
   wired (run-agent-scrim --new crashes in creds_from_files if you add
   --skip-deploy), so author via importlib, THEN deploy directly. Run from

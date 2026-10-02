@@ -50,9 +50,10 @@ nakon is vendored at `vendor/nakon` (pinned to a release; currently v0.1.7) and 
 [docs/architecture.md](docs/architecture.md#secrets) for the full inventory. For shared
 environments prefer real env vars over writing secrets to disk (`export TF_VAR_proxmox_api_token=…`).
 
-`tests/` holds 31 offline files — regression tests over the deploy-path helpers (bundle lint,
-non-apt-distro prep, unmanaged box, interrupted-clone, run-terraform, repeat-run, packet compile,
-multi-node math, secret hygiene, …), not a full pipeline suite. `python3 -m pytest tests/ -q` runs
-them; [docs/tests.md](docs/tests.md) maps what each file guards. The real integration gate is
-`verify-competition.py` against a deployed range; you can also exercise the nakon CLI directly from
-`vendor/nakon` (`python3 -m nakon randomize --json …`).
+`tests/` holds the offline suite — regression tests over the deploy-path helpers (sequencer and
+per-phase units, verify gates, golden boot smoke, parallelism, bundle lint, non-apt-distro prep,
+unmanaged box, interrupted-clone, run-terraform, repeat-run, packet compile/validation, multi-node
+math, secret hygiene, …), not a full pipeline suite. `python3 -m pytest tests/ -q` runs them and
+prints the current count; [docs/tests.md](docs/tests.md) maps what each file guards. The real
+integration gate is `verify-competition.py` against a deployed range; you can also exercise the
+nakon CLI directly from `vendor/nakon` (`python3 -m nakon randomize --json …`).
