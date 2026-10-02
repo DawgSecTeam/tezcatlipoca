@@ -10,6 +10,9 @@ import requests
 
 from range_ops import diagnose_unreachable_box, terraform_dir, wait_for_guest_agent
 from utils import PRINT_LOCK, run_concurrent
+# Re-export, not a second definition: ssh_ops' gateway auth and deploy/golden_ops' target
+# split must classify a template identically (windows_ops.is_windows_template owns the rule).
+from windows_ops import is_windows_template
 
 DEFAULT_KNOWN_HOSTS = str(Path.home() / ".tezcatlipoca" / "known_hosts")
 
@@ -68,10 +71,6 @@ def forget_engine_host_key(ip, known_hosts=None):
             sock.unlink()
         except OSError:
             pass
-
-
-def is_windows_template(template_name):
-    return "win" in template_name.lower()
 
 
 def read_terraform_ctx(comp_dir=None):

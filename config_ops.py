@@ -502,7 +502,11 @@ def random_password():
     login downstream. Characters are cmd/PS-quoting safe (no &|<>^%$`"' or
     whitespace) and URL-grammar free (no #/?@): these secrets land in
     postgres DSNs in /opt/quotient/.env, and `#` silently truncates the DSN
-    at the password (scrim-extreme-cyberfield-2026-09-22 crash loop)."""
+    at the password (scrim-extreme-cyberfield-2026-09-22 crash loop).
+
+    Single source of truth for every generated secret, including packet_ops' decoy
+    baseline accounts (which used to carry a copy of this generator, audit 2026-10-02).
+    Changing the charset or length changes behaviour everywhere at once — deliberately."""
     pools = [string.ascii_uppercase, string.ascii_lowercase, string.digits, "!*_-+="]
     alphabet = "".join(pools)
     while True:

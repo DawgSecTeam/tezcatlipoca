@@ -21,7 +21,9 @@ from pathlib import Path
 
 import yaml
 
+from config_ops import random_password
 from constants import MAX_BOXES_PER_TEAM, REQUIRED_VARS
+from nakon_ops import os_to_platform
 from quotient.setup import _SERVICE_TO_CHECK
 from utils import is_legacy_account_name, valid_comp_name, valid_unix_username
 
@@ -42,21 +44,15 @@ _CHECK_SLICES = set(_SCORE_CHECK_DEFAULTS.values())
 _BASELINE_WIN_CONFIG = "local-user-win"
 _BASELINE_LINUX_CONFIG = "local-user"
 
-# 14 chars, upper+lower+digit+symbol, cmd/PS- and URL-safe — mirrors
-# config_ops.random_password so a decoy baseline account can never trip AD complexity
-# or the postgres-DSN '#' truncation. Local copy: packet_ops stays importable without
-# the config_ops -> range_ops -> requests chain.
-import secrets as _secrets
-import string as _string
-
-
-def _gen_password():
-    pools = [_string.ascii_uppercase, _string.ascii_lowercase, _string.digits, "!*_-+="]
-    alphabet = "".join(pools)
-    while True:
-        pw = "".join(_secrets.choice(alphabet) for _ in range(14))
-        if all(any(c in p for c in pw) for p in pools):
-            return pw
+# Decoy baseline passwords come from config_ops.random_password — one canonical
+# implementation, not a copy. The 14-char upper+lower+digit+symbol, cmd/PS- and
+# URL-safe charset is load-bearing (a digit-free pool got rejected by AD complexity
+# policy on every Windows box, scrim-extreme-2026-09-20; URL-specials broke postgres
+# DSNs, scrim-extreme-cyberfield-2026-09-22), so two copies could silently drift apart
+# on exactly the property that keeps a range deployable. The old local copy claimed to
+# spare packet_ops the config_ops -> range_ops -> requests chain, but that isolation was
+# already nominal: quotient.setup (imported above) pulls requests regardless.
+_gen_password = random_password
 
 
 def team_domain_parts(name_template):
@@ -410,7 +406,16 @@ def _cred_carrying_services(p, box_name):
 
 
 def _platform_of(template):
-    return "windows" if "win" in str(template).lower() else "linux"
+    """Packet-side wrapper over the one template->platform map (nakon_ops.os_to_platform).
+
+    The shared map calls `.lower()` straight on its argument; packet YAML tolerates a box
+    with no `template` key, so coerce first. This wrapper historically read
+    `str(template)`, so an absent key classified as "linux" instead of raising — that
+    coercion is the only intentional difference and it is preserved here (for every str
+    input the two are identical). Nothing else may re-implement the mapping: the packet
+    compiler's Windows/Linux split here and nakon's machine tagging have to agree
+    (audit 2026-10-02)."""
+    return os_to_platform(str(template))
 
 
 def build_baseline(p):

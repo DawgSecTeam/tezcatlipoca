@@ -7,6 +7,13 @@ from range_ops import guest_agent_exec_windows, wait_for_guest_agent
 
 
 def is_windows_template(template_name):
+    """The single definition of the "win" rule (audit 2026-10-02).
+
+    nakon's machine routing, ssh_ops' gateway auth choice, golden_ops/deploy's target
+    split and redeploy's box_platform all classify the same free-text template name, and
+    a divergence builds the wrong OS path for a box. There used to be three copies
+    (here, ssh_ops, nakon_ops) plus nakon's private alias, with nothing enforcing that
+    they agreed; callers import this one instead."""
     return "win" in template_name.lower()
 
 

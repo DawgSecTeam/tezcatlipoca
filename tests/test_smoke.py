@@ -1,7 +1,9 @@
 """CI smoke gate: the class of bug that shipped in 108184c (NameErrors / unimported names on the
 first executed line of run_nakon and the engine-template build). Fails on undefined names and
-syntax errors only — stylistic pyflakes warnings (unused imports, bare f-strings) are ignored,
-since create-competition.py deliberately re-exports everything. Also runs --plan-only offline."""
+syntax errors only — stylistic pyflakes warnings (unused imports, bare f-strings) are ignored.
+That tolerance used to be justified by create-competition.py re-exporting the whole pipeline;
+it is now a thin CLI and the import surface lives in pipeline_api.py, so this gate stays narrow
+on purpose and must not be read as "unused imports are fine here". Also runs --plan-only offline."""
 
 import importlib.util
 import subprocess
