@@ -130,10 +130,11 @@ isolation, misconfig + survival, injects (2), plant integrity 0 failed, domains
 - `template_ops.build_engine_template`: retry the post-clone config PUT through PVE's
   transient-400 window; 900s SSH budget (300s lost twice to first-boot under the
   parallel deploy's node load).
-- `tools/engine_finish.py`: finish + convert the engine template on an already-up
-  build VM (recovery path when a resume would destroy a working clone); writes the
-  hash to BOTH `.deploy_state.json` and `.template-hashes.json` (the reuse check
-  reads the latter).
+- `tools/engine_finish.py` *(since deleted as dead code)*: finished + converted the
+  engine template on an already-up build VM (recovery path when a resume would
+  destroy a working clone); wrote the hash to BOTH `.deploy_state.json` and
+  `.template-hashes.json` (the reuse check reads the latter). Modern equivalent:
+  `redeploy-competition.py --mode engine-recovery`.
 - `windows_ops.bootstrap_windows_box`: hard-cycle once (fresh full budget) when the
   sysprep first-boot wait expires — golden-skeld deadlocked pre-specialize on every
   snapshot-rollback boot; the forced stop/start cleared it. Also a fresh exec-phase

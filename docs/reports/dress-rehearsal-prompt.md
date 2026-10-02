@@ -99,7 +99,9 @@ weekend and this must be flawless.
   tracked and is gone; run-agent-scrim's DEFAULT_TEMPLATE pointed at the also-
   gone agent-scrim-2026-09-16 — repinned to 17b 2026-09-20).
   stage_author semantics: skip RUNTIME_FILES, sub-*, LOG.md, .nakon-domain-*,
-  .phase6-swept; rewrite Compfile name. Authoring standalone via CLI is not
+  the sweep marker (named `.phase6-swept` when this was written; the pipeline now
+  writes `.postclone-swept` and the code has not caught up — see known-issues);
+  rewrite Compfile name. Authoring standalone via CLI is not
   wired (run-agent-scrim --new crashes in creds_from_files if you add
   --skip-deploy), so author via importlib, THEN deploy directly. Run from
   the repo root (cwd matters for the relative template path):
@@ -131,12 +133,13 @@ weekend and this must be flawless.
   catalog-pinned package self-heals after the box's apt-daily refresh (retry);
   fresh Windows clones can need >90 s before the guest agent answers (resume);
   qemu-server lock timeouts are usually transient (recheck state, resume);
-  team2 Linux clones may come up without IPv4 (cloud-init race) —
-  clone_ops.ensure_cloned_network now auto-repairs this after the start loop
-  (guest-agent repair: re-add address + default route; persists a
-  systemd-networkd .network with KeepConfiguration plus an ifupdown stanza —
-  the exact .network body lives in clone_ops._repair_box_network). If you see
-  its WARNING line, fix the box by hand before continuing.
+  team2 Linux clones may come up without IPv4 (cloud-init race) — **at the time of
+  this prompt** `clone_ops.ensure_cloned_network` auto-repaired it after the start
+  loop (guest-agent repair: re-add address + default route; persists a
+  systemd-networkd .network with KeepConfiguration plus an ifupdown stanza).
+  **`clone_ops.py` was later deleted as dead code and v2 has NO automatic
+  re-IP repair** — a dead clone now needs a Terraform replace or a resume; see
+  known-issues. Historical prompt text otherwise unchanged.
 
 ## Phase 2 — live-engine smoke (the checks that caught real bugs)
 

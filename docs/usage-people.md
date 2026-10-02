@@ -5,6 +5,13 @@ answering its prompts, and day-to-day operation. For scripted/non-interactive/ag
 usage (CLI flags, pre-authored configs), see [usage-agents.md](usage-agents.md). For what the
 project is and how it's architected, see the [README](../README.md).
 
+**Contents:** [Prerequisites](#prerequisites-one-time-per-proxmox-host) ·
+[Adding a template VM](#adding-a-template-vm) · [Windows box templates](#windows-box-templates) ·
+[Configure the event](#configure-the-event) (the full env-var reference) ·
+[The competitor packet](#the-competitor-packet) · [Run it](#run-it) ·
+[Recovering boxes mid-competition](#recovering-boxes-mid-competition) ·
+[Troubleshooting](#troubleshooting)
+
 ## Prerequisites (one-time, per Proxmox host)
 
 **API token** — Datacenter → Users → add a user, then Permissions → API Tokens → add a token
@@ -28,7 +35,8 @@ echo "deb [signed-by=/usr/share/keyrings/hashicorp.gpg] https://apt.releases.has
 sudo apt update && sudo apt install terraform
 
 # Python deps for create-competition.py / quotient/ (runs on your workstation)
-pip install toml requests python-dotenv
+pip install toml requests python-dotenv pyyaml urllib3
+# tools/ only (VNC screenshots): pip install websocket-client Pillow cryptography
 ```
 
 **Config file** — copy the template and fill in your real values:
@@ -130,14 +138,11 @@ Confirm both survive a reboot before moving on.
 
 ### 3. Reset its cloud-init state, then convert to template and tag it
 
-**Do this immediately before shutting down — it's the step that's easy to skip and hardest to
-notice you skipped.** If cloud-init ever ran on this VM before now (step 1's "boot it once and
-confirm cloud-init actually ran" check, or any manual boot), it cached this instance's ID and
-recorded that network setup already happened. Proxmox clones don't reset that — every future
-clone would look like "the same instance rebooting" to cloud-init, which then correctly (per
-its own default policy) skips re-applying network config, even though each clone needs a
-*different* IP. This is silent: `cloud-init status --long` still reports `done`, nothing errors,
-the clone just never gets its IP.
+**Do this immediately before shutting down — it is the step that is easy to skip and hardest to
+notice you skipped.** If cloud-init ever ran on this VM, it cached this instance's ID and recorded
+that network setup already happened. Proxmox clones don't reset that, so every future clone looks
+like "the same instance rebooting" and cloud-init correctly skips re-applying network config — even
+though each clone needs a *different* IP. Silent: `cloud-init status --long` still reports `done`.
 
 ```bash
 sudo cloud-init clean --logs --seed
@@ -255,27 +260,52 @@ values). Terraform reads each of these straight out of the environment via Terra
 `TF_VAR_<name>` convention — there's no `terraform.tfvars` file at all anymore. `.env` is the
 single place to configure both Terraform and `create-competition.py`.
 
-| Variable (`.env` key is `TF_VAR_<name>`) | What it is |
-|---|---|
-| `proxmox_endpoint` | Proxmox API URL, e.g. `https://10.0.0.10:8006/` |
-| `proxmox_api_token` | `user@realm!tokenid=uuid` from Prerequisites |
-| `proxmox_node` | Proxmox node name (Proxmox UI → Datacenter) |
-| `datastore` | Datastore the engine + box clones land on. Also decides snapshot support for `tz-base`/`tz-ready` (needs ZFS/LVM-thin/Ceph/qcow2 — thick LVM can't snapshot, and redeploy's rollback modes depend on them) |
-| `template_vm_id` | VM ID of the template the **scoring engine** clones from |
-| `ssh_public_key` / `ssh_private_key_path` | Keypair from Prerequisites |
-| `vm_username` | Account baked into the **scoring engine** template via cloud-init (see [Adding a template VM](#adding-a-template-vm)) — unrelated to box logins, which are themeable separately (see below) |
-| `box_username` | Login account Terraform's cloud-init creates on every **team box** clone. Rewritten automatically by `create-competition.py` from `competitions/<id>/users.json` (default `ubuntu` when that file doesn't exist) — see below, don't edit this key by hand |
-| `box_password` | Password for that box login account. Rewritten automatically by `create-competition.py` — generated fresh per competition (saved to `competitions/<id>/credentials.txt`), never a fixed literal |
-| `event_name` | Display name for the event |
-| `teams` | JSON map of team key → `{identifier, password}` — `identifier` is the subnet's third octet and follows the `101`, `102`, ... convention, e.g. `{"team1":{"identifier":"101","password":"hunter2"}}` |
-| `boxes_per_team` | JSON list of boxes cloned per team, max 10 (VM IDs allow each team a stride of 10 — see `MAX_BOXES_PER_TEAM`). `template` must match a tagged Proxmox template name; `disk_gb` is optional (omit or `null` to keep the template's own disk size — Proxmox cannot shrink, so a value under the template's own size fails the clone) |
+`.env.example` is the committed template and carries the naming standard: **`TF_VAR_<name>`** for a
+Terraform input, **`TEZ_<NAME>`** for a tezcatlipoca runtime knob (new knobs must use this prefix),
+**`NAKON_*`/`VULNDB_*`** for vendored-tool config that this repo does not read. A variable that is
+none of those must be declared in `tests/test_secret_hygiene.py`'s `INTERNAL_ENV` allowlist with a
+reason — that test fails the suite if code reads an env var that is neither documented here nor
+allowlisted, which is what keeps this table from drifting again.
 
-`teams` and `boxes_per_team` are rewritten automatically in `.env` by `create-competition.py`
-every time you create or reuse a competition (`update_env()`). `event_name` comes from the
-competition's `Compfile` — edit the `.env` copy by hand only if you're running `terraform
-apply` directly without going through the driver. Quotient's `admin` password isn't a `.env`
-variable at all: it's generated fresh in memory each run and saved to
-`competitions/<id>/credentials.txt`. Boxes are different per event on purpose (that's the point of nakon scaling
+**Required** (a fresh deploy fails without them):
+
+| Variable | What it is |
+|---|---|
+| `TF_VAR_proxmox_endpoint` | Proxmox API URL, e.g. `https://10.0.0.10:8006/` |
+| `TF_VAR_proxmox_api_token` | `user@realm!tokenid=uuid` from Prerequisites |
+| `TF_VAR_proxmox_node` | Proxmox node name (Proxmox UI → Datacenter) |
+| `TF_VAR_datastore` | Datastore the engine + box clones land on. Also decides snapshot support for `tz-base`/`tz-ready` (needs ZFS/LVM-thin/Ceph/qcow2 — thick LVM can't snapshot, and redeploy's rollback modes depend on them) |
+| `TF_VAR_template_vm_id` | VM ID of the template the **scoring engine** clones from |
+| `TF_VAR_ssh_public_key` / `TF_VAR_ssh_private_key_path` | Keypair from Prerequisites. The private-key path is resolved relative to `terraform/` unless absolute |
+| `TF_VAR_vm_username` | Account baked into the **scoring engine** template via cloud-init (see [Adding a template VM](#adding-a-template-vm)) — unrelated to box logins, which are themeable separately |
+| `TF_VAR_box_username` | Login account Terraform's cloud-init creates on every **team box** clone. **Driver-written** from `competitions/<id>/users.json` (default `ubuntu`) — don't edit by hand |
+| `TF_VAR_box_password` | Password for that box login account. **Driver-written** — carried forward per competition and saved to `competitions/<id>/credentials.txt`; never a fixed literal |
+| `TF_VAR_event_name` | Display name for the event (driver-written from the comp's `Compfile`) |
+| `TF_VAR_teams` | JSON map of team key → `{identifier, password}` — `identifier` is the subnet's third octet (`101`, `102`, …), e.g. `{"team1":{"identifier":"101","password":"hunter2"}}`. **Driver-written** |
+| `TF_VAR_boxes_per_team` | JSON list of boxes per team, max 10 (`MAX_BOXES_PER_TEAM`). `template` must match a tagged Proxmox template name; `disk_gb` is optional (omit or `null` keeps the template's own disk — Proxmox cannot shrink, so a smaller value fails the clone). **Driver-written** |
+
+**Optional / per-competition overrides:**
+
+| Variable | What it is |
+|---|---|
+| `TF_VAR_engine_mgmt_ip` | Static management IP for the scoring engine (default `DEFAULT_ENGINE_MGMT_IP` = `10.0.0.250`). Set to the empty string to restore DHCP. Read/exported by `deploy` and used by `template_ops` for the build VM's `ipconfig0` |
+| `TF_VAR_engine_mgmt_gw` | Gateway for that static address (default `DEFAULT_ENGINE_MGMT_GW` = `10.0.0.1`). Defaults whenever the IP is static |
+| `TF_VAR_scoring_vm_id` | Engine VMID (default 1000). Override when 1000 is taken on the node; also settable per run as `--scoring-vmid` |
+| `TF_VAR_team_identifiers` | Pin team subnets explicitly instead of deriving them from the team index. Comma/space separated identifiers, e.g. `120,121,122,123`. Set it when the node hosts challenge templates whose vmids collide with the default 101+ blocks |
+| `TEZ_THIN_HEADROOM` | Fraction `(0, 1]` of the *provisioned* disk math the datastore-headroom preflight counts, for thin-provisioned pools where provisioned ≫ used (linked clones allocate only written blocks). Unset = strict provisioned-bytes gate. See [known-issues.md](known-issues.md) |
+| `PROXMOX_CA_BUNDLE` / `PROXMOX_TLS_FINGERPRINT` | Pin Proxmox API TLS verification to a CA bundle or a sha256 cert fingerprint instead of the default unverified self-signed cert. Set at most one |
+| `TF_VAR_proxmox_api_token_<node>` (e.g. `_193`) | Multi-node: `nodes.json` references per-host tokens **by env-var name**, so each additional host's token gets its own variable. See [multi-node.md](multi-node.md) |
+
+**Driver-written mechanically, and read back on resume:** `TF_VAR_teams`,
+`TF_VAR_boxes_per_team`, `TF_VAR_box_username`, `TF_VAR_box_password`, `TF_VAR_event_name`,
+`TF_VAR_scoring_vm_id`, `TF_VAR_engine_mgmt_ip`, `TF_VAR_engine_mgmt_gw` (the last four only when
+set). The first four are rewritten in `.env` by `update_env()` every time you create or reuse a
+competition. An old env's stale `TF_VAR_teams`/`TF_VAR_boxes_per_team` are overridden from the comp
+dir at terraform time, so they are cosmetic.
+
+Not `.env` variables at all: Quotient's `admin` password (minted in memory each run and saved to
+`competitions/<id>/credentials.txt`) and the inject/postgres/redis passwords. Boxes are instead
+per-event on purpose (that's the point of nakon scaling
 difficulty per box) — `create-competition.py` queries Proxmox for templates tagged `template`
 and walks you through picking boxes interactively each time, then saves the result as
 `competitions/<id>/boxes.json` so reusing that competition later replays the exact same boxes
@@ -364,8 +394,8 @@ python3 create-competition.py
 It loads `.env`, asks whether to reuse an existing competition or create a new one, asks how
 many teams (it names/passwords them for you, see [Configure the event](#configure-the-event)),
 generates nakon's machine + vuln list itself (by calling `nakon randomize` from `vendor/nakon`),
-then runs `deploy()` — see the [README](../README.md#how-it-works) for what the seven deploy
-phases actually do. A few minutes per box; expect most of the time in package installs and
+then runs `deploy()` — see [architecture.md](architecture.md#seven-phase-deploy) for what the seven
+deploy phases actually do. A few minutes per box; expect most of the time in package installs and
 image builds. At the end it prints a summary and writes `competitions/<id>/credentials.txt`
 (mode 0600) with the scoreboard URL, admin login, every team's login, and the scoring engine's
 SSH command — copy this down, it's the only place team/admin passwords are shown.
@@ -373,28 +403,31 @@ SSH command — copy this down, it's the only place team/admin passwords are sho
 For CLI flags that skip these prompts (useful interactively too, e.g. `--yes` or
 `--from-phase`), see [usage-agents.md](usage-agents.md).
 
-**Teardown**: `python3 destroy-competition.py`. It destroys the team2+ boxes that were cloned
-via the Proxmox API (they're not in Terraform state, so `terraform destroy` alone can't remove
-them — it reads `competitions/<id>/cloned_vms.json`), then runs `terraform destroy`. It needs
-that competition's `teams.json` + `boxes.json` (both written by the deploy). Templates aren't
-touched.
+**Teardown**: `python3 destroy-competition.py`. It destroys the competition's team boxes and then
+runs `terraform destroy`. On a pipeline-v2 range every team box is in Terraform state, so no
+separate API-clone cleanup is needed; `competitions/<id>/cloned_vms.json` is only read for a
+**legacy** pre-golden range. It needs that competition's `teams.json` + `boxes.json` (both written
+by the deploy). Templates aren't touched unless you pass `--full`.
 
 **Add a team mid-event**: don't re-run `create-competition.py` for this. A fresh run
 regenerates **every** team's password *and* its phase [1/7] destroys the existing team boxes,
 engine, and bridges before rebuilding — a full teardown, not an incremental add. To add a team
-to a live event, do it by hand: clone the boxes onto a new `vmbr<identifier>` bridge the way
-`clone_team_boxes()` does, give the engine an address on that bridge, and re-push `event.conf`
-so Quotient knows about the team.
+to a live event, do it by hand: create a new `vmbr<identifier>` bridge on the node, add the team's
+boxes as Terraform-managed linked clones of the relevant goldens, give the engine an address on
+that bridge, and re-push `event.conf` so Quotient knows about the team.
 
 **Add a box type**: see [Adding a template VM](#adding-a-template-vm) to build/tag the template
-— then it just shows up as an option in `create-competition.py`'s box picker. New boxes are
-built for team1 and cloned out to every other team.
+— then it just shows up as an option in `create-competition.py`'s box picker. In v2 each box type
+gets one golden, and **apply #2 builds every team's copy of it as a linked clone**
+(`var.golden_template_ids`).
 
-**Running `terraform` directly** (skipping `create-competition.py`) — note this only builds
-team1's boxes, the scoring engine, and the bridges; it does **not** bootstrap Quotient, run
-nakon, or clone boxes to the other teams (the driver does all of that after `apply`), so a bare
-`terraform apply` leaves you with an unconfigured range. Terraform also doesn't load `.env`
-itself, so export it into your shell first. Plain `source .env` breaks on values with
+**Running `terraform` directly** (skipping `create-competition.py`) — note that a bare
+`terraform apply` creates the scoring engine, every team bridge, and the engine's NICs, but team
+boxes are gated by `var.build_team_boxes` (false until the driver's apply #2), and they clone from
+`var.golden_template_ids`, which only exists after phase 4. So a bare `terraform apply` leaves you
+with an engine and bridges and **no team boxes**, and it does **not** bootstrap Quotient, run
+nakon, or seed the competition — the driver does all of that around it. Terraform also doesn't load
+`.env` itself, so export it into your shell first. Plain `source .env` breaks on values with
 spaces/`!`/JSON braces (several of these have all three), so load it through python-dotenv
 instead, the same parser `create-competition.py` uses:
 ```bash
@@ -413,8 +446,9 @@ terraform apply -parallelism=1   # avoids Proxmox clone lock errors
 A deploy is all-or-nothing, and rebuilding the whole range an hour into an event is not an
 option. So the deploy leaves two disk-only snapshots on every box:
 
-- **`tz-base`** — taken in phase 5/6 once the box boots with working DNS and an `ubuntu` login,
-  before nakon plants anything.
+- **`tz-base`** — taken once for **every** box at the end of phase 4 (inside apply #2's block),
+  once the box boots with working DNS and its login, before any post-clone planting. (The golden
+  boxes take their own `tz-base` earlier, before the golden plant, as a rollback guard.)
 - **`tz-ready`** — taken at the end of phase 6, after nakon and service hardening. This is
   literally the disk the competition started on.
 
@@ -446,7 +480,10 @@ python3 redeploy-competition.py --competition <id> --teams 3 --platform linux \
 the tool says so and asks before doing it. If you only want to put a dead service back without
 touching the team's work, use `--mode reconfigure`, which re-runs the deploy's configuration
 steps against the live box and rolls nothing back. If the VM is gone entirely or won't boot,
-`--mode rebuild` recreates it from its box template.
+`--mode rebuild` recreates it as a linked clone of its **golden template** on a v2 range (or, on a
+legacy pre-golden range, of its box template) and replays the post-clone stages. `--mode engine-recovery`
+does the same for the scoring-engine VM from the engine template — note the scoring DB comes back
+empty, so re-seed with `create-competition.py --from-phase 7`.
 
 Run `python3 verify-competition.py competitions/<id>` afterwards, and give the scoreboard a
 round or two to pick the box back up.
@@ -462,16 +499,16 @@ available. See [usage-agents.md](usage-agents.md#redeploy-competitionpy) for the
 | VM clone lock errors | Proxmox can't clone two VMs at once | Always use `-parallelism=1` |
 | Template not found in lookup | Not tagged `template`, or the template name you typed into the box picker doesn't match exactly | Check tag + exact VM name in Proxmox UI |
 | Can't SSH into a freshly cloned box | Template's cloud-init is broken/disabled | Verify on a scratch clone (`cloud-init status --long`) before tagging as a template |
-| `apt-get install` fails or hangs on a fresh clone | Racing `unattended-upgrades`' first-boot run for the dpkg lock | Already retried automatically (60×2s); rerun apply if it still loses the race |
+| `apt-get install` fails or hangs on a fresh clone | Racing `unattended-upgrades`' first-boot run for the dpkg lock | Already retried automatically (5 attempts, 15 s apart); rerun apply if it still loses the race |
 | Quotient panics on startup re: credlist | A box check references a credlist that was never staged | `create-competition.py` pushes `linux.credlist` alongside `event.conf`, so the two always agree — check `config/credlists/` on the scoring engine if not |
-| nakon can't find its config on the scoring engine | Ran a bare `terraform apply` instead of `create-competition.py` — Terraform no longer runs nakon or ships it a machine list; the driver scps it to the engine in phases 5/6 | Run `python3 create-competition.py` (it generates `competitions/<id>/nakon-config.json` and pushes it), rather than driving Terraform by hand |
+| nakon can't find its config on the scoring engine | Ran a bare `terraform apply` instead of `create-competition.py` — Terraform no longer runs nakon or ships it a machine list; the driver scps it to the engine in phases 4–6 (one stage config per nakon pass) | Run `python3 create-competition.py` (it generates `competitions/<id>/nakon-config.json` and pushes it), rather than driving Terraform by hand |
 | nakon: MySQL access denied / connection refused | vulndb unreachable from your laptop when generating the machine list, or `vendor/nakon/.env` creds/db name don't match actual grants | Confirm reachability, check `SHOW GRANTS`, fix `vendor/nakon/.env` |
 | nakon can't SSH into a box | Box still booting, or its template's account/password doesn't match what `generate_nakon_config()` assumes | Check `boxes_per_team[].template`'s cloud-init account |
 | Bridge creation fails (403) | API token missing `Sys.Modify` | Re-add the permission at the right path/level |
 | Everything went down at once, after a scoring-engine reboot | The forwarding/NAT rules didn't get re-applied — Docker rebuilds `FORWARD` (policy `DROP`) on every start | `sudo systemctl status range-firewall.service` on the engine; `sudo systemctl restart range-firewall.service` re-applies them (the script is idempotent). It's ordered after `docker.service` and should do this automatically at boot |
 | A team can reach another team's boxes | `range-firewall.sh` isn't applied — the empty bridges don't isolate anything by themselves, since the engine has a NIC on every team bridge and forwards between them | `sudo /usr/local/sbin/range-firewall.sh` on the engine, then check `sudo iptables -L FORWARD -n --line-numbers` for the `192.168.0.0/16 → 192.168.0.0/16 DROP` rule |
-| `/tmp` full on a team VM — `No space left on device` in apt output, or `size mismatch in put!` from `deploy.py` | Stale files from a previous failed deploy accumulated in `/tmp` (a RAM-backed tmpfs); `deploy.py` does not clean up after itself | SSH into the scoring engine, then into the affected machine using credentials from `competitions/<id>/nakon-config.json`, and run `find /tmp -maxdepth 1 -type f -delete`; re-run `create-competition.py`. Also fix `deploy.py` in the `nakon` repo to remove `/tmp/<attachment>` after each script run. |
-| A box installs no services / DNS fails before nakon | Cloud-init's `dns.servers` is silently ignored on Debian with static IPs, leaving `/etc/resolv.conf` empty. The driver's `fix_dns_on_boxes()` (phases 5 and 6, run over the engine jump host) repairs it before nakon's `apt-get`, retrying up to 8× — nakon would otherwise install nothing there and still report success | Watch the `[5/7]`/`[6/7]` DNS output for the failing box. To debug: SSH through the scoring engine to that box and check `cat /etc/resolv.conf`, `cat /etc/systemd/resolved.conf.d/upstream.conf`, and `getent hosts deb.debian.org`. Re-run `create-competition.py` once fixed |
+| `/tmp` full on a team VM — `No space left on device` in apt output, or `size mismatch in put!` from `deploy.py` | Stale files from a previous failed deploy accumulated in `/tmp` (a RAM-backed tmpfs); `deploy.py` does not clean up after itself | SSH into the scoring engine, then into the affected machine using credentials from `competitions/<id>/nakon-config.json`, and run `find /tmp -maxdepth 1 -type f -delete`; re-run `create-competition.py`. Also fix `deploy.py` (in THIS repo, not the `nakon` repo) to remove `/tmp/<attachment>` after each script run. |
+| A box installs no services / DNS fails before nakon | Cloud-init's `dns.servers` is silently ignored on Debian with static IPs, leaving `/etc/resolv.conf` empty. The driver's `fix_dns_on_boxes()` (phase 4, and again on any redeploy path, run over the engine jump host) repairs it before nakon's `apt-get`, retrying up to 8× — nakon would otherwise install nothing there and still report success | Watch the `[4/7]` DNS output for the failing box. To debug: SSH through the scoring engine to that box and check `cat /etc/resolv.conf`, `cat /etc/systemd/resolved.conf.d/upstream.conf`, and `getent hosts deb.debian.org`. Re-run `create-competition.py` once fixed |
 | Services all show down on the scoreboard | First check round only lands `Delay`+`Jitter` (~70 s) after the summary prints — wait it out first. If they stay down, nakon installed nothing (see the DNS row above), or a login check is authenticating with credentials no box has | On a box: `ss -ltnp` to see whether the service is even listening. If it is, the check is failing auth — compare `/opt/quotient/config/credlists/linux.credlist` on the scoring engine against the box's real accounts. `Sql` checks need a matching *database* user, which nakon's install script has to create |
 | Something might be wrong mid-competition (nothing crashed loudly, scoreboard just looks off) | `range-healthcheck.timer` on the engine checks Quotient's container/API and the NAT/isolation rules every 60s and only writes to its log on failure — nothing pushes an alert | `sudo tail -f /var/log/range-healthcheck.log` on the engine during a live event, or `python3 verify-competition.py competitions/<id>` from your workstation (it reports the timer's status + recent log lines as part of its output) |
 | One team's boxes are broken mid-event and rebuilding the range isn't an option | That's what the snapshots are for — see [Recovering boxes mid-competition](#recovering-boxes-mid-competition) | `python3 redeploy-competition.py --competition <id> --teams N --dry-run` to see what's affected, then drop `--dry-run` |
