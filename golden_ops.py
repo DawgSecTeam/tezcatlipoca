@@ -51,7 +51,8 @@ from nodes_ops import golden_vmid_for_slot
 from ssh_ops import ssh_via_gateway, wait_for_boxes_ssh, wait_for_cloud_init
 from template_ops import (golden_plant_checkpoints, save_template_hashes,
                           stored_template_hash, write_template_hash)
-from utils import PRINT_LOCK, compfile_flag, is_unmanaged, run_concurrent
+from utils import (PRINT_LOCK, compfile_flag, is_unmanaged, record_degradation,
+                   run_concurrent)
 from windows_ops import bootstrap_windows_box, is_windows_template
 
 
@@ -878,6 +879,7 @@ def expand_guest_root_disks(targets, ctx):
                                    f"({size_gb:.0f}G < {need_gb}G) and expansion failed "
                                    f"(rc={r.returncode}): {(r.stderr or out).strip()[:200]}")
             note = f"{size_gb:.0f}G measured" if size_gb else "size unmeasurable"
+            record_degradation("golden root-disk expansion failed", f"{t['ip']}: {note}")
             print(f"    {t['ip']}: WARNING expansion failed ({note}) — continuing; "
                   f"first big plant will surface a truly undersized root")
         df_lines = [l for l in out.splitlines() if l.startswith("/dev/")]

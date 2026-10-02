@@ -177,6 +177,7 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
         with PRINT_LOCK:
             print(f"    WARNING: {ip} not reachable within timeout — continuing")
             print(diagnose_unreachable_box(node, t["vmid"]))
+            record_degradation("box not reachable within timeout", f"{ip} (vmid {t['vmid']})")
         return False
 
     results = run_concurrent(targets, _probe)

@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
+from utils import record_degradation
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
@@ -701,6 +703,13 @@ def take_snapshot(node, vmid, name, description="", timeout=900):
         return True
     except Exception as e:
         print(f"    WARNING: snapshot '{name}' failed for vmid {vmid}: {e}")
+        # Never raises by design, but this is NOT a cosmetic warning: `tz-base`/`tz-ready`
+        # are the rollback points, so a range whose snapshot failed cannot be rolled back
+        # (`redeploy --mode rollback-base`) and a failed golden snapshot removes the
+        # pre-plant guard. Live-found 2026-10-02: hdd filled during a Windows-heavy run and
+        # both snapshots failed with `zfs error: ... out of space`, silently, mid-deploy.
+        record_degradation(f"snapshot '{name}' failed",
+                           f"vmid {vmid}: {str(e)[:200]}")
         return False
 
 
