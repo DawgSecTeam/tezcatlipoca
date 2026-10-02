@@ -414,6 +414,18 @@ class DeployContext:
         return {"tezcatlipoca", f"comp-{self.comp_name}"}
 
 
+@dataclass
+class RunIdentity:
+    """The run's engine identity, settled before anything else keys on it.
+
+    prepare() resolves the scoring-engine VMID first because the engine lock is keyed on
+    it and phase-1 cleanup destroys by it. On a resume it is authoritative from
+    .deploy_state.json; on a fresh deploy it comes from the --scoring-vmid flag/arg
+    (default SCORING_ENGINE_VMID)."""
+
+    engine_vmid: int = SCORING_ENGINE_VMID
+
+
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
             team_node=None, engine_node=None, force_from_phase=False):
     """Everything deploy() must do before phase 1, as one testable step.
@@ -428,18 +440,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     The write lock is deliberately NOT taken here: deploy() holds it across the whole
     run, phases included. Nothing here destroys anything — the frozen gate runs before
     phase 1 precisely so a freeze can still say "nothing destroyed"."""
-    # Resolve this competition's scoring-engine VMID before taking the engine lock
-    # (the lock is keyed on it) and before phase-1 cleanup destroys it. On resume it
-    # is authoritative from .deploy_state.json; on a fresh deploy it comes from the
-    # flag/arg (default SCORING_ENGINE_VMID).
-    _early_state = comp_dir / ".deploy_state.json"
-    if from_phase > 1 and _early_state.exists():
-        try:
-            engine_vmid = int(json.loads(_early_state.read_text()).get("scoring_vm_id", SCORING_ENGINE_VMID))
-        except (ValueError, json.JSONDecodeError):
-            engine_vmid = SCORING_ENGINE_VMID
-    else:
-        engine_vmid = int(scoring_vmid) if scoring_vmid is not None else SCORING_ENGINE_VMID
+    identity = RunIdentity()
+    _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid)
     # (The engine lock itself is taken further down — multi-node placement must point
     # the env at the engine's host first, and that needs teams+boxes resolved.)
 
@@ -543,7 +545,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
             "box_creds": box_creds,
             "domain_creds": domain_creds,
             "inject_password": inject_password,
-            "scoring_vm_id": engine_vmid,
+            "scoring_vm_id": identity.engine_vmid,
         })
         write_state(state_path, state)
         print(f"  Resuming from phase {from_phase} "
@@ -568,7 +570,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
                     break
                 print(f"  Enter a number from 1 to {MAX_TEAMS} "
                       f"(team identifiers are 192.168.<101-254>.x).")
-        teams = collect_teams(number_of_teams, engine_vmid)
+        teams = collect_teams(number_of_teams, identity.engine_vmid)
         admin_password = random_password()
         postgres_password = random_password()
         redis_password = random_password()
@@ -600,7 +602,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
             "box_password": box_password,
             "box_creds": box_creds,
             "domain_creds": domain_creds,
-            "scoring_vm_id": engine_vmid,
+            "scoring_vm_id": identity.engine_vmid,
         }
         write_state(state_path, state)
 
@@ -610,7 +612,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     # placement.json always wins (authoritative); a resume without one adopts its
     # deployed endpoint rather than re-balancing a live range.
     placement, _resolved_engine_record = resolve_placement(
-        comp_dir, engine_vmid, teams, boxes, comp_name,
+        comp_dir, identity.engine_vmid, teams, boxes, comp_name,
         team_overrides=_parse_team_node(team_node), engine_override=engine_node,
         resume_endpoint=(previous_state.get("deployed_endpoint") if resuming else None))
     if placement:
@@ -624,7 +626,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
                                       _resolved_engine_record.engine_mgmt_gw)
     state["multi_node"] = bool(placement)
     write_state(state_path, state)
-    acquire_engine_lock(engine_vmid)
+    acquire_engine_lock(identity.engine_vmid)
 
     nakon_config_path = generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password,
                                                box_username=box_username)
@@ -686,7 +688,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         "TF_VAR_boxes_per_team": boxes_json,
         "TF_VAR_box_password": box_password,
         "TF_VAR_box_username": box_username,
-        "TF_VAR_scoring_vm_id": str(engine_vmid),
+        "TF_VAR_scoring_vm_id": str(identity.engine_vmid),
     })
 
     # teams.json holds every team password: write it with 0600 applied at creation
@@ -712,12 +714,12 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         prev_endpoint = (previous_state.get("deployed_endpoint") or "").rstrip("/")
         prev_engine = previous_state.get("scoring_vm_id")
         host_mismatch = bool(prev_endpoint) and prev_endpoint != cur_endpoint
-        vmid_mismatch = prev_engine is not None and int(prev_engine) != engine_vmid
+        vmid_mismatch = prev_engine is not None and int(prev_engine) != identity.engine_vmid
         if host_mismatch or vmid_mismatch:
             raise SystemExit(
                 f"  ERROR: {tf_dir}/terraform.tfstate holds state from a deploy against "
                 f"{prev_endpoint or 'another host'} (engine vmid {prev_engine}); this run "
-                f"targets {cur_endpoint} (engine vmid {engine_vmid}). Terraform would "
+                f"targets {cur_endpoint} (engine vmid {identity.engine_vmid}). Terraform would "
                 f"reconcile the stale state and destroy whatever sits at those resources "
                 f"on the new host. Destroy this competition first: python3 "
                 f"destroy-competition.py --competition {comp_name} --yes"
@@ -750,7 +752,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         "box_password": box_password,
         "box_username": box_username,
         "event_name": name,
-        "scoring_vm_id": engine_vmid,
+        "scoring_vm_id": identity.engine_vmid,
         "ssh_private_key_path": ssh_key_abs,
         # M3.3 two-apply: apply #1 (phase 2) builds the engine + bridges with an empty
         # team_box for_each; apply #2 (phase 4) flips this to true once the golden
@@ -778,12 +780,12 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     if from_phase <= 2:
         if placement:
             from config_ops import preflight_gates_multinode
-            preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
+            preflight_gates_multinode(comp_dir, boxes, teams, identity.engine_vmid, placement,
                                       engine_mgmt_ip=engine_mgmt_ip,
                                       check_free=not resuming)
         else:
             preflight_gates(comp_dir, boxes, number_of_teams, teams=teams,
-                            engine_vmid=engine_vmid, check_free=not resuming,
+                            engine_vmid=identity.engine_vmid, check_free=not resuming,
                             engine_mgmt_ip=engine_mgmt_ip)
 
     if not assume_yes and not resuming:
@@ -828,7 +830,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         inject_password=inject_password,
         placement=placement,
         node=node,
-        engine_vmid=engine_vmid,
+        engine_vmid=identity.engine_vmid,
         engine_mgmt_ip=engine_mgmt_ip,
         boxes=boxes,
         boxes_by_name={b["name"]: b for b in boxes},
@@ -849,6 +851,27 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         linux_targets=linux_targets,
         windows_targets=windows_targets,
     )
+
+
+def _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid):
+    """Settle the scoring-engine VMID into `identity` (see RunIdentity for why first).
+
+    A corrupt or absent .deploy_state.json here falls back to the default rather than
+    raising: _load_prior_deploy_state reads the same file a few steps later and does the
+    refusing, with a message that names the actual problem."""
+    # Resolve this competition's scoring-engine VMID before taking the engine lock
+    # (the lock is keyed on it) and before phase-1 cleanup destroys it. On resume it
+    # is authoritative from .deploy_state.json; on a fresh deploy it comes from the
+    # flag/arg (default SCORING_ENGINE_VMID).
+    _early_state = comp_dir / ".deploy_state.json"
+    if from_phase > 1 and _early_state.exists():
+        try:
+            identity.engine_vmid = int(
+                json.loads(_early_state.read_text()).get("scoring_vm_id", SCORING_ENGINE_VMID))
+        except (ValueError, json.JSONDecodeError):
+            identity.engine_vmid = SCORING_ENGINE_VMID
+    else:
+        identity.engine_vmid = int(scoring_vmid) if scoring_vmid is not None else SCORING_ENGINE_VMID
 
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
