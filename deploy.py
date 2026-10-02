@@ -526,6 +526,23 @@ class GeneratedConfigs:
     frozen_keep: set = field(default_factory=set)
 
 
+@dataclass
+class TerraformInputs:
+    """The per-competition terraform workdir and its authoritative tfvars.
+
+    terraform.tfvars.json outranks TF_VAR_* env, so `tfvars` is the copy terraform
+    actually reads; engine_mgmt_ip is both a tfvars value and the exported
+    TF_VAR_engine_mgmt_ip that template_ops builds the engine VM with (build-VM
+    ipconfig0). The ssh key path is absolute because it was ../proxmox-relative to the
+    now-deeper per-competition workdir."""
+
+    tf_dir: Optional[Path] = None
+    tfvars_path: Optional[Path] = None
+    tfvars: dict = field(default_factory=dict)
+    ssh_key_abs: str = ""
+    engine_mgmt_ip: Optional[str] = None
+
+
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
             team_node=None, engine_node=None, force_from_phase=False):
     """Everything deploy() must do before phase 1, as one testable step.
@@ -563,121 +580,19 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     generated = GeneratedConfigs()
     _generate_stage_configs_and_hashes(generated, comp_dir, spec, secrets)
 
-    teams_json_src = {
-        team_key: {"identifier": team_data["identifier"], "password": team_data["password"]}
-        for team_key, team_data in secrets.teams.items()
-    }
-    if place.placement:
-        # terraform's per-slot resources key on this: which host builds each team.
-        for team_key in teams_json_src:
-            teams_json_src[team_key]["slot"] = place.placement["team_slots"][team_key]
-    teams_json = json.dumps(teams_json_src)
-    boxes_json = json.dumps(spec.boxes)
-
-    update_env({
-        "TF_VAR_teams": teams_json,
-        "TF_VAR_boxes_per_team": boxes_json,
-        "TF_VAR_box_password": secrets.box_password,
-        "TF_VAR_box_username": spec.box_username,
-        "TF_VAR_scoring_vm_id": str(identity.engine_vmid),
-    })
-
-    # teams.json holds every team password: write it with 0600 applied at creation
-    # (a write_text-then-chmod leaves it briefly world-readable).
-    write_text_atomic(comp_dir / "teams.json", teams_json)
-
-    # Per-competition Terraform working dir + tfvars so concurrent competitions on
-    # one node don't share the single terraform/terraform.tfstate or clobber each
-    # other via the shared .env. terraform.tfvars.json outranks TF_VAR_* env, so it
-    # is authoritative for this comp's teams/boxes/engine-vmid regardless of what
-    # another concurrent deploy wrote to .env. The ssh key path is made absolute
-    # because it was ../proxmox-relative to the (now deeper) working dir.
-    tf_dir = ensure_terraform_workdir(comp_dir)
-
-    # Stale-state guard: the per-competition terraform workdir carries state from
-    # wherever the LAST deploy ran. Pointing terraform at a different host (or engine
-    # vmid) makes it "reconcile" that state against the new endpoint and destroy
-    # whatever now sits at the old vmid there (2026-09-24: a realm run deleted that
-    # host's existing 1090 engine because a dead primary attempt left 1090 in this
-    # comp's state). Refuse unless the recorded host and vmid agree.
-    if from_phase <= 2 and (tf_dir / "terraform.tfstate").exists() and prior.previous_state:
-        cur_endpoint = os.environ.get("TF_VAR_proxmox_endpoint", "").rstrip("/")
-        prev_endpoint = (prior.previous_state.get("deployed_endpoint") or "").rstrip("/")
-        prev_engine = prior.previous_state.get("scoring_vm_id")
-        host_mismatch = bool(prev_endpoint) and prev_endpoint != cur_endpoint
-        vmid_mismatch = prev_engine is not None and int(prev_engine) != identity.engine_vmid
-        if host_mismatch or vmid_mismatch:
-            raise SystemExit(
-                f"  ERROR: {tf_dir}/terraform.tfstate holds state from a deploy against "
-                f"{prev_endpoint or 'another host'} (engine vmid {prev_engine}); this run "
-                f"targets {cur_endpoint} (engine vmid {identity.engine_vmid}). Terraform would "
-                f"reconcile the stale state and destroy whatever sits at those resources "
-                f"on the new host. Destroy this competition first: python3 "
-                f"destroy-competition.py --competition {spec.comp_name} --yes"
-            )
-
-    raw_key = os.environ["TF_VAR_ssh_private_key_path"]
-    ssh_key_abs = raw_key if os.path.isabs(raw_key) else str((Path("terraform") / raw_key).resolve())
-    # Engine mgmt IP: static by default. The DHCP engine rebooted onto a different
-    # address mid-event while terraform's saved output — which deploy/verify/
-    # credentials all consume — stayed stale (shakedown-5x4: .221→.243→.233).
-    # An explicit TF_VAR_engine_mgmt_ip="" keeps the old DHCP behavior; the
-    # chosen value is also exported for template_ops (build-VM ipconfig0).
-    engine_mgmt_ip = os.environ.get("TF_VAR_engine_mgmt_ip")
-    if engine_mgmt_ip is None:
-        engine_mgmt_ip = DEFAULT_ENGINE_MGMT_IP
-        print(f"  Engine mgmt IP: static {engine_mgmt_ip} (default — override "
-              f"TF_VAR_engine_mgmt_ip, set '' for DHCP)")
-        os.environ["TF_VAR_engine_mgmt_ip"] = engine_mgmt_ip
-    # Default the gateway whenever the engine mgmt IP is static (live-found 2026-09-29:
-    # an explicitly-set mgmt IP skipped this branch on the .150 env, and the engine
-    # template build's ipconfig0 went out with an empty gw= — PVE 400 "Parameter
-    # verification failed").
-    if not os.environ.get("TF_VAR_engine_mgmt_gw"):
-        os.environ["TF_VAR_engine_mgmt_gw"] = DEFAULT_ENGINE_MGMT_GW
-    tfvars = {
-        # teams_json_src carries the placement slot per team (multi-node) — tfvars
-        # outranks the env, so this is the copy terraform actually reads.
-        "teams": teams_json_src,
-        "boxes_per_team": spec.boxes,
-        "box_password": secrets.box_password,
-        "box_username": spec.box_username,
-        "event_name": spec.name,
-        "scoring_vm_id": identity.engine_vmid,
-        "ssh_private_key_path": ssh_key_abs,
-        # M3.3 two-apply: apply #1 (phase 2) builds the engine + bridges with an empty
-        # team_box for_each; apply #2 (phase 4) flips this to true once the golden
-        # templates exist. team_nics/reboot keep their full-teams config in apply #1 so
-        # the engine already has a NIC on every bridge for the golden plant.
-        "build_team_boxes": False,
-        "golden_template_ids": [],
-        # M4: apply #2 rewrites tfvars with this intact — a resume that skips phase 2
-        # must not let the engine clone source fall back to the base image (which would
-        # replace the engine with an unbootstrapped full clone mid-pipeline).
-        "engine_clone_id": int(secrets.state.get("engine_template_vmid") or 0),
-        # Portable-node mode (realm): static engine mgmt IP instead of agent discovery.
-        # Persisted via tfvars so resumes don't depend on the env var being re-exported.
-        "engine_mgmt_ip": engine_mgmt_ip,
-        "engine_mgmt_gw": os.environ.get("TF_VAR_engine_mgmt_gw", ""),
-    }
-    if place.placement:
-        # Multi-node: per-slot satellite providers and the engine's jump routes.
-        tfvars["satellites"] = satellite_tfvars(place.placement)
-        tfvars["satellite_routes"] = satellite_routes_for(place.placement)
-    tfvars_path = tf_dir / "terraform.tfvars.json"
-    # Carries TF_VAR_box_password + the per-team passwords.
-    write_text_atomic(tfvars_path, json.dumps(tfvars, indent=2))
+    terraform = TerraformInputs()
+    _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity, place, from_phase)
 
     if from_phase <= 2:
         if place.placement:
             from config_ops import preflight_gates_multinode
             preflight_gates_multinode(comp_dir, spec.boxes, secrets.teams, identity.engine_vmid, place.placement,
-                                      engine_mgmt_ip=engine_mgmt_ip,
+                                      engine_mgmt_ip=terraform.engine_mgmt_ip,
                                       check_free=not prior.resuming)
         else:
             preflight_gates(comp_dir, spec.boxes, secrets.number_of_teams, teams=secrets.teams,
                             engine_vmid=identity.engine_vmid, check_free=not prior.resuming,
-                            engine_mgmt_ip=engine_mgmt_ip)
+                            engine_mgmt_ip=terraform.engine_mgmt_ip)
 
     if not assume_yes and not prior.resuming:
         if not confirm_deploy(spec.name, spec.scenario, spec.difficulty, secrets.teams, spec.boxes):
@@ -722,7 +637,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         placement=place.placement,
         node=node,
         engine_vmid=identity.engine_vmid,
-        engine_mgmt_ip=engine_mgmt_ip,
+        engine_mgmt_ip=terraform.engine_mgmt_ip,
         boxes=spec.boxes,
         boxes_by_name={b["name"]: b for b in spec.boxes},
         unbooted=generated.unbooted,
@@ -733,10 +648,10 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         golden_inputs=generated.golden_inputs,
         golden_hashes=generated.golden_hashes,
         frozen_keep=generated.frozen_keep,
-        tf_dir=tf_dir,
-        tfvars_path=tfvars_path,
-        tfvars=tfvars,
-        ssh_key_abs=ssh_key_abs,
+        tf_dir=terraform.tf_dir,
+        tfvars_path=terraform.tfvars_path,
+        tfvars=terraform.tfvars,
+        ssh_key_abs=terraform.ssh_key_abs,
         all_targets=all_targets,
         managed_targets=managed_targets,
         linux_targets=linux_targets,
@@ -919,6 +834,122 @@ def _generate_stage_configs_and_hashes(generated, comp_dir, spec, secrets):
                                        frozen.get("frozen_at"), golden_bundle)
             if drift["code"]:
                 generated.frozen_keep.add(spec.name)
+
+
+def _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity, place, from_phase):
+    """Assemble terraform.tfvars.json + the workdir/ssh fields, into `terraform`.
+
+    terraform.tfvars.json outranks TF_VAR_* env, so it is the authoritative copy of
+    this competition's teams/boxes/engine-vmid (concurrent comps on one node must not
+    clobber each other through the shared .env). The stale-state guard runs BEFORE the
+    file is written: the per-comp workdir carries state from wherever the last deploy
+    ran, and pointing terraform at a different host/vmid would make it reconcile that
+    state and destroy whatever sits at the old resources on the new host."""
+    teams_json_src = {
+        team_key: {"identifier": team_data["identifier"], "password": team_data["password"]}
+        for team_key, team_data in secrets.teams.items()
+    }
+    if place.placement:
+        # terraform's per-slot resources key on this: which host builds each team.
+        for team_key in teams_json_src:
+            teams_json_src[team_key]["slot"] = place.placement["team_slots"][team_key]
+    teams_json = json.dumps(teams_json_src)
+    boxes_json = json.dumps(spec.boxes)
+
+    update_env({
+        "TF_VAR_teams": teams_json,
+        "TF_VAR_boxes_per_team": boxes_json,
+        "TF_VAR_box_password": secrets.box_password,
+        "TF_VAR_box_username": spec.box_username,
+        "TF_VAR_scoring_vm_id": str(identity.engine_vmid),
+    })
+
+    # teams.json holds every team password: write it with 0600 applied at creation
+    # (a write_text-then-chmod leaves it briefly world-readable).
+    write_text_atomic(comp_dir / "teams.json", teams_json)
+
+    # Per-competition Terraform working dir + tfvars so concurrent competitions on
+    # one node don't share the single terraform/terraform.tfstate or clobber each
+    # other via the shared .env. terraform.tfvars.json outranks TF_VAR_* env, so it
+    # is authoritative for this comp's teams/boxes/engine-vmid regardless of what
+    # another concurrent deploy wrote to .env. The ssh key path is made absolute
+    # because it was ../proxmox-relative to the (now deeper) working dir.
+    terraform.tf_dir = ensure_terraform_workdir(comp_dir)
+
+    # Stale-state guard: the per-competition terraform workdir carries state from
+    # wherever the LAST deploy ran. Pointing terraform at a different host (or engine
+    # vmid) makes it "reconcile" that state against the new endpoint and destroy
+    # whatever now sits at the old vmid there (2026-09-24: a realm run deleted that
+    # host's existing 1090 engine because a dead primary attempt left 1090 in this
+    # comp's state). Refuse unless the recorded host and vmid agree.
+    if from_phase <= 2 and (terraform.tf_dir / "terraform.tfstate").exists() and prior.previous_state:
+        cur_endpoint = os.environ.get("TF_VAR_proxmox_endpoint", "").rstrip("/")
+        prev_endpoint = (prior.previous_state.get("deployed_endpoint") or "").rstrip("/")
+        prev_engine = prior.previous_state.get("scoring_vm_id")
+        host_mismatch = bool(prev_endpoint) and prev_endpoint != cur_endpoint
+        vmid_mismatch = prev_engine is not None and int(prev_engine) != identity.engine_vmid
+        if host_mismatch or vmid_mismatch:
+            raise SystemExit(
+                f"  ERROR: {terraform.tf_dir}/terraform.tfstate holds state from a deploy against "
+                f"{prev_endpoint or 'another host'} (engine vmid {prev_engine}); this run "
+                f"targets {cur_endpoint} (engine vmid {identity.engine_vmid}). Terraform would "
+                f"reconcile the stale state and destroy whatever sits at those resources "
+                f"on the new host. Destroy this competition first: python3 "
+                f"destroy-competition.py --competition {spec.comp_name} --yes"
+            )
+
+    raw_key = os.environ["TF_VAR_ssh_private_key_path"]
+    terraform.ssh_key_abs = (raw_key if os.path.isabs(raw_key)
+                             else str((Path("terraform") / raw_key).resolve()))
+    # Engine mgmt IP: static by default. The DHCP engine rebooted onto a different
+    # address mid-event while terraform's saved output — which deploy/verify/
+    # credentials all consume — stayed stale (shakedown-5x4: .221→.243→.233).
+    # An explicit TF_VAR_engine_mgmt_ip="" keeps the old DHCP behavior; the
+    # chosen value is also exported for template_ops (build-VM ipconfig0).
+    terraform.engine_mgmt_ip = os.environ.get("TF_VAR_engine_mgmt_ip")
+    if terraform.engine_mgmt_ip is None:
+        terraform.engine_mgmt_ip = DEFAULT_ENGINE_MGMT_IP
+        print(f"  Engine mgmt IP: static {terraform.engine_mgmt_ip} (default — override "
+              f"TF_VAR_engine_mgmt_ip, set '' for DHCP)")
+        os.environ["TF_VAR_engine_mgmt_ip"] = terraform.engine_mgmt_ip
+    # Default the gateway whenever the engine mgmt IP is static (live-found 2026-09-29:
+    # an explicitly-set mgmt IP skipped this branch on the .150 env, and the engine
+    # template build's ipconfig0 went out with an empty gw= — PVE 400 "Parameter
+    # verification failed").
+    if not os.environ.get("TF_VAR_engine_mgmt_gw"):
+        os.environ["TF_VAR_engine_mgmt_gw"] = DEFAULT_ENGINE_MGMT_GW
+    terraform.tfvars = {
+        # teams_json_src carries the placement slot per team (multi-node) — tfvars
+        # outranks the env, so this is the copy terraform actually reads.
+        "teams": teams_json_src,
+        "boxes_per_team": spec.boxes,
+        "box_password": secrets.box_password,
+        "box_username": spec.box_username,
+        "event_name": spec.name,
+        "scoring_vm_id": identity.engine_vmid,
+        "ssh_private_key_path": terraform.ssh_key_abs,
+        # M3.3 two-apply: apply #1 (phase 2) builds the engine + bridges with an empty
+        # team_box for_each; apply #2 (phase 4) flips this to true once the golden
+        # templates exist. team_nics/reboot keep their full-teams config in apply #1 so
+        # the engine already has a NIC on every bridge for the golden plant.
+        "build_team_boxes": False,
+        "golden_template_ids": [],
+        # M4: apply #2 rewrites tfvars with this intact — a resume that skips phase 2
+        # must not let the engine clone source fall back to the base image (which would
+        # replace the engine with an unbootstrapped full clone mid-pipeline).
+        "engine_clone_id": int(secrets.state.get("engine_template_vmid") or 0),
+        # Portable-node mode (realm): static engine mgmt IP instead of agent discovery.
+        # Persisted via tfvars so resumes don't depend on the env var being re-exported.
+        "engine_mgmt_ip": terraform.engine_mgmt_ip,
+        "engine_mgmt_gw": os.environ.get("TF_VAR_engine_mgmt_gw", ""),
+    }
+    if place.placement:
+        # Multi-node: per-slot satellite providers and the engine's jump routes.
+        terraform.tfvars["satellites"] = satellite_tfvars(place.placement)
+        terraform.tfvars["satellite_routes"] = satellite_routes_for(place.placement)
+    terraform.tfvars_path = terraform.tf_dir / "terraform.tfvars.json"
+    # Carries TF_VAR_box_password + the per-team passwords.
+    write_text_atomic(terraform.tfvars_path, json.dumps(terraform.tfvars, indent=2))
 
 
 def _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid):
