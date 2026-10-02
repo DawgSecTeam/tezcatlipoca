@@ -11,7 +11,12 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 
-from constants import MAX_BOXES_PER_TEAM, MAX_TEAMS, SCORING_ENGINE_VMID, SNAP_BASE, SNAP_READY
+# NOTE: range_ops is NOT a constants shim. It used to import MAX_TEAMS,
+# SNAP_BASE, SNAP_READY, ... purely so that redeploy-competition.py could pull
+# them through `from range_ops import (...)`. Those five were unused here, so
+# every cleanup pass flagged them — and deleting them would have broken
+# redeploy-competition.py at import time. Constants now come from constants.py
+# directly (w3 audit 2026-10-01); do not re-add re-exports.
 
 # Multi-node placement routes, registered by nodes_ops.activate_placement(): node
 # name -> (endpoint, api_token). proxmox_api consults this table for node-scoped
