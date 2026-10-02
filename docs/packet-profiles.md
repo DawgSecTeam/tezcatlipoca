@@ -35,7 +35,7 @@ layer, authored after compilation. A packet-compiled bundle deploys clean
 | Section | Fields | Notes |
 |---|---|---|
 | `packet` | `source` | provenance line for the fidelity report |
-| `event` | `comp_id`, `name`, `scenario`, `difficulty`, `teams_suggested`, `team_identifiers` | `comp_id` must be free (or pass `--force`); identifiers are a deploy-time suggestion |
+| `event` | `comp_id`, `name`, `scenario`, `difficulty`, `teams_suggested`, `team_identifiers` | `comp_id` must be free (or pass `--force`). `teams_suggested`/`team_identifiers` are **inert** — no Python consumer reads them; they are documentation for whoever runs `create-competition.py --teams N` (and the `TF_VAR_team_identifiers` suggestion) |
 | `domain` | `name_template` | e.g. `"mira-{team}.corp.sus"` → Compfile `domain_prefix`/`domain_suffix`; omit for the `team<id>.local` default |
 | `credentials` | `box_username`, `box_password`, `credlists.{linux,domain}`, `domain_accounts[]`, `out_of_scope[]`, `note` | verbatim packet credentials; see below |
 | `boxes[]` | `name`, `packet_os`, `template`, `last_octet`, `cpu`, `memory_mb`, `disk_gb`, `disk_iface`, `unmanaged`, `domain_role`, `fidelity`, `note` | `fidelity` ∈ exact/substituted/unsupported is REQUIRED per box |
@@ -46,8 +46,75 @@ layer, authored after compilation. A packet-compiled bundle deploys clean
 
 Validation refuses: unknown pins (a pin with no Quotient check would plant and score
 nothing), duplicate `<box>-<Display>`, unordered inject offsets, two DCs, unmanaged
-boxes carrying services, unresolvable templates, invalid usernames/legacy-account
-collisions, missing fidelity annotations.
+boxes carrying services, invalid usernames/legacy-account collisions, missing fidelity
+annotations, and a `credlists.domain` without a `domain.name_template`.
+
+Validation does **not** resolve box templates: `packet_ops.validate_profile()` only requires
+`boxes[].template` to be non-empty. Whether that name resolves to a template tagged `template` on
+the target node is checked later, by the deploy preflight (`config_ops.preflight_gates`), which
+hard-fails before touching infrastructure. A compile that passes is therefore not yet proof the
+lineup can deploy.
+
+## Authoring a packet.yaml for a new competition
+
+Read [packets/cde-2026/packet.yaml](../packets/cde-2026/packet.yaml) first — it is the reference:
+every field is present, and every substituted/unsupported item carries a `note` explaining the
+trade. A minimal profile is much smaller:
+
+```yaml
+packet:
+  source: "ACME Quals 2027 packet v2.1"
+event:
+  comp_id: acme-2027
+  name: ACME Quals 2027
+  scenario: "Defend ACME's e-commerce stack."
+  difficulty: 6
+credentials:
+  box_username: acmeblue          # must not collide with a legacy distro account
+  box_password: "Spr1ng2027!"     # packet-published, public by design
+  credlists:
+    linux: {acmeblue: "Spr1ng2027!"}
+boxes:
+  - name: web01
+    packet_os: "Ubuntu 22.04 — Apache"
+    template: base-ubuntu24.04-fix   # must resolve on the target node (deploy preflight)
+    last_octet: 2
+    cpu: 2
+    memory_mb: 2048
+    fidelity: substituted             # exact | substituted | unsupported (REQUIRED per box)
+    note: "no 22.04 template; 24.04 is the proven stand-in"
+services:
+  - box: web01
+    name: "Apache HTTP"
+    port: 80
+    pin: apache                       # catalog config name, or score/<check> for a native service
+    display: http
+    fidelity: exact
+```
+
+Recipe, in order:
+
+1. **Transcribe the packet literally.** Copy the published credentials, ports, account names, and
+   IP scheme verbatim — do not "fix" them (the CDE profile deliberately ships both `n0t_sus1` and
+   `n0t_sus!`, because the packet does).
+2. **One `boxes[]` entry per box type**, with `last_octet` from the packet's addressing. Pick the
+   closest template that exists on the node and mark `fidelity` honestly (`substituted` +
+   `note` beats pretending). Use `unmanaged: true` for an appliance you clone but never plant on
+   (pfSense), and `domain_role: dc`/`member` for AD members.
+3. **Map each scored service to a `pin`** — a nakon catalog config name, or `score/<check>`
+   (e.g. `score/tcp`) for a service that is scored without a plant. Check `display` uniqueness
+   per box. The pin must be a config the catalog actually has, or validation refuses.
+4. **Add `schedule[]` windows** (`at_min` offsets from T0; `null` for an unscheduled note) if the
+   event pauses — `run-schedule.py` executes them.
+5. **Compile and read the fidelity report**:
+   `python3 compile-packet.py packets/<event>/packet.yaml --dry-run`. It writes nothing and prints
+   every exact/substituted/unsupported decision; fix the profile until the substitutions are ones
+   you would defend in a briefing.
+6. **Real compile + deploy**: `python3 compile-packet.py packets/<event>/packet.yaml`, then
+   `create-competition.py --competition <id> --teams N --yes`. Deploy preflight resolves every
+   `template` name — a typo fails there, not at compile.
+7. **Author vulns separately, after** (see below), then verify with
+   `verify-competition.py competitions/<id> --packet packets/<event>/packet.yaml`.
 
 ## What compilation emits
 

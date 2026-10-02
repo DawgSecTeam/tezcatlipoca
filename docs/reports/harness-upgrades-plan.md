@@ -106,12 +106,12 @@ what remains (live validation only).
 
 ### D — deploy flakes (this repo)
 
-- D1: `clone_ops.ensure_cloned_network` runs after the start loop: guest-agent
-  IPv4 check per Linux box (30 s grace), repair on miss.
-- D2: `clone_ops._repair_box_network` — live `ip addr/route` repair plus the
-  persisted networkd `.network` (KeepConfiguration) + ifupdown stanza; the
-  body is recorded in the function docstring and
-  `docs/dress-rehearsal-prompt.md`'s playbook.
+*D1/D2 (historical — the modules were deleted):* `clone_ops.ensure_cloned_network`
+ran after the start loop (guest-agent IPv4 check per Linux box, 30 s grace, repair
+on miss), and `clone_ops._repair_box_network` did live `ip addr/route` repair plus a
+persisted networkd `.network` (KeepConfiguration) + ifupdown stanza. **`clone_ops.py`
+was removed as dead code** — v2 has no automatic clone re-IP repair (see
+known-issues). Kept as the upgrade record of what was tried, not as live behaviour.
 - D3: `setup_ubuntu_auth` now runs BEFORE `fix_dns_on_boxes` in
   `clone_team_boxes`, and `fix_dns_on_boxes` falls back to
   `guest_agent_exec_root` with `DNS_FIX_CMD_ROOT` (no sudo, no network) before

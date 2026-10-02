@@ -4,13 +4,19 @@ Design notes, rationale, and hard-won lessons for the agent-scrim harness
 scripts: `run-agent-scrim.py` (whole-lifecycle orchestrator),
 `scrim-report.py` (interaction scoring), and `beacon_ops.py` (hunt-artifact
 planting). This content used to live only in comments and docstrings inside
-those files; it was extracted here on 2026-09-21. It deliberately does NOT
+those files; it was extracted here on 2026-09-21. **An earlier commit (`af7468c`) stripped the
+docstrings and comments those notes came from, so for most of the symbols below this file is now
+the only record of the design decision — treat a deletion here as deleting the rationale, not
+duplicating it.** It deliberately does NOT
 duplicate the sibling docs: `docs/rehearsal-gates.md` owns the numeric
-pass/fail gates, `docs/harness-upgrades-plan.md` owns the rev-2 upgrade
+pass/fail gates, `docs/reports/harness-upgrades-plan.md` owns the rev-2 upgrade
 record (what changed, where it landed, what's left), and
-`docs/dress-rehearsal-prompt.md` owns the rehearsal runbook. Incident-level
+`docs/reports/dress-rehearsal-prompt.md` owns the rehearsal runbook. Incident-level
 detail (the three-round scoreboard mystery, the scp flakes, run post-mortems)
 lives in `docs/known-issues.md`.
+
+**Contents:** [run-agent-scrim.py](#run-agent-scrimpy) · [scrim-report.py](#scrim-reportpy) ·
+[beacon_ops.py](#beacon_opspy)
 
 ## run-agent-scrim.py
 
@@ -35,10 +41,11 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
 - `RUNTIME_FILES` — regenerated per deploy; never copied into a fresh
   competition (`teams.json`, `.deploy_state.json`, `credentials.txt`,
   `nakon-config.json`, `cloned_vms.json`, `packet.md`, `event.conf`).
-- `stage_author` — `.phase6-swept` is a resume marker and must never leak into
-  a fresh competition (explicitly skipped, alongside `RUNTIME_FILES`, `LOG.md`,
-  `sub-*`, `.nakon-domain-*`; `injects/` is re-copied deliberately). The
-  template's `Compfile` first line is rewritten to the new name.
+- `stage_author` — the pipeline's sweep marker **`.postclone-swept`** is a resume marker and must
+  never leak into a fresh competition (the code currently still names the retired `.phase6-swept`
+  here — a known mismatch, see [known-issues.md](known-issues.md#scrim-stage_author-skips-the-current-sweep-marker);
+  `RUNTIME_FILES`, `LOG.md`, `sub-*`, `.nakon-domain-*` are also skipped, and `injects/` is
+  re-copied deliberately). The template's `Compfile` first line is rewritten to the new name.
 - `creds_from_files` — all secrets/logins come from the post-deploy artifacts
   (`.deploy_state.json`, `teams.json`, `credentials.txt`) — no terraform
   output needed.
@@ -311,7 +318,7 @@ Reads a run dir (`evidence/red/events*.jsonl` + `world.json`,
   health_check exclusion and the opening count are rev-2 corrections — 17c's
   dead first 29 minutes was its biggest stall and the naive
   gap-between-successes definition missed it; see
-  `docs/harness-upgrades-plan.md`.)
+  `docs/reports/harness-upgrades-plan.md`.)
 - `red_metrics` windows_footholds — from world.json footholds' `windows`
   flag; on legacy world.json lacking it, inferred from initial-access events
   against last-octet 2/3 (dc01/win01).

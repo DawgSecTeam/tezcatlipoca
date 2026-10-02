@@ -7,9 +7,68 @@ scripts: `destroy-competition.py`, `redeploy-competition.py`, `verify-competitio
 All guidance lives in `docs/` — start with:
 
 - [README.md](README.md) — quickstart + full docs index
+- [docs/README.md](docs/README.md) — the grouped index of every doc ("read this when…")
 - [docs/architecture.md](docs/architecture.md) — architecture, nakon contract, operational invariants
 - [docs/internals.md](docs/internals.md) — per-module design notes (the "why" behind the code)
 - [docs/usage-agents.md](docs/usage-agents.md) — driving the pipeline non-interactively
+- [docs/usage-people.md](docs/usage-people.md) — setup/operation by hand, env-var reference, troubleshooting
 - [docs/multi-node.md](docs/multi-node.md) — one competition across multiple Proxmox hosts (nodes.json placement, jump routing, per-slot goldens, sync-template)
 - [docs/packet-profiles.md](docs/packet-profiles.md) — competition packets → ranges (profiles, compile-packet, packet verify gates)
 - [docs/known-issues.md](docs/known-issues.md) — incidents, known-broken templates, failure modes
+
+## Practice runs must run from a new worktree
+
+**RULE — any practice run (capacity test, canary, shakedown, any deploy whose goal is testing the
+pipeline rather than hosting an event) MUST run from a NEW worktree cut off `main`**, never from the
+main tree and never from another run's worktree. Practice deploys are exactly the runs that crash,
+get killed, and leave half-built state behind; isolating them keeps main's tree, state, and node view
+clean, gives the run its own branch to discard or merge, and stops two sessions from driving the same
+checkout.
+
+Teardown after a practice run is `destroy-competition.py` — it is resumable (stale-lock recovery,
+tag-scoped leftover sweep, foreign VMs skip-and-continue); re-run it until it exits clean. **Never
+substitute ad-hoc destroy scripts**: sweep predicates that match names or partial tags will destroy
+other sessions' infrastructure (live-found 2026-09-30 — an over-broad sweep took out two other comps'
+engines and goldens).
+
+A linked worktree has none of the gitignored local state the deploy reads, and every path resolves
+from the worktree root — run all commands from there. Pre-flight:
+
+```bash
+git worktree add -b <branch> ../tezcatlipoca-<branch> main
+cd ../tezcatlipoca-<branch>
+git submodule update --init                          # vendor/nakon — every nakon call needs it
+cp /path/to/main-tree/.env .env                      # the NODE-PROPER env variant (see below)
+cp /path/to/main-tree/vendor/nakon/.env vendor/nakon/.env
+cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxmox` against terraform/
+```
+
+- Pick the env file matching the target node and **check the stale-var traps**: the
+  `.env.realm-backup-20260923` (.150) variant shipped `TF_VAR_template_vm_id=9106` (dead vmid — the
+  engine-base preflight hard-fails; correct value is 955) and no `TF_VAR_team_identifiers` (default
+  identifiers 101… collide with nothing by themselves, but set it explicitly, e.g.
+  `TF_VAR_team_identifiers=130,131`, for predictable vmids).
+- `TF_VAR_teams` / `TF_VAR_boxes_per_team` in an old env are overridden by the comp dir at terraform
+  time — stale values there are cosmetic, not fatal.
+- `TEZ_THIN_HEADROOM=<0..1>` relaxes the datastore headroom gate on thin-provisioned pools (ZFS,
+  lvmthin): the gate counts that fraction of the provisioned team-disk math, because linked clones
+  only allocate written blocks (goldens + engine are the only full copies). Unset keeps the strict
+  provisioned-bytes gate. Size the factor to the pool, not to hope: 0.25 has been enough for
+  Windows-heavy comps on cyberrange `hdd`.
+- The sibling-repo tools have their own env fallback: `bad-auto/deploy` loads `../tezcatlipoca/.env`
+  via `setdefault`, so export the worktree's `TF_VAR_proxmox_*` trio before calling it if the main
+  tree points at a different node.
+
+Then the normal flow: `create-competition.py --competition <id> --scoring-vmid <free> --plan-only`,
+real `--teams N --yes`, verify, destroy — all from the worktree root. Worked example:
+[svc-matrix-2026-09-28-report.md](docs/reports/svc-matrix-2026-09-28-report.md).
+
+## Editing docs
+
+Docs are held to the same standard as code: **verify every claim against the source before writing
+it** (the pipeline is generation "v2" — golden templates + linked clones — and passages written
+against the pre-golden pipeline are still being found), prefer one canonical statement plus links
+over copies, and keep the incident/date citations that make the log trustworthy. If a doc and the
+code disagree and the code looks like the bug, document the code's actual behavior and flag the
+discrepancy (`docs/known-issues.md`) rather than silently "fixing" the doc. Never edit code from a
+docs pass.

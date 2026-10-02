@@ -1,16 +1,22 @@
 # E2E testing — running deploys without repeating failures
 
+> **Pipeline version 2** — golden templates + linked clones, phases renumbered (2026-09-24).
+> Phase numbers below are v2; the [v1 → v2 table](architecture.md#v1-to-v2-migration-what-moved)
+> maps them to the pre-golden numbering that older post-mortems use. Where this doc quotes a
+> historical run's phase, the run's own numbering is kept and said so.
+
 How to run a full pipeline test (`create-competition.py` / `run-agent-scrim.py`) so that
 failures are triaged once, recovered cheaply, and never debugged twice. This doc condenses
 every deploy failure from the July 2026 shakedown through the September scrim / winad / pfSense
-red-vs-blue runs; `docs/known-issues.md` stays the canonical incident log, `docs/architecture.md`
-explains the phases, `docs/usage-agents.md` documents the flags, and `docs/pfsense-inpath-2026-09-28.md`
+red-vs-blue runs; [known-issues.md](known-issues.md) stays the canonical incident log,
+[architecture.md](architecture.md) explains the phases, [usage-agents.md](usage-agents.md)
+documents the flags, and [pfsense-inpath-2026-09-28.md](pfsense-inpath-2026-09-28.md)
 is the in-path-firewall runbook. For a pfSense-fronted, multi-host, or red-team run also read §8.
 
 The three habits this doc exists to enforce:
 
 1. **Triage before touching anything** — regression or known failure class? (§1)
-2. **Never redo phase 1–2 for a failure in phase 4–7** — resume, don't rebuild. (§4)
+2. **Never redo phases 1–2 for a failure in phases 3–7** — resume, don't rebuild. (§4)
 3. **Always capture the deploy log** — several post-mortems were only possible by luck. (§3, §7)
 
 ## 1. Triage first: regression or expected?
@@ -27,13 +33,13 @@ Before debugging a failed deploy, answer: *what changed since the last green run
 
 | Failure class | Signature | Verdict | Status |
 |---|---|---|---|
-| strict × pin density | phase 5/6 `nakon deploy --strict` → `CalledProcessError` exit 1, per-step `FAILED` lines | Expected at max-vuln pin counts: one broken vulndb row aborts the whole phase. Some legacy rows had failed *silently* for months before strict made them visible | Chronic — recover with trim-then-resume (§5), fix or avoid pinning broken rows |
-| timeout sizing | `subprocess.TimeoutExpired` on apt/compose in phase 4 | Was chronic (300s compose build, 180s apt, 60s compose-up all tripped on slow cold starts) | Fixed — engine budgets raised to 600s (`63b9c31`, `0c0547e`) |
+| strict × pin density | phase 4 `nakon deploy --strict` → `CalledProcessError` exit 1, per-step `FAILED` lines | Expected at max-vuln pin counts: one broken vulndb row aborts the whole phase. Some legacy rows had failed *silently* for months before strict made them visible. **Only the phase-4 golden plant is strict**; phases 5 and 6 pass `strict=False` and record a tally instead | Chronic — recover with trim-then-resume (§5), fix or avoid pinning broken rows |
+| timeout sizing | `subprocess.TimeoutExpired` on apt/compose in phase 3 (engine prep) | Was chronic (300s compose build, 180s apt, 60s compose-up all tripped on slow cold starts) | Fixed — engine budgets raised to 600s (`63b9c31`, `0c0547e`) |
 | node/storage saturation | HTTP 596, authed API hangs, node reboot, stale `lock = clone` surviving reboot | Environmental — clones saturating the datastore the template lives on; concurrent external provisioners make it worse | Recurring risk — preflight pool headroom, no concurrent provisioners (§7) |
 | apt package rotation | apt 404 mid-deploy (e.g. `nginx 1.24.0-2ubuntu7.4x` vanished) | Environmental, self-heals after apt-daily refresh | Known — retry later or repair post-hoc |
-| cloud-init clone race | clone has no IPv4 / APIPA; ifupdown address dropped on carrier blip; resolv.conf reverted | Environmental | Auto-repaired by `ensure_cloned_network`/`_repair_box_network`; chronic time cost before that fix |
+| cloud-init clone race | clone has no IPv4 / APIPA; ifupdown address dropped on carrier blip; resolv.conf reverted | Environmental — much rarer on v2 (linked clones come off an already-cleaned golden disk) | **No v2 auto-repair exists**: `clone_ops._repair_box_network`/`ensure_cloned_network` were deleted with `clone_ops.py`. A dead clone now surfaces as `wait_for_boxes_ssh` failing with `diagnose_unreachable_box` output; fix the VM (Terraform replace) or resume |
 | domain-join vs ADDS race | Domain Join fails "domain does not exist" right after promotion | Timing race — dc01 still settling | Mitigated (`487b977`: skip re-promotion via ADDS artifact + live membership probes); resume phase 6 and retry |
-| deploy-path regression | anything unclassifiable, correlates with a logic-touching commit | Real regression | One on record: `2662fb7` iterated dict keys → `TypeError` in `ensure_cloned_network` at phase 6; fixed `9015f06` same day |
+| deploy-path regression | anything unclassifiable, correlates with a logic-touching commit | Real regression | One on record: `2662fb7` iterated dict keys → `TypeError` in `ensure_cloned_network` at the old phase 6; fixed `9015f06` same day. (`ensure_cloned_network` and `clone_ops.py` are gone in v2 — historical row) |
 | event-side (not deploy) | opencode cycle deaths, scoreboard `Forbidden`, red-evidence scp hangs, wrong systemd unit names | Harness/agent-side, not the deploy pipeline | Fixed + policed by `docs/rehearsal-gates.md` |
 | engine apt-lock race | phase 2 engine bootstrap `rc=100`, `Could not get lock /var/cache/apt/archives/lock` held by a fresh apt-get | First-boot `unattended-upgrades`/`apt-daily-upgrade` re-spawns apt *after* the preamble's killall; `DPkg::Lock::Timeout` doesn't cover the archives-cache lock | Fixed 2026-09-27 (`engine_ops.py`): `systemctl mask` the units + poll `fuser` on all three locks until free before touching apt |
 | non-apt distro prep | fedora/alpine box: `apt-get: command not found` ×5 retries, 240 s settle burned per pass | Box apt-prep + settle-check assumed Debian | Fixed 2026-09-27 (`hardening_ops.py`): `command -v apt-get \|\| exit 0` guard before any apt call |
@@ -79,20 +85,26 @@ aborts): **environmental saturation and unvetted pin density, not pipeline code.
   credentials (a missing secret is regenerated once and written back). Resuming without the
   state file is a hard error by design — fresh secrets while skipping destructive phases
   desyncs the range (see `docs/architecture.md`, Operational invariants).
-- **Resume markers.** `.phase6-swept` (written only after a clean full nakon sweep; a fresh
-  deploy unlinks it), `cloned_vms.json` (clones already present are skipped, not re-cloned),
+- **Resume markers.** `.postclone-swept` (written only after a clean full repair sweep; a fresh
+  deploy unlinks it, and apply #2 unlinks it again after re-creating the team boxes),
   `.nakon-domain-<team>-adds.json` + live join probes (skips DC re-promotion on resume).
+  `cloned_vms.json` is a **legacy** pre-golden marker only — v2 ranges have every team in Terraform
+  state and re-creation is gated by the marker/template logic, not by that file.
   Phase 7 sub-steps are flag-gated (`seeded` / `engine_unpaused` / `injects_created`) — but
   `unpause_engine` is not idempotent, so never resume "to be safe" past a completed phase 7.
-- **Snapshots.** `tz-base` is taken on team1 boxes in phase 5; `tz-ready` on all boxes at the
-  end of phase 6; clones get `tz-base` at birth. Disk-only, replace-existing, **never raises**
-  (a failed snapshot is only a WARNING — verify with `list_snapshots` if you plan to rely on
-  one). `redeploy-competition.py` modes: `rollback-ready` / `rollback-base` / `reconfigure` /
-  `rebuild`, with a fail-fast snapshot precheck. Snapshots need a snapshot-capable datastore —
-  the current `hdd` zfs pool is fine; thick LVM cannot snapshot at all.
+- **Snapshots.** `tz-base` is taken once for **all** boxes at the end of the phase-4 block (goldens
+  take theirs pre-plant inside the golden build); `tz-ready` on all boxes at the end of phase 6.
+  Disk-only, replace-existing, **never raises** (a failed snapshot is only a WARNING — verify with
+  `list_snapshots` if you plan to rely on one). `redeploy-competition.py` modes: `rollback-ready` /
+  `rollback-base` / `reconfigure` / `rebuild` / `resync` / `engine-recovery` (+ `--reset-event`),
+  with a fail-fast snapshot precheck. Snapshots need a snapshot-capable datastore — the current
+  `hdd` zfs pool is fine; thick LVM cannot snapshot at all.
 - **Verify gate.** `verify-competition.py` (logins, services, isolation, misconfig survival,
-  injects, no-default-creds) is the pass/fail gate for any deploy claim. No test suite exists;
-  this plus a deployed range *is* the test.
+  injects, no-default-creds, plus pins/plant-coverage/domains/red-identity/packet gates when
+  applicable — see [usage-agents.md](usage-agents.md#verify-competitionpy)) is the pass/fail gate
+  for any deploy claim. The offline suite (`python3 -m pytest tests/`) covers deploy-path helpers
+  but is **not** a pipeline test — this gate against a deployed range *is* the integration test.
+  See [tests.md](tests.md).
 - **Logs — nothing captures them by default.** `run-agent-scrim.py --run-dir` writes
   `<run_dir>/deploy.log`; `run-deploy.sh` tees to repo-root `deploy.log`; a bare
   `create-competition.py` run leaves only the console scrollback. Two post-mortems (17b/17c)
@@ -102,16 +114,18 @@ aborts): **environmental saturation and unvetted pin density, not pipeline code.
 ## 4. Per-phase failure cost map
 
 The cost asymmetry is the whole game: phases 1–2 are the expensive, dice-rolling part
-(Proxmox/Terraform/clone); phases 4–7 are mostly idempotent re-entries. A failure late in the
-pipeline never justifies starting over.
+(Proxmox/Terraform/clone); phases 3–7 are mostly idempotent re-entries. A failure late in the
+pipeline never justifies starting over. Numbering is v2 (see the
+[v1 → v2 table](architecture.md#v1-to-v2-migration-what-moved) for the older scheme).
 
 | Phase fails | Typical cause | Cheapest recovery | Never do this |
 |---|---|---|---|
 | 1 | (it *is* the teardown) | re-run | — |
-| 2 | Terraform abort; or "already exists" state mismatch | If state mismatch: the printed hint is correct — `--from-phase 1` is the only clean path. If TF died cleanly: fix cause, re-run `--from-phase 2` (17c did this mid-life after disk moves) | Don't hand-create/destroy TF-managed resources around TF — that's what creates the mismatch |
-| 4 | apt/compose timeout on the engine | `--from-phase 4` — bootstrap steps are idempotent; resumed comp this way 4 times across runs | Don't rebuild boxes for an engine-side timeout |
-| 5 | nakon `--strict` on team1; DNS/auth retries | Trim broken rows (§5) → `--from-phase 5`. If it was a transient (scp reset, one flaky step): re-run once before trimming | Don't `--from-phase 1` — you'd re-roll every clone/DNS/environmental dice to avoid one bad vulndb row |
-| 6 | strict on team2; clone race; join race; TypeError-class regressions | Trim (§5) → `--from-phase 6`: `.phase6-swept` absent means the sweep re-runs, but existing clones are skipped and the ADDS artifact guards re-promotion. Join races: just resume and retry | Don't assume the phase-6 resume re-clones (it doesn't); don't trust it on a domain comp without checking the `.nakon-domain-*-adds.json` artifacts exist |
+| 2 | Terraform abort; or "already exists" state mismatch; engine-template build/config PUT | If state mismatch: the printed hint is correct — `--from-phase 1` is the only clean path. If TF died cleanly: fix cause, re-run `--from-phase 2` (17c did this mid-life after disk moves) | Don't hand-create/destroy TF-managed resources around TF — that's what creates the mismatch |
+| 3 | apt/compose timeout on the engine (engine prep from template) | `--from-phase 3` — the prepare-engine steps are idempotent; resumed this way 4 times across runs | Don't rebuild boxes for an engine-side timeout |
+| 4 | golden plant strict abort on a bad vulndb row; golden build/convert; apply #2 clone race | Trim broken rows (§5) → `--from-phase 4`. **This is the only strict pass**, so it is the one that aborts on pin density | Don't `--from-phase 1` — you'd re-roll every golden and environmental dice to avoid one bad vulndb row. Note a partially *converted* golden set is fatal (templates can't be un-templated) |
+| 5 | repair-stage sweep (lenient, so usually a tally not an abort); DNS/auth retries; fix_services | Trim (§5) → `--from-phase 5`. `.postclone-swept` gates the sweep; it is unlinked by apply #2 so a phase-4 re-entry always re-sweeps. If it was a transient (scp reset, one flaky step): re-run once first | Don't assume a phase-5 resume re-clones — cloning is phase 4 |
+| 6 | domains (ADDS/join race, realmd timeouts); final-stage pass; beacons; `tz-ready` | Trim (§5) → `--from-phase 6`: join races are almost always just resume-and-retry, and the ADDS artifact guards re-promotion. Don't trust it on a domain comp without checking the `.nakon-domain-*-adds.json` artifacts exist | Don't expect a phase-6 resume to re-clone |
 | 7 | seed/inject/unpause failure | Re-run `--from-phase 7` — sub-steps are individually flag-gated | Don't re-run past an already-unpaused engine |
 
 Rule of thumb: **the resume you already have is cheaper than the redeploy you're considering.**
@@ -130,9 +144,12 @@ safe and takes effect immediately:
 3. Remove the broken row names from `competitions/<id>/box_vulns.json` (a 20-line throwaway
    script in the run dir is fine — the dress run trimmed 16 rows / 27 entries this way). Keep
    every trim recorded in your findings/notes; each is a vulndb bug or pin mismatch.
-4. Re-run with the phase where nakon ran: `--from-phase 5` (team1) or `--from-phase 6` (team2).
-5. **Trim before the first team2 resume if team1 already failed on those rows** — team2 runs
-   the same rows on equivalent boxes, so the same abort will happen again otherwise.
+4. Re-run with the phase where nakon ran: `--from-phase 4` (the strict golden plant), `--from-phase 5`
+   (repair-stage sweep on every team box) or `--from-phase 6` (final-stage pass). In v2 the tail
+   passes are lenient, so a broken row usually shows up as a tally rather than an abort — but it will
+   fail again on every box, so trim it before resuming anyway.
+5. **Trim before the first post-change resume** — every team runs the same rows on equivalent boxes,
+   so the same failure will repeat otherwise.
 
 Corollary: under `--strict`, pin density is risk. A full-catalog pin run (534 pins/team)
 should be expected to iterate; don't author it the night the range needs to be green.
@@ -142,13 +159,14 @@ should be expected to iterate; don't author it the night the range needs to be g
 1. **Per-phase snapshot checkpoints.** `checkpoint(n)` in `deploy.py` is the single choke
    point called exactly once per completed phase — the natural hook. Spec: after saving state,
    take `tz-phase<N>` snapshots (disk-only, replace-existing, non-fatal WARNING — same
-   semantics as `range_ops.take_snapshot`) on the boxes that exist at that point (team1 from
-   phase 2 onward, team2+ from phase 6). Payoff: a phase-5/6 failure could roll boxes back to
-   a known-good state instead of re-running bootstrap into a possibly-dirty one. Rollback path:
+   semantics as `range_ops.take_snapshot`) on the boxes that exist at that point (the engine from
+   phase 2, every team box from phase 4). Payoff: a phase-5/6 failure could roll boxes back to
+   a known-good state instead of re-running the sweep into a possibly-dirty one. Rollback path:
    extend the redeploy `rollback-*` modes with a snapshot-name override (they're currently
    pinned to the `tz-base`/`tz-ready` constants). Caveats: zfs snapshots are cheap on `hdd`,
    but rollback requires stop/start, snapshots are per-VM (no atomic group), and the scoring
-   **engine (vmid 1000) is never snapshotted** — engine recovery is rebuild-only today.
+   engine is never snapshotted — engine recovery is rebuild-only today
+   (`redeploy --mode engine-recovery`).
 2. **Always-on deploy logging.** Default the deploy to tee stdout/stderr to
    `<comp_dir>/deploy-<timestamp>.log` (the comp dir already holds 0600 secret files, so a log
    there leaks nothing new). Until
