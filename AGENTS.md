@@ -69,8 +69,10 @@ cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxm
   engine-base preflight hard-fails; correct value is **955**) and no `TF_VAR_team_identifiers`
   (default identifiers 101… collide with nothing by themselves, but on a shared node 100–124 are
   *all* occupied — set it explicitly, e.g. `TF_VAR_team_identifiers=130,131`). The main `.env`
-  (targets .193) shipped `9088`, which exists on neither node; for cyberfield the ubuntu fix template
-  is **1007**. Correct template vmids by node: 955/1007 ubuntu, 951/1006 debian-lite, 1016/1015 fedora,
+  (targets .193) shipped `9088`, which exists on neither node — corrected to **1007** on 2026-10-02;
+  for cyberfield the ubuntu fix template is **1007**. Re-check this line before trusting any env
+  variant: a dead vmid here hard-fails the engine-base preflight, and every variant has carried one
+  at some point. Correct template vmids by node: 955/1007 ubuntu, 951/1006 debian-lite, 1016/1015 fedora,
   127/1019 alpine — see [docs/environment-facts.md](docs/environment-facts.md#templates).
 - `TF_VAR_teams` / `TF_VAR_boxes_per_team` in an old env are overridden by the comp dir at terraform
   time — stale values there are cosmetic, not fatal.
@@ -86,6 +88,24 @@ cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxm
 Then the normal flow: `create-competition.py --competition <id> --scoring-vmid <free> --plan-only`,
 real `--teams N --yes`, verify, destroy — all from the worktree root. Worked example:
 [svc-matrix-2026-09-28-report.md](docs/reports/svc-matrix-2026-09-28-report.md).
+
+## Editing and dispatch discipline
+
+Cheap habits that the session logs show being re-learned expensively:
+
+- **Read a file before editing it**, and prefer a small anchored edit over a large literal block.
+  The single most common tool failure in the recorded sessions is `File has not been read yet`
+  (40 times), followed by `File has been modified since read` (30) — the latter is concurrency, not
+  carelessness, so when several sessions share a tree expect it and re-read.
+- **No mutating shell commands from plan mode.** 36 permission denials, all `mode.plan.nonReadOnly`.
+- **Never re-dispatch an identical subagent task** after it fails. One session lost the same task
+  four times; a failed delegation is not a reason to send the same prompt again. Prompts should name
+  the artifact the subagent must produce, so a retry can see what already exists.
+- **Long operations are detached** — see
+  [usage-agents.md → Running a deploy that outlives your shell](docs/usage-agents.md#running-a-deploy-that-outlives-your-shell).
+  Never wrap a deploy in `timeout` to make it fit a tool call.
+- **Kill by pid or process group**, never `pkill -f` a pattern that also appears in the invoking
+  command line.
 
 ## Editing docs
 

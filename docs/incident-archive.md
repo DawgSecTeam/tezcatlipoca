@@ -682,3 +682,28 @@ the one concurrency signal that cannot lie, because the kernel drops it when the
 runs first in every preflight and refuses, naming the holder and the remedy;
 `TEZ_ALLOW_CONCURRENT=1` proceeds with a warning once blocks are coordinated.
 **Guard:** `tests/test_concurrent_deploys.py`.
+
+### The mgmt-IP preflight called a live foreign engine's address "free" (FIXED 2026-10-02)
+
+**Was:** two independent defects in `config_ops._engine_mgmt_ip_gate`, found by the first
+attempt of the same-type-2box practice run. It printed
+
+    Preflight: engine mgmt IP 10.0.0.250 is free (4 running guest(s) unverifiable — agent down)
+
+while a foreign competition's live `quotient-engine` was answering 10.0.0.250. The deploy built
+its engine-template VM on the same address and died at phase 2 with an opaque
+`ssh … exit status 255`.
+- The scan skipped guests on other nodes (`vm["node"] != node`), but `10.0.0.0/24` is one flat
+  segment: the foreign engine was on .193 and this deploy on .150, so the rows that mattered were
+  filtered out even though `/cluster/resources` had already returned them.
+- A guest whose agent was down was counted and skipped, and the gate then concluded "free" from an
+  absence of evidence — the state where it matters most.
+
+**Fix:** the scan is cluster-wide (the mgmt L2 is shared, so a guest on ANY node counts), and an
+unverifiable running guest makes the address UNKNOWN: refusing for the *default* ip (which nobody
+chose and every competition gets), a loud warning for an ip the operator set explicitly. The error
+names the taker (vmid, name, node) rather than just the address.
+**Guards:** `tests/test_engine_mgmt_ip.py`. The environment note is in
+[environment-facts.md](environment-facts.md#node-runtime-behavior).
+**Related:** `clean_engine_for_template` could have run on that foreign engine — the build-VM
+identity stamp (`engine_ops.assert_engine_build_identity`, FIXED the same day) is what refuses that.

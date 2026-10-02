@@ -140,6 +140,16 @@ sweep. **[live]**
 
 ## Node runtime behavior
 
+- **The management network is ONE flat `10.0.0.0/24` L2 shared by both hosts.** A VM on .193 and a
+  VM on .150 are on the same segment, so `TF_VAR_engine_mgmt_ip` (and `jump_mgmt_ip`) are contested
+  **cluster-wide**, not per node — the engine's default `10.0.0.250` is what every competition gets
+  unless someone sets otherwise. Live-found 2026-10-02: `10.0.0.250` was a foreign competition's
+  live `quotient-engine` (verified: `ssh sysadmin@10.0.0.250 hostname` → `quotient-engine`) while a
+  .150 practice deploy was handed the same address by default; the build VM came up on it and died
+  at phase 2 with an opaque `ssh … exit status 255`. **Always set an explicit, checked
+  `TF_VAR_engine_mgmt_ip` when anything else is running on the estate**; `.245`, `.246`, `.249` and
+  `.250` all answered on 2026-10-02. The preflight now scans cluster-wide and refuses the *default*
+  address when any guest is unverifiable (see `config_ops._engine_mgmt_ip_gate`). **[live/code]**
 - **netplan refuses world-readable configs** — the engine's team-NIC netplan files are mode `0600`.
   Verified on both running engines 2026-10-02. **[live]**
 - **Docker re-syncs iptables on every container start/restart**: `FORWARD` goes to `DROP` and the
