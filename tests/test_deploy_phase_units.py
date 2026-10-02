@@ -245,6 +245,26 @@ class Phase5RepairSweep(unittest.TestCase):
             p_fix.assert_called_once()
             self.assertTrue((comp_dir / ".postclone-swept").exists())
 
+    def test_a_lineup_with_no_postclone_configs_records_a_clean_verdict(self):
+        """Live-found 2026-10-02: a lineup whose configs are ALL golden-stage
+        (same-type-2box) never reached record_stage_coverage, so
+        `plant_coverage_failed` was never created and verify's coverage gate failed
+        closed on a completely clean run — "coverage was never recorded (pre-tally
+        deploy?)". "Nothing to plant post-clone" is a clean result, not an absent one."""
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = Path(d)
+            ctx = _ctx(comp_dir)
+            ctx.repair_config_path.write_text(json.dumps({"machines": []}))
+            with patch.object(deploy_phases, "run_nakon"), \
+                    patch.object(deploy_phases, "fix_services_on_boxes"), \
+                    patch.object(deploy_phases, "ensure_nat_forwarding"), \
+                    patch.object(deploy_phases, "compfile_flag", return_value=0), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                deploy_phases.phase5_repair_sweep(ctx)
+        self.assertIn("plant_coverage_failed", ctx.state)
+        self.assertEqual(ctx.state["plant_coverage_failed"], {})
+        self.assertEqual(ctx.state["nakon_failed_steps"], [])
+
     def test_repair_pass_records_the_stage_tally_and_persists_coverage(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)

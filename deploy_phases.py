@@ -503,6 +503,15 @@ def phase5_repair_sweep(ctx):
             deploy.record_stage_coverage(ctx.state, repair_machines, result, ctx.save_state)
         else:
             print("  No repair-stage configurations in this lineup — sweep skipped")
+            # Still record the verdict. A lineup whose configs are ALL golden-stage
+            # (same-type-2box-2026-09-29: apache/roundcube/bind + WinRM/IIS) never
+            # reaches record_stage_coverage, so the key was never created and verify's
+            # coverage gate failed closed on a completely clean run with "coverage was
+            # never recorded (pre-tally deploy?)" (live-found 2026-10-02). "Nothing to
+            # plant post-clone" is a clean result, not an absent one.
+            ctx.state.setdefault("plant_coverage_failed", {})
+            ctx.state.setdefault("nakon_failed_steps", [])
+            ctx.save_state()
         # fix_services right after the repair pass: it un-wedges sshd (the ssh-*
         # configs above restart sshd and can trip the start-limit), creates the
         # credlist OS accounts, and binds the services the golden stage installed.
@@ -545,6 +554,10 @@ def phase6_domains_and_final(ctx):
     # box's domain-join reboot. From here on the boxes are in their as-started
     # competition flavor — nothing downstream reboots them or needs apt/DNS.
     final_machines = json.loads(ctx.final_config_path.read_text())["machines"]
+    if not final_machines:
+        ctx.state.setdefault("plant_coverage_failed", {})
+        ctx.state.setdefault("nakon_failed_steps", [])
+        ctx.save_state()
     if final_machines:
         print(f"  Final-stage pass (disruption + boot-hostile) on {len(final_machines)} machine(s)...")
         ensure_nat_forwarding(ctx.tf_ctx)
