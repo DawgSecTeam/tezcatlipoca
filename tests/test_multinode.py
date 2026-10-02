@@ -367,7 +367,7 @@ class Phase1WavesSlotTest(unittest.TestCase):
 
 class ActivatePlacementTest(unittest.TestCase):
     def test_routes_keyed_by_pve_host_name(self):
-        from range_ops import _NODE_ROUTES, clear_node_routes
+        from range_ops import _NODE_ROUTES
         placement = {
             "engine_node": "hdd-150",
             "nodes": {"hdd-150": _rec("hdd-150", node="proxmox",
@@ -417,8 +417,8 @@ class MultinodePreflightResumeTest(unittest.TestCase):
         boxes = [{"name": "web01", "template": "ubuntu-fix", "memory_mb": 512}]
         teams = TEAMS
         # Colliding VMs on n2 would fatal under check_free=True; must pass on resume.
-        probes = {"n1": _probe("n1", templates=["ubuntu-fix"]),
-                  "n2": _probe("n2", templates=["ubuntu-fix"], collisions=[1700])}
+        {"n1": _probe("n1", templates=["ubuntu-fix"]),
+         "n2": _probe("n2", templates=["ubuntu-fix"], collisions=[1700])}
         with patch.dict(os.environ, {"TOK_N1": "t", "TOK_N2": "t"}), \
                 patch.object(nodes_ops, "record_of", side_effect=lambda pl, n: _rec(n)), \
                 patch.object(nodes_ops, "teams_on_node",

@@ -23,7 +23,6 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 import jump_ops  # noqa: E402
-import nodes_ops  # noqa: E402
 from nodes_ops import NodeRecord  # noqa: E402
 
 
