@@ -3,9 +3,11 @@
 import json
 import os
 import re
+import shlex
 import shutil
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -213,6 +215,7 @@ def guest_agent_exec_root(node, vmid, script, timeout=60, shell="bash"):
         "POST", f"/nodes/{node}/qemu/{vmid}/agent/exec",
         data={"command": [shell, "-c", script]},
     )["data"]["pid"]
+    last = {}
     deadline = time.time() + timeout
     while time.time() < deadline:
         s = proxmox_api(
@@ -221,8 +224,9 @@ def guest_agent_exec_root(node, vmid, script, timeout=60, shell="bash"):
         )["data"]
         if s.get("exited"):
             return s.get("exitcode", -1), s.get("out-data", ""), s.get("err-data", "")
+        last = s
         time.sleep(1)
-    raise RuntimeError(f"guest-agent exec on vmid {vmid} didn't finish within {timeout}s")
+    raise RuntimeError(_exec_timeout_message(vmid, pid, timeout, last))
 
 
 def guest_agent_exec_windows(node, vmid, ps_script, timeout=120):
@@ -236,6 +240,7 @@ def guest_agent_exec_windows(node, vmid, ps_script, timeout=120):
             "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded,
         ]},
     )["data"]["pid"]
+    last = {}
     deadline = time.time() + timeout
     while time.time() < deadline:
         s = proxmox_api(
@@ -244,8 +249,99 @@ def guest_agent_exec_windows(node, vmid, ps_script, timeout=120):
         )["data"]
         if s.get("exited"):
             return s.get("exitcode", -1), s.get("out-data", ""), s.get("err-data", "")
+        last = s
         time.sleep(1)
-    raise RuntimeError(f"guest-agent exec on vmid {vmid} didn't finish within {timeout}s")
+    raise RuntimeError(_exec_timeout_message(vmid, pid, timeout, last))
+
+
+def _exec_timeout_message(vmid, pid, timeout, status):
+    """Explain a guest-exec timeout instead of just naming it.
+
+    A bare "didn't finish within Ns" gives an operator nothing to act on, and five
+    exec logs carry exactly that at the 120s cap (live-found 2026-09-26..10-01). The
+    agent already holds the partial output by the time we give up — include it, and
+    point at the detached path for work that legitimately outlives a poll budget.
+    """
+    status = status or {}
+    detail = []
+    for label, key in (("stdout", "out-data"), ("stderr", "err-data")):
+        text = str(status.get(key) or "").strip()
+        if text:
+            detail.append(f"{label} so far: {text[-400:]!r}")
+    tail = ("; " + "; ".join(detail)) if detail else ""
+    return (f"guest-agent exec pid={pid} on vmid {vmid} did not finish within {timeout}s"
+            f"{tail}. For work that can outlive the budget, call "
+            f"guest_agent_exec_detached() (nohup + log polling) rather than raising "
+            f"the timeout.")
+
+
+class DetachedExecResult(NamedTuple):
+    """`rc` is the script's exit status; `log` is the tail of the guest-side log;
+    `log_path` is where that log lives ON THE GUEST (not stderr — a detached run
+    has one merged stream, and the file outlives the call)."""
+
+    rc: int
+    log: str
+    log_path: str
+
+
+# Written by the same shell that ran the payload, so it cannot appear in the log
+# before the payload has finished.
+DETACHED_RC_MARKER = "__TZ_DETACHED_RC="
+
+
+def guest_agent_exec_detached(node, vmid, script, log_path, timeout=1800,
+                              shell="bash", poll_interval=5):
+    """Run a long root script via the guest agent without holding the exec channel open.
+
+    The agent's exec channel is a poll loop with a caller-set budget, so work that
+    legitimately outlives that budget (apt installs, nakon bundles, service fixups)
+    used to die mid-plant with a timeout — and the plant's partial effects stayed on
+    the box. This starts the payload under setsid+nohup, redirects it to a log on the
+    guest, and polls that log for a completion marker, so `timeout` is a real deadline
+    rather than a request/response budget.
+
+    Returns DetachedExecResult(rc, log_tail, log_path). The log survives a dropped
+    agent channel, so a timeout here is diagnosable after the fact on the guest.
+    """
+    qlog = shlex.quote(log_path)
+    # A subshell keeps an `exit` inside the payload from skipping the rc marker, and
+    # the marker is written by the same shell that ran the payload — so it cannot
+    # appear in the log before the payload has finished.
+    body = (f"( {script}\n); __tz_rc=$?; "
+            f'printf "%s%s\\n" "{DETACHED_RC_MARKER}" "$__tz_rc" >> {qlog}')
+    wrapper = (f"rm -f {qlog}; "
+               f"setsid nohup {shell} -c {shlex.quote(body)} "
+               f"> {qlog} 2>&1 < /dev/null & echo started")
+    proxmox_api(
+        "POST", f"/nodes/{node}/qemu/{vmid}/agent/exec",
+        data={"command": [shell, "-c", wrapper]},
+    )
+
+    deadline = time.time() + timeout
+    last_log = ""
+    while time.time() < deadline:
+        time.sleep(poll_interval)
+        try:
+            _rc, out, _err = guest_agent_exec_root(
+                node, vmid, f"tail -c 4000 {qlog} 2>/dev/null || true", timeout=30)
+        except Exception:
+            # A transient agent hiccup is expected while the payload churns; the log
+            # on the guest is the durable record, so keep polling until the deadline.
+            continue
+        last_log = out or ""
+        marker_at = last_log.rfind(DETACHED_RC_MARKER)
+        if marker_at != -1:
+            tail = last_log[marker_at + len(DETACHED_RC_MARKER):].strip()
+            rc_text = tail.splitlines()[0].strip() if tail else ""
+            try:
+                rc = int(rc_text)
+            except ValueError:
+                rc = -1
+            return DetachedExecResult(rc, last_log, log_path)
+    raise RuntimeError(
+        f"guest-agent detached exec on vmid {vmid} did not finish within {timeout}s "
+        f"(log on the guest: {log_path}). Last log tail: {last_log[-400:]!r}")
 
 
 def wait_for_guest_agent(node, vmid, timeout=300):
@@ -259,7 +355,22 @@ def wait_for_guest_agent(node, vmid, timeout=300):
         except Exception:
             pass
         time.sleep(5)
+    # Never raises — callers depend on the boolean — but a silent False is how a
+    # 45-minute escalation looks like progress (observed 600 -> 1200 -> 2700 -> 2900s
+    # for one vmid). Say what the VM is actually doing instead.
+    print(f"    guest agent on vmid {vmid} did not answer within {timeout}s{_vm_state_suffix(node, vmid)}")
     return False
+
+
+def _vm_state_suffix(node, vmid):
+    """Best-effort ' (status=running, name=…)' for a failed agent wait. Never raises."""
+    try:
+        cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+        status = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/status/current")["data"]
+        return (f" (status={status.get('status', '?')}, name={cfg.get('name', '?')}, "
+                f"lock={cfg.get('lock') or 'none'})")
+    except Exception as e:
+        return f" (state unavailable: {e})"
 
 
 
