@@ -227,7 +227,18 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
     try:
         vms = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
     except Exception as e:
-        raise SystemExit(f"  ERROR: Proxmox API unreachable during preflight: {e}")
+        # The API port IS the node's liveness signal. A site outage once left the tailnet
+        # bridge answering ICMP *for itself* while forwarding nothing, so "ping works"
+        # recovered hours before any TCP did (2026-09-24, ~10h outage) — never diagnose a
+        # node from ping. `curl -k https://<node>:8006/` returning any HTTP code but 000
+        # is the check that means something.
+        raise SystemExit(
+            f"  ERROR: Proxmox API unreachable during preflight: {e}\n"
+            f"         This is the liveness check that counts — do NOT judge the node by "
+            f"ping: during the 2026-09-24 outage the bridge answered ICMP while forwarding "
+            f"nothing. Probe the API port directly (curl -k https://<node>:8006/ — any "
+            f"HTTP code except 000 is up). Deploy state survives an outage; on recovery "
+            f"resume with --from-phase rather than restarting.")
     tagged = set()
     tagged_by_name = {}
     for vm in vms:
