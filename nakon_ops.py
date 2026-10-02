@@ -30,6 +30,10 @@ from constants import (
 )
 from ssh_ops import _engine_opts
 from utils import is_unmanaged
+# Single shared definition (windows_ops): nakon's per-machine OS tagging must agree with
+# the deploy/golden_ops target split and redeploy's box_platform. This module used to carry
+# its own copy plus a private alias, with nothing enforcing that they stayed identical.
+from windows_ops import is_windows_template
 
 _ENGINE_LOCKS = {}  # lock path -> open fh (kept referenced so the flock survives)
 
@@ -340,10 +344,6 @@ def release_engine_lock():
         del _ENGINE_LOCKS[path]
 
 
-def _is_windows_template(template_name):
-    return "win" in template_name.lower()
-
-
 def os_to_platform(template):
     """Classify a free-text template name the way nakon does: 'windows' if it has 'win'."""
     return "windows" if "win" in template.lower() else "linux"
@@ -451,7 +451,7 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
         configurations.sort(
             key=lambda c: (c if isinstance(c, str) else c["name"]) in DISRUPTIVE_CONFIGS
         )
-        windows = _is_windows_template(box["template"])
+        windows = is_windows_template(box["template"])
         machines.append({
             "id": i,
             "name": f"{box['name']}-team{team['identifier']}",
@@ -813,7 +813,3 @@ def _run_single_nakon_config(machine, configurations, key, scoring_user, scoring
         pending_path.unlink(missing_ok=True)
         raise
     os.replace(pending_path, final_path)
-
-
-def is_windows_template(template_name):
-    return _is_windows_template(template_name)
