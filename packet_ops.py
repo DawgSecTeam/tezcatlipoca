@@ -21,7 +21,7 @@ from pathlib import Path
 
 import yaml
 
-from constants import MAX_BOXES_PER_TEAM
+from constants import MAX_BOXES_PER_TEAM, REQUIRED_VARS
 from quotient.setup import _SERVICE_TO_CHECK
 from utils import is_legacy_account_name, valid_comp_name, valid_unix_username
 
@@ -70,6 +70,15 @@ def team_domain_parts(name_template):
     return pieces[0], pieces[1]
 
 
+def _has_control_chars(value):
+    """True for newlines / C0 controls / DEL. The Compfile is line-oriented
+    (utils.load_compfile splits on newlines into `key value`), so a newline in any
+    interpolated field silently truncates the value or injects arbitrary keys —
+    a YAML `|` block scalar with a trailing newline is enough (audit-found 2026-10-02:
+    event.name/event.scenario/domain.name_template reach compile_profile raw)."""
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in str(value))
+
+
 def load_profile(path):
     path = Path(path)
     if not path.exists():
@@ -97,12 +106,25 @@ def validate_profile(p):
         err(f"event.comp_id {comp_id!r} must be a valid competition name ([a-z0-9._-])")
     if not (event.get("name") or "").strip():
         err("event.name is required (scoreboard/event title)")
+    elif _has_control_chars(event["name"]):
+        err(f"event.name {event['name']!r} contains a control character/newline — the "
+            "Compfile is line-oriented, so it would inject arbitrary keys or truncate "
+            "the title")
+    scenario = event.get("scenario")
+    if scenario is not None and _has_control_chars(scenario):
+        err(f"event.scenario {scenario!r} contains a control character/newline — the "
+            "Compfile is line-oriented, so it would inject arbitrary keys or truncate "
+            "the scenario")
     difficulty = event.get("difficulty")
     if not isinstance(difficulty, int) or not 1 <= difficulty <= 10:
         err(f"event.difficulty must be an int 1-10 (got {difficulty!r})")
 
     domain = p.get("domain") or {}
     if domain.get("name_template"):
+        if _has_control_chars(domain["name_template"]):
+            err(f"domain.name_template {domain['name_template']!r} contains a control "
+                "character/newline — it is split into the Compfile domain_prefix/"
+                "domain_suffix lines, so it would inject arbitrary keys")
         try:
             team_domain_parts(domain["name_template"])
         except SystemExit as e:
@@ -115,6 +137,60 @@ def validate_profile(p):
     elif is_legacy_account_name(box_username):
         err(f"credentials.box_username {box_username!r} collides with a legacy distro "
             "system account (cloud-init would adopt it and brick auth)")
+    box_password = creds.get("box_password")
+    if box_password is not None:
+        if not isinstance(box_password, str) or not box_password:
+            err(f"credentials.box_password must be a non-empty string "
+                f"(got {box_password!r})")
+        else:
+            # The 8-char floor is a Windows local-account rule (net user / the guest
+            # agent push during bootstrap), so it applies to box_password itself, not
+            # just the baseline credlist users build_baseline filters (audit-found
+            # 2026-10-02). Linux-only lineups have no such floor.
+            win_boxes = [b.get("name") for b in (p.get("boxes") or [])
+                         if not b.get("unmanaged")
+                         and _platform_of(b.get("template")) == "windows"]
+            if win_boxes and len(box_password) < 8:
+                err(f"credentials.box_password is {len(box_password)} chars but Windows "
+                    f"box(es) {win_boxes} need >= 8 — bootstrap's net user/guest-agent "
+                    "push dies with InvalidPasswordException (live-found 2026-09-30)")
+    out_of_scope = creds.get("out_of_scope")
+    if out_of_scope is not None:
+        if not isinstance(out_of_scope, list):
+            err(f"credentials.out_of_scope must be a list of usernames "
+                f"(got {type(out_of_scope).__name__})")
+        else:
+            # These become local-user/local-user-win USERNAME vars on every managed
+            # box (build_baseline), so they get the same name rules as credlist users.
+            for user in out_of_scope:
+                if not valid_unix_username(str(user)):
+                    err(f"credentials.out_of_scope: username {user!r} must match "
+                        "[a-z_][a-z0-9_-]*")
+                elif is_legacy_account_name(str(user)):
+                    err(f"credentials.out_of_scope: {user!r} collides with a legacy "
+                        "distro system account")
+    accounts = creds.get("domain_accounts")
+    if accounts is not None:
+        if not isinstance(accounts, list):
+            err(f"credentials.domain_accounts must be a list of "
+                f"{{username, password, ...}} mappings (got {type(accounts).__name__})")
+        else:
+            for i, acct in enumerate(accounts):
+                where = f"credentials.domain_accounts[{i}]"
+                if not isinstance(acct, dict):
+                    err(f"{where} must be a mapping with username/password "
+                        f"(got {acct!r})")
+                    continue
+                # domain_ops adds each account at phase 6 (acct["username"] /
+                # acct["password"]), after DC promotion — a missing key is a KeyError
+                # ~40 minutes into a live deploy. AD names may be mixed-case (CDE's
+                # Red/Blue/...), so only presence/type is checked, not the unix regex.
+                if not isinstance(acct.get("username"), str) or not acct["username"].strip():
+                    err(f"{where}.username is required and must be a non-empty string "
+                        f"(got {acct.get('username')!r})")
+                if not isinstance(acct.get("password"), str) or not acct["password"]:
+                    err(f"{where}.password is required and must be a non-empty string "
+                        f"(got {acct.get('password')!r})")
     credlists = creds.get("credlists") or {}
     unknown_lists = set(credlists) - {"linux", "domain"}
     if unknown_lists:
@@ -209,6 +285,25 @@ def validate_profile(p):
             err(f"service {s.get('name')!r}: pin {pin!r} has no Quotient check mapping — it "
                 f"would plant but score nothing. Fix the name, use a score-only pin "
                 f"({SCORE_PIN_PREFIX}<check>), or mark it `scored: false` (plant-only)")
+        # fidelity is required like boxes[].fidelity: the honesty report defaults a
+        # missing value to "exact" (render_fidelity), silently claiming parity the
+        # packet may not have (audit-found 2026-10-02).
+        fidelity = s.get("fidelity")
+        if fidelity not in FIDELITY_LEVELS:
+            err(f"service {s.get('name')!r}: fidelity must be one of {FIDELITY_LEVELS} "
+                f"(got {fidelity!r}) — the honesty report would otherwise claim 'exact'")
+        svc_vars = s.get("vars")
+        if svc_vars is not None and not isinstance(svc_vars, dict):
+            err(f"service {s.get('name')!r}: vars must be a mapping (got {svc_vars!r})")
+        # REQUIRED_VARS "literal" vars must be pinned at compile time, not discovered
+        # at deploy start (nakon_ops._validate_pin_vars) after the golden is built.
+        # Identity kinds are exempt: they are auto-filled per machine.
+        required = REQUIRED_VARS.get(str(pin)) or {}
+        missing = [v for v, kind in required.items()
+                   if kind == "literal" and v not in (svc_vars or {})]
+        if missing:
+            err(f"service {s.get('name')!r}: pin {pin!r} needs var(s) {missing} — add "
+                f"them to this service's `vars:` (a bare pin fails mid-plant rc=2)")
         display = (s.get("display") or "").strip()
         if not display and not plant_only:
             err(f"service {s.get('name')!r}: display is required (scoreboard uniqueness "
