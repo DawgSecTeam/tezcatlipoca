@@ -12,16 +12,18 @@ in `tests/` replaces it.
 python3 -m pytest tests/ -q          # the whole suite; prints the current count
 python3 -m pytest tests/test_packet_compile.py -q
 python3 -m pytest tests/ -q -k frozen
+git ls-files tests/                  # the current file list — don't hard-code it here
 ```
 
 No fixtures or `conftest.py` exist; each file is standalone `unittest`-style and safe to run in any
 order. A handful skip themselves when an optional tool is missing (e.g. `pyflakes` in
 `test_smoke.py`), so a skip is not a pass.
 
-## What the 31 files cover
+## What the files cover
 
 Grouped by what they protect. Several exist because of a specific incident — those carry the run
-name in the docstring, which is the fastest way to find the "why".
+name in the docstring, which is the fastest way to find the "why". File set and test count both
+drift, so read them from `git ls-files tests/` and the pytest run above rather than from this table.
 
 **Range/config contracts**
 
@@ -45,6 +47,9 @@ name in the docstring, which is the fastest way to find the "why".
 | `test_golden_disk.py` | Golden-set disk sizing (svc-matrix: a 15 GB template disk filled mid-plant) |
 | `test_root_disk_expansion.py` | Guest-side root-disk expansion (regression-4x1: cloud-init/partition parsing on btrfs) |
 | `test_interrupted_clone.py` | Interrupted-clone recovery (winad-testrun rec 3): clone marker, stale-lock unlock, orphan handling |
+| `test_golden_boot_smoke.py` | The boot-smoke gate (2026-09-24 `systemd-system-masked`): stop → smoke → convert ordering, fail-closed tri-state, the `golden_boot_smoke 0` waiver, throwaway-clone teardown |
+| `test_parallel_golden.py` | `build_golden_set`'s snapshot/convert passes on the 4-worker pool without weakening the boot-smoke barrier or the delete-snapshot→convert ordering |
+| `test_nakon_stages.py` | Three-stage split safety: the golden identity ban on both golden paths (slot 0 and every satellite), and the combined post-clone pin merge |
 
 **Deploy robustness**
 
@@ -62,6 +67,27 @@ name in the docstring, which is the fastest way to find the "why".
 | `test_verify_domains.py` | `check_domains` fails closed on DSID shape, role-file schema, and box names |
 | `test_verify_injects.py` | verify's closed-inject warning (winad-scrim2: every inject read as closed) |
 
+**Deploy module split, sequencing & the pipeline API (2026-10-01/02)**
+
+| File | Guards |
+|---|---|
+| `test_deploy_sequencer.py` | The sequencer after the phase split: phase order, checkpoint gating (only a phase that ran may write `last_phase`), the byte-identical one-banner-per-phase set, the terraform-context hook between phases 2 and 3, and the mid-phase failure/resume hint |
+| `test_deploy_phases.py` | Phase-boundary defects offline: the M4 golden hash loop (every box gets an entry, unmanaged included), the `--from-phase` resume guard against `last_phase`, and phase 6's always-persist coverage repair |
+| `test_deploy_phase_units.py` | Per-phase units for the extracted `deploy_phases.py` — the branching, ordering and state writes that used to be buried in `deploy()`, with every infra call patched |
+| `test_pipeline_api.py` | `pipeline_api`'s explicit surface: one minimal `__all__`, every name resolved from the module that owns it, and no return of the importlib `driver` loader |
+| `test_helper_dedup.py` | One definition per shared helper (audit 2026-10-02): `is_windows_template`, `os_to_platform`, and the generated-secret charset cannot be silently re-duplicated |
+| `test_engine_steps.py` | engine_ops: every remote step names itself when it fails (timeout/non-zero instead of an undifferentiated SSH argv), and the Quotient `.env` secrets never appear in argv |
+| `test_destroy_teardown.py` | `terraform destroy` is bounded per attempt and a timeout is a retryable failure (pfsense-rvb: a hung Windows-DC destroy held the lock and printed nothing) |
+| `test_redeploy_state.py` | `.deploy_state.json` writers all go through `config_ops.write_state` (D1, winad-testrun), and redeploy's Linux hardening order holds (sudoers grant before the DNS fix) |
+| `test_jump_parallel.py` | `build_jump_vms` runs satellites concurrently (bound 4) without dropping one or turning a hard abort into a partial build (multinode-spread-2026-09-30) |
+
+**verify's gate model**
+
+| File | Guards |
+|---|---|
+| `test_verify_gates.py` | verify gate correctness, each against a reproduced defect (D1–D8): fail-closed plant coverage, tri-state SKIP semantics, the isolation decision table, strict-services freshness, and the SUMMARY/exit-code single source of truth (`--allow-unverified`) |
+| `test_parallel_verify.py` | verify's domain / misconfig-survival / beacon loops on the 8-worker pool, with parallel and re-serialised runs producing byte-identical stdout and the same statuses and exit code |
+
 **Packets, scrim, hygiene**
 
 | File | Guards |
@@ -71,8 +97,11 @@ name in the docstring, which is the fastest way to find the "why".
 | `test_blue_watchdog.py` | The blue watchdog script shape (pure string build, no SSH) |
 | `test_amongus_cde.py` | amongus-cde-2026 wiring: Windows service mappings and post-domain AD configs |
 | `test_multinode.py` | Multi-node placement, jump rules, slot vmid math, and the sync planner — all offline (the largest file) |
-| `test_secret_hygiene.py` | Repo hygiene: no secret-bearing file is tracked, and no env var drifts (the `INTERNAL_ENV` allowlist lives here) |
+| `test_secret_hygiene.py` | Repo hygiene: no secret-bearing file is tracked, and no env var drifts — it fails the suite if code reads a variable neither declared in `.env.example` nor allowlisted in `INTERNAL_ENV` |
 | `test_bundle_lint.py` | Bundle var-lint false positives that once blocked a valid deploy (live-found 2026-09-26) |
+| `test_packet_validation.py` | Compile-boundary packet shapes that used to survive `validate_profile` and die later in a live deploy — some only at phase 6, after DC promotion (D3) |
+| `test_service_fixups.py` | `fix_services_on_boxes`' generated hardening script is **byte-identical** to the pre-refactor output across the full service case matrix |
+| `test_scrim_defects.py` | The red-vs-blue scrim defect audit findings D1–D12 (process-tree timeouts, worker supervision, lineup, secret hygiene) — each pins a live-only failure path |
 
 ## Adding one
 
@@ -85,10 +114,11 @@ name in the docstring, which is the fastest way to find the "why".
    is the pattern.
 3. Put the incident or invariant in the module docstring, first line, with the run name if there is
    one. That is what makes a later failure legible.
-4. If your test reads an environment variable, add it to `INTERNAL_ENV` in
-   `tests/test_secret_hygiene.py` **or** document it in
-   [usage-people.md](usage-people.md#configure-the-event) — the hygiene test fails the suite
-   otherwise, by design.
+4. If your code reads a new environment variable, declare it in `.env.example` (the naming
+   standard there: `TF_VAR_<name>` / `TEZ_<NAME>` / `NAKON_*`/`VULNDB_*`) and add it to
+   [usage-people.md](usage-people.md#configure-the-event). A variable that is none of those kinds
+   must be listed in `INTERNAL_ENV` in `tests/test_secret_hygiene.py` with a reason;
+   `test_secret_hygiene.py` fails the suite otherwise, by design.
 5. Run `python3 -m pytest tests/ -q` and make sure the count went **up**.
 
 ## What the suite deliberately does not do

@@ -3,7 +3,7 @@
 The "why" behind individual symbols, constants, timeouts, orderings, and workarounds — largely the
 content that used to live only as comments and docstrings beside the code (much of it was stripped
 from the code in `af7468c`, so deleting a note here is not always recoverable from source). Verified
-against the tree 2026-10-01; re-verify before acting on a line, especially timeouts and symbol names.
+against the tree 2026-10-02; re-verify before acting on a line, especially timeouts and symbol names.
 
 [architecture.md](architecture.md) owns the system-level view (overview, the seven phases, the
 component map, data flow, network/isolation, the snapshot table, the nakon contract, the secrets
@@ -14,7 +14,8 @@ consequence is repeated here. The agent-scrim trio (`run-agent-scrim.py`, `scrim
 
 `constants.py` · `utils.py` · `ssh_ops.py` · `range_ops.py` · `config_ops.py` · `nakon_ops.py` ·
 `engine_ops.py` · `windows_ops.py` · `hardening_ops.py` · `golden_ops.py` · `template_ops.py` ·
-`domain_ops.py` · `timing.py` · `deploy.py` · `create-competition.py` · `destroy-competition.py` ·
+`domain_ops.py` · `timing.py` · `deploy.py` · `deploy_phases.py` · `pipeline_api.py` ·
+`create-competition.py` · `destroy-competition.py` ·
 `redeploy-competition.py` · `verify-competition.py` · `generate-packet.py` ·
 `packet_ops`/`compile-packet`/`run-schedule` · multinode & sync · `quotient/setup.py` ·
 `terraform/main.tf` · `terraform/variables.tf` · Conventions
@@ -55,7 +56,7 @@ Compfile/`users.json` loading, DNS-fix command strings, the concurrency helper. 
 | `BOX_USERNAME_DEFAULT` / `CREDLIST_USERNAMES_DEFAULT` | `ubuntu` / `["admin","user1","user2"]` — fallbacks when no `users.json` exists; themeable per competition since. |
 | `load_users_config()` | Box login + 3 credlist usernames from `competitions/<id>/users.json`, falling back per field. |
 | `load_compfile()` | key=value parser; skips blank lines and valueless keys; non-numeric `difficulty` degrades to 0 rather than raising. |
-| `compfile_flag()` | Integer Compfile knob reader (e.g. `team_beacons 1`); returns the default when the key or file is absent, so old Compfiles keep their behavior. |
+| `compfile_flag()` | Integer Compfile knob reader (e.g. `team_beacons 1`, `golden_boot_smoke 0`); returns the default when the key or file is absent, so old Compfiles keep their behavior. |
 | `run_concurrent(items, fn, max_workers=8)` | The one thread-pool helper. Returns an **index-aligned list** (each slot holds fn's value or the exception — never raised here); an earlier dict-keyed version broke on unhashable items and was live-fixed 2026-09-24. Per-box budgets are independent; prints go through `PRINT_LOCK`. Aggregate semantics: `wait_for_boxes_ssh`/`fix_dns_on_boxes` abort only when **all** boxes fail; `prep_apt_on_boxes`/`fix_services_on_boxes` warn per box; `setup_ubuntu_auth` raises if any box ends without working auth (all boxes still attempted, for diagnostics). Pool cap 8 sits well under the engine's raised sshd `MaxSessions` 64. `fix_services_on_boxes` keeps per-box script *construction* serial, parallelizing only execution. |
 | `pick_competition()` | Shared interactive picker used by destroy/redeploy. |
 
@@ -74,7 +75,7 @@ run without the package import.
 | `wait_for_ssh()` / `wait_for_http()` | Poll-based, never raise: warn and continue on timeout. Deploy aborts only when *every* target of a phase is unreachable. |
 | `wait_for_boxes_ssh()` | Polls each target through the gateway; Windows is probed via guest agent (no key auth exists). Raises only if **all** boxes fail — that looks systemic, and aborting beats burning through the DNS/auth/nakon retry loops for boxes already known unreachable. |
 | `wait_for_cloud_init()` | cloud-init can revert planted perms (sudoers, sshd_config) after a clone, so it must finish before nakon plants anything. Windows is skipped (no cloud-init; `bootstrap_windows_box()` is its equivalent). Exit code 2 means done with non-fatal warnings — still finished, still success. |
-| `is_windows_template()` | `"win" in template_name.lower()`; one of three identical definitions (see `create-competition.py` for why all three must agree). |
+| `is_windows_template()` | `"win" in template_name.lower()` — **one** definition, in `windows_ops.py`; `deploy`, `golden_ops`, `nakon_ops` and `ssh_ops` all import it (deduplicated 2026-10-02: there used to be three copies with nothing enforcing that they agreed, and a silent divergence builds the wrong range). |
 
 ## range_ops.py
 
@@ -230,8 +231,8 @@ Post-nakon hardening and DNS/auth fixes over the gateway, with guest-agent fallb
 
 Golden-set build and template conversion (M3.1). One VM per box type is full-cloned from the base
 templates to `engine_vmid + 150 + box_idx`, planted with the **golden stage** (strict, tz-base
-rollback guard on re-entry), cloud-init-cleaned, stopped, and converted with `qm template`. Terraform
-apply #2 then link-clones every team from those templates.
+rollback guard on re-entry), cloud-init-cleaned, stopped, boot-smoked, and converted with
+`qm template`. Terraform apply #2 then link-clones every team from those templates.
 
 | Topic | Note |
 |---|---|
@@ -240,6 +241,8 @@ apply #2 then link-clones every team from those templates.
 | resume routing | All golden vmids already templates → skip; some exist as plain VMs → roll the tz-base-marked ones back and re-plant, clone the missing; a *partially converted* set is fatal (templates cannot be un-templated) — destroy and redeploy. M4 exception: partial conversion is fine when every converted vmid's description hash matches its expected hash (selective rebuild / added box type), and only **unconverted slots** are worked on. Cold (unbooted DC) slots: any plain VM is a dead attempt that may have booted and specialized, so it is destroyed and FULL-cloned from the generalized base, then converted **without ever booting**. |
 | `unbooted_golden_boxes()` | Absent `domain_roles.json` = no-domain lineup (empty set). A present-but-invalid file (unparseable, non-map, role outside `dc`/`member`, or a name absent from `boxes.json`) raises rather than silently widening the booted set — the silent fallback would hand the DC a booted shared golden, the exact duplicate-DomainSID failure the unbooted split prevents. |
 | Windows identity | Linked clones see the same bytes a full clone would; SIDs already duplicate across teams (only the original templates are sysprepped) and stay unique within a team. Live-checked 2026-09-24: phase 6 never re-syspreps. |
+| `golden_boot_smoke()` (Compfile `golden_boot_smoke`, default ON) | The invariant "no boot-hostile config rides the golden" used to be enforced by a comment and the hand-maintained `FINAL_STAGE_CONFIGS` set, and it failed for real on 2026-09-24: `systemd-system-masked` planted into a golden disk left **every** linked clone bootless (`strict=True` cannot catch it — the plant exits 0 while the disk is unbootable, and the golden's own running system still answers). After the goldens are stopped and before any conversion, one **throwaway FULL clone per booted golden** is booted and must reach multi-user (guest agent for Windows). Tri-state and fail-closed: `verified-unbootable` and `could-not-verify` both **raise**, so a `POST /template` for that golden never happens. Cold/unbooted DC goldens deliberately skip it (they are converted without ever booting, by design). Setting `golden_boot_smoke 0` skips the gate and prints that the invariant is UNVERIFIED. Honest cost: a full clone + boot per booted box type — PVE only linked-clones templates, and the point is to verify *before* this golden becomes one. Detail: [benchmark-m02.md](benchmark-m02.md) and [known-issues.md](known-issues.md#boot-hostile-golden-config-left-every-linked-clone-bootless-2026-09-24). |
+| per-box passes run on a bounded pool (4) | The snapshot, password, cloud-init-clean and convert loops were serial; each unit is independent per-box Proxmox work, so they run through `utils.run_concurrent(max_workers=4)` — the same bound `deploy.py` uses for Windows bootstrap and the `tz-base`/`tz-ready` snapshots. Bound 4, not 8: each unit drives a Proxmox task. The `boot_smoke` block is a hard barrier ahead of conversion, and the full-clone loops stay serial (crash-consistent copies saturate the datastore). |
 | root-disk expansion | The golden's root fs is expanded guest-side before the plant. A Fedora btrfs root reports `/dev/sda3[/root]`; the bracketed suffix breaks the partition-digit parse and resize2fs cannot grow btrfs, so expansion strips the suffix, grows btrfs natively, and tolerates a late `/dev/dm-N` (`dmsetup mknodes`). Failures retry, then fail hard only when the root fs is measurably too small (regression-4x1 shape — the 15 GB ubuntu template disk filled mid-plant); unmeasurable warns and continues. |
 
 ## template_ops.py (M4)
@@ -291,7 +294,7 @@ when the node's template hash differs from the verified record.
 Per-team AD forests: DC promotion and member joins. Driven by `domain_roles.json`; no-op when absent.
 The **sequencing** (why the ADDS reboot needs its own single-machine pass, why the domain chain runs
 before the final stage, DSRM/SRV waits) is canonical in
-[architecture.md](architecture.md#windows-path) and [deploy.py](#deploypy); the internals-only notes:
+[architecture.md](architecture.md#windows-path) and [deploy.py](#deploypy--deploy_phasespy); the internals-only notes:
 
 | Topic | Note |
 |---|---|
@@ -312,15 +315,21 @@ safely. `print_timing_summary` totals seconds per (phase, op) at deploy end. Bas
 deploys (see [benchmark-m02.md](benchmark-m02.md), [benchmark-m04.md](benchmark-m04.md)), not
 synthetic ones.
 
-## deploy.py
+## deploy.py + deploy_phases.py
 
-The seven-phase orchestrator and CLI. `deploy()` owns phase sequencing, resume, and credential
-generation. The phase list and the v1→v2 renumbering are canonical in
-[architecture.md](architecture.md#seven-phase-deploy); the internals-specific notes:
+Two modules, one pipeline. `deploy.py` is orchestration: `DeployContext`, `prepare()`, the
+sequencer `deploy()` (which walks `deploy_phases.PHASES`), the resume guard, and the CLI. Every
+phase function and its helpers (`connect_terraform`, `finish_deploy`, `destroy_node_waves`) live
+in `deploy_phases.py`, which reaches back into `deploy` for the pure phase helpers and the globals
+the offline tests monkeypatch — hence `deploy()`'s function-local `from deploy_phases import …`
+(a module-level import would be circular). The phase list and the v1→v2 renumbering are canonical
+in [architecture.md](architecture.md#seven-phase-deploy); the internals-specific notes:
 
 | Topic | Note |
 |---|---|
-| resume semantics (`from_phase > 1`) | Skips the destructive [1/7] cleanup and [2/7] terraform apply, and reloads teams + per-run secrets from `.deploy_state.json` so the resume agrees with what was already deployed. After each numbered phase the last-completed number is checkpointed; on failure the exact resume command is printed. `--from-phase N` with **no** state file is a hard `SystemExit` (without it, the fresh-deploy branch minted NEW passwords and overwrote `teams.json` while phases 1–2 were skipped, desyncing the range from its credentials). A state file with a different `pipeline_version` also refuses — the phase numbers mean different things. |
+| `prepare()` | Everything before phase 1, as one testable step. Contract (its docstring): resolve the engine vmid, load `Compfile`/config/state, mint or reuse the run's secrets, compute multi-node placement, generate the nakon + stage configs, compute the golden hashes and run the frozen gate, assemble `terraform.tfvars.json`, run preflight, and enumerate the targets. Returns `None` when the operator declines confirmation, so `deploy()` returns without running any phase. The `.deploy.lock` is taken by `deploy()`, not here, and nothing in `prepare()` destroys anything. |
+| `ctx.save_state()` / `checkpoint(n)` | `save_state` delegates to `config_ops.write_state` (atomic `os.replace` + 0600-at-creation) — the single writer for `.deploy_state.json`, which holds the only copy of the box passwords. `checkpoint(n)` records `last_phase = n`, the resume guard's only source of truth. |
+| resume semantics (`from_phase > 1`) | Skips the destructive [1/7] cleanup and [2/7] terraform apply, and reloads teams + per-run secrets from `.deploy_state.json` so the resume agrees with what was already deployed. After each *executed* numbered phase the last-completed number is checkpointed (a resumed-past phase is called for its banner but never checkpointed); on failure the exact resume command is printed. `--from-phase N` with **no** state file is a hard `SystemExit` (without it, the fresh-deploy branch minted NEW passwords and overwrote `teams.json` while phases 1–2 were skipped, desyncing the range from its credentials). A state file with a different `pipeline_version` also refuses — the phase numbers mean different things. And `guard_resume_from_phase()` refuses `--from-phase N` when `N > last_phase + 1`: the skipped phases are what build the machines the later ones target, so a resume there buries the real failure in downstream errors. `--force-from-phase` is the deliberate override, for a checkpoint known to be stale (e.g. the process died after a phase finished but before its checkpoint landed). A missing/unusable `last_phase` reads as `0` — the conservative choice. |
 | secret-regeneration persistence | When resuming with an older state file that predates a secret field, the missing secret is regenerated once and immediately written back, so a *second* resume reuses the same value instead of minting yet another that disagrees with the engine/boxes. |
 | per-competition passwords | `admin`/`inject`/`postgres`/`redis`/`box_password`/`box_creds` are generated fresh per run, replacing the fixed `ubuntu/ubuntu` + `admin/changeme123` literals this once shipped: a fixed value across every deployment is guessable from this public repo or by fingerprinting a past deploy. `box_password` is a golden-hash INPUT (baked into `/etc/shadow` + cloud-init on the golden disk), so a fresh deploy **carries it forward** from prior state, and packet `passwords.json` outranks both — a fresh deploy that re-minted it would rebuild every golden. Postgres/Redis are generated once and passed to both `bootstrap_scoring_engine()` and `push_event_conf()` so the two `.env` writes agree. |
 | `KNOWN_BROKEN_TEMPLATES` | Warn-don't-block: `ubuntu24.04` and `debian13-lite` have bad cloud-init; clones never get a working network/SSH (use the `-fix` variants). The warning is unconditional — not gated by `--yes`/`confirm_deploy` — because a reused competition replays its saved `boxes.json` exactly and can outlive the interactive box-picker warning, and a non-interactive deploy skips that prompt anyway. |
@@ -331,7 +340,7 @@ generation. The phase list and the v1→v2 renumbering are canonical in
 | [1/7] teardown | Two waves per hosting node (team boxes + legacy clones, then engine + goldens that are missing, hash-mismatched, or a stale slot beyond the lineup). Linked clones must die before their templates. `reset_domain_markers()` clears `.nakon-domain-*` so a redeploy does not skip a promotion because a stale marker said it was done. Bridges serial. |
 | [2/7] apply #1 | `-parallelism=1` with `build_team_boxes=false`: the engine (a **linked clone of the engine template**) + all team bridges + the engine's team NICs (netplan) + the cold boot. `parallelism=1` because concurrent **full** clones saturate the datastore/API (HTTP 596); linked clones are metadata work, but the setting stays 1. The engine's SSH reachability is **polled** (`wait_for_ssh`) instead of a blind post-apply sleep, and `forget_engine_host_key` drops any stale pin (a fresh engine VM means a fresh host key). `state["deployed_endpoint"]` is recorded here for the stale-state guard. |
 | [3/7] prepare engine | Per-deploy state applied fresh (`.env` before compose up, fresh volumes, apt-cacher check), `event.conf` pushed early, NAT re-asserted. Pushing `event.conf` before any nakon run prevents the Quotient crash loop that wipes NAT. |
-| [4/7] golden + apply #2 | See `golden_ops` and `template_ops`; then Windows bootstrap for ALL teams (guest agent is the only pre-network channel), concurrent waits, `setup_ubuntu_auth`, DNS fix, apt prep, and `tz-base` for every box. Clones boot with working DNS/apt because the golden disk carries no disruptive configs. |
+| [4/7] golden + apply #2 | See `golden_ops` (incl. the phase-barrier boot smoke before conversion) and `template_ops`; then Windows bootstrap for ALL teams (guest agent is the only pre-network channel), concurrent waits, `setup_ubuntu_auth`, DNS fix, apt prep, and `tz-base` for every box. Clones boot with working DNS/apt because the golden disk carries no disruptive configs. |
 | [5/7] repair sweep | `.nakon-repair.json`, lenient (`strict=False`: one flaky plant must not kill the sweep after 98% landed), `--jobs N`, gated by `.postclone-swept`. `fix_services_on_boxes` runs **after** the sweep: the ssh-\* configs restart sshd and can trip the start-limit, so the un-wedge + credlist accounts + service binds belong after the thing that breaks them. (Historical note: through 2026-09-24 the equivalent sweep passed no `only=` at all — the monolith's comment said "team1 already done" but the filter was never implemented, so team1 was re-planted over its finished strict plant on every deploy.) |
 | [6/7] domains → final → beacons | `deploy_domain_configs` runs teams **concurrently** (each team's ADDS→join chain serial within itself); the final pass runs after it (disruptive + boot-hostile); team beacons (if `team_beacons 1`) are planted **before** the `tz-ready` snapshot so restore points carry them. `state["nakon_failed_steps"]` is **merged**, not overwritten: a failure in both passes must keep the repair tally, duplicates dropped, capped at 40. |
 | [7/7] seed | Quotient's HTTP is polled (`wait_for_http` on `/api/login`) instead of a blind sleep. Each sub-step is gated on its own state flag (`seeded`, `engine_unpaused`, `injects_created`) because **`unpause_engine` is not idempotent** — a resume in the crash window between POST and flag-save asks the engine first (`engine_paused`) and re-POSTs only when it really is still paused. `resolve_inject_times()` runs here so offsets anchor to the actual competition start. |
@@ -340,18 +349,31 @@ generation. The phase list and the v1→v2 renumbering are canonical in
 | `--plan-only` | Collects/generates the config and prints a summary, then exits without touching infrastructure. Exists because there is otherwise no confirmation checkpoint between the box picker and a real deploy: `--yes` skips it and piped/scripted stdin that satisfies every remaining prompt walks straight into a real deploy. |
 | `main()` paths | `--competition` reuses an existing competition straight to `deploy()` or creates one, falling back to prompting only for missing pieces; boxes are still collected interactively (no non-interactive box spec yet). The interactive path passes `--teams`/`--yes`/`--from-phase` through with None/False/1 defaults. |
 
-## create-competition.py (shim)
+## pipeline_api.py
 
-Re-export shim only; all logic lives in the focused modules.
+The stable import surface the hyphenated entry-point scripts cannot be: `create-competition.py` and
+its companions are not importable under their own names (the dash is not valid in a module name),
+and the old workaround loaded `create-competition.py` through `importlib` and reached whatever its
+shim happened to have imported as `driver.<symbol>`. That hid `redeploy-competition.py`'s true
+dependency set — the shim re-exported all 74 names it imported for its own use, so a consumer could
+start using a new symbol unnoticed, and the shim's surface could change silently under it.
 
-- **Why the shim exists** — keeps `import create-competition` (via importlib) working for
-  `redeploy-competition.py`; the hyphen in the filename forces `importlib`, and every historical
-  `driver.<symbol>` consumer keeps resolving.
-- **`is_windows_template` triple definition** — `nakon_ops`, `ssh_ops`, and `windows_ops` each define
-  one; the shim imports the `nakon_ops` one, which is what `driver.is_windows_template` (and therefore
-  redeploy's `box_platform`) resolves to. All three must agree (`"win"` in lowercase) — a divergence
-  would make Terraform, nakon routing, and the driver classify the same template differently.
-- **`ENV_PATH`** — re-exposed as `Path(".env")` for backwards compatibility with the original monolith.
+- **Explicit `__all__`** — 17 names, each imported from the module that owns it (`nakon_ops`,
+  `golden_ops`, `hardening_ops`, `ssh_ops`, `domain_ops`, `engine_ops`, `windows_ops`,
+  `config_ops`, `constants`). No re-export chains. `__all__` is also what stops pyflakes reporting
+  every name as unused.
+- **Growth rule** — add a name only when a consumer needs it. An unused re-export is invisible
+  again by construction, which is the bug this module removed (`tests/test_pipeline_api.py` pins it).
+- **`create-competition.py`** — now a thin CLI: load `.env` (before importing `deploy`, which reads
+  `TF_VAR_*` at import time), `import deploy`, `deploy.main()`. `deploy.py` loads the same `.env` at
+  its own module scope; `load_dotenv` does not overwrite already-set variables, so the second load
+  is a no-op.
+
+## create-competition.py
+
+Thin CLI entry point only — see [pipeline_api.py](#pipeline_apipy) for the library surface and why the
+hyphenated script cannot be imported directly. `ENV_PATH`/`load_dotenv` live in `deploy.py`; there
+is no compatibility re-export layer anymore.
 
 ## destroy-competition.py
 
@@ -378,7 +400,7 @@ table (incl. `resync` and `engine-recovery`) is in
 | `rebuild` | Clones from the golden template (`state["golden_template_ids"]`, linked) so a rebuilt box carries the golden-stage installs, and refuses with an explanation if the golden is gone. It deliberately does **not** clone the anchor team's live box (its defenders have changed it). A rebuilt anchor-team box was recreated outside Terraform, so the next `terraform apply` sees drift and wants to replace it — fine mid-event; re-import or accept the replacement afterwards. |
 | `resync` | Cannot recover `box_password` — it is baked into the boxes at bootstrap and lives nowhere on the engine — so it aligns everything else and re-sets the credlist accounts plus the box login it knows, reporting any box the guest agent could not reach. |
 | domain chain on rollback | `rollback-base`/`rebuild` re-run `deploy_domain_configs()` for any selected box with a role in `domain_roles.json` (restoring a pre-nakon disk undoes ADDS/joins), deleting the stale ADDS done-marker first. **If the domain chain cannot run, `tz-ready` is deliberately NOT re-taken** — snapshotting then would bake a broken state in as "as delivered". `reconfigure` never resets disks, so domain membership is assumed intact. |
-| `_load_driver()` / `box_platform()` | `create-competition.py` has a hyphen, so it is loaded via `importlib.util.spec_from_file_location` and re-used as `driver`. `box_platform()` routes through `driver.os_to_platform` (must match nakon's classification). |
+| `box_platform()` | Routes through `pipeline_api.os_to_platform` (the single map nakon also uses), so platform classification cannot disagree with nakon's routing. Replaced the old `_load_driver()`/importlib access to `create-competition.py` (see [pipeline_api.py](#pipeline_apipy)). |
 | secrets must be the originals | `box_password`/`box_creds` come from `.deploy_state.json`: the credlist accounts this recreates must match what `push_event_conf()` wrote to Quotient's `linux.credlist`, or a recovered box scores down on every auth-based check while healthy. |
 | symbol helpers | `template_vmid_for()` resolves a template name to a vmid exactly as `main.tf`'s templates data source does (tagged `template`, excluding the scoring template). `quote_sshkeys()` — Proxmox's `sshkeys` config param wants the key URL-encoded. |
 | Linux-only executors | `fix_dns_on_boxes`/`setup_ubuntu_auth`/`fix_services_on_boxes` (bash against Ubuntu boxes) receive Linux targets only on every path; Windows keeps the guest-agent bootstrap, the domain chain, waits, snapshots, and nakon. |
@@ -387,22 +409,28 @@ table (incl. `resync` and `engine-recovery`) is in
 ## verify-competition.py
 
 Post-deploy verifier: logins, services, isolation, misconfig spot-check, injects, pins, plant coverage,
-domains, red identity, packet. The gate list a reader cares about is in
-[usage-agents.md](usage-agents.md#verify-competitionpy); internals notes:
+domains, red identity, packet. Every gate returns a `GateResult` carrying the module-level `Status`
+(`PASS` / `FAIL` / `SKIP_UNAVAILABLE`), and the SUMMARY and the exit code are both derived from the
+same list — the printed word and the verdict can no longer disagree. The gate list a reader cares
+about is in [usage-agents.md](usage-agents.md#verify-competitionpy); internals notes:
 
 | Topic | Note |
 |---|---|
+| tri-state gate model | `SKIP_UNAVAILABLE` means the gate could not be evaluated (dead SSH, missing state, no vantage point) and is **non-passing** when the result gates: a check that never ran exiting 0 is how a dead box reads as a healthy range (live-found 2026-10-02: isolation's cross-team probe "PASSed" on stopped VMs). A `gating=False` result is reported in the SUMMARY as `[informational]` and excluded from the verdict — the structurally-not-applicable cases: no `nakon-config.json` (plant coverage), no `domain_roles.json` (domains), no `injects/` dir, `--expect-no-vulns`, fewer than 2 teams for misconfig-survival. Each `GateResult` also carries the SUMMARY `label`, so the two cannot drift apart (the old hand-printed SUMMARY said "SKIP — unverified" for isolation while the dict recorded a FAIL). |
+| `--allow-unverified <gate>` | The explicit waiver for one gate's SKIP: repeatable, and it waives **only** SKIP (a FAIL always fails). Names that match no gate in the run are warned about, not silently accepted. |
+| `--timeout SECONDS` | Optional whole-run wall-clock budget (default `0` = disabled). Deliberately cooperative: checked **between** gates, never mid-flight, so it can never kill an ssh or interrupt a Proxmox task; worst-case overshoot is the one gate already running. A gate skipped on budget is recorded `SKIP_UNAVAILABLE` — so a budget can bound a verify but can never turn an unevaluated range into a PASS. |
 | TLS warnings | Silenced: the engine speaks plain HTTP, but Quotient's checks and the Proxmox API elsewhere use self-signed TLS, and warnings would drown the output. |
 | box authentication | Boxes authenticate with the Proxmox key (cloud-init authorizes it for the configured `box_username`); the box password is informational here. The admin password is parsed from `credentials.txt`, falling back to `changeme123` (overridable with `--admin-password`); engine IP from `terraform output -json` (`--engine-ip`). |
 | `MISCONFIG_CHECKS` | Each entry documents what the planted misconfig looks like and how to verify it: `suid-find` (the `s` in the owner-exec slot of `ls -l $(which find)`), `www-data-shell` (`/etc/passwd` line ends `/bin/bash`), `bad-perms-userConfig` (`/etc/shadow` mode 666), `writable-sudoers` (`/etc/sudoers.d` mode 777 — nakon's `004-writable-sudoers.sh`). Only a handful are mapped; the spot-check picks a box/config pair it can actually verify. |
 | `check_no_default_creds()` | False-positive guard: only the actual value token (last whitespace-separated field) is compared against the default literals, not the whole line — `box-login (ubuntu)  <password>` legitimately contains the literal `ubuntu` as the non-secret username label, which is not a rotation failure. |
-| `check_services()` | A service with no scored rounds yet is "not yet scored", not a failure (excluded from the UP/DOWN tally). Check `Result` values are normalized (the string `"false"`/`"0"` count as failed) since Quotient returns strings. DOWN is reported but not fatal unless `--strict-services`. |
-| `check_isolation()` | The DROP rule match requires **both `-s` and `-d`** (`192.168.0.0/16` appears ≥ 2 times). With ≥ 2 teams it also runs a live cross-team connection test (expected blocked) plus an internet-reachability control; if the test cannot run, the rule-presence pass stands and this alone does not fail. |
-| `check_misconfig_survival()` | Groups are keyed on the **normalized config NAMES** (a tuple of `{"name": …}`-extracted strings), not raw entries: dict-form entries are unhashable, and "the same box, different teams" means the same names regardless of `vars`. Present on some teams but missing on others fails (did not survive cloning); **absent-everywhere is not this check's job** — `check_misconfig()` covers "was it planted at all". |
-| `check_domains()` | The live replacement for the freeze's operator attestation. Per team: the DC answers `Get-ADDomain` for `team<id>.local` **with a syntactically valid `S-1-5-21-*` DomainSID** (a promoted DC that answers without one fails — with one team, uniqueness alone is vacuous, so the DSID shape is what actually gates), the planted `svc-support` account exists, and every member is joined (Windows `PartOfDomain`+domain, Linux realmd). Details below. |
-| `check_plant_coverage()` | Reads `.deploy_state.json["plant_coverage_failed"]`: per-machine expected vs actually planted, so a silent nakon failure surfaces even when nakon reported success. `_record_coverage` clears a machine's stale failures when its stage replants clean. |
-| `check_round_loop(fix=…)` | `--fix-round-loop` POSTs the start/unpause pair for a frozen round loop (the engine does not auto-resume its round loop after an engine reboot). |
-| exit-code gate | `isolation` and `misconfig_survival` are NOT optional: a failed isolation check means teams can reach each other *right now*, and a misconfig missing on one team's clone breaks the "every team defends the same misconfigs" fairness guarantee. Down services are soft unless `--strict-services`; logins, the default-creds guard, misconfig spot-check, injects, pins, plant coverage, and domains (when checked) gate as well. `report_healthcheck_status`/`report_beacons` are informational only. |
+| `check_services()` | Returns a **list** of GateResults (the service gate plus `pins_registered` when pins exist); every path returns that shape, so a half-deployed engine no longer crashes main with a tuple-unpack `ValueError` that suppressed the SUMMARY. A service with no scored rounds yet is "not yet scored", not a failure (excluded from the UP/DOWN tally). Check `Result` values are normalized (the string `"false"`/`"0"` count as failed) since Quotient returns strings. DOWN is reported but not fatal unless `--strict-services`; under strict, nothing-scored is a FAIL (not a vacuous pass) and the newest scored round must be within 5 × 60 s `Delay`. Pins always gate. |
+| `check_isolation()` | The DROP rule match requires **both `-s` and `-d`** (`192.168.0.0/16` appears ≥ 2 times). With ≥ 2 teams it also runs a live cross-team connection test (expected blocked) plus an internet-reachability control **and** a target-liveness probe: a dead target and a blocked one look identical from here, so a probe that cannot establish all three is SKIP, never a verified pass — "the rule-presence pass stands" is exactly the fail-open this replaced. |
+| `check_misconfig_survival()` | Groups are keyed on the **normalized config NAMES** (a tuple of `{"name": …}`-extracted strings), not raw entries: dict-form entries are unhashable, and "the same box, different teams" means the same names regardless of `vars`. Present on some teams but missing on others FAILs (did not survive cloning), and **absent on every team now FAILs too** (the plant never landed anywhere — the old code matched no branch and left `all_ok` True). All probes unprovable (SSH dead) is SKIP, never a pass. |
+| `check_domains()` | The live replacement for the freeze's operator attestation. Per team: the DC answers `Get-ADDomain` for `team<id>.local` **with a syntactically valid `S-1-5-21-*` DomainSID** (a promoted DC that answers without one fails — with one team, uniqueness alone is vacuous, so the DSID shape is what actually gates), the planted `svc-support` account exists, and every member is joined (Windows `PartOfDomain`+domain, Linux realmd). Returns a GateResult; probes are one per VM on the MAX_CONCURRENCY (8) pool. Details below. |
+| `check_plant_coverage()` | Fails **closed**: it reads `.deploy_state.json["plant_coverage_failed"]` per-machine expected-vs-planted, falls back to the `nakon_failed_steps` tally the deploy promises, and when neither source exists it FAILs ("coverage was never recorded") instead of printing PASS — missing state, an older state, or a nakon with no `--json` outcome used to leave `failed = {}` and pass vacuously while its own SUMMARY warned. A non-empty tally can never PASS. `_record_coverage` clears a machine's stale failures when its stage replants clean. Returns a GateResult, never a bare tuple. |
+| `check_round_loop(fix=…)` | Now **consumed by main**: a stopped round loop used to WARN and return True while main discarded the value, so a frozen scoreboard never affected the exit code (pfsense-ad 2026-09-28). It FAILs for the current run; `--fix-round-loop` still POSTs the start/unpause pair, but re-run verify to confirm a fresh round. |
+| exit-code gate | `isolation` and `misconfig_survival` are NOT optional: a failed isolation check means teams can reach each other *right now*, and a misconfig missing on one team's clone breaks the "every team defends the same misconfigs" fairness guarantee. Down services are soft unless `--strict-services`; logins, the default-creds guard, misconfig spot-check, injects, pins, plant coverage, round loop, and domains (when checked) gate as well. Any non-waived SKIP fails the run, so a verify that used to exit 0 can now exit 1 for a gate that never ran. `report_healthcheck_status`/`report_beacons` are informational only. |
+| verify concurrency | The three big remote loops — `check_domains`, `check_misconfig_survival` and `report_beacons` — run on the full MAX_CONCURRENCY (8) pool. They are pure SSH / guest-agent probes with no Proxmox task and no datastore write, and 8 stays far under the engine's raised sshd `MaxSessions` 64. The aggregation is re-serialised in the old order, so every status, message and exit code is unchanged (`tests/test_parallel_verify.py`). |
 
 **`check_domains()` — cross-team and input rules.** Duplicate **DomainSIDs** FAIL (promotion reused
 image state — winad-testrun 2026-09-25); duplicate member machine SIDs are INFO only (linked clones of

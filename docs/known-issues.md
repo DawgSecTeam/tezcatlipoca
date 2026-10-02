@@ -57,14 +57,6 @@ from Noble boxes (Debian 13 boxes tolerate them) until their scripts get pre-see
 pruned too — `Set-LocalUser`/password-policy failures on users their own config was supposed to
 create.
 
-### scrim `stage_author` skips the current sweep marker
-
-The pipeline's resume marker is **`.postclone-swept`** (written by phase 5; unlinked by a fresh
-deploy and again by apply #2). `run-agent-scrim.py`'s `stage_author` still skips the retired name
-`.phase6-swept` when copying a competition template, so a leaked `.postclone-swept` would be carried
-into a fresh scrim competition. Flagged rather than silently documented as intended — the code fix
-is being handled separately from the docs. Detail: [scrim-harness.md](scrim-harness.md#run-agent-scrimpy).
-
 ### Scoring round loop doesn't auto-resume after an engine reboot (pfsense-ad 2026-09-28)
 *(detected 2026-09-29: `verify-competition` checks the round loop; `--fix-round-loop` runs the fix)*
 
@@ -72,14 +64,41 @@ After the engine VM rebooted, the scoreboard stayed frozen: `/api/engine` showed
 `last_round.StartTime` and a zero `current_round_time`. The Docker containers restart but the round
 loop stays stopped. Restart it: `POST /api/competition/start {"started":true}` then `POST
 /api/engine/pause {"pause":false}`; a fresh round lands within `Delay` seconds. verify now detects
-the stale signature (old StartTime + zero current_round_time, engine unpaused) and warns with those
-exact POSTs; `--fix-round-loop` issues them directly. (Symptom trap remains worth knowing:
+the stale signature (old StartTime + zero current_round_time, engine unpaused) and **FAILs the run**
+with those exact POSTs; `--fix-round-loop` issues them directly, but the run still FAILs — re-run
+verify to confirm a fresh round. (The check used to only warn and its return value was discarded,
+so a frozen scoreboard never affected the exit code; it is consumed as a gate since 2026-10-02.)
+(Symptom trap remains worth knowing:
 verify reads the *last scored* round, so a stopped loop reports stale DOWN as if live — the round
 check is what disambiguates.)
 
 ### Fixed incidents (kept for the why)
 
 Every entry here is fixed or mitigated. The write-up is kept because the mitigation's rationale is the load-bearing part, and several mitigations are only as good as that reasoning.
+
+### Boot-hostile golden config left every linked clone bootless (2026-09-24)
+
+**Symptom:** every team box of one type came up with no network and no cloud-init after phase 4,
+one phase after `POST /template` — a bootless range whose goldens themselves still answered.
+**Cause:** `systemd-system-masked` rode the golden disk. Masking multi-user/graphical/default
+targets leaves systemd booting with no `multi-user.target`, so sshd/cloud-init never start. The
+plant returned rc=0 and the golden's *running* system stayed reachable (masking a target does not
+stop the current boot), so `strict=True` saw nothing.
+**Fix:** boot-hostile configs were moved into `constants.FINAL_STAGE_CONFIGS`, planted after the
+domain joins (`deploy_phases.phase6_domains_and_final`), and `build_golden_set` now **boot-smokes**
+each booted golden — one throwaway FULL clone booted to multi-user (guest agent for Windows)
+before any conversion, raising on a failed *or unverifiable* smoke so `POST /template` cannot
+happen. Cold/unbooted DC goldens skip it deliberately. `golden_boot_smoke 0` in the Compfile
+waives the gate and prints that the invariant is UNVERIFIED. Detail:
+[benchmark-m02.md](benchmark-m02.md), [internals.md](internals.md#golden_opspy).
+
+### scrim `stage_author` skipped the sweep marker (FIXED 2026-10-01)
+
+**Was:** `run-agent-scrim.py`'s `stage_author` skipped the retired `.phase6-swept` name when
+copying a competition template while the pipeline writes `.postclone-swept`, so a leaked sweep
+marker was carried into a fresh scrim competition and its post-clone sweep was skipped.
+**Fix:** it now skips `.postclone-swept` (the only marker the pipeline writes). Detail:
+[scrim-harness.md](scrim-harness.md#run-agent-scrimpy).
 
 ### redeploy --reset-event self-deadlock on the phase-7 reseed (FIXED 2026-10-01)
 

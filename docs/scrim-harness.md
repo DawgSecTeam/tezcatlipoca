@@ -42,10 +42,12 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   competition (`teams.json`, `.deploy_state.json`, `credentials.txt`,
   `nakon-config.json`, `cloned_vms.json`, `packet.md`, `event.conf`).
 - `stage_author` — the pipeline's sweep marker **`.postclone-swept`** is a resume marker and must
-  never leak into a fresh competition (the code currently still names the retired `.phase6-swept`
-  here — a known mismatch, see [known-issues.md](known-issues.md#scrim-stage_author-skips-the-current-sweep-marker);
+  never leak into a fresh competition; `stage_author` skips that name (fixed 2026-10-01 — it used
+  to skip the retired `.phase6-swept`, so the real marker was copied into every competition
+  authored from a swept template; see
+  [known-issues.md](known-issues.md#scrim-stage_author-skipped-the-sweep-marker-fixed-2026-10-01)).
   `RUNTIME_FILES`, `LOG.md`, `sub-*`, `.nakon-domain-*` are also skipped, and `injects/` is
-  re-copied deliberately). The template's `Compfile` first line is rewritten to the new name.
+  re-copied deliberately. The template's `Compfile` first line is rewritten to the new name.
 - `creds_from_files` — all secrets/logins come from the post-deploy artifacts
   (`.deploy_state.json`, `teams.json`, `credentials.txt`) — no terraform
   output needed.
@@ -318,7 +320,10 @@ Reads a run dir (`evidence/red/events*.jsonl` + `world.json`,
   health_check exclusion and the opening count are rev-2 corrections — 17c's
   dead first 29 minutes was its biggest stall and the naive
   gap-between-successes definition missed it; see
-  `docs/reports/harness-upgrades-plan.md`.)
+  `docs/reports/harness-upgrades-plan.md`.) With **no clock** (a run dir with
+  red events but no `world.json`/`event_start`) the stall maths is skipped and
+  reported as none — it used to abort the whole report, hiding the `timeouts`
+  count the rehearsal gate reads.
 - `red_metrics` windows_footholds — from world.json footholds' `windows`
   flag; on legacy world.json lacking it, inferred from initial-access events
   against last-octet 2/3 (dc01/win01).

@@ -18,7 +18,8 @@ need all of them, only enough to cover what you'd otherwise be asked:
 | `--yes` | Skips the confirm-deploy prompt. |
 | `--scenario TEXT` | Scenario description (only used when creating a new competition). |
 | `--difficulty N` | Difficulty 1–10 (only used when creating a new competition). |
-| `--from-phase N` | Resume from this phase; `N > 1` skips the destructive cleanup + `terraform apply`. See the resume hint a failed deploy prints. |
+| `--from-phase N` | Resume from this phase; `N > 1` skips the destructive cleanup + `terraform apply`. Refused when it would skip a phase `.deploy_state.json` does not record as completed (`last_phase`). See the resume hint a failed deploy prints. |
+| `--force-from-phase` | Proceed anyway when `--from-phase` skips phases the state file never saw complete. Only for a checkpoint known to be stale (e.g. the process died after a phase finished but before its checkpoint landed) — the skipped phases build the machines the later ones target. |
 | `--plan-only` | Collect/generate the competition's config and print a summary, then exit **without touching any infrastructure** — no teardown, no `terraform apply`. |
 | `--box-username NAME` | Themeable box login username (only used when creating a new competition; default `ubuntu`). Written to `competitions/<id>/users.json`. |
 | `--credlist-usernames A,B,C` | Themeable credlist account names, exactly 3 comma-separated (only used when creating a new competition; default `admin,user1,user2`). Written to the same `users.json`. |
@@ -42,7 +43,7 @@ infrastructure, review it, then re-run the same command without `--plan-only` (p
 
 ### Resuming (`--from-phase`)
 
-`deploy()` runs the seven **v2** phases — 1 Cleanup · 2 engine-template + apply #1 · 3 prepare
+`deploy()` walks the seven **v2** phases (`deploy_phases.PHASES`) — 1 Cleanup · 2 engine-template + apply #1 · 3 prepare
 engine from template · 4 golden set + apply #2 · 5 repair-stage sweep · 6 domains → final pass →
 beacons + `tz-ready` · 7 seed. [architecture.md](architecture.md#seven-phase-deploy) is the
 canonical list, plus the [v1 → v2 table](architecture.md#v1-to-v2-migration-what-moved) if you are
@@ -55,8 +56,16 @@ sub-steps (seed teams, unpause the engine, create injects) are each gated on the
 than re-running it, since re-unpausing an already-unpaused engine isn't safe (see
 `quotient/setup.py`'s `unpause_engine()` docstring) and re-creating injects would duplicate
 them. If phase 7 needs to be forced to redo a step anyway, edit those flags out of
-`.deploy_state.json` first. Resuming a state file written by another pipeline version is refused;
-see [state-file schemas](architecture.md#state-files).
+`.deploy_state.json` first.
+
+**The resume target is checked, not just recorded.** Each phase writes `last_phase` after it
+completes, and `--from-phase N` is refused when `N` skips a phase that never completed (`N >
+last_phase + 1`): the skipped phases are what build the machines the later ones target, so
+resuming there would run the domain/final/seed chain against boxes that do not exist and bury the
+real failure. A state file with a missing/unusable `last_phase` reads as `0` (the conservative
+choice). `--force-from-phase` is the escape hatch for a checkpoint you know is stale — use it
+deliberately, not to silence the guard. Resuming a state file written by another pipeline version
+is refused; see [state-file schemas](architecture.md#state-files).
 
 ## Pre-authoring a competition
 
@@ -134,33 +143,53 @@ to regenerate; it always overwrites `packet.md` in full.
 Post-deploy smoke test — reproduces the manual checks run by hand after a deploy:
 
 ```bash
-python3 verify-competition.py competitions/<id> [--engine-ip IP] [--admin-password PW] [--strict-services]
+python3 verify-competition.py competitions/<id> [--engine-ip IP] [--admin-password PW] \
+    [--strict-services] [--allow-unverified GATE]... [--timeout SECONDS]
 ```
 
 1. **LOGIN** — every team account and admin can `POST /api/login` (HTTP 200).
 2. **SERVICES** — each team's services report UP in the latest scored round (informational
-   unless `--strict-services`).
+   unless `--strict-services`, which also requires something to have been scored and the newest
+   round to be fresh).
 3. **ISOLATION** — the team-to-team DROP rule (`range-firewall.sh`) is present in the engine's
    `FORWARD` chain, and — with 2+ teams — an actual connection from one team's box to
-   another's is confirmed blocked while that same box can still reach the internet (rule
-   presence alone can't tell a correct rule from one that's shadowed or misordered).
+   another's is confirmed blocked **while the target is provably alive and that same box still
+   reaches the internet**. Rule presence alone can't tell a correct rule from one that's shadowed
+   or misordered, and a stopped box looks identical to a blocked one, so an unprovable probe is
+   `SKIP`, not a pass.
 4. **MISCONFIG** — at least one planted misconfig is present on a target box (SSH via the
-   scoring-engine gateway). A follow-on **misconfig-survival** pass checks every team's copy
-   of each verifiable config (2+ teams) is identically present — a regression guard for the
-   clone-vs-cloud-init race where a clone's first-boot cloud-init silently reverts a
-   filesystem-permission plant.
+   scoring-engine gateway). A follow-on **misconfig-survival** pass checks every team's copy of
+   each verifiable config (2+ teams) is identically present — present on some teams but not
+   others FAILs, and absent on **every** team FAILs too (the plant never landed anywhere).
 5. **INJECTS** — if the competition ships an `injects/` dir, the engine has that many injects.
 6. **PINS** (`pins_registered`) — every pinned service's `<box>-<Display>` check is registered in
    Quotient. Gate is active only when the comp has pinned services.
 7. **PLANT COVERAGE** (`plant_coverage`) — reads `.deploy_state.json`'s per-machine
-   expected-vs-planted record, so a silent nakon failure surfaces even though nakon reported
-   success.
+   expected-vs-planted record, falls back to the nakon FAILED tally, and **fails closed**: when
+   neither source exists it FAILs ("coverage was never recorded") rather than passing vacuously.
 8. **DOMAINS** (`domains`) — AD promotion, joins, AD plants, and cross-team DomainSID uniqueness
    (see `verify-competition.py`'s `check_domains`). Fail-closed on a malformed `domain_roles.json`.
 9. **RED IDENTITY** (`red_identity`) — only with `--red-identity`: proves red's source address
    survives end-to-end to the boxes (see `--red-ip`/`--red-seg-ip`/`--red-user`).
 10. **PACKET** (`packet_creds` + `packet_accounts`) — only with `--packet <profile>`: the packet's
     published credentials match `credentials.txt`, and its `out_of_scope` decoy accounts exist.
+11. **ROUND LOOP** (`round_loop`) — the scoring round loop is actually advancing; it does not
+    auto-resume after an engine reboot.
+
+**Gate model: PASS / FAIL / SKIP, and a SKIP is not a pass.** Every gate returns a tri-state
+result, and the SUMMARY and the exit code are generated from the same results, so they cannot
+disagree. `SKIP` means the gate could not be evaluated (dead SSH, missing state, no vantage
+point) and is **non-passing** by default — a check that never ran exiting 0 is how a dead box
+reads as a healthy range (live-found 2026-10-02: isolation's cross-team probe passed on stopped
+VMs). A few results are deliberately *non-gating* and shown as `[informational]` in the SUMMARY:
+the structurally-not-applicable cases (no `nakon-config.json`, no `domain_roles.json`, no
+`injects/` dir, `--expect-no-vulns`, fewer than 2 teams for misconfig-survival). Waive a gating
+gate's SKIP with `--allow-unverified <gate>` (repeatable); it waives only a SKIP,
+never a FAIL, and names that match no gate in the run are warned about. `--timeout SECONDS` sets
+an optional whole-run wall-clock budget (default `0` = off), checked **between** gates so it never
+interrupts a Proxmox task; a gate skipped on budget is recorded `SKIP` and so is non-passing too.
+**Operators: a range whose verify used to exit 0 can now exit non-zero for a gate that never
+ran** — that is the intended fail-closed behavior; fix the gate or waive it explicitly.
 
 Two diagnostic lines: a `no_default_creds` regression guard (part of the exit-code gate, same as
 logins/isolation/misconfig/injects) confirming `credentials.txt`'s box-login/credlist lines aren't
@@ -170,15 +199,16 @@ affect the exit code.
 
 Exit code is `0` only when logins all pass, no default creds remain, isolation holds, the
 misconfig spot-check (and, with 2+ teams, the misconfig-survival pass) confirms, injects
-(if any) are present, and the conditional gates above pass. Service DOWN is reported but
-not fatal unless `--strict-services`. Isolation is **not** demoted to informational the way
-services are — a failed isolation check means teams can reach each other right now.
+(if any) are present, the round loop is advancing, and the conditional gates above pass — and no
+gating gate is an unwaived SKIP. Service DOWN is reported but not fatal unless
+`--strict-services`. Isolation is **not** demoted to informational the way services are — a failed
+isolation check means teams can reach each other right now.
 
 Other flags: `--expect-no-vulns` skips the misconfig gates for a packet-compiled comp that has not
 authored `box_vulns.json` yet; `--fix-round-loop` POSTs the start/unpause pair when the engine's
-round loop did not auto-resume after a reboot; `--freeze` (with `--windows-domain-validated` for
-Windows/domain lineups) writes the `.frozen.json` record, and `--unfreeze --confirm-unfreeze`
-removes it.
+round loop did not auto-resume after a reboot (the run still FAILs — re-run verify to confirm a
+fresh round); `--freeze` (with `--windows-domain-validated` for Windows/domain lineups) writes the
+`.frozen.json` record, and `--unfreeze --confirm-unfreeze` removes it.
 
 Data sources (all read at runtime): scoring-engine IP from `terraform output -json`
 (override with `--engine-ip`), team creds from `competitions/<id>/teams.json`, admin password
@@ -320,6 +350,8 @@ Everything that exists in argparse but is not part of the happy path, in one pla
 | `--fix-round-loop` | `verify-competition.py` | Issue the `POST /api/competition/start` + `POST /api/engine/pause {pause:false}` pair when the round loop did not auto-resume after an engine reboot |
 | `--freeze` / `--unfreeze --confirm-unfreeze` | `verify-competition.py` | Write / remove the `.frozen.json` record. Freeze requires all gates PASS (incl. plant coverage) and must be the **last** thing you do before the event — committing afterwards trips the drift gate |
 | `--expect-no-vulns` | `verify-competition.py` | Skip the misconfig gates for a packet-compiled comp whose `box_vulns.json` is not authored yet |
+| `--allow-unverified <gate>` | `verify-competition.py` | Waive ONE gate's `SKIP` (could-not-evaluate) verdict so it does not fail the exit code. Repeatable; waives only a SKIP, never a FAIL; unknown names are warned about. Without it a gate that couldn't run is not a pass |
+| `--timeout SECONDS` | `verify-competition.py` | Optional whole-run wall-clock budget (default `0` = off), checked **between** gates so it never interrupts a Proxmox task. A gate skipped on budget is recorded `SKIP` — non-passing — so a budget can bound a verify but never turn an unevaluated range into a PASS (waive with `--allow-unverified`) |
 | `--packet <profile>` | `verify-competition.py` | Add the `packet_creds` + `packet_accounts` gates (packet credentials match `credentials.txt`; `out_of_scope` decoy accounts exist) |
 | `--red-identity` | `verify-competition.py` | Prove red's **routed-mode** source address survives end-to-end: holds a TCP connection from red01 to a Linux box's `:22` and reads the box's `ss` table, expecting red's segment IP as the peer rather than the team gateway. Tri-state like the isolation check (SKIP when unverifiable). Requires red01 deployed |
 | `--red-ip` / `--red-user` / `--red-seg-ip` | `verify-competition.py` | Inputs for `--red-identity`. Defaults: red01 `10.0.0.198`, user `sysadmin`, segment IP from `../bad-auto/config.yaml` else `10.200.0.10` |

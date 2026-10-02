@@ -84,7 +84,11 @@ aborts): **environmental saturation and unvetted pin density, not pipeline code.
   and every secret. `--from-phase N` reloads it, skips confirmation, and reuses the original
   credentials (a missing secret is regenerated once and written back). Resuming without the
   state file is a hard error by design — fresh secrets while skipping destructive phases
-  desyncs the range (see `docs/architecture.md`, Operational invariants).
+  desyncs the range (see `docs/architecture.md`, Operational invariants). The resume target is
+  **checked**: `--from-phase N` is refused when it skips a phase the state file never recorded as
+  completed (`N > last_phase + 1`), because those phases build the machines the later ones target;
+  `--force-from-phase` overrides for a checkpoint known to be stale. So "resume at the failed
+  phase" is also the deepest resume the guard allows by default.
 - **Resume markers.** `.postclone-swept` (written only after a clean full repair sweep; a fresh
   deploy unlinks it, and apply #2 unlinks it again after re-creating the team boxes),
   `.nakon-domain-<team>-adds.json` + live join probes (skips DC re-promotion on resume).
@@ -102,7 +106,9 @@ aborts): **environmental saturation and unvetted pin density, not pipeline code.
 - **Verify gate.** `verify-competition.py` (logins, services, isolation, misconfig survival,
   injects, no-default-creds, plus pins/plant-coverage/domains/red-identity/packet gates when
   applicable — see [usage-agents.md](usage-agents.md#verify-competitionpy)) is the pass/fail gate
-  for any deploy claim. The offline suite (`python3 -m pytest tests/`) covers deploy-path helpers
+  for any deploy claim. Gates are tri-state (PASS/FAIL/SKIP) and an unwaived SKIP fails the run —
+  triage a non-zero exit for a gate that never ran before assuming the range is broken; the budget
+  flag is `--timeout`. The offline suite (`python3 -m pytest tests/`) covers deploy-path helpers
   but is **not** a pipeline test — this gate against a deployed range *is* the integration test.
   See [tests.md](tests.md).
 - **Logs — nothing captures them by default.** `run-agent-scrim.py --run-dir` writes
