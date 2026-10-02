@@ -503,6 +503,13 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     # real settle condition first. On realm the guest agent returns NULL data, so
     # this exercises the SSH settle fallback.
     from hardening_ops import wait_boxes_settled, _box_settled_via_ssh
+    # Stamp the build VM before anything else touches it: every later SSH goes to a
+    # management IP that another competition's engine can share, and the template clean
+    # is the most destructive command in the pipeline (known-issues: the wrong-engine
+    # wipe). A wrong machine now fails the identity check instead of losing its state.
+    from engine_ops import stamp_engine_build
+    stamp_engine_build(build_ctx, vmid)
+
     print("    Waiting for the build VM to settle (unattended-upgrades done, dpkg lock free)...")
     unsettled = wait_boxes_settled([{"vmid": vmid, "ip": build_ip}], node, timeout=600,
                                    ssh_fallback=lambda t: _box_settled_via_ssh(build_ctx, t))
@@ -515,7 +522,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                                           quotient_ref=quotient_ref)
 
     print("    Cleaning engine template for conversion (fresh state per clone)...")
-    clean_engine_for_template(build_ctx)
+    clean_engine_for_template(build_ctx, vmid)
     stop_vm(node, vmid)
     proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/template")["data"]
     write_template_hash(node, vmid, hash_value,

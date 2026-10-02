@@ -406,6 +406,54 @@ def release_engine_lock():
         del _ENGINE_LOCKS[path]
 
 
+def held_lock_paths():
+    """The lock files THIS process holds, so a concurrency scan can exclude them."""
+    return set(_ENGINE_LOCKS)
+
+
+def other_deploys_in_flight():
+    """Locks held by another LIVE process — i.e. another deploy is running right now.
+
+    Returns [(path, age_seconds), ...] sorted newest first. This is the one concurrency
+    signal that cannot lie: a holder is a live process, and the flock is released by the
+    kernel when that process dies, so a leftover `.lock` file is never a false positive
+    (unlike a timestamp, a VM's existence, or a log's mtime).
+
+    Why it matters (AGENTS.md, docs/environment-facts.md): two sessions driving one
+    estate is the documented cause of the 13xx vmid races, the foreign-golden squat, and
+    the over-broad sweep that destroyed two other competitions' engines and goldens.
+    """
+    locks_dir = Path.home() / ".tezcatlipoca" / "locks"
+    if not locks_dir.is_dir():
+        return []
+    ours = held_lock_paths()
+    in_flight = []
+    for path in sorted(locks_dir.glob("*.lock")):
+        if str(path) in ours:
+            continue
+        try:
+            fh = open(path, "a")
+        except OSError:
+            continue
+        try:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                # Someone else is holding it: a deploy is live.
+                try:
+                    age = max(0.0, time.time() - path.stat().st_mtime)
+                except OSError:
+                    age = 0.0
+                in_flight.append((str(path), age))
+            else:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fh, fcntl.LOCK_UN)
+        finally:
+            fh.close()
+    in_flight.sort(key=lambda item: item[1])
+    return in_flight
+
+
 def os_to_platform(template):
     """Classify a free-text template name the way nakon does: 'windows' if it has 'win'."""
     return "windows" if "win" in template.lower() else "linux"
