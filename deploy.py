@@ -4,28 +4,25 @@ import fcntl
 import json
 import os
 import sys
-import time
-from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 import urllib3
 from dotenv import load_dotenv
 
-from beacon_ops import plant_team_beacons
 from config_ops import (
     _prompt_difficulty,
     collect_boxes,
     collect_teams,
     collect_users_config,
     confirm_deploy,
-    destroy_bridge_if_exists,
     load_boxes,
     load_injects,
     load_packet_passwords,
     load_previous_competitions,
     preflight_gates,
     random_password,
-    resolve_inject_times,
     update_env,
     write_state,
     write_text_atomic,
@@ -36,53 +33,31 @@ from constants import (
     GOLDEN_TAG,
     MAX_BOXES_PER_TEAM,
     MAX_TEAMS,
-    PER_MACHINE_NAKON_BUDGET,
     SCORING_ENGINE_VMID,
-    SNAP_BASE,
-    SNAP_READY,
 )
-from domain_ops import deploy_domain_configs
-from engine_ops import (bootstrap_scoring_engine, ensure_nat_forwarding,
-                        prepare_engine_from_template, push_event_conf)
-from golden_ops import (_is_template, _quote_sshkeys, _template_vmid_map,
-                        build_golden_set, unbooted_golden_boxes)
-from hardening_ops import (_APT_PREP_BODY, _apt_prep_script, ensure_alpine_services,
-                           fix_dns_on_boxes, fix_services_on_boxes, prep_apt_on_boxes,
-                           setup_ubuntu_auth)
-from jump_ops import build_jump_vms
+from golden_ops import (_is_template, _template_vmid_map, build_golden_set,
+                        unbooted_golden_boxes)
+from hardening_ops import _APT_PREP_BODY, _apt_prep_script
 from nakon_ops import (acquire_engine_lock, build_nakon_bundle, generate_nakon_config,
-                       generate_slot_golden_config, generate_stage_configs, run_nakon)
-from nodes_ops import (activate_placement, golden_vmid_for_slot,
-                       record_of, resolve_placement, satellite_routes_for,
-                       satellite_tfvars)
-from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
+                       generate_stage_configs)
+from nodes_ops import (activate_placement, golden_vmid_for_slot, resolve_placement,
+                       satellite_routes_for, satellite_tfvars)
 from range_ops import (destroy_vm_if_exists, ensure_terraform_workdir, enumerate_targets,
-                       persist_targets, proxmox_api, take_snapshot,
-                       terraform_dir, terraform_plugin_cache_dir)
-from routing_ops import verify_satellite_routing
-from ssh_ops import (forget_engine_host_key, read_terraform_ctx, wait_for_boxes_ssh,
-                     wait_for_cloud_init, wait_for_http, wait_for_ssh)
+                       persist_targets)
 from template_ops import (
-    build_engine_template,
     code_hash,
-    destroy_engine_template,
-    engine_hash_inputs,
     engine_template_vmid,
-    find_engine_template,
     frozen_gate,
     frozen_state,
     golden_freeze_gate,
     golden_hash_inputs,
     golden_payload_hash,
     hash_from_inputs,
-    load_template_hashes,
-    save_template_hashes,
     stored_template_hash,
 )
-from timing import print_timing_summary, timed
-from utils import (compfile_flag, compfile_value, is_unmanaged, load_compfile, load_users_config,
-                   run_concurrent, run_terraform, valid_comp_name)
-from windows_ops import bootstrap_windows_box, is_windows_template
+from utils import (compfile_flag, is_unmanaged, load_compfile, load_users_config,
+                   valid_comp_name)
+from windows_ops import is_windows_template
 
 ENV_PATH = Path(".env")
 load_dotenv(ENV_PATH)
@@ -344,34 +319,115 @@ def reset_domain_markers(comp_dir):
         stale.unlink()
 
 
-def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
-           team_node=None, engine_node=None, force_from_phase=False):
-    """Run the seven-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
+@dataclass
+class DeployContext:
+    """Everything the seven deploy phases share, built once by prepare().
 
-    scoring_vmid overrides the scoring-engine VMID (default 1000) so several
-    competitions can run concurrently on one node; it is persisted to
-    .deploy_state.json and reused on resume.
-    team_node (--team-node id=NODE,...) and engine_node (--engine-node NAME) pin the
-    multi-node placement when nodes.json exists; without them teams are placed by
-    capacity-fill. force_from_phase (--force-from-phase) bypasses the guard that refuses
-    to skip phases .deploy_state.json never recorded as completed."""
-    # One driver per competition. Two concurrent deploys share the engine's
-    # /opt/nakon staging dir and each one's 'rm -rf /opt/nakon/*' wipes the
-    # other's plan archives mid-plant (scrim-extreme-2026-09-20: a pkill'd
-    # wrapper left run-2's python alive while run-3 started; both died with
-    # 'bundle is missing its plan archive').
-    lock_fh = open(comp_dir / ".deploy.lock", "w")
-    try:
-        fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        raise SystemExit(
-            f"  ERROR: another deploy already holds the lock on {comp_dir} — refusing to run "
-            "concurrently. Find it with pgrep -f create-competition; kill the PYTHON driver "
-            "itself (pkill -f 'python.*create-competition'), not just a wrapper, and confirm "
-            "with pgrep before retrying."
-        )
-    _DEPLOY_LOCKS[str(comp_dir)] = lock_fh
+    Before this existed the phases were `if` blocks inside a 940-line deploy() reading
+    ~160 locals, which made every phase boundary invisible and every phase untestable.
+    The context is deliberately a data holder: its only behaviour is the state-file pair
+    every phase needs (save_state/checkpoint) plus comp_tags, so a phase function is
+    ordinary code that takes this object.
 
+    Field order follows the pipeline: identity/config -> secrets/state -> placement and
+    environment -> generated configs and paths -> targets -> the terraform/SSH fields
+    phase 2 fills in (a fresh run only has terraform outputs after apply #1; a resume
+    finds them already there)."""
+
+    # --- run identity + inputs ---
+    comp_dir: Path
+    comp_name: str
+    state_path: Path
+    from_phase: int
+    resuming: bool
+    assume_yes: bool
+    # --- competition config (Compfile/users.json) ---
+    name: str
+    scenario: str
+    box_username: str
+    credlist_usernames: list
+    nakon_jobs: int
+    apt_cache: bool
+    injects: list
+    packet_pw: Optional[dict]
+    # --- secrets + persisted state ---
+    state: dict
+    teams: dict
+    number_of_teams: int
+    admin_password: str
+    postgres_password: str
+    redis_password: str
+    box_password: str
+    box_creds: dict
+    domain_creds: Optional[dict]
+    inject_password: Optional[str]
+    # --- multi-node placement + Proxmox environment ---
+    placement: Optional[dict]
+    node: str
+    engine_vmid: int
+    engine_mgmt_ip: str
+    # --- generated configs + terraform workdir ---
+    boxes: list
+    boxes_by_name: dict
+    unbooted: set
+    nakon_config_path: Path
+    golden_config_path: Path
+    repair_config_path: Path
+    final_config_path: Path
+    golden_inputs: dict
+    golden_hashes: dict
+    frozen_keep: set
+    tf_dir: Path
+    tfvars_path: Path
+    tfvars: dict
+    ssh_key_abs: str
+    # --- enumerated targets ---
+    all_targets: list
+    managed_targets: list
+    linux_targets: list
+    windows_targets: list
+    # --- filled in after terraform apply #1 (phase 2) ---
+    legacy_clones: dict = field(default_factory=dict)
+    tf_ctx: dict = field(default_factory=dict)
+    scoring_user: str = ""
+    scoring_ip: str = ""
+    ssh_key: Optional[Path] = None
+
+    def save_state(self):
+        """Persist .deploy_state.json through the shared config_ops writer."""
+        # .deploy_state.json holds the only copy of the generated box and team
+        # passwords: a torn write here bricks both resume and redeploy, and the old
+        # write_text-then-chmod idiom also left the secret briefly world-readable.
+        # config_ops.write_state is the shared os.replace + 0600-at-creation writer
+        # (added 2026-10-01 alongside redeploy's two copies and the post-DB-wipe
+        # recovery path) — one implementation, not four.
+        write_state(self.state_path, self.state)
+
+    def checkpoint(self, n):
+        """Record phase n as completed — the resume guard's only source of truth."""
+        self.state["last_phase"] = n
+        self.save_state()
+
+    @property
+    def comp_tags(self):
+        """The tags every VM this competition owns carries (destroy's ownership guard)."""
+        return {"tezcatlipoca", f"comp-{self.comp_name}"}
+
+
+def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
+            team_node=None, engine_node=None, force_from_phase=False):
+    """Everything deploy() must do before phase 1, as one testable step.
+
+    Resolves the engine VMID, loads Compfile/config/state, mints or reuses the
+    competition's secrets, computes multi-node placement, generates the nakon + stage
+    configs, computes the golden hashes and runs the frozen gate, assembles
+    terraform.tfvars.json, runs preflight and enumerates the targets. Returns None when
+    the operator declines the confirmation prompt, so deploy() can return without
+    running any phase (the same early return the inline code had).
+
+    The write lock is deliberately NOT taken here: deploy() holds it across the whole
+    run, phases included. Nothing here destroys anything — the frozen gate runs before
+    phase 1 precisely so a freeze can still say "nothing destroyed"."""
     # Resolve this competition's scoring-engine VMID before taking the engine lock
     # (the lock is keyed on it) and before phase-1 cleanup destroys it. On resume it
     # is authoritative from .deploy_state.json; on a fresh deploy it comes from the
@@ -454,19 +510,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
         guard_resume_from_phase(from_phase, previous_state.get("last_phase"), state_path,
                                 force=force_from_phase)
 
-    def _save_state():
-        # .deploy_state.json holds the only copy of the generated box and team
-        # passwords: a torn write here bricks both resume and redeploy, and the old
-        # write_text-then-chmod idiom also left the secret briefly world-readable.
-        # config_ops.write_state is the shared os.replace + 0600-at-creation writer
-        # (added 2026-10-01 alongside redeploy's two copies and the post-DB-wipe
-        # recovery path) — one implementation, not four.
-        write_state(state_path, state)
-
-    def checkpoint(n):
-        state["last_phase"] = n
-        _save_state()
-
     injects = load_injects(comp_dir)
     # Packet-published credentials (compile-packet.py -> passwords.json): when present,
     # box_password and the credlists are the packet's default credentials verbatim, not
@@ -502,7 +545,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
             "inject_password": inject_password,
             "scoring_vm_id": engine_vmid,
         })
-        _save_state()
+        write_state(state_path, state)
         print(f"  Resuming from phase {from_phase} "
               f"({number_of_teams} team(s), last completed phase {state.get('last_phase')})")
     else:
@@ -559,7 +602,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
             "domain_creds": domain_creds,
             "scoring_vm_id": engine_vmid,
         }
-        _save_state()
+        write_state(state_path, state)
 
     # Multi-node placement (no-op without nodes.json/placement.json): resolved now —
     # teams and boxes are known, and the env must point at the engine's host BEFORE
@@ -580,7 +623,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                 os.environ.setdefault("TF_VAR_engine_mgmt_gw",
                                       _resolved_engine_record.engine_mgmt_gw)
     state["multi_node"] = bool(placement)
-    _save_state()
+    write_state(state_path, state)
     acquire_engine_lock(engine_vmid)
 
     nakon_config_path = generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password,
@@ -746,7 +789,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     if not assume_yes and not resuming:
         if not confirm_deploy(name, scenario, difficulty, teams, boxes):
             print("  Deployment cancelled.")
-            return
+            return None
 
     node = os.environ["TF_VAR_proxmox_node"]
     all_targets = enumerate_targets(teams, boxes, placement=placement, default_node=node)
@@ -758,483 +801,119 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     linux_targets = [t for t in managed_targets if not is_windows_template(t["box"]["template"])]
     windows_targets = [t for t in managed_targets if is_windows_template(t["box"]["template"])]
 
-    current_phase = max(from_phase, 1)
+    return DeployContext(
+        comp_dir=comp_dir,
+        comp_name=comp_name,
+        state_path=state_path,
+        from_phase=from_phase,
+        resuming=resuming,
+        assume_yes=assume_yes,
+        name=name,
+        scenario=scenario,
+        box_username=box_username,
+        credlist_usernames=credlist_usernames,
+        nakon_jobs=nakon_jobs,
+        apt_cache=apt_cache,
+        injects=injects,
+        packet_pw=packet_pw,
+        state=state,
+        teams=teams,
+        number_of_teams=number_of_teams,
+        admin_password=admin_password,
+        postgres_password=postgres_password,
+        redis_password=redis_password,
+        box_password=box_password,
+        box_creds=box_creds,
+        domain_creds=domain_creds,
+        inject_password=inject_password,
+        placement=placement,
+        node=node,
+        engine_vmid=engine_vmid,
+        engine_mgmt_ip=engine_mgmt_ip,
+        boxes=boxes,
+        boxes_by_name={b["name"]: b for b in boxes},
+        unbooted=unbooted,
+        nakon_config_path=nakon_config_path,
+        golden_config_path=golden_config_path,
+        repair_config_path=repair_config_path,
+        final_config_path=final_config_path,
+        golden_inputs=golden_inputs,
+        golden_hashes=golden_hashes,
+        frozen_keep=frozen_keep,
+        tf_dir=tf_dir,
+        tfvars_path=tfvars_path,
+        tfvars=tfvars,
+        ssh_key_abs=ssh_key_abs,
+        all_targets=all_targets,
+        managed_targets=managed_targets,
+        linux_targets=linux_targets,
+        windows_targets=windows_targets,
+    )
+
+
+def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
+           team_node=None, engine_node=None, force_from_phase=False):
+    """Run the seven-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
+
+    scoring_vmid overrides the scoring-engine VMID (default 1000) so several
+    competitions can run concurrently on one node; it is persisted to
+    .deploy_state.json and reused on resume.
+    team_node (--team-node id=NODE,...) and engine_node (--engine-node NAME) pin the
+    multi-node placement when nodes.json exists; without them teams are placed by
+    capacity-fill. force_from_phase (--force-from-phase) bypasses the guard that refuses
+    to skip phases .deploy_state.json never recorded as completed."""
+    # Imported here, not at module scope: deploy_phases reaches back into this module
+    # for the pure phase helpers and the globals the offline tests monkeypatch, so a
+    # module-level import would be circular (and `python3 deploy.py` would trip over a
+    # partially-initialised deploy_phases).
+    from deploy_phases import PHASES, connect_terraform, finish_deploy
+
+    # One driver per competition. Two concurrent deploys share the engine's
+    # /opt/nakon staging dir and each one's 'rm -rf /opt/nakon/*' wipes the
+    # other's plan archives mid-plant (scrim-extreme-2026-09-20: a pkill'd
+    # wrapper left run-2's python alive while run-3 started; both died with
+    # 'bundle is missing its plan archive').
+    lock_fh = open(comp_dir / ".deploy.lock", "w")
     try:
-        if from_phase <= 1:
-            current_phase = 1
-            print("[1/7] Cleaning up previous deployment (parallel; deletes are metadata-light "
-                  "— the datastore-saturation hazard belongs to bulk clone writes, not deletes)...")
-            comp_tags = {"tezcatlipoca", f"comp-{comp_name}"}
-            legacy_clones = {}
-            cloned_path = comp_dir / "cloned_vms.json"
-            if cloned_path.exists():
-                try:
-                    legacy_clones = {int(v): str(k) for k, v in json.loads(cloned_path.read_text()).items()}
-                except (ValueError, TypeError, OSError):
-                    print("  WARNING: could not parse cloned_vms.json — relying on computed vmids")
+        fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        raise SystemExit(
+            f"  ERROR: another deploy already holds the lock on {comp_dir} — refusing to run "
+            "concurrently. Find it with pgrep -f create-competition; kill the PYTHON driver "
+            "itself (pkill -f 'python.*create-competition'), not just a wrapper, and confirm "
+            "with pgrep before retrying."
+        )
+    _DEPLOY_LOCKS[str(comp_dir)] = lock_fh
 
-            def _destroy_pool(vmid_map, destroy_node):
-                workers = min(8, len(vmid_map)) or 1
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futures = [pool.submit(_destroy_owned, destroy_node, vmid, name)
-                               for vmid, name in sorted(vmid_map.items())]
-                    for fut in futures:
-                        fut.result()
+    ctx = prepare(comp_dir, num_teams=num_teams, assume_yes=assume_yes, from_phase=from_phase,
+                  scoring_vmid=scoring_vmid, team_node=team_node, engine_node=engine_node,
+                  force_from_phase=force_from_phase)
+    if ctx is None:
+        return
 
-            def _destroy_owned(destroy_node, vmid, vm_name):
-                with timed(comp_dir, 1, "destroy_vm", vm_name):
-                    legacy_name = vm_name if vm_name.startswith("golden-") else None
-                    destroy_vm_if_exists(destroy_node, vmid, expect_tags=comp_tags,
-                                         legacy_name=legacy_name)
-
-            def _destroy_node_waves(destroy_node, node_targets, slot, extra_destroy=None):
-                """One wave pair per hosting node, that node's VMs and its slot's
-                golden span (multi-node) — the engine node keeps the historical
-                slot-0 behavior."""
-                try:
-                    node_vms = proxmox_api("GET", f"/nodes/{destroy_node}/qemu")["data"]
-                except Exception as e:
-                    print(f"  WARNING: could not scan {destroy_node} for stranded "
-                          f"clones ({e}) — proceeding")
-                    node_vms = []
-                wave1, wave2 = phase1_destroy_waves(
-                    node_vms, node_targets, legacy_clones if slot == 0 else {},
-                    engine_vmid, boxes, comp_tags,
-                    lambda vid: _is_template(destroy_node, vid),
-                    load_template_hashes(comp_dir), golden_hashes,
-                    frozen_keep=frozen_keep, slot=slot, extra_destroy=extra_destroy)
-                _destroy_pool(wave1, destroy_node)
-                _destroy_pool(wave2, destroy_node)
-
-            # Wave 1: every team box (the computed set covers ALL teams now that terraform
-            # builds them) plus any legacy API clones from a pre-golden range. Linked
-            # clones must die BEFORE their templates.
-            _destroy_node_waves(node, [t for t in all_targets if t.get("node") == node], 0)
-            if placement:
-                for sat in placement["satellites"]:
-                    sat_rec = record_of(placement, sat["name"])
-                    _destroy_node_waves(
-                        sat_rec.node,
-                        [t for t in all_targets if t.get("node") == sat_rec.node],
-                        sat["slot"], extra_destroy={sat["jump_vmid"]: f"jump-{comp_name}-{sat['slot']}"})
-                    for team_key in placement["team_nodes"]:
-                        if placement["team_nodes"][team_key] != sat["name"]:
-                            continue
-                        with timed(comp_dir, 1, "destroy_bridge", f"vmbr{teams[team_key]['identifier']}"):
-                            destroy_bridge_if_exists(sat_rec.node, f"vmbr{teams[team_key]['identifier']}")
-            for team_key, team in teams.items():
-                if placement and placement["team_nodes"][team_key] != placement["engine_node"]:
-                    continue  # satellite bridge — destroyed above on its own host
-                with timed(comp_dir, 1, "destroy_bridge", f"vmbr{team['identifier']}"):
-                    destroy_bridge_if_exists(node, f"vmbr{team['identifier']}")
-            (comp_dir / ".postclone-swept").unlink(missing_ok=True)
-            reset_domain_markers(comp_dir)
-            time.sleep(5)
-            checkpoint(1)
-        else:
-            print("[1/7] Skipped (resume) — leaving existing VMs/bridges in place.")
-
-        if from_phase <= 2:
-            current_phase = 2
-            # --- M4: engine template lifecycle (build once per competition, reuse
-            # across its test runs; rebuild only on config drift and never when frozen).
-            main_tf_text = Path("terraform/main.tf").read_text()
-            quotient_ref = compfile_value(comp_dir / "Compfile", "quotient_ref")
-            engine_inputs = engine_hash_inputs(
-                int(os.environ["TF_VAR_template_vm_id"]), quotient_ref,
-                main_tf_text, bootstrap_scoring_engine)
-            engine_hash = hash_from_inputs(engine_inputs)
-            stored = load_template_hashes(comp_dir)
-            tmpl = find_engine_template(node, engine_vmid)
-            rebuild = True
-            if tmpl:
-                entry = stored.get("engine") or {}
-                if stored_template_hash(node, tmpl) == engine_hash and entry.get("hash") == engine_hash:
-                    print(f"  Engine template hash matches — reusing (vmid {tmpl})")
-                    rebuild = False
-                elif not frozen_gate(comp_dir, entry.get("inputs"), engine_inputs,
-                                     "engine template"):
-                    # frozen + code-only drift: frozen_gate warned; keep the frozen template.
-                    rebuild = False
-            if rebuild:
-                if tmpl:
-                    print("  Engine template hash differs — rebuilding...")
-                    # The old template's only clone is the deployed engine, and the
-                    # build VM needs the planned mgmt IP — on a phase-2 resume the old
-                    # engine is still up (phase 1 was skipped), so destroy it here.
-                    # Apply #1 recreates it as a linked clone of the new template.
-                    comp_tags = {"tezcatlipoca", f"comp-{comp_name}"}
-                    destroy_vm_if_exists(node, engine_vmid, expect_tags=comp_tags)
-                    destroy_engine_template(node, engine_vmid, expect_tags={
-                        "tezcatlipoca", f"comp-{comp_name}", "engine-template"})
-                ctx_early = {
-                    "ssh_key_path": ssh_key_abs,
-                    "vm_username": os.environ["TF_VAR_vm_username"],
-                    "ssh_public_key_quoted": _quote_sshkeys(os.environ["TF_VAR_ssh_public_key"]),
-                }
-                with timed(comp_dir, 2, "engine_template_build"):
-                    tmpl, build_info = build_engine_template(
-                        node, comp_dir, engine_vmid, int(os.environ["TF_VAR_template_vm_id"]),
-                        ctx_early, postgres_password, redis_password, quotient_ref,
-                        engine_hash, engine_inputs)
-                state["engine_build_info"] = build_info
-            save_template_hashes(comp_dir, engine={"hash": engine_hash, "inputs": engine_inputs})
-            state["engine_template_vmid"] = tmpl
-            state["engine_template_hash"] = engine_hash
-            _save_state()
-
-            print("[2/7] Terraform apply #1 (engine from template + bridges; team boxes "
-                  "come in apply #2)...")
-            tfvars["engine_clone_id"] = tmpl
-            write_text_atomic(tfvars_path, json.dumps(tfvars, indent=2))
-            tf_env = {**os.environ, "TF_PLUGIN_CACHE_DIR": str(terraform_plugin_cache_dir())}
-            tf_cwd = str(terraform_dir(comp_dir))
-            run_terraform(["init"], cwd=tf_cwd, env=tf_env, timeout=300)
-            # team_box's for_each is empty here (build_team_boxes=false): only the engine
-            # (a linked clone of the engine template — seconds, no bulk disk copy) and the
-            # bridges are built, plus team_nics' netplan for every team bridge and the
-            # cold-boot that surfaces the engine's team NICs.
-            with timed(comp_dir, 2, "terraform_apply"):
-                run_terraform(["apply", "-auto-approve", "-parallelism=1"], cwd=tf_cwd, env=tf_env, timeout=2400)
-
-            apply_ctx = read_terraform_ctx(comp_dir)
-            # Fresh engine VM => new host key; drop any stale pin so accept-new re-pins it.
-            forget_engine_host_key(apply_ctx["scoring_engine_ip"])
-            with timed(comp_dir, 2, "wait_engine_ssh", apply_ctx["scoring_engine_ip"]):
-                wait_for_ssh(apply_ctx["ssh_key_path"], apply_ctx["vm_username"],
-                             apply_ctx["scoring_engine_ip"], timeout=300)
-            if placement and placement["satellites"]:
-                # Jump/router per satellite, then the fail-loud routing gate: nothing
-                # downstream (satellite golden plants, nakon, scoring) works without
-                # engine -> jump -> satellite-bridge paths.
-                jump_ctx = {"ssh_key_path": ssh_key_abs,
-                            "vm_username": os.environ["TF_VAR_vm_username"],
-                            "ssh_public_key_quoted": _quote_sshkeys(os.environ["TF_VAR_ssh_public_key"])}
-                with timed(comp_dir, 2, "jump_vms", f"x{len(placement['satellites'])}"):
-                    build_jump_vms(placement, engine_vmid, jump_ctx, comp_name,
-                                   engine_mgmt_ip,
-                                   engine_mgmt_gw=os.environ.get("TF_VAR_engine_mgmt_gw",
-                                                                 DEFAULT_ENGINE_MGMT_GW))
-                with timed(comp_dir, 2, "routing_converge"):
-                    verify_satellite_routing(placement, apply_ctx)
-            # Record where this state's resources live, for the stale-state guard above.
-            state["deployed_endpoint"] = os.environ.get("TF_VAR_proxmox_endpoint", "").rstrip("/")
-            checkpoint(2)
-        else:
-            print("[2/7] Skipped (resume) — not re-running terraform apply.")
-
-        ctx = read_terraform_ctx(comp_dir)
-        key = Path(ctx["ssh_key_path"])
-        scoring_user = os.environ["TF_VAR_vm_username"]
-        scoring_ip = ctx["scoring_engine_ip"]
-
-        if from_phase <= 3:
-            current_phase = 3
-            # M4: the deployed engine is a linked clone of the engine template — the
-            # heavy bootstrap ran once on the template build VM. Per-deploy state is
-            # applied fresh here: .env (BEFORE compose up, so the fresh postgres volume
-            # initializes with this competition's credentials), fresh-volume compose up
-            # (an empty scoring DB every run), and the cacher check.
-            print("[3/7] Preparing scoring engine from template (fresh volumes, event.conf)...")
-            with timed(comp_dir, 3, "engine_from_template"):
-                prepare_engine_from_template(ctx, postgres_password, redis_password)
-
-            print("  Pushing event.conf early (stabilizes Quotient so NAT survives nakon)...")
-            with timed(comp_dir, 3, "push_event_conf"):
-                push_event_conf(comp_dir, teams, boxes, ctx, name,
-                                inject_password=inject_password, admin_password=admin_password,
-                                postgres_password=postgres_password, redis_password=redis_password,
-                                box_creds=box_creds,
-                                extra_credlists=({"domain": domain_creds}
-                                                 if domain_creds else None))
-            ensure_nat_forwarding(ctx)
-            checkpoint(3)
-        else:
-            print("[3/7] Skipped (resume).")
-
-        if from_phase <= 4:
-            current_phase = 4
-            print("[4/7] Building the golden set (plant once per box type, convert to template)...")
-            # M4 hash gate: a converted golden whose stored hash differs is rebuilt —
-            # unless the competition is frozen, in which case config drift hard-fails
-            # (frozen_gate) and code-only drift reuses the template with a warning.
-            # Matching templates reach build_golden_set and short-circuit the build.
-            stored = load_template_hashes(comp_dir)
-
-            # Slot-0 goldens only exist when the engine node actually hosts teams —
-            # an all-satellite spread leaves the engine with no local bridges to
-            # anchor them on (their vmbr<id> lives on the satellite's host).
-            engine_has_teams = bool(
-                placement is None
-                or placement["team_nodes"] and any(
-                    n == placement["engine_node"]
-                    for n in placement["team_nodes"].values()))
-            golden_ids = {}
-            if engine_has_teams:
-                golden_rebuild_gate(comp_dir, node, 0, boxes, engine_vmid, stored,
-                                    golden_hashes, golden_inputs, comp_name)
-                golden_ids = build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid,
-                                              box_password, golden_config_path, key, scoring_user,
-                                              scoring_ip, jobs=nakon_jobs,
-                                              golden_hashes=golden_hashes, unbooted=unbooted)
-            golden_ids_by_slot = {0: golden_ids}
-            if placement and placement["satellites"]:
-                # Satellite goldens: identical planted content (same hashes), built ON
-                # each satellite from its own templates, at the slot's anchor subnet —
-                # linked clones can't cross hosts on separate storages. The plant rides
-                # the engine's gateway path; the jump routes + SNATs it there.
-                for sat in placement["satellites"]:
-                    sat_rec = record_of(placement, sat["name"])
-                    slot = sat["slot"]
-                    anchor = sat["anchor_identifier"]
-                    golden_rebuild_gate(comp_dir, sat_rec.node, slot, boxes, engine_vmid,
-                                        stored, golden_hashes, golden_inputs, comp_name)
-                    slot_config = generate_slot_golden_config(comp_dir, boxes,
-                                                              unbooted, anchor, slot)
-                    print(f"  Golden set on satellite '{sat['name']}' (slot {slot}, "
-                          f"anchor 192.168.{anchor}.0/24)...")
-                    with timed(comp_dir, 4, "golden_build", f"sat{slot}"):
-                        golden_ids_by_slot[slot] = build_golden_set(
-                            sat_rec.node, teams, boxes, ctx, comp_dir, engine_vmid,
-                            box_password, slot_config, key, scoring_user, scoring_ip,
-                            jobs=nakon_jobs, golden_hashes=golden_hashes,
-                            unbooted=unbooted, slot=slot, anchor_identifier=anchor)
-            state["golden_template_ids"] = golden_ids
-            state["golden_ids_by_slot"] = {str(k): v for k, v in golden_ids_by_slot.items()}
-            state["golden_hashes"] = golden_hashes
-            save_template_hashes(comp_dir, golden={
-                name: {"hash": golden_hashes[name], "inputs": golden_inputs[name]}
-                for name in golden_hashes})
-            _save_state()
-
-            print("[4b/7] Terraform apply #2: every team as a linked clone of the golden set...")
-            # Positional per box: two box types may share one base template, so a name-keyed
-            # map would silently cross-wire golden disks (live-found 2026-09-24: web01
-            # clones came from golden-db01's disk).
-            # Length must equal boxes_per_team (positional). Unmanaged boxes (pfSense) have
-            # no golden — terraform's team_box unmanaged branch clones them from their own
-            # base template instead, so their slot here carries that base template's vmid
-            # — ON THE TEAM'S OWN NODE for satellite slots (their clone must resolve
-            # locally).
-            _tmap = _template_vmid_map(node)
-            tfvars["golden_template_ids"] = [
-                int(_tmap[b["template"]]) if is_unmanaged(b)
-                # 0 placeholder when the engine hosts no teams (all-satellite spread):
-                # the slot-0 team_box for_each is empty then, so nothing reads it.
-                else int(golden_ids.get(b["name"]) or 0)
-                for b in boxes
-            ]
-            if placement and placement["satellites"]:
-                by_slot_ids = {str(k): v for k, v in golden_ids_by_slot.items()}
-                tfvars["golden_template_ids_by_slot"] = {}
-                for sat in placement["satellites"]:
-                    slot = sat["slot"]
-                    sat_node = record_of(placement, sat["name"]).node
-                    stmap = _template_vmid_map(sat_node)
-                    slot_ids = by_slot_ids.get(str(slot)) or {}
-                    tfvars["golden_template_ids_by_slot"][str(slot)] = [
-                        int(stmap[b["template"]]) if is_unmanaged(b) else int(slot_ids[b["name"]])
-                        for b in boxes
-                    ]
-            tfvars["build_team_boxes"] = True
-            write_text_atomic(tfvars_path, json.dumps(tfvars, indent=2))
-            tf_env = {**os.environ, "TF_PLUGIN_CACHE_DIR": str(terraform_plugin_cache_dir())}
-            tf_cwd = str(terraform_dir(comp_dir))
-            # Linked clones are seconds each (no bulk disk copy); the budget is for the
-            # cloud-init-adjacent API waits bpg does per box, not for storage.
-            apply_timeout = 600 + 300 * len(all_targets)
-            with timed(comp_dir, 4, "terraform_apply_teams"):
-                run_terraform(["apply", "-auto-approve", "-parallelism=1"],
-                              cwd=tf_cwd, env=tf_env, timeout=apply_timeout)
-
-            # Apply #2 (re-)created the team boxes: any surviving .postclone-swept
-            # marker describes the OLD clones, and a phase-5 resume would skip the
-            # repair sweep/credlist/shim on the fresh ones (hit twice on
-            # shakedown-5x4; the workaround was deleting the marker by hand).
-            (comp_dir / ".postclone-swept").unlink(missing_ok=True)
-
-            def _boot_win(t):
-                print(f"    Bootstrapping Windows box {t['ip']} (vmid {t['vmid']})...")
-                gw = f"192.168.{t['identifier']}.1"
-                with timed(comp_dir, 4, "bootstrap_windows", t["ip"]):
-                    bootstrap_windows_box(t.get("node", node), t["vmid"], t["ip"], gw,
-                                          "8.8.8.8", box_password)
-
-            win_results = run_concurrent(windows_targets, _boot_win, max_workers=4)
-            for t, r in zip(windows_targets, win_results):
-                if isinstance(r, Exception):
-                    raise r
-
-            with timed(comp_dir, 4, "wait_boxes_ssh"):
-                wait_for_boxes_ssh(ctx, all_targets, timeout=300)
-            with timed(comp_dir, 4, "wait_cloud_init"):
-                wait_for_cloud_init(ctx, all_targets, timeout=240)
-            with timed(comp_dir, 4, "setup_auth"):
-                setup_ubuntu_auth(linux_targets, ctx)
-            with timed(comp_dir, 4, "fix_dns"):
-                fix_dns_on_boxes(linux_targets, ctx)
-            with timed(comp_dir, 4, "prep_apt"):
-                prep_apt_on_boxes(linux_targets, ctx, use_proxy=apt_cache)
-
-            print(f"  Snapshotting all boxes as '{SNAP_BASE}' (pre-sweep restore point)...")
-
-            def _snap_base(t):
-                with timed(comp_dir, 4, "snapshot", t["vm_name"]):
-                    take_snapshot(t.get("node", node), t["vmid"], SNAP_BASE,
-                                  description="tezcatlipoca: booted, networked, pre-sweep")
-
-            run_concurrent(all_targets, _snap_base, max_workers=4)
-            checkpoint(4)
-        else:
-            print("[4/7] Skipped (resume).")
-
-        if from_phase <= 5:
-            current_phase = 5
-            swept_marker = comp_dir / ".postclone-swept"
-            if swept_marker.exists():
-                print("[5/7] Resume marker present — post-clone sweep already done; skipping")
-            else:
-                print("[5/7] Repair-stage sweep (sshd/sudoers) on every team box...")
-                ensure_nat_forwarding(ctx)
-                repair_machines = json.loads(repair_config_path.read_text())["machines"]
-                if repair_machines:
-                    repair_bundle = build_nakon_bundle(repair_config_path)
-                    # strict=False: the sweep re-runs on every resume, and one flaky plant
-                    # must not kill the sweep after 98% of it landed. The golden plant
-                    # (phase 4) is the strict, authoritative one.
-                    with timed(comp_dir, 5, "nakon", f"repair x{len(repair_machines)}"):
-                        result = run_nakon(key, scoring_user, scoring_ip, repair_bundle,
-                                           repair_config_path,
-                                           timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(repair_machines)),
-                                           strict=False, jobs=nakon_jobs)
-                    # Stage-prefixed tally (verify's plant-integrity line names the pass)
-                    # and the structured coverage record (verify's plant-coverage gate).
-                    state["nakon_failed_steps"] = [f"repair: {line}" for line in result.failed[:20]]
-                    record_stage_coverage(state, repair_machines, result, _save_state)
-                else:
-                    print("  No repair-stage configurations in this lineup — sweep skipped")
-                # fix_services right after the repair pass: it un-wedges sshd (the ssh-*
-                # configs above restart sshd and can trip the start-limit), creates the
-                # credlist OS accounts, and binds the services the golden stage installed.
-                # It must run BEFORE domains (nakon joins over SSH) and before the final
-                # pass (whose disruptive configs would break its apt/SSH needs).
-                with timed(comp_dir, 5, "fix_services"):
-                    fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=box_creds)
-                    if compfile_flag(comp_dir / "Compfile", "alpine_services"):
-                        # Clones usually inherit the shim-installed services from the
-                        # golden disk; this pass is the idempotent safety net.
-                        ensure_alpine_services(comp_dir, linux_targets, ctx)
-                swept_marker.write_text(time.strftime("%Y-%m-%d %H:%M:%S"))
-            checkpoint(5)
-        else:
-            print("[5/7] Skipped (resume).")
-
-        if from_phase <= 6:
-            current_phase = 6
-            print("  Configuring Windows AD domains (if any)...")
-            with timed(comp_dir, 6, "domains"):
-                deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path,
-                                               key, scoring_user, scoring_ip, box_password)
-
-            # Final-stage pass AFTER domains: the disruptive configs break the DNS/apt the
-            # Linux realmd joins need, and the boot-hostile configs would brick any member
-            # box's domain-join reboot. From here on the boxes are in their as-started
-            # competition flavor — nothing downstream reboots them or needs apt/DNS.
-            final_machines = json.loads(final_config_path.read_text())["machines"]
-            if final_machines:
-                print(f"  Final-stage pass (disruption + boot-hostile) on {len(final_machines)} machine(s)...")
-                ensure_nat_forwarding(ctx)
-                final_bundle = build_nakon_bundle(final_config_path)
-                with timed(comp_dir, 6, "nakon", f"final x{len(final_machines)}"):
-                    result = run_nakon(key, scoring_user, scoring_ip, final_bundle,
-                                       final_config_path,
-                                       timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(final_machines)),
-                                       strict=False, jobs=nakon_jobs)
-                # Merge, not overwrite: a failure in BOTH passes must keep the repair
-                # tally (phase 6 used to erase it by writing only on failure).
-                merged = list(state.get("nakon_failed_steps") or [])
-                merged += [f"final: {line}" for line in result.failed[:20]]
-                seen = set()
-                state["nakon_failed_steps"] = [x for x in merged if not (x in seen or seen.add(x))][:40]
-                # Save unconditionally: _record_coverage may have CLEARED a stale
-                # coverage entry on this fully-green pass, and a clear that never
-                # reaches disk leaves verify's coverage gate red (see
-                # record_stage_coverage — the ff9b19f bug, re-created).
-                record_stage_coverage(state, final_machines, result, _save_state)
-
-            if compfile_flag(comp_dir / "Compfile", "team_beacons"):
-                print("  Planting team beacons (hunt artifacts)...")
-                with timed(comp_dir, 6, "beacons"):
-                    plant_team_beacons(teams, boxes, ctx, box_username=box_username,
-                                       box_password=box_password)
-
-            print(f"  Snapshotting all boxes as '{SNAP_READY}' (as-delivered restore point)...")
-
-            def _snap_ready(t):
-                with timed(comp_dir, 6, "snapshot", t["vm_name"]):
-                    take_snapshot(t.get("node", node), t["vmid"], SNAP_READY,
-                                  description="tezcatlipoca: as delivered, post-sweep + hardening")
-
-            run_concurrent(all_targets, _snap_ready, max_workers=4)
-            checkpoint(6)
-        else:
-            print("[6/7] Skipped (resume).")
-
-        if from_phase <= 7:
-            current_phase = 7
-            print("[7/7] Seeding competition and creating injects...")
-
-            with timed(comp_dir, 7, "wait_quotient_http"):
-                wait_for_http(f"http://{scoring_ip}/api/login", timeout=120)
-
-            quotient_ctx = {
-                "teams": {team_key: team_data["identifier"] for team_key, team_data in teams.items()},
-                "quotient_admin_password": admin_password,
-            }
-
-            if not state.get("seeded"):
-                print("  Seeding teams and starting the competition clock...")
-                with timed(comp_dir, 7, "seed_teams"):
-                    seed_teams(scoring_ip, quotient_ctx)
-                state["seeded"] = True
-                _save_state()
-            else:
-                print("  Teams already seeded (resume) — skipping.")
-
-            if not state.get("engine_unpaused"):
-                # The unpause POST isn't idempotent, so a resume in the crash
-                # window between POST and flag-save asks the engine first and
-                # re-POSTs only when it really is still paused.
-                paused = engine_paused(scoring_ip, quotient_ctx)
-                if paused is False:
-                    print("  Engine reports itself unpaused — recording and skipping.")
-                else:
-                    with timed(comp_dir, 7, "unpause_engine"):
-                        unpause_engine(scoring_ip, quotient_ctx)
-                state["engine_unpaused"] = True
-                _save_state()
-            else:
-                print("  Engine already unpaused (resume) — skipping.")
-
-            if injects and not state.get("injects_created"):
-                print(f"  Creating {len(injects)} inject(s)...")
-                resolve_inject_times(injects)
-                with timed(comp_dir, 7, "create_injects", f"x{len(injects)}"):
-                    _created, failed_titles = create_injects(scoring_ip, admin_password, injects)
-                if failed_titles:
-                    print(f"  WARNING: {len(failed_titles)} inject(s) failed to create: "
-                          f"{', '.join(failed_titles)} — re-run --from-phase 7 to retry "
-                          f"(existing injects are deduped)")
-                else:
-                    state["injects_created"] = True
-                    _save_state()
-            elif injects:
-                print("  Injects already created (resume) — skipping.")
-            checkpoint(7)
-        else:
-            print("[7/7] Skipped (resume).")
+    current_phase = max(ctx.from_phase, 1)
+    try:
+        for n, phase in enumerate(PHASES, 1):
+            # Every phase is CALLED so it can print its own "[N/7] Skipped (resume)"
+            # banner, but only a phase that actually ran may become the failure's
+            # phase or write last_phase: checkpointing a skipped phase would move the
+            # resume guard's answer forward for a phase this run never executed.
+            running = ctx.from_phase <= n
+            if running:
+                current_phase = n
+            phase(ctx)
+            if running:
+                ctx.checkpoint(n)
+            if n == 2:
+                # The terraform/SSH context is read once, exactly where the inline
+                # code read it: after phase 2's checkpoint, before phase 3. A fresh
+                # run only has terraform's outputs after apply #1; a --from-phase 3+
+                # resume skips the apply but still needs them. Outside the `running`
+                # gate on purpose, so a failure here reports the phase the operator
+                # asked to resume at rather than phase 2.
+                connect_terraform(ctx)
     except BaseException as e:
-        print(f"\n  [!] Deploy failed during phase {current_phase} of '{comp_name}'.")
+        print(f"\n  [!] Deploy failed during phase {current_phase} of '{ctx.comp_name}'.")
         resume_phase = current_phase
         if current_phase >= 2 and "already exists" in str(e).lower():
             resume_phase = 1
@@ -1242,48 +921,10 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                   "prior attempt created still exists, but Terraform's state doesn't know about "
                   "it) — resuming from the failed phase would just hit the same error again.")
         print(f"      Resume with: python3 create-competition.py "
-              f"--competition {comp_name} --from-phase {resume_phase} --yes")
+              f"--competition {ctx.comp_name} --from-phase {resume_phase} --yes")
         raise
 
-    cred_lines = [
-        f"# Credentials for {name} — generated {time.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"Scoreboard:  http://{scoring_ip}",
-        f"admin  {admin_password}",
-    ]
-    if packet_pw:
-        cred_lines.append("# box credentials below are the packet-published defaults "
-                          "(passwords.json) — teams rotate them at minute zero")
-    if inject_password:
-        cred_lines.append(f"inject  {inject_password}")
-    for team_name, team_data in teams.items():
-        cred_lines.append(f"{team_name}  {team_data['password']}  (192.168.{team_data['identifier']}.0/24)")
-    cred_lines.append(f"box-login ({box_username})  {box_password}")
-    for user, pw in box_creds.items():
-        cred_lines.append(f"box-credlist-{user}  {pw}")
-    for user, pw in (domain_creds or {}).items():
-        cred_lines.append(f"box-credlist-domain-{user}  {pw}")
-    cred_path = comp_dir / "credentials.txt"
-    # The operator/packet-facing credential file — same 0600-at-creation rule.
-    write_text_atomic(cred_path, "\n".join(cred_lines) + "\n")
-
-    print_timing_summary(comp_dir)
-
-    print(f"\n{'='*60}")
-    print(f"  {name} is live")
-    print(f"{'='*60}")
-    print(f"Scenario: {scenario}")
-    print(f"Saved to: competitions/{comp_name}/  (credentials.txt, mode 0600)")
-    print(f"\nScoreboard:    http://{scoring_ip}")
-    print(f"Admin login:   admin / {admin_password}")
-    if inject_password:
-        print(f"Inject login:  inject / {inject_password}   ({len(injects)} inject(s) loaded)")
-    print("\nTeam logins:")
-    for team_name, team_data in teams.items():
-        print(f"  {team_name} / {team_data['password']}  (subnet 192.168.{team_data['identifier']}.0/24)")
-    print(f"\nBox login:     {box_username} / {box_password}  (every team box)")
-    print("Box credlist:  " + ", ".join(f"{u}/{p}" for u, p in box_creds.items()))
-    print(f"\nScoring engine SSH: ssh -i {key} {scoring_user}@{scoring_ip}")
-    print(f"{'='*60}")
+    finish_deploy(ctx)
 
 
 def main():
