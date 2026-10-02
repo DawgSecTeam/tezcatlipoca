@@ -43,14 +43,13 @@ from constants import (
     SNAP_READY,
 )
 from domain_ops import deploy_domain_configs
-from engine_ops import (bootstrap_scoring_engine, ensure_nat_forwarding,
-                        prepare_engine_from_template, push_event_conf)
-from golden_ops import (_is_template, _quote_sshkeys, _template_vmid_map,
-                        build_golden_set, unbooted_golden_boxes)
+from engine_ops import (ensure_nat_forwarding, prepare_engine_from_template,
+                        push_event_conf)
+from golden_ops import (_is_template, _template_vmid_map, build_golden_set,
+                        unbooted_golden_boxes)
 from hardening_ops import (_APT_PREP_BODY, _apt_prep_script, ensure_alpine_services,
                            fix_dns_on_boxes, fix_services_on_boxes, prep_apt_on_boxes,
                            setup_ubuntu_auth)
-from jump_ops import build_jump_vms
 from nakon_ops import (acquire_engine_lock, build_nakon_bundle, generate_nakon_config,
                        generate_slot_golden_config, generate_stage_configs, run_nakon)
 from nodes_ops import (activate_placement, golden_vmid_for_slot,
@@ -60,16 +59,11 @@ from quotient.setup import create_injects, engine_paused, seed_teams, unpause_en
 from range_ops import (destroy_vm_if_exists, ensure_terraform_workdir, enumerate_targets,
                        persist_targets, take_snapshot,
                        terraform_dir, terraform_plugin_cache_dir)
-from routing_ops import verify_satellite_routing
-from ssh_ops import (forget_engine_host_key, read_terraform_ctx, wait_for_boxes_ssh,
-                     wait_for_cloud_init, wait_for_http, wait_for_ssh)
+from ssh_ops import (read_terraform_ctx, wait_for_boxes_ssh, wait_for_cloud_init,
+                     wait_for_http)
 from template_ops import (
-    build_engine_template,
     code_hash,
-    destroy_engine_template,
-    engine_hash_inputs,
     engine_template_vmid,
-    find_engine_template,
     frozen_gate,
     frozen_state,
     golden_freeze_gate,
@@ -81,7 +75,7 @@ from template_ops import (
     stored_template_hash,
 )
 from timing import print_timing_summary, timed
-from utils import (compfile_flag, compfile_value, is_unmanaged, load_compfile, load_users_config,
+from utils import (compfile_flag, is_unmanaged, load_compfile, load_users_config,
                    run_concurrent, run_terraform, valid_comp_name)
 from windows_ops import bootstrap_windows_box, is_windows_template
 
@@ -915,7 +909,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     # for the pure phase helpers and the globals the offline tests monkeypatch, so a
     # module-level import would be circular (and `python3 deploy.py` would trip over a
     # partially-initialised deploy_phases).
-    from deploy_phases import phase1_cleanup
+    from deploy_phases import phase1_cleanup, phase2_engine_template
 
     # One driver per competition. Two concurrent deploys share the engine's
     # /opt/nakon staging dir and each one's 'rm -rf /opt/nakon/*' wipes the
@@ -951,89 +945,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 
         if ctx.from_phase <= 2:
             current_phase = 2
-            # --- M4: engine template lifecycle (build once per competition, reuse
-            # across its test runs; rebuild only on config drift and never when frozen).
-            main_tf_text = Path("terraform/main.tf").read_text()
-            quotient_ref = compfile_value(ctx.comp_dir / "Compfile", "quotient_ref")
-            engine_inputs = engine_hash_inputs(
-                int(os.environ["TF_VAR_template_vm_id"]), quotient_ref,
-                main_tf_text, bootstrap_scoring_engine)
-            engine_hash = hash_from_inputs(engine_inputs)
-            stored = load_template_hashes(ctx.comp_dir)
-            tmpl = find_engine_template(ctx.node, ctx.engine_vmid)
-            rebuild = True
-            if tmpl:
-                entry = stored.get("engine") or {}
-                if stored_template_hash(ctx.node, tmpl) == engine_hash and entry.get("hash") == engine_hash:
-                    print(f"  Engine template hash matches — reusing (vmid {tmpl})")
-                    rebuild = False
-                elif not frozen_gate(ctx.comp_dir, entry.get("inputs"), engine_inputs,
-                                     "engine template"):
-                    # frozen + code-only drift: frozen_gate warned; keep the frozen template.
-                    rebuild = False
-            if rebuild:
-                if tmpl:
-                    print("  Engine template hash differs — rebuilding...")
-                    # The old template's only clone is the deployed engine, and the
-                    # build VM needs the planned mgmt IP — on a phase-2 resume the old
-                    # engine is still up (phase 1 was skipped), so destroy it here.
-                    # Apply #1 recreates it as a linked clone of the new template.
-                    destroy_vm_if_exists(ctx.node, ctx.engine_vmid, expect_tags=ctx.comp_tags)
-                    destroy_engine_template(ctx.node, ctx.engine_vmid, expect_tags={
-                        "tezcatlipoca", f"comp-{ctx.comp_name}", "engine-template"})
-                ctx_early = {
-                    "ssh_key_path": ctx.ssh_key_abs,
-                    "vm_username": os.environ["TF_VAR_vm_username"],
-                    "ssh_public_key_quoted": _quote_sshkeys(os.environ["TF_VAR_ssh_public_key"]),
-                }
-                with timed(ctx.comp_dir, 2, "engine_template_build"):
-                    tmpl, build_info = build_engine_template(
-                        ctx.node, ctx.comp_dir, ctx.engine_vmid,
-                        int(os.environ["TF_VAR_template_vm_id"]),
-                        ctx_early, ctx.postgres_password, ctx.redis_password, quotient_ref,
-                        engine_hash, engine_inputs)
-                ctx.state["engine_build_info"] = build_info
-            save_template_hashes(ctx.comp_dir, engine={"hash": engine_hash, "inputs": engine_inputs})
-            ctx.state["engine_template_vmid"] = tmpl
-            ctx.state["engine_template_hash"] = engine_hash
-            ctx.save_state()
-
-            print("[2/7] Terraform apply #1 (engine from template + bridges; team boxes "
-                  "come in apply #2)...")
-            ctx.tfvars["engine_clone_id"] = tmpl
-            write_text_atomic(ctx.tfvars_path, json.dumps(ctx.tfvars, indent=2))
-            tf_env = {**os.environ, "TF_PLUGIN_CACHE_DIR": str(terraform_plugin_cache_dir())}
-            tf_cwd = str(terraform_dir(ctx.comp_dir))
-            run_terraform(["init"], cwd=tf_cwd, env=tf_env, timeout=300)
-            # team_box's for_each is empty here (build_team_boxes=false): only the engine
-            # (a linked clone of the engine template — seconds, no bulk disk copy) and the
-            # bridges are built, plus team_nics' netplan for every team bridge and the
-            # cold-boot that surfaces the engine's team NICs.
-            with timed(ctx.comp_dir, 2, "terraform_apply"):
-                run_terraform(["apply", "-auto-approve", "-parallelism=1"], cwd=tf_cwd, env=tf_env, timeout=2400)
-
-            apply_ctx = read_terraform_ctx(ctx.comp_dir)
-            # Fresh engine VM => new host key; drop any stale pin so accept-new re-pins it.
-            forget_engine_host_key(apply_ctx["scoring_engine_ip"])
-            with timed(ctx.comp_dir, 2, "wait_engine_ssh", apply_ctx["scoring_engine_ip"]):
-                wait_for_ssh(apply_ctx["ssh_key_path"], apply_ctx["vm_username"],
-                             apply_ctx["scoring_engine_ip"], timeout=300)
-            if ctx.placement and ctx.placement["satellites"]:
-                # Jump/router per satellite, then the fail-loud routing gate: nothing
-                # downstream (satellite golden plants, nakon, scoring) works without
-                # engine -> jump -> satellite-bridge paths.
-                jump_ctx = {"ssh_key_path": ctx.ssh_key_abs,
-                            "vm_username": os.environ["TF_VAR_vm_username"],
-                            "ssh_public_key_quoted": _quote_sshkeys(os.environ["TF_VAR_ssh_public_key"])}
-                with timed(ctx.comp_dir, 2, "jump_vms", f"x{len(ctx.placement['satellites'])}"):
-                    build_jump_vms(ctx.placement, ctx.engine_vmid, jump_ctx, ctx.comp_name,
-                                   ctx.engine_mgmt_ip,
-                                   engine_mgmt_gw=os.environ.get("TF_VAR_engine_mgmt_gw",
-                                                                 DEFAULT_ENGINE_MGMT_GW))
-                with timed(ctx.comp_dir, 2, "routing_converge"):
-                    verify_satellite_routing(ctx.placement, apply_ctx)
-            # Record where this state's resources live, for the stale-state guard above.
-            ctx.state["deployed_endpoint"] = os.environ.get("TF_VAR_proxmox_endpoint", "").rstrip("/")
+            phase2_engine_template(ctx)
             ctx.checkpoint(2)
         else:
             print("[2/7] Skipped (resume) — not re-running terraform apply.")
