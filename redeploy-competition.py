@@ -13,13 +13,12 @@ from pathlib import Path
 import urllib3
 from dotenv import load_dotenv
 
-from constants import WINDOWS_ADMIN_USER
+from config_ops import write_state
+from constants import SNAP_BASE, SNAP_READY, WINDOWS_ADMIN_USER
 from engine_ops import (ensure_nat_forwarding, prepare_engine_from_template,
                         push_event_conf, read_event_conf)
 from nakon_ops import acquire_engine_lock, build_nakon_bundle, release_engine_lock
 from range_ops import (
-    SNAP_BASE,
-    SNAP_READY,
     describe_target,
     destroy_vm_if_exists,
     guest_agent_exec_root,
@@ -123,8 +122,15 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
     scoring_ip = ctx["scoring_engine_ip"]
 
     linux_targets = [t for t in targets if box_platform(t["box"]) == "linux"]
-    driver.fix_dns_on_boxes(linux_targets, ctx)
+    # Order matters, and it is a documented invariant (docs/architecture.md: "On fresh
+    # clones the NOPASSWD sudoers grant lands BEFORE the DNS fix, whose sudo calls
+    # soft-fail until the grant does"). Same order as deploy.py phase 4. Re-inverting
+    # these two is a silent ~2-minute-per-box regression: without the grant, DNS_FIX_CMD's
+    # sudo is rejected, so fix_dns_on_boxes burns its full 8x15s retry ladder before
+    # falling back to the root guest agent (hardening_ops.py), which is the only reason
+    # the wrong order "works" at all.
     driver.setup_ubuntu_auth(linux_targets, ctx)
+    driver.fix_dns_on_boxes(linux_targets, ctx)
 
     driver.ensure_nat_forwarding(ctx)
 
@@ -142,10 +148,11 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
     state["nakon_failed_steps"] = [f"redeploy: {line}" for line in result.failed[:20]]
     state_path = comp_dir / ".deploy_state.json"
     if state_path.exists():
-        tmp = state_path.with_name(state_path.name + ".tmp")
-        tmp.write_text(json.dumps(state, indent=2))
-        os.replace(tmp, state_path)
-        os.chmod(state_path, 0o600)
+        # Shared atomic writer (config_ops.write_state): 0600 at creation, temp+os.replace.
+        # Never hand-roll this — .deploy_state.json carries the only copy of the box
+        # passwords, so a torn write bricks resume AND redeploy at once (deploy.py's
+        # atomic-rename note; winad-testrun 2026-09-25).
+        write_state(state_path, state)
 
     driver.fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=state.get("box_creds"))
 
@@ -238,10 +245,8 @@ def mode_resync(targets, ctx, node, comp_dir, state, state_path):
     if not changed:
         print("    .deploy_state.json already matches the engine.")
     if changed:
-        tmp = state_path.with_name(state_path.name + ".tmp")
-        tmp.write_text(json.dumps(state, indent=2))
-        os.replace(tmp, state_path)
-        os.chmod(state_path, 0o600)
+        # Atomic + 0600, same reason as run_nakon_and_harden above.
+        write_state(state_path, state)
 
     box_password = state.get("box_password")
     if not box_password:
@@ -297,8 +302,8 @@ def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_pa
         try:
             domain_settled = rerun_domain_configs(restored, ctx, comp_dir, state, nakon_config_path)
         except Exception:
-            print(f"  tz-ready NOT re-taken — the domain chain failed above, so the boxes are "
-                  f"not in an 'as delivered' state.")
+            print("  tz-ready NOT re-taken — the domain chain failed above, so the boxes are "
+                  "not in an 'as delivered' state.")
             raise
         if domain_settled:
             print(f"  Re-taking '{SNAP_READY}' for the recovered boxes...")
@@ -306,8 +311,8 @@ def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_pa
                 take_snapshot(t.get("node") or node, t["vmid"], SNAP_READY,
                               description="tezcatlipoca: as delivered (re-taken by redeploy)")
         else:
-            print(f"  tz-ready NOT re-taken — domain configuration could not run (see above); "
-                  f"snapshotting now would bake a broken state in as 'as delivered'.")
+            print("  tz-ready NOT re-taken — domain configuration could not run (see above); "
+                  "snapshotting now would bake a broken state in as 'as delivered'.")
 
     return restored
 
@@ -331,7 +336,6 @@ def mode_reconfigure(targets, ctx, comp_dir, state, nakon_config_path, nakon_bun
 
 def template_vmid_for(box):
     """Resolve a box's template name to a vmid, the way main.tf's templates data source does."""
-    endpoint = os.environ["TF_VAR_proxmox_endpoint"].rstrip("/")
     scoring_template_id = int(os.environ["TF_VAR_template_vm_id"])
     data = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
     for vm in data:
@@ -505,8 +509,8 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         try:
             domain_settled = rerun_domain_configs(rebuilt, ctx, comp_dir, state, nakon_config_path)
         except Exception:
-            print(f"  tz-ready NOT re-taken — the domain chain failed above, so the boxes are "
-                  f"not in an 'as delivered' state.")
+            print("  tz-ready NOT re-taken — the domain chain failed above, so the boxes are "
+                  "not in an 'as delivered' state.")
             raise
 
         if final_path.exists():
@@ -519,7 +523,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
                 take_snapshot(t.get("node") or node, t["vmid"], SNAP_READY,
                               description="tezcatlipoca: as delivered (rebuilt by redeploy)")
         else:
-            print(f"  tz-ready NOT re-taken — domain configuration could not run (see above).")
+            print("  tz-ready NOT re-taken — domain configuration could not run (see above).")
     return rebuilt
 
 
@@ -602,11 +606,14 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
     state_path = comp_dir / ".deploy_state.json"
     for flag in ("seeded", "engine_unpaused", "injects_created"):
         state.pop(flag, None)
-    state_path.write_text(json.dumps(state, indent=2))
-    os.chmod(state_path, 0o600)
+    # This write lands LAST in engine-recovery, after terraform already re-cloned the
+    # engine and the scoring DB was wiped. A torn or short-lived-0644 write here leaves a
+    # live engine with unreadable/eavesdroppable resume state and no second chance
+    # (winad-testrun 2026-09-25) — always go through the shared atomic writer.
+    write_state(state_path, state)
 
     print(f"\n  Engine recovered from template (vmid {state['engine_template_vmid']}).")
-    print(f"  The scoring DB is EMPTY — re-seed with:")
+    print("  The scoring DB is EMPTY — re-seed with:")
     print(f"    python3 create-competition.py --competition {comp_dir.name} "
           f"--from-phase 7 --yes")
     return True
