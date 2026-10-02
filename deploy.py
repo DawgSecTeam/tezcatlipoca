@@ -28,6 +28,7 @@ from config_ops import (
     resolve_inject_times,
     update_env,
     write_state,
+    write_text_atomic,
 )
 from constants import (
     DEFAULT_ENGINE_MGMT_GW,
@@ -645,8 +646,9 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
         "TF_VAR_scoring_vm_id": str(engine_vmid),
     })
 
-    (comp_dir / "teams.json").write_text(teams_json)
-    os.chmod(comp_dir / "teams.json", 0o600)
+    # teams.json holds every team password: write it with 0600 applied at creation
+    # (a write_text-then-chmod leaves it briefly world-readable).
+    write_text_atomic(comp_dir / "teams.json", teams_json)
 
     # Per-competition Terraform working dir + tfvars so concurrent competitions on
     # one node don't share the single terraform/terraform.tfstate or clobber each
@@ -727,8 +729,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
         tfvars["satellites"] = satellite_tfvars(placement)
         tfvars["satellite_routes"] = satellite_routes_for(placement)
     tfvars_path = tf_dir / "terraform.tfvars.json"
-    tfvars_path.write_text(json.dumps(tfvars, indent=2))
-    os.chmod(tfvars_path, 0o600)
+    # Carries TF_VAR_box_password + the per-team passwords.
+    write_text_atomic(tfvars_path, json.dumps(tfvars, indent=2))
 
     if from_phase <= 2:
         if placement:
@@ -884,8 +886,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
             print("[2/7] Terraform apply #1 (engine from template + bridges; team boxes "
                   "come in apply #2)...")
             tfvars["engine_clone_id"] = tmpl
-            tfvars_path.write_text(json.dumps(tfvars, indent=2))
-            os.chmod(tfvars_path, 0o600)
+            write_text_atomic(tfvars_path, json.dumps(tfvars, indent=2))
             tf_env = {**os.environ, "TF_PLUGIN_CACHE_DIR": str(terraform_plugin_cache_dir())}
             tf_cwd = str(terraform_dir(comp_dir))
             run_terraform(["init"], cwd=tf_cwd, env=tf_env, timeout=300)
@@ -1036,8 +1037,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                         for b in boxes
                     ]
             tfvars["build_team_boxes"] = True
-            tfvars_path.write_text(json.dumps(tfvars, indent=2))
-            os.chmod(tfvars_path, 0o600)
+            write_text_atomic(tfvars_path, json.dumps(tfvars, indent=2))
             tf_env = {**os.environ, "TF_PLUGIN_CACHE_DIR": str(terraform_plugin_cache_dir())}
             tf_cwd = str(terraform_dir(comp_dir))
             # Linked clones are seconds each (no bulk disk copy); the budget is for the
@@ -1263,8 +1263,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     for user, pw in (domain_creds or {}).items():
         cred_lines.append(f"box-credlist-domain-{user}  {pw}")
     cred_path = comp_dir / "credentials.txt"
-    cred_path.write_text("\n".join(cred_lines) + "\n")
-    os.chmod(cred_path, 0o600)
+    # The operator/packet-facing credential file — same 0600-at-creation rule.
+    write_text_atomic(cred_path, "\n".join(cred_lines) + "\n")
 
     print_timing_summary(comp_dir)
 

@@ -5,13 +5,17 @@ always-persist rule for phase 6's coverage repair."""
 import contextlib
 import io
 import json
+import os
+import stat
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
+import config_ops
 import deploy
 from nakon_ops import NakonResult
 from nodes_ops import golden_vmid_for_slot
@@ -205,7 +209,6 @@ class SharedStateWriter(unittest.TestCase):
     fourth hand-rolled atomic writer (the guarantee held at 1 of 4 call sites before)."""
 
     def test_deploy_writer_is_the_shared_config_ops_helper(self):
-        import config_ops
         self.assertIs(deploy.write_state, config_ops.write_state)
 
     def test_save_state_routes_through_the_helper(self):
@@ -215,6 +218,54 @@ class SharedStateWriter(unittest.TestCase):
         # only copy of the box passwords world-readable for a window.
         self.assertNotIn("state_path.with_name", src)
         self.assertNotIn("os.chmod(state_path, 0o600)", src)
+
+
+SECRET_WRITES = [
+    ("teams.json", '{"team1": {"identifier": "120", "password": "hunter2"}}'),
+    ("terraform.tfvars.json", '{"box_password": "hunter2", "teams": {}}'),
+    ("credentials.txt", "team1 / hunter2\nbox-credlist-linux-admin  hunter2\n"),
+]
+
+
+class AtomicSecretWrites(unittest.TestCase):
+    """Every secret-bearing write in deploy.py must go through
+    config_ops.write_text_atomic: 0600 is applied at CREATION (os.open), not by a chmod
+    after the process umask already exposed the file, and the content lands via a temp
+    file that never survives the rename. These are the exact shapes deploy writes."""
+
+    def test_deploy_uses_the_shared_atomic_write_helper(self):
+        self.assertIs(deploy.write_text_atomic, config_ops.write_text_atomic)
+
+    def test_mode_0600_at_creation_and_no_tmp_survives(self):
+        for name, text in SECRET_WRITES:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / name
+                seen = {}
+                real_replace = os.replace
+
+                def spy(src, dst):
+                    # At the instant of the swap the temp already holds the COMPLETE
+                    # content AND already carries 0600 — this is what a plain
+                    # write_text-then-chmod round-trip test cannot see.
+                    seen["tmp_mode"] = stat.S_IMODE(Path(src).stat().st_mode)
+                    seen["tmp_text"] = Path(src).read_text()
+                    return real_replace(src, dst)
+
+                with patch("os.replace", side_effect=spy):
+                    deploy.write_text_atomic(path, text)
+
+                self.assertEqual(seen["tmp_mode"], 0o600)
+                self.assertEqual(seen["tmp_text"], text)
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+                # No .tmp left behind (the signature of an aborted/torn write).
+                self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), [name])
+
+    def test_deploy_has_no_hand_rolled_secret_writer_left(self):
+        src = (_REPO / "deploy.py").read_text()
+        self.assertNotIn("os.chmod", src)          # no chmod-after-write anywhere
+        self.assertNotIn('"teams.json").write_text', src)
+        self.assertNotIn("tfvars_path.write_text", src)
+        self.assertNotIn("cred_path.write_text", src)
 
 
 if __name__ == "__main__":
