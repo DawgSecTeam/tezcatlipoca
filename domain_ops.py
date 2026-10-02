@@ -119,6 +119,16 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
         dc_vmid = vm_id_for(identifier, box_index(boxes, dc_box["name"]))
         dc_ip = dc_machine["ip"]
 
+        # Freshly cloned DCs specialize on first boot; with many teams they boot
+        # concurrently and nakon's first SSH dial used to race the specialize phase
+        # (every chain failed with "Unable to connect to port 22" at 8 teams).
+        # Wait the DC up before anything dials it.
+        if not wait_for_guest_agent(node, dc_vmid, timeout=900):
+            with PRINT_LOCK:
+                print(f"  WARNING: {team_key}: DC {dc_box['name']} guest agent never came "
+                      f"up after clone — continuing (dial may still race)")
+        wait_for_windows_sshd(node, dc_vmid, timeout=600)
+
         if not promote_dc:
             with PRINT_LOCK:
                 print(f"  [{team_key}] DC {dc_box['name']} left as-is — (re)joining member "
