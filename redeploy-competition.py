@@ -787,7 +787,6 @@ def main():
                         "cannot build the post-clone stage config for this mode.")
                 teams_v2 = json.loads((comp_dir / "teams.json").read_text())
                 driver.generate_stage_configs(comp_dir, teams_v2, boxes,
-                                              box_username=load_users_config(comp_dir)[0],
                                               unbooted=driver.unbooted_golden_boxes(comp_dir))
                 nakon_config_path = postclone
         else:
