@@ -27,6 +27,8 @@ from config_ops import (
     random_password,
     resolve_inject_times,
     update_env,
+    write_state,
+    write_text_atomic,
 )
 from constants import (
     DEFAULT_ENGINE_MGMT_GW,
@@ -118,6 +120,128 @@ def _record_coverage(state, stage_machines, result):
         if bad == {"<machine failed before any step>"}:
             bad = {(c if isinstance(c, str) else c["name"]) for c in m["configurations"]}
         cov[m["name"]] = sorted(set(cov.get(m["name"]) or []) | set(bad))
+
+
+def record_stage_coverage(state, stage_machines, result, save_state):
+    """Record one post-clone stage's coverage AND persist it, unconditionally.
+
+    _record_coverage's stale-entry clearing only counts once it reaches disk. Phase 6
+    used to guard its save on the nakon tally (`if state["nakon_failed_steps"]`), so a
+    final pass that was fully green yet popped a stale entry lost the pop at process
+    exit and verify's coverage gate stayed red — re-creating exactly the bug ff9b19f
+    fixed (amongus-cde-2026 2026-09-30: "SMB v1 stayed 'failed' across three green
+    replants"). The window is narrow but real: phase-5 tally empty, final pass fully
+    green, and the stale entry belongs to a final-only machine (one carrying just
+    systemd-system-masked / hosts-redirect-linux, so repair_machines never names it).
+    save_state is injected so the always-persist invariant is testable without a real
+    state file."""
+    _record_coverage(state, stage_machines, result)
+    save_state()
+
+
+def guard_resume_from_phase(from_phase, last_phase, state_path, force=False):
+    """Refuse a --from-phase that skips phases .deploy_state.json never saw complete.
+
+    checkpoint() writes `last_phase` after each phase, so the only safe resume target is
+    last_phase + 1 (re-run the phase that died) or earlier. `last_phase` was written but
+    never read, so `--from-phase 6` on a range whose last checkpoint was 3 passed both
+    existing guards (state exists, pipeline_version matches) and then ran the
+    domain/final/beacon/tz-ready chain against machines that were never built, burying
+    the real failure in confusing downstream errors. A missing/unusable `last_phase`
+    (hand-made or pre-checkpoint state) reads as 0 — the conservative choice.
+    --force-from-phase is the escape hatch for an operator who knows the checkpoint is
+    stale (e.g. the process died after a phase finished but before its checkpoint
+    landed); the default must stay refusing."""
+    if force:
+        return
+    last = last_phase if isinstance(last_phase, int) and last_phase >= 0 else 0
+    if from_phase <= last + 1:
+        return
+    raise SystemExit(
+        f"  ERROR: --from-phase {from_phase} skips phases {last + 1}-{from_phase - 1}, but "
+        f"{state_path} records phase {last} as the last one that completed. Those phases "
+        f"never ran, so the later phases would target machines that do not exist yet. "
+        f"Resume at --from-phase {last + 1} (re-runs the phase that died), or pass "
+        f"--force-from-phase to skip ahead deliberately."
+    )
+
+
+def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden_bundle,
+                        box_password, box_username, ssh_public_key, apt_cache, unbooted=()):
+    """golden_inputs/golden_hashes for every box in boxes.json — unmanaged included.
+
+    Extracted from deploy() (the pure part of the M4 hash loop) so the all-boxes
+    invariant is testable offline: phase 1's wave logic, the phase-4 rebuild gate and
+    `.template-hashes.json` all key off these dicts, and all three iterate the FULL
+    lineup, not just the planted boxes.
+
+    Every box MUST get an entry. The unmanaged (pfSense/appliance) case is the one that
+    used to be unreachable: 8cb755c3 (2026-09-30) added an early `continue` ABOVE
+    e91a5039's compensating unmanaged-inputs block, so the block went dead and the slot
+    carried no hash. The merge-order accident did not fix the KeyError, it moved it into
+    the phase-4 gate (live-found 2026-09-29, cyberfield hdrives-zfs: the first
+    pfsense-carried bundle through the M4 hash path). Unmanaged is checked FIRST now so
+    the entry exists no matter where a later branch continues from."""
+    golden_inputs, golden_hashes = {}, {}
+    for b in boxes:
+        if is_unmanaged(b):
+            # No golden machine, no golden plant: terraform clones it straight from
+            # its own base template. The slot still needs a stable hash entry so the
+            # rebuild gate and phase 1's wave logic never subscript it into a KeyError.
+            inputs = {"config": {"base_template_vmid": base_template_ids.get(b["template"]),
+                                 "disk_gb": b.get("disk_gb"), "golden": "unmanaged"},
+                      "code": {"build_golden_set": code_hash(build_golden_set)}}
+            golden_inputs[b["name"]] = inputs
+            golden_hashes[b["name"]] = hash_from_inputs(inputs)
+            continue
+        if b["name"] in unbooted:
+            inputs = {"config": {"base_template_vmid": base_template_ids.get(b["template"]),
+                                  "disk_gb": b.get("disk_gb"), "golden": "unbooted"},
+                      "code": {"build_golden_set": code_hash(build_golden_set)}}
+            golden_inputs[b["name"]] = inputs
+            golden_hashes[b["name"]] = hash_from_inputs(inputs)
+            continue
+        inputs = golden_hash_inputs(
+            b, golden_machines_by_box[b["name"]],
+            golden_payload_hash(golden_bundle, b["name"]),
+            box_password, box_username, ssh_public_key, apt_cache)
+        inputs["config"]["base_template_vmid"] = base_template_ids.get(b["template"])
+        inputs["code"]["build_golden_set+apt_prep"] = code_hash(
+            build_golden_set, _APT_PREP_BODY, _apt_prep_script)
+        golden_inputs[b["name"]] = inputs
+        golden_hashes[b["name"]] = hash_from_inputs(inputs)
+    return golden_inputs, golden_hashes
+
+
+def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored,
+                        golden_hashes, golden_inputs, comp_name):
+    """Destroy each golden template in `slot` whose stored M4 hash no longer matches.
+
+    A slot with no hash/inputs entry is SKIPPED, not subscripted. The unconditional
+    `golden_hashes[b["name"]]` here raised KeyError out of phase 4 for an
+    unmanaged-carried lineup (whose box had no entry — see golden_hash_entries) on a
+    --from-phase 4 resume or a box flipped to `unmanaged: true` under a live golden,
+    the exact case deploy() anticipates when it maps an unmanaged slot to its base
+    template (live-found 2026-09-29, cyberfield hdrives-zfs). With no computed hash
+    there is nothing to compare the stored one against, so skipping is correct; the
+    old code moved the KeyError here instead of fixing it."""
+    for i, b in enumerate(boxes):
+        vid = golden_vmid_for_slot(engine_vmid, slot, i)
+        if not _is_template(destroy_node, vid):
+            continue
+        box_hash = golden_hashes.get(b["name"])
+        box_inputs = golden_inputs.get(b["name"])
+        if box_hash is None or box_inputs is None:
+            continue
+        if stored_template_hash(destroy_node, vid) == box_hash:
+            continue
+        entry = stored.get("golden", {}).get(b["name"]) or {}
+        if frozen_gate(comp_dir, entry.get("inputs"), box_inputs,
+                       f"golden template for '{b['name']}'"):
+            print(f"  golden-{b['name']} hash differs — rebuilding...")
+            destroy_vm_if_exists(destroy_node, vid, expect_tags={
+                "tezcatlipoca", GOLDEN_TAG, f"comp-{comp_name}"},
+                legacy_name=f"golden-{b['name']}")
 
 
 def phase1_destroy_waves(node_vms, all_targets, legacy_clones, engine_vmid, boxes, comp_tags,
@@ -221,7 +345,7 @@ def reset_domain_markers(comp_dir):
 
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
-           team_node=None, engine_node=None):
+           team_node=None, engine_node=None, force_from_phase=False):
     """Run the seven-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
 
     scoring_vmid overrides the scoring-engine VMID (default 1000) so several
@@ -229,7 +353,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     .deploy_state.json and reused on resume.
     team_node (--team-node id=NODE,...) and engine_node (--engine-node NAME) pin the
     multi-node placement when nodes.json exists; without them teams are placed by
-    capacity-fill."""
+    capacity-fill. force_from_phase (--force-from-phase) bypasses the guard that refuses
+    to skip phases .deploy_state.json never recorded as completed."""
     # One driver per competition. Two concurrent deploys share the engine's
     # /opt/nakon staging dir and each one's 'rm -rf /opt/nakon/*' wipes the
     # other's plan archives mid-plant (scrim-extreme-2026-09-20: a pkill'd
@@ -324,17 +449,19 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                 f"(pre-golden-template phases) — this code is pipeline v{PIPELINE_VERSION} and its "
                 f"--from-phase numbers mean different things. Run a fresh deploy (no --from-phase)."
             )
+        # Refuse to skip a phase that never completed: the skipped phases are what build
+        # the machines the later ones target (see guard_resume_from_phase).
+        guard_resume_from_phase(from_phase, previous_state.get("last_phase"), state_path,
+                                force=force_from_phase)
 
     def _save_state():
-        # Atomic rename: .deploy_state.json holds the only copy of the box
-        # passwords — a torn write here bricks both resume and redeploy.
-        tmp_path = state_path.with_name(state_path.name + ".tmp")
-        tmp_path.write_text(json.dumps(state, indent=2))
-        os.replace(tmp_path, state_path)
-        try:
-            os.chmod(state_path, 0o600)
-        except OSError:
-            pass
+        # .deploy_state.json holds the only copy of the generated box and team
+        # passwords: a torn write here bricks both resume and redeploy, and the old
+        # write_text-then-chmod idiom also left the secret briefly world-readable.
+        # config_ops.write_state is the shared os.replace + 0600-at-creation writer
+        # (added 2026-10-01 alongside redeploy's two copies and the post-DB-wipe
+        # recovery path) — one implementation, not four.
+        write_state(state_path, state)
 
     def checkpoint(n):
         state["last_phase"] = n
@@ -465,7 +592,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     # own machine SID before promotion; their configs move to the repair stage.
     unbooted = unbooted_golden_boxes(comp_dir)
     golden_config_path, repair_config_path, final_config_path, _postclone_path = generate_stage_configs(
-        comp_dir, teams, boxes, box_username=box_username, unbooted=unbooted)
+        comp_dir, teams, boxes, unbooted=unbooted)
 
     # M4: template hashes are computed BEFORE phase 1 — cleanup must know which golden
     # templates survive (test-run reuse) and which rebuild. The golden bundle is built
@@ -480,39 +607,10 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
         for m in json.loads(golden_config_path.read_text())["machines"]
     }
     base_template_ids = _template_vmid_map(node)
-    golden_inputs, golden_hashes = {}, {}
-    for b in boxes:
-        if is_unmanaged(b):
-            continue  # no golden, no plant: terraform clones it from its own template
-        if b["name"] in unbooted:
-            inputs = {"config": {"base_template_vmid": base_template_ids.get(b["template"]),
-                                  "disk_gb": b.get("disk_gb"), "golden": "unbooted"},
-                      "code": {"build_golden_set": code_hash(build_golden_set)}}
-            golden_inputs[b["name"]] = inputs
-            golden_hashes[b["name"]] = hash_from_inputs(inputs)
-            continue
-        if is_unmanaged(b):
-            # Unmanaged boxes (pfSense) get no golden machine and no golden plant —
-            # terraform clones them straight from their own base template. Their slot
-            # still needs a hash entry so the loop below and phase 1's wave logic see
-            # a stable value (live-found 2026-09-29: first unmanaged-carried bundle
-            # KeyError'd here because no pfsense comp had run through the M4 hash path).
-            inputs = {"config": {"base_template_vmid": base_template_ids.get(b["template"]),
-                                 "disk_gb": b.get("disk_gb"), "golden": "unmanaged"},
-                      "code": {"build_golden_set": code_hash(build_golden_set)}}
-            golden_inputs[b["name"]] = inputs
-            golden_hashes[b["name"]] = hash_from_inputs(inputs)
-            continue
-        inputs = golden_hash_inputs(
-            b, golden_machines_by_box[b["name"]],
-            golden_payload_hash(golden_bundle, b["name"]),
-            box_password, box_username, os.environ.get("TF_VAR_ssh_public_key", ""),
-            apt_cache)
-        inputs["config"]["base_template_vmid"] = base_template_ids.get(b["template"])
-        inputs["code"]["build_golden_set+apt_prep"] = code_hash(
-            build_golden_set, _APT_PREP_BODY, _apt_prep_script)
-        golden_inputs[b["name"]] = inputs
-        golden_hashes[b["name"]] = hash_from_inputs(inputs)
+    golden_inputs, golden_hashes = golden_hash_entries(
+        boxes, base_template_ids, golden_machines_by_box, golden_bundle,
+        box_password, box_username, os.environ.get("TF_VAR_ssh_public_key", ""),
+        apt_cache, unbooted=unbooted)
 
     frozen = frozen_state(comp_dir)
     frozen_keep = set()
@@ -548,8 +646,9 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
         "TF_VAR_scoring_vm_id": str(engine_vmid),
     })
 
-    (comp_dir / "teams.json").write_text(teams_json)
-    os.chmod(comp_dir / "teams.json", 0o600)
+    # teams.json holds every team password: write it with 0600 applied at creation
+    # (a write_text-then-chmod leaves it briefly world-readable).
+    write_text_atomic(comp_dir / "teams.json", teams_json)
 
     # Per-competition Terraform working dir + tfvars so concurrent competitions on
     # one node don't share the single terraform/terraform.tfstate or clobber each
@@ -630,8 +729,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
         tfvars["satellites"] = satellite_tfvars(placement)
         tfvars["satellite_routes"] = satellite_routes_for(placement)
     tfvars_path = tf_dir / "terraform.tfvars.json"
-    tfvars_path.write_text(json.dumps(tfvars, indent=2))
-    os.chmod(tfvars_path, 0o600)
+    # Carries TF_VAR_box_password + the per-team passwords.
+    write_text_atomic(tfvars_path, json.dumps(tfvars, indent=2))
 
     if from_phase <= 2:
         if placement:
@@ -787,8 +886,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
             print("[2/7] Terraform apply #1 (engine from template + bridges; team boxes "
                   "come in apply #2)...")
             tfvars["engine_clone_id"] = tmpl
-            tfvars_path.write_text(json.dumps(tfvars, indent=2))
-            os.chmod(tfvars_path, 0o600)
+            write_text_atomic(tfvars_path, json.dumps(tfvars, indent=2))
             tf_env = {**os.environ, "TF_PLUGIN_CACHE_DIR": str(terraform_plugin_cache_dir())}
             tf_cwd = str(terraform_dir(comp_dir))
             run_terraform(["init"], cwd=tf_cwd, env=tf_env, timeout=300)
@@ -863,21 +961,6 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
             # Matching templates reach build_golden_set and short-circuit the build.
             stored = load_template_hashes(comp_dir)
 
-            def _golden_rebuild_gate(destroy_node, slot):
-                for i, b in enumerate(boxes):
-                    vid = golden_vmid_for_slot(engine_vmid, slot, i)
-                    if not _is_template(destroy_node, vid):
-                        continue
-                    if stored_template_hash(destroy_node, vid) == golden_hashes[b["name"]]:
-                        continue
-                    entry = stored.get("golden", {}).get(b["name"]) or {}
-                    if frozen_gate(comp_dir, entry.get("inputs"), golden_inputs[b["name"]],
-                                   f"golden template for '{b['name']}'"):
-                        print(f"  golden-{b['name']} hash differs — rebuilding...")
-                        destroy_vm_if_exists(destroy_node, vid, expect_tags={
-                            "tezcatlipoca", GOLDEN_TAG, f"comp-{comp_name}"},
-                            legacy_name=f"golden-{b['name']}")
-
             # Slot-0 goldens only exist when the engine node actually hosts teams —
             # an all-satellite spread leaves the engine with no local bridges to
             # anchor them on (their vmbr<id> lives on the satellite's host).
@@ -888,7 +971,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                     for n in placement["team_nodes"].values()))
             golden_ids = {}
             if engine_has_teams:
-                _golden_rebuild_gate(node, 0)
+                golden_rebuild_gate(comp_dir, node, 0, boxes, engine_vmid, stored,
+                                    golden_hashes, golden_inputs, comp_name)
                 golden_ids = build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid,
                                               box_password, golden_config_path, key, scoring_user,
                                               scoring_ip, jobs=nakon_jobs,
@@ -903,8 +987,9 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                     sat_rec = record_of(placement, sat["name"])
                     slot = sat["slot"]
                     anchor = sat["anchor_identifier"]
-                    _golden_rebuild_gate(sat_rec.node, slot)
-                    slot_config = generate_slot_golden_config(comp_dir, teams, boxes,
+                    golden_rebuild_gate(comp_dir, sat_rec.node, slot, boxes, engine_vmid,
+                                        stored, golden_hashes, golden_inputs, comp_name)
+                    slot_config = generate_slot_golden_config(comp_dir, boxes,
                                                               unbooted, anchor, slot)
                     print(f"  Golden set on satellite '{sat['name']}' (slot {slot}, "
                           f"anchor 192.168.{anchor}.0/24)...")
@@ -952,8 +1037,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                         for b in boxes
                     ]
             tfvars["build_team_boxes"] = True
-            tfvars_path.write_text(json.dumps(tfvars, indent=2))
-            os.chmod(tfvars_path, 0o600)
+            write_text_atomic(tfvars_path, json.dumps(tfvars, indent=2))
             tf_env = {**os.environ, "TF_PLUGIN_CACHE_DIR": str(terraform_plugin_cache_dir())}
             tf_cwd = str(terraform_dir(comp_dir))
             # Linked clones are seconds each (no bulk disk copy); the budget is for the
@@ -1026,8 +1110,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                     # Stage-prefixed tally (verify's plant-integrity line names the pass)
                     # and the structured coverage record (verify's plant-coverage gate).
                     state["nakon_failed_steps"] = [f"repair: {line}" for line in result.failed[:20]]
-                    _record_coverage(state, repair_machines, result)
-                    _save_state()
+                    record_stage_coverage(state, repair_machines, result, _save_state)
                 else:
                     print("  No repair-stage configurations in this lineup — sweep skipped")
                 # fix_services right after the repair pass: it un-wedges sshd (the ssh-*
@@ -1073,9 +1156,11 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                 merged += [f"final: {line}" for line in result.failed[:20]]
                 seen = set()
                 state["nakon_failed_steps"] = [x for x in merged if not (x in seen or seen.add(x))][:40]
-                _record_coverage(state, final_machines, result)
-                if state["nakon_failed_steps"]:
-                    _save_state()
+                # Save unconditionally: _record_coverage may have CLEARED a stale
+                # coverage entry on this fully-green pass, and a clear that never
+                # reaches disk leaves verify's coverage gate red (see
+                # record_stage_coverage — the ff9b19f bug, re-created).
+                record_stage_coverage(state, final_machines, result, _save_state)
 
             if compfile_flag(comp_dir / "Compfile", "team_beacons"):
                 print("  Planting team beacons (hunt artifacts)...")
@@ -1178,8 +1263,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     for user, pw in (domain_creds or {}).items():
         cred_lines.append(f"box-credlist-domain-{user}  {pw}")
     cred_path = comp_dir / "credentials.txt"
-    cred_path.write_text("\n".join(cred_lines) + "\n")
-    os.chmod(cred_path, 0o600)
+    # The operator/packet-facing credential file — same 0600-at-creation rule.
+    write_text_atomic(cred_path, "\n".join(cred_lines) + "\n")
 
     print_timing_summary(comp_dir)
 
@@ -1192,11 +1277,11 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     print(f"Admin login:   admin / {admin_password}")
     if inject_password:
         print(f"Inject login:  inject / {inject_password}   ({len(injects)} inject(s) loaded)")
-    print(f"\nTeam logins:")
+    print("\nTeam logins:")
     for team_name, team_data in teams.items():
         print(f"  {team_name} / {team_data['password']}  (subnet 192.168.{team_data['identifier']}.0/24)")
     print(f"\nBox login:     {box_username} / {box_password}  (every team box)")
-    print(f"Box credlist:  " + ", ".join(f"{u}/{p}" for u, p in box_creds.items()))
+    print("Box credlist:  " + ", ".join(f"{u}/{p}" for u, p in box_creds.items()))
     print(f"\nScoring engine SSH: ssh -i {key} {scoring_user}@{scoring_ip}")
     print(f"{'='*60}")
 
@@ -1225,7 +1310,13 @@ def main():
                              "Written to competitions/<id>/users.json.")
     parser.add_argument("--from-phase", type=int, default=1, dest="from_phase",
                         help="Resume from this phase (>1 skips the destructive cleanup + terraform "
-                             "apply). See the resume hint printed on a failed deploy.")
+                             "apply). See the resume hint printed on a failed deploy. Refused when "
+                             "it skips phases the state file doesn't record as completed.")
+    parser.add_argument("--force-from-phase", action="store_true", dest="force_from_phase",
+                        help="Proceed even when --from-phase skips phases .deploy_state.json does "
+                             "not record as completed. Only for a known-stale checkpoint (e.g. the "
+                             "process died after a phase finished but before it was checkpointed); "
+                             "the skipped phases build the machines the later ones target.")
     parser.add_argument("--scoring-vmid", type=int, default=None, dest="scoring_vmid",
                         help="VMID for this competition's scoring engine (default 1000). Give each "
                              "concurrent competition on a shared node a distinct free VMID so their "
@@ -1257,8 +1348,8 @@ def main():
         for b in boxes:
             disk = f"{b['disk_gb']} GB disk" if b.get("disk_gb") else "template's own disk"
             print(f"    {b['name']:<12} {b['template']:<20} {b['cpu']} CPU, {b['memory_mb']} MB, {disk}")
-        print(f"\n  Team count is decided at deploy time (--teams N, or the prompt).")
-        print(f"  Nothing was deployed — no teardown, no terraform apply.")
+        print("\n  Team count is decided at deploy time (--teams N, or the prompt).")
+        print("  Nothing was deployed — no teardown, no terraform apply.")
         print(f"  Deploy for real with: python3 create-competition.py --competition {comp_name} "
               f"--teams <N> --yes")
 
@@ -1299,7 +1390,8 @@ def main():
             return
 
         deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase,
-               scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node)
+               scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node,
+               force_from_phase=args.force_from_phase)
         return
 
     previous = load_previous_competitions()
@@ -1352,7 +1444,8 @@ def main():
         return
 
     deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase,
-           scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node)
+           scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node,
+           force_from_phase=args.force_from_phase)
 
 
 if __name__ == "__main__":
