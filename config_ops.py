@@ -175,6 +175,12 @@ def _gate_concurrent_deploys():
     squat and the over-broad sweep that took out two competitions' engines and goldens
     (AGENTS.md, docs/environment-facts.md).
 
+    The signal is only meaningful because of the call order in `deploy.prepare()`:
+    `_apply_engine_placement` takes the engine lock (line ~661) BEFORE
+    `_run_competition_preflight` runs this gate (line ~669). Any deploy that has got far
+    enough to matter is therefore holding a lock. The only uncovered window is the few
+    seconds a second process spends loading config before it takes its own lock.
+
     TEZ_ALLOW_CONCURRENT=1 proceeds anyway — for a deliberately coordinated second range
     with its own vmid blocks, which is the only safe way to run two at once.
     """
