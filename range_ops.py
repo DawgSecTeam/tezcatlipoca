@@ -373,6 +373,46 @@ def _vm_state_suffix(node, vmid):
         return f" (state unavailable: {e})"
 
 
+def node_loadavg(node):
+    """1-minute load average of a node, or None when the node won't say. Never raises."""
+    try:
+        data = proxmox_api("GET", f"/nodes/{node}/status")["data"]
+        loadavg = data.get("loadavg") or []
+        return float(loadavg[0]) if loadavg else None
+    except Exception:
+        return None
+
+
+def wait_for_node_load(node, max_load, timeout=3600, poll=30, sleep=time.sleep):
+    """Block until the node's 1-minute load drops below `max_load`. Returns True if it did.
+
+    Phase-4 golden retries were hand-throttled by an operator watching load
+    ("load=32.06 (attempt 1/36) … load below 10 — launching phase-4 resume",
+    2026-09-30, eight consecutive failures on one Windows golden while a second
+    deploy saturated the host). Raising the sysprep budget 900s -> 1800s did not fix
+    it; the contention did. A node that never reports load, or never comes down
+    within `timeout`, returns False — the caller decides whether to proceed anyway,
+    because the load may be this very deploy.
+
+    `sleep` is injectable so the offline tests do not wait a real hour.
+    """
+    deadline = time.time() + timeout
+    while True:
+        load = node_loadavg(node)
+        if load is None:
+            print(f"    node {node} did not report a load average — not waiting")
+            return False
+        if load < max_load:
+            print(f"    node {node} load {load:.2f} < {max_load} — proceeding")
+            return True
+        if time.time() >= deadline:
+            print(f"    node {node} load still {load:.2f} (>= {max_load}) after "
+                  f"{timeout}s — proceeding anyway")
+            return False
+        print(f"    node {node} load {load:.2f} >= {max_load} — waiting {poll}s")
+        sleep(poll)
+
+
 
 
 def vm_id_for(identifier, box_index):
