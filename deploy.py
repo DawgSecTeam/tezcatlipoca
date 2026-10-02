@@ -6,14 +6,12 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
-from functools import partial
 from pathlib import Path
 from typing import Optional
 
 import urllib3
 from dotenv import load_dotenv
 
-from beacon_ops import plant_team_beacons
 from config_ops import (
     _prompt_difficulty,
     collect_boxes,
@@ -37,22 +35,18 @@ from constants import (
     GOLDEN_TAG,
     MAX_BOXES_PER_TEAM,
     MAX_TEAMS,
-    PER_MACHINE_NAKON_BUDGET,
     SCORING_ENGINE_VMID,
-    SNAP_READY,
 )
-from domain_ops import deploy_domain_configs
-from engine_ops import ensure_nat_forwarding
 from golden_ops import (_is_template, _template_vmid_map, build_golden_set,
                         unbooted_golden_boxes)
 from hardening_ops import _APT_PREP_BODY, _apt_prep_script
 from nakon_ops import (acquire_engine_lock, build_nakon_bundle, generate_nakon_config,
-                       generate_stage_configs, run_nakon)
+                       generate_stage_configs)
 from nodes_ops import (activate_placement, golden_vmid_for_slot, resolve_placement,
                        satellite_routes_for, satellite_tfvars)
 from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
 from range_ops import (destroy_vm_if_exists, ensure_terraform_workdir, enumerate_targets,
-                       persist_targets, take_snapshot)
+                       persist_targets)
 from ssh_ops import read_terraform_ctx, wait_for_http
 from template_ops import (
     code_hash,
@@ -67,7 +61,7 @@ from template_ops import (
 )
 from timing import print_timing_summary, timed
 from utils import (compfile_flag, is_unmanaged, load_compfile, load_users_config,
-                   run_concurrent, valid_comp_name)
+                   valid_comp_name)
 from windows_ops import is_windows_template
 
 ENV_PATH = Path(".env")
@@ -423,13 +417,6 @@ class DeployContext:
     def comp_tags(self):
         """The tags every VM this competition owns carries (destroy's ownership guard)."""
         return {"tezcatlipoca", f"comp-{self.comp_name}"}
-
-
-def snap_ready(ctx, t):
-    """Take the as-delivered SNAP_READY restore point on one target."""
-    with timed(ctx.comp_dir, 6, "snapshot", t["vm_name"]):
-        take_snapshot(t.get("node", ctx.node), t["vmid"], SNAP_READY,
-                      description="tezcatlipoca: as delivered, post-sweep + hardening")
 
 
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
@@ -886,7 +873,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     # partially-initialised deploy_phases).
     from deploy_phases import (phase1_cleanup, phase2_engine_template,
                            phase3_prepare_engine, phase4_golden_set,
-                           phase5_repair_sweep)
+                           phase5_repair_sweep, phase6_domains_and_final)
 
     # One driver per competition. Two concurrent deploys share the engine's
     # /opt/nakon staging dir and each one's 'rm -rf /opt/nakon/*' wipes the
@@ -958,47 +945,10 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 
         if ctx.from_phase <= 6:
             current_phase = 6
-            print("  Configuring Windows AD domains (if any)...")
-            with timed(ctx.comp_dir, 6, "domains"):
-                deploy_domain_configs(ctx.teams, ctx.boxes, ctx.comp_dir, ctx.nakon_config_path,
-                                      ctx.ssh_key, ctx.scoring_user, ctx.scoring_ip, ctx.box_password)
-
-            # Final-stage pass AFTER domains: the disruptive configs break the DNS/apt the
-            # Linux realmd joins need, and the boot-hostile configs would brick any member
-            # box's domain-join reboot. From here on the boxes are in their as-started
-            # competition flavor — nothing downstream reboots them or needs apt/DNS.
-            final_machines = json.loads(ctx.final_config_path.read_text())["machines"]
-            if final_machines:
-                print(f"  Final-stage pass (disruption + boot-hostile) on {len(final_machines)} machine(s)...")
-                ensure_nat_forwarding(ctx.tf_ctx)
-                final_bundle = build_nakon_bundle(ctx.final_config_path)
-                with timed(ctx.comp_dir, 6, "nakon", f"final x{len(final_machines)}"):
-                    result = run_nakon(ctx.ssh_key, ctx.scoring_user, ctx.scoring_ip, final_bundle,
-                                       ctx.final_config_path,
-                                       timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(final_machines)),
-                                       strict=False, jobs=ctx.nakon_jobs)
-                # Merge, not overwrite: a failure in BOTH passes must keep the repair
-                # tally (phase 6 used to erase it by writing only on failure).
-                merged = list(ctx.state.get("nakon_failed_steps") or [])
-                merged += [f"final: {line}" for line in result.failed[:20]]
-                seen = set()
-                ctx.state["nakon_failed_steps"] = [x for x in merged if not (x in seen or seen.add(x))][:40]
-                # Save unconditionally: _record_coverage may have CLEARED a stale
-                # coverage entry on this fully-green pass, and a clear that never
-                # reaches disk leaves verify's coverage gate red (see
-                # record_stage_coverage — the ff9b19f bug, re-created).
-                record_stage_coverage(ctx.state, final_machines, result, ctx.save_state)
-
-            if compfile_flag(ctx.comp_dir / "Compfile", "team_beacons"):
-                print("  Planting team beacons (hunt artifacts)...")
-                with timed(ctx.comp_dir, 6, "beacons"):
-                    plant_team_beacons(ctx.teams, ctx.boxes, ctx.tf_ctx, box_username=ctx.box_username,
-                                       box_password=ctx.box_password)
-
-            print(f"  Snapshotting all boxes as '{SNAP_READY}' (as-delivered restore point)...")
-            run_concurrent(ctx.all_targets, partial(snap_ready, ctx), max_workers=4)
+            phase6_domains_and_final(ctx)
             ctx.checkpoint(6)
         else:
+            print("[6/7] Skipped (resume).")
             print("[6/7] Skipped (resume).")
 
         if ctx.from_phase <= 7:
