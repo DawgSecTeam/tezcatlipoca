@@ -29,6 +29,17 @@ load_dotenv(ENV_PATH)
 # bulk clone writes, not deletes); 4 keeps even a shared node comfortable.
 TEARDOWN_WORKERS = 4
 
+# Per-attempt wall-clock bound for `terraform destroy`. Without it,
+# utils.run_terraform waits on proc.wait(timeout=None) forever (utils.py), and the
+# documented hang mode is a Windows DC whose guest agent is down holding the qm lock
+# mid-destroy (see pre_stop_windows_boxes). A hung destroy also never reaches the
+# clear_stale_state_lock/sweep_tagged_leftovers recovery below, and prints nothing —
+# the operator just loses the range teardown to a silent hang. Every `apply` in the
+# pipeline is already bounded (deploy.py); destroy was the one unbounded call.
+# 1800s matches the scoring-engine/apply budget: a full destroy of a multi-team range
+# fits well inside it, and a real timeout is a hang, not slow progress.
+DESTROY_ATTEMPT_TIMEOUT_S = 1800
+
 
 def load_destroyable_competitions():
     return [
@@ -61,7 +72,6 @@ def destroy_cloned_vms(cloned_vms_path, default_node):
     for entry in cloned_vms.values():
         n = _entry_node(entry, default_node)
         if n not in live_by_node:
-            vmid = entry["vmid"] if isinstance(entry, dict) else entry
             try:
                 live_by_node[n] = {
                     int(v["vmid"]): (v.get("name") or "")
@@ -250,6 +260,42 @@ def report_remaining(nodes, competition, teams):
             print(f"    WARNING: could not list bridges on {node}: {e}")
 
 
+def destroy_with_recovery(env, tf_cwd, placement_nodes, competition):
+    """Run `terraform destroy` with bounded attempts and recovery between them.
+
+    Teardown is resumable: every pass makes progress, and each failure gets
+    (a) stale state-lock recovery (a SIGKILLed deploy leaves the lock behind),
+    (b) a tag-scoped sweep of clones a killed deploy left out of terraform state,
+    then a retry — until terraform completes or nothing of ours is left standing.
+
+    Returns True when terraform reported success, False once the attempts are exhausted.
+    A per-attempt timeout is treated as just another failed attempt so control reaches
+    the recovery steps instead of escaping as an exception (utils.run_terraform raises
+    TimeoutExpired even with check=False)."""
+    for attempt in (1, 2, 3, 4):
+        if attempt > 1:
+            clear_stale_state_lock(tf_cwd)
+            sweep_tagged_leftovers(placement_nodes, competition)
+        try:
+            proc = run_terraform(
+                ["destroy", "-parallelism=4", "-auto-approve"],
+                cwd=tf_cwd,
+                env=env,
+                timeout=DESTROY_ATTEMPT_TIMEOUT_S,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            # utils.run_terraform already SIGINT'd the process group and reaped
+            # stragglers, so the state lock is released and a retry is safe.
+            print(f"  terraform destroy timed out after {DESTROY_ATTEMPT_TIMEOUT_S}s "
+                  f"(attempt {attempt}/4, partial progress kept)...")
+            continue
+        if proc.returncode == 0:
+            return True
+        print(f"  terraform destroy failed (attempt {attempt}/4, partial progress kept)...")
+    return False
+
+
 def main():
     import argparse
 
@@ -389,27 +435,7 @@ def main():
     tf_cwd = str(per_comp_tf) if (per_comp_tf / "terraform.tfstate").exists() else "terraform"
 
     print(f"\nRunning terraform destroy for '{name}' (state: {tf_cwd})...")
-    # Teardown is resumable: every pass makes progress, and each failure gets
-    # (a) stale state-lock recovery (a SIGKILLed deploy leaves the lock behind),
-    # (b) a tag-scoped sweep of clones a killed deploy left out of terraform state,
-    # then a retry — until terraform completes or nothing of ours is left standing.
-    node = os.environ.get("TF_VAR_proxmox_node", "pve")
-    destroyed = False
-    for attempt in (1, 2, 3, 4):
-        if attempt > 1:
-            clear_stale_state_lock(tf_cwd)
-            sweep_tagged_leftovers(placement_nodes, competition)
-        proc = run_terraform(
-            ["destroy", "-parallelism=4", "-auto-approve"],
-            cwd=tf_cwd,
-            env=env,
-            check=False,
-        )
-        if proc.returncode == 0:
-            destroyed = True
-            break
-        print(f"  terraform destroy failed (attempt {attempt}/4, partial progress kept)...")
-    if not destroyed:
+    if not destroy_with_recovery(env, tf_cwd, placement_nodes, competition):
         report_remaining(placement_nodes, competition, teams)
         sys.exit("ERROR: terraform destroy did not complete after recovery attempts — "
                  "resolve what is listed above, then re-run this command (it is safe "
