@@ -5,7 +5,6 @@ import json
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -21,7 +20,6 @@ from config_ops import (
     collect_teams,
     collect_users_config,
     confirm_deploy,
-    destroy_bridge_if_exists,
     load_boxes,
     load_injects,
     load_packet_passwords,
@@ -60,7 +58,7 @@ from nodes_ops import (activate_placement, golden_vmid_for_slot,
                        satellite_tfvars)
 from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
 from range_ops import (destroy_vm_if_exists, ensure_terraform_workdir, enumerate_targets,
-                       persist_targets, proxmox_api, take_snapshot,
+                       persist_targets, take_snapshot,
                        terraform_dir, terraform_plugin_cache_dir)
 from routing_ops import verify_satellite_routing
 from ssh_ops import (forget_engine_host_key, read_terraform_ctx, wait_for_boxes_ssh,
@@ -440,43 +438,6 @@ class DeployContext:
     def comp_tags(self):
         """The tags every VM this competition owns carries (destroy's ownership guard)."""
         return {"tezcatlipoca", f"comp-{self.comp_name}"}
-
-
-def destroy_owned(ctx, destroy_node, vmid, vm_name):
-    """Destroy one VM if it is ours (tag-guarded), timing the call under phase 1."""
-    with timed(ctx.comp_dir, 1, "destroy_vm", vm_name):
-        legacy_name = vm_name if vm_name.startswith("golden-") else None
-        destroy_vm_if_exists(destroy_node, vmid, expect_tags=ctx.comp_tags,
-                             legacy_name=legacy_name)
-
-
-def destroy_pool(ctx, vmid_map, destroy_node):
-    """Destroy a wave in parallel (bounded like every other per-box bulk pass)."""
-    workers = min(8, len(vmid_map)) or 1
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(destroy_owned, ctx, destroy_node, vmid, name)
-                   for vmid, name in sorted(vmid_map.items())]
-        for fut in futures:
-            fut.result()
-
-
-def destroy_node_waves(ctx, destroy_node, node_targets, slot, extra_destroy=None):
-    """One wave pair per hosting node, that node's VMs and its slot's golden span
-    (multi-node) — the engine node keeps the historical slot-0 behavior."""
-    try:
-        node_vms = proxmox_api("GET", f"/nodes/{destroy_node}/qemu")["data"]
-    except Exception as e:
-        print(f"  WARNING: could not scan {destroy_node} for stranded "
-              f"clones ({e}) — proceeding")
-        node_vms = []
-    wave1, wave2 = phase1_destroy_waves(
-        node_vms, node_targets, ctx.legacy_clones if slot == 0 else {},
-        ctx.engine_vmid, ctx.boxes, ctx.comp_tags,
-        lambda vid: _is_template(destroy_node, vid),
-        load_template_hashes(ctx.comp_dir), ctx.golden_hashes,
-        frozen_keep=ctx.frozen_keep, slot=slot, extra_destroy=extra_destroy)
-    destroy_pool(ctx, wave1, destroy_node)
-    destroy_pool(ctx, wave2, destroy_node)
 
 
 def boot_win(ctx, t):
@@ -950,6 +911,12 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     multi-node placement when nodes.json exists; without them teams are placed by
     capacity-fill. force_from_phase (--force-from-phase) bypasses the guard that refuses
     to skip phases .deploy_state.json never recorded as completed."""
+    # Imported here, not at module scope: deploy_phases reaches back into this module
+    # for the pure phase helpers and the globals the offline tests monkeypatch, so a
+    # module-level import would be circular (and `python3 deploy.py` would trip over a
+    # partially-initialised deploy_phases).
+    from deploy_phases import phase1_cleanup
+
     # One driver per competition. Two concurrent deploys share the engine's
     # /opt/nakon staging dir and each one's 'rm -rf /opt/nakon/*' wipes the
     # other's plan archives mid-plant (scrim-extreme-2026-09-20: a pkill'd
@@ -977,42 +944,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     try:
         if ctx.from_phase <= 1:
             current_phase = 1
-            print("[1/7] Cleaning up previous deployment (parallel; deletes are metadata-light "
-                  "— the datastore-saturation hazard belongs to bulk clone writes, not deletes)...")
-            cloned_path = ctx.comp_dir / "cloned_vms.json"
-            ctx.legacy_clones = {}
-            if cloned_path.exists():
-                try:
-                    ctx.legacy_clones = {int(v): str(k) for k, v in json.loads(cloned_path.read_text()).items()}
-                except (ValueError, TypeError, OSError):
-                    print("  WARNING: could not parse cloned_vms.json — relying on computed vmids")
-
-            # Wave 1: every team box (the computed set covers ALL teams now that terraform
-            # builds them) plus any legacy API clones from a pre-golden range. Linked
-            # clones must die BEFORE their templates.
-            destroy_node_waves(ctx, ctx.node,
-                               [t for t in ctx.all_targets if t.get("node") == ctx.node], 0)
-            if ctx.placement:
-                for sat in ctx.placement["satellites"]:
-                    sat_rec = record_of(ctx.placement, sat["name"])
-                    destroy_node_waves(
-                        ctx, sat_rec.node,
-                        [t for t in ctx.all_targets if t.get("node") == sat_rec.node],
-                        sat["slot"],
-                        extra_destroy={sat["jump_vmid"]: f"jump-{ctx.comp_name}-{sat['slot']}"})
-                    for team_key in ctx.placement["team_nodes"]:
-                        if ctx.placement["team_nodes"][team_key] != sat["name"]:
-                            continue
-                        with timed(ctx.comp_dir, 1, "destroy_bridge", f"vmbr{ctx.teams[team_key]['identifier']}"):
-                            destroy_bridge_if_exists(sat_rec.node, f"vmbr{ctx.teams[team_key]['identifier']}")
-            for team_key, team in ctx.teams.items():
-                if ctx.placement and ctx.placement["team_nodes"][team_key] != ctx.placement["engine_node"]:
-                    continue  # satellite bridge — destroyed above on its own host
-                with timed(ctx.comp_dir, 1, "destroy_bridge", f"vmbr{team['identifier']}"):
-                    destroy_bridge_if_exists(ctx.node, f"vmbr{team['identifier']}")
-            (ctx.comp_dir / ".postclone-swept").unlink(missing_ok=True)
-            reset_domain_markers(ctx.comp_dir)
-            time.sleep(5)
+            phase1_cleanup(ctx)
             ctx.checkpoint(1)
         else:
             print("[1/7] Skipped (resume) — leaving existing VMs/bridges in place.")
