@@ -27,6 +27,7 @@ from config_ops import (
     random_password,
     resolve_inject_times,
     update_env,
+    write_state,
 )
 from constants import (
     DEFAULT_ENGINE_MGMT_GW,
@@ -453,15 +454,13 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                                 force=force_from_phase)
 
     def _save_state():
-        # Atomic rename: .deploy_state.json holds the only copy of the box
-        # passwords — a torn write here bricks both resume and redeploy.
-        tmp_path = state_path.with_name(state_path.name + ".tmp")
-        tmp_path.write_text(json.dumps(state, indent=2))
-        os.replace(tmp_path, state_path)
-        try:
-            os.chmod(state_path, 0o600)
-        except OSError:
-            pass
+        # .deploy_state.json holds the only copy of the generated box and team
+        # passwords: a torn write here bricks both resume and redeploy, and the old
+        # write_text-then-chmod idiom also left the secret briefly world-readable.
+        # config_ops.write_state is the shared os.replace + 0600-at-creation writer
+        # (added 2026-10-01 alongside redeploy's two copies and the post-DB-wipe
+        # recovery path) — one implementation, not four.
+        write_state(state_path, state)
 
     def checkpoint(n):
         state["last_phase"] = n
@@ -592,7 +591,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     # own machine SID before promotion; their configs move to the repair stage.
     unbooted = unbooted_golden_boxes(comp_dir)
     golden_config_path, repair_config_path, final_config_path, _postclone_path = generate_stage_configs(
-        comp_dir, teams, boxes, box_username=box_username, unbooted=unbooted)
+        comp_dir, teams, boxes, unbooted=unbooted)
 
     # M4: template hashes are computed BEFORE phase 1 — cleanup must know which golden
     # templates survive (test-run reuse) and which rebuild. The golden bundle is built
@@ -989,7 +988,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                     anchor = sat["anchor_identifier"]
                     golden_rebuild_gate(comp_dir, sat_rec.node, slot, boxes, engine_vmid,
                                         stored, golden_hashes, golden_inputs, comp_name)
-                    slot_config = generate_slot_golden_config(comp_dir, teams, boxes,
+                    slot_config = generate_slot_golden_config(comp_dir, boxes,
                                                               unbooted, anchor, slot)
                     print(f"  Golden set on satellite '{sat['name']}' (slot {slot}, "
                           f"anchor 192.168.{anchor}.0/24)...")

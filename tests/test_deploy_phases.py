@@ -200,5 +200,22 @@ class CoveragePersistence(unittest.TestCase):
                          {"web01-team101": ["smb-v1"]})
 
 
+class SharedStateWriter(unittest.TestCase):
+    """D4: deploy's .deploy_state.json writer is the shared config_ops helper, not a
+    fourth hand-rolled atomic writer (the guarantee held at 1 of 4 call sites before)."""
+
+    def test_deploy_writer_is_the_shared_config_ops_helper(self):
+        import config_ops
+        self.assertIs(deploy.write_state, config_ops.write_state)
+
+    def test_save_state_routes_through_the_helper(self):
+        src = (_REPO / "deploy.py").read_text()
+        self.assertIn("write_state(state_path, state)", src)
+        # The old hand-rolled body must be gone: write_text() then chmod() left the
+        # only copy of the box passwords world-readable for a window.
+        self.assertNotIn("state_path.with_name", src)
+        self.assertNotIn("os.chmod(state_path, 0o600)", src)
+
+
 if __name__ == "__main__":
     unittest.main()
