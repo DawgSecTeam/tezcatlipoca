@@ -597,7 +597,7 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
     # The scoring DB is empty now, so phase 7's per-step done-flags are stale: without
     # clearing them the advertised --from-phase 7 re-seed skipped every step.
     state_path = comp_dir / ".deploy_state.json"
-    for flag in ("seeded", "engine_unpaused", "injects_created"):
+    for flag in ("seeded", "engine_unpaused", "injects_created", "injects_fingerprint"):
         state.pop(flag, None)
     # This write lands LAST in engine-recovery, after terraform already re-cloned the
     # engine and the scoring DB was wiped. A torn or short-lived-0644 write here leaves a

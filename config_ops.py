@@ -934,6 +934,37 @@ def resolve_inject_times(injects):
     return injects
 
 
+def injects_fingerprint(injects):
+    """Stable identity of the inject *definitions*, for phase 7's done-marker.
+
+    Call this BEFORE `resolve_inject_times` — that function pops the offset fields and
+    rewrites them as absolute timestamps, so a fingerprint taken afterwards changes on
+    every run and would re-create the whole set every time.
+
+    `injects_created` used to be a bare boolean, which meant an inject added (or a
+    window edited) after the first phase-7 run was silently skipped forever on resume:
+    `create_injects` dedups on titles precisely so a re-run is safe, but nothing ever
+    re-ran it. Titles are what that dedup keys on, so they lead the fingerprint; the
+    offsets and attachment names are included so a changed window or a swapped
+    attachment is not missed either.
+    """
+    import hashlib
+
+    items = []
+    for inj in injects or []:
+        items.append({
+            "title": inj.get("title"),
+            "open_offset_min": inj.get("open_offset_min", 0),
+            "due_offset_min": inj.get("due_offset_min", 60),
+            "close_offset_min": inj.get("close_offset_min", 90),
+            "attachments": sorted(
+                (a.get("name") if isinstance(a, dict) else str(a)) or ""
+                for a in (inj.get("attachments") or [])),
+        })
+    blob = json.dumps(items, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
 def load_boxes(comp_dir):
     path = comp_dir / "boxes.json"
     return json.loads(path.read_text()) if path.exists() else None
@@ -949,7 +980,7 @@ def confirm_deploy(name, scenario, difficulty, teams, boxes):
     print(f"  Scenario    : {short_scenario}")
     print(f"  Difficulty  : {difficulty} / 10")
     print(f"  Teams       : {n}  ({team_range}, passwords auto-generated)")
-    print(f"  Boxes       :")
+    print("  Boxes       :")
     for b in boxes:
         print(f"    {b['name']} — {b['template']}  ({b['cpu']} CPU, {b['memory_mb']} MB)")
     print()

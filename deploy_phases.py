@@ -30,8 +30,8 @@ from pathlib import Path
 
 import deploy
 from beacon_ops import plant_team_beacons
-from config_ops import (destroy_bridge_if_exists, resolve_inject_times,
-                        write_text_atomic)
+from config_ops import (destroy_bridge_if_exists, injects_fingerprint,
+                        resolve_inject_times, write_text_atomic)
 from domain_ops import deploy_domain_configs
 from constants import (DEFAULT_ENGINE_MGMT_GW, PER_MACHINE_NAKON_BUDGET,
                        SNAP_BASE, SNAP_READY)
@@ -619,7 +619,14 @@ def phase7_seed(ctx):
     else:
         print("  Engine already unpaused (resume) — skipping.")
 
-    if ctx.injects and not ctx.state.get("injects_created"):
+    # `injects_created` alone is not a done-marker: it cannot tell "already created"
+    # from "already created, but the inject set has since changed". The fingerprint is
+    # taken BEFORE resolve_inject_times (which pops the offsets), and a mismatch
+    # re-enters create_injects — safe because that call dedups on titles, so only the
+    # genuinely new injects are posted.
+    want_injects = injects_fingerprint(ctx.injects) if ctx.injects else None
+    if ctx.injects and (not ctx.state.get("injects_created")
+                        or ctx.state.get("injects_fingerprint") != want_injects):
         print(f"  Creating {len(ctx.injects)} inject(s)...")
         resolve_inject_times(ctx.injects)
         with timed(ctx.comp_dir, 7, "create_injects", f"x{len(ctx.injects)}"):
@@ -630,6 +637,7 @@ def phase7_seed(ctx):
                   f"(existing injects are deduped)")
         else:
             ctx.state["injects_created"] = True
+            ctx.state["injects_fingerprint"] = want_injects
             ctx.save_state()
     elif ctx.injects:
         print("  Injects already created (resume) — skipping.")
