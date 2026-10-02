@@ -426,6 +426,25 @@ class RunIdentity:
     engine_vmid: int = SCORING_ENGINE_VMID
 
 
+@dataclass
+class CompetitionSpec:
+    """The competition's static definition: Compfile + users.json + boxes.json.
+
+    nakon_jobs and apt_cache are Compfile knobs materialised here so every step that
+    consumes them (the nakon config, the golden-hash inputs) reads the spec instead of
+    re-parsing the file."""
+
+    name: str = ""
+    scenario: str = ""
+    difficulty: int = 0
+    box_username: str = ""
+    credlist_usernames: list = field(default_factory=list)
+    nakon_jobs: int = 4
+    apt_cache: bool = True
+    comp_name: str = ""
+    boxes: list = field(default_factory=list)
+
+
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
             team_node=None, engine_node=None, force_from_phase=False):
     """Everything deploy() must do before phase 1, as one testable step.
@@ -445,35 +464,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     # (The engine lock itself is taken further down — multi-node placement must point
     # the env at the engine's host first, and that needs teams+boxes resolved.)
 
-    name, scenario, difficulty = load_compfile(comp_dir / "Compfile")
-    box_username, credlist_usernames = load_users_config(comp_dir)
-    # nakon --jobs pass-through (M1.2): per-machine work is atomic in nakon's runner, so N
-    # machines plant concurrently with each machine's step order (disruptive last) intact.
-    # The ceiling is engine egress/CPU and mirror throughput, not the datastore (no bulk
-    # writes) — start at 4 and judge against the M0.2 timings.
-    nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
-    # apt_cache (M1.3): point each box's apt at the engine's apt-cacher-ng mirror cache.
-    # Approved trade-off: through the IP-based proxy, resolv-conf-null-dns no longer breaks
-    # apt (it still breaks every other resolver user on the box); empty-sources/hold
-    # configs break apt either way. Set `apt_cache 0` in the Compfile for full realism.
-    apt_cache = bool(compfile_flag(comp_dir / "Compfile", "apt_cache", 1))
-    comp_name = comp_dir.name
-    print(f"\n{'='*60}")
-    print(f"  Deploying {comp_name}")
-    print(f"{'='*60}\n")
-
-    boxes = load_boxes(comp_dir)
-    if not boxes:
-        print("  ERROR: No boxes.json found. Create a new competition or add boxes.json.")
-        sys.exit(1)
-
-    KNOWN_BROKEN_TEMPLATES = {"debian13-lite", "ubuntu24.04"}
-    for b in boxes:
-        if b.get("template") in KNOWN_BROKEN_TEMPLATES:
-            print(f"  WARNING: box '{b['name']}' uses template '{b['template']}', which is "
-                  f"known broken (bad cloud-init — clones won't get a working network/SSH). "
-                  f"Use '{b['template']}-fix' instead. See docs/usage-people.md's "
-                  f"Troubleshooting table.")
+    spec = CompetitionSpec()
+    _load_competition_spec(spec, comp_dir)
 
     state_path = comp_dir / ".deploy_state.json"
     previous_state = {}
@@ -533,7 +525,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         redis_password = state.get("redis_password") or random_password()
         box_password = state.get("box_password") or random_password()
         box_creds = state.get("box_creds") or {
-            name: random_password() for name in credlist_usernames
+            name: random_password() for name in spec.credlist_usernames
         }
         domain_creds = state.get("domain_creds")
         inject_password = state.get("inject_password")
@@ -588,7 +580,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
             print("  Box credentials come from passwords.json (packet profile) — "
                   "not re-minted")
         box_creds = (dict(packet_credlists.get("linux") or {})
-                     or {name: random_password() for name in credlist_usernames})
+                     or {name: random_password() for name in spec.credlist_usernames})
         domain_creds = (dict(packet_credlists.get("domain") or {}) or None)
         inject_password = random_password() if injects else None
         state = {
@@ -612,7 +604,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     # placement.json always wins (authoritative); a resume without one adopts its
     # deployed endpoint rather than re-balancing a live range.
     placement, _resolved_engine_record = resolve_placement(
-        comp_dir, identity.engine_vmid, teams, boxes, comp_name,
+        comp_dir, identity.engine_vmid, teams, spec.boxes, spec.comp_name,
         team_overrides=_parse_team_node(team_node), engine_override=engine_node,
         resume_endpoint=(previous_state.get("deployed_endpoint") if resuming else None))
     if placement:
@@ -628,8 +620,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     write_state(state_path, state)
     acquire_engine_lock(identity.engine_vmid)
 
-    nakon_config_path = generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password,
-                                               box_username=box_username)
+    nakon_config_path = generate_nakon_config(teams, spec.boxes, spec.difficulty, comp_dir, box_password,
+                                               box_username=spec.box_username)
     # M3.2: the full bundle is never deployed as one pass anymore. The golden-stage
     # bundle is built inside golden_ops at plant time; the repair bundle in phase 5 and
     # the final bundle in phase 6 (all content-addressed, so resumes hit the cache).
@@ -637,7 +629,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     # own machine SID before promotion; their configs move to the repair stage.
     unbooted = unbooted_golden_boxes(comp_dir)
     golden_config_path, repair_config_path, final_config_path, _postclone_path = generate_stage_configs(
-        comp_dir, teams, boxes, unbooted=unbooted)
+        comp_dir, teams, spec.boxes, unbooted=unbooted)
 
     # M4: template hashes are computed BEFORE phase 1 — cleanup must know which golden
     # templates survive (test-run reuse) and which rebuild. The golden bundle is built
@@ -653,9 +645,9 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     }
     base_template_ids = _template_vmid_map(node)
     golden_inputs, golden_hashes = golden_hash_entries(
-        boxes, base_template_ids, golden_machines_by_box, golden_bundle,
-        box_password, box_username, os.environ.get("TF_VAR_ssh_public_key", ""),
-        apt_cache, unbooted=unbooted)
+        spec.boxes, base_template_ids, golden_machines_by_box, golden_bundle,
+        box_password, spec.box_username, os.environ.get("TF_VAR_ssh_public_key", ""),
+        spec.apt_cache, unbooted=unbooted)
 
     frozen = frozen_state(comp_dir)
     frozen_keep = set()
@@ -665,12 +657,12 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         # likewise before any engine destruction. Code-only drift keeps the golden:
         # phase1_destroy_waves must not rebuild what the gate said to proceed on.
         frozen_hashes = (frozen.get("hashes") or {})
-        for name in golden_hashes:
-            stored_inputs = (frozen_hashes.get("golden") or {}).get(name, {}).get("inputs") or {}
-            drift = golden_freeze_gate(name, stored_inputs, golden_inputs[name],
+        for spec.name in golden_hashes:
+            stored_inputs = (frozen_hashes.get("golden") or {}).get(spec.name, {}).get("inputs") or {}
+            drift = golden_freeze_gate(spec.name, stored_inputs, golden_inputs[spec.name],
                                        frozen.get("frozen_at"), golden_bundle)
             if drift["code"]:
-                frozen_keep.add(name)
+                frozen_keep.add(spec.name)
 
     teams_json_src = {
         team_key: {"identifier": team_data["identifier"], "password": team_data["password"]}
@@ -681,13 +673,13 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         for team_key in teams_json_src:
             teams_json_src[team_key]["slot"] = placement["team_slots"][team_key]
     teams_json = json.dumps(teams_json_src)
-    boxes_json = json.dumps(boxes)
+    boxes_json = json.dumps(spec.boxes)
 
     update_env({
         "TF_VAR_teams": teams_json,
         "TF_VAR_boxes_per_team": boxes_json,
         "TF_VAR_box_password": box_password,
-        "TF_VAR_box_username": box_username,
+        "TF_VAR_box_username": spec.box_username,
         "TF_VAR_scoring_vm_id": str(identity.engine_vmid),
     })
 
@@ -722,7 +714,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
                 f"targets {cur_endpoint} (engine vmid {identity.engine_vmid}). Terraform would "
                 f"reconcile the stale state and destroy whatever sits at those resources "
                 f"on the new host. Destroy this competition first: python3 "
-                f"destroy-competition.py --competition {comp_name} --yes"
+                f"destroy-competition.py --competition {spec.comp_name} --yes"
             )
 
     raw_key = os.environ["TF_VAR_ssh_private_key_path"]
@@ -748,10 +740,10 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         # teams_json_src carries the placement slot per team (multi-node) — tfvars
         # outranks the env, so this is the copy terraform actually reads.
         "teams": teams_json_src,
-        "boxes_per_team": boxes,
+        "boxes_per_team": spec.boxes,
         "box_password": box_password,
-        "box_username": box_username,
-        "event_name": name,
+        "box_username": spec.box_username,
+        "event_name": spec.name,
         "scoring_vm_id": identity.engine_vmid,
         "ssh_private_key_path": ssh_key_abs,
         # M3.3 two-apply: apply #1 (phase 2) builds the engine + bridges with an empty
@@ -780,22 +772,22 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     if from_phase <= 2:
         if placement:
             from config_ops import preflight_gates_multinode
-            preflight_gates_multinode(comp_dir, boxes, teams, identity.engine_vmid, placement,
+            preflight_gates_multinode(comp_dir, spec.boxes, teams, identity.engine_vmid, placement,
                                       engine_mgmt_ip=engine_mgmt_ip,
                                       check_free=not resuming)
         else:
-            preflight_gates(comp_dir, boxes, number_of_teams, teams=teams,
+            preflight_gates(comp_dir, spec.boxes, number_of_teams, teams=teams,
                             engine_vmid=identity.engine_vmid, check_free=not resuming,
                             engine_mgmt_ip=engine_mgmt_ip)
 
     if not assume_yes and not resuming:
-        if not confirm_deploy(name, scenario, difficulty, teams, boxes):
+        if not confirm_deploy(spec.name, spec.scenario, spec.difficulty, teams, spec.boxes):
             print("  Deployment cancelled.")
             return None
 
     node = os.environ["TF_VAR_proxmox_node"]
-    all_targets = enumerate_targets(teams, boxes, placement=placement, default_node=node)
-    persist_targets(comp_dir, all_targets, boxes)
+    all_targets = enumerate_targets(teams, spec.boxes, placement=placement, default_node=node)
+    persist_targets(comp_dir, all_targets, spec.boxes)
     # Unmanaged boxes (pfSense/appliances) get no plant/repair/fix_services/cloud-init —
     # they are cloned from their own template and self-configure. Keep them in all_targets
     # (positional vmids) but out of the Linux/Windows work lists.
@@ -805,17 +797,17 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
 
     return DeployContext(
         comp_dir=comp_dir,
-        comp_name=comp_name,
+        comp_name=spec.comp_name,
         state_path=state_path,
         from_phase=from_phase,
         resuming=resuming,
         assume_yes=assume_yes,
-        name=name,
-        scenario=scenario,
-        box_username=box_username,
-        credlist_usernames=credlist_usernames,
-        nakon_jobs=nakon_jobs,
-        apt_cache=apt_cache,
+        name=spec.name,
+        scenario=spec.scenario,
+        box_username=spec.box_username,
+        credlist_usernames=spec.credlist_usernames,
+        nakon_jobs=spec.nakon_jobs,
+        apt_cache=spec.apt_cache,
         injects=injects,
         packet_pw=packet_pw,
         state=state,
@@ -832,8 +824,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         node=node,
         engine_vmid=identity.engine_vmid,
         engine_mgmt_ip=engine_mgmt_ip,
-        boxes=boxes,
-        boxes_by_name={b["name"]: b for b in boxes},
+        boxes=spec.boxes,
+        boxes_by_name={b["name"]: b for b in spec.boxes},
         unbooted=unbooted,
         nakon_config_path=nakon_config_path,
         golden_config_path=golden_config_path,
@@ -872,6 +864,43 @@ def _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid):
             identity.engine_vmid = SCORING_ENGINE_VMID
     else:
         identity.engine_vmid = int(scoring_vmid) if scoring_vmid is not None else SCORING_ENGINE_VMID
+
+
+def _load_competition_spec(spec, comp_dir):
+    """Load the Compfile, users.json and boxes.json into `spec`; print the banner.
+
+    A missing boxes.json is fatal here: every later step (and every phase) enumerates
+    boxes. Known-broken templates only warn — the competition may predate the fix, and
+    the deploy still has to be able to refuse later on its own terms."""
+    spec.name, spec.scenario, spec.difficulty = load_compfile(comp_dir / "Compfile")
+    spec.box_username, spec.credlist_usernames = load_users_config(comp_dir)
+    # nakon --jobs pass-through (M1.2): per-machine work is atomic in nakon's runner, so N
+    # machines plant concurrently with each machine's step order (disruptive last) intact.
+    # The ceiling is engine egress/CPU and mirror throughput, not the datastore (no bulk
+    # writes) — start at 4 and judge against the M0.2 timings.
+    spec.nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
+    # apt_cache (M1.3): point each box's apt at the engine's apt-cacher-ng mirror cache.
+    # Approved trade-off: through the IP-based proxy, resolv-conf-null-dns no longer breaks
+    # apt (it still breaks every other resolver user on the box); empty-sources/hold
+    # configs break apt either way. Set `apt_cache 0` in the Compfile for full realism.
+    spec.apt_cache = bool(compfile_flag(comp_dir / "Compfile", "apt_cache", 1))
+    spec.comp_name = comp_dir.name
+    print(f"\n{'='*60}")
+    print(f"  Deploying {spec.comp_name}")
+    print(f"{'='*60}\n")
+
+    spec.boxes = load_boxes(comp_dir)
+    if not spec.boxes:
+        print("  ERROR: No boxes.json found. Create a new competition or add boxes.json.")
+        sys.exit(1)
+
+    KNOWN_BROKEN_TEMPLATES = {"debian13-lite", "ubuntu24.04"}
+    for b in spec.boxes:
+        if b.get("template") in KNOWN_BROKEN_TEMPLATES:
+            print(f"  WARNING: box '{b['name']}' uses template '{b['template']}', which is "
+                  f"known broken (bad cloud-init — clones won't get a working network/SSH). "
+                  f"Use '{b['template']}-fix' instead. See docs/usage-people.md's "
+                  f"Troubleshooting table.")
 
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
