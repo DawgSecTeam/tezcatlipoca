@@ -390,6 +390,34 @@ to a gitignored file — not a documented interface in its own right. Prefer the
 directly; adapt the wrapper's `printf`/logging pattern only if you specifically need
 stdin-driven prompt answers instead.
 
+## Running a deploy that outlives your shell
+
+A deploy takes tens of minutes to hours; a tool call, a terminal, and a harness background task do
+not. Wrapping the deploy in a `timeout` to fit is the wrong fix — it turns a slow success into an
+abrupt partial-state kill (six recorded exec logs open with a bare `Terminated`). Start it in its own
+session with its own log, then poll **the log**, never the process:
+
+```bash
+cd <worktree-root>                     # every path resolves from here
+mkdir -p logs
+setsid nohup python3 -u create-competition.py \
+    --competition <id> --teams <N> --scoring-vmid <free> --yes \
+    > logs/<id>-$(date +%Y%m%d-%H%M).log 2>&1 < /dev/null &
+echo "pid $! — follow with: tail -f logs/<id>-*.log"
+```
+
+- `setsid` puts the deploy in its own session/process group, so it survives the shell that started
+  it; `nohup` + the redirected log means nothing is lost when the caller goes away.
+- **Kill by process group or by pid** — `kill -TERM -<pid>` (negative == the group). Never
+  `pkill -f`/`pgrep -f` a pattern that also appears in the invoking command line: it matches the
+  caller itself and self-kills. That has happened twice on this project.
+- Never combine "kill" and "relaunch" in one pattern; kill, confirm it is gone, then relaunch.
+- In-process equivalent: `utils.spawn_detached(cmd, log_path)` returns `(pid, log_path)` for code
+  that needs to start one.
+
+`run-deploy.sh` remains the stdin-driven example wrapper; the recipe above is what a non-interactive
+run should use.
+
 ## Deploying from a worktree
 
 **RULE — any practice run (capacity test, canary, shakedown, any deploy whose goal is testing the

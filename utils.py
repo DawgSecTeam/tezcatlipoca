@@ -71,6 +71,32 @@ def mint_run_id():
     return f"run-{_secrets.token_hex(4)}"
 
 
+def spawn_detached(cmd, log_path, cwd=None):
+    """Start a long command in its own session, logging to `log_path`. Returns (pid, log_path).
+
+    A tool call — and a harness background task — has a wall-clock life far shorter than
+    a deploy, and the observed compensation is worse than the problem: agents wrap the
+    deploy in their own `timeout`, turning a slow success into an abrupt partial-state
+    kill (six exec logs carry a leading `Terminated`). setsid + nohup + a redirected log
+    is the only shape that survives the caller; poll the log.
+
+    The pid returned is the new session/process-group leader, so kill the whole tree with
+    `os.killpg(pid, SIGTERM)`. Never `pkill -f` a pattern that also appears in the
+    invoking command line — that matches the caller and self-kills.
+    """
+    log = Path(log_path)
+    if log.parent and str(log.parent) != ".":
+        log.parent.mkdir(parents=True, exist_ok=True)
+    argv = cmd if isinstance(cmd, (list, tuple)) else ["bash", "-lc", str(cmd)]
+    with open(log, "ab") as handle:
+        proc = subprocess.Popen(
+            list(argv), cwd=str(cwd) if cwd else None,
+            stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    return proc.pid, str(log)
+
+
 def run_concurrent(items, fn, max_workers=MAX_CONCURRENCY):
     """Run fn(item) for every item on a bounded thread pool.
 
