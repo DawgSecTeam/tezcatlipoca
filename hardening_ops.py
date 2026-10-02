@@ -7,6 +7,7 @@ import re
 import shlex
 import subprocess
 import time
+from typing import Callable, NamedTuple
 
 from range_ops import diagnose_unreachable_box, guest_agent_exec_root, wait_for_guest_agent
 from ssh_ops import gateway_proxy, ssh_via_gateway
@@ -295,7 +296,6 @@ def ensure_alpine_services(comp_dir, targets, ctx):
     a status probe as the pass condition. Idempotent — clones inherit the golden disk,
     so phase 5's pass usually confirms rather than installs. Unknown pinned services
     are reported, not silently skipped."""
-    proxy = gateway_proxy(ctx)
     box_username = ctx.get("box_username", "ubuntu")
     pins = json.loads((comp_dir / "box_services.json").read_text())
     alpine = [t for t in targets
@@ -382,242 +382,307 @@ def ensure_alpine_services(comp_dir, targets, ctx):
         raise RuntimeError(f"Alpine service shim failed on {failed} — nginx/scores would be DOWN")
 
 
+class _ServiceFixup(NamedTuple):
+    """One conditional block of the service-hardening script.
+
+    `triggers` are the catalog config names that select the block — the aliasing is
+    data here, not the `or` chain the pre-refactor if-chain spelled out by hand. Those
+    hand-written chains had drifted apart, and the drift is real and deliberate:
+    the apache gap-filler fires on apache|httpd, the fedora named.conf block fires on
+    bind ALONE, and the bind9 options block fires on bind|named|dns. Nothing here
+    normalises that; it reproduces it.
+
+    Exactly one of `lines` (a literal fragment) or `build` (a fragment that
+    interpolates the credlist accounts) is set. Preserve every byte: this script runs
+    on live boxes and has been debugged through several incidents."""
+
+    name: str
+    triggers: tuple[str, ...]
+    lines: tuple[str, ...] = ()
+    build: Callable[[dict[str, str]], list[str]] | None = None
+
+
+def _credlist_account_lines(creds):
+    """The `useradd ... || true` + `chpasswd` pair for every credlist account, in
+    credlist order.
+
+    ONE generator, TWO call sites: the script prologue and the postfix fragment. The
+    postfix branch used to carry its own copy-pasted pair, so credlist accounts were
+    asserted twice on a mail box (harmless — useradd is idempotent, chpasswd
+    re-asserts the same password). That duplicate is IN the captured golden, so only
+    the generator was deduplicated here; the emitted lines are unchanged."""
+    lines = []
+    for username, password in creds.items():
+        lines.append(f"sudo useradd -m -s /bin/bash {username} 2>/dev/null || true")
+        lines.append(f"echo '{username}:{password}' | sudo chpasswd")
+    return lines
+
+
+def _mysql_fixup(creds):
+    """MySQL/MariaDB: bind 0.0.0.0, restart, then replay the credlist as DB users.
+    Credlist order matters twice: the account lines, and which account gets
+    WITH GRANT OPTION (the first one, as before)."""
+    lines = [
+        "# MySQL/MariaDB: bind to 0.0.0.0",
+        "# Try all possible config file locations",
+        "for cnf in /etc/mysql/mysql.conf.d/50-server.cnf /etc/mysql/mariadb.conf.d/50-server.cnf /etc/mysql/my.cnf; do",
+        '  if [ -f "$cnf" ]; then',
+        "    sudo sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' \"$cnf\"",
+        "  fi",
+        "done",
+        "sudo systemctl restart mysql 2>/dev/null || sudo systemctl restart mariadb 2>/dev/null || true",
+        "sleep 2",
+        "# Create MySQL users from credlist",
+        "cat > /tmp/setup_mysql.sql << 'SQLEOF'",
+    ]
+    for idx, (username, password) in enumerate(creds.items()):
+        lines.append(f"CREATE USER IF NOT EXISTS '{username}'@'%' IDENTIFIED BY '{password}';")
+        grant = "GRANT ALL PRIVILEGES ON *.* TO '{}'@'%' WITH GRANT OPTION;" if idx == 0 \
+            else "GRANT ALL PRIVILEGES ON *.* TO '{}'@'%';"
+        lines.append(grant.format(username))
+    lines.extend([
+        "FLUSH PRIVILEGES;",
+        "SQLEOF",
+        "chmod 600 /tmp/setup_mysql.sql",
+        "sudo mysql < /tmp/setup_mysql.sql || true",
+        "rm -f /tmp/setup_mysql.sql",
+        "",
+    ])
+    return lines
+
+
+def _postfix_fixup(creds):
+    """Postfix: listen on all interfaces + re-assert the credlist mail accounts."""
+    lines = [
+        "# Postfix: ensure it listens on all interfaces",
+        "sudo postconf -e 'inet_interfaces = all' 2>/dev/null || true",
+        "sudo postconf -e 'inet_protocols = ipv4' 2>/dev/null || true",
+        "# Ensure smtpd listener exists (non-interactive install may leave master.cf empty).",
+        "sudo postconf -M 'smtp/inet=smtp inet n - y - - smtpd' 2>/dev/null || true",
+        "sudo systemctl restart postfix 2>/dev/null || true",
+        "sleep 1",
+        "# Create mail users matching credlist for SMTP checks",
+    ]
+    lines.extend(_credlist_account_lines(creds))
+    lines.append("")
+    return lines
+
+
+def _dovecot_fixup(creds):
+    """Dovecot: plaintext auth + a per-account maildir."""
+    lines = [
+        "# Dovecot: enable plaintext auth, create mail dirs",
+        "sudo sed -i 's/^#*disable_plaintext_auth.*/disable_plaintext_auth = no/' /etc/dovecot/conf.d/10-auth.conf 2>/dev/null || true",
+        "dovecot --version 2>/dev/null | grep -qE '^(2\\.[4-9]|[3-9]\\.)' && "
+        "sudo bash -c \"echo 'auth_allow_cleartext = yes' > "
+        "/etc/dovecot/conf.d/99-allow-plaintext.conf\" || true",
+    ]
+    for username, _password in creds.items():
+        lines.append(f"sudo mkdir -p /home/{username}/mail")
+        lines.append(f"sudo chmod 700 /home/{username}/mail")
+        lines.append(f"sudo chown {username}:{username} /home/{username}/mail 2>/dev/null || true")
+    lines.extend([
+        "sudo systemctl restart dovecot 2>/dev/null || true",
+        "sleep 1",
+        "",
+    ])
+    return lines
+
+
+# Per-service script fragments, keyed by canonical group name. SERVICE_FIXUP_ORDER is
+# the emission order and is OUTPUT, not a preference: the old if-chain appended the
+# fedora named.conf block before the bind9 options block, so a box pinned `bind` gets
+# both, in that order. Never sort this dict, and never merge the two bind groups.
+SERVICE_FIXUPS: dict[str, _ServiceFixup] = {
+    "apache": _ServiceFixup("apache", ("apache", "httpd"), lines=(
+        # Catalog scoreability gaps on non-Debian packagings
+        # (distro-matrix-2026-09-27): the apache/bind dnf/yum branches install+start
+        # but never touch distro defaults, so the checks they're pinned for still fail
+        # — fedora httpd serves an EMPTY docroot (403 on /) and fedora named listens
+        # on 127.0.0.1 behind the systemd-resolved stub (refused from the scoring
+        # engine). Idempotent; no-ops on Debian packagings (index.html already exists;
+        # the catalog's apt branch already did the resolved/named work).
+        "if [ -d /var/www/html ] && [ ! -f /var/www/html/index.html ]; then "
+        "echo '<html><body>tz</body></html>' | sudo tee /var/www/html/index.html >/dev/null; fi || true",
+        # Emitted, not a Python comment: this line is part of the generated script.
+        "# httpd resolves its (unset) ServerName against DNS at boot and can hang "
+        "when the resolver isn't up yet (pfsense-ad fedora member); localhost "
+        "short-circuits that on every later boot",
+        "if [ -d /etc/httpd/conf.d ] && [ ! -f /etc/httpd/conf.d/00-tzc-servername.conf ]; then "
+        "echo 'ServerName localhost' | sudo tee /etc/httpd/conf.d/00-tzc-servername.conf >/dev/null; "
+        "sudo systemctl restart httpd 2>/dev/null || true; fi || true",
+        "",
+    )),
+    "bind_named_conf": _ServiceFixup("bind_named_conf", ("bind",), lines=(
+        "if [ -f /etc/named.conf ]; then "
+        "sudo sed -i 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' /etc/named.conf; "
+        "sudo sed -i 's/allow-query\\(.*\\) { localhost; };/allow-query\\1 { any; };/' /etc/named.conf; "
+        "sudo mkdir -p /etc/systemd/resolved.conf.d; "
+        "printf '[Resolve]\\nDNSStubListener=no\\n' | sudo tee /etc/systemd/resolved.conf.d/no-stub.conf >/dev/null; "
+        "sudo systemctl restart systemd-resolved 2>/dev/null || true; "
+        "sudo systemctl restart named 2>/dev/null || true; fi || true",
+        "",
+    )),
+    "mysql": _ServiceFixup("mysql", ("mysql", "mariadb"), build=_mysql_fixup),
+    "postfix": _ServiceFixup("postfix", ("postfix", "smtp"), build=_postfix_fixup),
+    "nginx": _ServiceFixup("nginx", ("nginx", "http", "web"), lines=(
+        "# Nginx: ensure it starts and listens on port 80",
+        "sudo systemctl restart nginx 2>/dev/null || true",
+        "sleep 1",
+        "",
+    )),
+    "vsftpd": _ServiceFixup("vsftpd", ("vsftpd", "ftp"), lines=(
+        "# Vsftpd: ensure anonymous is off, local users can login",
+        "sudo sed -i 's/^#*anonymous_enable.*/anonymous_enable=NO/' /etc/vsftpd.conf 2>/dev/null || true",
+        "sudo sed -i 's/^#*local_enable.*/local_enable=YES/' /etc/vsftpd.conf 2>/dev/null || true",
+        "sudo sed -i 's/^#*write_enable.*/write_enable=YES/' /etc/vsftpd.conf 2>/dev/null || true",
+        "sudo systemctl restart vsftpd 2>/dev/null || true",
+        "sleep 1",
+        "",
+    )),
+    "dovecot": _ServiceFixup("dovecot", ("dovecot", "imap"), build=_dovecot_fixup),
+    "bind9": _ServiceFixup("bind9", ("bind", "named", "dns"), lines=(
+        "# Bind9: allow queries from anywhere",
+        # The nakon bind plant declares zone "localhost" in
+        # named.conf.local; on Ubuntu named.conf.default-zones already
+        # declares it and named refuses to start on the duplicate. The
+        # default-zones copy serves db.local (A localhost -> 127.0.0.1),
+        # which is what the scored Dns check resolves.
+        "sudo python3 -c \"import re; p='/etc/bind/named.conf.local'; \""
+        "\"s=open(p).read(); \""
+        "\"open(p,'w').write(re.sub(r'zone \\\"localhost\\\" \\{[^}]*\\};\\\\n?', '', s))\""
+        " 2>/dev/null || true",
+        "cat > /tmp/named.conf.options << 'BIND9EOF'",
+        "options {",
+        '  directory "/var/cache/bind";',
+        "  recursion yes;",
+        "  allow-query { any; };",
+        "  forwarders { 8.8.8.8; 1.1.1.1; };",
+        "};",
+        "BIND9EOF",
+        "sudo cp /tmp/named.conf.options /etc/bind/named.conf.options",
+        "if [ ! -f /etc/bind/named.conf.default-zones ]; then",
+        "  cat > /tmp/named.conf.default-zones << 'BZEOF'",
+        'zone "." {',
+        "  type hint;",
+        '  file "/usr/share/dns/root.hints";',
+        "};",
+        'zone "localhost" {',
+        "  type master;",
+        '  file "/etc/bind/db.local";',
+        "};",
+        'zone "127.in-addr.arpa" {',
+        "  type master;",
+        '  file "/etc/bind/db.127";',
+        "};",
+        "BZEOF",
+        "  sudo cp /tmp/named.conf.default-zones /etc/bind/named.conf.default-zones",
+        "fi",
+        "if [ ! -f /etc/bind/db.local ]; then",
+        "  cat > /tmp/db.local << 'DLEOF'",
+        '$TTL 86400',
+        '@   IN  SOA ns1.localhost. root.localhost. (',
+        '        2026071201',
+        '        3600',
+        '        1800',
+        '        604800',
+        '        86400 )',
+        '    IN  NS  ns1.localhost.',
+        'ns1 IN  A   127.0.0.1',
+        '@   IN  A   127.0.0.1',
+        "DLEOF",
+        "  sudo cp /tmp/db.local /etc/bind/db.local",
+        "fi",
+        "sudo systemctl restart bind9 2>/dev/null || true",
+        "sleep 1",
+        "",
+    )),
+    "telnet": _ServiceFixup("telnet", ("telnet-service", "telnet"), lines=(
+        "# Telnet: enable disabled inetd entry and restart.",
+        "sudo update-inetd --enable telnet 2>/dev/null || true",
+        "sudo systemctl restart inetutils-inetd 2>/dev/null || true",
+        "sleep 1",
+        "",
+    )),
+    "splunk": _ServiceFixup("splunk", ("splunk",), lines=(
+        "# Splunk: Nakon only creates user, need something on port 8000",
+        "sudo apt-get install -y lighttpd 2>/dev/null || true",
+        "sudo sed -i 's/server.port.*/server.port = 8000/' /etc/lighttpd/lighttpd.conf 2>/dev/null || true",
+        "sudo systemctl enable lighttpd 2>/dev/null || true",
+        "# restart, not start: lighttpd may already be running on :80 from the",
+        "# plant — start is a no-op on an active unit and the port move never lands",
+        "sudo systemctl restart lighttpd 2>/dev/null || true",
+        "sleep 1",
+        "",
+    )),
+}
+
+# Emission order, preserved from the pre-refactor if-chain (output depends on it).
+SERVICE_FIXUP_ORDER: tuple[str, ...] = (
+    "apache", "bind_named_conf", "mysql", "postfix", "nginx",
+    "vsftpd", "dovecot", "bind9", "telnet", "splunk",
+)
+
+
+def service_fixup_script(services, creds):
+    """Build the per-box service-hardening bash script.
+
+    PURE by design — no I/O, no env, no printing — so tests/test_service_fixups.py
+    can compare it byte for byte against a golden captured from the pre-refactor
+    code (the script runs on live boxes; a subtle change is a live incident).
+
+    `services` is the box's pin list from box_services.json: catalog config names, or
+    per-pin override dicts that ride the file for scoring only (fixups key on the
+    catalog name). `creds` is the per-run credlist {username: password} in credlist
+    order.
+
+    Block order comes from SERVICE_FIXUP_ORDER, NOT from the pin order: a box pinned
+    ["splunk", "nginx"] gets nginx first, exactly as the old if-chain did."""
+    names = [s if isinstance(s, str) else s.get("name") for s in services]
+
+    lines = ["#!/bin/bash", "set -e", ""]
+
+    lines.append(f"# Credlist OS accounts ({'/'.join(creds)}) for all auth-based service checks")
+    lines.extend(_credlist_account_lines(creds))
+    lines.append("")
+
+    lines.extend([
+        "# Un-wedge sshd if a burst of ssh-* misconfig restarts tripped the start-limit",
+        "sudo systemctl reset-failed ssh 2>/dev/null || true",
+        "sudo systemctl is-active --quiet ssh || sudo systemctl start ssh 2>/dev/null || true",
+        "",
+    ])
+
+    for name in SERVICE_FIXUP_ORDER:
+        fixup = SERVICE_FIXUPS[name]
+        if not any(trigger in names for trigger in fixup.triggers):
+            continue
+        lines.extend(fixup.lines if fixup.build is None else fixup.build(creds))
+
+    lines.extend([
+        "# Ensure all installed services are running",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
+        "    sudo systemctl start $svc 2>/dev/null || true",
+        "  fi",
+        "done",
+    ])
+
+    return "\n".join(lines)
+
+
 def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
     """Post-nakon service hardening (bind address, mail, ftp, dns, etc.) using the per-run credlist secrets."""
-
-    creds = box_creds
-    cred_items = list(creds.items())
 
     node = os.environ["TF_VAR_proxmox_node"]
     print("  Hardening services on all team boxes...")
     box_services = json.loads((comp_dir / "box_services.json").read_text())
 
-    # Script construction is pure string building (fast, no I/O) and stays serial;
-    # the SSH/guest-agent execution per box is what runs concurrently.
-    scripts = []
-    for t in targets:
-        # per-pin override dicts ride box_services.json for scoring only; fixups key
-        # on the catalog config name
-        services = [s if isinstance(s, str) else s.get("name")
-                    for s in box_services.get(t["box_name"], [])]
-
-        script_lines = ["#!/bin/bash", "set -e", ""]
-
-        script_lines.append(f"# Credlist OS accounts ({'/'.join(creds)}) for all auth-based service checks")
-        for username, password in cred_items:
-            script_lines.append(f"sudo useradd -m -s /bin/bash {username} 2>/dev/null || true")
-            script_lines.append(f"echo '{username}:{password}' | sudo chpasswd")
-        script_lines.append("")
-
-        script_lines.extend([
-            "# Un-wedge sshd if a burst of ssh-* misconfig restarts tripped the start-limit",
-            "sudo systemctl reset-failed ssh 2>/dev/null || true",
-            "sudo systemctl is-active --quiet ssh || sudo systemctl start ssh 2>/dev/null || true",
-            "",
-        ])
-
-        # Catalog scoreability gaps on non-Debian packagings (distro-matrix-2026-09-27):
-        # the apache/bind dnf/yum branches install+start but never touch distro defaults,
-        # so the checks they're pinned for still fail — fedora httpd serves an EMPTY
-        # docroot (403 on /) and fedora named listens on 127.0.0.1 behind the
-        # systemd-resolved stub (refused from the scoring engine). Idempotent; no-ops on
-        # Debian packagings (index.html already exists; the catalog's apt branch already
-        # did the resolved/named work).
-        if any(s in ("apache", "httpd") for s in services):
-            script_lines.extend([
-                "if [ -d /var/www/html ] && [ ! -f /var/www/html/index.html ]; then "
-                "echo '<html><body>tz</body></html>' | sudo tee /var/www/html/index.html >/dev/null; fi || true",
-                "# httpd resolves its (unset) ServerName against DNS at boot and can hang "
-                "when the resolver isn't up yet (pfsense-ad fedora member); localhost "
-                "short-circuits that on every later boot",
-                "if [ -d /etc/httpd/conf.d ] && [ ! -f /etc/httpd/conf.d/00-tzc-servername.conf ]; then "
-                "echo 'ServerName localhost' | sudo tee /etc/httpd/conf.d/00-tzc-servername.conf >/dev/null; "
-                "sudo systemctl restart httpd 2>/dev/null || true; fi || true",
-                "",
-            ])
-        if "bind" in services:
-            script_lines.extend([
-                "if [ -f /etc/named.conf ]; then "
-                "sudo sed -i 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' /etc/named.conf; "
-                "sudo sed -i 's/allow-query\\(.*\\) { localhost; };/allow-query\\1 { any; };/' /etc/named.conf; "
-                "sudo mkdir -p /etc/systemd/resolved.conf.d; "
-                "printf '[Resolve]\\nDNSStubListener=no\\n' | sudo tee /etc/systemd/resolved.conf.d/no-stub.conf >/dev/null; "
-                "sudo systemctl restart systemd-resolved 2>/dev/null || true; "
-                "sudo systemctl restart named 2>/dev/null || true; fi || true",
-                "",
-            ])
-
-        if "mysql" in services or "mariadb" in services:
-            script_lines.extend([
-                "# MySQL/MariaDB: bind to 0.0.0.0",
-                "# Try all possible config file locations",
-                "for cnf in /etc/mysql/mysql.conf.d/50-server.cnf /etc/mysql/mariadb.conf.d/50-server.cnf /etc/mysql/my.cnf; do",
-                '  if [ -f "$cnf" ]; then',
-                "    sudo sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' \"$cnf\"",
-                "  fi",
-                "done",
-                "sudo systemctl restart mysql 2>/dev/null || sudo systemctl restart mariadb 2>/dev/null || true",
-                "sleep 2",
-                "# Create MySQL users from credlist",
-                "cat > /tmp/setup_mysql.sql << 'SQLEOF'",
-            ])
-            for idx, (username, password) in enumerate(cred_items):
-                script_lines.append(f"CREATE USER IF NOT EXISTS '{username}'@'%' IDENTIFIED BY '{password}';")
-                grant = "GRANT ALL PRIVILEGES ON *.* TO '{}'@'%' WITH GRANT OPTION;" if idx == 0 \
-                    else "GRANT ALL PRIVILEGES ON *.* TO '{}'@'%';"
-                script_lines.append(grant.format(username))
-            script_lines.extend([
-                "FLUSH PRIVILEGES;",
-                "SQLEOF",
-                "chmod 600 /tmp/setup_mysql.sql",
-                "sudo mysql < /tmp/setup_mysql.sql || true",
-                "rm -f /tmp/setup_mysql.sql",
-                "",
-            ])
-
-        if "postfix" in services or "smtp" in services:
-            script_lines.extend([
-                "# Postfix: ensure it listens on all interfaces",
-                "sudo postconf -e 'inet_interfaces = all' 2>/dev/null || true",
-                "sudo postconf -e 'inet_protocols = ipv4' 2>/dev/null || true",
-                "# Ensure smtpd listener exists (non-interactive install may leave master.cf empty).",
-                "sudo postconf -M 'smtp/inet=smtp inet n - y - - smtpd' 2>/dev/null || true",
-                "sudo systemctl restart postfix 2>/dev/null || true",
-                "sleep 1",
-                "# Create mail users matching credlist for SMTP checks",
-            ])
-            for username, password in cred_items:
-                script_lines.append(f"sudo useradd -m -s /bin/bash {username} 2>/dev/null || true")
-                script_lines.append(f"echo '{username}:{password}' | sudo chpasswd")
-            script_lines.append("")
-
-        if "nginx" in services or "http" in services or "web" in services:
-            script_lines.extend([
-                "# Nginx: ensure it starts and listens on port 80",
-                "sudo systemctl restart nginx 2>/dev/null || true",
-                "sleep 1",
-                "",
-            ])
-
-        if "vsftpd" in services or "ftp" in services:
-            script_lines.extend([
-                "# Vsftpd: ensure anonymous is off, local users can login",
-                "sudo sed -i 's/^#*anonymous_enable.*/anonymous_enable=NO/' /etc/vsftpd.conf 2>/dev/null || true",
-                "sudo sed -i 's/^#*local_enable.*/local_enable=YES/' /etc/vsftpd.conf 2>/dev/null || true",
-                "sudo sed -i 's/^#*write_enable.*/write_enable=YES/' /etc/vsftpd.conf 2>/dev/null || true",
-                "sudo systemctl restart vsftpd 2>/dev/null || true",
-                "sleep 1",
-                "",
-            ])
-
-        if "dovecot" in services or "imap" in services:
-            script_lines.extend([
-                "# Dovecot: enable plaintext auth, create mail dirs",
-                "sudo sed -i 's/^#*disable_plaintext_auth.*/disable_plaintext_auth = no/' /etc/dovecot/conf.d/10-auth.conf 2>/dev/null || true",
-                "dovecot --version 2>/dev/null | grep -qE '^(2\\.[4-9]|[3-9]\\.)' && "
-                "sudo bash -c \"echo 'auth_allow_cleartext = yes' > "
-                "/etc/dovecot/conf.d/99-allow-plaintext.conf\" || true",
-            ])
-            for username, _ in cred_items:
-                script_lines.append(f"sudo mkdir -p /home/{username}/mail")
-                script_lines.append(f"sudo chmod 700 /home/{username}/mail")
-                script_lines.append(f"sudo chown {username}:{username} /home/{username}/mail 2>/dev/null || true")
-            script_lines.extend([
-                "sudo systemctl restart dovecot 2>/dev/null || true",
-                "sleep 1",
-                "",
-            ])
-
-        if "bind" in services or "named" in services or "dns" in services:
-            script_lines.extend([
-                "# Bind9: allow queries from anywhere",
-                # The nakon bind plant declares zone "localhost" in
-                # named.conf.local; on Ubuntu named.conf.default-zones already
-                # declares it and named refuses to start on the duplicate. The
-                # default-zones copy serves db.local (A localhost -> 127.0.0.1),
-                # which is what the scored Dns check resolves.
-                "sudo python3 -c \"import re; p='/etc/bind/named.conf.local'; \""
-                "\"s=open(p).read(); \""
-                "\"open(p,'w').write(re.sub(r'zone \\\"localhost\\\" \\{[^}]*\\};\\\\n?', '', s))\""
-                " 2>/dev/null || true",
-                "cat > /tmp/named.conf.options << 'BIND9EOF'",
-                "options {",
-                '  directory "/var/cache/bind";',
-                "  recursion yes;",
-                "  allow-query { any; };",
-                "  forwarders { 8.8.8.8; 1.1.1.1; };",
-                "};",
-                "BIND9EOF",
-                "sudo cp /tmp/named.conf.options /etc/bind/named.conf.options",
-                "if [ ! -f /etc/bind/named.conf.default-zones ]; then",
-                "  cat > /tmp/named.conf.default-zones << 'BZEOF'",
-                'zone "." {',
-                "  type hint;",
-                '  file "/usr/share/dns/root.hints";',
-                "};",
-                'zone "localhost" {',
-                "  type master;",
-                '  file "/etc/bind/db.local";',
-                "};",
-                'zone "127.in-addr.arpa" {',
-                "  type master;",
-                '  file "/etc/bind/db.127";',
-                "};",
-                "BZEOF",
-                "  sudo cp /tmp/named.conf.default-zones /etc/bind/named.conf.default-zones",
-                "fi",
-                "if [ ! -f /etc/bind/db.local ]; then",
-                "  cat > /tmp/db.local << 'DLEOF'",
-                '$TTL 86400',
-                '@   IN  SOA ns1.localhost. root.localhost. (',
-                '        2026071201',
-                '        3600',
-                '        1800',
-                '        604800',
-                '        86400 )',
-                '    IN  NS  ns1.localhost.',
-                'ns1 IN  A   127.0.0.1',
-                '@   IN  A   127.0.0.1',
-                "DLEOF",
-                "  sudo cp /tmp/db.local /etc/bind/db.local",
-                "fi",
-                "sudo systemctl restart bind9 2>/dev/null || true",
-                "sleep 1",
-                "",
-            ])
-
-        if "telnet-service" in services or "telnet" in services:
-            script_lines.extend([
-                "# Telnet: enable disabled inetd entry and restart.",
-                "sudo update-inetd --enable telnet 2>/dev/null || true",
-                "sudo systemctl restart inetutils-inetd 2>/dev/null || true",
-                "sleep 1",
-                "",
-            ])
-
-        if "splunk" in services:
-            script_lines.extend([
-                "# Splunk: Nakon only creates user, need something on port 8000",
-                "sudo apt-get install -y lighttpd 2>/dev/null || true",
-                "sudo sed -i 's/server.port.*/server.port = 8000/' /etc/lighttpd/lighttpd.conf 2>/dev/null || true",
-                "sudo systemctl enable lighttpd 2>/dev/null || true",
-                "# restart, not start: lighttpd may already be running on :80 from the",
-                "# plant — start is a no-op on an active unit and the port move never lands",
-                "sudo systemctl restart lighttpd 2>/dev/null || true",
-                "sleep 1",
-                "",
-            ])
-
-        script_lines.extend([
-            "# Ensure all installed services are running",
-            "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
-            "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
-            "    sudo systemctl start $svc 2>/dev/null || true",
-            "  fi",
-            "done",
-        ])
-
-        scripts.append((t, "\n".join(script_lines)))
+    # Script construction is pure string building (fast, no I/O) and stays serial; the
+    # SSH/guest-agent execution per box is what runs concurrently. The per-service shell
+    # lives in SERVICE_FIXUPS, rendered by the pure service_fixup_script() above.
+    scripts = [(t, service_fixup_script(box_services.get(t["box_name"], []), box_creds))
+               for t in targets]
 
     def _exec(item):
         t, script_content = item
