@@ -137,6 +137,22 @@ def expected_service_names(box_services: dict, boxes: list) -> set:
     return names
 
 
+def _admin_accounts(ctx):
+    """The `admin` role list: the operator account, plus a dedicated automation account.
+
+    Quotient allows ONE session per account, so a scheduled login on `admin` would kill
+    the operator's/harness's cookie. `scoring` is a separate account for automation
+    (round-loop watchdog, unattended verify) so the two can never evict each other.
+    Optional: a caller that does not supply a scoring password gets the single `admin`
+    entry, which keeps the pin/compile tests and any older caller working.
+    """
+    accounts = [{"name": "admin", "pw": ctx["quotient_admin_password"]}]
+    scoring_pw = ctx.get("quotient_scoring_password")
+    if scoring_pw:
+        accounts.append({"name": "scoring", "pw": scoring_pw})
+    return accounts
+
+
 def build_event_conf(ctx: dict, box_services: dict) -> dict:
     teams      = ctx["teams"]
     boxes      = ctx["boxes_per_team"]
@@ -155,7 +171,13 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
             "Jitter": 10,
             "Points": 5,
         },
-        "admin": [{"name": "admin", "pw": ctx["quotient_admin_password"]}],
+        # TWO admin accounts, deliberately (2026-10-02). Quotient allows ONE session per
+        # account: a second login on the same account kills the first cookie. `scoring` is
+        # for automation that has to authenticate on its own schedule — the round-loop
+        # watchdog, an unattended verify — so it can never evict the operator's or the
+        # harness's `admin` session. Its password is minted per competition like every
+        # other secret (never a fixed literal) and lands in credentials.txt.
+        "admin": _admin_accounts(ctx),
         "team":  [
             {"name": team_key, "pw": passwords[team_key]}
             for team_key in teams

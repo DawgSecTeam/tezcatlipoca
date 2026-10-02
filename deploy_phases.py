@@ -310,6 +310,7 @@ def phase3_prepare_engine(ctx):
     with timed(ctx.comp_dir, 3, "push_event_conf"):
         push_event_conf(ctx.comp_dir, ctx.teams, ctx.boxes, ctx.tf_ctx, ctx.name,
                         inject_password=ctx.inject_password, admin_password=ctx.admin_password,
+                        scoring_password=ctx.scoring_password,
                         postgres_password=ctx.postgres_password, redis_password=ctx.redis_password,
                         box_creds=ctx.box_creds,
                         extra_credlists=({"domain": ctx.domain_creds}
@@ -682,6 +683,11 @@ def finish_deploy(ctx):
         f"Scoreboard:  http://{ctx.scoring_ip}",
         f"admin  {ctx.admin_password}",
     ]
+    if getattr(ctx, "scoring_password", ""):
+        cred_lines.append("# automation account: a SECOND admin, so a scheduled login "
+                          "(round-loop watchdog, unattended verify) never evicts the "
+                          "operator's admin session — Quotient allows one per account")
+        cred_lines.append(f"scoring  {ctx.scoring_password}")
     if ctx.packet_pw:
         cred_lines.append("# box credentials below are the packet-published defaults "
                           "(passwords.json) — teams rotate them at minute zero")
@@ -707,6 +713,9 @@ def finish_deploy(ctx):
     print(f"Saved to: competitions/{ctx.comp_name}/  (credentials.txt, mode 0600)")
     print(f"\nScoreboard:    http://{ctx.scoring_ip}")
     print(f"Admin login:   admin / {ctx.admin_password}")
+    if getattr(ctx, "scoring_password", ""):
+        print(f"Scoring login: scoring / {ctx.scoring_password}   (automation; separate "
+              f"session from admin)")
     if ctx.inject_password:
         print(f"Inject login:  inject / {ctx.inject_password}   ({len(ctx.injects)} inject(s) loaded)")
     print("\nTeam logins:")

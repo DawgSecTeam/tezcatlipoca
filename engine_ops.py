@@ -540,7 +540,7 @@ def read_event_conf(ctx):
 
 def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
                     postgres_password, redis_password, box_creds, inject_password=None,
-                    extra_credlists=None):
+                    extra_credlists=None, scoring_password=None):
     """Build event.conf and push it to the scoring engine with the per-run secrets.
 
     extra_credlists maps additional credlist names to {user: pw} (packet dual-credit's
@@ -560,6 +560,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
         "team_passwords": {team_key: team_data["password"] for team_key, team_data in teams.items()},
         "event_name": event_name,
         "quotient_admin_password": admin_password,
+        "quotient_scoring_password": scoring_password or admin_password,
         "inject_password": inject_password,
     }
 

@@ -34,7 +34,7 @@ def _ctx(comp_dir, **overrides):
         assume_yes=True, name="probe", scenario="probe", box_username="ubuntu",
         credlist_usernames=["admin"], nakon_jobs=4, apt_cache=True, injects=[],
         packet_pw=None, state={}, teams={}, number_of_teams=0, admin_password="a",
-        postgres_password="p", redis_password="r", box_password="b", box_creds={},
+        scoring_password="s", postgres_password="p", redis_password="r", box_password="b", box_creds={},
         domain_creds=None, inject_password=None, placement=None, node="pve",
         engine_vmid=1000, engine_mgmt_ip="10.0.0.1", boxes=[], boxes_by_name={},
         unbooted=set(), nakon_config_path=comp_dir / "nakon.json",

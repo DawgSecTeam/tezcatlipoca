@@ -455,6 +455,7 @@ class DeployContext:
     teams: dict
     number_of_teams: int
     admin_password: str
+    scoring_password: str
     postgres_password: str
     redis_password: str
     box_password: str
@@ -608,6 +609,10 @@ class CompetitionSecrets:
     teams: dict = field(default_factory=dict)
     number_of_teams: int = 0
     admin_password: str = ""
+    # A SECOND admin account, for automation only — see build_event_conf. Quotient
+    # allows one session per ACCOUNT, so a watchdog that logs in as `scoring` cannot
+    # evict the operator's/harness's `admin` cookie.
+    scoring_password: str = ""
     postgres_password: str = ""
     redis_password: str = ""
     box_password: str = ""
@@ -756,6 +761,7 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
         }
         secrets.number_of_teams = len(secrets.teams)
         secrets.admin_password = secrets.state.get("admin_password") or random_password()
+        secrets.scoring_password = secrets.state.get("scoring_password") or random_password()
         secrets.postgres_password = secrets.state.get("postgres_password") or random_password()
         secrets.redis_password = secrets.state.get("redis_password") or random_password()
         secrets.box_password = secrets.state.get("box_password") or random_password()
@@ -766,6 +772,7 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
         secrets.inject_password = secrets.state.get("inject_password")
         secrets.state.update({
             "admin_password": secrets.admin_password,
+            "scoring_password": secrets.scoring_password,
             "postgres_password": secrets.postgres_password,
             "redis_password": secrets.redis_password,
             "box_password": secrets.box_password,
@@ -800,6 +807,7 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
                       f"(team identifiers are 192.168.<101-254>.x).")
         secrets.teams = collect_teams(secrets.number_of_teams, identity.engine_vmid)
         secrets.admin_password = random_password()
+        secrets.scoring_password = random_password()
         secrets.postgres_password = random_password()
         secrets.redis_password = random_password()
         # M4: box_password is a golden-hash INPUT (baked into /etc/shadow +
@@ -824,6 +832,7 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
             "pipeline_version": PIPELINE_VERSION,
             "teams": secrets.teams,
             "admin_password": secrets.admin_password,
+            "scoring_password": secrets.scoring_password,
             "inject_password": secrets.inject_password,
             "postgres_password": secrets.postgres_password,
             "redis_password": secrets.redis_password,
@@ -1130,6 +1139,7 @@ def _assemble_deploy_context(comp_dir, from_phase, assume_yes, identity, spec, p
         teams=secrets.teams,
         number_of_teams=secrets.number_of_teams,
         admin_password=secrets.admin_password,
+        scoring_password=secrets.scoring_password,
         postgres_password=secrets.postgres_password,
         redis_password=secrets.redis_password,
         box_password=secrets.box_password,

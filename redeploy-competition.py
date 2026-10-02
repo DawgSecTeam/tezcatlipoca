@@ -587,6 +587,7 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
         push_event_conf(comp_dir, teams, boxes, ctx, name,
                         inject_password=state.get("inject_password"),
                         admin_password=state["admin_password"],
+                        scoring_password=state.get("scoring_password"),
                         postgres_password=state["postgres_password"],
                         redis_password=state["redis_password"],
                         box_creds=state.get("box_creds") or {},

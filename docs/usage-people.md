@@ -312,8 +312,13 @@ set). The first four are rewritten in `.env` by `update_env()` every time you cr
 competition. An old env's stale `TF_VAR_teams`/`TF_VAR_boxes_per_team` are overridden from the comp
 dir at terraform time, so they are cosmetic.
 
-Not `.env` variables at all: Quotient's `admin` password (minted in memory each run and saved to
-`competitions/<id>/credentials.txt`) and the inject/postgres/redis passwords. Boxes are instead
+Not `.env` variables at all: Quotient's `admin` **and `scoring`** passwords (both minted in
+memory each run and saved to `competitions/<id>/credentials.txt`), plus the
+inject/postgres/redis passwords. **`scoring` is a second admin account for automation** —
+Quotient allows one session per account, so a scheduled login on `admin` would evict whichever
+operator, `verify-competition`, or harness session holds it. Anything that authenticates on its
+own timetable (a round-loop watchdog, an unattended verify) must use `scoring`, and both accounts
+are seeded into `event.conf` for every competition. Boxes are instead
 per-event on purpose (that's the point of nakon scaling
 difficulty per box) — `create-competition.py` queries Proxmox for templates tagged `template`
 and walks you through picking boxes interactively each time, then saves the result as
