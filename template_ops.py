@@ -53,14 +53,29 @@ def load_template_hashes(comp_dir):
         return {}
 
 
+def golden_plant_checkpoints(comp_dir):
+    """box name -> golden hash, for goldens that have been planted AND smoke-passed.
+
+    Deliberately a separate key from `golden` (which records *converted* templates):
+    this one marks the intermediate state that used to be thrown away. On cde-2026 a
+    re-entry rolled every planted golden back to tz-base and re-planted the whole set —
+    33 rollbacks (11 each for web01, ftp01, db01) across 10 runs — while only ftp01 was
+    ever the problem. Conversion still waits for the whole set; this only avoids
+    repeating work that already passed.
+
+    Delete the `golden_planted` key (or the whole file) to force a re-plant."""
+    planted = load_template_hashes(comp_dir).get("golden_planted")
+    return planted if isinstance(planted, dict) else {}
+
+
 def save_template_hashes(comp_dir, **entries):
     """Merge entries (engine={hash, inputs}, golden={box: {hash, inputs}}) into the
     record. Atomic rename; 0600 — golden inputs embed box_password."""
     path = Path(comp_dir) / HASHES_FILE
     data = load_template_hashes(comp_dir)
     for key, value in entries.items():
-        if key == "golden":
-            data.setdefault("golden", {}).update(value)
+        if key in ("golden", "golden_planted"):
+            data.setdefault(key, {}).update(value)
         else:
             data[key] = value
     data["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")

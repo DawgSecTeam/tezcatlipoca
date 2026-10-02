@@ -95,7 +95,8 @@ class GoldenBuildHarness:
 
     def __init__(self, n=8, snapshot_sleep=0.0, template_sleep=0.0, clone_sleep=0.0,
                  missing=False, unbooted=(), smoke_raises=(), template_raises=(),
-                 password_fail=(), snapshot_false=(), run_concurrent=None):
+                 password_fail=(), snapshot_false=(), run_concurrent=None,
+                 golden_hashes=None, snapshots_empty=()):
         self.n = n
         self.snapshot_sleep = snapshot_sleep
         self.template_sleep = template_sleep
@@ -107,6 +108,8 @@ class GoldenBuildHarness:
         self.password_fail = set(password_fail)
         self.snapshot_false = set(snapshot_false)
         self.run_concurrent = run_concurrent
+        self.golden_hashes = golden_hashes
+        self.snapshots_empty = {str(v) for v in snapshots_empty}
         self.events = _Events()
         self.tmp = tempfile.TemporaryDirectory()
         self.comp_dir = Path(self.tmp.name)
@@ -168,8 +171,11 @@ class GoldenBuildHarness:
             P("_template_vmid_map", return_value={"base-linux": 900})
             P("_vm_exists", return_value=not self.missing)
             P("_is_template", return_value=False)
-            P("list_snapshots", return_value={SNAP_BASE})
-            P("rollback_snapshot")
+            P("list_snapshots",
+              side_effect=lambda _node, vmid: set() if str(vmid) in self.snapshots_empty
+              else {SNAP_BASE})
+            P("rollback_snapshot",
+              side_effect=lambda _n, vmid, _s: self.events.record("rollback", str(vmid)))
             P("destroy_vm_if_exists")
             P("gc_orphan_volumes")
             P("wait_for_proxmox_task")
@@ -202,7 +208,8 @@ class GoldenBuildHarness:
                 result = golden_ops.build_golden_set(
                     "pve", {"team1": {"identifier": 104}}, self.boxes, {"box_username": "ubuntu"},
                     self.comp_dir, 1000, "Box-Pass-1", self.golden_config,
-                    "test-key", "scoring", "10.0.0.1", unbooted=self.unbooted)
+                    "test-key", "scoring", "10.0.0.1", unbooted=self.unbooted,
+                    golden_hashes=self.golden_hashes)
                 return result, self.events, None
             except Exception as exc:  # noqa: BLE001 - tests assert on what escapes
                 return None, self.events, exc
@@ -346,6 +353,74 @@ class GoldenParallelism(unittest.TestCase):
         self.assertIsInstance(exc, RuntimeError)
         self.assertIn("password reset failed on golden 192.168.104.241", str(exc))
         self.assertIn("Authentication token manipulation error", str(exc))
+
+
+class GoldenCheckpoint(unittest.TestCase):
+    """A golden that already passed its plant AND its boot smoke is not redone.
+
+    Measured on cde-2026: `Golden re-entry: rolling golden-<name> back to 'tz-base'`
+    appears 33 times — 11 each for web01, ftp01 and db01 — across 10 runs, while only
+    ftp01 was ever the problem. The checkpoint stops that multiplication; the
+    conversion barrier (a failed smoke blocks EVERY POST /template) must survive it.
+    """
+
+    def _seed(self, harness, mapping):
+        (harness.comp_dir / ".template-hashes.json").write_text(
+            json.dumps({"golden_planted": mapping}))
+
+    def test_a_checkpointed_golden_is_not_rolled_back_or_resmoked(self):
+        harness = GoldenBuildHarness(n=2, golden_hashes={"box0": "h0", "box1": "h1"})
+        self._seed(harness, {"box0": "h0"})
+        _result, events, exc = harness.run()
+        self.assertIsNone(exc)
+        self.assertEqual(events.keys("smoke"), ["box1"], "box0 was re-smoked")
+        self.assertNotIn(str(harness.vmids[0]), events.keys("rollback"))
+        self.assertEqual(events.keys("rollback"), [str(harness.vmids[1])])
+
+    def test_the_conversion_barrier_still_covers_every_target(self):
+        harness = GoldenBuildHarness(n=2, golden_hashes={"box0": "h0", "box1": "h1"})
+        self._seed(harness, {"box0": "h0"})
+        _result, events, exc = harness.run()
+        self.assertIsNone(exc)
+        self.assertEqual(sorted(events.keys("template")),
+                         sorted(str(v) for v in harness.vmids),
+                         "conversion must not be scoped to `work`")
+
+    def test_a_changed_hash_invalidates_the_checkpoint(self):
+        harness = GoldenBuildHarness(n=2, golden_hashes={"box0": "h0-NEW", "box1": "h1"})
+        self._seed(harness, {"box0": "h0-OLD"})
+        _result, events, exc = harness.run()
+        self.assertIsNone(exc)
+        self.assertIn("box0", events.keys("smoke"), "stale hash must be re-verified")
+        self.assertIn(str(harness.vmids[0]), events.keys("rollback"))
+
+    def test_a_golden_with_no_tz_base_is_not_treated_as_checkpointed(self):
+        """A fresh clone has no tz-base snapshot, so a leftover checkpoint entry must
+        not make it look planted — that is the destroy-and-redeploy path."""
+        harness = GoldenBuildHarness(n=2, golden_hashes={"box0": "h0", "box1": "h1"},
+                                     snapshots_empty=[golden_ops.golden_vmid_for(1000, 0)])
+        self._seed(harness, {"box0": "h0"})
+        _result, events, exc = harness.run()
+        self.assertIsNone(exc)
+        self.assertIn("box0", events.keys("smoke"))
+
+    def test_a_pass_is_recorded_immediately_not_at_the_end_of_the_set(self):
+        """If the NEXT box's smoke fails, the box that already passed must keep its
+        checkpoint — otherwise the next re-entry pays for it again."""
+        harness = GoldenBuildHarness(n=2, golden_hashes={"box0": "h0", "box1": "h1"},
+                                     smoke_raises=["box1"])
+        _result, _events, exc = harness.run()
+        self.assertIsNotNone(exc, "the smoke barrier must still raise")
+        recorded = json.loads((harness.comp_dir / ".template-hashes.json").read_text())
+        self.assertEqual(recorded.get("golden_planted"), {"box0": "h0"})
+
+    def test_no_hashes_means_no_checkpointing(self):
+        """Without golden hashes there is no identity to key on, so nothing is skipped —
+        the conservative default."""
+        harness = GoldenBuildHarness(n=1)
+        harness.run()
+        self.assertEqual(len(harness.events.keys("smoke")), 1)
+        self.assertFalse((harness.comp_dir / ".template-hashes.json").exists())
 
 
 if __name__ == "__main__":
