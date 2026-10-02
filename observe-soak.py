@@ -201,7 +201,7 @@ class Engine:
         if not pw:
             return False
         r = self.s.post(f"http://{self.ip}/api/login",
-                        json={"user": "admin", "password": pw}, timeout=8)
+                        json={"username": "admin", "password": pw}, timeout=8)
         r.raise_for_status()
         return True
 
