@@ -12,11 +12,13 @@ import shlex
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
 
+from config_ops import write_state, write_text_atomic
 from utils import load_users_config, valid_comp_name
 
 REPO = Path(__file__).resolve().parent
@@ -77,7 +79,10 @@ import urllib.request
 
 engine = os.environ["ENGINE_IP"]
 team = os.environ["MY_TEAM"]
-jar = os.environ.get("JAR") or f"/tmp/jar.{team}"
+# scrim.env always exports JAR; the fallback mirrors the driver's run-dir jar location
+# (.jars/<account>.jar) instead of the old predictable /tmp/jar.<team> path.
+jar = os.environ.get("JAR") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".jars", f"{team}.jar")
 qlogin = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qlogin")
 
 
@@ -139,10 +144,16 @@ exec python3 "$(dirname "$0")/score.py"
 SUBMIT_INJECT = """#!/usr/bin/env bash
 cd "$(dirname "$0")"; source ./scrim.env
 submit() { curl -s --max-time 30 -b "$JAR" -F "file=@$2" -X POST "http://$ENGINE_IP/api/injects/$1/submit"; }
+# Real JSON parse, not a substring probe: an inject whose body legitimately contains the
+# text "error" used to trigger a pointless re-login (the driver has the same fix).
+is_error() {
+  python3 -c 'import json,sys
+try: d = json.loads(sys.stdin.read())
+except Exception: sys.exit(1)
+sys.exit(0 if isinstance(d, dict) and "error" in d else 1)'
+}
 out=$(submit "$1" "$2")
-case "$out" in
-  *'"error"'*) ./qlogin; out=$(submit "$1" "$2") ;;
-esac
+if printf '%s' "$out" | is_error; then ./qlogin; out=$(submit "$1" "$2"); fi
 echo "$out"
 """
 
@@ -171,23 +182,154 @@ OPENCODE_PROJECT_CFG = """{
 CYCLE_TIMEOUT = 1800
 CYCLE_TARGET_PERIOD = 600
 MONITOR_INTERVAL = 300
-
-_llm_down_since = None
+# Grace between the SIGINT that lets terraform release its state lock and the SIGKILL
+# that sweeps whatever ignored it (utils.run_terraform uses the same two-phase stop).
+TREE_STOP_GRACE = 30
+# Cookie jars live per-run, not in the shared /tmp (see jar_path).
+JAR_DIRNAME = ".jars"
+_JAR_LOCKS = {}
+# Consecutive from-red01 LLM probe failures before the harness tries to rescue red.
+# MONITOR_INTERVAL (300s) per tick: one blip must not trigger a restart that drops a
+# tunnel red is mid-decision on, but silence this long is already the dress-rehearsal
+# failure mode (an event ran red-LLM-less because a dead `ssh -R` went unnoticed).
+RED_LLM_FAIL_THRESHOLD = 3
+ALERTS_FILENAME = "alerts.jsonl"
+# endpoint -> {"since": first_failure_ts|None, "failures": int, "restarted": bool}
+_llm_watch = {}
 
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def run(cmd, cwd=None, env=None, timeout=None, check=True, tail=None):
-    log("$ " + " ".join(str(c) for c in cmd[:6]) + (" ..." if len(cmd) > 6 else ""))
-    r = subprocess.run([str(c) for c in cmd], cwd=cwd, env=env, timeout=timeout,
-                       capture_output=True, text=True)
+class ScrimTimeout(subprocess.TimeoutExpired):
+    """A supervised command blew its wall-clock budget and its process TREE was killed.
+
+    Subclasses TimeoutExpired so the handlers that already exist around the blue cycles
+    and the watchdog keep catching it. The message names the recovery path because a
+    timed-out deploy/verify is resumed, not restarted: `--skip-deploy`/`--from-phase N`
+    for the pipeline, `--resume-event` for an event that already reached T0.
+    """
+
+    def __init__(self, cmd, timeout):
+        super().__init__(cmd, timeout)
+        self.cmd, self.timeout = cmd, timeout
+
+    def __str__(self):
+        return (f"command timed out after {self.timeout}s (its whole process group was "
+                f"signalled SIGINT then SIGKILL, so no orphaned grandchild still holds a "
+                f"lock or keeps mutating infrastructure): "
+                f"{' '.join(str(c) for c in self.cmd[:6])}"
+                + (" ..." if len(self.cmd) > 6 else "")
+                + " — resume the run with --skip-deploy/--from-phase (or --resume-event "
+                  "if T0 was already recorded)")
+
+
+def _feed_stdin(proc, text):
+    """Write stdin from a thread so a timeout can still kill and drain the process.
+
+    communicate(input=...) cannot be re-entered after TimeoutExpired, which is exactly
+    what the kill-and-drain path needs, so the pipe is fed out of band and closed
+    immediately (an open stdin pipe keeps a straggler grandchild alive).
+    """
+    try:
+        proc.stdin.write(text)
+        proc.stdin.close()
+    except (BrokenPipeError, ValueError, OSError):
+        pass
+
+
+def _kill_tree(proc, grace=TREE_STOP_GRACE):
+    """SIGINT the process group, wait, then SIGKILL it and everything left inside it.
+
+    SIGINT first because it is the graceful stop terraform uses to release its state
+    lock (utils.run_terraform does the same); SIGKILL because the grandchildren this
+    exists to reap may ignore SIGINT. killpg on an already-empty group is a no-op.
+    """
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(proc.pid, signal.SIGINT)
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(proc.pid, signal.SIGKILL)
+
+
+def run_tree(cmd, cwd=None, env=None, timeout=None, check=True, tail=None,
+             stdin_text=None, grace=TREE_STOP_GRACE):
+    """Run cmd in its own session so a timeout kills the whole tree, not just the child.
+
+    subprocess.run(timeout=) sends SIGKILL to the DIRECT child only. Every long-running
+    command here (create-competition.py, badauto, their terraform/nakon/ssh grandchildren)
+    then survives with the deploy lock still held and keeps mutating infrastructure — the
+    failure class the file already fixed once for _opencode_run, where one hung cycle held
+    the shared lock ~80 min because a grandchild outlived the kill. Modelled on
+    utils.run_terraform: SIGINT to the group, escalate to SIGKILL after `grace`.
+
+    Returns CompletedProcess; on timeout raises ScrimTimeout (a TimeoutExpired) whose
+    message names the resume path. `run` below is the thin house wrapper for it.
+    """
+    cmd = [str(c) for c in cmd]
+    log("$ " + " ".join(cmd[:6]) + (" ..." if len(cmd) > 6 else ""))
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True,
+                            stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            start_new_session=True)
+    if stdin_text is not None:
+        threading.Thread(target=_feed_stdin, args=(proc, stdin_text), daemon=True).start()
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc, grace)
+        proc.communicate()
+        raise ScrimTimeout(cmd, timeout) from None
+    except BaseException:
+        # Ctrl-C / any other driver-side abort must not orphan the tree either.
+        _kill_tree(proc, grace)
+        proc.communicate()
+        raise
+    r = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
     if tail and r.stdout:
         print("\n".join(r.stdout.splitlines()[-tail:]))
     if check and r.returncode != 0:
-        raise RuntimeError(f"command failed rc={r.returncode}: {r.stderr[-800:]}")
+        raise RuntimeError(f"command failed rc={r.returncode}: {(r.stderr or '')[-800:]}")
     return r
+
+
+def run(cmd, cwd=None, env=None, timeout=None, check=True, tail=None):
+    """Supervised `subprocess.run`: every long-running call goes through the process tree."""
+    return run_tree(cmd, cwd=cwd, env=env, timeout=timeout, check=check, tail=tail)
+
+
+def box_sudo_stdin(base, host, box_pw, script):
+    """(ssh argv, stdin text) for a root command on a team box.
+
+    The password goes on stdin — the process argv of a running command is world-readable
+    via ps, and interpolating a generated password into the remote shell string is one
+    shell metacharacter away from a syntax error aborting the fire test. Same pin every
+    other box path uses (beacon_ops._ssh_box). The script follows the password on the
+    same stdin stream, which is what `sudo -S -p '' bash -s` expects.
+    """
+    return list(base) + [host, "sudo -S -p '' bash -s"], box_pw + "\n" + script
+
+
+def write_evidence(path, text):
+    """Write an evidence file atomically, 0600.
+
+    Evidence files were written with a plain write_text at the process umask: the final
+    scoreboard and the per-team service dumps name every scored service and every error
+    string on the range, yet a report reader on a shared host could read them — and a torn
+    write during teardown was possible (audit find D5).
+    """
+    return write_text_atomic(path, text, mode=0o600)
+
+
+def secure_evidence(path):
+    """chmod an evidence file that some other tool copied in (scp/cp/shutil) to 0600."""
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o600)
+    return path
 
 
 
@@ -202,7 +344,10 @@ def stage_author(args):
         if item.name in RUNTIME_FILES or item.name in ("injects", "LOG.md") \
                 or item.name.startswith("sub-") or item.name.startswith(".nakon-domain-"):
             continue
-        if item.name == ".phase6-swept":
+        # deploy.py writes `.postclone-swept`; this listed the long-dead `.phase6-swept`
+        # name, so the real marker was copied into every competition authored from a
+        # swept template and the new range skipped its post-clone sweep (audit find 12).
+        if item.name == ".postclone-swept":
             continue
         if item.is_dir():
             subprocess.run(["cp", "-r", str(item), str(dst / item.name)], check=True)
@@ -411,9 +556,24 @@ def stage_verify(args, comp, creds):
     web_ip = web_ip or f"192.168.{creds['TEAM1_ID']}.4"
     units, svc_port = _web01_units(comp)
 
-    def ssh_web01(cmd):
-        return subprocess.run(base + [f"{creds['BOX_USER']}@{web_ip}", cmd],
-                              capture_output=True, text=True, timeout=60)
+    def ssh_web01(cmd, timeout=60):
+        return run_tree(base + [f"{creds['BOX_USER']}@{web_ip}", cmd],
+                        timeout=timeout, check=False)
+
+    def sudo_web01(script, timeout=120):
+        """Run `script` as root on web01 with the box password on STDIN.
+
+        The old call piped the box password through an `echo` into `sudo -S` inside a
+        remote shell string built with %-interpolation: the password landed in the local
+        process argv (readable from ps on the operator host) and a single quote in a
+        generated password would have been a shell syntax error that aborted the fire
+        test. beacon_ops._ssh_box already established the house pattern — `sudo -S` reads
+        the password from stdin and the script follows it on the same stream — so reuse it.
+        """
+        argv, stdin_text = box_sudo_stdin(base, f"{creds['BOX_USER']}@{web_ip}",
+                                          creds["BOX_PW"], script)
+        return run_tree(argv, timeout=timeout, check=False, stdin_text=stdin_text)
+
     # pick the unit that actually exists on this box (apache2 vs httpd across distros)
     probe = ('u=""; for c in %s; do systemctl list-unit-files "$c.service" --no-legend '
              '2>/dev/null | grep -q . && u=$c && break; done; echo "$u"' % " ".join(units))
@@ -425,12 +585,12 @@ def stage_verify(args, comp, creds):
 
     def web01_http():
         """HTTP code for web01 over the engine's network path ('' / 000 = no answer)."""
-        r = subprocess.run(["ssh", "-i", creds["KEY_PATH"], "-o", "StrictHostKeyChecking=no",
-                            "-o", "UserKnownHostsFile=/dev/null",
-                            f"{creds['VM_USER']}@{creds['ENGINE_IP']}",
-                            f"curl -sm 10 -o /dev/null -w '%{{http_code}}' "
-                            f"http://192.168.{creds['TEAM1_ID']}.4:{port}/"],
-                           capture_output=True, text=True, timeout=45)
+        r = run_tree(["ssh", "-i", creds["KEY_PATH"], "-o", "StrictHostKeyChecking=no",
+                      "-o", "UserKnownHostsFile=/dev/null",
+                      f"{creds['VM_USER']}@{creds['ENGINE_IP']}",
+                      f"curl -sm 10 -o /dev/null -w '%{{http_code}}' "
+                      f"http://192.168.{creds['TEAM1_ID']}.4:{port}/"],
+                     timeout=45, check=False)
         return (r.stdout or "").strip()
 
     def scoreboard_down():
@@ -440,7 +600,7 @@ def stage_verify(args, comp, creds):
         except Exception as e:
             return None, f"{type(e).__name__}: {e}"
 
-    ssh_web01("echo %s | sudo -S systemctl stop %s" % (creds["BOX_PW"], unit))
+    sudo_web01(f"systemctl stop {shlex.quote(unit)}")
     time.sleep(150)
     down, down_err = scoreboard_down()
     http_down = web01_http()
@@ -451,8 +611,8 @@ def stage_verify(args, comp, creds):
     restored = healed = False
     for attempt in (1, 2, 3):
         # unmask first: run-12 left the unit unstartable and a plain start was a no-op
-        ssh_web01("echo %s | sudo -S systemctl unmask %s" % (creds["BOX_PW"], unit))
-        ssh_web01("echo %s | sudo -S systemctl start %s" % (creds["BOX_PW"], unit))
+        sudo_web01(f"systemctl unmask {shlex.quote(unit)}; "
+                   f"systemctl start {shlex.quote(unit)}")
         time.sleep(150 if attempt == 1 else 60)
         up, up_err = scoreboard_down()
         http_up = web01_http()
@@ -473,12 +633,88 @@ def stage_verify(args, comp, creds):
             "(the fire test re-validates before T0).")
 
 
+def jar_dir(run_dir):
+    """The run's private cookie-jar directory (0700, never shared /tmp)."""
+    d = Path(run_dir) / JAR_DIRNAME
+    d.mkdir(parents=True, exist_ok=True)
+    os.chmod(d, 0o700)
+    return d
+
+
+def jar_path(run_dir, account):
+    """Deterministic per-account cookie jar inside the run dir, created 0600.
+
+    `/tmp/jar.<team>` was a predictable name in the shared /tmp, created by `curl -c` at
+    whatever umask the driver had: any local account on the operator host could read a
+    live Quotient session cookie, and a second scrim on the same host clobbered the first
+    one's jar. The name must stay deterministic (the generated qlogin/score.py helpers
+    and this driver have to agree on one file), so it keeps a fixed basename — but inside
+    a 0700 run-dir subdirectory, and seeded via mkstemp+rename so the mode is 0600 by
+    construction instead of by luck with the umask.
+    """
+    path = jar_dir(run_dir) / f"{account}.jar"
+    if not path.exists():
+        fd, tmp = tempfile.mkstemp(prefix=f".{account}-", dir=str(path.parent))
+        os.close(fd)
+        os.replace(tmp, path)
+    return str(path)
+
+
+def jar_lock(account):
+    """One re-entrant lock per Quotient account.
+
+    monitor_loop, inject_brief and the watchdog refresh the per-team jars concurrently,
+    and Quotient allows ONE session per account: two refreshers invalidate each other's
+    cookie in a loop — the documented cause of the "three-round scoreboard mystery".
+    Re-entrant so a helper that refreshes while already holding the account lock (qget ->
+    _qlogin) cannot deadlock against itself.
+    """
+    return _JAR_LOCKS.setdefault(account, threading.RLock())
+
+
+def json_error(body):
+    """True when a Quotient response is a JSON object carrying an `error` key.
+
+    `'"error"' in body` flipped the verdict on any payload whose DATA contained that text
+    (a service or inject legitimately named "error…") and missed an error object written
+    with different spacing. A non-JSON body is NOT an error here: callers json.loads() it
+    and fail loudly on their own.
+    """
+    try:
+        data = json.loads(body or "")
+    except (TypeError, ValueError):
+        return False
+    return isinstance(data, dict) and "error" in data
+
+
 def _qlogin(creds, user, jar):
-    """Refresh a Quotient cookie jar for one account (shared jar; newest login wins)."""
-    subprocess.run(["curl", "-s", "--max-time", "15", "-c", jar, "-X", "POST",
-                    f"http://{creds['ENGINE_IP']}/api/login", "-H", "Content-Type: application/json",
-                    "-d", json.dumps({"username": user, "password": creds[user.upper() + "_PW"]})],
-                   capture_output=True)
+    """Refresh a Quotient cookie jar for one account (shared jar; newest login wins).
+
+    curl writes a private temp file which is renamed over the shared jar: the jar is
+    never observed half-written (`curl -c` truncates in place, so a concurrent reader
+    could see a partial file), the 0600 mode survives, and a FAILED refresh leaves the
+    previous jar intact instead of destroying a working session. Callers in the loops
+    hold jar_lock(account); the lock here covers the one-off callers too.
+    """
+    with jar_lock(user):
+        fd, tmp = tempfile.mkstemp(prefix=f".{Path(jar).name}.", dir=str(Path(jar).parent))
+        os.close(fd)
+        try:
+            subprocess.run(["curl", "-s", "--max-time", "15", "-c", tmp, "-X", "POST",
+                            f"http://{creds['ENGINE_IP']}/api/login",
+                            "-H", "Content-Type: application/json",
+                            "-d", json.dumps({"username": user,
+                                              "password": creds[user.upper() + "_PW"]})],
+                           capture_output=True)
+            if os.path.getsize(tmp) > 0:
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, jar)
+                return True
+        except OSError:
+            pass
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        return False
 
 
 def qget(creds, user, jar, path):
@@ -487,18 +723,32 @@ def qget(creds, user, jar, path):
         return subprocess.run(["curl", "-s", "--max-time", "15", "-b", jar,
                                f"http://{creds['ENGINE_IP']}{path}"],
                               capture_output=True, text=True)
-    r = _get()
-    if '"error"' not in (r.stdout or ""):
-        return r
-    _qlogin(creds, user, jar)
-    return _get()
+    with jar_lock(user):
+        r = _get()
+        if not json_error(r.stdout):
+            return r
+        _qlogin(creds, user, jar)
+        return _get()
 
 
 def _team_tid(creds, user, jar, team):
-    """Map a team name to Quotient's internal team ID via /api/teams."""
+    """Map a team name to Quotient's internal team ID via /api/teams.
+
+    Raises ValueError on a payload that is not a team list. Without the isinstance guard
+    an error body made `next(...)` raise StopIteration/TypeError from inside the monitor
+    thread, which used to die silently (audit find D3).
+    """
     r = qget(creds, user, jar, "/api/teams")
-    teams = json.loads(r.stdout)
-    return str(next(t["ID"] for t in teams if t["Name"] == team))
+    try:
+        teams = json.loads(r.stdout)
+    except ValueError:
+        raise ValueError(f"/api/teams is not JSON: {(r.stdout or '')[:80]!r}")
+    if not isinstance(teams, list):
+        raise ValueError(f"/api/teams returned {str(teams)[:80]}")
+    tid = next((t.get("ID") for t in teams if isinstance(t, dict) and t.get("Name") == team), None)
+    if tid is None:
+        raise ValueError(f"team {team!r} is not registered in /api/teams")
+    return str(tid)
 
 
 def team_down(creds, team):
@@ -523,7 +773,7 @@ def services_to_rows(services):
 
 def parsed_status(creds, team):
     """Parsed scoreboard for one team: [{service, up, error}]; raises on failure."""
-    jar = f"/tmp/jar.{team}"
+    jar = jar_path(creds["RUN_DIR"], team)
     r = qget(creds, team, jar, f"/api/services/{_team_tid(creds, team, jar, team)}")
     try:
         services = json.loads(r.stdout)
@@ -570,7 +820,7 @@ def stage_blues(args, comp, run_dir, creds, t0):
             f"ENGINE_IP={creds['ENGINE_IP']}\nMY_TEAM=team{n}\nMY_PW={creds[f'TEAM{n}_PW']}\n"
             f"MY_TID={tid}\nBOX_PW={creds['BOX_PW']}\nINJECT_PW={creds['INJECT_PW']}\n"
             f"KEY_PATH={creds['KEY_PATH']}\nVM_USER={creds['VM_USER']}\nBOX_USER={creds['BOX_USER']}\n"
-            f"JAR=/tmp/jar.team{n}\n"
+            f"JAR={jar_path(run_dir, f'team{n}')}\n"
             f"CREDLIST=({credlist})\n")
         os.chmod(wd / "scrim.env", 0o600)
         for helper, body in (("mybox", mybox_script(comp)), ("scorch", scorch_script(comp)),
@@ -596,7 +846,9 @@ def stage_blues(args, comp, run_dir, creds, t0):
 
 
 def shutil_copy(src, dst):
+    """Copy bytes and return the destination (so callers can chmod what they just wrote)."""
     dst.write_bytes(src.read_bytes())
+    return dst
 
 
 def api_key(local=False):
@@ -643,7 +895,7 @@ def blue_cycle_prompt(n, creds, args, elapsed, remain, delta_text, inject_text, 
         reach.append(f"  Windows (Administrator, same password):"
                      f"  ./mybox {win[0]} \"<cmd>\"   (also: {rest})")
     reach.append("  ./mybox runs one command through the gateway and prints output — prefer it over hand-building ssh.")
-    scoring = [f"HOW THE SCORER SEES YOUR BOXES — check with ./scorch after ANY change to sshd, a firewall, or a scored service:",
+    scoring = ["HOW THE SCORER SEES YOUR BOXES — check with ./scorch after ANY change to sshd, a firewall, or a scored service:",
                "  ./scorch runs every scored check from the engine's vantage. The ssh pins log in as a credlist",
                f"  account (airship/blueteam) WITH A PASSWORD from the gateway 192.168.{tid}.1 — if you set",
                "  PasswordAuthentication no, the scored check itself fails and the pin shows DOWN forever even",
@@ -811,7 +1063,7 @@ def reanchor_injects(args, comp, creds):
         for fn in keep_files:
             cmd += ["-F", f"keep-files={fn}"]
         out = subprocess.run(cmd, capture_output=True, text=True).stdout or ""
-        if '"error"' in out:
+        if json_error(out):
             log(f"WARNING: re-anchoring inject {inject_id} failed: {out[:120]}")
         else:
             n_ok += 1
@@ -824,7 +1076,7 @@ def reanchor_injects(args, comp, creds):
 
 def inject_brief(creds, team):
     """One line per inject with submission state; flags due-within-30-min as task #1."""
-    jar = f"/tmp/jar.{team}"
+    jar = jar_path(creds["RUN_DIR"], team)
     try:
         r = qget(creds, team, jar, "/api/injects")
         injects = json.loads(r.stdout)
@@ -965,25 +1217,53 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
                                        notebook, log_tail)
             cycles = wd / "cycles"
             cycles.mkdir(exist_ok=True)
-            with llm_lock:
-                r = _opencode_run(args, prompt, wd, env)
-                if r.returncode != 0:
-                    log(f"blue-team{n} cycle T+{elapsed} rc={r.returncode} — retrying once")
-                    r = _opencode_run(args, prompt, wd, env)
+            r = run_cycle_with_retry(args, prompt, wd, env, llm_lock, stop, team=n)
             out = re.sub(r"\x1b\[[0-9;]*m", "", (r.stdout or "") + (r.stderr or ""))
             if r.returncode != 0:
                 out += _opencode_log_tail(wd)
             (cycles / f"cycle-T+{elapsed:03d}.prompt.txt").write_text(prompt)
             (cycles / f"cycle-T+{elapsed:03d}.output.log").write_text(out)
-            (wd / "feed.log").open("a").write(f"\n===== cycle T+{elapsed} rc={r.returncode} =====\n{out[-2000:]}\n")
+            with (wd / "feed.log").open("a") as f:
+                f.write(f"\n===== cycle T+{elapsed} rc={r.returncode} =====\n{out[-2000:]}\n")
             log(f"blue-team{n} cycle T+{elapsed} rc={r.returncode}")
         except subprocess.TimeoutExpired:
-            (wd / "feed.log").open("a").write(f"\n===== cycle T+{elapsed} TIMEOUT =====\n")
+            write_cycle_timeout(wd, elapsed)
             log(f"blue-team{n} cycle T+{elapsed} TIMED OUT")
         except Exception as e:
             log(f"blue-team{n} feed error: {e}")
         took = time.time() - started
         stop.wait(min(600, max(30, CYCLE_TARGET_PERIOD - took)))
+
+
+def write_cycle_timeout(wd, elapsed):
+    """Record the exact header scrim-report.py counts as a timeout.
+
+    Always written from the timeout path — including when the RETRY is the attempt that
+    timed out. The report's `timeouts == 0` rehearsal gate finds this string and nothing
+    else, so a timeout that skips it passes the gate silently.
+    """
+    with (Path(wd) / "feed.log").open("a") as f:
+        f.write(f"\n===== cycle T+{elapsed} TIMEOUT =====\n")
+
+
+def run_cycle_with_retry(args, prompt, wd, env, llm_lock, stop, team=None):
+    """One blue cycle, at most two attempts, ONE LOCK ACQUISITION PER ATTEMPT.
+
+    The lock exists to cap concurrency on a shared LLM endpoint. It used to wrap the
+    attempt AND its retry, so two hung attempts held it for up to 2 x CYCLE_TIMEOUT
+    (1800s each) and starved every other team on the same endpoint of its whole cycle.
+    Releasing between attempts lets a waiter run while this team is between attempts;
+    the cap on concurrent calls is unchanged. The retry is skipped once the stop event
+    is set, so teardown is never held up by a doomed second attempt.
+    """
+    who = team if team is not None else "?"
+    with llm_lock:
+        r = _opencode_run(args, prompt, wd, env)
+    if r.returncode != 0 and not stop.is_set():
+        log(f"blue-team{who} cycle rc={r.returncode} — retrying once (lock released)")
+        with llm_lock:
+            r = _opencode_run(args, prompt, wd, env)
+    return r
 
 
 # Scored service name (box_services.json) -> candidate systemd units, first existing wins.
@@ -1036,9 +1316,9 @@ def blue_watchdog_loop(args, creds, t0, stop):
             for b in linux:
                 host = f"{creds['BOX_USER']}@192.168.{tid}.{b['last_octet']}"
                 try:
-                    r = subprocess.run(base + [host, "bash -s"],
-                                       input=watchdog_script(box_services[b["name"]], creds["BOX_PW"]),
-                                       capture_output=True, text=True, timeout=60)
+                    r = run_tree(base + [host, "bash -s"], timeout=60, check=False,
+                                 stdin_text=watchdog_script(box_services[b["name"]],
+                                                           creds["BOX_PW"]))
                     out = [l for l in (r.stdout or "").splitlines() if l.startswith("RESTORED")]
                     msg = "; ".join(out) if out else ("" if r.returncode == 0 else
                                                       f"ssh rc={r.returncode} {(r.stderr or '').strip()[-120:]}")
@@ -1075,9 +1355,12 @@ def monitor_loop(args, creds, t0, stop):
                    "teams": parsed}
             with sb_path.open("a") as f:
                 f.write(json.dumps(rec) + "\n")
-        (Path(args.run_dir) / "monitor.log").open("a").write(
-            f"\n#### T+{t_plus // 60}min {time.strftime('%H:%M')}\n" +
-            "\n".join(f"{t}:\n{s}" for t, s in texts.items()))
+        # Context manager: the log append used to be a bare open(...).write(...) with no
+        # close, leaking one file descriptor per MONITOR_INTERVAL for the whole event
+        # (audit find D5).
+        with (Path(args.run_dir) / "monitor.log").open("a") as f:
+            f.write(f"\n#### T+{t_plus // 60}min {time.strftime('%H:%M')}\n" +
+                    "\n".join(f"{t}:\n{s}" for t, s in texts.items()))
         log("monitor snapshot written")
         if pull_red_snapshot(args, f"T+{t_plus // 60:03d}"):
             log("red events.jsonl snapshot pulled")
@@ -1117,14 +1400,15 @@ def pull_red_snapshot(args, tag=None):
     dest = ev / "events.jsonl"
     for extra in ([], (["-o", jump] if jump else [])):
         try:
-            r = subprocess.run(["scp"] + common + extra +
-                               [f"{target}:/var/lib/bad-auto/events.jsonl", str(dest)],
-                               capture_output=True, timeout=75)
+            r = run_tree(["scp"] + common + extra +
+                         [f"{target}:/var/lib/bad-auto/events.jsonl", str(dest)],
+                         timeout=75, check=False)
         except subprocess.TimeoutExpired:
             continue
         if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
+            secure_evidence(dest)
             if tag:
-                shutil_copy(dest, ev / f"events-{tag}.jsonl")
+                secure_evidence(shutil_copy(dest, ev / f"events-{tag}.jsonl"))
             return True
         dest.unlink(missing_ok=True)
     return False
@@ -1183,6 +1467,27 @@ class RedTunnel:
                 log("red LLM tunnel died — restarting")
                 self._spawn()
 
+    def restart(self):
+        """Tear down and respawn the tunnel — the one-shot rescue for a WEDGED process.
+
+        _supervise only notices a proc that has exited; an ssh that is still running but
+        no longer forwarding traffic (the dress-rehearsal failure: "a plain ssh -R died
+        and nobody noticed") needs an explicit kill+respawn. SIGTERM the session, then
+        SIGKILL after a short grace so a hung ssh cannot hold the forwarded port and
+        make the respawn fail with ExitOnForwardFailure.
+        """
+        if self.proc is not None and self.proc.poll() is None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(self.proc.pid, signal.SIGTERM)
+            try:
+                self.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(self.proc.pid, signal.SIGKILL)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    self.proc.wait(timeout=10)
+        self._spawn()
+
     def shutdown(self):
         self.stop.set()
         if self.proc and self.proc.poll() is None:
@@ -1218,8 +1523,8 @@ def check_red_llm(args, base_url):
         if extra is None:
             continue
         try:
-            r = subprocess.run(["ssh"] + common + extra + [target, probe],
-                               capture_output=True, text=True, timeout=45)
+            r = run_tree(["ssh"] + common + extra + [target, probe],
+                         timeout=45, check=False)
             code = (r.stdout or "").strip()
             if code == "200":
                 return True
@@ -1239,21 +1544,89 @@ def red_llm_url(args):
     return tunnel.red_base_url() if hasattr(tunnel, "red_base_url") else args.llm_base_url
 
 
+def alerts_path(run_dir):
+    """Run-dir alert journal (jsonl) that scrim-report.py surfaces."""
+    return Path(run_dir) / "evidence" / ALERTS_FILENAME
+
+
+def write_alert(run_dir, kind, detail, **fields):
+    """Append one durable, 0600 alert line; returns the record.
+
+    A lone log() line was the entire record that red spent an event LLM-less (the
+    dress rehearsal), because stdout scrolls away and the post-hoc report never reads
+    it. Alerts land in the run dir, where the report can count and print them.
+    """
+    path = alerts_path(run_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": kind, "detail": detail,
+           **fields}
+    with path.open("a") as f:
+        f.write(json.dumps(rec) + "\n")
+    secure_evidence(path)
+    return rec
+
+
+def restart_red_llm_tunnel(args):
+    """Make ONE rescue attempt on the red-side LLM path; returns a detail string.
+
+    Only a run with a managed reverse tunnel can be rescued from here: with a direct
+    (openrouter) endpoint the path is red01's own egress and there is nothing local to
+    respawn — say so instead of pretending to have acted.
+    """
+    tunnel = getattr(args, "red_tunnel", None)
+    if not hasattr(tunnel, "restart"):
+        return ("no managed reverse tunnel for this endpoint (red egresses directly) — "
+                "red stays blind until the endpoint itself recovers")
+    try:
+        tunnel.restart()
+    except Exception as e:
+        return f"tunnel respawn FAILED: {type(e).__name__}: {e}"
+    return f"reverse tunnel respawned (red01 localhost:{tunnel.remote_port})"
+
+
 def red_llm_watch(args, t_plus):
-    """In-event from-red01 LLM probe; alerts once per failure episode."""
-    global _llm_down_since
-    if check_red_llm(args, red_llm_url(args)):
-        if _llm_down_since is not None:
-            log(f"red LLM reachable again after {(time.time() - _llm_down_since) / 60:.0f} min")
-            _llm_down_since = None
+    """In-event from-red01 LLM probe: per-endpoint hysteresis plus one rescue per episode.
+
+    The old watcher tracked a single module-global timestamp with no endpoint key and no
+    failure count, so it printed one line and never acted — red continued blind for the
+    rest of the event (the exact failure the RedTunnel docstring records as having cost a
+    dress rehearsal). Here each endpoint carries (first_failure, consecutive_failures,
+    restarted): a single blip only logs, RED_LLM_FAIL_THRESHOLD consecutive failures
+    trigger ONE tunnel restart and a durable alert, and recovery clears the episode so a
+    later outage can be rescued again.
+    """
+    url = red_llm_url(args)
+    st = _llm_watch.setdefault(url, {"since": None, "failures": 0, "restarted": False})
+    if check_red_llm(args, url):
+        if st["failures"]:
+            mins = (time.time() - (st["since"] or time.time())) / 60
+            log(f"red LLM reachable again after {mins:.0f} min "
+                f"({st['failures']} failed probe(s))")
+            write_alert(args.run_dir, "red_llm_recovered",
+                        f"red01 can reach {url} again after {mins:.0f} min",
+                        endpoint=url, failed_probes=st["failures"])
+        st.update({"since": None, "failures": 0, "restarted": False})
         return
-    if _llm_down_since is None:
-        _llm_down_since = time.time()
+    st["failures"] += 1
+    if st["since"] is None:
+        st["since"] = time.time()
+    if st["failures"] == 1:
         tunnel = getattr(args, "red_tunnel", None)
         dead = hasattr(tunnel, "proc") and tunnel.proc is not None and tunnel.proc.poll() is not None
-        log(f"WARNING: T+{t_plus // 60} — red01 cannot reach the LLM endpoint"
+        log(f"WARNING: T+{t_plus // 60} — red01 cannot reach the LLM endpoint ({url})"
             + (" (tunnel process dead; supervisor will respawn it)" if dead else "")
             + " — red is making decisions blind until this recovers")
+        return
+    if st["failures"] < RED_LLM_FAIL_THRESHOLD or st["restarted"]:
+        return
+    st["restarted"] = True
+    detail = restart_red_llm_tunnel(args)
+    log(f"WARNING: T+{t_plus // 60} — red01 missed {st['failures']} consecutive LLM probes; "
+        f"{detail}")
+    write_alert(args.run_dir, "red_llm_restart",
+                f"red01 missed {st['failures']} consecutive LLM probes to {url}; {detail}",
+                endpoint=url, failed_probes=st["failures"],
+                down_since=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(st["since"])))
 
 
 def stage_red(args, comp, creds, run_dir):
@@ -1289,7 +1662,9 @@ def stage_red(args, comp, creds, run_dir):
                    **({"red_subnet": args.red_subnet} if args.red_subnet else {}),
                    **({"red_seg_ip": args.red_seg_ip} if args.red_seg_ip else {})},
     }
-    (BAD_AUTO / "config.yaml").write_text(json.dumps(cfg, indent=2))
+    # Atomic: a torn config.yaml would break every subsequent badauto call, and the
+    # file may name an internal endpoint.
+    write_text_atomic(BAD_AUTO / "config.yaml", json.dumps(cfg, indent=2), mode=0o600)
     env = {**os.environ, "BAuto_LLM_API_KEY": api_key(local="openrouter" not in args.llm_base_url),
            "BAuto_STATE_DIR": str(Path(run_dir) / "bad-auto-state")}
     run(["python3", "-m", "badauto", "validate-llm"], cwd=BAD_AUTO, env=env, timeout=300, tail=3)
@@ -1301,7 +1676,8 @@ def stage_red(args, comp, creds, run_dir):
         # The operator-side validate/dry-run above used the real URL on purpose;
         # red01 itself can only dial the endpoint through the tunnel.
         cfg["llm"]["base_url"] = tunnel.red_base_url()
-        (BAD_AUTO / "config.yaml").write_text(json.dumps(cfg, indent=2))
+        # Atomic, same reason as above.
+        write_text_atomic(BAD_AUTO / "config.yaml", json.dumps(cfg, indent=2), mode=0o600)
         args.red_tunnel = tunnel
     red_mode = args.red_mode or "routed (bad-auto default)"
     log(f"deploying red01 at {args.red_ip} (storage {args.red_storage}, mode {red_mode})")
@@ -1317,6 +1693,71 @@ def stage_red(args, comp, creds, run_dir):
     log(f"red01 reached the LLM at {red_base} — clear to start")
 
 
+class WorkerDiedError(RuntimeError):
+    """A monitor/feed/watchdog worker thread stopped on its own during the event.
+
+    The event itself keeps running (the surviving teams still need their feeds and the
+    watchdog is still keeping services up), but the harness must not report a clean run:
+    a dead feed thread means that team's agent was unattended, and a dead monitor thread
+    means the evidence the post-hoc report depends on simply is not there (audit find D3).
+    """
+
+
+# A worker may be parked inside a full opencode cycle when the window closes; 10s used to
+# abandon it, and stage_capture/stage_teardown then wrote into (and destroyed infra under)
+# a live cycle. One CYCLE_TIMEOUT plus slack is the honest bound (the retry is skipped
+# once stop is set, so a single attempt is the worst case).
+WORKER_JOIN_BUDGET = CYCLE_TIMEOUT + 120
+
+
+def dead_workers(threads, reported):
+    """Threads that stopped without being asked to, excluding already-reported ones.
+
+    Liveness is polled rather than assumed: nothing observed these threads before, so a
+    worker killed by a StopIteration on an error body (or any other exception escaping
+    its own handler) left the harness running to completion with no indication that its
+    monitoring had stopped.
+    """
+    return [t for t in threads if not t.is_alive() and t not in reported]
+
+
+def join_workers(threads, budget=None):
+    """Join every worker against ONE shared deadline; return the still-alive ones.
+
+    Budget is resolved at call time so tests (and an operator override) can shorten it.
+    """
+    budget = WORKER_JOIN_BUDGET if budget is None else budget
+    deadline = time.time() + budget
+    for t in threads:
+        t.join(timeout=max(0.0, deadline - time.time()))
+    return [t for t in threads if t.is_alive()]
+
+
+def supervise_workers(threads, deadline, stop, poll=60, t0=None):
+    """Poll worker liveness until `deadline`, then stop and join them all.
+
+    Returns the workers that died on their own or refused to stop within the join budget.
+    An empty list means every worker ran to the end of the window and shut down cleanly.
+    """
+    reported = []
+    try:
+        while time.time() < deadline:
+            time.sleep(poll)
+            for t in dead_workers(threads, reported):
+                when = f" at T+{int((time.time() - t0) // 60)}min" if t0 else ""
+                reported.append(t)
+                log(f"ERROR: worker thread {t.name!r} DIED{when} — whatever it was "
+                    f"supervising is now unattended")
+    finally:
+        stop.set()
+        for t in join_workers(threads):
+            log(f"ERROR: worker thread {t.name!r} did not stop within "
+                f"{WORKER_JOIN_BUDGET}s of the event window closing — capture/teardown "
+                f"would have raced it")
+            reported.append(t)
+    return reported
+
+
 def stage_run(args, creds, t0):
     stop = threading.Event()
     # One lock per distinct LLM endpoint — teams sharing an endpoint share its
@@ -1328,21 +1769,39 @@ def stage_run(args, creds, t0):
     threads = []
     for n in range(1, args.teams + 1):
         base_url, _ = blue_ep(args, n)
-        threads.append(threading.Thread(target=blue_feed_loop,
+        threads.append(threading.Thread(target=blue_feed_loop, name=f"blue-feed-{n}",
                                         args=(n, args, creds, t0, stop,
                                               endpoint_locks[base_url], 300.0 * (n - 1))))
-    threads.append(threading.Thread(target=monitor_loop, args=(args, creds, t0, stop)))
+    threads.append(threading.Thread(target=monitor_loop, name="monitor",
+                                    args=(args, creds, t0, stop)))
     if getattr(args, "blue_watchdog", False):
-        threads.append(threading.Thread(target=blue_watchdog_loop, args=(args, creds, t0, stop)))
+        threads.append(threading.Thread(target=blue_watchdog_loop, name="blue-watchdog",
+                                        args=(args, creds, t0, stop)))
     for t in threads:
         t.start()
+    reported = supervise_workers(threads, t0 + args.duration_min * 60, stop, t0=t0)
+    if reported:
+        raise WorkerDiedError(
+            "worker thread(s) stopped or hung during the event: "
+            + ", ".join(t.name for t in reported)
+            + " — that team's feed/monitoring was not running; treat the evidence as partial")
+
+
+def run_event_and_finish(args, creds, t0):
+    """stage_run -> capture -> teardown, capturing even when a worker died.
+
+    Teardown MUST still run (the range is expensive and a live cycle can be destroyed
+    under it otherwise), but the harness must not exit clean afterwards: the failure is
+    returned so main() can exit non-zero after the evidence is safely on disk.
+    """
+    failure = None
     try:
-        while (time.time() - t0) < args.duration_min * 60:
-            time.sleep(60)
-    finally:
-        stop.set()
-        for t in threads:
-            t.join(timeout=10)
+        stage_run(args, creds, t0)
+    except WorkerDiedError as e:
+        failure = str(e)
+    stage_capture(args, creds)
+    stage_teardown(args, creds)
+    return failure
 
 
 def stage_capture(args, creds):
@@ -1364,33 +1823,50 @@ def stage_capture(args, creds):
     for team in teams:
         path = f"/api/services/{_team_tid(creds, 'admin', admin_jar, team)}"
         r = qget(creds, "admin", admin_jar, path)
-        if '"error"' in (r.stdout or ""):
-            r = qget(creds, team, str(ev / f".jar-{team}"), path)
-        (ev / f"final-services-{team}.json").write_text(r.stdout or "")
+        if json_error(r.stdout):
+            r = qget(creds, team, jar_path(args.run_dir, team), path)
+        write_evidence(ev / f"final-services-{team}.json", r.stdout or "")
         try:
             final["services"][team] = services_to_rows(json.loads(r.stdout))
         except Exception:
             final["services"][team] = None
             log(f"WARNING: {team} services capture failed: {(r.stdout or '')[:120]}")
-    (ev / "final-scoreboard.json").write_text(json.dumps(final, indent=1))
+    write_evidence(ev / "final-scoreboard.json", json.dumps(final, indent=1))
     log("final scoreboard dumped to evidence")
-    jar = str(ev / ".jar-admin")
 
     def _pause():
-        return subprocess.run(["curl", "-s", "--max-time", "15", "-b", jar, "-X", "POST",
-                               f"http://{creds['ENGINE_IP']}/api/engine/pause",
-                               "-H", "Content-Type: application/json", "-d", '{"pause": true}'],
-                              capture_output=True, text=True)
+        """POST engine/pause. Returns (ok, detail) — the caller must not claim success.
 
-    _qlogin(creds, "admin", jar)
-    r = _pause()
-    if '"error"' in (r.stdout or ""):
-        _qlogin(creds, "admin", jar)
-        _pause()
-    log("engine paused (best-effort); services JSON captured")
+        The old version ignored both the return code and the body and logged "engine
+        paused (best-effort)" unconditionally: a 500 mid-round left scoring running while
+        the operator read a line saying it had stopped (audit find D7).
+        """
+        r = run_tree(["curl", "-s", "--max-time", "15", "-b", admin_jar, "-X", "POST",
+                      f"http://{creds['ENGINE_IP']}/api/engine/pause",
+                      "-H", "Content-Type: application/json", "-d", '{"pause": true}'],
+                     timeout=30, check=False)
+        if r.returncode != 0:
+            return False, f"curl rc={r.returncode}: {(r.stderr or '').strip()[-120:]}"
+        if json_error(r.stdout):
+            return False, (r.stdout or "")[:120]
+        return True, ""
+
+    # Refresh the admin session before pausing: the capture loop only re-logs-in after a
+    # rejected call, so a jar that expired between the last capture and the pause would
+    # otherwise silently spend the first attempt on an unauthenticated POST.
+    _qlogin(creds, "admin", admin_jar)
+    paused, why = _pause()
+    if not paused:
+        _qlogin(creds, "admin", admin_jar)
+        paused, why = _pause()
+    if paused:
+        log("engine paused; services JSON captured")
+    else:
+        log(f"ERROR: engine pause FAILED ({why}) — scoring is still running; pause it by "
+            f"hand before assuming the event is over")
     sb = Path(args.run_dir) / "scoreboard-state.jsonl"
     if sb.exists():
-        shutil_copy(sb, ev / "scoreboard-state.jsonl")
+        secure_evidence(shutil_copy(sb, ev / "scoreboard-state.jsonl"))
     for n in range(1, args.teams + 1):
         src = Path(args.run_dir) / f"blue-team{n}"
         dst = ev / f"blue-team{n}"
@@ -1399,10 +1875,10 @@ def stage_capture(args, creds):
         dst.mkdir(parents=True, exist_ok=True)
         for name in ("LOG.md", "NOTEBOOK.md", "feed.log"):
             if (src / name).exists():
-                shutil_copy(src / name, dst / name)
+                secure_evidence(shutil_copy(src / name, dst / name))
         for pattern in ("sub-*.md", "sub-*.txt"):
             for f in src.glob(pattern):
-                shutil_copy(f, dst / f.name)
+                secure_evidence(shutil_copy(f, dst / f.name))
         for sub in ("submissions", "cycles"):
             if (src / sub).is_dir():
                 subprocess.run(["cp", "-r", str(src / sub), str(dst / sub)], check=False)
@@ -1421,9 +1897,10 @@ def pull_red_evidence(args):
         attempts = [[], (["-o", jump] if jump else [])]
         ok = False
         for extra in attempts:
-            r = subprocess.run(["scp"] + common + extra + [f"{target}:{remote}", str(ev / local)],
-                               capture_output=True, timeout=120)
+            r = run_tree(["scp"] + common + extra + [f"{target}:{remote}", str(ev / local)],
+                         timeout=120, check=False)
             if r.returncode == 0 and (ev / local).exists() and (ev / local).stat().st_size > 0:
+                secure_evidence(ev / local)
                 ok = True
                 break
             (ev / local).unlink(missing_ok=True)
@@ -1436,13 +1913,12 @@ def pull_red_evidence(args):
                              ["-o", jump]])
     journal = ""
     for cmd, extra in journal_cmds:
-        r = subprocess.run(["ssh"] + common + extra + [target, cmd],
-                           capture_output=True, text=True, timeout=90)
+        r = run_tree(["ssh"] + common + extra + [target, cmd], timeout=90, check=False)
         if (r.stdout or "").strip():
             journal = r.stdout
             break
     if journal:
-        (ev / "bad-auto-journal.log").write_text(journal)
+        write_evidence(ev / "bad-auto-journal.log", journal)
     got = sorted(p.name for p in ev.iterdir() if p.stat().st_size > 0)
     log(f"red evidence captured: {got}")
     return ev
@@ -1471,7 +1947,81 @@ def stage_teardown(args, creds=None):
 
 
 
+RUN_MANIFEST = "run.json"
+RESUME_MIN_CYCLES = 2
+
+
+def save_manifest(run_dir, fields):
+    """Persist the run's intent (duration, retention, watchdog, phase) atomically, 0600."""
+    write_state(Path(run_dir) / RUN_MANIFEST, fields)
+
+
+def load_manifest(run_dir):
+    """The run manifest, or {} when absent/unreadable (older run dirs have none)."""
+    try:
+        data = json.loads((Path(run_dir) / RUN_MANIFEST).read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def record_phase(run_dir, args, phase, t0=None):
+    """Write/refresh the run manifest; doubles as the pre-T0 marker for --resume-event."""
+    save_manifest(run_dir, {
+        "competition": getattr(args, "competition", None),
+        "teams": getattr(args, "teams", None),
+        "duration_min": getattr(args, "duration_min", None),
+        "t0": t0,
+        "keep_range": bool(getattr(args, "keep_range", False)),
+        "blue_watchdog": bool(getattr(args, "blue_watchdog", False)),
+        "phase": phase,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    })
+
+
+def resume_intent(args, manifest):
+    """Fold the ORIGINAL run's retention/watchdog intent into the resume invocation.
+
+    That intent lived only in the first CLI invocation, so a resume without --keep-range
+    tore down a range the original run was keeping up. OR semantics: a resume cannot
+    silently drop an intent the first run had, and an operator who passes the flag on the
+    resume still gets it.
+    """
+    args.keep_range = bool(args.keep_range or manifest.get("keep_range"))
+    args.blue_watchdog = bool(args.blue_watchdog or manifest.get("blue_watchdog"))
+    return args
+
+
+def resume_window_ok(remaining_min, min_cycles=RESUME_MIN_CYCLES):
+    """True when at least `min_cycles` blue cycles still fit inside the window.
+
+    The feed loop stops issuing cycles at duration_min - 2, so that margin is required
+    on top of the cycles themselves.
+    """
+    return remaining_min >= min_cycles * (CYCLE_TARGET_PERIOD / 60.0) + 2
+
+
+def resume_refusal(remaining_min, force=False):
+    """None when resuming is worthwhile, otherwise the message that refuses it.
+
+    A driver that died at T+85 of a 90-min event left remaining=5: every loop exits
+    immediately, the log claims "RESUME", nothing runs — and the run then marched on to
+    capture and TEAR DOWN a range the original run may have meant to keep.
+    """
+    if force or resume_window_ok(remaining_min):
+        return None
+    return (f"--resume-event refused: {remaining_min:.0f} min left of the event window "
+            f"(T0 + duration), fewer than {RESUME_MIN_CYCLES} blue cycles of "
+            f"{CYCLE_TARGET_PERIOD // 60} min can still run. A resume now would log "
+            f"re-entry, run nothing, and still capture + tear down. Pass --force-resume "
+            f"to capture/tear down anyway.")
+
+
 def main():
+    # Start-up umask: every evidence file, jar and log this run creates is private unless
+    # a call site explicitly widens it. Several evidence writes used to rely on the
+    # operator's umask (audit find D5).
+    os.umask(0o077)
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--competition", required=True, help="competition dir under competitions/")
     p.add_argument("--new", help="author competitions/<NAME> from --from-template first")
@@ -1524,6 +2074,9 @@ def main():
                         "run_dir/T0.txt (badauto red keeps running on red01 regardless)")
     p.add_argument("--from-phase", dest="resume", type=int, default=None,
                    help="resume create-competition at this phase")
+    p.add_argument("--force-resume", action="store_true", dest="force_resume",
+                   help="with --resume-event: proceed even when too little of the event "
+                        "window is left for a single useful cycle (capture + teardown only)")
     p.add_argument("--keep-range", action="store_true", help="skip destroy-competition at teardown")
     p.add_argument("--run-dir", default=None)
     p.add_argument("--blue-watchdog", action="store_true", dest="blue_watchdog",
@@ -1538,20 +2091,42 @@ def main():
 
     comp = REPO / "competitions" / args.competition
     if args.resume_event:
-        t0_file = Path(args.run_dir or f"/home/hna/dev/dawgsec/scrim-runs/{args.competition}") / "T0.txt"
-        if not t0_file.exists():
-            sys.exit(f"--resume-event needs {t0_file} (written at T0 by the original run)")
-        rec = json.loads(t0_file.read_text().strip())
-        t0 = float(rec["t0"])
-        args.duration_min = int(rec.get("duration_min") or args.duration_min)
-        args.run_dir = str(t0_file.parent)
+        run_dir = Path(args.run_dir or f"/home/hna/dev/dawgsec/scrim-runs/{args.competition}")
+        manifest = load_manifest(run_dir)
+        resume_intent(args, manifest)
+        t0 = None
+        t0_file = run_dir / "T0.txt"
+        if t0_file.exists():
+            rec = json.loads(t0_file.read_text().strip())
+            t0 = float(rec["t0"])
+            args.duration_min = int(rec.get("duration_min") or args.duration_min)
+        elif manifest.get("t0"):
+            t0 = float(manifest["t0"])
+            args.duration_min = int(manifest.get("duration_min") or args.duration_min)
+        args.run_dir = str(run_dir)
+        if t0 is None:
+            # No T0.txt and no manifest t0: the driver died before the event clock
+            # started (almost always inside stage_red, which deploys red01 for tens of
+            # minutes). There is nothing to re-enter, and saying so beats a bare
+            # "T0.txt missing" now that the pre-stage_red marker exists.
+            where = f" (manifest phase={manifest.get('phase')!r})" if manifest else ""
+            sys.exit(f"--resume-event: no event clock in {run_dir} (T0.txt and run.json "
+                     f"t0 both missing){where} — the run never reached T0, so there is no "
+                     f"event to resume. Re-stage with --skip-deploy instead.")
+        remaining = args.duration_min - (time.time() - t0) / 60
+        refusal = resume_refusal(remaining, force=args.force_resume)
+        if refusal:
+            sys.exit(refusal)
         log(f"RESUME: re-entering stage_run at T+{int((time.time() - t0) / 60)}min "
-            f"({args.duration_min - int((time.time() - t0) / 60)}min left)")
+            f"({remaining:.0f}min left; keep_range={args.keep_range}, "
+            f"watchdog={args.blue_watchdog} from the manifest)")
         creds = creds_from_files(comp)
-        stage_run(args, creds, t0)
-        stage_capture(args, creds)
-        stage_teardown(args, creds)
+        creds["RUN_DIR"] = args.run_dir
+        record_phase(run_dir, args, "event-resumed", t0=t0)
+        failure = run_event_and_finish(args, creds, t0)
         log("DONE — resumed event captured and torn down")
+        if failure:
+            sys.exit(f"FAILED: {failure}")
         return
     if args.new:
         args.competition = args.new
@@ -1568,6 +2143,7 @@ def main():
     if not args.skip_deploy:
         stage_deploy(args, comp)
     creds = creds_from_files(comp)
+    creds["RUN_DIR"] = args.run_dir
     log(f"engine {creds['ENGINE_IP']}, teams {[(k, v['identifier']) for k, v in json.loads((comp / 'teams.json').read_text()).items()]}")
 
     if not (comp / "packet.md").exists():
@@ -1578,17 +2154,21 @@ def main():
     stage_blues(args, comp, run_dir, creds, time.time())
 
     red_setup_started = time.time()
+    # Marker BEFORE stage_red: red01 deployment takes tens of minutes, and a driver that
+    # dies in there used to leave nothing but a missing T0.txt for --resume-event (D3).
+    record_phase(run_dir, args, "stage_red")
     stage_red(args, comp, creds, run_dir)
     t0 = time.time()
-    (run_dir / "T0.txt").write_text(json.dumps({"t0": t0, "duration_min": args.duration_min}))
+    write_state(run_dir / "T0.txt", {"t0": t0, "duration_min": args.duration_min})
+    record_phase(run_dir, args, "event", t0=t0)
     log(f"T0 — event clock starts now (red setup took {(t0 - red_setup_started) / 60:.0f} min, "
         f"outside scored time)")
     reanchor_injects(args, comp, creds)
-    stage_run(args, creds, t0)
 
-    stage_capture(args, creds)
-    stage_teardown(args, creds)
+    failure = run_event_and_finish(args, creds, t0)
     log("DONE — reports: run-agent-scrim output above + run_dir evidence; write FINDINGS from blue logs and bad-auto events")
+    if failure:
+        sys.exit(f"FAILED: {failure}")
 
 
 if __name__ == "__main__":

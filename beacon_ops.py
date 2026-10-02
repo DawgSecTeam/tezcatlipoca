@@ -1,6 +1,5 @@
 """Plant raw-socket beacons on team Linux boxes as blue-team hunt artifacts (unscored, non-destructive)."""
 
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -15,12 +14,34 @@ REMOTE_DIR = "/usr/local/lib/.sysmon"
 REMOTE_BIN = f"{REMOTE_DIR}/beacon"
 UNIT_NAME = "wda-digest.service"
 
-BEACON_INTERVALS = {"web01": 45, "app01": 60, "db01": 90}
+# Staggered call-home intervals (seconds), assigned to the beaconable boxes in
+# boxes.json order. The old table was keyed on the 17b box NAMES — see beacon_plan.
+BEACON_STAGGER_SEC = (45, 60, 90)
 BEACON_PORT = 4444
 
 
 def _is_windows(template_name):
     return "win" in template_name.lower()
+
+
+def beacon_plan(boxes):
+    """[(box_name, interval)] for every beaconable box, derived from boxes.json.
+
+    The previous gate was `t["box_name"] in BEACON_INTERVALS` with
+    BEACON_INTERVALS = {"web01": 45, "app01": 60, "db01": 90}: on any other lineup
+    (cde-2026 ad01/ftp01/web01/db01, amongus-cde-2026 mira/skeld/airship/polus) the
+    competition silently got ZERO beacons while deploy's phase-6 banner announced
+    "Planting team beacons…" and the summary claimed "beacons planted on 0/0 linux
+    boxes" (audit find D8). Windows boxes are skipped (no systemd unit to install) and
+    unmanaged appliances (pfSense) are skipped by contract; every other box IS a
+    beacon target, so no lineup can silently degrade to zero.
+    """
+    plan = []
+    for box in boxes:
+        if _is_windows(str(box.get("template") or "")) or box.get("unmanaged"):
+            continue
+        plan.append((box["name"], BEACON_STAGGER_SEC[len(plan) % len(BEACON_STAGGER_SEC)]))
+    return plan
 
 
 def _build_beacon():
@@ -73,8 +94,20 @@ def _unit(box_name, target_ip, interval):
 
 
 def plant_team_beacons(teams, boxes, ctx, box_username="ubuntu", box_password=None):
-    """Install beacons on every (team, linux box); warns and continues — never aborts a deploy."""
+    """Install beacons on every (team, linux box); warns per box and continues.
+
+    Only a lineup with NO beaconable box aborts: that is a configuration error (the
+    Compfile asked for beacons and boxes.json offers nowhere to put them), and reporting
+    "planted on 0/0" for it is exactly the silent degradation audit find D8 closed.
+    """
     from range_ops import enumerate_targets
+
+    plan = dict(beacon_plan(boxes))
+    if not plan:
+        raise RuntimeError(
+            "team_beacons is enabled but boxes.json has no beaconable Linux box "
+            f"(boxes: {[b.get('name') for b in boxes]}) — refusing to report "
+            "\"planted on 0/0\"; either add a Linux box or drop team_beacons from the Compfile")
 
     binary, how = _build_beacon()
     if binary is None:
@@ -82,13 +115,12 @@ def plant_team_beacons(teams, boxes, ctx, box_username="ubuntu", box_password=No
     else:
         print(f"  beacons: using local {how} binary")
 
-    targets = [t for t in enumerate_targets(teams, boxes)
-               if not _is_windows(t["box"]["template"]) and t["box_name"] in BEACON_INTERVALS]
+    targets = [t for t in enumerate_targets(teams, boxes) if t["box_name"] in plan]
     planted = 0
     for t in targets:
         ip, name = t["ip"], t["box_name"]
         gw = f"192.168.{t['identifier']}.1"
-        interval = BEACON_INTERVALS[name]
+        interval = plan[name]
         unit = _unit(name, gw, interval)
         try:
             if binary is not None:
