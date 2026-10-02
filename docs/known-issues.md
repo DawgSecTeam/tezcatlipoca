@@ -780,6 +780,30 @@ Rules distilled from the [shakedown-5x4 run](reports/shakedown-5x4-2026-09-28-re
 
 ## Security disclosure history
 
+- **2026-10-01 env-variant leak**: `.env.pre-cde-20260929` was tracked from `8cb755c`
+  (the 2026-09-30 loadtest squash-merge) and reached the public remote. It carried a live
+  Proxmox API token (`TF_VAR_proxmox_api_token`, `root@pam!agent=…`), the real endpoint,
+  `TF_VAR_box_password`, and per-team passwords. It slipped through because `.gitignore`
+  listed `".env"` and `".env.realm-backup*"` **by name** and missed the hand-named variant.
+  Two independent fixes, both required:
+  1. *Prevention* — `.gitignore` now carries a blanket `.env.*` with `!.env.example`, and
+     `tests/test_secret_hygiene.py` fails the suite if any `.env` variant is tracked, if a
+     tracked file matches a secret shape, or if code reads an env var neither declared in
+     `.env.example` nor allowlisted in the test. Rule-by-rule gitignore edits silently reopen
+     this class, which is why the guard is a test and not a comment.
+  2. *Removal* — history rewrite via `tools/purge-path-from-history.sh`, the rehearsed
+     procedure: `filter-branch --index-filter`, then **delete `refs/original/*`, expire
+     reflogs, `gc --prune=now`**. That last step is the one that matters and the one usually
+     skipped — after the filter-branch alone the file is gone from every tree while the blob
+     is still in the object store and still cloneable.
+  **The token is permanently public until rotated**; removing it from history does not
+  un-leak it. Recorded here rather than quietly closed, because the shape (a hand-named
+  secrets file outside the ignore pattern) will recur.
+  Scope: `main` and local-only `scale8-2026-10-01` were rewritten; `testcomp-cyberfield-2026-09-29`
+  and tag `v0.1.0` never contained it. `refs/remotes/origin/*` is deliberately left
+  un-rewritten so `git status` keeps showing the divergence — the public remote retains the
+  blob until someone force-pushes.
+
 - **2026-08-06 git-history audit**: found a real admin password and team passwords for the CDE
   2026 competition (since torn down) in a pre-2026-07-09 commit predating the
   "stop tracking competition secrets" history rewrite. The commit is no longer reachable from
