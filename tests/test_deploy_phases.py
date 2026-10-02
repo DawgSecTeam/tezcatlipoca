@@ -213,7 +213,11 @@ class SharedStateWriter(unittest.TestCase):
 
     def test_save_state_routes_through_the_helper(self):
         src = (_REPO / "deploy.py").read_text()
-        self.assertIn("write_state(state_path, state)", src)
+        # The state path is now reached through the stage objects prepare() builds
+        # (prior.state_path in the resume-secrets step) and through self in
+        # DeployContext.save_state; both must be the shared helper, not a fourth
+        # hand-rolled writer.
+        self.assertRegex(src, r"write_state\((?:self\.|prior\.|secrets\.)?state_path,")
         # The old hand-rolled body must be gone: write_text() then chmod() left the
         # only copy of the box passwords world-readable for a window.
         self.assertNotIn("state_path.with_name", src)

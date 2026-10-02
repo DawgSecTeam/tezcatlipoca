@@ -66,6 +66,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 _DEPLOY_LOCKS = {}  # path -> open fh (keep referenced so flock survives)
 
+# Code-level, not run-level state: the .deploy_state.json resume guard and the fresh
+# state writer must record the same version, and both now live in different steps.
+PIPELINE_VERSION = 2
+
 
 def _record_coverage(state, stage_machines, result):
     """Record per-machine unplanted configs in state (M4 plant-coverage source).
@@ -445,6 +449,21 @@ class CompetitionSpec:
     boxes: list = field(default_factory=list)
 
 
+@dataclass
+class PriorDeployState:
+    """What the previous run left in .deploy_state.json, plus the resume decision.
+
+    previous_state is the raw dict the secrets step reuses (box_password, the packet
+    credentials' fallback); resuming is from_phase > 1. The file is read BEFORE the
+    guard that refuses a resume without one, because that guard's message names the
+    path it looked for. The pipeline-version refusal also lives here: a v1 file's phase
+    numbers mean different things, and the guard must fire before anything resumes."""
+
+    state_path: Optional[Path] = None
+    previous_state: dict = field(default_factory=dict)
+    resuming: bool = False
+
+
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
             team_node=None, engine_node=None, force_from_phase=False):
     """Everything deploy() must do before phase 1, as one testable step.
@@ -467,42 +486,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     spec = CompetitionSpec()
     _load_competition_spec(spec, comp_dir)
 
-    state_path = comp_dir / ".deploy_state.json"
-    previous_state = {}
-    if state_path.exists():
-        try:
-            previous_state = json.loads(state_path.read_text())
-        except (ValueError, OSError):
-            previous_state = {}
-    if from_phase > 1 and not state_path.exists():
-        raise SystemExit(
-            f"  ERROR: --from-phase {from_phase} but {state_path} doesn't exist — there are no "
-            f"saved team passwords/secrets to resume with, and generating fresh ones while "
-            f"skipping the destructive phases would leave the deployed range and its credentials "
-            f"out of sync. Re-run without --from-phase for a clean redeploy."
-        )
-    resuming = from_phase > 1
-
-    # Pipeline v2 (M3): golden templates + linked clones, phases renumbered. A v1 state
-    # file's phase numbers mean different things, so resuming across the boundary is
-    # refused rather than silently misinterpreted.
-    PIPELINE_VERSION = 2
-    if resuming:
-        _pv = None
-        try:
-            _pv = json.loads(state_path.read_text()).get("pipeline_version")
-        except (ValueError, OSError):
-            pass
-        if _pv != PIPELINE_VERSION:
-            raise SystemExit(
-                f"  ERROR: {state_path} was written by pipeline v{_pv if _pv is not None else '1'} "
-                f"(pre-golden-template phases) — this code is pipeline v{PIPELINE_VERSION} and its "
-                f"--from-phase numbers mean different things. Run a fresh deploy (no --from-phase)."
-            )
-        # Refuse to skip a phase that never completed: the skipped phases are what build
-        # the machines the later ones target (see guard_resume_from_phase).
-        guard_resume_from_phase(from_phase, previous_state.get("last_phase"), state_path,
-                                force=force_from_phase)
+    prior = PriorDeployState()
+    _load_prior_deploy_state(prior, comp_dir, from_phase, force_from_phase)
 
     injects = load_injects(comp_dir)
     # Packet-published credentials (compile-packet.py -> passwords.json): when present,
@@ -513,8 +498,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     packet_pw = load_packet_passwords(comp_dir)
     packet_credlists = (packet_pw or {}).get("credlists") or {}
 
-    if resuming:
-        state = json.loads(state_path.read_text())
+    if prior.resuming:
+        state = json.loads(prior.state_path.read_text())
         teams = {
             k: {"identifier": v["identifier"], "password": v["password"]}
             for k, v in state["teams"].items()
@@ -539,7 +524,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
             "inject_password": inject_password,
             "scoring_vm_id": identity.engine_vmid,
         })
-        write_state(state_path, state)
+        write_state(prior.state_path, state)
         print(f"  Resuming from phase {from_phase} "
               f"({number_of_teams} team(s), last completed phase {state.get('last_phase')})")
     else:
@@ -575,7 +560,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         # packet's default credentials ARE the competition, and an operator edit
         # to passwords.json is a deliberate re-key (goldens rebuild — correct).
         box_password = ((packet_pw or {}).get("box_password")
-                        or carry_box_password(previous_state))
+                        or carry_box_password(prior.previous_state))
         if packet_pw:
             print("  Box credentials come from passwords.json (packet profile) — "
                   "not re-minted")
@@ -596,7 +581,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
             "domain_creds": domain_creds,
             "scoring_vm_id": identity.engine_vmid,
         }
-        write_state(state_path, state)
+        write_state(prior.state_path, state)
 
     # Multi-node placement (no-op without nodes.json/placement.json): resolved now —
     # teams and boxes are known, and the env must point at the engine's host BEFORE
@@ -606,7 +591,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     placement, _resolved_engine_record = resolve_placement(
         comp_dir, identity.engine_vmid, teams, spec.boxes, spec.comp_name,
         team_overrides=_parse_team_node(team_node), engine_override=engine_node,
-        resume_endpoint=(previous_state.get("deployed_endpoint") if resuming else None))
+        resume_endpoint=(prior.previous_state.get("deployed_endpoint") if prior.resuming else None))
     if placement:
         # Stays active for the whole deploy: every later node-scoped call and the
         # terraform env point at the placement's hosts.
@@ -617,7 +602,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
                 os.environ.setdefault("TF_VAR_engine_mgmt_gw",
                                       _resolved_engine_record.engine_mgmt_gw)
     state["multi_node"] = bool(placement)
-    write_state(state_path, state)
+    write_state(prior.state_path, state)
     acquire_engine_lock(identity.engine_vmid)
 
     nakon_config_path = generate_nakon_config(teams, spec.boxes, spec.difficulty, comp_dir, box_password,
@@ -701,10 +686,10 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     # whatever now sits at the old vmid there (2026-09-24: a realm run deleted that
     # host's existing 1090 engine because a dead primary attempt left 1090 in this
     # comp's state). Refuse unless the recorded host and vmid agree.
-    if from_phase <= 2 and (tf_dir / "terraform.tfstate").exists() and previous_state:
+    if from_phase <= 2 and (tf_dir / "terraform.tfstate").exists() and prior.previous_state:
         cur_endpoint = os.environ.get("TF_VAR_proxmox_endpoint", "").rstrip("/")
-        prev_endpoint = (previous_state.get("deployed_endpoint") or "").rstrip("/")
-        prev_engine = previous_state.get("scoring_vm_id")
+        prev_endpoint = (prior.previous_state.get("deployed_endpoint") or "").rstrip("/")
+        prev_engine = prior.previous_state.get("scoring_vm_id")
         host_mismatch = bool(prev_endpoint) and prev_endpoint != cur_endpoint
         vmid_mismatch = prev_engine is not None and int(prev_engine) != identity.engine_vmid
         if host_mismatch or vmid_mismatch:
@@ -774,13 +759,13 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
             from config_ops import preflight_gates_multinode
             preflight_gates_multinode(comp_dir, spec.boxes, teams, identity.engine_vmid, placement,
                                       engine_mgmt_ip=engine_mgmt_ip,
-                                      check_free=not resuming)
+                                      check_free=not prior.resuming)
         else:
             preflight_gates(comp_dir, spec.boxes, number_of_teams, teams=teams,
-                            engine_vmid=identity.engine_vmid, check_free=not resuming,
+                            engine_vmid=identity.engine_vmid, check_free=not prior.resuming,
                             engine_mgmt_ip=engine_mgmt_ip)
 
-    if not assume_yes and not resuming:
+    if not assume_yes and not prior.resuming:
         if not confirm_deploy(spec.name, spec.scenario, spec.difficulty, teams, spec.boxes):
             print("  Deployment cancelled.")
             return None
@@ -798,9 +783,9 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     return DeployContext(
         comp_dir=comp_dir,
         comp_name=spec.comp_name,
-        state_path=state_path,
+        state_path=prior.state_path,
         from_phase=from_phase,
-        resuming=resuming,
+        resuming=prior.resuming,
         assume_yes=assume_yes,
         name=spec.name,
         scenario=spec.scenario,
@@ -901,6 +886,50 @@ def _load_competition_spec(spec, comp_dir):
                   f"known broken (bad cloud-init — clones won't get a working network/SSH). "
                   f"Use '{b['template']}-fix' instead. See docs/usage-people.md's "
                   f"Troubleshooting table.")
+
+
+def _load_prior_deploy_state(prior, comp_dir, from_phase, force_from_phase):
+    """Read .deploy_state.json into `prior` and run the two resume refusals.
+
+    Refuses a resume with no state file (there are no saved secrets to resume with) and
+    refuses to resume across the pipeline-v1/v2 boundary (the phase numbers changed
+    meaning). guard_resume_from_phase then refuses a --from-phase that skips phases the
+    state never saw complete; force_from_phase is the operator's explicit override."""
+    prior.state_path = comp_dir / ".deploy_state.json"
+    prior.previous_state = {}
+    if prior.state_path.exists():
+        try:
+            prior.previous_state = json.loads(prior.state_path.read_text())
+        except (ValueError, OSError):
+            prior.previous_state = {}
+    if from_phase > 1 and not prior.state_path.exists():
+        raise SystemExit(
+            f"  ERROR: --from-phase {from_phase} but {prior.state_path} doesn't exist — there are no "
+            f"saved team passwords/secrets to resume with, and generating fresh ones while "
+            f"skipping the destructive phases would leave the deployed range and its credentials "
+            f"out of sync. Re-run without --from-phase for a clean redeploy."
+        )
+    prior.resuming = from_phase > 1
+
+    # Pipeline v2 (M3): golden templates + linked clones, phases renumbered. A v1 state
+    # file's phase numbers mean different things, so resuming across the boundary is
+    # refused rather than silently misinterpreted.
+    if prior.resuming:
+        _pv = None
+        try:
+            _pv = json.loads(prior.state_path.read_text()).get("pipeline_version")
+        except (ValueError, OSError):
+            pass
+        if _pv != PIPELINE_VERSION:
+            raise SystemExit(
+                f"  ERROR: {prior.state_path} was written by pipeline v{_pv if _pv is not None else '1'} "
+                f"(pre-golden-template phases) — this code is pipeline v{PIPELINE_VERSION} and its "
+                f"--from-phase numbers mean different things. Run a fresh deploy (no --from-phase)."
+            )
+        # Refuse to skip a phase that never completed: the skipped phases are what build
+        # the machines the later ones target (see guard_resume_from_phase).
+        guard_resume_from_phase(from_phase, prior.previous_state.get("last_phase"), prior.state_path,
+                                force=force_from_phase)
 
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
