@@ -2,11 +2,16 @@
 """Post-deploy verifier for a Quotient scoring range: logins, services, isolation, misconfig spot-check, injects."""
 
 import argparse
+import dataclasses
+import enum
+import ipaddress
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -59,6 +64,125 @@ def _config_name(entry):
 
 class CheckError(Exception):
     """A check could not run (missing data / unreachable infra) — clean message, no trace."""
+
+
+class Status(enum.Enum):
+    """Tri-state gate verdict.
+
+    SKIP_UNAVAILABLE means the gate could not be evaluated (dead SSH, missing
+    state, no vantage point) and is deliberately NOT a pass: a check that never
+    ran exiting 0 is how a dead box reads as a healthy range (live-found
+    2026-10-02: isolation's cross-team probe "PASSed" on stopped VMs). The
+    operator can waive a specific gate with --allow-unverified."""
+    PASS = "PASS"
+    FAIL = "FAIL"
+    SKIP_UNAVAILABLE = "SKIP"
+
+
+@dataclasses.dataclass
+class GateResult:
+    """One gate's verdict — the SUMMARY and the exit code both read THIS object,
+    so the printed word and the gate dict can never drift apart (the old
+    hand-printed SUMMARY said "SKIP — unverified" for isolation while the dict
+    recorded a FAIL)."""
+    name: str
+    status: Status
+    detail: str = ""
+    gating: bool = True      # False = reported in SUMMARY, excluded from the verdict
+    label: str = ""          # SUMMARY label; defaults to name
+
+    def __post_init__(self):
+        if not self.label:
+            self.label = self.name
+
+    @property
+    def passed(self):
+        return self.status is Status.PASS
+
+
+def _pass(name, detail="", gating=True, label=""):
+    return GateResult(name, Status.PASS, detail, gating, label)
+
+
+def _fail(name, detail="", gating=True, label=""):
+    return GateResult(name, Status.FAIL, detail, gating, label)
+
+
+def _skip(name, detail="", gating=True, label=""):
+    return GateResult(name, Status.SKIP_UNAVAILABLE, detail, gating, label)
+
+
+def _bool_gate(name, ok, detail="", gating=True, label=""):
+    """Wrap a plain bool check (no SKIP outcome) as a GateResult."""
+    return GateResult(name, Status.PASS if ok else Status.FAIL, detail, gating, label)
+
+
+# Round cadence: quotient/setup.py build_event_conf's MiscSettings.Delay. Used as
+# the freshness unit — a scored round older than _FRESHNESS_ROUNDS × Delay means
+# the scoreboard is frozen and an old UP is not a live UP (see D7 / the
+# pfsense-ad frozen-scoreboard incident).
+_ROUND_DELAY_SECONDS = 60
+_FRESHNESS_ROUNDS = 5
+
+_GATE_LABEL_WIDTH = 18
+
+
+def _rfc3339(value):
+    """Parse an RFC3339 timestamp; None when absent/unparseable."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when.replace(tzinfo=timezone.utc) if when.tzinfo is None else when
+
+
+# Quotient's Last10Rounds key casing is not guaranteed; tolerate the variants the
+# codebase already sees elsewhere (check_round_loop reads the capital form).
+_ROUND_START_KEYS = ("StartTime", "start_time", "startTime")
+
+
+def _round_start(round_entry):
+    """StartTime of one Last10Rounds entry, however it's cased."""
+    if not isinstance(round_entry, dict):
+        return None
+    raw = next((round_entry[k] for k in _ROUND_START_KEYS if round_entry.get(k)), None)
+    return _rfc3339(raw)
+
+
+def gate_verdict(results, allow_unverified=()):
+    """(gate, passed) derived from GateResults.
+
+    gate maps every gating gate name to `status is PASS` (what do_freeze records).
+    A SKIP is non-passing — it must not yield exit 0 — unless the operator named
+    that gate in --allow-unverified; a FAIL always fails."""
+    allowed = set(allow_unverified)
+
+    def _allowed(r):
+        return r.name in allowed or r.label in allowed
+
+    gate = {r.name: r.passed for r in results if r.gating}
+    passed = all(r.status is Status.PASS
+                 or (r.status is Status.SKIP_UNAVAILABLE and _allowed(r))
+                 for r in results if r.gating)
+    return gate, passed
+
+
+def summary_lines(results, allow_unverified=()):
+    """The SUMMARY body, generated from the GateResults themselves (D6)."""
+    allowed = set(allow_unverified)
+    lines = []
+    for r in results:
+        line = f"  {r.label:<{_GATE_LABEL_WIDTH}}: {r.status.value}"
+        if r.detail:
+            line += f"  {r.detail}"
+        if not r.gating:
+            line += " [informational]"
+        elif r.status is Status.SKIP_UNAVAILABLE and (r.name in allowed or r.label in allowed):
+            line += " (allowed — --allow-unverified)"
+        lines.append(line)
+    return lines
 
 
 def read_terraform_ctx(comp_dir=None):
@@ -258,14 +382,15 @@ def check_packet_accounts(ctx, profile, boxes):
     """--packet gate: out-of-scope decoy accounts (scorebot/blackteam/red_scoring) exist
     on a Linux box. The packet promises these accounts exist and stay untouched — teams
     enumerate local accounts in minute-zero IR, and a missing decoy breaks that promise.
-    Unprovable (SSH dead) is a SKIP, not a pass."""
+    Unprovable (SSH dead) is a SKIP, not a pass — the old code returned True on every
+    unprovable path, so a dead SSH exited 0 (live-found 2026-10-02)."""
     users = list((profile.get("credentials") or {}).get("out_of_scope") or [])
     if not users:
-        return True
+        return _pass("packet_accounts", "packet declares no out-of-scope accounts")
     linux_boxes = [b for b in boxes if "win" not in str(b.get("os", "")).lower()]
     if not linux_boxes:
         print("  SKIP  — no Linux box to probe for out-of-scope accounts")
-        return True
+        return _skip("packet_accounts", "no Linux box to probe")
     target = linux_boxes[0]
     probe = "; ".join(
         f"id -u {u} >/dev/null 2>&1 && echo {u}=1 || echo {u}=0" for u in users)
@@ -273,20 +398,21 @@ def check_packet_accounts(ctx, profile, boxes):
         proc = ssh_via_gateway(ctx, target["ip"], probe)
     except (CheckError, subprocess.TimeoutExpired) as e:
         print(f"  SKIP  — couldn't probe {target.get('name', target['ip'])} ({e})")
-        return True
+        return _skip("packet_accounts", f"couldn't probe {target.get('name', target['ip'])}")
     if proc.returncode != 0:
         print(f"  SKIP  — probe failed rc={proc.returncode}: "
               f"{(proc.stderr or '').strip()[:120]}")
-        return True
+        return _skip("packet_accounts", f"probe failed rc={proc.returncode}")
     kv = dict(l.split("=", 1) for l in proc.stdout.split() if "=" in l)
     missing = [u for u in users if kv.get(u) != "1"]
     if missing:
         print(f"  FAIL  out-of-scope account(s) missing on "
               f"{target.get('name', target['ip'])}: {', '.join(missing)}")
-        return False
+        return _fail("packet_accounts",
+                     f"missing on {target.get('name', target['ip'])}: {', '.join(missing)}")
     print(f"  PASS  {len(users)} out-of-scope account(s) present on "
           f"{target.get('name', target['ip'])}")
-    return True
+    return _pass("packet_accounts", f"{len(users)} account(s) present")
 
 
 def count_local_injects(comp_dir):
@@ -350,33 +476,65 @@ def _check_passed(check):
 def check_services(base_url, admin_session, teams, strict, expected_names=frozenset()):
     """Report per-team service UP/DOWN from the latest scored round.
 
-    Returns (query_ok, all_up, pins_registered). pins_registered gates the scoreboard's
-    actual ServiceName set against the pins' expected set — a pin that never registered
-    (the regression-4x1 same-TYPE collapse: 12 pins, 11 checks) scores nothing and
-    silent-tallies as UP-absent, so it fails the exit code regardless of --strict."""
+    Returns a list of GateResult: the service gate plus (when box_services.json pins
+    exist) a separate `pins_registered` result. Every path returns the same shape —
+    the old code returned a 2-tuple on the /api/teams failure path while main
+    unpacked 3, so a half-deployed or restarting engine (exactly the state this gate
+    exists for) crashed verify with ValueError: not enough values to unpack, dumping
+    a traceback and suppressing the SUMMARY and every other gate result.
+
+    pins_registered gates the scoreboard's actual ServiceName set against the pins'
+    expected set — a pin that never registered (the regression-4x1 same-TYPE collapse:
+    12 pins, 11 checks) scores nothing and silent-tallies as UP-absent, so it fails
+    the exit code regardless of --strict.
+
+    Under --strict-services nothing-scored is a FAIL, not a vacuous pass (live-found
+    2026-10-02: a range where the engine had never scored a round still passed strict
+    mode because every service was skipped as "not yet scored"), and the newest scored
+    round must be within _FRESHNESS_ROUNDS × Delay — otherwise the scoreboard is frozen
+    and an old UP is not a live UP."""
     print("\n[2/5] SERVICES")
+    name = "services(strict)" if strict else "services"
+
+    def _pins_status(ok, detail):
+        return _bool_gate("pins_registered", ok, detail) if expected_names else None
+
     if admin_session is None:
         print("  SKIP  — no admin session (login failed).")
-        return False, False, True
+        out = [_skip(name, "no admin session (login failed)", gating=strict, label="services")]
+        pins = _pins_status(False, "no admin session")
+        if pins:
+            # Could not be evaluated, not a proven regression — but pins are always
+            # gating, so the operator must see SKIP, never a silent pass.
+            pins.status = Status.SKIP_UNAVAILABLE
+            out.append(pins)
+        return out
     try:
         r = admin_session.get(f"{base_url}/api/teams", timeout=10)
         r.raise_for_status()
         api_teams = r.json()
-    except (requests.RequestException, json.JSONDecodeError) as e:
+    except (requests.RequestException, json.JSONDecodeError, ValueError) as e:
         print(f"  FAIL  — could not fetch /api/teams: {e}")
-        return False, False
+        out = [_fail(name, f"could not fetch /api/teams ({str(e)[:60]})",
+                     gating=strict, label="services")]
+        pins = _pins_status(False, "could not fetch /api/teams")
+        if pins:
+            out.append(pins)
+        return out
 
     query_ok = True
     all_up = True
     actual_names = set()
     any_service = False
+    any_scored = False
+    newest_round = None
     for t in api_teams:
         tid, tname = t.get("ID"), t.get("Name", t.get("Identifier"))
         try:
             r = admin_session.get(f"{base_url}/api/services/{tid}", timeout=10)
             r.raise_for_status()
             services = r.json()
-        except (requests.RequestException, json.JSONDecodeError) as e:
+        except (requests.RequestException, json.JSONDecodeError, ValueError) as e:
             print(f"  WARN  {tname}: could not fetch services: {e}")
             query_ok = False
             all_up = False
@@ -387,28 +545,53 @@ def check_services(base_url, admin_session, teams, strict, expected_names=frozen
         down_names = []
         for svc in services or []:
             any_service = True
-            name = svc.get("ServiceName", "?")
+            name_ = svc.get("ServiceName", "?")
             rounds = svc.get("Last10Rounds") or []
+            for rnd in rounds:
+                when = _round_start(rnd)
+                if when is not None and (newest_round is None or when > newest_round):
+                    newest_round = when
             first_round = rounds[0] if rounds else None
             checks = (first_round.get("Checks") if isinstance(first_round, dict) else None) or []
             if not checks:
                 unscored += 1
                 continue
+            any_scored = True
             if all(_check_passed(c) for c in checks):
                 up += 1
             else:
-                down_names.append(name)
+                down_names.append(name_)
         total = len(services or []) - unscored
         note = f" ({unscored} not yet scored)" if unscored else ""
         print(f"  {tname}: {up}/{total} services UP{note}")
-        for name in down_names:
-            print(f"      DOWN: {name}")
+        for down in down_names:
+            print(f"      DOWN: {down}")
         if down_names:
             all_up = False
     if not any_service:
         print("  (no services reported yet — engine may not have scored a round)")
+    if strict and not any_service:
+        print("  FAIL  --strict-services: the engine reports no services for any team.")
+        all_up = False
+    elif strict and not any_scored:
+        print("  FAIL  --strict-services: no service has been scored yet (the engine may "
+              "never have run a round) — an unscored scoreboard is not a passing one.")
+        all_up = False
+    elif strict and newest_round is not None:
+        age_s = (datetime.now(timezone.utc) - newest_round).total_seconds()
+        if age_s > _FRESHNESS_ROUNDS * _ROUND_DELAY_SECONDS:
+            print(f"  FAIL  --strict-services: newest scored round started "
+                  f"{age_s / 60:.0f} min ago (> {_FRESHNESS_ROUNDS}×"
+                  f"{_ROUND_DELAY_SECONDS}s) — the scoreboard is stale/frozen, so this "
+                  "UP is not a live UP (engine rebooted? the loop does not self-resume).")
+            all_up = False
+    elif strict and newest_round is None:
+        print("  FAIL  --strict-services: no parseable round StartTime in Last10Rounds — "
+              "cannot establish the scoreboard is fresh.")
+        all_up = False
     if strict and not all_up:
-        print("  --strict-services: some services DOWN -> counts against exit code")
+        print("  --strict-services: some services DOWN/unscored/stale -> counts against "
+              "exit code")
     pins_ok = True
     if expected_names:
         missing = sorted(expected_names - actual_names)
@@ -422,42 +605,124 @@ def check_services(base_url, admin_session, teams, strict, expected_names=frozen
             print(f"  EXPECTED-PINS  all {len(expected_names)} pinned checks registered")
         if extras:
             print(f"  WARN  scoreboard services not derived from box_services.json: {', '.join(extras)}")
-    return query_ok, all_up, pins_ok
+    detail = f"{'UP' if all_up else 'some DOWN/unscored/stale'} " \
+             f"({'query ok' if query_ok else 'query failed'})"
+    out = [_bool_gate(name, all_up, detail, gating=strict, label="services")]
+    pins = _pins_status(pins_ok, f"{len(expected_names)} pinned checks")
+    if pins:
+        out.append(pins)
+    return out
+
+
+def _team_identifiers(teams):
+    """Sorted string identifiers for every team (the third IP octet).
+
+    Tolerates an entry without one: the old `t["identifier"]` raised an uncaught
+    KeyError here, killing the whole verifier over a hand-edited teams.json — an
+    uncaught crash is the worst failure mode a gate can have."""
+    out = set()
+    for t in (teams or {}).values():
+        ident = t.get("identifier") if isinstance(t, dict) else None
+        if ident is not None:
+            out.add(str(ident))
+    return sorted(out)
+
+
+def _cidr_covers(cidr, ip):
+    """IPv4 CIDR containment — enough for the isolation-rule match."""
+    try:
+        net_s, bits_s = cidr.split("/")
+        bits = int(bits_s)
+        net = int(ipaddress.IPv4Address(net_s))
+        addr = int(ipaddress.IPv4Address(ip))
+    except ValueError:
+        return False
+    if not 0 <= bits <= 32:
+        return False
+    mask = (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF
+    return (net & mask) == (addr & mask)
+
+
+_ISOLATION_RULE_RE = re.compile(
+    r"(?:^|\s)-([sd])\s+(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})(?=\s|$)")
+
+
+def _has_isolation_rule(stdout, subnet_ips):
+    """A FORWARD DROP whose -s AND -d each cover every team subnet.
+
+    The subnets are DERIVED from the team identifiers the rest of the file uses,
+    not the hardcoded 192.168.0.0/16 the old match required: a range renumbered
+    off that supernet must not read PASS from a match on the old literal (the
+    engine's aggregate 192.168.0.0/16 rule covers every derived subnet, so this
+    stays a superset check rather than a per-subnet one)."""
+    for line in stdout.splitlines():
+        if "-j DROP" not in line:
+            continue
+        sides = {}
+        for m in _ISOLATION_RULE_RE.finditer(line):
+            sides[m.group(1)] = m.group(2)
+        if "s" not in sides or "d" not in sides:
+            continue
+        if not subnet_ips:
+            return True
+        if all(_cidr_covers(sides["s"], ip) and _cidr_covers(sides["d"], ip)
+               for ip in subnet_ips):
+            return True
+    return False
+
+
+def _target_live_from_engine(ctx, to_ip):
+    """True/False/None: can the engine itself open to_ip:22?
+
+    The engine's traffic to a directly-attached team subnet is OUTPUT, not FORWARD,
+    so the isolation DROP rule cannot apply to it — engine reachability is a
+    liveness signal independent of the rule under test."""
+    try:
+        proc = ssh_to_engine(
+            ctx, f"timeout 3 bash -c 'echo > /dev/tcp/{to_ip}/22' 2>/dev/null; echo RC=$?")
+    except (CheckError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return "RC=0" in proc.stdout
 
 
 def check_isolation(ctx, teams, boxes):
     """Confirm isolation DROP rule present and actually blocks cross-team traffic.
 
-    Returns True (verified), False (broken), or None (couldn't run the live
-    probe — reported as SKIP, never as a pass): a rule that exists but couldn't
-    be exercised must not read as verified isolation."""
+    Returns a GateResult. A rule that exists but couldn't be exercised is SKIP,
+    never a pass.
 
+    D5 (live-found 2026-10-02): a target box whose sshd is down, whose VM is
+    stopped, or that is otherwise unreachable also yields RC!=0 from the
+    cross-team /dev/tcp probe, and the old `blocked = "RC=0" not in stdout` read
+    that as "blocked as expected" PASS. Establishing "blocked" now additionally
+    requires the engine to reach the target (target is alive, so the failure is
+    the rule) and the internet control to pass (the documented "blocked while
+    that same box can still reach the internet" condition) — otherwise SKIP."""
     print("\n[3/5] ISOLATION")
+    identifiers = _team_identifiers(teams)
+    subnets = [f"192.168.{i}.1" for i in identifiers]
     try:
         proc = ssh_to_engine(ctx, "sudo iptables -S FORWARD")
     except CheckError as e:
         print(f"  FAIL  — {e}")
-        return False
+        return _fail("isolation", f"could not read FORWARD chain ({str(e)[:60]})")
     if proc.returncode != 0:
         print(f"  FAIL  — could not read FORWARD chain (rc={proc.returncode}): "
               f"{(proc.stderr or '').strip()[:150]}")
-        return False
-    has_drop_rule = any(
-        "-j DROP" in line and "192.168.0.0/16" in line
-        and line.count("192.168.0.0/16") >= 2
-        for line in proc.stdout.splitlines()
-    )
-    if not has_drop_rule:
-        print("  FAIL  — no 192.168.0.0/16 -> 192.168.0.0/16 DROP rule in FORWARD chain; "
+        return _fail("isolation", f"could not read FORWARD chain (rc={proc.returncode})")
+    if not _has_isolation_rule(proc.stdout, subnets):
+        where = ", ".join(subnets) if subnets else "the team subnets"
+        print(f"  FAIL  — no DROP rule covering {where} -> {where} in the FORWARD chain; "
               "teams can currently route to each other through the engine.")
-        return False
+        return _fail("isolation", "no team-to-team DROP rule in FORWARD")
     print("  PASS  isolation DROP rule present in FORWARD chain")
 
     if len(teams) < 2:
         print("  (only 1 team — skipping the cross-team connection test)")
-        return True
+        return _pass("isolation", "rule present (single team — probe not applicable)")
 
-    identifiers = sorted({str(t["identifier"]) for t in teams.values()})
     team_ips = {}
     box_os = {}
     for box in boxes:
@@ -475,7 +740,7 @@ def check_isolation(ctx, teams, boxes):
     if len(team_ips) < 2:
         print("  (couldn't identify 2 distinct teams' boxes from nakon-config.json — skipping "
           "the cross-team connection test)")
-        return True
+        return _pass("isolation", "rule present (couldn't identify two teams' boxes)")
     from_ip, to_ip = (team_ips[i] for i in sorted(team_ips)[:2])
 
     try:
@@ -486,28 +751,21 @@ def check_isolation(ctx, teams, boxes):
     except (CheckError, subprocess.TimeoutExpired) as e:
         print(f"  SKIP  — cross-team connection test couldn't run ({e}); rule-presence "
               "check above passed, but an untested rule is NOT a verified pass.")
-        return None
-
+        return _skip("isolation", "cross-team probe couldn't run")
     if proc.returncode != 0:
         print(f"  SKIP  — couldn't SSH to {from_ip} to run the test "
               f"(rc={proc.returncode}): {(proc.stderr or '').strip()[:150]}; rule-presence "
               "check above passed, but an untested rule is NOT a verified pass.")
-        return None
+        return _skip("isolation", f"couldn't SSH to {from_ip} to run the probe")
 
     blocked = "RC=0" not in proc.stdout
-
-    if blocked:
-        print(f"  PASS  {from_ip} cannot reach {to_ip}:22 (blocked as expected)")
-    else:
-        print(f"  FAIL  {from_ip} CAN reach {to_ip}:22 — the isolation rule isn't actually "
-              "blocking traffic (shadowed or misordered in FORWARD?)")
 
     try:
         proc2 = ssh_via_gateway(
             ctx, from_ip,
             "timeout 3 bash -c 'echo > /dev/tcp/1.1.1.1/443' 2>/dev/null; echo RC=$?"
         )
-        internet_ok = "RC=0" in proc2.stdout
+        internet_ok = "RC=0" in proc2.stdout and proc2.returncode == 0
     except (CheckError, subprocess.TimeoutExpired):
         internet_ok = None
     if internet_ok is False:
@@ -518,7 +776,26 @@ def check_isolation(ctx, teams, boxes):
     else:
         print(f"  ....  control check ok: {from_ip} can still reach the internet")
 
-    return blocked
+    if not blocked:
+        print(f"  FAIL  {from_ip} CAN reach {to_ip}:22 — the isolation rule isn't actually "
+              "blocking traffic (shadowed or misordered in FORWARD?)")
+        return _fail("isolation", f"{from_ip} CAN reach {to_ip}:22")
+
+    target_live = _target_live_from_engine(ctx, to_ip)
+    if target_live is not True:
+        why = ("the engine can't reach it either, so it is dead/stopped"
+               if target_live is False else "target liveness couldn't be established")
+        print(f"  SKIP  — {from_ip} can't reach {to_ip}:22, but {why} — a dead box and a "
+              "blocked one look identical from here, so this is NOT a verified isolation pass.")
+        return _skip("isolation", f"{from_ip}->{to_ip}:22 failed but target liveness unproven")
+    if internet_ok is not True:
+        print(f"  SKIP  — {from_ip} can't reach {to_ip}:22 and the internet control "
+              f"{'failed' if internet_ok is False else 'could not run'} — the rule may be "
+              "over-blocking (or the from-box path is broken), not isolating.")
+        return _skip("isolation", "target reachable, but the internet control failed")
+    print(f"  PASS  {from_ip} cannot reach {to_ip}:22 (blocked as expected; target is live "
+          f"and {from_ip} still reaches the internet)")
+    return _pass("isolation", f"{from_ip}->{to_ip}:22 blocked, target live, control ok")
 
 
 def _default_red_seg_ip():
@@ -537,7 +814,7 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
     scoring checks source from. Holds a TCP connection open from red01 to a
     Linux box's :22 and reads the box's connection table (ss) while it's up.
 
-    Returns True/False/None tri-state like check_isolation. Gateway-peer
+    Returns a GateResult; unprovable paths are SKIP, never a pass. Gateway-peer
     lines in the ss output are the verify jump itself (ProxyCommand enters
     through the engine) — expected, not a red sighting."""
     print(f"\n[+RED] RED IDENTITY (routed-mode source address; red01 {red_ip}, "
@@ -546,7 +823,7 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
                  if b.get("ip") and "win" not in str(b.get("os", "")).lower()]
     if not linux_ips:
         print("  SKIP  — no Linux box to observe the connection from (ss)")
-        return None
+        return _skip("red_identity", "no Linux box to observe from")
     box_ip = linux_ips[0]
 
     try:
@@ -560,7 +837,7 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
         print(f"  SKIP  — couldn't spawn the red01 probe ssh: {e}")
-        return None
+        return _skip("red_identity", "couldn't spawn the red01 probe ssh")
 
     try:
         observed = ""
@@ -574,7 +851,7 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
                     timeout=20)
             except (CheckError, subprocess.TimeoutExpired) as e:
                 print(f"  SKIP  — couldn't read {box_ip}'s connection table: {e}")
-                return None
+                return _skip("red_identity", f"couldn't read {box_ip}'s connection table")
             if proc.returncode != 0:
                 continue
             observed = proc.stdout
@@ -592,18 +869,18 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
         print(f"  FAIL  — red01 could not open the probe connection to "
               f"{box_ip}:22 at all (probe rc={hold.returncode}): red cannot "
               "reach the team subnet, routed firewall rules missing/wrong?")
-        return False
+        return _fail("red_identity", "red01 could not reach the team subnet")
     if seg_ip in observed:
         print(f"  PASS  {seg_ip} visible on {box_ip} as an established :22 peer — "
               "red's source address survives end-to-end")
-        return True
+        return _pass("red_identity", f"{seg_ip} visible end-to-end")
     print(f"  FAIL  — {seg_ip} never appeared among {box_ip}'s established :22 "
           f"peers while red01 held a connection open. Observed peers:\n"
           f"{observed.strip() or '    (none)'}\n"
           "        If the only peers are the team gateway (192.168.<tid>.1), red "
           "is still masqueraded — bad-auto deployed in masq mode or the routed "
           "FORWARD rules are shadowed.")
-    return False
+    return _fail("red_identity", f"{seg_ip} never visible on {box_ip}")
 
 
 def report_healthcheck_status(ctx):
@@ -752,7 +1029,12 @@ def report_beacons(ctx, machines):
 
 
 def check_misconfig_survival(ctx, boxes):
-    """Confirm every team's copy of each box carries same verifiable misconfigs (clone race guard)."""
+    """Confirm every team's copy of each box carries same verifiable misconfigs (clone race guard).
+
+    Returns a GateResult: present-on-all PASSes, present-on-some FAILs, and — the
+    branch the old code was missing — absent-on-every-team FAILs too (the case
+    matched no branch at all, so it printed nothing and left all_ok True). All
+    probes unprovable (SSH dead) is SKIP, never a pass."""
     print("\n  (cross-team misconfig survival check)")
     groups = {}
     for box in boxes:
@@ -769,9 +1051,11 @@ def check_misconfig_survival(ctx, boxes):
     if not multi_team_groups:
         print("  SKIP  — fewer than 2 teams, or no box's misconfigs are both shared and "
               "verifiable.")
-        return True
+        return _skip("misconfig_survival",
+                     "fewer than 2 teams or nothing shared+verifiable", gating=False)
 
     all_ok = True
+    any_unverified = False
     for configs, machines in multi_team_groups:
         verifiable = [c for c in configs if c in MISCONFIG_CHECKS]
         for config in verifiable:
@@ -792,12 +1076,25 @@ def check_misconfig_survival(ctx, boxes):
                 all_ok = False
                 print(f"  FAIL  '{config}' present on {present} but MISSING on {absent} — "
                       f"didn't survive cloning")
+            elif absent and not present:
+                # D4: previously this matched no branch — no output, all_ok stayed True.
+                # Every team's copy reports the config as absent, so the plant never
+                # landed anywhere (or no longer matches); that is not a pass.
+                all_ok = False
+                note = f" (unverified: {unknown})" if unknown else ""
+                print(f"  FAIL  '{config}' absent on every team ({absent}){note} — the "
+                      f"config didn't plant on any clone")
             elif present and not absent:
                 note = f" (unverified: {unknown})" if unknown else ""
                 print(f"  PASS  '{config}' present on all {len(present)} team(s): {present}{note}")
             elif unknown and not present and not absent:
-                print(f"  WARN  '{config}' — could not verify on any team ({unknown})")
-    return all_ok
+                any_unverified = True
+                print(f"  SKIP  '{config}' — could not verify on any team ({unknown})")
+    if not all_ok:
+        return _fail("misconfig_survival", "misconfig did not survive cloning everywhere")
+    if any_unverified:
+        return _skip("misconfig_survival", "some configs unprovable (SSH dead)")
+    return _pass("misconfig_survival", "verifiable configs present on every team")
 
 
 def check_injects(base_url, admin_session, comp_dir):
@@ -837,39 +1134,32 @@ _INJECT_CLOSE_KEYS = ("CloseTime", "close_time", "CloseAt", "close_at", "Close",
 def check_round_loop(base_url, admin_session, fix=False):
     """Scoring round loop vs an engine reboot. The Docker containers restart after
     a reboot but the round loop stays stopped (pfsense-ad: frozen scoreboard) —
-    and verify reads the LAST SCORED round, reporting stale DOWN as if live.
+    and verify reads the LAST SCORED round, reporting stale UP/DOWN as if live.
     /api/engine is snake_case (live-confirmed 2026-09-29): `running` (False =
     paused), `competition_started`, `current_round_time` (RFC3339; the Go zero
     time "0001-01-01T00:00:00Z" means the loop is NOT cycling), and
-    `last_round.StartTime`. Informational: WARN with the exact remediation;
-    --fix-round-loop runs the two POSTs."""
+    `last_round.StartTime`.
+
+    Returns a GateResult and main CONSUMES it: a stopped loop used to WARN and
+    return True while main discarded the return value, so a frozen scoreboard
+    never affected the exit code. --fix-round-loop runs the two POSTs, but a
+    stopped loop is still FAIL for this run (re-run to confirm a fresh round)."""
     print("\n  (scoring round loop — stops silently after an engine reboot)")
     if admin_session is None:
         print("  SKIP  — no admin session.")
-        return True
+        return _skip("round_loop", "no admin session")
     try:
         r = admin_session.get(f"{base_url}/api/engine", timeout=10)
         r.raise_for_status()
         eng = r.json()
     except (requests.RequestException, ValueError) as e:
         print(f"  WARN  — could not read /api/engine: {e}")
-        return True
+        return _skip("round_loop", "could not read /api/engine")
     if not isinstance(eng, dict):
-        return True
+        return _skip("round_loop", "unexpected /api/engine payload")
     if eng.get("running") is False:
         print("  PASS  — engine paused (round loop not expected to advance)")
-        return True
-
-    from datetime import datetime, timezone
-
-    def _rfc3339(value):
-        if not isinstance(value, str) or not value:
-            return None
-        try:
-            when = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        return when.replace(tzinfo=timezone.utc) if when.tzinfo is None else when
+        return _pass("round_loop", "engine paused")
 
     cur_when = _rfc3339(eng.get("current_round_time"))
     if cur_when is not None and cur_when.year <= 1:
@@ -877,11 +1167,11 @@ def check_round_loop(base_url, admin_session, fix=False):
     started = _rfc3339((eng.get("last_round") or {}).get("StartTime"))
     if started is None or cur_when is not None:
         print("  PASS  — round loop advancing")
-        return True
+        return _pass("round_loop", "loop advancing")
     age_min = (datetime.now(timezone.utc) - started).total_seconds() / 60
-    if age_min < 10:
+    if age_min < (_FRESHNESS_ROUNDS * _ROUND_DELAY_SECONDS) / 60:
         print("  PASS  — round loop starting (first round pending within Delay)")
-        return True
+        return _pass("round_loop", "first round pending")
     print(f"  WARN  — round loop looks STOPPED: last round started {age_min:.0f} min ago "
           "and current_round_time is the zero time (engine rebooted? the loop does not "
           "self-resume)")
@@ -894,7 +1184,10 @@ def check_round_loop(base_url, admin_session, fix=False):
                                 json={"pause": False}, timeout=10)
         print(f"  --fix-round-loop: start={r1.status_code} unpause={r2.status_code} — "
               f"re-run verify to confirm a fresh round landed")
-    return True
+    print("  FAIL  — a frozen scoreboard makes every service verdict above stale; main "
+          "now consumes this result, so this run does not pass. Re-run verify once a "
+          "fresh round lands.")
+    return _fail("round_loop", f"loop stopped; last round {age_min:.0f} min ago")
 
 
 def closed_injects(injects, now=None):
@@ -954,43 +1247,43 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
     instead of claiming it. Member machine SIDs are reported, not gated: members
     linked-cloned from one golden share them by design, which is harmless for
     isolated forests. A present-but-malformed domain_roles.json fails closed.
-    Returns None when the lineup has no domain_roles.json."""
+    Returns a SKIP GateResult (gating=False) when the lineup has no domain_roles.json."""
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
         print("  SKIP  — no domain_roles.json")
-        return None
+        return _skip("domains", "no domain_roles.json", gating=False)
     try:
         roles = json.loads(roles_path.read_text())
     except (OSError, ValueError) as e:
         print(f"  FAIL  domain_roles.json is unreadable/malformed ({str(e)[:80]})")
-        return False
+        return _fail("domains", "domain_roles.json unreadable/malformed")
     if not isinstance(roles, dict) or not all(
             isinstance(name, str) and isinstance(role, str)
             for name, role in roles.items()):
         print("  FAIL  domain_roles.json must map box names to 'dc' or 'member' strings")
-        return False
+        return _fail("domains", "domain_roles.json schema invalid")
     bad = {name: role for name, role in roles.items() if role not in ("dc", "member")}
     if bad:
         print("  FAIL  domain_roles.json has invalid role value(s): "
               + ", ".join(f"{name}={role!r}" for name, role in sorted(bad.items()))
               + " (expected 'dc' or 'member')")
-        return False
+        return _fail("domains", "domain_roles.json has invalid role values")
     node = os.environ.get("TF_VAR_proxmox_node")
     # Box TYPES (boxes.json order = vmid order), not verify's per-team nakon machines.
     try:
         boxes = json.loads((comp_dir / "boxes.json").read_text())
     except (OSError, ValueError) as e:
         print(f"  FAIL  boxes.json is unreadable/malformed ({str(e)[:80]})")
-        return False
+        return _fail("domains", "boxes.json unreadable/malformed")
     idx = {b["name"]: i for i, b in enumerate(boxes)}
     unknown = [name for name in roles if name not in idx]
     if unknown:
         print("  FAIL  domain_roles.json names box(es) absent from boxes.json: "
               + ", ".join(sorted(unknown)))
-        return False
+        return _fail("domains", "domain_roles.json names unknown box(es)")
     if not teams:
         print("  FAIL  no teams loaded — nothing to check domain roles against")
-        return False
+        return _fail("domains", "no teams loaded")
     dc_name = next((n for n, r in roles.items() if r == "dc"), None)
     ok = True
     domain_sids, machine_sids = {}, {}
@@ -1073,13 +1366,15 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
         if len(teams) > 1:
             print(f"  PASS  {len(domain_sids)} team domain(s), all DomainSIDs unique")
         else:
-            print(f"  PASS  1 team domain, DomainSID well-formed "
-                  f"(uniqueness needs a second team to exercise)")
+            print("  PASS  1 team domain, DomainSID well-formed "
+                  "(uniqueness needs a second team to exercise)")
     shared = {sid: v for sid, v in machine_sids.items() if len(v) > 1}
     for sid, v in shared.items():
         print(f"  INFO  member machine SID {sid} shared by {', '.join(v)} "
               f"(linked clones of one golden — harmless for isolated forests)")
-    return ok
+    if not ok:
+        return _fail("domains", "domain validation failures above")
+    return _pass("domains", f"{len(domain_sids)} team domain(s) validated")
 
 
 def check_plant_coverage(comp_dir):
@@ -1091,7 +1386,21 @@ def check_plant_coverage(comp_dir):
     a machine died before reporting any step). Golden-stage entries map onto every team
     copy of that box (a golden failure means the clones inherited the gap). This is the
     backstop that catches a broken/undeclared-var config the moment it fails to plant,
-    instead of a mid-competition discovery."""
+    instead of a mid-competition discovery.
+
+    D2 (live-found 2026-10-02): this gate used to read ONLY plant_coverage_failed and
+    fail OPEN when it was absent — missing/unparseable state, an older state, or a
+    nakon that produced no --json outcome left `failed = {}`, so it printed
+    "PASS all N machine(s) report full config coverage" and exited 0 while its own
+    SUMMARY said "plant integrity: WARNING — last nakon plant recorded N FAILED
+    step(s)". The whole premise of verify (docs/known-issues.md: nakon failures are
+    silent by design) was vacuous in exactly that case. It now fails CLOSED: the
+    nakon tally deploy.py:105 promises as the fallback is consulted, a non-empty tally
+    can never PASS, and when neither source exists the gate FAILs with "coverage was
+    never recorded".
+
+    Returns a GateResult (never a bare tuple — the old (checked, ok) arity was part of
+    the D1 unpacking crash family)."""
     state_path = comp_dir / ".deploy_state.json"
     state = {}
     if state_path.exists():
@@ -1099,35 +1408,71 @@ def check_plant_coverage(comp_dir):
             state = json.loads(state_path.read_text())
         except (OSError, ValueError):
             state = {}
-    failed = state.get("plant_coverage_failed") or {}
+    if not isinstance(state, dict):
+        state = {}
+    # `None` distinguishes "never recorded" from "recorded and clean ({})" — the two
+    # must not be conflated, which is what made the old gate fail open.
+    failed = state.get("plant_coverage_failed")
+    tally = state.get("nakon_failed_steps")
     config_path = comp_dir / "nakon-config.json"
     if not config_path.exists():
         print("  SKIP  — no nakon-config.json (nothing expected).")
-        return True, None
+        return _skip("plant_coverage", "no nakon-config.json", gating=False)
     try:
         machines = json.loads(config_path.read_text())["machines"]
     except (OSError, ValueError, KeyError) as e:
         print(f"  FAIL  — cannot read nakon-config.json: {e}")
-        return True, False
+        return _fail("plant_coverage", f"cannot read nakon-config.json ({str(e)[:60]})")
 
     def cfg_name(c):
         return c if isinstance(c, str) else c["name"]
 
+    recorded = failed if isinstance(failed, dict) else None
     unplanted = {}
     for m in machines:
-        expected = {cfg_name(c) for c in m["configurations"]}
-        bad = set(failed.get(m["name"]) or [])
-        golden_key = f"{m['name'].rsplit('-team', 1)[0]}-golden"
-        bad |= {f"{c} (golden-stage)" for c in (failed.get(golden_key) or [])}
-        missing = sorted(bad & expected | {c for c in bad if c.startswith("<machine")})
+        name = m.get("name", "?")
+        expected = {cfg_name(c) for c in m.get("configurations", [])}
+        machine_bad = [c for c in (recorded or {}).get(name) or []]
+        golden_key = f"{name.rsplit('-team', 1)[0]}-golden"
+        golden_bad = [c for c in (recorded or {}).get(golden_key) or []]
+        # Intersect each recorded failure with what this machine STILL expects: a
+        # failure for a config no longer in its `configurations` is stale and must not
+        # fail the gate (amongus-cde-2026 2026-09-30: a recovered SMB v1 entry stayed
+        # 'failed' across three green replants). The `<machine ...>` sentinel is kept
+        # because it means "died before reporting any step" and is never a config name.
+        bad = {c for c in machine_bad if c in expected or c.startswith("<machine")}
+        # A golden-stage failure means every team copy inherited the gap.
+        bad |= {f"{c} (golden-stage)" for c in golden_bad if c in expected}
         if bad:
-            unplanted[m["name"]] = sorted(bad)
+            unplanted[name] = sorted(bad)
+
+    problems = []
     if unplanted:
         for name, cfgs in sorted(unplanted.items()):
             print(f"  FAIL  {name}: not planted: {', '.join(cfgs)}")
-        return True, False
+        problems.append(f"{sum(len(c) for c in unplanted.values())} unplanted config(s)")
+    if tally:
+        print(f"  FAIL  nakon recorded {len(tally)} FAILED plant step(s): "
+              f"{', '.join(str(s)[:80] for s in tally[:3])}"
+              f"{' …' if len(tally) > 3 else ''}")
+        problems.append(f"{len(tally)} failed nakon step(s)")
+    if problems:
+        return _fail("plant_coverage", "; ".join(problems))
+
+    if recorded is None:
+        if tally is None:
+            print("  FAIL  — plant coverage was never recorded: no "
+                  "'plant_coverage_failed' in .deploy_state.json and no nakon FAILED "
+                  "tally to fall back on (pre-tally deploy?). An unrecorded coverage "
+                  "gate is not a passing one.")
+            return _fail("plant_coverage", "coverage was never recorded")
+        # deploy.py's documented fallback: "no --json outcome (older nakon) —
+        # coverage falls back to the tally", and the tally here is present and clean.
+        print(f"  PASS  no coverage record (older nakon --json), so coverage falls back "
+              f"to the tally: 0 FAILED steps for {len(machines)} machine(s)")
+        return _pass("plant_coverage", f"tally clean (no coverage record; {len(machines)} machines)")
     print(f"  PASS  all {len(machines)} machine(s) report full config coverage")
-    return True, True
+    return _pass("plant_coverage", f"all {len(machines)} machine(s)")
 
 
 def freeze_hashes(comp_dir):
@@ -1141,7 +1486,7 @@ def freeze_hashes(comp_dir):
         return None
 
 
-def do_freeze(comp_dir, args, gate, coverage_ok):
+def do_freeze(comp_dir, args, gate, coverage_passed):
     """M4 freeze: record the template hashes this verify just passed against, plus the
     code commit, timestamp, and gate results. Preconditions: every gate PASS including
     plant-coverage and services; Windows/domain lineups additionally require the
@@ -1154,7 +1499,7 @@ def do_freeze(comp_dir, args, gate, coverage_ok):
         print("  FREEZE refused — no template hash record (.template-hashes.json); "
               "deploy once on the M4 pipeline first.")
         return False
-    if not coverage_ok:
+    if not coverage_passed:
         print("  FREEZE refused — plant-coverage did not pass.")
         return False
     if not all(gate.values()):
@@ -1174,7 +1519,7 @@ def do_freeze(comp_dir, args, gate, coverage_ok):
         "frozen_at": _time.strftime("%Y-%m-%d %H:%M:%S"),
         "code": git_commit_info(),
         "hashes": {"engine": hashes["engine"], "golden": hashes["golden"]},
-        "verify_report": {"gates": gate, "plant_coverage": coverage_ok},
+        "verify_report": {"gates": gate, "plant_coverage": coverage_passed},
         "windows_domain_validated": bool(args.windows_domain_validated),
     }
     path = comp_dir / ".frozen.json"
@@ -1211,6 +1556,12 @@ def main():
     parser.add_argument("--admin-password", help="override the Quotient admin password")
     parser.add_argument("--strict-services", action="store_true",
                         help="also require every service UP for a passing exit code")
+    parser.add_argument("--allow-unverified", action="append", default=[],
+                        dest="allow_unverified", metavar="GATE",
+                        help="waive ONE gate's SKIP (could-not-evaluate) verdict so it "
+                             "does not fail the exit code; repeatable, e.g. "
+                             "--allow-unverified isolation. Without it a gate that "
+                             "couldn't run is NOT a pass — a dead SSH must not exit 0.")
     parser.add_argument("--fix-round-loop", action="store_true", dest="fix_round_loop",
                         help="when the scoring round loop looks stopped after an engine "
                              "reboot, run the start/unpause POSTs instead of only warning")
@@ -1277,9 +1628,14 @@ def main():
     if args.unfreeze:
         return 0 if do_unfreeze(comp_dir, args.confirm_unfreeze) else 1
 
+    # Every gate reports a GateResult; the SUMMARY and the exit code are both derived
+    # from this list (D6), so a gate's printed word can never disagree with its effect
+    # on the verdict.
+    results = []
     logins_ok, admin_session = check_logins(base_url, teams, admin_password)
+    results.append(_bool_gate("logins", logins_ok))
     print("\n  (default-credential regression guard)")
-    no_default_creds_ok = check_no_default_creds(comp_dir)
+    results.append(_bool_gate("no_default_creds", check_no_default_creds(comp_dir)))
     packet_profile = None
     if args.packet_profile:
         try:
@@ -1289,8 +1645,8 @@ def main():
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
         print("\n  (packet fidelity — credentials + out-of-scope accounts)")
-        packet_creds_ok = check_packet_creds(comp_dir, packet_profile)
-        packet_accounts_ok = check_packet_accounts(ctx, packet_profile, boxes)
+        results.append(_bool_gate("packet_creds", check_packet_creds(comp_dir, packet_profile)))
+        results.append(check_packet_accounts(ctx, packet_profile, boxes))
     # boxes.json (box TYPES, keyed by name in box_services.json) — nakon-config
     # machines carry team-suffixed names the pin map doesn't use
     try:
@@ -1299,87 +1655,53 @@ def main():
     except (OSError, ValueError):
         box_list, pinned_services = [], {}
     expected_names = expected_service_names(pinned_services, box_list) if pinned_services else set()
-    services_query_ok, services_all_up, pins_registered = check_services(
-        base_url, admin_session, teams, args.strict_services, expected_names)
-    isolation_ok = check_isolation(ctx, teams, boxes)
-    red_identity_ok = None
+    results.extend(check_services(
+        base_url, admin_session, teams, args.strict_services, expected_names))
+    results.append(check_isolation(ctx, teams, boxes))
     if args.red_identity:
         seg_ip = args.red_seg_ip or _default_red_seg_ip()
         try:
-            red_identity_ok = check_red_identity(ctx, boxes, args.red_ip, seg_ip,
-                                                 red_user=args.red_user)
+            results.append(check_red_identity(ctx, boxes, args.red_ip, seg_ip,
+                                              red_user=args.red_user))
         except CheckError as e:
             print(f"  SKIP  — red identity check couldn't run: {e}")
-            red_identity_ok = None
+            results.append(_skip("red_identity", "check couldn't run"))
     print("\n  (live-ops health check status — informational)")
     report_healthcheck_status(ctx)
     if args.expect_no_vulns:
         print("\n[4/5] MISCONFIG SPOT-CHECK")
         print("  SKIP  — --expect-no-vulns: this comp deliberately plants no misconfigurations")
-        misconfig_ok = True
-        misconfig_survival_ok = True
+        note = "--expect-no-vulns: comp plants no misconfigurations"
+        results.append(_skip("misconfig", note, gating=False))
+        results.append(_skip("misconfig_survival", note, gating=False))
     else:
-        misconfig_ok = check_misconfig(ctx, boxes, comp_dir)
-        misconfig_survival_ok = check_misconfig_survival(ctx, boxes)
+        results.append(_bool_gate("misconfig", check_misconfig(ctx, boxes, comp_dir)))
+        results.append(check_misconfig_survival(ctx, boxes))
     report_beacons(ctx, boxes)
     injects_relevant, injects_ok = check_injects(base_url, admin_session, comp_dir)
-    check_round_loop(base_url, admin_session, fix=args.fix_round_loop)
+    if injects_relevant:
+        results.append(_bool_gate("injects", injects_ok))
+    else:
+        results.append(_skip("injects", "competition ships no injects/ dir", gating=False))
+    results.append(check_round_loop(base_url, admin_session, fix=args.fix_round_loop))
     print("\n  (M4 plant coverage — expected vs. actually planted, per machine)")
-    coverage_checked, coverage_ok = check_plant_coverage(comp_dir)
+    coverage_result = check_plant_coverage(comp_dir)
+    results.append(coverage_result)
     print("\n  (AD domains — promotion, joins, AD plants, DomainSID uniqueness)")
-    domains_ok = check_domains(comp_dir, teams, boxes, ctx=ctx)
+    results.append(check_domains(comp_dir, teams, boxes, ctx=ctx))
 
-    gate = {
-        "logins": logins_ok,
-        "no_default_creds": no_default_creds_ok,
-        "isolation": isolation_ok is True,
-        "misconfig": misconfig_ok,
-        "misconfig_survival": misconfig_survival_ok,
-        "injects": injects_ok,
-    }
-    if args.strict_services:
-        gate["services(strict)"] = services_query_ok and services_all_up
-    if expected_names:
-        gate["pins_registered"] = pins_registered
-    if coverage_checked and coverage_ok is not None:
-        gate["plant_coverage"] = coverage_ok
-    if domains_ok is not None:
-        gate["domains"] = domains_ok
-    if args.red_identity:
-        gate["red_identity"] = red_identity_ok is True
-    if packet_profile is not None:
-        gate["packet_creds"] = packet_creds_ok
-        gate["packet_accounts"] = packet_accounts_ok
+    gate, passed = gate_verdict(results, args.allow_unverified)
 
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
-    print(f"  logins           : {'PASS' if logins_ok else 'FAIL'}")
-    print(f"  no_default_creds : {'PASS' if no_default_creds_ok else 'FAIL'}")
-    svc_note = "informational"
-    if args.strict_services:
-        svc_note = "PASS" if (services_query_ok and services_all_up) else "FAIL"
-    print(f"  services         : {'UP' if services_all_up else 'some DOWN'} "
-          f"({'query ok' if services_query_ok else 'query failed'}) [{svc_note}]")
-    if expected_names:
-        print(f"  pins_registered  : "
-              f"{'PASS' if pins_registered else 'FAIL'} ({len(expected_names)} pinned checks)")
-    isolation_note = ("PASS" if isolation_ok is True
-                      else "SKIP — live probe couldn't run, unverified" if isolation_ok is None
-                      else "FAIL")
-    print(f"  isolation        : {isolation_note}")
-    if args.red_identity:
-        red_note = ("PASS" if red_identity_ok is True
-                    else "SKIP — couldn't run, unverified" if red_identity_ok is None
-                    else "FAIL — red source IP not visible end-to-end")
-        print(f"  red_identity     : {red_note}")
-    misconfig_note = "PASS"
-    if args.expect_no_vulns:
-        misconfig_note = "SKIP (--expect-no-vulns)"
-    print(f"  misconfig        : {misconfig_note if misconfig_note.startswith('SKIP') else ('PASS' if misconfig_ok else 'FAIL')}")
-    print(f"  misconfig_surviv.: {misconfig_note if misconfig_note.startswith('SKIP') else ('PASS' if misconfig_survival_ok else 'FAIL')}")
-    print(f"  injects          : {'PASS' if injects_ok else 'FAIL'}"
-          f"{'' if injects_relevant else ' (none — skipped)'}")
+    for line in summary_lines(results, args.allow_unverified):
+        print(line)
+    unknown_allowed = sorted(set(args.allow_unverified)
+                             - {r.name for r in results} - {r.label for r in results})
+    if unknown_allowed:
+        print(f"  WARN  --allow-unverified names no gate in this run: "
+              f"{', '.join(unknown_allowed)}")
     tally = None
     state_path = comp_dir / ".deploy_state.json"
     if state_path.exists():
@@ -1392,18 +1714,10 @@ def main():
               "(pre-tally deploy)")
     elif tally:
         print(f"  plant integrity  : WARNING — last nakon plant recorded {len(tally)} "
-              f"FAILED step(s): {', '.join(s[:60] for s in tally[:3])}"
+              f"FAILED step(s): {', '.join(str(s)[:60] for s in tally[:3])}"
               f"{' …' if len(tally) > 3 else ''}")
     else:
         print("  plant integrity  : last nakon plant recorded 0 FAILED steps")
-    if domains_ok is not None:
-        print(f"  domains          : {'PASS' if domains_ok else 'FAIL'}")
-    if coverage_checked and coverage_ok is not None:
-        print(f"  plant coverage   : {'PASS' if coverage_ok else 'FAIL'}"
-              + ("" if coverage_ok else " — unplanted configs above"))
-    if packet_profile is not None:
-        print(f"  packet_creds     : {'PASS' if packet_creds_ok else 'FAIL'}")
-        print(f"  packet_accounts  : {'PASS' if packet_accounts_ok else 'FAIL'}")
     hashes = freeze_hashes(comp_dir)
     if hashes and (hashes.get("engine") or {}).get("hash"):
         golden_short = {k: v["hash"][:12] for k, v in (hashes.get("golden") or {}).items()}
@@ -1417,11 +1731,10 @@ def main():
             frozen_at = "?"
         print(f"  freeze           : FROZEN since {frozen_at}")
 
-    passed = all(gate.values())
     print("\n" + ("RESULT: PASS — competition looks healthy."
                   if passed else "RESULT: FAIL — see failing checks above."))
     if args.freeze:
-        ok = do_freeze(comp_dir, args, gate, coverage_ok if coverage_checked else None)
+        ok = do_freeze(comp_dir, args, gate, coverage_result.passed)
         return 0 if (passed and ok) else 1
     return 0 if passed else 1
 
