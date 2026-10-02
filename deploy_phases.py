@@ -58,7 +58,7 @@ from template_ops import (build_engine_template, destroy_engine_template,
                           engine_hash_inputs, find_engine_template, frozen_gate,
                           hash_from_inputs, load_template_hashes,
                           save_template_hashes, stored_template_hash)
-from timing import timed
+from timing import print_timing_summary, timed
 from utils import (compfile_flag, compfile_value, is_unmanaged, run_concurrent,
                    run_terraform)
 from windows_ops import bootstrap_windows_box
@@ -109,6 +109,9 @@ def phase1_cleanup(ctx):
     clones must die BEFORE their templates. Wave 2 (goldens/engine/stale slots)
     is phase1_destroy_waves' job; this function is only the node/bridge walk and
     the resume markers around it."""
+    if ctx.from_phase > 1:
+        print("[1/7] Skipped (resume) — leaving existing VMs/bridges in place.")
+        return
     print("[1/7] Cleaning up previous deployment (parallel; deletes are metadata-light "
           "— the datastore-saturation hazard belongs to bulk clone writes, not deletes)...")
     cloned_path = ctx.comp_dir / "cloned_vms.json"
@@ -157,6 +160,9 @@ def phase2_engine_template(ctx):
     goldens exist. The checkpoint and the terraform-context read stay in the caller
     (deploy), in that order: a phase-2 resume still needs the outputs, and a run that
     dies between them must leave last_phase at 2 on disk."""
+    if ctx.from_phase > 2:
+        print("[2/7] Skipped (resume) — not re-running terraform apply.")
+        return
     # --- M4: engine template lifecycle (build once per competition, reuse
     # across its test runs; rebuild only on config drift and never when frozen).
     main_tf_text = Path("terraform/main.tf").read_text()
@@ -244,6 +250,9 @@ def phase2_engine_template(ctx):
 
 def phase3_prepare_engine(ctx):
     """[3/7] Apply this deploy's per-competition state to the engine clone."""
+    if ctx.from_phase > 3:
+        print("[3/7] Skipped (resume).")
+        return
     # M4: the deployed engine is a linked clone of the engine template — the
     # heavy bootstrap ran once on the template build VM. Per-deploy state is
     # applied fresh here: .env (BEFORE compose up, so the fresh postgres volume
@@ -289,6 +298,9 @@ def phase4_golden_set(ctx):
     summary shows the plant and the linked-clone burst separately. The [4/7] and
     [4b/7] banners stay distinct because operators (and incident logs) key on
     them."""
+    if ctx.from_phase > 4:
+        print("[4/7] Skipped (resume).")
+        return
 
     print("[4/7] Building the golden set (plant once per box type, convert to template)...")
     # M4 hash gate: a converted golden whose stored hash differs is rebuilt —
@@ -417,6 +429,9 @@ def phase5_repair_sweep(ctx):
     Re-runnable by design: the .postclone-swept marker makes a resume skip the
     whole sweep, and the nakon pass itself is strict=False (see the comment at the
     call) because one flaky plant must not kill a sweep that 98% landed."""
+    if ctx.from_phase > 5:
+        print("[5/7] Skipped (resume).")
+        return
     swept_marker = ctx.comp_dir / ".postclone-swept"
     if swept_marker.exists():
         print("[5/7] Resume marker present — post-clone sweep already done; skipping")
@@ -469,6 +484,9 @@ def phase6_domains_and_final(ctx):
     brick a member box's domain-join reboot. From the final pass on, the boxes are
     in their as-started competition flavor — nothing downstream reboots them or
     needs apt/DNS."""
+    if ctx.from_phase > 6:
+        print("[6/7] Skipped (resume).")
+        return
     print("  Configuring Windows AD domains (if any)...")
     with timed(ctx.comp_dir, 6, "domains"):
         deploy_domain_configs(ctx.teams, ctx.boxes, ctx.comp_dir, ctx.nakon_config_path,
@@ -517,6 +535,9 @@ def phase7_seed(ctx):
     flag: a resume in the crash window between a POST and the flag-save must not
     repeat it. The unpause window is the one that asks the engine first
     (engine_paused) because a re-POST there is the visible failure mode."""
+    if ctx.from_phase > 7:
+        print("[7/7] Skipped (resume).")
+        return
     print("[7/7] Seeding competition and creating injects...")
 
     with timed(ctx.comp_dir, 7, "wait_quotient_http"):
@@ -565,3 +586,78 @@ def phase7_seed(ctx):
             ctx.save_state()
     elif ctx.injects:
         print("  Injects already created (resume) — skipping.")
+
+
+def connect_terraform(ctx):
+    """Read terraform's outputs into the context (the SSH/engine coordinates).
+
+    Deliberately between phase 2 and phase 3, and deliberately outside every
+    phase's from_phase guard: a fresh run only has these outputs after apply #1,
+    and a resume from phase 3+ never runs the apply at all. A failure here must
+    be reported as the phase the operator asked to resume at, which is why the
+    sequencer does not set current_phase for it."""
+    ctx.tf_ctx = read_terraform_ctx(ctx.comp_dir)
+    ctx.ssh_key = Path(ctx.tf_ctx["ssh_key_path"])
+    ctx.scoring_user = os.environ["TF_VAR_vm_username"]
+    ctx.scoring_ip = ctx.tf_ctx["scoring_engine_ip"]
+
+
+def finish_deploy(ctx):
+    """Write credentials.txt, the timing summary, and the "is live" report.
+
+    The last thing deploy() does, and the only place the generated secrets are
+    printed: the operator/packet-facing credentials file gets the same
+    0600-at-creation rule as teams.json and .deploy_state.json."""
+    cred_lines = [
+        f"# Credentials for {ctx.name} — generated {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Scoreboard:  http://{ctx.scoring_ip}",
+        f"admin  {ctx.admin_password}",
+    ]
+    if ctx.packet_pw:
+        cred_lines.append("# box credentials below are the packet-published defaults "
+                          "(passwords.json) — teams rotate them at minute zero")
+    if ctx.inject_password:
+        cred_lines.append(f"inject  {ctx.inject_password}")
+    for team_name, team_data in ctx.teams.items():
+        cred_lines.append(f"{team_name}  {team_data['password']}  (192.168.{team_data['identifier']}.0/24)")
+    cred_lines.append(f"box-login ({ctx.box_username})  {ctx.box_password}")
+    for user, pw in ctx.box_creds.items():
+        cred_lines.append(f"box-credlist-{user}  {pw}")
+    for user, pw in (ctx.domain_creds or {}).items():
+        cred_lines.append(f"box-credlist-domain-{user}  {pw}")
+    cred_path = ctx.comp_dir / "credentials.txt"
+    # The operator/packet-facing credential file — same 0600-at-creation rule.
+    write_text_atomic(cred_path, "\n".join(cred_lines) + "\n")
+
+    print_timing_summary(ctx.comp_dir)
+
+    print(f"\n{'='*60}")
+    print(f"  {ctx.name} is live")
+    print(f"{'='*60}")
+    print(f"Scenario: {ctx.scenario}")
+    print(f"Saved to: competitions/{ctx.comp_name}/  (credentials.txt, mode 0600)")
+    print(f"\nScoreboard:    http://{ctx.scoring_ip}")
+    print(f"Admin login:   admin / {ctx.admin_password}")
+    if ctx.inject_password:
+        print(f"Inject login:  inject / {ctx.inject_password}   ({len(ctx.injects)} inject(s) loaded)")
+    print("\nTeam logins:")
+    for team_name, team_data in ctx.teams.items():
+        print(f"  {team_name} / {team_data['password']}  (subnet 192.168.{team_data['identifier']}.0/24)")
+    print(f"\nBox login:     {ctx.box_username} / {ctx.box_password}  (every team box)")
+    print("Box credlist:  " + ", ".join(f"{u}/{p}" for u, p in ctx.box_creds.items()))
+    print(f"\nScoring engine SSH: ssh -i {ctx.ssh_key} {ctx.scoring_user}@{ctx.scoring_ip}")
+    print(f"{'='*60}")
+
+
+# The pipeline, in order. deploy() walks this with enumerate(..., 1) so a phase's
+# index IS its [N/7] number and its checkpoint value; each function prints its own
+# "[N/7] Skipped (resume)" banner when from_phase has already passed it.
+PHASES = (
+    phase1_cleanup,
+    phase2_engine_template,
+    phase3_prepare_engine,
+    phase4_golden_set,
+    phase5_repair_sweep,
+    phase6_domains_and_final,
+    phase7_seed,
+)

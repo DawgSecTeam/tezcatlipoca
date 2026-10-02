@@ -4,7 +4,6 @@ import fcntl
 import json
 import os
 import sys
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -45,7 +44,6 @@ from nodes_ops import (activate_placement, golden_vmid_for_slot, resolve_placeme
                        satellite_routes_for, satellite_tfvars)
 from range_ops import (destroy_vm_if_exists, ensure_terraform_workdir, enumerate_targets,
                        persist_targets)
-from ssh_ops import read_terraform_ctx
 from template_ops import (
     code_hash,
     engine_template_vmid,
@@ -57,7 +55,6 @@ from template_ops import (
     hash_from_inputs,
     stored_template_hash,
 )
-from timing import print_timing_summary
 from utils import (compfile_flag, is_unmanaged, load_compfile, load_users_config,
                    valid_comp_name)
 from windows_ops import is_windows_template
@@ -869,10 +866,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     # for the pure phase helpers and the globals the offline tests monkeypatch, so a
     # module-level import would be circular (and `python3 deploy.py` would trip over a
     # partially-initialised deploy_phases).
-    from deploy_phases import (phase1_cleanup, phase2_engine_template,
-                           phase3_prepare_engine, phase4_golden_set,
-                           phase5_repair_sweep, phase6_domains_and_final,
-                           phase7_seed)
+    from deploy_phases import PHASES, connect_terraform, finish_deploy
 
     # One driver per competition. Two concurrent deploys share the engine's
     # /opt/nakon staging dir and each one's 'rm -rf /opt/nakon/*' wipes the
@@ -899,60 +893,25 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 
     current_phase = max(ctx.from_phase, 1)
     try:
-        if ctx.from_phase <= 1:
-            current_phase = 1
-            phase1_cleanup(ctx)
-            ctx.checkpoint(1)
-        else:
-            print("[1/7] Skipped (resume) — leaving existing VMs/bridges in place.")
-
-        if ctx.from_phase <= 2:
-            current_phase = 2
-            phase2_engine_template(ctx)
-            ctx.checkpoint(2)
-        else:
-            print("[2/7] Skipped (resume) — not re-running terraform apply.")
-
-        tf_ctx = read_terraform_ctx(ctx.comp_dir)
-        ctx.tf_ctx = tf_ctx
-        ctx.ssh_key = Path(tf_ctx["ssh_key_path"])
-        ctx.scoring_user = os.environ["TF_VAR_vm_username"]
-        ctx.scoring_ip = tf_ctx["scoring_engine_ip"]
-
-        if ctx.from_phase <= 3:
-            current_phase = 3
-            phase3_prepare_engine(ctx)
-            ctx.checkpoint(3)
-        else:
-            print("[3/7] Skipped (resume).")
-
-        if ctx.from_phase <= 4:
-            current_phase = 4
-            phase4_golden_set(ctx)
-            ctx.checkpoint(4)
-        else:
-            print("[4/7] Skipped (resume).")
-
-        if ctx.from_phase <= 5:
-            current_phase = 5
-            phase5_repair_sweep(ctx)
-            ctx.checkpoint(5)
-        else:
-            print("[5/7] Skipped (resume).")
-
-        if ctx.from_phase <= 6:
-            current_phase = 6
-            phase6_domains_and_final(ctx)
-            ctx.checkpoint(6)
-        else:
-            print("[6/7] Skipped (resume).")
-
-        if ctx.from_phase <= 7:
-            current_phase = 7
-            phase7_seed(ctx)
-            ctx.checkpoint(7)
-        else:
-            print("[7/7] Skipped (resume).")
+        for n, phase in enumerate(PHASES, 1):
+            # Every phase is CALLED so it can print its own "[N/7] Skipped (resume)"
+            # banner, but only a phase that actually ran may become the failure's
+            # phase or write last_phase: checkpointing a skipped phase would move the
+            # resume guard's answer forward for a phase this run never executed.
+            running = ctx.from_phase <= n
+            if running:
+                current_phase = n
+            phase(ctx)
+            if running:
+                ctx.checkpoint(n)
+            if n == 2:
+                # The terraform/SSH context is read once, exactly where the inline
+                # code read it: after phase 2's checkpoint, before phase 3. A fresh
+                # run only has terraform's outputs after apply #1; a --from-phase 3+
+                # resume skips the apply but still needs them. Outside the `running`
+                # gate on purpose, so a failure here reports the phase the operator
+                # asked to resume at rather than phase 2.
+                connect_terraform(ctx)
     except BaseException as e:
         print(f"\n  [!] Deploy failed during phase {current_phase} of '{ctx.comp_name}'.")
         resume_phase = current_phase
@@ -965,45 +924,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
               f"--competition {ctx.comp_name} --from-phase {resume_phase} --yes")
         raise
 
-    cred_lines = [
-        f"# Credentials for {ctx.name} — generated {time.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"Scoreboard:  http://{ctx.scoring_ip}",
-        f"admin  {ctx.admin_password}",
-    ]
-    if ctx.packet_pw:
-        cred_lines.append("# box credentials below are the packet-published defaults "
-                          "(passwords.json) — teams rotate them at minute zero")
-    if ctx.inject_password:
-        cred_lines.append(f"inject  {ctx.inject_password}")
-    for team_name, team_data in ctx.teams.items():
-        cred_lines.append(f"{team_name}  {team_data['password']}  (192.168.{team_data['identifier']}.0/24)")
-    cred_lines.append(f"box-login ({ctx.box_username})  {ctx.box_password}")
-    for user, pw in ctx.box_creds.items():
-        cred_lines.append(f"box-credlist-{user}  {pw}")
-    for user, pw in (ctx.domain_creds or {}).items():
-        cred_lines.append(f"box-credlist-domain-{user}  {pw}")
-    cred_path = ctx.comp_dir / "credentials.txt"
-    # The operator/packet-facing credential file — same 0600-at-creation rule.
-    write_text_atomic(cred_path, "\n".join(cred_lines) + "\n")
-
-    print_timing_summary(ctx.comp_dir)
-
-    print(f"\n{'='*60}")
-    print(f"  {ctx.name} is live")
-    print(f"{'='*60}")
-    print(f"Scenario: {ctx.scenario}")
-    print(f"Saved to: competitions/{ctx.comp_name}/  (credentials.txt, mode 0600)")
-    print(f"\nScoreboard:    http://{ctx.scoring_ip}")
-    print(f"Admin login:   admin / {ctx.admin_password}")
-    if ctx.inject_password:
-        print(f"Inject login:  inject / {ctx.inject_password}   ({len(ctx.injects)} inject(s) loaded)")
-    print("\nTeam logins:")
-    for team_name, team_data in ctx.teams.items():
-        print(f"  {team_name} / {team_data['password']}  (subnet 192.168.{team_data['identifier']}.0/24)")
-    print(f"\nBox login:     {ctx.box_username} / {ctx.box_password}  (every team box)")
-    print("Box credlist:  " + ", ".join(f"{u}/{p}" for u, p in ctx.box_creds.items()))
-    print(f"\nScoring engine SSH: ssh -i {ctx.ssh_key} {ctx.scoring_user}@{ctx.scoring_ip}")
-    print(f"{'='*60}")
+    finish_deploy(ctx)
 
 
 def main():
