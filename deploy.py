@@ -782,12 +782,23 @@ def _generate_stage_configs_and_hashes(generated, comp_dir, spec, secrets):
         # likewise before any engine destruction. Code-only drift keeps the golden:
         # phase1_destroy_waves must not rebuild what the gate said to proceed on.
         frozen_hashes = (frozen.get("hashes") or {})
-        for spec.name in generated.golden_hashes:
-            stored_inputs = (frozen_hashes.get("golden") or {}).get(spec.name, {}).get("inputs") or {}
-            drift = golden_freeze_gate(spec.name, stored_inputs, generated.golden_inputs[spec.name],
+        # `box_name`, NOT `spec.name`: this loop used to read `for spec.name in
+        # generated.golden_hashes`, which assigned each golden box name onto the spec
+        # and left the LAST box there. On any FROZEN competition that clobbered
+        # spec.name (the Compfile event name) before its later uses, so terraform's
+        # `event_name` — and therefore `local.comp_tag`, the ownership tag on the engine
+        # and every team box — became "comp-web01" instead of "comp-<competition>".
+        # Phase 1's destroy compares against `comp-<competition>`, fails its
+        # `comp_tags <= tags` ownership check, and REFUSES to reclaim the range's own
+        # VMs; confirm_deploy also showed the wrong name. Fail-safe rather than
+        # destructive, but it strands infrastructure and the next deploy collides on
+        # those vmids.
+        for box_name in generated.golden_hashes:
+            stored_inputs = (frozen_hashes.get("golden") or {}).get(box_name, {}).get("inputs") or {}
+            drift = golden_freeze_gate(box_name, stored_inputs, generated.golden_inputs[box_name],
                                        frozen.get("frozen_at"), golden_bundle)
             if drift["code"]:
-                generated.frozen_keep.add(spec.name)
+                generated.frozen_keep.add(box_name)
 
 
 def _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity, place, from_phase):
