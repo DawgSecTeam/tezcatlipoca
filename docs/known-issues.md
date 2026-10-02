@@ -42,12 +42,15 @@ to confirm a fresh round.
 
 **Next action:** an engine-side watchdog that issues the same POSTs when the stale signature appears
 (same pattern as the live `range-firewall.timer`), so a reboot — including the owner-confirmed .193
-hard-downs — heals without an operator. **Its one blocker is gone (2026-10-02):** a watchdog could not
-simply log in, because Quotient allows one session per account and the login would evict whichever
-operator, `verify-competition` or harness session held `admin`. Every competition now seeds a
-**separate `scoring` admin account** for exactly this (`event.conf`'s `admin` list; per-competition
-password in `credentials.txt`), so the watchdog authenticates on its own account and cannot disturb a
-human or harness session. Remaining work is the timer itself.
+hard-downs — heals without an operator. **Automation implemented 2026-10-02, opt-in and not yet trialled live:** the blocker was that a
+watchdog could not simply log in — Quotient allows one session per account, so the login would evict
+whichever operator, `verify-competition` or harness session held `admin`. Every competition now seeds
+a **separate `scoring` admin account** for exactly this (`event.conf`'s `admin` list; per-competition
+password in `credentials.txt`), and `round_loop.py` holds the one definition of "the loop is
+stopped" — shared with verify's gate so the two cannot disagree. The actor is
+`tools/round_loop_guard.py`, installed on the engine as a 60s timer when the Compfile sets
+**`round_loop_guard 1`** (default off). **Remaining:** run it on a live range — kill the loop
+deliberately, watch the timer heal it, and only then consider it done.
 
 ### Fedora goldens cannot be built on SELinux-enforcing nodes
 

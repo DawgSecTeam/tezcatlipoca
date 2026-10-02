@@ -36,7 +36,8 @@ from domain_ops import deploy_domain_configs
 from constants import (DEFAULT_ENGINE_MGMT_GW, PER_MACHINE_NAKON_BUDGET,
                        SNAP_BASE, SNAP_READY)
 from engine_ops import (bootstrap_scoring_engine, ensure_nat_forwarding,
-                        prepare_engine_from_template, push_event_conf)
+                        install_round_loop_guard, prepare_engine_from_template,
+                        push_event_conf)
 from golden_ops import (_is_template, _quote_sshkeys, _template_vmid_map,
                         build_golden_set)
 from hardening_ops import (ensure_alpine_services, fix_dns_on_boxes,
@@ -315,6 +316,15 @@ def phase3_prepare_engine(ctx):
                         box_creds=ctx.box_creds,
                         extra_credlists=({"domain": ctx.domain_creds}
                                          if ctx.domain_creds else None))
+
+    # Opt-in (Compfile `round_loop_guard 1`). After an engine reboot the containers come
+    # back but the round loop does not, and the scoreboard freezes while everything that
+    # reads it keeps working. Off by default: it is an unattended actor on a live engine,
+    # and the account it logs in as only exists from this deploy onward.
+    if compfile_flag(ctx.comp_dir / "Compfile", "round_loop_guard", 0) and ctx.scoring_password:
+        with timed(ctx.comp_dir, 3, "round_loop_guard"):
+            install_round_loop_guard(ctx.tf_ctx, ctx.comp_dir, ctx.scoring_password)
+
     ensure_nat_forwarding(ctx.tf_ctx)
 
 
