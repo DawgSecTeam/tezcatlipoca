@@ -30,7 +30,8 @@ from pathlib import Path
 import deploy
 from config_ops import destroy_bridge_if_exists, write_text_atomic
 from constants import DEFAULT_ENGINE_MGMT_GW
-from engine_ops import bootstrap_scoring_engine
+from engine_ops import (bootstrap_scoring_engine, ensure_nat_forwarding,
+                        prepare_engine_from_template, push_event_conf)
 from golden_ops import _is_template, _quote_sshkeys
 from jump_ops import build_jump_vms
 from nodes_ops import record_of
@@ -222,3 +223,25 @@ def phase2_engine_template(ctx):
             verify_satellite_routing(ctx.placement, apply_ctx)
     # Record where this state's resources live, for the stale-state guard above.
     ctx.state["deployed_endpoint"] = os.environ.get("TF_VAR_proxmox_endpoint", "").rstrip("/")
+
+
+def phase3_prepare_engine(ctx):
+    """[3/7] Apply this deploy's per-competition state to the engine clone."""
+    # M4: the deployed engine is a linked clone of the engine template — the
+    # heavy bootstrap ran once on the template build VM. Per-deploy state is
+    # applied fresh here: .env (BEFORE compose up, so the fresh postgres volume
+    # initializes with this competition's credentials), fresh-volume compose up
+    # (an empty scoring DB every run), and the cacher check.
+    print("[3/7] Preparing scoring engine from template (fresh volumes, event.conf)...")
+    with timed(ctx.comp_dir, 3, "engine_from_template"):
+        prepare_engine_from_template(ctx.tf_ctx, ctx.postgres_password, ctx.redis_password)
+
+    print("  Pushing event.conf early (stabilizes Quotient so NAT survives nakon)...")
+    with timed(ctx.comp_dir, 3, "push_event_conf"):
+        push_event_conf(ctx.comp_dir, ctx.teams, ctx.boxes, ctx.tf_ctx, ctx.name,
+                        inject_password=ctx.inject_password, admin_password=ctx.admin_password,
+                        postgres_password=ctx.postgres_password, redis_password=ctx.redis_password,
+                        box_creds=ctx.box_creds,
+                        extra_credlists=({"domain": ctx.domain_creds}
+                                         if ctx.domain_creds else None))
+    ensure_nat_forwarding(ctx.tf_ctx)

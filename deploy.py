@@ -43,8 +43,7 @@ from constants import (
     SNAP_READY,
 )
 from domain_ops import deploy_domain_configs
-from engine_ops import (ensure_nat_forwarding, prepare_engine_from_template,
-                        push_event_conf)
+from engine_ops import ensure_nat_forwarding
 from golden_ops import (_is_template, _template_vmid_map, build_golden_set,
                         unbooted_golden_boxes)
 from hardening_ops import (_APT_PREP_BODY, _apt_prep_script, ensure_alpine_services,
@@ -909,7 +908,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     # for the pure phase helpers and the globals the offline tests monkeypatch, so a
     # module-level import would be circular (and `python3 deploy.py` would trip over a
     # partially-initialised deploy_phases).
-    from deploy_phases import phase1_cleanup, phase2_engine_template
+    from deploy_phases import (phase1_cleanup, phase2_engine_template,
+                           phase3_prepare_engine)
 
     # One driver per competition. Two concurrent deploys share the engine's
     # /opt/nakon staging dir and each one's 'rm -rf /opt/nakon/*' wipes the
@@ -958,24 +958,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 
         if ctx.from_phase <= 3:
             current_phase = 3
-            # M4: the deployed engine is a linked clone of the engine template — the
-            # heavy bootstrap ran once on the template build VM. Per-deploy state is
-            # applied fresh here: .env (BEFORE compose up, so the fresh postgres volume
-            # initializes with this competition's credentials), fresh-volume compose up
-            # (an empty scoring DB every run), and the cacher check.
-            print("[3/7] Preparing scoring engine from template (fresh volumes, event.conf)...")
-            with timed(ctx.comp_dir, 3, "engine_from_template"):
-                prepare_engine_from_template(ctx.tf_ctx, ctx.postgres_password, ctx.redis_password)
-
-            print("  Pushing event.conf early (stabilizes Quotient so NAT survives nakon)...")
-            with timed(ctx.comp_dir, 3, "push_event_conf"):
-                push_event_conf(ctx.comp_dir, ctx.teams, ctx.boxes, ctx.tf_ctx, ctx.name,
-                                inject_password=ctx.inject_password, admin_password=ctx.admin_password,
-                                postgres_password=ctx.postgres_password, redis_password=ctx.redis_password,
-                                box_creds=ctx.box_creds,
-                                extra_credlists=({"domain": ctx.domain_creds}
-                                                 if ctx.domain_creds else None))
-            ensure_nat_forwarding(ctx.tf_ctx)
+            phase3_prepare_engine(ctx)
             ctx.checkpoint(3)
         else:
             print("[3/7] Skipped (resume).")
