@@ -7,6 +7,8 @@
 .env.*
 !.env.example
 .tez-backups/
+# Per-stream git worktrees used for parallel development/merges
+.worktrees/
 venv/
 terraform/terraform.tfvars
 terraform/.terraform/
