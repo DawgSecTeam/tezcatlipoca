@@ -93,6 +93,20 @@ def _config_name(c):
     return c if isinstance(c, str) else c["name"]
 
 
+def _pin_key(c):
+    """Identity of one pin for dedup: (config name, canonical vars).
+
+    Same-named pins with different vars are DIFFERENT plants — box_baseline.json
+    emits 3+ same-named local-user/local-user-win decoy accounts per box, and a cold
+    box's otherwise golden-stage configs ride the repair stage into the same combined
+    list. Keying on the name alone silently collapsed them (audit-found 2026-10-02:
+    .nakon-postclone.json — what redeploy's convergence sweep deploys and verify
+    --packet probes — kept 2 of the 4 decoy/plant pins, so a rollback-base sweep
+    stopped re-planting packet-promised accounts)."""
+    return (_config_name(c),
+            json.dumps(c.get("vars") or {}, sort_keys=True) if isinstance(c, dict) else "")
+
+
 def _cross_box_ip(machines, machine_name, target_box):
     """Same team's copy of target_box's IP, for REQUIRED_VARS "ip:<box>" vars."""
     _, _, identifier = machine_name.rpartition("-team")
@@ -108,6 +122,24 @@ def _cross_box_ip(machines, machine_name, target_box):
 
 def _is_identity_kind(kind):
     return str(kind) == "ip" or str(kind).startswith("ip:")
+
+
+def _identity_banned_configs():
+    """Config names whose REQUIRED_VARS carry any identity-dependent kind.
+
+    The single source of truth for BOTH golden paths — slot 0 (generate_stage_configs)
+    and every satellite (generate_slot_golden_config). A config whose var is the
+    machine's own address ("ip") or a same-team box's address ("ip:<box>") writes that
+    address into the disk, so riding a golden bakes the golden's address into every
+    linked clone. _golden_stage_machines consults this directly; the two public paths
+    can no longer disagree. audit-found 2026-10-02: the satellite path tested
+    `"ip" in kinds.values()`, so a cross-box-only ("ip:<box>") config escaped the ban
+    while _fill_identity_vars had already baked team1's database IP into the pin —
+    every clone on that satellite would have pointed at team1's database. It was
+    masked only because every current "ip:<box>" config also happens to be in
+    REPAIR_STAGE_CONFIGS."""
+    return {name for name, kinds in REQUIRED_VARS.items()
+            if any(_is_identity_kind(kind) for kind in kinds.values())}
 
 
 def _fill_identity_vars(machine, machines):
@@ -438,12 +470,15 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
     return config_path
 
 
-def _golden_stage_machines(full, boxes, unbooted, anchor_identifier, box_index_by_name,
-                           identity_banned):
+def _golden_stage_machines(full, unbooted, anchor_identifier, box_index_by_name):
     """One machine per box type at the anchor subnet's golden IP. The anchor is
     team1 for slot 0 (historical math) and the satellite's first local team for
     satellite slots — the golden must sit on a bridge that exists on the host
-    building it, with that node's jump routing the engine's plant there."""
+    building it, with that node's jump routing the engine's plant there.
+
+    The identity ban is computed here, not passed in, so slot 0 and every satellite
+    share one definition (_identity_banned_configs) and cannot drift apart."""
+    identity_banned = _identity_banned_configs()
     seen_types = set()
     golden_machines = []
     for m in full:
@@ -473,23 +508,22 @@ def _golden_stage_machines(full, boxes, unbooted, anchor_identifier, box_index_b
     return golden_machines
 
 
-def generate_slot_golden_config(comp_dir, teams, boxes, unbooted, anchor_identifier, slot):
+def generate_slot_golden_config(comp_dir, boxes, unbooted, anchor_identifier, slot):
     """The satellite slot's golden-stage config: identical planted content to slot 0
     (per-box golden hashes stay identical across slots), different transport IPs —
     the anchor team's subnet, reachable from the engine via the jump. Returns the
     path (0600, per-run-secret class)."""
     full = json.loads((comp_dir / "nakon-config.json").read_text())["machines"]
-    identity_banned = {name for name, kinds in REQUIRED_VARS.items() if "ip" in kinds.values()}
     box_index_by_name = {b["name"]: i for i, b in enumerate(boxes)}
-    machines = _golden_stage_machines(full, boxes, unbooted, anchor_identifier,
-                                      box_index_by_name, identity_banned)
+    machines = _golden_stage_machines(full, unbooted, anchor_identifier,
+                                      box_index_by_name)
     path = comp_dir / f".nakon-golden-slot{slot}.json"
     path.write_text(json.dumps({"machines": machines}, indent=2))
     os.chmod(path, 0o600)
     return path
 
 
-def generate_stage_configs(comp_dir, teams, boxes, box_username="ubuntu", unbooted=frozenset()):
+def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
     """Split the full nakon config into golden / repair / final stage configs (M3.2).
 
     nakon-config.json (all teams, full configuration lists) stays the source of truth.
@@ -514,15 +548,14 @@ def generate_stage_configs(comp_dir, teams, boxes, box_username="ubuntu", unboot
     def config_name(c):
         return c if isinstance(c, str) else c["name"]
 
-    # Identity-dependent configs (REQUIRED_VARS "ip" kind) write the machine's own
+    # Identity-dependent configs (REQUIRED_VARS "ip"/"ip:<box>" kinds) write an
     # address into the disk. Planted on the golden they would bake the golden's IP
-    # into every linked clone, so generate refuses them there and fills them per
-    # machine in the repair/final stages instead.
-    identity_banned = {name for name, kinds in REQUIRED_VARS.items()
-                       if any(_is_identity_kind(kind) for kind in kinds.values())}
+    # into every linked clone, so _golden_stage_machines refuses them there and the
+    # repair/final stages fill them per machine instead (see
+    # _identity_banned_configs for why this is one shared definition).
 
-    golden_machines = _golden_stage_machines(full, boxes, unbooted, team1_identifier,
-                                             box_index_by_name, identity_banned)
+    golden_machines = _golden_stage_machines(full, unbooted, team1_identifier,
+                                             box_index_by_name)
 
     def stage_machines(want, include_golden_stage=False):
         out = []
@@ -555,12 +588,19 @@ def generate_stage_configs(comp_dir, teams, boxes, box_username="ubuntu", unboot
 
     repair_machines = stage_machines(REPAIR_STAGE_CONFIGS, include_golden_stage=True)
     final_machines = stage_machines(FINAL_STAGE_CONFIGS)
+    # Merge repair ∪ final per machine, deduping on the pin's full identity
+    # (_pin_key: name + vars) rather than its name alone — a name-only collapse drops
+    # packet-promised same-named decoy accounts (audit-found 2026-10-02).
     combined = {}
     for m in repair_machines + final_machines:
         entry = combined.setdefault(m["name"], {**m, "configurations": []})
-        entry["configurations"].extend(
-            c for c in m["configurations"]
-            if config_name(c) not in {config_name(x) for x in entry["configurations"]})
+        seen = {_pin_key(c) for c in entry["configurations"]}
+        for c in m["configurations"]:
+            key = _pin_key(c)
+            if key in seen:
+                continue
+            seen.add(key)
+            entry["configurations"].append(c)
     postclone_machines = sorted(combined.values(), key=lambda m: m["name"])
 
     written = []
