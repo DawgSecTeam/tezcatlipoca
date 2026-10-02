@@ -27,7 +27,7 @@ from domain_ops import team_domain
 from range_ops import guest_agent_exec_root, guest_agent_exec_windows, vm_id_for
 from quotient.setup import expected_service_names
 from ssh_ops import engine_ssh_opts, gateway_proxy
-from utils import BOX_USERNAME_DEFAULT, load_users_config
+from utils import BOX_USERNAME_DEFAULT, MAX_CONCURRENCY, PRINT_LOCK, load_users_config, run_concurrent
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -115,6 +115,28 @@ def _skip(name, detail="", gating=True, label=""):
 def _bool_gate(name, ok, detail="", gating=True, label=""):
     """Wrap a plain bool check (no SKIP outcome) as a GateResult."""
     return GateResult(name, Status.PASS if ok else Status.FAIL, detail, gating, label)
+
+
+class RunBudget:
+    """Optional whole-run wall-clock budget for --timeout (default: disabled).
+
+    Additive, not a re-gate: with --timeout absent every query says `expired()` is
+    False, so the run is byte-for-byte what it was before. Deliberately cooperative —
+    it is checked BETWEEN gates, never mid-flight, so it can never kill an ssh or
+    interrupt a Proxmox task half-done (a half-deleted snapshot or half-converted
+    golden is worse than a slow verify); worst-case overshoot is the one gate already
+    running. A gate that never ran is recorded SKIP_UNAVAILABLE — deliberately
+    non-passing — so a budget can bound a verify but can never turn an unevaluated
+    range into a PASS; --allow-unverified is the explicit waiver.
+    """
+
+    def __init__(self, seconds):
+        self.seconds = int(seconds or 0)
+        self.deadline = time.monotonic() + self.seconds if self.seconds > 0 else None
+        self.label = f"--timeout {self.seconds}s"
+
+    def expired(self):
+        return self.deadline is not None and time.monotonic() >= self.deadline
 
 
 # Round cadence: quotient/setup.py build_event_conf's MiscSettings.Delay. Used as
@@ -1004,27 +1026,46 @@ def check_misconfig(ctx, boxes, comp_dir):
 
 
 def report_beacons(ctx, machines):
-    """Report planted raw-socket beacons (informational, not a gate)."""
+    """Report planted raw-socket beacons (informational, not a gate).
+
+    One SSH per Linux box, 30s timeout each; a 4-team x 5-box range is ~20 boxes, i.e.
+    up to 10 minutes of sequential waiting for an informational line. The boxes are
+    independent and the hop is the engine's ControlMaster-multiplexed channel
+    (MaxSessions raised to 64 — utils.run_concurrent's docstring), so it runs on the
+    full MAX_CONCURRENCY pool: pure SSH, no Proxmox task, no datastore write. Prints
+    stay in the workers under PRINT_LOCK (house pattern: domain_ops/hardening_ops);
+    only the informational line order can vary, never a verdict.
+    """
     print("\n  (team beacons — informational)")
-    expected = live = 0
-    for m in machines or []:
-        if "win" in (m.get("os") or "").lower():
-            continue
-        expected += 1
+    linux = [m for m in machines or [] if "win" not in (m.get("os") or "").lower()]
+    expected = len(linux)
+
+    def _probe(m):
         ip = m.get("ip")
         name = m.get("name", ip)
         try:
             proc = ssh_via_gateway(
                 ctx, ip, "systemctl is-active wda-digest.service 2>/dev/null || true", timeout=30)
         except (subprocess.TimeoutExpired, CheckError) as e:
-            print(f"  WARN  {name} ({ip}): unreachable ({e})")
-            continue
+            with PRINT_LOCK:
+                print(f"  WARN  {name} ({ip}): unreachable ({e})")
+            return False
         state = (proc.stdout or "").strip()
         if state == "active":
-            live += 1
-            print(f"  LIVE  {name} ({ip}) — wda-digest.service active")
-        else:
+            with PRINT_LOCK:
+                print(f"  LIVE  {name} ({ip}) — wda-digest.service active")
+            return True
+        with PRINT_LOCK:
             print(f"  ....  {name} ({ip}) — no beacon unit running ({state or 'none'})")
+        return False
+
+    results = run_concurrent(linux, _probe, max_workers=MAX_CONCURRENCY)
+    for r in results:
+        # The serial loop only caught TimeoutExpired/CheckError; anything else escaped,
+        # and run_concurrent's slot now holds it, so it must escape here too.
+        if isinstance(r, Exception):
+            raise r
+    live = sum(1 for r in results if r is True)
     print(f"  beacons live: {live}/{expected} linux boxes")
 
 
@@ -1056,22 +1097,52 @@ def check_misconfig_survival(ctx, boxes):
 
     all_ok = True
     any_unverified = False
+    # Work units in the serial order: groups -> configs -> machines. Each unit is one
+    # independent 60s SSH probe, so a groups x configs x machines loop is minutes of
+    # sequential waiting. The probes run on the full MAX_CONCURRENCY pool (pure SSH over
+    # the ControlMaster channel, no Proxmox task), and the present/absent/unknown
+    # classification is aggregated BACK IN SERIAL ORDER below, so every verdict AND
+    # every printed line (present on {present} but MISSING on {absent}) is unchanged.
+
+    def _probe(unit):
+        config, m = unit
+        cmd, predicate = MISCONFIG_CHECKS[config]
+        try:
+            proc = ssh_via_gateway(ctx, m["ip"], cmd)
+        except (subprocess.TimeoutExpired, CheckError):
+            return "unknown"
+        if proc.returncode != 0:
+            return "unknown"
+        return "present" if predicate(proc.stdout) else "absent"
+
+    # The serial loop ran (config, machine) pairs in this exact order; the pool keeps
+    # that order in its result list, so walk the same nesting and consume in step.
+    ordered = [(config, m) for configs, machines in multi_team_groups
+               for config in [c for c in configs if c in MISCONFIG_CHECKS]
+               for m in machines]
+    probe_results = iter(run_concurrent(ordered, _probe, max_workers=MAX_CONCURRENCY))
+
+    def _outcome():
+        r = next(probe_results)
+        # The serial loop only caught TimeoutExpired/CheckError; any other exception
+        # escaped check_misconfig_survival, so a non-caught slot must raise here.
+        if isinstance(r, Exception):
+            raise r
+        return r
+
     for configs, machines in multi_team_groups:
         verifiable = [c for c in configs if c in MISCONFIG_CHECKS]
         for config in verifiable:
-            cmd, predicate = MISCONFIG_CHECKS[config]
             present, absent, unknown = [], [], []
             for m in machines:
                 name = m.get("name", m["ip"])
-                try:
-                    proc = ssh_via_gateway(ctx, m["ip"], cmd)
-                except (subprocess.TimeoutExpired, CheckError):
+                outcome = _outcome()
+                if outcome == "present":
+                    present.append(name)
+                elif outcome == "absent":
+                    absent.append(name)
+                else:
                     unknown.append(name)
-                    continue
-                if proc.returncode != 0:
-                    unknown.append(name)
-                    continue
-                (present if predicate(proc.stdout) else absent).append(name)
             if present and absent:
                 all_ok = False
                 print(f"  FAIL  '{config}' present on {present} but MISSING on {absent} — "
@@ -1287,75 +1358,124 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
     dc_name = next((n for n, r in roles.items() if r == "dc"), None)
     ok = True
     domain_sids, machine_sids = {}, {}
+
+    # Work units in the serial loop's exact order (sorted teams, then `roles` order).
+    # Each unit is one independent per-VM probe: a Windows guest-agent call with a 120s
+    # timeout, or a Linux guest-agent call with a 60s timeout plus a 60s SSH fallback.
+    # For 4 teams x 5 boxes that was ~20 SEQUENTIAL probes — 3-10 minutes realistically
+    # and up to ~40 minutes in the all-timeout case, which is precisely the
+    # half-deployed range this gate exists to catch. Bound MAX_CONCURRENCY (8), not the
+    # per-box VM-work bound of 4: these are not Proxmox tasks (each VM has its own
+    # virtio-serial agent channel), and utils.run_concurrent's docstring pins 8 as the
+    # load-bounded cap that stays far under sshd's raised MaxSessions (64).
+    jobs = []
     for team_key, team in sorted(teams.items()):
         ident = team["identifier"]
         domain = team_domain(comp_dir, ident)
         for name, role in roles.items():
-            vmid = vm_id_for(ident, idx[name])
-            windows = "win" in (boxes[idx[name]].get("template") or "").lower()
+            jobs.append({
+                "team_key": team_key, "ident": ident, "domain": domain,
+                "name": name, "role": role,
+                "vmid": vm_id_for(ident, idx[name]),
+                "windows": "win" in (boxes[idx[name]].get("template") or "").lower(),
+            })
+
+    def _probe(job):
+        """One box's probe, returning an outcome instead of printing it.
+
+        The main thread then walks `jobs` in the serial order and aggregates, so every
+        verdict, every printed line, and (critically) the team order inside the
+        duplicate-DomainSID message stay exactly what the serial loop produced — the
+        2026-10-02 tri-state gate contract: same status, same message, same exit code.
+        """
+        team_key, name = job["team_key"], job["name"]
+        ident, domain = job["ident"], job["domain"]
+        if job["windows"]:
             try:
-                if windows:
-                    rc, out, err = guest_agent_exec_windows(node, vmid, _WIN_DOMAIN_PS, timeout=120)
-                    kv = _kv(out)
-                else:
-                    _realm_cmd = (f"realm list 2>/dev/null | grep -qi 'domain-name: *{domain}' "
-                                  f"&& echo JOINED=1 || echo JOINED=0")
-                    try:
-                        rc, out, err = guest_agent_exec_root(node, vmid, _realm_cmd, timeout=60)
-                        kv = _kv(out)
-                    except Exception as agent_err:
-                        # The PVE agent channel has a per-instance exec breaker that can
-                        # stay tripped (amongus-cde 2026-09-30: airship's failed join
-                        # probes tripped it permanently). Linux boxes are still reachable
-                        # over gateway SSH — fall back to it before failing the gate.
-                        try:
-                            box_ip = f"192.168.{ident}.{boxes[idx[name]]['last_octet']}"
-                            proc = ssh_via_gateway(ctx or {"ssh_key_path": str(resolve_ssh_key())},
-                                                   box_ip, _realm_cmd, timeout=60)
-                            kv = _kv(proc.stdout)
-                            if kv.get("JOINED") is None:
-                                raise CheckError(f"unparseable realm probe: {proc.stdout[:80]}")
-                            print(f"  INFO  {team_key}/{name}: agent channel unavailable, "
-                                  f"probed over gateway SSH")
-                        except Exception as ssh_err:
-                            print(f"  FAIL  {team_key}/{name}: guest-agent probe failed "
-                                  f"({str(agent_err)[:80]}) and gateway-SSH fallback failed "
-                                  f"({str(ssh_err)[:60]})")
-                            ok = False
-                            continue
+                _rc, out, err = guest_agent_exec_windows(node, job["vmid"], _WIN_DOMAIN_PS,
+                                                         timeout=120)
+                return {"kv": _kv(out), "err": err or "", "info": [], "fail": ""}
             except Exception as e:
-                print(f"  FAIL  {team_key}/{name}: guest-agent probe failed ({str(e)[:80]})")
+                return {"kv": None, "err": "", "info": [],
+                        "fail": f"  FAIL  {team_key}/{name}: guest-agent probe failed "
+                                f"({str(e)[:80]})"}
+        realm_cmd = (f"realm list 2>/dev/null | grep -qi 'domain-name: *{domain}' "
+                     f"&& echo JOINED=1 || echo JOINED=0")
+        try:
+            _rc, out, err = guest_agent_exec_root(node, job["vmid"], realm_cmd, timeout=60)
+            return {"kv": _kv(out), "err": err or "", "info": [], "fail": ""}
+        except Exception as agent_err:
+            # The PVE agent channel has a per-instance exec breaker that can stay
+            # tripped (amongus-cde 2026-09-30: airship's failed join probes tripped it
+            # permanently). Linux boxes are still reachable over gateway SSH — fall
+            # back to it before failing the gate.
+            try:
+                box_ip = f"192.168.{ident}.{boxes[idx[name]]['last_octet']}"
+                proc = ssh_via_gateway(ctx or {"ssh_key_path": str(resolve_ssh_key())},
+                                       box_ip, realm_cmd, timeout=60)
+                kv = _kv(proc.stdout)
+                if kv.get("JOINED") is None:
+                    raise CheckError(f"unparseable realm probe: {proc.stdout[:80]}")
+                return {"kv": kv, "err": "",
+                        "info": [f"  INFO  {team_key}/{name}: agent channel unavailable, "
+                                 f"probed over gateway SSH"],
+                        "fail": ""}
+            except Exception as ssh_err:
+                return {"kv": None, "err": "", "info": [],
+                        "fail": f"  FAIL  {team_key}/{name}: guest-agent probe failed "
+                                f"({str(agent_err)[:80]}) and gateway-SSH fallback failed "
+                                f"({str(ssh_err)[:60]})"}
+
+    probe_results = run_concurrent(jobs, _probe, max_workers=MAX_CONCURRENCY)
+
+    for job, outcome in zip(jobs, probe_results):
+        team_key, name, role = job["team_key"], job["name"], job["role"]
+        domain, windows = job["domain"], job["windows"]
+        if isinstance(outcome, Exception):
+            # Every probe-body exception was already caught below into a FAIL line;
+            # only something outside those handlers could escape, and it still does.
+            raise outcome
+        for line in outcome["info"]:
+            print(line)
+        if outcome["fail"]:
+            print(outcome["fail"])
+            ok = False
+            continue
+        # `err` is this box's own stderr. The serial loop could leak the PREVIOUS
+        # iteration's `err` into the DC detail line when the guest-agent call raised and
+        # the SSH fallback then succeeded (the tuple assignment never happened); that
+        # leak is not reproduced — it printed another box's stderr, and the verdict in
+        # that path is FAIL either way.
+        kv, err = outcome["kv"], outcome["err"]
+        if role == "dc":
+            if kv.get("ADERR") or kv.get("DNSROOT", "").lower() != domain:
+                print(f"  FAIL  {team_key}/{name}: DC not serving {domain} "
+                      f"({kv.get('ADERR') or kv.get('DNSROOT') or (err or '').strip()[:80]})")
                 ok = False
                 continue
-            if role == "dc":
-                if kv.get("ADERR") or kv.get("DNSROOT", "").lower() != domain:
-                    print(f"  FAIL  {team_key}/{name}: DC not serving {domain} "
-                          f"({kv.get('ADERR') or kv.get('DNSROOT') or (err or '').strip()[:80]})")
-                    ok = False
-                    continue
-                dsid = kv.get("DSID") or ""
-                if not _valid_domain_sid(dsid):
-                    print(f"  FAIL  {team_key}/{name}: {domain} reports no valid "
-                          f"DomainSID ({dsid or 'DSID missing'} — a promoted DC must "
-                          f"answer Get-ADDomain with an S-1-5-21-* SID)")
-                    ok = False
-                    continue
-                domain_sids.setdefault(dsid, []).append(team_key)
-                svc = kv.get("SVC", "").lower() == "true"
-                print(f"  {'PASS' if svc else 'FAIL'}  {team_key}/{name}: {domain} "
-                      f"DomainSID {dsid}; svc-support {'present' if svc else 'MISSING'}")
-                ok &= svc
-            elif windows:
-                joined = kv.get("PARTOF", "").lower() == "true" and kv.get("DOMAIN", "").lower() == domain
-                machine_sids.setdefault(kv.get("MSID"), []).append(f"{team_key}/{name}")
-                print(f"  {'PASS' if joined else 'FAIL'}  {team_key}/{name}: "
-                      f"{'joined' if joined else 'NOT joined'} to {domain}")
-                ok &= joined
-            else:
-                joined = kv.get("JOINED") == "1"
-                print(f"  {'PASS' if joined else 'FAIL'}  {team_key}/{name}: "
-                      f"{'realm-joined' if joined else 'NOT realm-joined'} to {domain}")
-                ok &= joined
+            dsid = kv.get("DSID") or ""
+            if not _valid_domain_sid(dsid):
+                print(f"  FAIL  {team_key}/{name}: {domain} reports no valid "
+                      f"DomainSID ({dsid or 'DSID missing'} — a promoted DC must "
+                      f"answer Get-ADDomain with an S-1-5-21-* SID)")
+                ok = False
+                continue
+            domain_sids.setdefault(dsid, []).append(team_key)
+            svc = kv.get("SVC", "").lower() == "true"
+            print(f"  {'PASS' if svc else 'FAIL'}  {team_key}/{name}: {domain} "
+                  f"DomainSID {dsid}; svc-support {'present' if svc else 'MISSING'}")
+            ok &= svc
+        elif windows:
+            joined = kv.get("PARTOF", "").lower() == "true" and kv.get("DOMAIN", "").lower() == domain
+            machine_sids.setdefault(kv.get("MSID"), []).append(f"{team_key}/{name}")
+            print(f"  {'PASS' if joined else 'FAIL'}  {team_key}/{name}: "
+                  f"{'joined' if joined else 'NOT joined'} to {domain}")
+            ok &= joined
+        else:
+            joined = kv.get("JOINED") == "1"
+            print(f"  {'PASS' if joined else 'FAIL'}  {team_key}/{name}: "
+                  f"{'realm-joined' if joined else 'NOT realm-joined'} to {domain}")
+            ok &= joined
     dupes = {sid: t for sid, t in domain_sids.items() if len(t) > 1}
     if dupes:
         for sid, t in dupes.items():
@@ -1596,9 +1716,20 @@ def main():
     parser.add_argument("--red-seg-ip", default=None,
                         help="red01's red-segment address for --red-identity "
                              "(default: ../bad-auto/config.yaml, else 10.200.0.10)")
+    parser.add_argument("--timeout", type=int, default=0, metavar="SECONDS",
+                        help="overall wall-clock budget for the gate run (default 0 = no "
+                             "budget). Checked BETWEEN gates, never mid-flight, so it "
+                             "never interrupts a Proxmox task; a gate that never ran is "
+                             "SKIP — deliberately non-passing — so a budget can bound the "
+                             "run but can never turn an unverified range into a PASS "
+                             "(waive with --allow-unverified <gate>).")
     args = parser.parse_args()
 
     load_dotenv(ENV_PATH)
+
+    # Starts before the terraform/ctx load so the budget covers the whole run; disabled
+    # (and therefore inert) at the default --timeout 0.
+    budget = RunBudget(args.timeout)
 
     comp_dir = Path(args.comp_dir).resolve()
     if not comp_dir.is_dir():
@@ -1632,10 +1763,26 @@ def main():
     # from this list (D6), so a gate's printed word can never disagree with its effect
     # on the verdict.
     results = []
-    logins_ok, admin_session = check_logins(base_url, teams, admin_password)
-    results.append(_bool_gate("logins", logins_ok))
+    # Only left None when logins itself was budget-skipped; every consumer below is
+    # guarded by the same monotonically expiring budget, so it cannot be reached.
+    admin_session = None
+
+    def _spent(name, label=""):
+        """--timeout guard, checked BETWEEN gates (never mid-flight): a gate that never
+        ran is SKIP_UNAVAILABLE — deliberately non-passing — so a budget can bound the
+        run but can never turn an unevaluated range into a PASS. Inert at --timeout 0."""
+        if not budget.expired():
+            return False
+        print(f"  SKIP  — run budget ({budget.label}) exhausted: '{name}' not evaluated")
+        results.append(_skip(name, "run budget exhausted before the gate ran", label=label))
+        return True
+
+    if not _spent("logins"):
+        logins_ok, admin_session = check_logins(base_url, teams, admin_password)
+        results.append(_bool_gate("logins", logins_ok))
     print("\n  (default-credential regression guard)")
-    results.append(_bool_gate("no_default_creds", check_no_default_creds(comp_dir)))
+    if not _spent("no_default_creds"):
+        results.append(_bool_gate("no_default_creds", check_no_default_creds(comp_dir)))
     packet_profile = None
     if args.packet_profile:
         try:
@@ -1645,8 +1792,9 @@ def main():
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
         print("\n  (packet fidelity — credentials + out-of-scope accounts)")
-        results.append(_bool_gate("packet_creds", check_packet_creds(comp_dir, packet_profile)))
-        results.append(check_packet_accounts(ctx, packet_profile, boxes))
+        if not _spent("packet_creds"):
+            results.append(_bool_gate("packet_creds", check_packet_creds(comp_dir, packet_profile)))
+            results.append(check_packet_accounts(ctx, packet_profile, boxes))
     # boxes.json (box TYPES, keyed by name in box_services.json) — nakon-config
     # machines carry team-suffixed names the pin map doesn't use
     try:
@@ -1655,40 +1803,50 @@ def main():
     except (OSError, ValueError):
         box_list, pinned_services = [], {}
     expected_names = expected_service_names(pinned_services, box_list) if pinned_services else set()
-    results.extend(check_services(
-        base_url, admin_session, teams, args.strict_services, expected_names))
-    results.append(check_isolation(ctx, teams, boxes))
+    if not _spent("services"):
+        results.extend(check_services(
+            base_url, admin_session, teams, args.strict_services, expected_names))
+    if not _spent("isolation"):
+        results.append(check_isolation(ctx, teams, boxes))
     if args.red_identity:
         seg_ip = args.red_seg_ip or _default_red_seg_ip()
-        try:
-            results.append(check_red_identity(ctx, boxes, args.red_ip, seg_ip,
-                                              red_user=args.red_user))
-        except CheckError as e:
-            print(f"  SKIP  — red identity check couldn't run: {e}")
-            results.append(_skip("red_identity", "check couldn't run"))
+        if not _spent("red_identity"):
+            try:
+                results.append(check_red_identity(ctx, boxes, args.red_ip, seg_ip,
+                                                  red_user=args.red_user))
+            except CheckError as e:
+                print(f"  SKIP  — red identity check couldn't run: {e}")
+                results.append(_skip("red_identity", "check couldn't run"))
     print("\n  (live-ops health check status — informational)")
-    report_healthcheck_status(ctx)
+    if not budget.expired():
+        report_healthcheck_status(ctx)
     if args.expect_no_vulns:
         print("\n[4/5] MISCONFIG SPOT-CHECK")
         print("  SKIP  — --expect-no-vulns: this comp deliberately plants no misconfigurations")
         note = "--expect-no-vulns: comp plants no misconfigurations"
         results.append(_skip("misconfig", note, gating=False))
         results.append(_skip("misconfig_survival", note, gating=False))
-    else:
+    elif not _spent("misconfig"):
         results.append(_bool_gate("misconfig", check_misconfig(ctx, boxes, comp_dir)))
         results.append(check_misconfig_survival(ctx, boxes))
-    report_beacons(ctx, boxes)
-    injects_relevant, injects_ok = check_injects(base_url, admin_session, comp_dir)
-    if injects_relevant:
-        results.append(_bool_gate("injects", injects_ok))
-    else:
-        results.append(_skip("injects", "competition ships no injects/ dir", gating=False))
-    results.append(check_round_loop(base_url, admin_session, fix=args.fix_round_loop))
+    if not budget.expired():
+        report_beacons(ctx, boxes)
+    if not _spent("injects"):
+        injects_relevant, injects_ok = check_injects(base_url, admin_session, comp_dir)
+        if injects_relevant:
+            results.append(_bool_gate("injects", injects_ok))
+        else:
+            results.append(_skip("injects", "competition ships no injects/ dir", gating=False))
+    if not _spent("round_loop"):
+        results.append(check_round_loop(base_url, admin_session, fix=args.fix_round_loop))
     print("\n  (M4 plant coverage — expected vs. actually planted, per machine)")
-    coverage_result = check_plant_coverage(comp_dir)
-    results.append(coverage_result)
+    coverage_result = None
+    if not _spent("plant_coverage"):
+        coverage_result = check_plant_coverage(comp_dir)
+        results.append(coverage_result)
     print("\n  (AD domains — promotion, joins, AD plants, DomainSID uniqueness)")
-    results.append(check_domains(comp_dir, teams, boxes, ctx=ctx))
+    if not _spent("domains"):
+        results.append(check_domains(comp_dir, teams, boxes, ctx=ctx))
 
     gate, passed = gate_verdict(results, args.allow_unverified)
 
@@ -1734,7 +1892,10 @@ def main():
     print("\n" + ("RESULT: PASS — competition looks healthy."
                   if passed else "RESULT: FAIL — see failing checks above."))
     if args.freeze:
-        ok = do_freeze(comp_dir, args, gate, coverage_result.passed)
+        # coverage_result is None only when the budget skipped the gate; a gate that
+        # never ran cannot attest coverage, so the freeze is refused (fail-closed).
+        ok = do_freeze(comp_dir, args, gate,
+                       coverage_result is not None and coverage_result.passed)
         return 0 if (passed and ok) else 1
     return 0 if passed else 1
 
