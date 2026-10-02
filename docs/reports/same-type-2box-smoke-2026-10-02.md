@@ -125,7 +125,22 @@ foreign infrastructure verified intact after teardown.
 | 4 | Low | Golden clone, boot smoke, and nakon plants emit no `.deploy-timings.jsonl` entries. | Pre-existing observability gap |
 | 5 | Info | Stale engine host key in `~/.tezcatlipoca/known_hosts` for a reused mgmt IP kills nakon mid-deploy with a confusing MITM warning. A preflight known-hosts probe (or a pointed error message) would turn this into a 5-second fix instead of a deploy failure. | Environmental; worth a known-issues entry |
 
-## 6. Not verified / caveats
+## 6. Concurrent-deploy observation (no harm, but a real hazard)
+
+A parallel session (worktree `.worktrees/live-2box`, branch `patterns-fixes-live` a4f8407)
+deployed the **same comp id** `same-type-2box-2026-09-29` (scoring vmid 2400, identifier 130)
+on `.193` starting ~01:35 — mid-way through this run's phase-4 resume. Same comp id means
+shared comp-derived VM tags, so both deploys' phase-1 sweeps targeted each other's VMs in
+principle. Outcome observed here: this run's range stayed healthy throughout (verify green at
+02:27, teardown clean), this teardown's destroys were strictly terraform-state-scoped
+(engine 1100, boxes 1420/1421, vmbr122 — no tag sweep fired), and no VMs of the other deploy
+remain (its comp dir shows `last_phase: 3`). No cross-damage found either direction — but the
+hazard is real: **two deploys of one comp id from different worktrees share tags**, and only
+luck (or timing) kept a phase-1 sweep from reclaiming the other deploy's engine mid-build.
+AGENTS.md's new-worktree rule isolates state but not comp-id identity; a comp-id lock or a
+preflight "tag already live from another state file" check would close it.
+
+## 7. Not verified / caveats
 
 - `misconfig_survival` and `injects` gates are SKIP-by-comp-shape; their new strict behavior
   was not exercised against a comp that actually plants misconfigs/injects.
