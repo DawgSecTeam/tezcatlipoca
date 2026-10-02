@@ -97,9 +97,10 @@ so reuse/rebuild logic works per node.
   destroy the jump VM and slot-shifted goldens; no engine there).
 - **Phase 2** apply #1 builds bridges on every host, the engine, and the engine's
   satellite routes (persisted as a systemd oneshot so an engine reboot re-asserts
-  them); then the jump VMs are cloned + configured (cloud-init static IPs,
-  iptables-restore ruleset, `verify_jump`), and `routing_ops` fail-loud gates
-  engine→jump reachability before anything depends on it.
+  them); then the jump VMs are cloned + configured **concurrently on a bounded pool of 4**
+  (cloud-init static IPs, iptables-restore ruleset, `verify_jump`; each satellite is an
+  independent host, and one that never comes up still aborts the deploy), and `routing_ops`
+  fail-loud gates engine→jump reachability before anything depends on it.
 - **Phase 4** builds the golden set on the engine node as today, then once per
   satellite (anchored on the satellite's first local team subnet, planted through
   the routed path); apply #2 builds team boxes per slot from that slot's goldens.

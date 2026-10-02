@@ -92,7 +92,7 @@ class BuildGoldenSetTests(unittest.TestCase):
                  patch.object(golden_ops, "start_vm") as p_start, \
                  patch.object(golden_ops, "take_snapshot") as p_snap, \
                  patch.object(golden_ops, "run_nakon") as p_nakon, \
-                 patch.object(golden_ops, "build_nakon_bundle") as p_bundle, \
+                 patch.object(golden_ops, "build_nakon_bundle"), \
                  patch.object(golden_ops, "prep_apt_on_boxes"), \
                  patch.object(golden_ops, "ssh_via_gateway"), \
                  patch.object(golden_ops, "wait_for_boxes_ssh"), \

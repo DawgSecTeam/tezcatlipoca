@@ -32,6 +32,7 @@ from range_ops import (
     wait_for_proxmox_task,
 )
 from ssh_ops import DEFAULT_KNOWN_HOSTS, forget_engine_host_key
+from utils import PRINT_LOCK, run_concurrent
 
 JUMP_TAGS_EXTRA = "jump"
 APT_CACHER_PORT = 3142
@@ -200,20 +201,50 @@ def verify_jump(ip, user, key_path):
                            f"(rc={r.returncode}, out={(r.stdout or '').strip()[:80]})")
 
 
+
+def _log(*args, **kwargs):
+    """print() under the shared lock: _build_one runs on a thread pool (build_jump_vms),
+    so an unwrapped multi-line print from one satellite interleaves into another's."""
+    with PRINT_LOCK:
+        print(*args, **kwargs)
+
+
 def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
                    engine_mgmt_gw=DEFAULT_ENGINE_MGMT_GW, engine_node_name=None):
     """Clone + configure one jump per satellite. Returns {node_name: jump_vmid}.
-    All VM API calls are node-scoped, so the placement route table sends them to the
-    owning host; the SSH configuration path goes direct over the mgmt LAN."""
+
+    Satellites run CONCURRENTLY. Each is a different Proxmox host reached over the
+    direct API path (node-scoped calls follow the placement route table) with its SSH
+    configuration going over the mgmt LAN, and each build is dominated by a full clone
+    plus a first-boot cloud-init wait — measured 17s to 547s, avg ~150s, across
+    17 samples in multinode-spread-2026-09-30. Serially that made an 8-satellite
+    spread pay ~18 minutes of pure waiting for no reason.
+
+    Bounded at 4 rather than the pool's default 8: unlike the per-box work, each unit
+    here is a *full* clone onto a datastore, and a satellite host may be running
+    several. 4 keeps clone-write saturation and the Proxmox task load in the range the
+    M0.2/M2.1 benchmarks validated, while still collapsing the wait.
+    """
     from nodes_ops import record_of
-    for sat in placement["satellites"]:
+    sats = list(placement["satellites"])
+
+    def _one(sat):
         rec = record_of(placement, sat["name"])
         vmid = sat["jump_vmid"]
-        print(f"  Jump VM for satellite '{sat['name']}' (slot {sat['slot']}, "
-              f"vmid {vmid}, mgmt {sat['jump_mgmt_ip']})...")
+        with PRINT_LOCK:
+            print(f"  Jump VM for satellite '{sat['name']}' (slot {sat['slot']}, "
+                  f"vmid {vmid}, mgmt {sat['jump_mgmt_ip']})...")
         team_ids = sorted({placement["team_identifiers"][k] for k in sat["teams"]}, key=int)
         _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_mgmt_gw)
-    return {sat["name"]: sat["jump_vmid"] for sat in placement["satellites"]}
+
+    results = run_concurrent(sats, _one, max_workers=4)
+    # run_concurrent captures exceptions per slot instead of raising, so each caller
+    # keeps its own aggregate semantics. Here the semantics are unchanged from the
+    # serial loop: one satellite that never comes up aborts the deploy.
+    for sat, r in zip(sats, results):
+        if isinstance(r, Exception):
+            raise r
+    return {sat["name"]: sat["jump_vmid"] for sat in sats}
 
 
 def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_mgmt_gw):
@@ -232,11 +263,11 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
         reuse = False
 
     if reuse:
-        print(f"    jump VM already running from a previous attempt — reconfiguring in place")
+        _log("    jump VM already running from a previous attempt — reconfiguring in place")
     else:
         templates = find_jump_template(node, rec.jump_template)
         if len(templates) > 1:
-            print(f"    WARNING: multiple jump-template candidates on {node}: "
+            _log(f"    WARNING: multiple jump-template candidates on {node}: "
                   f"{sorted(templates)} — using '{sorted(templates)[0]}'")
         src = templates[sorted(templates)[0]]
 
@@ -270,7 +301,7 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
         try:
             proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data={"delete": "cicustom"})
         except Exception as e:
-            print(f"    cicustom strip on {vmid} failed (template may not carry one): "
+            _log(f"    cicustom strip on {vmid} failed (template may not carry one): "
                   f"{str(e)[:100]}")
         proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data=cfg)
 
@@ -278,12 +309,12 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
         # the satellite took >120s) — tolerate a timed-out-but-running start.
         try:
             start_vm(node, vmid, timeout=300)
-        except RuntimeError as e:
+        except RuntimeError:
             if vm_status(node, vmid) != "running":
                 raise
-            print(f"    start task outlived its wait — VM is running anyway")
+            _log("    start task outlived its wait — VM is running anyway")
         if not wait_for_guest_agent(node, vmid, timeout=180):
-            print("    WARNING: jump agent not answering (cloud-init may still be running)")
+            _log("    WARNING: jump agent not answering (cloud-init may still be running)")
     user = ctx.get("vm_username", "sysadmin")
     # Every fresh clone regenerates its sshd host keys — the PREVIOUS jump's pinned
     # key for this mgmt IP makes accept-new refuse everything ("host key changed").
@@ -295,7 +326,7 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
         raise RuntimeError(f"jump {vm_name} on '{node}' never came up on SSH at "
                            f"{sat['jump_mgmt_ip']} — check its console")
     configure_jump(sat["jump_mgmt_ip"], user, ctx["ssh_key_path"], team_ids, engine_mgmt_ip)
-    print(f"    jump-{comp_name}-{sat['slot']} configured and forwarding "
+    _log(f"    jump-{comp_name}-{sat['slot']} configured and forwarding "
           f"(teams {', '.join(team_ids)})")
 
 

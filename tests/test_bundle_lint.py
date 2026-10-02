@@ -3,7 +3,6 @@ self-optional ${VAR-}/${VAR:+}, [ -n "${VAR-}" ] guards, in-script assignment co
 an apostrophe in a comment, and vars named only in full-line comments. A genuinely required
 ${VAR:?} must still be caught."""
 
-import importlib.util
 import json
 import sys
 import tempfile

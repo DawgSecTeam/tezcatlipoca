@@ -12,7 +12,6 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import constants
 import nakon_ops
 from quotient.setup import build_event_conf, expected_service_names
 

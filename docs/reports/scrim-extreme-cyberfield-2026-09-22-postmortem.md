@@ -180,4 +180,4 @@ successful guest-agent artifact check.
   cycles), `bad-auto-state/events.jsonl`, `monitor.log`, `evidence/`
 - Orchestrator log: `logs/scrim-cyberfield-e2e.log`, continuation: `logs/scrim-cyberfield-blues.log`
 - Engine fix evidence: engine `.env.bak-urlfix`, journal of 620 restarts before the fix
-- Cyberfield wiring notes: `docs/deploy-cyberfield-prompt.md`
+- Cyberfield wiring notes: `docs/reports/deploy-cyberfield-prompt.md`

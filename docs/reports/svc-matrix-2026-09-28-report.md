@@ -9,7 +9,7 @@ down and restorable. Both goals were met on 2026-09-28.
 ## Lineup
 
 Node `proxmox` (cyberrange, 10.0.0.150), datastore **wkshp-pool** (hdd/ssd fail the
-~470 GB preflight gate — see [known-issues.md](known-issues.md)), scoring vmid 1050,
+~470 GB preflight gate — see [known-issues.md](../known-issues.md)), scoring vmid 1050,
 engine at 10.0.0.190, teams ident 130/131 → vmids 1500–1519, goldens 1200–1209,
 engine template 1190.
 
@@ -42,7 +42,7 @@ deliberately clean range).
 - tezcatlipoca (`svc-matrix-2026-09-28`): bind duplicate-zone fix, lighttpd
   restart-not-start, RDP firewall rules in `bootstrap_windows_box`
   (`golden_ops.ensure_golden_disk_size` + tests; `verify-competition.py
-  --expect-no-vulns`) — details in [known-issues.md](known-issues.md).
+  --expect-no-vulns`) — details in [known-issues.md](../known-issues.md).
 - bad-auto (`svc-matrix-takedowns`): `coverage` subcommand; powershell double-quote
   exec wrapping; ADDS/SMB/RDP effect rework; credlist restore from intel ground
   truth. Invariants in that repo's AGENTS.md.

@@ -1,5 +1,6 @@
 """Competition configuration, team/box prompts, and inject handling."""
 
+import contextlib
 import json
 import os
 import re
@@ -501,7 +502,11 @@ def random_password():
     login downstream. Characters are cmd/PS-quoting safe (no &|<>^%$`"' or
     whitespace) and URL-grammar free (no #/?@): these secrets land in
     postgres DSNs in /opt/quotient/.env, and `#` silently truncates the DSN
-    at the password (scrim-extreme-cyberfield-2026-09-22 crash loop)."""
+    at the password (scrim-extreme-cyberfield-2026-09-22 crash loop).
+
+    Single source of truth for every generated secret, including packet_ops' decoy
+    baseline accounts (which used to carry a copy of this generator, audit 2026-10-02).
+    Changing the charset or length changes behaviour everywhere at once — deliberately."""
     pools = [string.ascii_uppercase, string.ascii_lowercase, string.digits, "!*_-+="]
     alphabet = "".join(pools)
     while True:
@@ -566,7 +571,39 @@ def update_env(updates: dict):
         new_text, count = re.subn(rf"^{re.escape(key)}=.*$", lambda _m: line, text, flags=re.MULTILINE)
         text = new_text if count else text + f"\n{line}\n"
         os.environ[key] = value
-    ENV_PATH.write_text(text)
+    write_text_atomic(ENV_PATH, text, mode=0o600)
+
+
+def write_text_atomic(path, text, mode=0o600):
+    """Write `text` to `path` so a torn write can never be observed, then chmod.
+
+    Both halves matter and both have bitten this repo:
+
+    *Atomicity* — `.deploy_state.json` holds the only copy of the generated box and
+    team passwords; a partial write bricks resume AND redeploy at once (deploy.py
+    documented this after the fact, but three other writers of the same file used a
+    plain write_text, so the guarantee held at exactly one of four call sites).
+
+    *Mode at creation* — creating with the process umask and chmod-ing afterwards
+    leaves a window where the file is world-readable. os.open() applies the mode
+    atomically with creation, so the secret is never briefly public.
+    """
+    path = Path(path)
+    tmp_path = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+    os.replace(tmp_path, path)
+
+
+def write_state(path, state):
+    """Persist a JSON state dict atomically, 0600. Single writer for .deploy_state.json."""
+    write_text_atomic(path, json.dumps(state, indent=2), mode=0o600)
 
 
 def list_proxmox_templates():

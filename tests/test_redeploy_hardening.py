@@ -46,12 +46,12 @@ class RunNakonAndHardenTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             with patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
-                 patch.object(redeploy.driver, "fix_dns_on_boxes") as p_dns, \
-                 patch.object(redeploy.driver, "setup_ubuntu_auth") as p_auth, \
-                 patch.object(redeploy.driver, "ensure_nat_forwarding"), \
-                 patch.object(redeploy.driver, "run_nakon",
+                 patch.object(redeploy.pipeline_api, "fix_dns_on_boxes") as p_dns, \
+                 patch.object(redeploy.pipeline_api, "setup_ubuntu_auth") as p_auth, \
+                 patch.object(redeploy.pipeline_api, "ensure_nat_forwarding"), \
+                 patch.object(redeploy.pipeline_api, "run_nakon",
                               return_value=MagicMock(failed=[])) as p_nakon, \
-                 patch.object(redeploy.driver, "fix_services_on_boxes") as p_fix:
+                 patch.object(redeploy.pipeline_api, "fix_services_on_boxes") as p_fix:
                 redeploy.run_nakon_and_harden(
                     targets, ctx, comp_dir, {},
                     comp_dir / "nakon-config.json", comp_dir / "bundle")
@@ -100,13 +100,13 @@ class ModeRebuildTests(unittest.TestCase):
                  patch.object(redeploy, "build_nakon_bundle"), \
                  patch.object(redeploy, "stored_template_hash", return_value=None), \
                  patch.object(redeploy, "rerun_domain_configs", return_value=True), \
-                 patch.object(redeploy.driver, "bootstrap_windows_box") as p_boot, \
-                 patch.object(redeploy.driver, "wait_for_boxes_ssh"), \
-                 patch.object(redeploy.driver, "wait_for_cloud_init"), \
-                 patch.object(redeploy.driver, "ensure_nat_forwarding"), \
-                 patch.object(redeploy.driver, "run_nakon",
+                 patch.object(redeploy.pipeline_api, "bootstrap_windows_box") as p_boot, \
+                 patch.object(redeploy.pipeline_api, "wait_for_boxes_ssh"), \
+                 patch.object(redeploy.pipeline_api, "wait_for_cloud_init"), \
+                 patch.object(redeploy.pipeline_api, "ensure_nat_forwarding"), \
+                 patch.object(redeploy.pipeline_api, "run_nakon",
                               return_value=MagicMock(failed=[])) as p_nakon, \
-                 patch.object(redeploy.driver, "fix_services_on_boxes") as p_fix:
+                 patch.object(redeploy.pipeline_api, "fix_services_on_boxes") as p_fix:
                 redeploy.mode_rebuild(
                     targets, ctx, "node", comp_dir, state,
                     comp_dir / "nakon-config.json", comp_dir / "bundle")

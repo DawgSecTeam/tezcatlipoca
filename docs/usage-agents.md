@@ -18,7 +18,8 @@ need all of them, only enough to cover what you'd otherwise be asked:
 | `--yes` | Skips the confirm-deploy prompt. |
 | `--scenario TEXT` | Scenario description (only used when creating a new competition). |
 | `--difficulty N` | Difficulty 1–10 (only used when creating a new competition). |
-| `--from-phase N` | Resume from this phase; `N > 1` skips the destructive cleanup + `terraform apply`. See the resume hint a failed deploy prints. |
+| `--from-phase N` | Resume from this phase; `N > 1` skips the destructive cleanup + `terraform apply`. Refused when it would skip a phase `.deploy_state.json` does not record as completed (`last_phase`). See the resume hint a failed deploy prints. |
+| `--force-from-phase` | Proceed anyway when `--from-phase` skips phases the state file never saw complete. Only for a checkpoint known to be stale (e.g. the process died after a phase finished but before its checkpoint landed) — the skipped phases build the machines the later ones target. |
 | `--plan-only` | Collect/generate the competition's config and print a summary, then exit **without touching any infrastructure** — no teardown, no `terraform apply`. |
 | `--box-username NAME` | Themeable box login username (only used when creating a new competition; default `ubuntu`). Written to `competitions/<id>/users.json`. |
 | `--credlist-usernames A,B,C` | Themeable credlist account names, exactly 3 comma-separated (only used when creating a new competition; default `admin,user1,user2`). Written to the same `users.json`. |
@@ -42,20 +43,29 @@ infrastructure, review it, then re-run the same command without `--plan-only` (p
 
 ### Resuming (`--from-phase`)
 
-`deploy()` runs seven phases (destroy-prior-range, `terraform apply`, a no-op phase 3 — the
-SSH-key copy it used to do was removed, bootstrap engine, nakon-on-team1,
-clone+nakon-on-other-teams, seed/start — see the
-[README](../README.md#how-it-works) for what each does). A failed deploy prints which phase it
-died in; `--from-phase N` re-enters there instead of tearing everything down and rebuilding
-from scratch. Phase 6's clone step reads the nakon bundle by content hash, so a resume there
-reuses the already-built bundle instead of rebuilding it. Phase 7's three sub-steps (seed
-teams, unpause the engine, create injects) are each gated on their own flag in
+`deploy()` walks the seven **v2** phases (`deploy_phases.PHASES`) — 1 Cleanup · 2 engine-template + apply #1 · 3 prepare
+engine from template · 4 golden set + apply #2 · 5 repair-stage sweep · 6 domains → final pass →
+beacons + `tz-ready` · 7 seed. [architecture.md](architecture.md#seven-phase-deploy) is the
+canonical list, plus the [v1 → v2 table](architecture.md#v1-to-v2-migration-what-moved) if you are
+reading an older run's notes. A failed deploy prints which phase it died in; `--from-phase N`
+re-enters there instead of tearing everything down. **Cloning is phase 4** (linked clones in
+apply #2) — phase 6 has no clone step and does not read the nakon bundle by hash. Phase 7's three
+sub-steps (seed teams, unpause the engine, create injects) are each gated on their own flag in
 `competitions/<id>/.deploy_state.json` (`seeded`/`engine_unpaused`/`injects_created`) — a
-`--from-phase 7` resume after a partial phase-7 failure skips whatever already succeeded
-rather than re-running it, since re-unpausing an already-unpaused engine isn't safe (see
+`--from-phase 7` resume after a partial phase-7 failure skips whatever already succeeded rather
+than re-running it, since re-unpausing an already-unpaused engine isn't safe (see
 `quotient/setup.py`'s `unpause_engine()` docstring) and re-creating injects would duplicate
 them. If phase 7 needs to be forced to redo a step anyway, edit those flags out of
 `.deploy_state.json` first.
+
+**The resume target is checked, not just recorded.** Each phase writes `last_phase` after it
+completes, and `--from-phase N` is refused when `N` skips a phase that never completed (`N >
+last_phase + 1`): the skipped phases are what build the machines the later ones target, so
+resuming there would run the domain/final/seed chain against boxes that do not exist and bury the
+real failure. A state file with a missing/unusable `last_phase` reads as `0` (the conservative
+choice). `--force-from-phase` is the escape hatch for a checkpoint you know is stale — use it
+deliberately, not to silence the guard. Resuming a state file written by another pipeline version
+is refused; see [state-file schemas](architecture.md#state-files).
 
 ## Pre-authoring a competition
 
@@ -133,35 +143,72 @@ to regenerate; it always overwrites `packet.md` in full.
 Post-deploy smoke test — reproduces the manual checks run by hand after a deploy:
 
 ```bash
-python3 verify-competition.py competitions/<id> [--engine-ip IP] [--admin-password PW] [--strict-services]
+python3 verify-competition.py competitions/<id> [--engine-ip IP] [--admin-password PW] \
+    [--strict-services] [--allow-unverified GATE]... [--timeout SECONDS]
 ```
 
 1. **LOGIN** — every team account and admin can `POST /api/login` (HTTP 200).
 2. **SERVICES** — each team's services report UP in the latest scored round (informational
-   unless `--strict-services`).
+   unless `--strict-services`, which also requires something to have been scored and the newest
+   round to be fresh).
 3. **ISOLATION** — the team-to-team DROP rule (`range-firewall.sh`) is present in the engine's
    `FORWARD` chain, and — with 2+ teams — an actual connection from one team's box to
-   another's is confirmed blocked while that same box can still reach the internet (rule
-   presence alone can't tell a correct rule from one that's shadowed or misordered).
+   another's is confirmed blocked **while the target is provably alive and that same box still
+   reaches the internet**. Rule presence alone can't tell a correct rule from one that's shadowed
+   or misordered, and a stopped box looks identical to a blocked one, so an unprovable probe is
+   `SKIP`, not a pass.
 4. **MISCONFIG** — at least one planted misconfig is present on a target box (SSH via the
-   scoring-engine gateway). A follow-on **misconfig-survival** pass checks every team's copy
-   of each verifiable config (2+ teams) is identically present — a regression guard for the
-   clone-vs-cloud-init race where a clone's first-boot cloud-init silently reverts a
-   filesystem-permission plant.
+   scoring-engine gateway). A follow-on **misconfig-survival** pass checks every team's copy of
+   each verifiable config (2+ teams) is identically present — present on some teams but not
+   others FAILs, and absent on **every** team FAILs too (the plant never landed anywhere).
 5. **INJECTS** — if the competition ships an `injects/` dir, the engine has that many injects.
+6. **PINS** (`pins_registered`) — every pinned service's `<box>-<Display>` check is registered in
+   Quotient. Gate is active only when the comp has pinned services.
+7. **PLANT COVERAGE** (`plant_coverage`) — reads `.deploy_state.json`'s per-machine
+   expected-vs-planted record, falls back to the nakon FAILED tally, and **fails closed**: when
+   neither source exists it FAILs ("coverage was never recorded") rather than passing vacuously.
+8. **DOMAINS** (`domains`) — AD promotion, joins, AD plants, and cross-team DomainSID uniqueness
+   (see `verify-competition.py`'s `check_domains`). Fail-closed on a malformed `domain_roles.json`.
+9. **RED IDENTITY** (`red_identity`) — only with `--red-identity`: proves red's source address
+   survives end-to-end to the boxes (see `--red-ip`/`--red-seg-ip`/`--red-user`).
+10. **PACKET** (`packet_creds` + `packet_accounts`) — only with `--packet <profile>`: the packet's
+    published credentials match `credentials.txt`, and its `out_of_scope` decoy accounts exist.
+11. **ROUND LOOP** (`round_loop`) — the scoring round loop is actually advancing; it does not
+    auto-resume after an engine reboot.
 
-Two additional lines: a `no_default_creds` regression guard (part of the exit-code gate,
-same as logins/isolation/misconfig/misconfig-survival/injects) confirming `credentials.txt`'s
-box-login/credlist lines aren't the old fixed literals, and a purely informational report of
-`range-healthcheck.timer`'s current status + any recent failures it logged (see
-`install_range_healthcheck()` in `engine_ops.py`) — that one doesn't affect the exit
-code, it's just visibility.
+**Gate model: PASS / FAIL / SKIP, and a SKIP is not a pass.** Every gate returns a tri-state
+result, and the SUMMARY and the exit code are generated from the same results, so they cannot
+disagree. `SKIP` means the gate could not be evaluated (dead SSH, missing state, no vantage
+point) and is **non-passing** by default — a check that never ran exiting 0 is how a dead box
+reads as a healthy range (live-found 2026-10-02: isolation's cross-team probe passed on stopped
+VMs). A few results are deliberately *non-gating* and shown as `[informational]` in the SUMMARY:
+the structurally-not-applicable cases (no `nakon-config.json`, no `domain_roles.json`, no
+`injects/` dir, `--expect-no-vulns`, fewer than 2 teams for misconfig-survival). Waive a gating
+gate's SKIP with `--allow-unverified <gate>` (repeatable); it waives only a SKIP,
+never a FAIL, and names that match no gate in the run are warned about. `--timeout SECONDS` sets
+an optional whole-run wall-clock budget (default `0` = off), checked **between** gates so it never
+interrupts a Proxmox task; a gate skipped on budget is recorded `SKIP` and so is non-passing too.
+**Operators: a range whose verify used to exit 0 can now exit non-zero for a gate that never
+ran** — that is the intended fail-closed behavior; fix the gate or waive it explicitly.
+
+Two diagnostic lines: a `no_default_creds` regression guard (part of the exit-code gate, same as
+logins/isolation/misconfig/injects) confirming `credentials.txt`'s box-login/credlist lines aren't
+the old fixed literals, and a purely informational report of `range-healthcheck.timer`'s status plus
+`report_beacons` and the per-pass `plant integrity` tally from `.deploy_state.json` — none of those
+affect the exit code.
 
 Exit code is `0` only when logins all pass, no default creds remain, isolation holds, the
-misconfig spot-check (and, with 2+ teams, the misconfig-survival pass) confirms, and injects
-(if any) are present; service DOWN is reported but
-not fatal unless `--strict-services`. Isolation is **not** demoted to informational the way
-services are — a failed isolation check means teams can reach each other right now.
+misconfig spot-check (and, with 2+ teams, the misconfig-survival pass) confirms, injects
+(if any) are present, the round loop is advancing, and the conditional gates above pass — and no
+gating gate is an unwaived SKIP. Service DOWN is reported but not fatal unless
+`--strict-services`. Isolation is **not** demoted to informational the way services are — a failed
+isolation check means teams can reach each other right now.
+
+Other flags: `--expect-no-vulns` skips the misconfig gates for a packet-compiled comp that has not
+authored `box_vulns.json` yet; `--fix-round-loop` POSTs the start/unpause pair when the engine's
+round loop did not auto-resume after a reboot (the run still FAILs — re-run verify to confirm a
+fresh round); `--freeze` (with `--windows-domain-validated` for Windows/domain lineups) writes the
+`.frozen.json` record, and `--unfreeze --confirm-unfreeze` removes it.
 
 Data sources (all read at runtime): scoring-engine IP from `terraform output -json`
 (override with `--engine-ip`), team creds from `competitions/<id>/teams.json`, admin password
@@ -192,7 +239,7 @@ python3 redeploy-competition.py --competition <id> [selection] [--mode M] [--dry
 
 Anything that matches no team/box is a hard error, not a silent empty selection.
 
-### Modes (`--mode`, cheapest first)
+### Redeploy modes (cheapest first)
 
 | Mode | What it does | When |
 |---|---|---|
@@ -201,11 +248,18 @@ Anything that matches no team/box is a hard error, not a silent empty selection.
 | `reconfigure` | No rollback — re-run that same chain against the live box. | A service died but the box is otherwise the team's to keep. |
 | `rebuild` | Destroy the VM, re-clone it from its **box template**, configure from scratch, take both snapshots. Windows boxes are bootstrapped over the guest agent (`bootstrap_windows_box()`), Linux via cloud-init. | The VM is gone or won't boot. |
 | `resync` | Pull the engine-authoritative secrets (event.conf, credlist, `/opt/quotient/.env`) into `.deploy_state.json`, then re-set the selected boxes' passwords via the guest agent. Touches nothing else. | Credentials drifted (partially-applied seed, manual box fiddling) and you need state and boxes back in line without a rollback. |
+| `engine-recovery` | Re-clone the **engine VM** from the competition's engine template (`terraform apply -replace` on the engine resource only, `-target`-scoped). Team boxes, goldens, and the engine template are untouched; the scoring DB starts **EMPTY**. Ignores the box-selection flags. | The engine VM is broken or was deleted mid-event. Re-seed afterwards with `python3 create-competition.py --competition <id> --from-phase 7`. |
 
-`rebuild` deliberately clones the template rather than team1's live box (which is what phase 6
-does at deploy time): mid-competition team1's box carries whatever team1's defenders have done
-to it. Rebuilding a **team1** box also puts it out of sync with Terraform state — the tool warns,
-and the next `terraform apply` will want to replace it.
+`--reset-event` (with `rollback-ready`/`rollback-base` only) additionally restarts the event from
+the engine template — a fresh scoring DB and a phase-7 re-run — so scores reset and injects re-open
+anchored at now. Use it for scrim reruns; the deadlock that used to kill it was fixed 2026-10-01
+(see `known-issues.md`).
+
+`rebuild` deliberately clones the **golden template** rather than the anchor team's live box, so a
+rebuilt box carries the golden-stage installs without inheriting whatever the defenders did. This is
+also what phase 4's apply #2 does at deploy time. Rebuilding an anchor-team (`team1`) box also puts
+it out of sync with Terraform state — the tool warns, and the next `terraform apply` will want to
+replace it.
 
 `resync` cannot recover `box_password` (the box login) — that is baked into the boxes at
 bootstrap and lives nowhere on the engine — so it aligns everything else and re-sets
@@ -224,7 +278,8 @@ plants the identical configuration set a full deploy would.
 
 ### Prerequisites
 
-- Snapshots are taken by `create-competition.py` (phases 5 and 6) and require a
+- Snapshots are taken by `create-competition.py` (`tz-base` for every box at the end of the phase-4
+  block, `tz-ready` at the end of phase 6) and require a
   snapshot-capable `TF_VAR_datastore`: ZFS, LVM-thin, Ceph, or qcow2 on file storage. **Thick
   LVM cannot snapshot.** A range deployed before snapshotting existed, or on such a datastore,
   has only `reconfigure` and `rebuild`. The tool checks up front and prints which boxes are
@@ -249,10 +304,11 @@ python3 destroy-competition.py --competition <id> --full      # also destroy tem
 python3 destroy-competition.py --competition <id> --full --end-of-competition  # frozen comp
 ```
 
-Destroys the team2+ boxes cloned via the Proxmox API (reads
-`competitions/<id>/cloned_vms.json` — they're not in Terraform state, so `terraform destroy`
-alone can't remove them), then runs `terraform destroy`. Requires that competition's
-`teams.json` + `boxes.json` (both written by `deploy()`).
+Destroys all of the competition's team boxes, then runs `terraform destroy`. Pipeline-v2 ranges keep
+every team in Terraform state, so `terraform destroy` alone removes them; `cloned_vms.json` is a
+**legacy** path taken only if the file exists (pre-golden ranges whose team2+ boxes were API clones).
+Requires that competition's `teams.json` + `boxes.json` (both written by `deploy()`), and restores
+the per-competition `TF_VAR_*` values first so Terraform address-matches the original apply.
 
 M4 teardown modes: the default is **teams-only** — team clones, the engine VM, and the
 bridges die; the competition's golden templates and engine template are KEPT and the next
@@ -277,7 +333,32 @@ python3 verify-competition.py competitions/<id> --freeze --windows-domain-valida
 python3 verify-competition.py competitions/<id> --unfreeze --confirm-unfreeze
 python3 redeploy-competition.py --competition <id> --mode engine-recovery   # fresh engine from template
 python3 redeploy-competition.py --competition <id> --teams team2 --mode rebuild --yes  # team rebuild
+python3 verify-competition.py competitions/<id> --fix-round-loop            # unfreeze a stuck round loop
 ```
+
+## Operational modes and one-off flags
+
+Everything that exists in argparse but is not part of the happy path, in one place.
+
+| Flag / mode | Script | What it does |
+|---|---|---|
+| `--mode resync` | `redeploy-competition.py` | Align `.deploy_state.json` with the engine-authoritative secrets (event.conf, credlist, `/opt/quotient/.env`), then re-set the selected boxes' passwords via the guest agent. No rollback. Cannot recover `box_password` (baked in at bootstrap; see internals) |
+| `--mode engine-recovery` | `redeploy-competition.py` | Re-clone the engine VM from the competition's engine template, `-replace` on that resource only. Ignored box-selection flags; fresh **empty** scoring DB — re-seed with `--from-phase 7` |
+| `--reset-event` | `redeploy-competition.py` | Valid only with `rollback-ready`/`rollback-base`: after the rollback, also restart the event from the engine template and re-run phase 7, so scores reset and injects re-open anchored at now. Use for scrim reruns |
+| `--end-of-competition` | `destroy-competition.py` | Required with `--full` on a **frozen** competition — makes an accidental mid-event full teardown impossible |
+| `--windows-domain-validated` | `verify-competition.py` | Operator attestation that a Windows/domain lineup's run exercised DomainSID uniqueness, machine SIDs, and the three-pass ordering. Required alongside `--freeze` for such a lineup |
+| `--fix-round-loop` | `verify-competition.py` | Issue the `POST /api/competition/start` + `POST /api/engine/pause {pause:false}` pair when the round loop did not auto-resume after an engine reboot |
+| `--freeze` / `--unfreeze --confirm-unfreeze` | `verify-competition.py` | Write / remove the `.frozen.json` record. Freeze requires all gates PASS (incl. plant coverage) and must be the **last** thing you do before the event — committing afterwards trips the drift gate |
+| `--expect-no-vulns` | `verify-competition.py` | Skip the misconfig gates for a packet-compiled comp whose `box_vulns.json` is not authored yet |
+| `--allow-unverified <gate>` | `verify-competition.py` | Waive ONE gate's `SKIP` (could-not-evaluate) verdict so it does not fail the exit code. Repeatable; waives only a SKIP, never a FAIL; unknown names are warned about. Without it a gate that couldn't run is not a pass |
+| `--timeout SECONDS` | `verify-competition.py` | Optional whole-run wall-clock budget (default `0` = off), checked **between** gates so it never interrupts a Proxmox task. A gate skipped on budget is recorded `SKIP` — non-passing — so a budget can bound a verify but never turn an unevaluated range into a PASS (waive with `--allow-unverified`) |
+| `--packet <profile>` | `verify-competition.py` | Add the `packet_creds` + `packet_accounts` gates (packet credentials match `credentials.txt`; `out_of_scope` decoy accounts exist) |
+| `--red-identity` | `verify-competition.py` | Prove red's **routed-mode** source address survives end-to-end: holds a TCP connection from red01 to a Linux box's `:22` and reads the box's `ss` table, expecting red's segment IP as the peer rather than the team gateway. Tri-state like the isolation check (SKIP when unverifiable). Requires red01 deployed |
+| `--red-ip` / `--red-user` / `--red-seg-ip` | `verify-competition.py` | Inputs for `--red-identity`. Defaults: red01 `10.0.0.198`, user `sysadmin`, segment IP from `../bad-auto/config.yaml` else `10.200.0.10` |
+| `--scoring-vmid N` | `create-competition.py` | Pick a free engine vmid for this run (dodges the default 1000 where it is taken) |
+
+The red team's network mode itself (`routed` vs `masq`) is owned by `../bad-auto`, not this repo;
+[architecture.md](architecture.md#red-team-identity-bad-auto-side-not-this-pipeline) describes both.
 
 ## `run-deploy.sh`
 
@@ -286,50 +367,11 @@ to a gitignored file — not a documented interface in its own right. Prefer the
 directly; adapt the wrapper's `printf`/logging pattern only if you specifically need
 stdin-driven prompt answers instead.
 
-## Deploying from a worktree (svc-matrix checklist)
+## Deploying from a worktree
 
-**RULE — any practice run (capacity tests, canaries, shakedowns, any deploy whose goal is
-testing the pipeline rather than hosting an event) MUST run from a NEW worktree cut off
-main** (`git worktree add -b <branch> ../tezcatlipoca-<branch> main`), never from the main
-tree and never from another run's worktree. Practice deploys are exactly the runs that
-crash, get killed, and leave half-built state behind; isolating them keeps main's tree,
-state, and node view clean, gives the run its own branch to discard or merge, and stops two
-sessions from driving the same checkout. Teardown after a practice run is
-`destroy-competition.py` — it is resumable (stale-lock recovery, tag-scoped leftover sweep,
-foreign VMs skip-and-continue); re-run it until it exits clean. **Never substitute ad-hoc
-destroy scripts**: sweep predicates that match names or partial tags will destroy other
-sessions' infrastructure (live-found 2026-09-30 — an over-broad sweep took out two other
-comps' engines and goldens).
-
-A linked worktree has none of the gitignored local state the deploy reads, and every path
-resolves from the worktree root — run all commands from there. Pre-flight list:
-
-```bash
-git worktree add -b <branch> ../tezcatlipoca-<branch> main
-cd ../tezcatlipoca-<branch>
-git submodule update --init                          # vendor/nakon — every nakon call needs it
-cp /path/to/main-tree/.env .env                      # the NODE-PROPER env variant (see below)
-cp /path/to/main-tree/vendor/nakon/.env vendor/nakon/.env
-cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxmox` against terraform/
-```
-
-- Pick the env file that matches the target node and **check the stale-var traps**: the
-  `.env.realm-backup-20260923` (.150) variant shipped `TF_VAR_template_vm_id=9106` (dead vmid —
-  the engine-base preflight hard-fails; correct value is 955) and no
-  `TF_VAR_team_identifiers` (default identifiers 101… collide with nothing by themselves, but
-  set it explicitly, e.g. `TF_VAR_team_identifiers=130,131`, for predictable vmids).
-- `TF_VAR_teams` / `TF_VAR_boxes_per_team` in an old env are overridden by the comp dir at
-  terraform time — stale values there are cosmetic, not fatal.
-- `TEZ_THIN_HEADROOM=<0..1>` relaxes the datastore headroom gate on thin-provisioned pools
-  (ZFS, lvmthin): the gate counts that fraction of the provisioned team-disk math, because
-  linked clones only allocate written blocks (goldens + engine are the only full copies).
-  Unset keeps the strict provisioned-bytes gate. Size the factor to the pool, not to hope:
-  0.25 has been enough for Windows-heavy comps on cyberrange `hdd`.
-- The sibling-repo tools have their own env fallback: `bad-auto/deploy` loads
-  `../tezcatlipoca/.env` via `setdefault`, so export the worktree's `TF_VAR_proxmox_*` trio
-  before calling it if the main tree points at a different node.
-
-Then the normal flow: `create-competition.py --competition <id> --scoring-vmid <free> --plan-only`,
-real `--teams N --yes`, verify, destroy (all from the worktree root). Worked example:
-[svc-matrix-2026-09-28-report.md](svc-matrix-2026-09-28-report.md).
+**RULE — any practice run (capacity test, canary, shakedown, any deploy whose goal is testing the
+pipeline rather than hosting an event) MUST run from a NEW worktree cut off `main`.** The rule, its
+rationale, the pre-flight copy list, and the env-var traps live in
+[AGENTS.md → Practice runs](../AGENTS.md#practice-runs-must-run-from-a-new-worktree). A worked
+example is [svc-matrix-2026-09-28-report.md](reports/svc-matrix-2026-09-28-report.md).
 

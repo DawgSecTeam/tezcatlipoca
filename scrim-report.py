@@ -9,7 +9,12 @@ import sys
 import time
 from pathlib import Path
 
-HOST_BY_OCTET = {"2": "dc01", "3": "win01", "4": "web01", "5": "app01", "6": "db01"}
+REPO = Path(__file__).resolve().parent
+# Legacy 17b lineup, kept ONLY as the fallback for callers that pass no label map (the
+# pinned self-test, ad-hoc use). Real reports resolve the map from the competition's
+# boxes.json via box_labels() — see the D8 note there.
+LEGACY_HOST_BY_OCTET = {"2": "dc01", "3": "win01", "4": "web01", "5": "app01", "6": "db01"}
+ALERTS_FILENAME = "alerts.jsonl"
 HEALTH_CHECK = "health_check"
 STALL_SEC = 600
 REAKILL_GAP_SEC = 900
@@ -45,16 +50,72 @@ def fmt_t(tp):
     return f"T+{tp:.0f}" if tp is not None else "?"
 
 
-def host_label(ip):
+def box_labels(run_dir):
+    """octet(str) -> box name, resolved from the competition's own boxes.json.
+
+    The fixed HOST_BY_OCTET table hardcoded the 17b lineup, so every red timeline entry
+    and every target label was WRONG on any other competition (cde-2026 is
+    ad01/ftp01/web01/db01, amongus-cde-2026 is mira/skeld/airship/polus) — even though
+    the report already knew the competition directory through the run dir's name
+    (audit find D8). Returns {} when it cannot resolve one, so host_label degrades to the
+    raw dotted octet instead of inventing a name from the wrong lineup.
+    """
+    name = Path(run_dir).resolve().name
+    comps = REPO / "competitions"
+    cands = [comps / name / "boxes.json"]
+    if comps.is_dir():
+        # run dirs are often suffixed (cde-2026-run2): take the longest competition
+        # name that prefixes the run dir.
+        prefixes = sorted((p for p in comps.iterdir()
+                           if p.is_dir() and name.startswith(p.name)),
+                          key=lambda p: len(p.name), reverse=True)
+        cands += [p / "boxes.json" for p in prefixes]
+    for cand in cands:
+        try:
+            boxes = json.loads(cand.read_text())
+        except (OSError, ValueError):
+            continue
+        labels = {str(b["last_octet"]): b["name"] for b in boxes
+                  if isinstance(b, dict) and "last_octet" in b and "name" in b}
+        if labels:
+            return labels
+    return {}
+
+
+def host_label(ip, labels=None):
     if not ip:
         return "?"
     octets = ip.split(".")
-    host = HOST_BY_OCTET.get(octets[-1], f".{octets[-1]}" if len(octets) == 4 else ip)
+    table = LEGACY_HOST_BY_OCTET if labels is None else labels
+    host = table.get(octets[-1], f".{octets[-1]}" if len(octets) == 4 else ip)
     # team identifiers are 100+i (101 -> team1, ...); anything else isn't a team box
     team = ""
     if len(octets) == 4 and octets[2].isdigit() and 100 < int(octets[2]) < 200:
         team = str(int(octets[2]) - 100)
     return f"{team}:{host}" if team else host
+
+
+def load_alerts(run_dir):
+    """Run-dir alert journal (red_llm_* notices) — [] when the run wrote none.
+
+    These used to exist only as log() lines in the driver's stdout, which the post-hoc
+    report never sees: an event that ran red-LLM-blind for an hour left no trace here.
+    """
+    path = Path(run_dir) / "evidence" / ALERTS_FILENAME
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text(errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
+    return out
 
 
 
@@ -160,7 +221,7 @@ def foothold_list(world):
     return list(fh.values()) if isinstance(fh, dict) else fh
 
 
-def red_metrics(events, t0, world):
+def red_metrics(events, t0, world, labels=None):
     m = {"takedowns": 0, "timeline": [], "distinct_tactics": set(), "initial_access": set(),
          "targets": set(), "stalls": [], "restore_reactions": 0, "blue_restore_events": 0,
          "blue_restore_list": [], "windows_footholds": 0, "actions_ok": 0,
@@ -200,7 +261,7 @@ def red_metrics(events, t0, world):
             dip, svc, mode = takedown_fields(ev)
             dip = dip or ip
             m["takedowns"] += 1
-            m["timeline"].append((tp, host_label(dip), svc, mode))
+            m["timeline"].append((tp, host_label(dip, labels), svc, mode))
             takes.append((tp, dip))
     per_ip = {}
     for tp, dip in takes:
@@ -211,6 +272,12 @@ def red_metrics(events, t0, world):
             m["restore_reactions"] += 1
         if earlier is None or tp > earlier:
             per_ip[dip] = tp
+    if t0 is None:
+        # No event_start (a run dir with red events but no world.json): every stamp is
+        # None and comparing one to the stall threshold used to abort the WHOLE report —
+        # including the timeout count the rehearsal gate reads. With no clock there is
+        # no timeline to measure gaps in, so report none.
+        ok_stamps = [s for s in ok_stamps if s is not None]
     if ok_stamps and ok_stamps[0] >= STALL_SEC / 60.0:
         m["stalls"].append((0.0, ok_stamps[0], ok_stamps[0]))
     for a, b in zip(ok_stamps, ok_stamps[1:]):
@@ -224,7 +291,7 @@ def red_metrics(events, t0, world):
                                       if ip and ip.split(".")[-1] in ("2", "3")})
     m["distinct_tactics"] = sorted(m["distinct_tactics"])
     m["initial_access"] = sorted({t for t, _ in m["initial_access"]})
-    m["targets"] = sorted(host_label(ip) for ip in m["targets"])
+    m["targets"] = sorted(host_label(ip, labels) for ip in m["targets"])
     return m
 
 
@@ -328,7 +395,8 @@ def build_report(run_dir):
     events, t0 = load_red_events(run_dir)
     world = load_world(run_dir)
     snaps = load_scoreboard(run_dir)
-    rm = red_metrics(events, t0, world)
+    labels = box_labels(run_dir)
+    rm = red_metrics(events, t0, world, labels)
     down = down_windows(snaps)
     bm = blue_metrics(run_dir)
 
@@ -337,11 +405,12 @@ def build_report(run_dir):
         restorations = sum(d["restorations"] for d in down.values())
         ttrs = [t for d in down.values() for t in d["ttrs_min"]]
         fast = sum(1 for t in ttrs if t <= RESTORE_TTR_GATE_MIN)
-        down_min = {t: d["down_min"] for t, d in down.items()}
+        # per-team down-minutes are rendered straight from `down` below; a local copy was
+        # built here and never used (audit find D12).
         max_sim = max((d["max_simultaneous_down"] for d in down.values()), default=0)
     else:
         restorations, ttrs, fast = rm["restore_reactions"], [], 0
-        down_min, max_sim = None, None
+        max_sim = None
     empty_room = (bm["cycles_rc0"] == 0 and restorations == 0
                   and rm["blue_restore_events"] == 0)
     score = (restorations + rm["restore_reactions"] + rm["evictions"]
@@ -384,6 +453,10 @@ def build_report(run_dir):
              f"injects {bm['injects']}, eradication {bm['eradication']}.\n")
 
     L.append("## Red\n")
+    if events and not labels:
+        L.append("_Note: no boxes.json could be resolved for this run dir, so host labels "
+                 "below are raw addresses rather than box names (the old fixed 17b table "
+                 "would have invented the wrong names)._\n")
     L.append(f"- takedowns: **{rm['takedowns']}**")
     for tp, host, svc, mode in rm["timeline"]:
         L.append(f"  - {fmt_t(tp)} {host} {svc} ({mode})")
@@ -404,7 +477,7 @@ def build_report(run_dir):
     L.append("## Blue interaction\n")
     L.append(f"- explicit blue_restore events seen by red: **{rm['blue_restore_events']}**")
     for tp, team, ip, detail in rm["blue_restore_list"]:
-        L.append(f"  - {fmt_t(tp)} {team} {host_label(ip)}: {detail}")
+        L.append(f"  - {fmt_t(tp)} {team} {host_label(ip, labels)}: {detail}")
     if not rm["blue_restore_list"]:
         L.append("  (none — blue never restored while red was watching, or this run "
                  "predates blue_restore logging)")
@@ -443,6 +516,16 @@ def build_report(run_dir):
         subs = sum(1 for inj in injects for s in (inj.get("Submissions") or []))
         L.append(f"- injects at capture: {len(injects)} published, {subs} submissions\n")
 
+    alerts = load_alerts(run_dir)
+    if alerts:
+        L.append("## Run alerts (evidence/alerts.jsonl)\n")
+        for a in alerts:
+            L.append(f"- {a.get('ts', '?')} **{a.get('kind', '?')}** — {a.get('detail', '')}")
+        L.append("")
+    elif (Path(run_dir) / "evidence").is_dir():
+        L.append("## Run alerts\n")
+        L.append("- none\n")
+
     L.append("## Gates (docs/rehearsal-gates.md)\n")
     L.append("| side | gate | value | threshold | verdict |")
     L.append("|---|---|---|---|---|")
@@ -466,7 +549,7 @@ def compute_components(run_dir):
     events, t0 = load_red_events(run_dir)
     world = load_world(run_dir)
     snaps = load_scoreboard(run_dir)
-    rm = red_metrics(events, t0, world)
+    rm = red_metrics(events, t0, world, box_labels(run_dir))
     down = down_windows(snaps)
     bm = blue_metrics(run_dir)
     restorations = (sum(d["restorations"] for d in down.values()) if down

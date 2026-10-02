@@ -11,8 +11,15 @@ from quotient.setup import build_event_conf
 from ssh_ops import engine_ssh_opts
 
 
-def _run_engine_cmd(ctx, cmd, check=True, timeout=60, capture=False):
-    """One SSH command to the scoring engine — the shared body of every bootstrap step."""
+def _run_engine_cmd(ctx, cmd, check=True, timeout=60, capture=False, step=None):
+    """One SSH command to the scoring engine — the shared body of every bootstrap step.
+
+    `step` names the pipeline step this command belongs to. Every command here runs
+    the same `ssh ... <cmd>` shape, so a raw CalledProcessError/TimeoutExpired out of
+    this function names nothing an operator can act on: bootstrap_scoring_engine alone
+    is ~11 steps over up to 1800s, and the only enclosing handler is deploy's generic
+    per-phase message. Raise a labelled RuntimeError instead, chaining the original as
+    __cause__ so the traceback still carries the ssh argv and return code."""
     argv = ["ssh", "-i", ctx["ssh_key_path"], *engine_ssh_opts(ctx),
             f"{ctx['vm_username']}@{ctx['scoring_engine_ip']}", cmd]
     # Guard: _fork_exec dies with an opaque "expected str, bytes or os.PathLike
@@ -25,8 +32,12 @@ def _run_engine_cmd(ctx, cmd, check=True, timeout=60, capture=False):
             f"{sorted(ctx)}: ssh_key_path={ctx.get('ssh_key_path')!r:.120} "
             f"vm_username={ctx.get('vm_username')!r} "
             f"scoring_engine_ip={ctx.get('scoring_engine_ip')!r}")
-    return subprocess.run(argv, check=check, timeout=timeout,
-                          capture_output=capture, text=capture)
+    try:
+        return subprocess.run(argv, check=check, timeout=timeout,
+                              capture_output=capture, text=capture)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        label = repr(step) if step else "<unnamed>"
+        raise RuntimeError(f"engine step {label} failed: {e}") from e
 
 
 def _clone_quotient_cmd(quotient_ref):
@@ -97,7 +108,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 upgrade -y && "
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y "
         "docker.io git curl python3-pip apt-cacher-ng"
-    ), timeout=1800)
+    ), timeout=1800, step="install engine packages")
 
     # apt-cacher-ng defaults to port 3142 on all interfaces; the boxes' gateway IP is the
     # engine's team-NIC address, so no listener change is needed. Enable it here so it is
@@ -109,7 +120,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
         "sudo systemctl enable --now apt-cacher-ng && "
         "ss -ltn | grep -q ':3142 ' && echo '    apt-cacher-ng listening on 3142' "
         "|| echo '    WARNING: apt-cacher-ng not listening on 3142 yet'"
-    ), check=False, timeout=60)
+    ), check=False, timeout=60, step="enable apt-cacher-ng")
 
     print("  Installing Docker Compose v2 plugin...")
     _run_engine_cmd(ctx, (
@@ -120,27 +131,30 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
         "https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable\" "
         "| sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && "
         "sudo apt-get update && sudo apt-get install -y docker-compose-plugin"
-    ), timeout=600)
+    ), timeout=600, step="install docker compose v2 plugin")
 
     print("  Starting Docker (already installed by Terraform)...")
     _run_engine_cmd(ctx, (
         "sudo systemctl start docker && sudo systemctl enable docker && sleep 2 && sudo docker version"
-    ), timeout=30)
+    ), timeout=30, step="start docker")
 
     print(f"  Cloning Quotient ({quotient_ref or 'default branch'})...")
-    _run_engine_cmd(ctx, _clone_quotient_cmd(quotient_ref), timeout=120)
+    _run_engine_cmd(ctx, _clone_quotient_cmd(quotient_ref), timeout=120,
+                    step="clone Quotient")
 
     realized = _run_engine_cmd(ctx, "git -C /opt/quotient rev-parse HEAD 2>/dev/null || true",
-                               check=False, timeout=10, capture=True)
+                               check=False, timeout=10, capture=True, step="read Quotient HEAD")
     quotient_head = (realized.stdout or "").strip()
 
     push_quotient_env(ctx, postgres_password, redis_password)
 
     print("  Building Quotient Docker images...")
-    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose build --no-cache", timeout=1800)
+    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose build --no-cache",
+                    timeout=1800, step="compose build")
 
     print("  Starting Quotient Docker containers...")
-    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose up -d", timeout=600)
+    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose up -d", timeout=600,
+                    step="compose up")
 
     _install_firewall_and_healthcheck(ctx)
     return {"quotient_head": quotient_head, "quotient_ref": quotient_ref or ""}
@@ -163,7 +177,7 @@ def _install_firewall_and_healthcheck(ctx):
             "-e 's/^#*MaxSessions.*/MaxSessions 64/' "
             "-e 's/^#*MaxStartups.*/MaxStartups 30:30:100/' /etc/ssh/sshd_config && "
             "sudo systemctl reload sshd 2>/dev/null || true"
-    ), timeout=15)
+    ), timeout=15, step="restore forwarding rules")
     print("  Forwarding rules restored")
 
     print("  Installing range-firewall systemd unit + timer (keeps team NAT + isolation durable)...")
@@ -204,7 +218,7 @@ def _install_firewall_and_healthcheck(ctx):
         f"echo '{firewall_service_b64}' | base64 -d | sudo tee /etc/systemd/system/range-firewall.service > /dev/null && "
         f"echo '{firewall_timer_b64}' | base64 -d | sudo tee /etc/systemd/system/range-firewall.timer > /dev/null && "
         "sudo systemctl daemon-reload && sudo systemctl enable --now range-firewall.timer"
-    ), timeout=30)
+    ), timeout=30, step="install range-firewall unit+timer")
     print("  range-firewall.timer enabled (re-asserts NAT + isolation every 30s)")
 
     install_range_healthcheck(ctx)
@@ -227,7 +241,7 @@ def push_quotient_env(ctx, postgres_password, redis_password):
     _run_engine_cmd(ctx, (
         f"echo '{env_b64}' | base64 -d | sudo tee /opt/quotient/.env > /dev/null && "
         "sudo chmod 600 /opt/quotient/.env"
-    ), timeout=10)
+    ), timeout=10, step="write Quotient .env")
 
 
 def clean_engine_for_template(ctx):
@@ -246,7 +260,7 @@ def clean_engine_for_template(ctx):
         "sudo cloud-init clean --logs --machine-id && "
         "sudo rm -f /etc/ssh/ssh_host_* && "
         "echo '    engine template cleaned (volumes, secrets, identity, host keys)'"
-    ), timeout=300)
+    ), timeout=300, step="clean engine for template")
 
 
 # Grow / to the whole disk. Terraform resizes the engine's virtual disk (main.tf: 40 GB)
@@ -280,13 +294,15 @@ def prepare_engine_from_template(ctx, postgres_password, redis_password):
     volume initialized with an empty password. compose up on a template with no
     volumes creates exactly that: an empty scoring DB every run."""
     print("  Preparing engine from template (.env + fresh-volume compose up)...")
-    _run_engine_cmd(ctx, _GROW_ROOT_CMD, check=False, timeout=120)
+    _run_engine_cmd(ctx, _GROW_ROOT_CMD, check=False, timeout=120,
+                    step="grow engine root filesystem")
     push_quotient_env(ctx, postgres_password, redis_password)
-    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose up -d", timeout=600)
+    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose up -d", timeout=600,
+                    step="compose up")
     _run_engine_cmd(ctx, (
         "ss -ltn | grep -q ':3142 ' && echo '  apt-cacher-ng listening on 3142' "
         "|| sudo systemctl enable --now apt-cacher-ng"
-    ), check=False, timeout=60)
+    ), check=False, timeout=60, step="ensure apt-cacher-ng")
 
 
 
