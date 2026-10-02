@@ -498,6 +498,16 @@ class CompetitionSecrets:
     inject_password: Optional[str] = None
 
 
+@dataclass
+class EnginePlacement:
+    """Where the competition's VMs live (None = single-node), resolved once.
+
+    Resolving it is also when the endpoint-keyed engine lock is taken, so `placement` is
+    read by every later node-scoped step and by terraform's satellite inputs."""
+
+    placement: Optional[dict] = None
+
+
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
             team_node=None, engine_node=None, force_from_phase=False):
     """Everything deploy() must do before phase 1, as one testable step.
@@ -529,27 +539,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     secrets = CompetitionSecrets()
     _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identity, from_phase)
 
-    # Multi-node placement (no-op without nodes.json/placement.json): resolved now —
-    # teams and boxes are known, and the env must point at the engine's host BEFORE
-    # the endpoint-keyed engine lock and anything node-scoped. An existing
-    # placement.json always wins (authoritative); a resume without one adopts its
-    # deployed endpoint rather than re-balancing a live range.
-    placement, _resolved_engine_record = resolve_placement(
-        comp_dir, identity.engine_vmid, secrets.teams, spec.boxes, spec.comp_name,
-        team_overrides=_parse_team_node(team_node), engine_override=engine_node,
-        resume_endpoint=(prior.previous_state.get("deployed_endpoint") if prior.resuming else None))
-    if placement:
-        # Stays active for the whole deploy: every later node-scoped call and the
-        # terraform env point at the placement's hosts.
-        activate_placement(placement)
-        if _resolved_engine_record is not None and _resolved_engine_record.engine_mgmt_ip:
-            os.environ["TF_VAR_engine_mgmt_ip"] = _resolved_engine_record.engine_mgmt_ip
-            if _resolved_engine_record.engine_mgmt_gw:
-                os.environ.setdefault("TF_VAR_engine_mgmt_gw",
-                                      _resolved_engine_record.engine_mgmt_gw)
-    secrets.state["multi_node"] = bool(placement)
-    write_state(prior.state_path, secrets.state)
-    acquire_engine_lock(identity.engine_vmid)
+    place = EnginePlacement()
+    _apply_engine_placement(place, prior, secrets, spec, identity, comp_dir, team_node, engine_node)
 
     nakon_config_path = generate_nakon_config(secrets.teams, spec.boxes, spec.difficulty, comp_dir, secrets.box_password,
                                                box_username=spec.box_username)
@@ -599,10 +590,10 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         team_key: {"identifier": team_data["identifier"], "password": team_data["password"]}
         for team_key, team_data in secrets.teams.items()
     }
-    if placement:
+    if place.placement:
         # terraform's per-slot resources key on this: which host builds each team.
         for team_key in teams_json_src:
-            teams_json_src[team_key]["slot"] = placement["team_slots"][team_key]
+            teams_json_src[team_key]["slot"] = place.placement["team_slots"][team_key]
     teams_json = json.dumps(teams_json_src)
     boxes_json = json.dumps(spec.boxes)
 
@@ -692,18 +683,18 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         "engine_mgmt_ip": engine_mgmt_ip,
         "engine_mgmt_gw": os.environ.get("TF_VAR_engine_mgmt_gw", ""),
     }
-    if placement:
+    if place.placement:
         # Multi-node: per-slot satellite providers and the engine's jump routes.
-        tfvars["satellites"] = satellite_tfvars(placement)
-        tfvars["satellite_routes"] = satellite_routes_for(placement)
+        tfvars["satellites"] = satellite_tfvars(place.placement)
+        tfvars["satellite_routes"] = satellite_routes_for(place.placement)
     tfvars_path = tf_dir / "terraform.tfvars.json"
     # Carries TF_VAR_box_password + the per-team passwords.
     write_text_atomic(tfvars_path, json.dumps(tfvars, indent=2))
 
     if from_phase <= 2:
-        if placement:
+        if place.placement:
             from config_ops import preflight_gates_multinode
-            preflight_gates_multinode(comp_dir, spec.boxes, secrets.teams, identity.engine_vmid, placement,
+            preflight_gates_multinode(comp_dir, spec.boxes, secrets.teams, identity.engine_vmid, place.placement,
                                       engine_mgmt_ip=engine_mgmt_ip,
                                       check_free=not prior.resuming)
         else:
@@ -717,7 +708,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
             return None
 
     node = os.environ["TF_VAR_proxmox_node"]
-    all_targets = enumerate_targets(secrets.teams, spec.boxes, placement=placement, default_node=node)
+    all_targets = enumerate_targets(secrets.teams, spec.boxes, placement=place.placement, default_node=node)
     persist_targets(comp_dir, all_targets, spec.boxes)
     # Unmanaged boxes (pfSense/appliances) get no plant/repair/fix_services/cloud-init —
     # they are cloned from their own template and self-configure. Keep them in all_targets
@@ -751,7 +742,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         box_creds=secrets.box_creds,
         domain_creds=secrets.domain_creds,
         inject_password=secrets.inject_password,
-        placement=placement,
+        placement=place.placement,
         node=node,
         engine_vmid=identity.engine_vmid,
         engine_mgmt_ip=engine_mgmt_ip,
@@ -867,6 +858,36 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
             "scoring_vm_id": identity.engine_vmid,
         }
         write_state(prior.state_path, secrets.state)
+
+
+def _apply_engine_placement(place, prior, secrets, spec, identity, comp_dir, team_node, engine_node):
+    """Resolve multi-node placement, point the env at the engine's host, take the lock.
+
+    Resolution happens now because teams and boxes are known and the Proxmox env must
+    point at the engine's host BEFORE the endpoint-keyed lock and any node-scoped call.
+    The lock is taken last, on the identity prepare() resolved first; it stays held for
+    the whole process (deploy() relies on that)."""
+    # Multi-node placement (no-op without nodes.json/placement.json): resolved now —
+    # teams and boxes are known, and the env must point at the engine's host BEFORE
+    # the endpoint-keyed engine lock and anything node-scoped. An existing
+    # placement.json always wins (authoritative); a resume without one adopts its
+    # deployed endpoint rather than re-balancing a live range.
+    place.placement, _resolved_engine_record = resolve_placement(
+        comp_dir, identity.engine_vmid, secrets.teams, spec.boxes, spec.comp_name,
+        team_overrides=_parse_team_node(team_node), engine_override=engine_node,
+        resume_endpoint=(prior.previous_state.get("deployed_endpoint") if prior.resuming else None))
+    if place.placement:
+        # Stays active for the whole deploy: every later node-scoped call and the
+        # terraform env point at the placement's hosts.
+        activate_placement(place.placement)
+        if _resolved_engine_record is not None and _resolved_engine_record.engine_mgmt_ip:
+            os.environ["TF_VAR_engine_mgmt_ip"] = _resolved_engine_record.engine_mgmt_ip
+            if _resolved_engine_record.engine_mgmt_gw:
+                os.environ.setdefault("TF_VAR_engine_mgmt_gw",
+                                      _resolved_engine_record.engine_mgmt_gw)
+    secrets.state["multi_node"] = bool(place.placement)
+    write_state(prior.state_path, secrets.state)
+    acquire_engine_lock(identity.engine_vmid)
 
 
 def _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid):
