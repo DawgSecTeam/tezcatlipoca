@@ -196,6 +196,15 @@ Fedora needs no boot-once step — the official Cloud Base qcow2 already ships c
 qemu-guest-agent (the `base-fedora44-fix` template was sealed unbooted, mirroring the
 `cloud-init;general;template` tag set used by this cluster's library).
 
+**Set SELinux permissive before sealing a Fedora template.** Mount the image (or boot it once)
+and set `SELINUX=permissive` in `/etc/selinux/config`. An enforcing Fedora guest cannot be
+golden-built at all: the qemu-guest-agent domain is confined, so the build's `setenforce 0` is
+denied and `sed -i` cannot write `/etc/ssh` (`Permission denied`) — and gateway-proxied SSH may
+be unavailable during a golden build, leaving the agent as the only path. Without this step the
+only options are to keep Fedora out of the lineup on that node or to rebuild the template, so the
+step belongs in the recipe rather than in a per-run workaround. Verify with
+`getenforce` → `Permissive` on a clone before trusting it in a lineup.
+
 ### 5. Wire it in
 
 - Scoring engine: set `TF_VAR_template_vm_id` in `.env` to the template's numeric Proxmox VM

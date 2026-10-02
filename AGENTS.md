@@ -37,6 +37,15 @@ collisions). Legacy state without a run id: teardown's sweep stays OFF until `--
 untagged VMs need `--allow-untagged`. Details:
 [docs/usage-agents.md](docs/usage-agents.md#run-ownership-teardown-only-touches-this-deploys-vms-2026-10-02).
 
+**The preflight now enforces the other half of this.** Before anything else it refuses to start when
+another deploy is live against the same estate — detected by a *held* flock in
+`~/.tezcatlipoca/locks/`, which is the one signal that cannot lie (a stale `.lock` from a dead run is
+ignored, not treated as a competitor). Two sessions at once is what produced the 13xx vmid races, a
+foreign template squatting a golden slot, and the over-broad sweep that took out two other comps'
+engines and goldens. To run two ranges deliberately, give each its own `--scoring-vmid` and
+`TF_VAR_team_identifiers` blocks and set `TEZ_ALLOW_CONCURRENT=1`; the gate then warns instead of
+refusing.
+
 Teardown after a practice run is `destroy-competition.py` — it is resumable (stale-lock recovery,
 tag-scoped leftover sweep, foreign VMs skip-and-continue); re-run it until it exits clean. **Never
 substitute ad-hoc destroy scripts**: sweep predicates that match names or partial tags will destroy

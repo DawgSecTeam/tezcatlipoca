@@ -42,32 +42,20 @@ to confirm a fresh round. **Next action:** an engine-side watchdog that issues t
 the stale signature appears (same pattern as the live `range-firewall.timer`), so a reboot — including
 the owner-confirmed .193 hardware hard-downs — heals without an operator.
 
-### `clean_engine_for_template` can wipe a *foreign* live engine on a shared mgmt IP
-
-**Status: OPEN — mitigation only.** The engine-template build VM is booted on the planned engine
-static mgmt IP, and the cleanup (`compose down -v`, `.env`/`event.conf` deletion, host-key wipe) is
-delivered by **SSH to that IP**. With two engines of two comps (or an engine and a build VM) up on
-one node, ARP flaps can make the cleanup land on a live foreign engine — observed destroying an
-engine's `/etc/ssh/ssh_host_*`, `/opt/quotient/.env` and containers while its listener stayed up.
-
-Mitigations: give each concurrent comp its own `TF_VAR_engine_mgmt_ip` (now in
-[e2e-testing.md §0](e2e-testing.md#0-read-before-you-deploy--live-traps)); `ssh_via_gateway` self-heals
-the resulting stale TOFU pin; recovery of a hit engine is `ssh-keygen -A` + `systemctl restart ssh`
-via the guest agent, then `--from-phase 3`. **Next action:** address the target by VM identity
-(vmid/guest-agent) instead of a shared IP, and refuse when the IP is ambiguous — see
-[the triage §3 B3](known-issues-triage-2026-10-02.md).
-
 ### Fedora goldens cannot be built on SELinux-enforcing nodes
 
-**Status: OPEN — workaround; live-confirmed 2026-10-02.** The qemu-guest-agent domain is confined:
-on a Fedora 44 clone, guest-exec is root inside `virt_qemu_ga_t`, where `dnf`/`rpm` and writes under
-`/etc` are `Permission denied`, `systemctl` is `Access denied`, and `setenforce 0` plus the
-`virt_qemu_ga_run_unconfined` boolean are denied. Golden build reaches the box by SSH when the
-gateway path works, and **SSH is the escape hatch** — the image's cloud user with the repo key lands
-in `unconfined_t` with passwordless sudo (verified). So the block is agent-only flows; keep Fedora out
-of lineups where the agent is the only path. **Fix (cheap, not yet applied):** flip the template's
-`/etc/selinux/config` to permissive at template-build time. Detail and the verified SSH route:
-[environment-facts.md](environment-facts.md#templates).
+**Status: OPEN — mitigated; the template recipe is fixed, the templates are not rebuilt.** The
+qemu-guest-agent domain is confined: on a Fedora 44 clone, guest-exec is root inside `virt_qemu_ga_t`,
+where `dnf`/`rpm` and writes under `/etc` are `Permission denied`, `systemctl` is `Access denied`, and
+`setenforce 0` plus the `virt_qemu_ga_run_unconfined` boolean are denied. Golden build reaches the box
+by SSH when the gateway path works, and **SSH is the escape hatch** — the image's cloud user with the
+repo key lands in `unconfined_t` with passwordless sudo (verified). So the block is agent-only flows;
+keep Fedora out of lineups where the agent is the only path. **Fix — recipe applied 2026-10-02,
+templates not yet rebuilt:** the template-build recipe now sets `SELINUX=permissive` in
+`/etc/selinux/config` before sealing
+([usage-people.md](usage-people.md#non-ubuntu-linux-box-templates-fedora-alpine)), which only takes
+effect on the next rebuild, so the Fedora templates currently on the nodes still enforce. Detail and
+the verified SSH route: [environment-facts.md](environment-facts.md#templates).
 
 ### llama.cpp local-blue context ceiling
 
@@ -76,36 +64,6 @@ endpoint's advertised context must leave room for it or opencode self-compacts f
 verified local value (cloud blue uses `120000`); do not set `reasoning_effort` for a local endpoint.
 **Next action:** a launch-time assertion against the endpoint's real `n_ctx` instead of prose — see
 [the triage §3 B6](known-issues-triage-2026-10-02.md).
-
-### Template with no cloud-init drive could pass the template preflight
-
-**Status: FIXED 2026-10-02** (moving to the archive). The preflight verified only that a selected
-template resolved to a *tagged template*, so a template with no cloud-init drive — e.g. .150 `920
-base-debian13-cloudinit`, despite its name — passed and its clones booted unreachable an hour later.
-`config_ops._cloudinit_gate` now reads each selected Linux template's config (single-node and the
-per-node multinode path, placed before the `check_free` skip so resumes are covered) and refuses with
-the vmid, ostype and the `-fix` alternative. Windows and other non-Linux ostypes are exempt (identity
-comes from `bootstrap_windows_box`); an unreadable config prints UNVERIFIED and does not block. The
-usable/dead template inventory is in [environment-facts.md](environment-facts.md#templates).
-
-### Freeze: the recorded commit was never read
-
-**Status: FIXED 2026-10-02** (moving to the archive). Code-verified at the time: `.frozen.json`
-recorded the code state (`commit`, `dirty`) but **no gate ever read it** — the deploy-time drift gate
-compares per-template function/`main.tf` hashes from `.template-hashes.json`, and code-class drift is
-*warn-only*. So the documented rule "commit before `--freeze` or the drift gate trips" was never what
-the code did. Fix, in two parts:
-
-- `--freeze` refuses when there are uncommitted **deploy-path code** changes (`.py/.tf/.sh/.j2/.ps1`);
-  non-code dirt (comp JSON, `placement.json`, `nodes.json`, terraform state, `.env` backups) is
-  expected after a run and only prints a note. The scoping is the load-bearing detail: the first cut
-  refused on *any* `git status --porcelain` entry, which made `--freeze` impossible in a normal
-  post-run worktree (verified on the scale8 worktree: a modified `placement.json`, an untracked
-  `nodes.json`, a `.env` backup). `git_commit_info`'s recorded `dirty` now means the same thing, so
-  runtime state cannot raise a false drift warning later.
-- `template_ops.frozen_code_drift` reads the recorded commit at deploy time and warns loudly on a
-  moved commit or uncommitted code, naming both commits and the `--unfreeze --confirm-unfreeze` path.
-  Deliberately warn-only: resuming after a docs commit is normal, and no strict-drift toggle exists.
 
 ## Pending upstream — owned by the catalog / nakon
 

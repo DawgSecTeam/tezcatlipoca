@@ -588,3 +588,97 @@ deletes under the comp-tag guard but the tag sweep needs `--legacy-tags`; kept t
 re-tagged on adoption (`range_ops.retag_ownership`) so they stay recognizable; phase-1 tears bridges
 down only when nothing is still attached. Model: docs/internals.md "Run ownership"; operator
 behavior: docs/usage-agents.md. Tests: tests/test_run_ownership.py.
+
+### Template with no cloud-init drive could pass the template preflight (FIXED 2026-10-02)
+
+**Was:** the preflight verified only that a selected template resolved to a *tagged template*, so a
+template with no cloud-init drive — e.g. .150 `920 base-debian13-cloudinit`, despite its name —
+passed and its clones booted unreachable an hour later.
+**Fix:** `config_ops._cloudinit_gate` reads each selected Linux template's config (single-node and the
+per-node multinode path, placed before the `check_free` skip so resumes are covered) and refuses with
+the vmid, ostype and the `-fix` alternative. Windows and other non-Linux ostypes are exempt (identity
+comes from `bootstrap_windows_box`); an unreadable config prints UNVERIFIED and does not block.
+**Guard:** `tests/test_template_cloudinit.py`. The usable/dead template inventory is in
+[environment-facts.md](environment-facts.md#templates).
+
+### Cleanup could land on a FOREIGN live engine sharing the mgmt IP (FIXED 2026-10-02)
+
+**Was:** the engine-template build VM is booted on the planned engine static management IP, and
+`clean_engine_for_template` — `compose down -v`, `.env`/`event.conf` deletion, machine-id and
+host-key wipe, the most destructive command in the pipeline — was delivered by **SSH to that IP**.
+With two engines of two competitions (or an engine and a build VM) up on one node, ARP flaps could
+make it land on a live foreign engine: observed destroying an engine's `/etc/ssh/ssh_host_*` (every
+session reset at kex while the listener stayed up) plus its `/opt/quotient/.env` and containers.
+**Fix:** the build VM is stamped with `/etc/tezcatlipoca-build-id` (`tezcatlipoca-engine-template/
+<vmid>`, keyed on the reserved build vmid) as soon as it first accepts SSH, and the clean now
+**verifies that stamp before it destroys anything** — a missing or different identity is fatal, not a
+warning, and says nothing was changed and names `TF_VAR_engine_mgmt_ip` as the remedy. The clean also
+removes the stamp, so it is never baked into the template (a stamped template would give every clone
+the build's identity).
+**Guards:** `engine_ops.engine_build_identity` / `stamp_engine_build` / `assert_engine_build_identity`;
+`tests/test_engine_identity.py`, including the verify-before-destroy ordering.
+**Still recommended:** give concurrent comps distinct `TF_VAR_engine_mgmt_ip`s — the stamp catches the
+collision, it does not make sharing an address safe.
+
+### Freeze: the recorded commit was never read (FIXED 2026-10-02)
+
+**Was:** `.frozen.json` recorded the code state (`commit`, `dirty`) but **no gate ever read it** — the
+deploy-time drift gate compares per-template function/`main.tf` hashes from `.template-hashes.json`,
+and code-class drift is *warn-only*. So the documented rule "commit before `--freeze` or the drift
+gate trips" was never what the code did.
+**Fix, in two parts:**
+- `--freeze` refuses when there are uncommitted **deploy-path code** changes (`.py/.tf/.sh/.j2/.ps1`);
+  non-code dirt (comp JSON, `placement.json`, `nodes.json`, terraform state, `.env` backups) is
+  expected after a run and only prints a note. The scoping is the load-bearing detail: the first cut
+  refused on *any* `git status --porcelain` entry, which made `--freeze` impossible in a normal
+  post-run worktree (verified on the scale8 worktree: a modified `placement.json`, an untracked
+  `nodes.json`, a `.env` backup). `git_commit_info`'s recorded `dirty` now means the same thing, so
+  runtime state cannot raise a false drift warning later.
+- `template_ops.frozen_code_drift` reads the recorded commit at deploy time and warns loudly on a
+  moved commit or uncommitted code, naming both commits and the `--unfreeze --confirm-unfreeze` path.
+  Deliberately warn-only: resuming after a docs commit is normal, and no strict-drift toggle exists.
+**Guard:** `tests/test_freeze_guard.py`.
+
+### One bad golden cost eleven deploys: no per-golden checkpoint (FIXED 2026-10-02)
+
+**Was:** a phase-4 re-entry rolled *every* planted golden back to `tz-base` and re-planted the whole
+set. Measured across the cde-2026 attempts, `Golden re-entry: rolling golden-<name> back to 'tz-base'`
+appears 33 times — 11 each for web01, ftp01 and db01 — over 10 runs, while only ftp01 was ever the
+problem. Raising the Windows sysprep budget 900s -> 1800s did not help; the node was contended.
+**Fix:** `template_ops.golden_plant_checkpoints()` records a `golden_planted` map (box -> golden
+hash) in the existing durable `.template-hashes.json`, written the moment each box passes its boot
+smoke. `build_golden_set` skips a checkpointed golden's rollback, plant and smoke — but only while its
+hash matches AND its `tz-base` snapshot still exists, so a re-cloned golden (no snapshot) is never
+mistaken for a done one. Checkpointed goldens are deliberately **not** re-snapshotted, which would
+have overwritten their pre-plant `tz-base` and destroyed the rollback point.
+**Not relaxed:** the conversion barrier. Every golden is still stopped and every pending one still
+smoked before any `POST /template`, so one failed smoke still blocks the whole conversion. Delete the
+`golden_planted` key (or the file) to force a re-plant.
+**Guard:** `tests/test_parallel_golden.py::GoldenCheckpoint`.
+
+### "Max 2 repair cycles" was prose, so cde-2026 looped eleven times (FIXED 2026-10-02)
+
+**Was:** `docs/e2e-testing.md` has always said a third consecutive resume is not a repair but a
+resume-loop. Nothing enforced it, so one Windows golden produced `deploy6` -> `deploy16` over
+2026-09-29/30.
+**Fix:** `deploy.record_failure()` counts consecutive failures of the same phase keyed on a
+normalised failure signature (vmids, uuids, hex ids and digits are stripped, so "the same failure on
+a different box" matches). `deploy.guard_resume_streak()` refuses the resume at
+`RESUME_ATTEMPT_LIMIT` (2) *before any infrastructure work*, prints the signature it matched and
+names the destroy-and-redeploy path; a **different** failure at the same phase resets the budget, and
+`--force-from-phase` overrides. `--min-load-free N` waits for the node's 1-minute load to drop below
+N on a resume into a phase that previously failed — the hand-throttling operators were doing by eye
+("load=32.06 (attempt 1/36) … load below 10").
+**Guards:** `tests/test_resume_budget.py`, `tests/test_deploy_prepare.py` (wiring).
+
+### A second concurrent deploy was undetectable (FIXED 2026-10-02)
+
+**Was:** two sessions could drive one estate at once; the recorded outcomes are a foreign template
+squatting a competition's golden vmid slot, and an over-broad sweep destroying two other
+competitions' engines and goldens (2026-09-30).
+**Fix:** `nakon_ops.other_deploys_in_flight()` probes `~/.tezcatlipoca/locks/` for a *held* flock —
+the one concurrency signal that cannot lie, because the kernel drops it when the holder dies, so the
+18 stale `.lock` files on these hosts are correctly ignored. `config_ops._gate_concurrent_deploys()`
+runs first in every preflight and refuses, naming the holder and the remedy;
+`TEZ_ALLOW_CONCURRENT=1` proceeds with a warning once blocks are coordinated.
+**Guard:** `tests/test_concurrent_deploys.py`.
