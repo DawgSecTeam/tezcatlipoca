@@ -391,7 +391,11 @@ def stage_deploy(args, comp):
         cmd += ["--from-phase", str(args.resume)]
     r = run(cmd, cwd=REPO, timeout=6 * 3600, check=False)
     if r.returncode != 0 and args.run_dir:
-        (Path(args.run_dir) / "deploy.log").write_text(r.stdout or "")
+        # stderr too: the phase-4 checkpoint SystemExit and a phase-3 ssh timeout both
+        # printed ONLY to stderr, and a stdout-only deploy.log sent the post-mortem to
+        # the live estate for the answer (live-found 2026-10-03, twice).
+        (Path(args.run_dir) / "deploy.log").write_text(
+            (r.stdout or "") + "\n=== STDERR ===\n" + (r.stderr or ""))
     for line in (r.stdout or "").splitlines()[-15:]:
         print("   ", line)
     if r.returncode != 0:
@@ -467,6 +471,15 @@ def scorch_script(comp):
              'ENGINE_RUN="ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no '
              '-o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$VM_USER@$ENGINE_IP""',
              'echo "== scored-check oracle (engine vantage) — team $MY_TEAM =="']
+    if not (http_specs or port_specs or ssh_specs):
+        # Catalog-name pins ("apache") carry no port metadata, so no engine-vantage
+        # probe can be derived — scrim-fresh-a 2026-10-03 printed the header and
+        # nothing else, and blue read the silence as "scorch is broken". Fall back to
+        # the scorer's own view so the oracle always says SOMETHING actionable.
+        lines.append('echo "(this comp\'s pins carry no ports, so there is no independent')
+        lines.append(' engine-vantage probe — showing the scorer\'s own view instead)"')
+        lines.append('exec ./score.py')
+        return "\n".join(lines) + "\n"
     if http_specs:
         lines.append("for spec in " + " ".join(f'"{x}"' for x in http_specs) + "; do")
         lines.append('  IFS="|" read -r box ip port <<<"$spec"')
