@@ -3,28 +3,33 @@ import { api } from '../api'
 import { useComp } from './CompLayout'
 import MarkdownEditor from '../components/MarkdownEditor'
 import { Button, ErrorBanner } from '../components/ui'
+import { Dirty, PageHeader, saveKey, useSaveHotkey, useToast } from '../components/kit'
 
 export default function Packet() {
   const { comp } = useComp()
   const [body, setBody] = useState(null)
-  const [saved, setSaved] = useState(true)
+  const [dirty, setDirty] = useState(false)
   const [err, setErr] = useState(null)
+  const toast = useToast()
   useEffect(() => { api.packet(comp.id).then((d) => setBody(d.body)).catch(setErr) }, [comp.id])
 
   const save = async () => {
-    try { await api.putPacket(comp.id, body); setSaved(true) } catch (e) { setErr(e) }
+    try { await api.putPacket(comp.id, body); setDirty(false); toast('Packet saved') } catch (e) { setErr(e) }
   }
+  useSaveHotkey(save, dirty)
+
   return (
-    <div className="space-y-8 pb-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-4xl font-bold tracking-tight">Packet</h1>
-          <p className="font-mono text-xs text-faint">competitions/{comp.id}/packet.md — the competitor-facing packet</p>
-        </div>
-        <Button variant="primary" onClick={save} disabled={saved}>{saved ? 'Saved' : 'Save'}</Button>
-      </div>
+    <div className="pb-6">
+      <PageHeader crumbs={[[comp.name, `/c/${comp.id}`], ['Packet']]} title="Competitor packet"
+        sub={<>What teams receive ahead of the event · <span className="font-mono text-xs text-faint">packet.md</span></>}
+        actions={<><Dirty dirty={dirty} /><Button variant="primary" onClick={save} disabled={!dirty} title={`Save (${saveKey})`}>Save</Button></>} />
       <ErrorBanner error={err} onClose={() => setErr(null)} />
-      {body !== null && <MarkdownEditor value={body} onChange={(v) => { setBody(v); setSaved(false) }} minHeight={600} />}
+      {body !== null && (
+        <div className="rise rise-1">
+          <MarkdownEditor value={body} onChange={(v) => { setBody(v); setDirty(true) }} minHeight={620}
+            placeholder="Scenario, format, scored services, rules… generate-packet.py can draft one from the comp's config." />
+        </div>
+      )}
     </div>
   )
 }

@@ -8,9 +8,10 @@ const isFirewall = (b) => /pfsense|opnsense|firewall/i.test(b.template) || (b.un
 const DOT = { windows: 'var(--win)', linux: 'var(--lin)', firewall: 'var(--fw)', engine: 'var(--eng)' }
 
 // Each node is a small floating tile: page-coloured face, bright rim, soft shadow, coloured dot.
-function Node({ x, y, w, h, label, sub, kind, onClick, selected }) {
+function Node({ x, y, w, h, label, sub, kind, onClick, selected, tip }) {
   return (
     <g onClick={onClick} className={onClick ? 'cursor-pointer [&:hover>rect]:[stroke:var(--accent)]' : ''} transform={`translate(${x - w / 2},${y - h / 2})`}>
+      {tip && <title>{tip}</title>}
       <rect width={w} height={h} rx="16" fill="var(--bg)" stroke={selected ? 'var(--accent)' : 'var(--edge)'} strokeWidth="2.5" filter="url(#tile-shadow)" style={{ transition: 'stroke .2s' }} />
       <circle cx="16" cy={h / 2} r="4" fill={DOT[kind]} />
       <text x={28} y={sub ? h / 2 - 2 : h / 2 + 4} fontSize="13" fontWeight="600" fill="var(--fg)">{label}</text>
@@ -19,7 +20,19 @@ function Node({ x, y, w, h, label, sub, kind, onClick, selected }) {
   )
 }
 
-export default function Topology({ boxes, onSelect, selected, height = 280 }) {
+export function TopologyLegend({ boxes }) {
+  const kinds = new Set(['engine', ...boxes.map((b) => (isFirewall(b) ? 'firewall' : platformOf(b.template)))])
+  const label = { engine: 'Scoring engine', windows: 'Windows', linux: 'Linux', firewall: 'Firewall (in-path)' }
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted">
+      {['engine', 'windows', 'linux', 'firewall'].filter((k) => kinds.has(k)).map((k) => (
+        <span key={k} className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: DOT[k] }} />{label[k]}</span>
+      ))}
+    </div>
+  )
+}
+
+export default function Topology({ boxes, onSelect, selected }) {
   const firewalls = boxes.filter(isFirewall)
   const hosts = boxes.filter((b) => !isFirewall(b)).sort((a, b) => a.last_octet - b.last_octet)
 
@@ -31,7 +44,7 @@ export default function Topology({ boxes, onSelect, selected, height = 280 }) {
   const fwY = 116
   const switchY = firewalls.length ? 184 : 124
   const hostY0 = switchY + 82
-  const H = Math.max(height, hostY0 + rows * 78 + 10)
+  const H = hostY0 + (rows - 1) * 78 + 40
   const cx = W / 2
 
   const hostPos = hosts.map((b, i) => {
@@ -41,7 +54,7 @@ export default function Topology({ boxes, onSelect, selected, height = 280 }) {
   })
 
   if (!boxes.length) {
-    return <div className="flex h-40 items-center justify-center text-sm text-faint">No boxes yet — add one to see the topology.</div>
+    return <div className="flex h-40 flex-col items-center justify-center gap-1 text-sm text-faint"><span>The map draws itself from your boxes.</span><span className="text-xs">Add one to see it.</span></div>
   }
 
   return (
@@ -60,15 +73,16 @@ export default function Topology({ boxes, onSelect, selected, height = 280 }) {
       {firewalls.map((b, i) => (
         <Node key={b.name} x={cx + (i - (firewalls.length - 1) / 2) * 160} y={fwY} w={136} h={46}
           label={b.name} sub={`.${b.last_octet} · in-path`} kind="firewall"
-          onClick={onSelect && (() => onSelect(b))} selected={selected === b.name} />
+          onClick={onSelect && (() => onSelect(b))} selected={selected === b.name} tip={`${b.name} — ${b.template}`} />
       ))}
       <g transform={`translate(${cx - 100},${switchY - 16})`}>
         <rect width="200" height="32" rx="16" fill="var(--sunken)" />
-        <text x="100" y="20.5" textAnchor="middle" fontSize="12" fill="var(--muted)" fontFamily="ui-monospace,monospace">192.168.&lt;team&gt;.0/24</text>
+        <text x="100" y="20.5" textAnchor="middle" fontSize="12" fill="var(--muted)" fontFamily="var(--font-mono)">192.168.&lt;team&gt;.0/24</text>
       </g>
       {hostPos.map(({ b, x, y }) => (
         <Node key={b.name} x={x} y={y} w={122} h={46} label={b.name} sub={`.${b.last_octet} · ${platformOf(b.template)}`}
-          kind={platformOf(b.template)} onClick={onSelect && (() => onSelect(b))} selected={selected === b.name} />
+          kind={platformOf(b.template)} onClick={onSelect && (() => onSelect(b))} selected={selected === b.name}
+          tip={`${b.name} — ${b.template} · ${b.cpu} vCPU · ${b.memory_mb} MB`} />
       ))}
     </svg>
   )

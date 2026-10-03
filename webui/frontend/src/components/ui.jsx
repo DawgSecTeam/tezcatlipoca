@@ -5,15 +5,19 @@ export function Button({ variant = 'default', className = '', ...props }) {
   return <button className={`btn ${v} ${className}`} {...props} />
 }
 
-export function SearchInput({ value, onChange, placeholder = 'Search…', autoFocus, className = '' }) {
+export function SearchInput({ value, onChange, placeholder = 'Search…', autoFocus, className = '', inputRef, hotkey }) {
   return (
     <div className={`relative ${className}`}>
-      <input autoFocus={autoFocus} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
-        className="field rounded-full pl-4 pr-10" />
-      <svg className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
+      <svg className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8">
         <circle cx="8.5" cy="8.5" r="5.5" />
         <path d="M13 13l4 4" strokeLinecap="round" />
       </svg>
+      <input ref={inputRef} autoFocus={autoFocus} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
+        onKeyDown={(e) => { if (e.key === 'Escape' && value) { e.preventDefault(); onChange('') } }}
+        className="field rounded-full pl-11 pr-10" />
+      {value
+        ? <button type="button" onClick={() => onChange('')} className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full px-1.5 text-faint hover:text-fg" aria-label="Clear">✕</button>
+        : hotkey && <kbd className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2">{hotkey}</kbd>}
     </div>
   )
 }
@@ -47,16 +51,16 @@ export function ErrorBanner({ error, onClose }) {
 export function Modal({ open, onClose, title, children, wide }) {
   useEffect(() => {
     if (!open) return
-    const onKey = (e) => e.key === 'Escape' && onClose()
+    const onKey = (e) => e.key === 'Escape' && !e.defaultPrevented && onClose()
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose])
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-bg/60 p-4 pt-[9vh] backdrop-blur-sm" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`panel w-full ${wide ? 'max-w-3xl' : 'max-w-md'}`}>
+      <div className={`panel rise w-full ${wide ? 'max-w-3xl' : 'max-w-md'}`} role="dialog" aria-modal="true">
         <div className="flex items-center justify-between px-6 pt-5 pb-2">
-          <h2 className="text-lg font-semibold">{title}</h2>
+          <h2 className="display text-2xl">{title}</h2>
           <button onClick={onClose} className="btn btn-ghost h-8 w-8 !p-0 text-faint">✕</button>
         </div>
         <div className="px-6 pb-6 pt-2">{children}</div>

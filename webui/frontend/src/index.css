@@ -1,3 +1,6 @@
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/fraunces";
+@import "@fontsource-variable/jetbrains-mono";
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
@@ -71,9 +74,25 @@
   --shadow-float: var(--shadow-float);
   --shadow-tile: var(--shadow-tile);
   --shadow-inset: var(--shadow-inset);
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Fraunces Variable', ui-serif, Georgia, serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
 }
 
-html, body { background: var(--bg); color: var(--fg); }
+html, body { background: var(--bg); color: var(--fg); font-family: var(--font-sans); font-feature-settings: 'cv11', 'ss01'; }
+::selection { background: var(--accent-soft); color: var(--fg); }
+
+/* Headings use the soft serif from the reference ("hi"); body stays Inter. */
+.display { font-family: var(--font-display); font-variation-settings: 'SOFT' 100, 'WONK' 0; letter-spacing: -0.02em; font-weight: 600; }
+
+/* Panels settle in when a page mounts. */
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise .35s cubic-bezier(.2,.7,.2,1) both; }
+.rise-1 { animation-delay: .04s; } .rise-2 { animation-delay: .08s; } .rise-3 { animation-delay: .12s; } .rise-4 { animation-delay: .16s; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(12px) scale(.97); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .rise, .toast { animation: none !important; } }
+
+kbd { @apply rounded-md border border-line bg-sunken px-1.5 py-0.5 font-mono text-[10px] text-muted; }
 body { transition: background-color .2s, color .2s; }
 
 @layer components {

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import './index.css'
 import { initTheme } from './components/ui'
+import { ConfirmProvider, ToastProvider } from './components/kit'
 import Comps from './pages/Comps'
 import CompLayout from './pages/CompLayout'
 import Overview from './pages/Overview'
@@ -17,6 +18,8 @@ initTheme()
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <BrowserRouter>
+      <ToastProvider>
+      <ConfirmProvider>
       <Routes>
         <Route path="/" element={<Comps />} />
         <Route path="/c/:id" element={<CompLayout />}>
@@ -30,6 +33,8 @@ createRoot(document.getElementById('root')).render(
           <Route path="boxes/:box/misconfigs" element={<PinPage kind="misconfigs" />} />
         </Route>
       </Routes>
+      </ConfirmProvider>
+      </ToastProvider>
     </BrowserRouter>
   </StrictMode>,
 )

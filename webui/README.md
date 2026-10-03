@@ -41,6 +41,18 @@ they were read.
 ([docs/packet-profiles.md](../docs/packet-profiles.md)). Once the comp dir exists, the comp dir is
 the source of truth.
 
+## Keyboard
+
+| Key | Where | Does |
+|---|---|---|
+| `/` | comps grid, box page, services/misconfigs | focus the search box |
+| `⌘S` / `Ctrl S` | any editor with unsaved changes | save |
+| `↑` `↓` `Enter` | catalog picker | browse, then add the highlighted config |
+| `⌘B` `⌘I` `⌘K` | Markdown editor | bold, italic, link |
+| `Esc` | dialogs, search boxes | close, or clear the search |
+
+The theme follows the OS on first visit; the sun/moon button switches it and the browser remembers.
+
 ## Catalog (the "Add +" pickers)
 
 The pickers come from nakon's catalog (`vendor/nakon`, so run `git submodule update --init`),
