@@ -1,4 +1,0 @@
-name m4-validation-2026-09-25
-scenario M4 validation: engine+golden template lifecycle, hash reuse/rebuild, freeze; Windows AD (DC+member) + Linux realmd member; pin-var regression (sudoers-rule vars, hosts-redirect identity)
-difficulty 3
-team_beacons 0

@@ -1,8 +1,8 @@
 # Environment facts — nodes, storage, templates, vmids
 
 Hardware and environment reality for the Proxmox hosts this pipeline deploys onto. These are **not**
-bugs — they are the ground truth a deploy has to fit into. Moved out of
-[known-issues.md](known-issues.md) (see [the triage](known-issues-triage-2026-10-02.md)) so that
+bugs — they are the ground truth a deploy has to fit into. Split out of
+[known-issues.md](known-issues.md) so that
 "something is broken" and "this is how the estate is" stop competing for attention.
 
 **Verification column:** **[live]** = read back from the Proxmox API or a guest agent on 2026-10-02;
@@ -132,7 +132,7 @@ three past competitions were still on the nodes, 20 of them running:
 | .150 | `scale8-scrim-2026-10-01` | 16 | 10 | branch `scale8-2026-10-01`, `.tez-backups/scale8-preserve/` |
 | .193 | `cde-2026` | 14 | 9 | `competitions/cde-2026/` |
 | .193 | `scale8-scrim-2026-10-01` | 7 | 1 | same branch/backup |
-| .193 | `amongus-cde-2026` | 6 | 0 | `competitions/amongus-cde-2026/` |
+| .193 | `amongus-cde-2026` | 6 | 0 | `competitions/amongus-cde/` |
 
 They hold vmids, consume `hdd`, and their golden templates can squat a slot a concurrent comp
 wants. Reclaim with `destroy-competition.py` from the matching comp dir/worktree — never an ad-hoc

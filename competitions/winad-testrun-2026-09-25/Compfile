@@ -1,5 +1,0 @@
-name winad-testrun-2026-09-25
-scenario Pre-event test run of the improved-parallelism pipeline (M4 template lifecycle, pin-vars fix, plant coverage). Meridian Health's regional care network: dc01 (fresh AD forest per team) with win01 and three Linux boxes (web01/app01/db01) joined via realmd. Hunt the planted misconfigurations while keeping scored services alive.
-difficulty 10
-team_beacons 1
-quotient_ref dab6a9804a7c53850df9a6603841289ef09da7e0

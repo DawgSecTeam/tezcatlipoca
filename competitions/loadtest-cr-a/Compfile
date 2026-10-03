@@ -1,4 +1,0 @@
-name loadtest-cr-a
-scenario Capacity stress 1/2: 4 teams x 7 boxes - Windows AD DC + domain-joined Windows member, pfSense firewall (presence only), 4 Linux service boxes
-difficulty 1
-nakon_jobs 4

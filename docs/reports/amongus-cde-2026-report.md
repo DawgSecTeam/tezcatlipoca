@@ -7,7 +7,7 @@ tezcatlipoca pipeline. Worktree: `tezcatlipoca-amongus`, branch `amongus-cde-202
 
 | Workstream | State |
 |---|---|
-| Competition definition (`competitions/amongus-cde-2026/`) | DONE — catalog check 0/0, generate dry-run validated (6c3a03a) |
+| Competition definition (`competitions/amongus-cde/`) | DONE — catalog check 0/0, generate dry-run validated (6c3a03a) |
 | Pipeline code (check mappings, stage routing, cross-box vars) | DONE — 133/133 tests (15784fa) |
 | vulndb catalog rows | DONE — `ad-color-fleet-win` (298), `ad-dns-localhost` (299), `ftp-content-win` (300) |
 | `base-centos8-fix` template | DONE — sealed vmid 1032, scratch-validated (password SSH, dnf httpd) |
@@ -177,7 +177,7 @@ isolation, misconfig + survival, injects (2), plant integrity 0 failed, domains
   `box_vulns.json` → `redeploy-competition.py --mode reconfigure` (keeps teams up).
 - The inject drop is skeld's anonymous-read FTP root (`C:\inetpub\ftproot\MyFtpSite`);
   submissions land there per the inject briefings.
-- Credentials: `competitions/amongus-cde-2026/credentials.txt` (0600, gitignored).
+- Credentials: `competitions/amongus-cde/credentials.txt` (0600, gitignored).
   AD fleet passwords are the spec's (Red123! …), blackteam = TOcpACdpCPAt; everything
   else is per-competition generated.
 - Event day: re-anchor injects at T0, then `POST /api/competition/start` + unpause.

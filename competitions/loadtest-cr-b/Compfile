@@ -1,4 +1,0 @@
-name loadtest-cr-b
-scenario Capacity stress 2/2: 4 teams x 7 boxes - Windows AD DC + domain-joined Windows member, pfSense firewall (presence only), 4 Linux service boxes (fedora excluded: SELinux-confined guest-agent blocks golden auth on .150)
-difficulty 1
-nakon_jobs 4

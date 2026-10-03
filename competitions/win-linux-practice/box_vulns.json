@@ -1,7 +1,0 @@
-{
-  "dc01": [],
-  "linux01": [
-    "writable-sudoers",
-    "www-data-shell"
-  ]
-}

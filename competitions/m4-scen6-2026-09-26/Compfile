@@ -1,4 +1,0 @@
-name m4-scen6-2026-09-26
-scenario M4 scenario 6: selective golden rebuild (one web01 golden-stage config input changed); two-team AD DomainSID uniqueness evidence
-difficulty 3
-team_beacons 0
