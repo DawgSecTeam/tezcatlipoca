@@ -85,6 +85,40 @@ class LoadNodesConfigTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 nodes_ops.load_nodes_config(path)
 
+    def test_shared_token_env_rejected(self):
+        """Two nodes on one token var is the scale8 soak's mid-preflight 401.
+
+        activate_placement applies one record's token at a time INTO the env var the
+        record names, so a shared name means the last write is used for every node —
+        the satellite authenticated with the engine node's token and 401'd. Distinct
+        node names here, so this failure can only come from the token check.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "nodes.json"
+            path.write_text(json.dumps({"nodes": [
+                {"name": "eng", "endpoint": "https://a:8006", "node": "n1",
+                 "datastore": "d", "token_env": "TF_VAR_proxmox_api_token"},
+                {"name": "sat", "endpoint": "https://b:8006", "node": "n2",
+                 "datastore": "d", "token_env": "TF_VAR_proxmox_api_token"}]}))
+            with self.assertRaises(SystemExit) as raised:
+                nodes_ops.load_nodes_config(path)
+        msg = str(raised.exception)
+        self.assertIn("token_env", msg)
+        self.assertIn("eng", msg)
+        self.assertIn("sat", msg)
+
+    def test_unique_token_env_is_accepted(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "nodes.json"
+            path.write_text(json.dumps({"nodes": [
+                {"name": "eng", "endpoint": "https://a:8006", "node": "n1",
+                 "datastore": "d", "token_env": "TF_VAR_proxmox_api_token"},
+                {"name": "sat", "endpoint": "https://b:8006", "node": "n2",
+                 "datastore": "d", "token_env": "TF_VAR_proxmox_api_token_150"}]}))
+            records, _ = nodes_ops.load_nodes_config(path)
+        self.assertEqual([r.token_env for r in records],
+                         ["TF_VAR_proxmox_api_token", "TF_VAR_proxmox_api_token_150"])
+
 
 class NodeEnvTest(unittest.TestCase):
     def test_apply_and_restore(self):

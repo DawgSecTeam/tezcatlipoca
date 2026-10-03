@@ -129,6 +129,14 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   cycle slot to the pacing sleep. Full transcript + exact prompt are kept per
   cycle (`cycles/cycle-T+NNN.prompt.txt` / `.output.log`) for the after-action
   report; `feed.log` stays a short readable tail (last 2000 chars per cycle).
+- **How many endpoints a run needs** — the lock serves one team at a time per
+  endpoint, in rotation. At 4 teams that is tolerable; at 8 the soak measured each
+  team getting a cycle every ~10 minutes of wall time, which halves blue's effective
+  attention per team and is the largest single lever on blue's score. **At ≥6 teams,
+  spread the blues over ≥2 LLM endpoints** with `--blue2-base-url`/`--blue2-model`
+  (`--blue3-*`, `--blue4-*` exist too; each distinct base URL gets its own lock, and
+  teams sharing one still serialize). Decide the split before launching — `stage_run`
+  builds the lock table from those flags at startup.
 - pacing (`blue_feed_loop` tail) — pace off ACTUAL cycle duration: local qwen
   turns are slow, so a fixed pre-cycle sleep both starves throughput and
   can't know a cycle overran; sleep = clamp(30..600 s,
