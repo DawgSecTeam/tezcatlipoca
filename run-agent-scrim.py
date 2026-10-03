@@ -441,13 +441,15 @@ def _web01_units(comp):
         port = pin.get("port") or (80 if httpish else None)
         if port is None:
             continue
-        candidates.append((httpish, name in ("ssh", "openssh", "sshd"), port, mapped))
+        display = pin.get("display") or _WATCHDOG_DISPLAY.get(name) or name
+        candidates.append((httpish, name in ("ssh", "openssh", "sshd"), port, mapped,
+                           display))
     if not candidates:
         raise SystemExit("  ERROR: no serviceable web01 unit for the fire test — "
                          "web01 pins in box_services.json map to nothing in _WATCHDOG_UNITS")
     # httpish first, then anything-but-sshd, then lowest port
     candidates.sort(key=lambda c: (not c[0], c[1], c[2]))
-    return candidates[0][3], candidates[0][2]
+    return candidates[0][3], candidates[0][2], candidates[0][4]
 
 
 def scorch_script(comp):
@@ -587,7 +589,7 @@ def stage_verify(args, comp, creds):
     web_ip = (json.loads((comp / "targets.json").read_text()).get("targets", {})
               .get("team1-web01", {}).get("ip"))
     web_ip = web_ip or f"192.168.{creds['TEAM1_ID']}.4"
-    units, svc_port = _web01_units(comp)
+    units, svc_port, svc_display = _web01_units(comp)
 
     def ssh_web01(cmd, timeout=60):
         return run_tree(base + [f"{creds['BOX_USER']}@{web_ip}", cmd],
@@ -628,13 +630,18 @@ def stage_verify(args, comp, creds):
 
     def scoreboard_down():
         """(down, err): down=True/False; err set when the scoreboard itself is unreadable.
-        Watches only the fired service's row: other scored services may legitimately
-        start down (planted broken services blue must restore), which would make the
-        any-service gate structurally unpassable on lineups with one (17b's
-        app01-dns/db01-sql sit down at T0 on the current template bases)."""
+        Watches the FIRED service's row (<box>-<display>) — other scored services may
+        legitimately start down (planted broken services blue must restore), and even a
+        sibling web01 row can be down (scrim-one 2026-10-03: the stale web01-ssh row
+        from an aborted attempt answered "down" for a nginx stop and then refused every
+        nginx restore). Falls back to the first web01 row only when the expected name
+        is not registered at all."""
         try:
             rows = parsed_status(creds, "team1")
-            fired = next((s for s in rows if s["service"].startswith("web01")), None)
+            wanted = f"web01-{svc_display}"
+            fired = next((s for s in rows if s["service"] == wanted), None)
+            if fired is None:
+                fired = next((s for s in rows if s["service"].startswith("web01")), None)
             if fired is None:
                 fired = rows[0]
             return not fired["up"], None
@@ -642,9 +649,22 @@ def stage_verify(args, comp, creds):
             return None, f"{type(e).__name__}: {e}"
 
     sudo_web01(f"systemctl stop {shlex.quote(unit)}")
-    time.sleep(150)
-    down, down_err = scoreboard_down()
-    http_down = web01_http()
+    # The scoreboard lags reality: a round that started before the stop lands its
+    # result late, and Quotient's per-round cadence means "the latest completed round"
+    # can trail the actual service by a minute or two (scrim-one 2026-10-03: the probe
+    # read 000 while the scoreboard still said UP at +150s, and the run aborted on a
+    # service that was demonstrably down). Poll until BOTH vantages agree the service
+    # is down, within a deadline — the engine-path probe is the fast truth, the
+    # scoreboard is the one that must eventually agree.
+    down = down_err = None
+    http_down = ""
+    deadline = time.time() + 360
+    while time.time() < deadline:
+        time.sleep(30)
+        down, down_err = scoreboard_down()
+        http_down = web01_http()
+        if down is True and http_down in ("", "000"):
+            break
     log(f"fire test: after stop — scoreboard down={down}"
         + (f" ({down_err})" if down_err else "")
         + f", web01 http={http_down or 'no answer'}")
@@ -654,9 +674,17 @@ def stage_verify(args, comp, creds):
         # unmask first: run-12 left the unit unstartable and a plain start was a no-op
         sudo_web01(f"systemctl unmask {shlex.quote(unit)}; "
                    f"systemctl start {shlex.quote(unit)}")
-        time.sleep(150 if attempt == 1 else 60)
-        up, up_err = scoreboard_down()
-        http_up = web01_http()
+        # same scoreboard-lag deal as the stop phase: poll for agreement, don't sleep
+        # a fixed slice and read one stale round
+        up = up_err = None
+        http_up = ""
+        deadline = time.time() + (240 if attempt == 1 else 120)
+        while time.time() < deadline:
+            time.sleep(30)
+            up, up_err = scoreboard_down()
+            http_up = web01_http()
+            if up is False and http_up not in ("", "000"):
+                break
         restored = up is False
         healed = restored and http_up not in ("", "000")
         log(f"fire test: restore attempt {attempt} — scoreboard "
@@ -1337,6 +1365,17 @@ _WATCHDOG_UNITS = {
     "postfix": ["postfix"], "dovecot": ["dovecot"], "vsftpd": ["vsftpd"],
     "ssh": ["ssh", "sshd"], "openssh": ["ssh", "sshd"], "sshd": ["ssh", "sshd"],
     "splunk": ["Splunkd"], "exim4": ["exim4"], "exim": ["exim4"], "sendmail": ["sendmail"],
+}
+# The scoreboard service name a catalog pin registers as (<box>-<Display>): the fire
+# test watches its own row, and "first row starting with web01" is web01-ssh on any
+# comp whose web01 carries an ssh pin — scrim-one 2026-10-03 "detected down" from a
+# stale ssh outage and then failed to restore the nginx service it never watched.
+_WATCHDOG_DISPLAY = {
+    "nginx": "http", "apache": "http", "httpd": "http", "iis": "http",
+    "bind": "dns", "named": "dns", "mysql": "sql", "mariadb": "sql", "mysqld": "sql",
+    "postfix": "smtp", "exim4": "smtp", "exim": "smtp", "sendmail": "smtp",
+    "dovecot": "imap", "vsftpd": "ftp", "ssh": "ssh", "openssh": "ssh", "sshd": "ssh",
+    "splunk": "splunk",
 }
 WATCHDOG_INTERVAL = 60
 
