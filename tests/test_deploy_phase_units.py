@@ -550,6 +550,10 @@ class PrepareResumeGuards(unittest.TestCase):
                                           "admin_password": "a", "box_password": "b"})
             with patch.object(deploy, "load_injects", return_value=[]), \
                     patch.object(deploy, "load_packet_passwords", return_value=None), \
+                    patch.object(deploy, "_artifact_probes",
+                                 return_value={"vmids_from_state": lambda: [1000],
+                                               "vm_exists": lambda: {1000},
+                                               "box_reachable": lambda *a: (True, "")}), \
                     patch.object(deploy, "resolve_placement",
                                  side_effect=RuntimeError("past the guard")):
                 with self.assertRaises(RuntimeError) as ctx:

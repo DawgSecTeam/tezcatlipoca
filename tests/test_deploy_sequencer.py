@@ -73,6 +73,17 @@ RUN_BANNERS = {
 }
 
 
+def _no_artifact_gates():
+    """Neutralize the checkpoint's existence gate for sequencing tests.
+
+    `checkpoint(3|4)` now verifies the phase's output exists before recording it (C1),
+    which needs a live Proxmox. These tests exercise ORDER and checkpoint gating, not
+    artifact verification, so the gate is stubbed here and tested for real in
+    tests/test_resume_existence.py."""
+    return patch.object(deploy.DeployContext, "_verify_phase_artifacts",
+                        lambda self, n: None)
+
+
 def _ctx(comp_dir, from_phase, state=None):
     """A DeployContext carrying only what the sequencer and finish path touch."""
     return deploy.DeployContext(
@@ -183,10 +194,10 @@ class Sequencer(unittest.TestCase):
                 patch.object(deploy_phases, "connect_terraform",
                              side_effect=lambda c: calls.append(("connect", 2))), \
                 patch.object(deploy_phases, "finish_deploy"), \
+                _no_artifact_gates(), \
                 contextlib.redirect_stdout(io.StringIO()):
             deploy.deploy(comp_dir, assume_yes=True, from_phase=from_phase)
         return ctx
-
     def test_phases_run_in_order_and_connect_terraform_sits_after_phase_2(self):
         calls = []
         with tempfile.TemporaryDirectory() as d:
