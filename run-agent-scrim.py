@@ -396,10 +396,15 @@ def stage_deploy(args, comp):
         print("   ", line)
     if r.returncode != 0:
         raise RuntimeError(f"deploy failed rc={r.returncode} (log above); fix and resume with --skip-deploy/--from-phase")
-    if "last_phase: 7" not in (r.stdout or "") and "Deploy complete" not in (r.stdout or ""):
+    # The pipeline's final phase number is the source of truth — hardcoded 7s went
+    # stale when firewalls became phase 5 and seed became phase 8 (live-found
+    # 2026-10-03: a completed deploy was rejected as "did not reach phase 7").
+    from deploy_phases import PHASES
+    final_phase = len(PHASES)
+    if f"last_phase: {final_phase}" not in (r.stdout or ""):
         state = json.loads((comp / ".deploy_state.json").read_text())
-        if state.get("last_phase") != 7:
-            raise RuntimeError("deploy did not reach phase 7")
+        if state.get("last_phase") != final_phase:
+            raise RuntimeError(f"deploy did not reach phase {final_phase}")
 
 
 def _web01_units(comp):
