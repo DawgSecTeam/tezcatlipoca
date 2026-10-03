@@ -14,8 +14,7 @@ All guidance lives in `docs/` — start with:
 - [docs/usage-people.md](docs/usage-people.md) — setup/operation by hand, env-var reference, troubleshooting
 - [docs/multi-node.md](docs/multi-node.md) — one competition across multiple Proxmox hosts (nodes.json placement, jump routing, per-slot goldens, sync-template)
 - [docs/packet-profiles.md](docs/packet-profiles.md) — competition packets → ranges (profiles, compile-packet, packet verify gates)
-- [docs/known-issues.md](docs/known-issues.md) — **open/pending issues only**
-- [docs/incident-archive.md](docs/incident-archive.md) — resolved incidents, kept for the why
+- [docs/known-issues.md](docs/known-issues.md) — **open/pending issues only; fixed issues are deleted, not archived**
 - [docs/environment-facts.md](docs/environment-facts.md) — node/storage/template/vmid ground truth
 - [docs/security-disclosures.md](docs/security-disclosures.md) — credential exposures + the open rotation
 - [docs/upstream-defects-handoff.md](docs/upstream-defects-handoff.md) — catalog/nakon defects to hand off
@@ -83,7 +82,9 @@ real `--teams N --yes`, verify, destroy — all from the worktree root. Worked e
 Docs are held to the same standard as code: **verify every claim against the source before writing
 it** (the pipeline is generation "v2" — golden templates + linked clones — and passages written
 against the pre-golden pipeline are still being found), prefer one canonical statement plus links
-over copies, and keep the incident/date citations that make the log trustworthy. If a doc and the
+over copies. If a doc and the
 code disagree and the code looks like the bug, document the code's actual behavior and flag the
-discrepancy (`docs/known-issues.md`) rather than silently "fixing" the doc. Never edit code from a
+discrepancy (`docs/known-issues.md`) rather than silently "fixing" the doc. Fixed issues are
+deleted from `docs/known-issues.md`, not archived — git history
+is the record. Never edit code from a
 docs pass.

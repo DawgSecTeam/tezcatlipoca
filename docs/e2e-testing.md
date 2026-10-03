@@ -9,8 +9,8 @@ How to run a full pipeline test (`create-competition.py` / `run-agent-scrim.py`)
 failures are triaged once, recovered cheaply, and never debugged twice. This doc condenses
 every deploy failure from the July 2026 shakedown through the September scrim / winad / pfSense
 red-vs-blue runs; the pre-deploy trap list is **[§0 below](#0-read-before-you-deploy--live-traps)**,
-[known-issues.md](known-issues.md) carries the currently-open issues,
-[incident-archive.md](incident-archive.md) is the canonical resolved-incident log,
+[known-issues.md](known-issues.md) carries the currently-open issues
+(fixed issues are deleted — git history is the record),
 [environment-facts.md](environment-facts.md) is the node/storage/template ground truth,
 [architecture.md](architecture.md) explains the phases, [usage-agents.md](usage-agents.md)
 documents the flags, and [pfsense-inpath-2026-09-28.md](pfsense-inpath-2026-09-28.md)

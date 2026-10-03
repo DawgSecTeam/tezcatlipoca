@@ -29,9 +29,7 @@ passage written against the pre-golden pipeline is a bug — see [AGENTS.md](../
 | [usage-people.md](usage-people.md) | You are setting up or driving a deploy by hand — prerequisites, template building (incl. the Windows traps), the **env-var reference**, running, teardown, mid-competition recovery, troubleshooting |
 | [usage-agents.md](usage-agents.md) | You are driving the pipeline non-interactively — CLI flags, pre-authored configs, verify/redeploy/destroy, operational modes |
 | [e2e-testing.md](e2e-testing.md) | A deploy failed and you need to triage it, or you are planning a full pipeline test (§1 triage, §4 cost map, §5 trim-then-resume, §7 checklist, §8 multi-host/pfSense/red) |
-| [known-issues.md](known-issues.md) | Something is broken, or you need a decision. **Open/pending issues only** |
-| [known-issues-triage-2026-10-02.md](known-issues-triage-2026-10-02.md) | You want to know why an issue is (or is not) on the open list — the full 69-entry triage that produced the current split |
-| [incident-archive.md](incident-archive.md) | A failure looks familiar — resolved incidents kept for the *why* behind each mitigation |
+| [known-issues.md](known-issues.md) | Something is broken, or you need a decision. **Open/pending issues only** — fixed issues are deleted, not archived |
 | [environment-facts.md](environment-facts.md) | You are about to pick a template, pool, vmid block, or node — node/storage/template ground truth with verification status |
 | [security-disclosures.md](security-disclosures.md) | You touch credentials, `.env` variants, or git history — exposures, and the open token rotation |
 | [upstream-defects-handoff.md](upstream-defects-handoff.md) | You own the vulndb catalog or nakon — the defects not fixable from this repo |

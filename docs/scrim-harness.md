@@ -11,9 +11,7 @@ duplicating it.** It deliberately does NOT
 duplicate the sibling docs: `docs/rehearsal-gates.md` owns the numeric
 pass/fail gates, `docs/reports/harness-upgrades-plan.md` owns the rev-2 upgrade
 record (what changed, where it landed, what's left), and
-`docs/reports/dress-rehearsal-prompt.md` owns the rehearsal runbook. Incident-level
-detail (the three-round scoreboard mystery, the scp flakes, run post-mortems)
-lives in `docs/incident-archive.md`.
+`docs/reports/dress-rehearsal-prompt.md` owns the rehearsal runbook.
 
 **Contents:** [run-agent-scrim.py](#run-agent-scrimpy) · [scrim-report.py](#scrim-reportpy) ·
 [beacon_ops.py](#beacon_opspy)
@@ -44,8 +42,7 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
 - `stage_author` — the pipeline's sweep marker **`.postclone-swept`** is a resume marker and must
   never leak into a fresh competition; `stage_author` skips that name (fixed 2026-10-01 — it used
   to skip the retired `.phase6-swept`, so the real marker was copied into every competition
-  authored from a swept template; see
-  [incident-archive.md](incident-archive.md#scrim-stage_author-skipped-the-sweep-marker-fixed-2026-10-01)).
+  authored from a swept template).
   `RUNTIME_FILES`, `LOG.md`, `sub-*`, `.nakon-domain-*` are also skipped, and `injects/` is
   re-copied deliberately. The template's `Compfile` first line is rewritten to the new name.
 - `creds_from_files` — all secrets/logins come from the post-deploy artifacts
@@ -83,7 +80,7 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   querying it with the subnet identifier from `teams.json` (101, 102) answers
   `{"error":"Forbidden"}` even with a valid cookie. That was the second half
   of the three-round "scoreboard unreachable" mystery (first half: session
-  clobbering — see `docs/incident-archive.md`).
+  clobbering).
 - `parsed_status` / `status_text` — `parsed_status` raises on failure so
   callers decide whether to render text or record a structured snapshot;
   `status_text` (for the cycle prompt) renders a self-diagnosing failure line

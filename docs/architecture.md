@@ -17,8 +17,7 @@ jump host, the nakon execution host, and the NAT gateway. Team isolation is enfo
 the engine, not by bridge separation.
 
 Per-symbol design notes and the "why" behind specific parameters and orderings live in
-[internals.md](internals.md); resolved incidents in
-[incident-archive.md](incident-archive.md) and open problems in [known-issues.md](known-issues.md);
+[internals.md](internals.md); open problems live in [known-issues.md](known-issues.md);
 the agent-scrim harness in
 [scrim-harness.md](scrim-harness.md).
 

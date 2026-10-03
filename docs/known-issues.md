@@ -1,14 +1,11 @@
 # Known issues — open and pending
 
-This file is the **open list only**: problems that are not fixed, or that need a decision. Resolved
-incidents live in [incident-archive.md](incident-archive.md) (kept for the *why* behind each
-mitigation); the pre-deploy trap checklist is
+This file is the **open list only**: problems that are not fixed, or that need a decision. Fixed
+issues are **deleted, not archived** — git history is the record. The pre-deploy trap checklist is
 [e2e-testing.md §0](e2e-testing.md#0-read-before-you-deploy--live-traps); node/storage/template
 ground truth is [environment-facts.md](environment-facts.md); credential exposure is
 [security-disclosures.md](security-disclosures.md); defects owned by the catalog/nakon are
 [upstream-defects-handoff.md](upstream-defects-handoff.md).
-
-Last triage: **2026-10-02** — [known-issues-triage-2026-10-02.md](known-issues-triage-2026-10-02.md).
 
 ## Open — ours
 
@@ -54,8 +51,7 @@ Mitigations: give each concurrent comp its own `TF_VAR_engine_mgmt_ip` (now in
 [e2e-testing.md §0](e2e-testing.md#0-read-before-you-deploy--live-traps)); `ssh_via_gateway` self-heals
 the resulting stale TOFU pin; recovery of a hit engine is `ssh-keygen -A` + `systemctl restart ssh`
 via the guest agent, then `--from-phase 3`. **Next action:** address the target by VM identity
-(vmid/guest-agent) instead of a shared IP, and refuse when the IP is ambiguous — see
-[the triage §3 B3](known-issues-triage-2026-10-02.md).
+(vmid/guest-agent) instead of a shared IP, and refuse when the IP is ambiguous.
 
 ### Fedora goldens cannot be built on SELinux-enforcing nodes
 
@@ -74,45 +70,9 @@ of lineups where the agent is the only path. **Fix (cheap, not yet applied):** f
 **Status: OPEN — standing constraint.** opencode's own base prompt is ~20k tokens, so the local
 endpoint's advertised context must leave room for it or opencode self-compacts fatally. `60000` is the
 verified local value (cloud blue uses `120000`); do not set `reasoning_effort` for a local endpoint.
-**Next action:** a launch-time assertion against the endpoint's real `n_ctx` instead of prose — see
-[the triage §3 B6](known-issues-triage-2026-10-02.md).
-
-### Template with no cloud-init drive could pass the template preflight
-
-**Status: FIXED 2026-10-02** (moving to the archive). The preflight verified only that a selected
-template resolved to a *tagged template*, so a template with no cloud-init drive — e.g. .150 `920
-base-debian13-cloudinit`, despite its name — passed and its clones booted unreachable an hour later.
-`config_ops._cloudinit_gate` now reads each selected Linux template's config (single-node and the
-per-node multinode path, placed before the `check_free` skip so resumes are covered) and refuses with
-the vmid, ostype and the `-fix` alternative. Windows and other non-Linux ostypes are exempt (identity
-comes from `bootstrap_windows_box`); an unreadable config prints UNVERIFIED and does not block. The
-usable/dead template inventory is in [environment-facts.md](environment-facts.md#templates).
-
-### Freeze: the recorded commit was never read
-
-**Status: FIXED 2026-10-02** (moving to the archive). Code-verified at the time: `.frozen.json`
-recorded the code state (`commit`, `dirty`) but **no gate ever read it** — the deploy-time drift gate
-compares per-template function/`main.tf` hashes from `.template-hashes.json`, and code-class drift is
-*warn-only*. So the documented rule "commit before `--freeze` or the drift gate trips" was never what
-the code did. Fix, in two parts:
-
-- `--freeze` refuses when there are uncommitted **deploy-path code** changes (`.py/.tf/.sh/.j2/.ps1`);
-  non-code dirt (comp JSON, `placement.json`, `nodes.json`, terraform state, `.env` backups) is
-  expected after a run and only prints a note. The scoping is the load-bearing detail: the first cut
-  refused on *any* `git status --porcelain` entry, which made `--freeze` impossible in a normal
-  post-run worktree (verified on the scale8 worktree: a modified `placement.json`, an untracked
-  `nodes.json`, a `.env` backup). `git_commit_info`'s recorded `dirty` now means the same thing, so
-  runtime state cannot raise a false drift warning later.
-- `template_ops.frozen_code_drift` reads the recorded commit at deploy time and warns loudly on a
-  moved commit or uncommitted code, naming both commits and the `--unfreeze --confirm-unfreeze` path.
-  Deliberately warn-only: resuming after a docs commit is normal, and no strict-drift toggle exists.
+**Next action:** a launch-time assertion against the endpoint's real `n_ctx` instead of prose.
 
 ## Pending upstream — owned by the catalog / nakon
-
-The four Linux catalog rows that were listed here were **fixed and verified live** on 2026-10-02
-(noble/debian13/fedora44), removed from `constants.KNOWN_BROKEN_CONFIGS`, and archived with their
-corrected root causes: [vulndb-fixes/](vulndb-fixes/), [incident-archive.md](incident-archive.md).
-What remains:
 
 - `mailenable-cleartext-mail-win` — the only Windows pin still in `KNOWN_BROKEN_CONFIGS`. The row
   plants no mail service at all: `choco install mailenable` names a package the community feed does
@@ -120,17 +80,6 @@ What remains:
   service names) is recorded in [vulndb-fixes/mailenable-cleartext-mail-win.candidate](vulndb-fixes/)
   but is **unverified** — the silent install only completes the MAPI-connector component.
   Handoff: [upstream-defects-handoff.md §5](upstream-defects-handoff.md).
-- `local-user-win`, `powershell-execution-unrestricted`, `rpc-proxy-on-dc-web-win`,
-  `unauth-kiosk-app-startup-win` — **fixed, verified live and removed** from
-  `KNOWN_BROKEN_CONFIGS` on 2026-10-02 (lab vmid 131). The old
-  "Set-LocalUser/password-policy ordering" story was an inference from three unrelated names and
-  was wrong: none of these four touches an account or password policy. Real defects were a
-  string-vs-integer flag comparison, a terminating `Set-ExecutionPolicy` under nakon's
-  Process-scope Bypass, non-existent feature/property names, and a prerequisite gap reported as a
-  script bug. Bodies and evidence: [vulndb-fixes/](vulndb-fixes/).
-- `local-user` (linux) — **closed**: the live catalog already carries the portable fix, and there is
-  no seed file anywhere (`vulndb-interfaces/schema.sql` is schema only), so nothing can revert it;
-  the nightly dumps in the vulndb VM are the only restore path.
 - `nakon randomize` handing out names whose script needs vars it cannot supply — **catalog half
   fixed**: `nakon catalog check` now reports `missing-vars` (`f86c11d`), and the driver additionally
   filters unplantable bare names on the fresh path (`nakon_ops._drop_unplantable_bare`). `randomize`
@@ -138,8 +87,6 @@ What remains:
   `catalog check` is the gate.
 - Windows package-manager fallback — the step now writes `.nakon-step-rc` and states plainly that it
   has never run against real winget/chocolatey (`12c3195`). Still not live-verified on Windows.
-- `install_package` — **stale doc, no defect**: the function no longer exists, and the current package
-  step records its rc into `report.tsv` and the FAILED tally.
 
 The repo-side guard for the broken catalog names is `constants.KNOWN_BROKEN_CONFIGS`, enforced by
 `nakon_ops._validate_known_broken_pins` at generate time and by `packet_ops` at packet-compile time.
@@ -148,8 +95,8 @@ deliberately: a **fresh selection** that gets past
 the driver's `_drop_unplantable_bare` filter is a hard error; a competition that **already records**
 the pin (any comp dir with `box_services.json`/`box_vulns.json`) gets a WARNING, so the historical
 comps stay re-deployable. Residual gap: a brand-new hand-authored comp dir is on that "reuse" path
-and therefore warns rather than errors (packet comps are caught at compile). The list is down to the
-one row above; it shrinks further when `mailenable` is fixed.
+and therefore warns rather than errors (packet comps are caught at compile). When `mailenable` is
+fixed, delete its bullet — do not archive it.
 
 ## Standing limitations — not fixable here
 
