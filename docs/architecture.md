@@ -9,7 +9,7 @@
 ## Overview
 
 `tezcatlipoca` is a Proxmox driver that builds a per-competition scoring range.
-`create-competition.py` (via `deploy.py`) runs a seven-phase deploy: it generates Quotient scoring
+`create-competition.py` (via `deploy.py`) runs an eight-phase deploy: it generates Quotient scoring
 config and a nakon machine list, provisions Proxmox resources with Terraform, bootstraps the
 scoring engine, and drives nakon to plant services and misconfigurations. Quotient scores; nakon
 provisions. The scoring engine is the only host with a NIC on every team bridge — it is the SSH
@@ -28,7 +28,7 @@ the agent-scrim harness in
 | `create-competition.py` | Thin CLI entry point: loads `.env`, calls `deploy.main()`. Not importable (the hyphen), so it exposes no library surface |
 | `pipeline_api.py` | The stable import surface the hyphenated entry points cannot be: explicit `__all__` of the symbols `redeploy-competition.py` calls, each imported from the module that owns it |
 | `deploy.py` | Deploy orchestration + CLI: `prepare()` (config/state/secrets/placement/hashes/tfvars/preflight) and the sequencer `deploy()`, which walks `PHASES` |
-| `deploy_phases.py` | The seven phase functions (`phase1_cleanup` … `phase7_seed`) plus `connect_terraform`/`finish_deploy`/`destroy_node_waves` — all the per-phase work |
+| `deploy_phases.py` | The eight phase functions (`phase1_cleanup` … `phase8_seed`) plus `connect_terraform`/`finish_deploy`/`destroy_node_waves` — all the per-phase work |
 | `config_ops.py` | Competition prompts and persistence: `Compfile`, `boxes.json`, `teams`, `users.json`, `injects`, `.env` updates |
 | `nakon_ops.py` | `generate_nakon_config` / `generate_stage_configs` / `build_nakon_bundle` / `run_nakon`; `os_to_platform` (mirrors nakon) |
 | `golden_ops.py` | M3 golden set: API-clone one VM per box type, plant the golden stage (strict), `cloud-init clean`, **boot-smoke** the stopped golden via one throwaway clone (`golden_boot_smoke` knob), `qm template` conversion; resume routing on template state |
@@ -42,12 +42,13 @@ the agent-scrim harness in
 | `nodes_ops.py` | Multi-node placement: `nodes.json` config, capacity-fill team placement, the per-competition `placement.json`. See [multi-node.md](multi-node.md) |
 | `jump_ops.py` | Per-satellite jump/router VM: impersonates the engine's gateway IP on the satellite's team bridges, DNAT/SNAT, default-DROP forwarding |
 | `routing_ops.py` | Post-apply #1 fail-loud gate proving the engine can reach every satellite (the routes themselves are written by `team_nics`) |
+| `firewall_ops.py` | In-path firewalls: per-team pfSense `config.xml` generation from the comp's seed, QEMU-monitor console bootstrap (`sendkey` + functional SSH probes), the engine netplan cutover, and the post-cutover routing gate |
 | `ssh_ops.py` | Gateway SSH (`ProxyCommand -W`), Terraform context, `wait_for_ssh`/`wait_for_boxes_ssh`/`wait_for_http` |
 | `constants.py` | `vmid` math, `MAX_TEAMS`/`MAX_BOXES_PER_TEAM`, `SNAP_BASE`/`SNAP_READY`, budgets, `NAKON_DIR`, Windows user |
 | `range_ops.py` | Proxmox API, guest-agent exec, VM lifecycle, `enumerate_targets`, snapshot helpers, `vm_id_for` |
 | `utils.py` | `load_compfile`, `load_users_config`, `DNS_FIX_CMD`, `run_concurrent`, competition picking |
 | `quotient/setup.py` | `build_event_conf`, `seed_teams`, `unpause_engine`, `create_injects`; `_SERVICE_TO_CHECK` map |
-| `terraform/main.tf` | Team bridges (`vmbr<id>`), scoring VM (`var.scoring_vm_id`), every team's boxes as slot-dimensioned resources, scoring NIC wiring, cold-boot + netplan |
+| `terraform/main.tf` | Team bridges (`vmbr<id>`), transit bridges (`vmbrW<id>`, firewall lineups only), scoring VM (`var.scoring_vm_id`), every team's boxes as slot-dimensioned resources (two NICs + no cloud-init for the in-path firewall), scoring NIC wiring, cold-boot + netplan |
 | `vendor/nakon` | Submodule (pinned release) — CLI-only catalog access and bundle builder |
 | `verify-competition.py` | Post-deploy checks (login, services, isolation, misconfig, injects, pins, plant coverage, domains, red identity, packet) on a tri-state gate model — PASS / FAIL / SKIP, where a SKIP is non-passing unless waived with `--allow-unverified` |
 | `redeploy-competition.py` | Filtered per-team/box rollback/reconfigure/rebuild/resync/engine-recovery using snapshots |
@@ -65,9 +66,12 @@ the agent-scrim harness in
 `beacon_ops`, `run-agent-scrim`, and `scrim-report` are documented in
 [scrim-harness.md](scrim-harness.md), not in [internals.md](internals.md).
 
-## Seven-phase deploy
+## Eight-phase deploy
 
-Pipeline v2 (golden templates + linked clones, 2026-09-24). `--from-phase` requires a
+Pipeline v3 (2026-10-03) added the in-path firewall bootstrap (phase 5) and renumbered
+phases 5-7 to 6-8. Pipeline v2 (golden templates + linked clones, 2026-09-24) preceded it.
+`--from-phase` requires a state file written by the same pipeline version; cross-version resumes are refused
+(`pipeline_version` in `.deploy_state.json`). `--from-phase` requires a
 state file written by the same pipeline version; cross-version resumes are refused
 (`pipeline_version` in `.deploy_state.json`).
 
@@ -119,19 +123,35 @@ state file written by the same pipeline version; cross-version resumes are refus
    per-box budgets, `setup_ubuntu_auth`, DNS fix, apt prep, `tz-base` snapshots. The
    snapshot / password / cloud-init-clean / convert passes over the golden set run on a
    bounded pool of 4.
-5. **Repair-stage sweep** — the first post-clone pass plants the **repair stage**
+5. **Firewall bootstrap (in-path firewalls only)** — skipped entirely unless the
+   lineup declares an `unmanaged` + `in_path` box. Terraform apply #2 cloned each
+   team's firewall from its own template with two NICs (WAN on the per-team transit
+   bridge `vmbrW<id>`, LAN on `vmbr<id>`); this phase generates one pfSense
+   `config-team<id>.xml` per team (`firewall_ops`, from the comp's
+   `pfsense/pfsense-config-orig.xml` seed), serves it from the engine, drives each
+   firewall's console to fetch it (`sendkey` via the QEMU monitor API), waits for the
+   config's SSH to answer on the WAN address, then **cuts the engine over**: the
+   engine's netplan loses `192.168.<id>.1` (the firewall owns the team gateway now)
+   and gains `192.168.<id>.0/24 via 172.31.<id>.2` routes. A fail-loud gate proves
+   every team subnet routes through its firewall and the first managed box is
+   reachable through it. Caveat: a later `terraform apply` rewrites the pre-cutover
+   netplan (see [internals.md](internals.md#firewall_opspy)).
+6. **Repair-stage sweep** — the first post-clone pass plants the **repair stage**
    (sshd/sudoers touchers) on every team box, lenient, with `--jobs`; then
    `fix_services_on_boxes` on **Linux boxes only** (Windows never reaches the bash
    executor; sshd un-wedge, credlist accounts, service binds). Failures
    are recorded per machine (stage-prefixed tally + plant-coverage record) in
    `.deploy_state.json`. Marked by `.postclone-swept` for idempotent resume.
-6. **Domains → final pass → beacons + tz-ready** — per-team AD forests run
+7. **Domains → final pass → beacons + tz-ready** — per-team AD forests run
    **concurrently** (each team's ADDS/join chain is serial within itself); then the
    **final-stage pass** plants the disruptive (DNS/apt-breaking) + boot-hostile configs
    AFTER the domain joins — those reboots are exactly what boot-hostile configs would
    brick, and the realmd joins need working DNS/apt (see `constants.py` for the split).
-   Beacons, then the `tz-ready` snapshot; snapshot pool of 4.
-7. **Seed** — unchanged: poll Quotient HTTP, `seed_teams`, `unpause_engine`,
+   Beacons, then the `tz-ready` snapshot; snapshot pool of 4. (The firewall, like
+   every team box, is snapshotted at `tz-ready`; its `tz-base` lands at the END of
+   phase 5, after the cutover — a pre-cutover restore point would be a firewallless
+   network pretending to be in-path.)
+8. **Seed** — unchanged: poll Quotient HTTP, `seed_teams`, `unpause_engine`,
    `create_injects`; each gated on `.deploy_state.json` flags.
 
 ## v1 to v2 migration (what moved)

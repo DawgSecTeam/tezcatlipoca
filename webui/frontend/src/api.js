@@ -48,5 +48,12 @@ export const api = {
 
 export const platformOf = (template) => (/win/i.test(template || '') ? 'windows' : 'linux')
 
+// What a box IS for rendering: an in-path firewall (unmanaged + in_path — it owns the
+// team gateway .1 and terraform wires it between the engine and the team switch), or a
+// plain platform. The single classifier for topology, sidebar dots and badges — never
+// sniff template or host names (that's how firewalls got drawn as Linux hosts).
+export const kindOf = (box) =>
+  box?.in_path ? 'firewall' : platformOf(box?.template)
+
 // Box pins are either a bare catalog name or {name, vars, ...}. The UI always works on objects.
 export const asPin = (p) => (typeof p === 'string' ? { name: p } : p)

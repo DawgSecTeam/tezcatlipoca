@@ -286,6 +286,15 @@ export default function PinPage({ kind }) {
   }, [platform, kind])
 
   if (!box) return <EmptyState icon="box" title={`No box called ${boxName}`} />
+  if (box.unmanaged) {
+    // Not just cosmetic: the server rejects pins on unmanaged boxes, so the editor
+    // would be a write-only dead end. The firewall card on BoxEdit is the destination.
+    return <EmptyState icon="shield" title={`${box.name} is unmanaged`}
+      action={<Link className="btn" to={`/c/${comp.id}/boxes/${box.name}`}>Back to {box.name}</Link>}>
+      Nothing can be planted on or scored against it — services and misconfigs live on
+      the managed boxes.
+    </EmptyState>
+  }
 
   const sel = params.has('sel') ? Number(params.get('sel')) : null
   const adding = params.get('add') === '1'

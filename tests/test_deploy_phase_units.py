@@ -68,19 +68,19 @@ class PhaseResumeGuards(unittest.TestCase):
                     patch.object(deploy_phases, "ensure_nat_forwarding") as p_nat, \
                     contextlib.redirect_stdout(io.StringIO()) as out:
                 deploy_phases.phase3_prepare_engine(ctx)
-        self.assertEqual(out.getvalue().strip(), "[3/7] Skipped (resume).")
+        self.assertEqual(out.getvalue().strip(), "[3/8] Skipped (resume).")
         p_prep.assert_not_called()
         p_push.assert_not_called()
         p_nat.assert_not_called()
 
-    def test_phase7_skips_cleanly(self):
+    def test_phase8_skips_cleanly(self):
         with tempfile.TemporaryDirectory() as d:
-            ctx = _ctx(Path(d), from_phase=8)
+            ctx = _ctx(Path(d), from_phase=9)
             with patch.object(deploy_phases, "wait_for_http") as p_http, \
                     patch.object(deploy_phases, "seed_teams") as p_seed, \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase7_seed(ctx)
-        self.assertEqual(out.getvalue().strip(), "[7/7] Skipped (resume).")
+                deploy_phases.phase8_seed(ctx)
+        self.assertEqual(out.getvalue().strip(), "[8/8] Skipped (resume).")
         p_http.assert_not_called()
         p_seed.assert_not_called()
 
@@ -92,7 +92,7 @@ class PhaseResumeGuards(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()) as out:
                 deploy_phases.phase1_cleanup(ctx)
         self.assertEqual(out.getvalue().strip(),
-                         "[1/7] Skipped (resume) — leaving existing VMs/bridges in place.")
+                         "[1/8] Skipped (resume) — leaving existing VMs/bridges in place.")
         p_waves.assert_not_called()
         p_bridge.assert_not_called()
 
@@ -222,8 +222,8 @@ class Phase5RepairSweep(unittest.TestCase):
                     patch.object(deploy_phases, "fix_services_on_boxes") as p_fix, \
                     patch.object(deploy_phases, "ensure_nat_forwarding") as p_nat, \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase5_repair_sweep(ctx)
-            self.assertIn("[5/7] Resume marker present", out.getvalue())
+                deploy_phases.phase6_repair_sweep(ctx)
+            self.assertIn("[6/8] Resume marker present", out.getvalue())
             p_nakon.assert_not_called()
             p_fix.assert_not_called()
             p_nat.assert_not_called()
@@ -239,7 +239,7 @@ class Phase5RepairSweep(unittest.TestCase):
                     patch.object(deploy_phases, "ensure_nat_forwarding"), \
                     patch.object(deploy_phases, "compfile_flag", return_value=0), \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase5_repair_sweep(ctx)
+                deploy_phases.phase6_repair_sweep(ctx)
             self.assertIn("No repair-stage configurations in this lineup", out.getvalue())
             p_nakon.assert_not_called()
             p_fix.assert_called_once()
@@ -260,7 +260,7 @@ class Phase5RepairSweep(unittest.TestCase):
                     patch.object(deploy_phases, "ensure_nat_forwarding"), \
                     patch.object(deploy_phases, "compfile_flag", return_value=0), \
                     contextlib.redirect_stdout(io.StringIO()):
-                deploy_phases.phase5_repair_sweep(ctx)
+                deploy_phases.phase6_repair_sweep(ctx)
         self.assertIn("plant_coverage_failed", ctx.state)
         self.assertEqual(ctx.state["plant_coverage_failed"], {})
         self.assertEqual(ctx.state["nakon_failed_steps"], [])
@@ -280,7 +280,7 @@ class Phase5RepairSweep(unittest.TestCase):
                     patch.object(deploy_phases, "compfile_flag", return_value=0), \
                     patch.object(deploy, "record_stage_coverage") as p_coverage, \
                     contextlib.redirect_stdout(io.StringIO()):
-                deploy_phases.phase5_repair_sweep(ctx)
+                deploy_phases.phase6_repair_sweep(ctx)
             self.assertEqual(ctx.state["nakon_failed_steps"], ["repair: sshd-hardening"])
             _args = p_nakon.call_args
             self.assertIs(_args.kwargs["strict"], False)
@@ -307,7 +307,7 @@ class Phase7Seed(unittest.TestCase):
                              side_effect=lambda *a: order.append("injects")
                              or ([], [])), \
                 contextlib.redirect_stdout(io.StringIO()):
-            deploy_phases.phase7_seed(ctx)
+            deploy_phases.phase8_seed(ctx)
         return order
 
     def test_fresh_seed_then_unpause_then_injects(self):
@@ -334,7 +334,7 @@ class Phase7Seed(unittest.TestCase):
                     patch.object(deploy_phases, "engine_paused", return_value=False), \
                     patch.object(deploy_phases, "unpause_engine") as p_unpause, \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase7_seed(ctx)
+                deploy_phases.phase8_seed(ctx)
         p_unpause.assert_not_called()
         self.assertIn("Engine reports itself unpaused", out.getvalue())
         self.assertTrue(ctx.state["engine_unpaused"])
@@ -349,7 +349,7 @@ class Phase7Seed(unittest.TestCase):
                     patch.object(deploy_phases, "create_injects",
                                  return_value=([], ["Bad inject"])), \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase7_seed(ctx)
+                deploy_phases.phase8_seed(ctx)
         self.assertNotIn("injects_created", ctx.state)
         self.assertIn("1 inject(s) failed to create: Bad inject", out.getvalue())
 
@@ -368,7 +368,7 @@ class Phase7Seed(unittest.TestCase):
                     patch.object(deploy_phases, "create_injects",
                                  return_value=([], [])) as p_create, \
                     contextlib.redirect_stdout(io.StringIO()):
-                deploy_phases.phase7_seed(ctx)
+                deploy_phases.phase8_seed(ctx)
         p_create.assert_called_once()          # re-ran, so i2 gets created
         self.assertEqual(ctx.state["injects_fingerprint"],
                          config_ops.injects_fingerprint([{"title": "i1"}, {"title": "i2"}]))
@@ -385,7 +385,7 @@ class Phase7Seed(unittest.TestCase):
                     patch.object(deploy_phases, "engine_paused", return_value=False), \
                     patch.object(deploy_phases, "create_injects") as p_create, \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase7_seed(ctx)
+                deploy_phases.phase8_seed(ctx)
         p_create.assert_not_called()
         self.assertIn("already created", out.getvalue())
 
@@ -412,7 +412,7 @@ class Phase7Seed(unittest.TestCase):
                     patch.object(deploy_phases, "engine_paused", return_value=False), \
                     patch.object(deploy_phases, "create_injects", return_value=([], [])), \
                     contextlib.redirect_stdout(io.StringIO()):
-                deploy_phases.phase7_seed(ctx)      # real resolve_inject_times runs
+                deploy_phases.phase8_seed(ctx)      # real resolve_inject_times runs
         self.assertEqual(ctx.state["injects_fingerprint"], expected)
 
     def test_fingerprint_tracks_titles_windows_and_attachments(self):
@@ -534,7 +534,7 @@ class PrepareResumeGuards(unittest.TestCase):
 
     def test_resume_past_the_last_completed_phase_is_refused(self):
         with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d, {"pipeline_version": 2, "last_phase": 3,
+            comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 3,
                                           "scoring_vm_id": 1000, "teams": {}})
             with self.assertRaises(SystemExit) as ctx:
                 deploy.prepare(comp_dir, from_phase=6, num_teams=1, assume_yes=True)
@@ -545,7 +545,7 @@ class PrepareResumeGuards(unittest.TestCase):
     def test_resuming_the_phase_after_the_last_completed_one_is_allowed(self):
         # The guard passes; prove it by failing later, in placement.
         with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d, {"pipeline_version": 2, "last_phase": 2,
+            comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 2,
                                           "scoring_vm_id": 1000, "teams": {},
                                           "admin_password": "a", "box_password": "b"})
             with patch.object(deploy, "load_injects", return_value=[]), \
@@ -558,7 +558,7 @@ class PrepareResumeGuards(unittest.TestCase):
 
     def test_force_from_phase_bypasses_the_guard(self):
         with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d, {"pipeline_version": 2, "last_phase": 2,
+            comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 2,
                                           "scoring_vm_id": 1000, "teams": {},
                                           "admin_password": "a", "box_password": "b"})
             with patch.object(deploy, "load_injects", return_value=[]), \

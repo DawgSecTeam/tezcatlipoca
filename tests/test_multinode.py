@@ -402,6 +402,29 @@ class SyncPlannerTest(unittest.TestCase):
 
 
 class MultinodePreflightResumeTest(unittest.TestCase):
+    def test_in_path_firewall_refused_on_satellite_teams(self):
+        # The jump VM impersonates 192.168.<id>.1 on each satellite; an in-path
+        # firewall there would fight it for the gateway address. Refusal fires before
+        # any API call, so no stubbing is needed.
+        import config_ops
+        from nodes_ops import PLACEMENT_VERSION
+        placement = {
+            "version": PLACEMENT_VERSION, "engine_node": "n1", "engine_vmid": 1000,
+            "nodes": {"n1": _rec("n1").to_json()},
+            "slots": {"n1": 0},
+            "team_nodes": {k: "n1" for k in TEAMS},
+            "team_slots": {k: 1 for k in TEAMS},
+            "team_identifiers": {k: TEAMS[k]["identifier"] for k in TEAMS},
+            "satellites": [], "jump_mgmt_ips": {}, "probe_summary": {},
+        }
+        fw = {"name": "fw01", "last_octet": 1, "template": "pfsense",
+              "unmanaged": True, "in_path": True}
+        with self.assertRaises(SystemExit) as cm:
+            config_ops.preflight_gates_multinode(
+                Path("competitions/example"), [fw], TEAMS, 1000, placement,
+                engine_mgmt_ip=None, check_free=False)
+        self.assertIn("in_path firewalls are only supported on engine-node", str(cm.exception))
+
     def test_check_free_false_skips_collisions(self):
         import config_ops
         from nodes_ops import PLACEMENT_VERSION

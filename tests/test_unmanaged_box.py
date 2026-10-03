@@ -28,6 +28,15 @@ class UnmanagedBox(unittest.TestCase):
         self.assertFalse(utils.is_unmanaged(BOXES[1]))
         self.assertFalse(utils.is_unmanaged({"name": "z", "template": "t"}))
 
+    def test_in_path_predicate_implies_unmanaged_gates(self):
+        # in_path is a SUBSET of unmanaged: every unmanaged skip must also skip it, so
+        # the phase-5 network plumbing is the ONLY thing the flag adds.
+        fw = {**BOXES[0], "in_path": True}
+        self.assertTrue(utils.is_in_path_fw(fw))
+        self.assertTrue(utils.is_unmanaged(fw))
+        self.assertFalse(utils.is_in_path_fw(BOXES[0]))  # unmanaged alone: no plumbing
+        self.assertFalse(utils.is_in_path_fw({**BOXES[1], "in_path": True}))  # not unmanaged
+
     def test_golden_targets_skip_unmanaged_positional(self):
         gt = golden_targets(1080, TEAMS, BOXES)
         names = [t["box"]["name"] for t in gt]

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useMatch, useNavigate, useParams } from 'react-router-dom'
-import { api, platformOf } from '../api'
+import { api, kindOf } from '../api'
 import { ErrorBanner, Spinner, ThemeToggle } from '../components/ui'
 import { Icon, Logo } from '../components/kit'
 
@@ -30,7 +30,8 @@ function Count({ n }) {
   return <span className="ml-auto text-[11px] font-semibold tabular-nums text-faint">{n}</span>
 }
 
-const dot = (t) => (platformOf(t) === 'windows' ? 'var(--win)' : /pfsense|opnsense/i.test(t) ? 'var(--fw)' : 'var(--lin)')
+const DOT = { windows: 'var(--win)', linux: 'var(--lin)', firewall: 'var(--fw)' }
+const dot = (b) => DOT[kindOf(b)]
 
 function Sidebar({ comp }) {
   const inBox = useMatch('/c/:id/boxes/:box/*')
@@ -53,7 +54,7 @@ function Sidebar({ comp }) {
             <Icon name="back" className="h-3.5 w-3.5" /> All boxes
           </Link>
           <div className="flex items-center gap-2 px-4 pb-1 pt-1">
-            {box && <span className="h-2 w-2 rounded-full" style={{ background: dot(box.template) }} />}
+            {box && <span className="h-2 w-2 rounded-full" style={{ background: dot(box) }} />}
             <span className="font-mono text-sm font-semibold">{boxName}</span>
           </div>
           <NavLink end to={`${base}/boxes/${boxName}`} className={navCls}><Icon name="box" />Summary</NavLink>
@@ -77,7 +78,7 @@ function Sidebar({ comp }) {
             <div className="ml-6 space-y-0.5 border-l-2 border-line py-1 pl-3">
               {[...comp.boxes].sort((a, b) => a.last_octet - b.last_octet).map((b) => (
                 <NavLink key={b.name} to={`${base}/boxes/${b.name}`} className={({ isActive }) => `flex items-center gap-2 rounded-full px-3 py-1 font-mono text-[13px] transition ${isActive ? 'text-accent' : 'text-muted hover:text-fg'}`}>
-                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: dot(b.template) }} />{b.name}
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: dot(b) }} />{b.name}
                 </NavLink>
               ))}
               {!comp.boxes.length && <Link to={`${base}/boxes`} className="block px-3 py-1 text-xs text-faint hover:text-accent">+ add the first box</Link>}

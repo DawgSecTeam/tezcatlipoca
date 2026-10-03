@@ -70,7 +70,8 @@ export function Modal({ open, onClose, title, children, wide }) {
 }
 
 export function PlatformBadge({ platform }) {
-  const c = platform === 'windows' ? 'var(--win)' : platform === 'linux' ? 'var(--lin)' : 'var(--muted)'
+  const c = platform === 'windows' ? 'var(--win)' : platform === 'linux' ? 'var(--lin)'
+    : platform === 'firewall' ? 'var(--fw)' : 'var(--muted)'
   return (
     <span className="chip gap-1.5 bg-sunken text-muted">
       <span className="h-1.5 w-1.5 rounded-full" style={{ background: c }} />{platform}

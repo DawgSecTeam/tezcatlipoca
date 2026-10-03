@@ -139,6 +139,8 @@ def _cloudinit_gate(tagged_by_name, boxes, label=""):
     seen = set()
     verified = 0
     for box in boxes:
+        if box.get("unmanaged"):
+            continue  # unmanaged boxes get no cloud-init identity (terraform skips the block)
         name = box.get("template")
         vm = tagged_by_name.get(name)
         if vm is None or name in seen:
@@ -335,15 +337,19 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
             existing_bridges = {n.get("iface") for n in nets}
         except Exception:
             existing_bridges = set()
+        # In-path firewalls add a per-team transit bridge (vmbrW<id>) alongside the
+        # team bridge — same collision rules, same "ours" tolerance.
+        wants_fw = any(b.get("in_path") for b in boxes)
         for team in teams.values():
-            bridge = f"vmbr{team['identifier']}"
-            # Bridges carry no per-comp tags. Tolerate one only when the VM leftovers are
-            # unambiguously all ours (a retry) — a foreign bridge stays fatal.
-            if bridge in existing_bridges:
-                if foreign == 0 and ours > 0:
-                    ours += 1
-                else:
-                    clashes.append(f"bridge {bridge}")
+            for prefix in ("vmbr", "vmbrW") if wants_fw else ("vmbr",):
+                bridge = f"{prefix}{team['identifier']}"
+                # Bridges carry no per-comp tags. Tolerate one only when the VM leftovers are
+                # unambiguously all ours (a retry) — a foreign bridge stays fatal.
+                if bridge in existing_bridges:
+                    if foreign == 0 and ours > 0:
+                        ours += 1
+                    else:
+                        clashes.append(f"bridge {bridge}")
         if clashes:
             other_run = any(
                 f"comp-{comp_dir.name}" in str(vm.get("tags") or "")
@@ -482,6 +488,17 @@ def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
 
     comp_name = comp_dir.name
     engine_name = placement["engine_node"]
+    # In-path firewalls are a slot-0 feature for now: the transit bridge + gateway
+    # handoff live on the engine node, while each satellite's jump VM impersonates
+    # 192.168.<id>.1 for its local teams — an in-path firewall there would fight the
+    # jump for the gateway address (docs/multi-node.md).
+    if any(b.get("in_path") for b in boxes) and any(
+            s != 0 for s in placement.get("team_slots", {}).values()):
+        raise SystemExit(
+            "  ERROR: in_path firewalls are only supported on engine-node (slot 0) teams — "
+            "the satellite design gives 192.168.<id>.1 to the jump VM, so an in-path "
+            "firewall there would fight it for the gateway address. Move the teams to the "
+            "engine node or drop the firewall from the lineup.")
     # Full ownership set (comp tag + run id) — see preflight_gates. Hoisted above the
     # per-node loop so the engine-node mgmt-IP gate after the loop can reuse it.
     our_tags = {"tezcatlipoca", f"comp-{comp_name}"}
@@ -581,7 +598,10 @@ def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
             existing_bridges = {n.get("iface") for n in nets}
         except Exception:
             existing_bridges = set()
+        wants_fw = any(b.get("in_path") for b in boxes)
         node_bridges = [f"vmbr{t['identifier']}" for t in node_teams.values()]
+        if wants_fw and slot == 0:  # transit bridges are engine-node resources (slot-0 teams)
+            node_bridges += [f"vmbrW{t['identifier']}" for t in node_teams.values()]
         for bridge in node_bridges:
             if bridge in existing_bridges:
                 if foreign == 0 and ours > 0:

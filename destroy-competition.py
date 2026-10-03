@@ -11,6 +11,7 @@ from pathlib import Path
 import urllib3
 from dotenv import load_dotenv
 
+import artifacts_ops
 from constants import GOLDEN_TAG, SCORING_ENGINE_VMID, ownership_tags
 from golden_ops import destroy_golden_set
 from jump_ops import destroy_jump_vms
@@ -291,10 +292,11 @@ def report_remaining(nodes, competition, teams, run_id=None):
             print(f"    WARNING: could not list remaining VMs on {node}: {e}")
         try:
             idents = {str(t["identifier"]) for t in teams.values()}
+            # vmbrW<id>: the transit bridges an in-path firewall lineup adds.
+            names = {f"vmbr{i}" for i in idents} | {f"vmbrW{i}" for i in idents}
             nets = proxmox_api("GET", f"/nodes/{node}/network")["data"]
             bridges = [n["iface"] for n in nets
-                       if n.get("type") == "bridge"
-                       and n["iface"] in {f"vmbr{i}" for i in idents}]
+                       if n.get("type") == "bridge" and n["iface"] in names]
             for b in bridges:
                 print(f"    bridge still present on {node}: {b} (terraform state "
                       f"should own it — resolve the state, then re-run)")
@@ -370,6 +372,15 @@ def main():
                         help="Also destroy UNTAGGED VMs sitting on this competition's "
                              "computed vmids (pre-tagging-era ranges). Default: refuse and "
                              "report them.")
+    parser.add_argument("--skip-artifacts", action="store_true", dest="skip_artifacts",
+                        help="Skip collecting this run's test artifacts into "
+                             "competitions/<id>/.automated-tests/<run-id>/ before destroying. "
+                             "Normally collected first, because the red report and the blue "
+                             "logs only exist while the boxes do.")
+    parser.add_argument("--artifacts-timeout", type=int, default=45, metavar="SEC",
+                        dest="artifacts_timeout",
+                        help="Per-file timeout for the artifact pull (default 45s). The pull "
+                             "never blocks the destroy; it warns and proceeds.")
     args = parser.parse_args()
 
     print("=" * 64)
@@ -483,6 +494,28 @@ def main():
     env["TF_VAR_teams"] = json.dumps(teams)
     env["TF_VAR_boxes_per_team"] = json.dumps(boxes)
     env["TF_VAR_event_name"] = name
+
+    # ── Collect this run's test artifacts — BEFORE anything is stopped or deleted ──────────
+    # Last chance by construction: the red report and the blue logs live on machines that are
+    # about to be destroyed, and the calls immediately below end that (destroy_cloned_vms
+    # purges clones; pre_stop_windows_boxes hard-stops every team box, after which a stopped
+    # guest's agent can no longer answer). This is also the safety net for a run whose harness
+    # died: teardown is the one script AGENTS.md tells you to re-run until clean, so it is the
+    # only step guaranteed to happen. It warns and proceeds — a dead box must never wedge a
+    # teardown — and records what it could not get in collection.json / REPORT.md.
+    if args.skip_artifacts:
+        print("\n  Artifacts  : skipped (--skip-artifacts)")
+    else:
+        print("\nCollecting test artifacts before teardown...")
+        try:
+            artifacts_ops.collect_for_teardown(
+                comp_dir, run_id=run_id or None, teams=teams, boxes=boxes,
+                node=default_node, nodes=placement_nodes,
+                script="destroy-competition.py", timeout=args.artifacts_timeout)
+        except Exception as e:  # never let bookkeeping outrank destroying the range
+            print(f"  WARNING: artifact collection failed ({type(e).__name__}: {e}) — "
+                  "continuing with the teardown; nothing was destroyed by this step.")
+        print()
 
     cloned_vms_path = comp_dir / "cloned_vms.json"
     if cloned_vms_path.exists():

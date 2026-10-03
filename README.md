@@ -1,7 +1,7 @@
 # Quotient + nakon range automation
 
 Proxmox-based scoring range. `create-competition.py` is the driver: it generates Quotient's
-scoring config and nakon's machine list, then runs a seven-phase deploy (pipeline v2, built on
+scoring config and nakon's machine list, then runs an eight-phase deploy (pipeline v3, built on
 golden templates and linked clones). Companion scripts: `verify-competition.py`,
 `redeploy-competition.py`, and `destroy-competition.py`.
 
@@ -27,7 +27,7 @@ Operations, or Reports, with one line on when to read it. The most-used entry po
 |---|---|
 | [docs/usage-people.md](docs/usage-people.md) | Setup and operation by hand: prerequisites, templates, env-var reference, running, teardown, recovery, troubleshooting |
 | [docs/usage-agents.md](docs/usage-agents.md) | Non-interactive and agent operation: CLI flags, pre-authored configs, verify/redeploy/destroy, operational modes |
-| [docs/architecture.md](docs/architecture.md) | The seven phases, component map, data flow, isolation, state files, invariants |
+| [docs/architecture.md](docs/architecture.md) | The eight phases, component map, data flow, isolation, state files, invariants |
 | [docs/internals.md](docs/internals.md) | Per-module design notes: the "why" behind functions, parameters, and orderings |
 | [docs/packet-profiles.md](docs/packet-profiles.md) | Competition packets to ranges: profile schema, `compile-packet.py`, packet verify gates |
 | [docs/multi-node.md](docs/multi-node.md) | One competition across several Proxmox hosts: `nodes.json`, placement, jump routing |

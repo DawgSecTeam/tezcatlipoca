@@ -21,7 +21,12 @@ for it. Grant it (Datacenter → Permissions → Add → User Permission, path `
 role, or at minimum `VM.Allocate`, `VM.Clone`, `VM.Config.All`, `VM.PowerMgmt`,
 `Datastore.AllocateSpace`, `Datastore.Audit`, `Sys.Modify`, `SDN.Use`.
 
-**Templates** — see [Adding a template VM](#adding-a-template-vm) below for the full process.
+**Templates** — see [Adding a template VM](#adding-a-template-vm) below for the full process. A
+lineup with an in-path firewall (`in_path: true`) additionally needs a pfSense template (named
+`pfsense`, e.g. cyberrange vmid 956 — [environment-facts.md](environment-facts.md#templates)) on
+EVERY node hosting teams, plus the seed config `competitions/<id>/pfsense/pfsense-config-orig.xml`
+(copy from `competitions/pfsense-ad/pfsense/`); preflight refuses the lineup without the template,
+and deploy phase 5 refuses without the seed.
 
 **SSH keypair** — used by Terraform, the agent, and nakon:
 ```bash
@@ -410,7 +415,7 @@ python3 create-competition.py
 It loads `.env`, asks whether to reuse an existing competition or create a new one, asks how
 many teams (it names/passwords them for you, see [Configure the event](#configure-the-event)),
 generates nakon's machine + vuln list itself (by calling `nakon randomize` from `vendor/nakon`),
-then runs `deploy()` — see [architecture.md](architecture.md#seven-phase-deploy) for what the seven
+then runs `deploy()` — see [architecture.md](architecture.md#eight-phase-deploy) for what the eight
 deploy phases actually do. A few minutes per box; expect most of the time in package installs and
 image builds. At the end it prints a summary and writes `competitions/<id>/credentials.txt`
 (mode 0600) with the scoreboard URL, admin login, every team's login, and the scoring engine's
@@ -426,7 +431,7 @@ separate API-clone cleanup is needed; `competitions/<id>/cloned_vms.json` is onl
 by the deploy). Templates aren't touched unless you pass `--full`.
 
 **Add a team mid-event**: don't re-run `create-competition.py` for this. A fresh run
-regenerates **every** team's password *and* its phase [1/7] destroys the existing team boxes,
+regenerates **every** team's password *and* its phase [1/8] destroys the existing team boxes,
 engine, and bridges before rebuilding — a full teardown, not an incremental add. To add a team
 to a live event, do it by hand: create a new `vmbr<identifier>` bridge on the node, add the team's
 boxes as Terraform-managed linked clones of the relevant goldens, give the engine an address on
@@ -524,7 +529,7 @@ available. See [usage-agents.md](usage-agents.md#redeploy-competitionpy) for the
 | Everything went down at once, after a scoring-engine reboot | The forwarding/NAT rules didn't get re-applied — Docker rebuilds `FORWARD` (policy `DROP`) on every start | `sudo systemctl status range-firewall.service` on the engine; `sudo systemctl restart range-firewall.service` re-applies them (the script is idempotent). It's ordered after `docker.service` and should do this automatically at boot |
 | A team can reach another team's boxes | `range-firewall.sh` isn't applied — the empty bridges don't isolate anything by themselves, since the engine has a NIC on every team bridge and forwards between them | `sudo /usr/local/sbin/range-firewall.sh` on the engine, then check `sudo iptables -L FORWARD -n --line-numbers` for the `192.168.0.0/16 → 192.168.0.0/16 DROP` rule |
 | `/tmp` full on a team VM — `No space left on device` in apt output, or `size mismatch in put!` from `deploy.py` | Stale files from a previous failed deploy accumulated in `/tmp` (a RAM-backed tmpfs); `deploy.py` does not clean up after itself | SSH into the scoring engine, then into the affected machine using credentials from `competitions/<id>/nakon-config.json`, and run `find /tmp -maxdepth 1 -type f -delete`; re-run `create-competition.py`. Also fix `deploy.py` (in THIS repo, not the `nakon` repo) to remove `/tmp/<attachment>` after each script run. |
-| A box installs no services / DNS fails before nakon | Cloud-init's `dns.servers` is silently ignored on Debian with static IPs, leaving `/etc/resolv.conf` empty. The driver's `fix_dns_on_boxes()` (phase 4, and again on any redeploy path, run over the engine jump host) repairs it before nakon's `apt-get`, retrying up to 8× — nakon would otherwise install nothing there and still report success | Watch the `[4/7]` DNS output for the failing box. To debug: SSH through the scoring engine to that box and check `cat /etc/resolv.conf`, `cat /etc/systemd/resolved.conf.d/upstream.conf`, and `getent hosts deb.debian.org`. Re-run `create-competition.py` once fixed |
+| A box installs no services / DNS fails before nakon | Cloud-init's `dns.servers` is silently ignored on Debian with static IPs, leaving `/etc/resolv.conf` empty. The driver's `fix_dns_on_boxes()` (phase 4, and again on any redeploy path, run over the engine jump host) repairs it before nakon's `apt-get`, retrying up to 8× — nakon would otherwise install nothing there and still report success | Watch the `[4/8]` DNS output for the failing box. To debug: SSH through the scoring engine to that box and check `cat /etc/resolv.conf`, `cat /etc/systemd/resolved.conf.d/upstream.conf`, and `getent hosts deb.debian.org`. Re-run `create-competition.py` once fixed |
 | Services all show down on the scoreboard | First check round only lands `Delay`+`Jitter` (~70 s) after the summary prints — wait it out first. If they stay down, nakon installed nothing (see the DNS row above), or a login check is authenticating with credentials no box has | On a box: `ss -ltnp` to see whether the service is even listening. If it is, the check is failing auth — compare `/opt/quotient/config/credlists/linux.credlist` on the scoring engine against the box's real accounts. `Sql` checks need a matching *database* user, which nakon's install script has to create |
 | Something might be wrong mid-competition (nothing crashed loudly, scoreboard just looks off) | `range-healthcheck.timer` on the engine checks Quotient's container/API and the NAT/isolation rules every 60s and only writes to its log on failure — nothing pushes an alert | `sudo tail -f /var/log/range-healthcheck.log` on the engine during a live event, or `python3 verify-competition.py competitions/<id>` from your workstation (it reports the timer's status + recent log lines as part of its output) |
 | One team's boxes are broken mid-event and rebuilding the range isn't an option | That's what the snapshots are for — see [Recovering boxes mid-competition](#recovering-boxes-mid-competition) | `python3 redeploy-competition.py --competition <id> --teams N --dry-run` to see what's affected, then drop `--dry-run` |

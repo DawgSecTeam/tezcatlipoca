@@ -3,8 +3,8 @@ the banner set (exactly one per phase, byte-identical), the terraform-context ho
 between phases 2 and 3, and the mid-phase failure/resume hint.
 
 All offline: prepare() and the phase functions are stubbed, or the REAL phases are
-driven down their resume path (from_phase=8), which prints their banners and
-touches no infrastructure. The from_phase=8 run is what makes the banner set a
+driven down their resume path (from_phase=9), which prints their banners and
+touches no infrastructure. The from_phase=9 run is what makes the banner set a
 regression test — the phase-extraction commits briefly emitted the phase 4-7 skip
 banners twice, and nothing caught it.
 """
@@ -25,50 +25,57 @@ import deploy_phases  # noqa: E402
 
 
 SKIP_BANNERS = [
-    "[1/7] Skipped (resume) — leaving existing VMs/bridges in place.",
-    "[2/7] Skipped (resume) — not re-running terraform apply.",
-    "[3/7] Skipped (resume).",
-    "[4/7] Skipped (resume).",
-    "[5/7] Skipped (resume).",
-    "[6/7] Skipped (resume).",
-    "[7/7] Skipped (resume).",
+    "[1/8] Skipped (resume) — leaving existing VMs/bridges in place.",
+    "[2/8] Skipped (resume) — not re-running terraform apply.",
+    "[3/8] Skipped (resume).",
+    "[4/8] Skipped (resume).",
+    "[5/8] Skipped (resume).",
+    "[6/8] Skipped (resume).",
+    "[7/8] Skipped (resume).",
+    "[8/8] Skipped (resume).",
 ]
 
-# Every "[N/7]"-tagged (or phase-6) print each phase can emit, in the order the
-# phase emits it: its resume guard first, then the run banners. Phase 5's two run
-# banners are alternatives (marker present vs sweep); both are listed in order.
+# Every "[N/8]"-tagged print each phase can emit, in the order the phase emits it:
+# its resume guard first, then the run banners. Alternative run banners (phase 5
+# with/without firewalls, phase 6 marker-vs-sweep) are all listed in order.
 RUN_BANNERS = {
     "phase1_cleanup": [
         SKIP_BANNERS[0],
-        "[1/7] Cleaning up previous deployment (parallel; deletes are metadata-light "
+        "[1/8] Cleaning up previous deployment (parallel; deletes are metadata-light "
         "— the datastore-saturation hazard belongs to bulk clone writes, not deletes)...",
     ],
     "phase2_engine_template": [
         SKIP_BANNERS[1],
-        "[2/7] Terraform apply #1 (engine from template + bridges; team boxes "
+        "[2/8] Terraform apply #1 (engine from template + bridges; team boxes "
         "come in apply #2)...",
     ],
     "phase3_prepare_engine": [
         SKIP_BANNERS[2],
-        "[3/7] Preparing scoring engine from template (fresh volumes, event.conf)...",
+        "[3/8] Preparing scoring engine from template (fresh volumes, event.conf)...",
     ],
     "phase4_golden_set": [
         SKIP_BANNERS[3],
-        "[4/7] Building the golden set (plant once per box type, convert to template)...",
-        "[4b/7] Terraform apply #2: every team as a linked clone of the golden set...",
+        "[4/8] Building the golden set (plant once per box type, convert to template)...",
+        "[4b/8] Terraform apply #2: every team as a linked clone of the golden set...",
     ],
-    "phase5_repair_sweep": [
+    "phase5_firewall_bootstrap": [
         SKIP_BANNERS[4],
-        "[5/7] Resume marker present — post-clone sweep already done; skipping",
-        "[5/7] Repair-stage sweep (sshd/sudoers) on every team box...",
+        "[5/8] No in-path firewall in this lineup — skipping.",
+        "[5/8] Bootstrapping the in-path firewalls (console → fetch → reboot → "
+        "engine cutover)...",
     ],
-    "phase6_domains_and_final": [
+    "phase6_repair_sweep": [
         SKIP_BANNERS[5],
+        "[6/8] Resume marker present — post-clone sweep already done; skipping",
+        "[6/8] Repair-stage sweep (sshd/sudoers) on every team box...",
+    ],
+    "phase7_domains_and_final": [
+        SKIP_BANNERS[6],
         "  Configuring Windows AD domains (if any)...",
     ],
-    "phase7_seed": [
-        SKIP_BANNERS[6],
-        "[7/7] Seeding competition and creating injects...",
+    "phase8_seed": [
+        SKIP_BANNERS[7],
+        "[8/8] Seeding competition and creating injects...",
     ],
 }
 
@@ -98,31 +105,31 @@ def _ctx(comp_dir, from_phase, state=None):
 
 
 def _stub_phases(calls):
-    """Seven stub phases recording their number; PHASES order is what is under test."""
+    """Eight stub phases recording their number; PHASES order is what is under test."""
     def make(n):
         def phase(ctx):
             calls.append(("phase", n))
         return phase
-    return tuple(make(n) for n in range(1, 8))
+    return tuple(make(n) for n in range(1, 9))
 
 
 class BannerSet(unittest.TestCase):
-    """The [N/7] banners operators and incident logs key on. Byte-identical, once each."""
+    """The [N/8] banners operators and incident logs key on. Byte-identical, once each."""
 
-    def _run_resume_from_8(self, comp_dir):
-        ctx = _ctx(comp_dir, 8)
+    def _run_resume_from_9(self, comp_dir):
+        ctx = _ctx(comp_dir, 9)
         buf = io.StringIO()
         with patch.object(deploy, "prepare", return_value=ctx), \
                 patch.object(deploy_phases, "connect_terraform"), \
                 patch.object(deploy_phases, "finish_deploy"):
             with contextlib.redirect_stdout(buf):
-                deploy.deploy(comp_dir, assume_yes=True, from_phase=8)
+                deploy.deploy(comp_dir, assume_yes=True, from_phase=9)
         return buf.getvalue()
 
     def test_resume_emits_every_skip_banner_exactly_once_in_phase_order(self):
         with tempfile.TemporaryDirectory() as d:
             # Real phases: each prints its own skip banner and returns.
-            out = self._run_resume_from_8(Path(d))
+            out = self._run_resume_from_9(Path(d))
         emitted = [ln.rstrip("\n") for ln in out.splitlines() if "Skipped (resume)" in ln]
         self.assertEqual(emitted, SKIP_BANNERS)
 
@@ -147,7 +154,7 @@ class BannerSet(unittest.TestCase):
             self.assertEqual(got, expected, name)
 
     def test_each_phase_skips_on_its_own_phase_number(self):
-        # The guard must compare against the phase's [N/7] number, not a neighbour's.
+        # The guard must compare against the phase's [N/8] number, not a neighbour's.
         tree = ast.parse((_REPO / "deploy_phases.py").read_text())
         funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
         for index, phase in enumerate(deploy_phases.PHASES, 1):
@@ -193,8 +200,8 @@ class Sequencer(unittest.TestCase):
             ctx = self._run(Path(d), 1, _stub_phases(calls), calls)
         self.assertEqual(calls, [("phase", 1), ("phase", 2), ("connect", 2),
                                  ("phase", 3), ("phase", 4), ("phase", 5),
-                                 ("phase", 6), ("phase", 7)])
-        self.assertEqual(ctx.state["last_phase"], 7)
+                                 ("phase", 6), ("phase", 7), ("phase", 8)])
+        self.assertEqual(ctx.state["last_phase"], 8)
 
     def test_connect_terraform_is_not_gated_on_phase_2_running(self):
         calls = []

@@ -110,9 +110,20 @@ class PriorStateGuards(unittest.TestCase):
                 deploy._load_prior_deploy_state(prior, comp_dir, 2, False)
         self.assertIn("pipeline v1", str(raised.exception))
 
+    def test_pipeline_v2_state_is_refused(self):
+        # v3 inserted the firewall-bootstrap phase 5 and renumbered 5-7, so a v2
+        # state's --from-phase numbers mean different things now.
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = self._comp_dir(d, {"pipeline_version": 2, "last_phase": 3})
+            prior = _prior(comp_dir)
+            with self.assertRaises(SystemExit) as raised:
+                deploy._load_prior_deploy_state(prior, comp_dir, 2, False)
+        self.assertIn("pipeline v2", str(raised.exception))
+        self.assertIn("renumbered", str(raised.exception))
+
     def test_guard_resume_from_phase_gets_the_states_last_completed_phase(self):
         with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d, {"pipeline_version": 2, "last_phase": 5})
+            comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 5})
             prior = _prior(comp_dir)
             with patch.object(deploy, "guard_resume_from_phase") as guard:
                 deploy._load_prior_deploy_state(prior, comp_dir, 6, True)
@@ -122,7 +133,7 @@ class PriorStateGuards(unittest.TestCase):
         """The budget is only enforceable if prepare() actually consults it — a guard
         nobody calls is the prose rule it replaced."""
         with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d, {"pipeline_version": 2, "last_phase": 3})
+            comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 3})
             prior = _prior(comp_dir)
             with patch.object(deploy, "guard_resume_streak") as guard:
                 deploy._load_prior_deploy_state(prior, comp_dir, 4, False)
@@ -130,7 +141,7 @@ class PriorStateGuards(unittest.TestCase):
 
     def test_fresh_run_never_calls_the_resume_guard(self):
         with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d, {"pipeline_version": 2, "last_phase": 0})
+            comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 0})
             prior = _prior(comp_dir)
             with patch.object(deploy, "guard_resume_from_phase") as guard, \
                     patch.object(deploy, "guard_resume_streak") as streak_guard:

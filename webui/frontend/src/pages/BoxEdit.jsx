@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { api, asPin, platformOf } from '../api'
+import { api, asPin, kindOf, platformOf } from '../api'
 import { useComp } from './CompLayout'
 import OsPicker from '../components/OsPicker'
 import { Button, Card, ErrorBanner, Field, Modal, PlatformBadge, SearchInput, inputCls } from '../components/ui'
@@ -10,6 +10,19 @@ function SettingsModal({ comp, box, onClose, onSaved }) {
   const [form, setForm] = useState(box)
   const [err, setErr] = useState(null)
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value })
+  // Leaving the firewall role means leaving the gateway slot: .1 is firewall-only, so
+  // the box moves to the first free host address in the same save.
+  const leaveGatewaySlot = (next) => {
+    if (next.last_octet !== 1) return next
+    const used = new Set(comp.boxes.filter((b) => b.name !== box.name).map((b) => b.last_octet))
+    let octet = 2
+    while (used.has(octet)) octet++
+    return { ...next, last_octet: octet }
+  }
+  const setUnmanaged = (checked) => setForm(checked ? { ...form, unmanaged: true }
+    : leaveGatewaySlot({ ...form, unmanaged: false, in_path: false }))
+  const setInPath = (checked) => setForm(checked ? { ...form, in_path: true, last_octet: 1 }
+    : leaveGatewaySlot({ ...form, in_path: false }))
   const save = async (e) => {
     e.preventDefault()
     try {
@@ -22,16 +35,22 @@ function SettingsModal({ comp, box, onClose, onSaved }) {
         <ErrorBanner error={err} />
         <div className="grid grid-cols-2 gap-4">
           <Field label="Hostname" hint="Renaming keeps its services and misconfigs"><input className={`${inputCls} font-mono`} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value.toLowerCase() })} /></Field>
-          <Field label="Address" hint={<span className="font-mono">192.168.&lt;team&gt;.{form.last_octet}</span>}><input type="number" min="2" max="254" className={`${inputCls} font-mono`} value={form.last_octet} onChange={set('last_octet')} /></Field>
+          <Field label="Address" hint={form.in_path ? <span className="font-mono">192.168.&lt;team&gt;.1 — the gateway</span> : <span className="font-mono">192.168.&lt;team&gt;.{form.last_octet}</span>}><input type="number" min={form.in_path ? 1 : 2} max="254" className={`${inputCls} font-mono`} value={form.last_octet} onChange={set('last_octet')} disabled={!!form.in_path} /></Field>
           <Field label="vCPU"><input type="number" min="1" className={inputCls} value={form.cpu ?? ''} onChange={set('cpu')} /></Field>
           <Field label="RAM (MB)"><input type="number" min="256" step="256" className={inputCls} value={form.memory_mb ?? ''} onChange={set('memory_mb')} /></Field>
           <Field label="Disk (GB)" hint="Blank keeps the template's size"><input type="number" className={inputCls} value={form.disk_gb ?? ''} onChange={set('disk_gb')} placeholder="template" /></Field>
           <Field label="Disk interface" hint="Windows templates boot from sata0"><input className={`${inputCls} font-mono`} value={form.disk_iface ?? ''} onChange={set('disk_iface')} placeholder="scsi0" /></Field>
         </div>
         <label className="flex items-start gap-3 rounded-2xl bg-sunken p-3 text-sm shadow-inset">
-          <input type="checkbox" checked={!!form.unmanaged} onChange={set('unmanaged')} className="mt-0.5 accent-[var(--accent)]" />
+          <input type="checkbox" checked={!!form.unmanaged} onChange={(e) => setUnmanaged(e.target.checked)} className="mt-0.5 accent-[var(--accent)]" />
           <span><b>Unmanaged</b><span className="block text-xs text-muted">No SSH and no nakon, e.g. a pfSense firewall. It can't carry services or misconfigs.</span></span>
         </label>
+        {!!form.unmanaged && (
+          <label className="flex items-start gap-3 rounded-2xl bg-sunken p-3 text-sm shadow-inset">
+            <input type="checkbox" checked={!!form.in_path} onChange={(e) => setInPath(e.target.checked)} className="mt-0.5 accent-[var(--accent)]" />
+            <span><b>In-path firewall</b><span className="block text-xs text-muted">Wired engine → transit → firewall → team switch; it owns the team gateway <span className="font-mono">.1</span> (address is locked) and every team gets its own clone. One per competition — deploy phase 5 bootstraps its config and cuts the engine over.</span></span>
+          </label>
+        )}
         <div className="flex justify-end gap-3 pt-2">
           <Button type="button" onClick={onClose}>Cancel</Button>
           <Button variant="primary">Save</Button>
@@ -93,7 +112,12 @@ export default function BoxEdit() {
       <ErrorBanner error={err} onClose={() => setErr(null)} />
       <PageHeader mono crumbs={[[comp.name, `/c/${comp.id}`], ['Boxes', `/c/${comp.id}/boxes`], [box.name]]} title={box.name}
         sub={<span className="flex flex-wrap items-center gap-4 font-mono text-xs">
-          <span className="flex items-center gap-1.5"><Icon name="net" className="h-3.5 w-3.5 text-faint" />192.168.&lt;team&gt;.{box.last_octet}</span>
+          {box.in_path
+            ? <>
+                <span className="flex items-center gap-1.5"><Icon name="net" className="h-3.5 w-3.5 text-faint" />LAN 192.168.&lt;team&gt;.1 (gateway)</span>
+                <span className="flex items-center gap-1.5"><Icon name="net" className="h-3.5 w-3.5 text-faint" />WAN 172.31.&lt;team&gt;.2/30</span>
+              </>
+            : <span className="flex items-center gap-1.5"><Icon name="net" className="h-3.5 w-3.5 text-faint" />192.168.&lt;team&gt;.{box.last_octet}</span>}
           <span className="flex items-center gap-1.5"><Icon name="cpu" className="h-3.5 w-3.5 text-faint" />{box.cpu} vCPU</span>
           <span className="flex items-center gap-1.5"><Icon name="ram" className="h-3.5 w-3.5 text-faint" />{fmtMem(box.memory_mb)}</span>
           <span className="flex items-center gap-1.5"><Icon name="disk" className="h-3.5 w-3.5 text-faint" />{box.disk_gb ? `${box.disk_gb} GB` : 'template disk'}</span>
@@ -104,13 +128,34 @@ export default function BoxEdit() {
         </>} />
 
       <button onClick={() => setPicking(true)} className="btn rise rise-1 gap-3 !px-5 !py-2.5" title="Change operating system">
-        <PlatformBadge platform={platformOf(box.template)} />
+        <PlatformBadge platform={kindOf(box)} />
         <span className="font-mono">{box.template}</span>
         <Icon name="edit" className="h-3.5 w-3.5 text-faint" />
       </button>
 
       {box.unmanaged ? (
-        <Card className="rise rise-2 mt-10 p-6"><EmptyState icon="shield" title="Unmanaged box">nakon doesn't SSH into this box, so it can't carry services or misconfigs.</EmptyState></Card>
+        <Card className="rise rise-2 mt-10 p-6">
+          {box.in_path ? (
+            <div className="space-y-3">
+              <h2 className="display text-xl">In-path firewall</h2>
+              <p className="max-w-2xl text-sm leading-relaxed text-muted">
+                Every team's clone sits between the engine and the team switch across a
+                per-team transit <span className="font-mono text-xs">/30</span>. Deploy
+                phase 5 drives each clone's console to fetch its config (SSH on, outbound
+                NAT off, routed scoring allowed), then cuts the engine over so the
+                firewall owns <span className="font-mono text-xs">192.168.&lt;team&gt;.1</span> and the
+                engine routes team subnets through it. Infrastructure, not a target — no
+                services or misconfigs ride on it.
+              </p>
+              <div className="grid max-w-2xl grid-cols-2 gap-2 font-mono text-xs text-muted">
+                <div className="rounded-xl bg-sunken p-2.5 shadow-inset">WAN&nbsp;&nbsp;172.31.&lt;team&gt;.2/30 · vmbrW&lt;team&gt;</div>
+                <div className="rounded-xl bg-sunken p-2.5 shadow-inset">LAN&nbsp;&nbsp;192.168.&lt;team&gt;.1/24 · the boxes' gateway</div>
+              </div>
+            </div>
+          ) : (
+            <EmptyState icon="shield" title="Unmanaged box">nakon doesn't SSH into this box, so it can't carry services or misconfigs.</EmptyState>
+          )}
+        </Card>
       ) : (
         <Card className="rise rise-2 mt-10 p-6">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-4">

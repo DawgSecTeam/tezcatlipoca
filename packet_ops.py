@@ -212,6 +212,7 @@ def validate_profile(p):
         err(f"boxes: need 1-{MAX_BOXES_PER_TEAM} box types (got {len(boxes)})")
     names, octets = set(), set()
     dc_boxes = []
+    fw_boxes = []
     for b in boxes:
         name = b.get("name")
         if not name or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", str(name)):
@@ -230,6 +231,20 @@ def validate_profile(p):
         if b.get("fidelity") not in FIDELITY_LEVELS:
             err(f"box {name!r}: fidelity must be one of {FIDELITY_LEVELS} — say what the "
                 "packet promised vs what this template delivers")
+        if b.get("in_path") and not b.get("unmanaged"):
+            err(f"box {name!r}: in_path firewalls are unmanaged by definition — set "
+                "`unmanaged: true` alongside `in_path: true`")
+        if b.get("in_path") and lo != 1:
+            err(f"box {name!r}: an in-path firewall owns the team gateway address — "
+                f"last_octet must be 1 (got {lo})")
+        if lo == 1 and not b.get("unmanaged"):
+            # Legacy shape stays valid: cde-2026/maccdc packets carry an unmanaged fw01
+            # at .1 as a packet-fidelity stand-in (idle while the engine holds the
+            # gateway). Managed hosts must never claim the gateway address, though.
+            err(f"box {name!r}: last_octet 1 is the team gateway — only an unmanaged "
+                "firewall/appliance (in_path or a packet stand-in) may sit there")
+        if b.get("in_path"):
+            fw_boxes.append(name)
         role = b.get("domain_role")
         if b.get("unmanaged"):
             if role:
@@ -248,6 +263,9 @@ def validate_profile(p):
             err(f"box {name!r}: disk_gb must be a positive int or null (template's own)")
     if len(dc_boxes) > 1:
         err(f"domain_role 'dc' appears on {len(dc_boxes)} boxes {dc_boxes} — exactly one DC")
+    if len(fw_boxes) > 1:
+        err(f"in_path firewalls appear on {len(fw_boxes)} boxes {fw_boxes} — one per-team "
+            "lineup (the transit design routes every team through a single gateway)")
 
     box_names = names
     displays_by_box = {}

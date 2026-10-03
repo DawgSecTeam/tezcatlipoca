@@ -214,7 +214,7 @@ def put_compfile(comp_id: str, body: CompfileBody):
 # ── boxes ───────────────────────────────────────────────────────────────────────────────
 
 BOX_FIELDS = ("name", "last_octet", "cpu", "memory_mb", "disk_gb", "disk_iface", "template",
-              "unmanaged")
+              "unmanaged", "in_path")
 
 
 def clean_box(raw: dict) -> dict:
@@ -227,11 +227,21 @@ def clean_box(raw: dict) -> dict:
         octet = int(box.get("last_octet", 0))
     except (TypeError, ValueError):
         raise HTTPException(400, "last_octet must be a number")
-    if not 2 <= octet <= 254:
-        raise HTTPException(400, "last_octet must be 2–254 (.1 is the team gateway)")
+    if not 2 <= octet <= 254 and not (octet == 1 and box.get("unmanaged")):
+        raise HTTPException(400, "last_octet must be 2–254; .1 is the team gateway — only an "
+                                 "unmanaged firewall (in_path or a packet stand-in) sits there")
     box["last_octet"] = octet
     if not box.get("template"):
         raise HTTPException(400, "template (operating system) is required")
+    if box.get("in_path"):
+        # The in-path firewall is the team's gateway: unmanaged by definition, and its
+        # LAN address IS the gateway address the hosts point at.
+        if not box.get("unmanaged"):
+            raise HTTPException(400, "an in_path firewall is unmanaged by definition — "
+                                     "it can take no services, misconfigs or nakon work")
+        if octet != 1:
+            raise HTTPException(400, "an in_path firewall owns the team gateway address — "
+                                     "set last_octet to 1")
     for k in ("cpu", "memory_mb", "disk_gb"):
         if box.get(k) is not None:
             box[k] = int(box[k])
@@ -248,6 +258,9 @@ def check_unique(boxes: list, box: dict, skip: Optional[str]):
             raise HTTPException(409, f"a box named {box['name']!r} already exists")
         if b["last_octet"] == box["last_octet"]:
             raise HTTPException(409, f".{box['last_octet']} is already used by {b['name']}")
+    if box.get("in_path") and any(b.get("in_path") for b in boxes if b["name"] != skip):
+        raise HTTPException(409, "this lineup already has an in-path firewall — one per "
+                                 "competition (every team routes through a single gateway)")
 
 
 @app.post("/api/comps/{comp_id}/boxes")
@@ -277,6 +290,8 @@ def update_box(comp_id: str, name: str, raw: dict = Body(...)):
         box.pop("disk_iface", None)
     if "unmanaged" in raw and not raw["unmanaged"]:
         box.pop("unmanaged", None)
+    if "in_path" in raw and not raw["in_path"]:
+        box.pop("in_path", None)  # dropping in_path must also drop unmanaged if raw asked
     check_unique(boxes, box, name)
     boxes[idx] = box
     write_json(d / "boxes.json", boxes)
@@ -324,8 +339,15 @@ def put_pins(comp_id: str, name: str, kind: str, pins: list = Body(...)):
     if kind not in files:
         raise HTTPException(404)
     d = comp_dir(comp_id)
-    if not any(b["name"] == name for b in read_json(d / "boxes.json", [])):
+    box = next((b for b in read_json(d / "boxes.json", []) if b["name"] == name), None)
+    if box is None:
         raise HTTPException(404, f"no box {name!r}")
+    if box.get("unmanaged"):
+        # Reject here, not just at packet-compile: nothing can ever be planted on or
+        # scored against an unmanaged box, so accepting the pins would only move the
+        # failure to deploy time.
+        raise HTTPException(400, f"{name!r} is unmanaged — no services or misconfigs can "
+                                 "be planted on or scored against it")
     m = read_json(d / files[kind], {})
     m[name] = [normalize_pin(p) for p in pins]
     write_json(d / files[kind], m)

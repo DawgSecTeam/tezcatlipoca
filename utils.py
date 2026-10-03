@@ -131,6 +131,14 @@ def is_unmanaged(box):
     return bool(box.get("unmanaged"))
 
 
+def is_in_path_fw(box):
+    """True for an in-path firewall: unmanaged + `in_path` — terraform gives it two NICs
+    (WAN on vmbrW<id>, LAN on vmbr<id>), deploy phase 5 bootstraps its pfSense config and
+    cuts the engine over so it routes the team subnet. Every unmanaged skip above applies
+    to it too; this predicate only adds the network plumbing on top."""
+    return is_unmanaged(box) and bool(box.get("in_path"))
+
+
 def valid_unix_username(name):
     """Safe as a remote-shell token, useradd name, and sudoers filename."""
     return bool(name) and _USERNAME_RE.fullmatch(name) is not None

@@ -1,4 +1,4 @@
-"""Orchestrator: seven-phase deploy and CLI."""
+"""Orchestrator: eight-phase deploy and CLI."""
 
 import fcntl
 import json
@@ -73,7 +73,7 @@ _DEPLOY_LOCKS = {}  # path -> open fh (keep referenced so flock survives)
 
 # Code-level, not run-level state: the .deploy_state.json resume guard and the fresh
 # state writer must record the same version, and both now live in different steps.
-PIPELINE_VERSION = 2
+PIPELINE_VERSION = 3
 
 
 def _record_coverage(state, stage_machines, result):
@@ -421,7 +421,7 @@ def reset_domain_markers(comp_dir):
 
 @dataclass
 class DeployContext:
-    """Everything the seven deploy phases share, built once by prepare().
+    """Everything the eight deploy phases share, built once by prepare().
 
     Before this existed the phases were `if` blocks inside a 940-line deploy() reading
     ~160 locals, which made every phase boundary invisible and every phase untestable.
@@ -1301,8 +1301,10 @@ def _load_prior_deploy_state(prior, comp_dir, from_phase, force_from_phase):
         if _pv != PIPELINE_VERSION:
             raise SystemExit(
                 f"  ERROR: {prior.state_path} was written by pipeline v{_pv if _pv is not None else '1'} "
-                f"(pre-golden-template phases) — this code is pipeline v{PIPELINE_VERSION} and its "
-                f"--from-phase numbers mean different things. Run a fresh deploy (no --from-phase)."
+                f"— this code is pipeline v{PIPELINE_VERSION} and its --from-phase numbers mean "
+                f"different things (v3 added the firewall-bootstrap phase 5; v2→v3 also renumbered "
+                f"phases 5-7). Run a fresh deploy (no --from-phase), or finish the run on the code "
+                f"that wrote the state."
             )
         # Refuse to skip a phase that never completed: the skipped phases are what build
         # the machines the later ones target (see guard_resume_from_phase).
@@ -1331,7 +1333,7 @@ def _load_competition_inputs(inputs, comp_dir):
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
            team_node=None, engine_node=None, force_from_phase=False, min_load_free=None):
-    """Run the seven-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
+    """Run the eight-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
 
     scoring_vmid overrides the scoring-engine VMID (default 1000) so several
     competitions can run concurrently on one node; it is persisted to
@@ -1382,7 +1384,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     current_phase = max(ctx.from_phase, 1)
     try:
         for n, phase in enumerate(PHASES, 1):
-            # Every phase is CALLED so it can print its own "[N/7] Skipped (resume)"
+            # Every phase is CALLED so it can print its own "[N/8] Skipped (resume)"
             # banner, but only a phase that actually ran may become the failure's
             # phase or write last_phase: checkpointing a skipped phase would move the
             # resume guard's answer forward for a phase this run never executed.
@@ -1494,7 +1496,9 @@ def main():
         print(f"\n  ── PLAN for '{comp_name}' — nothing has been deployed " + "─" * 20)
         for b in boxes:
             disk = f"{b['disk_gb']} GB disk" if b.get("disk_gb") else "template's own disk"
-            print(f"    {b['name']:<12} {b['template']:<20} {b['cpu']} CPU, {b['memory_mb']} MB, {disk}")
+            kind = "  (in-path firewall: vmbrW<id> → fw → team bridge, gateway .1)" \
+                if b.get("in_path") else "  (unmanaged appliance)" if b.get("unmanaged") else ""
+            print(f"    {b['name']:<12} {b['template']:<20} {b['cpu']} CPU, {b['memory_mb']} MB, {disk}{kind}")
         try:
             state_run = (json.loads((comp_dir / ".deploy_state.json").read_text()).get("run_id") or "")
         except (ValueError, OSError):
