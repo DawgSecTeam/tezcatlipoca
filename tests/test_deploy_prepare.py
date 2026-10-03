@@ -461,14 +461,17 @@ class PrepareSequencer(unittest.TestCase):
                                  "confirm"])
 
 
-class KnownShadowingPreserved(unittest.TestCase):
-    """A known bug the split must NOT quietly fix.
+class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):
+    """Regression: a frozen run must not overwrite the competition's event name.
 
-    The baseline's `for name in golden_hashes:` loop reused the Compfile `name` local,
-    so on a frozen run it clobbered the event name for every later use (the confirm
-    prompt and tfvars' event_name). _generate_stage_configs_and_hashes writes the loop
-    variable onto spec.name for exactly that reason. If someone deliberately fixes the
-    shadowing, this test should be deleted in the same commit.
+    The loop that runs the per-golden frozen gate used to read
+    `for spec.name in generated.golden_hashes`, which assigned each golden box name
+    onto the spec and left the LAST one there. On a frozen competition that silently
+    replaced the Compfile event name, so `terraform.tfvars.json`'s `event_name` — and
+    with it `local.comp_tag`, the ownership tag stamped on the engine and every team
+    box — became `comp-<lastbox>` while phase 1 compares against `comp-<competition>`.
+    Phase 1's `comp_tags <= tags` ownership check then FAILED and refused to reclaim
+    the range's own VMs; `confirm_deploy` also displayed the wrong name.
     """
 
     def _run(self, comp_dir, frozen):
@@ -484,23 +487,57 @@ class KnownShadowingPreserved(unittest.TestCase):
                 patch.object(deploy, "build_nakon_bundle", return_value=None), \
                 patch.object(deploy, "_template_vmid_map", return_value={}), \
                 patch.object(deploy, "golden_hash_entries",
-                             return_value=({"web01": {}}, {"web01": "H"})), \
-                patch.object(deploy, "frozen_state", return_value=frozen), \
-                patch.object(deploy, "golden_freeze_gate",
-                             return_value={"code": False, "config": False}):
+                             return_value=({"web01": {}, "dc01": {}},
+                                           {"web01": "H", "dc01": "H2"})), \
+                patch.object(deploy, "frozen_state", return_value=frozen):
             spec = _spec()
             deploy._generate_stage_configs_and_hashes(generated, comp_dir, spec, _secrets())
-        return spec
+        return spec, generated
 
-    def test_frozen_run_clobbers_the_event_name_exactly_as_before(self):
+    def test_frozen_run_keeps_the_event_name(self):
         with tempfile.TemporaryDirectory() as d:
-            spec = self._run(Path(d), {"hashes": {"golden": {}}, "frozen_at": "t"})
-        self.assertEqual(spec.name, "web01")
+            spec, _ = self._run(Path(d), {"hashes": {"golden": {}}, "frozen_at": "t"})
+        self.assertEqual(spec.name, "probe",
+                         "the frozen gate clobbered spec.name — terraform would tag the "
+                         "range comp-<lastbox> while phase 1 looks for comp-<competition>")
+
+    def test_frozen_gate_still_runs_over_every_box(self):
+        """The fix must not skip the gate it was guarding."""
+        calls = []
+
+        def gate(name, *a, **kw):
+            calls.append(name)
+            return {"code": False, "config": False}
+
+        with tempfile.TemporaryDirectory() as d:
+            with patch.object(deploy, "golden_freeze_gate", side_effect=gate):
+                spec, _ = self._run(Path(d), {"hashes": {"golden": {}}, "frozen_at": "t"})
+        self.assertEqual(sorted(calls), ["dc01", "web01"])
+        self.assertEqual(spec.name, "probe")
 
     def test_unfrozen_run_leaves_the_event_name_alone(self):
         with tempfile.TemporaryDirectory() as d:
-            spec = self._run(Path(d), None)
+            spec, _ = self._run(Path(d), None)
         self.assertEqual(spec.name, "probe")
+
+    def test_gate_mutates_no_spec_field(self):
+        """The general invariant behind the bug: this step READS the spec and writes only
+        into `generated`. Any attribute mutation here is a latent version of the same
+        clobbering bug, so guard the whole dataclass rather than just `name`."""
+        with tempfile.TemporaryDirectory() as d:
+            golden_dir = Path(d)
+            with patch.object(deploy, "frozen_state",
+                              return_value={"hashes": {"golden": {}}, "frozen_at": "t"}), \
+                    patch.object(deploy, "golden_freeze_gate",
+                                 return_value={"code": True, "config": False}):
+                spec, generated = self._run(
+                    golden_dir, {"hashes": {"golden": {}}, "frozen_at": "t"})
+        self.assertEqual(spec.name, "probe")
+        self.assertEqual(spec.comp_name, "probe")
+        self.assertEqual(spec.box_username, "ubuntu")
+        self.assertEqual(spec.difficulty, 3)
+        # code drift IS still collected into `generated` — the gate did its job
+        self.assertEqual(generated.frozen_keep, {"web01", "dc01"})
 
 
 if __name__ == "__main__":

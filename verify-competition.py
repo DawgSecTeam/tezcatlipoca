@@ -1595,6 +1595,23 @@ def check_plant_coverage(comp_dir):
     return _pass("plant_coverage", f"all {len(machines)} machine(s)")
 
 
+def git_dirty_lines(repo_root=None):
+    """Uncommitted paths in this checkout (`git status --porcelain` at the repo root).
+
+    Returns a list of porcelain lines, or None when git cannot answer (not a repo, git
+    missing, non-zero rc) — an unverifiable tree must never read as clean. Scoped to
+    REPO_ROOT rather than the cwd so the same answer holds wherever verify was invoked."""
+    try:
+        out = subprocess.run(["git", "status", "--porcelain"],
+                             cwd=str(repo_root or REPO_ROOT),
+                             capture_output=True, text=True, timeout=15)
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    return [line for line in out.stdout.splitlines() if line.strip()]
+
+
 def freeze_hashes(comp_dir):
     """The template hashes a freeze would record (None when nothing is recorded yet)."""
     path = comp_dir / ".template-hashes.json"
@@ -1611,7 +1628,7 @@ def do_freeze(comp_dir, args, gate, coverage_passed):
     code commit, timestamp, and gate results. Preconditions: every gate PASS including
     plant-coverage and services; Windows/domain lineups additionally require the
     operator's --windows-domain-validated attestation (that the run exercised them)."""
-    from template_ops import git_commit_info
+    from template_ops import code_path_dirty, git_commit_info
     import time as _time
 
     hashes = freeze_hashes(comp_dir)
@@ -1635,6 +1652,27 @@ def do_freeze(comp_dir, args, gate, coverage_passed):
               "--windows-domain-validated to attest that this run's Windows/domain "
               "validation (DomainSIDs, machine SIDs, three-pass ordering) passed.")
         return False
+    # A freeze taken while deploy-path CODE is uncommitted pins a commit that does not
+    # contain the verified code (the deploy-time check is a warning, not a gate trip — see
+    # template_ops.frozen_code_drift). Generated/run state (comp JSON, placement.json,
+    # nodes.json, terraform state, .env backups) is expected to be dirty after a run and
+    # must not block; it is noted, not refused.
+    dirty = git_dirty_lines()
+    if dirty is None:
+        print("  FREEZE warning — could not read the git worktree state (git unavailable "
+              "or not a checkout); the frozen record may not match the code tree.")
+    elif dirty:
+        code_dirty = [d for d in dirty if code_path_dirty([d])]
+        if code_dirty:
+            shown = ", ".join(d[:70] for d in code_dirty[:3]) + (" …" if len(code_dirty) > 3 else "")
+            print(f"  FREEZE refused — {len(code_dirty)} uncommitted code path(s) in the "
+                  f"worktree ({shown}). Freeze LAST, after the final commit: the frozen record "
+                  f"pins the commit the run was verified on. To back out before the competition "
+                  f"starts: --unfreeze --confirm-unfreeze, commit, then --freeze again.")
+            return False
+        shown = ", ".join(d[:60] for d in dirty[:3]) + (" …" if len(dirty) > 3 else "")
+        print(f"  FREEZE note — {len(dirty)} uncommitted non-code path(s) ignored for the "
+              f"freeze ({shown}); only deploy-path code (.py/.tf/.sh/.j2/.ps1) blocks it.")
     record = {
         "frozen_at": _time.strftime("%Y-%m-%d %H:%M:%S"),
         "code": git_commit_info(),

@@ -187,7 +187,7 @@ image, boot-once bootstraps it via a `cicustom` snippet, seals it, and tags it:
   the bootstrap installs them. It must ALSO set `manage_resolv_conf: true`: Alpine's
   cloud-init never creates `/etc/resolv.conf`, so `apk` dies of DNS timeouts and the
   `packages:` directive silently no-ops (once-per-instance — reboots don't retry; see
-  known-issues).
+  [environment-facts.md](environment-facts.md#templates)).
 - **Pick the box_username before building**: `setup_ubuntu_auth` assumes the username is not
   a legacy system account on the target distro (`operator` is a nologin uid-11 account on
   Fedora/Debian-classic and bricks auth setup; `medic` is proven safe).
@@ -292,7 +292,7 @@ allowlisted, which is what keeps this table from drifting again.
 | `TF_VAR_engine_mgmt_gw` | Gateway for that static address (default `DEFAULT_ENGINE_MGMT_GW` = `10.0.0.1`). Defaults whenever the IP is static |
 | `TF_VAR_scoring_vm_id` | Engine VMID (default 1000). Override when 1000 is taken on the node; also settable per run as `--scoring-vmid` |
 | `TF_VAR_team_identifiers` | Pin team subnets explicitly instead of deriving them from the team index. Comma/space separated identifiers, e.g. `120,121,122,123`. Set it when the node hosts challenge templates whose vmids collide with the default 101+ blocks |
-| `TEZ_THIN_HEADROOM` | Fraction `(0, 1]` of the *provisioned* disk math the datastore-headroom preflight counts, for thin-provisioned pools where provisioned ≫ used (linked clones allocate only written blocks). Unset = strict provisioned-bytes gate. See [known-issues.md](known-issues.md) |
+| `TEZ_THIN_HEADROOM` | Fraction `(0, 1]` of the *provisioned* disk math the datastore-headroom preflight counts, for thin-provisioned pools where provisioned ≫ used (linked clones allocate only written blocks). Unset = strict provisioned-bytes gate. See [environment-facts.md](environment-facts.md#storage) |
 | `PROXMOX_CA_BUNDLE` / `PROXMOX_TLS_FINGERPRINT` | Pin Proxmox API TLS verification to a CA bundle or a sha256 cert fingerprint instead of the default unverified self-signed cert. Set at most one |
 | `TF_VAR_proxmox_api_token_<node>` (e.g. `_193`) | Multi-node: `nodes.json` references per-host tokens **by env-var name**, so each additional host's token gets its own variable. See [multi-node.md](multi-node.md) |
 

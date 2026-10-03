@@ -17,8 +17,9 @@ jump host, the nakon execution host, and the NAT gateway. Team isolation is enfo
 the engine, not by bridge separation.
 
 Per-symbol design notes and the "why" behind specific parameters and orderings live in
-[internals.md](internals.md); incidents and known-broken things in
-[known-issues.md](known-issues.md); the agent-scrim harness in
+[internals.md](internals.md); resolved incidents in
+[incident-archive.md](incident-archive.md) and open problems in [known-issues.md](known-issues.md);
+the agent-scrim harness in
 [scrim-harness.md](scrim-harness.md).
 
 ## Component map
@@ -471,4 +472,4 @@ box passwords.
 - **The competitor packet omits `box_vulns.json`** — including planted misconfigs would spoil
   the exercise.
 - The 2026-08-06 git-history secret disclosure is recorded in
-  [known-issues.md](known-issues.md).
+  [security-disclosures.md](security-disclosures.md).

@@ -121,9 +121,48 @@ REQUIRED_VARS = {
     "airship-webapp": {"DB_USER": "literal", "DB_PASS": "literal",
                        "DB_HOST": "ip:polus"},
 }
-# unrealircd-backdoor-container (rc=127: assumes docker on the box) has no pin var —
-# it is a box-prerequisite gap, caught by the verify plant-coverage gate when the
-# step fails, not by this table.
+# Catalog configs that must never be *newly* pinned: each is a live-confirmed defect in the
+# shared vulndb catalog that takes a scored service down until it is fixed upstream. Pinning
+# one is a generate-time error (nakon_ops._validate_known_broken_pins, packet_ops' compiler)
+# instead of a mid-plant surprise. Pin sets used to carry this as prose + per-competition JSON
+# pruning, so a new comp could silently re-pin them. Reasons: docs/known-issues.md and
+# docs/upstream-defects-handoff.md; shrink the table as upstream fixes land.
+#
+# History: the four Linux rows (tftpd-hpa-anon-write, postgresql-no-auth,
+# postgresql-remote-access, sshd-force-sftp-broken-chroot) were fixed and verified live on
+# noble/debian13/fedora44 on 2026-10-02 and removed from this table — bodies and evidence in
+# docs/vulndb-fixes/. The five Windows rows it used to carry were NOT user-policy defects at
+# all: four of them never touch an account or password policy, and the fifth already created
+# its account first and re-ran clean (measured live 2026-10-02 on lab vmid 131 — the whole
+# "Set-LocalUser/password-policy ordering" diagnosis in upstream-defects-handoff §5 was wrong).
+# Those four are fixed and removed below. mailenable-cleartext-mail-win is the one real
+# Windows defect found and is STILL BROKEN: `choco install mailenable` names a package the
+# community feed does not have, so the row plants no mail service at all.
+KNOWN_BROKEN_CONFIGS = {
+    "mailenable-cleartext-mail-win":
+        "Planted cleartext-mail finding never lands: `choco install mailenable` is a "
+        "wrong package id (no such package in the community feed), so nothing installs and "
+        "only the firewall rule is created. Fix candidate (unverified) in "
+        "docs/vulndb-fixes/mailenable-cleartext-mail-win.candidate.",
+}
+# NOT in KNOWN_BROKEN_CONFIGS: unrealircd-backdoor-container. Its rc=127 (docker absent) was
+# fixed 2026-10-02 — the body now installs/detects docker or podman and otherwise exits rc=1
+# with a MISSING DEPENDENCY message — so it is a normal pin again; verify's plant-coverage
+# gate still catches a failed step. See docs/vulndb-fixes/unrealircd-backdoor-container-linux.sh.
+#
+# Also removed 2026-10-02 after live verification on lab vmid 131 (tz-vulnlab-w1), bodies and
+# evidence in docs/vulndb-fixes/:
+#   local-user-win — account was already created before its flags; the real bug was
+#     `PASSWORD_NEVER_EXPIRES -eq 1` comparing nakon's string "1" to an integer, so the flag
+#     silently no-opped.
+#   powershell-execution-unrestricted — `Set-ExecutionPolicy -Scope LocalMachine` raised a
+#     terminating SecurityException under nakon's Process-scope Bypass, so the step scored rc=1
+#     and the registry writes below it never ran (no account or password policy involved).
+#   rpc-proxy-on-dc-web-win — no account involved; RSAT-Rpc-Proxy is not a Server feature and
+#     `poolManagementMode` is not an IIS property, so the plant was dirty but landed.
+#   unauth-kiosk-app-startup-win — no account involved; worked as intended where its declared
+#     app tree existed (0.0.0.0:80, HTTP 200, rc=0 twice); now reports a missing interpreter
+#     explicitly instead of a bare Start-Process argument error.
 
 # M4 per-competition templates: the engine template sits just below the golden block
 # so one preflight scan covers both. Not a cross-competition cache: every template
@@ -143,6 +182,21 @@ GOLDEN_VMID_OFFSET = 150
 GOLDEN_CLONE_TIMEOUT = 5400
 GOLDEN_IP_BASE = 240
 GOLDEN_TAG = "tezcatlipoca-golden"
+
+
+def ownership_tags(comp_name, run_id=None, *extra):
+    """The full ownership tag set for a competition's VMs — every destruction guard
+    requires ALL of it on a VM before touching it.
+
+    `run_id` is the per-deploy identity (utils.mint_run_id, persisted in
+    .deploy_state.json): the comp tag alone is shared by every worktree running the
+    same competition ID, so two concurrent deploys were indistinguishable to every
+    sweep (2026-10-02 near-miss — smoke vs live-2box). A VM tagged comp-<name> but
+    missing the expected run tag belongs to a DIFFERENT run and must be refused."""
+    tags = {"tezcatlipoca", f"comp-{comp_name}"}
+    if run_id:
+        tags.add(run_id)
+    return tags | set(extra)
 
 WINDOWS_ADMIN_USER = "Administrator"
 

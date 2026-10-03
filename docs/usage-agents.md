@@ -253,7 +253,7 @@ Anything that matches no team/box is a hard error, not a silent empty selection.
 `--reset-event` (with `rollback-ready`/`rollback-base` only) additionally restarts the event from
 the engine template — a fresh scoring DB and a phase-7 re-run — so scores reset and injects re-open
 anchored at now. Use it for scrim reruns; the deadlock that used to kill it was fixed 2026-10-01
-(see `known-issues.md`).
+(see `incident-archive.md`).
 
 `rebuild` deliberately clones the **golden template** rather than the anchor team's live box, so a
 rebuilt box carries the golden-stage installs without inheriting whatever the defenders did. This is
@@ -316,6 +316,29 @@ deploy reuses them by hash (test-run reuse). `--full` additionally destroys the 
 (clones strictly first — linked clones die with their base disks) and removes
 `.template-hashes.json`. On a FROZEN competition `--full` refuses without
 `--end-of-competition`, so an accidental full teardown mid-event is impossible.
+
+### Run ownership: teardown only touches THIS deploy's VMs (2026-10-02)
+
+Every deploy mints a per-competition-directory **run id** (`run-<hex>`, in
+`.deploy_state.json`) and stamps it as a PVE tag on everything it creates. Teardown requires
+the FULL ownership set (`tezcatlipoca` + `comp-<id>` + `run-<id>`) before it stops or deletes
+anything — so **two worktrees deploying the same competition ID can no longer destroy each
+other's VMs**. Behavior you will see:
+
+- A VM tagged with the comp but a DIFFERENT run id (another worktree's run) is refused/skipped
+  with a loud warning, everywhere: pre-stop, the leftover sweep, `--full` template destroys,
+  and deploy phase-1 reclamation. It is never destroyed from the wrong worktree.
+- An UNTAGGED VM on a computed vmid is refused by default. Escape hatches are explicit:
+  `--allow-untagged` here, `TEZ_ALLOW_UNTAGGED_RECLAIM=1` for deploy phase 1.
+- A state file with no run id (pre-run-id deploy): the leftover sweep is OFF until you pass
+  `--legacy-tags` (comp-tag-only sweep — use it only when no other session runs the same comp
+  ID); recorded-vmid deletes keep the comp-tag guard.
+- A deploy whose preflight finds comp-tagged VMs missing its run tag refuses with a hint: tear
+  the old range down with `--legacy-tags` first, or coordinate with the other session.
+
+`report_remaining` (printed when teardown cannot finish) classifies every survivor the same
+way, so a human always knows what is ours, what belongs to another run, and what predates run
+ids.
 
 **Lifecycle rule: tear the golden range down once the run has achieved its goal.** Teams-only
 exists for the mid-run loop only — crash resume, iterate, re-run the SAME competition; that

@@ -2,6 +2,7 @@ import contextlib
 import json
 import os
 import re
+import secrets as _secrets
 import signal
 import subprocess
 import threading
@@ -13,6 +14,16 @@ _COMP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
 
 PRINT_LOCK = threading.Lock()
 MAX_CONCURRENCY = 8
+
+
+def mint_run_id():
+    """Per-deploy run identity: `run-` + 8 hex chars, minted once per competition
+    directory and reused by every later deploy/resume from it (constants.ownership_tags).
+
+    The comp dir is per-worktree, so two concurrent deploys of the SAME competition ID
+    mint different ids and can no longer destroy each other's VMs — destruction paths
+    require the full ownership tag set including this tag (2026-10-02 near-miss)."""
+    return f"run-{_secrets.token_hex(4)}"
 
 
 def run_concurrent(items, fn, max_workers=MAX_CONCURRENCY):
@@ -110,7 +121,7 @@ def load_users_config(comp_dir):
     elif is_legacy_account_name(box_username):
         print(f"  WARNING: users.json box_username '{box_username}' collides with a legacy "
               f"distro system account (cloud-init would adopt it and brick auth) — using "
-              f"{BOX_USERNAME_DEFAULT} instead (docs/known-issues.md).")
+              f"{BOX_USERNAME_DEFAULT} instead (docs/e2e-testing.md §0).")
         box_username = BOX_USERNAME_DEFAULT
     # 1..8 (was exactly 3): packet-compiled bundles carry whatever accounts the packet
     # publishes (CDE ships 2). fix_services_on_boxes iterates the pairs, so the count

@@ -8,7 +8,10 @@
 How to run a full pipeline test (`create-competition.py` / `run-agent-scrim.py`) so that
 failures are triaged once, recovered cheaply, and never debugged twice. This doc condenses
 every deploy failure from the July 2026 shakedown through the September scrim / winad / pfSense
-red-vs-blue runs; [known-issues.md](known-issues.md) stays the canonical incident log,
+red-vs-blue runs; the pre-deploy trap list is **[§0 below](#0-read-before-you-deploy--live-traps)**,
+[known-issues.md](known-issues.md) carries the currently-open issues,
+[incident-archive.md](incident-archive.md) is the canonical resolved-incident log,
+[environment-facts.md](environment-facts.md) is the node/storage/template ground truth,
 [architecture.md](architecture.md) explains the phases, [usage-agents.md](usage-agents.md)
 documents the flags, and [pfsense-inpath-2026-09-28.md](pfsense-inpath-2026-09-28.md)
 is the in-path-firewall runbook. For a pfSense-fronted, multi-host, or red-team run also read §8.
@@ -18,6 +21,76 @@ The three habits this doc exists to enforce:
 1. **Triage before touching anything** — regression or known failure class? (§1)
 2. **Never redo phases 1–2 for a failure in phases 3–7** — resume, don't rebuild. (§4)
 3. **Always capture the deploy log** — several post-mortems were only possible by luck. (§3, §7)
+
+## 0. Read before you deploy — live traps
+
+Operator actions, not incidents. Each of these has burned a real deploy; each is cheap to check
+first. Environment detail is in [environment-facts.md](environment-facts.md); genuinely-open
+problems are in [known-issues.md](known-issues.md).
+
+**Templates and vmids**
+
+- [ ] **Check the template has a cloud-init drive — do not trust its name.** A tagged template with
+      no `ide*/scsi*/sata*` entry containing `cloudinit` clones into an unreachable box. Known dead
+      on .150: `106 base-ubuntu24.04`, `920 base-debian13-cloudinit` ⚠️, `103`, `109`. On .193:
+      `1001`, `1002`, `1005 base-debian13-cloudinit` ⚠️, `1003`, `1004`. Use the `-fix` variants
+      (`955`/`1007` ubuntu, `951`/`1006` debian-lite, `1016`/`1015` fedora, `127`/`1019` alpine).
+- [ ] **Pass `TF_VAR_team_identifiers` explicitly.** Default 101+ collides with challenge/workshop/
+      livefire VMs on **both** nodes (on .150, 100–124 are all occupied). The collision preflight
+      names the clash; choose a free block.
+- [ ] **Check for a squatting golden/engine slot before deploying** if another session may have
+      allocated an ad-hoc template vmid in the same 13xx/20xx block.
+- [ ] **Check the env variant matches the node and has no stale vmids.** The dead-`TF_VAR_template_vm_id`
+      trap has now appeared twice: `.env.realm-backup-20260923` shipped `9106`, and the main `.env`
+      shipped `9088` — neither exists on either node. Correct values: **955** (.150) / **1007** (.193).
+      Also set `TF_VAR_team_identifiers` deliberately rather than relying on defaults.
+
+**Concurrency and the shared estate**
+
+- [ ] **Give every concurrent comp its own `TF_VAR_engine_mgmt_ip`.** `clean_engine_for_template`
+      cleans up over SSH to the planned engine mgmt IP, so a shared/static IP on one node can make
+      the cleanup land on a *live foreign engine* — it destroys that engine's `.env`, `event.conf`
+      and SSH host keys (see the open item in [known-issues.md](known-issues.md)).
+- [ ] **Reclaim orphaned ranges before you deploy** (43 VMs from three past comps were still on the
+      nodes at the last check, 20 running — see [environment-facts.md](environment-facts.md)).
+      Use `destroy-competition.py` from the matching comp dir/worktree; never an ad-hoc sweep.
+- [ ] **Probe the node's API port, not ping** — `curl -k https://<node>:8006/` (any HTTP code, not
+      `000`). A tailnet bridge can answer ICMP for itself while forwarding nothing. If a node did go
+      down, **resume with `--from-phase`** — deploy state, snapshots and disks survive on the node.
+
+**Storage**
+
+- [ ] **Check pool headroom and snapshot capability.** Only ZFS, LVM-thin, Ceph, or qcow2-on-file
+      can snapshot; a thick-LVM range has no `tz-base`/`tz-ready`. On .150 a 10-box × 2-team comp
+      has fit only `wkshp-pool` recently. For thin pools, `TEZ_THIN_HEADROOM=<0..1>` relaxes the
+      provisioned-bytes gate (size it to the pool, not to hope).
+- [ ] **Tear team bridges down with `ifdown`, never `ip link del`**, and if API-driven network
+      changes start failing on a missing `vmbrNNN/brif/`, clear the node's stale
+      `/run/network/ifstatenew` and `ifreload -a`.
+
+**Config and content**
+
+- [ ] **Commit your deploy-path code before you `--freeze`.** `--freeze` refuses uncommitted
+      `.py/.tf/.sh/.j2/.ps1` changes; post-run state (`placement.json`, `nodes.json`, comp JSON,
+      `.env` backups) is expected to be dirty and is ignored with a note. A commit after freezing
+      produces a loud deploy-time warning that the range is running code the freeze never verified.
+      The only way back is `--unfreeze --confirm-unfreeze` (pre-competition only), so freeze last.
+- [ ] **Do not pin a known-broken catalog config** (the list is becoming `constants.KNOWN_BROKEN_CONFIGS`;
+      the upstream handoff is [upstream-defects-handoff.md](upstream-defects-handoff.md)).
+- [ ] **Never point boxes at their own team's `dns*` box from Terraform** — deadlock: its bind is
+      installed by nakon via apt, which needs a working resolver. Repoint *after* nakon has run.
+- [ ] **Per box, every pin needs a distinct scoreboard Display.** Same-`TYPE`, same-port pins used
+      to collapse into one check silently; duplicate Displays on a box are now refused at generate
+      time, and `verify`'s `pins_registered` gate catches an unregistered pin.
+- [ ] **Choose a `box_username` that is not a legacy account name on any target distro.** `operator`,
+      `daemon`, `games`, `mail`, `news`, `sync` and friends collide with uid-11 system accounts;
+      cloud-init adopts the shadow account and every login fails. `medic` is the proven-safe choice.
+
+**Local-model scrims**
+
+- [ ] **Do not raise the local-blue model context above the slot limit.** opencode's base prompt is
+      ~20k tokens; `60000` is the verified local value (cloud blue uses `120000`). Do not set
+      `reasoning_effort` for a local endpoint.
 
 ## 1. Triage first: regression or expected?
 

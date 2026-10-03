@@ -404,7 +404,7 @@ def gc_orphan_volumes(node, vmid):
     return removed
 
 
-def destroy_vm_if_exists(node, vmid, expect_tags=None, legacy_name=None):
+def destroy_vm_if_exists(node, vmid, expect_tags=None, legacy_name=None, allow_untagged=False):
     vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
     vm = next((v for v in vms if v["vmid"] == vmid), None)
     if vm is None:
@@ -413,22 +413,42 @@ def destroy_vm_if_exists(node, vmid, expect_tags=None, legacy_name=None):
     if expect_tags is not None:
         # Defense in depth for the parallel cleanup sweep: a VM that carries tags without
         # ours is not ours, whatever the vmid math says (the preflight vmid-clash gate is
-        # the other half of the ownership proof). Untagged VMs pass with a warning — the
-        # transition window covers ranges built before tagging existed; the vmid space was
-        # still exclusively ours because preflight checked it.
+        # the other half of the ownership proof). The expected set is the FULL ownership
+        # set (constants.ownership_tags): comp tag + per-deploy run tag — a same-comp VM
+        # without this run's tag belongs to a DIFFERENT worktree's run (2026-10-02
+        # near-miss) and is refused, not reclaimed.
         cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
         raw = str(cfg.get("tags") or "")
         # PVE joins tags with ';' in some views and ',' in others — accept both.
         tags = {t.strip() for t in raw.replace(";", ",").split(",") if t.strip()}
         missing = set(expect_tags) - tags
-        if tags and missing:
+        if not tags:
+            # Untagged VMs used to be destroyed on computed-vmid ownership alone; a
+            # human-made VM parked in our vmid range died that way silently. Ownership
+            # must be PROVEN now — the escape hatch is explicit (destroy's
+            # --allow-untagged, phase 1's TEZ_ALLOW_UNTAGGED_RECLAIM=1) for the
+            # pre-tagging era's ranges.
+            if allow_untagged:
+                print(f"    vmid {vmid} untagged — destroying on computed-vmid ownership "
+                      f"(explicitly allowed)")
+            else:
+                raise RuntimeError(
+                    f"refusing to destroy UNTAGGED vmid {vmid} ({vm.get('name')}): ownership "
+                    f"cannot be proven. If this is a pre-run-tagging leftover of this "
+                    f"competition, re-run with the explicit escape hatch "
+                    f"(destroy-competition.py --allow-untagged, or "
+                    f"TEZ_ALLOW_UNTAGGED_RECLAIM=1 for deploy phase 1).")
+        elif missing:
             if not (legacy_name and vm.get("name") == legacy_name and tags == {"template"}):
+                other_run = (any(t.startswith("run-") for t in missing)
+                             and any(t.startswith("comp-") for t in tags))
                 raise RuntimeError(
                     f"refusing to destroy vmid {vmid} ({vm.get('name')}): its tags '{raw}' are "
-                    f"missing {sorted(missing)} — outside this deploy's ownership set")
+                    f"missing {sorted(missing)} — outside this deploy's ownership set"
+                    + (" (tagged by a PRE-RUN-ID deploy of this competition: tear it down "
+                       "with destroy-competition.py --legacy-tags --yes first)"
+                       if other_run else ""))
             print(f"    vmid {vmid} legacy golden '{legacy_name}' — adopting exact reserved slot")
-        if not tags:
-            print(f"    vmid {vmid} untagged (pre-tagging range) — destroying on computed-vmid ownership")
     lock = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"].get("lock")
     if lock:
         unlock_vm(node, vmid, lock)
@@ -438,6 +458,33 @@ def destroy_vm_if_exists(node, vmid, expect_tags=None, legacy_name=None):
     upid = proxmox_api("DELETE", f"/nodes/{node}/qemu/{vmid}",
                        params={"destroy-unreferenced-disks": 1, "purge": 1})["data"]
     wait_for_proxmox_task(node, upid)
+
+
+def parse_vm_tags(raw):
+    """VM tag string -> set; PVE joins tags with ';' in some views and ',' in others."""
+    return {t.strip() for t in str(raw or "").replace(";", ",").split(",") if t.strip()}
+
+
+def retag_ownership(node, vmid, ownership):
+    """Re-stamp an ADOPTED VM's tags to the current run's full ownership set.
+
+    Templates kept across runs (M4 hash reuse) and ranges deployed before run ids
+    existed carry the old tag set; without this, the next --full teardown's strict
+    guard would skip them as foreign and the next preflight would refuse them as
+    clashes. Only re-tags VMs already carrying this competition's comp tag — a
+    foreign VM is left alone (loudly)."""
+    cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+    tags = parse_vm_tags(cfg.get("tags"))
+    if ownership <= tags:
+        return
+    comp_tag = next((t for t in ownership if t.startswith("comp-")), None)
+    if comp_tag and comp_tag not in tags:
+        print(f"    WARNING: not re-tagging vmid {vmid}: tags '{cfg.get('tags')}' carry no "
+              f"'{comp_tag}' — not provably this competition's")
+        return
+    proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config",
+                data={"tags": ";".join(sorted(ownership))})
+    print(f"    vmid {vmid}: ownership tags updated to {sorted(ownership)}")
 
 
 

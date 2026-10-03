@@ -150,7 +150,7 @@ resource "proxmox_virtual_environment_vm" "scoring_engine" {
   node_name = var.proxmox_node
   name      = "quotient-engine"
   vm_id     = var.scoring_vm_id
-  tags      = ["tezcatlipoca", local.comp_tag]
+  tags      = compact(["tezcatlipoca", local.comp_tag, var.run_tag])
 
   clone {
     # M4: the deployed engine is a linked clone of the competition's engine template
@@ -279,7 +279,7 @@ resource "proxmox_virtual_environment_vm" "team_box" {
   vm_id = 200 + (tonumber(each.value.identifier) * 10) + index(
     [for b in var.boxes_per_team : b.name], each.value.box.name
   )
-  tags = ["tezcatlipoca", local.comp_tag]
+  tags = compact(["tezcatlipoca", local.comp_tag, var.run_tag])
 
   # The golden templates carry agent=1, so bpg would otherwise wait its default 15 min
   # per box for an agent IP — serially under -parallelism=1. An unbooted DC golden's
@@ -366,7 +366,7 @@ resource "proxmox_virtual_environment_vm" "team_box_sat1" {
   vm_id = 200 + (tonumber(each.value.identifier) * 10) + index(
     [for b in var.boxes_per_team : b.name], each.value.box.name
   )
-  tags = ["tezcatlipoca", local.comp_tag]
+  tags = compact(["tezcatlipoca", local.comp_tag, var.run_tag])
 
   agent {
     enabled = true
@@ -434,7 +434,7 @@ resource "proxmox_virtual_environment_vm" "team_box_sat2" {
   vm_id = 200 + (tonumber(each.value.identifier) * 10) + index(
     [for b in var.boxes_per_team : b.name], each.value.box.name
   )
-  tags = ["tezcatlipoca", local.comp_tag]
+  tags = compact(["tezcatlipoca", local.comp_tag, var.run_tag])
 
   agent {
     enabled = true
@@ -502,7 +502,7 @@ resource "proxmox_virtual_environment_vm" "team_box_sat3" {
   vm_id = 200 + (tonumber(each.value.identifier) * 10) + index(
     [for b in var.boxes_per_team : b.name], each.value.box.name
   )
-  tags = ["tezcatlipoca", local.comp_tag]
+  tags = compact(["tezcatlipoca", local.comp_tag, var.run_tag])
 
   agent {
     enabled = true
@@ -570,7 +570,7 @@ resource "proxmox_virtual_environment_vm" "team_box_sat4" {
   vm_id = 200 + (tonumber(each.value.identifier) * 10) + index(
     [for b in var.boxes_per_team : b.name], each.value.box.name
   )
-  tags = ["tezcatlipoca", local.comp_tag]
+  tags = compact(["tezcatlipoca", local.comp_tag, var.run_tag])
 
   agent {
     enabled = true

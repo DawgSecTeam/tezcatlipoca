@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 import pipeline_api
 from config_ops import write_state
-from constants import SNAP_BASE, SNAP_READY, WINDOWS_ADMIN_USER
+from constants import SNAP_BASE, SNAP_READY, WINDOWS_ADMIN_USER, ownership_tags
 from engine_ops import (ensure_nat_forwarding, prepare_engine_from_template,
                         push_event_conf, read_event_conf)
 from nakon_ops import acquire_engine_lock, build_nakon_bundle, release_engine_lock
@@ -393,7 +393,14 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
             src_label = f"template '{box['template']}' (vmid {src_vmid})"
         print(f"  Rebuilding {describe_target(t)} from {src_label}...")
 
-        destroy_vm_if_exists(tnode, t["vmid"])
+        # Ownership guard: the state's run id is the destruction anchor. A box that
+        # belongs to another run of the same competition ID (a second worktree) is
+        # refused — rebuilding over it would eat someone else's range. Legacy state
+        # (no run id) keeps today's behavior via the explicit untagged allowance.
+        _run_id = state.get("run_id") or ""
+        destroy_vm_if_exists(tnode, t["vmid"],
+                             expect_tags=ownership_tags(comp_dir.name, _run_id),
+                             allow_untagged=not _run_id)
 
         upid = proxmox_api("POST", f"/nodes/{tnode}/qemu/{src_vmid}/clone", data={
             "newid": t["vmid"],

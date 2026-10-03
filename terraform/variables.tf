@@ -49,6 +49,12 @@ variable "event_name" {
   default = "Range 2026"
 }
 
+variable "run_tag" {
+  description = "Per-deploy run identity (run-<hex>, from .deploy_state.json) stamped onto the engine and every team box alongside the comp tag. Destruction guards require the FULL set, so two worktrees deploying the same competition ID can no longer destroy each other's VMs (2026-10-02 near-miss). Empty (legacy tfvars) falls back to the comp tag only."
+  type        = string
+  default     = ""
+}
+
 variable "build_team_boxes" {
   description = "M3.3 two-apply gate. Apply #1 (deploy phase 2) leaves this false: only the engine and bridges are built. Apply #2 (deploy phase 4) flips it true once golden_ops has planted and converted the golden set — team boxes then come up as LINKED clones of those templates, and every team enters Terraform state."
   type        = bool

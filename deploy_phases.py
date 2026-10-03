@@ -48,7 +48,7 @@ from nakon_ops import (build_nakon_bundle, generate_slot_golden_config,
 from nodes_ops import record_of
 from quotient.setup import (create_injects, engine_paused, seed_teams,
                             unpause_engine)
-from range_ops import (destroy_vm_if_exists, proxmox_api, take_snapshot,
+from range_ops import (destroy_vm_if_exists, proxmox_api, retag_ownership, take_snapshot,
                        terraform_dir, terraform_plugin_cache_dir)
 from routing_ops import verify_satellite_routing
 from ssh_ops import (forget_engine_host_key, read_terraform_ctx,
@@ -65,11 +65,15 @@ from windows_ops import bootstrap_windows_box
 
 
 def destroy_owned(ctx, destroy_node, vmid, vm_name):
-    """Destroy one VM if it is ours (tag-guarded), timed under phase 1."""
+    """Destroy one VM if it is OURS (prior run's ownership, tag-guarded), timed under
+    phase 1. ctx.reclaim_tags carries the PRIOR state's run id — a same-comp VM
+    without it belongs to another worktree's run and is refused (2026-10-02
+    near-miss); untagged VMs need TEZ_ALLOW_UNTAGGED_RECLAIM=1."""
     with timed(ctx.comp_dir, 1, "destroy_vm", vm_name):
         legacy_name = vm_name if vm_name.startswith("golden-") else None
-        destroy_vm_if_exists(destroy_node, vmid, expect_tags=ctx.comp_tags,
-                             legacy_name=legacy_name)
+        destroy_vm_if_exists(destroy_node, vmid, expect_tags=ctx.reclaim_tags,
+                             legacy_name=legacy_name,
+                             allow_untagged=ctx.allow_untagged_reclaim)
 
 
 def destroy_pool(ctx, vmid_map, destroy_node):
@@ -93,12 +97,45 @@ def destroy_node_waves(ctx, destroy_node, node_targets, slot, extra_destroy=None
         node_vms = []
     wave1, wave2 = deploy.phase1_destroy_waves(
         node_vms, node_targets, ctx.legacy_clones if slot == 0 else {},
-        ctx.engine_vmid, ctx.boxes, ctx.comp_tags,
+        ctx.engine_vmid, ctx.boxes, ctx.reclaim_tags,
         lambda vid: _is_template(destroy_node, vid),
         load_template_hashes(ctx.comp_dir), ctx.golden_hashes,
         frozen_keep=ctx.frozen_keep, slot=slot, extra_destroy=extra_destroy)
     destroy_pool(ctx, wave1, destroy_node)
     destroy_pool(ctx, wave2, destroy_node)
+
+
+def _bridge_in_use(node, bridge):
+    """True when any VM on the node still has a NIC on this bridge.
+
+    Bridges carry no tags of their own and their names (vmbr<team identifier>)
+    collide across same-comp deploys sharing team identifiers — phase 1 must not
+    rip a bridge out from under another run's VMs. Unreadable configs count as
+    in use: fail closed, the bridge survives to teardown/terraform."""
+    try:
+        vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
+    except Exception:
+        return True
+    for v in vms:
+        try:
+            cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{v['vmid']}/config")["data"]
+        except Exception:
+            return True
+        if any(f"bridge={bridge}" in str(cfg.get(k) or "")
+               for k in cfg if str(k).startswith("net")):
+            return True
+    return False
+
+
+def _reclaim_bridge(ctx, node, bridge):
+    """Destroy a team bridge only when nothing is still attached to it (see
+    _bridge_in_use) — a foreign/other-run holder survives with a loud warning."""
+    if _bridge_in_use(node, bridge):
+        print(f"  WARNING: {bridge} on {node} still has attached VM(s) — NOT destroying "
+              f"it (another run's range may share the team identifier)")
+        return
+    with timed(ctx.comp_dir, 1, "destroy_bridge", bridge):
+        destroy_bridge_if_exists(node, bridge)
 
 
 def phase1_cleanup(ctx):
@@ -138,13 +175,11 @@ def phase1_cleanup(ctx):
             for team_key in ctx.placement["team_nodes"]:
                 if ctx.placement["team_nodes"][team_key] != sat["name"]:
                     continue
-                with timed(ctx.comp_dir, 1, "destroy_bridge", f"vmbr{ctx.teams[team_key]['identifier']}"):
-                    destroy_bridge_if_exists(sat_rec.node, f"vmbr{ctx.teams[team_key]['identifier']}")
+                _reclaim_bridge(ctx, sat_rec.node, f"vmbr{ctx.teams[team_key]['identifier']}")
     for team_key, team in ctx.teams.items():
         if ctx.placement and ctx.placement["team_nodes"][team_key] != ctx.placement["engine_node"]:
             continue  # satellite bridge — destroyed above on its own host
-        with timed(ctx.comp_dir, 1, "destroy_bridge", f"vmbr{team['identifier']}"):
-            destroy_bridge_if_exists(ctx.node, f"vmbr{team['identifier']}")
+        _reclaim_bridge(ctx, ctx.node, f"vmbr{team['identifier']}")
     (ctx.comp_dir / ".postclone-swept").unlink(missing_ok=True)
     deploy.reset_domain_markers(ctx.comp_dir)
     time.sleep(5)
@@ -190,9 +225,11 @@ def phase2_engine_template(ctx):
             # build VM needs the planned mgmt IP — on a phase-2 resume the old
             # engine is still up (phase 1 was skipped), so destroy it here.
             # Apply #1 recreates it as a linked clone of the new template.
-            destroy_vm_if_exists(ctx.node, ctx.engine_vmid, expect_tags=ctx.comp_tags)
-            destroy_engine_template(ctx.node, ctx.engine_vmid, expect_tags={
-                "tezcatlipoca", f"comp-{ctx.comp_name}", "engine-template"})
+            destroy_vm_if_exists(ctx.node, ctx.engine_vmid, expect_tags=ctx.reclaim_tags,
+                                 allow_untagged=ctx.allow_untagged_reclaim)
+            destroy_engine_template(ctx.node, ctx.engine_vmid,
+                                    expect_tags=ctx.reclaim_tags | {"engine-template"},
+                                    allow_untagged=ctx.allow_untagged_reclaim)
         ctx_early = {
             "ssh_key_path": ctx.ssh_key_abs,
             "vm_username": os.environ["TF_VAR_vm_username"],
@@ -203,8 +240,13 @@ def phase2_engine_template(ctx):
                 ctx.node, ctx.comp_dir, ctx.engine_vmid,
                 int(os.environ["TF_VAR_template_vm_id"]),
                 ctx_early, ctx.postgres_password, ctx.redis_password, quotient_ref,
-                engine_hash, engine_inputs)
+                engine_hash, engine_inputs, run_id=ctx.run_id)
         ctx.state["engine_build_info"] = build_info
+    elif tmpl:
+        # Kept (hash match or frozen): re-stamp its ownership to THIS run so the
+        # next teardown's strict guard and preflight recognize it — a template
+        # adopted from a pre-run-id deploy carries no run tag (range_ops.retag_ownership).
+        retag_ownership(ctx.node, tmpl, ctx.comp_tags | {"engine-template"})
     save_template_hashes(ctx.comp_dir, engine={"hash": engine_hash, "inputs": engine_inputs})
     ctx.state["engine_template_vmid"] = tmpl
     ctx.state["engine_template_hash"] = engine_hash
@@ -241,7 +283,8 @@ def phase2_engine_template(ctx):
             build_jump_vms(ctx.placement, ctx.engine_vmid, jump_ctx, ctx.comp_name,
                            ctx.engine_mgmt_ip,
                            engine_mgmt_gw=os.environ.get("TF_VAR_engine_mgmt_gw",
-                                                         DEFAULT_ENGINE_MGMT_GW))
+                                                         DEFAULT_ENGINE_MGMT_GW),
+                           run_id=ctx.run_id)
         with timed(ctx.comp_dir, 2, "routing_converge"):
             verify_satellite_routing(ctx.placement, apply_ctx)
     # Record where this state's resources live, for the stale-state guard above.
@@ -320,12 +363,14 @@ def phase4_golden_set(ctx):
     golden_ids = {}
     if engine_has_teams:
         deploy.golden_rebuild_gate(ctx.comp_dir, ctx.node, 0, ctx.boxes, ctx.engine_vmid,
-                                   stored, ctx.golden_hashes, ctx.golden_inputs, ctx.comp_name)
+                                   stored, ctx.golden_hashes, ctx.golden_inputs, ctx.comp_name,
+                                   run_tag=ctx.reclaim_tag)
         golden_ids = build_golden_set(ctx.node, ctx.teams, ctx.boxes, ctx.tf_ctx, ctx.comp_dir,
                                       ctx.engine_vmid, ctx.box_password,
                                       ctx.golden_config_path, ctx.ssh_key, ctx.scoring_user,
                                       ctx.scoring_ip, jobs=ctx.nakon_jobs,
-                                      golden_hashes=ctx.golden_hashes, unbooted=ctx.unbooted)
+                                      golden_hashes=ctx.golden_hashes, unbooted=ctx.unbooted,
+                                      run_id=ctx.run_id)
     golden_ids_by_slot = {0: golden_ids}
     if ctx.placement and ctx.placement["satellites"]:
         # Satellite goldens: identical planted content (same hashes), built ON
@@ -338,7 +383,8 @@ def phase4_golden_set(ctx):
             anchor = sat["anchor_identifier"]
             deploy.golden_rebuild_gate(ctx.comp_dir, sat_rec.node, slot, ctx.boxes,
                                        ctx.engine_vmid, stored, ctx.golden_hashes,
-                                       ctx.golden_inputs, ctx.comp_name)
+                                       ctx.golden_inputs, ctx.comp_name,
+                                       run_tag=ctx.reclaim_tag)
             slot_config = generate_slot_golden_config(ctx.comp_dir, ctx.boxes,
                                                       ctx.unbooted, anchor, slot)
             print(f"  Golden set on satellite '{sat['name']}' (slot {slot}, "
@@ -348,7 +394,8 @@ def phase4_golden_set(ctx):
                     sat_rec.node, ctx.teams, ctx.boxes, ctx.tf_ctx, ctx.comp_dir, ctx.engine_vmid,
                     ctx.box_password, slot_config, ctx.ssh_key, ctx.scoring_user, ctx.scoring_ip,
                     jobs=ctx.nakon_jobs, golden_hashes=ctx.golden_hashes,
-                    unbooted=ctx.unbooted, slot=slot, anchor_identifier=anchor)
+                    unbooted=ctx.unbooted, slot=slot, anchor_identifier=anchor,
+                    run_id=ctx.run_id)
     ctx.state["golden_template_ids"] = golden_ids
     ctx.state["golden_ids_by_slot"] = {str(k): v for k, v in golden_ids_by_slot.items()}
     ctx.state["golden_hashes"] = ctx.golden_hashes

@@ -27,6 +27,7 @@ import requests
 from constants import (
     ENGINE_TEMPLATE_NAME,
     ENGINE_TEMPLATE_VMID_OFFSET,
+    ownership_tags,
 )
 from range_ops import (
     destroy_vm_if_exists,
@@ -316,6 +317,44 @@ def frozen_gate(comp_dir, stored_inputs, current_inputs, what):
     return False
 
 
+def frozen_code_drift(frozen):
+    """Warn when the checkout no longer matches the code the freeze recorded.
+
+    `.frozen.json`'s `code` ({commit, dirty} — git_commit_info) was recorded by
+    verify --freeze but nothing read it: the drift gate keys on per-template input
+    hashes and code-class input drift is warn-only, so a commit taken after --freeze
+    ran the event on code the freeze never verified (known-issues "Freeze is not
+    commit-safe"). Returns the warning text, or None when the tree still matches.
+
+    Deliberately NOT fatal: resuming a range after a docs/test commit is a normal
+    flow, and the operator unfreezes explicitly when a change must invalidate the
+    freeze. `frozen` is the parsed .frozen.json (template_ops.frozen_state)."""
+    stored = (frozen or {}).get("code") or {}
+    stored_commit = str(stored.get("commit") or "").strip()
+    if not stored_commit or stored_commit == "unknown":
+        return None  # pre-commit-info freeze record, or git unavailable at freeze time
+    frozen_at = (frozen or {}).get("frozen_at") or "unknown time"
+    now = git_commit_info()
+    current_commit = str(now.get("commit") or "").strip()
+    if current_commit != stored_commit:
+        return (f"  WARNING: the code tree moved since FREEZE ({frozen_at}): frozen at "
+                f"{stored_commit[:12]}, now on {current_commit[:12] or 'unknown'} — this "
+                f"range is running on code the freeze did not verify. If the change is "
+                f"intentional, unfreeze deliberately (verify-competition.py --unfreeze "
+                f"--confirm-unfreeze) and re-verify + re-freeze.")
+    if now.get("dirty"):
+        return (f"  WARNING: the code worktree is DIRTY and no longer matches the FREEZE "
+                f"record ({frozen_at}, commit {stored_commit[:12]}) — this range is running "
+                f"on uncommitted code. Commit or stash it, or unfreeze deliberately "
+                f"(verify-competition.py --unfreeze --confirm-unfreeze).")
+    if stored.get("dirty"):
+        return (f"  WARNING: the FREEZE record itself ({frozen_at}, commit "
+                f"{stored_commit[:12]}) was written from a DIRTY worktree, so the code it "
+                f"verified is ambiguous. Re-freeze from a clean tree "
+                f"(verify-competition.py --unfreeze --confirm-unfreeze, commit, --freeze).")
+    return None
+
+
 # ---- engine template ----
 
 def find_engine_template(node, engine_vmid):
@@ -331,7 +370,7 @@ def find_engine_template(node, engine_vmid):
 
 def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                           postgres_password, redis_password, quotient_ref,
-                          hash_value, inputs):
+                          hash_value, inputs, run_id=None):
     """Build the per-competition engine template (API-driven, mirroring golden_ops —
     terraform only consumes the finished template as apply #1's clone source).
 
@@ -347,8 +386,8 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 
     vmid = engine_template_vmid(engine_vmid)
     vm_name = ENGINE_TEMPLATE_NAME
-    tags = f"tezcatlipoca,comp-{Path(comp_dir).name},engine-template"
-    expect_tags = {"tezcatlipoca", f"comp-{Path(comp_dir).name}", "engine-template"}
+    expect_tags = ownership_tags(Path(comp_dir).name, run_id, "engine-template")
+    tags = ",".join(sorted(expect_tags))
 
     # A previous build's leftover (plain VM, never converted) is a dead attempt:
     # rebuild it from scratch rather than resuming a half-bootstrapped disk. An
@@ -486,27 +525,56 @@ def _discover_vm_ipv4(node, vmid):
     return None
 
 
-def destroy_engine_template(node, engine_vmid, expect_tags=None):
+def destroy_engine_template(node, engine_vmid, expect_tags=None, allow_untagged=False):
     """Remove this competition's engine template. Callers destroy its clones first.
     A FOREIGN VM in the slot is skipped with a loud warning instead of aborting the
     teardown — same policy as destroy_golden_set."""
     try:
-        destroy_vm_if_exists(node, engine_template_vmid(engine_vmid), expect_tags=expect_tags)
+        destroy_vm_if_exists(node, engine_template_vmid(engine_vmid), expect_tags=expect_tags,
+                             allow_untagged=allow_untagged)
     except RuntimeError as e:
         print(f"    WARNING: engine template slot is FOREIGN — skipping it and "
               f"continuing: {e}")
 
 
+_CODE_SUFFIXES = (".py", ".tf", ".sh", ".j2", ".ps1")
+
+
+def code_path_dirty(porcelain_lines):
+    """True when any `git status --porcelain` entry touches deploy-path code.
+
+    Only uncommitted *code* invalidates a freeze: the frozen record pins the commit the
+    run was verified on, while generated/run state (comp JSON, placement.json, nodes.json,
+    terraform state, .env backups) is written by the run itself and is never committed as
+    part of the workflow. Treating every porcelain line as dirt made `--freeze` refuse in
+    any post-deploy worktree (verified 2026-10-02 on the scale8 worktree: a modified
+    placement.json, an untracked nodes.json and a .env backup), so the gate is scoped here.
+    Pure function of the porcelain lines — see verify-competition.do_freeze."""
+    for line in porcelain_lines or []:
+        path = line[3:] if len(line) > 3 else line
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        path = path.strip().strip('"')
+        if path.endswith(_CODE_SUFFIXES) or path.endswith(("Makefile", "Dockerfile")):
+            return True
+    return False
+
+
 def git_commit_info():
-    """The code frozen alongside the hashes, recorded in .frozen.json."""
+    """The code frozen alongside the hashes, recorded in .frozen.json.
+
+    `dirty` means uncommitted *deploy-path code* (see code_path_dirty) — deliberately the
+    same definition verify --freeze refuses on, so the recorded flag and the gate agree and
+    post-run runtime state does not raise a false warning on every later deploy."""
     try:
         commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
                                 text=True, timeout=10).stdout.strip()
     except Exception:
         commit = "unknown"
     try:
-        dirty = bool(subprocess.run(["git", "status", "--porcelain"], capture_output=True,
-                                    text=True, timeout=10).stdout.strip())
+        porcelain = subprocess.run(["git", "status", "--porcelain"], capture_output=True,
+                                   text=True, timeout=10).stdout
+        dirty = code_path_dirty(porcelain.splitlines())
     except Exception:
         dirty = None
     return {"commit": commit, "dirty": dirty}

@@ -19,7 +19,7 @@ import secrets
 import subprocess
 import time
 
-from constants import DEFAULT_ENGINE_MGMT_GW
+from constants import DEFAULT_ENGINE_MGMT_GW, ownership_tags
 from range_ops import (
     cluster_vms_for,
     vm_status,
@@ -210,7 +210,8 @@ def _log(*args, **kwargs):
 
 
 def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
-                   engine_mgmt_gw=DEFAULT_ENGINE_MGMT_GW, engine_node_name=None):
+                   engine_mgmt_gw=DEFAULT_ENGINE_MGMT_GW, engine_node_name=None,
+                   run_id=None):
     """Clone + configure one jump per satellite. Returns {node_name: jump_vmid}.
 
     Satellites run CONCURRENTLY. Each is a different Proxmox host reached over the
@@ -235,7 +236,8 @@ def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
             print(f"  Jump VM for satellite '{sat['name']}' (slot {sat['slot']}, "
                   f"vmid {vmid}, mgmt {sat['jump_mgmt_ip']})...")
         team_ids = sorted({placement["team_identifiers"][k] for k in sat["teams"]}, key=int)
-        _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_mgmt_gw)
+        _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_mgmt_gw,
+                   run_id=run_id)
 
     results = run_concurrent(sats, _one, max_workers=4)
     # run_concurrent captures exceptions per slot instead of raising, so each caller
@@ -247,9 +249,10 @@ def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
     return {sat["name"]: sat["jump_vmid"] for sat in sats}
 
 
-def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_mgmt_gw):
+def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_mgmt_gw,
+               run_id=None):
     node = rec.node
-    ownership = {"tezcatlipoca", f"comp-{comp_name}", JUMP_TAGS_EXTRA}
+    ownership = ownership_tags(comp_name, run_id, JUMP_TAGS_EXTRA)
     vm_name = f"jump-{comp_name}-{sat['slot']}"
 
     # Resume short-circuit: a running, ours jump from a failed attempt is
@@ -264,6 +267,13 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
 
     if reuse:
         _log("    jump VM already running from a previous attempt — reconfiguring in place")
+        # Re-stamp ownership so a jump adopted from an older attempt (e.g. a state
+        # that predates run ids) is recognized by this run's teardown guards.
+        from range_ops import retag_ownership
+        try:
+            retag_ownership(node, vmid, ownership)
+        except Exception as e:
+            _log(f"    WARNING: could not re-tag jump vmid {vmid}: {str(e)[:120]}")
     else:
         templates = find_jump_template(node, rec.jump_template)
         if len(templates) > 1:
@@ -330,12 +340,13 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
           f"(teams {', '.join(team_ids)})")
 
 
-def destroy_jump_vms(placement, comp_tags):
+def destroy_jump_vms(placement, comp_tags, allow_untagged=False):
     """Phase-1/teardown half: destroy every satellite's jump VM (ownership-checked)."""
     from nodes_ops import record_of
     for sat in placement.get("satellites", []):
         rec = record_of(placement, sat["name"])
         try:
-            destroy_vm_if_exists(rec.node, sat["jump_vmid"], expect_tags=comp_tags | {JUMP_TAGS_EXTRA})
+            destroy_vm_if_exists(rec.node, sat["jump_vmid"], expect_tags=comp_tags | {JUMP_TAGS_EXTRA},
+                                 allow_untagged=allow_untagged)
         except RuntimeError as e:
             print(f"    WARNING: jump vmid {sat['jump_vmid']} on '{rec.node}': {e}")

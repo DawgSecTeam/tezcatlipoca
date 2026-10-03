@@ -1,7 +1,6 @@
 """Repo hygiene gates: no secret-bearing file is tracked, and no env var drifts.
 
-Two independent incidents motivate this file, both recorded in docs/known-issues.md
-("Security disclosure history"):
+Two independent incidents motivate this file, both recorded in docs/security-disclosures.md:
 
   1. 2026-09-29 — 21 tracked terraform artifacts carried real per-competition
      passwords. Closed by gitignore curation.
@@ -47,6 +46,9 @@ INTERNAL_ENV = {
     "MY_TEAM": "scrim.env handoff written by run-agent-scrim.py",
     "JAR": "scrim.env handoff written by run-agent-scrim.py",
     "SCRIM_WEB01_PORT": "scrim harness test hook (fresh opencode port per blue cycle)",
+    # deploy.py phase-1 escape hatch: destroy UNTAGGED VMs on computed vmids (a
+    # pre-run-tagging range's own leftovers). Never set in .env; opt-in per run.
+    "TEZ_ALLOW_UNTAGGED_RECLAIM": "phase-1 untagged-reclaim escape hatch (fail-closed default)",
 }
 
 # High-signal secret shapes. Deliberately narrow: a broad "long string" rule would
@@ -99,7 +101,7 @@ class NoTrackedSecrets(unittest.TestCase):
         self.assertEqual(
             offenders, [],
             "secret-bearing env file(s) tracked — they hold the Proxmox API token and "
-            "box/team passwords. Untrack and rotate. See docs/known-issues.md "
+            "box/team passwords. Untrack and rotate. See docs/security-disclosures.md "
             "'Security disclosure history':\n  " + "\n  ".join(offenders),
         )
 

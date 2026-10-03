@@ -14,7 +14,7 @@ import requests
 
 from constants import (ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_VMID_OFFSET,
                        MAX_BOXES_PER_TEAM, NAKON_DIR, SCORING_ENGINE_VMID)
-from range_ops import has_clone_marker, proxmox_api, proxmox_request, vm_id_for
+from range_ops import has_clone_marker, parse_vm_tags, proxmox_api, proxmox_request, vm_id_for
 from utils import (BOX_USERNAME_DEFAULT, CREDLIST_USERNAMES_DEFAULT, is_legacy_account_name,
                    valid_unix_username)
 
@@ -109,9 +109,65 @@ def check_datastore_headroom(node, datastore, boxes, num_teams):
           + (f" (provisioned ~{need_gb:.0f} GB x{thin} thin)" if thin != 1.0 else ""))
 
 
+_CLOUDINIT_DISK_RE = re.compile(r"^(?:ide|scsi|sata)\d+$")
+
+
+def template_cloudinit_missing(config):
+    """True when a Linux-ostype VM config carries no cloud-init drive.
+
+    A template can be tagged `template` and still be cloud-init-less — .150 vmid 920 is
+    literally named `base-debian13-cloudinit` and ships none — so its linked clones boot
+    with no network and no identity and the failure only surfaces an hour later at
+    wait_for_boxes_ssh. Windows ostypes never carry one (identity comes from
+    bootstrap_windows_box), so they and every other non-Linux ostype are exempt."""
+    ostype = str((config or {}).get("ostype") or "").strip().lower()
+    if not ostype.startswith("l"):
+        return False
+    for key, value in (config or {}).items():
+        if _CLOUDINIT_DISK_RE.match(str(key)) and "cloudinit" in str(value).lower():
+            return False
+    return True
+
+
+def _cloudinit_gate(tagged_by_name, boxes, label=""):
+    """Refuse a selected Linux template that has no cloud-init drive.
+
+    `tagged_by_name` maps template name -> cluster-resource entry (vmid + node). A config
+    read that fails is warned about, not fatal — a transient API error must not block a
+    deploy, but the template's cloud-init drive stays marked UNVERIFIED. Returns the
+    number of distinct templates whose config was actually read and checked."""
+    seen = set()
+    verified = 0
+    for box in boxes:
+        name = box.get("template")
+        vm = tagged_by_name.get(name)
+        if vm is None or name in seen:
+            continue
+        seen.add(name)
+        vmid, node = vm.get("vmid"), vm.get("node")
+        try:
+            config = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+        except Exception as e:
+            print(f"  WARNING: could not read template '{name}' (vmid {vmid}) config — its "
+                  f"cloud-init drive is UNVERIFIED ({str(e)[:80]})")
+            continue
+        if template_cloudinit_missing(config):
+            fix = name if str(name).endswith("-fix") else f"{name}-fix"
+            raise SystemExit(
+                f"  ERROR: box template '{name}' (vmid {vmid}, node {node}, ostype "
+                f"{config.get('ostype') or '?'}) is Linux but has no cloud-init drive — "
+                f"its linked clones would boot with no network or identity and fail an "
+                f"hour later at wait_for_boxes_ssh. Use a cloud-init-capable template "
+                f"(e.g. the '{fix}' variant) or add a cloud-init drive to it.")
+        verified += 1
+    if verified:
+        print(f"  Preflight{label}: {verified} box template(s) carry a cloud-init drive")
+    return verified
+
+
 def preflight_gates(comp_dir, boxes, num_teams, teams=None,
                     engine_vmid=SCORING_ENGINE_VMID, check_free=True,
-                    engine_mgmt_ip=None):
+                    engine_mgmt_ip=None, our_run_tag=None):
     """Blocking pre-apply gates: template resolution, vmid/bridge collisions,
     datastore headroom, catalog check.
 
@@ -119,14 +175,21 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
     missing template died inside terraform apply, a full datastore died mid-clone,
     a bad pin died mid-plant. The collision gate (check_free) makes concurrent
     competitions on one node safe: it fails fast if this comp's engine vmid, any
-    team vmid, or any team bridge already exists (i.e. belongs to another range)."""
+    team vmid, or any team bridge already exists (i.e. belongs to another range).
+    our_run_tag (the prior state's run id) scopes the "ours" exemption to THIS
+    deploy's lineage — a same-comp VM without it is another run's and stays a
+    collision (2026-10-02 near-miss)."""
     node = os.environ["TF_VAR_proxmox_node"]
     try:
         vms = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
     except Exception as e:
         raise SystemExit(f"  ERROR: Proxmox API unreachable during preflight: {e}")
-    tagged = {vm.get("name") for vm in vms
-              if vm.get("template") == 1 and "template" in (vm.get("tags") or "").split(";")}
+    tagged = set()
+    tagged_by_name = {}
+    for vm in vms:
+        if vm.get("template") == 1 and "template" in (vm.get("tags") or "").split(";"):
+            tagged.add(vm.get("name"))
+            tagged_by_name.setdefault(vm.get("name"), vm)
     missing = sorted({b["template"] for b in boxes} - tagged)
     if missing:
         raise SystemExit(
@@ -134,6 +197,7 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
             + ", ".join(missing)
             + ". Clones would fail mid-apply; available: "
             + (", ".join(sorted(t for t in tagged if t)) or "(none)"))
+    _cloudinit_gate(tagged_by_name, boxes)
     engine_base = int(os.environ["TF_VAR_template_vm_id"])
     if not any(vm.get("vmid") == engine_base for vm in vms):
         raise SystemExit(
@@ -143,14 +207,21 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
     print(f"  Preflight: all {len(boxes)} box template(s) resolve; engine base image vmid "
           f"{engine_base} present")
 
+    # "Ours" = this deploy's full ownership set (comp tag + run id). Used by both the
+    # vmid clash gate and the mgmt-IP gate; without a run tag a same-comp VM is
+    # another run's and must classify as a collision, not as ours.
+    our_tags = {"tezcatlipoca", f"comp-{comp_dir.name}"}
+    if our_run_tag:
+        our_tags.add(our_run_tag)
+
     if check_free and teams:
         existing_vmids = {vm.get("vmid") for vm in vms}
         vm_by_vmid = {vm.get("vmid"): vm for vm in vms}
         # A retry of THIS competition's failed deploy meets its own leftovers. A VM tagged
-        # tezcatlipoca + comp-<name> is ours by creation (main.tf / clone_ops / golden_ops
-        # all tag); phase 1's ownership-checked cleanup destroys it. Anything else on our
-        # vmids is genuinely foreign and stays fatal.
-        our_tags = {"tezcatlipoca", f"comp-{comp_dir.name}"}
+        # tezcatlipoca + comp-<name> + this deploy's run id is ours by creation (main.tf /
+        # clone_ops / golden_ops all tag); phase 1's ownership-checked cleanup destroys it.
+        # A same-comp VM MISSING the run id belongs to a different run (another worktree's,
+        # or a pre-run-id deploy) and is a collision — the refusal message says which.
 
         def _is_ours(vmid, expected_name=None):
             vm = vm_by_vmid.get(vmid)
@@ -219,12 +290,21 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
                 else:
                     clashes.append(f"bridge {bridge}")
         if clashes:
+            other_run = any(
+                f"comp-{comp_dir.name}" in str(vm.get("tags") or "")
+                and our_run_tag and our_run_tag not in parse_vm_tags(vm.get("tags"))
+                for vm in vm_by_vmid.values())
             raise SystemExit(
                 "  ERROR: this competition's infrastructure collides with VMs/bridges already "
                 "on node '" + node + "' (another running competition?): " + ", ".join(clashes)
                 + ". Pick a free --scoring-vmid and/or non-overlapping TF_VAR_team_identifiers. "
                 "Note the golden block sits at <scoring-vmid>+150 — a colliding golden vmid "
-                "also means picking a different engine vmid.")
+                "also means picking a different engine vmid."
+                + (" The colliding VM(s) carry this competition's comp tag but NOT this "
+                   "run's run-id tag: a PRE-RUN-ID deploy of this competition (tear it down "
+                   "with destroy-competition.py --legacy-tags --yes first) or ANOTHER "
+                   "worktree's run of the same competition ID (coordinate with its session "
+                   "— never destroy it from here)." if other_run else ""))
         if ours:
             print(f"  Preflight: {ours} leftover VM(s)/bridge(s) tagged as this "
                   f"competition's — phase 1 cleans or (M4 hash-matching templates) reuses them")
@@ -236,8 +316,7 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
     check_datastore_headroom(node, datastore, boxes, num_teams)
 
     if engine_mgmt_ip:
-        _engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip,
-                             ours_tags={f"comp-{comp_dir.name}", "tezcatlipoca"})
+        _engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=our_tags)
     _catalog_gate(comp_dir)
 
 
@@ -307,7 +386,7 @@ def _catalog_gate(comp_dir):
 
 
 def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
-                              engine_mgmt_ip=None, check_free=True):
+                              engine_mgmt_ip=None, check_free=True, our_run_tag=None):
     """Per-node preflight for a multi-node placement: every hosting node gets its own
     template/collision/headroom gate scoped to exactly what it will hold (engine node:
     engine base + slot-0 goldens + its teams; each satellite: its slot's goldens, the
@@ -319,6 +398,11 @@ def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
 
     comp_name = comp_dir.name
     engine_name = placement["engine_node"]
+    # Full ownership set (comp tag + run id) — see preflight_gates. Hoisted above the
+    # per-node loop so the engine-node mgmt-IP gate after the loop can reuse it.
+    our_tags = {"tezcatlipoca", f"comp-{comp_name}"}
+    if our_run_tag:
+        our_tags.add(our_run_tag)
     for node_name in placement["slots"]:
         rec = record_of(placement, node_name)
         slot = placement["slots"][node_name]
@@ -338,8 +422,12 @@ def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
                     f"  ERROR: engine base image vmid {base} does not exist on engine "
                     f"node '{node_name}' ({node}) — the engine-template build would fail.")
         if node_teams:
-            tagged = {vm.get("name") for vm in node_vms
-                      if vm.get("template") == 1 and "template" in (vm.get("tags") or "").split(";")}
+            tagged = set()
+            tagged_by_name = {}
+            for vm in node_vms:
+                if vm.get("template") == 1 and "template" in (vm.get("tags") or "").split(";"):
+                    tagged.add(vm.get("name"))
+                    tagged_by_name.setdefault(vm.get("name"), vm)
             missing = sorted({b["template"] for b in boxes} - tagged)
             if missing:
                 raise SystemExit(
@@ -347,6 +435,7 @@ def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
                     f"'{node_name}' ({node}): " + ", ".join(missing)
                     + f". Available there: {sorted(t for t in tagged if t) or '(none)'}. "
                       "Sync with sync-template.py or move the teams.")
+            _cloudinit_gate(tagged_by_name, boxes, label=f"[{node_name}]")
             if slot > 0:
                 find_jump_template(node, rec.jump_template)  # raises with remedy
                 print(f"  Preflight[{node_name}]: box templates + jump clone source present")
@@ -357,8 +446,7 @@ def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
         if not check_free:
             continue  # resume: this competition's own leftovers are phase-1/terraform's to reconcile
 
-        # Collision gate scoped to this node's share.
-        our_tags = {"tezcatlipoca", f"comp-{comp_name}"}
+        # Collision gate scoped to this node's share ("ours" = our_tags, hoisted above).
         existing_vmids = {vm.get("vmid") for vm in node_vms}
         vm_by_vmid = {vm.get("vmid"): vm for vm in node_vms}
 
@@ -417,10 +505,19 @@ def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
                 else:
                     clashes.append(f"bridge {bridge}")
         if clashes:
+            other_run = any(
+                f"comp-{comp_name}" in str(vm.get("tags") or "")
+                and our_run_tag and our_run_tag not in parse_vm_tags(vm.get("tags"))
+                for vm in vm_by_vmid.values())
             raise SystemExit(
                 f"  ERROR: this competition's infrastructure collides with VMs/bridges "
                 f"already on node '{node_name}' ({node}): " + ", ".join(clashes)
-                + ". Pick a free --scoring-vmid and/or non-overlapping team identifiers.")
+                + ". Pick a free --scoring-vmid and/or non-overlapping team identifiers."
+                + (" The colliding VM(s) carry this competition's comp tag but NOT this "
+                   "run's run-id tag: a PRE-RUN-ID deploy of this competition (tear it "
+                   "down with destroy-competition.py --legacy-tags --yes first) or "
+                   "ANOTHER worktree's run of the same competition ID (coordinate with "
+                   "its session — never destroy it from here)." if other_run else ""))
         if ours:
             print(f"  Preflight[{node_name}]: {ours} leftover VM(s)/bridge(s) tagged as "
                   f"this competition's — phase 1 cleans or reuses them")
@@ -452,7 +549,7 @@ def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
     if engine_mgmt_ip:
         node = engine_rec.node
         vms = cluster_vms_for(node)
-        _engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip)
+        _engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=our_tags)
     jump_ips = [s["jump_mgmt_ip"] for s in placement["satellites"]]
     if jump_ips:
         taken, unchecked = set(), 0
