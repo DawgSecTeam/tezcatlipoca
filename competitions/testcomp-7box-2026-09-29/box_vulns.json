@@ -1,0 +1,187 @@
+{
+  "dc01": [
+    {
+      "name": "ad-blank-password-win",
+      "vars": {
+        "USERNAME": "frontdesk",
+        "FULLNAME": "Front Desk",
+        "DESCRIPTION": "Front desk scheduler"
+      }
+    },
+    {
+      "name": "ad-acl-dcsync-win",
+      "vars": {
+        "TRUSTEE": "svc-support"
+      }
+    },
+    {
+      "name": "ad-delegation-win",
+      "vars": {
+        "ACCOUNT": "MAINTPC01"
+      }
+    },
+    {
+      "name": "ad-group-member-win",
+      "vars": {
+        "GROUP": "Domain Admins",
+        "USERNAME": "frontdesk"
+      }
+    },
+    {
+      "name": "gpo-persistence-win",
+      "vars": {
+        "GPO_NAME": "Clinic Workstation Baseline",
+        "RUN_VALUE_NAME": "GpTelemetry"
+      }
+    },
+    "ldap-signing-off-win",
+    {
+      "name": "gpp-cpassword-win",
+      "vars": {
+        "GPO_NAME": "Clinic Print Deploy",
+        "PASSWORD": "Print-Deploy2026!"
+      }
+    },
+    "ntlm-downgrade-win",
+    "smb1-enabled-win",
+    "anonymous-enumeration-win",
+    {
+      "name": "insecure-smb-share-win",
+      "vars": {
+        "SHARE_NAME": "Intake",
+        "SHARE_PATH": "C:\\Intake",
+        "DESCRIPTION": "Intake scans"
+      }
+    },
+    "wdigest-cleartext-win",
+    "weak-password-policy-win"
+  ],
+  "win02": [
+    "guest-enabled-win",
+    "uac-disabled-win",
+    "Enable AutoPlay",
+    "ps-logging-off-win",
+    "insecure-interactive-logon",
+    "defender-disabled-win",
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "svc_backup",
+        "PASSWORD": "Mer!dianWard2026",
+        "FULLNAME": "Backup Service",
+        "DESCRIPTION": "Nightly backup service account"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\meridian-it-creds.txt",
+        "FILE_CONTENT": "MERIDIAN-IT quick sheet - see wiki for VPN preshared key"
+      }
+    },
+    {
+      "name": "insecure-file-acl-win",
+      "vars": {
+        "FILE_PATH": "C:\\Users\\Public\\payroll-export.csv",
+        "FILE_CONTENT": "emp_id,name,salary\n1001,REDACTED,REDACTED"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "MeridianTelemetry",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Meridian\\telemetry.ps1",
+        "PAYLOAD_BODY": "Write-Output 'telemetry heartbeat'"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "MeridianSynergy",
+        "PAYLOAD_PATH": "C:\\ProgramData\\Meridian\\synergy.ps1",
+        "PAYLOAD_BODY": "Write-Output 'synergy'"
+      }
+    }
+  ],
+  "web01": [
+    "suid-find",
+    "www-data-shell",
+    "bad-perms-userConfig",
+    "writable-sudoers",
+    "nginx-server-tokens-on",
+    "nginx-off-by-slash",
+    "web-exposed-file",
+    "secrets-in-webroot-env",
+    "root-nginx",
+    "ssh-backdoor-listener-2222",
+    "attacker-authorized-keys",
+    "pam-no-password-quality",
+    "cron-d-rogue-job"
+  ],
+  "mail01": [
+    "postfix-expn-vrfy",
+    "dovecot-debug-plaintext",
+    "ssh-max-auth-retries-high",
+    "ssh-x11-forwarding",
+    "ssh-password-auth",
+    "pam-permit-empty",
+    "sudo-nopasswd",
+    "passwd-world-readable",
+    {
+      "name": "motd-persistence",
+      "vars": {
+        "SCRIPT_NAME": "10-clinic-status",
+        "SNIPPET": "Scheduled maintenance window: Sunday 02:00-04:00. Contact IT-Floor3 ext 4112."
+      }
+    },
+    {
+      "name": "at-job-persistence",
+      "vars": {
+        "PAYLOAD_PATH": "/usr/local/share/.cache-helper"
+      }
+    },
+    "weak-password-account"
+  ],
+  "db01": [
+    "mysql-root-nopassword",
+    "mysql-remote-root",
+    "mysql-anon-user",
+    "mysql-insecure-server-flags",
+    "mysql-root-hash-reuse",
+    "unauthorized-ssh-backup-listener",
+    {
+      "name": "suid-binary",
+      "vars": {
+        "DEST": "/usr/local/bin/dbmaint"
+      }
+    },
+    "weak-password-account",
+    "world-readable-shadow-adjacent",
+    "systemd-service-writable",
+    {
+      "name": "bashrc-persistence",
+      "vars": {
+        "TARGET_FILE": "/root/.bashrc",
+        "SNIPPET": "export HISTFILE=/dev/null"
+      }
+    }
+  ],
+  "splunk01": [
+    "suid-nano",
+    "uid0-backdoor-account",
+    "sshd-config-weak",
+    "world-writable-crond",
+    {
+      "name": "authorized-keys-persistence",
+      "vars": {
+        "USERNAME": "root",
+        "PUBLIC_KEY": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHp2ZW/rq48CZ35GgZE3xX4VHmBaMoTz/N4UhtPeaKkP svc-ci@meridian"
+      }
+    },
+    "ufw-removed",
+    "sysctl-insecure",
+    "lingering-enabled",
+    "hidden-hosts-entry",
+    "sudo-timestamp-never-expires"
+  ]
+}

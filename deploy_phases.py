@@ -42,7 +42,7 @@ from golden_ops import (_is_template, _quote_sshkeys, _template_vmid_map,
                         build_golden_set)
 from hardening_ops import (ensure_alpine_services, fix_dns_on_boxes,
                            fix_services_on_boxes, prep_apt_on_boxes,
-                           setup_ubuntu_auth)
+                           reensure_mysql_credlist_users, setup_ubuntu_auth)
 from jump_ops import build_jump_vms
 from nakon_ops import (build_nakon_bundle, generate_slot_golden_config,
                        run_nakon)
@@ -589,6 +589,12 @@ def phase6_domains_and_final(ctx):
         # reaches disk leaves verify's coverage gate red (see
         # record_stage_coverage — the ff9b19f bug, re-created).
         deploy.record_stage_coverage(ctx.state, final_machines, result, ctx.save_state)
+
+    # The mysql final-stage plants rebuild the auth tables, taking the credlist SQL
+    # accounts fix_services created pre-plant with them — the auth-based sql check
+    # then fails on every team copy (2026-09-30 testcomp-7box: db01-sql DOWN at first
+    # verify, users re-added by hand mid-prep). Idempotent; mysql-pinned boxes only.
+    reensure_mysql_credlist_users(ctx.comp_dir, ctx.linux_targets, ctx.tf_ctx, ctx.box_creds)
 
     if compfile_flag(ctx.comp_dir / "Compfile", "team_beacons"):
         print("  Planting team beacons (hunt artifacts)...")

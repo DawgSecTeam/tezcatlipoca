@@ -586,7 +586,7 @@ class ScheduleEndAlwaysPauses(unittest.TestCase):
 
 # D8 ---------------------------------------------------------------------------
 class LineupDerivation(unittest.TestCase):
-    AMONGUS = _REPO / "competitions" / "amongus-cde-2026"
+    AMONGUS = _REPO / "competitions" / "amongus-cde"
     LEGACY_17B = {"web01": 45, "app01": 60, "db01": 90}
 
     def _boxes(self, comp):
@@ -642,11 +642,11 @@ class LineupDerivation(unittest.TestCase):
         self.assertNotIn("1:web01", out)
 
     def test_beacon_plan_matches_the_17b_table_it_replaces(self):
-        plan = dict(beacon.beacon_plan(self._boxes("agent-scrim-2026-09-17b")))
+        plan = dict(beacon.beacon_plan(self._boxes("agent-scrim")))
         self.assertEqual(plan, self.LEGACY_17B)
 
     def test_beacon_plan_covers_a_non_17b_lineup(self):
-        boxes = self._boxes("amongus-cde-2026")
+        boxes = self._boxes("amongus-cde")
         old_gate = [b["name"] for b in boxes
                     if not beacon._is_windows(b["template"])
                     and b["name"] in self.LEGACY_17B]           # the pre-fix gate
@@ -656,7 +656,17 @@ class LineupDerivation(unittest.TestCase):
         self.assertEqual([i for _name, i in plan], [45, 60])
 
     def test_beacon_plan_skips_windows_and_unmanaged_appliances(self):
-        plan = dict(beacon.beacon_plan(self._boxes("loadtest-cr-a")))
+        # loadtest-cr-a's lineup (the comp dir was pruned 2026-10-02): two Windows
+        # boxes, an unmanaged pfSense appliance, two beaconable Linux boxes.
+        boxes = [
+            {"name": "dc01", "last_octet": 2, "template": "base-windows-server"},
+            {"name": "win01", "last_octet": 3, "template": "base-windows-server"},
+            {"name": "fw01", "last_octet": 4, "template": "base-pfsense-fix",
+             "unmanaged": True},
+            {"name": "web01", "last_octet": 5, "template": "base-ubuntu24.04-fix"},
+            {"name": "dns01", "last_octet": 6, "template": "base-debian13-lite-fix"},
+        ]
+        plan = dict(beacon.beacon_plan(boxes))
         self.assertNotIn("dc01", plan)          # windows
         self.assertNotIn("win01", plan)         # windows
         self.assertNotIn("fw01", plan)          # unmanaged pfSense

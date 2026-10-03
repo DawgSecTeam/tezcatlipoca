@@ -690,16 +690,24 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
             team_node=None, engine_node=None, force_from_phase=False):
     """Everything deploy() must do before phase 1, as one testable step.
 
-    Resolves the engine VMID, loads Compfile/config/state, mints or reuses the
-    competition's secrets, computes multi-node placement, generates the nakon + stage
-    configs, computes the golden hashes and runs the frozen gate, assembles
-    terraform.tfvars.json, runs preflight and enumerates the targets. Returns None when
-    the operator declines the confirmation prompt, so deploy() can return without
-    running any phase (the same early return the inline code had).
+    Resolves the engine VMID, loads Compfile/config/state, resolves teams, computes
+    multi-node placement, runs preflight, THEN mints the competition's secrets,
+    generates the nakon + stage configs, computes the golden hashes and assembles
+    terraform.tfvars.json, and enumerates the targets. Returns None when the operator
+    declines the confirmation prompt, so deploy() can return without running any phase
+    (the same early return the inline code had).
 
     The write lock is deliberately NOT taken here: deploy() holds it across the whole
     run, phases included. Nothing here destroys anything — the frozen gate runs before
-    phase 1 precisely so a freeze can still say "nothing destroyed"."""
+    phase 1 precisely so a freeze can still say "nothing destroyed".
+
+    Order note: preflight runs BEFORE the fresh credential mint. These gates can abort
+    the deploy (engine mgmt IP collision, missing templates, datastore headroom, catalog
+    errors) — a state file written with minted credentials no engine ever received is a
+    credential-desync corpse: every login 401s against the live range until state is
+    restored by hand (2026-09-30 testcomp-7box: a create-competition re-run against an
+    already-deployed comp rotated state while the engine kept the originals). Resumes
+    keep the gate where it was relative to their carried (not minted) credentials."""
     identity = RunIdentity()
     _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid)
     # (The engine lock itself is taken further down — multi-node placement must point
@@ -715,19 +723,24 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     _load_competition_inputs(inputs, comp_dir)
 
     secrets = CompetitionSecrets()
-    _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identity, from_phase)
+    _resolve_competition_teams(secrets, prior, spec, num_teams, identity, from_phase)
 
     place = EnginePlacement()
     _apply_engine_placement(place, prior, secrets, spec, identity, comp_dir, team_node, engine_node)
 
-    generated = GeneratedConfigs()
-    _generate_stage_configs_and_hashes(generated, comp_dir, spec, secrets)
-
     terraform = TerraformInputs()
-    _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity, place, from_phase)
+    terraform.engine_mgmt_ip = _engine_mgmt_ip_from_env()
 
     _run_competition_preflight(comp_dir, spec, secrets, identity, place, terraform,
                                prior, from_phase)
+
+    if not prior.resuming:
+        _mint_competition_secrets(secrets, prior, spec, inputs, identity)
+
+    generated = GeneratedConfigs()
+    _generate_stage_configs_and_hashes(generated, comp_dir, spec, secrets)
+
+    _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity, place, from_phase)
 
     if not assume_yes and not prior.resuming:
         if not confirm_deploy(spec.name, spec.scenario, spec.difficulty, secrets.teams, spec.boxes):
@@ -741,17 +754,32 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
                                     inputs, secrets, place, generated, terraform, targets)
 
 
-def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identity, from_phase):
-    """Mint or reuse every secret the competition needs, into `secrets`.
+def _engine_mgmt_ip_from_env():
+    """The engine's static mgmt IP from the env, defaulted and re-exported.
 
-    A resume reuses state's secrets (minting only what an older state predates); a
-    fresh deploy mints them, except where a carried box_password or the packet's
-    passwords.json outranks the mint. From here on `secrets` is the single source for
-    teams, passwords and the persisted .deploy_state.json dict itself."""
-    # Run identity comes first so BOTH branches persist the same id (utils.mint_run_id):
-    # reused from prior state when the competition directory has one — a resume, a
-    # crash-loop re-run and a redeploy must reclaim and re-tag the SAME lineage, and a
-    # fresh mint would orphan every kept template's ownership.
+    Engine mgmt IP: static by default. The DHCP engine rebooted onto a different
+    address mid-event while terraform's saved output — which deploy/verify/
+    credentials all consume — stayed stale (shakedown-5x4: .221→.243→.233).
+    An explicit TF_VAR_engine_mgmt_ip="" keeps the old DHCP behavior; the
+    chosen value is also exported for template_ops (build-VM ipconfig0)."""
+    ip = os.environ.get("TF_VAR_engine_mgmt_ip")
+    if ip is None:
+        ip = DEFAULT_ENGINE_MGMT_IP
+        print(f"  Engine mgmt IP: static {ip} (default — override "
+              f"TF_VAR_engine_mgmt_ip, set '' for DHCP)")
+        os.environ["TF_VAR_engine_mgmt_ip"] = ip
+    return ip
+
+
+def _resolve_competition_teams(secrets, prior, spec, num_teams, identity, from_phase):
+    """Resolve the run id and the team roster (carried on a resume), into `secrets`.
+
+    Deliberately split from the credential mint: preflight must be able to abort a
+    fresh deploy before any secret exists to desync (see prepare()'s order note). The
+    run id comes first so BOTH paths persist the same id (utils.mint_run_id): reused
+    from prior state when the competition directory has one — a resume, a crash-loop
+    re-run and a redeploy must reclaim and re-tag the SAME lineage, and a fresh mint
+    would orphan every kept template's ownership."""
     secrets.run_id = prior.previous_state.get("run_id") or mint_run_id()
     if prior.resuming:
         secrets.state = json.loads(prior.state_path.read_text())
@@ -760,6 +788,8 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
             for k, v in secrets.state["teams"].items()
         }
         secrets.number_of_teams = len(secrets.teams)
+        # Carried, not minted — an older state may predate some of these; fill gaps
+        # only (the mint step never runs on a resume).
         secrets.admin_password = secrets.state.get("admin_password") or random_password()
         secrets.scoring_password = secrets.state.get("scoring_password") or random_password()
         secrets.postgres_password = secrets.state.get("postgres_password") or random_password()
@@ -806,43 +836,52 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
                 print(f"  Enter a number from 1 to {MAX_TEAMS} "
                       f"(team identifiers are 192.168.<101-254>.x).")
         secrets.teams = collect_teams(secrets.number_of_teams, identity.engine_vmid)
-        secrets.admin_password = random_password()
-        secrets.scoring_password = random_password()
-        secrets.postgres_password = random_password()
-        secrets.redis_password = random_password()
-        # M4: box_password is a golden-hash INPUT (baked into /etc/shadow +
-        # cloud-init on the golden disk) — a fresh deploy that re-minted it would
-        # rebuild every golden and break the lifecycle's "2-team test run → 8-team
-        # competition must not rebuild anything". Reuse the competition's existing
-        # box password when prior state carries one; mint fresh only on a truly
-        # new competition. passwords.json (packet profile) outranks both: the
-        # packet's default credentials ARE the competition, and an operator edit
-        # to passwords.json is a deliberate re-key (goldens rebuild — correct).
-        secrets.box_password = ((inputs.packet_pw or {}).get("box_password")
-                                or carry_box_password(prior.previous_state))
-        if inputs.packet_pw:
-            print("  Box credentials come from passwords.json (packet profile) — "
-                  "not re-minted")
-        secrets.box_creds = (dict(inputs.packet_credlists.get("linux") or {})
-                             or {name: random_password() for name in spec.credlist_usernames})
-        secrets.domain_creds = (dict(inputs.packet_credlists.get("domain") or {}) or None)
-        secrets.inject_password = random_password() if inputs.injects else None
+        # Skeleton only — the mint step adds the secrets after preflight. An abort at
+        # the gates leaves a state with the lineage (run id) but no credentials.
         secrets.state = {
             "last_phase": 0,
             "pipeline_version": PIPELINE_VERSION,
             "teams": secrets.teams,
-            "admin_password": secrets.admin_password,
-            "scoring_password": secrets.scoring_password,
-            "inject_password": secrets.inject_password,
-            "postgres_password": secrets.postgres_password,
-            "redis_password": secrets.redis_password,
-            "box_password": secrets.box_password,
-            "box_creds": secrets.box_creds,
-            "domain_creds": secrets.domain_creds,
             "scoring_vm_id": identity.engine_vmid,
             "run_id": secrets.run_id,
         }
-        write_state(prior.state_path, secrets.state)
+
+
+def _mint_competition_secrets(secrets, prior, spec, inputs, identity):
+    """Mint the fresh deploy's secrets into `secrets` and persist them (preflight has
+    already passed — see prepare()'s order note)."""
+    secrets.admin_password = random_password()
+    secrets.scoring_password = random_password()
+    secrets.postgres_password = random_password()
+    secrets.redis_password = random_password()
+    # M4: box_password is a golden-hash INPUT (baked into /etc/shadow +
+    # cloud-init on the golden disk) — a fresh deploy that re-minted it would
+    # rebuild every golden and break the lifecycle's "2-team test run → 8-team
+    # competition must not rebuild anything". Reuse the competition's existing
+    # box password when prior state carries one; mint fresh only on a truly
+    # new competition. passwords.json (packet profile) outranks both: the
+    # packet's default credentials ARE the competition, and an operator edit
+    # to passwords.json is a deliberate re-key (goldens rebuild — correct).
+    secrets.box_password = ((inputs.packet_pw or {}).get("box_password")
+                            or carry_box_password(prior.previous_state))
+    if inputs.packet_pw:
+        print("  Box credentials come from passwords.json (packet profile) — "
+              "not re-minted")
+    secrets.box_creds = (dict(inputs.packet_credlists.get("linux") or {})
+                         or {name: random_password() for name in spec.credlist_usernames})
+    secrets.domain_creds = (dict(inputs.packet_credlists.get("domain") or {}) or None)
+    secrets.inject_password = random_password() if inputs.injects else None
+    secrets.state.update({
+        "admin_password": secrets.admin_password,
+        "scoring_password": secrets.scoring_password,
+        "inject_password": secrets.inject_password,
+        "postgres_password": secrets.postgres_password,
+        "redis_password": secrets.redis_password,
+        "box_password": secrets.box_password,
+        "box_creds": secrets.box_creds,
+        "domain_creds": secrets.domain_creds,
+    })
+    write_state(prior.state_path, secrets.state)
 
 
 def _apply_engine_placement(place, prior, secrets, spec, identity, comp_dir, team_node, engine_node):
@@ -1017,12 +1056,7 @@ def _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity,
     # credentials all consume — stayed stale (shakedown-5x4: .221→.243→.233).
     # An explicit TF_VAR_engine_mgmt_ip="" keeps the old DHCP behavior; the
     # chosen value is also exported for template_ops (build-VM ipconfig0).
-    terraform.engine_mgmt_ip = os.environ.get("TF_VAR_engine_mgmt_ip")
-    if terraform.engine_mgmt_ip is None:
-        terraform.engine_mgmt_ip = DEFAULT_ENGINE_MGMT_IP
-        print(f"  Engine mgmt IP: static {terraform.engine_mgmt_ip} (default — override "
-              f"TF_VAR_engine_mgmt_ip, set '' for DHCP)")
-        os.environ["TF_VAR_engine_mgmt_ip"] = terraform.engine_mgmt_ip
+    terraform.engine_mgmt_ip = _engine_mgmt_ip_from_env()
     # Default the gateway whenever the engine mgmt IP is static (live-found 2026-09-29:
     # an explicitly-set mgmt IP skipped this branch on the .150 env, and the engine
     # template build's ipconfig0 went out with an empty gw= — PVE 400 "Parameter

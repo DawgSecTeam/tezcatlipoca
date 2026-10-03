@@ -402,8 +402,10 @@ class PrepareSequencer(unittest.TestCase):
     """prepare()'s step order and its early-None return, with every step stubbed.
 
     This is the test that says the ordering the comments argue for is the ordering the
-    code runs: engine-vmid first, placement+lock next, the golden/frozen step before the
-    confirmation (and therefore before phase 1), targets only after the prompt.
+    code runs: engine-vmid first, placement+lock next, preflight before the fresh
+    credential mint (a gate abort must not leave minted credentials no engine ever
+    received), the golden/frozen step before the confirmation (and therefore before
+    phase 1), targets only after the prompt.
     """
 
     def _prepare(self, comp_dir, order, confirm=True, buf=None):
@@ -426,10 +428,14 @@ class PrepareSequencer(unittest.TestCase):
                               setattr(spec, "comp_name", "probe")))), \
                 patch.object(deploy, "_load_prior_deploy_state", side_effect=load_prior), \
                 patch.object(deploy, "_load_competition_inputs", side_effect=rec("inputs")), \
-                patch.object(deploy, "_resolve_competition_secrets",
-                             side_effect=rec("secrets", lambda secrets, *a, **k: (
+                patch.object(deploy, "_resolve_competition_teams",
+                             side_effect=rec("teams", lambda secrets, *a, **k: (
                                  setattr(secrets, "state", {}),
                                  setattr(secrets, "teams", {})))), \
+                patch.object(deploy, "_mint_competition_secrets",
+                             side_effect=rec("mint")), \
+                patch.object(deploy, "_engine_mgmt_ip_from_env",
+                             return_value="10.0.0.250"), \
                 patch.object(deploy, "resolve_placement",
                              side_effect=lambda *a, **k: order.append("resolve")
                              or ({"team_slots": {}}, None)), \
@@ -456,9 +462,9 @@ class PrepareSequencer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             result = self._prepare(Path(d), order)
         self.assertEqual(result, "CTX")
-        self.assertEqual(order, ["spec", "prior", "inputs", "secrets", "resolve", "activate",
-                                 ("lock", 1234), "generated", "terraform", "preflight",
-                                 "confirm", "targets", "assemble"])
+        self.assertEqual(order, ["spec", "prior", "inputs", "teams", "resolve", "activate",
+                                 ("lock", 1234), "preflight", "mint", "generated",
+                                 "terraform", "confirm", "targets", "assemble"])
 
     def test_declining_the_prompt_returns_none_and_runs_nothing_after_it(self):
         order = []
@@ -468,9 +474,9 @@ class PrepareSequencer(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIn("Deployment cancelled.", buf.getvalue())
         # no target enumeration, no context: deploy() sees None and runs no phase
-        self.assertEqual(order, ["spec", "prior", "inputs", "secrets", "resolve", "activate",
-                                 ("lock", 1234), "generated", "terraform", "preflight",
-                                 "confirm"])
+        self.assertEqual(order, ["spec", "prior", "inputs", "teams", "resolve", "activate",
+                                 ("lock", 1234), "preflight", "mint", "generated",
+                                 "terraform", "confirm"])
 
 
 class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):

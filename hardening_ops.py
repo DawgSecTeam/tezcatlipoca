@@ -737,6 +737,83 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
     run_concurrent(scripts, _exec)
 
 
+def mysql_credlist_reensure_script(cred_items):
+    """Bash that re-creates the credlist SQL accounts, tolerating the post-plant client/server
+    TLS mismatch (final-stage mysql flags disable server TLS while the stock client insists
+    on it — hence the --skip-ssl fallbacks). Idempotent."""
+    lines = ["#!/bin/bash", "set -e", ""]
+    lines.append("cat > /tmp/tz-credlist.sql << 'SQLEOF'")
+    for username, password in cred_items:
+        lines.append(f"CREATE USER IF NOT EXISTS '{username}'@'%' IDENTIFIED BY '{password}';")
+        lines.append(f"GRANT ALL PRIVILEGES ON *.* TO '{username}'@'%';")
+    lines.append("FLUSH PRIVILEGES;")
+    lines.append("SQLEOF")
+    lines.append("chmod 600 /tmp/tz-credlist.sql")
+    lines.append("sudo mysql < /tmp/tz-credlist.sql 2>/dev/null "
+                 "|| sudo mariadb < /tmp/tz-credlist.sql 2>/dev/null "
+                 "|| sudo mysql --skip-ssl < /tmp/tz-credlist.sql 2>/dev/null "
+                 "|| sudo mariadb --skip-ssl < /tmp/tz-credlist.sql")
+    lines.append("rm -f /tmp/tz-credlist.sql")
+    return "\n".join(lines)
+
+
+def reensure_mysql_credlist_users(comp_dir, targets, ctx, box_creds):
+    """Re-create the credlist SQL accounts AFTER the phase-6 final-stage pass.
+
+    fix_services creates them pre-plant, but the mysql final-stage plants rebuild the
+    auth tables (2026-09-30 testcomp-7box: db01 ended with only the install + plant
+    accounts, so the auth-based sql check failed until the users were re-added by
+    hand). Idempotent; touches only boxes whose box_services pins include
+    mysql/mariadb."""
+    cred_items = list(box_creds.items())
+    box_services = json.loads((comp_dir / "box_services.json").read_text())
+
+    jobs = []
+    for t in targets:
+        services = [s if isinstance(s, str) else s.get("name")
+                    for s in box_services.get(t["box_name"], [])]
+        if any(s in ("mysql", "mariadb") for s in services):
+            jobs.append((t, mysql_credlist_reensure_script(cred_items)))
+    if not jobs:
+        return
+    node = os.environ["TF_VAR_proxmox_node"]
+    with PRINT_LOCK:
+        print("  Re-ensuring credlist SQL users on mysql-pinned box(es) "
+              f"({', '.join(t['box_name'] for t, _ in jobs)})...")
+
+    def _exec(item):
+        t, script_content = item
+        script_b64 = base64.b64encode(script_content.encode()).decode()
+        deploy_cmd = (
+            f"echo '{script_b64}' | base64 -d > /tmp/tz-mysql-credlist.sh && "
+            "chmod 600 /tmp/tz-mysql-credlist.sh && "
+            "bash /tmp/tz-mysql-credlist.sh; rc=$?; rm -f /tmp/tz-mysql-credlist.sh; exit $rc"
+        )
+        try:
+            result = ssh_via_gateway(ctx, t["ip"], deploy_cmd, timeout=60,
+                                     user=ctx.get("box_username", "ubuntu"))
+            if result.returncode != 0:
+                raise RuntimeError(f"rc={result.returncode}: {result.stderr.strip()[:160]}")
+            with PRINT_LOCK:
+                print(f"    Credlist SQL users ensured on {t['ip']}")
+        except Exception as e:
+            root_script = re.sub(r"\bsudo ", "", script_content)
+            try:
+                rc, _out, err = guest_agent_exec_root(node, t["vmid"], root_script, timeout=120)
+                with PRINT_LOCK:
+                    if rc == 0:
+                        print(f"    Credlist SQL users ensured on {t['ip']} (via guest agent)")
+                    else:
+                        print(f"    Credlist SQL re-ensure still failing on {t['ip']} via "
+                              f"guest agent: rc={rc} {err.strip()[:160]}")
+            except Exception as agent_error:
+                with PRINT_LOCK:
+                    print(f"    Credlist SQL re-ensure error on {t['ip']}: {e} / "
+                          f"guest-agent fallback: {agent_error}")
+
+    run_concurrent(jobs, _exec)
+
+
 def setup_ubuntu_auth(targets, ctx):
     """Enable password auth + NOPASSWD sudo for box_username (nakon uses password auth + sudo).
 
