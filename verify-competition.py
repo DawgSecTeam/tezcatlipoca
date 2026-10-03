@@ -1698,11 +1698,21 @@ def check_plant_coverage(comp_dir):
         for name, cfgs in sorted(unplanted.items()):
             print(f"  FAIL  {name}: not planted: {', '.join(cfgs)}")
         problems.append(f"{sum(len(c) for c in unplanted.values())} unplanted config(s)")
-    if tally:
+    if tally and recorded is None:
+        # The tally GATES only when it is the fallback (no structured record — older
+        # nakon). When a record exists it is the authority: the tally is merged
+        # history ("repair: X FAILED" stays listed even after a later stage replanted
+        # X green, scrim-one 2026-10-03), and gating on it means a recovered failure
+        # keeps the gate red forever — the tally twin of the stale-record bug the
+        # record side already fixed.
         print(f"  FAIL  nakon recorded {len(tally)} FAILED plant step(s): "
               f"{', '.join(str(s)[:80] for s in tally[:3])}"
               f"{' …' if len(tally) > 3 else ''}")
         problems.append(f"{len(tally)} failed nakon step(s)")
+    elif tally:
+        print(f"  (informational) nakon history: {len(tally)} FAILED plant step(s) on "
+              f"record — superseded failures stay listed; the coverage record above is "
+              f"authoritative")
     if problems:
         return _fail("plant_coverage", "; ".join(problems))
 
