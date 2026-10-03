@@ -2135,11 +2135,13 @@ def teardown_red(args, env):
             break
         if attempt == 1:
             log(f"WARNING: badauto destroy rc={proc.returncode} on attempt 1 — "
-                f"retrying once before failing the teardown")
+                f"retrying once before failing the teardown"
+                + (f"; stderr: {(proc.stderr or '')[-300:]}" if proc.stderr else ""))
         else:
             raise RuntimeError(
                 f"badauto destroy failed (rc={proc.returncode}) — red01 and its engine NAT "
-                f"rules may still be up. Do not treat this run as torn down; fix and re-run "
+                f"rules may still be up. stderr tail: {(proc.stderr or '(captured nothing)')[-500:]}. "
+                f"Do not treat this run as torn down; fix and re-run "
                 f"`python3 -m badauto destroy --competition {args.competition} --yes` in "
                 f"{BAD_AUTO}, or destroy vmid {args.red_vmid} by hand and re-run "
                 f"destroy-competition.py.")
