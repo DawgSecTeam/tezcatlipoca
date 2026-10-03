@@ -35,6 +35,7 @@ passage written against the pre-golden pipeline is a bug — see [AGENTS.md](../
 | [environment-facts.md](environment-facts.md) | You are about to pick a template, pool, vmid block, or node — node/storage/template ground truth with verification status |
 | [security-disclosures.md](security-disclosures.md) | You touch credentials, `.env` variants, or git history — exposures, and the open token rotation |
 | [upstream-defects-handoff.md](upstream-defects-handoff.md) | You own the vulndb catalog or nakon — the defects not fixable from this repo |
+| [../webui/README.md](../webui/README.md) | You are authoring or deploying a competition from the browser — what each screen edits in `competitions/<id>/`, the catalog source, the deploy panel |
 | [scrim-harness.md](scrim-harness.md) | You are running or modifying the red-vs-blue agent scrim (`run-agent-scrim.py`, `scrim-report.py`, `beacon_ops.py`) |
 | [tests.md](tests.md) | You are running the offline suite, adding a test, or wondering what the suite does *not* cover |
 | [pfsense-inpath-2026-09-28.md](pfsense-inpath-2026-09-28.md) | You are wiring an in-path pfSense firewall per team (topology + the reproducible guest-side config-injection method). Dated, but an operational runbook, not a run report |
