@@ -109,6 +109,39 @@ def ssh_via_gateway(ctx, target_ip, cmd, timeout=60, user="ubuntu"):
     return r
 
 
+PAM_PREAUTH_SIGNATURE = "by PAM account configuration"
+
+
+def classify_ssh_failure(ctx, target_ip, user=None, timeout=25):
+    """One BatchMode SSH attempt through the gateway, classified for reset escalation.
+
+    Returns 'ok', 'pam-trap', or 'unreachable'. 'pam-trap' is the planted-box restart
+    wound (known-issues.md, "Planted Linux boxes deny all SSH at the PAM account stage
+    after a restart"): the TCP handshake completes and sshd kills the session preauth
+    with the PAM account-stage fatal, distinguishable from a box that is merely still
+    booting (refused/timeout) or one whose network is broken. Never raises."""
+    args = [
+        "ssh", "-i", ctx["ssh_key_path"],
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=10",
+        "-o", f"ProxyCommand={gateway_proxy(ctx)}",
+        f"{user or 'ubuntu'}@{target_ip}", "true",
+    ]
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return "unreachable"
+    except Exception:
+        return "unreachable"
+    if r.returncode == 0:
+        return "ok"
+    if PAM_PREAUTH_SIGNATURE in (r.stderr or ""):
+        return "pam-trap"
+    return "unreachable"
+
+
 def ssh_on_gateway(ctx, cmd, timeout=30):
     """Run a command directly on the scoring engine gateway."""
     return subprocess.run(

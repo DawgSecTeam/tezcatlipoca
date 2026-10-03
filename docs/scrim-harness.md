@@ -272,6 +272,29 @@ into `test.json` — see [automated-test-artifacts.md](automated-test-artifacts.
   (sshpass), all through the engine ProxyCommand gateway; blues are told to
   prefer it over hand-building ssh.
 
+### Mid-run box resets
+
+A box that dies mid-run no longer means choosing between eating the downtime and killing the
+run. The harness keeps running while the operator resets the box from a second shell:
+
+```bash
+python3 redeploy-competition.py --competition <id> --teams N --boxes web01 --mode reset --yes
+```
+
+`--mode reset` is the cheapest-that-works ladder (tz-ready rollback → tz-base rollback +
+replant → golden rebuild, escalating only the boxes a health probe leaves unhealthy — see
+[usage-agents.md](usage-agents.md)). Safe to run against a live scrim:
+
+- the engine lock the reset takes is process-lifetime and serializes only other
+  engine-touching operations (another deploy, engine-recovery) — the harness's own scoring
+  and agent traffic is unaffected;
+- the box's scored services go DOWN while the reset runs and the scoreboard picks the box
+  back up within a round or two; blue's watchdog may flag the box — expected, not an incident;
+- the replant/rebuild rungs re-take `tz-ready` when they succeed, so a later cheap rollback
+  lands on the same as-delivered state;
+- `--reset-event` composes with `reset` (fresh scoring DB + phase-7 reseed after the ladder)
+  for full scrim reruns.
+
 ## scrim-report.py
 
 Reads a run dir (`evidence/red/events*.jsonl` + `world.json`,

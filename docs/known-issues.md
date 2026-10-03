@@ -42,7 +42,10 @@ after their next stop/start: the TCP handshake completes, then the connection di
 `fatal: Access denied for user <u> by PAM account configuration [preauth]`. Disk-persistent but
 boot-triggered; every account module fails against verifiably-clean inputs, so the fault is
 stack-level (config parsing, NSS, or module loading) in the account stage's boot-time environment.
-Workaround: `redeploy --mode rebuild`, or never restart a planted box.
+Workaround: `redeploy --mode rebuild`, or never restart a planted box. Since 2026-10-03
+`redeploy --mode reset` recognizes the preauth signature in its post-rung health probe
+(`ssh_ops.classify_ssh_failure`) and escalates past it automatically — the `tz-base` replant
+rung lands on the pre-plant disk, and rebuild remains the last resort.
 
 Investigated 2026-09-29: the visible pin set does **not** reproduce it, and the standing lab
 (`tzlive-pamlab`, vmid 1181) was destroyed in the same cleanup — the incident is currently

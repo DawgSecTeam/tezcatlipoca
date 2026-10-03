@@ -253,18 +253,23 @@ Anything that matches no team/box is a hard error, not a silent empty selection.
 | `rollback-base` | Roll back to `tz-base`, then re-run DNS/auth/`nakon deploy --only`/hardening and re-take `tz-ready`. | `tz-ready` is also bad. |
 | `reconfigure` | No rollback — re-run that same chain against the live box. | A service died but the box is otherwise the team's to keep. |
 | `rebuild` | Destroy the VM, re-clone it from its **box template**, configure from scratch, take both snapshots. Windows boxes are bootstrapped over the guest agent (`bootstrap_windows_box()`), Linux via cloud-init. | The VM is gone or won't boot. |
+| `reset` | Per-box escalation ladder: `tz-ready` rollback → `tz-base` rollback + replant → golden rebuild. After every rung each box is probed (SSH via the gateway for Linux, guest agent for Windows, plus every scored port **from the engine** — Quotient's own vantage) and only the boxes left unhealthy escalate. A PAM preauth verdict escalates one rung (the `tz-base` disk is pre-plant) rather than jumping to rebuild. Prints which level each box ended at; exits non-zero if anything is still broken. | "Just reset it" — you don't know how deep the damage goes and don't want three round-trips mid-event. |
 | `resync` | Pull the engine-authoritative secrets (event.conf, credlist, `/opt/quotient/.env`) into `.deploy_state.json`, then re-set the selected boxes' passwords via the guest agent. Touches nothing else. | Credentials drifted (partially-applied seed, manual box fiddling) and you need state and boxes back in line without a rollback. |
 | `engine-recovery` | Re-clone the **engine VM** from the competition's engine template (`terraform apply -replace` on the engine resource only, `-target`-scoped). Team boxes, goldens, and the engine template are untouched; the scoring DB starts **EMPTY**. Ignores the box-selection flags. | The engine VM is broken or was deleted mid-event. Re-seed afterwards with `python3 create-competition.py --competition <id> --from-phase 7`. |
 
-`--reset-event` (with `rollback-ready`/`rollback-base` only) additionally restarts the event from
+`--reset-event` (with `rollback-ready`/`rollback-base`/`reset`) additionally restarts the event from
 the engine template — a fresh scoring DB and a phase-7 re-run — so scores reset and injects re-open
 anchored at now. Use it for scrim reruns.
 
 `rebuild` deliberately clones the **golden template** rather than the anchor team's live box, so a
 rebuilt box carries the golden-stage installs without inheriting whatever the defenders did. This is
-also what phase 4's apply #2 does at deploy time. Rebuilding an anchor-team (`team1`) box also puts
-it out of sync with Terraform state — the tool warns, and the next `terraform apply` will want to
-replace it.
+also what phase 4's apply #2 does at deploy time. The rebuild stamps the full ownership tag set and
+the clone marker onto the new VM explicitly — a clone otherwise *inherits* its golden's tags, and a
+golden reused across runs carries a stale `run-<id>` that would make teardown refuse the box. A
+rebuilt box is recreated outside Terraform, so on a v2 range **every** rebuilt box (M3.3 made all
+teams Terraform resources) drifts from Terraform state — the tool notes it per box, and the next
+`terraform apply` will want to replace them. Fine mid-event; re-import or accept the replacement
+afterwards.
 
 `resync` cannot recover `box_password` (the box login) — that is baked into the boxes at
 bootstrap and lives nowhere on the engine — so it aligns everything else and re-sets
@@ -383,7 +388,7 @@ Everything that exists in argparse but is not part of the happy path, in one pla
 |---|---|---|
 | `--mode resync` | `redeploy-competition.py` | Align `.deploy_state.json` with the engine-authoritative secrets (event.conf, credlist, `/opt/quotient/.env`), then re-set the selected boxes' passwords via the guest agent. No rollback. Cannot recover `box_password` (baked in at bootstrap; see internals) |
 | `--mode engine-recovery` | `redeploy-competition.py` | Re-clone the engine VM from the competition's engine template, `-replace` on that resource only. Ignored box-selection flags; fresh **empty** scoring DB — re-seed with `--from-phase 7` |
-| `--reset-event` | `redeploy-competition.py` | Valid only with `rollback-ready`/`rollback-base`: after the rollback, also restart the event from the engine template and re-run phase 7, so scores reset and injects re-open anchored at now. Use for scrim reruns |
+| `--reset-event` | `redeploy-competition.py` | Valid only with `rollback-ready`/`rollback-base`/`reset`: after the rollback(s), also restart the event from the engine template and re-run phase 7, so scores reset and injects re-open anchored at now. Use for scrim reruns |
 | `--end-of-competition` | `destroy-competition.py` | Required with `--full` on a **frozen** competition — makes an accidental mid-event full teardown impossible |
 | `--windows-domain-validated` | `verify-competition.py` | Operator attestation that a Windows/domain lineup's run exercised DomainSID uniqueness, machine SIDs, and the three-pass ordering. Required alongside `--freeze` for such a lineup |
 | `--fix-round-loop` | `verify-competition.py` | Issue the `POST /api/competition/start` + `POST /api/engine/pause {pause:false}` pair when the round loop did not auto-resume after an engine reboot |
