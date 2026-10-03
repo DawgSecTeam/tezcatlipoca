@@ -9,6 +9,7 @@ Offline and fast: no network, no SSH, no real opencode. The one slow fixture is 
 orphaned-grandchild reproduction, which is two sub-second timeouts.
 """
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -774,6 +775,75 @@ class AuthoredCompSweepMarker(unittest.TestCase):
         src = (_REPO / "run-agent-scrim.py").read_text()
         self.assertIn('if item.name == ".postclone-swept"', src)
         self.assertNotIn('if item.name == ".phase6-swept"', src)
+
+
+class RedReachabilityGate(unittest.TestCase):
+    """D13: pre-T0 gate that red01 can dial a box on every team.
+
+    scale8-soak-2026-10-02: routed red01 could not reach any satellite team box (15/15
+    cred_sprays, both db_attacks "unreachable over SSH", 0 footholds) and the run went
+    40 minutes before anyone noticed. `verify --red-identity` only proved red reached
+    ONE box on its own segment, and stage_verify runs before red exists, so nothing
+    checked red's path across the range before T0.
+
+    The gate must (a) run the every-team verify, (b) fail the run rather than warn, and
+    (c) stay out of a masq-mode run, where red shares the team gateways and has no path
+    of its own to prove.
+    """
+
+    def _args(self, mode=None, red_ip="10.0.0.196"):
+        return SimpleNamespace(red_mode=mode, red_ip=red_ip)
+
+    @contextlib.contextmanager
+    def _repo_rooted(self):
+        """Point scrim.REPO at a temp root so `comp.relative_to(REPO)` resolves."""
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = Path(tmp) / "competitions" / "c1"
+            comp.mkdir(parents=True)
+            with mock.patch.object(scrim, "REPO", Path(tmp)):
+                yield comp
+
+    def test_routed_run_checks_every_team_and_fails_hard(self):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append((cmd, kw))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with self._repo_rooted() as comp, \
+                mock.patch.object(scrim, "run", side_effect=fake_run), \
+                mock.patch.object(scrim, "_verify_flags", return_value=[]):
+            scrim.verify_red_reaches_teams(
+                self._args(), comp, {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
+
+        cmd, kw = calls[0]
+        self.assertIn("--red-teams", cmd)
+        self.assertEqual(cmd[cmd.index("--red-teams") + 1], "all")
+        self.assertIn("--red-identity", cmd)
+        self.assertEqual(cmd[cmd.index("--red-ip") + 1], "10.0.0.196")
+        self.assertIs(kw.get("check"), True,
+                      "a range red cannot reach must stop the run, not warn")
+
+    def test_masq_mode_is_skipped(self):
+        calls = []
+        with mock.patch.object(scrim, "run",
+                               side_effect=lambda *a, **k: calls.append(a)), \
+                mock.patch.object(scrim, "_verify_flags", return_value=[]):
+            scrim.verify_red_reaches_teams(
+                self._args(mode="masq"), Path("/tmp/comp"),
+                {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
+        self.assertEqual(calls, [], "masq red shares the gateways: nothing to prove")
+
+    def test_default_mode_is_treated_as_routed(self):
+        # bad-auto's default is routed, so an unset --red-mode must still be gated.
+        calls = []
+        with self._repo_rooted() as comp, \
+                mock.patch.object(scrim, "run",
+                                  side_effect=lambda *a, **k: calls.append(a)), \
+                mock.patch.object(scrim, "_verify_flags", return_value=[]):
+            scrim.verify_red_reaches_teams(
+                self._args(), comp, {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
+        self.assertEqual(len(calls), 1)
 
 
 # D12 --------------------------------------------------------------------------

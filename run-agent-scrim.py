@@ -1637,6 +1637,30 @@ def red_llm_watch(args, t_plus):
                 down_since=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(st["since"])))
 
 
+def verify_red_reaches_teams(args, comp, creds):
+    """Pre-T0 gate: red01 must be able to dial a box on EVERY team.
+
+    scale8-soak-2026-10-02: routed red01 could not reach any satellite team box — all
+    15 cred_sprays and both db_attacks failed "unreachable over SSH" — and the run went
+    40 minutes before anyone noticed, because nothing checked red's path before T0 and
+    `verify --red-identity` only proved red reached one box on its own segment. Red
+    spent the event scouting a network half of which it could not touch.
+
+    Raises (stopping the run before T0) rather than warning: a range where red cannot
+    reach half the teams is not an event worth starting. Masq-mode red shares the team
+    gateways and has no path of its own to prove, so it is skipped."""
+    if (args.red_mode or "routed") == "masq":
+        log("--red-mode masq: red shares the team gateways, skipping the reachability gate")
+        return
+    log("pre-T0: red01 -> every team reachability gate")
+    run(["python3", "verify-competition.py", str(comp.relative_to(REPO)),
+         "--engine-ip", creds["ENGINE_IP"], "--admin-password", creds["ADMIN_PW"],
+         "--red-ip", args.red_ip,
+         "--red-identity", "--red-teams", "all",
+         *_verify_flags(comp)],
+        cwd=REPO, timeout=900, check=True, tail=25)
+
+
 def stage_red(args, comp, creds, run_dir):
     # Local endpoints (llama.cpp/qwen) are slow: tighter call timeout and no
     # JSON-retry double-call, or one decision can eat 8-16 min of a 90-min event.
@@ -1699,6 +1723,9 @@ def stage_red(args, comp, creds, run_dir):
             f"red-LLM-less. Run a socat relay on this host and/or the reverse tunnel "
             f"(--red-tunnel), then re-run. See docs/scrim-harness.md, 'stage_red (LLM gate)'.")
     log(f"red01 reached the LLM at {red_base} — clear to start")
+    # Second pre-T0 gate, same reasoning as the LLM one above: red that cannot dial the
+    # teams cannot attack them, and the soak burned 40 minutes finding that out.
+    verify_red_reaches_teams(args, comp, creds)
 
 
 class WorkerDiedError(RuntimeError):
