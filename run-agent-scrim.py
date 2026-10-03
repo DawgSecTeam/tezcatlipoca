@@ -1959,6 +1959,75 @@ def pull_red_evidence(args):
     return ev
 
 
+def _config_red_vmid():
+    """The red vmid bad-auto's destroy will actually act on: config.yaml's deploy.red_vmid.
+
+    `badauto destroy` follows config.yaml by design (cmd_destroy refuses to be a silent
+    target override), so this is the number to reconcile `--red-vmid` against."""
+    try:
+        cfg = json.loads((BAD_AUTO / "config.yaml").read_text())
+        return (cfg.get("deploy") or {}).get("red_vmid")
+    except (OSError, ValueError):
+        return None
+
+
+def _red_vm_still_exists(vmid):
+    """True when `vmid` is still present in the cluster.
+
+    None (could not ask) is treated as "not proven gone" by the caller — this is a
+    teardown assertion, so an unverifiable check must not read as success."""
+    if not vmid:
+        return None
+    try:
+        from range_ops import live_vmids
+        return int(vmid) in live_vmids()
+    except Exception as e:                                  # noqa: BLE001 - reported
+        log(f"WARNING: could not verify red01 vmid {vmid} is gone: {e}")
+        return None
+
+
+def teardown_red(args, env):
+    """Destroy red01 + its NAT, then PROVE the VM is gone.
+
+    scale8 soak 2026-10-02: red01 (998) survived `badauto destroy` and had to be
+    destroyed by hand. The stage ran with check=False and never looked at the result, so
+    a destroy that removed nothing was indistinguishable from one that worked — the
+    driver printed DONE while a red box with a live LLM key and beacon tasking stayed
+    up on the range. Both halves are needed: surface the exit code, and assert the
+    specific vmid this run deployed."""
+    log("teardown: red01 + NAT")
+    configured = _config_red_vmid()
+    if args.red_vmid and configured and int(configured) != int(args.red_vmid):
+        # Not fatal — badauto's identity guards are the authority on what is safe to
+        # delete — but it is exactly the stale-config shape that lost red01, so say it.
+        log(f"WARNING: config.yaml's deploy.red_vmid is {configured} but this run deployed "
+            f"{args.red_vmid}; badauto destroy follows config.yaml")
+    proc = run(["python3", "-m", "badauto", "destroy", "--competition", args.competition,
+                "--yes"],
+               cwd=BAD_AUTO, env=env, timeout=900, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"badauto destroy failed (rc={proc.returncode}) — red01 and its engine NAT "
+            f"rules may still be up. Do not treat this run as torn down; fix and re-run "
+            f"`python3 -m badauto destroy --competition {args.competition} --yes` in "
+            f"{BAD_AUTO}, or destroy vmid {args.red_vmid} by hand and re-run "
+            f"destroy-competition.py.")
+
+    vmid = args.red_vmid or configured
+    still = _red_vm_still_exists(vmid)
+    if still:
+        raise RuntimeError(
+            f"badauto destroy reported success but vmid {vmid} is STILL PRESENT — red01 "
+            f"survived teardown. This is the scale8 soak's leak (red01 998 left running, "
+            f"with the beacon controller and its LLM key, after the driver printed DONE). "
+            f"Destroy vmid {vmid} before starting another run on this range.")
+    if still is False:
+        log(f"teardown: red01 vmid {vmid} confirmed gone")
+    else:
+        log(f"teardown: red01 vmid {vmid} could not be verified gone — check by hand "
+            f"(badauto destroy exited 0)")
+
+
 def stage_teardown(args, creds=None):
     tunnel = getattr(args, "red_tunnel", None)
     if hasattr(tunnel, "shutdown"):
@@ -1969,10 +2038,8 @@ def stage_teardown(args, creds=None):
             pull_red_evidence(args)
         except Exception as e:
             log(f"WARNING: red evidence pull failed: {e}")
-    log("teardown: red01 + NAT")
     env = {**os.environ, "BAuto_LLM_API_KEY": api_key(local=True)}
-    run(["python3", "-m", "badauto", "destroy", "--competition", args.competition, "--yes"],
-        cwd=BAD_AUTO, env=env, timeout=900, check=False)
+    teardown_red(args, env)
     if args.keep_range:
         log("--keep-range: leaving the competition range up")
         return
