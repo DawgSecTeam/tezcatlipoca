@@ -541,7 +541,7 @@ def comp_world(comp):
         if key in ("name", "scenario"):
             meta[key] = value.strip()
     try:
-        units, _ = _web01_units(comp)
+        units, _port, _display = _web01_units(comp)
     except SystemExit:
         units = None
     return {"name": meta.get("name", ""), "scenario": meta.get("scenario", ""),
