@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import NamedTuple
@@ -59,11 +60,70 @@ _TF_TEMPLATE_DIR = REPO_ROOT / "terraform"
 _TF_TEMPLATE_FILES = ("main.tf", "variables.tf", "outputs.tf", ".terraform.lock.hcl")
 
 
+def live_vmids():
+    """Every vmid the cluster currently knows, as a set.
+
+    One cluster-level read serves a whole resume gate, and it works identically on a
+    single node and across a multi-node placement (each host's own view lists its own
+    VMs, and the gate only needs "does this vmid exist somewhere in this range").
+
+    Raises RuntimeError rather than returning an empty set when the API cannot be
+    reached: an empty set would read as "every machine is gone" and hard-fail a resume
+    that is actually fine, which is its own kind of lie."""
+    try:
+        data = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
+    except Exception as e:                                  # noqa: BLE001 - reported
+        raise RuntimeError(f"could not list the cluster's VMs to verify the resume: {e}")
+    return {int(v["vmid"]) for v in (data or []) if v.get("vmid") is not None}
+
+
 def terraform_dir(comp_dir):
     """Per-competition Terraform working dir (its own state + lock), so two
     competitions can `terraform apply` concurrently on one node instead of
     contending on the single shared terraform/terraform.tfstate."""
     return Path(comp_dir) / "terraform"
+
+
+# Resource instance addresses that carry a vmid: `...team_box["proxmox:221"]`. The
+# satellite variants (team_box_sat1..4) put their teams on other hosts, and the engine
+# is a separate resource — all three carry the same suffix shape, so one pattern
+# covers every box a deploy phase can produce.
+_TF_VMID_ADDR_RE = re.compile(r'\[(?:"[^"]*?:(\d+)"|(\d+))\]')
+
+
+def team_vmids_from_state(comp_dir, run=None):
+    """Every vmid in this competition's terraform state, as a sorted list.
+
+    Pure parse of `terraform state list` — the one artifact that says which machines a
+    completed phase actually created. Reads only; never plans, applies, or locks.
+
+    Raises RuntimeError when the state cannot be read at all (terraform missing, a
+    corrupt state, a held lock): "I could not check" must never be reported as "there
+    is nothing there", or a resume gate becomes a resume hazard."""
+    tf_dir = terraform_dir(comp_dir)
+    runner = run or subprocess.run
+    try:
+        proc = runner(["terraform", "state", "list"], cwd=str(tf_dir),
+                      capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RuntimeError(f"could not run `terraform state list` in {tf_dir}: {e}")
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        raise RuntimeError(
+            f"`terraform state list` failed in {tf_dir} (rc={proc.returncode}): "
+            f"{detail[-1] if detail else 'no output'}")
+    # Terraform writes warnings to stderr and resource addresses to stdout, but a
+    # provider can also emit notices on stdout — parse the address SHAPE rather than
+    # trusting every line to be an address.
+    vmids = set()
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("proxmox_virtual_environment_vm."):
+            continue
+        m = _TF_VMID_ADDR_RE.search(line)
+        if m:
+            vmids.add(int(m.group(1) or m.group(2)))
+    return sorted(vmids)
 
 
 def ensure_terraform_workdir(comp_dir):

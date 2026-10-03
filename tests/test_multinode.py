@@ -85,6 +85,40 @@ class LoadNodesConfigTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 nodes_ops.load_nodes_config(path)
 
+    def test_shared_token_env_rejected(self):
+        """Two nodes on one token var is the scale8 soak's mid-preflight 401.
+
+        activate_placement applies one record's token at a time INTO the env var the
+        record names, so a shared name means the last write is used for every node —
+        the satellite authenticated with the engine node's token and 401'd. Distinct
+        node names here, so this failure can only come from the token check.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "nodes.json"
+            path.write_text(json.dumps({"nodes": [
+                {"name": "eng", "endpoint": "https://a:8006", "node": "n1",
+                 "datastore": "d", "token_env": "TF_VAR_proxmox_api_token"},
+                {"name": "sat", "endpoint": "https://b:8006", "node": "n2",
+                 "datastore": "d", "token_env": "TF_VAR_proxmox_api_token"}]}))
+            with self.assertRaises(SystemExit) as raised:
+                nodes_ops.load_nodes_config(path)
+        msg = str(raised.exception)
+        self.assertIn("token_env", msg)
+        self.assertIn("eng", msg)
+        self.assertIn("sat", msg)
+
+    def test_unique_token_env_is_accepted(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "nodes.json"
+            path.write_text(json.dumps({"nodes": [
+                {"name": "eng", "endpoint": "https://a:8006", "node": "n1",
+                 "datastore": "d", "token_env": "TF_VAR_proxmox_api_token"},
+                {"name": "sat", "endpoint": "https://b:8006", "node": "n2",
+                 "datastore": "d", "token_env": "TF_VAR_proxmox_api_token_150"}]}))
+            records, _ = nodes_ops.load_nodes_config(path)
+        self.assertEqual([r.token_env for r in records],
+                         ["TF_VAR_proxmox_api_token", "TF_VAR_proxmox_api_token_150"])
+
 
 class NodeEnvTest(unittest.TestCase):
     def test_apply_and_restore(self):
@@ -284,6 +318,8 @@ class JumpRulesTest(unittest.TestCase):
 :FORWARD DROP
 :OUTPUT ACCEPT
 -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A FORWARD -s 10.0.0.0/24 -d 192.168.103.0/24 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+-A FORWARD -s 10.0.0.0/24 -d 192.168.104.0/24 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 -A FORWARD -s 10.0.0.250/32 -d 192.168.103.0/24 -j ACCEPT
 -A FORWARD -s 10.0.0.250/32 -d 192.168.104.0/24 -j ACCEPT
 -A FORWARD -s 192.168.103.0/24 -d 10.0.0.250/32 -j ACCEPT
@@ -326,6 +362,101 @@ class EnumerateTargetsTest(unittest.TestCase):
                                    "team3": "n1", "team4": "n1"})
         slots = {t["team_key"]: t["slot"] for t in targets}
         self.assertEqual(slots["team2"], 1)
+
+
+class RedSegmentRulesTest(unittest.TestCase):
+    """Routed red -> satellite teams (scale8 soak 2026-10-02).
+
+    Red01 sat on its own segment (10.200.0.0/24) with the engine as its gateway. The
+    jump's FORWARD policy is DROP with accepts only for the engine and team egress, so
+    red's source matched nothing: all 15 cred_sprays + 2 db_attacks against satellite
+    teams failed "unreachable over SSH", 0 footholds, and half the range was never
+    attackable. `TEZ_RED_SEGMENT` adds the path; empty must stay a no-op."""
+
+    RED = "10.200.0.0/24"
+
+    def rules(self, red=None):
+        return jump_ops.jump_rules([103, 104], "10.0.0.250",
+                                   red_segment=self.RED if red is None else red)
+
+    def test_red_reaches_each_local_team(self):
+        rules = self.rules()
+        for t in (103, 104):
+            self.assertIn(f"-A FORWARD -s {self.RED} -d 192.168.{t}.0/24 -j ACCEPT", rules)
+
+    def test_reply_to_red_is_accepted(self):
+        # The jump is the teams' gateway, so a reply to red leaves via the mgmt default
+        # route unless this accept matches FIRST — nothing upstream filters it.
+        rules = self.rules()
+        for t in (103, 104):
+            self.assertIn(f"-A FORWARD -s 192.168.{t}.0/24 -d {self.RED} -j ACCEPT", rules)
+
+    def test_red_is_snat_to_the_team_gateway(self):
+        # Boxes trust SSH only from 192.168.<id>.1, so red must arrive as the gateway
+        # or it gets refused even with the FORWARD accept in place.
+        rules = self.rules()
+        for t in (103, 104):
+            self.assertIn(f"-A POSTROUTING -s {self.RED} -d 192.168.{t}.0/24 "
+                          f"-j SNAT --to-source 192.168.{t}.1", rules)
+
+    def test_red_snat_precedes_team_egress_masquerade(self):
+        # nat POSTROUTING is first-match: if the team-egress MASQUERADE won, red's own
+        # source would be rewritten twice and arrive as the jump's mgmt address.
+        lines = self.rules().splitlines()
+        red_snat = lines.index(f"-A POSTROUTING -s {self.RED} -d 192.168.103.0/24 "
+                               f"-j SNAT --to-source 192.168.103.1")
+        masq = next(i for i, l in enumerate(lines)
+                    if l.startswith("-A POSTROUTING -s 192.168.103.0/24 ! -d"))
+        self.assertLess(red_snat, masq)
+
+    def test_red_does_not_break_team_isolation(self):
+        rules = self.rules()
+        self.assertNotIn("192.168.103.0/24 -d 192.168.104", rules)
+        self.assertIn(":FORWARD DROP", rules)
+
+    def test_empty_segment_emits_no_red_rules(self):
+        rules = self.rules(red="")
+        self.assertNotIn("10.200.0.0/24", rules)
+        for t in (103, 104):
+            self.assertNotIn(f"192.168.{t}.0/24 -d 10.200.0.0/24", rules)
+
+    def test_host_bits_and_open_form_normalise(self):
+        # A /24 written as a host address must still produce the canonical network.
+        self.assertIn(f"-A FORWARD -s {self.RED} -d 192.168.103.0/24 -j ACCEPT",
+                      self.rules(red="10.200.0.10/24"))
+
+    def test_mss_is_clamped_towards_red_and_the_engine(self):
+        # This VM is the first routed hop between two /24s; without the clamp a path
+        # MTU below 1500 black-holes large replies (the soak's SSH failures rode the
+        # same hop as its successful MySQL probes).
+        rules = self.rules()
+        for zone in ("10.0.0.0/24", self.RED):
+            self.assertIn(f"-A FORWARD -s {zone} -d 192.168.103.0/24 -p tcp "
+                          f"--tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu", rules)
+
+
+class RedSegmentFromEnvTest(unittest.TestCase):
+    """`TEZ_RED_SEGMENT` parsing: empty is the safe default, a typo is a hard error."""
+
+    def test_unset_and_blank_are_empty(self):
+        os.environ.pop("TEZ_RED_SEGMENT", None)
+        self.assertEqual(jump_ops.red_segment_from_env(), "")
+        with patch.dict("os.environ", {"TEZ_RED_SEGMENT": "   "}):
+            self.assertEqual(jump_ops.red_segment_from_env(), "")
+
+    def test_normalises_host_bits(self):
+        with patch.dict("os.environ", {"TEZ_RED_SEGMENT": "10.200.0.10/24"}):
+            self.assertEqual(jump_ops.red_segment_from_env(), "10.200.0.0/24")
+
+    def test_malformed_is_fatal_not_silent(self):
+        # A silently-dropped segment puts a live range back in the state that lost the
+        # soak's entire red coverage, so it must refuse to deploy instead. `10.200.0.0`
+        # parses as /32 — a plausible typo that would match only red01 itself.
+        with patch.dict("os.environ", {"TEZ_RED_SEGMENT": "10.200.0.0"}):
+            self.assertEqual(jump_ops.red_segment_from_env(), "10.200.0.0/32")
+        with patch.dict("os.environ", {"TEZ_RED_SEGMENT": "red-team"}):
+            with self.assertRaises(SystemExit):
+                jump_ops.red_segment_from_env()
 
 
 class ParseTeamNodeTest(unittest.TestCase):

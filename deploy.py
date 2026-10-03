@@ -47,7 +47,7 @@ from nakon_ops import (acquire_engine_lock, build_nakon_bundle, generate_nakon_c
 from nodes_ops import (activate_placement, golden_vmid_for_slot, resolve_placement,
                        satellite_routes_for, satellite_tfvars)
 from range_ops import (destroy_vm_if_exists, ensure_terraform_workdir, enumerate_targets,
-                       persist_targets, wait_for_node_load)
+                       persist_targets, team_vmids_from_state, wait_for_node_load)
 from template_ops import (
     code_hash,
     engine_template_vmid,
@@ -151,6 +151,180 @@ def guard_resume_from_phase(from_phase, last_phase, state_path, force=False):
         f"Resume at --from-phase {last + 1} (re-runs the phase that died), or pass "
         f"--force-from-phase to skip ahead deliberately."
     )
+
+
+def _artifact_probes(comp_dir):
+    """The three infrastructure probes guard_resume_existence needs, as one dict.
+
+    Indirection on purpose: it is the single seam a test patches to exercise the gate
+    offline, and the single place a caller could inject a cheaper probe. Resolved at
+    call time so a patch lands."""
+    from range_ops import live_vmids
+    return {"vmids_from_state": lambda: team_vmids_from_state(comp_dir),
+            "vm_exists": live_vmids,
+            "box_reachable": _any_box_reachable}
+
+
+def guard_resume_existence(from_phase, comp_dir, state, force=False,
+                           vmids_from_state=None, vm_exists=None, box_reachable=None):
+    """Refuse a resume whose skipped phases left no artifacts behind.
+
+    `guard_resume_from_phase` reads the checkpoint, which is a claim about work done —
+    and a claim can be written by a run that did nothing. scale8 soak 2026-10-02 attempts
+    9-11 resumed at --from-phase 5/6 after a phase-4 death: apply #2 never ran, the
+    phase-5 repair sweep is strict=False so it "succeeded" against 32 nonexistent
+    machines, and it checkpointed phase 5. Every later wait then raced a ghost, and the
+    run spent ~40 minutes in wait_for_windows_sshd before anyone understood why.
+
+    So: before trusting a skipped phase, verify the thing it produces. Each check is a
+    separate callable so every branch is testable without Proxmox, and so the checkpoint
+    path (C-checkpoint) can reuse them. Escalation stays available — an operator who
+    genuinely has the infrastructure passes --force-from-phase; what this removes is the
+    SILENT skip.
+
+    Checks, by the phase whose output is being trusted, in pipeline-v2 numbering:
+      > 2  the engine VM exists (phase 2's terraform apply #1)
+      > 4  every team box in terraform state exists as a live VM (apply #2)
+      > 5  the postclone sweep ran and at least one box answers on SSH
+    """
+    if force:
+        return
+    probes = _artifact_probes(comp_dir)
+    probe_vmids = vmids_from_state or probes["vmids_from_state"]
+    probe_live = vm_exists or probes["vm_exists"]
+    # Pipeline v2: phase 2's apply #1 creates the engine; phase 4's apply #2 creates the
+    # team boxes (its first half builds the goldens they clone from). So a resume that
+    # skips phase 2 needs a live engine, and one that skips phase 4 needs live boxes.
+    needs_engine = from_phase > 2
+    needs_boxes = from_phase > 4
+    needs_live_boxes = from_phase > 5
+    if not needs_engine:
+        return
+
+    try:
+        live = set(probe_live())
+    except RuntimeError as e:
+        raise SystemExit(
+            f"  ERROR: --from-phase {from_phase} cannot confirm the machines exist: {e}\n"
+            f"        Refusing to resume blind — re-run with --from-phase "
+            f"{_safe_resume_target(2)}, or pass --force-from-phase once you have confirmed "
+            f"the machines exist by hand."
+        )
+
+    if needs_engine:
+        engine_vmid = state.get("scoring_vm_id", SCORING_ENGINE_VMID)
+        if int(engine_vmid) not in live:
+            raise SystemExit(
+                f"  ERROR: --from-phase {from_phase} skips the phase that creates the scoring "
+                f"engine, but vmid {engine_vmid} does not exist.\n"
+                f"        Every later phase targets it (scoring setup, terraform context, "
+                f"box images).\n"
+                f"        Re-run with --from-phase 2 to recreate it."
+            )
+
+    if not needs_boxes:
+        return
+
+    try:
+        vmids = probe_vmids()
+    except RuntimeError as e:
+        raise SystemExit(
+            f"  ERROR: --from-phase {from_phase} would trust phases 2-{from_phase - 1}, but their "
+            f"output cannot be verified: {e}\n"
+            f"        Refusing to resume blind. Re-run with --from-phase {_safe_resume_target(2)} "
+            f"to rebuild, or pass --force-from-phase once you have confirmed the machines "
+            f"exist by hand."
+        )
+
+    missing = [v for v in vmids if v not in live]
+    if not vmids or missing:
+        found = ("no team boxes at all are recorded in terraform state" if not vmids else
+                 f"{len(missing)} of {len(vmids)} recorded team box(es) are gone: "
+                 f"{', '.join(str(v) for v in missing[:8])}"
+                 f"{' …' if len(missing) > 8 else ''}")
+        raise SystemExit(
+            f"  ERROR: --from-phase {from_phase} skips the phases that create the team boxes, "
+            f"but {found}.\n"
+            f"        The later phases would target machines that do not exist (this is the "
+            f"scale8 soak's poisoned resume: the repair sweep reported success against 32 "
+            f"ghosts and checkpointed it).\n"
+            f"        Re-run with --from-phase 4 to recreate them."
+        )
+
+    if not needs_live_boxes:
+        return
+
+    reachable = box_reachable or probes["box_reachable"]
+    ok, why = reachable(comp_dir, state)
+    if not ok:
+        raise SystemExit(
+            f"  ERROR: --from-phase {from_phase} trusts the post-clone work, but {why}.\n"
+            f"        Re-run with --from-phase 5 so the bootstrap/sweep phases run against the "
+            f"existing VMs."
+        )
+
+
+def _safe_resume_target(phase):
+    """The earliest phase that rebuilds the missing artifact — what the operator
+    should actually type, rather than the phase they asked for."""
+    return max(1, phase)
+
+
+# Phases whose output is independently checkable, so their checkpoint can be verified
+# before it is written. Phase 3 is "prepare the engine clone" (apply #1 has created it),
+# phase 4 is "goldens + apply #2" (the team boxes now exist). Everything else either
+# builds nothing durable (1, 7) or builds images/state that the resume gates already
+# cover indirectly — inventing a proxy check would refuse good deploys, which is worse
+# than the lie it would prevent.
+_CHECKPOINT_GATES = {3, 4}
+
+
+def _any_box_reachable(comp_dir, state):
+    """(ok, why) for 'the post-clone sweep ran and at least one box answers'.
+
+    Two separate facts, deliberately: the marker proves the sweep executed, the SSH
+    probe proves the boxes are real. A range whose marker exists but whose boxes are
+    dark is exactly the state that produced the phantom repair sweep."""
+    marker = Path(comp_dir) / ".postclone-swept"
+    if not marker.exists():
+        return False, f"{marker.name} is absent (the post-clone sweep never completed)"
+    # Cheapest and most specific first: with no team boxes on record there is nothing to
+    # probe, and reading the terraform context to discover that would run terraform (and
+    # could fail) for no reason.
+    targets = _team_box_ips(comp_dir)
+    if not targets:
+        return False, "no team box addresses are recorded to probe"
+    try:
+        from ssh_ops import read_terraform_ctx, ssh_via_gateway
+        ctx = read_terraform_ctx(comp_dir)
+    except Exception as e:                                  # noqa: BLE001 - reported
+        return False, f"the engine context could not be read to probe a box ({e})"
+    for ip in targets[:3]:
+        try:
+            proc = ssh_via_gateway(ctx, ip, "echo RESUME-OK", timeout=25)
+        except Exception:                                   # noqa: BLE001 - try the next
+            continue
+        if "RESUME-OK" in (proc.stdout or ""):
+            return True, ""
+    return False, (f"none of the first {min(3, len(targets))} team box(es) answered over SSH "
+                   f"({', '.join(targets[:3])})")
+
+
+def _team_box_ips(comp_dir):
+    """Every team box IP recorded for this competition, engine excluded.
+
+    targets.json is written by phase 2 and is the deploy's own record of what it built;
+    nakon-config.json is the fallback for a range deployed before targets.json existed."""
+    try:
+        data = json.loads((Path(comp_dir) / "targets.json").read_text())
+    except (OSError, ValueError):
+        return []
+    out = []
+    for name, rec in (data.get("targets") or {}).items():
+        ip = (rec or {}).get("ip") if isinstance(rec, dict) else None
+        if ip and str(name).startswith("team"):
+            out.append(str(ip))
+    return out
 
 
 def _record_degradations(ctx):
@@ -516,9 +690,41 @@ class DeployContext:
         write_state(self.state_path, self.state)
 
     def checkpoint(self, n):
-        """Record phase n as completed — the resume guard's only source of truth."""
+        """Record phase n as completed — the resume guard's only source of truth.
+
+        Which is exactly why a checkpoint must not be written on the strength of a phase
+        merely finishing. In the scale8 soak a strict=False repair sweep "completed"
+        against 32 nonexistent machines and stamped last_phase=5; the next resume then
+        read that stamp as proof the machines existed. So the phases that produce
+        infrastructure verify their own output before claiming it — the same checks a
+        resume would run (guard_resume_existence), which is defense in depth for the run
+        after this one rather than a substitute for the gate."""
+        self._verify_phase_artifacts(n)
         self.state["last_phase"] = n
         self.save_state()
+
+    def _verify_phase_artifacts(self, n):
+        """Phase n's own existence gate: refuse to stamp a claim the range cannot back.
+
+        Only the phases that build infrastructure are gated, using the same checks a
+        resume would run — "if I resume from n+1, is that resume honest?". A phase with
+        nothing independently checkable (cleanup, template build, sweeps, seeding) is
+        not gated, because inventing a proxy check for it would refuse good deploys.
+
+        --force-from-phase deliberately does NOT bypass this: that flag is a statement
+        about skipping work, not a licence to record work that never happened."""
+        if n not in _CHECKPOINT_GATES:
+            return
+        comp_dir = self.comp_dir
+        try:
+            guard_resume_existence(n + 1, comp_dir, self.state)
+        except SystemExit as e:
+            raise SystemExit(
+                f"  ERROR: phase {n} reported success but its output does not exist, so "
+                f"last_phase={n} will NOT be recorded:\n{e}\n"
+                f"        A checkpoint that claims work never done is what sent the scale8 "
+                f"soak's later phases chasing machines that were never built."
+            )
 
     @property
     def comp_tags(self):
@@ -1316,6 +1522,11 @@ def _load_prior_deploy_state(prior, comp_dir, from_phase, force_from_phase):
         # ...and refuse a resume-loop: the same phase failing the same way over and
         # over is not a repair (see guard_resume_streak).
         guard_resume_streak(from_phase, prior.previous_state, force=force_from_phase)
+        # ...and refuse to trust a checkpoint whose work is not actually there. The two
+        # guards above read the checkpoint as a fact; this one checks the fact
+        # (see guard_resume_existence for the 2026-10-02 soak that proved why).
+        guard_resume_existence(from_phase, comp_dir, prior.previous_state,
+                               force=force_from_phase)
 
 
 def _load_competition_inputs(inputs, comp_dir):

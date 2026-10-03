@@ -369,16 +369,34 @@ def blue_metrics(run_dir):
         for line in log_text.splitlines():
             if erad_re.search(line) and erad_verbs.search(line):
                 m["eradication"] += 1
-        # `sub*.md`, not `sub-*.md`: the cycle prompt tells blue to write `sub.md`, so the
-        # hyphenated pattern matched nothing and observed runs counted 0 injects however much
-        # blue submitted (the harness's blue-evidence copy had the same bug). The 17c self-test
-        # pin is unaffected — that run has no sub* file at all.
-        injects = set(wd.glob("sub*.md")) | set(wd.glob("sub*.txt"))
-        subs = wd / "submissions"
-        if subs.is_dir():
-            injects |= {p for p in subs.iterdir() if p.is_file()}
-        m["injects"] += len(injects)
+        m["injects"] += count_inject_submissions(wd)
     return m
+
+
+# An inject deliverable the blue agent wrote. Accepted shapes, in the order they were
+# observed: `sub-<id>.md` (the documented form), `sub.md` and `sub7.md` (what agents
+# actually produced in the scale8 soak), and `sub-<label>.md` for a non-numeric id.
+# Deliberately anchored on "sub" plus an optional short id, so an unrelated `submarine.md`
+# or `submission-notes.md` in the team dir is not counted as a submitted inject.
+_SUB_FILE_RE = re.compile(r"^sub(?:-?\d+|-[\w.-]+)?\.(?:md|txt)$", re.IGNORECASE)
+
+
+def count_inject_submissions(team_dir):
+    """How many inject deliverables this team produced.
+
+    scale8-soak-2026-10-02 reported "injects submitted: 0" and scored the blue inject gate
+    FAIL while the run had really submitted them: the teams wrote `sub.md`, `sub7.md` …
+    `sub12.md` at the team directory root, and the counter only matched `sub-*.md` or files
+    inside `submissions/`. A gate that reports zero because of a filename is worse than no
+    gate — it fails a team for something it did.
+
+    Both shapes count, and the `submissions/` directory still counts whatever is in it
+    (agents that follow the documented path must not be penalised either)."""
+    found = {p for p in team_dir.glob("sub*") if p.is_file() and _SUB_FILE_RE.match(p.name)}
+    subs = team_dir / "submissions"
+    if subs.is_dir():
+        found |= {p for p in subs.iterdir() if p.is_file()}
+    return len(found)
 
 
 

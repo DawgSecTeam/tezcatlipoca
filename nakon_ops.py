@@ -769,6 +769,27 @@ def _deploy_owner_check(ssh_base, action="deploy"):
     return me
 
 
+def _nothing_answered(machines):
+    """Why a rc=0 plant applied nothing, or None when the run was real.
+
+    `machines` is nakon deploy --json's per-machine outcome list. A machine that was
+    never reached carries no steps at all (`steps: []`) — nakon records the connection
+    error in `error` and moves on, so an all-unreachable plant is indistinguishable from
+    a clean one by exit code alone.
+
+    Deliberately narrow. It fires only when NO machine produced a single step result:
+    a plant where even one host ran one step is a real (if disappointing) outcome and
+    must not be escalated, or the floor would abort runs that are merely imperfect —
+    exactly the tolerated-failure case the ledger exists for."""
+    if not machines:
+        return "no per-machine results were reported"
+    ran = [m for m in machines if m.get("steps")]
+    if ran:
+        return None
+    names = ", ".join(str(m.get("name") or m.get("ip") or "?") for m in machines[:6])
+    return f"all {len(machines)} machine(s) ran zero steps ({names})"
+
+
 def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, timeout=2400,
               strict=True, jobs=1, run_tag=None):
     """Push the bundle to the scoring engine and run `nakon deploy` there.
@@ -882,6 +903,24 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
             finally:
                 pump.join(timeout=5)
             if proc.returncode == 0:
+                # rc=0 is not the same as "the plant did something". A strict=False run
+                # whose every machine was unreachable finishes rc=0 with zero FAILED
+                # steps, because a host that never answered cannot report a failing
+                # step. That is how the scale8 soak's repair sweep "succeeded" against
+                # 32 machines that did not exist (2026-10-02) and checkpointed phase 5.
+                # 2 flaky steps of 41 is a tolerated failure; 41 of 41 is a broken
+                # sweep, and only the latter must stop the run.
+                nothing = _nothing_answered(machines_json)
+                if nothing:
+                    raise RuntimeError(
+                        f"nakon deploy reported success but nothing was applied: "
+                        f"{nothing}. rc=0 with no per-machine step results means the "
+                        f"hosts never answered (or --only selected no machine) — "
+                        f"treating that as a completed plant is what let the scale8 "
+                        f"soak's repair sweep 'succeed' against machines that did not "
+                        f"exist. Refusing to continue; check that the boxes are up and "
+                        f"reachable, then re-run."
+                    )
                 return NakonResult(failed_steps, machines_json)
             if failed_steps or attempt == 3:
                 break

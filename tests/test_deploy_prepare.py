@@ -135,7 +135,8 @@ class PriorStateGuards(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 3})
             prior = _prior(comp_dir)
-            with patch.object(deploy, "guard_resume_streak") as guard:
+            with patch.object(deploy, "guard_resume_streak") as guard, \
+                    patch.object(deploy, "guard_resume_existence"):
                 deploy._load_prior_deploy_state(prior, comp_dir, 4, False)
         guard.assert_called_once_with(4, prior.previous_state, force=False)
 
@@ -144,10 +145,12 @@ class PriorStateGuards(unittest.TestCase):
             comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 0})
             prior = _prior(comp_dir)
             with patch.object(deploy, "guard_resume_from_phase") as guard, \
-                    patch.object(deploy, "guard_resume_streak") as streak_guard:
+                    patch.object(deploy, "guard_resume_streak") as streak_guard, \
+                    patch.object(deploy, "guard_resume_existence") as exist_guard:
                 deploy._load_prior_deploy_state(prior, comp_dir, 1, False)
         guard.assert_not_called()
         streak_guard.assert_not_called()   # a fresh deploy is never a resume-loop
+        exist_guard.assert_not_called()    # nor a resume of anything
         self.assertFalse(prior.resuming)
 
 

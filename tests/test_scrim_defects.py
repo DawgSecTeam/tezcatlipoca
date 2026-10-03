@@ -9,6 +9,7 @@ Offline and fast: no network, no SSH, no real opencode. The one slow fixture is 
 orphaned-grandchild reproduction, which is two sub-second timeouts.
 """
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -774,6 +775,162 @@ class AuthoredCompSweepMarker(unittest.TestCase):
         src = (_REPO / "run-agent-scrim.py").read_text()
         self.assertIn('if item.name == ".postclone-swept"', src)
         self.assertNotIn('if item.name == ".phase6-swept"', src)
+
+
+class RedReachabilityGate(unittest.TestCase):
+    """D13: pre-T0 gate that red01 can dial a box on every team.
+
+    scale8-soak-2026-10-02: routed red01 could not reach any satellite team box (15/15
+    cred_sprays, both db_attacks "unreachable over SSH", 0 footholds) and the run went
+    40 minutes before anyone noticed. `verify --red-identity` only proved red reached
+    ONE box on its own segment, and stage_verify runs before red exists, so nothing
+    checked red's path across the range before T0.
+
+    The gate must (a) run the every-team verify, (b) fail the run rather than warn, and
+    (c) stay out of a masq-mode run, where red shares the team gateways and has no path
+    of its own to prove.
+    """
+
+    def _args(self, mode=None, red_ip="10.0.0.196"):
+        return SimpleNamespace(red_mode=mode, red_ip=red_ip)
+
+    @contextlib.contextmanager
+    def _repo_rooted(self):
+        """Point scrim.REPO at a temp root so `comp.relative_to(REPO)` resolves."""
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = Path(tmp) / "competitions" / "c1"
+            comp.mkdir(parents=True)
+            with mock.patch.object(scrim, "REPO", Path(tmp)):
+                yield comp
+
+    def test_routed_run_checks_every_team_and_fails_hard(self):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append((cmd, kw))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with self._repo_rooted() as comp, \
+                mock.patch.object(scrim, "run", side_effect=fake_run), \
+                mock.patch.object(scrim, "_verify_flags", return_value=[]):
+            scrim.verify_red_reaches_teams(
+                self._args(), comp, {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
+
+        cmd, kw = calls[0]
+        self.assertIn("--red-teams", cmd)
+        self.assertEqual(cmd[cmd.index("--red-teams") + 1], "all")
+        self.assertIn("--red-identity", cmd)
+        self.assertEqual(cmd[cmd.index("--red-ip") + 1], "10.0.0.196")
+        self.assertIs(kw.get("check"), True,
+                      "a range red cannot reach must stop the run, not warn")
+
+    def test_masq_mode_is_skipped(self):
+        calls = []
+        with mock.patch.object(scrim, "run",
+                               side_effect=lambda *a, **k: calls.append(a)), \
+                mock.patch.object(scrim, "_verify_flags", return_value=[]):
+            scrim.verify_red_reaches_teams(
+                self._args(mode="masq"), Path("/tmp/comp"),
+                {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
+        self.assertEqual(calls, [], "masq red shares the gateways: nothing to prove")
+
+    def test_default_mode_is_treated_as_routed(self):
+        # bad-auto's default is routed, so an unset --red-mode must still be gated.
+        calls = []
+        with self._repo_rooted() as comp, \
+                mock.patch.object(scrim, "run",
+                                  side_effect=lambda *a, **k: calls.append(a)), \
+                mock.patch.object(scrim, "_verify_flags", return_value=[]):
+            scrim.verify_red_reaches_teams(
+                self._args(), comp, {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
+        self.assertEqual(len(calls), 1)
+
+
+class RedTeardownAssertion(unittest.TestCase):
+    """D14: red01 must not survive teardown, and a failed destroy must not read as DONE.
+
+    scale8-soak-2026-10-02: red01 (998) outlived `badauto destroy` and had to be removed
+    by hand. The stage ran with check=False and never looked at the result or at the
+    cluster, so a destroy that removed nothing was indistinguishable from one that
+    worked — the driver printed DONE while a red box holding the beacon controller and
+    its LLM key stayed up on the range. `badauto destroy` follows config.yaml's
+    deploy.red_vmid by design, so a stale config silently targets the wrong vmid.
+    """
+
+    def _args(self, red_vmid=998):
+        return SimpleNamespace(red_vmid=red_vmid, competition="c1")
+
+    def _run(self, rc=0, still=False, configured=998, red_vmid=998):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return SimpleNamespace(returncode=rc, stdout="", stderr="")
+
+        with mock.patch.object(scrim, "run", side_effect=fake_run), \
+                mock.patch.object(scrim, "log"), \
+                mock.patch.object(scrim, "_config_red_vmid", return_value=configured), \
+                mock.patch.object(scrim, "_red_vm_still_exists",
+                                  return_value=(True if still else False)):
+            scrim.teardown_red(self._args(red_vmid), {})
+        return calls
+
+    def test_destroy_is_invoked_for_this_competition(self):
+        calls = self._run()
+        self.assertIn("destroy", calls[0])
+        self.assertIn("c1", calls[0])
+
+    def test_surviving_red01_raises(self):
+        # The soak's exact outcome: rc=0, VM still there.
+        with self.assertRaises(RuntimeError) as raised:
+            self._run(rc=0, still=True)
+        msg = str(raised.exception)
+        self.assertIn("STILL PRESENT", msg)
+        self.assertIn("998", msg)
+
+    def test_failed_destroy_raises_with_the_rc(self):
+        with self.assertRaises(RuntimeError) as raised:
+            self._run(rc=1)
+        msg = str(raised.exception)
+        self.assertIn("badauto destroy failed", msg)
+        self.assertIn("rc=1", msg)
+
+    def test_unverifiable_is_not_silently_a_pass(self):
+        # Not proof of failure (badauto may well have deleted it) but it must be said out
+        # loud rather than folded into a clean teardown.
+        lines = []
+        with mock.patch.object(scrim, "run",
+                               side_effect=lambda *a, **k: SimpleNamespace(
+                                   returncode=0, stdout="", stderr="")), \
+                mock.patch.object(scrim, "log", side_effect=lines.append), \
+                mock.patch.object(scrim, "_config_red_vmid", return_value=None), \
+                mock.patch.object(scrim, "_red_vm_still_exists", return_value=None):
+            scrim.teardown_red(self._args(), {})
+        self.assertTrue(any("could not be verified gone" in l for l in lines), lines)
+
+    def test_stale_config_vmid_is_called_out(self):
+        # config.yaml pointing at another run's vmid is what lost red01 in the first place.
+        lines = []
+        with mock.patch.object(scrim, "run",
+                               side_effect=lambda *a, **k: SimpleNamespace(
+                                   returncode=0, stdout="", stderr="")), \
+                mock.patch.object(scrim, "log", side_effect=lines.append), \
+                mock.patch.object(scrim, "_config_red_vmid", return_value=999), \
+                mock.patch.object(scrim, "_red_vm_still_exists", return_value=False):
+            scrim.teardown_red(self._args(red_vmid=998), {})
+        self.assertTrue(any("follows config.yaml" in l for l in lines), lines)
+
+    def test_the_assertion_uses_the_runs_own_vmid_when_config_is_silent(self):
+        seen = []
+        with mock.patch.object(scrim, "run",
+                               side_effect=lambda *a, **k: SimpleNamespace(
+                                   returncode=0, stdout="", stderr="")), \
+                mock.patch.object(scrim, "log"), \
+                mock.patch.object(scrim, "_config_red_vmid", return_value=None), \
+                mock.patch.object(scrim, "_red_vm_still_exists",
+                                  side_effect=lambda v: seen.append(v) or False):
+            scrim.teardown_red(self._args(red_vmid=1234), {})
+        self.assertEqual(seen, [1234])
 
 
 # D12 --------------------------------------------------------------------------

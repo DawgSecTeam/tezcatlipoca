@@ -629,6 +629,81 @@ class TriStateVerdict(unittest.TestCase):
         self.assertEqual(lines[0].split(":", 1)[1].strip(), "PASS  2 team domain(s)")
 
 
+class RedTeamsReachability(unittest.TestCase):
+    """--red-teams all: red must reach EVERY team, not just one box.
+
+    scale8-soak-2026-10-02: routed red01 could not reach any satellite team box
+    (15/15 cred_sprays "unreachable over SSH", 0 footholds) and half the range was
+    never attacked. `--red-identity` proved red's source address on a single box, so
+    a whole-node routing failure still reported PASS. This gate is the missing one,
+    and it is what must fail BEFORE T0 rather than at T+40."""
+
+    CTX = {"ssh_key_path": "/tmp/key"}
+
+    def _boxes(self, *teams):
+        """One box per (identifier, last-octet) pair, like nakon-config machines."""
+        return [{"name": f"box-{ident}-{last}", "ip": f"192.168.{ident}.{last}"}
+                for ident, last in teams]
+
+    def _run(self, boxes, reachable, calls=None):
+        """`reachable` = set of IPs red01 can dial; every other probe returns rc=1."""
+        def fake_run(cmd, **kw):
+            target = cmd[-1].split("/dev/tcp/")[1].split("/")[0]
+            if calls is not None:
+                calls.append(target)
+            ok = target in reachable
+            return _proc(returncode=0 if ok else 1, stdout="RED-OK\n" if ok else "")
+        with patch.object(verify.subprocess, "run", side_effect=fake_run):
+            return verify.check_red_teams(self.CTX, boxes, "10.0.0.196")
+
+    def test_every_team_reachable_passes(self):
+        boxes = self._boxes((221, 2), (225, 2))
+        res = self._run(boxes, {"192.168.221.2", "192.168.225.2"})
+        self.assertIs(res.status, verify.Status.PASS)
+        self.assertEqual(res.name, "red_teams")
+
+    def test_one_unreachable_team_fails_even_if_the_rest_are_fine(self):
+        # This is the soak's exact shape: engine-node teams fine, satellite teams dead.
+        boxes = self._boxes((221, 2), (225, 2))
+        res = self._run(boxes, {"192.168.221.2"})
+        self.assertIs(res.status, verify.Status.FAIL)
+        self.assertIn("team225", res.detail)
+
+    def test_a_team_with_no_usable_ip_is_not_counted_as_reachable(self):
+        boxes = [{"name": "a", "ip": "192.168.221.2"}, {"name": "b", "ip": ""},
+                 {"name": "c"}]
+        res = self._run(boxes, {"192.168.221.2"})
+        self.assertIs(res.status, verify.Status.PASS)
+        self.assertIn("1 teams", res.detail)  # only the usable one is proven
+
+    def test_no_ip_bearing_boxes_is_a_skip_never_a_pass(self):
+        res = self._run([{"name": "a", "ip": ""}], set())
+        self.assertIs(res.status, verify.Status.SKIP_UNAVAILABLE)
+
+    def test_probing_stops_at_the_first_box_that_answers(self):
+        # A healthy team must cost one round trip, not one per box — this gate runs
+        # before T0 with the whole deploy waiting on it.
+        boxes = self._boxes((221, 2), (221, 3), (221, 4))
+        calls = []
+        res = self._run(boxes, {"192.168.221.2"}, calls=calls)
+        self.assertIs(res.status, verify.Status.PASS)
+        self.assertEqual(calls, ["192.168.221.2"])
+
+    def test_falls_through_to_the_next_box_before_failing_a_team(self):
+        boxes = self._boxes((221, 2), (221, 3))
+        calls = []
+        res = self._run(boxes, {"192.168.221.3"}, calls=calls)
+        self.assertIs(res.status, verify.Status.PASS)
+        self.assertEqual(calls, ["192.168.221.2", "192.168.221.3"])
+
+    def test_ssh_spawn_failure_is_a_skip_not_a_fail(self):
+        # Unprovable is SKIP in this file's discipline: an operator without a red01
+        # ssh key must not read as "routing is broken".
+        with patch.object(verify.subprocess, "run", side_effect=OSError("no ssh")):
+            res = verify.check_red_teams(self.CTX, self._boxes((221, 2)), "10.0.0.196")
+        self.assertIs(res.status, verify.Status.SKIP_UNAVAILABLE)
+
+
 class ConvertedGates(unittest.TestCase):
     """The D6 conversion itself: these gates return GateResult, not bare bool/None."""
 

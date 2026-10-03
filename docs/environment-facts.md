@@ -158,6 +158,14 @@ sweep. **[live]**
 
 ## Node runtime behavior
 
+- **.150 (cyberrange) RAM is the binding constraint for satellite-heavy Windows ranges.** The
+  2026-10-02 soak measured 50–70 GB *available* against our ~48 GB committed for 4 satellite teams
+  (dc01+win01, plus the jump and slot-1 goldens) — a ~2 GB margin on a node also carrying 73
+  co-tenant VMs; KSM and ARC absorbed it, but nothing else would have. Before placing 4
+  Windows-heavy teams there again, choose deliberately: trim `dc01`/`win01` memory (check the
+  Windows pagefile/commit charge first), reduce co-tenancy, or split 6/2 instead of 4/4 and treat
+  .150 as the 4-team ceiling. Deploy time budget:
+  [multi-node.md § Phase budget](multi-node.md#phase-budget-8-teams--5-boxes-two-nodes). **[live]**
 - **The management network is ONE flat `10.0.0.0/24` L2 shared by both hosts.** A VM on .193 and a
   VM on .150 are on the same segment, so `TF_VAR_engine_mgmt_ip` (and `jump_mgmt_ip`) are contested
   **cluster-wide**, not per node — the engine's default `10.0.0.250` is what every competition gets

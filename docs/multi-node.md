@@ -24,6 +24,55 @@ and the jump's FORWARD policy is DROP with accepts only for established, engine�
 teams, teams→engine, and teams→outside-`192.168.0.0/16` (internet). Team↔team and
 mgmt→team fall off the DROP.
 
+## Routed red
+
+Under bad-auto's default `routed` mode red01 sits on its own segment
+(`deploy.red_subnet`, default `10.200.0.0/24`) with the **engine** holding that
+segment's gateway address, and the engine forwards red→teams with the source address
+preserved so blue can see and firewall the attacker. That covers engine-node teams.
+Satellite teams are reachable only through the jump, whose FORWARD policy is DROP —
+so red's source matched no rule and every attack on a satellite team died
+"unreachable over SSH" in the scale8 soak (15/15 cred_sprays, 2/2 db_attacks,
+0 footholds, half the range never attackable).
+
+Set **`TEZ_RED_SEGMENT`** (see `.env.example`) to the same CIDR as bad-auto's
+`deploy.red_subnet`. Each jump then accepts red→its local teams, accepts the replies
+back, and SNATs red to `192.168.<id>.1` so the boxes' gateway-IP-only SSH trust still
+holds. Leave it unset for single-node ranges and for `masq`-mode red, which shares the
+team gateways and needs no path of its own.
+
+The deploy refuses to start an event when this is wrong: `run-agent-scrim` runs
+`verify-competition.py --red-identity --red-teams all` in `stage_red`, before T0, and
+fails the run if red01 cannot dial a box on every team. Check it by hand any time with:
+
+```bash
+python3 verify-competition.py competitions/<id> --red-ip <red mgmt IP> \
+    --red-identity --red-teams all
+```
+
+`--red-identity` alone only proves red reaches ONE box on its own segment; it said
+PASS throughout the soak's failure.
+
+## Phase budget (8 teams × 5 boxes, two nodes)
+
+Measured on the 2026-10-02 soak (`.deploy-timings.jsonl`); the deploy is wait-bound,
+not resource-bound, and Windows dominates:
+
+| Operation | Time |
+|---|---|
+| Engine template build (apt + go build) | ~19 min |
+| Jump VM per satellite (clone + cloud-init + rules + verify) | ~10 min clean |
+| Golden build per slot (clone 5, boot, plant ~180 steps, convert) | ~32 min × slots |
+| Terraform apply #2 — 40 clones at `parallelism=1` | ~42 min |
+| Windows bootstrap (32 boxes, 4-way concurrent) | ~7 min/box, ~60 min wall |
+| Repair sweep (32 machines, strict=False, 4 jobs) | ~6 min |
+| Domain ADDS promotions (8, 4-way concurrent) | ~5–15 min each |
+| Beacons + phase-7 seeds/injects | ~32 min |
+
+**Budget ~4.5–5 h for a clean 8-team two-node deploy** (vs ~1.5 h for 2 teams on one
+node). The critical path is Windows bootstrap → domain promotion; plan the scrim
+window around it rather than around clone speed.
+
 ## `nodes.json`
 
 ```json
@@ -43,7 +92,12 @@ mgmt→team fall off the DROP.
 ```
 
 - `token_env` names the `.env` variable holding that host's API token — tokens
-  never live in this file.
+  never live in this file. **It must be unique per record** (e.g.
+  `TF_VAR_proxmox_api_token_150` / `_193`): placement applies one record's token at a
+  time *into the env var that record names*, so two records sharing a name means the
+  last one written is used for both nodes. The scale8 soak found this the hard way —
+  the satellite authenticated with the engine node's token and 401'd mid-preflight
+  (2026-10-02). `load_nodes_config` now refuses duplicates outright.
 - `node` is the PVE host name; the API route table keys on it.
 - `engine_base_vmid` is that host's engine base template (hosts differ).
 - `jump_mgmt_ip` pins the satellite jump's mgmt address; empty walks down from

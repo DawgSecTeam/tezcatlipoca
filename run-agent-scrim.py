@@ -769,11 +769,19 @@ def team_down(creds, team):
 
 def services_to_rows(services):
     """Engine /api/services payload -> [{service, up, error}] (parsed_status + final capture).
-    A team with no registered/scored services is a legitimate `null` body."""
+    A team with no registered/scored services is a legitimate `null` body.
+
+    `Last10Rounds` is ordered newest-first, and at >=8 teams a poll can land mid-round:
+    rounds[0] is then the round in flight, with an empty `Checks` array that is not a
+    verdict at all. Reading it as "no check passed" reports a phantom DOWN — which the
+    soak's monitors, fire-tests and scoreboard snapshots would all have believed. So take
+    the newest round that actually HAS checks; only when no round carries any is the
+    service genuinely unmeasured, and unmeasured stays down (fail closed) rather than
+    being quietly promoted to up."""
     rows = []
     for s in services or []:
         rounds = s.get("Last10Rounds") or []
-        checks = (rounds[0] if rounds else {}).get("Checks") or []
+        checks = next((r.get("Checks") for r in rounds if r.get("Checks")), None) or []
         up = bool(checks) and all(c.get("Result") for c in checks)
         err = next((c.get("Error", "") for c in checks if c.get("Error") and not c.get("Result")), "")
         rows.append({"service": s["ServiceName"], "up": bool(up), "error": err[:120]})
@@ -950,7 +958,8 @@ directly (that kills the shared jar's session). Use the jar; if a call answers
   source ./scrim.env
   curl -s -b "$JAR" http://$ENGINE_IP/api/services/$MY_TID | python3 -m json.tool
   curl -s -b "$JAR" http://$ENGINE_IP/api/injects | python3 -c "import json,sys;[print(i['ID'],i['Title'],'due',i['DueTime'][11:16],'subs',len(i.get('Submissions') or [])) for i in json.load(sys.stdin)]"
-  echo "## deliverable" > sub.md && ./submit-inject <injectId> sub.md     # submit BEFORE close time
+  mkdir -p submissions && echo "## deliverable" > submissions/sub-<injectId>.md \
+    && ./submit-inject <injectId> submissions/sub-<injectId>.md   # submit BEFORE close time
 
 CYCLE TASK — you have ~25 wall-clock minutes for this whole cycle; pace for it,
 update the notebook BEFORE acting (so an interrupted cycle still hands over context),
@@ -1660,6 +1669,30 @@ def red_llm_watch(args, t_plus):
                 down_since=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(st["since"])))
 
 
+def verify_red_reaches_teams(args, comp, creds):
+    """Pre-T0 gate: red01 must be able to dial a box on EVERY team.
+
+    scale8-soak-2026-10-02: routed red01 could not reach any satellite team box — all
+    15 cred_sprays and both db_attacks failed "unreachable over SSH" — and the run went
+    40 minutes before anyone noticed, because nothing checked red's path before T0 and
+    `verify --red-identity` only proved red reached one box on its own segment. Red
+    spent the event scouting a network half of which it could not touch.
+
+    Raises (stopping the run before T0) rather than warning: a range where red cannot
+    reach half the teams is not an event worth starting. Masq-mode red shares the team
+    gateways and has no path of its own to prove, so it is skipped."""
+    if (args.red_mode or "routed") == "masq":
+        log("--red-mode masq: red shares the team gateways, skipping the reachability gate")
+        return
+    log("pre-T0: red01 -> every team reachability gate")
+    run(["python3", "verify-competition.py", str(comp.relative_to(REPO)),
+         "--engine-ip", creds["ENGINE_IP"], "--admin-password", creds["ADMIN_PW"],
+         "--red-ip", args.red_ip,
+         "--red-identity", "--red-teams", "all",
+         *_verify_flags(comp)],
+        cwd=REPO, timeout=900, check=True, tail=25)
+
+
 def stage_red(args, comp, creds, run_dir):
     # Local endpoints (llama.cpp/qwen) are slow: tighter call timeout and no
     # JSON-retry double-call, or one decision can eat 8-16 min of a 90-min event.
@@ -1727,6 +1760,9 @@ def stage_red(args, comp, creds, run_dir):
             f"red-LLM-less. Run a socat relay on this host and/or the reverse tunnel "
             f"(--red-tunnel), then re-run. See docs/scrim-harness.md, 'stage_red (LLM gate)'.")
     log(f"red01 reached the LLM at {red_base} — clear to start")
+    # Second pre-T0 gate, same reasoning as the LLM one above: red that cannot dial the
+    # teams cannot attack them, and the soak burned 40 minutes finding that out.
+    verify_red_reaches_teams(args, comp, creds)
 
 
 class WorkerDiedError(RuntimeError):
@@ -1968,6 +2004,75 @@ def stage_capture(args, creds):
     capture_blue_evidence(args.run_dir, ev, args.teams)
 
 
+def _config_red_vmid():
+    """The red vmid bad-auto's destroy will actually act on: config.yaml's deploy.red_vmid.
+
+    `badauto destroy` follows config.yaml by design (cmd_destroy refuses to be a silent
+    target override), so this is the number to reconcile `--red-vmid` against."""
+    try:
+        cfg = json.loads((BAD_AUTO / "config.yaml").read_text())
+        return (cfg.get("deploy") or {}).get("red_vmid")
+    except (OSError, ValueError):
+        return None
+
+
+def _red_vm_still_exists(vmid):
+    """True when `vmid` is still present in the cluster.
+
+    None (could not ask) is treated as "not proven gone" by the caller — this is a
+    teardown assertion, so an unverifiable check must not read as success."""
+    if not vmid:
+        return None
+    try:
+        from range_ops import live_vmids
+        return int(vmid) in live_vmids()
+    except Exception as e:                                  # noqa: BLE001 - reported
+        log(f"WARNING: could not verify red01 vmid {vmid} is gone: {e}")
+        return None
+
+
+def teardown_red(args, env):
+    """Destroy red01 + its NAT, then PROVE the VM is gone.
+
+    scale8 soak 2026-10-02: red01 (998) survived `badauto destroy` and had to be
+    destroyed by hand. The stage ran with check=False and never looked at the result, so
+    a destroy that removed nothing was indistinguishable from one that worked — the
+    driver printed DONE while a red box with a live LLM key and beacon tasking stayed
+    up on the range. Both halves are needed: surface the exit code, and assert the
+    specific vmid this run deployed."""
+    log("teardown: red01 + NAT")
+    configured = _config_red_vmid()
+    if args.red_vmid and configured and int(configured) != int(args.red_vmid):
+        # Not fatal — badauto's identity guards are the authority on what is safe to
+        # delete — but it is exactly the stale-config shape that lost red01, so say it.
+        log(f"WARNING: config.yaml's deploy.red_vmid is {configured} but this run deployed "
+            f"{args.red_vmid}; badauto destroy follows config.yaml")
+    proc = run(["python3", "-m", "badauto", "destroy", "--competition", args.competition,
+                "--yes"],
+               cwd=BAD_AUTO, env=env, timeout=900, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"badauto destroy failed (rc={proc.returncode}) — red01 and its engine NAT "
+            f"rules may still be up. Do not treat this run as torn down; fix and re-run "
+            f"`python3 -m badauto destroy --competition {args.competition} --yes` in "
+            f"{BAD_AUTO}, or destroy vmid {args.red_vmid} by hand and re-run "
+            f"destroy-competition.py.")
+
+    vmid = args.red_vmid or configured
+    still = _red_vm_still_exists(vmid)
+    if still:
+        raise RuntimeError(
+            f"badauto destroy reported success but vmid {vmid} is STILL PRESENT — red01 "
+            f"survived teardown. This is the scale8 soak's leak (red01 998 left running, "
+            f"with the beacon controller and its LLM key, after the driver printed DONE). "
+            f"Destroy vmid {vmid} before starting another run on this range.")
+    if still is False:
+        log(f"teardown: red01 vmid {vmid} confirmed gone")
+    else:
+        log(f"teardown: red01 vmid {vmid} could not be verified gone — check by hand "
+            f"(badauto destroy exited 0)")
+
+
 def stage_teardown(args, creds=None):
     tunnel = getattr(args, "red_tunnel", None)
     if hasattr(tunnel, "shutdown"):
@@ -1976,13 +2081,13 @@ def stage_teardown(args, creds=None):
     if creds:
         # The collector owns the red01 pull now — one implementation shared with
         # destroy-competition.py (artifacts_ops.py's docstring: two callers must agree) —
-        # and it MUST run before `badauto destroy` below, which erases red01.
+        # and it MUST run before `badauto destroy` below, which erases red01. It never
+        # raises: an unreachable red01 is recorded as `unreachable` in collection.json.
         collect_run_artifacts(args)
         write_interaction_report(args)
     log("teardown: red01 + NAT")
     env = {**os.environ, "BAuto_LLM_API_KEY": api_key(local=True)}
-    run(["python3", "-m", "badauto", "destroy", "--competition", args.competition, "--yes"],
-        cwd=BAD_AUTO, env=env, timeout=900, check=False)
+    teardown_red(args, env)
     if args.keep_range:
         log("--keep-range: leaving the competition range up")
         return

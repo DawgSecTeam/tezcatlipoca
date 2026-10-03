@@ -45,7 +45,7 @@ from golden_ops import (_is_template, _quote_sshkeys, _template_vmid_map,
 from hardening_ops import (ensure_alpine_services, fix_dns_on_boxes,
                            fix_services_on_boxes, prep_apt_on_boxes,
                            reensure_mysql_credlist_users, setup_ubuntu_auth)
-from jump_ops import build_jump_vms
+from jump_ops import build_jump_vms, red_segment_from_env
 from nakon_ops import (build_nakon_bundle, generate_slot_golden_config,
                        run_nakon)
 from nodes_ops import record_of
@@ -292,7 +292,8 @@ def phase2_engine_template(ctx):
                            ctx.engine_mgmt_ip,
                            engine_mgmt_gw=os.environ.get("TF_VAR_engine_mgmt_gw",
                                                          DEFAULT_ENGINE_MGMT_GW),
-                           run_id=ctx.run_id)
+                           run_id=ctx.run_id,
+                           red_segment=red_segment_from_env())
         with timed(ctx.comp_dir, 2, "routing_converge"):
             verify_satellite_routing(ctx.placement, apply_ctx)
     # Record where this state's resources live, for the stale-state guard above.

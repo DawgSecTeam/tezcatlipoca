@@ -907,6 +907,81 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
     return _fail("red_identity", f"{seg_ip} never visible on {box_ip}")
 
 
+def _boxes_by_team(boxes):
+    """{team identifier: [box, ...]} from the machine list, keyed on the IP's third
+    octet — the same convention every other gate uses (`192.168.<id>.<host>`).
+
+    A box with no usable IP is skipped rather than guessed at; a half-edited machine
+    list must not silently shrink the set of teams this gate proves."""
+    out = {}
+    for b in boxes or []:
+        ip = str(b.get("ip") or "").strip()
+        parts = ip.split(".")
+        if len(parts) != 4 or not parts[2].isdigit():
+            continue
+        out.setdefault(parts[2], []).append(b)
+    return out
+
+
+def check_red_teams(ctx, boxes, red_ip, red_user="sysadmin", timeout=12):
+    """--red-teams all: every team must be reachable from red01, not just one.
+
+    scale8-soak-2026-10-02: routed red01 could not reach ANY satellite team box
+    ("unreachable over SSH" on 15/15 cred_sprays) and this went unnoticed until
+    T+40 because `--red-identity` only proves red reaches one box on its own
+    segment. Red's whole job depends on this path, so it is a gate, and it runs
+    before T0 in the scrim's stage_verify.
+
+    Probes each team's boxes in turn and stops at the first that answers, so a
+    team costs one round trip when it is healthy. Fails closed: a team whose boxes
+    all refuse the connect is a FAIL, and an unreadable team list is a SKIP (never
+    a pass), matching the discipline of every other gate in this file."""
+    print(f"\n[+RED] RED REACHABILITY (red01 {red_ip} -> one box per team)")
+    by_team = _boxes_by_team(boxes)
+    if not by_team:
+        print("  SKIP  — no team boxes with usable IPs in the machine list")
+        return _skip("red_teams", "no team boxes with usable IPs")
+
+    unreachable, reached = [], []
+    for ident in sorted(by_team, key=int):
+        candidates = sorted(by_team[ident], key=lambda b: str(b.get("name") or ""))
+        hit = None
+        for box in candidates:
+            ip = box["ip"]
+            try:
+                proc = subprocess.run(
+                    ["ssh", "-i", ctx["ssh_key_path"],
+                     "-o", "StrictHostKeyChecking=no",
+                     "-o", "UserKnownHostsFile=/dev/null",
+                     "-o", "ConnectTimeout=10",
+                     f"{red_user}@{red_ip}",
+                     f"timeout {timeout} bash -c 'exec 3<>/dev/tcp/{ip}/22' && echo RED-OK"],
+                    capture_output=True, text=True, timeout=timeout + 20)
+            except (OSError, subprocess.SubprocessError) as e:
+                print(f"  SKIP  — couldn't run the red01 probe: {e}")
+                return _skip("red_teams", "couldn't run the red01 probe")
+            if "RED-OK" in (proc.stdout or ""):
+                hit = ip
+                break
+        if hit:
+            reached.append(f"team{ident}({hit})")
+            print(f"  ok    team{ident}: red01 reached {hit}:22")
+        else:
+            unreachable.append(f"team{ident}")
+            tried = ", ".join(f"{b['ip']}:22" for b in candidates)
+            print(f"  FAIL  team{ident}: red01 could not open a TCP connection to any of "
+                  f"{tried}")
+
+    if unreachable:
+        print(f"  FAIL  — red01 cannot reach {len(unreachable)}/{len(by_team)} team(s): "
+              f"{', '.join(unreachable)}. Red cannot attack what it cannot dial: check the "
+              "satellite jumps' FORWARD/SNAT rules for the red segment (TEZ_RED_SEGMENT) "
+              "and the engine's routes to every team subnet.")
+        return _fail("red_teams", f"red01 unreachable for {', '.join(unreachable)}")
+    print(f"  PASS  red01 reached {len(reached)}/{len(by_team)} teams")
+    return _pass("red_teams", f"red01 reached all {len(reached)} teams")
+
+
 def report_healthcheck_status(ctx):
     """Report range-healthcheck.timer status (informational, not gate)."""
     try:
@@ -1801,6 +1876,12 @@ def main():
                         help="also verify red's routed identity: red01 must reach a box with "
                              "its red-segment source IP (not the team gateway). Needs red01 "
                              "deployed; seg IP falls back to ../bad-auto/config.yaml")
+    parser.add_argument("--red-teams", choices=["own", "all"], default="own",
+                        help="--red-teams all: additionally prove red01 can reach EVERY "
+                             "team over SSH (one box each), not just its own segment. This "
+                             "is the gate the scale8 soak lacked — routed red could not "
+                             "reach any satellite team and it went unseen for 40 minutes. "
+                             "Needs red01 deployed; pairs with --red-identity.")
     parser.add_argument("--red-ip", default="10.0.0.198", help="red01 mgmt IP for --red-identity")
     parser.add_argument("--red-user", default="sysadmin", help="red01 SSH user for --red-identity")
     parser.add_argument("--red-seg-ip", default=None,
@@ -1907,6 +1988,13 @@ def main():
             except CheckError as e:
                 print(f"  SKIP  — red identity check couldn't run: {e}")
                 results.append(_skip("red_identity", "check couldn't run"))
+    if args.red_teams == "all" and not _spent("red_teams"):
+        try:
+            results.append(check_red_teams(ctx, boxes, args.red_ip,
+                                           red_user=args.red_user))
+        except CheckError as e:
+            print(f"  SKIP  — red team-reachability check couldn't run: {e}")
+            results.append(_skip("red_teams", "check couldn't run"))
     print("\n  (live-ops health check status — informational)")
     if not budget.expired():
         report_healthcheck_status(ctx)

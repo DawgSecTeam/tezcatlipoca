@@ -249,7 +249,10 @@ class AgentIdentity(TmpCase):
                                lambda *a, **k: subprocess.CompletedProcess(a[0], 0, "", "")), \
                 mock.patch.object(scrim, "check_red_llm", lambda *a, **k: True), \
                 mock.patch.object(scrim, "api_key", lambda *a, **k: "k"):
-            scrim.stage_red(args, self.comp, {}, run_dir)
+            # creds must be real-shaped: routed red runs the pre-T0 reachability gate,
+            # which reads ENGINE_IP/ADMIN_PW (mocked run answers rc=0 for it here)
+            scrim.stage_red(args, self.comp, {"ENGINE_IP": "10.0.0.193",
+                                              "ADMIN_PW": "pw"}, run_dir)
         red = ao.load_manifest(test_dir)["agents"]["red"]
         self.assertTrue(red["present"])
         self.assertEqual(red["ip"], "10.0.0.199")
@@ -369,8 +372,13 @@ class TeardownCollection(TmpCase):
 
     def test_a_failing_scrim_report_exit_code_only_warns(self):
         def rc1_run(cmd, **kwargs):
-            self.calls.append(self._label(cmd))
-            return subprocess.CompletedProcess(cmd, 1, "", "no such run dir")
+            label = self._label(cmd)
+            self.calls.append(label)
+            # only the report fails: a failing badauto destroy raises (fail-loud
+            # teardown, scale8-hardening), and this gate is about the report's rc
+            if label == "scrim-report":
+                return subprocess.CompletedProcess(cmd, 1, "", "no such run dir")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
 
         self._teardown(run=rc1_run)
         self.assertIn("ingest", self.calls)
