@@ -169,20 +169,46 @@ def wait_jump_ready(node, vmid, ip, user, key_path, expected_key, timeout=900):
 
 
 def configure_jump(ip, user, key_path, team_identifiers, engine_mgmt_ip):
-    """Push forwarding + NAT rules and make them persistent (Alpine iptables init)."""
+    """Push forwarding + NAT rules and make them persistent (Alpine OpenRC or
+    Debian netfilter-persistent, detected from the guest itself)."""
     rules = jump_rules(team_identifiers, engine_mgmt_ip)
     quoted = subprocess.list2cmdline([rules]).replace("'", "'\\''")
-    # Alpine's iptables OpenRC service ignores /etc/iptables/rules.v4 (Debian's
-    # persistent path): apply the rules LIVE, then `rc-service iptables save`
-    # persists them to Alpine's save file, which the boot service loads.
-    cmds = [
-        "command -v iptables-restore >/dev/null || sudo apk add --no-cache iptables",
-        f"printf '%s' {quoted} | sudo tee /etc/iptables/rules.v4 > /dev/null",
-        "sudo iptables-restore < /etc/iptables/rules.v4",
-        "sudo rc-service iptables save",
-        "sudo rc-update add iptables default || true",
-        jump_sysctl_script(),
-    ]
+    probe = _jump_ssh(ip, user, key_path,
+                      "command -v apk >/dev/null 2>&1 && echo alpine || echo debian",
+                      timeout=30)
+    alpine = "alpine" in (probe.stdout or "")
+    if alpine:
+        # Alpine's iptables OpenRC service ignores /etc/iptables/rules.v4 (Debian's
+        # persistent path): apply the rules LIVE, then `rc-service iptables save`
+        # persists them to Alpine's save file, which the boot service loads.
+        cmds = [
+            "command -v iptables-restore >/dev/null || sudo apk add --no-cache iptables",
+            f"printf '%s' {quoted} | sudo tee /etc/iptables/rules.v4 > /dev/null",
+            "sudo iptables-restore < /etc/iptables/rules.v4",
+            "sudo rc-service iptables save",
+            "sudo rc-update add iptables default || true",
+            jump_sysctl_script(),
+        ]
+    else:
+        # Debian non-login SSH PATH lacks /usr/sbin (iptables-restore, sysctl), and
+        # a static-ipconfig0 cloud-init jump may boot with no resolver at all —
+        # push one before any apt call.
+        path = "export PATH=$PATH:/usr/sbin:/sbin; "
+        resolver = ("printf 'nameserver 10.0.0.1\\nnameserver 1.1.1.1\\n' | "
+                    "sudo tee /etc/resolv.conf > /dev/null")
+        cmds = [
+            resolver,
+            path + "command -v iptables-restore >/dev/null || "
+            "sudo DEBIAN_FRONTEND=noninteractive sudo apt-get install -y -qq iptables",
+            path + "sudo mkdir -p /etc/iptables && "
+            f"printf '%s' {quoted} | sudo tee /etc/iptables/rules.v4 > /dev/null",
+            path + "sudo iptables-restore < /etc/iptables/rules.v4",
+            path + "sudo DEBIAN_FRONTEND=noninteractive sudo apt-get install -y -qq "
+            "iptables-persistent >/dev/null 2>&1 || true",
+            path + "sudo systemctl enable --now netfilter-persistent >/dev/null 2>&1 || true; "
+            "sudo iptables-restore < /etc/iptables/rules.v4",
+            path + jump_sysctl_script(),
+        ]
     for cmd in cmds:
         r = _jump_ssh(ip, user, key_path, cmd, timeout=180)
         if r.returncode != 0:
@@ -193,8 +219,12 @@ def configure_jump(ip, user, key_path, team_identifiers, engine_mgmt_ip):
 
 
 def verify_jump(ip, user, key_path):
+    # /usr/sbin PATH fix: sysctl and iptables live there on Debian and the
+    # non-login SSH shell doesn't include it.
     r = _jump_ssh(ip, user, key_path,
-                  "sysctl -n net.ipv4.ip_forward; iptables -S FORWARD | wc -l", timeout=30)
+                  "export PATH=$PATH:/usr/sbin:/sbin; "
+                  "sysctl -n net.ipv4.ip_forward; iptables -S FORWARD | wc -l",
+                  timeout=30)
     out = (r.stdout or "").split()
     if r.returncode != 0 or not out or out[0].strip() != "1":
         raise RuntimeError(f"jump {ip} not forwarding after configuration "

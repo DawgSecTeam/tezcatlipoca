@@ -64,3 +64,4 @@ terraform/terraform.tfvars*
 competitions/*/passwords.json
 competitions/*/box_baseline.json
 competitions/*/domain_accounts.json
+nodes.json

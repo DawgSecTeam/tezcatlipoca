@@ -594,9 +594,17 @@ def stage_verify(args, comp, creds):
         return (r.stdout or "").strip()
 
     def scoreboard_down():
-        """(down, err): down=True/False; err set when the scoreboard itself is unreadable."""
+        """(down, err): down=True/False; err set when the scoreboard itself is unreadable.
+        Watches only the fired service's row: other scored services may legitimately
+        start down (planted broken services blue must restore), which would make the
+        any-service gate structurally unpassable on lineups with one (17b's
+        app01-dns/db01-sql sit down at T0 on the current template bases)."""
         try:
-            return any(not s["up"] for s in parsed_status(creds, "team1")), None
+            rows = parsed_status(creds, "team1")
+            fired = next((s for s in rows if s["service"].startswith("web01")), None)
+            if fired is None:
+                fired = rows[0]
+            return not fired["up"], None
         except Exception as e:
             return None, f"{type(e).__name__}: {e}"
 

@@ -496,6 +496,13 @@ def enumerate_targets(teams, boxes, placement=None, default_node=None):
     node-scoped calls have one uniform field."""
     team_node = placement.get("team_nodes") if placement else None
     team_slot = placement.get("team_slots") if placement else None
+
+    def _pve_node(name):
+        # placement keys (team_nodes, node record names) are nodes.json NAMES; every
+        # /nodes/<name>/... API path needs the PVE hostname inside that record.
+        rec = (placement or {}).get("nodes", {}).get(name)
+        return rec["node"] if rec else name
+
     return [
         {
             "team_key": team_key,
@@ -508,7 +515,7 @@ def enumerate_targets(teams, boxes, placement=None, default_node=None):
             "vm_name": (f"{team_key}-{box['name']}" if team_key == "team1"
                         else f"{team['identifier']}-{box['name']}"),
             "machine": f"{box['name']}-team{team['identifier']}",
-            "node": (team_node or {}).get(team_key, default_node),
+            "node": _pve_node((team_node or {}).get(team_key, default_node)),
             "slot": (team_slot or {}).get(team_key, 0 if placement else None),
         }
         for team_key, team in teams.items()
