@@ -48,6 +48,15 @@ competitions/distro-matrix-2026-09-27/terraform/
 artifacts/rawsockets-beacon/build/
 competitions/*/terraform/
 competitions/*/.postclone-swept
+# Per-run test artifacts (competitions/<id>/.automated-tests/<run-id>/): box-pulled red/blue
+# reports, raw evidence under evidence/, the synthesis REPORT.md, and the machine manifests.
+# Ignored deliberately and with NO publish path — these quote flags, credentials and inject
+# answers, and "quote a password in prose" is exactly what tests/test_secret_hygiene.py's
+# pattern net cannot catch. A tool recommendation leaves this folder by being written into
+# docs/known-issues.md or a fixes plan, never by copying the artifact into git. Enforced by
+# test_no_test_artifact_is_tracked (the tracked set is asserted, not the rule: a force-add has
+# defeated a .gitignore line in this repo before).
+competitions/*/.automated-tests/
 
 # competition terraform artifacts carry dead per-comp passwords — three
 # reference comps keep theirs tracked on purpose (force-add to refresh a

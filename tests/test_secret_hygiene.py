@@ -144,6 +144,31 @@ class NoTrackedSecrets(unittest.TestCase):
                 offenders.append(f)
         self.assertEqual(offenders, [], f"private key material tracked: {offenders}")
 
+    def test_no_test_artifact_is_tracked(self):
+        """`competitions/*/.automated-tests/` holds box-pulled evidence, and it stays untracked.
+
+        These reports quote flags, credentials and inject answers by construction (the red report
+        even ships a separate 0600 credlist table), and a `KEY=<16+ chars>` line in one of them
+        would be caught by the pattern net above while a password quoted in prose would not —
+        the net is a shape matcher, not a safety guarantee. The decision is therefore "ignored,
+        with no publish path": a recommendation leaves this folder by being written into
+        docs/known-issues.md or a fixes plan, never by copying the artifact into git.
+
+        A .gitignore line alone is not enough here: competitions/pfsense-ad/terraform/terraform.tfstate
+        is tracked today despite `competitions/*/terraform/` being ignored, so this asserts the
+        tracked set directly rather than trusting the rule."""
+        offenders = [f for f in _tracked_files() if "/.automated-tests/" in f]
+        self.assertEqual(
+            offenders, [],
+            "test artifact(s) tracked — these are box-pulled reports and raw evidence:\n  "
+            + "\n  ".join(offenders),
+        )
+        r = subprocess.run(
+            ["git", "check-ignore", "-q", "competitions/demo/.automated-tests/run-1a2b3c4d/REPORT.md"],
+            cwd=_REPO, capture_output=True,
+        )
+        self.assertEqual(r.returncode, 0, "competitions/*/.automated-tests/ is not gitignored")
+
 
 class EnvVarStandard(unittest.TestCase):
     def setUp(self):

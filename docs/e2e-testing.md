@@ -184,11 +184,13 @@ aborts): **environmental saturation and unvetted pin density, not pipeline code.
   flag is `--timeout`. The offline suite (`python3 -m pytest tests/`) covers deploy-path helpers
   but is **not** a pipeline test — this gate against a deployed range *is* the integration test.
   See [tests.md](tests.md).
-- **Logs — nothing captures them by default.** `run-agent-scrim.py --run-dir` writes
-  `<run_dir>/deploy.log`; `run-deploy.sh` tees to repo-root `deploy.log`; a bare
-  `create-competition.py` run leaves only the console scrollback. Two post-mortems (17b/17c)
+- **Logs — nothing captures them by default.** `run-agent-scrim.py` writes `<run_dir>/deploy.log`
+  **only when the deploy fails** (the write is guarded on `returncode != 0` in `stage_deploy`), so a
+  *successful* harness run leaves no deploy log; `run-deploy.sh` tees to repo-root `deploy.log`; a
+  bare `create-competition.py` run leaves only the console scrollback. Two post-mortems (17b/17c)
   were possible only because a run-dir happened to capture output. Always launch with capture
-  (§7).
+  (§7) — the per-run artifact folder keeps phase markers and the timing sidecar, not stdout
+  ([automated-test-artifacts.md](automated-test-artifacts.md)).
 
 ## 4. Per-phase failure cost map
 

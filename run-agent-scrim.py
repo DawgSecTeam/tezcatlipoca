@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
+import artifacts_ops
 from config_ops import write_state, write_text_atomic
 from utils import load_users_config, valid_comp_name
 
@@ -838,7 +839,9 @@ def stage_blues(args, comp, run_dir, creds, t0):
             p.write_text(body)
             p.chmod(0o755)
         shutil_copy(comp / "packet.md", wd / "packet.md")
-        (wd / "LOG.md").write_text(f"# Blue team {n} — defense log\n")
+        (wd / "LOG.md").write_text(
+            f"# Blue team {n} — defense log\n"
+            "# Your after-action report goes in REPORT.md (an operator reads it afterwards)\n")
         if not (wd / "NOTEBOOK.md").exists():
             (wd / "NOTEBOOK.md").write_text(NOTEBOOK_TEMPLATE.format(n=n))
         (wd / "opencode.jsonc").write_text(
@@ -851,6 +854,9 @@ def stage_blues(args, comp, run_dir, creds, t0):
             .replace("{OUT}", "4000" if local_blue else "16000")
             .replace("{EFFORT}", "" if local_blue else effort_json(args.reasoning_effort)))
         log(f"blue workdir team{n} ready ({blue_model} @ {base_url})")
+    # Blue's identity and where its deliverables live, recorded while the workdirs are being
+    # made: teardown must not have to guess workdir names to collect them (INV5).
+    record_blue_agents(args, run_dir)
 
 
 def shutil_copy(src, dst):
@@ -962,6 +968,11 @@ hunts) is fine inside your budget — two changes is the cap, not two commands:
 3. Else: ONE hunt item from the notebook checklist (rogue UID-0 users, cron, systemd units, sudoers, firewall rules, listeners, Windows services/tasks/run-keys). Fix what is safe; never take a scored service down.
 4. Wrap up by minute 20: finish the current step, re-check the scoreboard, leave the
    SNAPSHOT line + LOG.md current so the next cycle starts warm.
+AFTER-ACTION REPORT: when you conclude — at the end of your last cycle, or as soon as you
+   know you cannot continue — write REPORT.md in your workdir. An operator reads it after
+   the event to grade the defence, so make it self-contained: what you found, what you
+   restored or fixed and how long each took, which injects you submitted, what you could
+   not do, and what you would change about this competition.
 ROE: never attack the engine ($ENGINE_IP) or the scoring path; never lock out, rename, or
 rotate {creds['BOX_USER']}/Administrator — those are the credentials your own helpers use.
 Keep replies terse."""
@@ -1378,9 +1389,15 @@ def monitor_loop(args, creds, t0, stop):
         stop.wait(MONITOR_INTERVAL)
 
 
-def _red_ssh_ctx(args):
-    """(target, common ssh/scp args, engine jump ProxyCommand or None) for red01."""
-    red_ip = "10.0.0.198"
+def _red_ssh_spec(args):
+    """`(ssh spec, common scp/ssh args)` for red01 — the one place its address is resolved.
+
+    Two callers, one construction: `_red_ssh_ctx` (the harness's own scp/ssh) and
+    `record_red_agent` (the `ssh` record in test.json that the teardown-time collector
+    dials). They must not be able to disagree — a collector pointing at a different address
+    fails silently as `unreachable`, and the manifest is the only per-run source of truth
+    because bad-auto's config.yaml is a rewritten singleton."""
+    red_ip = getattr(args, "red_ip", None) or "10.0.0.198"
     try:
         red_ip = json.loads((BAD_AUTO / "config.yaml").read_text())["deploy"]["red_ip"]
     except Exception:
@@ -1397,7 +1414,13 @@ def _red_ssh_ctx(args):
               "-o", "ConnectTimeout=15", "-i", key]
     jump = (f"ProxyCommand=ssh -i {key} -o StrictHostKeyChecking=no "
             f"-o UserKnownHostsFile=/dev/null -W %h:%p {user}@{engine}") if engine else None
-    return f"{user}@{red_ip}", common, jump
+    return {"user": user, "host": red_ip, "key": key, "jump": jump}, common
+
+
+def _red_ssh_ctx(args):
+    """(target, common ssh/scp args, engine jump ProxyCommand or None) for red01."""
+    spec, common = _red_ssh_spec(args)
+    return f"{spec['user']}@{spec['host']}", common, spec["jump"]
 
 
 def pull_red_snapshot(args, tag=None):
@@ -1691,6 +1714,11 @@ def stage_red(args, comp, creds, run_dir):
     log(f"deploying red01 at {args.red_ip} (storage {args.red_storage}, mode {red_mode})")
     run(["python3", "-m", "badauto", "deploy", "--competition", str(comp.resolve()), "--start"],
         cwd=BAD_AUTO, env=env, timeout=1800)
+    # Record red01's identity now, while it is known: bad-auto's config.yaml is a rewritten
+    # singleton, so a later reader of it can name ANOTHER run's red01 — the manifest is the
+    # only per-run source of truth the collector may dial (INV5). Recorded before the LLM
+    # gate below so a run that dies there still lets teardown collect from red01.
+    record_red_agent(args)
 
     red_base = cfg["llm"]["base_url"]
     if not check_red_llm(args, red_base):
@@ -1796,7 +1824,7 @@ def stage_run(args, creds, t0):
 
 
 def run_event_and_finish(args, creds, t0):
-    """stage_run -> capture -> teardown, capturing even when a worker died.
+    """stage_run -> capture -> teardown -> finalize, capturing even when a worker died.
 
     Teardown MUST still run (the range is expensive and a live cycle can be destroyed
     under it otherwise), but the harness must not exit clean afterwards: the failure is
@@ -1809,7 +1837,65 @@ def run_event_and_finish(args, creds, t0):
         failure = str(e)
     stage_capture(args, creds)
     stage_teardown(args, creds)
+    # Last, and after teardown, so it also runs when --keep-range skipped the range
+    # destroy: stubs + REPORT.md + index.json make the folder a standard test artifact
+    # either way. Wrapped, because reporting must never turn a finished run into a crash
+    # (the destroy has already happened by now).
+    test_dir = getattr(args, "test_dir", None)
+    if not test_dir:
+        log("WARNING: no test folder on this run — test artifacts not finalized")
+    else:
+        try:
+            result = artifacts_ops.finalize(test_dir)
+            for warning in (result or {}).get("warnings") or []:
+                log(f"WARNING: {warning}")
+            log(f"test artifacts finalized: {test_dir}")
+        except Exception as e:
+            log(f"WARNING: could not finalize test artifacts in {test_dir}: {e}")
     return failure
+
+
+def capture_engine_evidence(ev):
+    """Copy the engine-side capture into `ev/engine/` (created here); return what was written.
+
+    A copy, never a move: scrim-report.py reads `evidence/final-scoreboard.json` at that
+    exact path (scrim-report.py:193-199), so relocating the engine dump would silently zero
+    the report's scoreboard section."""
+    ev = Path(ev)
+    engine_dir = ev / "engine"
+    engine_dir.mkdir(parents=True, exist_ok=True)
+    srcs = [p for p in (ev / "final-scoreboard.json", ev / "scoreboard-state.jsonl")
+            if p.is_file()]
+    srcs += [p for p in sorted(ev.glob("final-services-*.json")) if p.is_file()]
+    return [secure_evidence(shutil_copy(src, engine_dir / src.name)) for src in srcs]
+
+
+def capture_blue_evidence(run_dir, ev, teams):
+    """Seal each blue workdir's deliverables under `ev/blue-team<n>/`; return what was written.
+
+    The submission globs are `sub*.md`/`sub*.txt`, NOT `sub-*.md`: the cycle prompt tells
+    blue to write `sub.md`, so the hyphenated pattern matched nothing and observed runs
+    counted 0 inject submissions with an empty `submissions/` (plan §3.2). `REPORT.md` is
+    blue's after-action report and is copied for the same reason it is asked for."""
+    run_dir, ev = Path(run_dir), Path(ev)
+    written = []
+    for n in range(1, teams + 1):
+        src = run_dir / f"blue-team{n}"
+        dst = ev / f"blue-team{n}"
+        if not src.exists():
+            continue
+        dst.mkdir(parents=True, exist_ok=True)
+        for name in ("LOG.md", "NOTEBOOK.md", "feed.log", "REPORT.md"):
+            if (src / name).exists():
+                written.append(secure_evidence(shutil_copy(src / name, dst / name)))
+        for pattern in ("sub*.md", "sub*.txt"):
+            for f in src.glob(pattern):
+                written.append(secure_evidence(shutil_copy(f, dst / f.name)))
+        for sub in ("submissions", "cycles"):
+            if (src / sub).is_dir():
+                subprocess.run(["cp", "-r", str(src / sub), str(dst / sub)], check=False)
+    log("blue evidence collected")
+    return written
 
 
 def stage_capture(args, creds):
@@ -1875,61 +1961,11 @@ def stage_capture(args, creds):
     sb = Path(args.run_dir) / "scoreboard-state.jsonl"
     if sb.exists():
         secure_evidence(shutil_copy(sb, ev / "scoreboard-state.jsonl"))
-    for n in range(1, args.teams + 1):
-        src = Path(args.run_dir) / f"blue-team{n}"
-        dst = ev / f"blue-team{n}"
-        if not src.exists():
-            continue
-        dst.mkdir(parents=True, exist_ok=True)
-        for name in ("LOG.md", "NOTEBOOK.md", "feed.log"):
-            if (src / name).exists():
-                secure_evidence(shutil_copy(src / name, dst / name))
-        for pattern in ("sub-*.md", "sub-*.txt"):
-            for f in src.glob(pattern):
-                secure_evidence(shutil_copy(f, dst / f.name))
-        for sub in ("submissions", "cycles"):
-            if (src / sub).is_dir():
-                subprocess.run(["cp", "-r", str(src / sub), str(dst / sub)], check=False)
-    log("blue evidence collected")
-
-
-def pull_red_evidence(args):
-    """Fetch the red agent's on-VM state (events.jsonl) before badauto destroy erases it."""
-    ev = Path(args.run_dir) / "evidence" / "red"
-    ev.mkdir(parents=True, exist_ok=True)
-    target, common, jump = _red_ssh_ctx(args)
-    log(f"pulling red evidence from {target} before destroy (direct, then via engine jump host)")
-
-    for remote, local in (("/var/lib/bad-auto/events.jsonl", "events.jsonl"),
-                          ("/var/lib/bad-auto/world.json", "world.json")):
-        attempts = [[], (["-o", jump] if jump else [])]
-        ok = False
-        for extra in attempts:
-            r = run_tree(["scp"] + common + extra + [f"{target}:{remote}", str(ev / local)],
-                         timeout=120, check=False)
-            if r.returncode == 0 and (ev / local).exists() and (ev / local).stat().st_size > 0:
-                secure_evidence(ev / local)
-                ok = True
-                break
-            (ev / local).unlink(missing_ok=True)
-        if not ok:
-            log(f"WARNING: could not pull {remote}")
-
-    journal_cmds = [["sudo -n journalctl -u bad-auto --no-pager 2>/dev/null || true", []]]
-    if jump:
-        journal_cmds.append(["sudo -n journalctl -u bad-auto --no-pager 2>/dev/null || true",
-                             ["-o", jump]])
-    journal = ""
-    for cmd, extra in journal_cmds:
-        r = run_tree(["ssh"] + common + extra + [target, cmd], timeout=90, check=False)
-        if (r.stdout or "").strip():
-            journal = r.stdout
-            break
-    if journal:
-        write_evidence(ev / "bad-auto-journal.log", journal)
-    got = sorted(p.name for p in ev.iterdir() if p.stat().st_size > 0)
-    log(f"red evidence captured: {got}")
-    return ev
+    # The engine capture is also copied into its own subtree (INV8) — a copy, because
+    # scrim-report.py reads evidence/final-scoreboard.json where the harness wrote it.
+    log(f"engine capture copied to {ev / 'engine'} "
+        f"({len(capture_engine_evidence(ev))} file(s))")
+    capture_blue_evidence(args.run_dir, ev, args.teams)
 
 
 def stage_teardown(args, creds=None):
@@ -1938,10 +1974,11 @@ def stage_teardown(args, creds=None):
         tunnel.shutdown()
         log("teardown: red LLM tunnel stopped")
     if creds:
-        try:
-            pull_red_evidence(args)
-        except Exception as e:
-            log(f"WARNING: red evidence pull failed: {e}")
+        # The collector owns the red01 pull now — one implementation shared with
+        # destroy-competition.py (artifacts_ops.py's docstring: two callers must agree) —
+        # and it MUST run before `badauto destroy` below, which erases red01.
+        collect_run_artifacts(args)
+        write_interaction_report(args)
     log("teardown: red01 + NAT")
     env = {**os.environ, "BAuto_LLM_API_KEY": api_key(local=True)}
     run(["python3", "-m", "badauto", "destroy", "--competition", args.competition, "--yes"],
@@ -1953,6 +1990,162 @@ def stage_teardown(args, creds=None):
     run(["python3", "destroy-competition.py", "--competition", args.competition, "--yes"],
         cwd=REPO, timeout=3600)
 
+
+# ── the run's test folder (artifacts_ops.py owns the format and the vocabulary) ──────────
+
+BOXES_JSON = "boxes.json"
+
+
+def _box_names(comp):
+    """Box names from the comp's boxes.json; [] when it is absent or unreadable.
+
+    Recorded in test.json so a teardown-time reader knows what the run covered without
+    re-reading a comp dir a later deploy may have rewritten."""
+    try:
+        boxes = json.loads((Path(comp) / BOXES_JSON).read_text())
+    except (OSError, ValueError):
+        return []
+    return [b.get("name") for b in boxes if isinstance(b, dict) and b.get("name")]
+
+
+def resolve_run_dir(comp, args):
+    """Open this run's test folder and return `(run_dir, test_dir)`.
+
+    The default run dir IS the test folder — `competitions/<comp>/.automated-tests/<key>`
+    with `key = artifacts_ops.test_key(comp)` (the run id when the deploy has one) — so the
+    harness writes run.json/T0.txt/blue-team*/evidence straight into the folder the
+    collector and the reports live in, instead of a post-hoc move out of a comp-keyed
+    `scrim-runs/<comp>` dir. `--run-dir <path>` remains the debugging escape hatch: the run
+    writes there and the test folder records `paths.run_dir` so the collector still finds
+    the evidence.
+
+    Resolution order, which is also the resume rule: an explicit `--run-dir` wins; else a
+    `paths.run_dir` already recorded in test.json is authoritative; else the test folder.
+    Both main() branches call this, so a fresh run and its `--resume-event` land in one
+    folder — a resume never mints a second key or forks the evidence.
+    """
+    test_path, manifest = artifacts_ops.ensure_test(
+        comp, kind="scrim", script="run-agent-scrim.py",
+        teams=getattr(args, "teams", None), boxes=_box_names(comp),
+        node=os.environ.get("TF_VAR_proxmox_node"),
+        endpoint=os.environ.get("TF_VAR_proxmox_endpoint"))
+    args.test_dir = str(test_path)
+    explicit = getattr(args, "run_dir", None)
+    recorded = (manifest.get("paths") or {}).get("run_dir")
+    run_dir = Path(explicit or recorded or test_path)
+    artifacts_ops.record_paths(test_path, run_dir=str(run_dir))
+    return run_dir, test_path
+
+
+def record_agent(args, side, **fields):
+    """Merge one agent side's identity into test.json's `agents` map; return that side.
+
+    Merged, never replaced: red is recorded in stage_red and blue in stage_blues, and a
+    resume re-recording one side must not erase what the other side, or an earlier call,
+    already knew (INV9)."""
+    test_dir = getattr(args, "test_dir", None)
+    if not test_dir:
+        return {}
+    manifest = artifacts_ops.load_manifest(test_dir)
+    agents = manifest.get("agents") or {}
+    agents[side] = {**(agents.get(side) or {}), **fields}
+    artifacts_ops.update_manifest(test_dir, agents=agents)
+    return agents[side]
+
+
+def record_red_agent(args):
+    """Write red01's identity, address and ssh route into test.json (INV5).
+
+    Recorded in stage_red, where the values are first known, because nothing later can
+    recover them honestly: bad-auto's config.yaml is a rewritten singleton, so a
+    teardown-time reader of it can point at ANOTHER run's red01. `ssh` comes from the same
+    helper `_red_ssh_ctx` builds its scp/ssh arguments from, so the harness and the
+    collector cannot dial different addresses."""
+    spec, _common = _red_ssh_spec(args)
+    node = os.environ.get("TF_VAR_proxmox_node")
+    return record_agent(args, "red", present=True, ip=spec["host"],
+                        vmid=getattr(args, "red_vmid", None) or None, ssh=spec,
+                        **({"node": node} if node else {}))
+
+
+def record_blue_agents(args, run_dir):
+    """Blue's identity and the paths its deliverables live at (INV5).
+
+    Blue never runs on a guest box — its workdirs are operator-side — so the collector
+    needs the paths, not just "present": a teardown that has to guess workdir names
+    collects nothing. `engine_evidence` is recorded here too; stage_capture creates it."""
+    record_agent(args, "blue", present=True, teams=getattr(args, "teams", None))
+    test_dir = getattr(args, "test_dir", None)
+    if not test_dir:
+        return
+    artifacts_ops.record_paths(
+        test_dir,
+        blue_workdirs=[str(Path(run_dir) / f"blue-team{n}")
+                       for n in range(1, (getattr(args, "teams", 0) or 0) + 1)],
+        engine_evidence=str(Path(run_dir) / "evidence" / "engine"))
+
+
+def collect_run_artifacts(args):
+    """Pull red01 + seal every local artifact into the test folder; never raises.
+
+    This is the harness's half of the two-caller contract: destroy-competition.py runs the
+    same collector for a run whose harness died, so the pull logic exists once
+    (artifacts_ops.collect). It must run before `badauto destroy`, which erases red01; an
+    unreachable box is recorded as `unreachable`, not raised, so a dead guest can never
+    hold the destroy hostage."""
+    test_dir = getattr(args, "test_dir", None)
+    if not test_dir:
+        log("WARNING: no test folder on this run — artifact collection skipped")
+        return None
+    comp = REPO / "competitions" / args.competition
+    try:
+        collection = artifacts_ops.collect(
+            test_dir,
+            artifacts_ops.plan_targets(artifacts_ops.load_manifest(test_dir), comp_dir=comp))
+    except Exception as e:
+        log(f"WARNING: artifact collection failed: {e}")
+        return None
+    summary = (collection or {}).get("summary") or {}
+    log("artifacts collected: " + ", ".join(f"{k}={v}" for k, v in sorted(summary.items())))
+    return collection
+
+
+def write_interaction_report(args):
+    """Best-effort `scrim-report.py <run_dir>` + fold its verdict into test.json.
+
+    Generating INTERACTION.md used to be a manual operator step, which is why the machine
+    verdict the artifact folder wants was usually missing. Both halves warn and continue:
+    reporting must never block the destroy."""
+    # main() sets run_dir; the test-folder fallback keeps the default case (run dir == test
+    # folder) working for any caller that only knows args.test_dir.
+    run_dir = Path(getattr(args, "run_dir", None) or getattr(args, "test_dir", None) or ".")
+    try:
+        r = run(["python3", "scrim-report.py", str(run_dir)], cwd=REPO, timeout=300,
+                check=False)
+        if r.returncode != 0:
+            log(f"WARNING: scrim-report.py exited {r.returncode} — "
+                f"{run_dir / 'INTERACTION.md'} may be stale")
+    except Exception as e:
+        log(f"WARNING: scrim-report.py failed: {e}")
+    test_dir = getattr(args, "test_dir", None)
+    if not test_dir:
+        return {}
+    # ingest_verdict reads the test folder's OWN copy (evidence/harness/INTERACTION.md),
+    # which the collection above cannot have taken: it ran before the report existed. Seal
+    # the report where the collector would have put it so the verdict is readable (a later
+    # teardown-time collection records it in collection.json with its hash).
+    interaction = run_dir / "INTERACTION.md"
+    if interaction.exists():
+        try:
+            artifacts_ops.seal_local_file(
+                interaction, Path(test_dir) / "evidence" / "harness" / "INTERACTION.md")
+        except OSError as e:
+            log(f"WARNING: could not file INTERACTION.md into the test folder: {e}")
+    try:
+        return artifacts_ops.ingest_verdict(test_dir)
+    except Exception as e:
+        log(f"WARNING: could not ingest the scrim verdict: {e}")
+        return {}
 
 
 RUN_MANIFEST = "run.json"
@@ -1974,7 +2167,14 @@ def load_manifest(run_dir):
 
 
 def record_phase(run_dir, args, phase, t0=None):
-    """Write/refresh the run manifest; doubles as the pre-T0 marker for --resume-event."""
+    """Write/refresh the run manifest; doubles as the pre-T0 marker for --resume-event.
+
+    Also mirrors the marker into this run's test folder (test.json) when it has one, so the
+    artifact reader can see how far a run got without cross-referencing run.json. run.json
+    stays the harness's own file (`save_manifest`/`load_manifest` above), written exactly as
+    before; `getattr` because callers without a test folder (unit tests, legacy run dirs)
+    must keep working.
+    """
     save_manifest(run_dir, {
         "competition": getattr(args, "competition", None),
         "teams": getattr(args, "teams", None),
@@ -1985,6 +2185,9 @@ def record_phase(run_dir, args, phase, t0=None):
         "phase": phase,
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     })
+    test_dir = getattr(args, "test_dir", None)
+    if test_dir:
+        artifacts_ops.record_phase(test_dir, phase, t0=t0)
 
 
 def resume_intent(args, manifest):
@@ -2099,7 +2302,15 @@ def main():
 
     comp = REPO / "competitions" / args.competition
     if args.resume_event:
-        run_dir = Path(args.run_dir or f"/home/hna/dev/dawgsec/scrim-runs/{args.competition}")
+        if not comp.is_dir():
+            # resolve_run_dir opens/creates the test folder under comp, so a typo must not
+            # mint a comp dir for a run that cannot exist.
+            sys.exit(f"no such competition: {comp}")
+        # The same folder the first run used: the test folder is keyed on this comp's run
+        # id, and a paths.run_dir already recorded in test.json is authoritative, so a
+        # resume can never mint a second key or fork the evidence (INV1).
+        run_dir, test_dir = resolve_run_dir(comp, args)
+        log(f"test folder: {test_dir}")
         manifest = load_manifest(run_dir)
         resume_intent(args, manifest)
         t0 = None
@@ -2143,10 +2354,11 @@ def main():
     if not (comp / "Compfile").exists():
         sys.exit(f"no such competition: {comp}")
 
-    run_dir = Path(args.run_dir or f"/home/hna/dev/dawgsec/scrim-runs/{args.competition}")
+    run_dir, test_dir = resolve_run_dir(comp, args)
     run_dir.mkdir(parents=True, exist_ok=True)
     args.run_dir = str(run_dir)
     log(f"run dir: {run_dir}")
+    log(f"test folder: {test_dir}")
 
     if not args.skip_deploy:
         stage_deploy(args, comp)
@@ -2174,7 +2386,10 @@ def main():
     reanchor_injects(args, comp, creds)
 
     failure = run_event_and_finish(args, creds, t0)
-    log("DONE — reports: run-agent-scrim output above + run_dir evidence; write FINDINGS from blue logs and bad-auto events")
+    test_dir = getattr(args, "test_dir", None) or run_dir
+    log(f"DONE — reports + evidence in {test_dir}; REPORT.md there needs its judgement "
+        f"sections filled, then: python3 test-artifacts.py verify {args.competition} "
+        f"{Path(test_dir).name} --seal")
     if failure:
         sys.exit(f"FAILED: {failure}")
 

@@ -45,13 +45,14 @@ infrastructure, review it, then re-run the same command without `--plan-only` (p
 
 ### Resuming (`--from-phase`)
 
-`deploy()` walks the seven **v2** phases (`deploy_phases.PHASES`) — 1 Cleanup · 2 engine-template + apply #1 · 3 prepare
-engine from template · 4 golden set + apply #2 · 5 repair-stage sweep · 6 domains → final pass →
-beacons + `tz-ready` · 7 seed. [architecture.md](architecture.md#seven-phase-deploy) is the
+`deploy()` walks the eight **v3** phases (`deploy_phases.PHASES`) — 1 Cleanup · 2 engine-template + apply #1 · 3 prepare
+engine from template · 4 golden set + apply #2 · 5 firewall bootstrap (in-path firewalls only) ·
+6 repair-stage sweep · 7 domains → final pass → beacons + `tz-ready` · 8 seed.
+[architecture.md](architecture.md#eight-phase-deploy) is the
 canonical list, plus the [v1 → v2 table](architecture.md#v1-to-v2-migration-what-moved) if you are
 reading an older run's notes. A failed deploy prints which phase it died in; `--from-phase N`
 re-enters there instead of tearing everything down. **Cloning is phase 4** (linked clones in
-apply #2) — phase 6 has no clone step and does not read the nakon bundle by hash. Phase 7's three
+apply #2) — phases 6-8 have no clone step and do not read the nakon bundle by hash. Phase 8's three
 sub-steps (seed teams, unpause the engine, create injects) are each gated on their own flag in
 `competitions/<id>/.deploy_state.json` (`seeded`/`engine_unpaused`/`injects_created`) — a
 `--from-phase 7` resume after a partial phase-7 failure skips whatever already succeeded rather
@@ -303,6 +304,8 @@ state, not a repair. Every mode except `reconfigure` says so and requires confir
 python3 destroy-competition.py                                # teams-only (M4 default)
 python3 destroy-competition.py --competition <id> --full      # also destroy templates
 python3 destroy-competition.py --competition <id> --full --end-of-competition  # frozen comp
+python3 destroy-competition.py --competition <id> --skip-artifacts  # do not collect reports
+python3 destroy-competition.py --competition <id> --artifacts-timeout 20  # per-file pull budget
 ```
 
 Destroys all of the competition's team boxes, then runs `terraform destroy`. Pipeline-v2 ranges keep
@@ -310,6 +313,15 @@ every team in Terraform state, so `terraform destroy` alone removes them; `clone
 **legacy** path taken only if the file exists (pre-golden ranges whose team2+ boxes were API clones).
 Requires that competition's `teams.json` + `boxes.json` (both written by `deploy()`), and restores
 the per-competition `TF_VAR_*` values first so Terraform address-matches the original apply.
+
+**Before the first destructive call** it collects the run's test artifacts into
+`competitions/<id>/.automated-tests/<run-id>/` — the red report from red01, blue's logs and report,
+the engine capture, the harness evidence, then `REPORT.md`. This is the last moment it can: the
+next calls purge clones and hard-stop every team box. It is also the safety net for a run whose
+harness died, since teardown is the step that always happens. Collection **warns and proceeds**
+(never blocks), so `--skip-artifacts` exists only to save time, and `--artifacts-timeout` bounds a
+dead source at 45s per file by default. See
+[automated-test-artifacts.md](automated-test-artifacts.md).
 
 M4 teardown modes: the default is **teams-only** — team clones, the engine VM, and the
 bridges die; the competition's golden templates and engine template are KEPT and the next

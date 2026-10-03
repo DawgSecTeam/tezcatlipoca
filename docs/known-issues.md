@@ -9,6 +9,32 @@ ground truth is [environment-facts.md](environment-facts.md); credential exposur
 
 ## Open — ours
 
+### A `terraform apply` on a LIVE firewall range rewrites the pre-cutover engine netplan
+
+**Status: OPEN — accepted caveat.** `null_resource.team_nics` writes `/etc/netplan/60-team-ifaces.yaml`
+with `192.168.<id>.1/24` on the team NICs (the pre-cutover shape that lets the pfSense consoles
+fetch their config). Deploy phase 5's cutover rewrites that file (gateway address moved to the
+firewalls, routes via `172.31.<id>.2`). The resource is trigger-gated so nothing rewrites it during
+a normal deploy, but re-running `terraform apply` on a live firewall range whose triggers changed
+re-adds `192.168.<id>.1` under the firewalls' feet — duplicate gateway addresses, ARP flux, and
+half the team's traffic bypassing the firewall. If you must re-apply, re-run
+`create-competition.py --competition <id> --from-phase 5 --yes` afterwards (the cutover is
+idempotent). Owning the cutover inside terraform would need the firewall config state round-tripped
+into tfvars — deferred until a deploy actually needs it.
+
+### pfSense console bootstrap is blind typing
+
+**Status: OPEN — accepted risk, mitigated.** The QEMU monitor API offers `sendkey` but no screen
+reading (PVE's `screendump` writes a host file the API cannot read back; `termproxy` is serial-only
+and the pfSense template's console is VGA). `firewall_ops` therefore drives the menu blind:
+`CONSOLE_SETTLE_S=90` keeps keystrokes out of the FreeBSD loader, the drive sequence is idempotent,
+and success is judged functionally — the fetched config enables SSH, so the WAN probe IS the signal.
+A team that never comes up gets a console PNG (`logs/fw-console-<comp>-<team>.png`) plus a re-drive
+hint; the fallback for a wedged console is the manual runbook
+([pfsense-inpath-2026-09-28.md](pfsense-inpath-2026-09-28.md)). A provisioning-friendly pfSense
+template (serial console + SSH on) would replace the whole dance — template work, not code work.
+
+
 ### Planted Linux boxes deny all SSH at the PAM account stage after a restart
 
 **Status: OPEN — root cause unsolved.** Phase-5-planted team1 Linux boxes stop accepting SSH entirely
@@ -70,6 +96,26 @@ the verified SSH route: [environment-facts.md](environment-facts.md#templates).
 endpoint's advertised context must leave room for it or opencode self-compacts fatally. `60000` is the
 verified local value (cloud blue uses `120000`); do not set `reasoning_effort` for a local endpoint.
 **Next action:** a launch-time assertion against the endpoint's real `n_ctx` instead of prose.
+
+### Teardown's pre-stop never matches team 1's boxes
+
+**Status: OPEN — latent; the name pattern is wrong for exactly one team.** `pre_stop_windows_boxes`
+exists to hard-stop every clone before `terraform destroy`, because a Windows DC whose guest agent is
+down never complies with the provider's graceful shutdown and holds the `qm` lock, hanging the whole
+destroy (`destroy-competition.py:126-141`). It matches VM names as `<identifier>-<box>`
+(`destroy-competition.py:162`), but terraform deliberately names team 1's VMs `team1-<box>` and only
+other teams' `<identifier>-<box>` (`terraform/main.tf:251-261`, comment: "Keys keep the historical
+naming (team1-<box>, <identifier>-<box>)"); `range_ops.enumerate_targets` implements the same
+special-case (`range_ops.py:668-669`), and every `teams.json` in the tree is keyed `team1…`
+(`competitions/*/teams.json`). So team 1's boxes are never pre-stopped and can still hit the
+graceful-shutdown hang the function was written to prevent; other teams pre-stop correctly. Not a
+destroy failure — terraform still removes team 1 from state, just potentially slowly.
+
+**Next action:** build the name from `range_ops.enumerate_targets` (`vm_name`) or apply the same
+`team_key == "team1"` special case instead of re-deriving the pattern. Found 2026-10-03 while
+surveying teardown for
+[reports/automated-test-artifacts-plan-2026-10-03.md](reports/automated-test-artifacts-plan-2026-10-03.md)
+(which must not copy this pattern when it enumerates boxes to collect artifacts from).
 
 ## Pending upstream — owned by the catalog / nakon
 

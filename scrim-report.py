@@ -369,7 +369,11 @@ def blue_metrics(run_dir):
         for line in log_text.splitlines():
             if erad_re.search(line) and erad_verbs.search(line):
                 m["eradication"] += 1
-        injects = set(wd.glob("sub-*.md")) | set(wd.glob("sub-*.txt"))
+        # `sub*.md`, not `sub-*.md`: the cycle prompt tells blue to write `sub.md`, so the
+        # hyphenated pattern matched nothing and observed runs counted 0 injects however much
+        # blue submitted (the harness's blue-evidence copy had the same bug). The 17c self-test
+        # pin is unaffected — that run has no sub* file at all.
+        injects = set(wd.glob("sub*.md")) | set(wd.glob("sub*.txt"))
         subs = wd / "submissions"
         if subs.is_dir():
             injects |= {p for p in subs.iterdir() if p.is_file()}

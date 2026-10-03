@@ -22,8 +22,13 @@ Deploys, verifies, and runs an agent-manned scrim end to end: author
 (optional) → deploy → verify + fire test → blue agents (opencode, fresh
 session per cycle) → red agent (bad-auto, sibling checkout at `../bad-auto`)
 → scheduled feeds and monitoring until the deadline → evidence capture →
-teardown (red01 + range, unless `--keep-range`). Run dirs default to
-`/home/hna/dev/dawgsec/scrim-runs/<competition>`.
+teardown (red01 + range, unless `--keep-range`). Run dirs default to the run's
+test-artifact folder, `competitions/<comp>/.automated-tests/<run-id>/`, so the whole run's
+evidence lands next to the competition it tested; `--run-dir` still overrides the location
+(the folder is then recorded in `test.json.paths.run_dir` and the collector copies from it).
+Before teardown destroys red01, the harness collects that folder into the standard shape
+(`RED-TEAM.md`, `BLUE-TEAM.md`, `REPORT.md`, `evidence/**`) and folds scrim-report.py's verdict
+into `test.json` — see [automated-test-artifacts.md](automated-test-artifacts.md).
 
 - Module docstring — "bake-in lessons" from the agent-scrim-2026-09-16 debrief:
   - fresh opencode session per cycle with a compact prompt (survives
@@ -262,9 +267,13 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
 ## scrim-report.py
 
 Reads a run dir (`evidence/red/events*.jsonl` + `world.json`,
-`blue-team*/{feed.log, LOG.md, NOTEBOOK.md, submissions/, sub-*.md}`,
+`blue-team*/{feed.log, LOG.md, NOTEBOOK.md, REPORT.md, submissions/, sub*.md}`,
 `scoreboard-state.jsonl` when the run produced one) and writes
-`INTERACTION.md` next to `FINDINGS.md`.
+`INTERACTION.md` into the run dir. The harness now runs it at teardown (best-effort), and
+teardown runs it too when the harness never got there; either way `artifacts_ops.ingest_verdict`
+folds its verdict and gate table into `test.json`, and `REPORT.md` quotes that verdict instead of
+recomputing one (`FINDINGS.md` is still the hand-written narrative, now superseded in the standard
+folder by `REPORT.md`).
 
 - Interaction-score philosophy (module docstring): the score is
   **restorations + red restore-reactions + evictions + injects +

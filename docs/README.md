@@ -12,7 +12,7 @@ passage written against the pre-golden pipeline is a bug — see [AGENTS.md](../
 
 | Doc | Read this when… |
 |---|---|
-| [architecture.md](architecture.md) | You need the system view: the seven phases, component map, data flow, stage split, isolation model, snapshot table, nakon contract, secrets, state files, invariants, timeout rationale |
+| [architecture.md](architecture.md) | You need the system view: the eight phases, component map, data flow, stage split, isolation model, snapshot table, nakon contract, secrets, state files, invariants, timeout rationale |
 | [internals.md](internals.md) | You are changing a module and need the "why" behind a symbol, constant, ordering, or workaround |
 | [glossary.md](glossary.md) | A term is being used precisely and you are not sure which sense: team key vs identifier, slot, anchor, golden vs unbooted golden, stage vs pass vs bundle |
 | [multi-node.md](multi-node.md) | You are running one competition across several Proxmox hosts (`nodes.json`, placement, jump routing, per-slot goldens, `sync-template.py`) |
@@ -35,6 +35,7 @@ passage written against the pre-golden pipeline is a bug — see [AGENTS.md](../
 | [upstream-defects-handoff.md](upstream-defects-handoff.md) | You own the vulndb catalog or nakon — the defects not fixable from this repo |
 | [../webui/README.md](../webui/README.md) | You are authoring or deploying a competition from the browser — what each screen edits in `competitions/<id>/`, the catalog source, the deploy panel |
 | [scrim-harness.md](scrim-harness.md) | You are running or modifying the red-vs-blue agent scrim (`run-agent-scrim.py`, `scrim-report.py`, `beacon_ops.py`) |
+| [automated-test-artifacts.md](automated-test-artifacts.md) | You are looking for a run's reports or evidence, adding a consumer of `competitions/<id>/.automated-tests/`, or changing what teardown collects |
 | [tests.md](tests.md) | You are running the offline suite, adding a test, or wondering what the suite does *not* cover |
 | [pfsense-inpath-2026-09-28.md](pfsense-inpath-2026-09-28.md) | You are wiring an in-path pfSense firewall per team (topology + the reproducible guest-side config-injection method). Dated, but an operational runbook, not a run report |
 
@@ -57,6 +58,7 @@ of a past failure; the evergreen lessons have been folded into the docs above.
 | [reports/scrim-extreme-cyberfield-2026-09-22-postmortem.md](reports/scrim-extreme-cyberfield-2026-09-22-postmortem.md) | Cyberfield extreme dress-rehearsal post-mortem |
 | [reports/scrim-live-2026-09-26-postmortem.md](reports/scrim-live-2026-09-26-postmortem.md) | scrim-live post-mortem |
 | [reports/harness-upgrades-plan.md](reports/harness-upgrades-plan.md) | Scrim harness rev-2 upgrade record (what changed, where it landed, what is left) |
+| [reports/automated-test-artifacts-plan-2026-10-03.md](reports/automated-test-artifacts-plan-2026-10-03.md) | You are changing per-run test artifacts and need the design record: layout rationale, `test.json`/`collection.json` schemas, the teardown collect hook, and the decisions taken |
 | [reports/dress-rehearsal-prompt.md](reports/dress-rehearsal-prompt.md) | The full-dress-rehearsal runbook/prompt for the first practice sweep |
 | [reports/deploy-cyberfield-prompt.md](reports/deploy-cyberfield-prompt.md) | The agent prompt + Cyberfield wiring notes from the cyberfield deploy |
 

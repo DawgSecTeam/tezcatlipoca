@@ -1,7 +1,7 @@
 # AGENTS.md — tezcatlipoca
 
 `tezcatlipoca` is the Proxmox-based scoring-range driver: `create-competition.py` generates
-Quotient's scoring config and nakon's machine list, then runs a seven-phase deploy. Companion
+Quotient's scoring config and nakon's machine list, then runs an eight-phase deploy. Companion
 scripts: `destroy-competition.py`, `redeploy-competition.py`, `verify-competition.py`.
 
 All guidance lives in `docs/` — start with:
@@ -50,6 +50,17 @@ tag-scoped leftover sweep, foreign VMs skip-and-continue); re-run it until it ex
 substitute ad-hoc destroy scripts**: sweep predicates that match names or partial tags will destroy
 other sessions' infrastructure (live-found 2026-09-30 — an over-broad sweep took out two other comps'
 engines and goldens).
+
+Teardown also collects this run's reports and evidence into
+`competitions/<id>/.automated-tests/<run-id>/` **before** it destroys anything (red report pulled
+from red01, blue logs sealed, engine capture, then `REPORT.md` with the machine sections filled and
+the judgement sections marked `TODO(author)`). It warns and proceeds — a dead box never blocks a
+destroy — and what it could not get is recorded in `collection.json` and in the report's caveats
+rather than left as an empty folder; `--skip-artifacts` bypasses it entirely. **Because the
+competition dir is per-worktree, archive before discarding the worktree:** `python3
+test-artifacts.py archive <comp> --all`, or keep the copy teardown already made under
+`~/.tezcatlipoca/automated-tests/` (it archives automatically when it detects a linked worktree, and
+again on `test-artifacts.py verify --seal` once the write-up is finished).
 
 A linked worktree has none of the gitignored local state the deploy reads, and every path resolves
 from the worktree root — run all commands from there. Pre-flight:
