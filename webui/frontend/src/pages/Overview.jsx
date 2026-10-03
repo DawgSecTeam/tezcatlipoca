@@ -29,19 +29,19 @@ function InfoEditor({ comp, onSaved }) {
     return (
       <div>
         <div className="flex items-start justify-between gap-4">
-          <p className="max-w-2xl text-slate-600">{get('scenario') || <span className="italic text-slate-400">No scenario yet.</span>}</p>
+          <p className="max-w-3xl text-[15px] leading-relaxed text-muted">{get('scenario') || <span className="italic text-faint">No scenario yet.</span>}</p>
           <Button variant="ghost" onClick={() => { setItems(comp.compfile); setEditing(true) }}>Edit info</Button>
         </div>
-        <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm">
-          <div><dt className="inline text-slate-400">Difficulty </dt><dd className="inline">{get('difficulty') || '—'}/10</dd></div>
-          <div><dt className="inline text-slate-400">Domain </dt><dd className="inline font-mono">{domain}</dd></div>
-          {extra.map(([k, v]) => <div key={k}><dt className="inline text-slate-400">{k} </dt><dd className="inline font-mono">{v}</dd></div>)}
-        </dl>
+        <div className="mt-4 flex flex-wrap gap-2 text-sm">
+          <span className="chip bg-sunken px-3 py-1 text-muted">difficulty <b className="ml-1 text-fg">{get('difficulty') || '—'}/10</b></span>
+          <span className="chip bg-sunken px-3 py-1 font-mono text-muted">{domain}</span>
+          {extra.map(([k, v]) => <span key={k} className="chip bg-sunken px-3 py-1 text-muted">{k} <span className="ml-1 font-mono text-fg">{v}</span></span>)}
+        </div>
       </div>
     )
   }
   return (
-    <Card className="space-y-3 p-4">
+    <Card className="max-w-3xl space-y-4 p-6">
       <ErrorBanner error={err} />
       {KNOWN.map(([k, label]) => (
         <Field key={k} label={label}>
@@ -50,8 +50,8 @@ function InfoEditor({ comp, onSaved }) {
             : <input className={inputCls} value={get(k)} onChange={(e) => set(k, e.target.value)} type={k === 'difficulty' ? 'number' : 'text'} />}
         </Field>
       ))}
-      {extra.length > 0 && <p className="text-xs text-slate-400">Other Compfile keys ({extra.map(([k]) => k).join(', ')}) are kept as-is.</p>}
-      <div className="flex justify-end gap-2">
+      {extra.length > 0 && <p className="text-xs text-faint">Other Compfile keys ({extra.map(([k]) => k).join(', ')}) are kept as-is.</p>}
+      <div className="flex justify-end gap-3">
         <Button onClick={() => setEditing(false)}>Cancel</Button>
         <Button variant="primary" onClick={save}>Save</Button>
       </div>
@@ -63,29 +63,29 @@ export default function Overview() {
   const { comp, reload } = useComp()
   const navigate = useNavigate()
   return (
-    <div className="p-8">
-      <h1 className="text-3xl font-bold tracking-tight">{comp.name}</h1>
-      <p className="mb-4 font-mono text-xs text-slate-400">competitions/{comp.id}/</p>
-      <div className="mb-6"><InfoEditor key={comp.compfile.join('|')} comp={comp} onSaved={reload} /></div>
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_320px]">
-        <div className="space-y-6">
-          <Card className="p-4">
-            <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Topology</h2>
-              <span className="text-xs text-slate-400">per team · click a box to edit</span>
+    <div className="pb-6">
+      <h1 className="text-4xl font-bold tracking-tight">{comp.name}</h1>
+      <p className="mb-5 font-mono text-xs text-faint">competitions/{comp.id}/</p>
+      <div className="mb-10"><InfoEditor key={comp.compfile.join('|')} comp={comp} onSaved={reload} /></div>
+      <div className="grid grid-cols-1 gap-8 xl:grid-cols-[1fr_340px]">
+        <div className="space-y-8">
+          <Card className="p-6">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-xl font-semibold">Topology</h2>
+              <span className="text-xs text-faint">per team · click a box to edit</span>
             </div>
             <Topology boxes={comp.boxes} onSelect={(b) => navigate(`/c/${comp.id}/boxes/${b.name}`)} />
           </Card>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-6 sm:grid-cols-4">
             {[['Boxes', comp.boxes.length, 'boxes'], ['Services', comp.services, 'boxes'], ['Misconfigs', comp.misconfigs, 'boxes'], ['Injects', comp.injects, 'injects']].map(([label, n, to]) => (
-              <Card key={label} className="cursor-pointer p-4 hover:border-indigo-300" onClick={() => navigate(`/c/${comp.id}/${to}`)}>
-                <div className="text-2xl font-semibold">{n}</div>
-                <div className="text-sm text-slate-500">{label}</div>
-              </Card>
+              <button key={label} className="panel p-5 text-left transition duration-200 hover:-translate-y-1" onClick={() => navigate(`/c/${comp.id}/${to}`)}>
+                <div className="text-3xl font-semibold">{n}</div>
+                <div className="text-sm text-muted">{label}</div>
+              </button>
             ))}
           </div>
         </div>
-        <DeployPanel comp={comp} />
+        <div><DeployPanel comp={comp} /></div>
       </div>
     </div>
   )

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
-import { Button, Card, ErrorBanner, Field, Modal, SearchInput, inputCls } from '../components/ui'
+import { Button, ErrorBanner, Field, Modal, SearchInput, ThemeToggle, inputCls } from '../components/ui'
 
 function NewCompModal({ open, onClose }) {
   const [form, setForm] = useState({ id: '', name: '', scenario: '', difficulty: 5 })
@@ -17,7 +17,7 @@ function NewCompModal({ open, onClose }) {
   }
   return (
     <Modal open={open} onClose={onClose} title="New competition">
-      <form onSubmit={submit} className="space-y-3">
+      <form onSubmit={submit} className="space-y-4">
         <ErrorBanner error={err} />
         <Field label="Name"><input className={inputCls} value={form.name} onChange={set('name')} required autoFocus /></Field>
         <Field label="ID" hint="Folder name under competitions/ — letters, digits, '-', '_'">
@@ -25,7 +25,7 @@ function NewCompModal({ open, onClose }) {
         </Field>
         <Field label="Scenario"><textarea className={inputCls} rows={3} value={form.scenario} onChange={set('scenario')} /></Field>
         <Field label="Difficulty (1–10)"><input type="number" min="1" max="10" className={inputCls} value={form.difficulty} onChange={set('difficulty')} /></Field>
-        <div className="flex justify-end gap-2 pt-2">
+        <div className="flex justify-end gap-3 pt-2">
           <Button type="button" onClick={onClose}>Cancel</Button>
           <Button variant="primary">Create</Button>
         </div>
@@ -47,33 +47,37 @@ export default function Comps() {
     .sort((a, b) => b.modified - a.modified)
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-10">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-3xl font-bold tracking-tight">Comps</h1>
-        <Button variant="primary" onClick={() => setCreating(true)}>+ New competition</Button>
+    <div className="mx-auto max-w-6xl px-8 py-12">
+      <div className="mb-10 flex items-center justify-between">
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-faint">tezcatlipoca</div>
+          <h1 className="text-4xl font-bold tracking-tight">Comps</h1>
+        </div>
+        <div className="flex items-center gap-3">
+          <ThemeToggle />
+          <Button variant="primary" onClick={() => setCreating(true)}>+ New competition</Button>
+        </div>
       </div>
-      <SearchInput value={q} onChange={setQ} placeholder="Search competitions…" className="mb-6" />
+      <SearchInput value={q} onChange={setQ} placeholder="Search competitions…" className="mx-auto mb-12 max-w-2xl" />
       <ErrorBanner error={err} />
-      {!comps && !err && <p className="text-slate-400">Loading…</p>}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      {!comps && !err && <p className="text-faint">Loading…</p>}
+      <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
         {shown.map((c) => (
-          <Link key={c.id} to={`/c/${c.id}`}>
-            <Card className="h-full p-5 transition hover:border-indigo-300 hover:shadow-md">
-              <div className="flex items-start justify-between gap-2">
-                <h2 className="text-lg font-semibold">{c.name}</h2>
-                {c.difficulty && <span className="shrink-0 rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">diff {c.difficulty}</span>}
-              </div>
-              <p className="font-mono text-xs text-slate-400">{c.id}</p>
-              <p className="mt-2 text-sm text-slate-700">
-                {c.boxes} box{c.boxes === 1 ? '' : 'es'}, {c.injects} inject{c.injects === 1 ? '' : 's'}
-                <span className="text-slate-400"> · {c.services} services · {c.misconfigs} misconfigs</span>
-              </p>
-              {c.scenario && <p className="mt-2 line-clamp-2 text-sm text-slate-500">{c.scenario}</p>}
-            </Card>
+          <Link key={c.id} to={`/c/${c.id}`} className="panel block p-7 transition duration-200 hover:-translate-y-1">
+            <div className="flex items-start justify-between gap-3">
+              <h2 className="text-xl font-semibold">{c.name}</h2>
+              {c.difficulty && <span className="chip shrink-0 bg-sunken text-muted">diff {c.difficulty}</span>}
+            </div>
+            <p className="font-mono text-xs text-faint">{c.id}</p>
+            <p className="mt-3 text-sm">
+              {c.boxes} box{c.boxes === 1 ? '' : 'es'}, {c.injects} inject{c.injects === 1 ? '' : 's'}
+              <span className="text-faint"> · {c.services} services · {c.misconfigs} misconfigs</span>
+            </p>
+            {c.scenario && <p className="mt-2 line-clamp-2 text-sm text-muted">{c.scenario}</p>}
           </Link>
         ))}
       </div>
-      {comps && !shown.length && <p className="text-slate-400">No competitions match.</p>}
+      {comps && !shown.length && <p className="text-center text-faint">No competitions match.</p>}
       <NewCompModal open={creating} onClose={() => setCreating(false)} />
     </div>
   )

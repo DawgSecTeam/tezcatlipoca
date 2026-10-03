@@ -15,11 +15,11 @@ export default function Packet() {
     try { await api.putPacket(comp.id, body); setSaved(true) } catch (e) { setErr(e) }
   }
   return (
-    <div className="space-y-4 p-8">
+    <div className="space-y-8 pb-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Packet</h1>
-          <p className="font-mono text-xs text-slate-400">competitions/{comp.id}/packet.md — the competitor-facing packet</p>
+          <h1 className="text-4xl font-bold tracking-tight">Packet</h1>
+          <p className="font-mono text-xs text-faint">competitions/{comp.id}/packet.md — the competitor-facing packet</p>
         </div>
         <Button variant="primary" onClick={save} disabled={saved}>{saved ? 'Saved' : 'Save'}</Button>
       </div>

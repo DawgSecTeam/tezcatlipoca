@@ -6,20 +6,20 @@ export default function MarkdownEditor({ value, onChange, minHeight = 420 }) {
   const [mode, setMode] = useState('split')
   const html = useMemo(() => marked.parse(value || ''), [value])
   const tab = (m, label) => (
-    <button onClick={() => setMode(m)} className={`rounded px-2 py-1 text-xs font-medium ${mode === m ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>{label}</button>
+    <button onClick={() => setMode(m)} className={`rounded-full px-3 py-1 text-xs font-semibold transition ${mode === m ? 'bg-accent text-accent-fg' : 'text-muted hover:text-fg'}`}>{label}</button>
   )
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <div className="flex gap-1 border-b border-slate-200 bg-slate-50 px-2 py-1.5">
+    <div className="panel overflow-hidden">
+      <div className="flex gap-1 px-4 pt-3 pb-2">
         {tab('edit', 'Write')}{tab('split', 'Split')}{tab('preview', 'Preview')}
       </div>
-      <div className={`grid ${mode === 'split' ? 'grid-cols-2 divide-x divide-slate-200' : 'grid-cols-1'}`} style={{ minHeight }}>
+      <div className={`grid gap-3 px-3 pb-3 ${mode === 'split' ? 'grid-cols-2' : 'grid-cols-1'}`} style={{ minHeight }}>
         {mode !== 'preview' && (
           <textarea value={value} onChange={(e) => onChange(e.target.value)} spellCheck
-            className="h-full w-full resize-none p-4 font-mono text-sm leading-relaxed focus:outline-none" style={{ minHeight }} />
+            className="h-full w-full resize-none rounded-2xl bg-sunken p-4 font-mono text-sm leading-relaxed text-fg shadow-inset focus:outline-none" style={{ minHeight }} />
         )}
         {mode !== 'edit' && (
-          <div className="prose prose-sm prose-slate max-w-none overflow-auto p-4" dangerouslySetInnerHTML={{ __html: html }} />
+          <div className="prose prose-sm max-w-none overflow-auto p-4 dark:prose-invert" dangerouslySetInnerHTML={{ __html: html }} />
         )}
       </div>
     </div>

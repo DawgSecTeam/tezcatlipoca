@@ -28,19 +28,19 @@ function InjectEditor({ comp, slug, onChanged }) {
     if (!confirm(`Delete inject ${slug}?`)) return
     try { await api.deleteInject(comp.id, slug); onChanged(); navigate(`/c/${comp.id}/injects`) } catch (e) { setErr(e) }
   }
-  if (!data) return <div className="p-6"><ErrorBanner error={err} /></div>
+  if (!data) return <ErrorBanner error={err} />
 
   return (
-    <div className="space-y-4 p-6">
+    <div className="space-y-6">
       <ErrorBanner error={err} onClose={() => setErr(null)} />
       <div className="flex items-center justify-between gap-4">
-        <input className="flex-1 border-0 bg-transparent text-2xl font-bold focus:outline-none" value={meta.title || ''} onChange={setM('title')} placeholder="Inject title" />
-        <div className="flex gap-2">
+        <input className="min-w-0 flex-1 border-0 bg-transparent text-4xl font-bold tracking-tight text-fg placeholder:text-faint focus:outline-none" value={meta.title || ''} onChange={setM('title')} placeholder="Inject title" />
+        <div className="flex gap-3">
           <Button variant="danger" onClick={remove}>Delete</Button>
           <Button variant="primary" onClick={save} disabled={saved}>{saved ? 'Saved' : 'Save'}</Button>
         </div>
       </div>
-      <div className="grid max-w-xl grid-cols-3 gap-3">
+      <div className="grid max-w-xl grid-cols-3 gap-4">
         <Field label="Opens (min from T0)"><input type="number" className={inputCls} value={meta.open_offset_min ?? ''} onChange={setM('open_offset_min')} /></Field>
         <Field label="Due (min)"><input type="number" className={inputCls} value={meta.due_offset_min ?? ''} onChange={setM('due_offset_min')} /></Field>
         <Field label="Closes (min)"><input type="number" className={inputCls} value={meta.close_offset_min ?? ''} onChange={setM('close_offset_min')} /></Field>
@@ -70,35 +70,35 @@ export default function Injects() {
   const nextNum = String(comp.injectList.length + 1).padStart(2, '0')
 
   return (
-    <div className="flex h-full">
-      <section className="flex w-72 shrink-0 flex-col border-r border-slate-200 bg-slate-50">
-        <div className="flex items-center justify-between p-4">
-          <h1 className="text-lg font-semibold">Injects</h1>
+    <div className="flex h-full gap-8">
+      <section className="panel flex w-80 shrink-0 flex-col">
+        <div className="flex items-center justify-between px-6 pt-6 pb-4">
+          <h1 className="text-2xl font-semibold">Injects</h1>
           <Button onClick={() => { setForm({ slug: `${nextNum}-`, title: '' }); setErr(null); setCreating(true) }}>+ New</Button>
         </div>
-        <ul className="flex-1 space-y-1 overflow-auto px-2">
-          {comp.injectList.length === 0 && <li className="p-3 text-sm text-slate-400">No injects yet.</li>}
+        <ul className="flex-1 space-y-3 overflow-auto px-6 pb-6 pt-1">
+          {comp.injectList.length === 0 && <li className="p-3 text-sm text-faint">No injects yet.</li>}
           {comp.injectList.map((i) => (
             <li key={i.slug}>
               <button onClick={() => navigate(`/c/${comp.id}/injects/${i.slug}`)}
-                className={`w-full rounded-lg px-3 py-2 text-left ${slug === i.slug ? 'bg-white shadow-sm ring-1 ring-indigo-300' : 'hover:bg-white'}`}>
+                className={`tile tile-hover w-full px-4 py-2.5 text-left ${slug === i.slug ? 'hatched !border-accent' : ''}`}>
                 <div className="truncate text-sm font-medium">{i.title || i.slug}</div>
-                <div className="text-xs text-slate-400">opens {fmt(i.open_offset_min)} · due {fmt(i.due_offset_min)} · closes {fmt(i.close_offset_min)}</div>
+                <div className="text-xs text-faint">opens {fmt(i.open_offset_min)} · due {fmt(i.due_offset_min)} · closes {fmt(i.close_offset_min)}</div>
               </button>
             </li>
           ))}
         </ul>
       </section>
-      <section className="min-w-0 flex-1 overflow-auto">
+      <section className="min-w-0 flex-1 overflow-auto px-2 pb-6">
         {slug ? <InjectEditor key={slug} comp={comp} slug={slug} onChanged={reload} />
-          : <div className="flex h-full items-center justify-center text-sm text-slate-400">Pick an inject or create one.</div>}
+          : <div className="panel flex h-full items-center justify-center text-sm text-faint">Pick an inject or create one.</div>}
       </section>
       <Modal open={creating} onClose={() => setCreating(false)} title="New inject">
-        <form onSubmit={create} className="space-y-3">
+        <form onSubmit={create} className="space-y-4">
           <ErrorBanner error={err} />
           <Field label="Title"><input className={inputCls} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required autoFocus /></Field>
           <Field label="Folder (slug)" hint="injects/<slug>/ — ordered by name"><input className={`${inputCls} font-mono`} value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} required pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" /></Field>
-          <div className="flex justify-end gap-2"><Button type="button" onClick={() => setCreating(false)}>Cancel</Button><Button variant="primary">Create</Button></div>
+          <div className="flex justify-end gap-3"><Button type="button" onClick={() => setCreating(false)}>Cancel</Button><Button variant="primary">Create</Button></div>
         </form>
       </Modal>
     </div>

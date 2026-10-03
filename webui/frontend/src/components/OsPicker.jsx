@@ -19,25 +19,24 @@ export default function OsPicker({ open, onClose, value, onPick }) {
     <Modal open={open} onClose={onClose} title="Operating system">
       <ErrorBanner error={err} />
       <SearchInput value={q} onChange={setQ} autoFocus placeholder="Search templates…" />
-      <div className="mt-3 max-h-80 overflow-auto">
-        {!templates && !err && <p className="p-2 text-sm text-slate-400">Loading…</p>}
+      <div className="-mx-2 mt-4 max-h-80 space-y-2 overflow-auto px-2 py-1">
+        {!templates && !err && <p className="p-2 text-sm text-faint">Loading…</p>}
         {shown.map((t) => (
           <button key={t.name} onClick={() => onPick(t.name)}
-            className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm hover:bg-slate-100 ${t.name === value ? 'bg-indigo-50 ring-1 ring-indigo-300' : ''}`}>
+            className={`tile tile-hover flex w-full items-center justify-between px-4 py-2.5 text-left text-sm ${t.name === value ? '!border-accent' : ''}`}>
             <span className="font-mono">{t.name}</span>
             <span className="flex items-center gap-2">
-              {t.live && <span className="text-[11px] text-emerald-600">on node</span>}
+              {t.live && <span className="text-[11px] text-accent">on node</span>}
               <PlatformBadge platform={t.platform} />
             </span>
           </button>
         ))}
       </div>
-      <form className="mt-3 flex gap-2 border-t border-slate-200 pt-3" onSubmit={(e) => { e.preventDefault(); custom.trim() && onPick(custom.trim()) }}>
-        <input value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="Other template name…"
-          className="flex-1 rounded-md border border-slate-300 px-2.5 py-1.5 font-mono text-sm" />
-        <button className="rounded-md border border-slate-300 px-3 text-sm hover:bg-slate-100">Use</button>
+      <form className="mt-4 flex gap-2" onSubmit={(e) => { e.preventDefault(); custom.trim() && onPick(custom.trim()) }}>
+        <input value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="Other template name…" className="field font-mono" />
+        <button className="btn">Use</button>
       </form>
-      <p className="mt-2 text-xs text-slate-400">Deploy preflight checks the template exists on the target node.</p>
+      <p className="mt-2 text-xs text-faint">Deploy preflight checks the template exists on the target node.</p>
     </Modal>
   )
 }

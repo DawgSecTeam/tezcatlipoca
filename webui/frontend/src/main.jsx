@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import './index.css'
+import { initTheme } from './components/ui'
 import Comps from './pages/Comps'
 import CompLayout from './pages/CompLayout'
 import Overview from './pages/Overview'
@@ -10,6 +11,8 @@ import Packet from './pages/Packet'
 import Boxes from './pages/Boxes'
 import BoxEdit from './pages/BoxEdit'
 import PinPage from './pages/PinPage'
+
+initTheme()
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

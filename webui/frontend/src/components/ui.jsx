@@ -1,31 +1,16 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useState } from 'react'
 
 export function Button({ variant = 'default', className = '', ...props }) {
-  const styles = {
-    default: 'bg-white border border-slate-300 hover:bg-slate-100 text-slate-800',
-    primary: 'bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-600',
-    danger: 'bg-white border border-red-300 text-red-700 hover:bg-red-50',
-    ghost: 'text-slate-600 hover:bg-slate-100',
-  }
-  return (
-    <button
-      className={`rounded-md px-3 py-1.5 text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed ${styles[variant]} ${className}`}
-      {...props}
-    />
-  )
+  const v = { default: '', primary: 'btn-primary', danger: 'btn-danger', ghost: 'btn-ghost' }[variant]
+  return <button className={`btn ${v} ${className}`} {...props} />
 }
 
 export function SearchInput({ value, onChange, placeholder = 'Search…', autoFocus, className = '' }) {
   return (
     <div className={`relative ${className}`}>
-      <input
-        autoFocus={autoFocus}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full rounded-md border border-slate-300 bg-white py-1.5 pl-3 pr-8 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-      />
-      <svg className="pointer-events-none absolute right-2.5 top-2 h-4 w-4 text-slate-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
+      <input autoFocus={autoFocus} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
+        className="field rounded-full pl-4 pr-10" />
+      <svg className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
         <circle cx="8.5" cy="8.5" r="5.5" />
         <path d="M13 13l4 4" strokeLinecap="round" />
       </svg>
@@ -36,32 +21,30 @@ export function SearchInput({ value, onChange, placeholder = 'Search…', autoFo
 export function Field({ label, children, hint }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">{label}</span>
+      <span className="label">{label}</span>
       {children}
-      {hint && <span className="mt-1 block text-xs text-slate-400">{hint}</span>}
+      {hint && <span className="mt-1 block text-xs text-faint">{hint}</span>}
     </label>
   )
 }
 
-export const inputCls =
-  'w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500'
+export const inputCls = 'field'
 
 export function Card({ className = '', ...props }) {
-  return <div className={`rounded-xl border border-slate-200 bg-white shadow-sm ${className}`} {...props} />
+  return <div className={`panel ${className}`} {...props} />
 }
 
 export function ErrorBanner({ error, onClose }) {
   if (!error) return null
   return (
-    <div className="mb-4 flex items-start justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+    <div className="mb-4 flex items-start justify-between gap-3 rounded-2xl bg-danger-soft px-4 py-2.5 text-sm text-danger">
       <span className="whitespace-pre-wrap">{String(error.message || error)}</span>
-      {onClose && <button onClick={onClose} className="text-red-500 hover:text-red-700">✕</button>}
+      {onClose && <button onClick={onClose} className="opacity-70 hover:opacity-100">✕</button>}
     </div>
   )
 }
 
 export function Modal({ open, onClose, title, children, wide }) {
-  const ref = useRef()
   useEffect(() => {
     if (!open) return
     const onKey = (e) => e.key === 'Escape' && onClose()
@@ -70,23 +53,58 @@ export function Modal({ open, onClose, title, children, wide }) {
   }, [open, onClose])
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/40 p-4 pt-[10vh]" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={ref} className={`w-full ${wide ? 'max-w-3xl' : 'max-w-md'} rounded-xl bg-white shadow-xl`}>
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-          <h2 className="font-semibold">{title}</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">✕</button>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-bg/60 p-4 pt-[9vh] backdrop-blur-sm" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className={`panel w-full ${wide ? 'max-w-3xl' : 'max-w-md'}`}>
+        <div className="flex items-center justify-between px-6 pt-5 pb-2">
+          <h2 className="text-lg font-semibold">{title}</h2>
+          <button onClick={onClose} className="btn btn-ghost h-8 w-8 !p-0 text-faint">✕</button>
         </div>
-        <div className="p-4">{children}</div>
+        <div className="px-6 pb-6 pt-2">{children}</div>
       </div>
     </div>
   )
 }
 
 export function PlatformBadge({ platform }) {
-  const cls = platform === 'windows' ? 'bg-sky-100 text-sky-800' : platform === 'linux' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'
-  return <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${cls}`}>{platform}</span>
+  const c = platform === 'windows' ? 'var(--win)' : platform === 'linux' ? 'var(--lin)' : 'var(--muted)'
+  return (
+    <span className="chip gap-1.5 bg-sunken text-muted">
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: c }} />{platform}
+    </span>
+  )
 }
 
 export function Spinner() {
-  return <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-600" />
+  return <div className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-accent" />
+}
+
+// ── theme ────────────────────────────────────────────────────────────────────────────────
+
+const KEY = 'tez-theme'
+function systemTheme() {
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+export function initTheme() {
+  let t = null
+  try { t = localStorage.getItem(KEY) } catch { /* storage blocked */ }
+  document.documentElement.dataset.theme = t || systemTheme()
+}
+
+export function ThemeToggle({ className = '' }) {
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
+  const flip = () => {
+    const next = theme === 'dark' ? 'light' : 'dark'
+    document.documentElement.dataset.theme = next
+    try { localStorage.setItem(KEY, next) } catch { /* storage blocked */ }
+    setTheme(next)
+  }
+  return (
+    <button onClick={flip} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} className={`btn h-9 w-9 !p-0 ${className}`}>
+      {theme === 'dark' ? (
+        <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="10" cy="10" r="3.5" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4" strokeLinecap="round" /></svg>
+      ) : (
+        <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M16 12.5A6.5 6.5 0 017.5 4a6.5 6.5 0 108.5 8.5z" strokeLinejoin="round" /></svg>
+      )}
+    </button>
+  )
 }

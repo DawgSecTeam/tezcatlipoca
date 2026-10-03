@@ -31,10 +31,10 @@ function JobLog({ job, onDone }) {
   return (
     <div>
       <div className="mb-2 flex items-center gap-2 text-sm">
-        {state.running ? <><Spinner /> <span>Running…</span></>
-          : <span className={state.returncode === 0 ? 'text-emerald-700' : 'text-red-700'}>Exited {state.returncode}</span>}
+        {state.running ? <><Spinner /> <span className="text-muted">Running…</span></>
+          : <span className={state.returncode === 0 ? 'text-accent' : 'text-danger'}>Exited {state.returncode}</span>}
       </div>
-      <pre ref={pre} className="h-[60vh] overflow-auto rounded-md bg-slate-900 p-3 text-xs leading-relaxed text-slate-100">{text}</pre>
+      <pre ref={pre} className="h-[60vh] overflow-auto rounded-2xl bg-sunken p-4 text-xs leading-relaxed text-fg shadow-inset">{text}</pre>
     </div>
   )
 }
@@ -63,10 +63,10 @@ export default function DeployPanel({ comp }) {
   })
 
   return (
-    <Card className="p-4">
-      <h2 className="mb-3 text-lg font-semibold">Deploy</h2>
+    <Card className="p-6">
+      <h2 className="mb-4 text-xl font-semibold">Deploy</h2>
       <ErrorBanner error={err} onClose={() => setErr(null)} />
-      <div className="space-y-3">
+      <div className="space-y-4">
         <Field label="Teams"><input type="number" min="1" max="50" className={inputCls} value={form.teams} onChange={set('teams')} /></Field>
         <Field label="Nodes" hint={nodes?.multi ? 'Unpinned teams are placed by capacity-fill (nodes.json).' : 'Single node from .env — add nodes.json for multi-node.'}>
           {nodes?.multi ? (
@@ -78,29 +78,29 @@ export default function DeployPanel({ comp }) {
               <input className={`${inputCls} font-mono`} placeholder="team pins: 101=zfs-193,102=hdd-150" value={form.team_node} onChange={set('team_node')} />
             </div>
           ) : (
-            <div className="rounded-md bg-slate-50 px-2.5 py-1.5 font-mono text-xs text-slate-600">{nodes?.nodes?.[0]?.name || '…'}</div>
+            <div className="field font-mono text-xs text-muted">{nodes?.nodes?.[0]?.name || '…'}</div>
           )}
         </Field>
         <Field label="Scoring VMID" hint="A free vmid for the engine (preflight refuses collisions)">
           <input type="number" className={inputCls} value={form.scoring_vmid} onChange={set('scoring_vmid')} placeholder="e.g. 1010" />
         </Field>
-        <div className="grid grid-cols-2 gap-2 pt-1">
+        <div className="grid grid-cols-2 gap-3 pt-2">
           <Button disabled={!!running} onClick={() => start(() => api.deploy(comp.id, body(true)))}>Plan only</Button>
           <Button variant="primary" disabled={!!running} onClick={() => setConfirm(true)}>Deploy</Button>
           <Button className="col-span-2" disabled={!!running} onClick={() => start(() => api.verify(comp.id))}>Verify</Button>
         </div>
-        <p className="text-xs text-slate-400">Practice runs belong in a fresh worktree (AGENTS.md). Teardown: <code>destroy-competition.py</code>.</p>
+        <p className="text-xs leading-relaxed text-faint">Practice runs belong in a fresh worktree (AGENTS.md). Teardown: <code>destroy-competition.py</code>.</p>
       </div>
 
       {jobs.length > 0 && (
-        <div className="mt-4 border-t border-slate-200 pt-3">
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Runs</h3>
-          <ul className="space-y-1">
+        <div className="mt-6">
+          <h3 className="label">Runs</h3>
+          <ul className="space-y-2">
             {jobs.map((j) => (
               <li key={j.id}>
-                <button onClick={() => setViewing(j)} className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm hover:bg-slate-100">
+                <button onClick={() => setViewing(j)} className="tile tile-hover flex w-full items-center justify-between px-4 py-2 text-left text-sm">
                   <span className="capitalize">{j.action}</span>
-                  <span className={`text-xs ${j.running ? 'text-indigo-600' : j.returncode === 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                  <span className={`text-xs font-semibold ${j.running ? 'text-accent' : j.returncode === 0 ? 'text-muted' : 'text-danger'}`}>
                     {j.running ? 'running' : j.returncode === 0 ? 'ok' : `rc ${j.returncode}`}
                   </span>
                 </button>
@@ -111,11 +111,11 @@ export default function DeployPanel({ comp }) {
       )}
 
       <Modal open={confirm} onClose={() => setConfirm(false)} title={`Deploy ${comp.name}?`}>
-        <p className="text-sm text-slate-700">
+        <p className="text-sm text-muted">
           This runs <code className="text-xs">create-competition.py --competition {comp.id} --teams {form.teams} --yes</code>
           {form.scoring_vmid && <> with scoring vmid {form.scoring_vmid}</>} and builds real VMs on Proxmox.
         </p>
-        <div className="mt-4 flex justify-end gap-2">
+        <div className="mt-6 flex justify-end gap-3">
           <Button onClick={() => setConfirm(false)}>Cancel</Button>
           <Button variant="primary" onClick={() => { setConfirm(false); start(() => api.deploy(comp.id, body(false))) }}>Deploy</Button>
         </div>
