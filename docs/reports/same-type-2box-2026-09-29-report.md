@@ -2,7 +2,7 @@
 
 One team × two boxes (web01 ubuntu24.04-fix 30G, win01 base-windows-server sata0 60G, no
 AD/domain_roles), 6 scored pins, no planted vulns, engine vmid 1090 (template 1230, goldens
-1240/1241), team ident 120. Config in `competitions/same-type-2box-2026-09-29/` (committed);
+1240/1241), team ident 120. Config in `competitions/same-type-2box/` (committed);
 range torn down `--full` at close. Validates the dedup fix from tezcatlipoca e026671 +
 bad-auto 6c554ba (coverage display overrides).
 

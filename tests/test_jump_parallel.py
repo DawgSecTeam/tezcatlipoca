@@ -57,7 +57,8 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
         seen = []
         lock = threading.Lock()
 
-        def fake_build_one(rec, sat, vmid, team_ids, ctx, comp_name, eng_ip, eng_gw, run_id=None):
+        def fake_build_one(rec, sat, vmid, team_ids, ctx, comp_name, eng_ip, eng_gw,
+                           run_id=None, red_segment=""):
             with lock:
                 seen.append((sat["name"], vmid, tuple(team_ids)))
 
@@ -72,6 +73,41 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
         by_name = {n: t for n, _, t in seen}
         self.assertEqual(by_name["sat1"], ("201", "202"))
         self.assertEqual(by_name["sat3"], ("205", "206"))
+
+    def test_red_segment_reaches_every_satellite_build(self):
+        """The segment must survive the thread-pool hop, not just the signature.
+
+        scale8 soak 2026-10-02: routed red could not reach any satellite team because
+        the jump's FORWARD policy dropped its source. The fix is only as good as this
+        plumbing — a segment that stops at build_jump_vms leaves the range unreachable.
+        """
+        placement = _placement(3)
+        seen = []
+        lock = threading.Lock()
+
+        def fake_build_one(rec, sat, vmid, team_ids, ctx, comp_name, eng_ip, eng_gw,
+                           run_id=None, red_segment=""):
+            with lock:
+                seen.append(red_segment)
+
+        with patch.object(jump_ops, "_build_one", side_effect=fake_build_one):
+            jump_ops.build_jump_vms(placement, engine_vmid=1000, ctx={}, comp_name="t",
+                                    engine_mgmt_ip="10.0.0.250",
+                                    red_segment="10.200.0.0/24")
+
+        self.assertEqual(seen, ["10.200.0.0/24"] * 3)
+
+    def test_no_red_segment_is_passed_through_as_empty(self):
+        """Absent knob must reach the builder as "" so red-less ranges stay unchanged."""
+        placement = _placement(2)
+        seen = []
+
+        with patch.object(jump_ops, "_build_one",
+                          side_effect=lambda *a, **kw: seen.append(kw.get("red_segment"))):
+            jump_ops.build_jump_vms(placement, engine_vmid=1000, ctx={}, comp_name="t",
+                                    engine_mgmt_ip="10.0.0.250")
+
+        self.assertEqual(seen, ["", ""])
 
     def test_builds_actually_overlap(self):
         """A serialised implementation would fail this: 4 units x 0.25s = 1.0s."""

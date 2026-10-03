@@ -107,7 +107,7 @@ variable "satellite_routes" {
 }
 
 variable "boxes_per_team" {
-  description = "Boxes cloned identically for every team. 'template' must match a Proxmox VM tagged 'template' exactly (see docs/usage-people.md 'Adding a template VM')."
+  description = "Boxes cloned identically for every team. 'template' must match a Proxmox VM tagged 'template' exactly (see docs/usage-people.md 'Adding a template VM'). unmanaged = no cloud-init/no nakon (appliance cloned from its own template); in_path = an unmanaged in-path firewall (two NICs: WAN on vmbrW<id>, LAN = the team gateway .1 on vmbr<id>) — at most one per lineup, engine-node teams only."
   type = list(object({
     name       = string
     last_octet = number
@@ -116,6 +116,8 @@ variable "boxes_per_team" {
     disk_gb    = optional(number)
     disk_iface = optional(string)
     template   = string
+    unmanaged  = optional(bool, false)
+    in_path    = optional(bool, false)
   }))
   default = [
     { name = "web01", last_octet = 2, cpu = 2, memory_mb = 2048, disk_gb = 20, template = "tmpl-ubuntu-22" },

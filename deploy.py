@@ -1,8 +1,9 @@
-"""Orchestrator: seven-phase deploy and CLI."""
+"""Orchestrator: eight-phase deploy and CLI."""
 
 import fcntl
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,6 +34,8 @@ from constants import (
     GOLDEN_TAG,
     MAX_BOXES_PER_TEAM,
     MAX_TEAMS,
+    MIN_LOAD_FREE_TIMEOUT,
+    RESUME_ATTEMPT_LIMIT,
     SCORING_ENGINE_VMID,
     ownership_tags,
 )
@@ -44,7 +47,7 @@ from nakon_ops import (acquire_engine_lock, build_nakon_bundle, generate_nakon_c
 from nodes_ops import (activate_placement, golden_vmid_for_slot, resolve_placement,
                        satellite_routes_for, satellite_tfvars)
 from range_ops import (destroy_vm_if_exists, ensure_terraform_workdir, enumerate_targets,
-                       persist_targets)
+                       persist_targets, team_vmids_from_state, wait_for_node_load)
 from template_ops import (
     code_hash,
     engine_template_vmid,
@@ -57,8 +60,8 @@ from template_ops import (
     hash_from_inputs,
     stored_template_hash,
 )
-from utils import (compfile_flag, is_unmanaged, load_compfile, load_users_config,
-                   mint_run_id, valid_comp_name)
+from utils import (compfile_flag, degradation_summary, degradations, is_unmanaged,
+                   load_compfile, load_users_config, mint_run_id, valid_comp_name)
 from windows_ops import is_windows_template
 
 ENV_PATH = Path(".env")
@@ -70,7 +73,7 @@ _DEPLOY_LOCKS = {}  # path -> open fh (keep referenced so flock survives)
 
 # Code-level, not run-level state: the .deploy_state.json resume guard and the fresh
 # state writer must record the same version, and both now live in different steps.
-PIPELINE_VERSION = 2
+PIPELINE_VERSION = 3
 
 
 def _record_coverage(state, stage_machines, result):
@@ -78,13 +81,16 @@ def _record_coverage(state, stage_machines, result):
 
     The expectation side is implicit — nakon-config.json is verify's source of truth.
     This records only failures: machine -> [config names whose step reported rc != 0],
-    or every config when a machine died before reporting any step. The golden plant is
-    strict (a failure aborts the deploy), so only the lenient post-clone passes record
-    here; verify maps '{box}-golden'-style failures onto every team copy of the box.
+    or every config when a machine died before reporting any step.
 
-    A machine whose stage reported NO failed steps drops its stale entry: a recovered
-    config (replanted by a later sweep) must not keep the coverage gate red forever
-    (amongus-cde-2026 2026-09-30: SMB v1 stayed 'failed' across three green replants)."""
+    The golden plant (phase 4) records through the same shape via build_golden_set's
+    coverage callback, under '{box}-golden' keys (satellite slots: '{box}-golden-slot{N}')
+    that verify maps onto every team copy of the box: a strict-mode failure aborts the
+    deploy before anything is recorded, but an alpine_services-tolerated failure is a
+    real gap on the golden disk and must reach the gate. A machine whose stage reported
+    NO failed steps drops its stale entry: a recovered config (replanted by a later
+    sweep) must not keep the coverage gate red forever (amongus-cde-2026 2026-09-30:
+    SMB v1 stayed 'failed' across three green replants)."""
     if result is None or not getattr(result, "machines", None):
         return  # no --json outcome (older nakon) — coverage falls back to the tally
     failed = result.failed_configs()
@@ -144,6 +150,271 @@ def guard_resume_from_phase(from_phase, last_phase, state_path, force=False):
         f"never ran, so the later phases would target machines that do not exist yet. "
         f"Resume at --from-phase {last + 1} (re-runs the phase that died), or pass "
         f"--force-from-phase to skip ahead deliberately."
+    )
+
+
+def _artifact_probes(comp_dir):
+    """The three infrastructure probes guard_resume_existence needs, as one dict.
+
+    Indirection on purpose: it is the single seam a test patches to exercise the gate
+    offline, and the single place a caller could inject a cheaper probe. Resolved at
+    call time so a patch lands."""
+    from range_ops import live_vmids
+    return {"vmids_from_state": lambda: team_vmids_from_state(comp_dir),
+            "vm_exists": live_vmids,
+            "box_reachable": _any_box_reachable}
+
+
+def guard_resume_existence(from_phase, comp_dir, state, force=False,
+                           vmids_from_state=None, vm_exists=None, box_reachable=None):
+    """Refuse a resume whose skipped phases left no artifacts behind.
+
+    `guard_resume_from_phase` reads the checkpoint, which is a claim about work done —
+    and a claim can be written by a run that did nothing. scale8 soak 2026-10-02 attempts
+    9-11 resumed at --from-phase 5/6 after a phase-4 death: apply #2 never ran, the
+    phase-5 repair sweep is strict=False so it "succeeded" against 32 nonexistent
+    machines, and it checkpointed phase 5. Every later wait then raced a ghost, and the
+    run spent ~40 minutes in wait_for_windows_sshd before anyone understood why.
+
+    So: before trusting a skipped phase, verify the thing it produces. Each check is a
+    separate callable so every branch is testable without Proxmox, and so the checkpoint
+    path (C-checkpoint) can reuse them. Escalation stays available — an operator who
+    genuinely has the infrastructure passes --force-from-phase; what this removes is the
+    SILENT skip.
+
+    Checks, by the phase whose output is being trusted, in pipeline-v2 numbering:
+      > 2  the engine VM exists (phase 2's terraform apply #1)
+      > 4  every team box in terraform state exists as a live VM (apply #2)
+      > 5  the postclone sweep ran and at least one box answers on SSH
+    """
+    if force:
+        return
+    probes = _artifact_probes(comp_dir)
+    probe_vmids = vmids_from_state or probes["vmids_from_state"]
+    probe_live = vm_exists or probes["vm_exists"]
+    # Pipeline v2: phase 2's apply #1 creates the engine; phase 4's apply #2 creates the
+    # team boxes (its first half builds the goldens they clone from). So a resume that
+    # skips phase 2 needs a live engine, and one that skips phase 4 needs live boxes.
+    needs_engine = from_phase > 2
+    needs_boxes = from_phase > 4
+    needs_live_boxes = from_phase > 5
+    if not needs_engine:
+        return
+
+    try:
+        live = set(probe_live())
+    except RuntimeError as e:
+        raise SystemExit(
+            f"  ERROR: --from-phase {from_phase} cannot confirm the machines exist: {e}\n"
+            f"        Refusing to resume blind — re-run with --from-phase "
+            f"{_safe_resume_target(2)}, or pass --force-from-phase once you have confirmed "
+            f"the machines exist by hand."
+        )
+
+    if needs_engine:
+        engine_vmid = state.get("scoring_vm_id", SCORING_ENGINE_VMID)
+        if int(engine_vmid) not in live:
+            raise SystemExit(
+                f"  ERROR: --from-phase {from_phase} skips the phase that creates the scoring "
+                f"engine, but vmid {engine_vmid} does not exist.\n"
+                f"        Every later phase targets it (scoring setup, terraform context, "
+                f"box images).\n"
+                f"        Re-run with --from-phase 2 to recreate it."
+            )
+
+    if not needs_boxes:
+        return
+
+    try:
+        vmids = probe_vmids()
+    except RuntimeError as e:
+        raise SystemExit(
+            f"  ERROR: --from-phase {from_phase} would trust phases 2-{from_phase - 1}, but their "
+            f"output cannot be verified: {e}\n"
+            f"        Refusing to resume blind. Re-run with --from-phase {_safe_resume_target(2)} "
+            f"to rebuild, or pass --force-from-phase once you have confirmed the machines "
+            f"exist by hand."
+        )
+
+    missing = [v for v in vmids if v not in live]
+    if not vmids or missing:
+        found = ("no team boxes at all are recorded in terraform state" if not vmids else
+                 f"{len(missing)} of {len(vmids)} recorded team box(es) are gone: "
+                 f"{', '.join(str(v) for v in missing[:8])}"
+                 f"{' …' if len(missing) > 8 else ''}")
+        raise SystemExit(
+            f"  ERROR: --from-phase {from_phase} skips the phases that create the team boxes, "
+            f"but {found}.\n"
+            f"        The later phases would target machines that do not exist (this is the "
+            f"scale8 soak's poisoned resume: the repair sweep reported success against 32 "
+            f"ghosts and checkpointed it).\n"
+            f"        Re-run with --from-phase 4 to recreate them."
+        )
+
+    if not needs_live_boxes:
+        return
+
+    reachable = box_reachable or probes["box_reachable"]
+    ok, why = reachable(comp_dir, state)
+    if not ok:
+        raise SystemExit(
+            f"  ERROR: --from-phase {from_phase} trusts the post-clone work, but {why}.\n"
+            f"        Re-run with --from-phase 5 so the bootstrap/sweep phases run against the "
+            f"existing VMs."
+        )
+
+
+def _safe_resume_target(phase):
+    """The earliest phase that rebuilds the missing artifact — what the operator
+    should actually type, rather than the phase they asked for."""
+    return max(1, phase)
+
+
+# Phases whose output is independently checkable, so their checkpoint can be verified
+# before it is written. Phase 3 is "prepare the engine clone" (apply #1 has created it),
+# phase 4 is "goldens + apply #2" (the team boxes now exist). Everything else either
+# builds nothing durable (1, 7) or builds images/state that the resume gates already
+# cover indirectly — inventing a proxy check would refuse good deploys, which is worse
+# than the lie it would prevent.
+_CHECKPOINT_GATES = {3, 4}
+
+
+def _any_box_reachable(comp_dir, state):
+    """(ok, why) for 'the post-clone sweep ran and at least one box answers'.
+
+    Two separate facts, deliberately: the marker proves the sweep executed, the SSH
+    probe proves the boxes are real. A range whose marker exists but whose boxes are
+    dark is exactly the state that produced the phantom repair sweep."""
+    marker = Path(comp_dir) / ".postclone-swept"
+    if not marker.exists():
+        return False, f"{marker.name} is absent (the post-clone sweep never completed)"
+    # Cheapest and most specific first: with no team boxes on record there is nothing to
+    # probe, and reading the terraform context to discover that would run terraform (and
+    # could fail) for no reason.
+    targets = _team_box_ips(comp_dir)
+    if not targets:
+        return False, "no team box addresses are recorded to probe"
+    try:
+        from ssh_ops import read_terraform_ctx, ssh_via_gateway
+        ctx = read_terraform_ctx(comp_dir)
+    except Exception as e:                                  # noqa: BLE001 - reported
+        return False, f"the engine context could not be read to probe a box ({e})"
+    for ip in targets[:3]:
+        try:
+            proc = ssh_via_gateway(ctx, ip, "echo RESUME-OK", timeout=25)
+        except Exception:                                   # noqa: BLE001 - try the next
+            continue
+        if "RESUME-OK" in (proc.stdout or ""):
+            return True, ""
+    return False, (f"none of the first {min(3, len(targets))} team box(es) answered over SSH "
+                   f"({', '.join(targets[:3])})")
+
+
+def _team_box_ips(comp_dir):
+    """Every team box IP recorded for this competition, engine excluded.
+
+    targets.json is written by phase 2 and is the deploy's own record of what it built;
+    nakon-config.json is the fallback for a range deployed before targets.json existed."""
+    try:
+        data = json.loads((Path(comp_dir) / "targets.json").read_text())
+    except (OSError, ValueError):
+        return []
+    out = []
+    for name, rec in (data.get("targets") or {}).items():
+        ip = (rec or {}).get("ip") if isinstance(rec, dict) else None
+        if ip and str(name).startswith("team"):
+            out.append(str(ip))
+    return out
+
+
+def _record_degradations(ctx):
+    """Persist tolerated-prerequisite failures into the state and print them once.
+
+    Every entry is something that failed while the deploy continued: apt prep that
+    installed nothing, an auth ladder that failed on both transports, a box that never
+    settled, a node scan that never happened. They used to exist only as WARNING lines
+    in the scrollback — which is why "the range came up with every service down" had no
+    named cause. Now they land in .deploy_state.json and verify can read them.
+    """
+    entries = degradations()
+    # ALWAYS record the key, even when empty. A gate cannot tell "clean" from "never
+    # ran" if the success path writes nothing: verify reported the 2026-10-02 live
+    # run's ledger as "not recorded by this deploy (pre-dates the ledger)", which reads
+    # as a stale state file rather than the clean run it actually was. Same trap the
+    # plant-coverage gate had to learn — and which verify caught on that same run.
+    ctx.state["degradations"] = entries
+    if not entries:
+        return
+    print(f"\n  [!] {len(entries)} tolerated failure(s) this run — the deploy continued "
+          f"past each of them:")
+    for item in degradation_summary():
+        count = f" x{item['count']}" if item["count"] > 1 else ""
+        print(f"      - {item['what']}{count}: {item['detail'][:120]}")
+    print("      (recorded in .deploy_state.json as `degradations`; verify-competition "
+          "surfaces them)")
+
+
+def failure_signature(exc):
+    """A stable identity for "the same failure again", for the resume budget.
+
+    Raw messages differ every run (vmids, uuids, temp paths, elapsed seconds), so a
+    naive signature would never match and the guard could never fire. Normalise the
+    volatile parts and keep the shape. Erring toward *matching* is deliberate: the
+    guard only ever refuses a resume, and --force-from-phase overrides it.
+    """
+    text = f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}"
+    text = re.sub(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                  r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", "<uuid>", text)
+    text = re.sub(r"\b[0-9a-fA-F]{12,}\b", "<hex>", text)
+    text = re.sub(r"\d+", "N", text)
+    return re.sub(r"\s+", " ", text).strip()[:160]
+
+
+def record_failure(state, phase, exc):
+    """Count consecutive failures of the same phase with the same signature.
+
+    Returns the new count. A different signature at the same phase is a *new*
+    failure, not a repeat, so the budget resets — that is why the streak is keyed on
+    the signature and not just the phase.
+    """
+    signature = failure_signature(exc)
+    previous = state.get("failure_streak") or {}
+    repeated = (previous.get("phase") == phase
+                and previous.get("signature") == signature)
+    count = int(previous.get("count") or 0) + 1 if repeated else 1
+    state["failure_streak"] = {"phase": phase, "signature": signature, "count": count}
+    return count
+
+
+def clear_failure_streak(state):
+    """Drop the streak after a phase run that made it through."""
+    return state.pop("failure_streak", None)
+
+
+def guard_resume_streak(from_phase, state, limit=RESUME_ATTEMPT_LIMIT, force=False):
+    """Refuse the (limit+1)-th consecutive resume of a phase failing the same way.
+
+    `docs/e2e-testing.md` has always said "max 2 repair-resume cycles; a third
+    consecutive resume is not a repair, it's a resume-loop", but that lived only in
+    prose and cde-2026 burned eleven attempts (deploy6 -> deploy16, 2026-09-29/30)
+    on a single Windows golden. This is the enforceable version. It refuses *before*
+    any infrastructure work, and names the path that actually helps.
+    """
+    if force:
+        return
+    streak = state.get("failure_streak") or {}
+    count = int(streak.get("count") or 0)
+    if streak.get("phase") != from_phase or count < limit:
+        return
+    raise SystemExit(
+        f"  ERROR: phase {from_phase} has now failed {count} time(s) in a row with the "
+        f"same error:\n"
+        f"    {streak.get('signature')}\n"
+        f"  That is a resume-loop, not a repair (docs/e2e-testing.md: max 2 repair-resume "
+        f"cycles). Resuming again would repeat it. Either fix the underlying cause and "
+        f"pass --force-from-phase once you have, or tear the range down and redeploy:\n"
+        f"    python3 destroy-competition.py <competition>\n"
+        f"    python3 create-competition.py --competition <competition> --teams N --yes"
     )
 
 
@@ -327,7 +598,7 @@ def reset_domain_markers(comp_dir):
 
 @dataclass
 class DeployContext:
-    """Everything the seven deploy phases share, built once by prepare().
+    """Everything the eight deploy phases share, built once by prepare().
 
     Before this existed the phases were `if` blocks inside a 940-line deploy() reading
     ~160 locals, which made every phase boundary invisible and every phase untestable.
@@ -361,6 +632,7 @@ class DeployContext:
     teams: dict
     number_of_teams: int
     admin_password: str
+    scoring_password: str
     postgres_password: str
     redis_password: str
     box_password: str
@@ -418,9 +690,41 @@ class DeployContext:
         write_state(self.state_path, self.state)
 
     def checkpoint(self, n):
-        """Record phase n as completed — the resume guard's only source of truth."""
+        """Record phase n as completed — the resume guard's only source of truth.
+
+        Which is exactly why a checkpoint must not be written on the strength of a phase
+        merely finishing. In the scale8 soak a strict=False repair sweep "completed"
+        against 32 nonexistent machines and stamped last_phase=5; the next resume then
+        read that stamp as proof the machines existed. So the phases that produce
+        infrastructure verify their own output before claiming it — the same checks a
+        resume would run (guard_resume_existence), which is defense in depth for the run
+        after this one rather than a substitute for the gate."""
+        self._verify_phase_artifacts(n)
         self.state["last_phase"] = n
         self.save_state()
+
+    def _verify_phase_artifacts(self, n):
+        """Phase n's own existence gate: refuse to stamp a claim the range cannot back.
+
+        Only the phases that build infrastructure are gated, using the same checks a
+        resume would run — "if I resume from n+1, is that resume honest?". A phase with
+        nothing independently checkable (cleanup, template build, sweeps, seeding) is
+        not gated, because inventing a proxy check for it would refuse good deploys.
+
+        --force-from-phase deliberately does NOT bypass this: that flag is a statement
+        about skipping work, not a licence to record work that never happened."""
+        if n not in _CHECKPOINT_GATES:
+            return
+        comp_dir = self.comp_dir
+        try:
+            guard_resume_existence(n + 1, comp_dir, self.state)
+        except SystemExit as e:
+            raise SystemExit(
+                f"  ERROR: phase {n} reported success but its output does not exist, so "
+                f"last_phase={n} will NOT be recorded:\n{e}\n"
+                f"        A checkpoint that claims work never done is what sent the scale8 "
+                f"soak's later phases chasing machines that were never built."
+            )
 
     @property
     def comp_tags(self):
@@ -514,6 +818,10 @@ class CompetitionSecrets:
     teams: dict = field(default_factory=dict)
     number_of_teams: int = 0
     admin_password: str = ""
+    # A SECOND admin account, for automation only — see build_event_conf. Quotient
+    # allows one session per ACCOUNT, so a watchdog that logs in as `scoring` cannot
+    # evict the operator's/harness's `admin` cookie.
+    scoring_password: str = ""
     postgres_password: str = ""
     redis_password: str = ""
     box_password: str = ""
@@ -591,16 +899,24 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
             team_node=None, engine_node=None, force_from_phase=False):
     """Everything deploy() must do before phase 1, as one testable step.
 
-    Resolves the engine VMID, loads Compfile/config/state, mints or reuses the
-    competition's secrets, computes multi-node placement, generates the nakon + stage
-    configs, computes the golden hashes and runs the frozen gate, assembles
-    terraform.tfvars.json, runs preflight and enumerates the targets. Returns None when
-    the operator declines the confirmation prompt, so deploy() can return without
-    running any phase (the same early return the inline code had).
+    Resolves the engine VMID, loads Compfile/config/state, resolves teams, computes
+    multi-node placement, runs preflight, THEN mints the competition's secrets,
+    generates the nakon + stage configs, computes the golden hashes and assembles
+    terraform.tfvars.json, and enumerates the targets. Returns None when the operator
+    declines the confirmation prompt, so deploy() can return without running any phase
+    (the same early return the inline code had).
 
     The write lock is deliberately NOT taken here: deploy() holds it across the whole
     run, phases included. Nothing here destroys anything — the frozen gate runs before
-    phase 1 precisely so a freeze can still say "nothing destroyed"."""
+    phase 1 precisely so a freeze can still say "nothing destroyed".
+
+    Order note: preflight runs BEFORE the fresh credential mint. These gates can abort
+    the deploy (engine mgmt IP collision, missing templates, datastore headroom, catalog
+    errors) — a state file written with minted credentials no engine ever received is a
+    credential-desync corpse: every login 401s against the live range until state is
+    restored by hand (2026-09-30 testcomp-7box: a create-competition re-run against an
+    already-deployed comp rotated state while the engine kept the originals). Resumes
+    keep the gate where it was relative to their carried (not minted) credentials."""
     identity = RunIdentity()
     _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid)
     # (The engine lock itself is taken further down — multi-node placement must point
@@ -616,19 +932,24 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     _load_competition_inputs(inputs, comp_dir)
 
     secrets = CompetitionSecrets()
-    _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identity, from_phase)
+    _resolve_competition_teams(secrets, prior, spec, num_teams, identity, from_phase)
 
     place = EnginePlacement()
     _apply_engine_placement(place, prior, secrets, spec, identity, comp_dir, team_node, engine_node)
 
-    generated = GeneratedConfigs()
-    _generate_stage_configs_and_hashes(generated, comp_dir, spec, secrets)
-
     terraform = TerraformInputs()
-    _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity, place, from_phase)
+    terraform.engine_mgmt_ip = _engine_mgmt_ip_from_env()
 
     _run_competition_preflight(comp_dir, spec, secrets, identity, place, terraform,
                                prior, from_phase)
+
+    if not prior.resuming:
+        _mint_competition_secrets(secrets, prior, spec, inputs, identity)
+
+    generated = GeneratedConfigs()
+    _generate_stage_configs_and_hashes(generated, comp_dir, spec, secrets)
+
+    _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity, place, from_phase)
 
     if not assume_yes and not prior.resuming:
         if not confirm_deploy(spec.name, spec.scenario, spec.difficulty, secrets.teams, spec.boxes):
@@ -642,17 +963,32 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
                                     inputs, secrets, place, generated, terraform, targets)
 
 
-def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identity, from_phase):
-    """Mint or reuse every secret the competition needs, into `secrets`.
+def _engine_mgmt_ip_from_env():
+    """The engine's static mgmt IP from the env, defaulted and re-exported.
 
-    A resume reuses state's secrets (minting only what an older state predates); a
-    fresh deploy mints them, except where a carried box_password or the packet's
-    passwords.json outranks the mint. From here on `secrets` is the single source for
-    teams, passwords and the persisted .deploy_state.json dict itself."""
-    # Run identity comes first so BOTH branches persist the same id (utils.mint_run_id):
-    # reused from prior state when the competition directory has one — a resume, a
-    # crash-loop re-run and a redeploy must reclaim and re-tag the SAME lineage, and a
-    # fresh mint would orphan every kept template's ownership.
+    Engine mgmt IP: static by default. The DHCP engine rebooted onto a different
+    address mid-event while terraform's saved output — which deploy/verify/
+    credentials all consume — stayed stale (shakedown-5x4: .221→.243→.233).
+    An explicit TF_VAR_engine_mgmt_ip="" keeps the old DHCP behavior; the
+    chosen value is also exported for template_ops (build-VM ipconfig0)."""
+    ip = os.environ.get("TF_VAR_engine_mgmt_ip")
+    if ip is None:
+        ip = DEFAULT_ENGINE_MGMT_IP
+        print(f"  Engine mgmt IP: static {ip} (default — override "
+              f"TF_VAR_engine_mgmt_ip, set '' for DHCP)")
+        os.environ["TF_VAR_engine_mgmt_ip"] = ip
+    return ip
+
+
+def _resolve_competition_teams(secrets, prior, spec, num_teams, identity, from_phase):
+    """Resolve the run id and the team roster (carried on a resume), into `secrets`.
+
+    Deliberately split from the credential mint: preflight must be able to abort a
+    fresh deploy before any secret exists to desync (see prepare()'s order note). The
+    run id comes first so BOTH paths persist the same id (utils.mint_run_id): reused
+    from prior state when the competition directory has one — a resume, a crash-loop
+    re-run and a redeploy must reclaim and re-tag the SAME lineage, and a fresh mint
+    would orphan every kept template's ownership."""
     secrets.run_id = prior.previous_state.get("run_id") or mint_run_id()
     if prior.resuming:
         secrets.state = json.loads(prior.state_path.read_text())
@@ -661,7 +997,10 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
             for k, v in secrets.state["teams"].items()
         }
         secrets.number_of_teams = len(secrets.teams)
+        # Carried, not minted — an older state may predate some of these; fill gaps
+        # only (the mint step never runs on a resume).
         secrets.admin_password = secrets.state.get("admin_password") or random_password()
+        secrets.scoring_password = secrets.state.get("scoring_password") or random_password()
         secrets.postgres_password = secrets.state.get("postgres_password") or random_password()
         secrets.redis_password = secrets.state.get("redis_password") or random_password()
         secrets.box_password = secrets.state.get("box_password") or random_password()
@@ -672,6 +1011,7 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
         secrets.inject_password = secrets.state.get("inject_password")
         secrets.state.update({
             "admin_password": secrets.admin_password,
+            "scoring_password": secrets.scoring_password,
             "postgres_password": secrets.postgres_password,
             "redis_password": secrets.redis_password,
             "box_password": secrets.box_password,
@@ -705,41 +1045,52 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
                 print(f"  Enter a number from 1 to {MAX_TEAMS} "
                       f"(team identifiers are 192.168.<101-254>.x).")
         secrets.teams = collect_teams(secrets.number_of_teams, identity.engine_vmid)
-        secrets.admin_password = random_password()
-        secrets.postgres_password = random_password()
-        secrets.redis_password = random_password()
-        # M4: box_password is a golden-hash INPUT (baked into /etc/shadow +
-        # cloud-init on the golden disk) — a fresh deploy that re-minted it would
-        # rebuild every golden and break the lifecycle's "2-team test run → 8-team
-        # competition must not rebuild anything". Reuse the competition's existing
-        # box password when prior state carries one; mint fresh only on a truly
-        # new competition. passwords.json (packet profile) outranks both: the
-        # packet's default credentials ARE the competition, and an operator edit
-        # to passwords.json is a deliberate re-key (goldens rebuild — correct).
-        secrets.box_password = ((inputs.packet_pw or {}).get("box_password")
-                                or carry_box_password(prior.previous_state))
-        if inputs.packet_pw:
-            print("  Box credentials come from passwords.json (packet profile) — "
-                  "not re-minted")
-        secrets.box_creds = (dict(inputs.packet_credlists.get("linux") or {})
-                             or {name: random_password() for name in spec.credlist_usernames})
-        secrets.domain_creds = (dict(inputs.packet_credlists.get("domain") or {}) or None)
-        secrets.inject_password = random_password() if inputs.injects else None
+        # Skeleton only — the mint step adds the secrets after preflight. An abort at
+        # the gates leaves a state with the lineage (run id) but no credentials.
         secrets.state = {
             "last_phase": 0,
             "pipeline_version": PIPELINE_VERSION,
             "teams": secrets.teams,
-            "admin_password": secrets.admin_password,
-            "inject_password": secrets.inject_password,
-            "postgres_password": secrets.postgres_password,
-            "redis_password": secrets.redis_password,
-            "box_password": secrets.box_password,
-            "box_creds": secrets.box_creds,
-            "domain_creds": secrets.domain_creds,
             "scoring_vm_id": identity.engine_vmid,
             "run_id": secrets.run_id,
         }
-        write_state(prior.state_path, secrets.state)
+
+
+def _mint_competition_secrets(secrets, prior, spec, inputs, identity):
+    """Mint the fresh deploy's secrets into `secrets` and persist them (preflight has
+    already passed — see prepare()'s order note)."""
+    secrets.admin_password = random_password()
+    secrets.scoring_password = random_password()
+    secrets.postgres_password = random_password()
+    secrets.redis_password = random_password()
+    # M4: box_password is a golden-hash INPUT (baked into /etc/shadow +
+    # cloud-init on the golden disk) — a fresh deploy that re-minted it would
+    # rebuild every golden and break the lifecycle's "2-team test run → 8-team
+    # competition must not rebuild anything". Reuse the competition's existing
+    # box password when prior state carries one; mint fresh only on a truly
+    # new competition. passwords.json (packet profile) outranks both: the
+    # packet's default credentials ARE the competition, and an operator edit
+    # to passwords.json is a deliberate re-key (goldens rebuild — correct).
+    secrets.box_password = ((inputs.packet_pw or {}).get("box_password")
+                            or carry_box_password(prior.previous_state))
+    if inputs.packet_pw:
+        print("  Box credentials come from passwords.json (packet profile) — "
+              "not re-minted")
+    secrets.box_creds = (dict(inputs.packet_credlists.get("linux") or {})
+                         or {name: random_password() for name in spec.credlist_usernames})
+    secrets.domain_creds = (dict(inputs.packet_credlists.get("domain") or {}) or None)
+    secrets.inject_password = random_password() if inputs.injects else None
+    secrets.state.update({
+        "admin_password": secrets.admin_password,
+        "scoring_password": secrets.scoring_password,
+        "inject_password": secrets.inject_password,
+        "postgres_password": secrets.postgres_password,
+        "redis_password": secrets.redis_password,
+        "box_password": secrets.box_password,
+        "box_creds": secrets.box_creds,
+        "domain_creds": secrets.domain_creds,
+    })
+    write_state(prior.state_path, secrets.state)
 
 
 def _apply_engine_placement(place, prior, secrets, spec, identity, comp_dir, team_node, engine_node):
@@ -914,12 +1265,7 @@ def _build_terraform_inputs(terraform, comp_dir, spec, secrets, prior, identity,
     # credentials all consume — stayed stale (shakedown-5x4: .221→.243→.233).
     # An explicit TF_VAR_engine_mgmt_ip="" keeps the old DHCP behavior; the
     # chosen value is also exported for template_ops (build-VM ipconfig0).
-    terraform.engine_mgmt_ip = os.environ.get("TF_VAR_engine_mgmt_ip")
-    if terraform.engine_mgmt_ip is None:
-        terraform.engine_mgmt_ip = DEFAULT_ENGINE_MGMT_IP
-        print(f"  Engine mgmt IP: static {terraform.engine_mgmt_ip} (default — override "
-              f"TF_VAR_engine_mgmt_ip, set '' for DHCP)")
-        os.environ["TF_VAR_engine_mgmt_ip"] = terraform.engine_mgmt_ip
+    terraform.engine_mgmt_ip = _engine_mgmt_ip_from_env()
     # Default the gateway whenever the engine mgmt IP is static (live-found 2026-09-29:
     # an explicitly-set mgmt IP skipped this branch on the .150 env, and the engine
     # template build's ipconfig0 went out with an empty gw= — PVE 400 "Parameter
@@ -1036,6 +1382,7 @@ def _assemble_deploy_context(comp_dir, from_phase, assume_yes, identity, spec, p
         teams=secrets.teams,
         number_of_teams=secrets.number_of_teams,
         admin_password=secrets.admin_password,
+        scoring_password=secrets.scoring_password,
         postgres_password=secrets.postgres_password,
         redis_password=secrets.redis_password,
         box_password=secrets.box_password,
@@ -1163,13 +1510,23 @@ def _load_prior_deploy_state(prior, comp_dir, from_phase, force_from_phase):
         if _pv != PIPELINE_VERSION:
             raise SystemExit(
                 f"  ERROR: {prior.state_path} was written by pipeline v{_pv if _pv is not None else '1'} "
-                f"(pre-golden-template phases) — this code is pipeline v{PIPELINE_VERSION} and its "
-                f"--from-phase numbers mean different things. Run a fresh deploy (no --from-phase)."
+                f"— this code is pipeline v{PIPELINE_VERSION} and its --from-phase numbers mean "
+                f"different things (v3 added the firewall-bootstrap phase 5; v2→v3 also renumbered "
+                f"phases 5-7). Run a fresh deploy (no --from-phase), or finish the run on the code "
+                f"that wrote the state."
             )
         # Refuse to skip a phase that never completed: the skipped phases are what build
         # the machines the later ones target (see guard_resume_from_phase).
         guard_resume_from_phase(from_phase, prior.previous_state.get("last_phase"), prior.state_path,
                                 force=force_from_phase)
+        # ...and refuse a resume-loop: the same phase failing the same way over and
+        # over is not a repair (see guard_resume_streak).
+        guard_resume_streak(from_phase, prior.previous_state, force=force_from_phase)
+        # ...and refuse to trust a checkpoint whose work is not actually there. The two
+        # guards above read the checkpoint as a fact; this one checks the fact
+        # (see guard_resume_existence for the 2026-10-02 soak that proved why).
+        guard_resume_existence(from_phase, comp_dir, prior.previous_state,
+                               force=force_from_phase)
 
 
 def _load_competition_inputs(inputs, comp_dir):
@@ -1189,8 +1546,8 @@ def _load_competition_inputs(inputs, comp_dir):
 
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
-           team_node=None, engine_node=None, force_from_phase=False):
-    """Run the seven-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
+           team_node=None, engine_node=None, force_from_phase=False, min_load_free=None):
+    """Run the eight-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
 
     scoring_vmid overrides the scoring-engine VMID (default 1000) so several
     competitions can run concurrently on one node; it is persisted to
@@ -1228,10 +1585,20 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     if ctx is None:
         return
 
+    # `--min-load-free N` on a resume into a phase that previously failed: wait for the
+    # node to come down before starting. The retries that produced the eleven-attempt
+    # cde-2026 storm were pure contention, and an operator was doing this by hand.
+    if min_load_free is not None and ctx.from_phase > 1:
+        streak_phase = (ctx.state.get("failure_streak") or {}).get("phase")
+        if streak_phase == ctx.from_phase:
+            print(f"  Phase {ctx.from_phase} failed on the previous attempt — waiting for "
+                  f"node '{ctx.node}' to fall below load {min_load_free}...")
+            wait_for_node_load(ctx.node, float(min_load_free), timeout=MIN_LOAD_FREE_TIMEOUT)
+
     current_phase = max(ctx.from_phase, 1)
     try:
         for n, phase in enumerate(PHASES, 1):
-            # Every phase is CALLED so it can print its own "[N/7] Skipped (resume)"
+            # Every phase is CALLED so it can print its own "[N/8] Skipped (resume)"
             # banner, but only a phase that actually ran may become the failure's
             # phase or write last_phase: checkpointing a skipped phase would move the
             # resume guard's answer forward for a phase this run never executed.
@@ -1250,7 +1617,17 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                 # asked to resume at rather than phase 2.
                 connect_terraform(ctx)
     except BaseException as e:
+        _record_degradations(ctx)
         print(f"\n  [!] Deploy failed during phase {current_phase} of '{ctx.comp_name}'.")
+        try:
+            count = record_failure(ctx.state, current_phase, e)
+            ctx.save_state()
+            print(f"      Attempt {count} at phase {current_phase} with this signature"
+                  + (f" — {RESUME_ATTEMPT_LIMIT} is the limit before a resume is refused."
+                     if count >= RESUME_ATTEMPT_LIMIT else "."))
+        except Exception as record_error:
+            # Never let bookkeeping mask the real failure.
+            print(f"      (could not record the failure streak: {record_error})")
         resume_phase = current_phase
         if current_phase >= 2 and "already exists" in str(e).lower():
             resume_phase = 1
@@ -1261,6 +1638,9 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
               f"--competition {ctx.comp_name} --from-phase {resume_phase} --yes")
         raise
 
+    clear_failure_streak(ctx.state)
+    _record_degradations(ctx)
+    ctx.save_state()
     finish_deploy(ctx)
 
 
@@ -1295,6 +1675,11 @@ def main():
                              "not record as completed. Only for a known-stale checkpoint (e.g. the "
                              "process died after a phase finished but before it was checkpointed); "
                              "the skipped phases build the machines the later ones target.")
+    parser.add_argument("--min-load-free", type=float, default=None, dest="min_load_free",
+                        help="On a resume into a phase that previously failed, wait until the "
+                             "node's 1-minute load is below this before starting. Phase-4 retries "
+                             "used to be hand-throttled this way; a contended node, not a short "
+                             "timeout, is what made cde-2026 loop eleven times.")
     parser.add_argument("--scoring-vmid", type=int, default=None, dest="scoring_vmid",
                         help="VMID for this competition's scoring engine (default 1000). Give each "
                              "concurrent competition on a shared node a distinct free VMID so their "
@@ -1325,7 +1710,9 @@ def main():
         print(f"\n  ── PLAN for '{comp_name}' — nothing has been deployed " + "─" * 20)
         for b in boxes:
             disk = f"{b['disk_gb']} GB disk" if b.get("disk_gb") else "template's own disk"
-            print(f"    {b['name']:<12} {b['template']:<20} {b['cpu']} CPU, {b['memory_mb']} MB, {disk}")
+            kind = "  (in-path firewall: vmbrW<id> → fw → team bridge, gateway .1)" \
+                if b.get("in_path") else "  (unmanaged appliance)" if b.get("unmanaged") else ""
+            print(f"    {b['name']:<12} {b['template']:<20} {b['cpu']} CPU, {b['memory_mb']} MB, {disk}{kind}")
         try:
             state_run = (json.loads((comp_dir / ".deploy_state.json").read_text()).get("run_id") or "")
         except (ValueError, OSError):
@@ -1378,7 +1765,7 @@ def main():
 
         deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase,
                scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node,
-               force_from_phase=args.force_from_phase)
+               force_from_phase=args.force_from_phase, min_load_free=args.min_load_free)
         return
 
     previous = load_previous_competitions()
@@ -1432,7 +1819,7 @@ def main():
 
     deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase,
            scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node,
-           force_from_phase=args.force_from_phase)
+           force_from_phase=args.force_from_phase, min_load_free=args.min_load_free)
 
 
 if __name__ == "__main__":

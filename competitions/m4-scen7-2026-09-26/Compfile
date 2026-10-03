@@ -1,4 +1,0 @@
-name m4-scen7-2026-09-26
-scenario M4 scenario 7: frozen gate legs — config drift refuses pre-cleanup; engine code drift warns and reuses the frozen engine template
-difficulty 3
-team_beacons 0

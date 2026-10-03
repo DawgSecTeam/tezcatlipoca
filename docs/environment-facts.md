@@ -1,8 +1,8 @@
 # Environment facts — nodes, storage, templates, vmids
 
 Hardware and environment reality for the Proxmox hosts this pipeline deploys onto. These are **not**
-bugs — they are the ground truth a deploy has to fit into. Moved out of
-[known-issues.md](known-issues.md) (see [the triage](known-issues-triage-2026-10-02.md)) so that
+bugs — they are the ground truth a deploy has to fit into. Split out of
+[known-issues.md](known-issues.md) so that
 "something is broken" and "this is how the estate is" stop competing for attention.
 
 **Verification column:** **[live]** = read back from the Proxmox API or a guest agent on 2026-10-02;
@@ -38,6 +38,19 @@ Measured 2026-10-02 **[live]**:
 | `local-lvm` | lvmthin | .193 | 117 GiB / 137 GiB |
 | `local` | dir | .193 | 12 GiB / 66 GiB |
 
+- **The headroom preflight under-counts by design, and Windows-heavy comps pay for it.**
+  It compares free space against `teams × Σdisk_gb` of the *team* disks, but the real
+  allocation is the **full clones**: one golden per box type plus the engine template.
+  Live 2026-10-02, `same-type-2box-2026-09-29` on `hdd` (1 team × 90 GB provisioned):
+  the preflight said "189 GB free vs ~90 GB needed" and the pool reached **0.2 GiB free**
+  mid-run, at which point both `tz-base` and `tz-ready` snapshots failed with
+  `zfs error: cannot create snapshot … out of space` — silently, leaving the range with
+  **no rollback point**. Teardown returned it to 154.5 GiB, so the run itself consumed
+  roughly 155 GiB: two goldens (30 + 60 GB) plus a ~40 GB engine template, i.e. the
+  full clones dominate. `TEZ_THIN_HEADROOM` does not help here — these are full copies,
+  not linked clones. Budget for goldens + engine template before trusting the gate, and
+  tear down with `destroy-competition.py --full` as soon as a run's goal is met. **[live]**
+
 - **The preflight headroom gate counts provisioned bytes** (≈ teams × Σ`disk_gb`), which does not
   match what linked clones actually allocate. `TEZ_THIN_HEADROOM=<0..1>` relaxes it by counting that
   fraction of the provisioned math. Size the factor to the pool (0.25 has been enough for
@@ -64,6 +77,11 @@ cloud-init drive passes the preflight but its clones boot unreachable. Measured 
 **cyberrange .150 — usable:** `955 base-ubuntu24.04-fix`, `951 base-debian13-lite-fix`,
 `1016 base-fedora44-fix`, `127 base-alpine3.23`, plus the challenge/workshop templates tagged
 `cloud-init` (`112`, `132`, `140`, `153`, …).
+
+**cyberrange .150 — appliance (no cloud-init by design):** `956 pfsense` — the in-path
+firewall template (`unmanaged` + `in_path` boxes clone straight from it; the cloud-init rule
+above does not apply to unmanaged boxes). Only exists on .150 — a firewall lineup needs it
+synced (or rebuilt) on any other node before preflight will pass.
 
 **cyberrange .150 — NOT usable (no cloud-init drive):** `106 base-ubuntu24.04`,
 `920 base-debian13-cloudinit` ⚠️, `103 base-ubuntu20.04`, `109 base-fedora44`.
@@ -132,7 +150,7 @@ three past competitions were still on the nodes, 20 of them running:
 | .150 | `scale8-scrim-2026-10-01` | 16 | 10 | branch `scale8-2026-10-01`, `.tez-backups/scale8-preserve/` |
 | .193 | `cde-2026` | 14 | 9 | `competitions/cde-2026/` |
 | .193 | `scale8-scrim-2026-10-01` | 7 | 1 | same branch/backup |
-| .193 | `amongus-cde-2026` | 6 | 0 | `competitions/amongus-cde-2026/` |
+| .193 | `amongus-cde-2026` | 6 | 0 | `competitions/amongus-cde/` |
 
 They hold vmids, consume `hdd`, and their golden templates can squat a slot a concurrent comp
 wants. Reclaim with `destroy-competition.py` from the matching comp dir/worktree — never an ad-hoc
@@ -140,6 +158,24 @@ sweep. **[live]**
 
 ## Node runtime behavior
 
+- **.150 (cyberrange) RAM is the binding constraint for satellite-heavy Windows ranges.** The
+  2026-10-02 soak measured 50–70 GB *available* against our ~48 GB committed for 4 satellite teams
+  (dc01+win01, plus the jump and slot-1 goldens) — a ~2 GB margin on a node also carrying 73
+  co-tenant VMs; KSM and ARC absorbed it, but nothing else would have. Before placing 4
+  Windows-heavy teams there again, choose deliberately: trim `dc01`/`win01` memory (check the
+  Windows pagefile/commit charge first), reduce co-tenancy, or split 6/2 instead of 4/4 and treat
+  .150 as the 4-team ceiling. Deploy time budget:
+  [multi-node.md § Phase budget](multi-node.md#phase-budget-8-teams--5-boxes-two-nodes). **[live]**
+- **The management network is ONE flat `10.0.0.0/24` L2 shared by both hosts.** A VM on .193 and a
+  VM on .150 are on the same segment, so `TF_VAR_engine_mgmt_ip` (and `jump_mgmt_ip`) are contested
+  **cluster-wide**, not per node — the engine's default `10.0.0.250` is what every competition gets
+  unless someone sets otherwise. Live-found 2026-10-02: `10.0.0.250` was a foreign competition's
+  live `quotient-engine` (verified: `ssh sysadmin@10.0.0.250 hostname` → `quotient-engine`) while a
+  .150 practice deploy was handed the same address by default; the build VM came up on it and died
+  at phase 2 with an opaque `ssh … exit status 255`. **Always set an explicit, checked
+  `TF_VAR_engine_mgmt_ip` when anything else is running on the estate**; `.245`, `.246`, `.249` and
+  `.250` all answered on 2026-10-02. The preflight now scans cluster-wide and refuses the *default*
+  address when any guest is unverifiable (see `config_ops._engine_mgmt_ip_gate`). **[live/code]**
 - **netplan refuses world-readable configs** — the engine's team-NIC netplan files are mode `0600`.
   Verified on both running engines 2026-10-02. **[live]**
 - **Docker re-syncs iptables on every container start/restart**: `FORWARD` goes to `DROP` and the

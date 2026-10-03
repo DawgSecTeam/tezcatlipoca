@@ -1,16 +1,39 @@
 # Known issues — open and pending
 
-This file is the **open list only**: problems that are not fixed, or that need a decision. Resolved
-incidents live in [incident-archive.md](incident-archive.md) (kept for the *why* behind each
-mitigation); the pre-deploy trap checklist is
+This file is the **open list only**: problems that are not fixed, or that need a decision. Fixed
+issues are **deleted, not archived** — git history is the record. The pre-deploy trap checklist is
 [e2e-testing.md §0](e2e-testing.md#0-read-before-you-deploy--live-traps); node/storage/template
 ground truth is [environment-facts.md](environment-facts.md); credential exposure is
 [security-disclosures.md](security-disclosures.md); defects owned by the catalog/nakon are
 [upstream-defects-handoff.md](upstream-defects-handoff.md).
 
-Last triage: **2026-10-02** — [known-issues-triage-2026-10-02.md](known-issues-triage-2026-10-02.md).
-
 ## Open — ours
+
+### A `terraform apply` on a LIVE firewall range rewrites the pre-cutover engine netplan
+
+**Status: OPEN — accepted caveat.** `null_resource.team_nics` writes `/etc/netplan/60-team-ifaces.yaml`
+with `192.168.<id>.1/24` on the team NICs (the pre-cutover shape that lets the pfSense consoles
+fetch their config). Deploy phase 5's cutover rewrites that file (gateway address moved to the
+firewalls, routes via `172.31.<id>.2`). The resource is trigger-gated so nothing rewrites it during
+a normal deploy, but re-running `terraform apply` on a live firewall range whose triggers changed
+re-adds `192.168.<id>.1` under the firewalls' feet — duplicate gateway addresses, ARP flux, and
+half the team's traffic bypassing the firewall. If you must re-apply, re-run
+`create-competition.py --competition <id> --from-phase 5 --yes` afterwards (the cutover is
+idempotent). Owning the cutover inside terraform would need the firewall config state round-tripped
+into tfvars — deferred until a deploy actually needs it.
+
+### pfSense console bootstrap is blind typing
+
+**Status: OPEN — accepted risk, mitigated.** The QEMU monitor API offers `sendkey` but no screen
+reading (PVE's `screendump` writes a host file the API cannot read back; `termproxy` is serial-only
+and the pfSense template's console is VGA). `firewall_ops` therefore drives the menu blind:
+`CONSOLE_SETTLE_S=90` keeps keystrokes out of the FreeBSD loader, the drive sequence is idempotent,
+and success is judged functionally — the fetched config enables SSH, so the WAN probe IS the signal.
+A team that never comes up gets a console PNG (`logs/fw-console-<comp>-<team>.png`) plus a re-drive
+hint; the fallback for a wedged console is the manual runbook
+([pfsense-inpath-2026-09-28.md](pfsense-inpath-2026-09-28.md)). A provisioning-friendly pfSense
+template (serial console + SSH on) would replace the whole dance — template work, not code work.
+
 
 ### Planted Linux boxes deny all SSH at the PAM account stage after a restart
 
@@ -38,81 +61,63 @@ stopped loop reports stale DOWN as if live).
 Mitigated: `verify-competition.py` detects the signature (old StartTime + zero current_round_time,
 engine unpaused), **FAILs** the run, and `--fix-round-loop` issues the two POSTs
 (`/api/competition/start {"started":true}`, then `/api/engine/pause {"pause":false}`); re-run verify
-to confirm a fresh round. **Next action:** an engine-side watchdog that issues the same POSTs when
-the stale signature appears (same pattern as the live `range-firewall.timer`), so a reboot — including
-the owner-confirmed .193 hardware hard-downs — heals without an operator.
+to confirm a fresh round.
 
-### `clean_engine_for_template` can wipe a *foreign* live engine on a shared mgmt IP
-
-**Status: OPEN — mitigation only.** The engine-template build VM is booted on the planned engine
-static mgmt IP, and the cleanup (`compose down -v`, `.env`/`event.conf` deletion, host-key wipe) is
-delivered by **SSH to that IP**. With two engines of two comps (or an engine and a build VM) up on
-one node, ARP flaps can make the cleanup land on a live foreign engine — observed destroying an
-engine's `/etc/ssh/ssh_host_*`, `/opt/quotient/.env` and containers while its listener stayed up.
-
-Mitigations: give each concurrent comp its own `TF_VAR_engine_mgmt_ip` (now in
-[e2e-testing.md §0](e2e-testing.md#0-read-before-you-deploy--live-traps)); `ssh_via_gateway` self-heals
-the resulting stale TOFU pin; recovery of a hit engine is `ssh-keygen -A` + `systemctl restart ssh`
-via the guest agent, then `--from-phase 3`. **Next action:** address the target by VM identity
-(vmid/guest-agent) instead of a shared IP, and refuse when the IP is ambiguous — see
-[the triage §3 B3](known-issues-triage-2026-10-02.md).
+**Next action:** an engine-side watchdog that issues the same POSTs when the stale signature appears
+(same pattern as the live `range-firewall.timer`), so a reboot — including the owner-confirmed .193
+hard-downs — heals without an operator. **Automation implemented 2026-10-02, opt-in and not yet trialled live:** the blocker was that a
+watchdog could not simply log in — Quotient allows one session per account, so the login would evict
+whichever operator, `verify-competition` or harness session held `admin`. Every competition now seeds
+a **separate `scoring` admin account** for exactly this (`event.conf`'s `admin` list; per-competition
+password in `credentials.txt`), and `round_loop.py` holds the one definition of "the loop is
+stopped" — shared with verify's gate so the two cannot disagree. The actor is
+`tools/round_loop_guard.py`, installed on the engine as a 60s timer when the Compfile sets
+**`round_loop_guard 1`** (default off). **Remaining:** run it on a live range — kill the loop
+deliberately, watch the timer heal it, and only then consider it done.
 
 ### Fedora goldens cannot be built on SELinux-enforcing nodes
 
-**Status: OPEN — workaround; live-confirmed 2026-10-02.** The qemu-guest-agent domain is confined:
-on a Fedora 44 clone, guest-exec is root inside `virt_qemu_ga_t`, where `dnf`/`rpm` and writes under
-`/etc` are `Permission denied`, `systemctl` is `Access denied`, and `setenforce 0` plus the
-`virt_qemu_ga_run_unconfined` boolean are denied. Golden build reaches the box by SSH when the
-gateway path works, and **SSH is the escape hatch** — the image's cloud user with the repo key lands
-in `unconfined_t` with passwordless sudo (verified). So the block is agent-only flows; keep Fedora out
-of lineups where the agent is the only path. **Fix (cheap, not yet applied):** flip the template's
-`/etc/selinux/config` to permissive at template-build time. Detail and the verified SSH route:
-[environment-facts.md](environment-facts.md#templates).
+**Status: OPEN — mitigated; the template recipe is fixed, the templates are not rebuilt.** The
+qemu-guest-agent domain is confined: on a Fedora 44 clone, guest-exec is root inside `virt_qemu_ga_t`,
+where `dnf`/`rpm` and writes under `/etc` are `Permission denied`, `systemctl` is `Access denied`, and
+`setenforce 0` plus the `virt_qemu_ga_run_unconfined` boolean are denied. Golden build reaches the box
+by SSH when the gateway path works, and **SSH is the escape hatch** — the image's cloud user with the
+repo key lands in `unconfined_t` with passwordless sudo (verified). So the block is agent-only flows;
+keep Fedora out of lineups where the agent is the only path. **Fix — recipe applied 2026-10-02,
+templates not yet rebuilt:** the template-build recipe now sets `SELINUX=permissive` in
+`/etc/selinux/config` before sealing
+([usage-people.md](usage-people.md#non-ubuntu-linux-box-templates-fedora-alpine)), which only takes
+effect on the next rebuild, so the Fedora templates currently on the nodes still enforce. Detail and
+the verified SSH route: [environment-facts.md](environment-facts.md#templates).
 
 ### llama.cpp local-blue context ceiling
 
 **Status: OPEN — standing constraint.** opencode's own base prompt is ~20k tokens, so the local
 endpoint's advertised context must leave room for it or opencode self-compacts fatally. `60000` is the
 verified local value (cloud blue uses `120000`); do not set `reasoning_effort` for a local endpoint.
-**Next action:** a launch-time assertion against the endpoint's real `n_ctx` instead of prose — see
-[the triage §3 B6](known-issues-triage-2026-10-02.md).
+**Next action:** a launch-time assertion against the endpoint's real `n_ctx` instead of prose.
 
-### Template with no cloud-init drive could pass the template preflight
+### Teardown's pre-stop never matches team 1's boxes
 
-**Status: FIXED 2026-10-02** (moving to the archive). The preflight verified only that a selected
-template resolved to a *tagged template*, so a template with no cloud-init drive — e.g. .150 `920
-base-debian13-cloudinit`, despite its name — passed and its clones booted unreachable an hour later.
-`config_ops._cloudinit_gate` now reads each selected Linux template's config (single-node and the
-per-node multinode path, placed before the `check_free` skip so resumes are covered) and refuses with
-the vmid, ostype and the `-fix` alternative. Windows and other non-Linux ostypes are exempt (identity
-comes from `bootstrap_windows_box`); an unreadable config prints UNVERIFIED and does not block. The
-usable/dead template inventory is in [environment-facts.md](environment-facts.md#templates).
+**Status: OPEN — latent; the name pattern is wrong for exactly one team.** `pre_stop_windows_boxes`
+exists to hard-stop every clone before `terraform destroy`, because a Windows DC whose guest agent is
+down never complies with the provider's graceful shutdown and holds the `qm` lock, hanging the whole
+destroy (`destroy-competition.py:126-141`). It matches VM names as `<identifier>-<box>`
+(`destroy-competition.py:162`), but terraform deliberately names team 1's VMs `team1-<box>` and only
+other teams' `<identifier>-<box>` (`terraform/main.tf:251-261`, comment: "Keys keep the historical
+naming (team1-<box>, <identifier>-<box>)"); `range_ops.enumerate_targets` implements the same
+special-case (`range_ops.py:668-669`), and every `teams.json` in the tree is keyed `team1…`
+(`competitions/*/teams.json`). So team 1's boxes are never pre-stopped and can still hit the
+graceful-shutdown hang the function was written to prevent; other teams pre-stop correctly. Not a
+destroy failure — terraform still removes team 1 from state, just potentially slowly.
 
-### Freeze: the recorded commit was never read
-
-**Status: FIXED 2026-10-02** (moving to the archive). Code-verified at the time: `.frozen.json`
-recorded the code state (`commit`, `dirty`) but **no gate ever read it** — the deploy-time drift gate
-compares per-template function/`main.tf` hashes from `.template-hashes.json`, and code-class drift is
-*warn-only*. So the documented rule "commit before `--freeze` or the drift gate trips" was never what
-the code did. Fix, in two parts:
-
-- `--freeze` refuses when there are uncommitted **deploy-path code** changes (`.py/.tf/.sh/.j2/.ps1`);
-  non-code dirt (comp JSON, `placement.json`, `nodes.json`, terraform state, `.env` backups) is
-  expected after a run and only prints a note. The scoping is the load-bearing detail: the first cut
-  refused on *any* `git status --porcelain` entry, which made `--freeze` impossible in a normal
-  post-run worktree (verified on the scale8 worktree: a modified `placement.json`, an untracked
-  `nodes.json`, a `.env` backup). `git_commit_info`'s recorded `dirty` now means the same thing, so
-  runtime state cannot raise a false drift warning later.
-- `template_ops.frozen_code_drift` reads the recorded commit at deploy time and warns loudly on a
-  moved commit or uncommitted code, naming both commits and the `--unfreeze --confirm-unfreeze` path.
-  Deliberately warn-only: resuming after a docs commit is normal, and no strict-drift toggle exists.
+**Next action:** build the name from `range_ops.enumerate_targets` (`vm_name`) or apply the same
+`team_key == "team1"` special case instead of re-deriving the pattern. Found 2026-10-03 while
+surveying teardown for
+[reports/automated-test-artifacts-plan-2026-10-03.md](reports/automated-test-artifacts-plan-2026-10-03.md)
+(which must not copy this pattern when it enumerates boxes to collect artifacts from).
 
 ## Pending upstream — owned by the catalog / nakon
-
-The four Linux catalog rows that were listed here were **fixed and verified live** on 2026-10-02
-(noble/debian13/fedora44), removed from `constants.KNOWN_BROKEN_CONFIGS`, and archived with their
-corrected root causes: [vulndb-fixes/](vulndb-fixes/), [incident-archive.md](incident-archive.md).
-What remains:
 
 - `mailenable-cleartext-mail-win` — the only Windows pin still in `KNOWN_BROKEN_CONFIGS`. The row
   plants no mail service at all: `choco install mailenable` names a package the community feed does
@@ -120,17 +125,6 @@ What remains:
   service names) is recorded in [vulndb-fixes/mailenable-cleartext-mail-win.candidate](vulndb-fixes/)
   but is **unverified** — the silent install only completes the MAPI-connector component.
   Handoff: [upstream-defects-handoff.md §5](upstream-defects-handoff.md).
-- `local-user-win`, `powershell-execution-unrestricted`, `rpc-proxy-on-dc-web-win`,
-  `unauth-kiosk-app-startup-win` — **fixed, verified live and removed** from
-  `KNOWN_BROKEN_CONFIGS` on 2026-10-02 (lab vmid 131). The old
-  "Set-LocalUser/password-policy ordering" story was an inference from three unrelated names and
-  was wrong: none of these four touches an account or password policy. Real defects were a
-  string-vs-integer flag comparison, a terminating `Set-ExecutionPolicy` under nakon's
-  Process-scope Bypass, non-existent feature/property names, and a prerequisite gap reported as a
-  script bug. Bodies and evidence: [vulndb-fixes/](vulndb-fixes/).
-- `local-user` (linux) — **closed**: the live catalog already carries the portable fix, and there is
-  no seed file anywhere (`vulndb-interfaces/schema.sql` is schema only), so nothing can revert it;
-  the nightly dumps in the vulndb VM are the only restore path.
 - `nakon randomize` handing out names whose script needs vars it cannot supply — **catalog half
   fixed**: `nakon catalog check` now reports `missing-vars` (`f86c11d`), and the driver additionally
   filters unplantable bare names on the fresh path (`nakon_ops._drop_unplantable_bare`). `randomize`
@@ -138,8 +132,6 @@ What remains:
   `catalog check` is the gate.
 - Windows package-manager fallback — the step now writes `.nakon-step-rc` and states plainly that it
   has never run against real winget/chocolatey (`12c3195`). Still not live-verified on Windows.
-- `install_package` — **stale doc, no defect**: the function no longer exists, and the current package
-  step records its rc into `report.tsv` and the FAILED tally.
 
 The repo-side guard for the broken catalog names is `constants.KNOWN_BROKEN_CONFIGS`, enforced by
 `nakon_ops._validate_known_broken_pins` at generate time and by `packet_ops` at packet-compile time.
@@ -148,8 +140,8 @@ deliberately: a **fresh selection** that gets past
 the driver's `_drop_unplantable_bare` filter is a hard error; a competition that **already records**
 the pin (any comp dir with `box_services.json`/`box_vulns.json`) gets a WARNING, so the historical
 comps stay re-deployable. Residual gap: a brand-new hand-authored comp dir is on that "reuse" path
-and therefore warns rather than errors (packet comps are caught at compile). The list is down to the
-one row above; it shrinks further when `mailenable` is fixed.
+and therefore warns rather than errors (packet comps are caught at compile). When `mailenable` is
+fixed, delete its bullet — do not archive it.
 
 ## Standing limitations — not fixable here
 

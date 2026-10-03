@@ -24,10 +24,12 @@ except ImportError as e:
 from dotenv import load_dotenv
 
 from domain_ops import team_domain
+import round_loop
 from range_ops import guest_agent_exec_root, guest_agent_exec_windows, vm_id_for
 from quotient.setup import expected_service_names
 from ssh_ops import engine_ssh_opts, gateway_proxy
-from utils import BOX_USERNAME_DEFAULT, MAX_CONCURRENCY, PRINT_LOCK, load_users_config, run_concurrent
+from utils import (BOX_USERNAME_DEFAULT, MAX_CONCURRENCY, PRINT_LOCK, load_users_config,
+                   run_concurrent)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -905,6 +907,81 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
     return _fail("red_identity", f"{seg_ip} never visible on {box_ip}")
 
 
+def _boxes_by_team(boxes):
+    """{team identifier: [box, ...]} from the machine list, keyed on the IP's third
+    octet — the same convention every other gate uses (`192.168.<id>.<host>`).
+
+    A box with no usable IP is skipped rather than guessed at; a half-edited machine
+    list must not silently shrink the set of teams this gate proves."""
+    out = {}
+    for b in boxes or []:
+        ip = str(b.get("ip") or "").strip()
+        parts = ip.split(".")
+        if len(parts) != 4 or not parts[2].isdigit():
+            continue
+        out.setdefault(parts[2], []).append(b)
+    return out
+
+
+def check_red_teams(ctx, boxes, red_ip, red_user="sysadmin", timeout=12):
+    """--red-teams all: every team must be reachable from red01, not just one.
+
+    scale8-soak-2026-10-02: routed red01 could not reach ANY satellite team box
+    ("unreachable over SSH" on 15/15 cred_sprays) and this went unnoticed until
+    T+40 because `--red-identity` only proves red reaches one box on its own
+    segment. Red's whole job depends on this path, so it is a gate, and it runs
+    before T0 in the scrim's stage_verify.
+
+    Probes each team's boxes in turn and stops at the first that answers, so a
+    team costs one round trip when it is healthy. Fails closed: a team whose boxes
+    all refuse the connect is a FAIL, and an unreadable team list is a SKIP (never
+    a pass), matching the discipline of every other gate in this file."""
+    print(f"\n[+RED] RED REACHABILITY (red01 {red_ip} -> one box per team)")
+    by_team = _boxes_by_team(boxes)
+    if not by_team:
+        print("  SKIP  — no team boxes with usable IPs in the machine list")
+        return _skip("red_teams", "no team boxes with usable IPs")
+
+    unreachable, reached = [], []
+    for ident in sorted(by_team, key=int):
+        candidates = sorted(by_team[ident], key=lambda b: str(b.get("name") or ""))
+        hit = None
+        for box in candidates:
+            ip = box["ip"]
+            try:
+                proc = subprocess.run(
+                    ["ssh", "-i", ctx["ssh_key_path"],
+                     "-o", "StrictHostKeyChecking=no",
+                     "-o", "UserKnownHostsFile=/dev/null",
+                     "-o", "ConnectTimeout=10",
+                     f"{red_user}@{red_ip}",
+                     f"timeout {timeout} bash -c 'exec 3<>/dev/tcp/{ip}/22' && echo RED-OK"],
+                    capture_output=True, text=True, timeout=timeout + 20)
+            except (OSError, subprocess.SubprocessError) as e:
+                print(f"  SKIP  — couldn't run the red01 probe: {e}")
+                return _skip("red_teams", "couldn't run the red01 probe")
+            if "RED-OK" in (proc.stdout or ""):
+                hit = ip
+                break
+        if hit:
+            reached.append(f"team{ident}({hit})")
+            print(f"  ok    team{ident}: red01 reached {hit}:22")
+        else:
+            unreachable.append(f"team{ident}")
+            tried = ", ".join(f"{b['ip']}:22" for b in candidates)
+            print(f"  FAIL  team{ident}: red01 could not open a TCP connection to any of "
+                  f"{tried}")
+
+    if unreachable:
+        print(f"  FAIL  — red01 cannot reach {len(unreachable)}/{len(by_team)} team(s): "
+              f"{', '.join(unreachable)}. Red cannot attack what it cannot dial: check the "
+              "satellite jumps' FORWARD/SNAT rules for the red segment (TEZ_RED_SEGMENT) "
+              "and the engine's routes to every team subnet.")
+        return _fail("red_teams", f"red01 unreachable for {', '.join(unreachable)}")
+    print(f"  PASS  red01 reached {len(reached)}/{len(by_team)} teams")
+    return _pass("red_teams", f"red01 reached all {len(reached)} teams")
+
+
 def report_healthcheck_status(ctx):
     """Report range-healthcheck.timer status (informational, not gate)."""
     try:
@@ -1232,17 +1309,20 @@ def check_round_loop(base_url, admin_session, fix=False):
         print("  PASS  — engine paused (round loop not expected to advance)")
         return _pass("round_loop", "engine paused")
 
-    cur_when = _rfc3339(eng.get("current_round_time"))
-    if cur_when is not None and cur_when.year <= 1:
-        cur_when = None  # the Go zero time — the loop is not cycling
-    started = _rfc3339((eng.get("last_round") or {}).get("StartTime"))
-    if started is None or cur_when is not None:
+    # The judgement itself lives in round_loop.py so the engine-side watchdog
+    # (tools/round_loop_guard.py) cannot drift from this gate — two definitions of "the
+    # loop is stopped" is precisely the failure mode this repo keeps paying for.
+    verdict = round_loop.round_loop_state(eng)
+    if verdict["state"] == round_loop.UNKNOWN:
+        print("  SKIP  — /api/engine did not answer a usable document")
+        return _skip("round_loop", "unexpected /api/engine payload")
+    if verdict["state"] == round_loop.ADVANCING:
         print("  PASS  — round loop advancing")
         return _pass("round_loop", "loop advancing")
-    age_min = (datetime.now(timezone.utc) - started).total_seconds() / 60
-    if age_min < (_FRESHNESS_ROUNDS * _ROUND_DELAY_SECONDS) / 60:
+    if verdict["state"] == round_loop.PENDING:
         print("  PASS  — round loop starting (first round pending within Delay)")
         return _pass("round_loop", "first round pending")
+    age_min = (verdict["age_seconds"] or 0) / 60
     print(f"  WARN  — round loop looks STOPPED: last round started {age_min:.0f} min ago "
           "and current_round_time is the zero time (engine rebooted? the loop does not "
           "self-resume)")
@@ -1305,6 +1385,42 @@ def _valid_domain_sid(sid):
     parts = (sid or "").split("-")
     return (len(parts) == 7 and sid.startswith("S-1-5-21-")
             and all(p.isdigit() for p in parts[3:]))
+
+
+def check_degradations(comp_dir):
+    """Surface the prerequisites that failed while the deploy continued anyway.
+
+    The deploy tolerates some failures on purpose (each site has its own reason), but
+    it records every one of them in `.deploy_state.json["degradations"]` — apt prep that
+    installed nothing, an auth ladder that failed on both transports, a box that never
+    settled, a node scan that never happened. Without this line those exist only as
+    WARNING text in a scrollback nobody reads, which is how a range can come up "green"
+    with every service down. Warning-level, not gating: the deploy did survive them, and
+    the plant-coverage/service gates are what decide whether the range actually works.
+    """
+    state_path = comp_dir / ".deploy_state.json"
+    try:
+        state = json.loads(state_path.read_text())
+    except (OSError, ValueError):
+        return _skip("degradations", "no readable .deploy_state.json", gating=False)
+    entries = state.get("degradations")
+    if entries is None:
+        print("  SKIP  — this deploy recorded no degradation ledger "
+              "(pre-dates the ledger, or state was rewritten).")
+        return _skip("degradations", "not recorded by this deploy", gating=False)
+    if not entries:
+        print("  PASS  — no tolerated failures recorded.")
+        return _pass("degradations", "none recorded")
+    seen = {}
+    for entry in entries:
+        seen[entry.get("what", "?")] = seen.get(entry.get("what", "?"), 0) + 1
+    detail = ", ".join(f"{what} x{count}" if count > 1 else what
+                       for what, count in sorted(seen.items()))
+    for entry in entries:
+        print(f"  WARN  — {entry.get('what')}: {str(entry.get('detail', ''))[:110]}")
+    print(f"  WARN  — {len(entries)} tolerated failure(s) recorded; see "
+          f".deploy_state.json['degradations']")
+    return _pass("degradations", f"{len(entries)} tolerated: {detail[:150]}")
 
 
 def check_domains(comp_dir, teams, boxes, ctx=None):
@@ -1504,9 +1620,13 @@ def check_plant_coverage(comp_dir):
     Deploy records failures per machine in .deploy_state.json["plant_coverage_failed"]
     (machine -> [config names whose nakon step reported rc != 0], or every config when
     a machine died before reporting any step). Golden-stage entries map onto every team
-    copy of that box (a golden failure means the clones inherited the gap). This is the
-    backstop that catches a broken/undeclared-var config the moment it fails to plant,
-    instead of a mid-competition discovery.
+    copy of that box (a golden failure means the clones inherited the gap): the golden
+    plant records under '{box}-golden' (phase 4, via build_golden_set's coverage
+    callback — including alpine_services-tolerated failures), and satellite slots
+    record '{box}-golden-slot{N}' since every slot's stage config names its machine
+    identically; any slot's failure flags every team copy. This is the backstop that
+    catches a broken/undeclared-var config the moment it fails to plant, instead of a
+    mid-competition discovery.
 
     D2 (live-found 2026-10-02): this gate used to read ONLY plant_coverage_failed and
     fail OPEN when it was absent — missing/unparseable state, an older state, or a
@@ -1553,8 +1673,15 @@ def check_plant_coverage(comp_dir):
         name = m.get("name", "?")
         expected = {cfg_name(c) for c in m.get("configurations", [])}
         machine_bad = [c for c in (recorded or {}).get(name) or []]
-        golden_key = f"{name.rsplit('-team', 1)[0]}-golden"
-        golden_bad = [c for c in (recorded or {}).get(golden_key) or []]
+        # Golden-stage keys: slot 0 records '{box}-golden', satellite slot N records
+        # '{box}-golden-slot{N}' (every slot's stage config names its golden machine
+        # identically, so the keys must not collide across slots). A failure on ANY
+        # slot's golden flags every team copy of the box — each clone inherits its
+        # own slot's disk, and a gap on any of them is a range-wide problem.
+        base = name.rsplit("-team", 1)[0]
+        golden_bad = [c for k, v in (recorded or {}).items()
+                      if k == f"{base}-golden" or k.startswith(f"{base}-golden-slot")
+                      for c in (v or [])]
         # Intersect each recorded failure with what this machine STILL expects: a
         # failure for a config no longer in its `configurations` is stale and must not
         # fail the gate (amongus-cde-2026 2026-09-30: a recovered SMB v1 entry stayed
@@ -1749,6 +1876,12 @@ def main():
                         help="also verify red's routed identity: red01 must reach a box with "
                              "its red-segment source IP (not the team gateway). Needs red01 "
                              "deployed; seg IP falls back to ../bad-auto/config.yaml")
+    parser.add_argument("--red-teams", choices=["own", "all"], default="own",
+                        help="--red-teams all: additionally prove red01 can reach EVERY "
+                             "team over SSH (one box each), not just its own segment. This "
+                             "is the gate the scale8 soak lacked — routed red could not "
+                             "reach any satellite team and it went unseen for 40 minutes. "
+                             "Needs red01 deployed; pairs with --red-identity.")
     parser.add_argument("--red-ip", default="10.0.0.198", help="red01 mgmt IP for --red-identity")
     parser.add_argument("--red-user", default="sysadmin", help="red01 SSH user for --red-identity")
     parser.add_argument("--red-seg-ip", default=None,
@@ -1855,6 +1988,13 @@ def main():
             except CheckError as e:
                 print(f"  SKIP  — red identity check couldn't run: {e}")
                 results.append(_skip("red_identity", "check couldn't run"))
+    if args.red_teams == "all" and not _spent("red_teams"):
+        try:
+            results.append(check_red_teams(ctx, boxes, args.red_ip,
+                                           red_user=args.red_user))
+        except CheckError as e:
+            print(f"  SKIP  — red team-reachability check couldn't run: {e}")
+            results.append(_skip("red_teams", "check couldn't run"))
     print("\n  (live-ops health check status — informational)")
     if not budget.expired():
         report_healthcheck_status(ctx)
@@ -1882,6 +2022,8 @@ def main():
     if not _spent("plant_coverage"):
         coverage_result = check_plant_coverage(comp_dir)
         results.append(coverage_result)
+    print("\n  (Tolerated failures — prerequisites that failed while the deploy continued)")
+    results.append(check_degradations(comp_dir))
     print("\n  (AD domains — promotion, joins, AD plants, DomainSID uniqueness)")
     if not _spent("domains"):
         results.append(check_domains(comp_dir, teams, boxes, ctx=ctx))

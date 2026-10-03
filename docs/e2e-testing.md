@@ -9,8 +9,8 @@ How to run a full pipeline test (`create-competition.py` / `run-agent-scrim.py`)
 failures are triaged once, recovered cheaply, and never debugged twice. This doc condenses
 every deploy failure from the July 2026 shakedown through the September scrim / winad / pfSense
 red-vs-blue runs; the pre-deploy trap list is **[§0 below](#0-read-before-you-deploy--live-traps)**,
-[known-issues.md](known-issues.md) carries the currently-open issues,
-[incident-archive.md](incident-archive.md) is the canonical resolved-incident log,
+[known-issues.md](known-issues.md) carries the currently-open issues
+(fixed issues are deleted — git history is the record),
 [environment-facts.md](environment-facts.md) is the node/storage/template ground truth,
 [architecture.md](architecture.md) explains the phases, [usage-agents.md](usage-agents.md)
 documents the flags, and [pfsense-inpath-2026-09-28.md](pfsense-inpath-2026-09-28.md)
@@ -116,7 +116,7 @@ Before debugging a failed deploy, answer: *what changed since the last green run
 | event-side (not deploy) | opencode cycle deaths, scoreboard `Forbidden`, red-evidence scp hangs, wrong systemd unit names | Harness/agent-side, not the deploy pipeline | Fixed + policed by `docs/rehearsal-gates.md` |
 | engine apt-lock race | phase 2 engine bootstrap `rc=100`, `Could not get lock /var/cache/apt/archives/lock` held by a fresh apt-get | First-boot `unattended-upgrades`/`apt-daily-upgrade` re-spawns apt *after* the preamble's killall; `DPkg::Lock::Timeout` doesn't cover the archives-cache lock | Fixed 2026-09-27 (`engine_ops.py`): `systemctl mask` the units + poll `fuser` on all three locks until free before touching apt |
 | non-apt distro prep | fedora/alpine box: `apt-get: command not found` ×5 retries, 240 s settle burned per pass | Box apt-prep + settle-check assumed Debian | Fixed 2026-09-27 (`hardening_ops.py`): `command -v apt-get \|\| exit 0` guard before any apt call |
-| Fedora member gaps | app01 (Fedora) golden plant `Bad authentication type`; post-boot httpd/named DOWN; guest-agent flaps | Fedora Cloud image ≠ Ubuntu: SSH password-auth off (`50-cloud-init.conf`), `named` binds localhost-only, httpd hangs on `ServerName` DNS at boot before the DC is up | Fixed by baking `base-fedora44-fix` (cloud-init + `00-tzc-pwauth.conf`) and, per box, `ServerName localhost` + `named listen-on { any; }`. Fold into the template/catalog (still a TODO) |
+| Fedora member gaps | app01 (Fedora) golden plant `Bad authentication type`; post-boot httpd/named DOWN; guest-agent flaps | Fedora Cloud image ≠ Ubuntu: SSH password-auth off (`50-cloud-init.conf`), `named` binds localhost-only, httpd hangs on `ServerName` DNS at boot before the DC is up | Fixed by baking `base-fedora44-fix` (cloud-init + `00-tzc-pwauth.conf`) and, per box, `ServerName localhost` + `named listen-on { any; }` — both folded into `fix_services_on_boxes`, so they re-apply on every fresh clone. The old "fold into the golden/catalog" TODO is retired — git history is the record |
 | teardown stuck DC | `terraform destroy` hangs "Still destroying… Nm elapsed" on a Windows DC | bpg provider does a *graceful* shutdown (long `timeout_shutdown_vm`); a DC whose qemu-guest-agent is down never shuts down | Hard-kill the qemu process: `kill -9 $(cat /var/run/qemu-server/<vmid>.pid)` — terraform then deletes the stopped VM. Pre-`qm stop` the other DCs first |
 | scoring stopped post-reboot | scoreboard frozen; `/api/engine` `last_round.StartTime` is stale, `current_round_time` zero | The round loop does not auto-resume after an engine VM reboot | `POST /api/competition/start {started:true}` then `POST /api/engine/pause {pause:false}`; a fresh round appears within `Delay` seconds |
 | pfSense in-path | engine→box scoring times out through pfSense, or the firewall clone won't boot | WAN pass rule used a raw CIDR `<network>` (silently dropped); host-side ZFS config-write breaks pfSense boot (OpenZFS 2.4.4 > pfSense's loader) | See §8 and `docs/pfsense-inpath-2026-09-28.md`: `<network>lan</network>`, and inject config guest-side (console `fetch`), never host-side ZFS |
@@ -184,11 +184,13 @@ aborts): **environmental saturation and unvetted pin density, not pipeline code.
   flag is `--timeout`. The offline suite (`python3 -m pytest tests/`) covers deploy-path helpers
   but is **not** a pipeline test — this gate against a deployed range *is* the integration test.
   See [tests.md](tests.md).
-- **Logs — nothing captures them by default.** `run-agent-scrim.py --run-dir` writes
-  `<run_dir>/deploy.log`; `run-deploy.sh` tees to repo-root `deploy.log`; a bare
-  `create-competition.py` run leaves only the console scrollback. Two post-mortems (17b/17c)
+- **Logs — nothing captures them by default.** `run-agent-scrim.py` writes `<run_dir>/deploy.log`
+  **only when the deploy fails** (the write is guarded on `returncode != 0` in `stage_deploy`), so a
+  *successful* harness run leaves no deploy log; `run-deploy.sh` tees to repo-root `deploy.log`; a
+  bare `create-competition.py` run leaves only the console scrollback. Two post-mortems (17b/17c)
   were possible only because a run-dir happened to capture output. Always launch with capture
-  (§7).
+  (§7) — the per-run artifact folder keeps phase markers and the timing sidecar, not stdout
+  ([automated-test-artifacts.md](automated-test-artifacts.md)).
 
 ## 4. Per-phase failure cost map
 

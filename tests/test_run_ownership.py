@@ -259,7 +259,8 @@ class DeployContextTags(unittest.TestCase):
             comp_dir=Path("."), comp_name=COMP, state_path=Path("."), from_phase=1,
             resuming=False, assume_yes=True, name=COMP, scenario="", box_username="ubuntu",
             credlist_usernames=[], nakon_jobs=4, apt_cache=True, injects=[], packet_pw=None,
-            state={}, teams={}, number_of_teams=0, admin_password="a", postgres_password="p",
+            state={}, teams={}, number_of_teams=0, admin_password="a", scoring_password="s",
+            postgres_password="p",
             redis_password="r", box_password="b", box_creds={}, domain_creds=None,
             inject_password=None, placement=None, node="pve", engine_vmid=1000,
             engine_mgmt_ip="10.0.0.1", boxes=[], boxes_by_name={}, unbooted=set(),
@@ -286,7 +287,8 @@ class DeployContextTags(unittest.TestCase):
 
 
 class RunIdMinting(unittest.TestCase):
-    """_resolve_competition_secrets: minted once per comp dir, reused forever after."""
+    """_resolve_competition_teams + _mint_competition_secrets: the run id is minted
+    once per comp dir and reused forever after."""
 
     def _spec(self):
         return deploy.CompetitionSpec(comp_name=COMP, credlist_usernames=[])
@@ -300,9 +302,12 @@ class RunIdMinting(unittest.TestCase):
                     patch.object(deploy, "collect_teams",
                                  return_value={"team1": {"identifier": "101",
                                                          "password": "x"}}):
-                deploy._resolve_competition_secrets(
-                    secrets, prior, self._spec(), deploy.CompetitionInputs(), 1,
+                deploy._resolve_competition_teams(
+                    secrets, prior, self._spec(), 1,
                     deploy.RunIdentity(engine_vmid=1000), 1)
+                deploy._mint_competition_secrets(
+                    secrets, prior, self._spec(), deploy.CompetitionInputs(),
+                    deploy.RunIdentity(engine_vmid=1000))
         self.assertRegex(secrets.run_id, r"^run-[0-9a-f]{8}$")
         self.assertEqual(secrets.state["run_id"], secrets.run_id)
 
@@ -316,8 +321,8 @@ class RunIdMinting(unittest.TestCase):
                                             previous_state={"run_id": RUN}, resuming=True)
             secrets = deploy.CompetitionSecrets()
             with patch.object(deploy, "write_state"):
-                deploy._resolve_competition_secrets(
-                    secrets, prior, self._spec(), deploy.CompetitionInputs(), None,
+                deploy._resolve_competition_teams(
+                    secrets, prior, self._spec(), None,
                     deploy.RunIdentity(engine_vmid=1000), 4)
         self.assertEqual(secrets.run_id, RUN)
         self.assertEqual(secrets.state["run_id"], RUN)

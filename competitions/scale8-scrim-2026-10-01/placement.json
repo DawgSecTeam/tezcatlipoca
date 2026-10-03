@@ -1,0 +1,113 @@
+{
+ "version": 1,
+ "comp": "scale8-scrim-2026-10-01",
+ "engine_vmid": 1900,
+ "engine_node": "zfs-193",
+ "nodes": {
+  "zfs-193": {
+   "name": "zfs-193",
+   "endpoint": "https://10.0.0.193:8006",
+   "node": "pve",
+   "datastore": "hdrives-zfs",
+   "token_env": "TF_VAR_proxmox_api_token_193",
+   "engine_base_vmid": 1007,
+   "engine_mgmt_ip": "10.0.0.252",
+   "engine_mgmt_gw": "10.0.0.1",
+   "jump_mgmt_ip": "",
+   "ssh_host": "",
+   "jump_template": "",
+   "weight": 1.0,
+   "max_teams": 8,
+   "tls_fingerprint": ""
+  },
+  "hdd-150": {
+   "name": "hdd-150",
+   "endpoint": "https://10.0.0.150:8006",
+   "node": "proxmox",
+   "datastore": "hdd",
+   "token_env": "TF_VAR_proxmox_api_token_150",
+   "engine_base_vmid": 955,
+   "engine_mgmt_ip": "",
+   "engine_mgmt_gw": "",
+   "jump_mgmt_ip": "10.0.0.249",
+   "ssh_host": "10.0.0.150",
+   "jump_template": "base-debian13-lite-fix",
+   "weight": 1.0,
+   "max_teams": 8,
+   "tls_fingerprint": ""
+  }
+ },
+ "slots": {
+  "zfs-193": 0,
+  "hdd-150": 1
+ },
+ "team_nodes": {
+  "team1": "zfs-193",
+  "team2": "zfs-193",
+  "team3": "zfs-193",
+  "team4": "zfs-193",
+  "team5": "hdd-150",
+  "team6": "hdd-150",
+  "team7": "hdd-150",
+  "team8": "hdd-150"
+ },
+ "team_slots": {
+  "team1": 0,
+  "team2": 0,
+  "team3": 0,
+  "team4": 0,
+  "team5": 1,
+  "team6": 1,
+  "team7": 1,
+  "team8": 1
+ },
+ "team_identifiers": {
+  "team1": "221",
+  "team2": "222",
+  "team3": "223",
+  "team4": "224",
+  "team5": "225",
+  "team6": "226",
+  "team7": "227",
+  "team8": "228"
+ },
+ "satellites": [
+  {
+   "name": "hdd-150",
+   "slot": 1,
+   "teams": [
+    "team5",
+    "team6",
+    "team7",
+    "team8"
+   ],
+   "jump_vmid": 2031,
+   "jump_mgmt_ip": "10.0.0.249",
+   "anchor_identifier": "225"
+  }
+ ],
+ "jump_mgmt_ips": {
+  "hdd-150": "10.0.0.249"
+ },
+ "probe_summary": {
+  "zfs-193": {
+   "ok": true,
+   "reasons": [],
+   "missing_templates": [],
+   "collisions": [],
+   "mem_free_bytes": 151597551616,
+   "datastore_free": 2472853219408,
+   "running_ours": 9
+  },
+  "hdd-150": {
+   "ok": true,
+   "reasons": [],
+   "missing_templates": [],
+   "collisions": [],
+   "mem_free_bytes": 13384040448,
+   "datastore_free": 630026134080,
+   "running_ours": 0
+  }
+ },
+ "computed_at": "2026-10-01 14:48:00"
+}

@@ -1,6 +1,0 @@
-name distro-matrix-2026-09-27
-scenario Distro matrix smoke: all-Linux two-distro lineup (fedora web01, alpine app01) proving the pipeline off the ubuntu/windows rails
-difficulty 3
-team_beacons 0
-apt_cache 0
-alpine_services 1

@@ -96,6 +96,12 @@ locals {
   # so legacy tfvars without the key place every team on the engine node — the
   # single-node behavior, unchanged.
   slot_teams = [for s in range(5) : { for k, t in var.teams : k => t if try(t.slot, 0) == s }]
+
+  # In-path firewall presence: one optional box (unmanaged + in_path) switches on the
+  # transit bridges, the engine's transit NICs and the firewall's two-NIC wiring below.
+  # Without it none of these resources exist and every plan is byte-identical to the
+  # pre-firewall pipeline.
+  has_in_path_fw = anytrue([for b in var.boxes_per_team : b.in_path])
 }
 
 
@@ -104,6 +110,16 @@ resource "proxmox_network_linux_bridge" "team_bridge" {
   node_name = var.proxmox_node
   name      = "vmbr${each.value.identifier}"
   comment   = "Quotient team ${each.key} — isolated, no uplink"
+}
+
+resource "proxmox_network_linux_bridge" "transit_bridge" {
+  # Engine-side WAN bridge for the in-path firewall: engine (172.31.<id>.1/30) ─
+  # pfSense WAN (172.31.<id>.2/30). Engine-node teams only — a satellite's jump VM
+  # owns 192.168.<id>.1 there, so firewall+transit wiring is refused at preflight.
+  for_each  = local.has_in_path_fw ? local.slot_teams[0] : {}
+  node_name = var.proxmox_node
+  name      = "vmbrW${each.value.identifier}"
+  comment   = "Quotient team ${each.key} — transit to in-path firewall"
 }
 
 resource "proxmox_network_linux_bridge" "team_bridge_sat1" {
@@ -212,8 +228,22 @@ resource "proxmox_virtual_environment_vm" "scoring_engine" {
     }
   }
 
+  dynamic "network_device" {
+    # Transit NICs for in-path firewalls, appended AFTER every team NIC so the team
+    # NICs keep their positional netplan names (ens19+); team_nics addresses the
+    # transit NICs at 172.31.<id>.1/30 by continuing the same positional scheme.
+    for_each = local.has_in_path_fw ? local.slot_teams[0] : {}
+    content {
+      bridge = "vmbrW${network_device.value.identifier}"
+      model  = "virtio"
+    }
+  }
 
-  depends_on = [proxmox_network_linux_bridge.team_bridge]
+
+  depends_on = [
+    proxmox_network_linux_bridge.team_bridge,
+    proxmox_network_linux_bridge.transit_bridge,
+  ]
 }
 
 data "proxmox_virtual_environment_vms" "templates" {
@@ -307,6 +337,10 @@ resource "proxmox_virtual_environment_vm" "team_box" {
       error_message = "build_team_boxes is true but golden_template_ids doesn't have one entry per box — the golden build (deploy phase 4) must run before apply #2."
     }
     precondition {
+      condition     = length([for b in var.boxes_per_team : b if b.in_path]) <= 1
+      error_message = "At most one in_path firewall per lineup — the transit design routes every team through a single gateway (engine ─ vmbrW<id> ─ fw ─ vmbr<id>)."
+    }
+    precondition {
       condition = (200 + (tonumber(each.value.identifier) * 10) + index(
         [for b in var.boxes_per_team : b.name], each.value.box.name
       )) != proxmox_virtual_environment_vm.scoring_engine.vm_id
@@ -327,13 +361,30 @@ resource "proxmox_virtual_environment_vm" "team_box" {
     }
   }
 
-  network_device {
-    bridge = each.value.bridge
-    model  = "virtio"
+  dynamic "network_device" {
+    # In-path firewall: net0 = WAN on the transit bridge (172.31.<id>.2/30 per the
+    # generated pfSense config), net1 = LAN on the team bridge (the boxes' gateway .1).
+    # Order is load-bearing — pfSense's config keys the interfaces on vtnet0/vtnet1.
+    for_each = each.value.box.in_path ? ["vmbrW${each.value.identifier}"] : []
+    content {
+      bridge = network_device.value
+      model  = "virtio"
+    }
+  }
+
+  dynamic "network_device" {
+    for_each = each.value.box.in_path ? [] : [each.value.bridge]
+    content {
+      bridge = network_device.value
+      model  = "virtio"
+    }
   }
 
   dynamic "initialization" {
-    for_each = strcontains(lower(each.value.box.template), "win") ? [] : [1]
+    # No cloud-init identity on Windows (bootstrap_windows_box owns it) or on any
+    # unmanaged box (pfSense ignores cloud-init; the appliance self-configures —
+    # firewall_ops bootstraps the in-path config over its console).
+    for_each = (!each.value.box.unmanaged && !strcontains(lower(each.value.box.template), "win")) ? [1] : []
     content {
       ip_config {
         ipv4 {
@@ -352,7 +403,10 @@ resource "proxmox_virtual_environment_vm" "team_box" {
     }
   }
 
-  depends_on = [proxmox_network_linux_bridge.team_bridge]
+  depends_on = [
+    proxmox_network_linux_bridge.team_bridge,
+    proxmox_network_linux_bridge.transit_bridge,
+  ]
 }
 
 # Satellite team boxes: same shape, hosted on the satellite's node and linked from
@@ -404,7 +458,7 @@ resource "proxmox_virtual_environment_vm" "team_box_sat1" {
   }
 
   dynamic "initialization" {
-    for_each = strcontains(lower(each.value.box.template), "win") ? [] : [1]
+    for_each = (!each.value.box.unmanaged && !strcontains(lower(each.value.box.template), "win")) ? [1] : []
     content {
       ip_config {
         ipv4 {
@@ -472,7 +526,7 @@ resource "proxmox_virtual_environment_vm" "team_box_sat2" {
   }
 
   dynamic "initialization" {
-    for_each = strcontains(lower(each.value.box.template), "win") ? [] : [1]
+    for_each = (!each.value.box.unmanaged && !strcontains(lower(each.value.box.template), "win")) ? [1] : []
     content {
       ip_config {
         ipv4 {
@@ -540,7 +594,7 @@ resource "proxmox_virtual_environment_vm" "team_box_sat3" {
   }
 
   dynamic "initialization" {
-    for_each = strcontains(lower(each.value.box.template), "win") ? [] : [1]
+    for_each = (!each.value.box.unmanaged && !strcontains(lower(each.value.box.template), "win")) ? [1] : []
     content {
       ip_config {
         ipv4 {
@@ -608,7 +662,7 @@ resource "proxmox_virtual_environment_vm" "team_box_sat4" {
   }
 
   dynamic "initialization" {
-    for_each = strcontains(lower(each.value.box.template), "win") ? [] : [1]
+    for_each = (!each.value.box.unmanaged && !strcontains(lower(each.value.box.template), "win")) ? [1] : []
     content {
       ip_config {
         ipv4 {
@@ -654,20 +708,29 @@ resource "null_resource" "team_nics" {
     engine_id        = proxmox_virtual_environment_vm.scoring_engine.id
     team_identifiers = join(",", [for k in local.sorted_team_keys : var.teams[k].identifier])
     satellite_routes = join(",", [for r in var.satellite_routes : "${r.subnet}@${r.via}"])
+    in_path_fw       = local.has_in_path_fw ? "1" : "0"
   }
 
   provisioner "remote-exec" {
     # Netplan block only when the engine has local (slot-0) teams — an all-satellite
     # spread has none, and an empty string in a remote-exec script list is fatal.
+    # With an in-path firewall, the transit NICs are addressed 172.31.<id>.1/30 AFTER
+    # the team NICs (the engine keeps 192.168.<id>.1 on the team bridges for now —
+    # deploy phase 5's cutover moves the gateway address to the firewall and adds the
+    # 192.168.<id>.0/24 via 172.31.<id>.2 routes once every firewall is configured;
+    # routes here would blackhole engine→box traffic before that).
     inline = concat(
       length(local.sorted_team_keys) == 0 ? [] : [
         "sudo tee /etc/netplan/60-team-ifaces.yaml << 'EOF'",
         "network:",
         "  version: 2",
         "  ethernets:",
-        join("\n", [for idx, team in local.sorted_team_keys :
-          "    ens${18 + idx + 1}:\n      addresses: [\"192.168.${var.teams[team].identifier}.1/24\"]"
-        ]),
+        join("\n", concat(
+          [for idx, team in local.sorted_team_keys :
+          "    ens${18 + idx + 1}:\n      addresses: [\"192.168.${var.teams[team].identifier}.1/24\"]"],
+          local.has_in_path_fw ? [for idx, team in local.sorted_team_keys :
+          "    ens${18 + length(local.sorted_team_keys) + idx + 1}:\n      addresses: [\"172.31.${var.teams[team].identifier}.1/30\"]"] : [],
+        )),
         "EOF",
         "sudo chmod 600 /etc/netplan/60-team-ifaces.yaml",
         "sudo netplan apply",

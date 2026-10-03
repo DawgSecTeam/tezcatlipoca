@@ -4,7 +4,8 @@ Companion to [session-breakage-patterns-2026-10-02.md](session-breakage-patterns
 (the analysis + remediation proposals). This file is the **execution plan**: what changes, in what
 order, how each is proven, and how it is validated against live infrastructure.
 
-Status: **proposed — not started.** Working document; archive or delete when the work closes.
+Status: **implemented — see the completion record at the end.** Working document; archive or
+delete when the work closes.
 
 ---
 
@@ -408,3 +409,54 @@ start there unless you redirect.
 | Token rotation breaks sibling tooling | Do it in a window, grep all four repos for the token first |
 | Docs pass marks something FIXED that then regresses | W-12 runs *after* Phases 1–5, and every FIXED claim must cite a passing test |
 | The practice run itself leaves half-built state | It runs in its own worktree; teardown is the sanctioned tool; the worktree is disposable |
+
+---
+
+# Completion record (2026-10-02)
+
+Implemented on branch `patterns-fixes` in a linked worktree; **750 tests pass**, `pyflakes` clean.
+Everything below was verified against the tree, not against this plan.
+
+| Plan item | What landed | Guard |
+|---|---|---|
+| A1 silent success | Tolerated-failure ledger (`utils.record_degradation`), wired into **14** sites — including the four a manual sweep missed and a source scan now enforces — persisted to `.deploy_state.json` and surfaced by `verify-competition.check_degradations()` | `test_degradations.py`, `test_degradation_coverage.py` |
+| A2 markers | Verified the existing markers were already commit-on-success (no redundant helper written); fixed the real gap — `injects_created` was a bare boolean, so an inject added after the first phase-7 run was skipped forever | `test_deploy_phase_units.py` |
+| A3 whole-phase replay | Per-golden plant+smoke checkpoint (`.template-hashes.json`), plus a resume budget that refuses the third identical resume and a `--min-load-free` gate | `test_parallel_golden.py`, `test_resume_budget.py` |
+| A4 tool waste | `AGENTS.md` "Editing and dispatch discipline" | — |
+| A5 secret hygiene | Shape-not-name rule documented and already enforced by `test_secret_hygiene.py`; **token rotation deferred by the user** and tracked in `security-docs` | `test_secret_hygiene.py` |
+| A6 docs | Genre split completed, stale contradictions resolved, fixes archived with their guarding tests | — |
+| B1 concurrency | Cross-deploy preflight gate (held-flock probe), engine-build identity stamp before the destructive template clean | `test_concurrent_deploys.py`, `test_engine_identity.py` |
+| B2 transports | `guest_agent_exec_detached` + diagnosable timeouts + agent-wait diagnosis, with two real callers migrated | `test_detached_exec.py`, `test_auth_ladder.py` |
+| B3 provider | Mitigations only (fine-grained resumability, non-LLM watchdogs) — correct, since the provider is not fixable here | — |
+| B4 wall clock | `utils.spawn_detached` + the documented recipe | `test_spawn_detached.py` |
+| B5 liveness/capacity | API-port liveness lesson at the failure point; the mgmt-IP gate made cluster-wide and no longer reads "unverifiable" as "free"; datastore under-counting documented | `test_engine_mgmt_ip.py` |
+| Round loop (W-09.2) | `round_loop.py` (one definition of "stopped", shared with verify) + `tools/round_loop_guard.py`, installed by `engine_ops`, opt-in via Compfile `round_loop_guard 1` | `test_round_loop.py`, `test_round_loop_guard.py`, `test_round_loop_install.py` |
+| Scoring account | A second admin (`scoring`) so automation can never evict an operator/harness session | `test_scoring_account.py` |
+
+## Live practice run (2026-10-02)
+
+A new worktree branched off this branch deployed `same-type-2box-2026-09-29` (ubuntu + Windows,
+1 team, engine vmid 2400, team block 1500-1509) against **.150**, then verified and tore down:
+
+- **Deploy succeeded** — all seven phases, `is live`, `last_phase: 7`, no failure streak, no plant
+  failures.
+- **Verify ran** — PASS on logins, no_default_creds, **services (UP)**, **pins_registered (6
+  checks)**, isolation and **round_loop (advancing)**.
+- **Destroy clean** — `hdd` went from **0.2 GiB free** (the run exhausted the pool) back to
+  **154.5 GiB**, and no competition-tagged VMs remain.
+
+What the run proved live, beyond the pipeline working: the concurrency gate refused and then
+warned under its documented opt-out; the golden checkpoint recorded both boxes keyed by hash
+(`web01 3861e319…`, `win01 c28ff2a5…`) and verify read back the same hashes; the failure-streak
+recorder persisted `phase 2`; and the engine-build identity stamp verified before the destructive
+template clean on a machine whose address another competition was also using.
+
+## Known residual
+
+- **The round-loop watchman has not been trialled against a live stopped loop.** It is implemented,
+  installed behind a Compfile flag and tested offline; the honest completion step is to deploy a
+  small range with `round_loop_guard 1`, stop the loop deliberately, and watch the timer heal it.
+- **Token rotation** is the user's to schedule (`docs/security-disclosures.md`).
+- Three `pyflakes` findings exist on `main` in another session's files
+  (`destroy-competition.py`, `test_run_ownership.py`) — pre-existing, verified against `main`, left
+  alone rather than edited under a concurrent writer.

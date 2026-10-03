@@ -1,3 +1,0 @@
-name regression-4x1-2026-09-28
-scenario Minimal regression validation for the changes-shake-2026-09-28 pass: golden disk sizing (web01 15G->30G, Windows sata0 root-disk detection), DC firewall profiles + RDP rules in bootstrap, bind duplicate-zone strip + lighttpd restart in fix_services, DOMAIN_INFRA_CONFIGS stripping, verify --expect-no-vulns, and the bad-auto takedown-coverage rework (roundcube/splunk/telnet aliases, Windows postchecks, ADDS profile-enable, credlist restore-from-intel). One team, four boxes, no planted vulns; every scored service must be takeable down and restorable.
-difficulty 1

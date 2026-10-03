@@ -36,6 +36,18 @@ Pins are written back in the files' own idiom: a bare `"name"` when an entry has
 name, otherwise `{"name": …, "vars": {…}}`. Entries you don't touch are written back exactly as
 they were read.
 
+## Firewalls
+
+**Add firewall** (Boxes page, next to Add box) creates the competition's in-path firewall: one box
+per competition, cloned for every team, marked `"unmanaged": true, "in_path": true, "last_octet": 1`
+— it owns the team gateway address, so the topology draws it between the engine and the team switch
+across the transit `/30`, and it cannot take services or misconfigs (the server rejects pin writes
+on unmanaged boxes; its page shows the WAN/LAN wiring instead). Any unmanaged box shows the
+`unmanaged` chip; the `firewall` classification comes from the `in_path` flag, never from the
+template or hostname. To convert an existing appliance into the firewall, tick **In-path firewall**
+in its Settings (the address moves to `.1` and locks); unticking it moves the box back to the
+first free host address in the same save.
+
 `packets/<id>/packet.yaml` is not edited here. It is an optional upstream input that
 `compile-packet.py` turns into a comp dir
 ([docs/packet-profiles.md](../docs/packet-profiles.md)). Once the comp dir exists, the comp dir is

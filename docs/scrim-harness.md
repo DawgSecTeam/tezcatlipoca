@@ -11,9 +11,7 @@ duplicating it.** It deliberately does NOT
 duplicate the sibling docs: `docs/rehearsal-gates.md` owns the numeric
 pass/fail gates, `docs/reports/harness-upgrades-plan.md` owns the rev-2 upgrade
 record (what changed, where it landed, what's left), and
-`docs/reports/dress-rehearsal-prompt.md` owns the rehearsal runbook. Incident-level
-detail (the three-round scoreboard mystery, the scp flakes, run post-mortems)
-lives in `docs/incident-archive.md`.
+`docs/reports/dress-rehearsal-prompt.md` owns the rehearsal runbook.
 
 **Contents:** [run-agent-scrim.py](#run-agent-scrimpy) · [scrim-report.py](#scrim-reportpy) ·
 [beacon_ops.py](#beacon_opspy)
@@ -24,8 +22,13 @@ Deploys, verifies, and runs an agent-manned scrim end to end: author
 (optional) → deploy → verify + fire test → blue agents (opencode, fresh
 session per cycle) → red agent (bad-auto, sibling checkout at `../bad-auto`)
 → scheduled feeds and monitoring until the deadline → evidence capture →
-teardown (red01 + range, unless `--keep-range`). Run dirs default to
-`/home/hna/dev/dawgsec/scrim-runs/<competition>`.
+teardown (red01 + range, unless `--keep-range`). Run dirs default to the run's
+test-artifact folder, `competitions/<comp>/.automated-tests/<run-id>/`, so the whole run's
+evidence lands next to the competition it tested; `--run-dir` still overrides the location
+(the folder is then recorded in `test.json.paths.run_dir` and the collector copies from it).
+Before teardown destroys red01, the harness collects that folder into the standard shape
+(`RED-TEAM.md`, `BLUE-TEAM.md`, `REPORT.md`, `evidence/**`) and folds scrim-report.py's verdict
+into `test.json` — see [automated-test-artifacts.md](automated-test-artifacts.md).
 
 - Module docstring — "bake-in lessons" from the agent-scrim-2026-09-16 debrief:
   - fresh opencode session per cycle with a compact prompt (survives
@@ -44,8 +47,7 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
 - `stage_author` — the pipeline's sweep marker **`.postclone-swept`** is a resume marker and must
   never leak into a fresh competition; `stage_author` skips that name (fixed 2026-10-01 — it used
   to skip the retired `.phase6-swept`, so the real marker was copied into every competition
-  authored from a swept template; see
-  [incident-archive.md](incident-archive.md#scrim-stage_author-skipped-the-sweep-marker-fixed-2026-10-01)).
+  authored from a swept template).
   `RUNTIME_FILES`, `LOG.md`, `sub-*`, `.nakon-domain-*` are also skipped, and `injects/` is
   re-copied deliberately. The template's `Compfile` first line is rewritten to the new name.
 - `creds_from_files` — all secrets/logins come from the post-deploy artifacts
@@ -83,7 +85,7 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   querying it with the subnet identifier from `teams.json` (101, 102) answers
   `{"error":"Forbidden"}` even with a valid cookie. That was the second half
   of the three-round "scoreboard unreachable" mystery (first half: session
-  clobbering — see `docs/incident-archive.md`).
+  clobbering).
 - `parsed_status` / `status_text` — `parsed_status` raises on failure so
   callers decide whether to render text or record a structured snapshot;
   `status_text` (for the cycle prompt) renders a self-diagnosing failure line
@@ -132,6 +134,14 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
   cycle slot to the pacing sleep. Full transcript + exact prompt are kept per
   cycle (`cycles/cycle-T+NNN.prompt.txt` / `.output.log`) for the after-action
   report; `feed.log` stays a short readable tail (last 2000 chars per cycle).
+- **How many endpoints a run needs** — the lock serves one team at a time per
+  endpoint, in rotation. At 4 teams that is tolerable; at 8 the soak measured each
+  team getting a cycle every ~10 minutes of wall time, which halves blue's effective
+  attention per team and is the largest single lever on blue's score. **At ≥6 teams,
+  spread the blues over ≥2 LLM endpoints** with `--blue2-base-url`/`--blue2-model`
+  (`--blue3-*`, `--blue4-*` exist too; each distinct base URL gets its own lock, and
+  teams sharing one still serialize). Decide the split before launching — `stage_run`
+  builds the lock table from those flags at startup.
 - pacing (`blue_feed_loop` tail) — pace off ACTUAL cycle duration: local qwen
   turns are slow, so a fixed pre-cycle sleep both starves throughput and
   can't know a cycle overran; sleep = clamp(30..600 s,
@@ -265,9 +275,13 @@ teardown (red01 + range, unless `--keep-range`). Run dirs default to
 ## scrim-report.py
 
 Reads a run dir (`evidence/red/events*.jsonl` + `world.json`,
-`blue-team*/{feed.log, LOG.md, NOTEBOOK.md, submissions/, sub-*.md}`,
+`blue-team*/{feed.log, LOG.md, NOTEBOOK.md, REPORT.md, submissions/, sub*.md}`,
 `scoreboard-state.jsonl` when the run produced one) and writes
-`INTERACTION.md` next to `FINDINGS.md`.
+`INTERACTION.md` into the run dir. The harness now runs it at teardown (best-effort), and
+teardown runs it too when the harness never got there; either way `artifacts_ops.ingest_verdict`
+folds its verdict and gate table into `test.json`, and `REPORT.md` quotes that verdict instead of
+recomputing one (`FINDINGS.md` is still the hand-written narrative, now superseded in the standard
+folder by `REPORT.md`).
 
 - Interaction-score philosophy (module docstring): the score is
   **restorations + red restore-reactions + evictions + injects +

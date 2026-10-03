@@ -1,9 +1,11 @@
 # Usage — people
 
 Interactive, human-operator guide: one-time Proxmox/workstation setup, running a deploy by
-answering its prompts, and day-to-day operation. For scripted/non-interactive/agent-driven
-usage (CLI flags, pre-authored configs), see [usage-agents.md](usage-agents.md). For what the
-project is and how it's architected, see the [README](../README.md).
+answering its prompts, and day-to-day operation. Most authoring and deploying can also be done
+from the browser front end, see [../webui/README.md](../webui/README.md). For
+scripted/non-interactive/agent-driven usage (CLI flags, pre-authored configs), see
+[usage-agents.md](usage-agents.md). For what the project is and how it's architected, see the
+[README](../README.md).
 
 **Contents:** [Prerequisites](#prerequisites-one-time-per-proxmox-host) ·
 [Adding a template VM](#adding-a-template-vm) · [Windows box templates](#windows-box-templates) ·
@@ -19,7 +21,12 @@ for it. Grant it (Datacenter → Permissions → Add → User Permission, path `
 role, or at minimum `VM.Allocate`, `VM.Clone`, `VM.Config.All`, `VM.PowerMgmt`,
 `Datastore.AllocateSpace`, `Datastore.Audit`, `Sys.Modify`, `SDN.Use`.
 
-**Templates** — see [Adding a template VM](#adding-a-template-vm) below for the full process.
+**Templates** — see [Adding a template VM](#adding-a-template-vm) below for the full process. A
+lineup with an in-path firewall (`in_path: true`) additionally needs a pfSense template (named
+`pfsense`, e.g. cyberrange vmid 956 — [environment-facts.md](environment-facts.md#templates)) on
+EVERY node hosting teams, plus the seed config `competitions/<id>/pfsense/pfsense-config-orig.xml`
+(copy from `competitions/pfsense-ad/pfsense/`); preflight refuses the lineup without the template,
+and deploy phase 5 refuses without the seed.
 
 **SSH keypair** — used by Terraform, the agent, and nakon:
 ```bash
@@ -196,6 +203,15 @@ Fedora needs no boot-once step — the official Cloud Base qcow2 already ships c
 qemu-guest-agent (the `base-fedora44-fix` template was sealed unbooted, mirroring the
 `cloud-init;general;template` tag set used by this cluster's library).
 
+**Set SELinux permissive before sealing a Fedora template.** Mount the image (or boot it once)
+and set `SELINUX=permissive` in `/etc/selinux/config`. An enforcing Fedora guest cannot be
+golden-built at all: the qemu-guest-agent domain is confined, so the build's `setenforce 0` is
+denied and `sed -i` cannot write `/etc/ssh` (`Permission denied`) — and gateway-proxied SSH may
+be unavailable during a golden build, leaving the agent as the only path. Without this step the
+only options are to keep Fedora out of the lineup on that node or to rebuild the template, so the
+step belongs in the recipe rather than in a per-run workaround. Verify with
+`getenforce` → `Permissive` on a clone before trusting it in a lineup.
+
 ### 5. Wire it in
 
 - Scoring engine: set `TF_VAR_template_vm_id` in `.env` to the template's numeric Proxmox VM
@@ -293,6 +309,7 @@ allowlisted, which is what keeps this table from drifting again.
 | `TF_VAR_scoring_vm_id` | Engine VMID (default 1000). Override when 1000 is taken on the node; also settable per run as `--scoring-vmid` |
 | `TF_VAR_team_identifiers` | Pin team subnets explicitly instead of deriving them from the team index. Comma/space separated identifiers, e.g. `120,121,122,123`. Set it when the node hosts challenge templates whose vmids collide with the default 101+ blocks |
 | `TEZ_THIN_HEADROOM` | Fraction `(0, 1]` of the *provisioned* disk math the datastore-headroom preflight counts, for thin-provisioned pools where provisioned ≫ used (linked clones allocate only written blocks). Unset = strict provisioned-bytes gate. See [environment-facts.md](environment-facts.md#storage) |
+| `TEZ_RED_SEGMENT` | Routed red's own segment, matching bad-auto's `deploy.red_subnet` (default `10.200.0.0/24`). Set it and each satellite jump VM accepts red→its local teams and SNATs red to `192.168.<id>.1`; unset leaves those rules out, correct for single-node ranges and `masq`-mode red. A malformed value is a hard error. See [multi-node.md § Routed red](multi-node.md#routed-red) |
 | `PROXMOX_CA_BUNDLE` / `PROXMOX_TLS_FINGERPRINT` | Pin Proxmox API TLS verification to a CA bundle or a sha256 cert fingerprint instead of the default unverified self-signed cert. Set at most one |
 | `TF_VAR_proxmox_api_token_<node>` (e.g. `_193`) | Multi-node: `nodes.json` references per-host tokens **by env-var name**, so each additional host's token gets its own variable. See [multi-node.md](multi-node.md) |
 
@@ -303,8 +320,13 @@ set). The first four are rewritten in `.env` by `update_env()` every time you cr
 competition. An old env's stale `TF_VAR_teams`/`TF_VAR_boxes_per_team` are overridden from the comp
 dir at terraform time, so they are cosmetic.
 
-Not `.env` variables at all: Quotient's `admin` password (minted in memory each run and saved to
-`competitions/<id>/credentials.txt`) and the inject/postgres/redis passwords. Boxes are instead
+Not `.env` variables at all: Quotient's `admin` **and `scoring`** passwords (both minted in
+memory each run and saved to `competitions/<id>/credentials.txt`), plus the
+inject/postgres/redis passwords. **`scoring` is a second admin account for automation** —
+Quotient allows one session per account, so a scheduled login on `admin` would evict whichever
+operator, `verify-competition`, or harness session holds it. Anything that authenticates on its
+own timetable (a round-loop watchdog, an unattended verify) must use `scoring`, and both accounts
+are seeded into `event.conf` for every competition. Boxes are instead
 per-event on purpose (that's the point of nakon scaling
 difficulty per box) — `create-competition.py` queries Proxmox for templates tagged `template`
 and walks you through picking boxes interactively each time, then saves the result as
@@ -394,7 +416,7 @@ python3 create-competition.py
 It loads `.env`, asks whether to reuse an existing competition or create a new one, asks how
 many teams (it names/passwords them for you, see [Configure the event](#configure-the-event)),
 generates nakon's machine + vuln list itself (by calling `nakon randomize` from `vendor/nakon`),
-then runs `deploy()` — see [architecture.md](architecture.md#seven-phase-deploy) for what the seven
+then runs `deploy()` — see [architecture.md](architecture.md#eight-phase-deploy) for what the eight
 deploy phases actually do. A few minutes per box; expect most of the time in package installs and
 image builds. At the end it prints a summary and writes `competitions/<id>/credentials.txt`
 (mode 0600) with the scoreboard URL, admin login, every team's login, and the scoring engine's
@@ -410,7 +432,7 @@ separate API-clone cleanup is needed; `competitions/<id>/cloned_vms.json` is onl
 by the deploy). Templates aren't touched unless you pass `--full`.
 
 **Add a team mid-event**: don't re-run `create-competition.py` for this. A fresh run
-regenerates **every** team's password *and* its phase [1/7] destroys the existing team boxes,
+regenerates **every** team's password *and* its phase [1/8] destroys the existing team boxes,
 engine, and bridges before rebuilding — a full teardown, not an incremental add. To add a team
 to a live event, do it by hand: create a new `vmbr<identifier>` bridge on the node, add the team's
 boxes as Terraform-managed linked clones of the relevant goldens, give the engine an address on
@@ -508,7 +530,7 @@ available. See [usage-agents.md](usage-agents.md#redeploy-competitionpy) for the
 | Everything went down at once, after a scoring-engine reboot | The forwarding/NAT rules didn't get re-applied — Docker rebuilds `FORWARD` (policy `DROP`) on every start | `sudo systemctl status range-firewall.service` on the engine; `sudo systemctl restart range-firewall.service` re-applies them (the script is idempotent). It's ordered after `docker.service` and should do this automatically at boot |
 | A team can reach another team's boxes | `range-firewall.sh` isn't applied — the empty bridges don't isolate anything by themselves, since the engine has a NIC on every team bridge and forwards between them | `sudo /usr/local/sbin/range-firewall.sh` on the engine, then check `sudo iptables -L FORWARD -n --line-numbers` for the `192.168.0.0/16 → 192.168.0.0/16 DROP` rule |
 | `/tmp` full on a team VM — `No space left on device` in apt output, or `size mismatch in put!` from `deploy.py` | Stale files from a previous failed deploy accumulated in `/tmp` (a RAM-backed tmpfs); `deploy.py` does not clean up after itself | SSH into the scoring engine, then into the affected machine using credentials from `competitions/<id>/nakon-config.json`, and run `find /tmp -maxdepth 1 -type f -delete`; re-run `create-competition.py`. Also fix `deploy.py` (in THIS repo, not the `nakon` repo) to remove `/tmp/<attachment>` after each script run. |
-| A box installs no services / DNS fails before nakon | Cloud-init's `dns.servers` is silently ignored on Debian with static IPs, leaving `/etc/resolv.conf` empty. The driver's `fix_dns_on_boxes()` (phase 4, and again on any redeploy path, run over the engine jump host) repairs it before nakon's `apt-get`, retrying up to 8× — nakon would otherwise install nothing there and still report success | Watch the `[4/7]` DNS output for the failing box. To debug: SSH through the scoring engine to that box and check `cat /etc/resolv.conf`, `cat /etc/systemd/resolved.conf.d/upstream.conf`, and `getent hosts deb.debian.org`. Re-run `create-competition.py` once fixed |
+| A box installs no services / DNS fails before nakon | Cloud-init's `dns.servers` is silently ignored on Debian with static IPs, leaving `/etc/resolv.conf` empty. The driver's `fix_dns_on_boxes()` (phase 4, and again on any redeploy path, run over the engine jump host) repairs it before nakon's `apt-get`, retrying up to 8× — nakon would otherwise install nothing there and still report success | Watch the `[4/8]` DNS output for the failing box. To debug: SSH through the scoring engine to that box and check `cat /etc/resolv.conf`, `cat /etc/systemd/resolved.conf.d/upstream.conf`, and `getent hosts deb.debian.org`. Re-run `create-competition.py` once fixed |
 | Services all show down on the scoreboard | First check round only lands `Delay`+`Jitter` (~70 s) after the summary prints — wait it out first. If they stay down, nakon installed nothing (see the DNS row above), or a login check is authenticating with credentials no box has | On a box: `ss -ltnp` to see whether the service is even listening. If it is, the check is failing auth — compare `/opt/quotient/config/credlists/linux.credlist` on the scoring engine against the box's real accounts. `Sql` checks need a matching *database* user, which nakon's install script has to create |
 | Something might be wrong mid-competition (nothing crashed loudly, scoreboard just looks off) | `range-healthcheck.timer` on the engine checks Quotient's container/API and the NAT/isolation rules every 60s and only writes to its log on failure — nothing pushes an alert | `sudo tail -f /var/log/range-healthcheck.log` on the engine during a live event, or `python3 verify-competition.py competitions/<id>` from your workstation (it reports the timer's status + recent log lines as part of its output) |
 | One team's boxes are broken mid-event and rebuilding the range isn't an option | That's what the snapshots are for — see [Recovering boxes mid-competition](#recovering-boxes-mid-competition) | `python3 redeploy-competition.py --competition <id> --teams N --dry-run` to see what's affected, then drop `--dry-run` |

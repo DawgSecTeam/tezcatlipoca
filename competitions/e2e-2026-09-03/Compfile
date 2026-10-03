@@ -1,3 +1,0 @@
-name e2e-2026-09-03
-scenario End-to-end smoke test of the post-refactor module split (config_ops/clone_ops/hardening_ops/nakon_ops/engine_ops/range_ops/ssh_ops), reusing practice-fix-templates' validated box config
-difficulty 3

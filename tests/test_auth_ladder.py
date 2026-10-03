@@ -12,6 +12,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import hardening_ops
+from range_ops import DetachedExecResult
 
 ENV = {"TF_VAR_proxmox_node": "proxmox", "TF_VAR_ssh_public_key": "ssh-ed25519 AAAAtest"}
 CTX = {"ssh_key_path": "/tmp/fake-key", "vm_username": "sysadmin",
@@ -36,14 +37,15 @@ class AuthLadder(unittest.TestCase):
                 raise r
             return r
 
-        def fake_agent(node, vmid, script, timeout=120):
+        def fake_agent(node, vmid, script, log_path, timeout=900):
             calls["agent"] += 1
-            return agent_rc
+            rc, out, err = agent_rc
+            return DetachedExecResult(rc, err or out, log_path)
 
         with patch.dict("os.environ", ENV):
             with patch.object(hardening_ops.subprocess, "run", side_effect=fake_run), \
                  patch.object(hardening_ops.time, "sleep"), \
-                 patch.object(hardening_ops, "guest_agent_exec_root",
+                 patch.object(hardening_ops, "guest_agent_exec_detached",
                               side_effect=fake_agent), \
                  patch.object(hardening_ops, "wait_for_guest_agent"):
                 hardening_ops.setup_ubuntu_auth(TARGETS, CTX)

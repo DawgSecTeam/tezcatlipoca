@@ -1,5 +1,12 @@
 # pfSense in-path firewall — runbook & postmortem (2026-09-28)
 
+> **Superseded as a manual process (2026-10-03):** pipeline v3 folds this entire flow in —
+> terraform builds the transit bridges + two-NIC firewall boxes, `firewall_ops` generates the
+> per-team configs and drives the console, and deploy phase 5 performs the engine cutover and
+> verifies the routed path. This runbook remains the reference for the TRAP LIST below (host ZFS
+> import corrupts pfSense boot, WAN `fetch` reverts, IDE hot-attach, engine NIC hotplug) and as the
+> by-hand fallback for a wedged console.
+
 Competition `pfsense-ad-2026-09-27`, 4 teams, on **cyberrange** (10.0.0.150, node `proxmox`).
 Goal: an in-path pfSense firewall (pure router) in front of every team, routing all scoring
 traffic, left clean/undamaged (infrastructure, not a scored target).

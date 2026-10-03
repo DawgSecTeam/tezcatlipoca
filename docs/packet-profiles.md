@@ -38,7 +38,7 @@ layer, authored after compilation. A packet-compiled bundle deploys clean
 | `event` | `comp_id`, `name`, `scenario`, `difficulty`, `teams_suggested`, `team_identifiers` | `comp_id` must be free (or pass `--force`). `teams_suggested`/`team_identifiers` are **inert** — no Python consumer reads them; they are documentation for whoever runs `create-competition.py --teams N` (and the `TF_VAR_team_identifiers` suggestion) |
 | `domain` | `name_template` | e.g. `"mira-{team}.corp.sus"` → Compfile `domain_prefix`/`domain_suffix`; omit for the `team<id>.local` default |
 | `credentials` | `box_username`, `box_password`, `credlists.{linux,domain}`, `domain_accounts[]`, `out_of_scope[]`, `note` | verbatim packet credentials; see below |
-| `boxes[]` | `name`, `packet_os`, `template`, `last_octet`, `cpu`, `memory_mb`, `disk_gb`, `disk_iface`, `unmanaged`, `domain_role`, `fidelity`, `note` | `fidelity` ∈ exact/substituted/unsupported is REQUIRED per box |
+| `boxes[]` | `name`, `packet_os`, `template`, `last_octet`, `cpu`, `memory_mb`, `disk_gb`, `disk_iface`, `unmanaged`, `in_path`, `domain_role`, `fidelity`, `note` | `fidelity` ∈ exact/substituted/unsupported is REQUIRED per box; `in_path` (with `unmanaged`) makes the box the team's in-path gateway at `.1` |
 | `services[]` | `box`, `name`, `port`, `pin`, `display`, `dual_credit`, `vars`, `check`, `fidelity`, `note` | `pin` is a catalog config name, or `score/<slice>` (e.g. `score/tcp`) for a native service scored without a plant |
 | `schedule[]` | `label`, `at_min` (T0 offset; null = unscheduled note), `note` | drives `run-schedule.py` and the fidelity report |
 | `scoring` | `weights` | metadata only — the engine scores flat 5 pts/check/round |
@@ -99,7 +99,7 @@ Recipe, in order:
    `n0t_sus!`, because the packet does).
 2. **One `boxes[]` entry per box type**, with `last_octet` from the packet's addressing. Pick the
    closest template that exists on the node and mark `fidelity` honestly (`substituted` +
-   `note` beats pretending). Use `unmanaged: true` for an appliance you clone but never plant on
+   `note` beats pretending). Use `unmanaged: true` for an appliance you clone but never plant on; add `in_path: true` when it is the team's routed gateway (then `last_octet` must be 1, and `validate_profile` rejects a second one)
    (pfSense), and `domain_role: dc`/`member` for AD members.
 3. **Map each scored service to a `pin`** — a nakon catalog config name, or `score/<check>`
    (e.g. `score/tcp`) for a service that is scored without a plant. Check `display` uniqueness

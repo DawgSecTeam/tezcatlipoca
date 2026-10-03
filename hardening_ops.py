@@ -9,9 +9,11 @@ import subprocess
 import time
 from typing import Callable, NamedTuple
 
-from range_ops import diagnose_unreachable_box, guest_agent_exec_root, wait_for_guest_agent
+from range_ops import (diagnose_unreachable_box, guest_agent_exec_detached,
+                       guest_agent_exec_root, wait_for_guest_agent)
 from ssh_ops import gateway_proxy, ssh_via_gateway
-from utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT, PRINT_LOCK, run_concurrent, valid_unix_username
+from utils import (DNS_FIX_CMD, DNS_FIX_CMD_ROOT, PRINT_LOCK, record_degradation,
+                   run_concurrent, valid_unix_username)
 
 
 _APT_PREP_BODY = r"""
@@ -165,6 +167,8 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
                                    ssh_fallback=lambda t: _box_settled_via_ssh(ctx, t))
     if unsettled:
         print(f"    WARNING: {len(unsettled)} box(es) never settled after boot — proceeding")
+        record_degradation("boxes never settled after boot",
+                           ", ".join(str(t.get("ip")) for t in unsettled)[:200])
 
     def _prep(t):
         ip = t["ip"]
@@ -204,9 +208,11 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
             else:
                 with PRINT_LOCK:
                     print(f"    WARNING: apt prep rc={rc} on {ip}: {(err or '').strip()[:160]} — proceeding")
+                    record_degradation("apt prep failed", f"{ip}: rc={rc} {(err or '').strip()[:160]}")
         except Exception as exc:
             with PRINT_LOCK:
                 print(f"    WARNING: apt prep failed on {ip} ({exc}) — proceeding")
+                record_degradation("apt prep failed", f"{ip}: {exc}")
         return False
 
     run_concurrent(targets, _prep)
@@ -262,6 +268,7 @@ def fix_dns_on_boxes(targets, ctx):
             with PRINT_LOCK:
                 print(f"  WARNING: DNS fix failed for {ip} after 8 attempts "
                       f"and guest-agent fallback ({agent_exc}) — proceeding anyway")
+                record_degradation("DNS fix failed", f"{ip}: {agent_exc}")
                 print(diagnose_unreachable_box(node, t["vmid"]))
             return False
 
@@ -705,14 +712,18 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
                 vmid = t["vmid"]
                 root_script = re.sub(r"\bsudo ", "", script_content)
                 try:
-                    rc, out, err = guest_agent_exec_root(node, vmid, root_script, timeout=120)
-                    if rc == 0:
+                    # Detached: this script restarts several services and can outlive
+                    # the agent channel's budget (the 120s cap is what the exec logs
+                    # showed dying mid-plant). The guest-side log is the evidence.
+                    res = guest_agent_exec_detached(
+                        node, vmid, root_script, f"/tmp/tz-harden-{vmid}.log", timeout=900)
+                    if res.rc == 0:
                         with PRINT_LOCK:
                             print(f"    Services hardened on {ip} (via guest agent)")
                     else:
                         with PRINT_LOCK:
                             print(f"    Service hardening still failing on {ip} via guest agent: "
-                                  f"rc={rc} {err.strip()[:200]}")
+                                  f"rc={res.rc} {res.log[-200:].strip()}")
                 except Exception as e:
                     with PRINT_LOCK:
                         print(f"    Guest-agent fallback failed for {ip} (vmid {vmid}): {e}")
@@ -724,6 +735,83 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
                 print(f"    Service hardening error on {ip}: {e}")
 
     run_concurrent(scripts, _exec)
+
+
+def mysql_credlist_reensure_script(cred_items):
+    """Bash that re-creates the credlist SQL accounts, tolerating the post-plant client/server
+    TLS mismatch (final-stage mysql flags disable server TLS while the stock client insists
+    on it — hence the --skip-ssl fallbacks). Idempotent."""
+    lines = ["#!/bin/bash", "set -e", ""]
+    lines.append("cat > /tmp/tz-credlist.sql << 'SQLEOF'")
+    for username, password in cred_items:
+        lines.append(f"CREATE USER IF NOT EXISTS '{username}'@'%' IDENTIFIED BY '{password}';")
+        lines.append(f"GRANT ALL PRIVILEGES ON *.* TO '{username}'@'%';")
+    lines.append("FLUSH PRIVILEGES;")
+    lines.append("SQLEOF")
+    lines.append("chmod 600 /tmp/tz-credlist.sql")
+    lines.append("sudo mysql < /tmp/tz-credlist.sql 2>/dev/null "
+                 "|| sudo mariadb < /tmp/tz-credlist.sql 2>/dev/null "
+                 "|| sudo mysql --skip-ssl < /tmp/tz-credlist.sql 2>/dev/null "
+                 "|| sudo mariadb --skip-ssl < /tmp/tz-credlist.sql")
+    lines.append("rm -f /tmp/tz-credlist.sql")
+    return "\n".join(lines)
+
+
+def reensure_mysql_credlist_users(comp_dir, targets, ctx, box_creds):
+    """Re-create the credlist SQL accounts AFTER the phase-6 final-stage pass.
+
+    fix_services creates them pre-plant, but the mysql final-stage plants rebuild the
+    auth tables (2026-09-30 testcomp-7box: db01 ended with only the install + plant
+    accounts, so the auth-based sql check failed until the users were re-added by
+    hand). Idempotent; touches only boxes whose box_services pins include
+    mysql/mariadb."""
+    cred_items = list(box_creds.items())
+    box_services = json.loads((comp_dir / "box_services.json").read_text())
+
+    jobs = []
+    for t in targets:
+        services = [s if isinstance(s, str) else s.get("name")
+                    for s in box_services.get(t["box_name"], [])]
+        if any(s in ("mysql", "mariadb") for s in services):
+            jobs.append((t, mysql_credlist_reensure_script(cred_items)))
+    if not jobs:
+        return
+    node = os.environ["TF_VAR_proxmox_node"]
+    with PRINT_LOCK:
+        print("  Re-ensuring credlist SQL users on mysql-pinned box(es) "
+              f"({', '.join(t['box_name'] for t, _ in jobs)})...")
+
+    def _exec(item):
+        t, script_content = item
+        script_b64 = base64.b64encode(script_content.encode()).decode()
+        deploy_cmd = (
+            f"echo '{script_b64}' | base64 -d > /tmp/tz-mysql-credlist.sh && "
+            "chmod 600 /tmp/tz-mysql-credlist.sh && "
+            "bash /tmp/tz-mysql-credlist.sh; rc=$?; rm -f /tmp/tz-mysql-credlist.sh; exit $rc"
+        )
+        try:
+            result = ssh_via_gateway(ctx, t["ip"], deploy_cmd, timeout=60,
+                                     user=ctx.get("box_username", "ubuntu"))
+            if result.returncode != 0:
+                raise RuntimeError(f"rc={result.returncode}: {result.stderr.strip()[:160]}")
+            with PRINT_LOCK:
+                print(f"    Credlist SQL users ensured on {t['ip']}")
+        except Exception as e:
+            root_script = re.sub(r"\bsudo ", "", script_content)
+            try:
+                rc, _out, err = guest_agent_exec_root(node, t["vmid"], root_script, timeout=120)
+                with PRINT_LOCK:
+                    if rc == 0:
+                        print(f"    Credlist SQL users ensured on {t['ip']} (via guest agent)")
+                    else:
+                        print(f"    Credlist SQL re-ensure still failing on {t['ip']} via "
+                              f"guest agent: rc={rc} {err.strip()[:160]}")
+            except Exception as agent_error:
+                with PRINT_LOCK:
+                    print(f"    Credlist SQL re-ensure error on {t['ip']}: {e} / "
+                          f"guest-agent fallback: {agent_error}")
+
+    run_concurrent(jobs, _exec)
 
 
 def setup_ubuntu_auth(targets, ctx):
@@ -767,15 +855,16 @@ def setup_ubuntu_auth(targets, ctx):
             vmid = t["vmid"]
             root_script = re.sub(r"\bsudo ", "", auth_cmd)
             try:
-                rc, out, err = guest_agent_exec_root(
-                    os.environ["TF_VAR_proxmox_node"], vmid, root_script, timeout=120)
-                if rc == 0:
+                res = guest_agent_exec_detached(
+                    os.environ["TF_VAR_proxmox_node"], vmid, root_script,
+                    f"/tmp/tz-auth-{vmid}.log", timeout=900)
+                if res.rc == 0:
                     with PRINT_LOCK:
                         print(f"    Auth configured on {ip} (via guest agent)")
                     return True
                 raise RuntimeError(
                     f"auth setup failed on {ip} via guest agent too: "
-                    f"rc={rc} {err.strip()[:200]}")
+                    f"rc={res.rc} {res.log[-200:].strip()}")
             except RuntimeError:
                 raise
             except Exception as e:

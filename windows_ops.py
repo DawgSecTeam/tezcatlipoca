@@ -22,6 +22,30 @@ _IMAGE_STATE_PS = (
     "-ErrorAction SilentlyContinue; if ($s) { $s.ImageState } else { 'IMAGE_STATE_COMPLETE' }"
 )
 
+# How long ONE nested agent wait may block before the enclosing loop gets to re-check its
+# own deadline. The scale8 soak's 40-minute hang was a deadline that never got re-read:
+# _wait_for_windows_setup_complete handed wait_for_guest_agent the ENTIRE remaining budget
+# (windows_ops.py:35, `timeout=max(1, int(deadline - time.time()))` against a 900 s
+# default), so a host whose agent never answered consumed the whole window in a single
+# uninterruptible call and every outer timeout was decorative. Each poll is now capped,
+# and the loop keeps re-asking — total wait is unchanged for a box that is merely slow,
+# but a wedged one is re-checked every AGENT_POLL_CAP seconds instead of never.
+AGENT_POLL_CAP = 120
+
+# Per-call bound for the domain-chain probes below. They only ever ran 20-60 s calls, so
+# this is documentation of the invariant rather than a behaviour change: no single probe
+# may consume the whole helper deadline, or "wait for the DC" silently becomes "wait for
+# one RPC".
+AGENT_PROBE_CAP = 60
+
+
+def _bounded(timeout, remaining):
+    """Min(desired timeout, deadline remainder, poll cap), never below 1 s.
+
+    The point is that no single agent call may outlive the loop that is waiting on it:
+    whichever of the three is smallest wins."""
+    return max(1, min(timeout, AGENT_POLL_CAP, int(remaining)))
+
 
 def _wait_for_windows_setup_complete(node, vmid, deadline):
     """Wait out a sysprepped image's first boot (specialize -> reboot -> OOBE).
@@ -32,9 +56,12 @@ def _wait_for_windows_setup_complete(node, vmid, deadline):
     settled ~520s). A longer exec timeout alone still races the reboot; wait for the
     image to actually report complete."""
     while time.time() < deadline:
-        if wait_for_guest_agent(node, vmid, timeout=max(1, int(deadline - time.time()))):
+        remaining = deadline - time.time()
+        if wait_for_guest_agent(node, vmid, timeout=_bounded(AGENT_POLL_CAP, remaining)):
             try:
-                rc, out, _ = guest_agent_exec_windows(node, vmid, _IMAGE_STATE_PS, timeout=60)
+                rc, out, _ = guest_agent_exec_windows(
+                    node, vmid, _IMAGE_STATE_PS,
+                    timeout=_bounded(60, deadline - time.time()))
                 if rc == 0 and "IMAGE_STATE_COMPLETE" in out:
                     return True
             except Exception:
@@ -135,16 +162,24 @@ def wait_for_adws(node, vmid, timeout=900):
     (winad-testrun 2026-09-25: svc-support never created, silently — the AD misconfig
     pass is non-strict and outside nakon-config.json's coverage)."""
     deadline = time.time() + timeout
+    errors = 0
     while time.time() < deadline:
         try:
             rc, out, _ = guest_agent_exec_windows(
-                node, vmid, "(Get-ADDomain -ErrorAction Stop).DomainSID.Value", timeout=60)
+                node, vmid, "(Get-ADDomain -ErrorAction Stop).DomainSID.Value",
+                timeout=_bounded(AGENT_PROBE_CAP, deadline - time.time()))
             sid = (out or "").strip()
             if rc == 0 and sid.startswith("S-1-5-21-"):
                 return sid
         except Exception:
-            pass
+            errors += 1
         time.sleep(15)
+    if errors:
+        # A DC whose agent answered nothing at all is a different problem from a DC whose
+        # ADWS is slow, and the difference decides whether the fix is "wait" or "look at
+        # the guest agent" (scale8 soak 2026-10-02: exec 500s on every satellite dc01).
+        print(f"    WARNING: ADWS never came up in {timeout}s and {errors} agent probe(s) "
+              f"failed — the DC may be agent-unreachable rather than slow")
     return None
 
 
@@ -152,16 +187,20 @@ def wait_for_windows_sshd(node, vmid, timeout=180):
     """Wait for sshd Running via guest agent (agent up doesn't guarantee sshd up after ADDS reboot). Never raises."""
 
     deadline = time.time() + timeout
+    errors = 0
     while time.time() < deadline:
         try:
             rc, out, _ = guest_agent_exec_windows(
-                node, vmid, "(Get-Service sshd -ErrorAction SilentlyContinue).Status", timeout=20
-            )
+                node, vmid, "(Get-Service sshd -ErrorAction SilentlyContinue).Status",
+                timeout=_bounded(20, deadline - time.time()))
             if rc == 0 and out.strip() == "Running":
                 return True
         except Exception:
-            pass
+            errors += 1
         time.sleep(10)
+    if errors:
+        print(f"    WARNING: sshd was not confirmed Running within {timeout}s and {errors} "
+              f"agent probe(s) failed — the box may be agent-unreachable")
     return False
 
 
@@ -181,7 +220,7 @@ def wait_for_dc_dns(node, dc_vmid, domain, dc_ip, timeout=300):
                 node, dc_vmid,
                 f"@(Resolve-DnsName -Name {record} -Server {dc_ip} -Type SRV -ErrorAction "
                 f"SilentlyContinue).Count -gt 0",
-                timeout=20,
+                timeout=_bounded(20, deadline - time.time()),
             )
             probes += 1
             if rc == 0 and out.strip().lower() == "true":

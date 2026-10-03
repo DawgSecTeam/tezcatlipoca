@@ -192,5 +192,52 @@ class ServiceRequiredVars(unittest.TestCase):
         self.assertTrue(any("vars must be a mapping" in e for e in errs), errs)
 
 
+class FirewallBoxes(unittest.TestCase):
+    """in_path firewalls (unmanaged, gateway .1) and the legacy packet stand-in shape
+    (unmanaged .1 without in_path — cde-2026/maccdc packets)."""
+
+    def test_in_path_firewall_valid(self):
+        p = copy.deepcopy(_BASE)
+        p["boxes"].append({"name": "fw01", "template": "pfsense", "last_octet": 1,
+                           "cpu": 1, "memory_mb": 512, "fidelity": "substituted",
+                           "unmanaged": True, "in_path": True})
+        self.assertEqual(validate_profile(p), [])
+
+    def test_in_path_requires_unmanaged(self):
+        p = copy.deepcopy(_BASE)
+        p["boxes"].append({"name": "fw01", "template": "pfsense", "last_octet": 1,
+                           "cpu": 1, "memory_mb": 512, "fidelity": "substituted",
+                           "in_path": True})
+        self.assertTrue(any("unmanaged by definition" in e
+                            for e in validate_profile(p)))
+
+    def test_in_path_must_own_the_gateway(self):
+        p = copy.deepcopy(_BASE)
+        p["boxes"].append({"name": "fw01", "template": "pfsense", "last_octet": 7,
+                           "cpu": 1, "memory_mb": 512, "fidelity": "substituted",
+                           "unmanaged": True, "in_path": True})
+        self.assertTrue(any("last_octet must be 1" in e for e in validate_profile(p)))
+
+    def test_gateway_address_is_firewall_only(self):
+        # managed host at .1 is rejected; the legacy unmanaged stand-in stays legal
+        p = copy.deepcopy(_BASE)
+        p["boxes"][0]["last_octet"] = 1
+        p["boxes"][0]["disk_iface"] = "sata0"
+        self.assertTrue(any("gateway" in e for e in validate_profile(p)))
+        p["boxes"][0]["unmanaged"] = True
+        p["boxes"][0].pop("domain_role", None)
+        self.assertEqual(validate_profile(p), [])
+
+    def test_second_firewall_rejected(self):
+        p = copy.deepcopy(_BASE)
+        p["boxes"].append({"name": "fw01", "template": "pfsense", "last_octet": 1,
+                           "cpu": 1, "memory_mb": 512, "fidelity": "substituted",
+                           "unmanaged": True, "in_path": True})
+        p["boxes"].append({"name": "fw02", "template": "pfsense", "last_octet": 254,
+                           "cpu": 1, "memory_mb": 512, "fidelity": "substituted",
+                           "unmanaged": True, "in_path": True})
+        self.assertTrue(any("one per-team lineup" in e for e in validate_profile(p)))
+
+
 if __name__ == "__main__":
     unittest.main()

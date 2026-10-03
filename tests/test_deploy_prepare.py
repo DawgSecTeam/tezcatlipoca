@@ -110,21 +110,47 @@ class PriorStateGuards(unittest.TestCase):
                 deploy._load_prior_deploy_state(prior, comp_dir, 2, False)
         self.assertIn("pipeline v1", str(raised.exception))
 
+    def test_pipeline_v2_state_is_refused(self):
+        # v3 inserted the firewall-bootstrap phase 5 and renumbered 5-7, so a v2
+        # state's --from-phase numbers mean different things now.
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = self._comp_dir(d, {"pipeline_version": 2, "last_phase": 3})
+            prior = _prior(comp_dir)
+            with self.assertRaises(SystemExit) as raised:
+                deploy._load_prior_deploy_state(prior, comp_dir, 2, False)
+        self.assertIn("pipeline v2", str(raised.exception))
+        self.assertIn("renumbered", str(raised.exception))
+
     def test_guard_resume_from_phase_gets_the_states_last_completed_phase(self):
         with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d, {"pipeline_version": 2, "last_phase": 5})
+            comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 5})
             prior = _prior(comp_dir)
             with patch.object(deploy, "guard_resume_from_phase") as guard:
                 deploy._load_prior_deploy_state(prior, comp_dir, 6, True)
         guard.assert_called_once_with(6, 5, comp_dir / ".deploy_state.json", force=True)
 
+    def test_the_resume_budget_guard_is_also_wired_in(self):
+        """The budget is only enforceable if prepare() actually consults it — a guard
+        nobody calls is the prose rule it replaced."""
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 3})
+            prior = _prior(comp_dir)
+            with patch.object(deploy, "guard_resume_streak") as guard, \
+                    patch.object(deploy, "guard_resume_existence"):
+                deploy._load_prior_deploy_state(prior, comp_dir, 4, False)
+        guard.assert_called_once_with(4, prior.previous_state, force=False)
+
     def test_fresh_run_never_calls_the_resume_guard(self):
         with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d, {"pipeline_version": 2, "last_phase": 0})
+            comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 0})
             prior = _prior(comp_dir)
-            with patch.object(deploy, "guard_resume_from_phase") as guard:
+            with patch.object(deploy, "guard_resume_from_phase") as guard, \
+                    patch.object(deploy, "guard_resume_streak") as streak_guard, \
+                    patch.object(deploy, "guard_resume_existence") as exist_guard:
                 deploy._load_prior_deploy_state(prior, comp_dir, 1, False)
         guard.assert_not_called()
+        streak_guard.assert_not_called()   # a fresh deploy is never a resume-loop
+        exist_guard.assert_not_called()    # nor a resume of anything
         self.assertFalse(prior.resuming)
 
 
@@ -390,8 +416,10 @@ class PrepareSequencer(unittest.TestCase):
     """prepare()'s step order and its early-None return, with every step stubbed.
 
     This is the test that says the ordering the comments argue for is the ordering the
-    code runs: engine-vmid first, placement+lock next, the golden/frozen step before the
-    confirmation (and therefore before phase 1), targets only after the prompt.
+    code runs: engine-vmid first, placement+lock next, preflight before the fresh
+    credential mint (a gate abort must not leave minted credentials no engine ever
+    received), the golden/frozen step before the confirmation (and therefore before
+    phase 1), targets only after the prompt.
     """
 
     def _prepare(self, comp_dir, order, confirm=True, buf=None):
@@ -414,10 +442,14 @@ class PrepareSequencer(unittest.TestCase):
                               setattr(spec, "comp_name", "probe")))), \
                 patch.object(deploy, "_load_prior_deploy_state", side_effect=load_prior), \
                 patch.object(deploy, "_load_competition_inputs", side_effect=rec("inputs")), \
-                patch.object(deploy, "_resolve_competition_secrets",
-                             side_effect=rec("secrets", lambda secrets, *a, **k: (
+                patch.object(deploy, "_resolve_competition_teams",
+                             side_effect=rec("teams", lambda secrets, *a, **k: (
                                  setattr(secrets, "state", {}),
                                  setattr(secrets, "teams", {})))), \
+                patch.object(deploy, "_mint_competition_secrets",
+                             side_effect=rec("mint")), \
+                patch.object(deploy, "_engine_mgmt_ip_from_env",
+                             return_value="10.0.0.250"), \
                 patch.object(deploy, "resolve_placement",
                              side_effect=lambda *a, **k: order.append("resolve")
                              or ({"team_slots": {}}, None)), \
@@ -444,9 +476,9 @@ class PrepareSequencer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             result = self._prepare(Path(d), order)
         self.assertEqual(result, "CTX")
-        self.assertEqual(order, ["spec", "prior", "inputs", "secrets", "resolve", "activate",
-                                 ("lock", 1234), "generated", "terraform", "preflight",
-                                 "confirm", "targets", "assemble"])
+        self.assertEqual(order, ["spec", "prior", "inputs", "teams", "resolve", "activate",
+                                 ("lock", 1234), "preflight", "mint", "generated",
+                                 "terraform", "confirm", "targets", "assemble"])
 
     def test_declining_the_prompt_returns_none_and_runs_nothing_after_it(self):
         order = []
@@ -456,9 +488,9 @@ class PrepareSequencer(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIn("Deployment cancelled.", buf.getvalue())
         # no target enumeration, no context: deploy() sees None and runs no phase
-        self.assertEqual(order, ["spec", "prior", "inputs", "secrets", "resolve", "activate",
-                                 ("lock", 1234), "generated", "terraform", "preflight",
-                                 "confirm"])
+        self.assertEqual(order, ["spec", "prior", "inputs", "teams", "resolve", "activate",
+                                 ("lock", 1234), "preflight", "mint", "generated",
+                                 "terraform", "confirm"])
 
 
 class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):

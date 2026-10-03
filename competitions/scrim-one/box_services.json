@@ -1,0 +1,36 @@
+{
+  "dc01": [
+    "ADDS",
+    "Enable WinRM"
+  ],
+  "win02": [
+    {
+      "name": "IIS FTP",
+      "plant_only": true
+    },
+    {
+      "name": "score/tcp",
+      "score_only": true,
+      "check": "Tcp",
+      "display": "ftp",
+      "port": 21
+    }
+  ],
+  "web01": [
+    "ssh",
+    "nginx"
+  ],
+  "mail01": [
+    "ssh",
+    "postfix",
+    "dovecot"
+  ],
+  "db01": [
+    "ssh",
+    "mysql"
+  ],
+  "splunk01": [
+    "ssh",
+    "splunk"
+  ]
+}

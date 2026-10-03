@@ -1,11 +1,17 @@
 """Proxmox API layer, VM identity math, and (team, box) target abstraction."""
 
+import base64
 import json
 import os
 import re
+import shlex
 import shutil
+import subprocess
 import time
 from pathlib import Path
+from typing import NamedTuple
+
+from utils import record_degradation
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -54,11 +60,70 @@ _TF_TEMPLATE_DIR = REPO_ROOT / "terraform"
 _TF_TEMPLATE_FILES = ("main.tf", "variables.tf", "outputs.tf", ".terraform.lock.hcl")
 
 
+def live_vmids():
+    """Every vmid the cluster currently knows, as a set.
+
+    One cluster-level read serves a whole resume gate, and it works identically on a
+    single node and across a multi-node placement (each host's own view lists its own
+    VMs, and the gate only needs "does this vmid exist somewhere in this range").
+
+    Raises RuntimeError rather than returning an empty set when the API cannot be
+    reached: an empty set would read as "every machine is gone" and hard-fail a resume
+    that is actually fine, which is its own kind of lie."""
+    try:
+        data = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
+    except Exception as e:                                  # noqa: BLE001 - reported
+        raise RuntimeError(f"could not list the cluster's VMs to verify the resume: {e}")
+    return {int(v["vmid"]) for v in (data or []) if v.get("vmid") is not None}
+
+
 def terraform_dir(comp_dir):
     """Per-competition Terraform working dir (its own state + lock), so two
     competitions can `terraform apply` concurrently on one node instead of
     contending on the single shared terraform/terraform.tfstate."""
     return Path(comp_dir) / "terraform"
+
+
+# Resource instance addresses that carry a vmid: `...team_box["proxmox:221"]`. The
+# satellite variants (team_box_sat1..4) put their teams on other hosts, and the engine
+# is a separate resource — all three carry the same suffix shape, so one pattern
+# covers every box a deploy phase can produce.
+_TF_VMID_ADDR_RE = re.compile(r'\[(?:"[^"]*?:(\d+)"|(\d+))\]')
+
+
+def team_vmids_from_state(comp_dir, run=None):
+    """Every vmid in this competition's terraform state, as a sorted list.
+
+    Pure parse of `terraform state list` — the one artifact that says which machines a
+    completed phase actually created. Reads only; never plans, applies, or locks.
+
+    Raises RuntimeError when the state cannot be read at all (terraform missing, a
+    corrupt state, a held lock): "I could not check" must never be reported as "there
+    is nothing there", or a resume gate becomes a resume hazard."""
+    tf_dir = terraform_dir(comp_dir)
+    runner = run or subprocess.run
+    try:
+        proc = runner(["terraform", "state", "list"], cwd=str(tf_dir),
+                      capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RuntimeError(f"could not run `terraform state list` in {tf_dir}: {e}")
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        raise RuntimeError(
+            f"`terraform state list` failed in {tf_dir} (rc={proc.returncode}): "
+            f"{detail[-1] if detail else 'no output'}")
+    # Terraform writes warnings to stderr and resource addresses to stdout, but a
+    # provider can also emit notices on stdout — parse the address SHAPE rather than
+    # trusting every line to be an address.
+    vmids = set()
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("proxmox_virtual_environment_vm."):
+            continue
+        m = _TF_VMID_ADDR_RE.search(line)
+        if m:
+            vmids.add(int(m.group(1) or m.group(2)))
+    return sorted(vmids)
 
 
 def ensure_terraform_workdir(comp_dir):
@@ -213,6 +278,7 @@ def guest_agent_exec_root(node, vmid, script, timeout=60, shell="bash"):
         "POST", f"/nodes/{node}/qemu/{vmid}/agent/exec",
         data={"command": [shell, "-c", script]},
     )["data"]["pid"]
+    last = {}
     deadline = time.time() + timeout
     while time.time() < deadline:
         s = proxmox_api(
@@ -221,8 +287,9 @@ def guest_agent_exec_root(node, vmid, script, timeout=60, shell="bash"):
         )["data"]
         if s.get("exited"):
             return s.get("exitcode", -1), s.get("out-data", ""), s.get("err-data", "")
+        last = s
         time.sleep(1)
-    raise RuntimeError(f"guest-agent exec on vmid {vmid} didn't finish within {timeout}s")
+    raise RuntimeError(_exec_timeout_message(vmid, pid, timeout, last))
 
 
 def guest_agent_exec_windows(node, vmid, ps_script, timeout=120):
@@ -236,6 +303,7 @@ def guest_agent_exec_windows(node, vmid, ps_script, timeout=120):
             "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded,
         ]},
     )["data"]["pid"]
+    last = {}
     deadline = time.time() + timeout
     while time.time() < deadline:
         s = proxmox_api(
@@ -244,8 +312,259 @@ def guest_agent_exec_windows(node, vmid, ps_script, timeout=120):
         )["data"]
         if s.get("exited"):
             return s.get("exitcode", -1), s.get("out-data", ""), s.get("err-data", "")
+        last = s
         time.sleep(1)
-    raise RuntimeError(f"guest-agent exec on vmid {vmid} didn't finish within {timeout}s")
+    raise RuntimeError(_exec_timeout_message(vmid, pid, timeout, last))
+
+
+# The guest-file pull block. It lives next to the two exec helpers above because
+# those are its fallback channels: agent/file-read is only usable where PVE and the
+# guest agent both implement it, and everywhere else the bytes come back base64'd
+# through an exec — which is why the read side has a practical size ceiling too
+# (the same endpoint's write side caps at 61440 base64 chars, pmx.py:21-26).
+_NOT_FOUND_SIGNATURES = (
+    "no such file", "not found", "does not exist",
+    # Windows: [IO.File]::ReadAllBytes fails with .NET's "Could not find file ...",
+    # which contains neither "no such file" nor "not found".
+    "could not find", "cannot find",
+)
+
+
+def _guest_file_missing(detail):
+    """Is this error string "the file is not there", or "the channel broke"?
+
+    One predicate for all three channels, because downstream the two outcomes are
+    recorded differently (`absent` vs `failed` in a collection manifest): an absent
+    file is a normal result — a run that never wrote that log — while a read that
+    fails needs an operator. PVE answers a missing file with an HTTP error and the
+    guest agent with rc != 0, so the message text is the only portable signal. The
+    Windows phrasings are here because .NET's "Could not find file" matches neither
+    "no such file" nor "not found"; without them an absent Windows path would be
+    misfiled as a transport failure and re-probed through every channel.
+    """
+    low = str(detail or "").lower()
+    return any(sig in low for sig in _NOT_FOUND_SIGNATURES)
+
+
+def _guest_file_content_bytes(content):
+    """Bytes for the `content` field of a PVE agent/file-read response.
+
+    The channel is asymmetric: file-write wants base64 that the caller produces
+    (pmx.py:21-26), file-read documents base64 back — yet the proxmoxer path the
+    skill CLI uses has returned `content` already decoded (pmx.py:25,591). So decide
+    per response rather than per Proxmox version: a body that is valid base64 (right
+    length, padding, no whitespace) is decoded; anything else — a space, a trailing
+    newline, the wrong length — is literal text, which is what an already-decoded
+    body looks like. A short text file consisting only of base64 characters is
+    genuinely indistinguishable from an encoded one, which is one more reason the scp
+    route stays the byte-exact one for arbitrary evidence.
+    """
+    if isinstance(content, (bytes, bytearray)):
+        return bytes(content)
+    text = str(content)
+    probe = text.strip()
+    if probe and len(probe) % 4 == 0 and not any(c.isspace() for c in probe):
+        try:
+            return base64.b64decode(probe, validate=True)
+        except (ValueError, TypeError):
+            pass
+    return text.encode("utf-8", errors="surrogateescape")
+
+
+def guest_file_read(node, vmid, path, timeout=60, windows=False, max_bytes=8388608):
+    """Pull one guest file's exact bytes — this repo's only file-pull primitive.
+
+    Why it exists: every other agent helper here runs a command and hands back
+    `(exit_code, stdout, stderr)` (`guest_agent_exec_root` :214,
+    `guest_agent_exec_windows` :235), so an artifact could only be rebuilt by parsing
+    stdout, and the one proven pull in the tree (red01's evidence,
+    run-agent-scrim.py) is scp over an engine jump. Evidence collection needs what a
+    manifest can trust — bytes, or a definite "not there" — and the absent-vs-failed
+    split is the whole point: a missing file raises `FileNotFoundError` (record
+    `absent`; a run that never wrote its log is normal) and a broken channel raises
+    `RuntimeError` (record `failed`; a human is needed). Never collapse the two.
+
+    Channels, in this order:
+
+    1. PVE `GET /nodes/<node>/qemu/<vmid>/agent/file-read` — no guest-side tooling
+       and no shell, identical on Linux and Windows, so it is tried first.
+    2. Linux fallback: `base64 <file> | tr -d '\\n'` through
+       `guest_agent_exec_root`, for PVE/agent versions without file-read. The form
+       matters: `-w0` is GNU-only, while `base64 ... | tr -d '\\n'` is the one GNU
+       coreutils and busybox agree on; the pipeline is POSIX, so it runs under `sh`
+       (alpine guests have no bash).
+    3. `windows=True` fallback:
+       `[Convert]::ToBase64String([IO.File]::ReadAllBytes('<path>'))` through
+       `guest_agent_exec_windows`.
+
+    A not-found signature in the primary route's error is final — PVE already
+    answered, so the exec channel is not spent re-asking. Any *other* primary failure
+    falls through to the exec channel, and only if that fails too does the error
+    surface, as a `RuntimeError` naming both causes.
+
+    `max_bytes` bounds the decoded result, not the transfer: a silently truncated
+    evidence file that looks complete is worse than a loud failure, so an oversize
+    read raises. Use this for config files, unit status, small logs and journals you
+    need byte-exact; keep multi-MB evidence (e.g. `events.jsonl`) on the existing scp
+    route, because file-read ships the whole file base64'd in one JSON body and has
+    no chunk or offset parameter.
+
+    `timeout` is per channel and bounds the exec poll loops, not the HTTP read.
+    """
+    data = None
+    primary_error = None
+    try:
+        resp = proxmox_api(
+            "GET", f"/nodes/{node}/qemu/{vmid}/agent/file-read",
+            params={"file": path},
+        )
+        content = (resp.get("data") or {}).get("content")
+        if content is None:
+            raise RuntimeError("agent/file-read returned no content field")
+        data = _guest_file_content_bytes(content)
+    except Exception as e:
+        if _guest_file_missing(e):
+            # PVE spells a missing file as an HTTP error; that IS the answer, so do
+            # not spend the fallback (and another timeout) re-asking the same question.
+            raise FileNotFoundError(
+                f"guest file {path} does not exist in vmid {vmid} (node {node}): {e}"
+            ) from e
+        primary_error = e
+
+    if data is None:
+        if windows:
+            channel = "powershell"
+            # Single-quoted PowerShell literal: the only escape is a doubled quote.
+            script = ("[Convert]::ToBase64String([IO.File]::ReadAllBytes('"
+                      + path.replace("'", "''") + "'))")
+        else:
+            channel = "base64"
+            script = f"base64 {shlex.quote(path)} | tr -d '\\n'"
+        try:
+            if windows:
+                rc, out, err = guest_agent_exec_windows(node, vmid, script, timeout=timeout)
+            else:
+                rc, out, err = guest_agent_exec_root(node, vmid, script,
+                                                     timeout=timeout, shell="sh")
+        except Exception as e:
+            raise RuntimeError(
+                f"guest file read of {path} on vmid {vmid} failed on both channels — "
+                f"agent/file-read: {primary_error}; {channel} exec fallback: {e}"
+            ) from e
+        if rc != 0:
+            if _guest_file_missing(err):
+                raise FileNotFoundError(
+                    f"guest file {path} does not exist in vmid {vmid} (node {node}): "
+                    f"rc={rc} from the {channel} exec fallback: {str(err).strip()}")
+            raise RuntimeError(
+                f"guest file read of {path} on vmid {vmid} failed on the {channel} exec "
+                f"fallback (rc={rc}): {str(err).strip()}; agent/file-read had failed "
+                f"first: {primary_error}")
+        try:
+            # validate=True: a corrupted stream must raise here, not silently decode to
+            # fewer bytes (without it b64decode discards junk characters).
+            data = base64.b64decode((out or "").strip(), validate=True)
+        except (ValueError, TypeError) as e:
+            raise RuntimeError(
+                f"guest file read of {path} on vmid {vmid}: the {channel} exec fallback "
+                f"returned {len(out or '')} chars that are not valid base64: {e}") from e
+
+    if len(data) > max_bytes:
+        raise RuntimeError(
+            f"guest file read of {path} on vmid {vmid} returned {len(data)} bytes, over the "
+            f"max_bytes limit of {max_bytes} — refusing to hand back a file that only looks "
+            f"complete. Pull large evidence (multi-MB events.jsonl) over the scp route.")
+    return data
+
+
+def _exec_timeout_message(vmid, pid, timeout, status):
+    """Explain a guest-exec timeout instead of just naming it.
+
+    A bare "didn't finish within Ns" gives an operator nothing to act on, and five
+    exec logs carry exactly that at the 120s cap (live-found 2026-09-26..10-01). The
+    agent already holds the partial output by the time we give up — include it, and
+    point at the detached path for work that legitimately outlives a poll budget.
+    """
+    status = status or {}
+    detail = []
+    for label, key in (("stdout", "out-data"), ("stderr", "err-data")):
+        text = str(status.get(key) or "").strip()
+        if text:
+            detail.append(f"{label} so far: {text[-400:]!r}")
+    tail = ("; " + "; ".join(detail)) if detail else ""
+    return (f"guest-agent exec pid={pid} on vmid {vmid} did not finish within {timeout}s"
+            f"{tail}. For work that can outlive the budget, call "
+            f"guest_agent_exec_detached() (nohup + log polling) rather than raising "
+            f"the timeout.")
+
+
+class DetachedExecResult(NamedTuple):
+    """`rc` is the script's exit status; `log` is the tail of the guest-side log;
+    `log_path` is where that log lives ON THE GUEST (not stderr — a detached run
+    has one merged stream, and the file outlives the call)."""
+
+    rc: int
+    log: str
+    log_path: str
+
+
+# Written by the same shell that ran the payload, so it cannot appear in the log
+# before the payload has finished.
+DETACHED_RC_MARKER = "__TZ_DETACHED_RC="
+
+
+def guest_agent_exec_detached(node, vmid, script, log_path, timeout=1800,
+                              shell="bash", poll_interval=5):
+    """Run a long root script via the guest agent without holding the exec channel open.
+
+    The agent's exec channel is a poll loop with a caller-set budget, so work that
+    legitimately outlives that budget (apt installs, nakon bundles, service fixups)
+    used to die mid-plant with a timeout — and the plant's partial effects stayed on
+    the box. This starts the payload under setsid+nohup, redirects it to a log on the
+    guest, and polls that log for a completion marker, so `timeout` is a real deadline
+    rather than a request/response budget.
+
+    Returns DetachedExecResult(rc, log_tail, log_path). The log survives a dropped
+    agent channel, so a timeout here is diagnosable after the fact on the guest.
+    """
+    qlog = shlex.quote(log_path)
+    # A subshell keeps an `exit` inside the payload from skipping the rc marker, and
+    # the marker is written by the same shell that ran the payload — so it cannot
+    # appear in the log before the payload has finished.
+    body = (f"( {script}\n); __tz_rc=$?; "
+            f'printf "%s%s\\n" "{DETACHED_RC_MARKER}" "$__tz_rc" >> {qlog}')
+    wrapper = (f"rm -f {qlog}; "
+               f"setsid nohup {shell} -c {shlex.quote(body)} "
+               f"> {qlog} 2>&1 < /dev/null & echo started")
+    proxmox_api(
+        "POST", f"/nodes/{node}/qemu/{vmid}/agent/exec",
+        data={"command": [shell, "-c", wrapper]},
+    )
+
+    deadline = time.time() + timeout
+    last_log = ""
+    while time.time() < deadline:
+        time.sleep(poll_interval)
+        try:
+            _rc, out, _err = guest_agent_exec_root(
+                node, vmid, f"tail -c 4000 {qlog} 2>/dev/null || true", timeout=30)
+        except Exception:
+            # A transient agent hiccup is expected while the payload churns; the log
+            # on the guest is the durable record, so keep polling until the deadline.
+            continue
+        last_log = out or ""
+        marker_at = last_log.rfind(DETACHED_RC_MARKER)
+        if marker_at != -1:
+            tail = last_log[marker_at + len(DETACHED_RC_MARKER):].strip()
+            rc_text = tail.splitlines()[0].strip() if tail else ""
+            try:
+                rc = int(rc_text)
+            except ValueError:
+                rc = -1
+            return DetachedExecResult(rc, last_log, log_path)
+    raise RuntimeError(
+        f"guest-agent detached exec on vmid {vmid} did not finish within {timeout}s "
+        f"(log on the guest: {log_path}). Last log tail: {last_log[-400:]!r}")
 
 
 def wait_for_guest_agent(node, vmid, timeout=300):
@@ -259,7 +578,62 @@ def wait_for_guest_agent(node, vmid, timeout=300):
         except Exception:
             pass
         time.sleep(5)
+    # Never raises — callers depend on the boolean — but a silent False is how a
+    # 45-minute escalation looks like progress (observed 600 -> 1200 -> 2700 -> 2900s
+    # for one vmid). Say what the VM is actually doing instead.
+    print(f"    guest agent on vmid {vmid} did not answer within {timeout}s{_vm_state_suffix(node, vmid)}")
     return False
+
+
+def _vm_state_suffix(node, vmid):
+    """Best-effort ' (status=running, name=…)' for a failed agent wait. Never raises."""
+    try:
+        cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+        status = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/status/current")["data"]
+        return (f" (status={status.get('status', '?')}, name={cfg.get('name', '?')}, "
+                f"lock={cfg.get('lock') or 'none'})")
+    except Exception as e:
+        return f" (state unavailable: {e})"
+
+
+def node_loadavg(node):
+    """1-minute load average of a node, or None when the node won't say. Never raises."""
+    try:
+        data = proxmox_api("GET", f"/nodes/{node}/status")["data"]
+        loadavg = data.get("loadavg") or []
+        return float(loadavg[0]) if loadavg else None
+    except Exception:
+        return None
+
+
+def wait_for_node_load(node, max_load, timeout=3600, poll=30, sleep=time.sleep):
+    """Block until the node's 1-minute load drops below `max_load`. Returns True if it did.
+
+    Phase-4 golden retries were hand-throttled by an operator watching load
+    ("load=32.06 (attempt 1/36) … load below 10 — launching phase-4 resume",
+    2026-09-30, eight consecutive failures on one Windows golden while a second
+    deploy saturated the host). Raising the sysprep budget 900s -> 1800s did not fix
+    it; the contention did. A node that never reports load, or never comes down
+    within `timeout`, returns False — the caller decides whether to proceed anyway,
+    because the load may be this very deploy.
+
+    `sleep` is injectable so the offline tests do not wait a real hour.
+    """
+    deadline = time.time() + timeout
+    while True:
+        load = node_loadavg(node)
+        if load is None:
+            print(f"    node {node} did not report a load average — not waiting")
+            return False
+        if load < max_load:
+            print(f"    node {node} load {load:.2f} < {max_load} — proceeding")
+            return True
+        if time.time() >= deadline:
+            print(f"    node {node} load still {load:.2f} (>= {max_load}) after "
+                  f"{timeout}s — proceeding anyway")
+            return False
+        print(f"    node {node} load {load:.2f} >= {max_load} — waiting {poll}s")
+        sleep(poll)
 
 
 
@@ -496,6 +870,13 @@ def enumerate_targets(teams, boxes, placement=None, default_node=None):
     node-scoped calls have one uniform field."""
     team_node = placement.get("team_nodes") if placement else None
     team_slot = placement.get("team_slots") if placement else None
+
+    def _pve_node(name):
+        # placement keys (team_nodes, node record names) are nodes.json NAMES; every
+        # /nodes/<name>/... API path needs the PVE hostname inside that record.
+        rec = (placement or {}).get("nodes", {}).get(name)
+        return rec["node"] if rec else name
+
     return [
         {
             "team_key": team_key,
@@ -508,7 +889,7 @@ def enumerate_targets(teams, boxes, placement=None, default_node=None):
             "vm_name": (f"{team_key}-{box['name']}" if team_key == "team1"
                         else f"{team['identifier']}-{box['name']}"),
             "machine": f"{box['name']}-team{team['identifier']}",
-            "node": (team_node or {}).get(team_key, default_node),
+            "node": _pve_node((team_node or {}).get(team_key, default_node)),
             "slot": (team_slot or {}).get(team_key, 0 if placement else None),
         }
         for team_key, team in teams.items()
@@ -550,6 +931,13 @@ def take_snapshot(node, vmid, name, description="", timeout=900):
         return True
     except Exception as e:
         print(f"    WARNING: snapshot '{name}' failed for vmid {vmid}: {e}")
+        # Never raises by design, but this is NOT a cosmetic warning: `tz-base`/`tz-ready`
+        # are the rollback points, so a range whose snapshot failed cannot be rolled back
+        # (`redeploy --mode rollback-base`) and a failed golden snapshot removes the
+        # pre-plant guard. Live-found 2026-10-02: hdd filled during a Windows-heavy run and
+        # both snapshots failed with `zfs error: ... out of space`, silently, mid-deploy.
+        record_degradation(f"snapshot '{name}' failed",
+                           f"vmid {vmid}: {str(e)[:200]}")
         return False
 
 

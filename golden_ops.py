@@ -49,8 +49,10 @@ from range_ops import (
 )
 from nodes_ops import golden_vmid_for_slot
 from ssh_ops import ssh_via_gateway, wait_for_boxes_ssh, wait_for_cloud_init
-from template_ops import stored_template_hash, write_template_hash
-from utils import PRINT_LOCK, compfile_flag, is_unmanaged, run_concurrent
+from template_ops import (golden_plant_checkpoints, save_template_hashes,
+                          stored_template_hash, write_template_hash)
+from utils import (PRINT_LOCK, compfile_flag, is_unmanaged, record_degradation,
+                   run_concurrent)
 from windows_ops import bootstrap_windows_box, is_windows_template
 
 
@@ -283,7 +285,7 @@ def _boot_smoke_error(box, target, status, detail, planted_configs):
         "plant after cloning; the 2026-09-24 incident was 'systemd-system-masked', which "
         "returns rc=0 while masking multi-user/graphical/default targets — systemd then "
         "boots with no multi-user.target, so no cloud-init and no network "
-        "(docs/benchmark-m02.md; see also docs/incident-archive.md). strict=True cannot see "
+        "(docs/benchmark-m02.md). strict=True cannot see "
         "it because the plant step exits 0.",
     ]
     if hostile:
@@ -375,7 +377,7 @@ def golden_boot_smoke(node, target, ctx, comp_dir, timeout=None,
 def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_password,
                      golden_config_path, key, scoring_user, scoring_ip, jobs=1,
                      golden_hashes=None, unbooted=frozenset(),
-                     slot=0, anchor_identifier=None, run_id=None):
+                     slot=0, anchor_identifier=None, run_id=None, coverage=None):
     """Clone, plant (strict), and convert the golden set. Returns {box_name: vmid}.
 
     Resume routing: every golden vmid already a template -> skip (the build is done);
@@ -383,7 +385,13 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     the ones tz-base marks as planted and re-plant; missing ones are cloned fresh.
     A PARTIALLY converted set is fine when every converted vmid's description hash
     matches its expected hash (M4 selective rebuild / added box type); without
-    expected hashes, the historical no-clean-resume refusal stands."""
+    expected hashes, the historical no-clean-resume refusal stands.
+
+    coverage (optional) — callable(machines, result) recording the plant-coverage
+    verdict: `machines` are {"name", "configurations"} dicts keyed for verify's golden
+    mapping ('{box}-golden', slot-qualified on satellites), `result` the NakonResult
+    when the plant ran (clean OR alpine_services-tolerated failures), None on every
+    skip path (reuse / cold / pristine / checkpointed)."""
     targets = golden_targets(engine_vmid, teams, boxes, slot=slot,
                              anchor_identifier=anchor_identifier)
     # Full ownership set (comp tag + per-deploy run tag): stamped on everything this
@@ -391,6 +399,27 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     own_set = ownership_tags(comp_dir.name, run_id, GOLDEN_TAG)
     ownership_tag_str = ",".join(sorted(own_set))
     templates = _template_vmid_map(node)
+    # Loaded lazily but only once: the coverage skip paths and the plant section both
+    # need the stage machines, while the all-converted resume path must work without
+    # ever reading the config (same contract as before the coverage hook existed).
+    _golden_cfg_cache = []
+
+    def _golden_cfg():
+        if not _golden_cfg_cache:
+            _golden_cfg_cache.append(
+                json.loads(golden_config_path.read_text())["machines"])
+        return _golden_cfg_cache[0]
+
+    def _coverage_machines(box_names):
+        """Coverage keys for the named box types: '{box}-golden' on slot 0,
+        '{box}-golden-slot{N}' on satellite slots — every slot's stage config names
+        its golden machine identically, so the key must be slot-qualified or one
+        slot's clean replant would pop another slot's recorded failure."""
+        suffix = f"-slot{slot}" if slot else ""
+        by_box = {m["name"][:-len("-golden")]: m for m in _golden_cfg()}
+        return [{"name": f"{box}-golden{suffix}",
+                 "configurations": by_box[box].get("configurations", [])}
+                for box in box_names if box in by_box]
 
     missing = [t for t in targets if not _vm_exists(node, t["vmid"])]
     planted = [t for t in targets
@@ -419,6 +448,8 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
         # pre-run-id deploys) — re-stamp so teardown/preflight recognize them.
         for t in converted:
             retag_ownership(node, t["vmid"], own_set)
+        if coverage:
+            coverage(_coverage_machines(t["box"]["name"] for t in targets), None)
         return {t["box"]["name"]: t["vmid"] for t in targets}
 
     # Only unconverted slots are worked on: a selective rebuild (one box type's hash
@@ -467,10 +498,42 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
         print(f"    {t['vm_name']} (vmid {t['vmid']}) is now an UNBOOTED template "
               f"(generalized — each team's clone specializes its own SID)")
     if not booted:
+        # All-cold slot (every box type unbooted): nothing here is ever nakon-planted,
+        # and unbooted box types don't appear in the stage config at all — the clean
+        # marker is the whole record for this slot.
+        if coverage:
+            coverage(_coverage_machines(t["box"]["name"] for t in targets), None)
         return {t["box"]["name"]: t["vmid"] for t in targets}
     missing = [t for t in missing if t in booted]
     planted = [t for t in planted if t in booted]
     targets_all, targets = targets, booted
+
+    # Per-golden checkpoint. A re-entry used to roll EVERY planted golden back to
+    # tz-base and re-plant the whole set; measured across the cde-2026 attempts,
+    # `Golden re-entry: rolling golden-<name> back to 'tz-base'` appears 33 times — 11
+    # each for web01, ftp01 and db01 — over 10 runs, while only ftp01 was ever the
+    # problem. A golden that already passed its plant AND its boot smoke on an
+    # unchanged hash does not need either redone.
+    #
+    # The conversion barrier is deliberately NOT relaxed: every golden is still stopped
+    # and every *pending* one still smoked before any POST /template, so one failed
+    # smoke still blocks the whole conversion (tests/test_parallel_golden.py pins that).
+    # A checkpoint is only trusted while SNAP_BASE still exists on the box — a fresh
+    # clone has no such snapshot, so a re-cloned golden is never mistaken for a done one.
+    checkpoint_record = golden_plant_checkpoints(comp_dir) if golden_hashes else {}
+    checkpointed = set()
+    for t in planted:
+        wanted = (golden_hashes or {}).get(t["box"]["name"])
+        if (wanted and checkpoint_record.get(t["box"]["name"]) == wanted
+                and SNAP_BASE in list_snapshots(node, t["vmid"])):
+            checkpointed.add(t["box"]["name"])
+    if checkpointed:
+        print(f"  Golden checkpoint: {', '.join(sorted(checkpointed))} already planted and "
+              f"smoke-passed on this hash — skipping their rollback, plant and smoke")
+    # Everything below that does WORK (start, wait, prepare, snapshot, plant, smoke,
+    # cloud-init clean) is scoped to `work`; the stop-and-convert barrier still covers
+    # all of `targets`.
+    work = [t for t in targets if t["box"]["name"] not in checkpointed]
 
     # Boot smoke gate (Compfile `golden_boot_smoke`, default ON): the ONLY way to skip
     # verifying the boot-hostile-config invariant is to say so deliberately — and then
@@ -527,17 +590,19 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
             ensure_golden_disk_size(node, t["vmid"], t["box"].get("disk_gb"))
             print(f"    {t['box']['template']} -> {t['vm_name']} (vmid {t['vmid']})")
 
-    rolls = [t for t in planted if SNAP_BASE in list_snapshots(node, t["vmid"])]
+    work_vmids = {t["vmid"] for t in work}
+    rolls = [t for t in planted
+             if t["vmid"] in work_vmids and SNAP_BASE in list_snapshots(node, t["vmid"])]
     for t in rolls:
         print(f"  Golden re-entry: rolling {t['vm_name']} back to '{SNAP_BASE}' before re-planting...")
         rollback_snapshot(node, t["vmid"], SNAP_BASE)
 
     print("  Starting golden boxes...")
-    for t in targets:
+    for t in work:
         start_vm(node, t["vmid"])
 
-    linux_targets = [t for t in targets if not is_windows_template(t["box"]["template"])]
-    windows_targets = [t for t in targets if is_windows_template(t["box"]["template"])]
+    linux_targets = [t for t in work if not is_windows_template(t["box"]["template"])]
+    windows_targets = [t for t in work if is_windows_template(t["box"]["template"])]
 
     def _boot_win(t):
         # 1800s: a fresh sysprep-specialize first boot can exceed the 900s default
@@ -551,8 +616,8 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
         if isinstance(r, Exception):
             raise r
 
-    wait_for_boxes_ssh(ctx, targets, timeout=300)
-    wait_for_cloud_init(ctx, targets, timeout=240)
+    wait_for_boxes_ssh(ctx, work, timeout=300)
+    wait_for_cloud_init(ctx, work, timeout=240)
     setup_ubuntu_auth(linux_targets, ctx)
     if linux_targets:
         print("  Expanding guest root filesystems (LVM layouts need pvresize+lvextend)...")
@@ -602,10 +667,10 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     # per-box bound deploy.py validated. run_concurrent joins the whole pool before it
     # returns, so every box's snapshot still exists before the plant, the smoke gate,
     # and the conversion that follow: the rollback-guard ordering is unchanged.
-    snap_results = run_concurrent(targets, _snap_base, max_workers=4)
+    snap_results = run_concurrent(work, _snap_base, max_workers=4)
     # take_snapshot warns and returns False instead of raising, so the serial semantics
     # are warn-and-continue; anything that still escaped it must keep propagating.
-    for _t, r in zip(targets, snap_results):
+    for _t, r in zip(work, snap_results):
         if isinstance(r, Exception):
             raise r
 
@@ -619,15 +684,20 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     # pristine disk by design. An empty plan makes nakon report "no output from the
     # remote plan" per machine, so the plant is skipped outright (live-found
     # 2026-09-30 multinode-spread).
-    golden_cfg = json.loads(golden_config_path.read_text())["machines"]
-    if not any(m.get("configurations") for m in golden_cfg):
+    if not any(m.get("configurations") for m in _golden_cfg()):
         print("  Golden stage carries no plantable configurations — skipping the "
               "nakon plant; converting pristine goldens")
+        if coverage:
+            coverage(_coverage_machines(t["box"]["name"] for t in targets), None)
+    elif not work:
+        print("  Every golden is already planted and smoke-passed — skipping the plant")
+        if coverage:
+            coverage(_coverage_machines(t["box"]["name"] for t in targets), None)
     else:
         bundle = build_nakon_bundle(golden_config_path)
         result = run_nakon(key, scoring_user, scoring_ip, bundle, golden_config_path,
-                           only=[t["machine"] for t in targets],
-                           timeout=max(2400, 2400 * len(targets)), strict=not alpine_shim,
+                           only=[t["machine"] for t in work],
+                           timeout=max(2400, 2400 * len(work)), strict=not alpine_shim,
                            jobs=jobs, run_tag="golden")
         if result.failed:
             if alpine_shim:
@@ -635,8 +705,14 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
                       f"alpine_services shim owns those (apk/OpenRC)")
             else:
                 raise RuntimeError(f"golden plant had {len(result.failed)} FAILED step(s) — strict mode requires green")
+        # Record BEFORE the shim runs: an alpine-tolerated failure is a real gap on
+        # the golden disk (verify maps '{box}-golden' onto every team clone), and if
+        # ensure_alpine_services then fails the deploy, the record must already be
+        # on disk. A strict failure raised above and never reaches this line.
+        if coverage:
+            coverage(_coverage_machines(t["box"]["name"] for t in work), result)
         if alpine_shim:
-            ensure_alpine_services(comp_dir, targets, ctx)
+            ensure_alpine_services(comp_dir, work, ctx)
 
     print("  Cleaning cloud-init state on golden Linux boxes (clones must re-init)...")
 
@@ -669,10 +745,18 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     if boot_smoke:
         planted_configs = sorted(
             c if isinstance(c, str) else c.get("name", "")
-            for m in golden_cfg for c in (m.get("configurations") or []))
-        for t in targets:
+            for m in _golden_cfg() for c in (m.get("configurations") or []))
+        # Only the boxes this run planted need re-smoking: a checkpointed golden's disk
+        # has not changed since it passed, and it was never started this run. A failure
+        # here still raises BEFORE the conversion below, so the barrier holds.
+        for t in work:
             golden_boot_smoke(node, t, ctx, comp_dir, planted_configs=planted_configs,
                               run_id=run_id)
+            # Record per-box, immediately: if the NEXT box's smoke fails, this one's
+            # work must not be thrown away by the next re-entry.
+            if golden_hashes:
+                save_template_hashes(comp_dir, golden_planted={
+                    t["box"]["name"]: golden_hashes[t["box"]["name"]]})
 
     print("  Converting golden boxes to templates...")
 
@@ -838,6 +922,7 @@ def expand_guest_root_disks(targets, ctx):
                                    f"({size_gb:.0f}G < {need_gb}G) and expansion failed "
                                    f"(rc={r.returncode}): {(r.stderr or out).strip()[:200]}")
             note = f"{size_gb:.0f}G measured" if size_gb else "size unmeasurable"
+            record_degradation("golden root-disk expansion failed", f"{t['ip']}: {note}")
             print(f"    {t['ip']}: WARNING expansion failed ({note}) — continuing; "
                   f"first big plant will surface a truly undersized root")
         df_lines = [l for l in out.splitlines() if l.startswith("/dev/")]

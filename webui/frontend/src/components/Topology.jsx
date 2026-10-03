@@ -1,10 +1,10 @@
-import { platformOf } from '../api'
+import { kindOf } from '../api'
 
-// Auto-drawn from boxes.json: every team gets the same /24 (192.168.<team>.0/24, gateway .1,
-// terraform/main.tf), so one generic team is drawn. An unmanaged pfSense box sits in-path
-// between the engine and the team switch (docs/pfsense-inpath-2026-09-28.md).
-const isFirewall = (b) => /pfsense|opnsense|firewall/i.test(b.template) || (b.unmanaged && /fw/i.test(b.name))
-
+// Auto-drawn from boxes.json: every team gets the same /24 (192.168.<team>.0/24), so one
+// generic team is drawn. An in-path firewall (unmanaged + in_path, gateway .1) sits
+// between the engine and the team switch across a per-team transit /30
+// (172.31.<team>.0/30) — the wiring terraform builds and deploy phase 5 bootstraps
+// (docs/pfsense-inpath-2026-09-28.md, docs/architecture.md).
 const DOT = { windows: 'var(--win)', linux: 'var(--lin)', firewall: 'var(--fw)', engine: 'var(--eng)' }
 
 // Each node is a small floating tile: page-coloured face, bright rim, soft shadow, coloured dot.
@@ -21,8 +21,8 @@ function Node({ x, y, w, h, label, sub, kind, onClick, selected, tip }) {
 }
 
 export function TopologyLegend({ boxes }) {
-  const kinds = new Set(['engine', ...boxes.map((b) => (isFirewall(b) ? 'firewall' : platformOf(b.template)))])
-  const label = { engine: 'Scoring engine', windows: 'Windows', linux: 'Linux', firewall: 'Firewall (in-path)' }
+  const kinds = new Set(['engine', ...boxes.map(kindOf)])
+  const label = { engine: 'Scoring engine', windows: 'Windows', linux: 'Linux', firewall: 'Firewall (in-path, gateway .1)' }
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted">
       {['engine', 'windows', 'linux', 'firewall'].filter((k) => kinds.has(k)).map((k) => (
@@ -33,8 +33,8 @@ export function TopologyLegend({ boxes }) {
 }
 
 export default function Topology({ boxes, onSelect, selected }) {
-  const firewalls = boxes.filter(isFirewall)
-  const hosts = boxes.filter((b) => !isFirewall(b)).sort((a, b) => a.last_octet - b.last_octet)
+  const firewalls = boxes.filter((b) => kindOf(b) === 'firewall')
+  const hosts = boxes.filter((b) => kindOf(b) !== 'firewall').sort((a, b) => a.last_octet - b.last_octet)
 
   const gap = 140
   const perRow = Math.max(1, Math.min(hosts.length, 6))
@@ -64,24 +64,32 @@ export default function Topology({ boxes, onSelect, selected }) {
           <feDropShadow dx="0" dy="6" stdDeviation="7" floodColor="#000" floodOpacity="0.16" />
         </filter>
       </defs>
-      <line x1={cx} y1={engineY} x2={cx} y2={switchY} stroke="var(--line)" strokeWidth="2.5" />
+      {/* Engine ─ transit ─ firewalls ─ team switch: real packets cross the transit /30. */}
+      <line x1={cx} y1={engineY} x2={cx} y2={firewalls.length ? fwY : switchY} stroke="var(--line)" strokeWidth="2.5" />
+      {firewalls.map((b, i) => {
+        const x = cx + (i - (firewalls.length - 1) / 2) * 160
+        return <line key={`fwlink-${b.name}`} x1={x} y1={fwY + 23} x2={x} y2={switchY} stroke="var(--line)" strokeWidth="2.5" />
+      })}
       {hostPos.map(({ b, x, y }) => (
         <path key={b.name} d={`M${cx},${switchY} L${cx},${switchY + 34} L${x},${switchY + 34} L${x},${y}`} fill="none" stroke="var(--line)" strokeWidth="2" strokeLinejoin="round" />
       ))}
 
       <Node x={cx} y={engineY} w={170} h={46} label="Scoring engine" sub="Quotient" kind="engine" />
+      {firewalls.length > 0 && (
+        <text x={cx} y={(engineY + fwY) / 2 + 22} textAnchor="middle" fontSize="10.5" fill="var(--muted)" fontFamily="var(--font-mono)">172.31.&lt;team&gt;.0/30 transit</text>
+      )}
       {firewalls.map((b, i) => (
         <Node key={b.name} x={cx + (i - (firewalls.length - 1) / 2) * 160} y={fwY} w={136} h={46}
-          label={b.name} sub={`.${b.last_octet} · in-path`} kind="firewall"
-          onClick={onSelect && (() => onSelect(b))} selected={selected === b.name} tip={`${b.name} — ${b.template}`} />
+          label={b.name} sub=".1 · gateway" kind="firewall"
+          onClick={onSelect && (() => onSelect(b))} selected={selected === b.name} tip={`${b.name} — ${b.template} · WAN 172.31.<team>.2, LAN gateway .1`} />
       ))}
       <g transform={`translate(${cx - 100},${switchY - 16})`}>
         <rect width="200" height="32" rx="16" fill="var(--sunken)" />
         <text x="100" y="20.5" textAnchor="middle" fontSize="12" fill="var(--muted)" fontFamily="var(--font-mono)">192.168.&lt;team&gt;.0/24</text>
       </g>
       {hostPos.map(({ b, x, y }) => (
-        <Node key={b.name} x={x} y={y} w={122} h={46} label={b.name} sub={`.${b.last_octet} · ${platformOf(b.template)}`}
-          kind={platformOf(b.template)} onClick={onSelect && (() => onSelect(b))} selected={selected === b.name}
+        <Node key={b.name} x={x} y={y} w={122} h={46} label={b.name} sub={`.${b.last_octet} · ${kindOf(b)}`}
+          kind={kindOf(b)} onClick={onSelect && (() => onSelect(b))} selected={selected === b.name}
           tip={`${b.name} — ${b.template} · ${b.cpu} vCPU · ${b.memory_mb} MB`} />
       ))}
     </svg>

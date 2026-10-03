@@ -2,6 +2,8 @@
 
 Non-interactive interface: CLI flags, pre-authored config files, and machine-readable
 validation, for driving this from a script or an agent instead of answering prompts by hand.
+A browser front end wraps the same drivers for authoring and deploying, see
+[../webui/README.md](../webui/README.md).
 One-time Proxmox/template setup is still a human prerequisite — see
 [usage-people.md](usage-people.md#prerequisites-one-time-per-proxmox-host) for that. For what
 the project is and how it's architected, see the [README](../README.md).
@@ -43,13 +45,14 @@ infrastructure, review it, then re-run the same command without `--plan-only` (p
 
 ### Resuming (`--from-phase`)
 
-`deploy()` walks the seven **v2** phases (`deploy_phases.PHASES`) — 1 Cleanup · 2 engine-template + apply #1 · 3 prepare
-engine from template · 4 golden set + apply #2 · 5 repair-stage sweep · 6 domains → final pass →
-beacons + `tz-ready` · 7 seed. [architecture.md](architecture.md#seven-phase-deploy) is the
+`deploy()` walks the eight **v3** phases (`deploy_phases.PHASES`) — 1 Cleanup · 2 engine-template + apply #1 · 3 prepare
+engine from template · 4 golden set + apply #2 · 5 firewall bootstrap (in-path firewalls only) ·
+6 repair-stage sweep · 7 domains → final pass → beacons + `tz-ready` · 8 seed.
+[architecture.md](architecture.md#eight-phase-deploy) is the
 canonical list, plus the [v1 → v2 table](architecture.md#v1-to-v2-migration-what-moved) if you are
 reading an older run's notes. A failed deploy prints which phase it died in; `--from-phase N`
 re-enters there instead of tearing everything down. **Cloning is phase 4** (linked clones in
-apply #2) — phase 6 has no clone step and does not read the nakon bundle by hash. Phase 7's three
+apply #2) — phases 6-8 have no clone step and do not read the nakon bundle by hash. Phase 8's three
 sub-steps (seed teams, unpause the engine, create injects) are each gated on their own flag in
 `competitions/<id>/.deploy_state.json` (`seeded`/`engine_unpaused`/`injects_created`) — a
 `--from-phase 7` resume after a partial phase-7 failure skips whatever already succeeded rather
@@ -167,6 +170,9 @@ python3 verify-competition.py competitions/<id> [--engine-ip IP] [--admin-passwo
 7. **PLANT COVERAGE** (`plant_coverage`) — reads `.deploy_state.json`'s per-machine
    expected-vs-planted record, falls back to the nakon FAILED tally, and **fails closed**: when
    neither source exists it FAILs ("coverage was never recorded") rather than passing vacuously.
+   Phase 4's golden plant records its own verdict (the `{box}-golden` keys, slot-qualified on
+   satellites), so a lineup with no post-clone configs is still recorded — golden-stage failures
+   (including `alpine_services`-tolerated ones) map onto every team clone.
 8. **DOMAINS** (`domains`) — AD promotion, joins, AD plants, and cross-team DomainSID uniqueness
    (see `verify-competition.py`'s `check_domains`). Fail-closed on a malformed `domain_roles.json`.
 9. **RED IDENTITY** (`red_identity`) — only with `--red-identity`: proves red's source address
@@ -252,8 +258,7 @@ Anything that matches no team/box is a hard error, not a silent empty selection.
 
 `--reset-event` (with `rollback-ready`/`rollback-base` only) additionally restarts the event from
 the engine template — a fresh scoring DB and a phase-7 re-run — so scores reset and injects re-open
-anchored at now. Use it for scrim reruns; the deadlock that used to kill it was fixed 2026-10-01
-(see `incident-archive.md`).
+anchored at now. Use it for scrim reruns.
 
 `rebuild` deliberately clones the **golden template** rather than the anchor team's live box, so a
 rebuilt box carries the golden-stage installs without inheriting whatever the defenders did. This is
@@ -302,6 +307,8 @@ state, not a repair. Every mode except `reconfigure` says so and requires confir
 python3 destroy-competition.py                                # teams-only (M4 default)
 python3 destroy-competition.py --competition <id> --full      # also destroy templates
 python3 destroy-competition.py --competition <id> --full --end-of-competition  # frozen comp
+python3 destroy-competition.py --competition <id> --skip-artifacts  # do not collect reports
+python3 destroy-competition.py --competition <id> --artifacts-timeout 20  # per-file pull budget
 ```
 
 Destroys all of the competition's team boxes, then runs `terraform destroy`. Pipeline-v2 ranges keep
@@ -309,6 +316,15 @@ every team in Terraform state, so `terraform destroy` alone removes them; `clone
 **legacy** path taken only if the file exists (pre-golden ranges whose team2+ boxes were API clones).
 Requires that competition's `teams.json` + `boxes.json` (both written by `deploy()`), and restores
 the per-competition `TF_VAR_*` values first so Terraform address-matches the original apply.
+
+**Before the first destructive call** it collects the run's test artifacts into
+`competitions/<id>/.automated-tests/<run-id>/` — the red report from red01, blue's logs and report,
+the engine capture, the harness evidence, then `REPORT.md`. This is the last moment it can: the
+next calls purge clones and hard-stop every team box. It is also the safety net for a run whose
+harness died, since teardown is the step that always happens. Collection **warns and proceeds**
+(never blocks), so `--skip-artifacts` exists only to save time, and `--artifacts-timeout` bounds a
+dead source at 45s per file by default. See
+[automated-test-artifacts.md](automated-test-artifacts.md).
 
 M4 teardown modes: the default is **teams-only** — team clones, the engine VM, and the
 bridges die; the competition's golden templates and engine template are KEPT and the next
@@ -389,6 +405,34 @@ A minimal example wrapper around `create-competition.py`'s old stdin-driven inte
 to a gitignored file — not a documented interface in its own right. Prefer the flags above
 directly; adapt the wrapper's `printf`/logging pattern only if you specifically need
 stdin-driven prompt answers instead.
+
+## Running a deploy that outlives your shell
+
+A deploy takes tens of minutes to hours; a tool call, a terminal, and a harness background task do
+not. Wrapping the deploy in a `timeout` to fit is the wrong fix — it turns a slow success into an
+abrupt partial-state kill (six recorded exec logs open with a bare `Terminated`). Start it in its own
+session with its own log, then poll **the log**, never the process:
+
+```bash
+cd <worktree-root>                     # every path resolves from here
+mkdir -p logs
+setsid nohup python3 -u create-competition.py \
+    --competition <id> --teams <N> --scoring-vmid <free> --yes \
+    > logs/<id>-$(date +%Y%m%d-%H%M).log 2>&1 < /dev/null &
+echo "pid $! — follow with: tail -f logs/<id>-*.log"
+```
+
+- `setsid` puts the deploy in its own session/process group, so it survives the shell that started
+  it; `nohup` + the redirected log means nothing is lost when the caller goes away.
+- **Kill by process group or by pid** — `kill -TERM -<pid>` (negative == the group). Never
+  `pkill -f`/`pgrep -f` a pattern that also appears in the invoking command line: it matches the
+  caller itself and self-kills. That has happened twice on this project.
+- Never combine "kill" and "relaunch" in one pattern; kill, confirm it is gone, then relaunch.
+- In-process equivalent: `utils.spawn_detached(cmd, log_path)` returns `(pid, log_path)` for code
+  that needs to start one.
+
+`run-deploy.sh` remains the stdin-driven example wrapper; the recipe above is what a non-interactive
+run should use.
 
 ## Deploying from a worktree
 

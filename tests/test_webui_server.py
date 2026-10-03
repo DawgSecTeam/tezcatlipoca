@@ -100,6 +100,39 @@ class WebUIServerTest(unittest.TestCase):
         self.assertEqual(self.client.post("/api/comps/t1/boxes",
                                           json={**ok, "name": "Bad Name"}).status_code, 400)
 
+    def test_firewall_box_validation(self):
+        fw = {"name": "fw01", "last_octet": 1, "template": "pfsense",
+              "unmanaged": True, "in_path": True, "cpu": 1, "memory_mb": 512, "disk_gb": 12}
+        r = self.client.post("/api/comps/t1/boxes", json=fw)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self._read("boxes.json")[0],
+                         {**fw, "cpu": 1, "memory_mb": 512, "disk_gb": 12})
+        # gateway address is firewall-only; in_path demands unmanaged AND .1
+        self.assertEqual(self.client.post("/api/comps/t1/boxes", json={
+            "name": "h01", "last_octet": 1, "template": "base-ubuntu24.04-fix"}).status_code, 400)
+        self.assertEqual(self.client.post("/api/comps/t1/boxes", json={
+            **fw, "name": "fw02"}).status_code, 409)  # one firewall per competition
+        # Dropping the firewall role means leaving the gateway slot: .1 as a managed
+        # host is refused even in the same update; unflag + move in one save works.
+        r = self.client.put("/api/comps/t1/boxes/fw01", json={"in_path": False, "unmanaged": False})
+        self.assertEqual(r.status_code, 400)
+        r = self.client.put("/api/comps/t1/boxes/fw01",
+                            json={"in_path": False, "unmanaged": False, "last_octet": 2})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertNotIn("in_path", self._read("boxes.json")[0])
+        self.assertNotIn("unmanaged", self._read("boxes.json")[0])
+        self.assertEqual(self._read("boxes.json")[0]["last_octet"], 2)
+
+    def test_pins_rejected_on_unmanaged_box(self):
+        self.client.post("/api/comps/t1/boxes", json={
+            "name": "fw01", "last_octet": 1, "template": "pfsense",
+            "unmanaged": True, "in_path": True})
+        r = self.client.put("/api/comps/t1/boxes/fw01/services", json=["mysql"])
+        self.assertEqual(r.status_code, 400)
+        r = self.client.put("/api/comps/t1/boxes/fw01/misconfigs", json=["suid-find"])
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self._read("box_services.json").get("fw01", []), [])
+
     def test_ids_and_slugs_cannot_escape(self):
         for bad in ("../etc", "..", "a/b", ".hidden", ""):
             with self.assertRaises(self.server.HTTPException):
