@@ -768,11 +768,19 @@ def team_down(creds, team):
 
 def services_to_rows(services):
     """Engine /api/services payload -> [{service, up, error}] (parsed_status + final capture).
-    A team with no registered/scored services is a legitimate `null` body."""
+    A team with no registered/scored services is a legitimate `null` body.
+
+    `Last10Rounds` is ordered newest-first, and at >=8 teams a poll can land mid-round:
+    rounds[0] is then the round in flight, with an empty `Checks` array that is not a
+    verdict at all. Reading it as "no check passed" reports a phantom DOWN — which the
+    soak's monitors, fire-tests and scoreboard snapshots would all have believed. So take
+    the newest round that actually HAS checks; only when no round carries any is the
+    service genuinely unmeasured, and unmeasured stays down (fail closed) rather than
+    being quietly promoted to up."""
     rows = []
     for s in services or []:
         rounds = s.get("Last10Rounds") or []
-        checks = (rounds[0] if rounds else {}).get("Checks") or []
+        checks = next((r.get("Checks") for r in rounds if r.get("Checks")), None) or []
         up = bool(checks) and all(c.get("Result") for c in checks)
         err = next((c.get("Error", "") for c in checks if c.get("Error") and not c.get("Result")), "")
         rows.append({"service": s["ServiceName"], "up": bool(up), "error": err[:120]})
@@ -944,7 +952,8 @@ directly (that kills the shared jar's session). Use the jar; if a call answers
   source ./scrim.env
   curl -s -b "$JAR" http://$ENGINE_IP/api/services/$MY_TID | python3 -m json.tool
   curl -s -b "$JAR" http://$ENGINE_IP/api/injects | python3 -c "import json,sys;[print(i['ID'],i['Title'],'due',i['DueTime'][11:16],'subs',len(i.get('Submissions') or [])) for i in json.load(sys.stdin)]"
-  echo "## deliverable" > sub.md && ./submit-inject <injectId> sub.md     # submit BEFORE close time
+  mkdir -p submissions && echo "## deliverable" > submissions/sub-<injectId>.md \
+    && ./submit-inject <injectId> submissions/sub-<injectId>.md   # submit BEFORE close time
 
 CYCLE TASK — you have ~25 wall-clock minutes for this whole cycle; pace for it,
 update the notebook BEFORE acting (so an interrupted cycle still hands over context),
