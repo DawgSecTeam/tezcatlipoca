@@ -1545,9 +1545,13 @@ def check_plant_coverage(comp_dir):
     Deploy records failures per machine in .deploy_state.json["plant_coverage_failed"]
     (machine -> [config names whose nakon step reported rc != 0], or every config when
     a machine died before reporting any step). Golden-stage entries map onto every team
-    copy of that box (a golden failure means the clones inherited the gap). This is the
-    backstop that catches a broken/undeclared-var config the moment it fails to plant,
-    instead of a mid-competition discovery.
+    copy of that box (a golden failure means the clones inherited the gap): the golden
+    plant records under '{box}-golden' (phase 4, via build_golden_set's coverage
+    callback — including alpine_services-tolerated failures), and satellite slots
+    record '{box}-golden-slot{N}' since every slot's stage config names its machine
+    identically; any slot's failure flags every team copy. This is the backstop that
+    catches a broken/undeclared-var config the moment it fails to plant, instead of a
+    mid-competition discovery.
 
     D2 (live-found 2026-10-02): this gate used to read ONLY plant_coverage_failed and
     fail OPEN when it was absent — missing/unparseable state, an older state, or a
@@ -1594,8 +1598,15 @@ def check_plant_coverage(comp_dir):
         name = m.get("name", "?")
         expected = {cfg_name(c) for c in m.get("configurations", [])}
         machine_bad = [c for c in (recorded or {}).get(name) or []]
-        golden_key = f"{name.rsplit('-team', 1)[0]}-golden"
-        golden_bad = [c for c in (recorded or {}).get(golden_key) or []]
+        # Golden-stage keys: slot 0 records '{box}-golden', satellite slot N records
+        # '{box}-golden-slot{N}' (every slot's stage config names its golden machine
+        # identically, so the keys must not collide across slots). A failure on ANY
+        # slot's golden flags every team copy of the box — each clone inherits its
+        # own slot's disk, and a gap on any of them is a range-wide problem.
+        base = name.rsplit("-team", 1)[0]
+        golden_bad = [c for k, v in (recorded or {}).items()
+                      if k == f"{base}-golden" or k.startswith(f"{base}-golden-slot")
+                      for c in (v or [])]
         # Intersect each recorded failure with what this machine STILL expects: a
         # failure for a config no longer in its `configurations` is stale and must not
         # fail the gate (amongus-cde-2026 2026-09-30: a recovered SMB v1 entry stayed

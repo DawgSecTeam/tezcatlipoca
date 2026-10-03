@@ -49,6 +49,9 @@ INTERNAL_ENV = {
     # deploy.py phase-1 escape hatch: destroy UNTAGGED VMs on computed vmids (a
     # pre-run-tagging range's own leftovers). Never set in .env; opt-in per run.
     "TEZ_ALLOW_UNTAGGED_RECLAIM": "phase-1 untagged-reclaim escape hatch (fail-closed default)",
+    # artifacts_ops.py seal step: default author attribution from the OS user, not
+    # operator configuration.
+    "USER": "OS username, recorded as the default write-up author on seal",
 }
 
 # High-signal secret shapes. Deliberately narrow: a broad "long string" rule would

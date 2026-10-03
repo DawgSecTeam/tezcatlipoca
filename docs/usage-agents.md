@@ -170,6 +170,9 @@ python3 verify-competition.py competitions/<id> [--engine-ip IP] [--admin-passwo
 7. **PLANT COVERAGE** (`plant_coverage`) — reads `.deploy_state.json`'s per-machine
    expected-vs-planted record, falls back to the nakon FAILED tally, and **fails closed**: when
    neither source exists it FAILs ("coverage was never recorded") rather than passing vacuously.
+   Phase 4's golden plant records its own verdict (the `{box}-golden` keys, slot-qualified on
+   satellites), so a lineup with no post-clone configs is still recorded — golden-stage failures
+   (including `alpine_services`-tolerated ones) map onto every team clone.
 8. **DOMAINS** (`domains`) — AD promotion, joins, AD plants, and cross-team DomainSID uniqueness
    (see `verify-competition.py`'s `check_domains`). Fail-closed on a malformed `domain_roles.json`.
 9. **RED IDENTITY** (`red_identity`) — only with `--red-identity`: proves red's source address

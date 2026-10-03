@@ -316,6 +316,38 @@ class PlantCoverage(unittest.TestCase):
         result, _ = _run(verify.check_plant_coverage, comp_dir)
         self.assertIs(result.status, verify.Status.PASS)
 
+    def test_golden_slot_failure_maps_onto_team_clone(self):
+        """Satellite slot N records '{box}-golden-slot{N}' (every slot's stage config
+        names its golden machine identically); a failure on any slot's golden flags
+        every team copy of the box."""
+        tmp, comp_dir = _comp_dir()
+        self.addCleanup(tmp.cleanup)
+        _state(comp_dir, {"plant_coverage_failed": {"web01-golden-slot2": ["suid-find"]},
+                          "nakon_failed_steps": []})
+        result, out = _run(verify.check_plant_coverage, comp_dir)
+        self.assertIs(result.status, verify.Status.FAIL)
+        self.assertIn("suid-find (golden-stage)", out)
+
+    def test_stale_golden_slot_entry_is_filtered(self):
+        tmp, comp_dir = _comp_dir()
+        self.addCleanup(tmp.cleanup)
+        _state(comp_dir, {"plant_coverage_failed": {"web01-golden-slot2": ["legacy-config"]},
+                          "nakon_failed_steps": []})
+        result, _ = _run(verify.check_plant_coverage, comp_dir)
+        self.assertIs(result.status, verify.Status.PASS)
+
+    def test_another_boxs_golden_keys_do_not_map(self):
+        """Entries keyed for other boxes (a different box's golden, or another team's
+        machine key) must not fail this machine."""
+        tmp, comp_dir = _comp_dir()
+        self.addCleanup(tmp.cleanup)
+        _state(comp_dir, {"plant_coverage_failed": {"web99-golden": ["suid-find"],
+                                                    "web01-team999": ["suid-find"]},
+                          "nakon_failed_steps": []})
+        result, out = _run(verify.check_plant_coverage, comp_dir)
+        self.assertIs(result.status, verify.Status.PASS)
+        self.assertNotIn("not planted", out)
+
     def test_no_nakon_config_is_a_non_gating_skip(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

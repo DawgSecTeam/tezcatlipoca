@@ -371,6 +371,23 @@ def phase4_golden_set(ctx):
     # Matching templates reach build_golden_set and short-circuit the build.
     stored = load_template_hashes(ctx.comp_dir)
 
+    def _golden_coverage(machines, result):
+        """The golden plant's coverage verdict, recorded like a post-clone stage's.
+
+        result is None on every skip path (M4 reuse / checkpointed / pristine / cold):
+        the disk is then proven by hash, not by a fresh plant, so guarantee the record
+        exists but never erase a previously recorded failure. A real result records
+        through deploy._record_coverage — including alpine_services-tolerated failures,
+        which are a genuine gap on the golden disk and must reach verify's gate."""
+        if result is None or not getattr(result, "machines", None):
+            ctx.state.setdefault("plant_coverage_failed", {})
+        else:
+            deploy._record_coverage(ctx.state, machines, result)
+            if result.failed:
+                ctx.state["nakon_failed_steps"] = [
+                    f"golden: {line}" for line in result.failed[:20]]
+        ctx.save_state()
+
     # Slot-0 goldens only exist when the engine node actually hosts teams —
     # an all-satellite spread leaves the engine with no local bridges to
     # anchor them on (their vmbr<id> lives on the satellite's host).
@@ -389,7 +406,7 @@ def phase4_golden_set(ctx):
                                       ctx.golden_config_path, ctx.ssh_key, ctx.scoring_user,
                                       ctx.scoring_ip, jobs=ctx.nakon_jobs,
                                       golden_hashes=ctx.golden_hashes, unbooted=ctx.unbooted,
-                                      run_id=ctx.run_id)
+                                      run_id=ctx.run_id, coverage=_golden_coverage)
     golden_ids_by_slot = {0: golden_ids}
     if ctx.placement and ctx.placement["satellites"]:
         # Satellite goldens: identical planted content (same hashes), built ON
@@ -414,7 +431,7 @@ def phase4_golden_set(ctx):
                     ctx.box_password, slot_config, ctx.ssh_key, ctx.scoring_user, ctx.scoring_ip,
                     jobs=ctx.nakon_jobs, golden_hashes=ctx.golden_hashes,
                     unbooted=ctx.unbooted, slot=slot, anchor_identifier=anchor,
-                    run_id=ctx.run_id)
+                    run_id=ctx.run_id, coverage=_golden_coverage)
     ctx.state["golden_template_ids"] = golden_ids
     ctx.state["golden_ids_by_slot"] = {str(k): v for k, v in golden_ids_by_slot.items()}
     ctx.state["golden_hashes"] = ctx.golden_hashes

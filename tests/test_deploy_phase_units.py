@@ -291,6 +291,110 @@ class Phase5RepairSweep(unittest.TestCase):
             self.assertIs(saved.__func__, deploy.DeployContext.save_state)
 
 
+class Phase4GoldenCoverage(unittest.TestCase):
+    """Phase 4 records the golden plant's coverage verdict like a post-clone stage's:
+    the closure threaded into build_golden_set writes plant_coverage_failed (and the
+    stage-prefixed tally on tolerated failures) and persists through ctx.save_state.
+    The integration halves join here with the REAL check_plant_coverage — a golden-only
+    lineup (same-type-2box shape) must come out PASS on a clean plant and FAIL, with
+    the (golden-stage) annotation, on an alpine-tolerated one."""
+
+    def _run_phase4(self, comp_dir):
+        """Run phase4_golden_set with build_golden_set faked; returns (ctx, coverage)."""
+        captured = []
+        ctx = _ctx(comp_dir, golden_hashes={}, golden_inputs={})
+        with patch.object(deploy_phases, "load_template_hashes", return_value={}), \
+                patch.object(deploy, "golden_rebuild_gate"), \
+                patch.object(deploy_phases, "build_golden_set",
+                             side_effect=lambda *a, **k:
+                                 (captured.append(k["coverage"]) or {"web01": 1250})), \
+                patch.object(deploy_phases, "_template_vmid_map", return_value={}), \
+                patch.object(deploy_phases, "write_text_atomic"), \
+                patch.object(deploy_phases, "terraform_plugin_cache_dir",
+                             return_value=comp_dir), \
+                patch.object(deploy_phases, "terraform_dir", return_value=comp_dir), \
+                patch.object(deploy_phases, "run_terraform"), \
+                patch.object(deploy_phases, "run_concurrent", return_value=[]), \
+                patch.object(deploy_phases, "wait_for_boxes_ssh"), \
+                patch.object(deploy_phases, "wait_for_cloud_init"), \
+                patch.object(deploy_phases, "setup_ubuntu_auth"), \
+                patch.object(deploy_phases, "fix_dns_on_boxes"), \
+                patch.object(deploy_phases, "prep_apt_on_boxes"), \
+                patch.object(deploy_phases, "snap_base"), \
+                _nulltimed(), \
+                contextlib.redirect_stdout(io.StringIO()):
+            deploy_phases.phase4_golden_set(ctx)
+        return ctx, captured[0]
+
+    @staticmethod
+    def _gate(comp_dir, machines):
+        """The real verify gate against a real comp dir (importlib: dashed filename).
+        Returns (gate, stdout); status compared by NAME — this helper loads its own
+        module copy, so the gate's Status enum is not the caller's object."""
+        (comp_dir / "nakon-config.json").write_text(
+            json.dumps({"machines": machines}))
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "verify_phase4_join", _REPO / "verify-competition.py")
+        verify = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(verify)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            gate = verify.check_plant_coverage(comp_dir)
+        return gate, out.getvalue()
+
+    def test_the_closure_is_threaded_and_a_clean_plant_records_pass(self):
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = Path(d)
+            ctx, coverage = self._run_phase4(comp_dir)
+            self.assertIsNotNone(coverage)
+            machines = [{"name": "web01-golden", "configurations": ["apache"]}]
+            clean = NakonResult([], [{"name": "web01-golden",
+                                      "steps": [{"name": "apache", "rc": 0}]}])
+            coverage(machines, clean)
+            self.assertEqual(ctx.state["plant_coverage_failed"], {})
+            on_disk = json.loads((comp_dir / ".deploy_state.json").read_text())
+            self.assertEqual(on_disk["plant_coverage_failed"], {})
+            gate, out = self._gate(comp_dir, [
+                {"name": "web01-team122", "configurations": ["apache"]}])
+        self.assertEqual(gate.status.name, "PASS")
+        self.assertIn("full config coverage", out)
+
+    def test_a_tolerated_golden_failure_fails_the_real_gate(self):
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = Path(d)
+            ctx, coverage = self._run_phase4(comp_dir)
+            machines = [{"name": "web01-golden", "configurations": ["apache", "bind"]}]
+            tolerated = NakonResult(
+                ["box0: apache rc=1 (FAILED)"],
+                [{"name": "web01-golden", "steps": [{"name": "apache", "rc": 1},
+                                                    {"name": "bind", "rc": 0}]}])
+            coverage(machines, tolerated)
+            self.assertEqual(ctx.state["plant_coverage_failed"],
+                             {"web01-golden": ["apache"]})
+            self.assertEqual(ctx.state["nakon_failed_steps"],
+                             ["golden: box0: apache rc=1 (FAILED)"])
+            gate, out = self._gate(comp_dir, [
+                {"name": "web01-team122", "configurations": ["apache"]}])
+        self.assertEqual(gate.status.name, "FAIL")
+        self.assertIn("apache (golden-stage)", out)
+
+    def test_a_skip_verdict_never_erases_a_recorded_failure(self):
+        """result=None (reuse / checkpoint / pristine / cold): the record must come
+        into existence if absent, but a previously recorded failure survives — the
+        disk is proven by hash, not by a fresh plant."""
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = Path(d)
+            ctx, coverage = self._run_phase4(comp_dir)
+            ctx.state["plant_coverage_failed"] = {"web01-golden": ["apache"]}
+            coverage([{"name": "web01-golden", "configurations": ["apache"]}], None)
+            self.assertEqual(ctx.state["plant_coverage_failed"],
+                             {"web01-golden": ["apache"]})
+            gate, _out = self._gate(comp_dir, [
+                {"name": "web01-team122", "configurations": ["apache"]}])
+        self.assertEqual(gate.status.name, "FAIL")
+
+
 class Phase7Seed(unittest.TestCase):
     def _run(self, ctx):
         order = []

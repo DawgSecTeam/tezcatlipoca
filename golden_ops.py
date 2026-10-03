@@ -377,7 +377,7 @@ def golden_boot_smoke(node, target, ctx, comp_dir, timeout=None,
 def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_password,
                      golden_config_path, key, scoring_user, scoring_ip, jobs=1,
                      golden_hashes=None, unbooted=frozenset(),
-                     slot=0, anchor_identifier=None, run_id=None):
+                     slot=0, anchor_identifier=None, run_id=None, coverage=None):
     """Clone, plant (strict), and convert the golden set. Returns {box_name: vmid}.
 
     Resume routing: every golden vmid already a template -> skip (the build is done);
@@ -385,7 +385,13 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     the ones tz-base marks as planted and re-plant; missing ones are cloned fresh.
     A PARTIALLY converted set is fine when every converted vmid's description hash
     matches its expected hash (M4 selective rebuild / added box type); without
-    expected hashes, the historical no-clean-resume refusal stands."""
+    expected hashes, the historical no-clean-resume refusal stands.
+
+    coverage (optional) — callable(machines, result) recording the plant-coverage
+    verdict: `machines` are {"name", "configurations"} dicts keyed for verify's golden
+    mapping ('{box}-golden', slot-qualified on satellites), `result` the NakonResult
+    when the plant ran (clean OR alpine_services-tolerated failures), None on every
+    skip path (reuse / cold / pristine / checkpointed)."""
     targets = golden_targets(engine_vmid, teams, boxes, slot=slot,
                              anchor_identifier=anchor_identifier)
     # Full ownership set (comp tag + per-deploy run tag): stamped on everything this
@@ -393,6 +399,27 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     own_set = ownership_tags(comp_dir.name, run_id, GOLDEN_TAG)
     ownership_tag_str = ",".join(sorted(own_set))
     templates = _template_vmid_map(node)
+    # Loaded lazily but only once: the coverage skip paths and the plant section both
+    # need the stage machines, while the all-converted resume path must work without
+    # ever reading the config (same contract as before the coverage hook existed).
+    _golden_cfg_cache = []
+
+    def _golden_cfg():
+        if not _golden_cfg_cache:
+            _golden_cfg_cache.append(
+                json.loads(golden_config_path.read_text())["machines"])
+        return _golden_cfg_cache[0]
+
+    def _coverage_machines(box_names):
+        """Coverage keys for the named box types: '{box}-golden' on slot 0,
+        '{box}-golden-slot{N}' on satellite slots — every slot's stage config names
+        its golden machine identically, so the key must be slot-qualified or one
+        slot's clean replant would pop another slot's recorded failure."""
+        suffix = f"-slot{slot}" if slot else ""
+        by_box = {m["name"][:-len("-golden")]: m for m in _golden_cfg()}
+        return [{"name": f"{box}-golden{suffix}",
+                 "configurations": by_box[box].get("configurations", [])}
+                for box in box_names if box in by_box]
 
     missing = [t for t in targets if not _vm_exists(node, t["vmid"])]
     planted = [t for t in targets
@@ -421,6 +448,8 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
         # pre-run-id deploys) — re-stamp so teardown/preflight recognize them.
         for t in converted:
             retag_ownership(node, t["vmid"], own_set)
+        if coverage:
+            coverage(_coverage_machines(t["box"]["name"] for t in targets), None)
         return {t["box"]["name"]: t["vmid"] for t in targets}
 
     # Only unconverted slots are worked on: a selective rebuild (one box type's hash
@@ -469,6 +498,11 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
         print(f"    {t['vm_name']} (vmid {t['vmid']}) is now an UNBOOTED template "
               f"(generalized — each team's clone specializes its own SID)")
     if not booted:
+        # All-cold slot (every box type unbooted): nothing here is ever nakon-planted,
+        # and unbooted box types don't appear in the stage config at all — the clean
+        # marker is the whole record for this slot.
+        if coverage:
+            coverage(_coverage_machines(t["box"]["name"] for t in targets), None)
         return {t["box"]["name"]: t["vmid"] for t in targets}
     missing = [t for t in missing if t in booted]
     planted = [t for t in planted if t in booted]
@@ -650,12 +684,15 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     # pristine disk by design. An empty plan makes nakon report "no output from the
     # remote plan" per machine, so the plant is skipped outright (live-found
     # 2026-09-30 multinode-spread).
-    golden_cfg = json.loads(golden_config_path.read_text())["machines"]
-    if not any(m.get("configurations") for m in golden_cfg):
+    if not any(m.get("configurations") for m in _golden_cfg()):
         print("  Golden stage carries no plantable configurations — skipping the "
               "nakon plant; converting pristine goldens")
+        if coverage:
+            coverage(_coverage_machines(t["box"]["name"] for t in targets), None)
     elif not work:
         print("  Every golden is already planted and smoke-passed — skipping the plant")
+        if coverage:
+            coverage(_coverage_machines(t["box"]["name"] for t in targets), None)
     else:
         bundle = build_nakon_bundle(golden_config_path)
         result = run_nakon(key, scoring_user, scoring_ip, bundle, golden_config_path,
@@ -668,6 +705,12 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
                       f"alpine_services shim owns those (apk/OpenRC)")
             else:
                 raise RuntimeError(f"golden plant had {len(result.failed)} FAILED step(s) — strict mode requires green")
+        # Record BEFORE the shim runs: an alpine-tolerated failure is a real gap on
+        # the golden disk (verify maps '{box}-golden' onto every team clone), and if
+        # ensure_alpine_services then fails the deploy, the record must already be
+        # on disk. A strict failure raised above and never reaches this line.
+        if coverage:
+            coverage(_coverage_machines(t["box"]["name"] for t in work), result)
         if alpine_shim:
             ensure_alpine_services(comp_dir, work, ctx)
 
@@ -702,7 +745,7 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     if boot_smoke:
         planted_configs = sorted(
             c if isinstance(c, str) else c.get("name", "")
-            for m in golden_cfg for c in (m.get("configurations") or []))
+            for m in _golden_cfg() for c in (m.get("configurations") or []))
         # Only the boxes this run planted need re-smoking: a checkpointed golden's disk
         # has not changed since it passed, and it was never started this run. A failure
         # here still raises BEFORE the conversion below, so the barrier holds.
