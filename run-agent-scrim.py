@@ -418,22 +418,36 @@ def _web01_units(comp):
     on the box (apache2 vs httpd across distros) by the caller. The old code
     hardcoded nginx, which doesn't exist on comps whose web box runs apache
     (cde-2026: Fedora httpd) — the fire test would stop a non-existent unit, see no
-    scoreboard change, and abort."""
+    scoreboard change, and abort.
+
+    scrims-one 2026-10-03: web01 pins ["ssh", "nginx"] — a port-less ssh pin took the
+    `or 80` default, tied with nginx on the sort, and won by order, so the test
+    stopped sshd while probing HTTP :80; the scoreboard never moved (nginx was still
+    serving) and the run aborted pre-T0. So: a pin is httpish from its display, an
+    explicit :80, or a well-known web NAME; a non-http pin gets no default port; the
+    ssh unit is only ever a last resort — stopping it severs the operator's own path
+    to the box and proves nothing about the scored web service."""
     pins = json.loads((comp / "box_services.json").read_text()).get("web01", [])
     candidates = []
     for pin in pins:
         if isinstance(pin, str):
             pin = {"name": pin}
-        mapped = _WATCHDOG_UNITS.get(pin.get("name", ""), [])
+        name = pin.get("name", "")
+        mapped = _WATCHDOG_UNITS.get(name, [])
         if not mapped:
             continue
-        httpish = pin.get("port") == 80 or pin.get("display") in ("http", "https")
-        candidates.append((httpish, pin.get("port") or 80, mapped))
+        httpish = (pin.get("port") == 80 or pin.get("display") in ("http", "https")
+                   or name in ("nginx", "apache", "httpd", "iis"))
+        port = pin.get("port") or (80 if httpish else None)
+        if port is None:
+            continue
+        candidates.append((httpish, name in ("ssh", "openssh", "sshd"), port, mapped))
     if not candidates:
         raise SystemExit("  ERROR: no serviceable web01 unit for the fire test — "
                          "web01 pins in box_services.json map to nothing in _WATCHDOG_UNITS")
-    candidates.sort(key=lambda c: (not c[0], c[1]))
-    return candidates[0][2], candidates[0][1]
+    # httpish first, then anything-but-sshd, then lowest port
+    candidates.sort(key=lambda c: (not c[0], c[1], c[2]))
+    return candidates[0][3], candidates[0][2]
 
 
 def scorch_script(comp):
