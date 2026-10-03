@@ -1,9 +1,11 @@
 # Usage — people
 
 Interactive, human-operator guide: one-time Proxmox/workstation setup, running a deploy by
-answering its prompts, and day-to-day operation. For scripted/non-interactive/agent-driven
-usage (CLI flags, pre-authored configs), see [usage-agents.md](usage-agents.md). For what the
-project is and how it's architected, see the [README](../README.md).
+answering its prompts, and day-to-day operation. Most authoring and deploying can also be done
+from the browser front end, see [../webui/README.md](../webui/README.md). For
+scripted/non-interactive/agent-driven usage (CLI flags, pre-authored configs), see
+[usage-agents.md](usage-agents.md). For what the project is and how it's architected, see the
+[README](../README.md).
 
 **Contents:** [Prerequisites](#prerequisites-one-time-per-proxmox-host) ·
 [Adding a template VM](#adding-a-template-vm) · [Windows box templates](#windows-box-templates) ·

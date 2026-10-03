@@ -2,6 +2,8 @@
 
 Non-interactive interface: CLI flags, pre-authored config files, and machine-readable
 validation, for driving this from a script or an agent instead of answering prompts by hand.
+A browser front end wraps the same drivers for authoring and deploying, see
+[../webui/README.md](../webui/README.md).
 One-time Proxmox/template setup is still a human prerequisite — see
 [usage-people.md](usage-people.md#prerequisites-one-time-per-proxmox-host) for that. For what
 the project is and how it's architected, see the [README](../README.md).
