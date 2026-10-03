@@ -118,7 +118,10 @@ state file written by the same pipeline version; cross-version resumes are refus
    gone. Windows bootstrap across all teams (guest agent), SSH/cloud-init waits with
    per-box budgets, `setup_ubuntu_auth`, DNS fix, apt prep, `tz-base` snapshots. The
    snapshot / password / cloud-init-clean / convert passes over the golden set run on a
-   bounded pool of 4.
+   bounded pool of 4. The plant records its own **plant-coverage verdict** in
+   `.deploy_state.json` — the `{box}-golden` keys (satellite slots: `{box}-golden-slot{N}`)
+   that verify's coverage gate maps onto every team clone — on every completion path,
+   including `alpine_services`-tolerated failures, which are a real gap on the golden disk.
 5. **Repair-stage sweep** — the first post-clone pass plants the **repair stage**
    (sshd/sudoers touchers) on every team box, lenient, with `--jobs`; then
    `fix_services_on_boxes` on **Linux boxes only** (Windows never reaches the bash

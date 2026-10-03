@@ -81,13 +81,16 @@ def _record_coverage(state, stage_machines, result):
 
     The expectation side is implicit — nakon-config.json is verify's source of truth.
     This records only failures: machine -> [config names whose step reported rc != 0],
-    or every config when a machine died before reporting any step. The golden plant is
-    strict (a failure aborts the deploy), so only the lenient post-clone passes record
-    here; verify maps '{box}-golden'-style failures onto every team copy of the box.
+    or every config when a machine died before reporting any step.
 
-    A machine whose stage reported NO failed steps drops its stale entry: a recovered
-    config (replanted by a later sweep) must not keep the coverage gate red forever
-    (amongus-cde-2026 2026-09-30: SMB v1 stayed 'failed' across three green replants)."""
+    The golden plant (phase 4) records through the same shape via build_golden_set's
+    coverage callback, under '{box}-golden' keys (satellite slots: '{box}-golden-slot{N}')
+    that verify maps onto every team copy of the box: a strict-mode failure aborts the
+    deploy before anything is recorded, but an alpine_services-tolerated failure is a
+    real gap on the golden disk and must reach the gate. A machine whose stage reported
+    NO failed steps drops its stale entry: a recovered config (replanted by a later
+    sweep) must not keep the coverage gate red forever (amongus-cde-2026 2026-09-30:
+    SMB v1 stayed 'failed' across three green replants)."""
     if result is None or not getattr(result, "machines", None):
         return  # no --json outcome (older nakon) — coverage falls back to the tally
     failed = result.failed_configs()

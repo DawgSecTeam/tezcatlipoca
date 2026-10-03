@@ -40,6 +40,7 @@ if str(_REPO) not in sys.path:
 
 import golden_ops  # noqa: E402
 from constants import SNAP_BASE  # noqa: E402
+from nakon_ops import NakonResult  # noqa: E402
 
 
 def _proc(returncode=0, stdout="", stderr=""):
@@ -96,7 +97,8 @@ class GoldenBuildHarness:
     def __init__(self, n=8, snapshot_sleep=0.0, template_sleep=0.0, clone_sleep=0.0,
                  missing=False, unbooted=(), smoke_raises=(), template_raises=(),
                  password_fail=(), snapshot_false=(), run_concurrent=None,
-                 golden_hashes=None, snapshots_empty=()):
+                 golden_hashes=None, snapshots_empty=(), all_templates=False,
+                 slot=0, anchor=None):
         self.n = n
         self.snapshot_sleep = snapshot_sleep
         self.template_sleep = template_sleep
@@ -110,7 +112,13 @@ class GoldenBuildHarness:
         self.run_concurrent = run_concurrent
         self.golden_hashes = golden_hashes
         self.snapshots_empty = {str(v) for v in snapshots_empty}
+        self.all_templates = all_templates
+        self.slot = slot
+        self.anchor = anchor
         self.events = _Events()
+        # Capturing recorder for the coverage hook — build_golden_set invokes it on
+        # every completion path, and the tests below assert on what it captured.
+        self.coverage_calls = []
         self.tmp = tempfile.TemporaryDirectory()
         self.comp_dir = Path(self.tmp.name)
         self.boxes = [{"name": f"box{i}", "template": "base-linux"} for i in range(n)]
@@ -170,12 +178,13 @@ class GoldenBuildHarness:
                 stack.enter_context(patch.object(golden_ops, name, **kw))
             P("_template_vmid_map", return_value={"base-linux": 900})
             P("_vm_exists", return_value=not self.missing)
-            P("_is_template", return_value=False)
+            P("_is_template", return_value=self.all_templates)
             P("list_snapshots",
               side_effect=lambda _node, vmid: set() if str(vmid) in self.snapshots_empty
               else {SNAP_BASE})
             P("rollback_snapshot",
               side_effect=lambda _n, vmid, _s: self.events.record("rollback", str(vmid)))
+            P("retag_ownership")
             P("destroy_vm_if_exists")
             P("gc_orphan_volumes")
             P("wait_for_proxmox_task")
@@ -203,13 +212,16 @@ class GoldenBuildHarness:
 
     def run(self):
         """Returns (result, events, exception)."""
+        coverage = (lambda machines, result:
+                    self.coverage_calls.append((machines, result)))
         with self._patched(), contextlib.redirect_stdout(io.StringIO()):
             try:
                 result = golden_ops.build_golden_set(
                     "pve", {"team1": {"identifier": 104}}, self.boxes, {"box_username": "ubuntu"},
                     self.comp_dir, 1000, "Box-Pass-1", self.golden_config,
                     "test-key", "scoring", "10.0.0.1", unbooted=self.unbooted,
-                    golden_hashes=self.golden_hashes)
+                    golden_hashes=self.golden_hashes, slot=self.slot,
+                    anchor_identifier=self.anchor, coverage=coverage)
                 return result, self.events, None
             except Exception as exc:  # noqa: BLE001 - tests assert on what escapes
                 return None, self.events, exc
@@ -421,6 +433,131 @@ class GoldenCheckpoint(unittest.TestCase):
         harness.run()
         self.assertEqual(len(harness.events.keys("smoke")), 1)
         self.assertFalse((harness.comp_dir / ".template-hashes.json").exists())
+
+
+class GoldenCoverageRecords(unittest.TestCase):
+    """Phase 4 emits its plant-coverage verdict through the `coverage` callback on
+    EVERY completion path — keyed for verify's '-golden' mapping, slot-qualified on
+    satellite slots. The alpine_services tolerated-failure path is the load-bearing
+    one: those failures used to vanish (warn-only), so verify's coverage gate could
+    not see a golden disk that provably lacked the failed configs."""
+
+    STAGE = [{"name": "box0-golden", "configurations": ["apache", "roundcube"]},
+             {"name": "box1-golden", "configurations": ["Enable WinRM"]}]
+
+    def _harness(self, **kw):
+        harness = GoldenBuildHarness(n=2, **kw)
+        harness.golden_config.write_text(json.dumps({"machines": self.STAGE}))
+        return harness
+
+    def _run_plant(self, harness, result, alpine=False):
+        """Run a harness whose nakon plant is patched to return `result`."""
+        (harness.comp_dir / "Compfile").write_text(
+            "alpine_services 1\n" if alpine else "")
+        with patch.object(golden_ops, "run_nakon", return_value=result) as p_nakon, \
+                patch.object(golden_ops, "build_nakon_bundle", return_value="bundle"), \
+                patch.object(golden_ops, "ensure_alpine_services") as p_shim:
+            _r, _e, exc = harness.run()
+        return p_nakon, p_shim, exc
+
+    def test_a_clean_plant_records_slot0_golden_keys_with_the_result(self):
+        harness = self._harness()
+        clean = NakonResult(
+            [], [{"name": "box0-golden", "steps": [{"name": "apache", "rc": 0}]},
+                 {"name": "box1-golden", "steps": [{"name": "Enable WinRM", "rc": 0}]}])
+        _p, _s, exc = self._run_plant(harness, clean)
+        self.assertIsNone(exc)
+        self.assertEqual(len(harness.coverage_calls), 1)
+        machines, seen = harness.coverage_calls[0]
+        self.assertIs(seen, clean)
+        self.assertEqual([m["name"] for m in machines],
+                         ["box0-golden", "box1-golden"])
+        self.assertEqual(machines[0]["configurations"], ["apache", "roundcube"])
+
+    def test_an_alpine_tolerated_failure_still_reaches_the_record(self):
+        """The point of the hook: a non-strict plant whose steps FAILED must reach the
+        coverage callback with the result carrying the failures — not vanish as a
+        WARNING — and ensure_alpine_services must run after the record lands."""
+        harness = self._harness()
+        partial = NakonResult(
+            ["box0-golden: apache rc=1 (FAILED)"],
+            [{"name": "box0-golden", "steps": [{"name": "apache", "rc": 1},
+                                               {"name": "roundcube", "rc": 0}]},
+             {"name": "box1-golden", "steps": [{"name": "Enable WinRM", "rc": 0}]}])
+        p_nakon, p_shim, exc = self._run_plant(harness, partial, alpine=True)
+        self.assertIsNone(exc)
+        self.assertEqual(len(harness.coverage_calls), 1)
+        machines, seen = harness.coverage_calls[0]
+        self.assertIs(seen, partial)
+        self.assertTrue(seen.failed)
+        self.assertEqual([m["name"] for m in machines],
+                         ["box0-golden", "box1-golden"])
+        # the shim owns the failed service AFTER the verdict is on record
+        p_shim.assert_called_once()
+        self.assertEqual(p_nakon.call_args.kwargs["strict"], False)
+
+    def test_score_only_lineup_records_a_skip_verdict(self):
+        """The harness default: no plantable configurations — the plant is skipped
+        and the verdict is (stage machines, None)."""
+        harness = GoldenBuildHarness(n=2)
+        _r, _e, exc = harness.run()
+        self.assertIsNone(exc)
+        self.assertEqual(len(harness.coverage_calls), 1)
+        machines, seen = harness.coverage_calls[0]
+        self.assertIsNone(seen)
+        self.assertEqual([m["name"] for m in machines],
+                         ["box0-golden", "box1-golden"])
+
+    def test_a_fully_converted_resume_records_a_skip_verdict(self):
+        """The M4 all-templates re-entry returns before the plant section ever reads
+        the stage config — the coverage verdict must still fire."""
+        harness = self._harness(all_templates=True)
+        _r, _e, exc = harness.run()
+        self.assertIsNone(exc)
+        self.assertEqual(len(harness.coverage_calls), 1)
+        machines, seen = harness.coverage_calls[0]
+        self.assertIsNone(seen)
+        self.assertEqual([m["name"] for m in machines],
+                         ["box0-golden", "box1-golden"])
+
+    def test_a_fully_checkpointed_plant_records_a_skip_verdict(self):
+        """Every golden checkpointed (planted + smoke-passed on this hash): the plant
+        must not run, and the verdict must be a skip, not an absent record."""
+        harness = self._harness(golden_hashes={"box0": "h0", "box1": "h1"})
+        (harness.comp_dir / ".template-hashes.json").write_text(json.dumps(
+            {"golden_planted": {"box0": "h0", "box1": "h1"}}))
+        with patch.object(golden_ops, "run_nakon") as p_nakon:
+            _r, _e, exc = harness.run()
+        self.assertIsNone(exc)
+        p_nakon.assert_not_called()
+        self.assertEqual(len(harness.coverage_calls), 1)
+        _machines, seen = harness.coverage_calls[0]
+        self.assertIsNone(seen)
+
+    def test_satellite_slot_keys_are_slot_qualified(self):
+        """Every slot's stage config names its golden machine identically, so a
+        satellite slot's coverage keys must carry the slot suffix — otherwise one
+        slot's clean replant would pop another slot's recorded failure."""
+        harness = self._harness(slot=2, anchor="105")
+        clean = NakonResult(
+            [], [{"name": "box0-golden", "steps": [{"name": "apache", "rc": 0}]}])
+        _p, _s, exc = self._run_plant(harness, clean)
+        self.assertIsNone(exc)
+        machines, _seen = harness.coverage_calls[0]
+        self.assertEqual([m["name"] for m in machines],
+                         ["box0-golden-slot2", "box1-golden-slot2"])
+
+    def test_a_strict_failure_raises_before_any_verdict_is_recorded(self):
+        """Strict mode (no alpine shim): a failed step aborts the build — the deploy
+        dies here, so no coverage verdict fires and verify never runs against it."""
+        harness = self._harness()
+        failed = NakonResult(
+            ["box0-golden: apache rc=1 (FAILED)"],
+            [{"name": "box0-golden", "steps": [{"name": "apache", "rc": 1}]}])
+        _p, _s, exc = self._run_plant(harness, failed)
+        self.assertIsInstance(exc, RuntimeError)
+        self.assertIn("strict mode requires green", str(exc))
+        self.assertEqual(harness.coverage_calls, [])
 
 
 if __name__ == "__main__":
