@@ -198,6 +198,15 @@ Fedora needs no boot-once step — the official Cloud Base qcow2 already ships c
 qemu-guest-agent (the `base-fedora44-fix` template was sealed unbooted, mirroring the
 `cloud-init;general;template` tag set used by this cluster's library).
 
+**Set SELinux permissive before sealing a Fedora template.** Mount the image (or boot it once)
+and set `SELINUX=permissive` in `/etc/selinux/config`. An enforcing Fedora guest cannot be
+golden-built at all: the qemu-guest-agent domain is confined, so the build's `setenforce 0` is
+denied and `sed -i` cannot write `/etc/ssh` (`Permission denied`) — and gateway-proxied SSH may
+be unavailable during a golden build, leaving the agent as the only path. Without this step the
+only options are to keep Fedora out of the lineup on that node or to rebuild the template, so the
+step belongs in the recipe rather than in a per-run workaround. Verify with
+`getenforce` → `Permissive` on a clone before trusting it in a lineup.
+
 ### 5. Wire it in
 
 - Scoring engine: set `TF_VAR_template_vm_id` in `.env` to the template's numeric Proxmox VM
@@ -305,8 +314,13 @@ set). The first four are rewritten in `.env` by `update_env()` every time you cr
 competition. An old env's stale `TF_VAR_teams`/`TF_VAR_boxes_per_team` are overridden from the comp
 dir at terraform time, so they are cosmetic.
 
-Not `.env` variables at all: Quotient's `admin` password (minted in memory each run and saved to
-`competitions/<id>/credentials.txt`) and the inject/postgres/redis passwords. Boxes are instead
+Not `.env` variables at all: Quotient's `admin` **and `scoring`** passwords (both minted in
+memory each run and saved to `competitions/<id>/credentials.txt`), plus the
+inject/postgres/redis passwords. **`scoring` is a second admin account for automation** —
+Quotient allows one session per account, so a scheduled login on `admin` would evict whichever
+operator, `verify-competition`, or harness session holds it. Anything that authenticates on its
+own timetable (a round-loop watchdog, an unattended verify) must use `scoring`, and both accounts
+are seeded into `event.conf` for every competition. Boxes are instead
 per-event on purpose (that's the point of nakon scaling
 difficulty per box) — `create-competition.py` queries Proxmox for templates tagged `template`
 and walks you through picking boxes interactively each time, then saves the result as

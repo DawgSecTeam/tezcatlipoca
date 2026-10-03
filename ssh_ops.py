@@ -9,7 +9,7 @@ from pathlib import Path
 import requests
 
 from range_ops import diagnose_unreachable_box, terraform_dir, wait_for_guest_agent
-from utils import PRINT_LOCK, run_concurrent
+from utils import PRINT_LOCK, record_degradation, run_concurrent
 # Re-export, not a second definition: ssh_ops' gateway auth and deploy/golden_ops' target
 # split must classify a template identically (windows_ops.is_windows_template owns the rule).
 from windows_ops import is_windows_template
@@ -145,6 +145,7 @@ def wait_for_ssh(key, user, host, timeout=300):
             pass
         time.sleep(5)
     print(f"  WARNING: {host} not reachable via SSH within {timeout}s — continuing anyway")
+    record_degradation("box not reachable via SSH", f"{host}: no answer in {timeout}s")
     return False
 
 
@@ -176,6 +177,7 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
         with PRINT_LOCK:
             print(f"    WARNING: {ip} not reachable within timeout — continuing")
             print(diagnose_unreachable_box(node, t["vmid"]))
+            record_degradation("box not reachable within timeout", f"{ip} (vmid {t['vmid']})")
         return False
 
     results = run_concurrent(targets, _probe)
@@ -213,6 +215,7 @@ def wait_for_cloud_init(ctx, targets, timeout=240):
         except subprocess.TimeoutExpired:
             with PRINT_LOCK:
                 print(f"  WARNING: {ip} cloud-init still running after {remaining}s — continuing anyway")
+                record_degradation("cloud-init still running", f"{ip}: {remaining}s")
             return "timeout"
         except Exception as e:
             with PRINT_LOCK:
@@ -238,4 +241,5 @@ def wait_for_http(url, timeout=120):
             pass
         time.sleep(3)
     print(f"  WARNING: {url} did not respond within {timeout}s — continuing anyway")
+    record_degradation("endpoint did not respond", f"{url}: {timeout}s")
     return False

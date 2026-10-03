@@ -36,6 +36,7 @@ from range_ops import (
     stop_vm,
     wait_for_proxmox_task,
 )
+from utils import record_degradation
 
 FROZEN_FILE = ".frozen.json"
 HASHES_FILE = ".template-hashes.json"
@@ -53,14 +54,29 @@ def load_template_hashes(comp_dir):
         return {}
 
 
+def golden_plant_checkpoints(comp_dir):
+    """box name -> golden hash, for goldens that have been planted AND smoke-passed.
+
+    Deliberately a separate key from `golden` (which records *converted* templates):
+    this one marks the intermediate state that used to be thrown away. On cde-2026 a
+    re-entry rolled every planted golden back to tz-base and re-planted the whole set —
+    33 rollbacks (11 each for web01, ftp01, db01) across 10 runs — while only ftp01 was
+    ever the problem. Conversion still waits for the whole set; this only avoids
+    repeating work that already passed.
+
+    Delete the `golden_planted` key (or the whole file) to force a re-plant."""
+    planted = load_template_hashes(comp_dir).get("golden_planted")
+    return planted if isinstance(planted, dict) else {}
+
+
 def save_template_hashes(comp_dir, **entries):
     """Merge entries (engine={hash, inputs}, golden={box: {hash, inputs}}) into the
     record. Atomic rename; 0600 — golden inputs embed box_password."""
     path = Path(comp_dir) / HASHES_FILE
     data = load_template_hashes(comp_dir)
     for key, value in entries.items():
-        if key == "golden":
-            data.setdefault("golden", {}).update(value)
+        if key in ("golden", "golden_planted"):
+            data.setdefault(key, {}).update(value)
         else:
             data[key] = value
     data["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -488,19 +504,28 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     # real settle condition first. On realm the guest agent returns NULL data, so
     # this exercises the SSH settle fallback.
     from hardening_ops import wait_boxes_settled, _box_settled_via_ssh
+    # Stamp the build VM before anything else touches it: every later SSH goes to a
+    # management IP that another competition's engine can share, and the template clean
+    # is the most destructive command in the pipeline (known-issues: the wrong-engine
+    # wipe). A wrong machine now fails the identity check instead of losing its state.
+    from engine_ops import stamp_engine_build
+    stamp_engine_build(build_ctx, vmid)
+
     print("    Waiting for the build VM to settle (unattended-upgrades done, dpkg lock free)...")
     unsettled = wait_boxes_settled([{"vmid": vmid, "ip": build_ip}], node, timeout=600,
                                    ssh_fallback=lambda t: _box_settled_via_ssh(build_ctx, t))
     if unsettled:
         print("    WARNING: build VM never fully settled — proceeding (the bootstrap's "
               "Lock::Timeout covers a straggler)")
+        record_degradation("engine build VM never fully settled",
+                           f"vmid {vmid}")
 
     print("    Bootstrapping engine template (packages, Docker, Quotient, apt-cacher-ng)...")
     build_info = bootstrap_scoring_engine(build_ctx, postgres_password, redis_password,
                                           quotient_ref=quotient_ref)
 
     print("    Cleaning engine template for conversion (fresh state per clone)...")
-    clean_engine_for_template(build_ctx)
+    clean_engine_for_template(build_ctx, vmid)
     stop_vm(node, vmid)
     proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/template")["data"]
     write_template_hash(node, vmid, hash_value,

@@ -21,6 +21,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import deploy  # noqa: E402
+import config_ops  # noqa: E402
 import deploy_phases  # noqa: E402
 from nakon_ops import NakonResult  # noqa: E402
 
@@ -33,7 +34,7 @@ def _ctx(comp_dir, **overrides):
         assume_yes=True, name="probe", scenario="probe", box_username="ubuntu",
         credlist_usernames=["admin"], nakon_jobs=4, apt_cache=True, injects=[],
         packet_pw=None, state={}, teams={}, number_of_teams=0, admin_password="a",
-        postgres_password="p", redis_password="r", box_password="b", box_creds={},
+        scoring_password="s", postgres_password="p", redis_password="r", box_password="b", box_creds={},
         domain_creds=None, inject_password=None, placement=None, node="pve",
         engine_vmid=1000, engine_mgmt_ip="10.0.0.1", boxes=[], boxes_by_name={},
         unbooted=set(), nakon_config_path=comp_dir / "nakon.json",
@@ -244,6 +245,26 @@ class Phase5RepairSweep(unittest.TestCase):
             p_fix.assert_called_once()
             self.assertTrue((comp_dir / ".postclone-swept").exists())
 
+    def test_a_lineup_with_no_postclone_configs_records_a_clean_verdict(self):
+        """Live-found 2026-10-02: a lineup whose configs are ALL golden-stage
+        (same-type-2box) never reached record_stage_coverage, so
+        `plant_coverage_failed` was never created and verify's coverage gate failed
+        closed on a completely clean run — "coverage was never recorded (pre-tally
+        deploy?)". "Nothing to plant post-clone" is a clean result, not an absent one."""
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = Path(d)
+            ctx = _ctx(comp_dir)
+            ctx.repair_config_path.write_text(json.dumps({"machines": []}))
+            with patch.object(deploy_phases, "run_nakon"), \
+                    patch.object(deploy_phases, "fix_services_on_boxes"), \
+                    patch.object(deploy_phases, "ensure_nat_forwarding"), \
+                    patch.object(deploy_phases, "compfile_flag", return_value=0), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                deploy_phases.phase5_repair_sweep(ctx)
+        self.assertIn("plant_coverage_failed", ctx.state)
+        self.assertEqual(ctx.state["plant_coverage_failed"], {})
+        self.assertEqual(ctx.state["nakon_failed_steps"], [])
+
     def test_repair_pass_records_the_stage_tally_and_persists_coverage(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
@@ -331,6 +352,87 @@ class Phase7Seed(unittest.TestCase):
                 deploy_phases.phase7_seed(ctx)
         self.assertNotIn("injects_created", ctx.state)
         self.assertIn("1 inject(s) failed to create: Bad inject", out.getvalue())
+
+    def test_an_inject_added_after_the_first_run_is_not_skipped(self):
+        """The bug: `injects_created` was a bare boolean, so a new inject was never
+        posted on a resume — create_injects dedups on titles, but nothing re-ran it."""
+        with tempfile.TemporaryDirectory() as d:
+            ctx = _ctx(Path(d), state={"seeded": True, "engine_unpaused": True},
+                       injects=[{"title": "i1"}, {"title": "i2"}])
+            stale = config_ops.injects_fingerprint([{"title": "i1"}])
+            ctx.state["injects_created"] = True
+            ctx.state["injects_fingerprint"] = stale
+            with patch.object(deploy_phases, "wait_for_http"), \
+                    patch.object(deploy_phases, "engine_paused", return_value=False), \
+                    patch.object(deploy_phases, "resolve_inject_times"), \
+                    patch.object(deploy_phases, "create_injects",
+                                 return_value=([], [])) as p_create, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                deploy_phases.phase7_seed(ctx)
+        p_create.assert_called_once()          # re-ran, so i2 gets created
+        self.assertEqual(ctx.state["injects_fingerprint"],
+                         config_ops.injects_fingerprint([{"title": "i1"}, {"title": "i2"}]))
+
+    def test_unchanged_injects_still_short_circuit(self):
+        with tempfile.TemporaryDirectory() as d:
+            injects = [{"title": "i1"}]
+            ctx = _ctx(Path(d), state={"seeded": True, "engine_unpaused": True,
+                                       "injects_created": True,
+                                       "injects_fingerprint":
+                                           config_ops.injects_fingerprint(injects)},
+                       injects=injects)
+            with patch.object(deploy_phases, "wait_for_http"), \
+                    patch.object(deploy_phases, "engine_paused", return_value=False), \
+                    patch.object(deploy_phases, "create_injects") as p_create, \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                deploy_phases.phase7_seed(ctx)
+        p_create.assert_not_called()
+        self.assertIn("already created", out.getvalue())
+
+    def test_fingerprint_must_be_taken_before_offsets_are_popped(self):
+        """resolve_inject_times pops the offset keys, so a fingerprint taken after it
+        loses a non-default window (30 -> the 60 default) and would re-create the set
+        spuriously on the next run. Default offsets happen to survive, which is exactly
+        why this must be pinned on a non-default one."""
+        loaded = [{"title": "i1", "open_offset_min": 0, "due_offset_min": 30}]
+        before = config_ops.injects_fingerprint(loaded)
+        config_ops.resolve_inject_times(loaded)
+        after = config_ops.injects_fingerprint(loaded)
+        self.assertNotEqual(before, after)
+        self.assertEqual(before, config_ops.injects_fingerprint(
+            [{"title": "i1", "open_offset_min": 0, "due_offset_min": 30}]))
+
+    def test_the_recorded_fingerprint_is_the_pre_resolve_one(self):
+        definitions = [{"title": "i1", "open_offset_min": 0, "due_offset_min": 30}]
+        expected = config_ops.injects_fingerprint(definitions)
+        with tempfile.TemporaryDirectory() as d:
+            ctx = _ctx(Path(d), state={"seeded": True, "engine_unpaused": True},
+                       injects=[dict(definitions[0])])
+            with patch.object(deploy_phases, "wait_for_http"), \
+                    patch.object(deploy_phases, "engine_paused", return_value=False), \
+                    patch.object(deploy_phases, "create_injects", return_value=([], [])), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                deploy_phases.phase7_seed(ctx)      # real resolve_inject_times runs
+        self.assertEqual(ctx.state["injects_fingerprint"], expected)
+
+    def test_fingerprint_tracks_titles_windows_and_attachments(self):
+        base = [{"title": "i1", "open_offset_min": 0, "due_offset_min": 60,
+                 "attachments": [{"name": "brief.txt"}]}]
+        same = [{"title": "i1", "open_offset_min": 0, "due_offset_min": 60,
+                 "attachments": [{"name": "brief.txt"}]}]
+        new_title = [{"title": "i2", "open_offset_min": 0, "due_offset_min": 60,
+                      "attachments": [{"name": "brief.txt"}]}]
+        new_window = [{"title": "i1", "open_offset_min": 0, "due_offset_min": 90,
+                       "attachments": [{"name": "brief.txt"}]}]
+        new_file = [{"title": "i1", "open_offset_min": 0, "due_offset_min": 60,
+                     "attachments": [{"name": "other.txt"}]}]
+        self.assertEqual(config_ops.injects_fingerprint(base),
+                         config_ops.injects_fingerprint(same))
+        for changed in (new_title, new_window, new_file):
+            self.assertNotEqual(config_ops.injects_fingerprint(base),
+                                config_ops.injects_fingerprint(changed))
+        self.assertEqual(config_ops.injects_fingerprint([]),
+                         config_ops.injects_fingerprint(None))
 
 
 class Phase2EngineTemplate(unittest.TestCase):

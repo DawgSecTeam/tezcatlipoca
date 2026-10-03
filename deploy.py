@@ -3,6 +3,7 @@
 import fcntl
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,6 +34,8 @@ from constants import (
     GOLDEN_TAG,
     MAX_BOXES_PER_TEAM,
     MAX_TEAMS,
+    MIN_LOAD_FREE_TIMEOUT,
+    RESUME_ATTEMPT_LIMIT,
     SCORING_ENGINE_VMID,
     ownership_tags,
 )
@@ -44,7 +47,7 @@ from nakon_ops import (acquire_engine_lock, build_nakon_bundle, generate_nakon_c
 from nodes_ops import (activate_placement, golden_vmid_for_slot, resolve_placement,
                        satellite_routes_for, satellite_tfvars)
 from range_ops import (destroy_vm_if_exists, ensure_terraform_workdir, enumerate_targets,
-                       persist_targets)
+                       persist_targets, wait_for_node_load)
 from template_ops import (
     code_hash,
     engine_template_vmid,
@@ -57,8 +60,8 @@ from template_ops import (
     hash_from_inputs,
     stored_template_hash,
 )
-from utils import (compfile_flag, is_unmanaged, load_compfile, load_users_config,
-                   mint_run_id, valid_comp_name)
+from utils import (compfile_flag, degradation_summary, degradations, is_unmanaged,
+                   load_compfile, load_users_config, mint_run_id, valid_comp_name)
 from windows_ops import is_windows_template
 
 ENV_PATH = Path(".env")
@@ -144,6 +147,97 @@ def guard_resume_from_phase(from_phase, last_phase, state_path, force=False):
         f"never ran, so the later phases would target machines that do not exist yet. "
         f"Resume at --from-phase {last + 1} (re-runs the phase that died), or pass "
         f"--force-from-phase to skip ahead deliberately."
+    )
+
+
+def _record_degradations(ctx):
+    """Persist tolerated-prerequisite failures into the state and print them once.
+
+    Every entry is something that failed while the deploy continued: apt prep that
+    installed nothing, an auth ladder that failed on both transports, a box that never
+    settled, a node scan that never happened. They used to exist only as WARNING lines
+    in the scrollback — which is why "the range came up with every service down" had no
+    named cause. Now they land in .deploy_state.json and verify can read them.
+    """
+    entries = degradations()
+    # ALWAYS record the key, even when empty. A gate cannot tell "clean" from "never
+    # ran" if the success path writes nothing: verify reported the 2026-10-02 live
+    # run's ledger as "not recorded by this deploy (pre-dates the ledger)", which reads
+    # as a stale state file rather than the clean run it actually was. Same trap the
+    # plant-coverage gate had to learn — and which verify caught on that same run.
+    ctx.state["degradations"] = entries
+    if not entries:
+        return
+    print(f"\n  [!] {len(entries)} tolerated failure(s) this run — the deploy continued "
+          f"past each of them:")
+    for item in degradation_summary():
+        count = f" x{item['count']}" if item["count"] > 1 else ""
+        print(f"      - {item['what']}{count}: {item['detail'][:120]}")
+    print("      (recorded in .deploy_state.json as `degradations`; verify-competition "
+          "surfaces them)")
+
+
+def failure_signature(exc):
+    """A stable identity for "the same failure again", for the resume budget.
+
+    Raw messages differ every run (vmids, uuids, temp paths, elapsed seconds), so a
+    naive signature would never match and the guard could never fire. Normalise the
+    volatile parts and keep the shape. Erring toward *matching* is deliberate: the
+    guard only ever refuses a resume, and --force-from-phase overrides it.
+    """
+    text = f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}"
+    text = re.sub(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                  r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", "<uuid>", text)
+    text = re.sub(r"\b[0-9a-fA-F]{12,}\b", "<hex>", text)
+    text = re.sub(r"\d+", "N", text)
+    return re.sub(r"\s+", " ", text).strip()[:160]
+
+
+def record_failure(state, phase, exc):
+    """Count consecutive failures of the same phase with the same signature.
+
+    Returns the new count. A different signature at the same phase is a *new*
+    failure, not a repeat, so the budget resets — that is why the streak is keyed on
+    the signature and not just the phase.
+    """
+    signature = failure_signature(exc)
+    previous = state.get("failure_streak") or {}
+    repeated = (previous.get("phase") == phase
+                and previous.get("signature") == signature)
+    count = int(previous.get("count") or 0) + 1 if repeated else 1
+    state["failure_streak"] = {"phase": phase, "signature": signature, "count": count}
+    return count
+
+
+def clear_failure_streak(state):
+    """Drop the streak after a phase run that made it through."""
+    return state.pop("failure_streak", None)
+
+
+def guard_resume_streak(from_phase, state, limit=RESUME_ATTEMPT_LIMIT, force=False):
+    """Refuse the (limit+1)-th consecutive resume of a phase failing the same way.
+
+    `docs/e2e-testing.md` has always said "max 2 repair-resume cycles; a third
+    consecutive resume is not a repair, it's a resume-loop", but that lived only in
+    prose and cde-2026 burned eleven attempts (deploy6 -> deploy16, 2026-09-29/30)
+    on a single Windows golden. This is the enforceable version. It refuses *before*
+    any infrastructure work, and names the path that actually helps.
+    """
+    if force:
+        return
+    streak = state.get("failure_streak") or {}
+    count = int(streak.get("count") or 0)
+    if streak.get("phase") != from_phase or count < limit:
+        return
+    raise SystemExit(
+        f"  ERROR: phase {from_phase} has now failed {count} time(s) in a row with the "
+        f"same error:\n"
+        f"    {streak.get('signature')}\n"
+        f"  That is a resume-loop, not a repair (docs/e2e-testing.md: max 2 repair-resume "
+        f"cycles). Resuming again would repeat it. Either fix the underlying cause and "
+        f"pass --force-from-phase once you have, or tear the range down and redeploy:\n"
+        f"    python3 destroy-competition.py <competition>\n"
+        f"    python3 create-competition.py --competition <competition> --teams N --yes"
     )
 
 
@@ -361,6 +455,7 @@ class DeployContext:
     teams: dict
     number_of_teams: int
     admin_password: str
+    scoring_password: str
     postgres_password: str
     redis_password: str
     box_password: str
@@ -514,6 +609,10 @@ class CompetitionSecrets:
     teams: dict = field(default_factory=dict)
     number_of_teams: int = 0
     admin_password: str = ""
+    # A SECOND admin account, for automation only — see build_event_conf. Quotient
+    # allows one session per ACCOUNT, so a watchdog that logs in as `scoring` cannot
+    # evict the operator's/harness's `admin` cookie.
+    scoring_password: str = ""
     postgres_password: str = ""
     redis_password: str = ""
     box_password: str = ""
@@ -662,6 +761,7 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
         }
         secrets.number_of_teams = len(secrets.teams)
         secrets.admin_password = secrets.state.get("admin_password") or random_password()
+        secrets.scoring_password = secrets.state.get("scoring_password") or random_password()
         secrets.postgres_password = secrets.state.get("postgres_password") or random_password()
         secrets.redis_password = secrets.state.get("redis_password") or random_password()
         secrets.box_password = secrets.state.get("box_password") or random_password()
@@ -672,6 +772,7 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
         secrets.inject_password = secrets.state.get("inject_password")
         secrets.state.update({
             "admin_password": secrets.admin_password,
+            "scoring_password": secrets.scoring_password,
             "postgres_password": secrets.postgres_password,
             "redis_password": secrets.redis_password,
             "box_password": secrets.box_password,
@@ -706,6 +807,7 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
                       f"(team identifiers are 192.168.<101-254>.x).")
         secrets.teams = collect_teams(secrets.number_of_teams, identity.engine_vmid)
         secrets.admin_password = random_password()
+        secrets.scoring_password = random_password()
         secrets.postgres_password = random_password()
         secrets.redis_password = random_password()
         # M4: box_password is a golden-hash INPUT (baked into /etc/shadow +
@@ -730,6 +832,7 @@ def _resolve_competition_secrets(secrets, prior, spec, inputs, num_teams, identi
             "pipeline_version": PIPELINE_VERSION,
             "teams": secrets.teams,
             "admin_password": secrets.admin_password,
+            "scoring_password": secrets.scoring_password,
             "inject_password": secrets.inject_password,
             "postgres_password": secrets.postgres_password,
             "redis_password": secrets.redis_password,
@@ -1036,6 +1139,7 @@ def _assemble_deploy_context(comp_dir, from_phase, assume_yes, identity, spec, p
         teams=secrets.teams,
         number_of_teams=secrets.number_of_teams,
         admin_password=secrets.admin_password,
+        scoring_password=secrets.scoring_password,
         postgres_password=secrets.postgres_password,
         redis_password=secrets.redis_password,
         box_password=secrets.box_password,
@@ -1170,6 +1274,9 @@ def _load_prior_deploy_state(prior, comp_dir, from_phase, force_from_phase):
         # the machines the later ones target (see guard_resume_from_phase).
         guard_resume_from_phase(from_phase, prior.previous_state.get("last_phase"), prior.state_path,
                                 force=force_from_phase)
+        # ...and refuse a resume-loop: the same phase failing the same way over and
+        # over is not a repair (see guard_resume_streak).
+        guard_resume_streak(from_phase, prior.previous_state, force=force_from_phase)
 
 
 def _load_competition_inputs(inputs, comp_dir):
@@ -1189,7 +1296,7 @@ def _load_competition_inputs(inputs, comp_dir):
 
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
-           team_node=None, engine_node=None, force_from_phase=False):
+           team_node=None, engine_node=None, force_from_phase=False, min_load_free=None):
     """Run the seven-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
 
     scoring_vmid overrides the scoring-engine VMID (default 1000) so several
@@ -1228,6 +1335,16 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     if ctx is None:
         return
 
+    # `--min-load-free N` on a resume into a phase that previously failed: wait for the
+    # node to come down before starting. The retries that produced the eleven-attempt
+    # cde-2026 storm were pure contention, and an operator was doing this by hand.
+    if min_load_free is not None and ctx.from_phase > 1:
+        streak_phase = (ctx.state.get("failure_streak") or {}).get("phase")
+        if streak_phase == ctx.from_phase:
+            print(f"  Phase {ctx.from_phase} failed on the previous attempt — waiting for "
+                  f"node '{ctx.node}' to fall below load {min_load_free}...")
+            wait_for_node_load(ctx.node, float(min_load_free), timeout=MIN_LOAD_FREE_TIMEOUT)
+
     current_phase = max(ctx.from_phase, 1)
     try:
         for n, phase in enumerate(PHASES, 1):
@@ -1250,7 +1367,17 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                 # asked to resume at rather than phase 2.
                 connect_terraform(ctx)
     except BaseException as e:
+        _record_degradations(ctx)
         print(f"\n  [!] Deploy failed during phase {current_phase} of '{ctx.comp_name}'.")
+        try:
+            count = record_failure(ctx.state, current_phase, e)
+            ctx.save_state()
+            print(f"      Attempt {count} at phase {current_phase} with this signature"
+                  + (f" — {RESUME_ATTEMPT_LIMIT} is the limit before a resume is refused."
+                     if count >= RESUME_ATTEMPT_LIMIT else "."))
+        except Exception as record_error:
+            # Never let bookkeeping mask the real failure.
+            print(f"      (could not record the failure streak: {record_error})")
         resume_phase = current_phase
         if current_phase >= 2 and "already exists" in str(e).lower():
             resume_phase = 1
@@ -1261,6 +1388,9 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
               f"--competition {ctx.comp_name} --from-phase {resume_phase} --yes")
         raise
 
+    clear_failure_streak(ctx.state)
+    _record_degradations(ctx)
+    ctx.save_state()
     finish_deploy(ctx)
 
 
@@ -1295,6 +1425,11 @@ def main():
                              "not record as completed. Only for a known-stale checkpoint (e.g. the "
                              "process died after a phase finished but before it was checkpointed); "
                              "the skipped phases build the machines the later ones target.")
+    parser.add_argument("--min-load-free", type=float, default=None, dest="min_load_free",
+                        help="On a resume into a phase that previously failed, wait until the "
+                             "node's 1-minute load is below this before starting. Phase-4 retries "
+                             "used to be hand-throttled this way; a contended node, not a short "
+                             "timeout, is what made cde-2026 loop eleven times.")
     parser.add_argument("--scoring-vmid", type=int, default=None, dest="scoring_vmid",
                         help="VMID for this competition's scoring engine (default 1000). Give each "
                              "concurrent competition on a shared node a distinct free VMID so their "
@@ -1378,7 +1513,7 @@ def main():
 
         deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase,
                scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node,
-               force_from_phase=args.force_from_phase)
+               force_from_phase=args.force_from_phase, min_load_free=args.min_load_free)
         return
 
     previous = load_previous_competitions()
@@ -1432,7 +1567,7 @@ def main():
 
     deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase,
            scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node,
-           force_from_phase=args.force_from_phase)
+           force_from_phase=args.force_from_phase, min_load_free=args.min_load_free)
 
 
 if __name__ == "__main__":

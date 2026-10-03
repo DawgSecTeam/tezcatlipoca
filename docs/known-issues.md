@@ -35,35 +35,34 @@ stopped loop reports stale DOWN as if live).
 Mitigated: `verify-competition.py` detects the signature (old StartTime + zero current_round_time,
 engine unpaused), **FAILs** the run, and `--fix-round-loop` issues the two POSTs
 (`/api/competition/start {"started":true}`, then `/api/engine/pause {"pause":false}`); re-run verify
-to confirm a fresh round. **Next action:** an engine-side watchdog that issues the same POSTs when
-the stale signature appears (same pattern as the live `range-firewall.timer`), so a reboot — including
-the owner-confirmed .193 hardware hard-downs — heals without an operator.
+to confirm a fresh round.
 
-### `clean_engine_for_template` can wipe a *foreign* live engine on a shared mgmt IP
-
-**Status: OPEN — mitigation only.** The engine-template build VM is booted on the planned engine
-static mgmt IP, and the cleanup (`compose down -v`, `.env`/`event.conf` deletion, host-key wipe) is
-delivered by **SSH to that IP**. With two engines of two comps (or an engine and a build VM) up on
-one node, ARP flaps can make the cleanup land on a live foreign engine — observed destroying an
-engine's `/etc/ssh/ssh_host_*`, `/opt/quotient/.env` and containers while its listener stayed up.
-
-Mitigations: give each concurrent comp its own `TF_VAR_engine_mgmt_ip` (now in
-[e2e-testing.md §0](e2e-testing.md#0-read-before-you-deploy--live-traps)); `ssh_via_gateway` self-heals
-the resulting stale TOFU pin; recovery of a hit engine is `ssh-keygen -A` + `systemctl restart ssh`
-via the guest agent, then `--from-phase 3`. **Next action:** address the target by VM identity
-(vmid/guest-agent) instead of a shared IP, and refuse when the IP is ambiguous.
+**Next action:** an engine-side watchdog that issues the same POSTs when the stale signature appears
+(same pattern as the live `range-firewall.timer`), so a reboot — including the owner-confirmed .193
+hard-downs — heals without an operator. **Automation implemented 2026-10-02, opt-in and not yet trialled live:** the blocker was that a
+watchdog could not simply log in — Quotient allows one session per account, so the login would evict
+whichever operator, `verify-competition` or harness session held `admin`. Every competition now seeds
+a **separate `scoring` admin account** for exactly this (`event.conf`'s `admin` list; per-competition
+password in `credentials.txt`), and `round_loop.py` holds the one definition of "the loop is
+stopped" — shared with verify's gate so the two cannot disagree. The actor is
+`tools/round_loop_guard.py`, installed on the engine as a 60s timer when the Compfile sets
+**`round_loop_guard 1`** (default off). **Remaining:** run it on a live range — kill the loop
+deliberately, watch the timer heal it, and only then consider it done.
 
 ### Fedora goldens cannot be built on SELinux-enforcing nodes
 
-**Status: OPEN — workaround; live-confirmed 2026-10-02.** The qemu-guest-agent domain is confined:
-on a Fedora 44 clone, guest-exec is root inside `virt_qemu_ga_t`, where `dnf`/`rpm` and writes under
-`/etc` are `Permission denied`, `systemctl` is `Access denied`, and `setenforce 0` plus the
-`virt_qemu_ga_run_unconfined` boolean are denied. Golden build reaches the box by SSH when the
-gateway path works, and **SSH is the escape hatch** — the image's cloud user with the repo key lands
-in `unconfined_t` with passwordless sudo (verified). So the block is agent-only flows; keep Fedora out
-of lineups where the agent is the only path. **Fix (cheap, not yet applied):** flip the template's
-`/etc/selinux/config` to permissive at template-build time. Detail and the verified SSH route:
-[environment-facts.md](environment-facts.md#templates).
+**Status: OPEN — mitigated; the template recipe is fixed, the templates are not rebuilt.** The
+qemu-guest-agent domain is confined: on a Fedora 44 clone, guest-exec is root inside `virt_qemu_ga_t`,
+where `dnf`/`rpm` and writes under `/etc` are `Permission denied`, `systemctl` is `Access denied`, and
+`setenforce 0` plus the `virt_qemu_ga_run_unconfined` boolean are denied. Golden build reaches the box
+by SSH when the gateway path works, and **SSH is the escape hatch** — the image's cloud user with the
+repo key lands in `unconfined_t` with passwordless sudo (verified). So the block is agent-only flows;
+keep Fedora out of lineups where the agent is the only path. **Fix — recipe applied 2026-10-02,
+templates not yet rebuilt:** the template-build recipe now sets `SELINUX=permissive` in
+`/etc/selinux/config` before sealing
+([usage-people.md](usage-people.md#non-ubuntu-linux-box-templates-fedora-alpine)), which only takes
+effect on the next rebuild, so the Fedora templates currently on the nodes still enforce. Detail and
+the verified SSH route: [environment-facts.md](environment-facts.md#templates).
 
 ### llama.cpp local-blue context ceiling
 

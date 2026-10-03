@@ -118,13 +118,25 @@ class PriorStateGuards(unittest.TestCase):
                 deploy._load_prior_deploy_state(prior, comp_dir, 6, True)
         guard.assert_called_once_with(6, 5, comp_dir / ".deploy_state.json", force=True)
 
+    def test_the_resume_budget_guard_is_also_wired_in(self):
+        """The budget is only enforceable if prepare() actually consults it — a guard
+        nobody calls is the prose rule it replaced."""
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = self._comp_dir(d, {"pipeline_version": 2, "last_phase": 3})
+            prior = _prior(comp_dir)
+            with patch.object(deploy, "guard_resume_streak") as guard:
+                deploy._load_prior_deploy_state(prior, comp_dir, 4, False)
+        guard.assert_called_once_with(4, prior.previous_state, force=False)
+
     def test_fresh_run_never_calls_the_resume_guard(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = self._comp_dir(d, {"pipeline_version": 2, "last_phase": 0})
             prior = _prior(comp_dir)
-            with patch.object(deploy, "guard_resume_from_phase") as guard:
+            with patch.object(deploy, "guard_resume_from_phase") as guard, \
+                    patch.object(deploy, "guard_resume_streak") as streak_guard:
                 deploy._load_prior_deploy_state(prior, comp_dir, 1, False)
         guard.assert_not_called()
+        streak_guard.assert_not_called()   # a fresh deploy is never a resume-loop
         self.assertFalse(prior.resuming)
 
 

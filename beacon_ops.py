@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from ssh_ops import gateway_proxy as _gateway_proxy
+from utils import record_degradation
 
 REPO = Path(__file__).resolve().parent
 BEACON_SRC = REPO / "artifacts" / "rawsockets-beacon" / "beacon.c"
@@ -169,5 +170,6 @@ def plant_team_beacons(teams, boxes, ctx, box_username="ubuntu", box_password=No
                 raise RuntimeError(f"unit not active: {(r.stdout or r.stderr or '').strip()[-150:]}")
         except Exception as e:
             print(f"    WARNING: beacon on {ip} failed (continuing): {e}")
+            record_degradation("beacon plant failed", f"{ip}: {str(e)[:200]}")
         time.sleep(1)
     print(f"  beacons planted on {planted}/{len(targets)} linux boxes")

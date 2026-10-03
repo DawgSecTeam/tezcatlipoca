@@ -183,7 +183,6 @@ GOLDEN_CLONE_TIMEOUT = 5400
 GOLDEN_IP_BASE = 240
 GOLDEN_TAG = "tezcatlipoca-golden"
 
-
 def ownership_tags(comp_name, run_id=None, *extra):
     """The full ownership tag set for a competition's VMs — every destruction guard
     requires ALL of it on a VM before touching it.
@@ -197,6 +196,20 @@ def ownership_tags(comp_name, run_id=None, *extra):
     if run_id:
         tags.add(run_id)
     return tags | set(extra)
+
+# How many times the SAME phase may fail with the SAME signature before a resume at
+# that phase is refused. `docs/e2e-testing.md` has always said "max 2 repair-resume
+# cycles; a third consecutive resume is not a repair, it's a resume-loop", but that
+# lived only in prose: cde-2026 burned eleven attempts (deploy6 -> deploy16,
+# 2026-09-29/30) on one Windows golden. A DIFFERENT failure at the same phase resets
+# the budget — that is new information, not a loop. `--force-from-phase` still overrides.
+RESUME_ATTEMPT_LIMIT = 2
+
+# `--min-load-free N`: on a resume into a phase that previously failed, wait for the
+# node's 1-minute load to drop below N before starting. Operators hand-throttled this
+# by eye ("load=32.06 (attempt 1/36) ... load below 10 - launching phase-4 resume",
+# 2026-09-30); raising the sysprep timeout 900s -> 1800s did not help, the load did.
+MIN_LOAD_FREE_TIMEOUT = 3600
 
 WINDOWS_ADMIN_USER = "Administrator"
 

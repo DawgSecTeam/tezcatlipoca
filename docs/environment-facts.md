@@ -38,6 +38,19 @@ Measured 2026-10-02 **[live]**:
 | `local-lvm` | lvmthin | .193 | 117 GiB / 137 GiB |
 | `local` | dir | .193 | 12 GiB / 66 GiB |
 
+- **The headroom preflight under-counts by design, and Windows-heavy comps pay for it.**
+  It compares free space against `teams × Σdisk_gb` of the *team* disks, but the real
+  allocation is the **full clones**: one golden per box type plus the engine template.
+  Live 2026-10-02, `same-type-2box-2026-09-29` on `hdd` (1 team × 90 GB provisioned):
+  the preflight said "189 GB free vs ~90 GB needed" and the pool reached **0.2 GiB free**
+  mid-run, at which point both `tz-base` and `tz-ready` snapshots failed with
+  `zfs error: cannot create snapshot … out of space` — silently, leaving the range with
+  **no rollback point**. Teardown returned it to 154.5 GiB, so the run itself consumed
+  roughly 155 GiB: two goldens (30 + 60 GB) plus a ~40 GB engine template, i.e. the
+  full clones dominate. `TEZ_THIN_HEADROOM` does not help here — these are full copies,
+  not linked clones. Budget for goldens + engine template before trusting the gate, and
+  tear down with `destroy-competition.py --full` as soon as a run's goal is met. **[live]**
+
 - **The preflight headroom gate counts provisioned bytes** (≈ teams × Σ`disk_gb`), which does not
   match what linked clones actually allocate. `TEZ_THIN_HEADROOM=<0..1>` relaxes it by counting that
   fraction of the provisioned math. Size the factor to the pool (0.25 has been enough for
@@ -140,6 +153,16 @@ sweep. **[live]**
 
 ## Node runtime behavior
 
+- **The management network is ONE flat `10.0.0.0/24` L2 shared by both hosts.** A VM on .193 and a
+  VM on .150 are on the same segment, so `TF_VAR_engine_mgmt_ip` (and `jump_mgmt_ip`) are contested
+  **cluster-wide**, not per node — the engine's default `10.0.0.250` is what every competition gets
+  unless someone sets otherwise. Live-found 2026-10-02: `10.0.0.250` was a foreign competition's
+  live `quotient-engine` (verified: `ssh sysadmin@10.0.0.250 hostname` → `quotient-engine`) while a
+  .150 practice deploy was handed the same address by default; the build VM came up on it and died
+  at phase 2 with an opaque `ssh … exit status 255`. **Always set an explicit, checked
+  `TF_VAR_engine_mgmt_ip` when anything else is running on the estate**; `.245`, `.246`, `.249` and
+  `.250` all answered on 2026-10-02. The preflight now scans cluster-wide and refuses the *default*
+  address when any guest is unverifiable (see `config_ops._engine_mgmt_ip_gate`). **[live/code]**
 - **netplan refuses world-readable configs** — the engine's team-NIC netplan files are mode `0600`.
   Verified on both running engines 2026-10-02. **[live]**
 - **Docker re-syncs iptables on every container start/restart**: `FORWARD` goes to `DROP` and the

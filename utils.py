@@ -15,6 +15,51 @@ _COMP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
 PRINT_LOCK = threading.Lock()
 MAX_CONCURRENCY = 8
 
+# Failures a caller chose to tolerate. Every entry is a prerequisite that did NOT
+# succeed while the deploy continued anyway — historically a WARNING line in a
+# scrollback and nothing else, which is how "the range came up with every service down"
+# had no named cause (nakon's install failures are silent by design, and apt prep that
+# installed nothing looked exactly like apt prep that worked).
+_DEGRADATIONS = []
+_DEGRADATION_LOCK = threading.Lock()
+
+
+def record_degradation(what, detail=""):
+    """Note that a prerequisite failed and execution continued anyway.
+
+    The deploy still continues — each site has its own reason for tolerating the
+    failure — but the fact is collected, written into `.deploy_state.json` and printed
+    once in a summary, so it survives the scrollback and can be surfaced by verify.
+    """
+    import time
+
+    entry = {"what": str(what), "detail": str(detail)[:300],
+             "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    with _DEGRADATION_LOCK:
+        _DEGRADATIONS.append(entry)
+    return entry
+
+
+def degradations():
+    """The degradations recorded so far in this process, oldest first."""
+    with _DEGRADATION_LOCK:
+        return [dict(entry) for entry in _DEGRADATIONS]
+
+
+def clear_degradations():
+    with _DEGRADATION_LOCK:
+        _DEGRADATIONS.clear()
+
+
+def degradation_summary():
+    """One line per distinct degradation, with a count — for the end-of-run print."""
+    seen = {}
+    for entry in degradations():
+        key = (entry["what"], entry["detail"])
+        seen[key] = seen.get(key, 0) + 1
+    return [{"what": what, "detail": detail, "count": count}
+            for (what, detail), count in seen.items()]
+
 
 def mint_run_id():
     """Per-deploy run identity: `run-` + 8 hex chars, minted once per competition
@@ -24,6 +69,32 @@ def mint_run_id():
     mint different ids and can no longer destroy each other's VMs — destruction paths
     require the full ownership tag set including this tag (2026-10-02 near-miss)."""
     return f"run-{_secrets.token_hex(4)}"
+
+
+def spawn_detached(cmd, log_path, cwd=None):
+    """Start a long command in its own session, logging to `log_path`. Returns (pid, log_path).
+
+    A tool call — and a harness background task — has a wall-clock life far shorter than
+    a deploy, and the observed compensation is worse than the problem: agents wrap the
+    deploy in their own `timeout`, turning a slow success into an abrupt partial-state
+    kill (six exec logs carry a leading `Terminated`). setsid + nohup + a redirected log
+    is the only shape that survives the caller; poll the log.
+
+    The pid returned is the new session/process-group leader, so kill the whole tree with
+    `os.killpg(pid, SIGTERM)`. Never `pkill -f` a pattern that also appears in the
+    invoking command line — that matches the caller and self-kills.
+    """
+    log = Path(log_path)
+    if log.parent and str(log.parent) != ".":
+        log.parent.mkdir(parents=True, exist_ok=True)
+    argv = cmd if isinstance(cmd, (list, tuple)) else ["bash", "-lc", str(cmd)]
+    with open(log, "ab") as handle:
+        proc = subprocess.Popen(
+            list(argv), cwd=str(cwd) if cwd else None,
+            stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    return proc.pid, str(log)
 
 
 def run_concurrent(items, fn, max_workers=MAX_CONCURRENCY):

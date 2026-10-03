@@ -30,13 +30,14 @@ from pathlib import Path
 
 import deploy
 from beacon_ops import plant_team_beacons
-from config_ops import (destroy_bridge_if_exists, resolve_inject_times,
-                        write_text_atomic)
+from config_ops import (destroy_bridge_if_exists, injects_fingerprint,
+                        resolve_inject_times, write_text_atomic)
 from domain_ops import deploy_domain_configs
 from constants import (DEFAULT_ENGINE_MGMT_GW, PER_MACHINE_NAKON_BUDGET,
                        SNAP_BASE, SNAP_READY)
 from engine_ops import (bootstrap_scoring_engine, ensure_nat_forwarding,
-                        prepare_engine_from_template, push_event_conf)
+                        install_round_loop_guard, prepare_engine_from_template,
+                        push_event_conf)
 from golden_ops import (_is_template, _quote_sshkeys, _template_vmid_map,
                         build_golden_set)
 from hardening_ops import (ensure_alpine_services, fix_dns_on_boxes,
@@ -59,8 +60,8 @@ from template_ops import (build_engine_template, destroy_engine_template,
                           hash_from_inputs, load_template_hashes,
                           save_template_hashes, stored_template_hash)
 from timing import print_timing_summary, timed
-from utils import (compfile_flag, compfile_value, is_unmanaged, run_concurrent,
-                   run_terraform)
+from utils import (compfile_flag, compfile_value, is_unmanaged, record_degradation,
+                   run_concurrent, run_terraform)
 from windows_ops import bootstrap_windows_box
 
 
@@ -94,6 +95,7 @@ def destroy_node_waves(ctx, destroy_node, node_targets, slot, extra_destroy=None
     except Exception as e:
         print(f"  WARNING: could not scan {destroy_node} for stranded "
               f"clones ({e}) — proceeding")
+        record_degradation("could not scan node for stranded clones", f"{destroy_node}: {e}")
         node_vms = []
     wave1, wave2 = deploy.phase1_destroy_waves(
         node_vms, node_targets, ctx.legacy_clones if slot == 0 else {},
@@ -309,10 +311,20 @@ def phase3_prepare_engine(ctx):
     with timed(ctx.comp_dir, 3, "push_event_conf"):
         push_event_conf(ctx.comp_dir, ctx.teams, ctx.boxes, ctx.tf_ctx, ctx.name,
                         inject_password=ctx.inject_password, admin_password=ctx.admin_password,
+                        scoring_password=ctx.scoring_password,
                         postgres_password=ctx.postgres_password, redis_password=ctx.redis_password,
                         box_creds=ctx.box_creds,
                         extra_credlists=({"domain": ctx.domain_creds}
                                          if ctx.domain_creds else None))
+
+    # Opt-in (Compfile `round_loop_guard 1`). After an engine reboot the containers come
+    # back but the round loop does not, and the scoreboard freezes while everything that
+    # reads it keeps working. Off by default: it is an unattended actor on a live engine,
+    # and the account it logs in as only exists from this deploy onward.
+    if compfile_flag(ctx.comp_dir / "Compfile", "round_loop_guard", 0) and ctx.scoring_password:
+        with timed(ctx.comp_dir, 3, "round_loop_guard"):
+            install_round_loop_guard(ctx.tf_ctx, ctx.comp_dir, ctx.scoring_password)
+
     ensure_nat_forwarding(ctx.tf_ctx)
 
 
@@ -502,6 +514,15 @@ def phase5_repair_sweep(ctx):
             deploy.record_stage_coverage(ctx.state, repair_machines, result, ctx.save_state)
         else:
             print("  No repair-stage configurations in this lineup — sweep skipped")
+            # Still record the verdict. A lineup whose configs are ALL golden-stage
+            # (same-type-2box-2026-09-29: apache/roundcube/bind + WinRM/IIS) never
+            # reaches record_stage_coverage, so the key was never created and verify's
+            # coverage gate failed closed on a completely clean run with "coverage was
+            # never recorded (pre-tally deploy?)" (live-found 2026-10-02). "Nothing to
+            # plant post-clone" is a clean result, not an absent one.
+            ctx.state.setdefault("plant_coverage_failed", {})
+            ctx.state.setdefault("nakon_failed_steps", [])
+            ctx.save_state()
         # fix_services right after the repair pass: it un-wedges sshd (the ssh-*
         # configs above restart sshd and can trip the start-limit), creates the
         # credlist OS accounts, and binds the services the golden stage installed.
@@ -544,6 +565,10 @@ def phase6_domains_and_final(ctx):
     # box's domain-join reboot. From here on the boxes are in their as-started
     # competition flavor — nothing downstream reboots them or needs apt/DNS.
     final_machines = json.loads(ctx.final_config_path.read_text())["machines"]
+    if not final_machines:
+        ctx.state.setdefault("plant_coverage_failed", {})
+        ctx.state.setdefault("nakon_failed_steps", [])
+        ctx.save_state()
     if final_machines:
         print(f"  Final-stage pass (disruption + boot-hostile) on {len(final_machines)} machine(s)...")
         ensure_nat_forwarding(ctx.tf_ctx)
@@ -619,7 +644,14 @@ def phase7_seed(ctx):
     else:
         print("  Engine already unpaused (resume) — skipping.")
 
-    if ctx.injects and not ctx.state.get("injects_created"):
+    # `injects_created` alone is not a done-marker: it cannot tell "already created"
+    # from "already created, but the inject set has since changed". The fingerprint is
+    # taken BEFORE resolve_inject_times (which pops the offsets), and a mismatch
+    # re-enters create_injects — safe because that call dedups on titles, so only the
+    # genuinely new injects are posted.
+    want_injects = injects_fingerprint(ctx.injects) if ctx.injects else None
+    if ctx.injects and (not ctx.state.get("injects_created")
+                        or ctx.state.get("injects_fingerprint") != want_injects):
         print(f"  Creating {len(ctx.injects)} inject(s)...")
         resolve_inject_times(ctx.injects)
         with timed(ctx.comp_dir, 7, "create_injects", f"x{len(ctx.injects)}"):
@@ -630,6 +662,7 @@ def phase7_seed(ctx):
                   f"(existing injects are deduped)")
         else:
             ctx.state["injects_created"] = True
+            ctx.state["injects_fingerprint"] = want_injects
             ctx.save_state()
     elif ctx.injects:
         print("  Injects already created (resume) — skipping.")
@@ -660,6 +693,11 @@ def finish_deploy(ctx):
         f"Scoreboard:  http://{ctx.scoring_ip}",
         f"admin  {ctx.admin_password}",
     ]
+    if getattr(ctx, "scoring_password", ""):
+        cred_lines.append("# automation account: a SECOND admin, so a scheduled login "
+                          "(round-loop watchdog, unattended verify) never evicts the "
+                          "operator's admin session — Quotient allows one per account")
+        cred_lines.append(f"scoring  {ctx.scoring_password}")
     if ctx.packet_pw:
         cred_lines.append("# box credentials below are the packet-published defaults "
                           "(passwords.json) — teams rotate them at minute zero")
@@ -685,6 +723,9 @@ def finish_deploy(ctx):
     print(f"Saved to: competitions/{ctx.comp_name}/  (credentials.txt, mode 0600)")
     print(f"\nScoreboard:    http://{ctx.scoring_ip}")
     print(f"Admin login:   admin / {ctx.admin_password}")
+    if getattr(ctx, "scoring_password", ""):
+        print(f"Scoring login: scoring / {ctx.scoring_password}   (automation; separate "
+              f"session from admin)")
     if ctx.inject_password:
         print(f"Inject login:  inject / {ctx.inject_password}   ({len(ctx.injects)} inject(s) loaded)")
     print("\nTeam logins:")

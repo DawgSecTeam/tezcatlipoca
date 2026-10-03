@@ -165,6 +165,49 @@ def _cloudinit_gate(tagged_by_name, boxes, label=""):
     return verified
 
 
+def _gate_concurrent_deploys():
+    """Refuse to start while another deploy is live on this host.
+
+    The locks directory is the one concurrency signal that cannot lie: a holder is a
+    live process, and the kernel releases the flock when it dies, so a leftover `.lock`
+    file is never a false positive (unlike a mtime, a running VM, or a log). Two sessions
+    sharing one estate is the documented cause of the 13xx vmid races, the foreign-golden
+    squat and the over-broad sweep that took out two competitions' engines and goldens
+    (AGENTS.md, docs/environment-facts.md).
+
+    The signal is only meaningful because of the call order in `deploy.prepare()`:
+    `_apply_engine_placement` takes the engine lock (line ~661) BEFORE
+    `_run_competition_preflight` runs this gate (line ~669). Any deploy that has got far
+    enough to matter is therefore holding a lock. The only uncovered window is the few
+    seconds a second process spends loading config before it takes its own lock.
+
+    TEZ_ALLOW_CONCURRENT=1 proceeds anyway — for a deliberately coordinated second range
+    with its own vmid blocks, which is the only safe way to run two at once.
+    """
+    from nakon_ops import other_deploys_in_flight
+
+    in_flight = other_deploys_in_flight()
+    if not in_flight:
+        return
+    summary = ", ".join(f"{Path(path).name} ({int(age)}s)" for path, age in in_flight[:4])
+    if len(in_flight) > 4:
+        summary += f", +{len(in_flight) - 4} more"
+    if os.environ.get("TEZ_ALLOW_CONCURRENT"):
+        print(f"  WARNING: {len(in_flight)} other deploy(s) in flight on this host "
+              f"({summary}) — proceeding because TEZ_ALLOW_CONCURRENT is set. Give this "
+              f"range its own vmid blocks.")
+        return
+    raise SystemExit(
+        f"  ERROR: {len(in_flight)} other deploy(s) are already running against this host "
+        f"({summary}). Two concurrent deploys race for the same vmid blocks and golden "
+        f"slots — the recorded outcome is a foreign template squatting this competition's "
+        f"golden slot on the next run, and one sweep destroying another range's engines "
+        f"(AGENTS.md). Wait for them (pgrep -af 'create-competition|redeploy-competition'), "
+        f"or set TEZ_ALLOW_CONCURRENT=1 once you have coordinated distinct "
+        f"--scoring-vmid / TF_VAR_team_identifiers blocks."
+    )
+
+
 def preflight_gates(comp_dir, boxes, num_teams, teams=None,
                     engine_vmid=SCORING_ENGINE_VMID, check_free=True,
                     engine_mgmt_ip=None, our_run_tag=None):
@@ -180,10 +223,22 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
     deploy's lineage — a same-comp VM without it is another run's and stays a
     collision (2026-10-02 near-miss)."""
     node = os.environ["TF_VAR_proxmox_node"]
+    _gate_concurrent_deploys()
     try:
         vms = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
     except Exception as e:
-        raise SystemExit(f"  ERROR: Proxmox API unreachable during preflight: {e}")
+        # The API port IS the node's liveness signal. A site outage once left the tailnet
+        # bridge answering ICMP *for itself* while forwarding nothing, so "ping works"
+        # recovered hours before any TCP did (2026-09-24, ~10h outage) — never diagnose a
+        # node from ping. `curl -k https://<node>:8006/` returning any HTTP code but 000
+        # is the check that means something.
+        raise SystemExit(
+            f"  ERROR: Proxmox API unreachable during preflight: {e}\n"
+            f"         This is the liveness check that counts — do NOT judge the node by "
+            f"ping: during the 2026-09-24 outage the bridge answered ICMP while forwarding "
+            f"nothing. Probe the API port directly (curl -k https://<node>:8006/ — any "
+            f"HTTP code except 000 is up). Deploy state survives an outage; on recovery "
+            f"resume with --from-phase rather than restarting.")
     tagged = set()
     tagged_by_name = {}
     for vm in vms:
@@ -321,15 +376,28 @@ def preflight_gates(comp_dir, boxes, num_teams, teams=None,
 
 
 def _engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
-    """Static engine mgmt IP must not collide with any running guest on the node's
-    mgmt L2 — two boxes answering one address is the DHCP-drift incident class with
-    a guaranteed bad ending. Guests without a working agent can't be checked; count
-    them out loud instead of claiming the range is clean."""
-    unchecked, taken = 0, set()
+    """Static engine mgmt IP must not collide with any running guest on the mgmt L2.
+
+    Two things this gate got wrong, both live-found on the 2026-10-02 same-type-2box
+    practice run — where it printed "engine mgmt IP 10.0.0.250 is free" while a FOREIGN
+    live `quotient-engine` was answering that exact address:
+
+    * **The mgmt L2 spans nodes.** The scan did `vm["node"] != node: continue`, but
+      10.0.0.0/24 is one flat segment: the foreign engine was on .193 and this deploy
+      was on .150. The data was already cluster-wide (`/cluster/resources`) — the filter
+      threw away the rows that mattered. The scan is now cluster-wide.
+    * **Unverifiable is not free.** A guest whose agent is down was counted and skipped,
+      and the gate then claimed the address was free from an absence of evidence. When
+      any running guest cannot be checked the address is *unknown*: refusing is correct
+      for the DEFAULT ip (it is what every comp gets, and nobody chose it), while an IP
+      the operator set explicitly gets a loud warning instead, because they have taken
+      responsibility for it.
+
+    Guests without a working agent can't be checked; count them out loud instead of
+    claiming the range is clean."""
+    unchecked, taken, takers = [], set(), {}
     for vm in vms:
         if vm.get("status") != "running" or vm.get("template") == 1:
-            continue
-        if vm.get("node") and vm["node"] != node:
             continue
         if vm.get("vmid") == engine_vmid:
             # Our own engine from a prior failed attempt — it holds the planned
@@ -345,25 +413,41 @@ def _engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None)
                        .replace(";", ",").split(",") if t.strip()}
             if ours_tags <= vm_tags:
                 continue
+        label = f"{vm.get('vmid')} ({vm.get('name') or '?'} on {vm.get('node') or '?'})"
         try:
             result = proxmox_api(
-                "GET", f"/nodes/{node}/qemu/{vm['vmid']}/agent/network-get-interfaces"
+                "GET", f"/nodes/{vm['node']}/qemu/{vm['vmid']}/agent/network-get-interfaces"
             )["data"]["result"]
         except Exception:
-            unchecked += 1
+            unchecked.append(label)
             continue
         for ifc in result or []:
             for addr in ifc.get("ip-addresses") or []:
                 if addr.get("ip-address-type") == "ipv4":
                     taken.add(addr.get("ip-address"))
+                    takers.setdefault(addr.get("ip-address"), label)
     if engine_mgmt_ip in taken:
         raise SystemExit(
-            f"  ERROR: static engine mgmt IP {engine_mgmt_ip} is already answered by "
-            f"a running guest on {node}. Pick another TF_VAR_engine_mgmt_ip (or set "
-            f"it to '' for DHCP).")
-    note = (f" ({unchecked} running guest(s) unverifiable — agent down)"
-            if unchecked else "")
-    print(f"  Preflight: engine mgmt IP {engine_mgmt_ip} is free{note}")
+            f"  ERROR: static engine mgmt IP {engine_mgmt_ip} is already answered by a "
+            f"running guest ({takers.get(engine_mgmt_ip, 'unknown')}). Pick another "
+            f"TF_VAR_engine_mgmt_ip (or set it to '' for DHCP). The management network is "
+            f"shared across nodes, so a guest on ANY node counts.")
+    explicit = bool((os.environ.get("TF_VAR_engine_mgmt_ip") or "").strip())
+    if unchecked:
+        listing = ", ".join(unchecked[:5]) + ("..." if len(unchecked) > 5 else "")
+        if not explicit:
+            raise SystemExit(
+                f"  ERROR: cannot verify the engine mgmt IP {engine_mgmt_ip} — "
+                f"{len(unchecked)} running guest(s) have no working agent to ask "
+                f"({listing}). This is the DEFAULT address, and on this estate the "
+                f"default has already been a live foreign engine's address once "
+                f"(2026-10-02). Set TF_VAR_engine_mgmt_ip to an address you have checked "
+                f"yourself (or '' for DHCP).")
+        print(f"  Preflight: engine mgmt IP {engine_mgmt_ip} — UNVERIFIED "
+              f"({len(unchecked)} running guest(s) have no agent: {listing}); proceeding "
+              f"because TF_VAR_engine_mgmt_ip is set explicitly")
+        return
+    print(f"  Preflight: engine mgmt IP {engine_mgmt_ip} is free")
 
 
 def _catalog_gate(comp_dir):
@@ -943,6 +1027,37 @@ def resolve_inject_times(injects):
     return injects
 
 
+def injects_fingerprint(injects):
+    """Stable identity of the inject *definitions*, for phase 7's done-marker.
+
+    Call this BEFORE `resolve_inject_times` — that function pops the offset fields and
+    rewrites them as absolute timestamps, so a fingerprint taken afterwards changes on
+    every run and would re-create the whole set every time.
+
+    `injects_created` used to be a bare boolean, which meant an inject added (or a
+    window edited) after the first phase-7 run was silently skipped forever on resume:
+    `create_injects` dedups on titles precisely so a re-run is safe, but nothing ever
+    re-ran it. Titles are what that dedup keys on, so they lead the fingerprint; the
+    offsets and attachment names are included so a changed window or a swapped
+    attachment is not missed either.
+    """
+    import hashlib
+
+    items = []
+    for inj in injects or []:
+        items.append({
+            "title": inj.get("title"),
+            "open_offset_min": inj.get("open_offset_min", 0),
+            "due_offset_min": inj.get("due_offset_min", 60),
+            "close_offset_min": inj.get("close_offset_min", 90),
+            "attachments": sorted(
+                (a.get("name") if isinstance(a, dict) else str(a)) or ""
+                for a in (inj.get("attachments") or [])),
+        })
+    blob = json.dumps(items, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
 def load_boxes(comp_dir):
     path = comp_dir / "boxes.json"
     return json.loads(path.read_text()) if path.exists() else None
@@ -958,7 +1073,7 @@ def confirm_deploy(name, scenario, difficulty, teams, boxes):
     print(f"  Scenario    : {short_scenario}")
     print(f"  Difficulty  : {difficulty} / 10")
     print(f"  Teams       : {n}  ({team_range}, passwords auto-generated)")
-    print(f"  Boxes       :")
+    print("  Boxes       :")
     for b in boxes:
         print(f"    {b['name']} — {b['template']}  ({b['cpu']} CPU, {b['memory_mb']} MB)")
     print()

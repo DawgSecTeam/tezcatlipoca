@@ -9,9 +9,11 @@ import subprocess
 import time
 from typing import Callable, NamedTuple
 
-from range_ops import diagnose_unreachable_box, guest_agent_exec_root, wait_for_guest_agent
+from range_ops import (diagnose_unreachable_box, guest_agent_exec_detached,
+                       guest_agent_exec_root, wait_for_guest_agent)
 from ssh_ops import gateway_proxy, ssh_via_gateway
-from utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT, PRINT_LOCK, run_concurrent, valid_unix_username
+from utils import (DNS_FIX_CMD, DNS_FIX_CMD_ROOT, PRINT_LOCK, record_degradation,
+                   run_concurrent, valid_unix_username)
 
 
 _APT_PREP_BODY = r"""
@@ -165,6 +167,8 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
                                    ssh_fallback=lambda t: _box_settled_via_ssh(ctx, t))
     if unsettled:
         print(f"    WARNING: {len(unsettled)} box(es) never settled after boot — proceeding")
+        record_degradation("boxes never settled after boot",
+                           ", ".join(str(t.get("ip")) for t in unsettled)[:200])
 
     def _prep(t):
         ip = t["ip"]
@@ -204,9 +208,11 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
             else:
                 with PRINT_LOCK:
                     print(f"    WARNING: apt prep rc={rc} on {ip}: {(err or '').strip()[:160]} — proceeding")
+                    record_degradation("apt prep failed", f"{ip}: rc={rc} {(err or '').strip()[:160]}")
         except Exception as exc:
             with PRINT_LOCK:
                 print(f"    WARNING: apt prep failed on {ip} ({exc}) — proceeding")
+                record_degradation("apt prep failed", f"{ip}: {exc}")
         return False
 
     run_concurrent(targets, _prep)
@@ -262,6 +268,7 @@ def fix_dns_on_boxes(targets, ctx):
             with PRINT_LOCK:
                 print(f"  WARNING: DNS fix failed for {ip} after 8 attempts "
                       f"and guest-agent fallback ({agent_exc}) — proceeding anyway")
+                record_degradation("DNS fix failed", f"{ip}: {agent_exc}")
                 print(diagnose_unreachable_box(node, t["vmid"]))
             return False
 
@@ -705,14 +712,18 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
                 vmid = t["vmid"]
                 root_script = re.sub(r"\bsudo ", "", script_content)
                 try:
-                    rc, out, err = guest_agent_exec_root(node, vmid, root_script, timeout=120)
-                    if rc == 0:
+                    # Detached: this script restarts several services and can outlive
+                    # the agent channel's budget (the 120s cap is what the exec logs
+                    # showed dying mid-plant). The guest-side log is the evidence.
+                    res = guest_agent_exec_detached(
+                        node, vmid, root_script, f"/tmp/tz-harden-{vmid}.log", timeout=900)
+                    if res.rc == 0:
                         with PRINT_LOCK:
                             print(f"    Services hardened on {ip} (via guest agent)")
                     else:
                         with PRINT_LOCK:
                             print(f"    Service hardening still failing on {ip} via guest agent: "
-                                  f"rc={rc} {err.strip()[:200]}")
+                                  f"rc={res.rc} {res.log[-200:].strip()}")
                 except Exception as e:
                     with PRINT_LOCK:
                         print(f"    Guest-agent fallback failed for {ip} (vmid {vmid}): {e}")
@@ -767,15 +778,16 @@ def setup_ubuntu_auth(targets, ctx):
             vmid = t["vmid"]
             root_script = re.sub(r"\bsudo ", "", auth_cmd)
             try:
-                rc, out, err = guest_agent_exec_root(
-                    os.environ["TF_VAR_proxmox_node"], vmid, root_script, timeout=120)
-                if rc == 0:
+                res = guest_agent_exec_detached(
+                    os.environ["TF_VAR_proxmox_node"], vmid, root_script,
+                    f"/tmp/tz-auth-{vmid}.log", timeout=900)
+                if res.rc == 0:
                     with PRINT_LOCK:
                         print(f"    Auth configured on {ip} (via guest agent)")
                     return True
                 raise RuntimeError(
                     f"auth setup failed on {ip} via guest agent too: "
-                    f"rc={rc} {err.strip()[:200]}")
+                    f"rc={res.rc} {res.log[-200:].strip()}")
             except RuntimeError:
                 raise
             except Exception as e:

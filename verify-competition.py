@@ -24,10 +24,12 @@ except ImportError as e:
 from dotenv import load_dotenv
 
 from domain_ops import team_domain
+import round_loop
 from range_ops import guest_agent_exec_root, guest_agent_exec_windows, vm_id_for
 from quotient.setup import expected_service_names
 from ssh_ops import engine_ssh_opts, gateway_proxy
-from utils import BOX_USERNAME_DEFAULT, MAX_CONCURRENCY, PRINT_LOCK, load_users_config, run_concurrent
+from utils import (BOX_USERNAME_DEFAULT, MAX_CONCURRENCY, PRINT_LOCK, load_users_config,
+                   run_concurrent)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -1232,17 +1234,20 @@ def check_round_loop(base_url, admin_session, fix=False):
         print("  PASS  — engine paused (round loop not expected to advance)")
         return _pass("round_loop", "engine paused")
 
-    cur_when = _rfc3339(eng.get("current_round_time"))
-    if cur_when is not None and cur_when.year <= 1:
-        cur_when = None  # the Go zero time — the loop is not cycling
-    started = _rfc3339((eng.get("last_round") or {}).get("StartTime"))
-    if started is None or cur_when is not None:
+    # The judgement itself lives in round_loop.py so the engine-side watchdog
+    # (tools/round_loop_guard.py) cannot drift from this gate — two definitions of "the
+    # loop is stopped" is precisely the failure mode this repo keeps paying for.
+    verdict = round_loop.round_loop_state(eng)
+    if verdict["state"] == round_loop.UNKNOWN:
+        print("  SKIP  — /api/engine did not answer a usable document")
+        return _skip("round_loop", "unexpected /api/engine payload")
+    if verdict["state"] == round_loop.ADVANCING:
         print("  PASS  — round loop advancing")
         return _pass("round_loop", "loop advancing")
-    age_min = (datetime.now(timezone.utc) - started).total_seconds() / 60
-    if age_min < (_FRESHNESS_ROUNDS * _ROUND_DELAY_SECONDS) / 60:
+    if verdict["state"] == round_loop.PENDING:
         print("  PASS  — round loop starting (first round pending within Delay)")
         return _pass("round_loop", "first round pending")
+    age_min = (verdict["age_seconds"] or 0) / 60
     print(f"  WARN  — round loop looks STOPPED: last round started {age_min:.0f} min ago "
           "and current_round_time is the zero time (engine rebooted? the loop does not "
           "self-resume)")
@@ -1305,6 +1310,42 @@ def _valid_domain_sid(sid):
     parts = (sid or "").split("-")
     return (len(parts) == 7 and sid.startswith("S-1-5-21-")
             and all(p.isdigit() for p in parts[3:]))
+
+
+def check_degradations(comp_dir):
+    """Surface the prerequisites that failed while the deploy continued anyway.
+
+    The deploy tolerates some failures on purpose (each site has its own reason), but
+    it records every one of them in `.deploy_state.json["degradations"]` — apt prep that
+    installed nothing, an auth ladder that failed on both transports, a box that never
+    settled, a node scan that never happened. Without this line those exist only as
+    WARNING text in a scrollback nobody reads, which is how a range can come up "green"
+    with every service down. Warning-level, not gating: the deploy did survive them, and
+    the plant-coverage/service gates are what decide whether the range actually works.
+    """
+    state_path = comp_dir / ".deploy_state.json"
+    try:
+        state = json.loads(state_path.read_text())
+    except (OSError, ValueError):
+        return _skip("degradations", "no readable .deploy_state.json", gating=False)
+    entries = state.get("degradations")
+    if entries is None:
+        print("  SKIP  — this deploy recorded no degradation ledger "
+              "(pre-dates the ledger, or state was rewritten).")
+        return _skip("degradations", "not recorded by this deploy", gating=False)
+    if not entries:
+        print("  PASS  — no tolerated failures recorded.")
+        return _pass("degradations", "none recorded")
+    seen = {}
+    for entry in entries:
+        seen[entry.get("what", "?")] = seen.get(entry.get("what", "?"), 0) + 1
+    detail = ", ".join(f"{what} x{count}" if count > 1 else what
+                       for what, count in sorted(seen.items()))
+    for entry in entries:
+        print(f"  WARN  — {entry.get('what')}: {str(entry.get('detail', ''))[:110]}")
+    print(f"  WARN  — {len(entries)} tolerated failure(s) recorded; see "
+          f".deploy_state.json['degradations']")
+    return _pass("degradations", f"{len(entries)} tolerated: {detail[:150]}")
 
 
 def check_domains(comp_dir, teams, boxes, ctx=None):
@@ -1882,6 +1923,8 @@ def main():
     if not _spent("plant_coverage"):
         coverage_result = check_plant_coverage(comp_dir)
         results.append(coverage_result)
+    print("\n  (Tolerated failures — prerequisites that failed while the deploy continued)")
+    results.append(check_degradations(comp_dir))
     print("\n  (AD domains — promotion, joins, AD plants, DomainSID uniqueness)")
     if not _spent("domains"):
         results.append(check_domains(comp_dir, teams, boxes, ctx=ctx))
