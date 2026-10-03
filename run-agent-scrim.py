@@ -958,13 +958,16 @@ Last LOG.md lines:
 {chr(10).join(scoring)}
 
 SCOREBOARD + INJECTS — Quotient allows ONE session per account, so NEVER log in
-directly (that kills the shared jar's session). Use the jar; if a call answers
-{{"error":"Forbidden"}}, run ./qlogin once and retry:
-  source ./scrim.env
-  curl -s -b "$JAR" http://$ENGINE_IP/api/services/$MY_TID | python3 -m json.tool
+directly (that kills the shared jar's session). Use the shipped helpers — they
+share the jar, re-login on rejection, and resolve the engine's INTERNAL team id
+themselves ($MY_TID is your SUBNET number; the services API rejects it with
+{{"error":"Forbidden"}} forever — live-found 2026-10-03, both teams flew blind
+on it):
+  ./score.py          # your team's services, scorer's-eye view (UP/DOWN per pin)
+  ./myscore           # same, one line per service
+  ./qlogin            # ONLY if a helper still answers Forbidden after one retry
+  ./submit-inject <injectId> submissions/sub-<injectId>.md   # submit BEFORE close time
   curl -s -b "$JAR" http://$ENGINE_IP/api/injects | python3 -c "import json,sys;[print(i['ID'],i['Title'],'due',i['DueTime'][11:16],'subs',len(i.get('Submissions') or [])) for i in json.load(sys.stdin)]"
-  mkdir -p submissions && echo "## deliverable" > submissions/sub-<injectId>.md \
-    && ./submit-inject <injectId> submissions/sub-<injectId>.md   # submit BEFORE close time
 
 CYCLE TASK — you have ~25 wall-clock minutes for this whole cycle; pace for it,
 update the notebook BEFORE acting (so an interrupted cycle still hands over context),
@@ -2052,16 +2055,28 @@ def teardown_red(args, env):
         # delete — but it is exactly the stale-config shape that lost red01, so say it.
         log(f"WARNING: config.yaml's deploy.red_vmid is {configured} but this run deployed "
             f"{args.red_vmid}; badauto destroy follows config.yaml")
-    proc = run(["python3", "-m", "badauto", "destroy", "--competition", args.competition,
-                "--yes"],
-               cwd=BAD_AUTO, env=env, timeout=900, check=False)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"badauto destroy failed (rc={proc.returncode}) — red01 and its engine NAT "
-            f"rules may still be up. Do not treat this run as torn down; fix and re-run "
-            f"`python3 -m badauto destroy --competition {args.competition} --yes` in "
-            f"{BAD_AUTO}, or destroy vmid {args.red_vmid} by hand and re-run "
-            f"destroy-competition.py.")
+    # One retry: the first attempt's rc=1 can be a transient Proxmox task/API hiccup,
+    # and the fail-loud raise below aborts the whole teardown mid-sequence (the range
+    # destroy never runs, and the harness dies leaving everything up — live-found
+    # 2026-10-03: the manual re-run succeeded in seconds). Identity guards live inside
+    # badauto, so a retry cannot widen what may be deleted.
+    proc = None
+    for attempt in (1, 2):
+        proc = run(["python3", "-m", "badauto", "destroy", "--competition",
+                    args.competition, "--yes"],
+                   cwd=BAD_AUTO, env=env, timeout=900, check=False)
+        if proc.returncode == 0:
+            break
+        if attempt == 1:
+            log(f"WARNING: badauto destroy rc={proc.returncode} on attempt 1 — "
+                f"retrying once before failing the teardown")
+        else:
+            raise RuntimeError(
+                f"badauto destroy failed (rc={proc.returncode}) — red01 and its engine NAT "
+                f"rules may still be up. Do not treat this run as torn down; fix and re-run "
+                f"`python3 -m badauto destroy --competition {args.competition} --yes` in "
+                f"{BAD_AUTO}, or destroy vmid {args.red_vmid} by hand and re-run "
+                f"destroy-competition.py.")
 
     vmid = args.red_vmid or configured
     still = _red_vm_still_exists(vmid)
@@ -2371,8 +2386,10 @@ def main():
     p.add_argument("--red-storage", default="hdd", help="storage pool red01 clones from")
     p.add_argument("--red-vmid", type=int, default=None,
                    help="red01 vmid when the cluster default collides (cyberfield used 999)")
-    p.add_argument("--red-template", default=None,
-                   help="red01 template name when it differs from the cluster default")
+    p.add_argument("--red-template", default=os.environ.get("TEZ_RED_TEMPLATE") or None,
+                   help="red01 template name when it differs from the cluster default "
+                        "(default: $TEZ_RED_TEMPLATE — bad-auto's built-in default is a "
+                        ".193 name; .150 wants base-ubuntu24.04-fix)")
     p.add_argument("--red-mode", choices=["routed", "masq"], default=None,
                    help="red's network identity: routed (bad-auto default) gives red01 a "
                         "dedicated segment and keeps its source IP visible end-to-end, so "

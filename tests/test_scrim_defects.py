@@ -860,12 +860,16 @@ class RedTeardownAssertion(unittest.TestCase):
     def _args(self, red_vmid=998):
         return SimpleNamespace(red_vmid=red_vmid, competition="c1")
 
-    def _run(self, rc=0, still=False, configured=998, red_vmid=998):
+    def _run(self, rc=0, still=False, configured=998, red_vmid=998, rcs=None):
         calls = []
+        # a plain rc fails EVERY attempt (the retry must not rescue a real failure);
+        # an explicit rcs list scripts attempt-by-attempt outcomes.
+        seq = list(rcs) if rcs is not None else None
 
         def fake_run(cmd, **kw):
             calls.append(cmd)
-            return SimpleNamespace(returncode=rc, stdout="", stderr="")
+            return SimpleNamespace(returncode=seq.pop(0) if seq else rc,
+                                   stdout="", stderr="")
 
         with mock.patch.object(scrim, "run", side_effect=fake_run), \
                 mock.patch.object(scrim, "log"), \
@@ -879,6 +883,13 @@ class RedTeardownAssertion(unittest.TestCase):
         calls = self._run()
         self.assertIn("destroy", calls[0])
         self.assertIn("c1", calls[0])
+
+    def test_transient_destroy_failure_is_retried_once(self):
+        # live-found 2026-10-03: attempt 1 rc=1 (transient Proxmox hiccup), the manual
+        # re-run succeeded in seconds — but the harness had already aborted the whole
+        # teardown, leaving the range up.
+        calls = self._run(rcs=[1, 0])
+        self.assertEqual(len(calls), 2, "exactly one retry")
 
     def test_surviving_red01_raises(self):
         # The soak's exact outcome: rc=0, VM still there.
