@@ -111,6 +111,21 @@
 		<rule>
 			<type>pass</type>
 			<ipprotocol>inet</ipprotocol>
+			<protocol>tcp</protocol>
+			<descr><![CDATA[Management SSH to the firewall itself (deploy probe)]]></descr>
+			<interface>wan</interface>
+			<tracker>0100000202</tracker>
+			<source>
+				<any></any>
+			</source>
+			<destination>
+				<address>172.31.141.2</address>
+				<port>22</port>
+			</destination>
+		</rule>
+		<rule>
+			<type>pass</type>
+			<ipprotocol>inet</ipprotocol>
 			<descr><![CDATA[Default allow LAN to any rule]]></descr>
 			<interface>lan</interface>
 			<tracker>0100000101</tracker>
