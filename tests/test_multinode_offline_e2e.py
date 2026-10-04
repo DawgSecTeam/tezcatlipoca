@@ -96,6 +96,7 @@ class MultinodeOfflineE2E(unittest.TestCase):
                "TF_VAR_proxmox_endpoint": "https://n1.lab:8006",
                "TF_VAR_proxmox_api_token": "u@pam!a=1", "TF_VAR_proxmox_node": "pve1",
                "TF_VAR_datastore": "ds1", "TF_VAR_template_vm_id": "955",
+               "TF_VAR_engine_mgmt_ip": "10.0.0.250",  # hermetic against a .env-loaded value
                "TF_VAR_ssh_private_key_path": str(self.root / "key")}
         p = patch.dict(os.environ, env)
         p.start()

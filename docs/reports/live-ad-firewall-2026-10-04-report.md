@@ -23,3 +23,8 @@ scoring vmid 1890 (1900 collides with team vmid 200+170*10 = 1900), engine mgmt 
 ## Left running
 Range pfsense-ad (engine 1890, goldens 2040+, team1 boxes 1900-1903, bridges vmbr170/vmbrW170) is still up pending approval to continue; teardown is
 `python3 destroy-competition.py --competition pfsense-ad --full --yes` from the worktree.
+
+## Update
+- tests/test_multinode_offline_e2e.py made hermetic (pins TF_VAR_engine_mgmt_ip in its env patch); full suite green.
+- The coordinator relayed user approval to re-run `--from-phase 4`; the permission classifier again denied the launch (Blind Apply),
+  since relayed approval is not the user's own message. Run still stopped before phase 5; range still up.
