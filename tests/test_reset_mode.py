@@ -477,6 +477,9 @@ class DomainMarkerCascadeTests(unittest.TestCase):
             remaining = [p.name for p in Path(tmp).glob(".nakon-domain-team1-*")]
             self.assertEqual(remaining, [])
             self.assertTrue(p_dom.called)
+            # A DC reset re-promoted a FRESH AD: the member's "already joined"
+            # self-report must be overridden or the trust is silently dead.
+            self.assertTrue(p_dom.call_args.kwargs.get("force_member_join"))
 
     def test_member_reset_does_not_touch_the_markers(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -490,12 +493,13 @@ class DomainMarkerCascadeTests(unittest.TestCase):
                  {"name": "ftp01", "template": "base-windows-server"}]))
             targets = [_target({"name": "ftp01", "template": "base-windows-server"}, 1501,
                                team="team2", identifier=102)]
-            with patch.object(redeploy.pipeline_api, "deploy_domain_configs"), \
+            with patch.object(redeploy.pipeline_api, "deploy_domain_configs") as p_dom, \
                  patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}):
                 redeploy.rerun_domain_configs(targets, CTX, Path(tmp),
                                               {"box_password": "pw"}, Path(tmp) / "cfg.json")
             remaining = [p.name for p in Path(tmp).glob(".nakon-domain-team1-*")]
             self.assertEqual(sorted(remaining), sorted(names))
+            self.assertFalse(p_dom.call_args.kwargs.get("force_member_join"))
 
 
 class FailedStepsTests(unittest.TestCase):

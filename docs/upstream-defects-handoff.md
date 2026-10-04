@@ -344,6 +344,29 @@ fails). Non-fatal is fine — silent is not.
 **Acceptance.** A deliberately failing install appears as a `FAILED` step with its rc in the TSV and
 in the driver's tally.
 
+## 10. `Domain Join` cannot re-join an already-joined member (nakon repo) — dead trust after a DC reset
+
+> **Status 2026-10-04:** OPEN. Live-found during the per-box-reset matrix
+> ([reset-live-test-2026-10-03-report.md](reports/reset-live-test-2026-10-03-report.md), F6).
+
+**Symptom.** After a team's DC is reset and re-promoted (redeploy rollback-base/rebuild, or the
+new `--mode reset` ladder), the member's machine account no longer exists in the fresh AD — but
+the member still self-reports "joined". The chain's `Domain Join` config then runs
+`Add-Computer`, which refuses: *"Cannot add computer to domain because it is already in that
+domain"* (rc=1). The member's trust is silently dead: domain-credential scoring against that
+member fails, and the driver-side skip/verify logic (which probes the member, not the DC) reads
+the state as healthy.
+
+**Required fix.** The `Domain Join` step needs a trust-repair branch when the target machine
+already believes it is in the target domain: `Test-ComputerSecureChannel -Repair` (covers a
+stale machine-account password) falling back to `Remove-Computer` → reboot → `Add-Computer`
+(covers a machine account that no longer exists on the DC — the actual post-reset case).
+
+**Acceptance.** On a range whose DC was re-promoted: forcing the domain chain re-run leaves a
+machine account for the member on the DC (`Get-ADComputer`), and domain-credential checks score
+again. Repro: reset-test 2026-10-04 — `Get-ADComputer` on the re-promoted DC listed only the DC
+itself while ftp01 self-reported joined.
+
 ---
 
 ## Definition of done

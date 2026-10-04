@@ -228,6 +228,7 @@ def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
             {team_key: teams[team_key]}, boxes, comp_dir, domain_config_path,
             Path(ctx["ssh_key_path"]), os.environ["TF_VAR_vm_username"],
             ctx["scoring_engine_ip"], box_password, promote_dc=dc_reset,
+            force_member_join=dc_reset,
         )
     return True
 

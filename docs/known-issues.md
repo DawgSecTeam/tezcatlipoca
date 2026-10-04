@@ -45,7 +45,10 @@ stack-level (config parsing, NSS, or module loading) in the account stage's boot
 Workaround: `redeploy --mode rebuild`, or never restart a planted box. Since 2026-10-03
 `redeploy --mode reset` recognizes the preauth signature in its post-rung health probe
 (`ssh_ops.classify_ssh_failure`) and escalates past it automatically — the `tz-base` replant
-rung lands on the pre-plant disk, and rebuild remains the last resort.
+rung lands on the pre-plant disk, and rebuild remains the last resort. **Live observation
+2026-10-03/04** (reset matrix, [reports/reset-live-test-2026-10-03-report.md](reports/reset-live-test-2026-10-03-report.md)):
+four stop/starts of planted boxes (db01 ×2, ftp01 ×2 through rollback/rebuild) all came back
+SSH-clean — the trap did not fire, and remains unreproducible by intent.
 
 Investigated 2026-09-29: the visible pin set does **not** reproduce it, and the standing lab
 (`tzlive-pamlab`, vmid 1181) was destroyed in the same cleanup — the incident is currently
@@ -53,6 +56,20 @@ unreproducible from the repo. **Next action:** commit the diagnostic kit as a sc
 (`tools/pam-bisect-lab.py`: plant rungs + `sshd2` on 2225 + `pam_exec` probe log) so the next
 occurrence can be bisected. Full evidence and the kit:
 [reports/pam-account-stage-after-restart-2026-09-24.md](reports/pam-account-stage-after-restart-2026-09-24.md).
+
+### Harness pre-T0 verify fails on packet gates for a stage_author-authored comp
+
+**Status: OPEN — found 2026-10-04, blocks the scrim harness pre-run, unrelated to resets.**
+`run-agent-scrim.py --new <id> --from-template competitions/cde-2026` authors a comp whose
+regenerated `packet.md` contains NONE of the packet profile's decoy accounts
+(scorebot/blackteam/red_scoring), and the harness's pre-T0 `verify-competition.py --packet`
+then FAILs `packet_creds` + `packet_accounts` ("missing on web01-team130: scorebot, blackteam,
+red_scoring") and aborts the run before the event window
+([reports/reset-live-test-2026-10-03-report.md](reports/reset-live-test-2026-10-03-report.md), F7 —
+range and red01 were deployed and healthy; teardown was done by hand). Either packet compile
+drops the decoys from the regenerated packet.md, or verify reads a different profile revision
+than compile planted. **Next action:** diff the profile's account set against
+`packet_ops`' compile output for an authored comp; fix whichever side drifted.
 
 ### Scoring round loop does not auto-resume after an engine reboot
 
