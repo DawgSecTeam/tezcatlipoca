@@ -21,6 +21,7 @@ from engine_ops import (ensure_nat_forwarding, prepare_engine_from_template,
 from nakon_ops import acquire_engine_lock, build_nakon_bundle, release_engine_lock
 from range_ops import (
     clone_marker,
+    delete_snapshot,
     describe_target,
     destroy_vm_if_exists,
     guest_agent_exec_root,
@@ -105,6 +106,18 @@ def select_targets(comp_dir, teams, boxes, args):
 
 
 
+def _is_golden_pipeline(state):
+    """True when the range's state carries golden templates (pipeline v2 or later —
+    v3 layered the firewall schema on top of v2's goldens, it did not replace them).
+    A missing version means a pre-golden range, whose only rebuild source is the
+    original box template. Live-found 2026-10-03: the reset matrix's rebuild rung
+    took the v1 path on a v3 range because these gates read `== 2`."""
+    try:
+        return int(state.get("pipeline_version") or 1) >= 2
+    except (TypeError, ValueError):
+        return False
+
+
 def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon_bundle):
     """Configure half: DNS, auth, scoped nakon (--only), service hardening."""
     key = Path(ctx["ssh_key_path"])
@@ -125,28 +138,34 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
     pipeline_api.ensure_nat_forwarding(ctx)
 
     machines = [t["machine"] for t in targets]
-    print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
-    # strict=False, mirroring deploy.py's phase-6 stance: these re-plants hit live
-    # boxes mid-event, and one flaky/broken pin must not abort a repair sweep.
-    nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
-    result = pipeline_api.run_nakon(
-        key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
-        only=machines,
-        timeout=max(2400, pipeline_api.PER_MACHINE_NAKON_BUDGET * len(machines)),
-        strict=False, jobs=nakon_jobs,
-    )
-    # Append, never replace: the deploy-time entries belong to verify's plant-integrity
-    # line, and a scoped mid-event replant must not retroactively declare the deploy's
-    # failed steps resolved — or erase the record that they ever existed.
-    state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
-        f"redeploy: {line}" for line in result.failed[:20]]
-    state_path = comp_dir / ".deploy_state.json"
-    if state_path.exists():
-        # Shared atomic writer (config_ops.write_state): 0600 at creation, temp+os.replace.
-        # Never hand-roll this — .deploy_state.json carries the only copy of the box
-        # passwords, so a torn write bricks resume AND redeploy at once (deploy.py's
-        # atomic-rename note; winad-testrun 2026-09-25).
-        write_state(state_path, state)
+    if nakon_bundle is None or nakon_config_path is None:
+        # prepare_nakon_assets returned no stage: every plant for this comp rides the
+        # golden clone, so there is nothing for nakon to re-apply. The python-side
+        # steps below (auth grant, DNS, service hardening) still re-run.
+        print("  (no nakon replant stage for this competition — skipping the plant pass)")
+    else:
+        print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
+        # strict=False, mirroring deploy.py's phase-6 stance: these re-plants hit live
+        # boxes mid-event, and one flaky/broken pin must not abort a repair sweep.
+        nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
+        result = pipeline_api.run_nakon(
+            key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
+            only=machines,
+            timeout=max(2400, pipeline_api.PER_MACHINE_NAKON_BUDGET * len(machines)),
+            strict=False, jobs=nakon_jobs,
+        )
+        # Append, never replace: the deploy-time entries belong to verify's plant-integrity
+        # line, and a scoped mid-event replant must not retroactively declare the deploy's
+        # failed steps resolved — or erase the record that they ever existed.
+        state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
+            f"redeploy: {line}" for line in result.failed[:20]]
+        state_path = comp_dir / ".deploy_state.json"
+        if state_path.exists():
+            # Shared atomic writer (config_ops.write_state): 0600 at creation, temp+os.replace.
+            # Never hand-roll this — .deploy_state.json carries the only copy of the box
+            # passwords, so a torn write bricks resume AND redeploy at once (deploy.py's
+            # atomic-rename note; winad-testrun 2026-09-25).
+            write_state(state_path, state)
 
     pipeline_api.fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=state.get("box_creds"))
 
@@ -194,15 +213,22 @@ def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
             for t in domain_targets
         )
         if dc_reset:
-            stale_marker = comp_dir / f".nakon-domain-{team_key}-adds.json"
-            if stale_marker.exists():
-                print(f"  Deleting stale ADDS marker for {team_key} — the DC was reset, so "
-                      "it must be re-promoted, not assumed promoted.")
-                stale_marker.unlink()
+            # A reset DC wipes the ENTIRE AD content: promotion state, the svc-support
+            # and packet accounts, the AD misconfigs, and every member's machine
+            # account. Each chain step keys on its own done-marker, so ALL of this
+            # team's domain markers are void (live-found 2026-10-03: deleting only the
+            # ADDS marker re-promoted the DC but skipped account re-creation —
+            # svc-support went missing and verify's domain gate failed).
+            for marker in sorted(comp_dir.glob(f".nakon-domain-{team_key}-*.json")):
+                print(f"  Deleting stale domain marker {marker.name} — the DC was reset, "
+                      f"so the whole domain chain (promotion, AD content, member joins) "
+                      f"must re-run.")
+                marker.unlink()
         pipeline_api.deploy_domain_configs(
             {team_key: teams[team_key]}, boxes, comp_dir, domain_config_path,
             Path(ctx["ssh_key_path"]), os.environ["TF_VAR_vm_username"],
             ctx["scoring_engine_ip"], box_password, promote_dc=dc_reset,
+            force_member_join=dc_reset,
         )
     return True
 
@@ -279,7 +305,20 @@ def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_pa
     for t in targets:
         print(f"  Rolling back {describe_target(t)} to '{snapshot}'...")
         try:
-            rollback_snapshot(t.get("node") or node, t["vmid"], snapshot)
+            tnode = t.get("node") or node
+            if snapshot == SNAP_BASE:
+                # PVE only rolls a disk back to its MOST RECENT snapshot (live-found
+                # 2026-10-03: "can't rollback, 'tz-base' is not most recent snapshot").
+                # tz-ready is always taken after tz-base, so reaching the pre-plant
+                # disk requires dropping the newer restore point first — the replant
+                # below re-takes it (and rebuild re-takes both), so nothing is lost
+                # that the ladder's own next steps don't recreate.
+                snaps = list_snapshots(tnode, t["vmid"])
+                if SNAP_READY in snaps:
+                    print(f"    dropping newer '{SNAP_READY}' (PVE rolls back only to the "
+                          f"most recent snapshot; it is re-taken after the replant)")
+                    delete_snapshot(tnode, t["vmid"], SNAP_READY)
+            rollback_snapshot(tnode, t["vmid"], snapshot)
             restored.append(t)
             print(f"    {t['vm_name']} restored")
         except Exception as e:
@@ -363,7 +402,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         full_clone = True
         src_vmid = None
         src_label = None
-        if state.get("pipeline_version") == 2:
+        if _is_golden_pipeline(state):
             # Multi-node: the box's golden is its own node's slot copy (state carries
             # per-slot ids); single-node keeps the flat map.
             by_slot = state.get("golden_ids_by_slot") or {}
@@ -465,7 +504,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         # satellites get team_box_sat1..4), so on a v2 range EVERY rebuilt box drifts from
         # state — the old team1-only note was pre-M3.3 truth. Fine mid-event; nobody runs a
         # full apply against a live range, but the next one will want to replace these.
-        if state.get("pipeline_version") == 2 or t["team_key"] == "team1":
+        if _is_golden_pipeline(state) or t["team_key"] == "team1":
             print(f"    NOTE: {t['vm_name']} is a Terraform-managed resource. It was recreated "
                   f"outside Terraform, so the next `terraform apply` will see drift and want to "
                   f"replace it. Fine mid-event; re-import or accept the replacement afterwards.")
@@ -551,15 +590,24 @@ def prepare_nakon_assets(comp_dir, state, teams, boxes, difficulty):
     a reset that settles at the tz-ready rung must not demand stage files it would
     never have used (a legacy comp with neither stage files nor box_password still
     gets its cheap rollback)."""
-    # Pipeline v2 (golden templates): repair re-plants run the POST-CLONE stage only —
+    # Pipeline v2+ (golden templates): repair re-plants run the POST-CLONE stage only —
     # the golden-stage installs ride the linked clone and re-running them over live
     # boxes mid-event is exactly what the stage split removed.
-    if state.get("pipeline_version") == 2:
+    if _is_golden_pipeline(state):
         postclone = comp_dir / ".nakon-postclone.json"
         if postclone.exists():
-            nakon_config_path = postclone
+            # A comp whose plants are ALL golden-stage (e.g. every cde-2026-style pin)
+            # has an empty postclone stage — live-found 2026-10-03: build_nakon_bundle
+            # refuses an empty machine list, so a legitimate no-replant must not try.
+            # Auth/DNS/service hardening below still re-runs; the probe judges health.
+            if json.loads(postclone.read_text()).get("machines"):
+                nakon_config_path = postclone
+            else:
+                print("  (postclone stage is empty — every plant rides the golden clone; "
+                      "nakon has nothing to re-plant. Auth/DNS/hardening still re-runs.)")
+                return None, None
         else:
-            print("  WARNING: pipeline v2 state but .nakon-postclone.json is missing — "
+            print("  WARNING: pipeline v2+ state but .nakon-postclone.json is missing — "
                   "regenerating the stage split from nakon-config.json")
             nakon_config_path = comp_dir / "nakon-config.json"
             if not nakon_config_path.exists():
@@ -573,7 +621,7 @@ def prepare_nakon_assets(comp_dir, state, teams, boxes, difficulty):
             nakon_config_path = postclone
     else:
         nakon_config_path = comp_dir / "nakon-config.json"
-    if not nakon_config_path.exists() and state.get("pipeline_version") != 2:
+    if not nakon_config_path.exists() and not _is_golden_pipeline(state):
         box_password = state.get("box_password")
         if not box_password:
             raise SystemExit(

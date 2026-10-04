@@ -195,6 +195,36 @@ class LadderTests(unittest.TestCase):
             self._run([T1], {T1["vmid"]: ["tz-base", "tz-ready"]}, verdicts)
 
 
+class RollbackOrderTests(unittest.TestCase):
+    """PVE rolls a disk back only to its MOST RECENT snapshot (live-found 2026-10-03:
+    "can't rollback, 'tz-base' is not most recent snapshot"). Reaching the pre-plant
+    tz-base disk requires dropping the newer tz-ready first."""
+
+    def _run(self, snapshot, snaps):
+        order = []
+        with patch.object(redeploy, "list_snapshots", return_value=set(snaps)), \
+             patch.object(redeploy, "delete_snapshot",
+                          side_effect=lambda *a: order.append(("delete", a[2]))), \
+             patch.object(redeploy, "rollback_snapshot",
+                          side_effect=lambda *a: order.append(("rollback", a[2]))), \
+             patch.object(redeploy.pipeline_api, "wait_for_boxes_ssh"):
+            redeploy.mode_rollback([T1], CTX, "pve", snapshot, Path("c"), {},
+                                   None, None, reconfigure=False)
+        return order
+
+    def test_base_rollback_deletes_newer_tz_ready_before_rolling_back(self):
+        order = self._run("tz-base", ["tz-base", "tz-ready"])
+        self.assertEqual(order, [("delete", "tz-ready"), ("rollback", "tz-base")])
+
+    def test_ready_rollback_touches_no_snapshots(self):
+        order = self._run("tz-ready", ["tz-base", "tz-ready"])
+        self.assertEqual(order, [("rollback", "tz-ready")])
+
+    def test_base_rollback_without_tz_ready_rolls_back_directly(self):
+        order = self._run("tz-base", ["tz-base"])
+        self.assertEqual(order, [("rollback", "tz-base")])
+
+
 class ProbeTests(unittest.TestCase):
 
     def setUp(self):
@@ -335,22 +365,43 @@ class RebuildStampingTests(unittest.TestCase):
 
     def test_clone_carries_the_marker_description_and_full_ownership_tags(self):
         t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
-        state = {"pipeline_version": 2, "box_password": "pw", "run_id": "run-beefcafe",
+        for version in (2, 3):
+            with self.subTest(pipeline_version=version):
+                state = {"pipeline_version": version, "box_password": "pw",
+                         "run_id": "run-beefcafe", "golden_template_ids": {"web01": 9150}}
+                calls, _out, comp_name = self._run_rebuild(t2, state)
+
+                clone = next(kw for m, p, kw in calls
+                             if m == "POST" and p.endswith("/clone"))
+                self.assertEqual(clone["data"]["description"], clone_marker(comp_name))
+
+                put = next(kw for m, p, kw in calls if m == "PUT" and p.endswith("/config"))
+                self.assertEqual(set(put["data"]["tags"].split(";")),
+                                 ownership_tags(comp_name, "run-beefcafe"))
+
+    def test_v3_range_rebuilds_from_its_golden_not_the_v1_template_path(self):
+        """Live-found 2026-10-03: pipeline v3 state sent mode_rebuild down the v1
+        template path, which then excluded the box template for equaling
+        TF_VAR_template_vm_id (engine base == box base on this env). v3 must ride
+        the golden path."""
+        t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
+        state = {"pipeline_version": 3, "box_password": "pw", "run_id": "run-beefcafe",
                  "golden_template_ids": {"web01": 9150}}
-        calls, _out, comp_name = self._run_rebuild(t2, state)
-
-        clone = next(kw for m, p, kw in calls
-                     if m == "POST" and p.endswith("/clone"))
-        self.assertEqual(clone["data"]["description"], clone_marker(comp_name))
-
-        put = next(kw for m, p, kw in calls if m == "PUT" and p.endswith("/config"))
-        self.assertEqual(set(put["data"]["tags"].split(";")),
-                         ownership_tags(comp_name, "run-beefcafe"))
+        calls, _out, _name = self._run_rebuild(t2, state)
+        clone = next((m, p, kw) for m, p, kw in calls if m == "POST" and p.endswith("/clone"))
+        self.assertEqual(clone[1].split("/")[4], "9150")  # cloned from the golden
 
     def test_v2_drift_note_fires_for_non_team1_boxes(self):
         """M3.3 made every team a terraform resource; the note must say so for team2+."""
         t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
         state = {"pipeline_version": 2, "box_password": "pw", "run_id": "run-beefcafe",
+                 "golden_template_ids": {"web01": 9150}}
+        _calls, out, _name = self._run_rebuild(t2, state)
+        self.assertIn("Terraform-managed resource", out)
+
+    def test_v3_drift_note_fires_for_non_team1_boxes(self):
+        t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
+        state = {"pipeline_version": 3, "box_password": "pw", "run_id": "run-beefcafe",
                  "golden_template_ids": {"web01": 9150}}
         _calls, out, _name = self._run_rebuild(t2, state)
         self.assertIn("Terraform-managed resource", out)
@@ -362,6 +413,93 @@ class RebuildStampingTests(unittest.TestCase):
         state = {"box_password": "pw"}
         _calls, out, _name = self._run_rebuild(t2, state)
         self.assertNotIn("Terraform-managed resource", out)
+
+
+class PrepareAssetsTests(unittest.TestCase):
+    """A comp whose plants are all golden-stage has an empty postclone stage —
+    live-found 2026-10-03: building a bundle from it crashed the whole replant."""
+
+    def test_empty_postclone_stage_yields_no_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = Path(tmp)
+            (comp / ".nakon-postclone.json").write_text(json.dumps({"machines": []}))
+            cfg, bundle = redeploy.prepare_nakon_assets(
+                comp, {"pipeline_version": 3}, {}, [], "easy")
+        self.assertIsNone(cfg)
+        self.assertIsNone(bundle)
+
+    def test_run_nakon_and_harden_skips_the_plant_pass_but_still_hardens(self):
+        ctx = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.9"}
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
+             patch.object(redeploy.pipeline_api, "setup_ubuntu_auth") as p_auth, \
+             patch.object(redeploy.pipeline_api, "fix_dns_on_boxes"), \
+             patch.object(redeploy.pipeline_api, "ensure_nat_forwarding"), \
+             patch.object(redeploy.pipeline_api, "run_nakon") as p_run, \
+             patch.object(redeploy.pipeline_api, "fix_services_on_boxes") as p_fix:
+            redeploy.run_nakon_and_harden([T1], ctx, Path(tmp), {}, None, None)
+        p_run.assert_not_called()
+        p_auth.assert_called_once()
+        p_fix.assert_called_once()
+
+
+class DomainMarkerCascadeTests(unittest.TestCase):
+    """A reset DC wipes the entire AD content — every done-marker of that team's
+    domain chain is void (live-found 2026-10-03: deleting only the ADDS marker left
+    svc-support missing and failed verify's domain gate)."""
+
+    def _markers(self, tmp, team="team1"):
+        names = [f".nakon-domain-{team}-adds.json",
+                 f".nakon-domain-{team}-ad-misconfigs.json",
+                 f".nakon-domain-{team}-ad-accounts.json",
+                 f".nakon-domain-{team}-ftp01-join.json"]
+        for n in names:
+            (Path(tmp) / n).write_text("{}")
+        return names
+
+    def test_dc_reset_cascades_all_team_domain_markers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            names = self._markers(tmp)
+            (Path(tmp) / "domain_roles.json").write_text(
+                json.dumps({"ad01": "dc", "ftp01": "member"}))
+            (Path(tmp) / "teams.json").write_text(
+                json.dumps({"team1": {"identifier": "130"}}))
+            (Path(tmp) / "boxes.json").write_text(json.dumps(
+                [{"name": "ad01", "template": "base-windows-server"},
+                 {"name": "ftp01", "template": "base-windows-server"}]))
+            with patch.object(redeploy.pipeline_api, "deploy_domain_configs") as p_dom, \
+                 patch.object(redeploy, "load_users_config", return_value=("ops", {})), \
+                 patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}):
+                settled = redeploy.rerun_domain_configs(
+                    [_target({"name": "ad01", "template": "base-windows-server"}, 1500)],
+                    CTX, Path(tmp), {"box_password": "pw"}, Path(tmp) / "cfg.json")
+            self.assertTrue(settled)
+            remaining = [p.name for p in Path(tmp).glob(".nakon-domain-team1-*")]
+            self.assertEqual(remaining, [])
+            self.assertTrue(p_dom.called)
+            # A DC reset re-promoted a FRESH AD: the member's "already joined"
+            # self-report must be overridden or the trust is silently dead.
+            self.assertTrue(p_dom.call_args.kwargs.get("force_member_join"))
+
+    def test_member_reset_does_not_touch_the_markers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            names = self._markers(tmp)
+            (Path(tmp) / "domain_roles.json").write_text(
+                json.dumps({"ad01": "dc", "ftp01": "member"}))
+            (Path(tmp) / "teams.json").write_text(json.dumps(
+                {"team1": {"identifier": "130"}, "team2": {"identifier": "102"}}))
+            (Path(tmp) / "boxes.json").write_text(json.dumps(
+                [{"name": "ad01", "template": "base-windows-server"},
+                 {"name": "ftp01", "template": "base-windows-server"}]))
+            targets = [_target({"name": "ftp01", "template": "base-windows-server"}, 1501,
+                               team="team2", identifier=102)]
+            with patch.object(redeploy.pipeline_api, "deploy_domain_configs") as p_dom, \
+                 patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}):
+                redeploy.rerun_domain_configs(targets, CTX, Path(tmp),
+                                              {"box_password": "pw"}, Path(tmp) / "cfg.json")
+            remaining = [p.name for p in Path(tmp).glob(".nakon-domain-team1-*")]
+            self.assertEqual(sorted(remaining), sorted(names))
+            self.assertFalse(p_dom.call_args.kwargs.get("force_member_join"))
 
 
 class FailedStepsTests(unittest.TestCase):
