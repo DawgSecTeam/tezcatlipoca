@@ -21,6 +21,7 @@ from engine_ops import (ensure_nat_forwarding, prepare_engine_from_template,
 from nakon_ops import acquire_engine_lock, build_nakon_bundle, release_engine_lock
 from range_ops import (
     clone_marker,
+    delete_snapshot,
     describe_target,
     destroy_vm_if_exists,
     guest_agent_exec_root,
@@ -103,6 +104,18 @@ def select_targets(comp_dir, teams, boxes, args):
 
     return targets
 
+
+
+def _is_golden_pipeline(state):
+    """True when the range's state carries golden templates (pipeline v2 or later —
+    v3 layered the firewall schema on top of v2's goldens, it did not replace them).
+    A missing version means a pre-golden range, whose only rebuild source is the
+    original box template. Live-found 2026-10-03: the reset matrix's rebuild rung
+    took the v1 path on a v3 range because these gates read `== 2`."""
+    try:
+        return int(state.get("pipeline_version") or 1) >= 2
+    except (TypeError, ValueError):
+        return False
 
 
 def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon_bundle):
@@ -279,7 +292,20 @@ def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_pa
     for t in targets:
         print(f"  Rolling back {describe_target(t)} to '{snapshot}'...")
         try:
-            rollback_snapshot(t.get("node") or node, t["vmid"], snapshot)
+            tnode = t.get("node") or node
+            if snapshot == SNAP_BASE:
+                # PVE only rolls a disk back to its MOST RECENT snapshot (live-found
+                # 2026-10-03: "can't rollback, 'tz-base' is not most recent snapshot").
+                # tz-ready is always taken after tz-base, so reaching the pre-plant
+                # disk requires dropping the newer restore point first — the replant
+                # below re-takes it (and rebuild re-takes both), so nothing is lost
+                # that the ladder's own next steps don't recreate.
+                snaps = list_snapshots(tnode, t["vmid"])
+                if SNAP_READY in snaps:
+                    print(f"    dropping newer '{SNAP_READY}' (PVE rolls back only to the "
+                          f"most recent snapshot; it is re-taken after the replant)")
+                    delete_snapshot(tnode, t["vmid"], SNAP_READY)
+            rollback_snapshot(tnode, t["vmid"], snapshot)
             restored.append(t)
             print(f"    {t['vm_name']} restored")
         except Exception as e:
@@ -363,7 +389,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         full_clone = True
         src_vmid = None
         src_label = None
-        if state.get("pipeline_version") == 2:
+        if _is_golden_pipeline(state):
             # Multi-node: the box's golden is its own node's slot copy (state carries
             # per-slot ids); single-node keeps the flat map.
             by_slot = state.get("golden_ids_by_slot") or {}
@@ -465,7 +491,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         # satellites get team_box_sat1..4), so on a v2 range EVERY rebuilt box drifts from
         # state — the old team1-only note was pre-M3.3 truth. Fine mid-event; nobody runs a
         # full apply against a live range, but the next one will want to replace these.
-        if state.get("pipeline_version") == 2 or t["team_key"] == "team1":
+        if _is_golden_pipeline(state) or t["team_key"] == "team1":
             print(f"    NOTE: {t['vm_name']} is a Terraform-managed resource. It was recreated "
                   f"outside Terraform, so the next `terraform apply` will see drift and want to "
                   f"replace it. Fine mid-event; re-import or accept the replacement afterwards.")
@@ -551,10 +577,10 @@ def prepare_nakon_assets(comp_dir, state, teams, boxes, difficulty):
     a reset that settles at the tz-ready rung must not demand stage files it would
     never have used (a legacy comp with neither stage files nor box_password still
     gets its cheap rollback)."""
-    # Pipeline v2 (golden templates): repair re-plants run the POST-CLONE stage only —
+    # Pipeline v2+ (golden templates): repair re-plants run the POST-CLONE stage only —
     # the golden-stage installs ride the linked clone and re-running them over live
     # boxes mid-event is exactly what the stage split removed.
-    if state.get("pipeline_version") == 2:
+    if _is_golden_pipeline(state):
         postclone = comp_dir / ".nakon-postclone.json"
         if postclone.exists():
             nakon_config_path = postclone
@@ -573,7 +599,7 @@ def prepare_nakon_assets(comp_dir, state, teams, boxes, difficulty):
             nakon_config_path = postclone
     else:
         nakon_config_path = comp_dir / "nakon-config.json"
-    if not nakon_config_path.exists() and state.get("pipeline_version") != 2:
+    if not nakon_config_path.exists() and not _is_golden_pipeline(state):
         box_password = state.get("box_password")
         if not box_password:
             raise SystemExit(

@@ -195,6 +195,36 @@ class LadderTests(unittest.TestCase):
             self._run([T1], {T1["vmid"]: ["tz-base", "tz-ready"]}, verdicts)
 
 
+class RollbackOrderTests(unittest.TestCase):
+    """PVE rolls a disk back only to its MOST RECENT snapshot (live-found 2026-10-03:
+    "can't rollback, 'tz-base' is not most recent snapshot"). Reaching the pre-plant
+    tz-base disk requires dropping the newer tz-ready first."""
+
+    def _run(self, snapshot, snaps):
+        order = []
+        with patch.object(redeploy, "list_snapshots", return_value=set(snaps)), \
+             patch.object(redeploy, "delete_snapshot",
+                          side_effect=lambda *a: order.append(("delete", a[2]))), \
+             patch.object(redeploy, "rollback_snapshot",
+                          side_effect=lambda *a: order.append(("rollback", a[2]))), \
+             patch.object(redeploy.pipeline_api, "wait_for_boxes_ssh"):
+            redeploy.mode_rollback([T1], CTX, "pve", snapshot, Path("c"), {},
+                                   None, None, reconfigure=False)
+        return order
+
+    def test_base_rollback_deletes_newer_tz_ready_before_rolling_back(self):
+        order = self._run("tz-base", ["tz-base", "tz-ready"])
+        self.assertEqual(order, [("delete", "tz-ready"), ("rollback", "tz-base")])
+
+    def test_ready_rollback_touches_no_snapshots(self):
+        order = self._run("tz-ready", ["tz-base", "tz-ready"])
+        self.assertEqual(order, [("rollback", "tz-ready")])
+
+    def test_base_rollback_without_tz_ready_rolls_back_directly(self):
+        order = self._run("tz-base", ["tz-base"])
+        self.assertEqual(order, [("rollback", "tz-base")])
+
+
 class ProbeTests(unittest.TestCase):
 
     def setUp(self):
@@ -335,22 +365,43 @@ class RebuildStampingTests(unittest.TestCase):
 
     def test_clone_carries_the_marker_description_and_full_ownership_tags(self):
         t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
-        state = {"pipeline_version": 2, "box_password": "pw", "run_id": "run-beefcafe",
+        for version in (2, 3):
+            with self.subTest(pipeline_version=version):
+                state = {"pipeline_version": version, "box_password": "pw",
+                         "run_id": "run-beefcafe", "golden_template_ids": {"web01": 9150}}
+                calls, _out, comp_name = self._run_rebuild(t2, state)
+
+                clone = next(kw for m, p, kw in calls
+                             if m == "POST" and p.endswith("/clone"))
+                self.assertEqual(clone["data"]["description"], clone_marker(comp_name))
+
+                put = next(kw for m, p, kw in calls if m == "PUT" and p.endswith("/config"))
+                self.assertEqual(set(put["data"]["tags"].split(";")),
+                                 ownership_tags(comp_name, "run-beefcafe"))
+
+    def test_v3_range_rebuilds_from_its_golden_not_the_v1_template_path(self):
+        """Live-found 2026-10-03: pipeline v3 state sent mode_rebuild down the v1
+        template path, which then excluded the box template for equaling
+        TF_VAR_template_vm_id (engine base == box base on this env). v3 must ride
+        the golden path."""
+        t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
+        state = {"pipeline_version": 3, "box_password": "pw", "run_id": "run-beefcafe",
                  "golden_template_ids": {"web01": 9150}}
-        calls, _out, comp_name = self._run_rebuild(t2, state)
-
-        clone = next(kw for m, p, kw in calls
-                     if m == "POST" and p.endswith("/clone"))
-        self.assertEqual(clone["data"]["description"], clone_marker(comp_name))
-
-        put = next(kw for m, p, kw in calls if m == "PUT" and p.endswith("/config"))
-        self.assertEqual(set(put["data"]["tags"].split(";")),
-                         ownership_tags(comp_name, "run-beefcafe"))
+        calls, _out, _name = self._run_rebuild(t2, state)
+        clone = next((m, p, kw) for m, p, kw in calls if m == "POST" and p.endswith("/clone"))
+        self.assertEqual(clone[1].split("/")[4], "9150")  # cloned from the golden
 
     def test_v2_drift_note_fires_for_non_team1_boxes(self):
         """M3.3 made every team a terraform resource; the note must say so for team2+."""
         t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
         state = {"pipeline_version": 2, "box_password": "pw", "run_id": "run-beefcafe",
+                 "golden_template_ids": {"web01": 9150}}
+        _calls, out, _name = self._run_rebuild(t2, state)
+        self.assertIn("Terraform-managed resource", out)
+
+    def test_v3_drift_note_fires_for_non_team1_boxes(self):
+        t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
+        state = {"pipeline_version": 3, "box_password": "pw", "run_id": "run-beefcafe",
                  "golden_template_ids": {"web01": 9150}}
         _calls, out, _name = self._run_rebuild(t2, state)
         self.assertIn("Terraform-managed resource", out)
