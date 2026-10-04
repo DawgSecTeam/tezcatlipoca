@@ -129,6 +129,21 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None):
 \t\t\t\t<network>lan</network>
 \t\t\t</destination>
 \t\t</rule>
+\t\t<rule>
+\t\t\t<type>pass</type>
+\t\t\t<ipprotocol>inet</ipprotocol>
+\t\t\t<protocol>tcp</protocol>
+\t\t\t<descr><![CDATA[Management SSH to the firewall itself (deploy probe)]]></descr>
+\t\t\t<interface>wan</interface>
+\t\t\t<tracker>0100000202</tracker>
+\t\t\t<source>
+\t\t\t\t<any></any>
+\t\t\t</source>
+\t\t\t<destination>
+\t\t\t\t<address>172.31.{tid}.2</address>
+\t\t\t\t<port>22</port>
+\t\t\t</destination>
+\t\t</rule>
 \t\t"""
     x = x.replace("\t\t<rule>", "\t\t" + wan_rule + "<rule>", 1)
 
@@ -228,44 +243,60 @@ def console_screenshot(node, vmid, out_path):
             f"?port={d['port']}&vncticket={quote(d['ticket'])}",
             header={"Authorization": auth["Authorization"]},
             sslopt={"cert_reqs": ssl.CERT_NONE}, timeout=60)
+        try:
+            return _rfb_frame(ws, d, out_path, Image, Cipher, algorithms, modes, struct)
+        finally:
+            # A leaked session breaks the NEXT screenshot (PVE caps concurrent VNC
+            # sessions per VM) — the close must happen on every path.
+            try:
+                ws.close()
+            except Exception:
+                pass
 
-        def rx(n):
-            buf = b""
-            while len(buf) < n:
-                chunk = ws.recv()
-                if not chunk:
-                    raise EOFError("websocket closed")
-                buf += chunk
-            return buf
-
-        rx(12)
-        ws.send_binary(b"RFB 003.003\n")
-        sectype = struct.unpack(">I", rx(4))[0]
-        if sectype == 2:
-            challenge = rx(16)
-            key = d["ticket"].encode()[:8].ljust(8, b"\x00")
-            des_key = bytes(int(f"{b:08b}"[::-1], 2) for b in key)
-            enc = Cipher(algorithms.TripleDES(des_key), modes.ECB()).encryptor()
-            ws.send_binary(enc.update(challenge) + enc.finalize())
-            if struct.unpack(">I", rx(4))[0] != 0:
-                raise OSError("VNC auth failed")
-        elif sectype != 1:
-            raise OSError(f"unsupported security type {sectype}")
-        ws.send_binary(b"\x01")
-        init = rx(24)
-        w, h = struct.unpack(">HH", init[:4])
-        pf = bytes([0, 0, 0, 0, 32, 24, 0, 0, 0, 0, 0, 0,
-                    255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0])
-        ws.send_binary(b"\x00" + pf)
-        ws.send_binary(b"\x02" + b"\x00" + struct.pack(">H", 1) + struct.pack(">i", 0))
-        ws.send_binary(b"\x03" + b"\x00" + struct.pack(">HHHH", 0, 0, w, h))
-        hdr = rx(16)
-        px = rx(struct.unpack(">I", hdr[12:16])[0])
-        Image.frombytes("RGBX", (w, h), px).convert("RGB").save(out_path)
-        ws.close()
-        return str(out_path)
     except Exception as e:  # noqa: BLE001 — diagnostics must never mask the real failure
         return f"(screenshot failed: {e})"
+
+
+def _rfb_frame(ws, d, out_path, Image, Cipher, algorithms, modes, struct):
+    """The RFB conversation over an open vncwebsocket; returns the saved path."""
+    def rx(n):
+        buf = b""
+        while len(buf) < n:
+            chunk = ws.recv()
+            if not chunk:
+                raise EOFError("websocket closed")
+            buf += chunk
+        return buf
+
+    # 3.3-style one-shot: PVE answers the banner `RFB 003.008` but, when the client
+    # offers 003.003, behaves 3.3-style (u32 chosen sectype). Its 3.8 type-list path
+    # does NOT complete over vncwebsocket (live-found 2026-10-04: choosing from the
+    # list hangs after the DES response; None is refused) — always offer 003.003.
+    rx(12)
+    ws.send_binary(b"RFB 003.003\n")
+    sectype = struct.unpack(">I", rx(4))[0]
+    if sectype == 2:
+        challenge = rx(16)
+        key = d["ticket"].encode()[:8].ljust(8, b"\x00")
+        des_key = bytes(int(f"{b:08b}"[::-1], 2) for b in key)
+        enc = Cipher(algorithms.TripleDES(des_key), modes.ECB()).encryptor()
+        ws.send_binary(enc.update(challenge) + enc.finalize())
+        if struct.unpack(">I", rx(4))[0] != 0:
+            raise OSError("VNC auth failed")
+    elif sectype != 1:
+        raise OSError(f"unsupported security type {sectype}")
+    ws.send_binary(b"\x01")
+    init = rx(24)
+    w, h = struct.unpack(">HH", init[:4])
+    pf = bytes([0, 0, 0, 0, 32, 24, 0, 0, 0, 0, 0, 0,
+                255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0])
+    ws.send_binary(b"\x00" + pf)
+    ws.send_binary(b"\x02" + b"\x00" + struct.pack(">H", 1) + struct.pack(">i", 0))
+    ws.send_binary(b"\x03" + b"\x00" + struct.pack(">HHHH", 0, 0, w, h))
+    hdr = rx(16)
+    px = rx(struct.unpack(">I", hdr[12:16])[0])
+    Image.frombytes("RGBX", (w, h), px).convert("RGB").save(out_path)
+    return str(out_path)
 
 
 def _probe_tcp(ssh_ctx, ip, port, timeout=4):

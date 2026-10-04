@@ -72,6 +72,11 @@ class TeamConfig(unittest.TestCase):
         # the pfsense-ad 2026-09-28 bug: <network> takes the `lan` keyword, never a CIDR
         self.assertIn("<network>lan</network>", out)
         self.assertNotIn("<network>192.168.120.0/24</network>", out)
+        # the success probe SSHes the FIREWALL ITSELF on the WAN — pfSense has no
+        # implicit management allowance on WAN, so a self-destination rule is required
+        # (live-found 2026-10-04: perfectly applied configs failed the probe for hours)
+        self.assertIn("<address>172.31.120.2</address>", out)
+        self.assertIn("Management SSH to the firewall itself", out)
         # the WAN pass rule must be filter's FIRST rule (before the nat block's rules)
         first_rule = out[out.index("<rule>"):out.index("</rule>")]
         self.assertIn("Allow engine scoring", first_rule)
