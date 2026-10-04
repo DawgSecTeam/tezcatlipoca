@@ -415,6 +415,34 @@ class RebuildStampingTests(unittest.TestCase):
         self.assertNotIn("Terraform-managed resource", out)
 
 
+class PrepareAssetsTests(unittest.TestCase):
+    """A comp whose plants are all golden-stage has an empty postclone stage —
+    live-found 2026-10-03: building a bundle from it crashed the whole replant."""
+
+    def test_empty_postclone_stage_yields_no_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = Path(tmp)
+            (comp / ".nakon-postclone.json").write_text(json.dumps({"machines": []}))
+            cfg, bundle = redeploy.prepare_nakon_assets(
+                comp, {"pipeline_version": 3}, {}, [], "easy")
+        self.assertIsNone(cfg)
+        self.assertIsNone(bundle)
+
+    def test_run_nakon_and_harden_skips_the_plant_pass_but_still_hardens(self):
+        ctx = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.9"}
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
+             patch.object(redeploy.pipeline_api, "setup_ubuntu_auth") as p_auth, \
+             patch.object(redeploy.pipeline_api, "fix_dns_on_boxes"), \
+             patch.object(redeploy.pipeline_api, "ensure_nat_forwarding"), \
+             patch.object(redeploy.pipeline_api, "run_nakon") as p_run, \
+             patch.object(redeploy.pipeline_api, "fix_services_on_boxes") as p_fix:
+            redeploy.run_nakon_and_harden([T1], ctx, Path(tmp), {}, None, None)
+        p_run.assert_not_called()
+        p_auth.assert_called_once()
+        p_fix.assert_called_once()
+
+
 class FailedStepsTests(unittest.TestCase):
     """nakon_failed_steps: append, never clobber."""
 

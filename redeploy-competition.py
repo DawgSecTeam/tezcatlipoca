@@ -138,28 +138,34 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
     pipeline_api.ensure_nat_forwarding(ctx)
 
     machines = [t["machine"] for t in targets]
-    print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
-    # strict=False, mirroring deploy.py's phase-6 stance: these re-plants hit live
-    # boxes mid-event, and one flaky/broken pin must not abort a repair sweep.
-    nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
-    result = pipeline_api.run_nakon(
-        key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
-        only=machines,
-        timeout=max(2400, pipeline_api.PER_MACHINE_NAKON_BUDGET * len(machines)),
-        strict=False, jobs=nakon_jobs,
-    )
-    # Append, never replace: the deploy-time entries belong to verify's plant-integrity
-    # line, and a scoped mid-event replant must not retroactively declare the deploy's
-    # failed steps resolved — or erase the record that they ever existed.
-    state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
-        f"redeploy: {line}" for line in result.failed[:20]]
-    state_path = comp_dir / ".deploy_state.json"
-    if state_path.exists():
-        # Shared atomic writer (config_ops.write_state): 0600 at creation, temp+os.replace.
-        # Never hand-roll this — .deploy_state.json carries the only copy of the box
-        # passwords, so a torn write bricks resume AND redeploy at once (deploy.py's
-        # atomic-rename note; winad-testrun 2026-09-25).
-        write_state(state_path, state)
+    if nakon_bundle is None or nakon_config_path is None:
+        # prepare_nakon_assets returned no stage: every plant for this comp rides the
+        # golden clone, so there is nothing for nakon to re-apply. The python-side
+        # steps below (auth grant, DNS, service hardening) still re-run.
+        print("  (no nakon replant stage for this competition — skipping the plant pass)")
+    else:
+        print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
+        # strict=False, mirroring deploy.py's phase-6 stance: these re-plants hit live
+        # boxes mid-event, and one flaky/broken pin must not abort a repair sweep.
+        nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
+        result = pipeline_api.run_nakon(
+            key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
+            only=machines,
+            timeout=max(2400, pipeline_api.PER_MACHINE_NAKON_BUDGET * len(machines)),
+            strict=False, jobs=nakon_jobs,
+        )
+        # Append, never replace: the deploy-time entries belong to verify's plant-integrity
+        # line, and a scoped mid-event replant must not retroactively declare the deploy's
+        # failed steps resolved — or erase the record that they ever existed.
+        state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
+            f"redeploy: {line}" for line in result.failed[:20]]
+        state_path = comp_dir / ".deploy_state.json"
+        if state_path.exists():
+            # Shared atomic writer (config_ops.write_state): 0600 at creation, temp+os.replace.
+            # Never hand-roll this — .deploy_state.json carries the only copy of the box
+            # passwords, so a torn write bricks resume AND redeploy at once (deploy.py's
+            # atomic-rename note; winad-testrun 2026-09-25).
+            write_state(state_path, state)
 
     pipeline_api.fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=state.get("box_creds"))
 
@@ -583,9 +589,18 @@ def prepare_nakon_assets(comp_dir, state, teams, boxes, difficulty):
     if _is_golden_pipeline(state):
         postclone = comp_dir / ".nakon-postclone.json"
         if postclone.exists():
-            nakon_config_path = postclone
+            # A comp whose plants are ALL golden-stage (e.g. every cde-2026-style pin)
+            # has an empty postclone stage — live-found 2026-10-03: build_nakon_bundle
+            # refuses an empty machine list, so a legitimate no-replant must not try.
+            # Auth/DNS/service hardening below still re-runs; the probe judges health.
+            if json.loads(postclone.read_text()).get("machines"):
+                nakon_config_path = postclone
+            else:
+                print("  (postclone stage is empty — every plant rides the golden clone; "
+                      "nakon has nothing to re-plant. Auth/DNS/hardening still re-runs.)")
+                return None, None
         else:
-            print("  WARNING: pipeline v2 state but .nakon-postclone.json is missing — "
+            print("  WARNING: pipeline v2+ state but .nakon-postclone.json is missing — "
                   "regenerating the stage split from nakon-config.json")
             nakon_config_path = comp_dir / "nakon-config.json"
             if not nakon_config_path.exists():
