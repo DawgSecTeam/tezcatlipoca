@@ -35,24 +35,34 @@ sys.path.insert(0, str(_REPO))
 import deploy  # noqa: E402
 import range_ops  # noqa: E402
 
-STATE_LINES = (
-    'proxmox_virtual_environment_vm.scoring_engine\n'
-    'proxmox_virtual_environment_vm.team_box["pve:221"]\n'
-    'proxmox_virtual_environment_vm.team_box["pve:222"]\n'
-    'proxmox_virtual_environment_vm.team_box_sat1["pve-150:225"]\n'
-    'null_resource.team_nics["pve:221"]\n'
-    'proxmox_network_linux_bridge.team_bridge["221"]\n'
-)
+STATE_RESOURCES = [
+    {"type": "proxmox_virtual_environment_vm", "name": "scoring_engine",
+     "instances": [{"attributes": {"id": "200", "vm_id": 200}}]},
+    {"type": "proxmox_virtual_environment_vm", "name": "team_box",
+     "instances": [{"attributes": {"id": "221", "vm_id": 221}},
+                   {"attributes": {"id": "222", "vm_id": 222}}]},
+    {"type": "proxmox_virtual_environment_vm", "name": "team_box_sat1",
+     "instances": [{"attributes": {"id": "225", "vm_id": 225}}]},
+    {"type": "null_resource", "name": "team_nics",
+     "instances": [{"attributes": {"id": "221"}}]},
+    {"type": "proxmox_network_linux_bridge", "name": "team_bridge",
+     "instances": [{"attributes": {"id": "221"}}]},
+]
+STATE_JSON = json.dumps({"version": 4, "serial": 14, "resources": STATE_RESOURCES})
+
+# The real team_box address keys are BOX NAMES, not vmids — the vmid lives in the
+# instance attributes (live-found 2026-10-03: an address-shape parser read a fully
+# built range as "no team boxes at all" and failed the phase-4 checkpoint).
 
 
-def _fake_terraform(tmp, stdout=STATE_LINES, returncode=0, stderr=""):
-    """A `terraform` shim on PATH that answers `state list` and nothing else."""
+def _fake_terraform(tmp, stdout=STATE_JSON, returncode=0, stderr=""):
+    """A `terraform` shim on PATH that answers `state pull` and nothing else."""
     bindir = Path(tmp) / "bin"
     bindir.mkdir(exist_ok=True)
     script = bindir / "terraform"
     script.write_text(
         "#!/bin/sh\n"
-        f"cat <<'EOF'\n{stdout}EOF\n"
+        f"cat <<'EOF'\n{stdout}\nEOF\n"
         f"echo {json.dumps(stderr)} >&2\n"
         f"exit {returncode}\n"
     )
@@ -61,22 +71,31 @@ def _fake_terraform(tmp, stdout=STATE_LINES, returncode=0, stderr=""):
 
 
 class TerraformStateReading(unittest.TestCase):
-    """`terraform state list` -> the vmids a completed phase actually created."""
+    """`terraform state pull` -> the vmids a completed phase actually created."""
 
     def _comp(self, tmp):
         comp = Path(tmp) / "competitions" / "c1"
         (comp / "terraform").mkdir(parents=True)
         return comp
 
-    def test_parses_only_vm_resources_and_keeps_satellite_boxes(self):
+    def test_parses_vm_attributes_and_keeps_satellite_boxes(self):
         with tempfile.TemporaryDirectory() as d:
             comp = self._comp(d)
             bindir = _fake_terraform(d)
             with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
                 vmids = range_ops.team_vmids_from_state(comp)
-        # The engine has no ["host:vmid"] key (its vm_id is a plain variable) and the
+        # The engine is read through state["scoring_vm_id"], not this parser, and the
         # null_resource/bridge entries must not be mistaken for machines.
         self.assertEqual(vmids, [221, 222, 225])
+
+    def test_team_box_without_vmid_attribute_is_skipped_not_fatal(self):
+        with tempfile.TemporaryDirectory() as d:
+            comp = self._comp(d)
+            resources = json.loads(json.dumps(STATE_RESOURCES))
+            resources[-3]["instances"][0]["attributes"] = {}  # sat1 lost its vm_id
+            bindir = _fake_terraform(d, stdout=json.dumps({"resources": resources}))
+            with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
+                self.assertEqual(range_ops.team_vmids_from_state(comp), [221, 222])
 
     def test_unreadable_state_raises_instead_of_reporting_nothing(self):
         # The distinction the whole gate rests on: "no machines" and "could not ask"
@@ -87,7 +106,16 @@ class TerraformStateReading(unittest.TestCase):
             with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
                 with self.assertRaises(RuntimeError) as raised:
                     range_ops.team_vmids_from_state(comp)
-        self.assertIn("state list", str(raised.exception))
+        self.assertIn("state pull", str(raised.exception))
+
+    def test_unparsable_state_raises_instead_of_reporting_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            comp = self._comp(d)
+            bindir = _fake_terraform(d, stdout="not json at all")
+            with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
+                with self.assertRaises(RuntimeError) as raised:
+                    range_ops.team_vmids_from_state(comp)
+        self.assertIn("unparsable", str(raised.exception))
 
     def test_missing_terraform_binary_raises(self):
         with tempfile.TemporaryDirectory() as d:
@@ -99,7 +127,7 @@ class TerraformStateReading(unittest.TestCase):
     def test_empty_state_is_an_empty_list_not_an_error(self):
         with tempfile.TemporaryDirectory() as d:
             comp = self._comp(d)
-            bindir = _fake_terraform(d, stdout="")
+            bindir = _fake_terraform(d, stdout="{}")
             with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
                 self.assertEqual(range_ops.team_vmids_from_state(comp), [])
 

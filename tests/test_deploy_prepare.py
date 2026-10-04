@@ -62,9 +62,29 @@ class EngineVmidResolution(unittest.TestCase):
         self.assertEqual(identity.engine_vmid, 1234)
 
     def test_fresh_run_without_a_flag_takes_the_default(self):
+        # isolated: importing deploy load_dotenvs the worktree's .env, whose
+        # TF_VAR_scoring_vm_id would otherwise masquerade as the default here
         with tempfile.TemporaryDirectory() as d:
-            identity = deploy.RunIdentity()
-            deploy._resolve_engine_vmid(identity, Path(d), 1, None)
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("TF_VAR_scoring_vm_id", None)
+                identity = deploy.RunIdentity()
+                deploy._resolve_engine_vmid(identity, Path(d), 1, None)
+        self.assertEqual(identity.engine_vmid, SCORING_ENGINE_VMID)
+
+    def test_fresh_run_without_a_flag_takes_the_env_vmid(self):
+        # TF_VAR_scoring_vm_id ships in every env variant; live-found 2026-10-03 it was
+        # silently ignored (the default 1000 was taken) until a second range collided.
+        with tempfile.TemporaryDirectory() as d:
+            with patch.dict(os.environ, {"TF_VAR_scoring_vm_id": "777"}):
+                identity = deploy.RunIdentity()
+                deploy._resolve_engine_vmid(identity, Path(d), 1, None)
+        self.assertEqual(identity.engine_vmid, 777)
+
+    def test_a_junk_env_vmid_falls_back_to_the_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            with patch.dict(os.environ, {"TF_VAR_scoring_vm_id": "not-a-number"}):
+                identity = deploy.RunIdentity()
+                deploy._resolve_engine_vmid(identity, Path(d), 1, None)
         self.assertEqual(identity.engine_vmid, SCORING_ENGINE_VMID)
 
     def test_resume_reads_the_vmid_from_state_not_the_flag(self):

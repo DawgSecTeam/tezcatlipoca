@@ -1,0 +1,65 @@
+{
+  "ad01": [
+    {
+      "name": "ADDS",
+      "display": "ldap",
+      "port": 389
+    },
+    {
+      "name": "score/tcp",
+      "score_only": true,
+      "check": "Tcp",
+      "display": "dns",
+      "port": 53
+    },
+    {
+      "name": "score/tcp",
+      "score_only": true,
+      "check": "Tcp",
+      "display": "smb",
+      "port": 445
+    }
+  ],
+  "ftp01": [
+    {
+      "name": "IIS FTP",
+      "plant_only": true
+    },
+    {
+      "name": "score/tcp",
+      "score_only": true,
+      "check": "Tcp",
+      "display": "ftp",
+      "port": 21
+    },
+    {
+      "name": "New SMB Share",
+      "display": "smb",
+      "port": 445
+    }
+  ],
+  "web01": [
+    {
+      "name": "apache",
+      "display": "http",
+      "port": 80
+    },
+    {
+      "name": "ssh",
+      "display": "ssh",
+      "port": 22
+    }
+  ],
+  "db01": [
+    {
+      "name": "mysql",
+      "display": "sql",
+      "port": 3306
+    },
+    {
+      "name": "ssh",
+      "display": "ssh",
+      "port": 22
+    }
+  ]
+}

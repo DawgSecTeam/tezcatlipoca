@@ -391,15 +391,24 @@ def stage_deploy(args, comp):
         cmd += ["--from-phase", str(args.resume)]
     r = run(cmd, cwd=REPO, timeout=6 * 3600, check=False)
     if r.returncode != 0 and args.run_dir:
-        (Path(args.run_dir) / "deploy.log").write_text(r.stdout or "")
+        # stderr too: the phase-4 checkpoint SystemExit and a phase-3 ssh timeout both
+        # printed ONLY to stderr, and a stdout-only deploy.log sent the post-mortem to
+        # the live estate for the answer (live-found 2026-10-03, twice).
+        (Path(args.run_dir) / "deploy.log").write_text(
+            (r.stdout or "") + "\n=== STDERR ===\n" + (r.stderr or ""))
     for line in (r.stdout or "").splitlines()[-15:]:
         print("   ", line)
     if r.returncode != 0:
         raise RuntimeError(f"deploy failed rc={r.returncode} (log above); fix and resume with --skip-deploy/--from-phase")
-    if "last_phase: 7" not in (r.stdout or "") and "Deploy complete" not in (r.stdout or ""):
+    # The pipeline's final phase number is the source of truth — hardcoded 7s went
+    # stale when firewalls became phase 5 and seed became phase 8 (live-found
+    # 2026-10-03: a completed deploy was rejected as "did not reach phase 7").
+    from deploy_phases import PHASES
+    final_phase = len(PHASES)
+    if f"last_phase: {final_phase}" not in (r.stdout or ""):
         state = json.loads((comp / ".deploy_state.json").read_text())
-        if state.get("last_phase") != 7:
-            raise RuntimeError("deploy did not reach phase 7")
+        if state.get("last_phase") != final_phase:
+            raise RuntimeError(f"deploy did not reach phase {final_phase}")
 
 
 def _web01_units(comp):
@@ -409,22 +418,38 @@ def _web01_units(comp):
     on the box (apache2 vs httpd across distros) by the caller. The old code
     hardcoded nginx, which doesn't exist on comps whose web box runs apache
     (cde-2026: Fedora httpd) — the fire test would stop a non-existent unit, see no
-    scoreboard change, and abort."""
+    scoreboard change, and abort.
+
+    scrims-one 2026-10-03: web01 pins ["ssh", "nginx"] — a port-less ssh pin took the
+    `or 80` default, tied with nginx on the sort, and won by order, so the test
+    stopped sshd while probing HTTP :80; the scoreboard never moved (nginx was still
+    serving) and the run aborted pre-T0. So: a pin is httpish from its display, an
+    explicit :80, or a well-known web NAME; a non-http pin gets no default port; the
+    ssh unit is only ever a last resort — stopping it severs the operator's own path
+    to the box and proves nothing about the scored web service."""
     pins = json.loads((comp / "box_services.json").read_text()).get("web01", [])
     candidates = []
     for pin in pins:
         if isinstance(pin, str):
             pin = {"name": pin}
-        mapped = _WATCHDOG_UNITS.get(pin.get("name", ""), [])
+        name = pin.get("name", "")
+        mapped = _WATCHDOG_UNITS.get(name, [])
         if not mapped:
             continue
-        httpish = pin.get("port") == 80 or pin.get("display") in ("http", "https")
-        candidates.append((httpish, pin.get("port") or 80, mapped))
+        httpish = (pin.get("port") == 80 or pin.get("display") in ("http", "https")
+                   or name in ("nginx", "apache", "httpd", "iis"))
+        port = pin.get("port") or (80 if httpish else None)
+        if port is None:
+            continue
+        display = pin.get("display") or _WATCHDOG_DISPLAY.get(name) or name
+        candidates.append((httpish, name in ("ssh", "openssh", "sshd"), port, mapped,
+                           display))
     if not candidates:
         raise SystemExit("  ERROR: no serviceable web01 unit for the fire test — "
                          "web01 pins in box_services.json map to nothing in _WATCHDOG_UNITS")
-    candidates.sort(key=lambda c: (not c[0], c[1]))
-    return candidates[0][2], candidates[0][1]
+    # httpish first, then anything-but-sshd, then lowest port
+    candidates.sort(key=lambda c: (not c[0], c[1], c[2]))
+    return candidates[0][3], candidates[0][2], candidates[0][4]
 
 
 def scorch_script(comp):
@@ -462,6 +487,15 @@ def scorch_script(comp):
              'ENGINE_RUN="ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no '
              '-o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$VM_USER@$ENGINE_IP""',
              'echo "== scored-check oracle (engine vantage) — team $MY_TEAM =="']
+    if not (http_specs or port_specs or ssh_specs):
+        # Catalog-name pins ("apache") carry no port metadata, so no engine-vantage
+        # probe can be derived — scrim-fresh-a 2026-10-03 printed the header and
+        # nothing else, and blue read the silence as "scorch is broken". Fall back to
+        # the scorer's own view so the oracle always says SOMETHING actionable.
+        lines.append('echo "(this comp\'s pins carry no ports, so there is no independent')
+        lines.append(' engine-vantage probe — showing the scorer\'s own view instead)"')
+        lines.append('exec ./score.py')
+        return "\n".join(lines) + "\n"
     if http_specs:
         lines.append("for spec in " + " ".join(f'"{x}"' for x in http_specs) + "; do")
         lines.append('  IFS="|" read -r box ip port <<<"$spec"')
@@ -507,7 +541,7 @@ def comp_world(comp):
         if key in ("name", "scenario"):
             meta[key] = value.strip()
     try:
-        units, _ = _web01_units(comp)
+        units, _port, _display = _web01_units(comp)
     except SystemExit:
         units = None
     return {"name": meta.get("name", ""), "scenario": meta.get("scenario", ""),
@@ -555,7 +589,7 @@ def stage_verify(args, comp, creds):
     web_ip = (json.loads((comp / "targets.json").read_text()).get("targets", {})
               .get("team1-web01", {}).get("ip"))
     web_ip = web_ip or f"192.168.{creds['TEAM1_ID']}.4"
-    units, svc_port = _web01_units(comp)
+    units, svc_port, svc_display = _web01_units(comp)
 
     def ssh_web01(cmd, timeout=60):
         return run_tree(base + [f"{creds['BOX_USER']}@{web_ip}", cmd],
@@ -596,13 +630,18 @@ def stage_verify(args, comp, creds):
 
     def scoreboard_down():
         """(down, err): down=True/False; err set when the scoreboard itself is unreadable.
-        Watches only the fired service's row: other scored services may legitimately
-        start down (planted broken services blue must restore), which would make the
-        any-service gate structurally unpassable on lineups with one (17b's
-        app01-dns/db01-sql sit down at T0 on the current template bases)."""
+        Watches the FIRED service's row (<box>-<display>) — other scored services may
+        legitimately start down (planted broken services blue must restore), and even a
+        sibling web01 row can be down (scrim-one 2026-10-03: the stale web01-ssh row
+        from an aborted attempt answered "down" for a nginx stop and then refused every
+        nginx restore). Falls back to the first web01 row only when the expected name
+        is not registered at all."""
         try:
             rows = parsed_status(creds, "team1")
-            fired = next((s for s in rows if s["service"].startswith("web01")), None)
+            wanted = f"web01-{svc_display}"
+            fired = next((s for s in rows if s["service"] == wanted), None)
+            if fired is None:
+                fired = next((s for s in rows if s["service"].startswith("web01")), None)
             if fired is None:
                 fired = rows[0]
             return not fired["up"], None
@@ -610,9 +649,22 @@ def stage_verify(args, comp, creds):
             return None, f"{type(e).__name__}: {e}"
 
     sudo_web01(f"systemctl stop {shlex.quote(unit)}")
-    time.sleep(150)
-    down, down_err = scoreboard_down()
-    http_down = web01_http()
+    # The scoreboard lags reality: a round that started before the stop lands its
+    # result late, and Quotient's per-round cadence means "the latest completed round"
+    # can trail the actual service by a minute or two (scrim-one 2026-10-03: the probe
+    # read 000 while the scoreboard still said UP at +150s, and the run aborted on a
+    # service that was demonstrably down). Poll until BOTH vantages agree the service
+    # is down, within a deadline — the engine-path probe is the fast truth, the
+    # scoreboard is the one that must eventually agree.
+    down = down_err = None
+    http_down = ""
+    deadline = time.time() + 360
+    while time.time() < deadline:
+        time.sleep(30)
+        down, down_err = scoreboard_down()
+        http_down = web01_http()
+        if down is True and http_down in ("", "000"):
+            break
     log(f"fire test: after stop — scoreboard down={down}"
         + (f" ({down_err})" if down_err else "")
         + f", web01 http={http_down or 'no answer'}")
@@ -622,9 +674,17 @@ def stage_verify(args, comp, creds):
         # unmask first: run-12 left the unit unstartable and a plain start was a no-op
         sudo_web01(f"systemctl unmask {shlex.quote(unit)}; "
                    f"systemctl start {shlex.quote(unit)}")
-        time.sleep(150 if attempt == 1 else 60)
-        up, up_err = scoreboard_down()
-        http_up = web01_http()
+        # same scoreboard-lag deal as the stop phase: poll for agreement, don't sleep
+        # a fixed slice and read one stale round
+        up = up_err = None
+        http_up = ""
+        deadline = time.time() + (240 if attempt == 1 else 120)
+        while time.time() < deadline:
+            time.sleep(30)
+            up, up_err = scoreboard_down()
+            http_up = web01_http()
+            if up is False and http_up not in ("", "000"):
+                break
         restored = up is False
         healed = restored and http_up not in ("", "000")
         log(f"fire test: restore attempt {attempt} — scoreboard "
@@ -953,13 +1013,16 @@ Last LOG.md lines:
 {chr(10).join(scoring)}
 
 SCOREBOARD + INJECTS — Quotient allows ONE session per account, so NEVER log in
-directly (that kills the shared jar's session). Use the jar; if a call answers
-{{"error":"Forbidden"}}, run ./qlogin once and retry:
-  source ./scrim.env
-  curl -s -b "$JAR" http://$ENGINE_IP/api/services/$MY_TID | python3 -m json.tool
+directly (that kills the shared jar's session). Use the shipped helpers — they
+share the jar, re-login on rejection, and resolve the engine's INTERNAL team id
+themselves ($MY_TID is your SUBNET number; the services API rejects it with
+{{"error":"Forbidden"}} forever — live-found 2026-10-03, both teams flew blind
+on it):
+  ./score.py          # your team's services, scorer's-eye view (UP/DOWN per pin)
+  ./myscore           # same, one line per service
+  ./qlogin            # ONLY if a helper still answers Forbidden after one retry
+  ./submit-inject <injectId> submissions/sub-<injectId>.md   # submit BEFORE close time
   curl -s -b "$JAR" http://$ENGINE_IP/api/injects | python3 -c "import json,sys;[print(i['ID'],i['Title'],'due',i['DueTime'][11:16],'subs',len(i.get('Submissions') or [])) for i in json.load(sys.stdin)]"
-  mkdir -p submissions && echo "## deliverable" > submissions/sub-<injectId>.md \
-    && ./submit-inject <injectId> submissions/sub-<injectId>.md   # submit BEFORE close time
 
 CYCLE TASK — you have ~25 wall-clock minutes for this whole cycle; pace for it,
 update the notebook BEFORE acting (so an interrupted cycle still hands over context),
@@ -1302,6 +1365,17 @@ _WATCHDOG_UNITS = {
     "postfix": ["postfix"], "dovecot": ["dovecot"], "vsftpd": ["vsftpd"],
     "ssh": ["ssh", "sshd"], "openssh": ["ssh", "sshd"], "sshd": ["ssh", "sshd"],
     "splunk": ["Splunkd"], "exim4": ["exim4"], "exim": ["exim4"], "sendmail": ["sendmail"],
+}
+# The scoreboard service name a catalog pin registers as (<box>-<Display>): the fire
+# test watches its own row, and "first row starting with web01" is web01-ssh on any
+# comp whose web01 carries an ssh pin — scrim-one 2026-10-03 "detected down" from a
+# stale ssh outage and then failed to restore the nginx service it never watched.
+_WATCHDOG_DISPLAY = {
+    "nginx": "http", "apache": "http", "httpd": "http", "iis": "http",
+    "bind": "dns", "named": "dns", "mysql": "sql", "mariadb": "sql", "mysqld": "sql",
+    "postfix": "smtp", "exim4": "smtp", "exim": "smtp", "sendmail": "smtp",
+    "dovecot": "imap", "vsftpd": "ftp", "ssh": "ssh", "openssh": "ssh", "sshd": "ssh",
+    "splunk": "splunk",
 }
 WATCHDOG_INTERVAL = 60
 
@@ -2047,16 +2121,30 @@ def teardown_red(args, env):
         # delete — but it is exactly the stale-config shape that lost red01, so say it.
         log(f"WARNING: config.yaml's deploy.red_vmid is {configured} but this run deployed "
             f"{args.red_vmid}; badauto destroy follows config.yaml")
-    proc = run(["python3", "-m", "badauto", "destroy", "--competition", args.competition,
-                "--yes"],
-               cwd=BAD_AUTO, env=env, timeout=900, check=False)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"badauto destroy failed (rc={proc.returncode}) — red01 and its engine NAT "
-            f"rules may still be up. Do not treat this run as torn down; fix and re-run "
-            f"`python3 -m badauto destroy --competition {args.competition} --yes` in "
-            f"{BAD_AUTO}, or destroy vmid {args.red_vmid} by hand and re-run "
-            f"destroy-competition.py.")
+    # One retry: the first attempt's rc=1 can be a transient Proxmox task/API hiccup,
+    # and the fail-loud raise below aborts the whole teardown mid-sequence (the range
+    # destroy never runs, and the harness dies leaving everything up — live-found
+    # 2026-10-03: the manual re-run succeeded in seconds). Identity guards live inside
+    # badauto, so a retry cannot widen what may be deleted.
+    proc = None
+    for attempt in (1, 2):
+        proc = run(["python3", "-m", "badauto", "destroy", "--competition",
+                    args.competition, "--yes"],
+                   cwd=BAD_AUTO, env=env, timeout=900, check=False)
+        if proc.returncode == 0:
+            break
+        if attempt == 1:
+            log(f"WARNING: badauto destroy rc={proc.returncode} on attempt 1 — "
+                f"retrying once before failing the teardown"
+                + (f"; stderr: {(proc.stderr or '')[-300:]}" if proc.stderr else ""))
+        else:
+            raise RuntimeError(
+                f"badauto destroy failed (rc={proc.returncode}) — red01 and its engine NAT "
+                f"rules may still be up. stderr tail: {(proc.stderr or '(captured nothing)')[-500:]}. "
+                f"Do not treat this run as torn down; fix and re-run "
+                f"`python3 -m badauto destroy --competition {args.competition} --yes` in "
+                f"{BAD_AUTO}, or destroy vmid {args.red_vmid} by hand and re-run "
+                f"destroy-competition.py.")
 
     vmid = args.red_vmid or configured
     still = _red_vm_still_exists(vmid)
@@ -2366,8 +2454,10 @@ def main():
     p.add_argument("--red-storage", default="hdd", help="storage pool red01 clones from")
     p.add_argument("--red-vmid", type=int, default=None,
                    help="red01 vmid when the cluster default collides (cyberfield used 999)")
-    p.add_argument("--red-template", default=None,
-                   help="red01 template name when it differs from the cluster default")
+    p.add_argument("--red-template", default=os.environ.get("TEZ_RED_TEMPLATE") or None,
+                   help="red01 template name when it differs from the cluster default "
+                        "(default: $TEZ_RED_TEMPLATE — bad-auto's built-in default is a "
+                        ".193 name; .150 wants base-ubuntu24.04-fix)")
     p.add_argument("--red-mode", choices=["routed", "masq"], default=None,
                    help="red's network identity: routed (bad-auto default) gives red01 a "
                         "dedicated segment and keeps its source IP visible end-to-end, so "

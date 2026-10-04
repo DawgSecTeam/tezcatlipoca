@@ -1435,7 +1435,18 @@ def _resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid):
         except (ValueError, json.JSONDecodeError):
             identity.engine_vmid = SCORING_ENGINE_VMID
     else:
-        identity.engine_vmid = int(scoring_vmid) if scoring_vmid is not None else SCORING_ENGINE_VMID
+        # flag wins, then TF_VAR_scoring_vm_id from the environment (env variants ship
+        # it; live-found 2026-10-03 it was silently ignored and the default 1000 was
+        # taken instead — invisible until a second range on the node collided),
+        # then the built-in default.
+        if scoring_vmid is not None:
+            identity.engine_vmid = int(scoring_vmid)
+        else:
+            try:
+                identity.engine_vmid = int(os.environ.get("TF_VAR_scoring_vm_id")
+                                           or SCORING_ENGINE_VMID)
+            except ValueError:
+                identity.engine_vmid = SCORING_ENGINE_VMID
 
 
 def _load_competition_spec(spec, comp_dir):

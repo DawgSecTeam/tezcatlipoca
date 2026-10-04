@@ -711,6 +711,9 @@ class PrepareTfvarsAssembly(unittest.TestCase):
         "TF_VAR_proxmox_endpoint": "https://pve:8006/",
         # explicit "" is the documented DHCP switch; the static default is skipped
         "TF_VAR_engine_mgmt_ip": "",
+        # the operator's .env (load_dotenv'd at import) must not choose the vmid here —
+        # this class pins the no-flag default
+        "TF_VAR_scoring_vm_id": "",
     }
 
     def _prepare(self, comp_dir, captured):

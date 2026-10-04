@@ -7,6 +7,7 @@ import os
 import re
 import shlex
 import sys
+import time
 from pathlib import Path
 
 import urllib3
@@ -19,22 +20,26 @@ from engine_ops import (ensure_nat_forwarding, prepare_engine_from_template,
                         push_event_conf, read_event_conf)
 from nakon_ops import acquire_engine_lock, build_nakon_bundle, release_engine_lock
 from range_ops import (
+    clone_marker,
+    delete_snapshot,
     describe_target,
     destroy_vm_if_exists,
     guest_agent_exec_root,
     guest_agent_exec_windows,
     list_snapshots,
     load_targets,
+    parse_vm_tags,
     proxmox_api,
     rollback_snapshot,
     snapshot_support_hint,
     start_vm,
     take_snapshot,
+    wait_for_guest_agent,
     wait_for_proxmox_task,
 )
 from template_ops import stored_template_hash
 from timing import timed
-from ssh_ops import forget_engine_host_key, wait_for_ssh
+from ssh_ops import classify_ssh_failure, forget_engine_host_key, ssh_to_engine, wait_for_ssh
 from utils import (compfile_flag, load_compfile, load_users_config, pick_competition,
                    run_terraform, valid_comp_name)
 
@@ -101,6 +106,18 @@ def select_targets(comp_dir, teams, boxes, args):
 
 
 
+def _is_golden_pipeline(state):
+    """True when the range's state carries golden templates (pipeline v2 or later —
+    v3 layered the firewall schema on top of v2's goldens, it did not replace them).
+    A missing version means a pre-golden range, whose only rebuild source is the
+    original box template. Live-found 2026-10-03: the reset matrix's rebuild rung
+    took the v1 path on a v3 range because these gates read `== 2`."""
+    try:
+        return int(state.get("pipeline_version") or 1) >= 2
+    except (TypeError, ValueError):
+        return False
+
+
 def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon_bundle):
     """Configure half: DNS, auth, scoped nakon (--only), service hardening."""
     key = Path(ctx["ssh_key_path"])
@@ -121,24 +138,34 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
     pipeline_api.ensure_nat_forwarding(ctx)
 
     machines = [t["machine"] for t in targets]
-    print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
-    # strict=False, mirroring deploy.py's phase-6 stance: these re-plants hit live
-    # boxes mid-event, and one flaky/broken pin must not abort a repair sweep.
-    nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
-    result = pipeline_api.run_nakon(
-        key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
-        only=machines,
-        timeout=max(2400, pipeline_api.PER_MACHINE_NAKON_BUDGET * len(machines)),
-        strict=False, jobs=nakon_jobs,
-    )
-    state["nakon_failed_steps"] = [f"redeploy: {line}" for line in result.failed[:20]]
-    state_path = comp_dir / ".deploy_state.json"
-    if state_path.exists():
-        # Shared atomic writer (config_ops.write_state): 0600 at creation, temp+os.replace.
-        # Never hand-roll this — .deploy_state.json carries the only copy of the box
-        # passwords, so a torn write bricks resume AND redeploy at once (deploy.py's
-        # atomic-rename note; winad-testrun 2026-09-25).
-        write_state(state_path, state)
+    if nakon_bundle is None or nakon_config_path is None:
+        # prepare_nakon_assets returned no stage: every plant for this comp rides the
+        # golden clone, so there is nothing for nakon to re-apply. The python-side
+        # steps below (auth grant, DNS, service hardening) still re-run.
+        print("  (no nakon replant stage for this competition — skipping the plant pass)")
+    else:
+        print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
+        # strict=False, mirroring deploy.py's phase-6 stance: these re-plants hit live
+        # boxes mid-event, and one flaky/broken pin must not abort a repair sweep.
+        nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
+        result = pipeline_api.run_nakon(
+            key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
+            only=machines,
+            timeout=max(2400, pipeline_api.PER_MACHINE_NAKON_BUDGET * len(machines)),
+            strict=False, jobs=nakon_jobs,
+        )
+        # Append, never replace: the deploy-time entries belong to verify's plant-integrity
+        # line, and a scoped mid-event replant must not retroactively declare the deploy's
+        # failed steps resolved — or erase the record that they ever existed.
+        state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
+            f"redeploy: {line}" for line in result.failed[:20]]
+        state_path = comp_dir / ".deploy_state.json"
+        if state_path.exists():
+            # Shared atomic writer (config_ops.write_state): 0600 at creation, temp+os.replace.
+            # Never hand-roll this — .deploy_state.json carries the only copy of the box
+            # passwords, so a torn write bricks resume AND redeploy at once (deploy.py's
+            # atomic-rename note; winad-testrun 2026-09-25).
+            write_state(state_path, state)
 
     pipeline_api.fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=state.get("box_creds"))
 
@@ -186,15 +213,22 @@ def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
             for t in domain_targets
         )
         if dc_reset:
-            stale_marker = comp_dir / f".nakon-domain-{team_key}-adds.json"
-            if stale_marker.exists():
-                print(f"  Deleting stale ADDS marker for {team_key} — the DC was reset, so "
-                      "it must be re-promoted, not assumed promoted.")
-                stale_marker.unlink()
+            # A reset DC wipes the ENTIRE AD content: promotion state, the svc-support
+            # and packet accounts, the AD misconfigs, and every member's machine
+            # account. Each chain step keys on its own done-marker, so ALL of this
+            # team's domain markers are void (live-found 2026-10-03: deleting only the
+            # ADDS marker re-promoted the DC but skipped account re-creation —
+            # svc-support went missing and verify's domain gate failed).
+            for marker in sorted(comp_dir.glob(f".nakon-domain-{team_key}-*.json")):
+                print(f"  Deleting stale domain marker {marker.name} — the DC was reset, "
+                      f"so the whole domain chain (promotion, AD content, member joins) "
+                      f"must re-run.")
+                marker.unlink()
         pipeline_api.deploy_domain_configs(
             {team_key: teams[team_key]}, boxes, comp_dir, domain_config_path,
             Path(ctx["ssh_key_path"]), os.environ["TF_VAR_vm_username"],
             ctx["scoring_engine_ip"], box_password, promote_dc=dc_reset,
+            force_member_join=dc_reset,
         )
     return True
 
@@ -271,7 +305,20 @@ def mode_rollback(targets, ctx, node, snapshot, comp_dir, state, nakon_config_pa
     for t in targets:
         print(f"  Rolling back {describe_target(t)} to '{snapshot}'...")
         try:
-            rollback_snapshot(t.get("node") or node, t["vmid"], snapshot)
+            tnode = t.get("node") or node
+            if snapshot == SNAP_BASE:
+                # PVE only rolls a disk back to its MOST RECENT snapshot (live-found
+                # 2026-10-03: "can't rollback, 'tz-base' is not most recent snapshot").
+                # tz-ready is always taken after tz-base, so reaching the pre-plant
+                # disk requires dropping the newer restore point first — the replant
+                # below re-takes it (and rebuild re-takes both), so nothing is lost
+                # that the ladder's own next steps don't recreate.
+                snaps = list_snapshots(tnode, t["vmid"])
+                if SNAP_READY in snaps:
+                    print(f"    dropping newer '{SNAP_READY}' (PVE rolls back only to the "
+                          f"most recent snapshot; it is re-taken after the replant)")
+                    delete_snapshot(tnode, t["vmid"], SNAP_READY)
+            rollback_snapshot(tnode, t["vmid"], snapshot)
             restored.append(t)
             print(f"    {t['vm_name']} restored")
         except Exception as e:
@@ -355,7 +402,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         full_clone = True
         src_vmid = None
         src_label = None
-        if state.get("pipeline_version") == 2:
+        if _is_golden_pipeline(state):
             # Multi-node: the box's golden is its own node's slot copy (state carries
             # per-slot ids); single-node keeps the flat map.
             by_slot = state.get("golden_ids_by_slot") or {}
@@ -406,6 +453,11 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
             "newid": t["vmid"],
             "name": t["vm_name"],
             "full": 1 if full_clone else 0,
+            # /clone takes no tags, and the tagging PUT below only lands after the clone
+            # task finishes — a kill mid-clone would otherwise leave an unmarked VM
+            # squatting our vmid slot. The description exists from the clone's first
+            # instant (range_ops.clone_marker; winad-testrun 2026-09-25).
+            "description": clone_marker(comp_dir.name),
         })["data"]
         wait_for_proxmox_task(tnode, upid)
 
@@ -413,6 +465,10 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
             "net0": f"virtio,bridge=vmbr{t['identifier']}",
             "cores": box["cpu"],
             "memory": box["memory_mb"],
+            # Stamp ownership explicitly: a clone INHERITS its source's tags, and a
+            # golden reused across runs carries a stale run-<id> — the next teardown's
+            # full-tag-set guard would then refuse this box as foreign.
+            "tags": ";".join(sorted(ownership_tags(comp_dir.name, _run_id))),
         }
         if not windows:
             config.update({
@@ -444,7 +500,11 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
 
         rebuilt.append(t)
 
-        if t["team_key"] == "team1":
+        # M3.3 made every team a Terraform resource (`team_box` for_each covers all teams;
+        # satellites get team_box_sat1..4), so on a v2 range EVERY rebuilt box drifts from
+        # state — the old team1-only note was pre-M3.3 truth. Fine mid-event; nobody runs a
+        # full apply against a live range, but the next one will want to replace these.
+        if _is_golden_pipeline(state) or t["team_key"] == "team1":
             print(f"    NOTE: {t['vm_name']} is a Terraform-managed resource. It was recreated "
                   f"outside Terraform, so the next `terraform apply` will see drift and want to "
                   f"replace it. Fine mid-event; re-import or accept the replacement afterwards.")
@@ -492,6 +552,9 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
             if result.failed:
                 print(f"  WARNING: {stage}-stage replant had {len(result.failed)} "
                       f"FAILED step(s) (recorded in .deploy_state.json)")
+                state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
+                    f"redeploy {stage}-stage: {line}" for line in result.failed[:20]]
+                write_state(comp_dir / ".deploy_state.json", state)
 
         print("  Repair-stage sweep (sshd/sudoers) on rebuilt boxes...")
         _stage_pass(repair_path, "repair")
@@ -518,6 +581,266 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         else:
             print("  tz-ready NOT re-taken — domain configuration could not run (see above).")
     return rebuilt
+
+
+def prepare_nakon_assets(comp_dir, state, teams, boxes, difficulty):
+    """(nakon_config_path, nakon_bundle) for the replant modes.
+
+    A function rather than main() inline so the reset ladder can build them LAZILY —
+    a reset that settles at the tz-ready rung must not demand stage files it would
+    never have used (a legacy comp with neither stage files nor box_password still
+    gets its cheap rollback)."""
+    # Pipeline v2+ (golden templates): repair re-plants run the POST-CLONE stage only —
+    # the golden-stage installs ride the linked clone and re-running them over live
+    # boxes mid-event is exactly what the stage split removed.
+    if _is_golden_pipeline(state):
+        postclone = comp_dir / ".nakon-postclone.json"
+        if postclone.exists():
+            # A comp whose plants are ALL golden-stage (e.g. every cde-2026-style pin)
+            # has an empty postclone stage — live-found 2026-10-03: build_nakon_bundle
+            # refuses an empty machine list, so a legitimate no-replant must not try.
+            # Auth/DNS/service hardening below still re-runs; the probe judges health.
+            if json.loads(postclone.read_text()).get("machines"):
+                nakon_config_path = postclone
+            else:
+                print("  (postclone stage is empty — every plant rides the golden clone; "
+                      "nakon has nothing to re-plant. Auth/DNS/hardening still re-runs.)")
+                return None, None
+        else:
+            print("  WARNING: pipeline v2+ state but .nakon-postclone.json is missing — "
+                  "regenerating the stage split from nakon-config.json")
+            nakon_config_path = comp_dir / "nakon-config.json"
+            if not nakon_config_path.exists():
+                raise SystemExit(
+                    "  ERROR: neither .nakon-postclone.json nor nakon-config.json exists — "
+                    "cannot build the post-clone stage config for this mode.")
+            teams_v2 = json.loads((comp_dir / "teams.json").read_text())
+            pipeline_api.generate_stage_configs(
+                comp_dir, teams_v2, boxes,
+                unbooted=pipeline_api.unbooted_golden_boxes(comp_dir))
+            nakon_config_path = postclone
+    else:
+        nakon_config_path = comp_dir / "nakon-config.json"
+    if not nakon_config_path.exists() and not _is_golden_pipeline(state):
+        box_password = state.get("box_password")
+        if not box_password:
+            raise SystemExit(
+                "  ERROR: nakon-config.json is missing and .deploy_state.json has no "
+                "box_password — can't regenerate the machine list (nakon authenticates to "
+                "every box with it). This mode is unavailable for this competition."
+            )
+        print("  nakon-config.json missing — regenerating from the pinned service/vuln sets...")
+        box_username, _credlist = load_users_config(comp_dir)
+        nakon_config_path = pipeline_api.generate_nakon_config(
+            teams, boxes, difficulty, comp_dir, box_password, box_username=box_username
+        )
+    return nakon_config_path, pipeline_api.build_nakon_bundle(nakon_config_path)
+
+
+def scored_ports_for(comp_dir):
+    """box_name -> sorted scored TCP ports, from box_services.json pins.
+
+    Bare catalog names resolve through quotient's own _SERVICE_TO_CHECK — the same
+    mapping that builds event.conf — so the probe tests exactly what Quotient will
+    connect to. plant_only pins emit no scored check (their score rides a separate
+    score/tcp pin that carries the port). Best-effort by design: a missing or
+    unreadable box_services.json means fewer probed ports, never a crash — the SSH /
+    guest-agent leg still gates the verdict."""
+    path = comp_dir / "box_services.json"
+    if not path.exists():
+        return {}
+    try:
+        pins_by_box = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {}
+    # Vendored in-repo; private name is the single source of port truth for event.conf.
+    from quotient.setup import _SERVICE_TO_CHECK
+    ports = {}
+    for box_name, pins in pins_by_box.items():
+        out = set()
+        for pin in pins or []:
+            if isinstance(pin, dict) and pin.get("plant_only"):
+                continue
+            name = pin if isinstance(pin, str) else pin.get("name")
+            port = pin.get("port") if isinstance(pin, dict) else None
+            if not port:
+                mapped = _SERVICE_TO_CHECK.get(name)
+                port = mapped[1].get("Port") if mapped else None
+            if port:
+                try:
+                    out.add(int(port))
+                except (TypeError, ValueError):
+                    pass
+        if out:
+            ports[box_name] = sorted(out)
+    return ports
+
+
+def ports_closed_from_engine(ctx, ip, ports, per_port_timeout=3):
+    """The subset of `ports` the ENGINE cannot connect to on `ip` — Quotient's own
+    vantage, so an in-path firewall is traversed exactly as scoring traverses it.
+    Empty set = every scored port accepts a connection."""
+    if not ports:
+        return set()
+    probe = "; ".join(
+        f"timeout {per_port_timeout} bash -c 'echo > /dev/tcp/{ip}/{p}' 2>/dev/null "
+        f"&& echo P{p}=OK || echo P{p}=CLOSED"
+        for p in ports)
+    try:
+        r = ssh_to_engine(ctx, probe, timeout=per_port_timeout * len(ports) + 20)
+    except Exception:
+        return set(ports)
+    if r.returncode != 0:
+        return set(ports)
+    tokens = set((r.stdout or "").split())
+    return {p for p in ports if f"P{p}=OK" not in tokens}
+
+
+RESET_PROBE_ATTEMPTS = 3
+RESET_PROBE_GAP_S = 20
+
+
+def probe_box_health(ctx, t, ports, node):
+    """Health verdict for one box after a reset rung: ('healthy'|'pam-trap'|'unhealthy',
+    detail). Healthy = the management transport answers (SSH via the gateway for Linux,
+    guest agent for Windows) AND every scored port accepts a connection from the engine.
+
+    The SSH leg doubles as the PAM planted-box trap detector: a tz-ready rollback boots
+    a post-plant disk, and a box that fell into the trap dies at SSH preauth with its
+    services possibly still listening — ports alone would call it healthy right before
+    it fails every auth-based scored check."""
+    windows = box_platform(t["box"]) == "windows"
+    detail = "no attempt"
+    for attempt in range(1, RESET_PROBE_ATTEMPTS + 1):
+        if attempt > 1:
+            time.sleep(RESET_PROBE_GAP_S)
+        if windows:
+            if not wait_for_guest_agent(node, t["vmid"], timeout=20):
+                detail = "guest agent silent"
+                continue
+        else:
+            klass = classify_ssh_failure(ctx, t["ip"], user=ctx.get("box_username", "ubuntu"))
+            if klass == "pam-trap":
+                return "pam-trap", ("SSH dies at the PAM account stage preauth — planted-box "
+                                    "restart trap (docs/known-issues.md)")
+            if klass != "ok":
+                detail = f"ssh {klass}"
+                continue
+        missing = ports_closed_from_engine(ctx, t["ip"], ports)
+        if not missing:
+            return "healthy", "guest agent + scored ports" if windows else "ssh + scored ports"
+        detail = "closed scored port(s): " + ", ".join(str(p) for p in sorted(missing))
+    return "unhealthy", detail
+
+
+def mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty):
+    """Cheapest-that-works per-box reset: tz-ready rollback -> tz-base rollback + replant
+    -> golden rebuild. Each rung only receives the boxes the previous rung left
+    unhealthy (engine-vantage probe decides), so a box the cheap rung fixed is never
+    escalated and a box it cannot fix is never left behind.
+
+    A PAM-trap verdict escalates one rung rather than straight to rebuild: the trap
+    lives on the post-plant disk, the tz-base disk is pre-plant, and rebuild remains
+    the documented last resort (docs/known-issues.md)."""
+    print(f"\n  Reset ladder: '{SNAP_READY}' rollback -> '{SNAP_BASE}' rollback + replant "
+          f"-> golden rebuild. Escalating only the boxes each rung leaves unhealthy.")
+    ports_by_box = scored_ports_for(comp_dir)
+    levels = {}
+    assets = []
+
+    def nakon_assets():
+        if not assets:
+            assets.extend(prepare_nakon_assets(comp_dir, state, teams, boxes, difficulty))
+        return assets
+
+    def _rung(batch, run):
+        """(restored, carry). On success carry is empty. On a wholesale failure
+        (mode_rollback raises when NOTHING was restored, mode_rebuild on config
+        errors) the rung touched nobody, so the whole batch carries to the next
+        rung unprobed. KeyboardInterrupt still aborts."""
+        try:
+            return run(batch) or [], []
+        except (Exception, SystemExit) as e:
+            print(f"    rung failed wholesale ({type(e).__name__}: {e}) — escalating the batch")
+            return [], list(batch)
+
+    def _split_by_snapshot(batch, snap):
+        have, missing = [], []
+        for t in batch:
+            if snap in list_snapshots(t.get("node") or node, t["vmid"]):
+                have.append(t)
+            else:
+                missing.append(t)
+        return have, missing
+
+    def _probe_all(batch, level_label):
+        """Probe a rung's output; healthy boxes earn their level label, and the boxes
+        the next rung must handle are returned."""
+        escalate = []
+        for t in batch:
+            verdict, detail = probe_box_health(ctx, t, ports_by_box.get(t["box_name"], ()), node)
+            name = f"{t['team_key']}/{t['box_name']}"
+            if verdict == "healthy":
+                print(f"    {name}: healthy ({detail})")
+                levels[t["vm_name"]] = level_label
+            elif verdict == "pam-trap":
+                print(f"    {name}: PAM PLANTED-BOX TRAP — {detail}")
+                escalate.append(t)
+            else:
+                print(f"    {name}: unhealthy ({detail})")
+                escalate.append(t)
+        return escalate
+
+    pending = list(targets)
+
+    # Rung 1: the disk the competition started on.
+    have_ready, pending = _split_by_snapshot(pending, SNAP_READY)
+    for t in pending:
+        print(f"    {t['team_key']}/{t['box_name']}: no '{SNAP_READY}' snapshot — starts at rung 2")
+    if have_ready:
+        print(f"\n  [reset 1/3] {len(have_ready)} box(es): rollback to '{SNAP_READY}'...")
+        restored, carry = _rung(have_ready, lambda b: mode_rollback(
+            b, ctx, node, SNAP_READY, comp_dir, state, None, None, reconfigure=False))
+        pending += carry + _probe_all(restored, f"'{SNAP_READY}' rollback")
+
+    # Rung 2: the pre-plant disk, re-planted and domain-chained by mode_rollback.
+    have_base, pending = _split_by_snapshot(pending, SNAP_BASE)
+    for t in pending:
+        print(f"    {t['team_key']}/{t['box_name']}: no '{SNAP_BASE}' snapshot — starts at rebuild")
+    if have_base:
+        print(f"\n  [reset 2/3] {len(have_base)} box(es): rollback to '{SNAP_BASE}' + replant...")
+        cfg, bundle = nakon_assets()
+        restored, carry = _rung(have_base, lambda b: mode_rollback(
+            b, ctx, node, SNAP_BASE, comp_dir, state, cfg, bundle, reconfigure=True))
+        pending += carry + _probe_all(restored, f"'{SNAP_BASE}' rollback + replant")
+
+    # Rung 3: golden rebuild — the documented PAM-trap workaround.
+    if pending:
+        print(f"\n  [reset 3/3] {len(pending)} box(es): rebuild from golden template...")
+        cfg, bundle = nakon_assets()
+        rebuilt, carry = _rung(pending, lambda b: mode_rebuild(
+            b, ctx, node, comp_dir, state, cfg, bundle))
+        pending += carry + _probe_all(rebuilt, "golden rebuild")
+
+    print(f"\n{'='*64}")
+    print("  Reset summary")
+    print(f"{'='*64}")
+    still_broken = []
+    fixed = []
+    for t in targets:
+        name = f"{t['team_key']}/{t['box_name']}"
+        label = levels.get(t["vm_name"])
+        if label:
+            fixed.append(t)
+            print(f"    {name}: fixed via {label}")
+        else:
+            still_broken.append(t)
+            print(f"    {name}: STILL BROKEN (every rung failed — see the per-box lines above)")
+    if still_broken:
+        raise SystemExit(
+            f"\n  {len(still_broken)} box(es) remain broken after the full reset ladder — "
+            f"diagnose by hand (verify-competition.py, engine console) before re-running.")
+    return fixed
 
 
 def quote_sshkeys(public_key):
@@ -648,6 +971,9 @@ def main():
 
   # see what would be touched, change nothing
   redeploy-competition.py --competition cde-2026 --teams 3 --dry-run
+
+  # one box, cheapest reset that works (rollback -> replant -> rebuild as needed)
+  redeploy-competition.py --competition cde-2026 --teams 3 --boxes web01 --mode reset
 """,
     )
     parser.add_argument("--competition", help="Competition ID (competitions/<id>). Omit for a "
@@ -660,13 +986,17 @@ def main():
                         help="Only boxes whose template is this platform.")
     parser.add_argument("--mode", default="rollback-ready",
                         choices=["rollback-ready", "rollback-base", "reconfigure", "rebuild",
-                                 "resync", "engine-recovery"],
+                                 "resync", "engine-recovery", "reset"],
                         help="What to do to the selected boxes (default: rollback-ready). "
                              "resync = align credentials with the engine and re-set box "
                              "passwords via the guest agent, touching nothing else. "
                              "engine-recovery = re-clone the engine VM from the engine "
                              "template (fresh empty scoring DB; re-seed with "
-                             "--from-phase 7); ignores box selection flags.")
+                             "--from-phase 7); ignores box selection flags. "
+                             "reset = cheapest-that-works ladder per box: tz-ready "
+                             "rollback, then tz-base rollback + replant, then golden "
+                             "rebuild — escalating only the boxes each rung leaves "
+                             "unhealthy, and reporting what each box ended up with.")
     parser.add_argument("--dry-run", action="store_true", dest="dry_run",
                         help="Print the resolved targets and their snapshots, then exit.")
     parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
@@ -717,8 +1047,8 @@ def main():
     if args.mode == "engine-recovery":
         engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=args.yes)
         return
-    if args.reset_event and args.mode not in ("rollback-ready", "rollback-base"):
-        raise SystemExit("  ERROR: --reset-event only applies to rollback-ready/rollback-base.")
+    if args.reset_event and args.mode not in ("rollback-ready", "rollback-base", "reset"):
+        raise SystemExit("  ERROR: --reset-event only applies to rollback-ready/rollback-base/reset.")
 
     targets = select_targets(comp_dir, teams, boxes, args)
     if not targets:
@@ -731,11 +1061,32 @@ def main():
     print(f"{'='*64}")
     print(f"  Mode: {args.mode}")
     print(f"  {len(targets)} of {len(teams) * len(boxes)} box(es) selected:\n")
+    snaps_by_box = {}
     for t in targets:
-        snaps = list_snapshots(t.get("node") or node, t["vmid"])
+        tnode = t.get("node") or node
+        snaps = list_snapshots(tnode, t["vmid"])
+        snaps_by_box[t["vm_name"]] = snaps
         have = ", ".join(sorted(snaps)) if snaps else "none"
-        print(f"    {describe_target(t)}  [snapshots: {have}]")
+        try:
+            cfg = proxmox_api("GET", f"/nodes/{tnode}/qemu/{t['vmid']}/config")["data"]
+            tags = ", ".join(sorted(parse_vm_tags(cfg.get("tags")))) or "UNTAGGED"
+        except Exception:
+            tags = "?"
+        print(f"    {describe_target(t)}  [snapshots: {have}]  [tags: {tags}]")
     print()
+
+    if args.mode == "reset":
+        print("  reset ladder — cheapest rung each box would start at:")
+        for t in targets:
+            snaps = snaps_by_box[t["vm_name"]]
+            if SNAP_READY in snaps:
+                first = f"1/3 ('{SNAP_READY}' rollback)"
+            elif SNAP_BASE in snaps:
+                first = f"2/3 ('{SNAP_BASE}' rollback + replant)"
+            else:
+                first = "3/3 golden rebuild — no usable snapshots"
+            print(f"    {t['team_key']}/{t['box_name']}: rung {first}")
+        print()
 
     if args.dry_run:
         print("  --dry-run: nothing was changed.")
@@ -764,42 +1115,10 @@ def main():
 
     nakon_config_path = nakon_bundle = None
     if args.mode in ("rollback-base", "reconfigure", "rebuild"):
-        # Pipeline v2 (golden templates): repair re-plants run the POST-CLONE stage only —
-        # the golden-stage installs ride the linked clone and re-running them over live
-        # boxes mid-event is exactly what the stage split removed.
-        if state.get("pipeline_version") == 2:
-            postclone = comp_dir / ".nakon-postclone.json"
-            if postclone.exists():
-                nakon_config_path = postclone
-            else:
-                print("  WARNING: pipeline v2 state but .nakon-postclone.json is missing — "
-                      "regenerating the stage split from nakon-config.json")
-                nakon_config_path = comp_dir / "nakon-config.json"
-                if not nakon_config_path.exists():
-                    raise SystemExit(
-                        "  ERROR: neither .nakon-postclone.json nor nakon-config.json exists — "
-                        "cannot build the post-clone stage config for this mode.")
-                teams_v2 = json.loads((comp_dir / "teams.json").read_text())
-                pipeline_api.generate_stage_configs(
-                    comp_dir, teams_v2, boxes,
-                    unbooted=pipeline_api.unbooted_golden_boxes(comp_dir))
-                nakon_config_path = postclone
-        else:
-            nakon_config_path = comp_dir / "nakon-config.json"
-        if not nakon_config_path.exists() and state.get("pipeline_version") != 2:
-            box_password = state.get("box_password")
-            if not box_password:
-                raise SystemExit(
-                    "  ERROR: nakon-config.json is missing and .deploy_state.json has no "
-                    "box_password — can't regenerate the machine list (nakon authenticates to "
-                    "every box with it). This mode is unavailable for this competition."
-                )
-            print("  nakon-config.json missing — regenerating from the pinned service/vuln sets...")
-            box_username, _credlist = load_users_config(comp_dir)
-            nakon_config_path = pipeline_api.generate_nakon_config(
-                teams, boxes, difficulty, comp_dir, box_password, box_username=box_username
-            )
-        nakon_bundle = pipeline_api.build_nakon_bundle(nakon_config_path)
+        # mode_reset prepares these lazily — a reset that settles at the tz-ready rung
+        # must not demand stage files it would never have used.
+        nakon_config_path, nakon_bundle = prepare_nakon_assets(
+            comp_dir, state, teams, boxes, difficulty)
 
     if args.mode == "rollback-ready":
         done = mode_rollback(targets, ctx, node, SNAP_READY, comp_dir, state,
@@ -811,6 +1130,8 @@ def main():
         done = mode_reconfigure(targets, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
     elif args.mode == "resync":
         done = mode_resync(targets, ctx, node, comp_dir, state, state_path)
+    elif args.mode == "reset":
+        done = mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty)
     else:
         done = mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_bundle)
 

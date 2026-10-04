@@ -507,6 +507,23 @@ legacy pre-golden range, of its box template) and replays the post-clone stages.
 does the same for the scoring-engine VM from the engine template — note the scoring DB comes back
 empty, so re-seed with `create-competition.py --from-phase 7`.
 
+When you don't know how deep the damage goes, `--mode reset` runs the whole ladder for you: each
+box is rolled back to `tz-ready`, probed (SSH via the gateway for Linux, the guest agent for
+Windows, plus every scored port from the engine's own vantage), and only the boxes still
+unhealthy fall through to a `tz-base` rollback + replant and then a full golden rebuild. It
+prints which level each box ended at and exits non-zero if anything is still broken:
+
+```bash
+python3 redeploy-competition.py --competition <id> --teams 3 --boxes web01 --mode reset
+```
+
+One open trap the ladder handles for you: a planted Linux box that is stopped and started can
+deny all SSH at the PAM account stage (see [known-issues.md](known-issues.md)) even while its
+services still listen — the probe recognizes that preauth signature and escalates past it
+instead of calling the box healthy because its ports answer. `--dry-run` also prints, per box,
+which rung the ladder would start at and the box's current PVE tags (a stale `run-<id>` there
+is worth knowing about before anything is destroyed).
+
 Run `python3 verify-competition.py competitions/<id>` afterwards, and give the scoreboard a
 round or two to pick the box back up.
 

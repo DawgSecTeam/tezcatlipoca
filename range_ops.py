@@ -88,14 +88,20 @@ def terraform_dir(comp_dir):
 # satellite variants (team_box_sat1..4) put their teams on other hosts, and the engine
 # is a separate resource — all three carry the same suffix shape, so one pattern
 # covers every box a deploy phase can produce.
-_TF_VMID_ADDR_RE = re.compile(r'\[(?:"[^"]*?:(\d+)"|(\d+))\]')
+_TF_TEAM_BOX_RESOURCE_NAMES = {"team_box", "team_box_sat1", "team_box_sat2",
+                               "team_box_sat3", "team_box_sat4"}
 
 
 def team_vmids_from_state(comp_dir, run=None):
-    """Every vmid in this competition's terraform state, as a sorted list.
+    """Every team-box vmid in this competition's terraform state, as a sorted list.
 
-    Pure parse of `terraform state list` — the one artifact that says which machines a
+    Pure parse of `terraform state pull` — the one artifact that says which machines a
     completed phase actually created. Reads only; never plans, applies, or locks.
+
+    The vmid lives in each instance's `vm_id` attribute, NOT in the resource address:
+    team_box keys are box names (`team_box["team1-web01"]`), so an address-shape parser
+    finds nothing and a healthy deploy reads as "no machines" (live-found 2026-10-03 —
+    the phase-4 checkpoint gate hard-failed a fully-built range that way).
 
     Raises RuntimeError when the state cannot be read at all (terraform missing, a
     corrupt state, a held lock): "I could not check" must never be reported as "there
@@ -103,26 +109,31 @@ def team_vmids_from_state(comp_dir, run=None):
     tf_dir = terraform_dir(comp_dir)
     runner = run or subprocess.run
     try:
-        proc = runner(["terraform", "state", "list"], cwd=str(tf_dir),
+        proc = runner(["terraform", "state", "pull"], cwd=str(tf_dir),
                       capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as e:
-        raise RuntimeError(f"could not run `terraform state list` in {tf_dir}: {e}")
+        raise RuntimeError(f"could not run `terraform state pull` in {tf_dir}: {e}")
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip().splitlines()
         raise RuntimeError(
-            f"`terraform state list` failed in {tf_dir} (rc={proc.returncode}): "
+            f"`terraform state pull` failed in {tf_dir} (rc={proc.returncode}): "
             f"{detail[-1] if detail else 'no output'}")
-    # Terraform writes warnings to stderr and resource addresses to stdout, but a
-    # provider can also emit notices on stdout — parse the address SHAPE rather than
-    # trusting every line to be an address.
+    try:
+        state = json.loads(proc.stdout or "")
+    except ValueError as e:
+        raise RuntimeError(
+            f"`terraform state pull` returned unparsable JSON in {tf_dir}: {e}")
     vmids = set()
-    for line in (proc.stdout or "").splitlines():
-        line = line.strip()
-        if not line.startswith("proxmox_virtual_environment_vm."):
+    for resource in state.get("resources") or []:
+        if resource.get("type") != "proxmox_virtual_environment_vm":
             continue
-        m = _TF_VMID_ADDR_RE.search(line)
-        if m:
-            vmids.add(int(m.group(1) or m.group(2)))
+        if resource.get("name") not in _TF_TEAM_BOX_RESOURCE_NAMES:
+            continue
+        for instance in resource.get("instances") or []:
+            attrs = instance.get("attributes") or {}
+            vmid = attrs.get("vm_id") or attrs.get("id")
+            if vmid:
+                vmids.add(int(vmid))
     return sorted(vmids)
 
 

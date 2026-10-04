@@ -27,6 +27,7 @@ from constants import (
     REQUIRED_VARS,
     SCORING_ENGINE_VMID,
     SLOW_SERVICES,
+    is_domain_dependent,
     WINDOWS_ADMIN_USER,
 )
 from ssh_ops import _engine_opts
@@ -612,7 +613,9 @@ def _golden_stage_machines(full, unbooted, anchor_identifier, box_index_by_name)
         seen_types.add(box_name)
         box_idx = box_index_by_name[box_name]
         golden_kept = [c for c in m["configurations"]
-                       if (c if isinstance(c, str) else c["name"]) not in POST_CLONE_CONFIGS]
+                       if (c if isinstance(c, str) else c["name"]) not in POST_CLONE_CONFIGS
+                       and not is_domain_dependent(
+                           c if isinstance(c, str) else c["name"])]
         banned = sorted({(c if isinstance(c, str) else c["name"]) for c in golden_kept}
                         & identity_banned)
         if banned:
@@ -679,6 +682,13 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
 
     golden_machines = _golden_stage_machines(full, unbooted, team1_identifier,
                                              box_index_by_name)
+    # Domain-dependent configs (ad-* / GPO / the explicit final-stage set) plant per
+    # team AFTER the domain pass; they are never golden- or repair-stage, whatever a
+    # pin said (a DC box type is unbooted, so absent this rule its whole plan would
+    # ride the pre-promotion repair sweep and every domain-dependent step would fail).
+    domain_dependent = {config_name(c) for m in full for c in m["configurations"]
+                        if is_domain_dependent(config_name(c))}
+    post_clone = POST_CLONE_CONFIGS | domain_dependent
 
     def stage_machines(want, include_golden_stage=False):
         out = []
@@ -687,7 +697,7 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
             kept = []
             for c in m["configurations"]:
                 name = config_name(c)
-                golden_stage = name not in POST_CLONE_CONFIGS
+                golden_stage = name not in post_clone
                 if name not in want and not (include_golden_stage and cold and golden_stage):
                     continue
                 required = REQUIRED_VARS.get(name) or {}
@@ -710,7 +720,7 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
         return out
 
     repair_machines = stage_machines(REPAIR_STAGE_CONFIGS, include_golden_stage=True)
-    final_machines = stage_machines(FINAL_STAGE_CONFIGS)
+    final_machines = stage_machines(FINAL_STAGE_CONFIGS | domain_dependent)
     # Merge repair ∪ final per machine, deduping on the pin's full identity
     # (_pin_key: name + vars) rather than its name alone — a name-only collapse drops
     # packet-promised same-named decoy accounts (audit-found 2026-10-02).

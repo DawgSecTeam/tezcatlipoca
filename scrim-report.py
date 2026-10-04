@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
+RUN_MANIFEST_NAME = "run.json"  # the harness's per-run manifest (run-agent-scrim.py)
 # Legacy 17b lineup, kept ONLY as the fallback for callers that pass no label map (the
 # pinned self-test, ad-hoc use). Real reports resolve the map from the competition's
 # boxes.json via box_labels() — see the D8 note there.
@@ -63,6 +64,14 @@ def box_labels(run_dir):
     name = Path(run_dir).resolve().name
     comps = REPO / "competitions"
     cands = [comps / name / "boxes.json"]
+    # Run dirs live INSIDE their competition now (competitions/<comp>/.automated-tests/
+    # <run-id>/): the competition's own boxes.json is three levels up. Miss this and a
+    # fully-labeled comp degrades to raw addresses — or worse, to the legacy octet map,
+    # which invents the wrong names on any lineup that isn't 17b's.
+    p = Path(run_dir).resolve()
+    if ".automated-tests" in p.parts:
+        i = p.parts.index(".automated-tests")
+        cands.append(Path(*p.parts[:i]) / "boxes.json")
     if comps.is_dir():
         # run dirs are often suffixed (cde-2026-run2): take the longest competition
         # name that prefixes the run dir.
@@ -80,6 +89,32 @@ def box_labels(run_dir):
         if labels:
             return labels
     return {}
+
+
+def windows_octets(run_dir):
+    """The last octets that are WINDOWS boxes, from the competition's boxes.json.
+
+    The windows_footholds fallback used to hardcode octets 2/3 (the 17b dc01/win01
+    slots); scrim-fresh-a's only Windows box sits at .5, so red's two real win01
+    cred_spray footholds counted 0 and the gate failed red for footholds it held.
+    Unresolvable -> the legacy octets, for run dirs whose competition is gone."""
+    p = Path(run_dir).resolve()
+    cands = []
+    if ".automated-tests" in p.parts:
+        i = p.parts.index(".automated-tests")
+        cands.append(Path(*p.parts[:i]) / "boxes.json")
+    cands.append(REPO / "competitions" / p.name / "boxes.json")
+    for cand in cands:
+        try:
+            boxes = json.loads(cand.read_text())
+        except (OSError, ValueError):
+            continue
+        octets = {str(b["last_octet"]) for b in boxes
+                  if isinstance(b, dict) and "last_octet" in b
+                  and "windows" in str(b.get("template", "")).lower()}
+        if octets:
+            return octets
+    return {"2", "3"}
 
 
 def host_label(ip, labels=None):
@@ -148,6 +183,21 @@ def load_red_events(run_dir):
 
 
 def load_event_start(run_dir):
+    """The event's T0, harness-first.
+
+    The harness's run.json t0 is when the event ACTUALLY started (written once, after
+    red01 was up). bad-auto's world.json event_start is written on the FIRST harness
+    contact — including a failed stage_red attempt whose red01 never deployed — so on a
+    retried red deploy it predates red01's existence and every red event reads as
+    shifted late (live-found 2026-10-03: a 14-minute-early t0 manufactured a phantom
+    "27-minute opening stall" out of red's normal pre-T0 sprint). Harness wins; the
+    world.json value remains the fallback for legacy run dirs without run.json."""
+    try:
+        run = json.loads((Path(run_dir) / RUN_MANIFEST_NAME).read_text())
+        if run.get("t0"):
+            return float(run["t0"])
+    except (OSError, ValueError):
+        pass
     for cand in (Path(run_dir) / "evidence" / "red" / "world.json",
                  Path(run_dir) / "bad-auto-state" / "world.json"):
         try:
@@ -221,7 +271,7 @@ def foothold_list(world):
     return list(fh.values()) if isinstance(fh, dict) else fh
 
 
-def red_metrics(events, t0, world, labels=None):
+def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
     m = {"takedowns": 0, "timeline": [], "distinct_tactics": set(), "initial_access": set(),
          "targets": set(), "stalls": [], "restore_reactions": 0, "blue_restore_events": 0,
          "blue_restore_list": [], "windows_footholds": 0, "actions_ok": 0,
@@ -264,11 +314,39 @@ def red_metrics(events, t0, world, labels=None):
             m["timeline"].append((tp, host_label(dip, labels), svc, mode))
             takes.append((tp, dip))
     per_ip = {}
+    restored = []  # (tp, team, box) — box parsed from the detail; target field is null
+    for rtp, _team, rtarget, rdetail in m["blue_restore_list"]:
+        box = None
+        for name in (labels or {}).values() if labels else []:
+            if rdetail and rdetail.startswith(name):
+                box = name
+                break
+        if box is None and LEGACY_HOST_BY_OCTET and rdetail:
+            box = rdetail.split("-")[0] if "-" in rdetail else None
+        restored.append((rtp, _team, box))
     for tp, dip in takes:
         if dip is None:
             continue
         earlier = per_ip.get(dip)
-        if earlier is not None and (tp - earlier) * 60 >= REAKILL_GAP_SEC:
+        gap_reaction = (earlier is not None
+                        and (tp - earlier) * 60 >= REAKILL_GAP_SEC)
+        # A re-kill that closely follows blue restoring THAT box is a reaction too,
+        # even when red never left (continuous pressure): red saw the restore and
+        # answered it. scrim-fresh-a 2026-10-03: red re-killed IIS within minutes of
+        # every blue restore, but the >=15-min-gap rule counted 0 restore-reactions
+        # and the gate failed red for exactly the behavior the gate is about. The
+        # blue_restore event carries target=null and a detail like "web01-roundcube
+        # is UP again on team2", so the match is box-level: the killed IP's team
+        # octet must agree and the box label must be the restored one.
+        follow_reaction = False
+        box = host_label(dip, labels)
+        for rtp, _rteam, rbox in restored:
+            if (rtp is not None and tp is not None
+                    and 0 <= tp - rtp <= REAKILL_GAP_SEC / 60
+                    and rbox and rbox in box):
+                follow_reaction = True
+                break
+        if gap_reaction or follow_reaction:
             m["restore_reactions"] += 1
         if earlier is None or tp > earlier:
             per_ip[dip] = tp
@@ -288,7 +366,7 @@ def red_metrics(events, t0, world, labels=None):
             m["windows_footholds"] += 1
     if not m["windows_footholds"]:
         m["windows_footholds"] = len({ip for _, ip in m["initial_access"]
-                                      if ip and ip.split(".")[-1] in ("2", "3")})
+                                      if ip and ip.split(".")[-1] in win_octets})
     m["distinct_tactics"] = sorted(m["distinct_tactics"])
     m["initial_access"] = sorted({t for t, _ in m["initial_access"]})
     m["targets"] = sorted(host_label(ip, labels) for ip in m["targets"])
@@ -418,7 +496,7 @@ def build_report(run_dir):
     world = load_world(run_dir)
     snaps = load_scoreboard(run_dir)
     labels = box_labels(run_dir)
-    rm = red_metrics(events, t0, world, labels)
+    rm = red_metrics(events, t0, world, labels, windows_octets(run_dir))
     down = down_windows(snaps)
     bm = blue_metrics(run_dir)
 
@@ -571,7 +649,7 @@ def compute_components(run_dir):
     events, t0 = load_red_events(run_dir)
     world = load_world(run_dir)
     snaps = load_scoreboard(run_dir)
-    rm = red_metrics(events, t0, world, box_labels(run_dir))
+    rm = red_metrics(events, t0, world, box_labels(run_dir), windows_octets(run_dir))
     down = down_windows(snaps)
     bm = blue_metrics(run_dir)
     restorations = (sum(d["restorations"] for d in down.values()) if down

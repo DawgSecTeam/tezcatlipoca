@@ -77,8 +77,12 @@ def _probe_joined(node, member_box, member_vmid, domain):
 
 
 def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scoring_user,
-                          scoring_ip, box_password, promote_dc=True):
-    """Per-team AD forest promotion + member joins from domain_roles.json; no-op when absent."""
+                          scoring_ip, box_password, promote_dc=True, force_member_join=False):
+    """Per-team AD forest promotion + member joins from domain_roles.json; no-op when absent.
+
+    force_member_join bypasses the members' "already joined" self-report: a reset DC
+    re-promoted a FRESH AD database, so members claiming membership hold trusts the new
+    DC knows nothing about (live-found 2026-10-03 — the member probe cannot see this)."""
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
         return
@@ -226,7 +230,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
             member_ip = member_machine["ip"]
 
             if is_windows_template(member_box["template"]):
-                if _probe_joined(node, member_box, member_vmid, domain):
+                if _probe_joined(node, member_box, member_vmid, domain) and not force_member_join:
                     with PRINT_LOCK:
                         print(f"  [{team_key}] {member_box['name']} already joined to {domain} — "
                               f"skipping join (resume)")
@@ -281,7 +285,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                         print(f"  WARNING: [{team_key}] {member_box['name']} NOT joined to "
                               f"{domain} after {JOIN_ATTEMPTS} attempts")
             else:
-                if _probe_joined(node, member_box, member_vmid, domain):
+                if _probe_joined(node, member_box, member_vmid, domain) and not force_member_join:
                     with PRINT_LOCK:
                         print(f"  [{team_key}] Linux member {member_box['name']} already joined to "
                               f"{domain} — skipping join (resume)")

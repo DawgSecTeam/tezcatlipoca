@@ -89,6 +89,25 @@ FINAL_STAGE_CONFIGS = DISRUPTIVE_CONFIGS | {
     "Elevate Guest Account",
     "weak-password-policy-win",
 }
+# AD-dependent catalog configs by SHAPE, not enumeration: the cde-2026-era catalog
+# grew a whole family of `ad-*` Windows misconfigs plus GPO/GPP ones that only do the
+# right thing on a PROMOTED DC (scrim-one 2026-10-03: seven of them rode a DC's
+# repair-stage plant pre-promotion, failed rc=1, and the range silently lost its AD
+# attack surface — invisible until the plant_coverage gate existed). Everything
+# `ad-*` and these GPO/GPP names plants per team in the final stage, post-domains.
+DOMAIN_DEPENDENT_CONFIG_PREFIXES = ("ad-",)
+DOMAIN_DEPENDENT_CONFIGS = {
+    "gpo-persistence-win",
+    "gpp-cpassword-win",
+}
+
+
+def is_domain_dependent(name):
+    """True when a config needs a promoted DC and must plant in the final stage."""
+    return (name.startswith(DOMAIN_DEPENDENT_CONFIG_PREFIXES)
+            or name in DOMAIN_DEPENDENT_CONFIGS)
+
+
 # Combined view: what a convergence sweep (redeploy rollback-base/rebuild) must plant.
 POST_CLONE_CONFIGS = REPAIR_STAGE_CONFIGS | FINAL_STAGE_CONFIGS
 
