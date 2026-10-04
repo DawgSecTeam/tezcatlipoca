@@ -59,6 +59,7 @@ of a past failure; the evergreen lessons have been folded into the docs above.
 | [reports/scrim-live-2026-09-26-postmortem.md](reports/scrim-live-2026-09-26-postmortem.md) | scrim-live post-mortem |
 | [reports/harness-upgrades-plan.md](reports/harness-upgrades-plan.md) | Scrim harness rev-2 upgrade record (what changed, where it landed, what is left) |
 | [reports/automated-test-artifacts-plan-2026-10-03.md](reports/automated-test-artifacts-plan-2026-10-03.md) | You are changing per-run test artifacts and need the design record: layout rationale, `test.json`/`collection.json` schemas, the teardown collect hook, and the decisions taken |
+| [reports/firewall-live-validation-plan-2026-10-04.md](reports/firewall-live-validation-plan-2026-10-04.md) | You are about to live-test the pipeline-v3 in-path firewall: staged deploy plan for .150 (preconditions, watch points per phase, failure drills, teardown) |
 | [reports/dress-rehearsal-prompt.md](reports/dress-rehearsal-prompt.md) | The full-dress-rehearsal runbook/prompt for the first practice sweep |
 | [reports/deploy-cyberfield-prompt.md](reports/deploy-cyberfield-prompt.md) | The agent prompt + Cyberfield wiring notes from the cyberfield deploy |
 
