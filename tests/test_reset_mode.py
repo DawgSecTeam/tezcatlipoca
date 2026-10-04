@@ -443,6 +443,61 @@ class PrepareAssetsTests(unittest.TestCase):
         p_fix.assert_called_once()
 
 
+class DomainMarkerCascadeTests(unittest.TestCase):
+    """A reset DC wipes the entire AD content — every done-marker of that team's
+    domain chain is void (live-found 2026-10-03: deleting only the ADDS marker left
+    svc-support missing and failed verify's domain gate)."""
+
+    def _markers(self, tmp, team="team1"):
+        names = [f".nakon-domain-{team}-adds.json",
+                 f".nakon-domain-{team}-ad-misconfigs.json",
+                 f".nakon-domain-{team}-ad-accounts.json",
+                 f".nakon-domain-{team}-ftp01-join.json"]
+        for n in names:
+            (Path(tmp) / n).write_text("{}")
+        return names
+
+    def test_dc_reset_cascades_all_team_domain_markers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            names = self._markers(tmp)
+            (Path(tmp) / "domain_roles.json").write_text(
+                json.dumps({"ad01": "dc", "ftp01": "member"}))
+            (Path(tmp) / "teams.json").write_text(
+                json.dumps({"team1": {"identifier": "130"}}))
+            (Path(tmp) / "boxes.json").write_text(json.dumps(
+                [{"name": "ad01", "template": "base-windows-server"},
+                 {"name": "ftp01", "template": "base-windows-server"}]))
+            with patch.object(redeploy.pipeline_api, "deploy_domain_configs") as p_dom, \
+                 patch.object(redeploy, "load_users_config", return_value=("ops", {})), \
+                 patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}):
+                settled = redeploy.rerun_domain_configs(
+                    [_target({"name": "ad01", "template": "base-windows-server"}, 1500)],
+                    CTX, Path(tmp), {"box_password": "pw"}, Path(tmp) / "cfg.json")
+            self.assertTrue(settled)
+            remaining = [p.name for p in Path(tmp).glob(".nakon-domain-team1-*")]
+            self.assertEqual(remaining, [])
+            self.assertTrue(p_dom.called)
+
+    def test_member_reset_does_not_touch_the_markers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            names = self._markers(tmp)
+            (Path(tmp) / "domain_roles.json").write_text(
+                json.dumps({"ad01": "dc", "ftp01": "member"}))
+            (Path(tmp) / "teams.json").write_text(json.dumps(
+                {"team1": {"identifier": "130"}, "team2": {"identifier": "102"}}))
+            (Path(tmp) / "boxes.json").write_text(json.dumps(
+                [{"name": "ad01", "template": "base-windows-server"},
+                 {"name": "ftp01", "template": "base-windows-server"}]))
+            targets = [_target({"name": "ftp01", "template": "base-windows-server"}, 1501,
+                               team="team2", identifier=102)]
+            with patch.object(redeploy.pipeline_api, "deploy_domain_configs"), \
+                 patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}):
+                redeploy.rerun_domain_configs(targets, CTX, Path(tmp),
+                                              {"box_password": "pw"}, Path(tmp) / "cfg.json")
+            remaining = [p.name for p in Path(tmp).glob(".nakon-domain-team1-*")]
+            self.assertEqual(sorted(remaining), sorted(names))
+
+
 class FailedStepsTests(unittest.TestCase):
     """nakon_failed_steps: append, never clobber."""
 

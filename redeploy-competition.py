@@ -213,11 +213,17 @@ def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
             for t in domain_targets
         )
         if dc_reset:
-            stale_marker = comp_dir / f".nakon-domain-{team_key}-adds.json"
-            if stale_marker.exists():
-                print(f"  Deleting stale ADDS marker for {team_key} — the DC was reset, so "
-                      "it must be re-promoted, not assumed promoted.")
-                stale_marker.unlink()
+            # A reset DC wipes the ENTIRE AD content: promotion state, the svc-support
+            # and packet accounts, the AD misconfigs, and every member's machine
+            # account. Each chain step keys on its own done-marker, so ALL of this
+            # team's domain markers are void (live-found 2026-10-03: deleting only the
+            # ADDS marker re-promoted the DC but skipped account re-creation —
+            # svc-support went missing and verify's domain gate failed).
+            for marker in sorted(comp_dir.glob(f".nakon-domain-{team_key}-*.json")):
+                print(f"  Deleting stale domain marker {marker.name} — the DC was reset, "
+                      f"so the whole domain chain (promotion, AD content, member joins) "
+                      f"must re-run.")
+                marker.unlink()
         pipeline_api.deploy_domain_configs(
             {team_key: teams[team_key]}, boxes, comp_dir, domain_config_path,
             Path(ctx["ssh_key_path"]), os.environ["TF_VAR_vm_username"],
