@@ -372,7 +372,9 @@ resource "proxmox_virtual_environment_vm" "team_box" {
   }
 
   dynamic "network_device" {
-    for_each = each.value.box.in_path ? [] : [each.value.bridge]
+    # Every box (firewall included) gets its team-bridge NIC; for the in-path firewall it
+    # is net1 = LAN, following the WAN/transit net0 above.
+    for_each = [each.value.bridge]
     content {
       bridge = network_device.value
       model  = "virtio"
