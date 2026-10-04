@@ -157,7 +157,7 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None):
     return x
 
 
-def write_team_configs(comp_dir, teams, fw_box, red_dnat_spec=None):
+def write_team_configs(comp_dir, teams, red_dnat_spec=None):
     """Write config-team<id>.xml for every team into the comp's pfsense/ dir (kept as
     deploy artifacts — debugging a stuck console means diffing what the firewall got).
     Returns the seed-missing error when there is no seed to work from."""
