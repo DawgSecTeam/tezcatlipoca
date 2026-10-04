@@ -1,7 +1,7 @@
 """Teardown collects this run's test artifacts, and does it before anything is destroyed.
 
 The ordering is the whole feature, not a detail: `pre_stop_windows_boxes` hard-stops every team box, after which a stopped guest's agent can no
-longer answer (destroy-competition.py:487-491). A collector that runs one line later reads
+longer answer (destroy-competition.py, ahead of the pre-stop). A collector that runs one line later reads
 nothing and reports it as "absent", which is indistinguishable from a run that produced no
 evidence at all — exactly the ambiguity the artifact folder exists to remove.
 

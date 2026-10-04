@@ -309,7 +309,7 @@ class PlantCoverage(unittest.TestCase):
         self.assertIn("full config coverage", out)
 
     def test_missing_record_but_clean_tally_passes_via_fallback(self):
-        """deploy.py:105 promises this fallback: no --json outcome (older nakon)."""
+        """deploy_lib/coverage.py promises this fallback: no --json outcome (older nakon)."""
         tmp, comp_dir = _comp_dir()
         self.addCleanup(tmp.cleanup)
         _state(comp_dir, {"nakon_failed_steps": []})

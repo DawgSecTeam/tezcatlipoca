@@ -62,7 +62,7 @@ def check_plant_coverage(comp_dir):
     SUMMARY said "plant integrity: WARNING — last nakon plant recorded N FAILED
     step(s)". The whole premise of verify (docs/known-issues.md: nakon failures are
     silent by design) was vacuous in exactly that case. It now fails CLOSED: the
-    nakon tally deploy.py:105 promises as the fallback is consulted, a non-empty tally
+    nakon tally `deploy_lib/coverage.py` promises as the fallback is consulted, a non-empty tally
     can never PASS, and when neither source exists the gate FAILs with "coverage was
     never recorded".
 

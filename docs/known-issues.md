@@ -122,11 +122,11 @@ verified local value (cloud blue uses `120000`); do not set `reasoning_effort` f
 **Status: OPEN — latent; the name pattern is wrong for exactly one team.** `pre_stop_windows_boxes`
 exists to hard-stop every clone before `terraform destroy`, because a Windows DC whose guest agent is
 down never complies with the provider's graceful shutdown and holds the `qm` lock, hanging the whole
-destroy (`destroy-competition.py:126-141`). It matches VM names as `<identifier>-<box>`
-(`destroy-competition.py:162`), but terraform deliberately names team 1's VMs `team1-<box>` and only
+destroy (`destroy_sweep_ops.pre_stop_windows_boxes`). It matches VM names as `<identifier>-<box>`
+(the `f"{team['identifier']}-{box}"` match in `destroy_sweep_ops.py`), but terraform deliberately names team 1's VMs `team1-<box>` and only
 other teams' `<identifier>-<box>` (`terraform/main.tf:251-261`, comment: "Keys keep the historical
-naming (team1-<box>, <identifier>-<box>)"); `range_ops.enumerate_targets` implements the same
-special-case (`range_ops.py:668-669`), and every `teams.json` in the tree is keyed `team1…`
+naming (team1-<box>, <identifier>-<box>)"); `targets.enumerate_targets` implements the same
+special-case, and every `teams.json` in the tree is keyed `team1…`
 (`competitions/*/teams.json`). So team 1's boxes are never pre-stopped and can still hit the
 graceful-shutdown hang the function was written to prevent; other teams pre-stop correctly. Not a
 destroy failure — terraform still removes team 1 from state, just potentially slowly.

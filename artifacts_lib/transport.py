@@ -34,7 +34,7 @@ def _scp_files(ssh, remote, dest_dir, timeout=120):
 
     Direct first, then through the engine jump: the control host reaches red01 either way
     depending on the estate, and the harness has used this two-attempt shape since the first
-    scrim (run-agent-scrim.py:1906-1914). A failed attempt's partial file is always removed —
+    scrim (`scrim.red_link.pull_red_snapshot`). A failed attempt's partial file is always removed —
     a truncated events.jsonl that looks complete is worse than a loud failure."""
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)

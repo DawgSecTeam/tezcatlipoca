@@ -55,7 +55,7 @@ def collect_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=
     """Teardown's whole artifact step: the one call destroy-competition.py makes.
 
     Ordering is the entire point. destroy-competition.py calls this after the confirmation
-    prompt and *before* its first destructive call (:487-491): `pre_stop_windows_boxes` hard-
+    prompt and *before* its first destructive call (the `collect_for_teardown` call ahead of the pre-stop): `pre_stop_windows_boxes` hard-
     stops every clone, and a stopped guest's agent can no longer answer, so anything not read by
     then is gone. Red01 is worse — `badauto destroy` removes it before teardown even starts, so
     this is the safety net for the run whose harness died, not the primary path.
