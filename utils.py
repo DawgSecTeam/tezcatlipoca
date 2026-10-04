@@ -265,6 +265,23 @@ def compfile_value(path, key, default=""):
     return default
 
 
+def env_summary():
+    """One line naming the estate this run targets: endpoint/node/datastore/template/
+    engine mgmt IP. Live-found 2026-10-04: the repo carries several env variants
+    (main .env targets the DOWN .193; .150 lives in .env.cyberrange-20260930) and a
+    wrong-variant copy used to be visible only if someone read the file. Printed in
+    every entry script's banner so the first five lines betray the wrong estate."""
+    def get(name, default="?"):
+        return (os.environ.get(name) or "").strip() or default
+    endpoint = get("TF_VAR_proxmox_endpoint")
+    node = get("TF_VAR_proxmox_node")
+    datastore = get("TF_VAR_datastore")
+    template = get("TF_VAR_template_vm_id")
+    mgmt = get("TF_VAR_engine_mgmt_ip", "default")
+    return (f"endpoint={endpoint} node={node} datastore={datastore} "
+            f"tpl={template} engine-mgmt={mgmt}")
+
+
 def pick_competition(competitions, label="saved", action="Select a competition"):
     print(f"Found {len(competitions)} {label} competition(s):\n")
     for i, comp in enumerate(competitions, 1):

@@ -74,7 +74,12 @@ cp /path/to/main-tree/vendor/nakon/.env vendor/nakon/.env
 cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxmox` against terraform/
 ```
 
-- Pick the env file matching the target node and **check the stale-var traps**: the
+- Pick the env file matching the target node and **check the stale-var traps**: on .150 that is
+  `.env.cyberrange-20260930` (the MAIN `.env` targets the down .193 — copying it is the classic
+  wrong-variant mistake; every banner now prints the resolved endpoint/node/datastore so a wrong
+  copy shows immediately). The engine mgmt IP default (.250) is SSH-poisoned on .150's tailnet
+  path — the cyberrange variant pins `TF_VAR_engine_mgmt_ip=10.0.0.252`, and the preflight now
+  REFUSES an unverifiable default IP instead of proceeding. The
   `.env.realm-backup-20260923` (.150) variant shipped `TF_VAR_template_vm_id=9106` (dead vmid — the
   engine-base preflight hard-fails; correct value is **955**) and no `TF_VAR_team_identifiers`
   (default identifiers 101… collide with nothing by themselves, but on a shared node 100–124 are
@@ -116,6 +121,11 @@ Cheap habits that the session logs show being re-learned expensively:
   Never wrap a deploy in `timeout` to make it fit a tool call.
 - **Kill by pid or process group**, never `pkill -f` a pattern that also appears in the invoking
   command line.
+- **Never judge a command's success through a pipe** — `cmd | tail` reports the PIPE's exit code,
+  so a failed pytest/deploy reads as success (live: a red suite was briefly committed, 2026-10-04).
+  Check `${PIPESTATUS[0]}`, or redirect to a file and echo `$?` from the command itself.
+- **Never write "validated" in a commit message before it is.** State what was done and what the
+  next step proves; the report/docs are where validated claims live after they pass.
 
 ## Editing docs
 

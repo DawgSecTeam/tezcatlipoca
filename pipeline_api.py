@@ -39,6 +39,9 @@ from nakon_ops import (build_nakon_bundle, generate_nakon_config, generate_stage
 # Owned by ssh_ops.
 from ssh_ops import read_terraform_ctx, wait_for_boxes_ssh, wait_for_cloud_init
 
+# Owned by utils.
+from utils import env_summary
+
 # Owned by windows_ops.
 from windows_ops import bootstrap_windows_box
 
@@ -51,6 +54,7 @@ __all__ = [
     "build_nakon_bundle",
     "deploy_domain_configs",
     "ensure_nat_forwarding",
+    "env_summary",
     "fix_dns_on_boxes",
     "fix_services_on_boxes",
     "generate_nakon_config",

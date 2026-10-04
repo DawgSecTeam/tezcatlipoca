@@ -440,6 +440,8 @@ def main():
 
     mode = "FULL (templates destroyed)" if args.full else "teams-only (templates kept)"
     print("─── About to destroy " + "─" * 42)
+    from utils import env_summary
+    print(f"  Targeting   : {env_summary()}")
     print(f"  Competition : {name} ({competition})")
     print(f"  Teams       : {len(teams)}")
     print(f"  Boxes       : {len(boxes)} type(s)")
