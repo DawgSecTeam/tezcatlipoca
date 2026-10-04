@@ -313,11 +313,27 @@ def bootstrap_firewalls(node, teams, fw_targets, config_paths, ssh_ctx,
                        f"> /dev/null && sudo chmod 644 {engine_dir}/{path.name}",
                        timeout=60)
     try:
+        # A run killed mid-bootstrap (driver SIGKILLed before the finally) leaves its
+        # server holding the port — clear it and PROVE the bind landed, or every
+        # console drive fetches into the void (live-found 2026-10-04: an orphaned
+        # :8611 starved a whole phase-5 attempt silently).
+        ssh_on_gateway(ssh_ctx,
+                       f"sudo pkill -f 'http.server {FW_CONFIG_PORT}' || true",
+                       timeout=30)
+        time.sleep(1)
         ssh_on_gateway(ssh_ctx,
                        f"nohup python3 -m http.server {FW_CONFIG_PORT} --directory "
                        f"{engine_dir} > {engine_dir}/http.log 2>&1 & echo started",
                        timeout=30)
         time.sleep(2)
+        r = ssh_on_gateway(ssh_ctx, f"sudo ss -ltn | grep -c ':{FW_CONFIG_PORT}'",
+                           timeout=30)
+        if (r.stdout or "").strip() == "0":
+            tail = ssh_on_gateway(ssh_ctx, f"tail -5 {engine_dir}/http.log",
+                                  timeout=30).stdout
+            raise RuntimeError(
+                f"the engine's firewall-config HTTP server did not bind "
+                f":{FW_CONFIG_PORT} — http.log: {(tail or '').strip()[:200]}")
 
         for t in fw_targets:
             tid = t["identifier"]
