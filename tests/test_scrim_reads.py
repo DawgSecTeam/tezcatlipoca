@@ -16,8 +16,11 @@ did.
 """
 
 import importlib.util
+import json
+import re
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -153,6 +156,87 @@ class InjectCounting(unittest.TestCase):
             prompt = scrim.blue_cycle_prompt(1, creds, args, 0, 120, "", "", "", "")
         self.assertIn("submissions/", prompt)
         self.assertNotIn("> sub.md", prompt)
+
+
+class GateCalibration(unittest.TestCase):
+    """Per-run gate calibration (2026-10-04 hardening): the max_simultaneous_down gate
+    judges against red's own pacing cap, and the injects gate gets out of the way when
+    the comp publishes none."""
+
+    def _run_dir(self, pacing=None, injects_published=0, injects_submitted=0):
+        d = Path(tempfile.mkdtemp())
+        run = {"t0": 1000.0, "phase": "event"}
+        if pacing is not None:
+            run["pacing"] = pacing
+        (d / "run.json").write_text(json.dumps(run))
+        ev = d / "evidence"
+        (ev / "red").mkdir(parents=True)
+        (ev / "final-scoreboard.json").write_text(json.dumps({
+            "services": {"team1": [{"service": "web01-http", "up": True}]},
+            "injects": [{"ID": i, "Submissions": []}
+                        for i in range(injects_published)]}))
+        wd = d / "blue-team1"
+        wd.mkdir(exist_ok=True)
+        (wd / "feed.log").write_text("===== cycle 1 rc=0\n")
+        for n in range(injects_submitted):
+            (wd / f"sub-{n}.md").write_text("deliverable")
+        return d
+
+    def _gates(self, out):
+        rows = []
+        for line in (out[0] if isinstance(out, tuple) else out).splitlines():
+            m = re.match(r"\| (\w+) \| (\w+) \| ([^|]*) \| ([^|]*) \| ([^|]+?) \s*\|$", line)
+            if m:
+                rows.append((m.group(2), m.group(3).strip(), m.group(4).strip(), m.group(5)))
+        return rows
+
+    def test_max_sim_judges_against_the_pacing_cap(self):
+        d = self._run_dir(pacing={"max_concurrent_down_start": 2,
+                                  "max_concurrent_down_end": 2})
+        out = report.build_report(d)
+        rows = dict((k, (v, t, verdict)) for k, v, t, verdict in self._gates(out))
+        self.assertEqual(rows["max_simultaneous_down"][1], ">= 2",
+                         "the gate must judge against the cap red was actually given")
+
+    def test_legacy_run_dirs_keep_the_flat_four(self):
+        d = self._run_dir(pacing=None)
+        out = report.build_report(d)
+        rows = dict((k, (v, t, verdict)) for k, v, t, verdict in self._gates(out))
+        self.assertEqual(rows["max_simultaneous_down"][1], ">= 4")
+
+    def test_zero_published_injects_is_na_not_a_fail(self):
+        d = self._run_dir(injects_published=0)
+        out = report.build_report(d)
+        rows = dict((k, (v, t, verdict)) for k, v, t, verdict in self._gates(out))
+        self.assertEqual(rows["injects"][0], "n/a (comp ships none)")
+        self.assertNotIn("injects", [k for k, _, _, v in self._gates(out) if v == "FAIL"])
+
+    def test_submissions_above_published_still_count(self):
+        d = self._run_dir(injects_published=3, injects_submitted=2)
+        out = report.build_report(d)
+        rows = dict((k, (v, t, verdict)) for k, v, t, verdict in self._gates(out))
+        self.assertEqual(rows["injects"][0], "2")
+        self.assertEqual(rows["injects"][2], "PASS")
+
+    def test_spread_metric_names_the_dominant_target(self):
+        d = self._run_dir()
+        ev = d / "evidence" / "red"
+        # 4 takedowns: 3 on one host, 1 on another (run.json t0 anchors T+)
+        lines = []
+        for i, ip in enumerate(["192.168.130.5", "192.168.130.5", "192.168.130.5",
+                                "192.168.130.4"]):
+            ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(1000 + 60 * (i + 1)))
+            lines.append(json.dumps({
+                "ts": ts, "kind": "action", "tactic": "impact_service", "ok": True,
+                "target": ip,
+                "detail": f"svc is DOWN on {ip} (stop_disable)",
+                "data": {"unit": "svc", "mode": "stop_disable"}}))
+        (ev / "events.jsonl").write_text("\n".join(lines) + "\n")
+        (d / "evidence" / "red" / "world.json").write_text(json.dumps({"meta": {}}))
+        out = report.build_report(d)
+        self.assertRegex(out[0] if isinstance(out, tuple) else out,
+                         r"takedown spread: \*\*75%\*\* on one target")
+
 
 
 if __name__ == "__main__":

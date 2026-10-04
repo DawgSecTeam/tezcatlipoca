@@ -172,6 +172,34 @@ class NoTrackedSecrets(unittest.TestCase):
         )
         self.assertEqual(r.returncode, 0, "competitions/*/.automated-tests/ is not gitignored")
 
+    def test_no_runtime_state_is_tracked_in_comp_dirs(self):
+        """A competition directory ships its AUTHORING inputs, never its runtime state.
+
+        Runtime files carry this deploy's secrets (teams.json/credentials.txt are the
+        generated passwords, .deploy_state.json holds every one of them plus the run
+        identity) — and a comp dir that ships them invites a later deploy on another
+        host to adopt them as its own (wrong run id, wrong credentials, preflight
+        refusing on a phantom identity). Same reason as the artifacts rule above,
+        checked against the tracked set rather than the ignore rules.
+
+        Tracked on purpose (and NOT matched here): Compfile, boxes.json,
+        box_services.json, box_vulns.json, domain_roles.json, users.json, packet
+        inputs, injects/, pfsense seed configs."""
+        runtime = (".deploy_state.json", "teams.json", "credentials.txt",
+                   "targets.json", "nakon-config.json", ".frozen.json",
+                   ".template-hashes.json")
+        offenders = []
+        for f in _tracked_files():
+            if not f.startswith("competitions/"):
+                continue
+            name = f.rsplit("/", 1)[-1]
+            if name in runtime or (name.startswith("coverage-run") and name.endswith(".json")):
+                offenders.append(f)
+        self.assertEqual(
+            offenders, [],
+            "runtime state tracked in competition dirs — these carry this deploy's "
+            "secrets and identity:\n  " + "\n  ".join(offenders))
+
 
 class EnvVarStandard(unittest.TestCase):
     def setUp(self):

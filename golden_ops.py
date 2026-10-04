@@ -909,22 +909,38 @@ def expand_guest_root_disks(targets, ctx):
             # (live-found 2026-09-29 x3: ssh to the fresh golden flaky for minutes,
             # every box healthy afterwards) — warn and continue; a genuinely undersized
             # root dies loudly at first big plant, named by the plant coverage gate.
+            # The probe gets the SAME retry budget as the grow: a single immediate
+            # attempt inherited the boot-window flakiness and recorded a permanent
+            # "size unmeasurable" degradation on healthy boxes (2026-10-03: x1 + x4
+            # on two .150 runs).
             size_gb = 0.0
-            try:
-                probe = ssh_via_gateway(ctx, t["ip"], "df -BK / | awk 'NR==2{print $2}'",
-                                        timeout=60, user=ctx.get("box_username", "ubuntu"))
-                size_gb = int((probe.stdout or "0").strip().splitlines()[-1]) / 1024 ** 2
-            except (ValueError, IndexError, Exception):
-                size_gb = 0.0
+            for attempt in range(3):
+                try:
+                    probe = ssh_via_gateway(ctx, t["ip"],
+                                            "df -BK / | awk 'NR==2{print $2}'",
+                                            timeout=60,
+                                            user=ctx.get("box_username", "ubuntu"))
+                    size_gb = int((probe.stdout or "0").strip().splitlines()[-1]) / 1024 ** 2
+                    if size_gb:
+                        break
+                except (ValueError, IndexError, Exception):
+                    size_gb = 0.0
+                if attempt < 2:
+                    time.sleep(15)
             need_gb = max(int(t.get("disk_gb") or 10) - 4, 1)
             if size_gb and size_gb < need_gb:
                 raise RuntimeError(f"root-disk too small on golden {t['ip']} "
                                    f"({size_gb:.0f}G < {need_gb}G) and expansion failed "
                                    f"(rc={r.returncode}): {(r.stderr or out).strip()[:200]}")
-            note = f"{size_gb:.0f}G measured" if size_gb else "size unmeasurable"
-            record_degradation("golden root-disk expansion failed", f"{t['ip']}: {note}")
-            print(f"    {t['ip']}: WARNING expansion failed ({note}) — continuing; "
-                  f"first big plant will surface a truly undersized root")
+            if not size_gb:
+                note = "size unmeasurable"
+                record_degradation("golden root-disk expansion failed", f"{t['ip']}: {note}")
+                print(f"    {t['ip']}: WARNING expansion failed ({note}) — continuing; "
+                      f"first big plant will surface a truly undersized root")
+            else:
+                print(f"    {t['ip']}: expansion failed but root measures "
+                      f"{size_gb:.0f}G >= {need_gb}G — continuing without a degradation "
+                      f"(probe succeeded after retry; disk is big enough for the plants)")
         df_lines = [l for l in out.splitlines() if l.startswith("/dev/")]
         print(f"    {t['ip']}: root-disk expansion done"
               + (f" ({df_lines[-1].split()[2] if len(df_lines[-1].split()) > 2 else 'used=?'} used)" if df_lines else ""))

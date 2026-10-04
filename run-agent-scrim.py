@@ -336,6 +336,12 @@ def secure_evidence(path):
 
 def stage_author(args):
     src = Path(args.from_template or DEFAULT_TEMPLATE)
+    if not src.is_dir():
+        valid = sorted(p.name for p in (REPO / "competitions").iterdir() if p.is_dir())
+        raise RuntimeError(
+            f"template {src} does not exist. Pass --from-template with one of "
+            f"{valid} (the default template itself is gone — competitions/ dirs are "
+            f"curated; point DEFAULT_TEMPLATE at one that ships Compfile + boxes.json).")
     dst = REPO / "competitions" / args.new
     if dst.exists():
         raise RuntimeError(f"{dst} already exists")
@@ -362,6 +368,11 @@ def stage_author(args):
     compfile = (dst / "Compfile").read_text().splitlines()
     compfile[0] = f"name {args.new}"
     (dst / "Compfile").write_text("\n".join(compfile) + "\n")
+    if not (dst / "injects").exists():
+        log("WARNING: template ships no injects/ — blue's inject work is structurally "
+            "impossible on this comp (2026-10-03 scrim-fresh-a: injects gate n/a and "
+            "half of blue's job missing). Author at least two under "
+            f"{dst / 'injects'} before the event.")
     log("authored (scenario/creds carry over; edit Compfile/box_vulns.json to re-theme)")
 
 
@@ -609,13 +620,57 @@ def stage_verify(args, comp, creds):
                                           creds["BOX_PW"], script)
         return run_tree(argv, timeout=timeout, check=False, stdin_text=stdin_text)
 
-    # pick the unit that actually exists on this box (apache2 vs httpd across distros)
+    # pick the unit that actually exists on this box (apache2 vs httpd across distros),
+    # then hand the whole fire test to run_fire_test — injectable runners keep it
+    # unit-testable offline.
+    run_fire_test(args, comp, creds, ssh_web01, sudo_web01)
+
+
+def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
+    """Prove the scoring path end to end: stop web01's scored unit, watch the scoreboard
+    register it down, restore it, watch the scoreboard heal. Raises (aborting before T0)
+    rather than warning: firing blue into an unproven scoring path is how a whole event
+    goes unscored (run-12).
+
+    `ssh_web01(cmd)` runs a shell command as the box user, `sudo_web01(script)` as root —
+    injected so tests can script the box without SSH."""
+    units, svc_port, svc_display = _web01_units(comp)
+    web_ip = (json.loads((comp / "targets.json").read_text()).get("targets", {})
+              .get("team1-web01", {}).get("ip"))
+    web_ip = web_ip or f"192.168.{creds['TEAM1_ID']}.4"
     probe = ('u=""; for c in %s; do systemctl list-unit-files "$c.service" --no-legend '
              '2>/dev/null | grep -q . && u=$c && break; done; echo "$u"' % " ".join(units))
     r = ssh_web01(probe)
     unit = (r.stdout or "").strip().splitlines()[-1] if (r.stdout or "").strip() else units[0]
     args.web_unit = unit
     log(f"fire test unit: {unit} on {web_ip} (port {svc_port})")
+    port = os.environ.get("SCRIM_WEB01_PORT", str(svc_port))
+
+    # Residue guard: an aborted earlier fire test can leave the unit stopped (scrim-one
+    # 2026-10-03: web01's sshd died with the harness and the next attempt inherited the
+    # outage until a manual rollback). Restore BEFORE testing — a stop-then-restore cycle
+    # that starts from an already-down service proves nothing and heals nothing.
+    st = ssh_web01(f"systemctl is-active {shlex.quote(unit)}")
+    state = (st.stdout or "").strip().splitlines()[-1] if (st.stdout or "").strip() else "unknown"
+    if state != "active":
+        log(f"fire test: WARNING {unit} on {web_ip} is '{state}' — a previous aborted run "
+            f"left it down; restoring before testing")
+        sudo_web01(f"systemctl unmask {shlex.quote(unit)}; "
+                   f"systemctl start {shlex.quote(unit)}")
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            time.sleep(15)
+            st = ssh_web01(f"systemctl is-active {shlex.quote(unit)}")
+            state = ((st.stdout or "").strip().splitlines() or ["unknown"])[-1]
+            if state == "active":
+                break
+        if state != "active":
+            raise RuntimeError(
+                f"fire test: {unit} on {web_ip} was already down (pre-existing outage) and "
+                f"could not be restored. Fix it by hand first — ./mybox web01 'echo $BOX_PW | "
+                f"sudo -S systemctl unmask {unit} && sudo systemctl start {unit}' — or "
+                f"redeploy-competition.py --boxes web01 --mode rollback-ready.")
+        log(f"fire test: pre-existing outage on {unit} restored — proceeding")
     port = os.environ.get("SCRIM_WEB01_PORT", str(svc_port))
 
     def web01_http():
@@ -1037,8 +1092,9 @@ hunts) is fine inside your budget — two changes is the cap, not two commands:
    own access is key-based; rotate/lock the abused account). Restoring the symptom alone gets
    re-undone every minute.
 2. Else if an inject is due within 30 minutes and unsubmitted: investigate on the boxes, write the deliverable, ./submit-inject.
-3. Else: ONE hunt item from the notebook checklist (rogue UID-0 users, cron, systemd units, sudoers, firewall rules, listeners, Windows services/tasks/run-keys). Fix what is safe; never take a scored service down.
-4. Wrap up by minute 20: finish the current step, re-check the scoreboard, leave the
+3. Else if the scoreboard is green and an attacker has been active (any DOWN in CHANGES history, or red's name in a hunt finding): ONE eviction item — hunt the foothold, not just the symptom: unknown services/listeners, new cron/systemd units/scheduled tasks/Run keys, rogue accounts or UID-0, unfamiliar active sessions (`w`, `ss -tnp`, Windows logged-on users). When you find attacker persistence, REMOVE it and log the line `EVICTED: <what> on <box>` in LOG.md — the report counts evictions.
+4. Else (everything green, no attacker trace, no inject due): harden something REAL — a file backup of /etc plus a verify, a detection cron that logs new cron entries/units, package updates, password rotation on non-credlist accounts. Idling is not defending; leave the notebook a line saying what you hardened and why.
+5. Wrap up by minute 20: finish the current step, re-check the scoreboard, leave the
    SNAPSHOT line + LOG.md current so the next cycle starts warm.
 AFTER-ACTION REPORT: when you conclude — at the end of your last cycle, or as soon as you
    know you cannot continue — write REPORT.md in your workdir. An operator reads it after
@@ -1767,6 +1823,16 @@ def verify_red_reaches_teams(args, comp, creds):
         cwd=REPO, timeout=900, check=True, tail=25)
 
 
+def red_pacing_caps():
+    """The three concurrent-down caps red is paced by, in ONE place.
+
+    They land in bad-auto's config (stage_red) AND in the run manifest (record_phase) —
+    the scrim report judges max_simultaneous_down against the END cap, and a gate that
+    disagrees with the pacing it judges is a gate that fails red for obeying orders."""
+    return {"max_concurrent_down_start": 2, "max_concurrent_down_end": 4,
+            "max_concurrent_down_endgame": 6}
+
+
 def stage_red(args, comp, creds, run_dir):
     # Local endpoints (llama.cpp/qwen) are slow: tighter call timeout and no
     # JSON-retry double-call, or one decision can eat 8-16 min of a 90-min event.
@@ -1784,8 +1850,8 @@ def stage_red(args, comp, creds, run_dir):
         "pacing": {"decision_window_min": 2, "window_jitter_min": 1,
                    "active_burst_min": 15, "burst_jitter_min": 2, "quiet_min": 2, "quiet_jitter_min": 1,
                    "focus_rotation_min": max(10, args.duration_min // 8),
-                   "max_concurrent_down_start": 2, "max_concurrent_down_end": 4,
-                   "max_concurrent_down_endgame": 6, "access_deadline_remaining_min": args.duration_min // 4,
+                   **red_pacing_caps(),
+                   "access_deadline_remaining_min": args.duration_min // 4,
                    "endgame_start_remaining_min": 15,
                    "endgame_decision_window_sec": 60, "endgame_force_active": True,
                    "min_standing_services": 2, "credlist_gate_min": args.duration_min // 4,
@@ -2138,6 +2204,17 @@ def teardown_red(args, env):
                 f"retrying once before failing the teardown"
                 + (f"; stderr: {(proc.stderr or '')[-300:]}" if proc.stderr else ""))
         else:
+            # Leave the evidence where the post-mortem will look: the test folder
+            # survives the harness crash and the archive carries it out of the worktree.
+            test_dir = getattr(args, "test_dir", None)
+            if test_dir:
+                try:
+                    write_text_atomic(
+                        Path(test_dir) / "bad-auto-destroy.log",
+                        (proc.stdout or "") + "\n=== STDERR ===\n" + (proc.stderr or ""),
+                        mode=0o600)
+                except OSError as e:
+                    log(f"WARNING: could not write bad-auto-destroy.log: {e}")
             raise RuntimeError(
                 f"badauto destroy failed (rc={proc.returncode}) — red01 and its engine NAT "
                 f"rules may still be up. stderr tail: {(proc.stderr or '(captured nothing)')[-500:]}. "
@@ -2375,6 +2452,9 @@ def record_phase(run_dir, args, phase, t0=None):
         "t0": t0,
         "keep_range": bool(getattr(args, "keep_range", False)),
         "blue_watchdog": bool(getattr(args, "blue_watchdog", False)),
+        # red's concurrent-down caps: the scrim report's max_simultaneous_down gate
+        # judges against max_concurrent_down_end from here, not a hardcoded 4
+        "pacing": red_pacing_caps(),
         "phase": phase,
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     })

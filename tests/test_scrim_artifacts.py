@@ -530,6 +530,9 @@ class BluePrompt(TmpCase):
         # the change is additive: the cycle prompt's structure is untouched
         self.assertIn("CYCLE TASK", prompt)
         self.assertIn("ROE: never attack the engine", prompt)
+        # 2026-10-04 hardening: eviction guidance + the idle case
+        self.assertIn("EVICTED:", prompt)
+        self.assertIn("Idling is not defending", prompt)
 
     def test_stage_blues_asks_for_it_and_records_blue_identity(self):
         args = SimpleNamespace(competition="demo", teams=1, run_dir=str(self.run_dir),
@@ -546,6 +549,114 @@ class BluePrompt(TmpCase):
         self.assertEqual(manifest["paths"]["blue_workdirs"], [str(workdir)])
         self.assertEqual(manifest["paths"]["engine_evidence"],
                          str(self.run_dir / "evidence" / "engine"))
+
+
+class FireTest(TmpCase):
+    """The fire test, with the box and the scoreboard scripted (no SSH, no engine).
+
+    Pins three behaviors the 2026-10-03 scrims bought the hard way: the residue guard
+    (an aborted earlier run can leave the unit down — restore BEFORE testing), the
+    watched row (web01-<display>, not "first web01*"), and agreement polling (probe and
+    scoreboard must agree within the deadline, not one stale sample)."""
+
+    def setUp(self):
+        super().setUp()
+        (self.comp / "box_services.json").write_text(json.dumps({"web01": ["ssh", "nginx"]}))
+        (self.comp / "targets.json").write_text(json.dumps(
+            {"targets": {"team1-web01": {"ip": "192.168.130.4"}}}))
+        self.creds = {"ENGINE_IP": "10.0.0.250", "TEAM1_ID": "130", "TEAM1_PW": "p",
+                      "BOX_PW": "p", "INJECT_PW": "p", "KEY_PATH": "/tmp/k",
+                      "VM_USER": "u", "BOX_USER": "medic"}
+        self.args = SimpleNamespace(competition="demo", teams=1, duration_min=90)
+        self.sudo_calls = []
+        self.logs = []
+
+    def _ssh(self, states):
+        """ssh_web01 scripted by command content; `states` is the is-active answer queue."""
+        def runner(cmd, timeout=60):
+            if "is-active" in cmd:
+                return SimpleNamespace(returncode=0,
+                                       stdout=(states.pop(0) if states else "inactive") + "\n",
+                                       stderr="")
+            if "list-unit-files" in cmd:
+                return SimpleNamespace(returncode=0, stdout="nginx\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return runner
+
+    def _sudo(self):
+        def runner(script, timeout=120):
+            self.sudo_calls.append(script)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return runner
+
+    def _scoreboard(self, downs):
+        """parsed_status handing out one row-set per poll: `downs` says whether
+        web01-http is down on each successive poll; exhausted -> all green."""
+        seq = [[{"service": "web01-ssh", "up": True},
+                {"service": "web01-http", "up": not d}] for d in downs]
+
+        def parsed(creds, team):
+            return seq.pop(0) if seq else [{"service": "web01-ssh", "up": True},
+                                           {"service": "web01-http", "up": True}]
+        return parsed
+
+    def _run(self, states, downs, codes):
+        """Run the fire test on a FAKE clock: sleep is a no-op and each time.time()
+        call advances 30s, so the deadline loops terminate after a few polls."""
+        clock = {"t": 0.0}
+
+        def fake_time():
+            clock["t"] += 30
+            return clock["t"]
+
+        http_seq = list(codes)
+
+        def fake_run_tree(cmd, **kw):
+            return SimpleNamespace(returncode=0,
+                                   stdout=(http_seq.pop(0) if http_seq else "000"),
+                                   stderr="")
+
+        with mock.patch.object(scrim.time, "sleep", lambda s: None), \
+                mock.patch.object(scrim.time, "time", fake_time), \
+                mock.patch.object(scrim, "parsed_status", self._scoreboard(downs)), \
+                mock.patch.object(scrim, "run_tree", fake_run_tree), \
+                mock.patch.object(scrim, "log", side_effect=self.logs.append):
+            scrim.run_fire_test(self.args, self.comp, self.creds,
+                                self._ssh(states), self._sudo())
+
+    def test_green_path_stops_and_restores_the_scored_unit(self):
+        self._run(["active"], [True], ["000", "200"])
+        self.assertTrue(any("systemctl stop" in c for c in self.sudo_calls))
+        self.assertTrue(any("systemctl start" in c for c in self.sudo_calls))
+        self.assertEqual(self.args.web_unit, "nginx")
+        self.assertTrue(any("down_detected=True restored=True healed=True" in l
+                            for l in self.logs))
+
+    def test_pre_existing_outage_is_restored_before_the_stop(self):
+        self._run(["inactive", "active", "active"], [True], ["000", "200"])
+        self.assertTrue(any("pre-existing outage" in l for l in self.logs))
+        # the unmask/start came before the stop
+        self.assertLess([i for i, c in enumerate(self.sudo_calls) if "start" in c][0],
+                        [i for i, c in enumerate(self.sudo_calls) if "stop" in c][0])
+
+    def test_unrestorable_outage_aborts_before_the_stop(self):
+        with self.assertRaises(RuntimeError) as raised:
+            # every is-active poll answers inactive; time.time advances 30s per call so
+            # the guard's bounded loop terminates after a handful of polls
+            clock = {"t": 0.0}
+
+            def fake_time():
+                clock["t"] += 30
+                return clock["t"]
+
+            with mock.patch.object(scrim.time, "sleep", lambda s: None), \
+                    mock.patch.object(scrim.time, "time", fake_time), \
+                    mock.patch.object(scrim, "log", side_effect=self.logs.append):
+                scrim.run_fire_test(self.args, self.comp, self.creds,
+                                    self._ssh(["inactive"]), self._sudo())
+        self.assertIn("pre-existing outage", str(raised.exception))
+        self.assertFalse(any("systemctl stop" in c for c in self.sudo_calls),
+                         "must not stop a unit it could not first bring up")
 
 
 if __name__ == "__main__":
