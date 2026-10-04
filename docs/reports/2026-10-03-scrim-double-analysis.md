@@ -117,13 +117,15 @@ between the runs were the scoreboard-trap fixes:
    `--skip-deploy` attempt then inherits the outage (run 2 needed a manual `rollback-ready`).
    Cheap guard: before stopping anything, the fire test verifies the unit is active and, if
    not, restores it first and logs that it did. Owner: `run-agent-scrim.stage_verify`.
-3. **P2 — stop shipping runtime state in tracked comp dirs.** `scrim-one`'s committed
-   `.deploy_state.json` (with team passwords and a stale run id) silently redirected the fresh
-   deploy's identity/credential resolution until `--from-phase` rewrote it. Proposal: add
-   `.deploy_state.json`/`teams.json`/`credentials.txt`/`targets.json` to the tracked-comp-dir
-   hygiene test (same family as `test_no_test_artifact_is_tracked`), keep only
-   Compfile/boxes/pins/injects tracked. Owner: `tests/test_secret_hygiene.py` + a one-time
-   `git rm --cached`.
+3. **P2 — guard comp dirs against tracked runtime state.** Correction (verified 2026-10-04):
+   scrim-one's `.deploy_state.json` was worktree-local, NOT committed — the only tracked
+   runtime artifact today is `competitions/same-type-2box/coverage-run1.json`. The failure
+   mode this proposal guards (a comp dir shipping state/credentials into git where a later
+   deploy reads them as its own) remains worth a cheap structural guard: a hygiene test
+   asserting no tracked file under `competitions/*` matches
+   `.deploy_state.json`/`teams.json`/`credentials.txt`/`targets.json`/`nakon-config.json`/
+   `.frozen.json`/`.template-hashes.json`/`coverage-*.json`, then untrack the one offender.
+   Owner: `tests/test_secret_hygiene.py`. (Implementation: 2026-10-04 plan §B.)
 4. **P3 — align the rehearsal gates with red's pacing config.** `max_simultaneous_down >= 4`
    contradicts the harness-written pacing (`max_concurrent_down_start: 2` until the last 15
    minutes); either the gate reads the pacing it will be judged against, or the endgame burst
