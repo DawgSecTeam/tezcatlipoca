@@ -17,12 +17,13 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 import range_ops  # noqa: E402
+import vm_ownership  # noqa: E402
 
 RUN = "run-abcdef01"
 OTHER_RUN = "run-12345678"
@@ -41,9 +42,15 @@ def load_destroy():
 
 
 destroy = load_destroy()
+import destroy_sweep_ops  # noqa: E402
 import deploy  # noqa: E402
+from _deploy_patch import dpatch  # noqa: E402
+from deploy_lib import secrets as dl_secrets  # noqa: E402
+from deploy_lib import stages as dl_stages  # noqa: E402
+from deploy_lib import tfinputs as dl_tfinputs  # noqa: E402
 import config_ops  # noqa: E402
-import nodes_ops  # noqa: E402
+import placement_record  # noqa: E402
+import pve_api  # noqa: E402
 
 
 class FakePVE:
@@ -82,85 +89,70 @@ def vm(vmid, name, tags, status="stopped"):
     return {"vmid": vmid, "name": name, "tags": tags, "status": status}
 
 
-@patch.object(range_ops, "wait_for_proxmox_task", lambda *a, **k: None)
+@patch.object(vm_ownership, "wait_for_proxmox_task", lambda *a, **k: None)
 class DestroyVmOwnership(unittest.TestCase):
     """The shared delete primitive: only proven ownership is touchable."""
 
-    def test_untagged_vm_is_refused_by_default(self):
+    def test_untagged_vm_is_refused(self):
         fake = FakePVE(nodes={"n": [vm(4150, "mystery-box", "")]},
                        cfgs={4150: {}})
-        with patch.object(range_ops, "proxmox_api", fake):
-            with self.assertRaisesRegex(RuntimeError, "UNTAGGED vmid 4150.*escape hatch"):
+        with patch.object(vm_ownership, "proxmox_api", fake):
+            with self.assertRaisesRegex(RuntimeError, "UNTAGGED vmid 4150"):
                 range_ops.destroy_vm_if_exists("n", 4150, expect_tags={RUN, "tezcatlipoca"})
         self.assertEqual(fake.deleted, [])
 
-    def test_untagged_vm_destroyed_only_with_explicit_allowance(self):
-        fake = FakePVE(nodes={"n": [vm(4150, "mystery-box", "")]},
-                       cfgs={4150: {}})
-        with patch.object(range_ops, "proxmox_api", fake):
-            range_ops.destroy_vm_if_exists("n", 4150, expect_tags={RUN, "tezcatlipoca"},
-                                           allow_untagged=True)
+    def test_untagged_vm_with_this_comps_clone_marker_is_destroyed(self):
+        fake = FakePVE(nodes={"n": [vm(4150, "half-clone", "")]},
+                       cfgs={4150: {"description": range_ops.clone_marker(COMP)}})
+        with patch.object(vm_ownership, "proxmox_api", fake):
+            range_ops.destroy_vm_if_exists(
+                "n", 4150, expect_tags={"tezcatlipoca", f"comp-{COMP}", RUN})
         self.assertEqual(fake.deleted, [4150])
 
-    def test_same_comp_different_run_is_refused_with_legacy_hint(self):
-        fake = FakePVE(nodes={"n": [vm(4150, "someone-elses-box", OTHER)]},
-                       cfgs={4150: {"tags": OTHER}})
-        with patch.object(range_ops, "proxmox_api", fake):
-            with self.assertRaisesRegex(RuntimeError, "PRE-RUN-ID deploy|--legacy-tags"):
-                range_ops.destroy_vm_if_exists("n", 4150, expect_tags={RUN, "tezcatlipoca"})
-            # The hint fires for comp-tagged VMs missing the run tag specifically.
-            with self.assertRaisesRegex(RuntimeError, "PRE-RUN-ID deploy"):
+    def test_untagged_vm_with_another_comps_clone_marker_is_refused(self):
+        fake = FakePVE(nodes={"n": [vm(4150, "half-clone", "")]},
+                       cfgs={4150: {"description": range_ops.clone_marker("other")}})
+        with patch.object(vm_ownership, "proxmox_api", fake):
+            with self.assertRaisesRegex(RuntimeError, "UNTAGGED vmid 4150"):
                 range_ops.destroy_vm_if_exists(
                     "n", 4150, expect_tags={"tezcatlipoca", f"comp-{COMP}", RUN})
+        self.assertEqual(fake.deleted, [])
+
+    def test_same_comp_different_run_is_refused(self):
+        fake = FakePVE(nodes={"n": [vm(4150, "someone-elses-box", OTHER)]},
+                       cfgs={4150: {"tags": OTHER}})
+        with patch.object(vm_ownership, "proxmox_api", fake):
+            with self.assertRaisesRegex(RuntimeError, "outside this deploy's ownership set"):
+                range_ops.destroy_vm_if_exists("n", 4150, expect_tags={RUN, "tezcatlipoca"})
         self.assertEqual(fake.deleted, [])
 
     def test_full_ownership_set_passes(self):
         fake = FakePVE(nodes={"n": [vm(4150, "ours", OURS)]},
                        cfgs={4150: {"tags": OURS}})
-        with patch.object(range_ops, "proxmox_api", fake):
+        with patch.object(vm_ownership, "proxmox_api", fake):
             range_ops.destroy_vm_if_exists(
                 "n", 4150, expect_tags={"tezcatlipoca", f"comp-{COMP}", RUN})
         self.assertEqual(fake.deleted, [4150])
 
 
 class LeftoverSweep(unittest.TestCase):
-    """sweep_tagged_leftovers: run-id scoped, skipped without proof, legacy opt-in."""
+    """sweep_tagged_leftovers: only the full run-id-scoped ownership set is swept."""
 
     def test_run_scoped_sweep_leaves_other_runs_alone(self):
         fake = FakePVE(nodes={"n": [vm(2300, "ours", OURS),
                                     vm(2313, "other-run", OTHER, status="running"),
                                     vm(1080, "foreign", "tezcatlipoca;comp-other")]})
-        with patch.object(destroy, "proxmox_api", fake), \
-                patch.object(destroy, "wait_for_proxmox_task"):
-            destroy.sweep_tagged_leftovers(["n"], COMP, run_id=RUN)
+        with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
+                patch.object(destroy_sweep_ops, "wait_for_proxmox_task"):
+            destroy_sweep_ops.sweep_tagged_leftovers(["n"], COMP, run_id=RUN)
         self.assertEqual(fake.deleted, [2300])
-
-    def test_no_run_id_and_no_flag_skips_the_sweep(self):
-        fake = FakePVE(nodes={"n": [vm(2300, "comp-tagged", OTHER)]})
-        out = io.StringIO()
-        with patch.object(destroy, "proxmox_api", fake), \
-                contextlib.redirect_stdout(out):
-            destroy.sweep_tagged_leftovers(["n"], COMP)
-        self.assertEqual(fake.deleted, [])
-        self.assertIn("SKIPPED", out.getvalue())
-        self.assertIn("--legacy-tags", out.getvalue())
-
-    def test_legacy_flag_sweeps_by_comp_tags_with_a_warning(self):
-        fake = FakePVE(nodes={"n": [vm(2300, "comp-tagged", OTHER)]})
-        out = io.StringIO()
-        with patch.object(destroy, "proxmox_api", fake), \
-                patch.object(destroy, "wait_for_proxmox_task"), \
-                contextlib.redirect_stdout(out):
-            destroy.sweep_tagged_leftovers(["n"], COMP, legacy=True)
-        self.assertEqual(fake.deleted, [2300])
-        self.assertIn("WARNING", out.getvalue())
 
     def test_partial_overlap_is_never_a_candidate(self):
         fake = FakePVE(nodes={"n": [vm(1080, "foreign", "tezcatlipoca;comp-other"),
                                     vm(1333, "golden", "template")]})
-        with patch.object(destroy, "proxmox_api", fake), \
-                patch.object(destroy, "wait_for_proxmox_task"):
-            destroy.sweep_tagged_leftovers(["n"], COMP, run_id=RUN)
+        with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
+                patch.object(destroy_sweep_ops, "wait_for_proxmox_task"):
+            destroy_sweep_ops.sweep_tagged_leftovers(["n"], COMP, run_id=RUN)
         self.assertEqual(fake.deleted, [])
 
 
@@ -174,70 +166,40 @@ class PreStopOwnership(unittest.TestCase):
         fake = FakePVE(nodes={"n": [vm(301, "101-web01", OTHER, status="running"),
                                     vm(302, "101-web01", OURS, status="running")]})
         stopped = []
-        with patch.object(destroy, "proxmox_api", fake), \
-                patch.object(destroy, "wait_for_proxmox_task",
+        with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
+                patch.object(destroy_sweep_ops, "wait_for_proxmox_task",
                              side_effect=lambda n, u: stopped.append(n)):
-            destroy.pre_stop_windows_boxes(self.TEAMS, self.BOXES, "n",
+            destroy_sweep_ops.pre_stop_windows_boxes(self.TEAMS, self.BOXES, "n",
                                            expect_tags={"tezcatlipoca", f"comp-{COMP}", RUN})
         self.assertEqual(stopped, ["n"])
 
-    def test_no_tags_requires_only_comp_tags(self):
-        # Legacy state: comp-tag gate (today's semantics), name still must match.
-        fake = FakePVE(nodes={"n": [vm(301, "101-web01", f"tezcatlipoca,comp-{COMP}",
-                                       status="running")]})
-        stopped = []
-        with patch.object(destroy, "proxmox_api", fake), \
-                patch.object(destroy, "wait_for_proxmox_task",
-                             side_effect=lambda n, u: stopped.append(n)):
-            destroy.pre_stop_windows_boxes(self.TEAMS, self.BOXES, "n",
-                                           expect_tags={"tezcatlipoca", f"comp-{COMP}"})
-        self.assertEqual(stopped, ["n"])
-
-
-class CloneMapFailClosed(unittest.TestCase):
-    """destroy_cloned_vms: a failed node listing must never purge blind."""
-
-    def test_listing_failure_skips_entries(self):
-        fake = FakePVE(nodes={"n": [vm(101, "web01", "")]}, listing_fails={"n"})
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "cloned_vms.json"
-            path.write_text(json.dumps({"web01": {"vmid": 101, "node": "n"}}))
-            out = io.StringIO()
-            with patch.object(destroy, "proxmox_api", fake), \
-                    patch.object(destroy, "wait_for_proxmox_task"), \
-                    contextlib.redirect_stdout(out):
-                destroy.destroy_cloned_vms(path, "n")
-        self.assertEqual(fake.deleted, [])
-        self.assertIn("NOT deleting without a live check", out.getvalue())
-
-
 class ReportRemainingClassification(unittest.TestCase):
-    def test_ours_other_run_and_legacy_are_distinguished(self):
+    def test_ours_other_run_and_untagged_run_are_distinguished(self):
         fake = FakePVE(nodes={"n": [vm(2300, "ours", OURS),
                                     vm(2313, "other-run", OTHER),
                                     vm(2314, "legacy", f"tezcatlipoca,comp-{COMP}")]})
         out = io.StringIO()
-        with patch.object(destroy, "proxmox_api", fake), \
+        with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
                 contextlib.redirect_stdout(out):
-            destroy.report_remaining(["n"], COMP, {"team1": {"identifier": "101"}},
+            destroy_sweep_ops.report_remaining(["n"], COMP, {"team1": {"identifier": "101"}},
                                      run_id=RUN)
         text = out.getvalue()
         self.assertIn("OURS", text)
         self.assertIn("DIFFERENT run", text)
-        self.assertIn("no run id recorded", text)
+        self.assertIn("carries no run tag", text)
 
 
 class RetagOwnership(unittest.TestCase):
     def test_missing_run_tag_is_added(self):
         fake = FakePVE(cfgs={4150: {"tags": f"tezcatlipoca,comp-{COMP}"}})
-        with patch.object(range_ops, "proxmox_api", fake):
+        with patch.object(vm_ownership, "proxmox_api", fake):
             range_ops.retag_ownership("n", 4150,
                                       {"tezcatlipoca", f"comp-{COMP}", RUN})
         self.assertEqual(fake.puts[0][1]["tags"], f"comp-{COMP};run-abcdef01;tezcatlipoca")
 
     def test_current_tags_are_a_noop(self):
         fake = FakePVE(cfgs={4150: {"tags": OURS}})
-        with patch.object(range_ops, "proxmox_api", fake):
+        with patch.object(vm_ownership, "proxmox_api", fake):
             range_ops.retag_ownership("n", 4150,
                                       {"tezcatlipoca", f"comp-{COMP}", RUN})
         self.assertEqual(fake.puts, [])
@@ -245,7 +207,7 @@ class RetagOwnership(unittest.TestCase):
     def test_foreign_vm_is_never_retagged(self):
         fake = FakePVE(cfgs={4150: {"tags": "tezcatlipoca;comp-something-else"}})
         out = io.StringIO()
-        with patch.object(range_ops, "proxmox_api", fake), \
+        with patch.object(vm_ownership, "proxmox_api", fake), \
                 contextlib.redirect_stdout(out):
             range_ops.retag_ownership("n", 4150,
                                       {"tezcatlipoca", f"comp-{COMP}", RUN})
@@ -287,27 +249,27 @@ class DeployContextTags(unittest.TestCase):
 
 
 class RunIdMinting(unittest.TestCase):
-    """_resolve_competition_teams + _mint_competition_secrets: the run id is minted
+    """resolve_competition_teams + mint_competition_secrets: the run id is minted
     once per comp dir and reused forever after."""
 
     def _spec(self):
-        return deploy.CompetitionSpec(comp_name=COMP, credlist_usernames=[])
+        return dl_stages.CompetitionSpec(comp_name=COMP, credlist_usernames=[])
 
     def test_fresh_deploy_mints_a_run_id_into_state(self):
         with tempfile.TemporaryDirectory() as d:
-            prior = deploy.PriorDeployState(state_path=Path(d) / "s.json",
+            prior = dl_stages.PriorDeployState(state_path=Path(d) / "s.json",
                                             previous_state={}, resuming=False)
-            secrets = deploy.CompetitionSecrets()
-            with patch.object(deploy, "write_state"), \
-                    patch.object(deploy, "collect_teams",
+            secrets = dl_stages.CompetitionSecrets()
+            with dpatch("write_state"), \
+                    dpatch("collect_teams",
                                  return_value={"team1": {"identifier": "101",
                                                          "password": "x"}}):
-                deploy._resolve_competition_teams(
+                dl_secrets.resolve_competition_teams(
                     secrets, prior, self._spec(), 1,
-                    deploy.RunIdentity(engine_vmid=1000), 1)
-                deploy._mint_competition_secrets(
-                    secrets, prior, self._spec(), deploy.CompetitionInputs(),
-                    deploy.RunIdentity(engine_vmid=1000))
+                    dl_stages.RunIdentity(engine_vmid=1000), 1)
+                dl_secrets.mint_competition_secrets(
+                    secrets, prior, self._spec(), dl_stages.CompetitionInputs(),
+                    dl_stages.RunIdentity(engine_vmid=1000))
         self.assertRegex(secrets.run_id, r"^run-[0-9a-f]{8}$")
         self.assertEqual(secrets.state["run_id"], secrets.run_id)
 
@@ -317,13 +279,13 @@ class RunIdMinting(unittest.TestCase):
             state_path.write_text(json.dumps({
                 "run_id": RUN, "last_phase": 3,
                 "teams": {"team1": {"identifier": "101", "password": "x"}}}))
-            prior = deploy.PriorDeployState(state_path=state_path,
+            prior = dl_stages.PriorDeployState(state_path=state_path,
                                             previous_state={"run_id": RUN}, resuming=True)
-            secrets = deploy.CompetitionSecrets()
-            with patch.object(deploy, "write_state"):
-                deploy._resolve_competition_teams(
+            secrets = dl_stages.CompetitionSecrets()
+            with dpatch("write_state"):
+                dl_secrets.resolve_competition_teams(
                     secrets, prior, self._spec(), None,
-                    deploy.RunIdentity(engine_vmid=1000), 4)
+                    dl_stages.RunIdentity(engine_vmid=1000), 4)
         self.assertEqual(secrets.run_id, RUN)
         self.assertEqual(secrets.state["run_id"], RUN)
 
@@ -334,23 +296,22 @@ class TfvarsCarryRunTag(unittest.TestCase):
             comp_dir = Path(d)
             tf_dir = comp_dir / "terraform"
             tf_dir.mkdir()
-            secrets = deploy.CompetitionSecrets(run_id=RUN, teams={}, number_of_teams=0)
-            terraform = deploy.TerraformInputs()
+            secrets = dl_stages.CompetitionSecrets(run_id=RUN, teams={}, number_of_teams=0)
+            terraform = dl_stages.TerraformInputs()
             captured = {}
             env = {"TF_VAR_ssh_private_key_path": "/tmp/key",
                    "TF_VAR_proxmox_node": "pve",
                    "TF_VAR_proxmox_endpoint": "https://pve:8006/"}
             with patch.dict(os.environ, env, clear=True), \
-                    patch.object(deploy, "ensure_terraform_workdir", return_value=tf_dir), \
-                    patch.object(deploy, "update_env"), \
-                    patch.object(deploy, "write_text_atomic",
+                    dpatch("ensure_terraform_workdir", return_value=tf_dir), \
+                    dpatch("update_env"), \
+                    dpatch("write_text_atomic",
                                  side_effect=lambda p, t: captured.__setitem__(str(p), t)):
-                deploy._build_terraform_inputs(
+                dl_tfinputs.build_terraform_inputs(
                     terraform, comp_dir,
-                    deploy.CompetitionSpec(comp_name=COMP, boxes=[{"name": "web01",
+                    dl_stages.CompetitionSpec(comp_name=COMP, boxes=[{"name": "web01",
                                                                    "template": "t"}]),
-                    secrets, deploy.PriorDeployState(), deploy.RunIdentity(1000),
-                    deploy.EnginePlacement(), 1)
+                    secrets, dl_stages.RunIdentity(1000), dl_stages.EnginePlacement())
         tfvars = json.loads(captured[str(tf_dir / "terraform.tfvars.json")])
         self.assertEqual(tfvars["run_tag"], RUN)
 
@@ -373,19 +334,22 @@ class MultinodePreflightRunAware(unittest.TestCase):
         base_template = dict(vm(900, "ubuntu-fix", "template"), node="n1")
         base_template["template"] = 1
         with patch.dict(os.environ, {"TOK_N1": "t"}), \
-                patch.object(nodes_ops, "record_of",
+                patch.object(placement_record, "record_of",
                              side_effect=lambda pl, n: SimpleNamespace(
                                  node=n, engine_base_vmid=900, datastore="local-zfs")), \
-                patch.object(nodes_ops, "teams_on_node",
+                patch.object(placement_record, "teams_on_node",
                              side_effect=lambda pl, n: [k for k, v in
                                                         pl["team_nodes"].items() if v == n]), \
-                patch.object(range_ops, "cluster_vms_for",
+                patch.object(pve_api, "cluster_vms_for",
                              return_value=[colliding, base_template]), \
-                patch.object(config_ops, "has_clone_marker", return_value=False), \
-                patch.object(config_ops, "proxmox_api",
-                             return_value={"data": {"ostype": "l26",
-                                                    "ide2": "local:vm-900-cloudinit"}}), \
-                patch.object(config_ops, "_catalog_gate"):
+                patch.object(vm_ownership, "has_clone_marker", return_value=False), \
+                patch("preflight.templates.proxmox_api",
+                      return_value={"data": {"ostype": "l26",
+                                             "ide2": "local:vm-900-cloudinit"}}), \
+                patch("preflight.clashes.proxmox_api", return_value={"data": []}), \
+                patch("preflight.headroom.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
+                patch("preflight.concurrency.gate_concurrent_deploys"), \
+                patch("preflight.catalog.catalog_gate"):
             config_ops.preflight_gates_multinode(
                 Path("competitions/example"), boxes, self.TEAMS, 1000, self.PLACEMENT,
                 engine_mgmt_ip=None, check_free=True, our_run_tag=RUN)
@@ -393,7 +357,7 @@ class MultinodePreflightRunAware(unittest.TestCase):
     def test_same_comp_tag_without_run_tag_is_a_collision(self):
         with self.assertRaises(SystemExit) as ctx:
             self._run("tezcatlipoca,comp-example")
-        self.assertIn("--legacy-tags", str(ctx.exception))
+        self.assertIn("ANOTHER worktree", str(ctx.exception))
 
     def test_full_ownership_match_is_ours(self):
         # The engine tagged with the FULL set is this deploy's leftover: phase 1

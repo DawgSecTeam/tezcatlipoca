@@ -32,8 +32,8 @@ Run identity makes this safe on the host too (2026-10-02): each deploy stamps a 
 `run-<id>` tag on everything it creates and every destroy path requires the full ownership set, so
 two worktrees may deploy the SAME competition ID without their teardowns eating each other's VMs —
 coexistence still needs distinct `--scoring-vmid` + team identifiers (preflight refuses real
-collisions). Legacy state without a run id: teardown's sweep stays OFF until `--legacy-tags`, and
-untagged VMs need `--allow-untagged`. Details:
+collisions). A state file with no run id is refused by teardown outright, and untagged VMs are
+never destroyed unless they carry this competition's clone marker. Details:
 [docs/usage-agents.md](docs/usage-agents.md#run-ownership-teardown-only-touches-this-deploys-vms-2026-10-02).
 
 **The preflight now enforces the other half of this.** Before anything else it refuses to start when
@@ -120,8 +120,8 @@ Cheap habits that the session logs show being re-learned expensively:
 ## Editing docs
 
 Docs are held to the same standard as code: **verify every claim against the source before writing
-it** (the pipeline is generation "v2" — golden templates + linked clones — and passages written
-against the pre-golden pipeline are still being found), prefer one canonical statement plus links
+it** (there is one pipeline — golden templates + linked clones — and passages written against
+older pipelines may still turn up), prefer one canonical statement plus links
 over copies. If a doc and the
 code disagree and the code looks like the bug, document the code's actual behavior and flag the
 discrepancy (`docs/known-issues.md`) rather than silently "fixing" the doc. Fixed issues are

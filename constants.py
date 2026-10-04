@@ -2,6 +2,10 @@
 
 from pathlib import Path
 
+# Stamped into .deploy_state.json by deploy.py; deploy resume and redeploy refuse state
+# written by any other value (the phase numbering is part of what the number means).
+PIPELINE_VERSION = 3
+
 MAX_BOXES_PER_TEAM = 10
 
 MAX_TEAMS = 154
@@ -54,7 +58,7 @@ DOMAIN_INFRA_CONFIGS = {"ADDS", "Domain Join", "domain-join"}
 #              (boot-hostile configs planted earlier would brick the rebooting member),
 #              and Linux realmd joins need working DNS + apt for the realmd install
 #              (plausibly the long-documented "Linux member joins blow their timeouts"
-#              flakiness — v1's plant ordering carried the same interaction). This is the
+#              flakiness). This is the
 #              as-started competition flavor, so it lands right before beacons/tz-ready.
 #
 # Within each pass, DISRUPTIVE_CONFIGS still sort last per machine.

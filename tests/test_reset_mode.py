@@ -16,10 +16,10 @@ Covers:
 
 Offline; no Proxmox, no terraform, no SSH."""
 
-import importlib.util
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from contextlib import nullcontext, redirect_stdout
@@ -27,10 +27,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 _REPO = Path(__file__).resolve().parents[1]
-_SPEC = importlib.util.spec_from_file_location(
-    "redeploy_reset_test", _REPO / "redeploy-competition.py")
-redeploy = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(redeploy)
+sys.path.insert(0, str(_REPO))
+
+import pipeline_api  # noqa: E402
+import redeploy_light_ops  # noqa: E402
+import redeploy_plant_ops  # noqa: E402
+import redeploy_rebuild_ops  # noqa: E402
+import redeploy_reset_ops  # noqa: E402
 
 from constants import ownership_tags  # noqa: E402
 from range_ops import clone_marker  # noqa: E402
@@ -101,13 +104,13 @@ class LadderTests(unittest.TestCase):
             calls["prepare"] += 1
             return ("cfg", "bundle")
 
-        with patch.object(redeploy, "mode_rollback", side_effect=fake_rollback), \
-             patch.object(redeploy, "mode_rebuild", side_effect=fake_rebuild), \
-             patch.object(redeploy, "probe_box_health", side_effect=fake_probe), \
-             patch.object(redeploy, "list_snapshots", side_effect=fake_snaps), \
-             patch.object(redeploy, "prepare_nakon_assets", side_effect=fake_prepare), \
-             patch.object(redeploy, "scored_ports_for", return_value={}):
-            out = redeploy.mode_reset(targets, CTX, "pve", Path("competitions/x"),
+        with patch.object(redeploy_reset_ops, "mode_rollback", side_effect=fake_rollback), \
+             patch.object(redeploy_reset_ops, "mode_rebuild", side_effect=fake_rebuild), \
+             patch.object(redeploy_reset_ops, "probe_box_health", side_effect=fake_probe), \
+             patch.object(redeploy_reset_ops, "list_snapshots", side_effect=fake_snaps), \
+             patch.object(redeploy_reset_ops, "prepare_nakon_assets", side_effect=fake_prepare), \
+             patch.object(redeploy_reset_ops, "scored_ports_for", return_value={}):
+            out = redeploy_reset_ops.mode_reset(targets, CTX, "pve", Path("competitions/x"),
                                       {"box_password": "pw"}, {}, [], "easy")
         if probe_calls is not None:
             self.assertEqual(calls["probe"], probe_calls)
@@ -202,13 +205,13 @@ class RollbackOrderTests(unittest.TestCase):
 
     def _run(self, snapshot, snaps):
         order = []
-        with patch.object(redeploy, "list_snapshots", return_value=set(snaps)), \
-             patch.object(redeploy, "delete_snapshot",
+        with patch.object(redeploy_light_ops, "list_snapshots", return_value=set(snaps)), \
+             patch.object(redeploy_light_ops, "delete_snapshot",
                           side_effect=lambda *a: order.append(("delete", a[2]))), \
-             patch.object(redeploy, "rollback_snapshot",
+             patch.object(redeploy_light_ops, "rollback_snapshot",
                           side_effect=lambda *a: order.append(("rollback", a[2]))), \
-             patch.object(redeploy.pipeline_api, "wait_for_boxes_ssh"):
-            redeploy.mode_rollback([T1], CTX, "pve", snapshot, Path("c"), {},
+             patch.object(pipeline_api, "wait_for_boxes_ssh"):
+            redeploy_light_ops.mode_rollback([T1], CTX, "pve", snapshot, Path("c"), {},
                                    None, None, reconfigure=False)
         return order
 
@@ -229,76 +232,76 @@ class ProbeTests(unittest.TestCase):
 
     def setUp(self):
         # Never actually sleep between probe attempts.
-        self._sleep = patch.object(redeploy.time, "sleep", lambda s: None)
+        self._sleep = patch.object(redeploy_reset_ops.time, "sleep", lambda s: None)
         self._sleep.start()
         self.addCleanup(self._sleep.stop)
 
     def test_healthy_when_ssh_ok_and_ports_open(self):
-        with patch.object(redeploy, "classify_ssh_failure", return_value="ok"), \
-             patch.object(redeploy, "ports_closed_from_engine", return_value=set()):
-            verdict, detail = redeploy.probe_box_health(CTX, T1, [22, 80], "pve")
+        with patch.object(redeploy_reset_ops, "classify_ssh_failure", return_value="ok"), \
+             patch.object(redeploy_reset_ops, "ports_closed_from_engine", return_value=set()):
+            verdict, detail = redeploy_reset_ops.probe_box_health(CTX, T1, [22, 80], "pve")
         self.assertEqual(verdict, "healthy")
         self.assertIn("ssh", detail)
 
     def test_pam_trap_is_passed_through_verbatim(self):
-        with patch.object(redeploy, "classify_ssh_failure", return_value="pam-trap"), \
-             patch.object(redeploy, "ports_closed_from_engine") as p_ports:
-            verdict, detail = redeploy.probe_box_health(CTX, T1, [22], "pve")
+        with patch.object(redeploy_reset_ops, "classify_ssh_failure", return_value="pam-trap"), \
+             patch.object(redeploy_reset_ops, "ports_closed_from_engine") as p_ports:
+            verdict, detail = redeploy_reset_ops.probe_box_health(CTX, T1, [22], "pve")
         self.assertEqual(verdict, "pam-trap")
         self.assertIn("PAM", detail)
         p_ports.assert_not_called()  # a trapped box is decided at SSH, not ports
 
     def test_windows_boxes_probe_via_guest_agent(self):
         win = _target(WIN_BOX, 2105)
-        with patch.object(redeploy, "wait_for_guest_agent", return_value=True) as p_agent, \
-             patch.object(redeploy, "classify_ssh_failure") as p_ssh, \
-             patch.object(redeploy, "ports_closed_from_engine", return_value=set()):
-            verdict, detail = redeploy.probe_box_health(CTX, win, [3389], "pve")
+        with patch.object(redeploy_reset_ops, "wait_for_guest_agent", return_value=True) as p_agent, \
+             patch.object(redeploy_reset_ops, "classify_ssh_failure") as p_ssh, \
+             patch.object(redeploy_reset_ops, "ports_closed_from_engine", return_value=set()):
+            verdict, detail = redeploy_reset_ops.probe_box_health(CTX, win, [3389], "pve")
         self.assertEqual(verdict, "healthy")
         self.assertIn("guest agent", detail)
         p_agent.assert_called_once()
         p_ssh.assert_not_called()  # Windows never reaches the bash/SSH executor
 
     def test_closed_ports_retry_then_report_unhealthy(self):
-        with patch.object(redeploy, "classify_ssh_failure", return_value="ok"), \
-             patch.object(redeploy, "ports_closed_from_engine",
+        with patch.object(redeploy_reset_ops, "classify_ssh_failure", return_value="ok"), \
+             patch.object(redeploy_reset_ops, "ports_closed_from_engine",
                           return_value={80}) as p_ports:
-            verdict, detail = redeploy.probe_box_health(CTX, T1, [22, 80], "pve")
+            verdict, detail = redeploy_reset_ops.probe_box_health(CTX, T1, [22, 80], "pve")
         self.assertEqual(verdict, "unhealthy")
-        self.assertEqual(p_ports.call_count, redeploy.RESET_PROBE_ATTEMPTS)
+        self.assertEqual(p_ports.call_count, redeploy_reset_ops.RESET_PROBE_ATTEMPTS)
         self.assertIn("80", detail)
 
     def test_ssh_unreachable_then_ok_reports_healthy(self):
         verdicts = iter(["unreachable", "unreachable", "ok"])
-        with patch.object(redeploy, "classify_ssh_failure",
+        with patch.object(redeploy_reset_ops, "classify_ssh_failure",
                           side_effect=lambda *a, **k: next(verdicts)), \
-             patch.object(redeploy, "ports_closed_from_engine", return_value=set()):
-            verdict, _ = redeploy.probe_box_health(CTX, T1, [], "pve")
+             patch.object(redeploy_reset_ops, "ports_closed_from_engine", return_value=set()):
+            verdict, _ = redeploy_reset_ops.probe_box_health(CTX, T1, [], "pve")
         self.assertEqual(verdict, "healthy")
 
 
 class PortsClosedFromEngineTests(unittest.TestCase):
 
     def _engine(self, stdout):
-        return patch.object(redeploy, "ssh_to_engine",
+        return patch.object(redeploy_reset_ops, "ssh_to_engine",
                             return_value=MagicMock(returncode=0, stdout=stdout))
 
     def test_port_tokens_match_exactly(self):
         """P2=OK must not satisfy a P22 probe (or vice versa) — matching is by whole
         whitespace token, not substring."""
         with self._engine("P2=CLOSED\nP22=OK\n"):
-            closed = redeploy.ports_closed_from_engine(CTX, "192.168.104.10", [2, 22])
+            closed = redeploy_reset_ops.ports_closed_from_engine(CTX, "192.168.104.10", [2, 22])
         self.assertEqual(closed, {2})
 
     def test_engine_failure_marks_every_port_closed(self):
-        with patch.object(redeploy, "ssh_to_engine", side_effect=RuntimeError("dead")):
-            closed = redeploy.ports_closed_from_engine(CTX, "192.168.104.10", [22, 80])
+        with patch.object(redeploy_reset_ops, "ssh_to_engine", side_effect=RuntimeError("dead")):
+            closed = redeploy_reset_ops.ports_closed_from_engine(CTX, "192.168.104.10", [22, 80])
         self.assertEqual(closed, {22, 80})
 
     def test_no_ports_never_touches_the_engine(self):
-        with patch.object(redeploy, "ssh_to_engine",
+        with patch.object(redeploy_reset_ops, "ssh_to_engine",
                           side_effect=AssertionError("must not be called")):
-            self.assertEqual(redeploy.ports_closed_from_engine(CTX, "1.2.3.4", []), set())
+            self.assertEqual(redeploy_reset_ops.ports_closed_from_engine(CTX, "1.2.3.4", []), set())
 
 
 class ScoredPortsTests(unittest.TestCase):
@@ -313,12 +316,12 @@ class ScoredPortsTests(unittest.TestCase):
                                      "check": "Tcp", "display": "dns", "port": 53}],
                 "ftp01": [{"name": "IIS FTP", "plant_only": True}],
             }))
-            ports = redeploy.scored_ports_for(comp)
+            ports = redeploy_reset_ops.scored_ports_for(comp)
         self.assertEqual(ports, {"web01": [53, 80]})
 
     def test_missing_file_is_empty_not_fatal(self):
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(redeploy.scored_ports_for(Path(tmp)), {})
+            self.assertEqual(redeploy_reset_ops.scored_ports_for(Path(tmp)), {})
 
 
 class RebuildStampingTests(unittest.TestCase):
@@ -345,45 +348,38 @@ class RebuildStampingTests(unittest.TestCase):
             env = {"TF_VAR_proxmox_node": "pve", "TF_VAR_ssh_public_key": "ssh-ed25519 AAA",
                    "TF_VAR_template_vm_id": "1000", "TF_VAR_vm_username": "ops"}
             with patch.dict(os.environ, env), \
-                 patch.object(redeploy, "proxmox_api", side_effect=fake_pve), \
-                 patch.object(redeploy, "destroy_vm_if_exists"), \
-                 patch.object(redeploy, "wait_for_proxmox_task"), \
-                 patch.object(redeploy, "stored_template_hash", return_value="abc"), \
-                 patch.object(redeploy, "start_vm"), \
-                 patch.object(redeploy, "take_snapshot"), \
-                 patch.object(redeploy, "timed", return_value=nullcontext()), \
-                 patch.object(redeploy.pipeline_api, "wait_for_boxes_ssh"), \
-                 patch.object(redeploy.pipeline_api, "wait_for_cloud_init"), \
-                 patch.object(redeploy.pipeline_api, "fix_services_on_boxes"), \
-                 patch.object(redeploy.pipeline_api, "ensure_nat_forwarding"), \
-                 patch.object(redeploy, "rerun_domain_configs", return_value=True):
+                 patch.object(redeploy_rebuild_ops, "proxmox_api", side_effect=fake_pve), \
+                 patch.object(redeploy_rebuild_ops, "destroy_vm_if_exists"), \
+                 patch.object(redeploy_rebuild_ops, "wait_for_proxmox_task"), \
+                 patch.object(redeploy_rebuild_ops, "stored_template_hash", return_value="abc"), \
+                 patch.object(redeploy_rebuild_ops, "start_vm"), \
+                 patch.object(redeploy_rebuild_ops, "take_snapshot"), \
+                 patch.object(redeploy_rebuild_ops, "timed", return_value=nullcontext()), \
+                 patch.object(pipeline_api, "wait_for_boxes_ssh"), \
+                 patch.object(pipeline_api, "wait_for_cloud_init"), \
+                 patch.object(pipeline_api, "fix_services_on_boxes"), \
+                 patch.object(pipeline_api, "ensure_nat_forwarding"), \
+                 patch.object(redeploy_rebuild_ops, "rerun_domain_configs", return_value=True):
                 buf = io.StringIO()
                 with redirect_stdout(buf):
-                    redeploy.mode_rebuild([target], CTX, "pve", comp_dir, state,
+                    redeploy_rebuild_ops.mode_rebuild([target], CTX, "pve", comp_dir, state,
                                           comp_dir / "cfg", comp_dir / "bundle")
         return calls, buf.getvalue(), comp_dir.name
 
     def test_clone_carries_the_marker_description_and_full_ownership_tags(self):
         t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
-        for version in (2, 3):
-            with self.subTest(pipeline_version=version):
-                state = {"pipeline_version": version, "box_password": "pw",
-                         "run_id": "run-beefcafe", "golden_template_ids": {"web01": 9150}}
-                calls, _out, comp_name = self._run_rebuild(t2, state)
+        state = {"pipeline_version": 3, "box_password": "pw",
+                 "run_id": "run-beefcafe", "golden_template_ids": {"web01": 9150}}
+        calls, _out, comp_name = self._run_rebuild(t2, state)
 
-                clone = next(kw for m, p, kw in calls
-                             if m == "POST" and p.endswith("/clone"))
-                self.assertEqual(clone["data"]["description"], clone_marker(comp_name))
+        clone = next(kw for m, p, kw in calls if m == "POST" and p.endswith("/clone"))
+        self.assertEqual(clone["data"]["description"], clone_marker(comp_name))
 
-                put = next(kw for m, p, kw in calls if m == "PUT" and p.endswith("/config"))
-                self.assertEqual(set(put["data"]["tags"].split(";")),
-                                 ownership_tags(comp_name, "run-beefcafe"))
+        put = next(kw for m, p, kw in calls if m == "PUT" and p.endswith("/config"))
+        self.assertEqual(set(put["data"]["tags"].split(";")),
+                         ownership_tags(comp_name, "run-beefcafe"))
 
-    def test_v3_range_rebuilds_from_its_golden_not_the_v1_template_path(self):
-        """Live-found 2026-10-03: pipeline v3 state sent mode_rebuild down the v1
-        template path, which then excluded the box template for equaling
-        TF_VAR_template_vm_id (engine base == box base on this env). v3 must ride
-        the golden path."""
+    def test_rebuild_clones_from_the_golden(self):
         t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
         state = {"pipeline_version": 3, "box_password": "pw", "run_id": "run-beefcafe",
                  "golden_template_ids": {"web01": 9150}}
@@ -391,28 +387,12 @@ class RebuildStampingTests(unittest.TestCase):
         clone = next((m, p, kw) for m, p, kw in calls if m == "POST" and p.endswith("/clone"))
         self.assertEqual(clone[1].split("/")[4], "9150")  # cloned from the golden
 
-    def test_v2_drift_note_fires_for_non_team1_boxes(self):
-        """M3.3 made every team a terraform resource; the note must say so for team2+."""
-        t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
-        state = {"pipeline_version": 2, "box_password": "pw", "run_id": "run-beefcafe",
-                 "golden_template_ids": {"web01": 9150}}
-        _calls, out, _name = self._run_rebuild(t2, state)
-        self.assertIn("Terraform-managed resource", out)
-
-    def test_v3_drift_note_fires_for_non_team1_boxes(self):
+    def test_drift_note_fires_for_non_team1_boxes(self):
         t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
         state = {"pipeline_version": 3, "box_password": "pw", "run_id": "run-beefcafe",
                  "golden_template_ids": {"web01": 9150}}
         _calls, out, _name = self._run_rebuild(t2, state)
         self.assertIn("Terraform-managed resource", out)
-
-    def test_v1_keeps_the_team1_only_drift_note(self):
-        """Pre-M3.3 ranges: only team1 is terraform-managed; team2+ boxes were API
-        clones, so no drift note for them."""
-        t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
-        state = {"box_password": "pw"}
-        _calls, out, _name = self._run_rebuild(t2, state)
-        self.assertNotIn("Terraform-managed resource", out)
 
 
 class PrepareAssetsTests(unittest.TestCase):
@@ -423,8 +403,7 @@ class PrepareAssetsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp = Path(tmp)
             (comp / ".nakon-postclone.json").write_text(json.dumps({"machines": []}))
-            cfg, bundle = redeploy.prepare_nakon_assets(
-                comp, {"pipeline_version": 3}, {}, [], "easy")
+            cfg, bundle = redeploy_plant_ops.prepare_nakon_assets(comp, [])
         self.assertIsNone(cfg)
         self.assertIsNone(bundle)
 
@@ -432,12 +411,12 @@ class PrepareAssetsTests(unittest.TestCase):
         ctx = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.9"}
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
-             patch.object(redeploy.pipeline_api, "setup_ubuntu_auth") as p_auth, \
-             patch.object(redeploy.pipeline_api, "fix_dns_on_boxes"), \
-             patch.object(redeploy.pipeline_api, "ensure_nat_forwarding"), \
-             patch.object(redeploy.pipeline_api, "run_nakon") as p_run, \
-             patch.object(redeploy.pipeline_api, "fix_services_on_boxes") as p_fix:
-            redeploy.run_nakon_and_harden([T1], ctx, Path(tmp), {}, None, None)
+             patch.object(pipeline_api, "setup_ubuntu_auth") as p_auth, \
+             patch.object(pipeline_api, "fix_dns_on_boxes"), \
+             patch.object(pipeline_api, "ensure_nat_forwarding"), \
+             patch.object(pipeline_api, "run_nakon") as p_run, \
+             patch.object(pipeline_api, "fix_services_on_boxes") as p_fix:
+            redeploy_plant_ops.run_nakon_and_harden([T1], ctx, Path(tmp), {}, None, None)
         p_run.assert_not_called()
         p_auth.assert_called_once()
         p_fix.assert_called_once()
@@ -467,10 +446,9 @@ class DomainMarkerCascadeTests(unittest.TestCase):
             (Path(tmp) / "boxes.json").write_text(json.dumps(
                 [{"name": "ad01", "template": "base-windows-server"},
                  {"name": "ftp01", "template": "base-windows-server"}]))
-            with patch.object(redeploy.pipeline_api, "deploy_domain_configs") as p_dom, \
-                 patch.object(redeploy, "load_users_config", return_value=("ops", {})), \
+            with patch.object(pipeline_api, "deploy_domain_configs") as p_dom, \
                  patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}):
-                settled = redeploy.rerun_domain_configs(
+                settled = redeploy_plant_ops.rerun_domain_configs(
                     [_target({"name": "ad01", "template": "base-windows-server"}, 1500)],
                     CTX, Path(tmp), {"box_password": "pw"}, Path(tmp) / "cfg.json")
             self.assertTrue(settled)
@@ -493,9 +471,9 @@ class DomainMarkerCascadeTests(unittest.TestCase):
                  {"name": "ftp01", "template": "base-windows-server"}]))
             targets = [_target({"name": "ftp01", "template": "base-windows-server"}, 1501,
                                team="team2", identifier=102)]
-            with patch.object(redeploy.pipeline_api, "deploy_domain_configs") as p_dom, \
+            with patch.object(pipeline_api, "deploy_domain_configs") as p_dom, \
                  patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}):
-                redeploy.rerun_domain_configs(targets, CTX, Path(tmp),
+                redeploy_plant_ops.rerun_domain_configs(targets, CTX, Path(tmp),
                                               {"box_password": "pw"}, Path(tmp) / "cfg.json")
             remaining = [p.name for p in Path(tmp).glob(".nakon-domain-team1-*")]
             self.assertEqual(sorted(remaining), sorted(names))
@@ -509,13 +487,13 @@ class FailedStepsTests(unittest.TestCase):
         ctx = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.9"}
         with tempfile.TemporaryDirectory() as tmp, \
              patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
-             patch.object(redeploy.pipeline_api, "setup_ubuntu_auth"), \
-             patch.object(redeploy.pipeline_api, "fix_dns_on_boxes"), \
-             patch.object(redeploy.pipeline_api, "ensure_nat_forwarding"), \
-             patch.object(redeploy.pipeline_api, "run_nakon",
+             patch.object(pipeline_api, "setup_ubuntu_auth"), \
+             patch.object(pipeline_api, "fix_dns_on_boxes"), \
+             patch.object(pipeline_api, "ensure_nat_forwarding"), \
+             patch.object(pipeline_api, "run_nakon",
                           return_value=MagicMock(failed=failed)), \
-             patch.object(redeploy.pipeline_api, "fix_services_on_boxes"):
-            redeploy.run_nakon_and_harden(
+             patch.object(pipeline_api, "fix_services_on_boxes"):
+            redeploy_plant_ops.run_nakon_and_harden(
                 [T1], ctx, Path(tmp), state, Path(tmp) / "cfg", Path(tmp) / "bundle")
         return state
 

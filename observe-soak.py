@@ -15,7 +15,6 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.parse
 
 import requests
 import urllib3

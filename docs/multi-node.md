@@ -107,6 +107,15 @@ window around it rather than around clone speed.
 - `weight` divides a node's free RAM (bigger weight = counts for less);
   `max_teams` caps how many teams capacity-fill will stack on a node.
 
+**Preflight.** Multi-node preflight is not a separate code path: `preflight.run_preflight` builds one
+`NodeShare` per hosting node (engine node: engine base image + slot-0 goldens + its teams; each
+satellite: its slot's goldens, jump VM, its teams, and a jump clone source) and runs the same
+template / collision / headroom checks the single-node deploy runs as a one-share plan, then the
+engine and jump mgmt-IP sweeps and the catalog check. `in_path` firewalls on satellite teams are
+refused while the plan is built. See [internals.md](internals.md#preflight--the-single-pre-proxmox-gate).
+The placement code is `nodes_config.py` / `placement_record.py` / `placement_planner.py`
+(`nodes_ops` re-exports them); tests patch the owning module.
+
 Absent `nodes.json` → every deploy/op behaves exactly as the single-node design.
 
 ## Placement

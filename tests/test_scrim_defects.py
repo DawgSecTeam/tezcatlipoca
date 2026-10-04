@@ -39,8 +39,8 @@ def _load(name, filename):
     return mod
 
 
-scrim = _load("run_agent_scrim_defects", "run-agent-scrim.py")
-report = _load("scrim_report_defects", "scrim-report.py")
+from scrim import blue_agent, blue_prompt, compworld, core, endpoints, event_run, evidence, inject_sync, llm_probe, procs, quotient_api, red_link, red_stage, run_manifest, staging, supervisor, teardown_stage
+from scrim_report import blue_side, host_labels, loaders, red_side, render, timefmt
 sched = _load("run_schedule_defects", "run-schedule.py")
 beacon = _load("beacon_ops_defects", "beacon_ops.py")
 
@@ -60,6 +60,13 @@ def _wait_dead(pid, timeout=5.0):
     while time.time() < deadline and _pid_alive(pid):
         time.sleep(0.05)
     return not _pid_alive(pid)
+
+
+
+def _scrim_src():
+    """The whole harness as one string: the entrypoint plus every module of the scrim/ package."""
+    return "\n".join(f.read_text() for f in
+                     [_REPO / "run-agent-scrim.py", *sorted((_REPO / "scrim").glob("*.py"))])
 
 
 class _suppress:
@@ -102,8 +109,8 @@ class ProcessTreeSupervision(unittest.TestCase):
     def test_run_tree_kills_the_whole_process_group(self):
         tmp = Path(tempfile.mkdtemp())
         pidfile = tmp / "gc.pid"
-        with self.assertRaises(scrim.ScrimTimeout):
-            scrim.run_tree(["bash", "-c", self._orphan_script(pidfile)],
+        with self.assertRaises(procs.ScrimTimeout):
+            procs.run_tree(["bash", "-c", self._orphan_script(pidfile)],
                            timeout=0.6, grace=0.4, check=False)
         pid = int(pidfile.read_text())
         if not _wait_dead(pid):
@@ -112,8 +119,8 @@ class ProcessTreeSupervision(unittest.TestCase):
         self.assertFalse(_pid_alive(pid))
 
     def test_timeout_error_is_typed_and_names_the_resume_path(self):
-        with self.assertRaises(scrim.ScrimTimeout) as ctx:
-            scrim.run_tree([sys.executable, "-c", "import time; time.sleep(30)"],
+        with self.assertRaises(procs.ScrimTimeout) as ctx:
+            procs.run_tree([sys.executable, "-c", "import time; time.sleep(30)"],
                            timeout=0.3, grace=0.2, check=False)
         self.assertIsInstance(ctx.exception, subprocess.TimeoutExpired)
         msg = str(ctx.exception)
@@ -122,14 +129,14 @@ class ProcessTreeSupervision(unittest.TestCase):
         self.assertIn("--resume-event", msg)
 
     def test_run_tree_still_returns_a_completed_process(self):
-        r = scrim.run_tree([sys.executable, "-c", "print('hi')"], timeout=30, check=False)
+        r = procs.run_tree([sys.executable, "-c", "print('hi')"], timeout=30, check=False)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(), "hi")
         with self.assertRaises(RuntimeError):
-            scrim.run_tree([sys.executable, "-c", "raise SystemExit(3)"], timeout=30)
+            procs.run_tree([sys.executable, "-c", "raise SystemExit(3)"], timeout=30)
 
     def test_stdin_is_delivered_without_argv_exposure(self):
-        r = scrim.run_tree(["bash", "-c", "cat"], timeout=30, check=False,
+        r = procs.run_tree(["bash", "-c", "cat"], timeout=30, check=False,
                            stdin_text="secret\nscript\n")
         self.assertEqual(r.stdout, "secret\nscript\n")
 
@@ -172,8 +179,8 @@ class BlueFeedLockAndTimeout(unittest.TestCase):
             [subprocess.CompletedProcess([], 1, "", ""), subprocess.CompletedProcess([], 0, "", "")],
             calls)
         lock = TrackingLock()
-        with mock.patch.object(scrim, "_opencode_run", fake):
-            r = scrim.run_cycle_with_retry(SimpleNamespace(), "p", "/tmp/blue-team1", {},
+        with mock.patch.object(blue_agent, "_opencode_run", fake):
+            r = blue_agent.run_cycle_with_retry(SimpleNamespace(), "p", "/tmp/blue-team1", {},
                                            lock, threading.Event(), team=1)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(len(calls), 2)
@@ -187,8 +194,8 @@ class BlueFeedLockAndTimeout(unittest.TestCase):
         fake = self._fake_opencode([subprocess.CompletedProcess([], 1, "", "")], calls)
         stop = threading.Event()
         stop.set()
-        with mock.patch.object(scrim, "_opencode_run", fake):
-            r = scrim.run_cycle_with_retry(SimpleNamespace(), "p", "/tmp/blue-team1", {},
+        with mock.patch.object(blue_agent, "_opencode_run", fake):
+            r = blue_agent.run_cycle_with_retry(SimpleNamespace(), "p", "/tmp/blue-team1", {},
                                            threading.Lock(), stop, team=1)
         self.assertEqual(len(calls), 1)
         self.assertEqual(r.returncode, 1)
@@ -206,23 +213,23 @@ class BlueFeedLockAndTimeout(unittest.TestCase):
         args = SimpleNamespace(run_dir=str(rd), duration_min=90, teams=1,
                                blue_base_url="http://llm.invalid/v1", blue_model="m")
         creds = {"TEAM1_ID": "101", "RUN_DIR": str(rd)}
-        with mock.patch.object(scrim, "_opencode_run", fake), \
-                mock.patch.object(scrim, "blue_cycle_prompt", lambda *a, **k: "prompt"), \
-                mock.patch.object(scrim, "scoreboard_delta", lambda *a, **k: ""), \
-                mock.patch.object(scrim, "inject_brief", lambda *a, **k: ""), \
-                mock.patch.object(scrim, "api_key", lambda *a, **k: "k"):
-            scrim.blue_feed_loop(1, args, creds, time.time(), stop, threading.Lock(),
+        with mock.patch.object(blue_agent, "_opencode_run", fake), \
+                mock.patch.object(blue_prompt, "blue_cycle_prompt", lambda *a, **k: "prompt"), \
+                mock.patch.object(blue_prompt, "scoreboard_delta", lambda *a, **k: ""), \
+                mock.patch.object(inject_sync, "inject_brief", lambda *a, **k: ""), \
+                mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"):
+            blue_agent.blue_feed_loop(1, args, creds, time.time(), stop, threading.Lock(),
                                  first_delay=0)
         self.assertEqual(len(calls), 2, "the retry should have been attempted")
         feed = (rd / "blue-team1" / "feed.log").read_text()
         self.assertIn("===== cycle T+0 TIMEOUT =====", feed)
         # ...and the rehearsal gate reads exactly this header. Pre-fix, a retried-then-
         # timed-out cycle was the one timeout the report could not see.
-        self.assertEqual(report.blue_metrics(rd)["timeouts"], 1)
+        self.assertEqual(blue_side.blue_metrics(rd)["timeouts"], 1)
 
     def test_write_cycle_timeout_header_is_a_single_source_of_truth(self):
         rd = Path(tempfile.mkdtemp())
-        scrim.write_cycle_timeout(rd, 42)
+        blue_agent.write_cycle_timeout(rd, 42)
         self.assertIn("===== cycle T+42 TIMEOUT =====", (rd / "feed.log").read_text())
 
 
@@ -231,27 +238,27 @@ class WorkerSupervision(unittest.TestCase):
     def test_dead_workers_reports_each_thread_once(self):
         t = threading.Thread(target=lambda: None, name="feed"); t.start(); t.join()
         reported = []
-        self.assertEqual(scrim.dead_workers([t], reported), [t])
+        self.assertEqual(supervisor.dead_workers([t], reported), [t])
         reported.append(t)
-        self.assertEqual(scrim.dead_workers([t], reported), [])
+        self.assertEqual(supervisor.dead_workers([t], reported), [])
 
     def test_join_workers_uses_one_shared_deadline_and_returns_stragglers(self):
         quick = threading.Thread(target=lambda: None, name="quick"); quick.start()
         stuck = threading.Thread(target=lambda: time.sleep(10), name="stuck", daemon=True)
         stuck.start()
-        alive = scrim.join_workers([quick, stuck], budget=0.2)
+        alive = supervisor.join_workers([quick, stuck], budget=0.2)
         self.assertEqual(alive, [stuck])
         self.assertFalse(quick.is_alive())
 
     def test_join_budget_covers_a_full_cycle(self):
         # the old join(timeout=10) abandoned a live 1800s opencode cycle and capture /
         # teardown then wrote into (and destroyed infra under) the same workdir.
-        self.assertGreaterEqual(scrim.WORKER_JOIN_BUDGET, scrim.CYCLE_TIMEOUT)
+        self.assertGreaterEqual(supervisor.WORKER_JOIN_BUDGET, core.CYCLE_TIMEOUT)
 
     def test_supervise_workers_reports_a_worker_that_died(self):
         t = threading.Thread(target=lambda: None, name="blue-feed-1"); t.start()
         stop = threading.Event()
-        reported = scrim.supervise_workers([t], time.time() + 0.05, stop, poll=0.01)
+        reported = supervisor.supervise_workers([t], time.time() + 0.05, stop, poll=0.01)
         self.assertEqual([x.name for x in reported], ["blue-feed-1"])
         self.assertTrue(stop.is_set())
 
@@ -259,8 +266,8 @@ class WorkerSupervision(unittest.TestCase):
         stuck = threading.Thread(target=lambda: time.sleep(10), name="monitor", daemon=True)
         stuck.start()
         stop = threading.Event()
-        with mock.patch.object(scrim, "WORKER_JOIN_BUDGET", 0.05):
-            reported = scrim.supervise_workers([stuck], time.time() - 1, stop, poll=0.01)
+        with mock.patch.object(supervisor, "WORKER_JOIN_BUDGET", 0.05):
+            reported = supervisor.supervise_workers([stuck], time.time() - 1, stop, poll=0.01)
         self.assertEqual([x.name for x in reported], ["monitor"])
         self.assertTrue(stop.is_set())
 
@@ -268,24 +275,24 @@ class WorkerSupervision(unittest.TestCase):
         # an error/HTML body used to make next(...) raise StopIteration/TypeError inside
         # the monitor thread; that thread then died with nothing watching it.
         for body in ('{"error":"Forbidden"}', "<html>500</html>", '{"ID":1}'):
-            with mock.patch.object(scrim, "qget",
+            with mock.patch.object(quotient_api, "qget",
                                    lambda *a, **k: SimpleNamespace(stdout=body)):
                 with self.assertRaises(ValueError):
-                    scrim._team_tid({"ENGINE_IP": "x"}, "team1", "/tmp/j.jar", "team1")
+                    quotient_api._team_tid({"ENGINE_IP": "x"}, "team1", "/tmp/j.jar", "team1")
 
     def test_team_tid_reports_an_unregistered_team(self):
-        with mock.patch.object(scrim, "qget",
+        with mock.patch.object(quotient_api, "qget",
                                lambda *a, **k: SimpleNamespace(stdout='[{"ID":1,"Name":"team2"}]')):
             with self.assertRaises(ValueError):
-                scrim._team_tid({"ENGINE_IP": "x"}, "team1", "/tmp/j.jar", "team1")
+                quotient_api._team_tid({"ENGINE_IP": "x"}, "team1", "/tmp/j.jar", "team1")
 
     def test_worker_death_still_captures_and_tears_down(self):
         calls = []
-        with mock.patch.object(scrim, "stage_run",
-                               side_effect=scrim.WorkerDiedError("blue-feed-1 died")), \
-                mock.patch.object(scrim, "stage_capture", lambda *a: calls.append("capture")), \
-                mock.patch.object(scrim, "stage_teardown", lambda *a: calls.append("teardown")):
-            failure = scrim.run_event_and_finish(SimpleNamespace(), {}, 0.0)
+        with mock.patch.object(event_run, "stage_run",
+                               side_effect=supervisor.WorkerDiedError("blue-feed-1 died")), \
+                mock.patch.object(evidence, "stage_capture", lambda *a: calls.append("capture")), \
+                mock.patch.object(teardown_stage, "stage_teardown", lambda *a: calls.append("teardown")):
+            failure = event_run.run_event_and_finish(SimpleNamespace(), {}, 0.0)
         self.assertEqual(calls, ["capture", "teardown"])
         self.assertIn("blue-feed-1", failure)
 
@@ -301,7 +308,7 @@ class RedLlmWatchdog(unittest.TestCase):
             self.restarts += 1
 
     def setUp(self):
-        scrim._llm_watch.clear()
+        llm_probe._llm_watch.clear()
 
     def _args(self, rd, url="http://llm.local/v1", tunnel=None):
         return SimpleNamespace(run_dir=str(rd), llm_base_url=url, red_tunnel=tunnel or "off")
@@ -310,53 +317,53 @@ class RedLlmWatchdog(unittest.TestCase):
         rd = Path(tempfile.mkdtemp())
         tunnel = self.Tunnel()
         args = self._args(rd, tunnel=tunnel)
-        with mock.patch.object(scrim, "check_red_llm", lambda *a: False):
+        with mock.patch.object(red_link, "check_red_llm", lambda *a: False):
             for tick in range(5):
-                scrim.red_llm_watch(args, tick * 5)
+                llm_probe.red_llm_watch(args, tick * 5)
         # 5 failed probes -> one rescue, not five
         self.assertEqual(tunnel.restarts, 1)
-        lines = scrim.alerts_path(rd).read_text().splitlines()
+        lines = llm_probe.alerts_path(rd).read_text().splitlines()
         self.assertEqual(len(lines), 1)
         rec = json.loads(lines[0])
         self.assertEqual(rec["kind"], "red_llm_restart")
-        self.assertEqual(rec["failed_probes"], scrim.RED_LLM_FAIL_THRESHOLD)
-        self.assertEqual(stat.S_IMODE(scrim.alerts_path(rd).stat().st_mode), 0o600)
+        self.assertEqual(rec["failed_probes"], llm_probe.RED_LLM_FAIL_THRESHOLD)
+        self.assertEqual(stat.S_IMODE(llm_probe.alerts_path(rd).stat().st_mode), 0o600)
 
     def test_a_single_blip_alerts_but_does_not_restart(self):
         rd = Path(tempfile.mkdtemp())
         tunnel = self.Tunnel()
         args = self._args(rd, tunnel=tunnel)
-        with mock.patch.object(scrim, "check_red_llm", lambda *a: False):
-            scrim.red_llm_watch(args, 0)
+        with mock.patch.object(red_link, "check_red_llm", lambda *a: False):
+            llm_probe.red_llm_watch(args, 0)
         self.assertEqual(tunnel.restarts, 0)
-        self.assertFalse(scrim.alerts_path(rd).exists())
+        self.assertFalse(llm_probe.alerts_path(rd).exists())
 
     def test_recovery_clears_the_episode_so_a_later_outage_is_rescued(self):
         rd = Path(tempfile.mkdtemp())
         tunnel = self.Tunnel()
         args = self._args(rd, tunnel=tunnel)
         reachable = {"v": False}
-        with mock.patch.object(scrim, "check_red_llm", lambda *a: reachable["v"]):
+        with mock.patch.object(red_link, "check_red_llm", lambda *a: reachable["v"]):
             for tick in range(3):
-                scrim.red_llm_watch(args, tick)
+                llm_probe.red_llm_watch(args, tick)
             self.assertEqual(tunnel.restarts, 1)
             reachable["v"] = True
-            scrim.red_llm_watch(args, 3)
-            self.assertIsNone(scrim._llm_watch[args.llm_base_url]["since"])
+            llm_probe.red_llm_watch(args, 3)
+            self.assertIsNone(llm_probe._llm_watch[args.llm_base_url]["since"])
             reachable["v"] = False
             for tick in range(4, 7):
-                scrim.red_llm_watch(args, tick)
+                llm_probe.red_llm_watch(args, tick)
         self.assertEqual(tunnel.restarts, 2)
 
     def test_state_is_per_endpoint(self):
         rd = Path(tempfile.mkdtemp())
         a = self._args(rd, url="http://a.invalid/v1")
         b = self._args(rd, url="http://b.invalid/v1")
-        with mock.patch.object(scrim, "check_red_llm", lambda *a_: False):
-            scrim.red_llm_watch(a, 0)
-            scrim.red_llm_watch(b, 0)
-        self.assertEqual(scrim._llm_watch["http://a.invalid/v1"]["failures"], 1)
-        self.assertEqual(scrim._llm_watch["http://b.invalid/v1"]["failures"], 1)
+        with mock.patch.object(red_link, "check_red_llm", lambda *a_: False):
+            llm_probe.red_llm_watch(a, 0)
+            llm_probe.red_llm_watch(b, 0)
+        self.assertEqual(llm_probe._llm_watch["http://a.invalid/v1"]["failures"], 1)
+        self.assertEqual(llm_probe._llm_watch["http://b.invalid/v1"]["failures"], 1)
 
     def test_report_survives_red_events_without_a_world_clock(self):
         # A run dir with red events but no world.json has no event_start; the stall maths
@@ -367,7 +374,7 @@ class RedLlmWatchdog(unittest.TestCase):
         (run / "evidence" / "red" / "events.jsonl").write_text(json.dumps(
             {"ts": "2026-09-29T07:00:00Z", "kind": "action", "ok": True,
              "tactic": "impact_service", "target": "192.168.101.4", "detail": "x"}) + "\n")
-        out, meta = report.build_report(run)
+        out, meta = render.build_report(run)
         self.assertIn("## Gates", out)
         self.assertEqual(meta["gates_failed"], meta["gates_failed"])  # built, did not raise
 
@@ -375,20 +382,20 @@ class RedLlmWatchdog(unittest.TestCase):
         rd = Path(tempfile.mkdtemp())
         ev = rd / "evidence"
         ev.mkdir()
-        (ev / scrim.ALERTS_FILENAME).write_text(json.dumps(
+        (ev / llm_probe.ALERTS_FILENAME).write_text(json.dumps(
             {"ts": "2026-09-29T07:00:00", "kind": "red_llm_restart",
              "detail": "red01 missed 3 consecutive LLM probes"}) + "\n")
-        out, _meta = report.build_report(rd)
+        out, _meta = render.build_report(rd)
         self.assertIn("## Run alerts", out)
         self.assertIn("red_llm_restart", out)
-        self.assertEqual(len(report.load_alerts(rd)), 1)
+        self.assertEqual(len(loaders.load_alerts(rd)), 1)
 
 
 # D5/D6 ------------------------------------------------------------------------
 class EvidenceHygiene(unittest.TestCase):
     def test_jar_path_is_private_and_out_of_shared_tmp(self):
         rd = Path(tempfile.mkdtemp())
-        p = Path(scrim.jar_path(rd, "team1"))
+        p = Path(quotient_api.jar_path(rd, "team1"))
         self.assertTrue(p.is_file())
         self.assertEqual(stat.S_IMODE(p.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(p.parent.stat().st_mode), 0o700)
@@ -396,23 +403,23 @@ class EvidenceHygiene(unittest.TestCase):
         self.assertFalse(str(p).startswith("/tmp/jar."))
         # deterministic basename: the generated qlogin/score.py helpers and the driver
         # must agree on one file across processes.
-        self.assertEqual(scrim.jar_path(rd, "team1"), str(p))
+        self.assertEqual(quotient_api.jar_path(rd, "team1"), str(p))
         # an existing jar is never truncated by looking it up again
         p.write_text("cookie")
-        scrim.jar_path(rd, "team1")
+        quotient_api.jar_path(rd, "team1")
         self.assertEqual(p.read_text(), "cookie")
 
     def test_no_predictable_tmp_jar_path_in_the_driver_or_its_generated_helpers(self):
-        src = (_REPO / "run-agent-scrim.py").read_text()
+        src = _scrim_src()
         # no string literal builds the old shared-/tmp path...
         self.assertNotIn('"/tmp/jar.', src)
         # ...and scrim.env points the blue agent's helpers at the run-dir jar instead
-        self.assertIn("JAR={jar_path(run_dir, f'team{n}')}", src)
+        self.assertIn("JAR={quotient_api.jar_path(run_dir, f'team{n}')}", src)
 
     def test_evidence_writer_is_atomic_and_0600(self):
         rd = Path(tempfile.mkdtemp())
         out = rd / "final-scoreboard.json"
-        scrim.write_evidence(out, '{"a": 1}')
+        core.write_evidence(out, '{"a": 1}')
         self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o600)
         self.assertEqual(json.loads(out.read_text()), {"a": 1})
         self.assertFalse((rd / "final-scoreboard.json.tmp").exists())
@@ -421,68 +428,68 @@ class EvidenceHygiene(unittest.TestCase):
         out = Path(tempfile.mkdtemp()) / "feed.log"
         out.write_text("x")
         out.chmod(0o644)
-        scrim.secure_evidence(out)
+        core.secure_evidence(out)
         self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o600)
 
     def test_startup_sets_a_restrictive_umask(self):
-        for name in ("run-agent-scrim.py", "run-schedule.py"):
+        for name in ("scrim/cli.py", "run-schedule.py"):
             self.assertIn("os.umask(0o077)", (_REPO / name).read_text(), name)
 
     def test_no_dangling_open_write_leaks(self):
         # `.open("a").write(...)` leaks one descriptor per call (monitor.log every
         # MONITOR_INTERVAL, feed.log every cycle) for the length of the event.
-        self.assertNotIn('.open("a").write(', (_REPO / "run-agent-scrim.py").read_text())
+        self.assertNotIn('.open("a").write(', _scrim_src())
 
     def test_json_error_tests_the_key_not_the_text(self):
-        self.assertTrue(scrim.json_error('{"error":"Forbidden"}'))
-        self.assertTrue(scrim.json_error('{"error": "x"}'))
-        self.assertFalse(scrim.json_error('{"service":"error-handler","up":true}'))
-        self.assertFalse(scrim.json_error('[{"error":"x"}]'))
-        self.assertFalse(scrim.json_error('"error"'))
-        self.assertFalse(scrim.json_error(""))
-        self.assertFalse(scrim.json_error("garbage"))
-        self.assertFalse(scrim.json_error('{"outer":{"error":1}}'))
+        self.assertTrue(quotient_api.json_error('{"error":"Forbidden"}'))
+        self.assertTrue(quotient_api.json_error('{"error": "x"}'))
+        self.assertFalse(quotient_api.json_error('{"service":"error-handler","up":true}'))
+        self.assertFalse(quotient_api.json_error('[{"error":"x"}]'))
+        self.assertFalse(quotient_api.json_error('"error"'))
+        self.assertFalse(quotient_api.json_error(""))
+        self.assertFalse(quotient_api.json_error("garbage"))
+        self.assertFalse(quotient_api.json_error('{"outer":{"error":1}}'))
 
     def test_qget_relogins_only_for_a_real_error_object(self):
         for body, expected_logins in (('{"service":"error-handler","up":true}', 0),
                                       ('[{"ID":1,"Name":"team1"}]', 0),
                                       ('{"error":"Forbidden"}', 1)):
             logins = []
-            with mock.patch.object(scrim, "_qlogin", lambda *a: logins.append(1)), \
-                    mock.patch.object(scrim.subprocess, "run",
+            with mock.patch.object(quotient_api, "_qlogin", lambda *a: logins.append(1)), \
+                    mock.patch.object(quotient_api.subprocess, "run",
                                       lambda *a, **k: SimpleNamespace(returncode=0, stdout=body)):
-                again = scrim.qget({"ENGINE_IP": "192.0.2.1"}, "team1",
+                again = quotient_api.qget({"ENGINE_IP": "192.0.2.1"}, "team1",
                                    "/tmp/does-not-matter.jar", "/api/teams")
             self.assertEqual(len(logins), expected_logins, body)
             self.assertIsNotNone(again)
 
     def test_login_writes_via_temp_then_rename_and_keeps_the_old_jar_on_failure(self):
         rd = Path(tempfile.mkdtemp())
-        jar = Path(scrim.jar_path(rd, "team1"))
+        jar = Path(quotient_api.jar_path(rd, "team1"))
         jar.write_text("old-cookie")
         creds = {"ENGINE_IP": "192.0.2.1", "TEAM1_PW": "pw"}
         # curl failing (e.g. engine unreachable) must not destroy a working session
-        with mock.patch.object(scrim.subprocess, "run",
+        with mock.patch.object(quotient_api.subprocess, "run",
                                lambda *a, **k: SimpleNamespace(returncode=7)):
-            self.assertFalse(scrim._qlogin(creds, "team1", str(jar)))
+            self.assertFalse(quotient_api._qlogin(creds, "team1", str(jar)))
         self.assertEqual(jar.read_text(), "old-cookie")
 
         def fake_curl(cmd, *a, **k):
             Path(cmd[cmd.index("-c") + 1]).write_text("new-cookie")
             return SimpleNamespace(returncode=0)
 
-        with mock.patch.object(scrim.subprocess, "run", fake_curl):
-            self.assertTrue(scrim._qlogin(creds, "team1", str(jar)))
+        with mock.patch.object(quotient_api.subprocess, "run", fake_curl):
+            self.assertTrue(quotient_api._qlogin(creds, "team1", str(jar)))
         self.assertEqual(jar.read_text(), "new-cookie")
         self.assertEqual(stat.S_IMODE(jar.stat().st_mode), 0o600)
         # the temp file was renamed onto the jar, not left behind
         self.assertEqual(sorted(p.name for p in (rd / ".jars").iterdir()), ["team1.jar"])
 
     def test_jar_lock_is_per_account_and_reentrant(self):
-        self.assertIs(scrim.jar_lock("team1"), scrim.jar_lock("team1"))
-        self.assertIsNot(scrim.jar_lock("team2"), scrim.jar_lock("team1"))
-        with scrim.jar_lock("team1"):
-            with scrim.jar_lock("team1"):
+        self.assertIs(quotient_api.jar_lock("team1"), quotient_api.jar_lock("team1"))
+        self.assertIsNot(quotient_api.jar_lock("team2"), quotient_api.jar_lock("team1"))
+        with quotient_api.jar_lock("team1"):
+            with quotient_api.jar_lock("team1"):
                 pass  # RLock: qget -> _qlogin must not self-deadlock
 
 
@@ -594,25 +601,25 @@ class LineupDerivation(unittest.TestCase):
         return json.loads((_REPO / "competitions" / comp / "boxes.json").read_text())
 
     def test_box_labels_come_from_the_competition_boxes_json(self):
-        labels = report.box_labels(self.AMONGUS)
+        labels = host_labels.box_labels(self.AMONGUS)
         self.assertEqual(labels, {"2": "mira", "3": "skeld", "4": "airship", "5": "polus"})
-        self.assertEqual(report.host_label("192.168.101.4", labels), "1:airship")
+        self.assertEqual(host_labels.host_label("192.168.101.4", labels), "1:airship")
         # a non-team address (red01) keeps its raw octets and is never team-labelled
-        self.assertEqual(report.host_label("10.0.0.198", labels), ".198")
-        self.assertNotIn(":", report.host_label("10.0.0.198", labels))
+        self.assertEqual(host_labels.host_label("10.0.0.198", labels), ".198")
+        self.assertNotIn(":", host_labels.host_label("10.0.0.198", labels))
 
     def test_box_labels_resolve_a_suffixed_run_dir(self):
         fake_run = Path(tempfile.mkdtemp()) / "amongus-cde-2026-run2"
         fake_run.mkdir()
-        self.assertEqual(report.box_labels(fake_run)["4"], "airship")
+        self.assertEqual(host_labels.box_labels(fake_run)["4"], "airship")
 
     def test_unknown_run_dir_does_not_invent_a_name_from_the_wrong_lineup(self):
         fake_run = Path(tempfile.mkdtemp()) / "totally-unknown-run"
         fake_run.mkdir()
-        labels = report.box_labels(fake_run)
+        labels = host_labels.box_labels(fake_run)
         self.assertEqual(labels, {})
         # empty map -> raw dotted octet, NOT the 17b dc01/win01/web01 guess
-        self.assertEqual(report.host_label("192.168.101.4", labels), "1:.4")
+        self.assertEqual(host_labels.host_label("192.168.101.4", labels), "1:.4")
 
     def test_report_says_so_when_it_cannot_resolve_the_lineup(self):
         run = Path(tempfile.mkdtemp()) / "mystery-run"
@@ -621,12 +628,12 @@ class LineupDerivation(unittest.TestCase):
             {"ts": "2026-09-29T07:00:00Z", "kind": "action", "ok": True,
              "tactic": "impact_service", "target": "192.168.101.4",
              "data": {"unit": "httpd"}, "detail": "httpd is DOWN on 192.168.101.4"}) + "\n")
-        out, _meta = report.build_report(run)
+        out, _meta = render.build_report(run)
         self.assertIn("no boxes.json could be resolved", out)
         self.assertIn("1:.4", out)
 
-    def test_legacy_fallback_still_serves_unattributed_callers(self):
-        self.assertTrue(report.host_label("192.168.101.4").startswith("1:"))
+    def test_no_label_map_degrades_to_raw_octets_never_a_guessed_name(self):
+        self.assertEqual(host_labels.host_label("192.168.101.4"), "1:.4")
 
     def test_red_timeline_labels_the_amongus_lineup(self):
         run = Path(tempfile.mkdtemp()) / "amongus-cde-2026-run2"
@@ -635,10 +642,10 @@ class LineupDerivation(unittest.TestCase):
               "tactic": "impact_service", "target": "192.168.101.4",
               "data": {"unit": "httpd"}, "detail": "httpd is DOWN on 192.168.101.4"}
         (run / "evidence" / "red" / "events.jsonl").write_text(json.dumps(ev) + "\n")
-        t0 = report.parse_ts(ev["ts"])
-        rm = report.red_metrics([ev], t0, {}, report.box_labels(run))
+        t0 = timefmt.parse_ts(ev["ts"])
+        rm = red_side.red_metrics([ev], t0, {}, host_labels.box_labels(run))
         self.assertEqual(rm["timeline"][0][1], "1:airship")
-        out, _meta = report.build_report(run)
+        out, _meta = render.build_report(run)
         self.assertIn("1:airship", out)
         self.assertNotIn("1:web01", out)
 
@@ -686,14 +693,14 @@ class LineupDerivation(unittest.TestCase):
 class PasswordHandling(unittest.TestCase):
     def test_box_sudo_keeps_the_password_out_of_argv(self):
         pw = "a'b;c$(d)"
-        argv, stdin_text = scrim.box_sudo_stdin(["ssh", "host"], "user@192.0.2.4", pw,
+        argv, stdin_text = procs.box_sudo_stdin(["ssh", "host"], "user@192.0.2.4", pw,
                                                 "systemctl stop nginx")
         self.assertNotIn(pw, " ".join(argv))
         self.assertIn("sudo -S", argv[-1])
         self.assertEqual(stdin_text, pw + "\nsystemctl stop nginx")
 
     def test_no_password_interpolation_into_a_shell_string_remains(self):
-        src = (_REPO / "run-agent-scrim.py").read_text()
+        src = _scrim_src()
         self.assertNotIn("echo %s | sudo -S", src)
         self.assertNotIn('creds["BOX_PW"], unit', src)
 
@@ -701,26 +708,26 @@ class PasswordHandling(unittest.TestCase):
 # D10 --------------------------------------------------------------------------
 class ResumeGuardAndManifest(unittest.TestCase):
     def test_resume_window_threshold(self):
-        self.assertFalse(scrim.resume_window_ok(5))
-        self.assertFalse(scrim.resume_window_ok(21))
-        self.assertTrue(scrim.resume_window_ok(22))
-        self.assertTrue(scrim.resume_window_ok(90))
+        self.assertFalse(run_manifest.resume_window_ok(5))
+        self.assertFalse(run_manifest.resume_window_ok(21))
+        self.assertTrue(run_manifest.resume_window_ok(22))
+        self.assertTrue(run_manifest.resume_window_ok(90))
 
     def test_resume_refusal_message_and_force_override(self):
-        self.assertIsNone(scrim.resume_refusal(45))
-        refused = scrim.resume_refusal(5)
+        self.assertIsNone(run_manifest.resume_refusal(45))
+        refused = run_manifest.resume_refusal(5)
         self.assertIsNotNone(refused)
         self.assertIn("--force-resume", refused)
-        self.assertIsNone(scrim.resume_refusal(5, force=True))
+        self.assertIsNone(run_manifest.resume_refusal(5, force=True))
 
     def test_resume_intent_is_inherited_from_the_manifest(self):
         args = SimpleNamespace(keep_range=False, blue_watchdog=False)
-        scrim.resume_intent(args, {"keep_range": True, "blue_watchdog": True})
+        run_manifest.resume_intent(args, {"keep_range": True, "blue_watchdog": True})
         self.assertTrue(args.keep_range)
         self.assertTrue(args.blue_watchdog)
         # an explicit flag on the resume is still honoured
         args = SimpleNamespace(keep_range=True, blue_watchdog=False)
-        scrim.resume_intent(args, {})
+        run_manifest.resume_intent(args, {})
         self.assertTrue(args.keep_range)
         self.assertFalse(args.blue_watchdog)
 
@@ -728,25 +735,25 @@ class ResumeGuardAndManifest(unittest.TestCase):
         rd = Path(tempfile.mkdtemp())
         args = SimpleNamespace(competition="demo", teams=2, duration_min=90,
                                keep_range=True, blue_watchdog=False)
-        scrim.record_phase(rd, args, "stage_red")
-        man = scrim.load_manifest(rd)
+        run_manifest.record_phase(rd, args, "stage_red")
+        man = run_manifest.load_manifest(rd)
         self.assertEqual(man["phase"], "stage_red")
         self.assertIsNone(man["t0"])
         self.assertTrue(man["keep_range"])
-        self.assertEqual(stat.S_IMODE((rd / scrim.RUN_MANIFEST).stat().st_mode), 0o600)
-        scrim.record_phase(rd, args, "event", t0=1234.5)
-        self.assertEqual(scrim.load_manifest(rd)["t0"], 1234.5)
+        self.assertEqual(stat.S_IMODE((rd / run_manifest.RUN_MANIFEST).stat().st_mode), 0o600)
+        run_manifest.record_phase(rd, args, "event", t0=1234.5)
+        self.assertEqual(run_manifest.load_manifest(rd)["t0"], 1234.5)
 
     def test_missing_manifest_is_empty_not_an_error(self):
-        self.assertEqual(scrim.load_manifest(Path(tempfile.mkdtemp())), {})
+        self.assertEqual(run_manifest.load_manifest(Path(tempfile.mkdtemp())), {})
 
     def test_the_phase_marker_is_written_before_stage_red(self):
         # stage_red deploys red01 for tens of minutes; a driver that dies in there must
         # still leave something --resume-event can reason about.
-        src = (_REPO / "run-agent-scrim.py").read_text()
+        src = _scrim_src()
         # the indented call site in main(), not the `def stage_red(...)` definition
-        self.assertLess(src.index('record_phase(run_dir, args, "stage_red")'),
-                        src.index("\n    stage_red(args, comp, creds, run_dir)"))
+        self.assertLess(src.index('run_manifest.record_phase(run_dir, args, "stage_red")'),
+                        src.index("\n    red_stage.stage_red(args, comp, creds, run_dir)"))
 
 
 # D11 --------------------------------------------------------------------------
@@ -759,12 +766,12 @@ class AuthoredCompSweepMarker(unittest.TestCase):
         (src / "Compfile").write_text("name tmpl\nscenario x\n")
         (src / ".postclone-swept").write_text("")   # the marker deploy.py actually writes
         (src / ".phase6-swept").write_text("")      # the stale name this file used to skip
-        old_repo = scrim.REPO
-        scrim.REPO = tmp
+        old_repo = core.REPO
+        core.REPO = tmp
         try:
-            scrim.stage_author(SimpleNamespace(new="demo", from_template=str(src)))
+            staging.stage_author(SimpleNamespace(new="demo", from_template=str(src)))
         finally:
-            scrim.REPO = old_repo
+            core.REPO = old_repo
         dst = tmp / "competitions" / "demo"
         self.assertTrue((dst / "Compfile").exists())
         # pre-fix the REAL marker was copied, so the new competition claimed to be
@@ -772,7 +779,7 @@ class AuthoredCompSweepMarker(unittest.TestCase):
         self.assertFalse((dst / ".postclone-swept").exists())
 
     def test_the_skip_condition_names_the_postclone_marker(self):
-        src = (_REPO / "run-agent-scrim.py").read_text()
+        src = _scrim_src()
         self.assertIn('if item.name == ".postclone-swept"', src)
         self.assertNotIn('if item.name == ".phase6-swept"', src)
 
@@ -796,11 +803,11 @@ class RedReachabilityGate(unittest.TestCase):
 
     @contextlib.contextmanager
     def _repo_rooted(self):
-        """Point scrim.REPO at a temp root so `comp.relative_to(REPO)` resolves."""
+        """Point core.REPO at a temp root so `comp.relative_to(REPO)` resolves."""
         with tempfile.TemporaryDirectory() as tmp:
             comp = Path(tmp) / "competitions" / "c1"
             comp.mkdir(parents=True)
-            with mock.patch.object(scrim, "REPO", Path(tmp)):
+            with mock.patch.object(core, "REPO", Path(tmp)):
                 yield comp
 
     def test_routed_run_checks_every_team_and_fails_hard(self):
@@ -811,9 +818,9 @@ class RedReachabilityGate(unittest.TestCase):
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         with self._repo_rooted() as comp, \
-                mock.patch.object(scrim, "run", side_effect=fake_run), \
-                mock.patch.object(scrim, "_verify_flags", return_value=[]):
-            scrim.verify_red_reaches_teams(
+                mock.patch.object(procs, "run", side_effect=fake_run), \
+                mock.patch.object(compworld, "_verify_flags", return_value=[]):
+            red_stage.verify_red_reaches_teams(
                 self._args(), comp, {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
 
         cmd, kw = calls[0]
@@ -826,10 +833,10 @@ class RedReachabilityGate(unittest.TestCase):
 
     def test_masq_mode_is_skipped(self):
         calls = []
-        with mock.patch.object(scrim, "run",
+        with mock.patch.object(procs, "run",
                                side_effect=lambda *a, **k: calls.append(a)), \
-                mock.patch.object(scrim, "_verify_flags", return_value=[]):
-            scrim.verify_red_reaches_teams(
+                mock.patch.object(compworld, "_verify_flags", return_value=[]):
+            red_stage.verify_red_reaches_teams(
                 self._args(mode="masq"), Path("/tmp/comp"),
                 {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
         self.assertEqual(calls, [], "masq red shares the gateways: nothing to prove")
@@ -838,10 +845,10 @@ class RedReachabilityGate(unittest.TestCase):
         # bad-auto's default is routed, so an unset --red-mode must still be gated.
         calls = []
         with self._repo_rooted() as comp, \
-                mock.patch.object(scrim, "run",
+                mock.patch.object(procs, "run",
                                   side_effect=lambda *a, **k: calls.append(a)), \
-                mock.patch.object(scrim, "_verify_flags", return_value=[]):
-            scrim.verify_red_reaches_teams(
+                mock.patch.object(compworld, "_verify_flags", return_value=[]):
+            red_stage.verify_red_reaches_teams(
                 self._args(), comp, {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
         self.assertEqual(len(calls), 1)
 
@@ -871,12 +878,12 @@ class RedTeardownAssertion(unittest.TestCase):
             return SimpleNamespace(returncode=seq.pop(0) if seq else rc,
                                    stdout="", stderr="")
 
-        with mock.patch.object(scrim, "run", side_effect=fake_run), \
-                mock.patch.object(scrim, "log"), \
-                mock.patch.object(scrim, "_config_red_vmid", return_value=configured), \
-                mock.patch.object(scrim, "_red_vm_still_exists",
+        with mock.patch.object(procs, "run", side_effect=fake_run), \
+                mock.patch.object(teardown_stage, "log"), \
+                mock.patch.object(teardown_stage, "_config_red_vmid", return_value=configured), \
+                mock.patch.object(teardown_stage, "_red_vm_still_exists",
                                   return_value=(True if still else False)):
-            scrim.teardown_red(self._args(red_vmid), {})
+            teardown_stage.teardown_red(self._args(red_vmid), {})
         return calls
 
     def test_destroy_is_invoked_for_this_competition(self):
@@ -910,43 +917,43 @@ class RedTeardownAssertion(unittest.TestCase):
         # Not proof of failure (badauto may well have deleted it) but it must be said out
         # loud rather than folded into a clean teardown.
         lines = []
-        with mock.patch.object(scrim, "run",
+        with mock.patch.object(procs, "run",
                                side_effect=lambda *a, **k: SimpleNamespace(
                                    returncode=0, stdout="", stderr="")), \
-                mock.patch.object(scrim, "log", side_effect=lines.append), \
-                mock.patch.object(scrim, "_config_red_vmid", return_value=None), \
-                mock.patch.object(scrim, "_red_vm_still_exists", return_value=None):
-            scrim.teardown_red(self._args(), {})
+                mock.patch.object(teardown_stage, "log", side_effect=lines.append), \
+                mock.patch.object(teardown_stage, "_config_red_vmid", return_value=None), \
+                mock.patch.object(teardown_stage, "_red_vm_still_exists", return_value=None):
+            teardown_stage.teardown_red(self._args(), {})
         self.assertTrue(any("could not be verified gone" in l for l in lines), lines)
 
     def test_stale_config_vmid_is_called_out(self):
         # config.yaml pointing at another run's vmid is what lost red01 in the first place.
         lines = []
-        with mock.patch.object(scrim, "run",
+        with mock.patch.object(procs, "run",
                                side_effect=lambda *a, **k: SimpleNamespace(
                                    returncode=0, stdout="", stderr="")), \
-                mock.patch.object(scrim, "log", side_effect=lines.append), \
-                mock.patch.object(scrim, "_config_red_vmid", return_value=999), \
-                mock.patch.object(scrim, "_red_vm_still_exists", return_value=False):
-            scrim.teardown_red(self._args(red_vmid=998), {})
+                mock.patch.object(teardown_stage, "log", side_effect=lines.append), \
+                mock.patch.object(teardown_stage, "_config_red_vmid", return_value=999), \
+                mock.patch.object(teardown_stage, "_red_vm_still_exists", return_value=False):
+            teardown_stage.teardown_red(self._args(red_vmid=998), {})
         self.assertTrue(any("follows config.yaml" in l for l in lines), lines)
 
     def test_the_assertion_uses_the_runs_own_vmid_when_config_is_silent(self):
         seen = []
-        with mock.patch.object(scrim, "run",
+        with mock.patch.object(procs, "run",
                                side_effect=lambda *a, **k: SimpleNamespace(
                                    returncode=0, stdout="", stderr="")), \
-                mock.patch.object(scrim, "log"), \
-                mock.patch.object(scrim, "_config_red_vmid", return_value=None), \
-                mock.patch.object(scrim, "_red_vm_still_exists",
+                mock.patch.object(teardown_stage, "log"), \
+                mock.patch.object(teardown_stage, "_config_red_vmid", return_value=None), \
+                mock.patch.object(teardown_stage, "_red_vm_still_exists",
                                   side_effect=lambda v: seen.append(v) or False):
-            scrim.teardown_red(self._args(red_vmid=1234), {})
+            teardown_stage.teardown_red(self._args(red_vmid=1234), {})
         self.assertEqual(seen, [1234])
 
 
 # D12 --------------------------------------------------------------------------
 class PyflakesClean(unittest.TestCase):
-    FILES = ("run-agent-scrim.py", "scrim-report.py", "beacon_ops.py", "run-schedule.py")
+    FILES = ("run-agent-scrim.py", "scrim", "scrim-report.py", "beacon_ops.py", "run-schedule.py")
 
     def test_owned_files_are_pyflakes_clean(self):
         if importlib.util.find_spec("pyflakes") is None:

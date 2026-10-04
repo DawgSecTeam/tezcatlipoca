@@ -27,7 +27,6 @@ from unittest import mock
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import engine_ops
 from engine_ops import _run_engine_cmd, push_quotient_env
 
 _CTX = {
@@ -43,7 +42,7 @@ _BLOB_RE = re.compile(r"echo '([A-Za-z0-9+/=]+)' \| base64 -d")
 class StepNaming(unittest.TestCase):
     def test_failing_step_names_itself_and_chains_the_cause(self):
         err = subprocess.CalledProcessError(1, ["ssh", "engine", "compose up"], stderr="boom")
-        with mock.patch.object(engine_ops.subprocess, "run", side_effect=err):
+        with mock.patch.object(subprocess, "run", side_effect=err):
             with self.assertRaises(RuntimeError) as cm:
                 _run_engine_cmd(_CTX, "cd /opt/quotient && sudo docker compose up -d",
                                 timeout=600, step="compose up")
@@ -52,7 +51,7 @@ class StepNaming(unittest.TestCase):
 
     def test_timeout_names_its_step_too(self):
         err = subprocess.TimeoutExpired(["ssh", "engine", "compose build"], 1800)
-        with mock.patch.object(engine_ops.subprocess, "run", side_effect=err):
+        with mock.patch.object(subprocess, "run", side_effect=err):
             with self.assertRaises(RuntimeError) as cm:
                 _run_engine_cmd(_CTX, "sudo docker compose build", timeout=1800,
                                 step="compose build")
@@ -62,7 +61,7 @@ class StepNaming(unittest.TestCase):
 
     def test_successful_run_is_returned_unchanged(self):
         sentinel = subprocess.CompletedProcess(["ssh"], 0, stdout="ok", stderr="")
-        with mock.patch.object(engine_ops.subprocess, "run", return_value=sentinel) as run:
+        with mock.patch.object(subprocess, "run", return_value=sentinel) as run:
             got = _run_engine_cmd(_CTX, "true", timeout=30, capture=True, step="noop")
         self.assertIs(got, sentinel)
         self.assertEqual(run.call_args.kwargs["timeout"], 30)
@@ -71,7 +70,7 @@ class StepNaming(unittest.TestCase):
         # The check=False steps (apt-cacher-ng probe, growpart) must keep returning the
         # CompletedProcess; only TimeoutExpired can be labelled there.
         sentinel = subprocess.CompletedProcess(["ssh"], 7, stdout="", stderr="")
-        with mock.patch.object(engine_ops.subprocess, "run", return_value=sentinel):
+        with mock.patch.object(subprocess, "run", return_value=sentinel):
             got = _run_engine_cmd(_CTX, "false", check=False, timeout=30, step="noop")
         self.assertEqual(got.returncode, 7)
 
@@ -80,7 +79,7 @@ class StepNaming(unittest.TestCase):
         # ssh_key_path lands in the argv verbatim (vm_username is interpolated into an
         # f-string, so only this one can reach the argv as a non-string).
         bad_ctx = dict(_CTX, ssh_key_path=("tuple",))
-        with mock.patch.object(engine_ops.subprocess, "run") as run:
+        with mock.patch.object(subprocess, "run") as run:
             with self.assertRaises(RuntimeError) as cm:
                 _run_engine_cmd(bad_ctx, "true", step="noop")
         run.assert_not_called()
@@ -90,13 +89,13 @@ class StepNaming(unittest.TestCase):
     def test_every_run_engine_cmd_call_site_passes_a_step(self):
         # Guard: a new remote step added without step= would silently go back to being
         # unnameable in a traceback, which is the whole defect.
-        tree = ast.parse((_REPO / "engine_ops.py").read_text())
+        tree = ast.parse("\n".join(f.read_text() for f in sorted(_REPO.glob("engine_*_ops.py"))))
         calls = [n for n in ast.walk(tree)
                  if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "_run_engine_cmd"]
         self.assertGreaterEqual(len(calls), 10, "engine_ops lost its _run_engine_cmd calls?")
         for call in calls:
             self.assertIn("step", [kw.arg for kw in call.keywords],
-                          f"engine_ops.py:{call.lineno}: _run_engine_cmd call without step=")
+                          f"engine_*_ops.py:{call.lineno}: _run_engine_cmd call without step=")
 
 
 class SecretHygiene(unittest.TestCase):
@@ -110,7 +109,7 @@ class SecretHygiene(unittest.TestCase):
             calls.append(argv)
             return subprocess.CompletedProcess(argv, 0)
 
-        with mock.patch.object(engine_ops.subprocess, "run", side_effect=fake_run):
+        with mock.patch.object(subprocess, "run", side_effect=fake_run):
             push_quotient_env(_CTX, self.PG, self.REDIS)
 
         self.assertEqual(len(calls), 1)
@@ -133,7 +132,7 @@ class SecretHygiene(unittest.TestCase):
             # the path a plaintext secret would leak through.
             raise subprocess.CalledProcessError(1, argv)
 
-        with mock.patch.object(engine_ops.subprocess, "run", side_effect=fake_run):
+        with mock.patch.object(subprocess, "run", side_effect=fake_run):
             with self.assertRaises(RuntimeError) as cm:
                 push_quotient_env(_CTX, self.PG, self.REDIS)
 

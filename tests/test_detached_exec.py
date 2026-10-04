@@ -19,7 +19,8 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import range_ops
+import guest_exec
+import range_ops  # noqa: F401  (facade must keep exporting the helpers)
 
 
 class _FakeApi:
@@ -51,9 +52,9 @@ class ExecTimeoutDiagnosis(unittest.TestCase):
     def test_root_timeout_names_pid_budget_and_partial_output(self):
         api = _FakeApi([{"exited": False, "out-data": "installing nginx\n",
                          "err-data": "E: lock held by apt\n"}])
-        with patch.object(range_ops, "proxmox_api", api), \
-             patch.object(range_ops.time, "sleep"), \
-             patch.object(range_ops.time, "time", side_effect=[0, 0, 999]):
+        with patch.object(guest_exec, "proxmox_api", api), \
+             patch.object(guest_exec.time, "sleep"), \
+             patch.object(guest_exec.time, "time", side_effect=[0, 0, 999]):
             with self.assertRaises(RuntimeError) as ctx:
                 range_ops.guest_agent_exec_root("proxmox", 1234, "apt-get install -y nginx",
                                                 timeout=120)
@@ -66,9 +67,9 @@ class ExecTimeoutDiagnosis(unittest.TestCase):
 
     def test_windows_timeout_is_diagnosed_too(self):
         api = _FakeApi([{"exited": False, "out-data": "specializing...\n"}])
-        with patch.object(range_ops, "proxmox_api", api), \
-             patch.object(range_ops.time, "sleep"), \
-             patch.object(range_ops.time, "time", side_effect=[0, 0, 999]):
+        with patch.object(guest_exec, "proxmox_api", api), \
+             patch.object(guest_exec.time, "sleep"), \
+             patch.object(guest_exec.time, "time", side_effect=[0, 0, 999]):
             with self.assertRaises(RuntimeError) as ctx:
                 range_ops.guest_agent_exec_windows("pve", 1232, "Start-Sleep 1", timeout=900)
         self.assertIn("specializing", str(ctx.exception))
@@ -86,10 +87,10 @@ class DetachedExec(unittest.TestCase):
             text = tails[min(seen["tail_calls"] - 1, len(tails) - 1)]
             return 0, text, ""
 
-        with patch.object(range_ops, "proxmox_api", api), \
-             patch.object(range_ops, "guest_agent_exec_root", side_effect=fake_root), \
-             patch.object(range_ops.time, "sleep"), \
-             patch.object(range_ops.time, "time", side_effect=list(range(0, 5000, 5))):
+        with patch.object(guest_exec, "proxmox_api", api), \
+             patch.object(guest_exec, "guest_agent_exec_root", side_effect=fake_root), \
+             patch.object(guest_exec.time, "sleep"), \
+             patch.object(guest_exec.time, "time", side_effect=list(range(0, 5000, 5))):
             result = range_ops.guest_agent_exec_detached(
                 "proxmox", 1234, "apt-get install -y nginx",
                 "/tmp/tz-detached-1234.log", timeout=300, poll_interval=1)
@@ -112,10 +113,10 @@ class DetachedExec(unittest.TestCase):
         def fake_root(node, vmid, script, timeout=60, shell="bash"):
             return 0, "__TZ_DETACHED_RC=0\n", ""
 
-        with patch.object(range_ops, "proxmox_api", api), \
-             patch.object(range_ops, "guest_agent_exec_root", side_effect=fake_root), \
-             patch.object(range_ops.time, "sleep"), \
-             patch.object(range_ops.time, "time", side_effect=list(range(0, 5000, 5))):
+        with patch.object(guest_exec, "proxmox_api", api), \
+             patch.object(guest_exec, "guest_agent_exec_root", side_effect=fake_root), \
+             patch.object(guest_exec.time, "sleep"), \
+             patch.object(guest_exec.time, "time", side_effect=list(range(0, 5000, 5))):
             range_ops.guest_agent_exec_detached(
                 "proxmox", 1234, "true", "/tmp/tz log/run 1.log", timeout=300)
         wrapper = [c for c in api.calls if c[0] == "POST"][0][2]["data"]["command"][2]
@@ -153,10 +154,10 @@ class DetachedExec(unittest.TestCase):
                 raise RuntimeError("agent busy")
             return 0, "ok\n__TZ_DETACHED_RC=0\n", ""
 
-        with patch.object(range_ops, "proxmox_api", api), \
-             patch.object(range_ops, "guest_agent_exec_root", side_effect=flaky_root), \
-             patch.object(range_ops.time, "sleep"), \
-             patch.object(range_ops.time, "time", side_effect=list(range(0, 5000, 5))):
+        with patch.object(guest_exec, "proxmox_api", api), \
+             patch.object(guest_exec, "guest_agent_exec_root", side_effect=flaky_root), \
+             patch.object(guest_exec.time, "sleep"), \
+             patch.object(guest_exec.time, "time", side_effect=list(range(0, 5000, 5))):
             result = range_ops.guest_agent_exec_detached(
                 "proxmox", 1234, "true", "/tmp/x.log", timeout=300)
         self.assertEqual(result.rc, 0)
@@ -164,11 +165,11 @@ class DetachedExec(unittest.TestCase):
     def test_deadline_exceeded_names_the_guest_log_and_last_tail(self):
         api = _FakeApi()
 
-        with patch.object(range_ops, "proxmox_api", api), \
-             patch.object(range_ops, "guest_agent_exec_root",
+        with patch.object(guest_exec, "proxmox_api", api), \
+             patch.object(guest_exec, "guest_agent_exec_root",
                           return_value=(0, "never finishing\n", "")), \
-             patch.object(range_ops.time, "sleep"), \
-             patch.object(range_ops.time, "time", side_effect=[0, 5, 10, 999]):
+             patch.object(guest_exec.time, "sleep"), \
+             patch.object(guest_exec.time, "time", side_effect=[0, 5, 10, 999]):
             with self.assertRaises(RuntimeError) as ctx:
                 range_ops.guest_agent_exec_detached(
                     "proxmox", 1234, "sleep forever", "/tmp/tz-x.log", timeout=60)
@@ -182,9 +183,9 @@ class WaitForAgentDiagnosis(unittest.TestCase):
         api = _FakeApi()
         out = []
 
-        with patch.object(range_ops, "proxmox_api", api), \
-             patch.object(range_ops.time, "sleep"), \
-             patch.object(range_ops.time, "time", side_effect=[0, 0, 999]), \
+        with patch.object(guest_exec, "proxmox_api", api), \
+             patch.object(guest_exec.time, "sleep"), \
+             patch.object(guest_exec.time, "time", side_effect=[0, 0, 999]), \
              patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
             ok = range_ops.wait_for_guest_agent("proxmox", 147, timeout=600)
         self.assertFalse(ok)
@@ -198,9 +199,9 @@ class WaitForAgentDiagnosis(unittest.TestCase):
             raise RuntimeError("API unreachable")
 
         out = []
-        with patch.object(range_ops, "proxmox_api", dead), \
-             patch.object(range_ops.time, "sleep"), \
-             patch.object(range_ops.time, "time", side_effect=[0, 0, 999]), \
+        with patch.object(guest_exec, "proxmox_api", dead), \
+             patch.object(guest_exec.time, "sleep"), \
+             patch.object(guest_exec.time, "time", side_effect=[0, 0, 999]), \
              patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
             self.assertFalse(range_ops.wait_for_guest_agent("proxmox", 7, timeout=5))
         self.assertIn("state unavailable", "\n".join(out))

@@ -93,8 +93,7 @@ provider "proxmox" {
 
 locals {
   # Teams split by hosting slot. t.slot defaults to 0 (variables.tf optional field),
-  # so legacy tfvars without the key place every team on the engine node — the
-  # single-node behavior, unchanged.
+  # so a team without the key sits on the engine node (single-node deploys).
   slot_teams = [for s in range(5) : { for k, t in var.teams : k => t if try(t.slot, 0) == s }]
 
   # In-path firewall presence: one optional box (unmanaged + in_path) switches on the
@@ -169,11 +168,11 @@ resource "proxmox_virtual_environment_vm" "scoring_engine" {
   tags      = compact(["tezcatlipoca", local.comp_tag, var.run_tag])
 
   clone {
-    # M4: the deployed engine is a linked clone of the competition's engine template
+    # The deployed engine is a linked clone of the competition's engine template
     # (fresh identity + host keys via the template's clean step, empty scoring DB per
-    # run). 0 = pre-M4 fallback: full clone straight from the base image.
-    vm_id = var.engine_clone_id != 0 ? var.engine_clone_id : var.template_vm_id
-    full  = var.engine_clone_id == 0
+    # run).
+    vm_id = var.engine_clone_id
+    full  = false
   }
 
   agent {
@@ -282,7 +281,7 @@ locals {
 
   # M3.3: every team is Terraform-managed now. Keys keep the historical naming
   # (team1-<box>, <identifier>-<box>) so enumerate_targets' vm_name matches.
-  # Split by hosting slot: slot 0's map keeps the legacy `all_team_vms` name/address;
+  # Split by hosting slot: slot 0's map keeps the `all_team_vms` name/address;
   # satellite slots clone from their own node's golden copies (golden_ids_for_slot).
   all_team_vms_by_slot = [for s in range(5) : merge([
     for team_key, team in local.slot_teams[s] : {
@@ -428,14 +427,9 @@ resource "proxmox_virtual_environment_vm" "team_box_sat1" {
   }
 
   clone {
-    vm_id = try(
-      var.golden_template_ids_by_slot[tostring(1)][index(
-        [for b in var.boxes_per_team : b.name], each.value.box.name
-      )],
-      var.golden_template_ids[index(
-        [for b in var.boxes_per_team : b.name], each.value.box.name
-      )]
-    )
+    vm_id = var.golden_template_ids_by_slot[tostring(1)][index(
+      [for b in var.boxes_per_team : b.name], each.value.box.name
+    )]
     full = false
   }
 
@@ -496,14 +490,9 @@ resource "proxmox_virtual_environment_vm" "team_box_sat2" {
   }
 
   clone {
-    vm_id = try(
-      var.golden_template_ids_by_slot[tostring(2)][index(
-        [for b in var.boxes_per_team : b.name], each.value.box.name
-      )],
-      var.golden_template_ids[index(
-        [for b in var.boxes_per_team : b.name], each.value.box.name
-      )]
-    )
+    vm_id = var.golden_template_ids_by_slot[tostring(2)][index(
+      [for b in var.boxes_per_team : b.name], each.value.box.name
+    )]
     full = false
   }
 
@@ -564,14 +553,9 @@ resource "proxmox_virtual_environment_vm" "team_box_sat3" {
   }
 
   clone {
-    vm_id = try(
-      var.golden_template_ids_by_slot[tostring(3)][index(
-        [for b in var.boxes_per_team : b.name], each.value.box.name
-      )],
-      var.golden_template_ids[index(
-        [for b in var.boxes_per_team : b.name], each.value.box.name
-      )]
-    )
+    vm_id = var.golden_template_ids_by_slot[tostring(3)][index(
+      [for b in var.boxes_per_team : b.name], each.value.box.name
+    )]
     full = false
   }
 
@@ -632,14 +616,9 @@ resource "proxmox_virtual_environment_vm" "team_box_sat4" {
   }
 
   clone {
-    vm_id = try(
-      var.golden_template_ids_by_slot[tostring(4)][index(
-        [for b in var.boxes_per_team : b.name], each.value.box.name
-      )],
-      var.golden_template_ids[index(
-        [for b in var.boxes_per_team : b.name], each.value.box.name
-      )]
-    )
+    vm_id = var.golden_template_ids_by_slot[tostring(4)][index(
+      [for b in var.boxes_per_team : b.name], each.value.box.name
+    )]
     full = false
   }
 

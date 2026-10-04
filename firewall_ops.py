@@ -116,7 +116,7 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None):
 \t\t</gateway_item>
 \t</gateways>""")
 
-    wan_rule = f"""<rule>
+    wan_rule = """<rule>
 \t\t\t<type>pass</type>
 \t\t\t<ipprotocol>inet</ipprotocol>
 \t\t\t<descr><![CDATA[Allow engine scoring + routed traffic to LAN]]></descr>

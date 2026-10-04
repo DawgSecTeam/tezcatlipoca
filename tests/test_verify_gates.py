@@ -31,6 +31,17 @@ _SPEC = importlib.util.spec_from_file_location(
     "verify_gates_test", _REPO / "verify-competition.py")
 verify = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(verify)
+import subprocess  # noqa: E402
+import requests  # noqa: E402
+import verifier.context as v_context  # noqa: E402
+import verifier.creds as v_creds  # noqa: E402
+import verifier.domains as v_domains  # noqa: E402
+import verifier.engine as v_engine  # noqa: E402
+import verifier.isolation as v_isolation  # noqa: E402
+import verifier.misconfig as v_misconfig  # noqa: E402
+import verifier.reports as v_reports  # noqa: E402
+import verifier.scoreboard as v_scoreboard  # noqa: E402
+import verifier.state_gates as v_state_gates  # noqa: E402
 
 
 # --------------------------------------------------------------------------- helpers
@@ -82,7 +93,7 @@ class CheckServicesArity(unittest.TestCase):
     """D1: a failing /api/teams must not crash main's unpacking."""
 
     def test_api_teams_failure_returns_gate_results(self):
-        session = _Session([], {}, teams_error=verify.requests.RequestException("refused"))
+        session = _Session([], {}, teams_error=requests.RequestException("refused"))
         results, out = _run(verify.check_services, "http://e", session, {}, False)
         self.assertTrue(all(isinstance(r, verify.GateResult) for r in results))
         self.assertEqual([r.name for r in results], ["services"])
@@ -91,7 +102,7 @@ class CheckServicesArity(unittest.TestCase):
         self.assertIn("could not fetch /api/teams", out)
 
     def test_api_teams_failure_strict_gates_and_pins_fail(self):
-        session = _Session([], {}, teams_error=verify.requests.RequestException("refused"))
+        session = _Session([], {}, teams_error=requests.RequestException("refused"))
         results, _ = _run(verify.check_services, "http://e", session, {}, True,
                           {"web01-ssh"})
         names = [r.name for r in results]
@@ -383,7 +394,7 @@ class PacketAccounts(unittest.TestCase):
     """D3: unprovable out-of-scope accounts are a SKIP, never a pass."""
 
     def test_ssh_dead_is_skip(self):
-        with patch.object(verify, "ssh_via_gateway",
+        with patch.object(v_context, "ssh_via_gateway",
                           side_effect=verify.CheckError("ssh: connect refused")):
             result, out = _run(verify.check_packet_accounts, CTX, PACKET_PROFILE, LINUX_BOXES)
         self.assertIs(result.status, verify.Status.SKIP_UNAVAILABLE)
@@ -393,20 +404,20 @@ class PacketAccounts(unittest.TestCase):
         self.assertFalse(passed)
 
     def test_probe_rc_nonzero_is_skip(self):
-        with patch.object(verify, "ssh_via_gateway",
+        with patch.object(v_context, "ssh_via_gateway",
                           return_value=_proc(255, "", "Permission denied")):
             result, out = _run(verify.check_packet_accounts, CTX, PACKET_PROFILE, LINUX_BOXES)
         self.assertIs(result.status, verify.Status.SKIP_UNAVAILABLE)
         self.assertIn("SKIP", out)
 
     def test_all_accounts_present_passes(self):
-        with patch.object(verify, "ssh_via_gateway",
+        with patch.object(v_context, "ssh_via_gateway",
                           return_value=_proc(0, "scorebot=1\nblackteam=1\n")):
             result, _ = _run(verify.check_packet_accounts, CTX, PACKET_PROFILE, LINUX_BOXES)
         self.assertIs(result.status, verify.Status.PASS)
 
     def test_missing_account_fails(self):
-        with patch.object(verify, "ssh_via_gateway",
+        with patch.object(v_context, "ssh_via_gateway",
                           return_value=_proc(0, "scorebot=1\nblackteam=0\n")):
             result, out = _run(verify.check_packet_accounts, CTX, PACKET_PROFILE, LINUX_BOXES)
         self.assertIs(result.status, verify.Status.FAIL)
@@ -437,7 +448,7 @@ class MisconfigSurvival(unittest.TestCase):
             if value is None:
                 raise verify.CheckError("ssh: connect refused")
             return _proc(0, value)
-        with patch.object(verify, "ssh_via_gateway", side_effect=fake):
+        with patch.object(v_context, "ssh_via_gateway", side_effect=fake):
             return _run(verify.check_misconfig_survival, CTX, SURVIVAL_BOXES)
 
     def test_present_on_every_team_passes(self):
@@ -506,8 +517,8 @@ class IsolationDecisionTable(unittest.TestCase):
                 raise verify.CheckError(cross_exc)
             return _proc(0, "RC=0\n" if cross == "reachable" else "RC=1\n", "")
 
-        with patch.object(verify, "ssh_to_engine", side_effect=fake_engine), \
-             patch.object(verify, "ssh_via_gateway", side_effect=fake_gateway):
+        with patch.object(v_context, "ssh_to_engine", side_effect=fake_engine), \
+             patch.object(v_context, "ssh_via_gateway", side_effect=fake_gateway):
             return _run(verify.check_isolation, CTX, teams, boxes)
 
     def test_rule_absent_fails(self):
@@ -532,8 +543,8 @@ class IsolationDecisionTable(unittest.TestCase):
         self.assertIs(result.status, verify.Status.SKIP_UNAVAILABLE)
 
     def test_verifier_rc_nonzero_is_skip(self):
-        with patch.object(verify, "ssh_to_engine", return_value=_proc(0, FORWARD_OK, "")), \
-             patch.object(verify, "ssh_via_gateway", return_value=_proc(255, "", "denied")):
+        with patch.object(v_context, "ssh_to_engine", return_value=_proc(0, FORWARD_OK, "")), \
+             patch.object(v_context, "ssh_via_gateway", return_value=_proc(255, "", "denied")):
             result, _ = _run(verify.check_isolation, CTX, TEAMS, ISO_BOXES)
         self.assertIs(result.status, verify.Status.SKIP_UNAVAILABLE)
 
@@ -591,33 +602,33 @@ class TriStateVerdict(unittest.TestCase):
         self.assertEqual(verify.Status.SKIP_UNAVAILABLE.value, "SKIP")
 
     def test_result_passed_property(self):
-        self.assertTrue(verify._pass("g").passed)
-        self.assertFalse(verify._fail("g").passed)
-        self.assertFalse(verify._skip("g").passed)
+        self.assertTrue(verify.gate_pass("g").passed)
+        self.assertFalse(verify.gate_fail("g").passed)
+        self.assertFalse(verify.gate_skip("g").passed)
 
     def test_skip_is_not_passing(self):
-        results = [verify._pass("a"), verify._skip("b")]
+        results = [verify.gate_pass("a"), verify.gate_skip("b")]
         gate, passed = verify.gate_verdict(results)
         self.assertFalse(passed)
         self.assertEqual(gate, {"a": True, "b": False})
 
     def test_allow_unverified_waives_a_named_skip(self):
-        results = [verify._pass("a"), verify._skip("b")]
+        results = [verify.gate_pass("a"), verify.gate_skip("b")]
         gate, passed = verify.gate_verdict(results, ["b"])
         self.assertTrue(passed)
         self.assertEqual(gate["b"], False)  # freeze still refuses on a waived gate
 
     def test_allow_unverified_matches_the_summary_label(self):
-        results = [verify._skip("services(strict)", label="services")]
+        results = [verify.gate_skip("services(strict)", label="services")]
         self.assertFalse(verify.gate_verdict(results, ["nope"])[1])
         self.assertTrue(verify.gate_verdict(results, ["services"])[1])
 
     def test_fail_is_never_waivable(self):
-        results = [verify._fail("isolation")]
+        results = [verify.gate_fail("isolation")]
         self.assertFalse(verify.gate_verdict(results, ["isolation"])[1])
 
     def test_non_gating_result_is_excluded_from_the_verdict(self):
-        results = [verify._pass("a"), verify._fail("b", gating=False)]
+        results = [verify.gate_pass("a"), verify.gate_fail("b", gating=False)]
         gate, passed = verify.gate_verdict(results)
         self.assertTrue(passed)
         self.assertNotIn("b", gate)
@@ -625,7 +636,7 @@ class TriStateVerdict(unittest.TestCase):
     def test_summary_word_matches_the_exit_effect(self):
         """The old SUMMARY printed "SKIP — unverified" while the dict held FAIL;
         now the printed word IS the verdict."""
-        results = [verify._pass("logins"), verify._skip("isolation")]
+        results = [verify.gate_pass("logins"), verify.gate_skip("isolation")]
         lines = verify.summary_lines(results)
         self.assertIn("SKIP", lines[1])
         _, passed = verify.gate_verdict(results)
@@ -635,13 +646,13 @@ class TriStateVerdict(unittest.TestCase):
         self.assertTrue(verify.gate_verdict(results, ["isolation"])[1])
 
     def test_informational_line_is_annotated(self):
-        lines = verify.summary_lines([verify._fail("services", "some DOWN", gating=False)])
+        lines = verify.summary_lines([verify.gate_fail("services", "some DOWN", gating=False)])
         self.assertIn("[informational]", lines[0])
         self.assertTrue(verify.gate_verdict(
-            [verify._fail("services", gating=False)])[1])
+            [verify.gate_fail("services", gating=False)])[1])
 
     def test_summary_shows_detail(self):
-        lines = verify.summary_lines([verify._pass("domains", "2 team domain(s)")])
+        lines = verify.summary_lines([verify.gate_pass("domains", "2 team domain(s)")])
         self.assertEqual(lines[0].split(":", 1)[1].strip(), "PASS  2 team domain(s)")
 
 
@@ -669,7 +680,7 @@ class RedTeamsReachability(unittest.TestCase):
                 calls.append(target)
             ok = target in reachable
             return _proc(returncode=0 if ok else 1, stdout="RED-OK\n" if ok else "")
-        with patch.object(verify.subprocess, "run", side_effect=fake_run):
+        with patch.object(subprocess, "run", side_effect=fake_run):
             return verify.check_red_teams(self.CTX, boxes, "10.0.0.196")
 
     def test_every_team_reachable_passes(self):
@@ -715,7 +726,7 @@ class RedTeamsReachability(unittest.TestCase):
     def test_ssh_spawn_failure_is_a_skip_not_a_fail(self):
         # Unprovable is SKIP in this file's discipline: an operator without a red01
         # ssh key must not read as "routing is broken".
-        with patch.object(verify.subprocess, "run", side_effect=OSError("no ssh")):
+        with patch.object(subprocess, "run", side_effect=OSError("no ssh")):
             res = verify.check_red_teams(self.CTX, self._boxes((221, 2)), "10.0.0.196")
         self.assertIs(res.status, verify.Status.SKIP_UNAVAILABLE)
 
@@ -724,7 +735,7 @@ class ConvertedGates(unittest.TestCase):
     """The D6 conversion itself: these gates return GateResult, not bare bool/None."""
 
     def test_check_isolation_returns_gate_result(self):
-        with patch.object(verify, "ssh_to_engine", return_value=_proc(0, FORWARD_OK, "")):
+        with patch.object(v_context, "ssh_to_engine", return_value=_proc(0, FORWARD_OK, "")):
             result, _ = _run(verify.check_isolation, CTX,
                              {"team1": {"identifier": 104}}, [])
         self.assertIsInstance(result, verify.GateResult)
@@ -765,24 +776,24 @@ class MainSummaryWiring(unittest.TestCase):
 
     def _run_main(self, comp_dir, extra=()):
         patches = [
-            patch.object(verify, "read_terraform_ctx",
+            patch.object(v_context, "read_terraform_ctx",
                          side_effect=verify.CheckError("terraform unavailable")),
-            patch.object(verify, "check_logins", return_value=(True, object())),
-            patch.object(verify, "check_no_default_creds", return_value=True),
-            patch.object(verify, "check_services",
-                         return_value=[verify._pass("services", gating=False)]),
-            patch.object(verify, "check_isolation", return_value=verify._skip("isolation")),
-            patch.object(verify, "report_healthcheck_status"),
-            patch.object(verify, "check_misconfig", return_value=True),
-            patch.object(verify, "check_misconfig_survival",
-                         return_value=verify._pass("misconfig_survival")),
-            patch.object(verify, "report_beacons"),
-            patch.object(verify, "check_injects", return_value=(False, True)),
-            patch.object(verify, "check_round_loop", return_value=verify._pass("round_loop")),
-            patch.object(verify, "check_plant_coverage",
-                         return_value=verify._skip("plant_coverage")),
-            patch.object(verify, "check_domains",
-                         return_value=verify._skip("domains", gating=False)),
+            patch.object(v_scoreboard, "check_logins", return_value=(True, object())),
+            patch.object(v_creds, "check_no_default_creds", return_value=True),
+            patch.object(v_scoreboard, "check_services",
+                         return_value=[verify.gate_pass("services", gating=False)]),
+            patch.object(v_isolation, "check_isolation", return_value=verify.gate_skip("isolation")),
+            patch.object(v_reports, "report_healthcheck_status"),
+            patch.object(v_misconfig, "check_misconfig", return_value=True),
+            patch.object(v_misconfig, "check_misconfig_survival",
+                         return_value=verify.gate_pass("misconfig_survival")),
+            patch.object(v_reports, "report_beacons"),
+            patch.object(v_engine, "check_injects", return_value=(False, True)),
+            patch.object(v_engine, "check_round_loop", return_value=verify.gate_pass("round_loop")),
+            patch.object(v_state_gates, "check_plant_coverage",
+                         return_value=verify.gate_skip("plant_coverage")),
+            patch.object(v_domains, "check_domains",
+                         return_value=verify.gate_skip("domains", gating=False)),
             patch.object(sys, "argv",
                          ["verify-competition.py", str(comp_dir), "--engine-ip",
                           "10.0.0.1", *extra]),

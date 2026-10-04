@@ -21,19 +21,18 @@ per-team repair stage (nakon_ops.generate_stage_configs), which still runs pre-d
 
 import json
 import os
-import re
-import shlex
-import subprocess
-import time
 
-from constants import (FINAL_STAGE_CONFIGS, GOLDEN_CLONE_TIMEOUT, GOLDEN_TAG, SNAP_BASE,
-                       ownership_tags)
+from constants import GOLDEN_CLONE_TIMEOUT, GOLDEN_TAG, SNAP_BASE, ownership_tags
 from engine_ops import ensure_nat_forwarding
-from hardening_ops import ensure_alpine_services, fix_dns_on_boxes, prep_apt_on_boxes, setup_ubuntu_auth
+from hardening_ops import (
+    ensure_alpine_services,
+    fix_dns_on_boxes,
+    prep_apt_on_boxes,
+    setup_ubuntu_auth,
+)
 from nakon_ops import build_nakon_bundle, run_nakon
 from range_ops import (
     clone_marker,
-    cluster_vms_for,
     gc_orphan_volumes,
     delete_snapshot,
     destroy_vm_if_exists,
@@ -44,334 +43,179 @@ from range_ops import (
     start_vm,
     stop_vm,
     take_snapshot,
-    wait_for_guest_agent,
     wait_for_proxmox_task,
 )
 from nodes_ops import golden_vmid_for_slot
 from ssh_ops import ssh_via_gateway, wait_for_boxes_ssh, wait_for_cloud_init
-from template_ops import (golden_plant_checkpoints, save_template_hashes,
-                          stored_template_hash, write_template_hash)
-from utils import (PRINT_LOCK, compfile_flag, is_unmanaged, record_degradation,
-                   run_concurrent)
+from template_ops import (
+    golden_plant_checkpoints,
+    save_template_hashes,
+    stored_template_hash,
+    write_template_hash,
+)
+from utils import PRINT_LOCK, compfile_flag, run_concurrent
 from windows_ops import bootstrap_windows_box, is_windows_template
+# Names that moved to sibling modules stay importable from here (this module is the
+# public path; see docs/internals.md 'golden_ops split').
+from golden_target_ops import (
+    _quote_sshkeys,
+    golden_vmid_for,
+    golden_ip_for,
+    _is_template,
+    _vm_exists,
+    _template_vmid_map,
+    unbooted_golden_boxes,
+    golden_targets,
+)
+from golden_smoke_ops import (
+    BOOT_SMOKE_PASS,
+    BOOT_SMOKE_UNBOOTABLE,
+    BOOT_SMOKE_UNVERIFIED,
+    GOLDEN_BOOT_SMOKE_TAG,
+    GOLDEN_BOOT_SMOKE_TIMEOUT,
+    GOLDEN_BOOT_SMOKE_WIN_TIMEOUT,
+    GOLDEN_BOOT_SMOKE_POLL,
+    _smoke_vmid,
+    _destroy_smoke_clone,
+    _probe_boot,
+    _boot_smoke_error,
+    golden_boot_smoke,
+)
+from golden_disk_ops import (
+    _SIZE_TO_GB,
+    _root_disk_gb,
+    ensure_golden_disk_size,
+    expand_guest_root_disks,
+)
 
 
-def _quote_sshkeys(public_key):
-    """Proxmox's sshkeys config param wants the key URL-encoded (as redeploy does)."""
-    from urllib.parse import quote
-    return quote(public_key.strip(), safe="")
-
-
-def golden_vmid_for(engine_vmid, box_idx):
-    """Golden boxes sit just above the engine's slot; preflight gates the span for
-    collisions with team vmid space (engine vmids above ~1060 shift the golden block).
-    Slot 0 of golden_vmid_for_slot — the satellite slots shift by box-stride (nodes_ops)."""
-    return golden_vmid_for_slot(engine_vmid, 0, box_idx)
-
-
-def golden_ip_for(anchor_identifier, box_idx):
-    """Above the .1 gateway, below .255, on the anchor team's subnet — free because
-    golden boxes are converted to (stopped) templates before any real team box
-    exists. Satellite slots anchor on their first local team (the jump answers .1
-    there and routes to the engine)."""
-    return f"192.168.{anchor_identifier}.{240 + box_idx}"
-
-
-def _is_template(node, vmid):
-    try:
-        return bool(proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"].get("template"))
-    except Exception:
-        return False
-
-
-def _vm_exists(node, vmid):
-    vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
-    return any(v["vmid"] == vmid for v in vms)
-
-
-def _template_vmid_map(node):
-    """name -> vmid for stopped VMs tagged `template`, ON `node` (mirrors main.tf's
-    per-slot template data sources). Asks the host that owns `node`
-    (range_ops.cluster_vms_for): with a multi-node placement that is the satellite's
-    own endpoint — a primary-side cluster query would never see its templates on
-    independent hosts. /cluster/resources joins tags with ';' (config GET uses ','),
-    so split on both."""
-    vms = cluster_vms_for(node)
-    out = {}
-    for vm in vms:
-        if vm.get("node") and vm["node"] != node:
-            continue
-        tags = {t.strip() for t in str(vm.get("tags") or "").replace(";", ",").split(",") if t.strip()}
-        if "template" in tags and vm.get("status") == "stopped":
-            out[vm["name"]] = vm["vmid"]
-    return out
-
-
-def unbooted_golden_boxes(comp_dir):
-    """Box types whose golden must stay sysprep-generalized (never booted): the
-    domain-controller role in domain_roles.json. See the module identity note.
-
-    An absent file is a no-domain lineup (empty set). A PRESENT but malformed or
-    invalid file raises: treating it as no-domain would hand the DC a booted shared
-    golden — the exact duplicate-DomainSID failure this split exists to prevent."""
-    path = comp_dir / "domain_roles.json"
-    if not path.exists():
-        return set()
-    try:
-        roles = json.loads(path.read_text())
-    except (OSError, ValueError) as e:
-        raise SystemExit(f"  ERROR: {path} is unreadable/malformed ({str(e)[:80]}) — "
-                         "cannot decide which goldens must stay unbooted")
-    if not isinstance(roles, dict) or not all(
-            isinstance(name, str) and isinstance(role, str)
-            for name, role in roles.items()):
-        raise SystemExit(
-            f"  ERROR: {path} must map box names to 'dc' or 'member' strings")
-    bad = {name: role for name, role in roles.items() if role not in ("dc", "member")}
-    if bad:
-        raise SystemExit(
-            f"  ERROR: {path} has invalid role value(s): "
-            + ", ".join(f"{name}={role!r}" for name, role in sorted(bad.items()))
-            + " (expected 'dc' or 'member')")
-    boxes_path = comp_dir / "boxes.json"
-    if boxes_path.exists():
-        names = {b["name"] for b in json.loads(boxes_path.read_text())}
-        unknown = [name for name in roles if name not in names]
-        if unknown:
-            raise SystemExit(
-                f"  ERROR: {path} names box(es) absent from boxes.json: "
-                + ", ".join(sorted(unknown)))
-    return {name for name, role in roles.items() if role == "dc"}
-
-
-def golden_targets(engine_vmid, teams, boxes, slot=0, anchor_identifier=None):
-    """One target per box type: vmid/IP/name pre-derived, box_idx positional (mirrors
-    enumerate_targets' invariant — build from the full box list, never a filtered one).
-
-    slot 0 anchors on team1's subnet (historical behavior exactly); a satellite slot
-    anchors on its first local team's subnet — the satellite's goldens must sit on a
-    bridge that exists on the satellite's host, with the jump answering .1 there."""
-    if anchor_identifier is None:
-        anchor_identifier = str(teams["team1"]["identifier"])
-    return [
-        {
-            "box": box,
-            "box_idx": box_idx,
-            "vmid": golden_vmid_for_slot(engine_vmid, slot, box_idx),
-            "ip": golden_ip_for(anchor_identifier, box_idx),
-            "vm_name": f"golden-{box['name']}",
-            "machine": f"{box['name']}-golden",
-            "gateway": f"192.168.{anchor_identifier}.1",
-            "bridge": f"vmbr{anchor_identifier}",
-        }
-        for box_idx, box in enumerate(boxes)
-        if not is_unmanaged(box)  # no golden for firewall/appliance boxes; box_idx stays positional
-    ]
-
-
-# ------------------------------------------------------------------ boot smoke gate
-#
-# The invariant "no boot-hostile config rides the golden" was, until now, enforced by a
-# comment and the hand-maintained constants.FINAL_STAGE_CONFIGS set — nothing else. It
-# already failed for real on 2026-09-24: `systemd-system-masked` was planted into the
-# golden disk and every linked clone was bootless (masked multi-user/graphical/default
-# targets => systemd boots with no multi-user.target => no cloud-init, no network; see
-# docs/benchmark-m02.md and the constants.py note). strict=True does not catch it: the
-# plant returns rc=0 while the disk is unbootable, and the golden's own running system
-# stays reachable (masking a target does not stop the current boot), so the damage only
-# surfaces one phase later, on every team clone at once. Hence a real boot of a
-# throwaway clone of the exact disk about to be sealed.
-BOOT_SMOKE_PASS = "verified-bootable"
-BOOT_SMOKE_UNBOOTABLE = "verified-unbootable"
-BOOT_SMOKE_UNVERIFIED = "could-not-verify"
-GOLDEN_BOOT_SMOKE_TAG = "tezcatlipoca-golden-bootsmoke"
-# Deliberately generous bounds: they only cost wall clock on a golden that is genuinely
-# failing (a healthy clone returns as soon as it answers). A first boot of a fresh clone
-# can legitimately crawl on the overprovisioned thin pool, and bootstrap_windows_box
-# already budgets 1800s for a Windows first boot.
-GOLDEN_BOOT_SMOKE_TIMEOUT = 1200
-GOLDEN_BOOT_SMOKE_WIN_TIMEOUT = 1800
-GOLDEN_BOOT_SMOKE_POLL = 15
-
-
-def _smoke_vmid(node):
-    """A free vmid for the throwaway boot clone.
-
-    PVE's own allocator (/cluster/nextid, as template_sync_ops also uses) plus a
-    node-local existence check: with a multi-node placement the allocator may be
-    answered by the primary endpoint while this golden lives on a satellite host,
-    where that id can already be taken."""
-    existing = {int(v["vmid"]) for v in cluster_vms_for(node)}
-    try:
-        vmid = int(proxmox_api("GET", "/cluster/nextid")["data"])
-    except Exception:
-        vmid = max(existing) + 1 if existing else 900
-    while vmid in existing:
-        vmid += 1
-    return vmid
-
-
-def _destroy_smoke_clone(node, vmid, name, comp_dir, run_id=None):
-    """Destroy the throwaway boot clone — but only if it is really ours.
-
-    Identity is the clone NAME (unique to this build) plus its full ownership tag
-    set (comp tag + this run's run tag): never bare vmid math. A vmid we created
-    but that now carries another name is left alone, loudly."""
-    try:
-        vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
-    except Exception as e:
-        print(f"    WARNING: boot-smoke clone vmid {vmid} state unreadable ({str(e)[:120]}) "
-              f"— destroy it manually before the next deploy")
-        return
-    vm = next((v for v in vms if int(v["vmid"]) == vmid), None)
-    if vm is None:
-        gc_orphan_volumes(node, vmid)  # an interrupted clone can strand its volumes
-        return
-    if vm.get("name") != name:
-        print(f"    WARNING: vmid {vmid} is '{vm.get('name')}', not our boot-smoke clone "
-              f"'{name}' — leaving it alone; destroy it manually if it is a stranded clone")
-        return
-    destroy_vm_if_exists(node, vmid, expect_tags=ownership_tags(comp_dir.name, run_id))
-
-
-def _probe_boot(node, vmid, target, ctx, timeout, poll):
-    """(status, detail) — BOOT_SMOKE_PASS / _UNBOOTABLE / _UNVERIFIED.
-
-    Linux: SSH must answer a `systemctl is-active multi-user.target` that prints
-    `active`. sshd is WantedBy=multi-user.target, so a successful command already
-    implies multi-user; the explicit check makes the 2026-09-24 signature (systemd up,
-    no multi-user.target because it is masked) legible in the failure detail instead of
-    a bare timeout. Windows: the guest agent answering is the same readiness signal
-    wait_for_boxes_ssh uses for Windows team clones.
-
-    An exception that waiting cannot fix (bad ctx/key, no ssh binary) is
-    UNVERIFIED — immediate, never a silent pass and never a full-budget spin."""
-    if is_windows_template(target["box"]["template"]):
-        if wait_for_guest_agent(node, vmid, timeout=timeout):
-            return BOOT_SMOKE_PASS, "guest agent answered"
-        return BOOT_SMOKE_UNBOOTABLE, f"guest agent never answered within {timeout}s"
-    deadline = time.time() + timeout
-    detail = "no probe attempt completed within the budget"
-    while time.time() < deadline:
+def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_tag_str,
+                           golden_hashes):
+    """Unbooted (DC) goldens: full clone of the sysprepped base converted straight to a
+    template — never booted, so each team clone specializes its own SID."""
+    for t in cold:
+        # Any plain VM here is a dead attempt that may have booted (and specialized) —
+        # never reuse it; the whole point of this slot is a generalized disk.
+        # Adoption exception (live-found 2026-09-30, same shape as the engine-template
+        # leftover): a clone task that outlived its 1800s task-wait completes AFTER
+        # the driver raised, leaving the VM with only the BASE image's inherited tags
+        # — the strict guard would refuse it forever. A not-yet-converted VM on the
+        # reserved slot carrying our clone-marker description is ours; adopt it loudly.
         try:
-            r = ssh_via_gateway(ctx, target["ip"], "systemctl is-active multi-user.target",
-                                timeout=20, user=ctx.get("box_username", "ubuntu"))
-        except subprocess.TimeoutExpired:
-            detail = "ssh probe timed out (box not answering yet)"
-        except Exception as e:
-            return BOOT_SMOKE_UNVERIFIED, (f"probe could not run ({type(e).__name__}: "
-                                           f"{str(e)[:120]})")
+            cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"]
+            desc = str(cfg.get("description") or "")
+            raw_tags = str(cfg.get("tags") or "")
+            tags = {x.strip() for x in raw_tags.replace(";", ",").split(",") if x.strip()}
+            if (cfg.get("name") == t["vm_name"] and clone_marker(comp_dir.name) in desc
+                    and "tezcatlipoca" not in tags):
+                print(f"    vmid {t['vmid']}: untagged dead-attempt clone of "
+                      f"'{t['vm_name']}' (our clone marker in description) — adopting")
+                destroy_vm_if_exists(node, t["vmid"], expect_tags=None)
+        except Exception:
+            pass  # slot empty, or unreadable — the strict destroy below decides
+        destroy_vm_if_exists(node, t["vmid"], expect_tags=own_set)
+        src = templates.get(t["box"]["template"])
+        if src is None:
+            raise RuntimeError(f"no stopped template named '{t['box']['template']}' on the node")
+        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone", data={
+            "newid": t["vmid"], "name": t["vm_name"], "full": 1,
+            "description": clone_marker(comp_dir.name)})["data"]
+        wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
+        proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
+            "net0": f"virtio,bridge={t['bridge']}", "tags": ownership_tag_str})
+        proxmox_api("POST", f"/nodes/{node}/qemu/{t['vmid']}/template")
+        if golden_hashes:
+            write_template_hash(node, t["vmid"], golden_hashes[t["box"]["name"]],
+                                extra=f"box={t['box']['name']} unbooted")
+        print(f"    {t['vm_name']} (vmid {t['vmid']}) is now an UNBOOTED template "
+              f"(generalized — each team's clone specializes its own SID)")
+
+
+def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password,
+                          ownership_tag_str):
+    """Full-clone each missing golden from its base template, adopting/clearing an
+    interrupted clone only on proof of ownership (our clone marker)."""
+    print(f"  Cloning {len(missing)} golden box(es) from base templates...")
+    existing_vmids = {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
+    for t in missing:
+        src = templates.get(t["box"]["template"])
+        if src is None:
+            raise RuntimeError(f"no stopped template named '{t['box']['template']}' on the node")
+        if t["vmid"] in existing_vmids:
+            locked_cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"]
+            if not locked_cfg.get("lock"):
+                continue
+            # An interrupted clone: half-copied disk, never usable — start over.
+            # Ownership proof: only THIS competition's clone marker in the
+            # description adopts it; expect_tags=set() used to destroy ANY VM
+            # found here, foreign ones included.
+            if clone_marker(comp_dir.name) not in str(locked_cfg.get("description") or ""):
+                raise RuntimeError(
+                    f"refusing to destroy locked vmid {t['vmid']} on reserved golden "
+                    f"slot '{t['vm_name']}' — no clone marker in its description, "
+                    f"not provably ours")
+            destroy_vm_if_exists(node, t["vmid"], expect_tags=None)
         else:
-            state = (r.stdout or "").strip().splitlines()
-            state = state[-1] if state else ""
-            if r.returncode == 0 and state == "active":
-                return BOOT_SMOKE_PASS, "multi-user.target active over SSH"
-            detail = (f"ssh rc={r.returncode} multi-user.target={state or '?'} "
-                      f"{(r.stderr or '').strip()[:100]}")
-        time.sleep(poll)
-    return BOOT_SMOKE_UNBOOTABLE, f"{detail} (gave up after {timeout}s)"
+            gc_orphan_volumes(node, t["vmid"])
+        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone", data={
+            "newid": t["vmid"],
+            "name": t["vm_name"],
+            "full": 1,
+            "description": clone_marker(comp_dir.name),
+        })["data"]
+        wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
+        proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
+            "ipconfig0": f"ip={t['ip']}/24,gw={t['gateway']}",
+            "net0": f"virtio,bridge={t['bridge']}",
+            "tags": ownership_tag_str,
+            # cloud-init identity for the golden box's first boot (the base template
+            # bakes no password — terraform's user_account normally supplies it):
+            "ciuser": ctx.get("box_username", "ubuntu"),
+            "cipassword": box_password,
+            "sshkeys": _quote_sshkeys(os.environ["TF_VAR_ssh_public_key"]),
+        })
+        ensure_golden_disk_size(node, t["vmid"], t["box"].get("disk_gb"))
+        print(f"    {t['box']['template']} -> {t['vm_name']} (vmid {t['vmid']})")
 
 
-def _boot_smoke_error(box, target, status, detail, planted_configs):
-    hostile = sorted(set(planted_configs) & FINAL_STAGE_CONFIGS)
-    lines = [
-        f"golden boot smoke FAILED ({status}) for box type '{box}': the throwaway clone of "
-        f"golden vmid {target['vmid']} did not reach multi-user ({detail}).",
-        "Refusing to convert this golden into a template: a golden disk that cannot boot "
-        "leaves EVERY linked team clone unbootable — one phase later, after every box type "
-        "has been built.",
-        "Likely cause: a boot-hostile config rode the golden stage. constants."
-        "FINAL_STAGE_CONFIGS (a subset of POST_CLONE_CONFIGS) lists the configs that must "
-        "plant after cloning; the 2026-09-24 incident was 'systemd-system-masked', which "
-        "returns rc=0 while masking multi-user/graphical/default targets — systemd then "
-        "boots with no multi-user.target, so no cloud-init and no network "
-        "(docs/benchmark-m02.md). strict=True cannot see "
-        "it because the plant step exits 0.",
-    ]
-    if hostile:
-        lines.append("This golden-stage plan explicitly carries boot-hostile config(s): "
-                     + ", ".join(hostile) + " — move them to the repair/final stage.")
-    return " ".join(lines)
+def _convert_goldens(node, targets, ownership_tag_str, golden_hashes):
+    """Stop-barrier already passed: convert every target golden to a template (parallel,
+    bound 4). Delete-then-convert stays inside one worker."""
+    print("  Converting golden boxes to templates...")
 
+    def _convert(t):
+        # qm template refuses a VM holding snapshots — and the tz-base rollback guard's
+        # purpose ends with the plant: a converted set is fatal on re-entry by design.
+        # Delete-then-convert stays INSIDE one worker, so a box's snapshot is always
+        # gone before the POST /template that needs it gone.
+        if SNAP_BASE in list_snapshots(node, t["vmid"]):
+            delete_snapshot(node, t["vmid"], SNAP_BASE)
+        proxmox_api("POST", f"/nodes/{node}/qemu/{t['vmid']}/template")["data"]
+        proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={"tags": ownership_tag_str})
+        # M4: the hash lands on the template (description) AND in the comp's state —
+        # reuse/rebuild decisions read it back at the next deploy's hash gate.
+        if golden_hashes:
+            write_template_hash(node, t["vmid"], golden_hashes[t["box"]["name"]],
+                                extra=f"box={t['box']['name']}")
+        with PRINT_LOCK:
+            print(f"    {t['vm_name']} (vmid {t['vmid']}) is now a template")
 
-def golden_boot_smoke(node, target, ctx, comp_dir, timeout=None,
-                      poll=GOLDEN_BOOT_SMOKE_POLL, planted_configs=(), run_id=None):
-    """Prove the golden disk boots by booting ONE throwaway clone of it.
-
-    Why a clone and not the golden itself: rebooting the golden would mutate the very
-    disk about to be templated (cloud-init identity/hostname/IP) and would still test
-    the wrong thing — a throwaway clone boots the bytes the template will hold, exactly
-    what every team's linked clone experiences after the golden's cloud-init clean.
-
-    Why the clone is FULL and not linked: PVE only creates linked clones from templates
-    (qm(1): "--full ... This is always done when you clone a normal VM"), and the whole
-    point is to verify BEFORE this golden becomes a template. It is one clone + boot per
-    box type, run sequentially with the golden stopped, so it does not stack a second
-    booting guest next to a running one.
-
-    Tri-state, fail-closed: BOOT_SMOKE_PASS returns True; BOOT_SMOKE_UNBOOTABLE and
-    BOOT_SMOKE_UNVERIFIED both raise. A clone that cannot be created or a probe that
-    cannot run is a FAILURE, never a pass — this project's gates have failed open
-    before, and that is exactly how the 2026-09-24 incident reached the clone phase."""
-    box = target["box"]["name"]
-    windows = is_windows_template(target["box"]["template"])
-    if timeout is None:
-        timeout = GOLDEN_BOOT_SMOKE_WIN_TIMEOUT if windows else GOLDEN_BOOT_SMOKE_TIMEOUT
-    try:
-        vmid = _smoke_vmid(node)
-    except Exception as e:
-        raise RuntimeError(
-            f"golden boot smoke COULD NOT VERIFY box '{box}': no vmid could be allocated "
-            f"for the throwaway clone ({type(e).__name__}: {str(e)[:160]}) — refusing to "
-            f"convert an unverified golden to a template") from e
-    name = f"{target['vm_name']}-bootsmoke"
-    print(f"  Boot smoke: booting a throwaway clone of {target['vm_name']} "
-          f"(vmid {target['vmid']}) as vmid {vmid} to prove the golden disk reaches "
-          f"multi-user (timeout {timeout}s)...")
-    try:
-        try:
-            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{target['vmid']}/clone", data={
-                "newid": vmid, "name": name, "full": 1,
-                "description": clone_marker(comp_dir.name),
-            })["data"]
-            wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
-        except Exception as e:
-            raise RuntimeError(
-                f"golden boot smoke COULD NOT VERIFY box '{box}': the throwaway clone of "
-                f"golden vmid {target['vmid']} could not be created "
-                f"({type(e).__name__}: {str(e)[:160]}) — refusing to convert an unverified "
-                f"golden to a template, because every linked clone of it might be "
-                f"unbootable") from e
-        # The clone inherits net0/ipconfig0/ciuser/cipassword/sshkeys from the golden, so
-        # it comes up on the golden's address (free: the golden is stopped here) exactly
-        # as a team clone comes up on its own after the golden's cloud-init clean.
-        try:
-            proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data={
-                "tags": ",".join(sorted(ownership_tags(
-                    comp_dir.name, run_id, GOLDEN_BOOT_SMOKE_TAG)))})
-        except Exception as e:
-            # Cosmetic only; teardown identifies the clone by name.
-            print(f"    WARNING: could not tag boot-smoke clone vmid {vmid}: {str(e)[:120]}")
-        try:
-            start_vm(node, vmid)
-        except Exception as e:
-            raise RuntimeError(
-                f"golden boot smoke COULD NOT VERIFY box '{box}': throwaway clone vmid "
-                f"{vmid} would not start ({type(e).__name__}: {str(e)[:160]}) — refusing to "
-                f"convert an unverified golden to a template") from e
-        status, detail = _probe_boot(node, vmid, target, ctx, timeout, poll)
-        if status != BOOT_SMOKE_PASS:
-            raise RuntimeError(_boot_smoke_error(box, target, status, detail, planted_configs))
-        print(f"    {box}: throwaway clone (vmid {vmid}) reached multi-user — golden disk boots")
-        return True
-    finally:
-        try:
-            _destroy_smoke_clone(node, vmid, name, comp_dir, run_id=run_id)
-        except Exception as e:
-            # Never mask the smoke verdict with a teardown error — but leaking a VM is
-            # loud, not silent.
-            print(f"    WARNING: failed to destroy boot-smoke clone vmid {vmid} "
-                  f"({str(e)[:120]}) — destroy it manually before the next deploy")
+    # Parallel since W11 (2026-10-01): 4-5 API calls plus a snapshot-delete task wait
+    # per box (the converting POST itself returns no task to wait on), which is ~5-10s
+    # per box, so an 8-box-type build paid ~30-60s serially. Bound 4, NOT
+    # MAX_CONCURRENCY's 8: each unit drives Proxmox tasks and 4 is the validated
+    # per-box VM-work bound (deploy.py's snapshot/Windows-bootstrap pools, jump_ops).
+    #
+    # The `if boot_smoke:` block ABOVE is a hard phase barrier: it runs first and
+    # raises on any non-PASS verdict, so a golden that failed its boot smoke can never
+    # reach POST /template no matter how this pool schedules. The clone loops (cold
+    # path, and `missing`) are deliberately NOT parallel: full clones are
+    # crash-consistent copies and saturate the datastore (see the module note on the
+    # cold path and deploy.py's -parallelism=1).
+    conv_results = run_concurrent(targets, _convert, max_workers=4)
+    for _t, r in zip(targets, conv_results):
+        if isinstance(r, Exception):
+            raise r
 
 
 def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_password,
@@ -444,8 +288,8 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     if len(converted) == len(targets):
         print(f"  Golden set already converted ({len(converted)} template(s)) — skipping "
               f"build (resume; M4 hash gate passed or rebuild already handled upstream)")
-        # Kept templates may carry an older run's ownership (M4 reuse across runs,
-        # pre-run-id deploys) — re-stamp so teardown/preflight recognize them.
+        # Kept templates carry an earlier run's ownership (M4 reuse across runs) —
+        # re-stamp so teardown/preflight recognize them.
         for t in converted:
             retag_ownership(node, t["vmid"], own_set)
         if coverage:
@@ -460,43 +304,8 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     cold = [t for t in targets if t["vmid"] not in done and t["box"]["name"] in unbooted]
     booted = [t for t in targets if t["vmid"] not in done and t["box"]["name"] not in unbooted]
 
-    for t in cold:
-        # Any plain VM here is a dead attempt that may have booted (and specialized) —
-        # never reuse it; the whole point of this slot is a generalized disk.
-        # Adoption exception (live-found 2026-09-30, same shape as the engine-template
-        # leftover): a clone task that outlived its 1800s task-wait completes AFTER
-        # the driver raised, leaving the VM with only the BASE image's inherited tags
-        # — the strict guard would refuse it forever. A not-yet-converted VM on the
-        # reserved slot carrying our clone-marker description is ours; adopt it loudly.
-        try:
-            cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"]
-            desc = str(cfg.get("description") or "")
-            raw_tags = str(cfg.get("tags") or "")
-            tags = {x.strip() for x in raw_tags.replace(";", ",").split(",") if x.strip()}
-            if (cfg.get("name") == t["vm_name"] and clone_marker(comp_dir.name) in desc
-                    and "tezcatlipoca" not in tags):
-                print(f"    vmid {t['vmid']}: untagged dead-attempt clone of "
-                      f"'{t['vm_name']}' (our clone marker in description) — adopting")
-                destroy_vm_if_exists(node, t["vmid"], expect_tags=None)
-        except Exception:
-            pass  # slot empty, or unreadable — the strict destroy below decides
-        destroy_vm_if_exists(node, t["vmid"], expect_tags=own_set,
-                             legacy_name=t["vm_name"])
-        src = templates.get(t["box"]["template"])
-        if src is None:
-            raise RuntimeError(f"no stopped template named '{t['box']['template']}' on the node")
-        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone", data={
-            "newid": t["vmid"], "name": t["vm_name"], "full": 1,
-            "description": clone_marker(comp_dir.name)})["data"]
-        wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
-        proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
-            "net0": f"virtio,bridge={t['bridge']}", "tags": ownership_tag_str})
-        proxmox_api("POST", f"/nodes/{node}/qemu/{t['vmid']}/template")
-        if golden_hashes:
-            write_template_hash(node, t["vmid"], golden_hashes[t["box"]["name"]],
-                                extra=f"box={t['box']['name']} unbooted")
-        print(f"    {t['vm_name']} (vmid {t['vmid']}) is now an UNBOOTED template "
-              f"(generalized — each team's clone specializes its own SID)")
+    _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_tag_str,
+                            golden_hashes)
     if not booted:
         # All-cold slot (every box type unbooted): nothing here is ever nakon-planted,
         # and unbooted box types don't appear in the stage config at all — the clean
@@ -548,47 +357,8 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
               "verify before conversion.")
 
     if missing:
-        print(f"  Cloning {len(missing)} golden box(es) from base templates...")
-        existing_vmids = {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
-        for t in missing:
-            src = templates.get(t["box"]["template"])
-            if src is None:
-                raise RuntimeError(f"no stopped template named '{t['box']['template']}' on the node")
-            if t["vmid"] in existing_vmids:
-                locked_cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"]
-                if not locked_cfg.get("lock"):
-                    continue
-                # An interrupted clone: half-copied disk, never usable — start over.
-                # Ownership proof: only THIS competition's clone marker in the
-                # description adopts it; expect_tags=set() used to destroy ANY VM
-                # found here, foreign ones included.
-                if clone_marker(comp_dir.name) not in str(locked_cfg.get("description") or ""):
-                    raise RuntimeError(
-                        f"refusing to destroy locked vmid {t['vmid']} on reserved golden "
-                        f"slot '{t['vm_name']}' — no clone marker in its description, "
-                        f"not provably ours")
-                destroy_vm_if_exists(node, t["vmid"], expect_tags=None)
-            else:
-                gc_orphan_volumes(node, t["vmid"])
-            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone", data={
-                "newid": t["vmid"],
-                "name": t["vm_name"],
-                "full": 1,
-                "description": clone_marker(comp_dir.name),
-            })["data"]
-            wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
-            proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
-                "ipconfig0": f"ip={t['ip']}/24,gw={t['gateway']}",
-                "net0": f"virtio,bridge={t['bridge']}",
-                "tags": ownership_tag_str,
-                # cloud-init identity for the golden box's first boot (the base template
-                # bakes no password — terraform's user_account normally supplies it):
-                "ciuser": ctx.get("box_username", "ubuntu"),
-                "cipassword": box_password,
-                "sshkeys": _quote_sshkeys(os.environ["TF_VAR_ssh_public_key"]),
-            })
-            ensure_golden_disk_size(node, t["vmid"], t["box"].get("disk_gb"))
-            print(f"    {t['box']['template']} -> {t['vm_name']} (vmid {t['vmid']})")
+        _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password,
+                               ownership_tag_str)
 
     work_vmids = {t["vmid"] for t in work}
     rolls = [t for t in planted
@@ -758,180 +528,12 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
                 save_template_hashes(comp_dir, golden_planted={
                     t["box"]["name"]: golden_hashes[t["box"]["name"]]})
 
-    print("  Converting golden boxes to templates...")
-
-    def _convert(t):
-        # qm template refuses a VM holding snapshots — and the tz-base rollback guard's
-        # purpose ends with the plant: a converted set is fatal on re-entry by design.
-        # Delete-then-convert stays INSIDE one worker, so a box's snapshot is always
-        # gone before the POST /template that needs it gone.
-        if SNAP_BASE in list_snapshots(node, t["vmid"]):
-            delete_snapshot(node, t["vmid"], SNAP_BASE)
-        proxmox_api("POST", f"/nodes/{node}/qemu/{t['vmid']}/template")["data"]
-        proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={"tags": ownership_tag_str})
-        # M4: the hash lands on the template (description) AND in the comp's state —
-        # reuse/rebuild decisions read it back at the next deploy's hash gate.
-        if golden_hashes:
-            write_template_hash(node, t["vmid"], golden_hashes[t["box"]["name"]],
-                                extra=f"box={t['box']['name']}")
-        with PRINT_LOCK:
-            print(f"    {t['vm_name']} (vmid {t['vmid']}) is now a template")
-
-    # Parallel since W11 (2026-10-01): 4-5 API calls plus a snapshot-delete task wait
-    # per box (the converting POST itself returns no task to wait on), which is ~5-10s
-    # per box, so an 8-box-type build paid ~30-60s serially. Bound 4, NOT
-    # MAX_CONCURRENCY's 8: each unit drives Proxmox tasks and 4 is the validated
-    # per-box VM-work bound (deploy.py's snapshot/Windows-bootstrap pools, jump_ops).
-    #
-    # The `if boot_smoke:` block ABOVE is a hard phase barrier: it runs first and
-    # raises on any non-PASS verdict, so a golden that failed its boot smoke can never
-    # reach POST /template no matter how this pool schedules. The clone loops (cold
-    # path, and `missing`) are deliberately NOT parallel: full clones are
-    # crash-consistent copies and saturate the datastore (see the module note on the
-    # cold path and deploy.py's -parallelism=1).
-    conv_results = run_concurrent(targets, _convert, max_workers=4)
-    for _t, r in zip(targets, conv_results):
-        if isinstance(r, Exception):
-            raise r
+    _convert_goldens(node, targets, ownership_tag_str, golden_hashes)
 
     return {t["box"]["name"]: t["vmid"] for t in targets_all}
 
 
-_SIZE_TO_GB = {"": 1 / 1024 ** 3, "K": 1 / 1024 ** 2, "M": 1 / 1024, "G": 1, "T": 1024}
-
-
-def _root_disk_gb(cfg, vmid):
-    """(config key, size in GB) of the clone's root disk, or (None, 0).
-
-    The bus varies per base template (scsi0 on the -fix images); cdrom and
-    cloud-init entries are not disks. Parsed from the config because the
-    clone inherits the template's size verbatim — there is no other record
-    of it (svc-matrix: the 15 GB ubuntu template disk filled mid-plant on
-    splunk's .deb unpack while team clones got their terraform disk_gb)."""
-    for key in sorted(k for k in cfg
-                      if k.startswith(("scsi", "virtio", "sata", "ide"))):
-        val = cfg[key]
-        if "media=cdrom" in val or "cloudinit" in val or "size=" not in val:
-            continue
-        m = re.search(r"size=(\d+(?:\.\d+)?)([KMGT]?)", val)
-        if m:
-            return key, int(float(m.group(1)) * _SIZE_TO_GB[m.group(2)])
-    return None, 0
-
-
-def ensure_golden_disk_size(node, vmid, disk_gb):
-    """Grow the golden clone's root disk to the box's disk_gb BEFORE first boot.
-
-    Golden clones inherit the base template's disk verbatim (terraform only
-    sizes the team clones), so a big plant payload (splunk) can fill the
-    template-sized disk mid-golden-build. Grow-only — a shrink would destroy
-    data — and before start_vm. Guest-side expansion is a separate post-boot
-    step (expand_guest_root_disks): cloud-init only grows a plain partition+fs,
-    so LVM layouts need growpart + pvresize + lvextend + resize2fs."""
-    if not disk_gb:
-        return
-    cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
-    key, cur_gb = _root_disk_gb(cfg, vmid)
-    if key is None:
-        print(f"    WARNING: golden {vmid} has no root disk — disk_gb={disk_gb} not applied")
-        return
-    if disk_gb <= cur_gb:
-        return
-    proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/resize",
-                data={"disk": key, "size": f"{disk_gb}G"})
-    print(f"    golden {vmid}: {key} grown {cur_gb}G -> {disk_gb}G")
-
-
-def expand_guest_root_disks(targets, ctx):
-    """Guest-side companion to ensure_golden_disk_size: cloud-init only expands a
-    PLAIN partition+fs on first boot — LVM layouts (ubuntu cloud images) keep their
-    original root LV, and btrfs layouts (default on Fedora cloud images — live-found
-    2026-09-29: findmnt reports '/dev/sda3[/root]', whose bracketed subvolume suffix
-    broke the partition-digit parse AND resize2fs can't grow btrfs) need their own
-    grow. growpart + pvresize + lvextend / btrfs resize / xfs_growfs / resize2fs
-    after first boot; every step no-ops when there is nothing to grow, and boxes
-    without growpart (Alpine) are skipped. Windows goldens are out of scope (they
-    boot at their template's own size)."""
-    script = (
-        "command -v growpart >/dev/null || { echo 'growpart unavailable - skipping'; exit 0; }; "
-        "set -e; "
-        # base-ubuntu24.04-fix golden clones can run MINUTES with the LV mounted but
-        # no /dev/dm-N node (udev late under boot load — live-found 2026-09-29:
-        # resize2fs "No such file or directory" on the live root LV at T+40s, node
-        # present at T+16min). dmsetup mknodes materializes the node immediately.
-        "command -v dmsetup >/dev/null 2>&1 && dmsetup mknodes 2>/dev/null || true; "
-        "ROOT_SRC=$(findmnt -no SOURCE /); "
-        "SRC=${ROOT_SRC%%\\[*}; "  # strip a btrfs subvolume suffix: /dev/sda3[/root] -> /dev/sda3
-        "case \"$(stat -f -c %T /)\" in "
-        "btrfs) GROW_FS=\"btrfs filesystem resize max /\";; "
-        "xfs) GROW_FS=\"xfs_growfs /\";; "
-        "*) GROW_FS=\"resize2fs \\\"$SRC\\\"\";; "
-        "esac; "
-        "case \"$SRC\" in "
-        "/dev/mapper/*|/dev/dm-*) "
-        "PV=$(pvs --noheadings -o pv_name | tr -d ' ' | head -1); "
-        "DISK=$(basename \"$PV\" | sed 's/[0-9]*$//'); "
-        "PART=$(basename \"$PV\" | grep -o '[0-9]*$'); "
-        "if [ -n \"$DISK\" ] && [ -n \"$PART\" ]; then growpart \"/dev/$DISK\" \"$PART\" || true; fi; "
-        "pvresize \"$PV\" || true; "
-        "LV=$(lvs --noheadings -o lv_path | tr -d ' ' | head -1); "
-        "lvextend -l +100%FREE \"$LV\" || true; "
-        ";; "
-        "/dev/*) "
-        "DISK=$(basename \"$SRC\" | sed 's/[0-9]*$//'); "
-        "PART=$(basename \"$SRC\" | grep -o '[0-9]*$'); "
-        "if [ -n \"$DISK\" ] && [ -n \"$PART\" ]; then growpart \"/dev/$DISK\" \"$PART\" || true; fi; "
-        ";; "
-        "*) echo 'unrecognized root layout - skipping'; exit 0; ;; "
-        "esac; "
-        "$GROW_FS; "
-        "df -h /"
-    )
-    for t in targets:
-        # The grow itself is retried: a just-booted golden can transiently lack its
-        # device-mapper node (live-found 2026-09-29: the ubuntu golden's /dev/dm-0
-        # appeared seconds after resize2fs died with "No such file or directory").
-        r = None
-        for attempt in range(3):
-            r = ssh_via_gateway(ctx, t["ip"], f"sudo -H sh -c {shlex.quote(script)}",
-                                timeout=120, user=ctx.get("box_username", "ubuntu"))
-            if r.returncode == 0:
-                break
-            print(f"    {t['ip']}: root-disk expansion attempt {attempt + 1} failed "
-                  f"(rc={r.returncode}) — retrying")
-            time.sleep(15)
-        out = (r.stdout or "").strip()
-        if r.returncode != 0:
-            # Expansion is an ENOSPC guard, not a correctness gate. Fail ONLY when the
-            # root fs is measurably too small for the plants (the regression-4x1 shape:
-            # a 10G LV inside a 30G disk). When the size can't be measured — the same
-            # boot-window instability that broke the grow usually breaks the probe too
-            # (live-found 2026-09-29 x3: ssh to the fresh golden flaky for minutes,
-            # every box healthy afterwards) — warn and continue; a genuinely undersized
-            # root dies loudly at first big plant, named by the plant coverage gate.
-            size_gb = 0.0
-            try:
-                probe = ssh_via_gateway(ctx, t["ip"], "df -BK / | awk 'NR==2{print $2}'",
-                                        timeout=60, user=ctx.get("box_username", "ubuntu"))
-                size_gb = int((probe.stdout or "0").strip().splitlines()[-1]) / 1024 ** 2
-            except (ValueError, IndexError, Exception):
-                size_gb = 0.0
-            need_gb = max(int(t.get("disk_gb") or 10) - 4, 1)
-            if size_gb and size_gb < need_gb:
-                raise RuntimeError(f"root-disk too small on golden {t['ip']} "
-                                   f"({size_gb:.0f}G < {need_gb}G) and expansion failed "
-                                   f"(rc={r.returncode}): {(r.stderr or out).strip()[:200]}")
-            note = f"{size_gb:.0f}G measured" if size_gb else "size unmeasurable"
-            record_degradation("golden root-disk expansion failed", f"{t['ip']}: {note}")
-            print(f"    {t['ip']}: WARNING expansion failed ({note}) — continuing; "
-                  f"first big plant will surface a truly undersized root")
-        df_lines = [l for l in out.splitlines() if l.startswith("/dev/")]
-        print(f"    {t['ip']}: root-disk expansion done"
-              + (f" ({df_lines[-1].split()[2] if len(df_lines[-1].split()) > 2 else 'used=?'} used)" if df_lines else ""))
-
-
-def destroy_golden_set(node, engine_vmid, num_box_types, expect_tags=None, slot=0,
-                       allow_untagged=False):
+def destroy_golden_set(node, engine_vmid, num_box_types, expect_tags=None, slot=0):
     """Tear the golden templates down. Destroy order: AFTER the linked clones (they
     depend on the template's base disk). Slot-aware: each node's copy of the golden
     set dies on its own host. A slot held by a FOREIGN VM (ownership guard refusal)
@@ -942,7 +544,7 @@ def destroy_golden_set(node, engine_vmid, num_box_types, expect_tags=None, slot=
     for box_idx in range(num_box_types):
         try:
             destroy_vm_if_exists(node, golden_vmid_for_slot(engine_vmid, slot, box_idx),
-                                 expect_tags=expect_tags, allow_untagged=allow_untagged)
+                                 expect_tags=expect_tags)
         except RuntimeError as e:
             skipped.append(str(e))
             print(f"    WARNING: golden slot {box_idx} is FOREIGN — skipping it and "
@@ -950,3 +552,33 @@ def destroy_golden_set(node, engine_vmid, num_box_types, expect_tags=None, slot=
     if skipped:
         print(f"  {len(skipped)} golden slot(s) skipped as foreign — they belong to "
               f"another deployment; inspect them manually.")
+
+
+__all__ = [
+    'build_golden_set',
+    'destroy_golden_set',
+    '_quote_sshkeys',
+    'golden_vmid_for',
+    'golden_ip_for',
+    '_is_template',
+    '_vm_exists',
+    '_template_vmid_map',
+    'unbooted_golden_boxes',
+    'golden_targets',
+    'BOOT_SMOKE_PASS',
+    'BOOT_SMOKE_UNBOOTABLE',
+    'BOOT_SMOKE_UNVERIFIED',
+    'GOLDEN_BOOT_SMOKE_TAG',
+    'GOLDEN_BOOT_SMOKE_TIMEOUT',
+    'GOLDEN_BOOT_SMOKE_WIN_TIMEOUT',
+    'GOLDEN_BOOT_SMOKE_POLL',
+    '_smoke_vmid',
+    '_destroy_smoke_clone',
+    '_probe_boot',
+    '_boot_smoke_error',
+    'golden_boot_smoke',
+    '_SIZE_TO_GB',
+    '_root_disk_gb',
+    'ensure_golden_disk_size',
+    'expand_guest_root_disks',
+]

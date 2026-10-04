@@ -6,7 +6,7 @@ drive the pipeline.
 
 **The pipeline is version 2** (golden templates + linked clones, phases renumbered 2026-09-24).
 [architecture.md](architecture.md#v1-to-v2-migration-what-moved) maps the old phase numbers, and any
-passage written against the pre-golden pipeline is a bug — see [AGENTS.md](../AGENTS.md#editing-docs).
+passage written against an older pipeline is a bug — see [AGENTS.md](../AGENTS.md#editing-docs).
 
 ## Evergreen — how the system works
 
@@ -18,7 +18,7 @@ passage written against the pre-golden pipeline is a bug — see [AGENTS.md](../
 | [multi-node.md](multi-node.md) | You are running one competition across several Proxmox hosts (`nodes.json`, placement, jump routing, per-slot goldens, `sync-template.py`) |
 | [packet-profiles.md](packet-profiles.md) | You are compiling a competition packet into a range, or authoring a `packet.yaml` |
 | [rehearsal-gates.md](rehearsal-gates.md) | You need the numeric pass/fail gates for a scrim run |
-| [benchmark-m02.md](benchmark-m02.md) | You are questioning a timeout, a parallelism setting, or a resource assumption — the linked-vs-full-clone v2 measurements |
+| [benchmark-m02.md](benchmark-m02.md) | You are questioning a timeout, a parallelism setting, or a resource assumption — the linked-vs-full-clone measurements |
 | [benchmark-m04.md](benchmark-m04.md) | Same, for the per-competition template lifecycle: validation matrix, rebuild granularity, Windows/domain numbers |
 | [vulndb-fixes/](vulndb-fixes/) | You are loading a **fresh** vulndb from `nakon/vulndb/seed.sql` and need the catalog rows that were patched by hand |
 

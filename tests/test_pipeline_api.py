@@ -20,8 +20,11 @@ sys.path.insert(0, str(_REPO))
 
 import pipeline_api  # noqa: E402
 
+# The CLI script plus the redeploy_*_ops modules it delegates to: the consumer set.
+_REDEPLOY_SOURCES = [_REPO / "redeploy-competition.py", *sorted(_REPO.glob("redeploy_*_ops.py"))]
+
 # The contract, derived from the base commit by grepping `driver.` out of
-# redeploy-competition.py: 25 call sites, 17 distinct names. owner module -> names.
+# redeploy-competition.py: 16 distinct names. owner module -> names.
 _OWNERS = {
     "constants": ("PER_MACHINE_NAKON_BUDGET",),
     "config_ops": ("list_proxmox_templates",),
@@ -29,7 +32,7 @@ _OWNERS = {
     "engine_ops": ("ensure_nat_forwarding",),
     "golden_ops": ("unbooted_golden_boxes",),
     "hardening_ops": ("fix_dns_on_boxes", "fix_services_on_boxes", "setup_ubuntu_auth"),
-    "nakon_ops": ("build_nakon_bundle", "generate_nakon_config", "generate_stage_configs",
+    "nakon_ops": ("build_nakon_bundle", "generate_stage_configs",
                   "os_to_platform", "run_nakon"),
     "ssh_ops": ("read_terraform_ctx", "wait_for_boxes_ssh", "wait_for_cloud_init"),
     "windows_ops": ("bootstrap_windows_box",),
@@ -39,7 +42,7 @@ _OWNERS = {
 class PipelineApiSurfaceTests(unittest.TestCase):
     def test_exports_exactly_the_consumer_set(self):
         expected = sorted(name for names in _OWNERS.values() for name in names)
-        self.assertEqual(len(expected), 17)
+        self.assertEqual(len(expected), 16)
         self.assertEqual(sorted(pipeline_api.__all__), expected)
 
     def test_every_export_resolves_to_its_owning_module(self):
@@ -54,16 +57,16 @@ class PipelineApiSurfaceTests(unittest.TestCase):
     def test_surface_matches_what_redeploy_actually_calls(self):
         """No over-export: the surface is exactly the set redeploy reaches for. A name
         added here but unused by any consumer is invisible again — the original bug."""
-        source = (_REPO / "redeploy-competition.py").read_text()
+        source = "\n".join(f.read_text() for f in _REDEPLOY_SOURCES)
         used = set(re.findall(r"pipeline_api\.([A-Za-z_][A-Za-z0-9_]*)", source))
         self.assertEqual(used, set(pipeline_api.__all__))
 
 
 class ShimIsGoneTests(unittest.TestCase):
     def test_redeploy_has_no_driver_or_importlib_loader(self):
-        source = (_REPO / "redeploy-competition.py").read_text()
+        source = "\n".join(f.read_text() for f in _REDEPLOY_SOURCES)
         for gone in ("driver.", "_load_driver", "importlib", "sys.modules"):
-            self.assertNotIn(gone, source, f"redeploy-competition.py still contains {gone!r}")
+            self.assertNotIn(gone, source, f"redeploy still contains {gone!r}")
 
     def test_create_competition_is_a_thin_cli(self):
         tree = ast.parse((_REPO / "create-competition.py").read_text())

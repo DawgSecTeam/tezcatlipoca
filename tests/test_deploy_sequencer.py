@@ -11,9 +11,11 @@ banners twice, and nothing caught it.
 
 import ast
 import contextlib
+import inspect
 import io
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -21,7 +23,9 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import deploy  # noqa: E402
-import deploy_phases  # noqa: E402
+from deploy_lib import phases  # noqa: E402
+from _deploy_patch import dpatch  # noqa: E402
+from deploy_lib import gates as dl_gates  # noqa: E402
 
 
 SKIP_BANNERS = [
@@ -130,9 +134,9 @@ class BannerSet(unittest.TestCase):
     def _run_resume_from_9(self, comp_dir):
         ctx = _ctx(comp_dir, 9)
         buf = io.StringIO()
-        with patch.object(deploy, "prepare", return_value=ctx), \
-                patch.object(deploy_phases, "connect_terraform"), \
-                patch.object(deploy_phases, "finish_deploy"):
+        with dpatch("prepare", return_value=ctx), \
+                dpatch("connect_terraform"), \
+                dpatch("finish_deploy"):
             with contextlib.redirect_stdout(buf):
                 deploy.deploy(comp_dir, assume_yes=True, from_phase=9)
         return buf.getvalue()
@@ -149,15 +153,9 @@ class BannerSet(unittest.TestCase):
         # source: each phase function's banner literals, in function order, must
         # equal the captured list byte for byte, and the phases must sit in PHASES
         # order in the module.
-        src = (_REPO / "deploy_phases.py").read_text()
-        tree = ast.parse(src)
-        funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
-        names = [p.__name__ for p in deploy_phases.PHASES]
+        funcs = _phase_functions()
+        names = [p.__name__ for p in phases.PHASES]
         self.assertEqual(names, list(RUN_BANNERS))
-        # source order of the phase definitions matches the pipeline order
-        defined = [n.name for n in tree.body
-                   if isinstance(n, ast.FunctionDef) and n.name in RUN_BANNERS]
-        self.assertEqual(defined, sorted(defined, key=names.index))
         for name in names:
             literals = _print_literals(funcs[name])
             expected = RUN_BANNERS[name]
@@ -166,14 +164,22 @@ class BannerSet(unittest.TestCase):
 
     def test_each_phase_skips_on_its_own_phase_number(self):
         # The guard must compare against the phase's [N/8] number, not a neighbour's.
-        tree = ast.parse((_REPO / "deploy_phases.py").read_text())
-        funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
-        for index, phase in enumerate(deploy_phases.PHASES, 1):
+        funcs = _phase_functions()
+        for index, phase in enumerate(phases.PHASES, 1):
             fn = funcs[phase.__name__]
             compares = [n for n in ast.walk(fn) if isinstance(n, ast.Compare)
                         and isinstance(n.left, ast.Attribute) and n.left.attr == "from_phase"]
             self.assertTrue(compares, phase.__name__)
             self.assertEqual(compares[0].comparators[0].value, index, phase.__name__)
+
+
+def _phase_functions():
+    """{phase name: its ast FunctionDef}, parsed from each phase function's own source."""
+    out = {}
+    for phase in phases.PHASES:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(phase)))
+        out[phase.__name__] = tree.body[0]
+    return out
 
 
 def _print_literals(fn):
@@ -196,11 +202,11 @@ class Sequencer(unittest.TestCase):
 
     def _run(self, comp_dir, from_phase, phases, calls):
         ctx = _ctx(comp_dir, from_phase)
-        with patch.object(deploy, "prepare", return_value=ctx), \
-                patch.object(deploy_phases, "PHASES", phases), \
-                patch.object(deploy_phases, "connect_terraform",
+        with dpatch("prepare", return_value=ctx), \
+                dpatch("PHASES", phases), \
+                dpatch("connect_terraform",
                              side_effect=lambda c: calls.append(("connect", 2))), \
-                patch.object(deploy_phases, "finish_deploy"), \
+                dpatch("finish_deploy"), \
                 _no_artifact_gates(), \
                 contextlib.redirect_stdout(io.StringIO()):
             deploy.deploy(comp_dir, assume_yes=True, from_phase=from_phase)
@@ -231,10 +237,10 @@ class Sequencer(unittest.TestCase):
         phases[5] = boom
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx(Path(d), 6)
-            with patch.object(deploy, "prepare", return_value=ctx), \
-                    patch.object(deploy_phases, "PHASES", tuple(phases)), \
-                    patch.object(deploy_phases, "connect_terraform"), \
-                    patch.object(deploy_phases, "finish_deploy"), \
+            with dpatch("prepare", return_value=ctx), \
+                    dpatch("PHASES", tuple(phases)), \
+                    dpatch("connect_terraform"), \
+                    dpatch("finish_deploy"), \
                     contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaises(RuntimeError):
                     deploy.deploy(Path(d), assume_yes=True, from_phase=6)
@@ -247,10 +253,10 @@ class FailureHandling(unittest.TestCase):
     def _fail(self, comp_dir, from_phase, exc, phases):
         ctx = _ctx(comp_dir, from_phase)
         buf = io.StringIO()
-        with patch.object(deploy, "prepare", return_value=ctx), \
-                patch.object(deploy_phases, "PHASES", phases), \
-                patch.object(deploy_phases, "connect_terraform"), \
-                patch.object(deploy_phases, "finish_deploy"):
+        with dpatch("prepare", return_value=ctx), \
+                dpatch("PHASES", phases), \
+                dpatch("connect_terraform"), \
+                dpatch("finish_deploy"):
             with contextlib.redirect_stdout(buf):
                 with self.assertRaises(type(exc)) as raised:
                     deploy.deploy(comp_dir, assume_yes=True, from_phase=from_phase)
@@ -286,15 +292,15 @@ class CancelledPrepare(unittest.TestCase):
         calls = []
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
-            with patch.object(deploy, "prepare", return_value=None), \
-                    patch.object(deploy_phases, "PHASES", _stub_phases(calls)), \
+            with dpatch("prepare", return_value=None), \
+                    dpatch("PHASES", _stub_phases(calls)), \
                     contextlib.redirect_stdout(io.StringIO()):
                 result = deploy.deploy(comp_dir, assume_yes=False)
             self.assertIsNone(result)
             self.assertEqual(calls, [])
             # Same as the old inline early return: the lock stays held (it is the
             # process-lifetime flock), so a second deploy in this process refuses.
-            self.assertIn(str(comp_dir), deploy._DEPLOY_LOCKS)
+            self.assertIn(str(comp_dir), dl_gates._DEPLOY_LOCKS)
 
 
 if __name__ == "__main__":

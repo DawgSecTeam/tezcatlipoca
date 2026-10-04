@@ -50,7 +50,7 @@ variable "event_name" {
 }
 
 variable "run_tag" {
-  description = "Per-deploy run identity (run-<hex>, from .deploy_state.json) stamped onto the engine and every team box alongside the comp tag. Destruction guards require the FULL set, so two worktrees deploying the same competition ID can no longer destroy each other's VMs (2026-10-02 near-miss). Empty (legacy tfvars) falls back to the comp tag only."
+  description = "Per-deploy run identity (run-<hex>, from .deploy_state.json) stamped onto the engine and every team box alongside the comp tag. Destruction guards require the FULL set, so two worktrees deploying the same competition ID can no longer destroy each other's VMs (2026-10-02 near-miss). Set by deploy.py on every apply."
   type        = string
   default     = ""
 }
@@ -68,7 +68,7 @@ variable "golden_template_ids" {
 }
 
 variable "teams" {
-  description = "Map of team key → identifier (used as subnet third octet). slot picks the hosting node: 0 = engine node (default — every legacy team), 1..4 = satellite index into var.satellites."
+  description = "Map of team key → identifier (used as subnet third octet). slot picks the hosting node: 0 = engine node (default), 1..4 = satellite index into var.satellites."
   type = map(object({
     identifier = string
     password   = string
@@ -92,7 +92,7 @@ variable "satellites" {
 }
 
 variable "golden_template_ids_by_slot" {
-  description = "Per-slot positional golden template vmids (same order as boxes_per_team). '0' is the engine node. Legacy fallback: when a slot is missing here, team_box_satN falls back to var.golden_template_ids (pre-multi-node tfvars)."
+  description = "Per-slot positional golden template vmids (same order as boxes_per_team). Slots 1..4 are the satellites; slot 0 (the engine node) uses var.golden_template_ids."
   type        = map(list(number))
   default     = {}
 }
@@ -131,13 +131,8 @@ variable "datastore" {
   default = "local-lvm"
 }
 
-variable "template_vm_id" {
-  description = "VM ID of the base template the scoring engine is cloned from (also the engine-template build's source; used directly only when engine_clone_id is 0)."
-  type        = number
-}
-
 variable "engine_clone_id" {
-  description = "M4: vmid of this competition's engine TEMPLATE — the deployed engine is a linked clone of it (fresh identity/host keys per clone, empty scoring DB every run). 0 falls back to a full clone from template_vm_id (pre-M4 behavior; deploy() always sets this before apply)."
+  description = "vmid of this competition's engine TEMPLATE — the deployed engine is a linked clone of it (fresh identity/host keys per clone, empty scoring DB every run). deploy() sets it before apply #1; teardown never reads it."
   type        = number
   default     = 0
 }

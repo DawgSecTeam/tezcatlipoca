@@ -16,10 +16,10 @@ Two incidents drive this file:
 
 Offline; no Proxmox, no terraform, no SSH."""
 
-import importlib.util
 import json
 import os
 import stat
+import sys
 import tempfile
 import unittest
 from contextlib import nullcontext
@@ -27,12 +27,17 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 _REPO = Path(__file__).resolve().parents[1]
-_SPEC = importlib.util.spec_from_file_location(
-    "redeploy_state_test", _REPO / "redeploy-competition.py")
-redeploy = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(redeploy)
+sys.path.insert(0, str(_REPO))
 
-import config_ops  # noqa: E402  (imported for the torn-write test's patch target)
+import config_ops  # noqa: E402  (the one atomic writer; also the torn-write test's patch target)
+import pipeline_api  # noqa: E402
+import redeploy_engine_ops  # noqa: E402
+import redeploy_light_ops  # noqa: E402
+import redeploy_plant_ops  # noqa: E402
+import redeploy_rebuild_ops  # noqa: E402
+
+_REDEPLOY_SOURCES = [_REPO / "redeploy-competition.py",
+                     *sorted(_REPO.glob("redeploy_*_ops.py"))]
 
 LINUX_BOX = {"name": "web01", "template": "ubuntu-2204-web", "cpu": 2, "memory_mb": 2048}
 WIN_BOX = {"name": "win01", "template": "windows-server-2022", "cpu": 2, "memory_mb": 4096}
@@ -65,12 +70,14 @@ class AtomicStateWriteTests(unittest.TestCase):
     def test_redeploy_uses_the_shared_config_ops_writer(self):
         """One atomic writer in the tree, not a second local copy: the name redeploy
         imported IS config_ops.write_state, so all three sites share its guarantees."""
-        self.assertIs(redeploy.write_state, config_ops.write_state)
+        for module in (redeploy_engine_ops, redeploy_light_ops, redeploy_plant_ops,
+                       redeploy_rebuild_ops):
+            self.assertIs(module.write_state, config_ops.write_state, module.__name__)
 
     def test_round_trips_is_0600_and_leaves_no_tmp(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".deploy_state.json"
-            redeploy.write_state(path, NEW_STATE)
+            config_ops.write_state(path, NEW_STATE)
 
             self.assertEqual(json.loads(path.read_text()), NEW_STATE)
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
@@ -98,7 +105,7 @@ class AtomicStateWriteTests(unittest.TestCase):
                 return real_replace(src, dst)
 
             with patch("os.replace", side_effect=spy):
-                redeploy.write_state(path, NEW_STATE)
+                config_ops.write_state(path, NEW_STATE)
 
             self.assertEqual(seen["target_at_swap"], original_bytes)
             self.assertEqual(seen["tmp_at_swap"], NEW_STATE)
@@ -116,7 +123,7 @@ class AtomicStateWriteTests(unittest.TestCase):
 
             with patch("os.replace", side_effect=OSError("simulated crash mid-write")):
                 with self.assertRaises(OSError):
-                    redeploy.write_state(path, NEW_STATE)
+                    config_ops.write_state(path, NEW_STATE)
 
             self.assertEqual(path.read_bytes(), original_bytes)
             self.assertEqual(json.loads(path.read_text()), ORIGINAL_STATE)
@@ -124,7 +131,7 @@ class AtomicStateWriteTests(unittest.TestCase):
     def test_redeploy_has_no_hand_rolled_state_writer_left(self):
         """Guard against re-introducing one of the old writers: every state write in
         redeploy-competition.py must be the shared helper."""
-        src = (_REPO / "redeploy-competition.py").read_text()
+        src = "\n".join(f.read_text() for f in _REDEPLOY_SOURCES)
         self.assertNotIn("state_path.write_text", src)
         self.assertNotIn("state_path.with_name", src)
         self.assertNotIn(".tmp", src)
@@ -143,14 +150,14 @@ class StateWriteCallSiteTests(unittest.TestCase):
             state_path.write_text(json.dumps({"box_password": "pw"}))
             state = {"box_password": "pw"}
             with patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
-                 patch.object(redeploy.pipeline_api, "setup_ubuntu_auth"), \
-                 patch.object(redeploy.pipeline_api, "fix_dns_on_boxes"), \
-                 patch.object(redeploy.pipeline_api, "ensure_nat_forwarding"), \
-                 patch.object(redeploy.pipeline_api, "run_nakon",
+                 patch.object(pipeline_api, "setup_ubuntu_auth"), \
+                 patch.object(pipeline_api, "fix_dns_on_boxes"), \
+                 patch.object(pipeline_api, "ensure_nat_forwarding"), \
+                 patch.object(pipeline_api, "run_nakon",
                               return_value=MagicMock(failed=[])), \
-                 patch.object(redeploy.pipeline_api, "fix_services_on_boxes"), \
-                 patch.object(redeploy, "write_state") as p_write:
-                redeploy.run_nakon_and_harden(
+                 patch.object(pipeline_api, "fix_services_on_boxes"), \
+                 patch.object(redeploy_plant_ops, "write_state") as p_write:
+                redeploy_plant_ops.run_nakon_and_harden(
                     [LINUX], ctx, comp_dir, state,
                     comp_dir / "nakon-config.json", comp_dir / "bundle")
         p_write.assert_called_once_with(state_path, state)
@@ -161,11 +168,11 @@ class StateWriteCallSiteTests(unittest.TestCase):
             state_path = comp_dir / ".deploy_state.json"
             state_path.write_text(json.dumps({"box_password": "pw"}))
             state = {"box_password": "pw"}
-            with patch.object(redeploy, "read_event_conf",
+            with patch.object(redeploy_light_ops, "read_event_conf",
                               return_value={"postgres_password": "new"}), \
-                 patch.object(redeploy, "load_users_config", return_value=("ops", {})), \
-                 patch.object(redeploy, "write_state") as p_write:
-                redeploy.mode_resync([], {"ssh_key_path": "/k"}, "pve", comp_dir, state,
+                 patch.object(redeploy_light_ops, "load_users_config", return_value=("ops", {})), \
+                 patch.object(redeploy_light_ops, "write_state") as p_write:
+                redeploy_light_ops.mode_resync([], {"ssh_key_path": "/k"}, "pve", comp_dir, state,
                                      state_path)
         p_write.assert_called_once_with(state_path, state)
         self.assertEqual(state["postgres_password"], "new")
@@ -187,22 +194,22 @@ class StateWriteCallSiteTests(unittest.TestCase):
                 "injects_created": True,
             }
             with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
-                 patch.object(redeploy, "acquire_engine_lock"), \
-                 patch.object(redeploy, "stored_template_hash", return_value="abc"), \
-                 patch.object(redeploy, "args_yes_engine_recovery", return_value=True), \
-                 patch.object(redeploy, "timed", return_value=nullcontext()), \
-                 patch.object(redeploy, "run_terraform",
+                 patch.object(redeploy_engine_ops, "acquire_engine_lock"), \
+                 patch.object(redeploy_engine_ops, "stored_template_hash", return_value="abc"), \
+                 patch.object(redeploy_engine_ops, "args_yes_engine_recovery", return_value=True), \
+                 patch.object(redeploy_engine_ops, "timed", return_value=nullcontext()), \
+                 patch.object(redeploy_engine_ops, "run_terraform",
                               return_value=MagicMock(returncode=0)), \
-                 patch.object(redeploy.pipeline_api, "read_terraform_ctx",
+                 patch.object(pipeline_api, "read_terraform_ctx",
                               return_value={"scoring_engine_ip": "10.0.0.9",
                                             "ssh_key_path": "/k", "vm_username": "ops"}), \
-                 patch.object(redeploy, "forget_engine_host_key"), \
-                 patch.object(redeploy, "wait_for_ssh"), \
-                 patch.object(redeploy, "prepare_engine_from_template"), \
-                 patch.object(redeploy, "push_event_conf"), \
-                 patch.object(redeploy, "ensure_nat_forwarding"), \
-                 patch.object(redeploy, "write_state") as p_write:
-                self.assertTrue(redeploy.engine_recovery(
+                 patch.object(redeploy_engine_ops, "forget_engine_host_key"), \
+                 patch.object(redeploy_engine_ops, "wait_for_ssh"), \
+                 patch.object(redeploy_engine_ops, "prepare_engine_from_template"), \
+                 patch.object(redeploy_engine_ops, "push_event_conf"), \
+                 patch.object(redeploy_engine_ops, "ensure_nat_forwarding"), \
+                 patch.object(redeploy_engine_ops, "write_state") as p_write:
+                self.assertTrue(redeploy_engine_ops.engine_recovery(
                     "comp", comp_dir, {"team1": {}}, [LINUX], state, assume_yes=True))
 
         p_write.assert_called_once_with(comp_dir / ".deploy_state.json", state)
@@ -219,15 +226,15 @@ class HardeningOrderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             with patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
-                 patch.object(redeploy.pipeline_api, "setup_ubuntu_auth") as p_auth, \
-                 patch.object(redeploy.pipeline_api, "fix_dns_on_boxes") as p_dns, \
-                 patch.object(redeploy.pipeline_api, "ensure_nat_forwarding"), \
-                 patch.object(redeploy.pipeline_api, "run_nakon",
+                 patch.object(pipeline_api, "setup_ubuntu_auth") as p_auth, \
+                 patch.object(pipeline_api, "fix_dns_on_boxes") as p_dns, \
+                 patch.object(pipeline_api, "ensure_nat_forwarding"), \
+                 patch.object(pipeline_api, "run_nakon",
                               return_value=MagicMock(failed=[])), \
-                 patch.object(redeploy.pipeline_api, "fix_services_on_boxes"):
+                 patch.object(pipeline_api, "fix_services_on_boxes"):
                 p_auth.side_effect = lambda *a, **k: order.append("auth")
                 p_dns.side_effect = lambda *a, **k: order.append("dns")
-                redeploy.run_nakon_and_harden(
+                redeploy_plant_ops.run_nakon_and_harden(
                     targets, ctx, comp_dir, {},
                     comp_dir / "nakon-config.json", comp_dir / "bundle")
         return order, p_auth, p_dns

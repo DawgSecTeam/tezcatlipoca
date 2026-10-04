@@ -14,6 +14,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import config_ops
+import preflight.templates as preflight_templates
 
 
 def _vm(name, vmid=920, node="proxmox"):
@@ -52,7 +53,7 @@ class CloudinitGate(unittest.TestCase):
     def _run(self, config, fail=False, name="base-debian13-cloudinit"):
         boxes = [{"name": "db01", "template": name}]
         out = io.StringIO()
-        with patch.object(config_ops, "proxmox_api", _api(config, fail=fail)), \
+        with patch.object(preflight_templates, "proxmox_api", _api(config, fail=fail)), \
              contextlib.redirect_stdout(out):
             n = config_ops._cloudinit_gate({name: _vm(name)}, boxes)
         return n, out.getvalue()

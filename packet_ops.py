@@ -238,8 +238,8 @@ def validate_profile(p):
             err(f"box {name!r}: an in-path firewall owns the team gateway address — "
                 f"last_octet must be 1 (got {lo})")
         if lo == 1 and not b.get("unmanaged"):
-            # Legacy shape stays valid: cde-2026/maccdc packets carry an unmanaged fw01
-            # at .1 as a packet-fidelity stand-in (idle while the engine holds the
+            # An unmanaged fw01 at .1 is valid: cde-2026/maccdc packets carry one
+            # as a packet-fidelity stand-in (idle while the engine holds the
             # gateway). Managed hosts must never claim the gateway address, though.
             err(f"box {name!r}: last_octet 1 is the team gateway — only an unmanaged "
                 "firewall/appliance (in_path or a packet stand-in) may sit there")

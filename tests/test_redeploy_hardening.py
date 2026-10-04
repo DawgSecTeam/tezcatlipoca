@@ -5,19 +5,20 @@ and clone_ops.py pre-filter their lists, so redeploy's reconfigure/rollback/rebu
 paths must too. Nakon, bootstrap, waits, snapshots, and the domain chain stay on the
 full mixed-platform target set."""
 
-import importlib.util
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 _REPO = Path(__file__).resolve().parents[1]
-_SPEC = importlib.util.spec_from_file_location(
-    "redeploy_hardening_test", _REPO / "redeploy-competition.py")
-redeploy = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(redeploy)
+sys.path.insert(0, str(_REPO))
+
+import pipeline_api  # noqa: E402
+import redeploy_plant_ops  # noqa: E402
+import redeploy_rebuild_ops  # noqa: E402
 
 LINUX_BOX = {"name": "web01", "template": "ubuntu-2204-web", "cpu": 2, "memory_mb": 2048}
 WIN_BOX = {"name": "win01", "template": "windows-server-2022", "cpu": 2, "memory_mb": 4096}
@@ -46,13 +47,13 @@ class RunNakonAndHardenTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             with patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
-                 patch.object(redeploy.pipeline_api, "fix_dns_on_boxes") as p_dns, \
-                 patch.object(redeploy.pipeline_api, "setup_ubuntu_auth") as p_auth, \
-                 patch.object(redeploy.pipeline_api, "ensure_nat_forwarding"), \
-                 patch.object(redeploy.pipeline_api, "run_nakon",
+                 patch.object(pipeline_api, "fix_dns_on_boxes") as p_dns, \
+                 patch.object(pipeline_api, "setup_ubuntu_auth") as p_auth, \
+                 patch.object(pipeline_api, "ensure_nat_forwarding"), \
+                 patch.object(pipeline_api, "run_nakon",
                               return_value=MagicMock(failed=[])) as p_nakon, \
-                 patch.object(redeploy.pipeline_api, "fix_services_on_boxes") as p_fix:
-                redeploy.run_nakon_and_harden(
+                 patch.object(pipeline_api, "fix_services_on_boxes") as p_fix:
+                redeploy_plant_ops.run_nakon_and_harden(
                     targets, ctx, comp_dir, {},
                     comp_dir / "nakon-config.json", comp_dir / "bundle")
         return p_dns, p_auth, p_nakon, p_fix
@@ -78,7 +79,8 @@ class ModeRebuildTests(unittest.TestCase):
                "box_username": "ubuntu"}
         state = {
             "box_password": "pw",
-            "pipeline_version": 2,
+            "pipeline_version": 3,
+            "run_id": "run-beefcafe",
             "golden_template_ids": {t["box_name"]: 1150 + i
                                     for i, t in enumerate(targets)},
         }
@@ -91,23 +93,23 @@ class ModeRebuildTests(unittest.TestCase):
                 json.dumps({**stage, "steps": []}))
             with patch.dict(os.environ, {"TF_VAR_vm_username": "ops",
                                          "TF_VAR_ssh_public_key": "ssh-ed25519 AAAA test"}), \
-                 patch.object(redeploy, "proxmox_api",
+                 patch.object(redeploy_rebuild_ops, "proxmox_api",
                               return_value={"data": "upid"}) as p_api, \
-                 patch.object(redeploy, "destroy_vm_if_exists"), \
-                 patch.object(redeploy, "wait_for_proxmox_task"), \
-                 patch.object(redeploy, "start_vm") as p_start, \
-                 patch.object(redeploy, "take_snapshot") as p_snap, \
-                 patch.object(redeploy, "build_nakon_bundle"), \
-                 patch.object(redeploy, "stored_template_hash", return_value=None), \
-                 patch.object(redeploy, "rerun_domain_configs", return_value=True), \
-                 patch.object(redeploy.pipeline_api, "bootstrap_windows_box") as p_boot, \
-                 patch.object(redeploy.pipeline_api, "wait_for_boxes_ssh"), \
-                 patch.object(redeploy.pipeline_api, "wait_for_cloud_init"), \
-                 patch.object(redeploy.pipeline_api, "ensure_nat_forwarding"), \
-                 patch.object(redeploy.pipeline_api, "run_nakon",
+                 patch.object(redeploy_rebuild_ops, "destroy_vm_if_exists"), \
+                 patch.object(redeploy_rebuild_ops, "wait_for_proxmox_task"), \
+                 patch.object(redeploy_rebuild_ops, "start_vm") as p_start, \
+                 patch.object(redeploy_rebuild_ops, "take_snapshot") as p_snap, \
+                 patch.object(redeploy_rebuild_ops, "build_nakon_bundle"), \
+                 patch.object(redeploy_rebuild_ops, "stored_template_hash", return_value=None), \
+                 patch.object(redeploy_rebuild_ops, "rerun_domain_configs", return_value=True), \
+                 patch.object(pipeline_api, "bootstrap_windows_box") as p_boot, \
+                 patch.object(pipeline_api, "wait_for_boxes_ssh"), \
+                 patch.object(pipeline_api, "wait_for_cloud_init"), \
+                 patch.object(pipeline_api, "ensure_nat_forwarding"), \
+                 patch.object(pipeline_api, "run_nakon",
                               return_value=MagicMock(failed=[])) as p_nakon, \
-                 patch.object(redeploy.pipeline_api, "fix_services_on_boxes") as p_fix:
-                redeploy.mode_rebuild(
+                 patch.object(pipeline_api, "fix_services_on_boxes") as p_fix:
+                redeploy_rebuild_ops.mode_rebuild(
                     targets, ctx, "node", comp_dir, state,
                     comp_dir / "nakon-config.json", comp_dir / "bundle")
         return p_boot, p_start, p_snap, p_nakon, p_fix, p_api

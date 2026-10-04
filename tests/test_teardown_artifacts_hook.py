@@ -1,7 +1,6 @@
 """Teardown collects this run's test artifacts, and does it before anything is destroyed.
 
-The ordering is the whole feature, not a detail: `destroy_cloned_vms` purges the clones and
-`pre_stop_windows_boxes` hard-stops every team box, after which a stopped guest's agent can no
+The ordering is the whole feature, not a detail: `pre_stop_windows_boxes` hard-stops every team box, after which a stopped guest's agent can no
 longer answer (destroy-competition.py:487-491). A collector that runs one line later reads
 nothing and reports it as "absent", which is indistinguishable from a run that produced no
 evidence at all — exactly the ambiguity the artifact folder exists to remove.
@@ -56,9 +55,6 @@ class TeardownArtifactsHook(unittest.TestCase):
         (comp / "boxes.json").write_text(json.dumps(BOXES))
         (comp / ".deploy_state.json").write_text(json.dumps(
             {"run_id": "run-1a2b3c4d", "scoring_vm_id": 1000}))
-        # destroy_cloned_vms only runs when the clone map exists, and it is the first
-        # destructive call — the ordering assertion needs it present.
-        (comp / "cloned_vms.json").write_text(json.dumps({"101-dc01": 1220}))
         self.comp = comp
         self.log = []
         self._cwd = os.getcwd()
@@ -73,8 +69,6 @@ class TeardownArtifactsHook(unittest.TestCase):
             patch.object(destroy, "frozen_state", return_value={}),
             patch.object(destroy, "read_placement", return_value=None),
             patch.object(destroy, "activate_placement"),
-            patch.object(destroy, "destroy_cloned_vms",
-                         side_effect=lambda *a, **k: calls.append("destroy_cloned_vms")),
             patch.object(destroy, "pre_stop_windows_boxes",
                          side_effect=lambda *a, **k: calls.append("pre_stop_windows_boxes")),
             patch.object(destroy, "destroy_with_recovery",
@@ -97,8 +91,7 @@ class TeardownArtifactsHook(unittest.TestCase):
 
     def test_collection_runs_before_any_destructive_call(self):
         calls = self._main(["--yes"])
-        self.assertEqual(calls, ["collect", "destroy_cloned_vms", "pre_stop_windows_boxes",
-                                 "terraform_destroy"])
+        self.assertEqual(calls, ["collect", "pre_stop_windows_boxes", "terraform_destroy"])
 
     def test_collection_never_runs_when_the_operator_cancels(self):
         with self.assertRaises(SystemExit):
@@ -116,7 +109,7 @@ class TeardownArtifactsHook(unittest.TestCase):
             raise RuntimeError("estate on fire")
 
         calls = self._main(["--yes"], collect=boom)
-        self.assertIn("destroy_cloned_vms", calls)
+        self.assertIn("pre_stop_windows_boxes", calls)
         self.assertIn("terraform_destroy", calls)
 
     def test_collector_receives_the_run_id_roster_and_timeout(self):
@@ -135,12 +128,12 @@ class TeardownArtifactsHook(unittest.TestCase):
         self.assertEqual(seen["script"], "destroy-competition.py")
         self.assertEqual(Path(seen["comp_dir"]), Path("competitions/demo"))
 
-    def test_legacy_state_without_a_run_id_still_collects(self):
+    def test_state_without_a_run_id_refuses_before_collecting_or_destroying(self):
         (self.comp / ".deploy_state.json").write_text(json.dumps({"scoring_vm_id": 1000}))
-        seen = {}
-        self._main(["--yes"], collect=lambda comp_dir, **kwargs:
-                   seen.update(kwargs) or {})
-        self.assertIsNone(seen["run_id"])
+        with self.assertRaises(SystemExit) as ctx:
+            self._main(["--yes"])
+        self.assertIn("no run id", str(ctx.exception))
+        self.assertEqual(self.log, [])
 
 
 class CrashedHarnessRecovery(unittest.TestCase):
@@ -159,7 +152,6 @@ class CrashedHarnessRecovery(unittest.TestCase):
         (comp / "boxes.json").write_text(json.dumps(BOXES))
         (comp / ".deploy_state.json").write_text(json.dumps(
             {"run_id": "run-1a2b3c4d", "scoring_vm_id": 1000}))
-        (comp / "cloned_vms.json").write_text(json.dumps({"101-dc01": 1220}))
         self.comp, self.log = comp, []
         self._cwd = os.getcwd()
 
@@ -214,8 +206,6 @@ class CrashedHarnessRecovery(unittest.TestCase):
             patch.object(destroy, "frozen_state", return_value={}),
             patch.object(destroy, "read_placement", return_value=None),
             patch.object(destroy, "activate_placement"),
-            patch.object(destroy, "destroy_cloned_vms",
-                         side_effect=lambda *a, **k: calls.append("destroy_cloned_vms")),
             patch.object(destroy, "pre_stop_windows_boxes",
                          side_effect=lambda *a, **k: calls.append("pre_stop_windows_boxes")),
             patch.object(destroy, "destroy_with_recovery",
@@ -255,8 +245,7 @@ class CrashedHarnessRecovery(unittest.TestCase):
 
     def test_the_destroy_still_happens_afterwards(self):
         self._teardown()
-        self.assertEqual(self.log, ["destroy_cloned_vms", "pre_stop_windows_boxes",
-                                    "terraform_destroy"])
+        self.assertEqual(self.log, ["pre_stop_windows_boxes", "terraform_destroy"])
 
     def test_an_unreachable_red01_leaves_an_honest_stub_not_a_lie(self):
         def dead(ssh, remote, dest, timeout=120):

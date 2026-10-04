@@ -33,8 +33,8 @@ def _load(name, filename):
     return mod
 
 
-scrim = _load("run_agent_scrim_reads", "run-agent-scrim.py")
-report = _load("scrim_report_reads", "scrim-report.py")
+from scrim import blue_prompt, compworld, quotient_api
+from scrim_report import blue_side
 
 
 def _round(checks, start="2026-10-02T06:36:00Z"):
@@ -54,7 +54,7 @@ class PhantomRound(unittest.TestCase):
             _round([]),                      # in flight — not a verdict
             _round([_check(True)]),          # last completed — UP
         ]}]
-        rows = scrim.services_to_rows(payload)
+        rows = quotient_api.services_to_rows(payload)
         self.assertTrue(rows[0]["up"], "an in-flight round must not invent a DOWN")
 
     def test_a_real_down_in_the_last_completed_round_still_reads_down(self):
@@ -62,30 +62,30 @@ class PhantomRound(unittest.TestCase):
             _round([]),
             _round([_check(False, "no records received")]),
         ]}]
-        rows = scrim.services_to_rows(payload)
+        rows = quotient_api.services_to_rows(payload)
         self.assertFalse(rows[0]["up"])
         self.assertIn("no records received", rows[0]["error"])
 
     def test_no_round_with_checks_stays_down(self):
         # Unmeasured is not up. Fail closed, exactly like every other gate in this repo.
         payload = [{"ServiceName": "db01-sql", "Last10Rounds": [_round([]), _round([])]}]
-        self.assertFalse(scrim.services_to_rows(payload)[0]["up"])
+        self.assertFalse(quotient_api.services_to_rows(payload)[0]["up"])
 
     def test_empty_and_missing_round_lists_do_not_crash(self):
         payload = [{"ServiceName": "a", "Last10Rounds": []},
                    {"ServiceName": "b"},
                    {"ServiceName": "c", "Last10Rounds": None}]
-        rows = scrim.services_to_rows(payload)
+        rows = quotient_api.services_to_rows(payload)
         self.assertEqual([r["service"] for r in rows], ["a", "b", "c"])
         self.assertFalse(any(r["up"] for r in rows))
 
     def test_null_body_is_still_a_legitimate_empty_team(self):
-        self.assertEqual(scrim.services_to_rows(None), [])
+        self.assertEqual(quotient_api.services_to_rows(None), [])
 
     def test_a_multi_check_round_needs_every_check_to_pass(self):
         payload = [{"ServiceName": "web01-nginx",
                     "Last10Rounds": [_round([_check(True), _check(False)])]}]
-        self.assertFalse(scrim.services_to_rows(payload)[0]["up"])
+        self.assertFalse(quotient_api.services_to_rows(payload)[0]["up"])
 
 
 class InjectCounting(unittest.TestCase):
@@ -105,24 +105,24 @@ class InjectCounting(unittest.TestCase):
         # The exact filenames the soak's teams produced.
         d = self._team("sub.md", "sub7.md", "sub8.md", "sub9.md", "sub10.md",
                        "sub11.md", "sub12.md")
-        self.assertEqual(report.count_inject_submissions(d), 7)
+        self.assertEqual(blue_side.count_inject_submissions(d), 7)
 
     def test_documented_hyphenated_form_is_counted(self):
         d = self._team("sub-3.md", "sub-4.txt")
-        self.assertEqual(report.count_inject_submissions(d), 2)
+        self.assertEqual(blue_side.count_inject_submissions(d), 2)
 
     def test_non_numeric_inject_id_is_counted(self):
         d = self._team("sub-m1.md")
-        self.assertEqual(report.count_inject_submissions(d), 1)
+        self.assertEqual(blue_side.count_inject_submissions(d), 1)
 
     def test_submissions_directory_still_counts_whatever_is_in_it(self):
         d = self._team(subdir=("brief.md", "notes.txt"))
-        self.assertEqual(report.count_inject_submissions(d), 2)
+        self.assertEqual(blue_side.count_inject_submissions(d), 2)
 
     def test_unrelated_files_are_not_counted(self):
         # A report that over-counts is as useless as one that under-counts.
         d = self._team("submarine.md", "submission-notes.md", "NOTES.md", "sub.md.bak")
-        self.assertEqual(report.count_inject_submissions(d), 0)
+        self.assertEqual(blue_side.count_inject_submissions(d), 0)
 
     def test_blue_metrics_adds_the_count_across_teams(self):
         rd = Path(tempfile.mkdtemp())
@@ -137,7 +137,7 @@ class InjectCounting(unittest.TestCase):
             else:
                 (wd / "submissions").mkdir()
                 (wd / "submissions" / "sub-1.md").write_text("x")
-        self.assertEqual(report.blue_metrics(rd)["injects"], 6)
+        self.assertEqual(blue_side.blue_metrics(rd)["injects"], 6)
 
     def test_the_harness_prompt_writes_where_the_counter_looks(self):
         # The two halves must agree, or the next run repeats the soak exactly.
@@ -149,8 +149,8 @@ class InjectCounting(unittest.TestCase):
                               "run_dir": "/tmp"})()
         world = {"linux": ["web01", "app01"], "windows": [], "web_unit": "nginx",
                  "name": "probe", "scenario": ""}
-        with mock.patch.object(scrim, "comp_world", return_value=world):
-            prompt = scrim.blue_cycle_prompt(1, creds, args, 0, 120, "", "", "", "")
+        with mock.patch.object(compworld, "comp_world", return_value=world):
+            prompt = blue_prompt.blue_cycle_prompt(1, creds, args, 0, 120, "", "", "", "")
         self.assertIn("submissions/", prompt)
         self.assertNotIn("> sub.md", prompt)
 

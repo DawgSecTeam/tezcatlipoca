@@ -60,7 +60,7 @@ class PlatformMapTests(unittest.TestCase):
     """2b: packet_ops._platform_of is a wrapper over the one map in nakon_ops."""
 
     def test_exactly_one_definition(self):
-        self.assertEqual(_definitions("os_to_platform"), {"nakon_ops.py": 1})
+        self.assertEqual(_definitions("os_to_platform"), {"nakon_config_ops.py": 1})
 
     def test_packet_wrapper_agrees_on_every_string_input(self):
         for template in ("", "tmpl-ubuntu-22", "win", "WIN-SERVER", "windows-server-2022"):

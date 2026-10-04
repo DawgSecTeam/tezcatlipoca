@@ -26,6 +26,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
+import guest_exec  # noqa: E402
 import range_ops  # noqa: E402
 
 NODE = "proxmox"
@@ -81,9 +82,9 @@ def _channels(api, root=None, windows=None):
     """Patch all three channels, so a test can assert which ones were used."""
     root = _Exec() if root is None else root
     windows = _Exec() if windows is None else windows
-    with patch.object(range_ops, "proxmox_api", api), \
-         patch.object(range_ops, "guest_agent_exec_root", root), \
-         patch.object(range_ops, "guest_agent_exec_windows", windows):
+    with patch.object(guest_exec, "proxmox_api", api), \
+         patch.object(guest_exec, "guest_agent_exec_root", root), \
+         patch.object(guest_exec, "guest_agent_exec_windows", windows):
         yield root, windows
 
 

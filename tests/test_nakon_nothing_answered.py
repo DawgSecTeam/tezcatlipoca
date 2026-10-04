@@ -23,7 +23,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import nakon_ops  # noqa: E402
+import nakon_run_ops  # noqa: E402
 
 
 class _FakeProc:
@@ -49,11 +49,11 @@ def _run_with(json_line, strict=False):
     def fake_popen(*a, **kw):
         return _FakeProc(json_line)
 
-    with patch.object(nakon_ops.subprocess, "run", side_effect=fake_run), \
-            patch.object(nakon_ops.subprocess, "Popen", side_effect=fake_popen), \
-            patch.object(nakon_ops, "_deploy_owner_check", return_value="me@host"), \
-            patch.object(nakon_ops.time, "sleep"):
-        return nakon_ops.run_nakon(
+    with patch.object(nakon_run_ops.subprocess, "run", side_effect=fake_run), \
+            patch.object(nakon_run_ops.subprocess, "Popen", side_effect=fake_popen), \
+            patch.object(nakon_run_ops, "_deploy_owner_check", return_value="me@host"), \
+            patch.object(nakon_run_ops.time, "sleep"):
+        return nakon_run_ops.run_nakon(
             key="/k", scoring_user="ubuntu", scoring_ip="10.0.0.252",
             bundle=Path("/tmp/b.tar.gz"), config_path=Path("/tmp/c.json"),
             strict=strict, run_tag="t")
@@ -104,19 +104,19 @@ class FloorPredicate(unittest.TestCase):
     """The predicate itself, including the boundary it must NOT cross."""
 
     def test_empty_list_is_nothing_answered(self):
-        self.assertIn("no per-machine results", nakon_ops._nothing_answered([]))
+        self.assertIn("no per-machine results", nakon_run_ops._nothing_answered([]))
 
     def test_all_zero_step_machines_is_nothing_answered(self):
         self.assertIn("2 machine(s)",
-                      nakon_ops._nothing_answered([{"name": "a", "steps": []},
+                      nakon_run_ops._nothing_answered([{"name": "a", "steps": []},
                                                    {"name": "b", "steps": []}]))
 
     def test_one_step_anywhere_clears_the_floor(self):
-        self.assertIsNone(nakon_ops._nothing_answered([{"name": "a", "steps": []},
+        self.assertIsNone(nakon_run_ops._nothing_answered([{"name": "a", "steps": []},
                                                        {"name": "b", "steps": [{"rc": 1}]}]))
 
     def test_a_failing_step_is_still_a_step(self):
-        self.assertIsNone(nakon_ops._nothing_answered([{"name": "a", "steps": [{"rc": 1}]}]))
+        self.assertIsNone(nakon_run_ops._nothing_answered([{"name": "a", "steps": [{"rc": 1}]}]))
 
 
 if __name__ == "__main__":

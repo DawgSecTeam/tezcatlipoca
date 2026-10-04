@@ -33,7 +33,7 @@ from golden_ops import unbooted_golden_boxes
 from hardening_ops import fix_dns_on_boxes, fix_services_on_boxes, setup_ubuntu_auth
 
 # Owned by nakon_ops.
-from nakon_ops import (build_nakon_bundle, generate_nakon_config, generate_stage_configs,
+from nakon_ops import (build_nakon_bundle, generate_stage_configs,
                        os_to_platform, run_nakon)
 
 # Owned by ssh_ops.
@@ -53,7 +53,6 @@ __all__ = [
     "ensure_nat_forwarding",
     "fix_dns_on_boxes",
     "fix_services_on_boxes",
-    "generate_nakon_config",
     "generate_stage_configs",
     "list_proxmox_templates",
     "os_to_platform",

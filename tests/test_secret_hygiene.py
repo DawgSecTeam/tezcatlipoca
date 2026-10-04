@@ -46,9 +46,6 @@ INTERNAL_ENV = {
     "MY_TEAM": "scrim.env handoff written by run-agent-scrim.py",
     "JAR": "scrim.env handoff written by run-agent-scrim.py",
     "SCRIM_WEB01_PORT": "scrim harness test hook (fresh opencode port per blue cycle)",
-    # deploy.py phase-1 escape hatch: destroy UNTAGGED VMs on computed vmids (a
-    # pre-run-tagging range's own leftovers). Never set in .env; opt-in per run.
-    "TEZ_ALLOW_UNTAGGED_RECLAIM": "phase-1 untagged-reclaim escape hatch (fail-closed default)",
     # artifacts_ops.py seal step: default author attribution from the OS user, not
     # operator configuration.
     "USER": "OS username, recorded as the default write-up author on seal",

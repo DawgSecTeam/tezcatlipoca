@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
+import nakon_config_ops
 import nakon_ops
 
 BOXES = [
@@ -142,10 +143,10 @@ class PostCloneMerge(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             self._write(comp_dir, [{"name": "both-stage-x", "vars": {"K": "v"}}])
-            with patch.object(nakon_ops, "REPAIR_STAGE_CONFIGS",
-                              nakon_ops.REPAIR_STAGE_CONFIGS | {"both-stage-x"}), \
-                 patch.object(nakon_ops, "FINAL_STAGE_CONFIGS",
-                              nakon_ops.FINAL_STAGE_CONFIGS | {"both-stage-x"}):
+            with patch.object(nakon_config_ops, "REPAIR_STAGE_CONFIGS",
+                              nakon_config_ops.REPAIR_STAGE_CONFIGS | {"both-stage-x"}), \
+                 patch.object(nakon_config_ops, "FINAL_STAGE_CONFIGS",
+                              nakon_config_ops.FINAL_STAGE_CONFIGS | {"both-stage-x"}):
                 _, _, _, postclone_p = nakon_ops.generate_stage_configs(
                     comp_dir, self.COLD_TEAMS, self.COLD_BOXES)
             postclone = self._pins(postclone_p)

@@ -6,6 +6,17 @@ submodule checkout. The real integration gate is
 [`verify-competition.py`](usage-agents.md#verify-competitionpy) against a deployed range — nothing
 in `tests/` replaces it.
 
+## Patching after the 0.2.0 module split
+
+`golden_ops`, `nakon_ops`, `hardening_ops`, `engine_ops` are re-export facades and the two
+hyphenated scripts delegate to `redeploy_*_ops.py` / `destroy_*_ops.py`. A `patch.object` only takes
+effect on the module whose function *looks the name up*, so patch the module that owns the
+caller: e.g. `golden_smoke_ops` / `golden_disk_ops` for the smoke and disk helpers,
+`nakon_run_ops` for `run_nakon`'s collaborators, `ubuntu_auth_ops` / `apt_dns_ops` /
+`service_fixup_ops` for hardening, `engine_identity_ops` / `engine_guard_ops` for engine steps,
+`destroy_sweep_ops` for the teardown sweep, and the matching `redeploy_<mode>_ops` for each redeploy
+mode. Importing a name from the facade (`from golden_ops import golden_targets`) stays fine.
+
 ## Run them
 
 ```bash
@@ -25,10 +36,28 @@ Grouped by what they protect. Several exist because of a specific incident — t
 name in the docstring, which is the fastest way to find the "why". File set and test count both
 drift, so read them from `git ls-files tests/` and the pytest run above rather than from this table.
 
-**Range/config contracts**
+**Test artifacts** (`artifacts_ops.py` facade over the `artifacts_lib/` package; see
+[internals.md](internals.md#artifacts_lib--per-run-test-artifacts))
 
 | File | Guards |
 |---|---|
+| `test_artifacts_ops.py` | Manifest, planning, collector statuses, stubs, report skeleton, seal, archive (patches `ao.subprocess`/`ao.shutil`, which are the package's own module objects) |
+| `test_test_artifacts_cli.py` | `test-artifacts.py` subcommands, exit codes and output (loaded by path; only `main` is the surface) |
+| `test_scrim_artifacts.py` | The scrim harness's calls into the facade (`ao.collect`, `ao.ingest_verdict`, `ao.finalize`) |
+| `test_teardown_artifacts_hook.py` | Teardown's artifact step through `destroy.artifacts_ops` (patches `collect_for_teardown` / `default_transport` on the facade) |
+
+**Range/config contracts**
+
+**Patch the owning module, not the facade.** `range_ops`, `config_ops`, `nodes_ops`, `template_ops`
+are re-export facades: patch `pve_api.proxmox_api`, `guest_exec.*`, `vm_ownership.*`,
+`vm_lifecycle.*`, `preflight.<gate>.proxmox_api`, `placement_record.record_of`,
+`placement_planner.probe_node`, `engine_template_ops.destroy_vm_if_exists`, `template_freeze.*`
+(patching the facade name does not reach the moved code, and an unpatched `proxmox_api` in a preflight
+module makes a real network call).
+
+| File | Guards |
+|---|---|
+| `test_preflight_unified.py` | The one preflight: `ownership_verdict` classes, `expected_slots`/`expected_bridges` parity between single- and multi-node shares, collision/ours/bridge-tolerance rules |
 | `test_team_vmid_arithmetic.py` | Team identifier vs engine-derived vmid-slot arithmetic (live-found 2026-09-29: identifiers whose 10-slot block overlapped the engine/template/golden block) |
 | `test_unmanaged_box.py` | An unmanaged (pfSense/appliance) box is skipped by the nakon plant and the golden set but keeps its positional vmid |
 | `test_golden_unbooted.py` | `unbooted_golden_boxes`: absent role file = no-domain lineup; present-but-invalid file fails closed |
@@ -72,8 +101,10 @@ drift, so read them from `git ls-files tests/` and the pytest run above rather t
 | File | Guards |
 |---|---|
 | `test_deploy_sequencer.py` | The sequencer after the phase split: phase order, checkpoint gating (only a phase that ran may write `last_phase`), the byte-identical one-banner-per-phase set, the terraform-context hook between phases 2 and 3, and the mid-phase failure/resume hint |
+| `test_deploy_gates.py` | The single-gate-point contract: `prepare()` runs `gates.check_resume_gates` and `gates.run_range_gates` before any secret is minted, tfvars written or target enumerated; `deploy()` takes the deploy lock before preparing; a held lock refuses |
+| `tests/_deploy_patch.py` | Not a test: `dpatch(name)` patches one name in every `deploy_lib` module that binds it (the pipeline is many small modules, each importing what it uses) |
 | `test_deploy_phases.py` | Phase-boundary defects offline: the M4 golden hash loop (every box gets an entry, unmanaged included), the `--from-phase` resume guard against `last_phase`, and phase 6's always-persist coverage repair |
-| `test_deploy_phase_units.py` | Per-phase units for the extracted `deploy_phases.py` — the branching, ordering and state writes that used to be buried in `deploy()`, with every infra call patched |
+| `test_deploy_phase_units.py` | Per-phase units for `deploy_lib/phases/` — the branching, ordering and state writes that used to be buried in `deploy()`, with every infra call patched |
 | `test_pipeline_api.py` | `pipeline_api`'s explicit surface: one minimal `__all__`, every name resolved from the module that owns it, and no return of the importlib `driver` loader |
 | `test_helper_dedup.py` | One definition per shared helper (audit 2026-10-02): `is_windows_template`, `os_to_platform`, and the generated-secret charset cannot be silently re-duplicated |
 | `test_engine_steps.py` | engine_ops: every remote step names itself when it fails (timeout/non-zero instead of an undifferentiated SSH argv), and the Quotient `.env` secrets never appear in argv |
@@ -82,6 +113,11 @@ drift, so read them from `git ls-files tests/` and the pytest run above rather t
 | `test_jump_parallel.py` | `build_jump_vms` runs satellites concurrently (bound 4) without dropping one or turning a hard abort into a partial build (multinode-spread-2026-09-30) |
 
 **verify's gate model**
+
+These tests load `verify-competition.py` by path (hyphenated filename) for its re-exported gate API;
+anything they **patch** (an SSH hop, `run_concurrent`, `guest_agent_exec_*`, a gate inside a
+`main()` run) is patched in its defining `verifier.*` module (`verifier.context`, `verifier.domains`,
+`verifier.misconfig`, …) — the entrypoint only re-exports, so patching it changes nothing.
 
 | File | Guards |
 |---|---|
@@ -101,7 +137,7 @@ drift, so read them from `git ls-files tests/` and the pytest run above rather t
 | `test_bundle_lint.py` | Bundle var-lint false positives that once blocked a valid deploy (live-found 2026-09-26) |
 | `test_packet_validation.py` | Compile-boundary packet shapes that used to survive `validate_profile` and die later in a live deploy — some only at phase 6, after DC promotion (D3) |
 | `test_service_fixups.py` | `fix_services_on_boxes`' generated hardening script is **byte-identical** to the pre-refactor output across the full service case matrix |
-| `test_scrim_defects.py` | The red-vs-blue scrim defect audit findings D1–D12 (process-tree timeouts, worker supervision, lineup, secret hygiene) — each pins a live-only failure path |
+| `test_scrim_defects.py` | The red-vs-blue scrim defect audit findings D1–D12 (process-tree timeouts, worker supervision, lineup, secret hygiene) — each pins a live-only failure path. The scrim tests import the `scrim/` and `scrim_report/` modules directly and patch a function in the module that *defines* it (see the module map in [scrim-harness.md](scrim-harness.md)); source-grep assertions read the whole package via `_scrim_src()` |
 
 ## Adding one
 

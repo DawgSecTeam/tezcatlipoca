@@ -16,6 +16,54 @@ record (what changed, where it landed, what's left), and
 **Contents:** [run-agent-scrim.py](#run-agent-scrimpy) · [scrim-report.py](#scrim-reportpy) ·
 [beacon_ops.py](#beacon_opspy)
 
+## Module map (release 0.2.0 split)
+
+`run-agent-scrim.py` and `scrim-report.py` stay the CLI entrypoints (identical flags) but are now
+thin wrappers; the code lives in two packages, one responsibility per module. Every symbol named in
+the sections below still exists under the same name, in the module listed here. Cross-module calls
+are module-qualified (`procs.run_tree`, `quotient_api.qget`, `core.REPO`), so each function has one
+binding and tests patch it where it is *defined* (`mock.patch.object(procs, "run", ...)`), not
+where it is used. `log` is the one exception: it is from-imported, so patch it in the module under
+test.
+
+`scrim/` (the harness):
+
+| Module | Responsibility |
+|---|---|
+| `cli.py` | `main()`: flags, resume handling, the stage sequence |
+| `core.py` | repo paths (`REPO`, `BAD_AUTO`), timing constants, `log`, evidence writers, and the shared helpers (`vm_username`, `engine_ip_from`, `engine_proxy`, `box_ssh_base`, `read_comp_json`, `is_local_endpoint`, `is_windows_box`, `now_iso`) |
+| `runfiles.py` | run-dir file names shared with the report (`run.json`, `alerts.jsonl`, `scoreboard-state.jsonl`, `final-scoreboard.json`) |
+| `procs.py` | `run_tree`/`run` (process-group supervision, `ScrimTimeout`), `box_sudo_stdin` |
+| `quotient_api.py` | cookie jars + per-account locks, `qget`/`_qlogin`, `parsed_status`, `services_to_rows` |
+| `staging.py` | `stage_author`, `creds_from_files`, `stage_deploy` |
+| `compworld.py` | per-comp facts: `comp_world`, `_web01_units`, `_verify_flags`, `verify_cmd`, the unit/display maps |
+| `fire_test.py` | `stage_verify` (verify-competition + the web01 stop/restore fire test) |
+| `blue_helpers.py` | generated blue workdir files: `mybox`, `scorch`, `qlogin`, `score.py`, `myscore`, `submit-inject`, opencode config, notebook template |
+| `endpoints.py` | `api_key`, `provider_key`, `effort_json`, `blue_ep` |
+| `blue_prompt.py` | `blue_cycle_prompt`, `scoreboard_delta` |
+| `inject_sync.py` | `reanchor_injects`, `_inject_reanchor_plan`, `inject_brief` |
+| `blue_agent.py` | `stage_blues`, the opencode cycle runner, `blue_feed_loop`, `run_cycle_with_retry` |
+| `blue_watchdog.py` | `watchdog_script`, `blue_watchdog_loop` |
+| `scoreboard_monitor.py` | `monitor_loop` (scoreboard snapshots, red pull, red-LLM probe tick) |
+| `red_link.py` | red01 ssh addressing (`_red_ssh_spec`/`_red_ssh_ctx`), `pull_red_snapshot`, `check_red_llm`, `red_llm_url` |
+| `red_tunnel.py` | `RedTunnel`, `maybe_start_red_tunnel` |
+| `llm_probe.py` | `red_llm_watch` hysteresis, `restart_red_llm_tunnel`, run-dir alert journal |
+| `red_stage.py` | `stage_red`, `verify_red_reaches_teams` |
+| `supervisor.py` | worker-thread supervision (`WorkerDiedError`, `supervise_workers`, `join_workers`) |
+| `event_run.py` | `stage_run`, `run_event_and_finish` |
+| `evidence.py` | `stage_capture`, `capture_engine_evidence`, `capture_blue_evidence` |
+| `teardown_stage.py` | `stage_teardown`, `teardown_red` (+ the vmid-gone assertion) |
+| `test_folder.py` | the run's test folder: `resolve_run_dir`, `record_*_agent`, `collect_run_artifacts`, `write_interaction_report` |
+| `run_manifest.py` | `run.json` + resume rules (`record_phase`, `resume_refusal`, ...) |
+
+`scrim_report/` (the interaction report): `cli.py` (flags), `loaders.py` (run-dir readers),
+`host_labels.py` (box labels, Windows octets), `timefmt.py`, `red_side.py` (red metrics),
+`blue_side.py` (blue metrics, down windows, inject counting), `gate_table.py` (rehearsal gates,
+components, pinned self-test), `render.py` (`build_report`).
+
+`beacon_ops.py`, `run-schedule.py`, `observe-soak.py` and `generate-packet.py` are single-purpose
+scripts and were not split.
+
 ## run-agent-scrim.py
 
 Deploys, verifies, and runs an agent-manned scrim end to end: author
@@ -43,7 +91,7 @@ into `test.json` — see [automated-test-artifacts.md](automated-test-artifacts.
   - teardown of the whole range at the end unless `--keep-range`
 - `RUNTIME_FILES` — regenerated per deploy; never copied into a fresh
   competition (`teams.json`, `.deploy_state.json`, `credentials.txt`,
-  `nakon-config.json`, `cloned_vms.json`, `packet.md`, `event.conf`).
+  `nakon-config.json`, `packet.md`, `event.conf`).
 - `stage_author` — the pipeline's sweep marker **`.postclone-swept`** is a resume marker and must
   never leak into a fresh competition; `stage_author` skips that name (fixed 2026-10-01 — it used
   to skip the retired `.phase6-swept`, so the real marker was copied into every competition
@@ -332,8 +380,8 @@ folder by `REPORT.md`).
   (snapshots overlap the final file by construction; dedup key =
   ts/kind/tactic/target/detail). T0 comes from `load_event_start`
   (`world.json` `meta.event_start`, in evidence or `bad-auto-state/`).
-- `load_scoreboard` — returns `[]` when the run predates C1 (no
-  `scoreboard-state.jsonl`). The report then runs in "legacy" mode:
+- `load_scoreboard` — returns `[]` when the run dir has no
+  `scoreboard-state.jsonl`. The report then runs in no-scoreboard mode:
   down-minutes, TTR, and max-simultaneous-down are n/a, the restoration count
   is inferred from red's re-kills and marked as such, and the honest red-side
   numbers carry the verdict.
@@ -349,7 +397,7 @@ folder by `REPORT.md`).
   list across versions; accept both.
 - `red_metrics` restore-reactions — a takedown on a target red already killed
   >=15 min (`REAKILL_GAP_SEC`) ago implies blue restored it in between; works
-  on legacy runs. New runs also carry explicit `blue_restore` events (counted
+  without a scoreboard series. Runs also carry explicit `blue_restore` events (counted
   separately as `blue_restore_events`).
 - `red_metrics` stalls — gaps between successful non-health_check actions;
   the OPENING (T0 → first success) counts too, so a red that sleeps through
@@ -362,8 +410,8 @@ folder by `REPORT.md`).
   reported as none — it used to abort the whole report, hiding the `timeouts`
   count the rehearsal gate reads.
 - `red_metrics` windows_footholds — from world.json footholds' `windows`
-  flag; on legacy world.json lacking it, inferred from initial-access events
-  against last-octet 2/3 (dc01/win01).
+  flag; when none carry it, inferred from initial-access events against the Windows
+  boxes' last octets in the competition's `boxes.json`.
 - evictions — counted as 0 in the score: not yet observable (metric gap);
   rendered as "evictions n/a".
 - `down_windows` — per team: restorations (real DOWN→UP transitions between

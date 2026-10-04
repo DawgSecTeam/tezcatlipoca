@@ -21,6 +21,7 @@ _SPEC = importlib.util.spec_from_file_location(
     "verify_domains_test", _REPO / "verify-competition.py")
 verify = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(verify)
+import verifier.domains as v_domains  # noqa: E402
 
 TEAMS = {"team1": {"identifier": 104}, "team2": {"identifier": 105}}
 BOXES = [
@@ -62,8 +63,8 @@ class CheckDomainsTests(unittest.TestCase):
             outs[vmid] = out
         stdout = io.StringIO()
         with patch.dict(os.environ, {"TF_VAR_proxmox_node": "node"}), \
-             patch.object(verify, "guest_agent_exec_windows", side_effect=probe), \
-             patch.object(verify, "guest_agent_exec_root", side_effect=probe), \
+             patch.object(v_domains, "guest_agent_exec_windows", side_effect=probe), \
+             patch.object(v_domains, "guest_agent_exec_root", side_effect=probe), \
              contextlib.redirect_stdout(stdout):
             result = verify.check_domains(comp_dir, teams, BOXES)
         return result, stdout.getvalue()

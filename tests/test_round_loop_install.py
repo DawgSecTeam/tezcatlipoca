@@ -18,8 +18,9 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import deploy_phases  # noqa: E402
-import engine_ops  # noqa: E402
+from _deploy_patch import dpatch  # noqa: E402
+from deploy_lib.phases import engine as dl_engine  # noqa: E402
+import engine_guard_ops  # noqa: E402
 
 
 class _Recorder:
@@ -42,9 +43,9 @@ class InstallPayload(unittest.TestCase):
 
     def _install(self, password="scoringpw"):
         with tempfile.TemporaryDirectory() as d:
-            with patch.object(engine_ops, "_run_engine_cmd", self.rec), \
+            with patch.object(engine_guard_ops, "_run_engine_cmd", self.rec), \
                     patch("builtins.print"):
-                engine_ops.install_round_loop_guard({"ssh_key_path": "/k"}, Path(d), password)
+                engine_guard_ops.install_round_loop_guard({"ssh_key_path": "/k"}, Path(d), password)
 
     def test_it_pushes_the_actor_the_decision_module_and_a_timer(self):
         self._install()
@@ -106,14 +107,14 @@ class FlagGating(unittest.TestCase):
     def _run_phase3(self, comp_dir, flag):
         ctx = self._ctx(comp_dir, flag)
         ctx.repair_config_path = comp_dir / "repair.json"
-        with patch.object(deploy_phases, "prepare_engine_from_template"), \
-                patch.object(deploy_phases, "push_event_conf"), \
-                patch.object(deploy_phases, "ensure_nat_forwarding"), \
-                patch.object(deploy_phases, "timed",
+        with dpatch("prepare_engine_from_template"), \
+                dpatch("push_event_conf"), \
+                dpatch("ensure_nat_forwarding"), \
+                dpatch("timed",
                              side_effect=lambda *a, **k: contextlib.nullcontext()), \
-                patch.object(deploy_phases, "install_round_loop_guard") as installer, \
+                dpatch("install_round_loop_guard") as installer, \
                 contextlib.redirect_stdout(io.StringIO()):
-            deploy_phases.phase3_prepare_engine(ctx)
+            dl_engine.phase3_prepare_engine(ctx)
         return installer
 
     def test_no_flag_means_no_install(self):

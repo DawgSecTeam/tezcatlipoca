@@ -20,6 +20,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
+import nakon_config_ops
 import nakon_ops
 from constants import KNOWN_BROKEN_CONFIGS
 from packet_ops import validate_profile
@@ -106,7 +107,7 @@ class GenerateNakonConfigGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp = _comp(tmp)
             out = io.StringIO()
-            with patch.object(nakon_ops, "_nakon_randomize",
+            with patch.object(nakon_config_ops, "_nakon_randomize",
                               return_value=(["apache", "airship-webapp"],
                                              ["mailenable-cleartext-mail-win", "suid-find"])):
                 with contextlib.redirect_stdout(out):

@@ -29,6 +29,7 @@ def _load(name, filename):
 
 verify = _load("verify_comp_s3", "verify-competition.py")
 destroy = _load("destroy_comp_s3", "destroy-competition.py")
+import destroy_sweep_ops  # noqa: E402
 
 
 class AdMisconfigReplay(unittest.TestCase):
@@ -171,11 +172,11 @@ class WindowsPreStop(unittest.TestCase):
             return {"data": "UPID:stop"}
 
         out = io.StringIO()
-        with patch.object(destroy, "proxmox_api", side_effect=fake_api), \
-             patch.object(destroy, "wait_for_proxmox_task"), \
+        with patch.object(destroy_sweep_ops, "proxmox_api", side_effect=fake_api), \
+             patch.object(destroy_sweep_ops, "wait_for_proxmox_task"), \
              patch.dict(os.environ, {"TF_VAR_proxmox_node": "node"}), \
              contextlib.redirect_stdout(out):
-            destroy.pre_stop_windows_boxes(
+            destroy_sweep_ops.pre_stop_windows_boxes(
                 {"team1": {"identifier": "120"}},
                 [{"name": "dc01", "template": "base-windows-server"},
                  {"name": "web01", "template": "base-ubuntu24.04-fix"}],

@@ -23,6 +23,9 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import config_ops  # noqa: E402
+import preflight.concurrency  # noqa: E402
+import preflight.plan  # noqa: E402
+import nakon_lock_ops  # noqa: E402
 import nakon_ops  # noqa: E402
 
 
@@ -75,7 +78,7 @@ class InFlightDetection(unittest.TestCase):
         holder = open(path, "a")
         self.addCleanup(holder.close)
         fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        with patch.object(nakon_ops, "held_lock_paths", return_value={path}):
+        with patch.object(nakon_lock_ops, "held_lock_paths", return_value={path}):
             self.assertEqual(nakon_ops.other_deploys_in_flight(), [])
 
     def test_a_missing_locks_dir_is_not_an_error(self):
@@ -118,9 +121,9 @@ class PreflightGate(unittest.TestCase):
     def test_preflight_gates_calls_the_concurrency_gate_first(self):
         """It must fire before any per-competition check, because it protects other
         competitions, not just this one."""
-        with patch.object(config_ops, "_gate_concurrent_deploys") as gate, \
+        with patch.object(preflight.concurrency, "gate_concurrent_deploys") as gate, \
                 patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
-                patch.object(config_ops, "proxmox_api",
+                patch.object(preflight.plan, "proxmox_api",
                              side_effect=RuntimeError("stop here — we only need the order")):
             with self.assertRaises(SystemExit):
                 config_ops.preflight_gates(Path("/tmp/nope"), [], 1)

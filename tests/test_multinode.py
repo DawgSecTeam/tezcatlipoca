@@ -14,9 +14,13 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import deploy  # noqa: E402
+from deploy_lib import golden_plan as dl_golden_plan  # noqa: E402
+from deploy_lib import placement as dl_placement  # noqa: E402
 import jump_ops  # noqa: E402
 import nodes_ops  # noqa: E402
+import placement_planner  # noqa: E402
+import placement_record  # noqa: E402
+import pve_api  # noqa: E402
 from range_ops import enumerate_targets  # noqa: E402
 
 
@@ -248,7 +252,7 @@ class PlacementRecordTest(unittest.TestCase):
 
     def test_resolve_legacy_when_nothing_configured(self):
         with tempfile.TemporaryDirectory() as td, \
-                patch.object(nodes_ops, "load_nodes_config", return_value=(None, None)):
+                patch.object(placement_planner, "load_nodes_config", return_value=(None, None)):
             placement, rec = nodes_ops.resolve_placement(Path(td), 1000, TEAMS, BOXES, "c")
         self.assertIsNone(placement)
         self.assertIsNone(rec)
@@ -258,8 +262,8 @@ class PlacementRecordTest(unittest.TestCase):
         probes = {"n1": _probe("n1", templates=["ubuntu-fix", "alpine-fix"]),
                   "n2": _probe("n2", templates=["ubuntu-fix", "alpine-fix"])}
         with tempfile.TemporaryDirectory() as td, \
-                patch.object(nodes_ops, "load_nodes_config", return_value=(records, {})), \
-                patch.object(nodes_ops, "probe_node", side_effect=lambda r, *a, **k: probes[r.name]):
+                patch.object(placement_planner, "load_nodes_config", return_value=(records, {})), \
+                patch.object(placement_planner, "probe_node", side_effect=lambda r, *a, **k: probes[r.name]):
             placement, rec = nodes_ops.resolve_placement(
                 Path(td), 1000, TEAMS, BOXES, "c",
                 resume_endpoint="https://n2.lab:8006")
@@ -270,7 +274,7 @@ class PlacementRecordTest(unittest.TestCase):
     def test_resume_refuses_unknown_endpoint(self):
         records = [_rec("n1")]
         with tempfile.TemporaryDirectory() as td, \
-                patch.object(nodes_ops, "load_nodes_config", return_value=(records, {})):
+                patch.object(placement_planner, "load_nodes_config", return_value=(records, {})):
             with self.assertRaises(SystemExit):
                 nodes_ops.resolve_placement(Path(td), 1000, TEAMS, BOXES, "c",
                                             resume_endpoint="https://elsewhere:8006")
@@ -461,11 +465,11 @@ class RedSegmentFromEnvTest(unittest.TestCase):
 
 class ParseTeamNodeTest(unittest.TestCase):
     def test_shapes(self):
-        self.assertIsNone(deploy._parse_team_node(None))
-        self.assertEqual(deploy._parse_team_node("103=n2,team4=n1"),
+        self.assertIsNone(dl_placement.parse_team_node(None))
+        self.assertEqual(dl_placement.parse_team_node("103=n2,team4=n1"),
                          {"103": "n2", "team4": "n1"})
         with self.assertRaises(SystemExit):
-            deploy._parse_team_node("103-n2")
+            dl_placement.parse_team_node("103-n2")
 
 
 class Phase1WavesSlotTest(unittest.TestCase):
@@ -477,8 +481,8 @@ class Phase1WavesSlotTest(unittest.TestCase):
                     {"vmid": 1131, "tags": "tezcatlipoca,comp-c,jump"}]
         hashes = {"golden": {"web01": {"hash": "h"}}}
         golden_hashes = {"web01": "h"}
-        wave1, wave2 = deploy.phase1_destroy_waves(
-            node_vms, [], {}, 1000, boxes, {"tezcatlipoca", "comp-c"},
+        wave1, wave2 = dl_golden_plan.phase1_destroy_waves(
+            node_vms, [], 1000, boxes, {"tezcatlipoca", "comp-c"},
             lambda vid: False, hashes, golden_hashes, slot=1,
             extra_destroy={1131: "jump-c-1"})
         self.assertNotIn(1000, wave2)  # no engine on a satellite
@@ -489,8 +493,8 @@ class Phase1WavesSlotTest(unittest.TestCase):
     def test_slot0_keeps_engine(self):
         boxes = [{"name": "web01", "template": "t"}]
         hashes = {"golden": {"web01": {"hash": "h"}}}
-        wave1, wave2 = deploy.phase1_destroy_waves(
-            [], [], {}, 1000, boxes, {"tezcatlipoca", "comp-c"},
+        wave1, wave2 = dl_golden_plan.phase1_destroy_waves(
+            [], [], 1000, boxes, {"tezcatlipoca", "comp-c"},
             lambda vid: False, hashes, {"web01": "h"})
         self.assertIn(1000, wave2)
         self.assertIn(1000 + 150, wave2)
@@ -576,10 +580,10 @@ class MultinodePreflightResumeTest(unittest.TestCase):
         # proxmox_api is stubbed because the template preflight reads each template's
         # config for the cloud-init gate (test_template_cloudinit covers that gate).
         with patch.dict(os.environ, {"TOK_N1": "t", "TOK_N2": "t"}), \
-                patch.object(nodes_ops, "record_of", side_effect=lambda pl, n: _rec(n)), \
-                patch.object(nodes_ops, "teams_on_node",
+                patch.object(placement_record, "record_of", side_effect=lambda pl, n: _rec(n)), \
+                patch.object(placement_record, "teams_on_node",
                              side_effect=lambda pl, n: [k for k, v in pl["team_nodes"].items() if v == n]), \
-                patch.object(__import__("range_ops"), "cluster_vms_for",
+                patch.object(pve_api, "cluster_vms_for",
                              return_value=[{"vmid": 1700, "node": "N2", "name": "foreign",
                                             "tags": "x", "status": "stopped"},
                                            {"vmid": 900, "node": "N1", "name": "engine-base",
@@ -588,11 +592,14 @@ class MultinodePreflightResumeTest(unittest.TestCase):
                                            {"vmid": 901, "node": "N2", "name": "ubuntu-fix",
                                             "tags": "template", "template": 1,
                                             "status": "stopped"}]), \
-                patch.object(config_ops, "has_clone_marker", return_value=False), \
-                patch.object(config_ops, "proxmox_api",
-                             return_value={"data": {"ostype": "l26",
-                                                    "ide2": "local:vm-901-cloudinit"}}), \
-                patch.object(config_ops, "_catalog_gate"), \
+                patch("vm_ownership.has_clone_marker", return_value=False), \
+                patch("preflight.templates.proxmox_api",
+                      return_value={"data": {"ostype": "l26",
+                                             "ide2": "local:vm-901-cloudinit"}}), \
+                patch("preflight.clashes.proxmox_api", return_value={"data": []}), \
+                patch("preflight.headroom.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
+                patch("preflight.concurrency.gate_concurrent_deploys"), \
+                patch("preflight.catalog.catalog_gate"), \
                 patch("jump_ops.find_jump_template", return_value={"alpine": 900}):
             config_ops.preflight_gates_multinode(
                 Path("competitions/example"), boxes, teams, 1000, placement,
