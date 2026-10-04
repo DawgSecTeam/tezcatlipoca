@@ -82,7 +82,7 @@ def render_report_skeleton(test_path):
     lines = ["---", f"id: {run}", f"kind: {manifest.get('kind')}",
              f"comp: {manifest.get('comp')}", f"generated: {iso()}",
              "generated_by: artifacts_ops.py",
-             "author: null   # fill the judgement sections, then: test-artifacts.py seal", "---",
+             "author: null   # fill the judgement sections, then: test-artifacts.py verify --seal", "---",
              "", f"# {manifest.get('kind', 'run')} report — {manifest.get('comp')} — {run}", "",
              "## Verdict", ""]
     if verdict.get("status"):
