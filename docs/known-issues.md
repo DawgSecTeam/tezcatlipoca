@@ -23,6 +23,16 @@ idempotent). `verify-competition.py`'s `firewall_in_path` gate now detects the d
 via the transit /30, firewall silent, or the gateway back on the engine). Owning the cutover inside terraform would need the firewall config state round-tripped
 into tfvars — deferred until a deploy actually needs it.
 
+### The `pfsense-provision` template exists only on .150, and phase 5 pushes teams one at a time
+
+**Status: OPEN — accepted limitation.** Template `957 pfsense-provision` was built on cyberrange
+.150 by `tools/build-pfsense-provision-template.py`; another node (or a multi-node firewall lineup)
+needs the tool run there (or the template synced) before a deploy. Phase 5 pushes each team's
+config over SSH one team at a time: every clone of the template boots as 192.168.1.1 and the engine
+can borrow only one such address per run, so the bootstrap is not yet per-team concurrent. A fresh
+clone can also take several minutes before it answers on its WAN address when the node is busy
+(the push retries and the apply budget is 600s).
+
 ### Planted Linux boxes deny all SSH at the PAM account stage after a restart
 
 **Status: OPEN — root cause unsolved.** Phase-5-planted team1 Linux boxes stop accepting SSH entirely
