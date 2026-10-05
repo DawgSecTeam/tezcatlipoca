@@ -113,5 +113,28 @@ class CutoverNetplan(unittest.TestCase):
         self.assertIn("- to: \"192.168.121.0/24\"\n          via: \"172.31.121.2\"", yaml)
 
 
+class VerifyInPathConvergence(unittest.TestCase):
+    """The cutover moves the gateway MAC; the box probe must retry, not fail on probe #1."""
+
+    def test_box_probe_retries_until_it_answers(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        answers = iter([False, False, True])
+        clock = {"t": 0.0}
+        with patch.object(fo, "_probe_tcp", side_effect=lambda *a, **k: next(answers)), \
+                patch.object(fo.time, "time", side_effect=lambda: clock["t"]), \
+                patch.object(fo.time, "sleep", side_effect=lambda s: clock.update(t=clock["t"] + s)):
+            self.assertTrue(fo._wait_tcp(None, "192.168.1.2", 22))
+
+    def test_box_probe_gives_up_after_the_budget(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        clock = {"t": 0.0}
+        with patch.object(fo, "_probe_tcp", return_value=False), \
+                patch.object(fo.time, "time", side_effect=lambda: clock["t"]), \
+                patch.object(fo.time, "sleep", side_effect=lambda s: clock.update(t=clock["t"] + s)):
+            self.assertFalse(fo._wait_tcp(None, "192.168.1.2", 22, budget_s=30, interval_s=10))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -297,6 +297,17 @@ def _probe_tcp(ssh_ctx, ip, port, timeout=4):
     return "UP" in (r.stdout or "")
 
 
+def _wait_tcp(ssh_ctx, ip, port, budget_s=120, interval_s=10):
+    """_probe_tcp, retried until `budget_s` elapses (convergence after a network change)."""
+    deadline = time.time() + budget_s
+    while True:
+        if _probe_tcp(ssh_ctx, ip, port, timeout=8):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(interval_s)
+
+
 def _drive_console(node, vmid, identifier, config_url):
     """One full menu→shell→fetch→reboot drive. Runs only after CONSOLE_SETTLE_S, so a
     booting system is never interrupted mid-loader."""
@@ -441,7 +452,9 @@ def verify_in_path(ssh_ctx, teams, managed_first_ip, log=print):
                             f"172.31.{tid}.2 (got: {(r.stdout or '').strip()[:80]})")
             continue
         box_ip = managed_first_ip.get(k)
-        if box_ip and not _probe_tcp(ssh_ctx, box_ip, 22, timeout=8):
+        # The cutover just moved the gateway MAC: give ARP/routing a bounded window to
+        # converge instead of failing on the first probe (live-found 2026-10-05).
+        if box_ip and not _wait_tcp(ssh_ctx, box_ip, 22):
             failures.append(f"{k}: first managed box {box_ip}:22 not reachable through "
                             "the firewall — check the WAN pass rule loaded (pfctl -sr)")
     if failures:
