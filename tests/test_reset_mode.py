@@ -111,8 +111,9 @@ class LadderTests(unittest.TestCase):
              patch.object(redeploy_reset_ops, "list_snapshots", side_effect=fake_snaps), \
              patch.object(redeploy_reset_ops, "prepare_nakon_assets", side_effect=fake_prepare), \
              patch.object(redeploy_reset_ops, "scored_ports_for", return_value={}):
+            # mode_reset returns (fixed, levels); the ladder tests assert on `fixed`.
             out = redeploy_reset_ops.mode_reset(targets, CTX, "pve", Path("competitions/x"),
-                                      {"box_password": "pw"}, {}, [], "easy")
+                                                {"box_password": "pw"}, {}, [], "easy")[0]
         if probe_calls is not None:
             self.assertEqual(calls["probe"], probe_calls)
         return out, calls

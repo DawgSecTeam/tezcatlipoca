@@ -141,8 +141,8 @@ run tag as a collision, never as "ours".
 mutates Proxmox; `config_ops.preflight_gates` / `preflight_gates_multinode` are thin wrappers that
 build a plan and call it. A `PreflightPlan` is a list of `NodeShare`s: **single-node is one share
 over the whole cluster view, multi-node is one share per hosting node scoped to what that node
-holds** — there is no second implementation. Order: (1) `concurrency.py` flock gate (once, both
-modes); (2) per share: `templates.py` (tagged templates resolve, cloud-init drive, engine base
+holds** — there is no second implementation. Order: (1) `concurrency.py` flock warning (once, both
+modes; warns, never refuses — concurrent ranges are supported, the per-resource gates below refuse real collisions); (2) per share: `templates.py` (tagged templates resolve, cloud-init drive, engine base
 image, jump clone source), `clashes.py` (vmid + bridge collisions via `ownership_verdict`; the
 slot math and labels are `expected_slots`/`expected_bridges`), `headroom.py` (datastore, thin
 factor); (3) `mgmt_ip.py` (engine static IP; satellite jump IPs across all nodes); (4) `catalog.py`

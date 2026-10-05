@@ -1,4 +1,5 @@
 import time
+from collections import Counter
 from pathlib import Path
 
 from scrim_report import blue_side
@@ -31,16 +32,37 @@ def build_report(run_dir):
         max_sim = None
     empty_room = (bm["cycles_rc0"] == 0 and restorations == 0
                   and rm["blue_restore_events"] == 0)
-    score = (restorations + rm["restore_reactions"] + rm["evictions"]
+    evictions = max(rm["evictions"], bm["evictions_logged"])
+    score = (restorations + rm["restore_reactions"] + evictions
              + bm["injects"] + bm["eradication"])
+    # Per-run gate calibration:
+    # - max_simultaneous_down judges against red's own max_concurrent_down_end pacing
+    #   cap (run.json pacing, added 2026-10-04) — a gate that demanded 4 while the
+    #   harness paced red at 2 failed red for obeying orders (scrim-one 2026-10-03).
+    # - the injects gate drops out (n/a, comp shape) when the capture proves the comp
+    #   published none, and caps at the published count otherwise — scrim-fresh-a
+    #   shipped no injects/ dir and blue failed a gate it could never pass.
+    pacing = loaders.load_pacing(run_dir)
+    max_sim_threshold = int(pacing.get("max_concurrent_down_end") or 4)
+    final = loaders.load_final_scoreboard(run_dir)
+    injects_published = len((final or {}).get("injects") or [])
+    injects_threshold = min(2, injects_published) if injects_published else None
+    gate_rows = {"red": gate_table.GATES["red"],
+                 "blue": [k for k in gate_table.GATES["blue"]
+                          if k[0] != "injects" or injects_threshold is not None]}
     gates = gate_table.evaluate(
         {"takedowns": rm["takedowns"], "restore_reactions": rm["restore_reactions"],
          "distinct_tactics": len(rm["distinct_tactics"]),
          "windows_footholds": rm["windows_footholds"], "max_simultaneous_down": max_sim,
-         "stalls": len(rm["stalls"]), "evictions": rm["evictions"]},
+         "stalls": len(rm["stalls"]), "evictions": evictions},
         {"cycles_rc0": bm["cycles_rc0"], "restorations": restorations,
          "injects": bm["injects"], "notebook_entries": bm["notebook_entries"],
-         "timeouts": bm["timeouts"]})
+         "timeouts": bm["timeouts"]},
+        thresholds={"max_simultaneous_down": max_sim_threshold,
+                    **({"injects": injects_threshold} if injects_threshold else {})},
+        gates=gate_rows)
+    if injects_threshold is None:
+        gates.append(("blue", "injects", "n/a (comp ships none)", "-", "n/a"))
     gates_failed = [r for r in gates if r[4] == "FAIL"]
 
     L = []
@@ -67,7 +89,7 @@ def build_report(run_dir):
     L.append(f"Interaction score components: restorations {restorations}"
              + (" (inferred from re-kills; no scoreboard series)" if no_scoreboard else "")
              + f", red restore-reactions {rm['restore_reactions']}, "
-             f"evictions {rm['evictions']}, "
+             f"evictions {evictions}, "
              f"injects {bm['injects']}, eradication {bm['eradication']}.\n")
 
     L.append("## Red\n")
@@ -78,6 +100,15 @@ def build_report(run_dir):
     L.append(f"- takedowns: **{rm['takedowns']}**")
     for tp, host, svc, mode in rm["timeline"]:
         L.append(f"  - {timefmt.fmt_t(tp)} {host} {svc} ({mode})")
+    # Rotation health (informational, not gated — yet): the biggest single target's
+    # share of all takedowns. scrim-fresh-a 2026-10-03: 20 of 22 were one box's IIS;
+    # the number that justifies — and then measures — bad-auto's rotation rule.
+    if rm["timeline"]:
+        per_host = Counter(host for _, host, _, _ in rm["timeline"])
+        top_host, top_n = per_host.most_common(1)[0]
+        L.append(f"- takedown spread: **{top_n / len(rm['timeline']) * 100:.0f}%** on one "
+                 f"target ({top_host}, {top_n} of {len(rm['timeline'])}) — informational; "
+                 f"rotation health")
     L.append(f"- distinct tactics (excl. health_check): **{len(rm['distinct_tactics'])}** "
              f"({', '.join(rm['distinct_tactics']) or 'none'})")
     L.append(f"- initial access: **{len(rm['initial_access'])}** technique(s) "
@@ -117,10 +148,12 @@ def build_report(run_dir):
     else:
         L.append("- restorations/down-minutes: **n/a** (run predates scoreboard-state.jsonl; "
                  "restoration count above is inferred from red's re-kills)")
+    if bm["evictions_logged"]:
+        L.append(f"- evictions logged by blue (EVICTED: lines): **{bm['evictions_logged']}**"
+                 f" (red-observed foothold evictions: {rm['evictions']})")
     L.append(f"- injects submitted: **{bm['injects']}**")
     L.append(f"- notebook liveliness: **{bm['notebook_entries']}** entries\n")
 
-    final = loaders.load_final_scoreboard(run_dir)
     if final:
         L.append("## Final scores (evidence dump at capture, before teardown)\n")
         for team, rows in sorted((final.get("services") or {}).items()):

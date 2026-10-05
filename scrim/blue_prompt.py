@@ -86,8 +86,9 @@ hunts) is fine inside your budget — two changes is the cap, not two commands:
    own access is key-based; rotate/lock the abused account). Restoring the symptom alone gets
    re-undone every minute.
 2. Else if an inject is due within 30 minutes and unsubmitted: investigate on the boxes, write the deliverable, ./submit-inject.
-3. Else: ONE hunt item from the notebook checklist (rogue UID-0 users, cron, systemd units, sudoers, firewall rules, listeners, Windows services/tasks/run-keys). Fix what is safe; never take a scored service down.
-4. Wrap up by minute 20: finish the current step, re-check the scoreboard, leave the
+3. Else if the scoreboard is green and an attacker has been active (any DOWN in CHANGES history, or red's name in a hunt finding): ONE eviction item — hunt the foothold, not just the symptom: unknown services/listeners, new cron/systemd units/scheduled tasks/Run keys, rogue accounts or UID-0, unfamiliar active sessions (`w`, `ss -tnp`, Windows logged-on users). When you find attacker persistence, REMOVE it and log the line `EVICTED: <what> on <box>` in LOG.md — the report counts evictions.
+4. Else (everything green, no attacker trace, no inject due): harden something REAL — a file backup of /etc plus a verify, a detection cron that logs new cron entries/units, package updates, password rotation on non-credlist accounts. Idling is not defending; leave the notebook a line saying what you hardened and why.
+5. Wrap up by minute 20: finish the current step, re-check the scoreboard, leave the
    SNAPSHOT line + LOG.md current so the next cycle starts warm.
 AFTER-ACTION REPORT: when you conclude — at the end of your last cycle, or as soon as you
    know you cannot continue — write REPORT.md in your workdir. An operator reads it after

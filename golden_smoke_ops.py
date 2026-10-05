@@ -5,7 +5,6 @@ import time
 
 from constants import FINAL_STAGE_CONFIGS, GOLDEN_CLONE_TIMEOUT, ownership_tags
 from range_ops import (
-    clone_marker,
     cluster_vms_for,
     gc_orphan_volumes,
     destroy_vm_if_exists,
@@ -15,6 +14,7 @@ from range_ops import (
     wait_for_proxmox_task,
 )
 from ssh_ops import ssh_via_gateway
+from vm_ownership import full_clone_data
 from windows_ops import is_windows_template
 
 
@@ -167,10 +167,8 @@ def golden_boot_smoke(node, target, ctx, comp_dir, timeout=None,
           f"multi-user (timeout {timeout}s)...")
     try:
         try:
-            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{target['vmid']}/clone", data={
-                "newid": vmid, "name": name, "full": 1,
-                "description": clone_marker(comp_dir.name),
-            })["data"]
+            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{target['vmid']}/clone",
+                               data=full_clone_data(vmid, name, comp_dir.name))["data"]
             wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
         except Exception as e:
             raise RuntimeError(

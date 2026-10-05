@@ -4,6 +4,7 @@ from pathlib import Path
 import artifacts_ops
 from config_ops import write_state
 from scrim import core
+from scrim.red_stage import red_pacing_caps
 from scrim.runfiles import RUN_MANIFEST
 
 
@@ -42,6 +43,9 @@ def record_phase(run_dir, args, phase, t0=None):
         "t0": t0,
         "keep_range": bool(getattr(args, "keep_range", False)),
         "blue_watchdog": bool(getattr(args, "blue_watchdog", False)),
+        # red's concurrent-down caps: the scrim report's max_simultaneous_down gate
+        # judges against max_concurrent_down_end from here, not a hardcoded 4
+        "pacing": red_pacing_caps(),
         "phase": phase,
         "updated_at": core.now_iso(),
                   })

@@ -889,7 +889,10 @@ class RedTeardownAssertion(unittest.TestCase):
     def test_destroy_is_invoked_for_this_competition(self):
         calls = self._run()
         self.assertIn("destroy", calls[0])
-        self.assertIn("c1", calls[0])
+        # the resolved competition path: bad-auto's destroy cross-checks it against
+        # config.yaml's competition_dir, and the bare name was the real cause of the
+        # "transient" teardown rc=1 on the 2026-10-03/04 scrims
+        self.assertIn("competitions/c1", calls[0][-2])
 
     def test_transient_destroy_failure_is_retried_once(self):
         # live-found 2026-10-03: attempt 1 rc=1 (transient Proxmox hiccup), the manual

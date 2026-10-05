@@ -10,6 +10,7 @@ from constants import SNAP_BASE, SNAP_READY, ownership_tags
 from nakon_ops import build_nakon_bundle
 from range_ops import (
     clone_marker,
+    terraform_dir,
     describe_target,
     destroy_vm_if_exists,
     proxmox_api,
@@ -20,7 +21,7 @@ from range_ops import (
 from template_ops import stored_template_hash
 from timing import timed
 from ssh_ops import quote_sshkeys
-from utils import compfile_flag
+from utils import compfile_flag, run_terraform
 from pathlib import Path
 from redeploy_select_ops import box_platform
 from redeploy_plant_ops import rerun_domain_configs
@@ -232,3 +233,45 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
         else:
             print("  tz-ready NOT re-taken — domain configuration could not run (see above).")
     return rebuilt
+
+
+def reconcile_terraform_state(rebuilt, ctx, comp_dir, teams, boxes):
+    """`terraform import` each rebuilt box back into state (opt-in --reconcile-state).
+
+    mode_rebuild recreates boxes through the API, so on a v2+ range every rebuilt box
+    is a live terraform resource the state no longer matches — the next full
+    `terraform apply` sees drift and REPLACES it, destroying the box again (warned
+    about since the tool existed). Import re-pins the state to the recreated VM with
+    its deterministic vmid, after which a plan reports the box clean. Import ID is
+    the vmid; the for_each key lives in the address (slot 0 = team_box, satellites =
+    team_box_sat1..4). A failed import is printed, never fatal — the warning path
+    (accept the replacement, or `terraform state rm`) remains the fallback."""
+    env = {**os.environ,
+           "TF_VAR_teams": json.dumps(teams),
+           "TF_VAR_boxes_per_team": json.dumps(boxes)}
+    tf_cwd = str(terraform_dir(comp_dir))
+    node = os.environ["TF_VAR_proxmox_node"]
+    for t in rebuilt:
+        slot = t.get("slot") or 0
+        resource = "proxmox_virtual_environment_vm.team_box" if slot == 0 else \
+            f"proxmox_virtual_environment_vm.team_box_sat{slot}"
+        addr = f'{resource}["{t["vm_name"]}"]'
+        print(f"  Importing {t['vm_name']} (vmid {t['vmid']}) into terraform state...")
+        try:
+            # The address is usually ALREADY in state (the deploy's apply #2 created
+            # it; the rebuild replaced the VM out-of-band) and `terraform import`
+            # refuses managed addresses — live-found 2026-10-04: "Resource already
+            # managed by Terraform". Forget the stale entry first, then adopt the
+            # live VM. A rm of an absent address is fine.
+            run_terraform(["state", "rm", addr], cwd=tf_cwd, env=env, timeout=60,
+                          check=False)
+            # The bpg provider's import ID for VM resources is "node/vmid", not a
+            # bare vmid (live-found 2026-10-04: "unexpected format of ID ()").
+            run_terraform(["import", addr, f"{node}/{t['vmid']}"], cwd=tf_cwd, env=env,
+                          timeout=300)
+        except Exception as e:
+            print(f"    WARNING: import failed for {addr}: {str(e)[:160]} — the box stays "
+                  f"drifted from state; accept the next apply's replacement or "
+                  f"`terraform state rm` + import by hand.")
+    print("  Confirm with: terraform plan  (run in " + tf_cwd + " — the rebuilt box(es) "
+          "should show no changes)")

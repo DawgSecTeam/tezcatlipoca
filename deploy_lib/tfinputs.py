@@ -21,6 +21,12 @@ def engine_mgmt_ip_from_env():
     ip = os.environ.get("TF_VAR_engine_mgmt_ip")
     if ip is None:
         ip = DEFAULT_ENGINE_MGMT_IP
+        # Mark the default AS the default: the preflight's "explicitly set" escape
+        # hatch must not be self-satisfying. Live-found 2026-10-03: the .150 default
+        # (.250) is SSH-poisoned on the tailnet path, and the deploy died 12 minutes
+        # in at compose build because the gate read this exported default as an
+        # explicit operator choice.
+        os.environ["TEZ_ENGINE_MGMT_IP_IS_DEFAULT"] = "1"
         print(f"  Engine mgmt IP: static {ip} (default — override "
               f"TF_VAR_engine_mgmt_ip, set '' for DHCP)")
         os.environ["TF_VAR_engine_mgmt_ip"] = ip

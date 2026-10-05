@@ -68,7 +68,12 @@ def take_snapshot(node, vmid, name, description="", timeout=900):
 
 
 def rollback_snapshot(node, vmid, name, timeout=900, restart=True):
-    """Rollback to snapshot (requires stop/start for no-RAM snapshot). Raises on failure."""
+    """Rollback to snapshot (requires stop/start for no-RAM snapshot). Raises on failure.
+
+    Waits for the guest agent after the restart: whatever runs next dialled the box
+    the moment start_vm returned and failed in ~1s against a still-booting Windows
+    guest (win02-golden's IIS FTP plant, 2026-10-04 — the rollback+re-plant cycle
+    failed the exact step that had succeeded on the first, fully-waited plant)."""
 
     if vm_status(node, vmid) == "running":
         stop_vm(node, vmid)
@@ -76,6 +81,11 @@ def rollback_snapshot(node, vmid, name, timeout=900, restart=True):
     wait_for_proxmox_task(node, upid, timeout=timeout)
     if restart:
         start_vm(node, vmid)
+        try:
+            from guest_exec import wait_for_guest_agent
+            wait_for_guest_agent(node, vmid, timeout=600)
+        except Exception as e:
+            print(f"    WARNING: guest agent wait after rollback of {vmid}: {e}")
 
 
 def snapshot_support_hint(node, vmid):

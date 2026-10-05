@@ -20,7 +20,6 @@ def stage_verify(args, comp, creds):
     web_ip = (json.loads((comp / "targets.json").read_text()).get("targets", {})
               .get("team1-web01", {}).get("ip"))
     web_ip = web_ip or f"192.168.{creds['TEAM1_ID']}.4"
-    units, svc_port, svc_display = compworld._web01_units(comp)
 
     def ssh_web01(cmd, timeout=60):
         return procs.run_tree(base + [f"{creds['BOX_USER']}@{web_ip}", cmd],
@@ -40,6 +39,23 @@ def stage_verify(args, comp, creds):
                                                 creds["BOX_PW"], script)
         return procs.run_tree(argv, timeout=timeout, check=False, stdin_text=stdin_text)
 
+    # hand the whole fire test to run_fire_test — injectable runners keep it unit-testable
+    # offline.
+    run_fire_test(args, comp, creds, ssh_web01, sudo_web01)
+
+
+def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
+    """Prove the scoring path end to end: stop web01's scored unit, watch the scoreboard
+    register it down, restore it, watch the scoreboard heal. Raises (aborting before T0)
+    rather than warning: firing blue into an unproven scoring path is how a whole event
+    goes unscored (run-12).
+
+    `ssh_web01(cmd)` runs a shell command as the box user, `sudo_web01(script)` as root —
+    injected so tests can script the box without SSH."""
+    units, svc_port, svc_display = compworld._web01_units(comp)
+    web_ip = (json.loads((comp / "targets.json").read_text()).get("targets", {})
+              .get("team1-web01", {}).get("ip"))
+    web_ip = web_ip or f"192.168.{creds['TEAM1_ID']}.4"
     # pick the unit that actually exists on this box (apache2 vs httpd across distros)
     probe = ('u=""; for c in %s; do systemctl list-unit-files "$c.service" --no-legend '
              '2>/dev/null | grep -q . && u=$c && break; done; echo "$u"' % " ".join(units))
@@ -48,6 +64,32 @@ def stage_verify(args, comp, creds):
     args.web_unit = unit
     log(f"fire test unit: {unit} on {web_ip} (port {svc_port})")
     port = os.environ.get("SCRIM_WEB01_PORT", str(svc_port))
+
+    # Residue guard: an aborted earlier fire test can leave the unit stopped (scrim-one
+    # 2026-10-03: web01's sshd died with the harness and the next attempt inherited the
+    # outage until a manual rollback). Restore BEFORE testing — a stop-then-restore cycle
+    # that starts from an already-down service proves nothing and heals nothing.
+    st = ssh_web01(f"systemctl is-active {shlex.quote(unit)}")
+    state = (st.stdout or "").strip().splitlines()[-1] if (st.stdout or "").strip() else "unknown"
+    if state != "active":
+        log(f"fire test: WARNING {unit} on {web_ip} is '{state}' — a previous aborted run "
+            f"left it down; restoring before testing")
+        sudo_web01(f"systemctl unmask {shlex.quote(unit)}; "
+                   f"systemctl start {shlex.quote(unit)}")
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            time.sleep(15)
+            st = ssh_web01(f"systemctl is-active {shlex.quote(unit)}")
+            state = ((st.stdout or "").strip().splitlines() or ["unknown"])[-1]
+            if state == "active":
+                break
+        if state != "active":
+            raise RuntimeError(
+                f"fire test: {unit} on {web_ip} was already down (pre-existing outage) and "
+                f"could not be restored. Fix it by hand first — ./mybox web01 'echo $BOX_PW | "
+                f"sudo -S systemctl unmask {unit} && sudo systemctl start {unit}' — or "
+                f"redeploy-competition.py --boxes web01 --mode rollback-ready.")
+        log(f"fire test: pre-existing outage on {unit} restored — proceeding")
 
     def web01_http():
         """HTTP code for web01 over the engine's network path ('' / 000 = no answer)."""

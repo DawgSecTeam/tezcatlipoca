@@ -27,10 +27,17 @@ EXPECTED_17C = {
 }
 
 
-def evaluate(gm, bm):
+def evaluate(gm, bm, thresholds=None, gates=None):
+    """Gate rows. `thresholds` overrides a gate's static threshold by key — used where the
+    right threshold is per-run data (max_simultaneous_down judges against red's own
+    max_concurrent_down_end pacing cap, not a hardcoded 4). `gates` replaces the static
+    GATES table per section (used to drop a structurally inapplicable gate)."""
+    thresholds = thresholds or {}
+    gates = gates or GATES
     rows = []
     for section, metrics in (("red", gm), ("blue", bm)):
-        for key, threshold, op in GATES[section]:
+        for key, threshold, op in gates[section]:
+            threshold = thresholds.get(key, threshold)
             val = metrics.get(key)
             if val is None:
                 rows.append((section, key, "n/a", threshold, "n/a"))

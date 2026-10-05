@@ -34,6 +34,16 @@ def verify_red_reaches_teams(args, comp, creds):
               cwd=core.REPO, timeout=900, check=True, tail=25)
 
 
+def red_pacing_caps():
+    """The three concurrent-down caps red is paced by, in ONE place.
+
+    They land in bad-auto's config (stage_red) AND in the run manifest (record_phase) —
+    the scrim report judges max_simultaneous_down against the END cap, and a gate that
+    disagrees with the pacing it judges is a gate that fails red for obeying orders."""
+    return {"max_concurrent_down_start": 2, "max_concurrent_down_end": 4,
+            "max_concurrent_down_endgame": 6}
+
+
 def stage_red(args, comp, creds, run_dir):
     # Local endpoints (llama.cpp/qwen) are slow: tighter call timeout and no
     # JSON-retry double-call, or one decision can eat 8-16 min of a 90-min event.
@@ -51,8 +61,8 @@ def stage_red(args, comp, creds, run_dir):
         "pacing": {"decision_window_min": 2, "window_jitter_min": 1,
                    "active_burst_min": 15, "burst_jitter_min": 2, "quiet_min": 2, "quiet_jitter_min": 1,
                    "focus_rotation_min": max(10, args.duration_min // 8),
-                   "max_concurrent_down_start": 2, "max_concurrent_down_end": 4,
-                   "max_concurrent_down_endgame": 6, "access_deadline_remaining_min": args.duration_min // 4,
+                   **red_pacing_caps(),
+                   "access_deadline_remaining_min": args.duration_min // 4,
                    "endgame_start_remaining_min": 15,
                    "endgame_decision_window_sec": 60, "endgame_force_active": True,
                    "min_standing_services": 2, "credlist_gate_min": args.duration_min // 4,

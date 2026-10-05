@@ -176,6 +176,21 @@ sweep. **[live]**
   `TF_VAR_engine_mgmt_ip` when anything else is running on the estate**; `.245`, `.246`, `.249` and
   `.250` all answered on 2026-10-02. The preflight now scans cluster-wide and refuses the *default*
   address when any guest is unverifiable (see `config_ops._engine_mgmt_ip_gate`). **[live/code]**
+- **Engine management-IP allocation table.** Three concurrent deploys on 2026-10-04 worked only
+  because each session hand-picked a distinct address. Claim yours here (and put it in the run's
+  `.env` as `TF_VAR_engine_mgmt_ip`) before deploying; the preflight still verifies the claim
+  against the live estate, so a stale row costs a refusal, not a clash. **[doc + live]**
+
+  | Address | Holder / use | Notes |
+  |---|---|---|
+  | `10.0.0.250` | the engine *default* — a foreign competition's live `quotient-engine` | never rely on the default |
+  | `10.0.0.252` | practice deploys (6-team / follow-up sessions, 2026-10-04) | free between runs |
+  | `10.0.0.248` | practice deploys (parallel session, 2026-10-04) | free between runs |
+  | `10.0.0.243` | pfsense-ad live validation (2026-10-04) | free between runs |
+  | `10.0.0.245`, `.246`, `.249` | answered on 2026-10-02 — foreign guests | do not use |
+
+  Rows marked "free between runs" are only free when `ssh sysadmin@<ip>` and ping both fail and
+  the preflight's cluster-wide scan agrees.
 - **netplan refuses world-readable configs** — the engine's team-NIC netplan files are mode `0600`.
   Verified on both running engines 2026-10-02. **[live]**
 - **Docker re-syncs iptables on every container start/restart**: `FORWARD` goes to `DROP` and the

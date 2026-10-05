@@ -3,6 +3,7 @@
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from config_ops import write_text_atomic
@@ -35,30 +36,40 @@ def _scp_files(ssh, remote, dest_dir, timeout=120):
     Direct first, then through the engine jump: the control host reaches red01 either way
     depending on the estate, and the harness has used this two-attempt shape since the first
     scrim (`scrim.red_link.pull_red_snapshot`). A failed attempt's partial file is always removed —
-    a truncated events.jsonl that looks complete is worse than a loud failure."""
+    a truncated events.jsonl that looks complete is worse than a loud failure.
+
+    The whole route pair retries ONCE after 10s when everything failed network-side:
+    the 2026-10-03 teardown's red01 pull died on a seconds-long "no route to host" flap
+    on the ENGINE's jump address — reachable again before the destroy that ran next —
+    and the red report was lost to a transient. "No such file" raises immediately: that
+    is a real absence, not a route flap."""
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     user, host, common, jump = _ssh_options(ssh)
     before = {p.name for p in dest_dir.iterdir() if p.is_file()}
     last_error = ""
-    for extra in ([], (["-o", jump] if jump else [])):
-        cmd = ["scp"] + common + extra + [f"{user}@{host}:{remote}", f"{dest_dir}/"]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            last_error = f"scp timed out after {timeout}s"
-            continue
-        fetched = [p for p in dest_dir.iterdir() if p.is_file() and p.name not in before]
-        lowered = (proc.stderr or proc.stdout or "").lower()
-        if proc.returncode == 0 and fetched:
+    routes = ([], (["-o", jump] if jump else []))
+    for round_no in (1, 2):
+        for extra in routes:
+            cmd = ["scp"] + common + extra + [f"{user}@{host}:{remote}", f"{dest_dir}/"]
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                last_error = f"scp timed out after {timeout}s"
+                continue
+            fetched = [p for p in dest_dir.iterdir() if p.is_file() and p.name not in before]
+            lowered = (proc.stderr or proc.stdout or "").lower()
+            if proc.returncode == 0 and fetched:
+                for path in fetched:
+                    os.chmod(path, 0o600)
+                return sorted(fetched)
             for path in fetched:
-                os.chmod(path, 0o600)
-            return sorted(fetched)
-        for path in fetched:
-            path.unlink(missing_ok=True)
-        last_error = (proc.stderr or proc.stdout or "").strip()
-        if "no such file" in lowered or "not found" in lowered:
-            raise FileNotFoundError(f"{remote} on {host}")
+                path.unlink(missing_ok=True)
+            last_error = (proc.stderr or proc.stdout or "").strip()
+            if "no such file" in lowered or "not found" in lowered:
+                raise FileNotFoundError(f"{remote} on {host}")
+        if round_no == 1:
+            time.sleep(10)
     raise Unreachable(f"scp from {user}@{host} failed: {last_error}")
 
 

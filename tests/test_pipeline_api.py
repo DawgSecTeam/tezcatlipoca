@@ -24,7 +24,7 @@ import pipeline_api  # noqa: E402
 _REDEPLOY_SOURCES = [_REPO / "redeploy-competition.py", *sorted(_REPO.glob("redeploy_*_ops.py"))]
 
 # The contract, derived from the base commit by grepping `driver.` out of
-# redeploy-competition.py: 16 distinct names. owner module -> names.
+# redeploy-competition.py: 16 distinct names (+ env_summary). owner module -> names.
 _OWNERS = {
     "constants": ("PER_MACHINE_NAKON_BUDGET",),
     "config_ops": ("list_proxmox_templates",),
@@ -35,6 +35,7 @@ _OWNERS = {
     "nakon_ops": ("build_nakon_bundle", "generate_stage_configs",
                   "os_to_platform", "run_nakon"),
     "ssh_ops": ("read_terraform_ctx", "wait_for_boxes_ssh", "wait_for_cloud_init"),
+    "utils": ("env_summary",),
     "windows_ops": ("bootstrap_windows_box",),
 }
 
@@ -42,7 +43,7 @@ _OWNERS = {
 class PipelineApiSurfaceTests(unittest.TestCase):
     def test_exports_exactly_the_consumer_set(self):
         expected = sorted(name for names in _OWNERS.values() for name in names)
-        self.assertEqual(len(expected), 16)
+        self.assertEqual(len(expected), 17)
         self.assertEqual(sorted(pipeline_api.__all__), expected)
 
     def test_every_export_resolves_to_its_owning_module(self):

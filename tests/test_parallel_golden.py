@@ -508,6 +508,48 @@ class GoldenCoverageRecords(unittest.TestCase):
         self.assertEqual([m["name"] for m in machines],
                          ["box0-golden", "box1-golden"])
 
+    def test_a_half_converted_golden_fails_the_conversion_loudly(self):
+        """Live-found 2026-10-04: an interrupted POST /template left a golden with
+        template=1 on a plain vm- volume; every linked clone of it then died with
+        HTTP 500 "Linked clone feature is not supported". _convert must verify the
+        base- rename landed and fail loudly when it did not."""
+        harness = self._harness(golden_hashes={"box0": "h0", "box1": "h1"})
+        (harness.comp_dir / ".template-hashes.json").write_text(json.dumps(
+            {"golden_planted": {"box0": "h0", "box1": "h1"}}))
+        real = harness._proxmox
+
+        def half_converted(method, path, **kw):
+            if method == "GET" and path.endswith("/config"):
+                return {"data": {"scsi0": "hdd:vm-1412-disk-0,size=15G",
+                                 "ide2": "local-lvm:vm-1412-cloudinit,media=cloudinit"}}
+            return real(method, path, **kw)
+
+        with patch.object(harness, "_proxmox", side_effect=half_converted), \
+                patch("time.sleep", lambda *_: None):
+            _r, _e, exc = harness.run()
+        self.assertIsNotNone(exc)
+        self.assertIn("never became base- volumes", str(exc))
+
+    def test_a_properly_renamed_golden_passes_the_conversion_check(self):
+        """The happy path must not regress: base- volumes (and an ide cloudinit drive
+        on the renamed form) satisfy the check and the build completes."""
+        harness = self._harness(golden_hashes={"box0": "h0", "box1": "h1"})
+        (harness.comp_dir / ".template-hashes.json").write_text(json.dumps(
+            {"golden_planted": {"box0": "h0", "box1": "h1"}}))
+        real = harness._proxmox
+
+        def renamed(method, path, **kw):
+            if method == "GET" and path.endswith("/config"):
+                vmid = path.strip("/").split("/")[3]
+                return {"data": {"scsi0": f"hdd:base-{vmid}-disk-0,size=15G",
+                                 "ide2": f"local-lvm:base-{vmid}-cloudinit,media=cloudinit"}}
+            return real(method, path, **kw)
+
+        with patch.object(harness, "_proxmox", side_effect=renamed), \
+                patch("time.sleep", lambda *_: None):
+            _r, _e, exc = harness.run()
+        self.assertIsNone(exc)
+
     def test_a_fully_converted_resume_records_a_skip_verdict(self):
         """The M4 all-templates re-entry returns before the plant section ever reads
         the stage config — the coverage verdict must still fire."""

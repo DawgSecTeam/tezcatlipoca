@@ -94,6 +94,48 @@ def _nothing_answered(machines):
     return f"all {len(machines)} machine(s) ran zero steps ({names})"
 
 
+_ZERO_STEP_ERROR = "no output from the remote plan (exit 0)"
+
+
+def _reconcile_zero_step_machines(machines, config_path, failed_steps):
+    """Downgrade a zero-step machine's "credential failure" verdict to a clean no-op.
+
+    A machine whose `configurations` list is EMPTY (an unpinned box in the lineup)
+    dispatches a 0-step plan: the bootstrap runs, writes an empty report.tsv, exits 0 —
+    and nakon's runner, seeing no report and no results, misclassifies the silence as
+    "no output from the remote plan (exit 0) — check credentials and sudo access" and
+    fails the plant (live-found 2026-10-04, fw-live-2026-10-04 stage A: an unpinned box
+    hard-failed the STRICT golden pass twice on a genuine no-op; the box itself accepted
+    SSH and sudo fine throughout). The no-op is correct behavior — nothing was pinned on
+    the box — so the exact outcome signature is reconciled to a recorded success: the
+    machine gets a synthetic "(empty plan)" step (rc 0) so coverage and the
+    nothing-answered floor treat it as ran, and its FAILED lines drop from the tally.
+    Upstream fix tracked in docs/upstream-defects-handoff.md."""
+    if not machines:
+        return machines, failed_steps
+    try:
+        cfg = {m["name"]: m.get("configurations") or []
+               for m in json.loads(Path(config_path).read_text())["machines"]}
+    except (ValueError, OSError, KeyError, TypeError):
+        return machines, failed_steps
+    out, dropped = [], []
+    for m in machines:
+        if (not m.get("steps") and str(m.get("error") or "").startswith(_ZERO_STEP_ERROR)
+                and m.get("name") in cfg and not cfg[m["name"]]):
+            dropped.append(m.get("name"))
+            out.append({**m, "error": None,
+                        "steps": [{"name": "(empty plan)", "rc": 0, "seconds": 0}]})
+        else:
+            out.append(m)
+    if dropped:
+        print(f"  [nakon] {len(dropped)} machine(s) with an EMPTY plan ran as no-ops "
+              f"({', '.join(dropped)}) — the runner misreads a 0-step plan as a "
+              f"credential failure; recorded as clean (upstream-defects-handoff)")
+        failed_steps = [line for line in failed_steps
+                        if not any(name in line for name in dropped)]
+    return out, failed_steps
+
+
 def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, timeout=2400,
               strict=True, jobs=1, run_tag=None):
     """Push the bundle to the scoring engine and run `nakon deploy` there.
@@ -233,6 +275,14 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
             failed_steps = []
             machines_json = None
             time.sleep(20)
+        # A 0-step machine's silent no-op is misread as a credential failure by the
+        # runner — reconcile BEFORE the verdict so an unpinned box never kills a
+        # strict pass (see _reconcile_zero_step_machines).
+        machines_json, failed_steps = _reconcile_zero_step_machines(
+            machines_json, Path(config_path).resolve(), failed_steps)
+        if not failed_steps and machines_json is not None:
+            # rc != 0 but every failure was a reconciled no-op: the plant succeeded.
+            return NakonResult([], machines_json)
         if failed_steps:
             print(f"\n  Nakon plant FAILED steps: {len(failed_steps)}")
             for line in failed_steps[:10]:

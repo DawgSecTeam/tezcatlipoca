@@ -10,7 +10,7 @@ import sys
 
 from config_ops import load_boxes, load_injects, load_packet_passwords
 from constants import SCORING_ENGINE_VMID
-from utils import compfile_flag, load_compfile, load_users_config
+from utils import compfile_flag, env_summary, load_compfile, load_users_config
 
 
 def resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid):
@@ -52,6 +52,12 @@ def load_competition_spec(spec, comp_dir):
     boxes. Known-broken templates only warn — the competition may predate the fix, and
     the deploy still has to be able to refuse later on its own terms."""
     spec.name, spec.scenario, spec.difficulty = load_compfile(comp_dir / "Compfile")
+    # A comp dir that arrived by git (stage_author authoring, manual copy, fresh clone)
+    # lacks compile-packet's gitignored secret layer; without it the machine list has
+    # no packet-promised decoy/local accounts and the harness's pre-T0 verify --packet
+    # aborts the run (live-found 2026-10-04, scrim-reset). Compile-on-demand here.
+    from packet_ops import ensure_packet_secrets
+    ensure_packet_secrets(comp_dir)
     spec.box_username, spec.credlist_usernames = load_users_config(comp_dir)
     # nakon --jobs pass-through (M1.2): per-machine work is atomic in nakon's runner, so N
     # machines plant concurrently with each machine's step order (disruptive last) intact.
@@ -66,6 +72,7 @@ def load_competition_spec(spec, comp_dir):
     spec.comp_name = comp_dir.name
     print(f"\n{'='*60}")
     print(f"  Deploying {spec.comp_name}")
+    print(f"  {env_summary()}")
     print(f"{'='*60}\n")
 
     spec.boxes = load_boxes(comp_dir)

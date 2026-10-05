@@ -215,4 +215,4 @@ def mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty):
         raise SystemExit(
             f"\n  {len(still_broken)} box(es) remain broken after the full reset ladder — "
             f"diagnose by hand (verify-competition.py, engine console) before re-running.")
-    return fixed
+    return fixed, levels

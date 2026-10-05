@@ -14,6 +14,8 @@ guard (destroy_vm_if_exists) classify a VM with the same pure function, `ownersh
 Only OWNED and MARKER VMs are ever touched. A same-comp VM without this run's tag is a DIFFERENT
 worktree's run (2026-10-02 near-miss) and is MISSING, never reclaimed."""
 
+import os
+
 from pve_api import proxmox_api, wait_for_proxmox_task
 
 OWNED = "owned"
@@ -34,6 +36,19 @@ def clone_marker(comp_name):
     slot that preflight called "foreign" and blocked every later deploy (winad-testrun
     2026-09-25). The description exists from the first instant of the clone."""
     return f"tezcatlipoca-clone comp-{comp_name}"
+
+
+def full_clone_data(newid, name, comp_name):
+    """POST body for a full clone: ownership marker + TF_VAR_datastore.
+
+    A full clone with no `storage` inherits the SOURCE's pool, so a golden cloned from a
+    base template on one pool silently landed there instead of on the pool the comp was
+    told to use (live-found 2026-10-04). One definition for every golden / smoke clone."""
+    data = {"newid": newid, "name": name, "full": 1, "description": clone_marker(comp_name)}
+    storage = os.environ.get("TF_VAR_datastore")
+    if storage:
+        data["storage"] = storage
+    return data
 
 
 def has_clone_marker(node, vmid, comp_name):

@@ -1,5 +1,8 @@
 import json
 import os
+from pathlib import Path
+
+from config_ops import write_text_atomic
 
 from scrim import core
 from scrim import endpoints
@@ -57,9 +60,13 @@ def teardown_red(args, env):
     # 2026-10-03: the manual re-run succeeded in seconds). Identity guards live inside
     # badauto, so a retry cannot widen what may be deleted.
     proc = None
+    # The --competition value must be the SAME string stage_red wrote into config.yaml's
+    # competition_dir (the resolved path): bad-auto's destroy cross-checks the two and
+    # refuses a mismatch (both 2026-10-03 teardowns failed on the bare name).
+    comp_path = str((core.REPO / "competitions" / args.competition).resolve())
     for attempt in (1, 2):
         proc = procs.run(["python3", "-m", "badauto", "destroy", "--competition",
-                          args.competition, "--yes"],
+                          comp_path, "--yes"],
                          cwd=core.BAD_AUTO, env=env, timeout=900, check=False)
         if proc.returncode == 0:
             break
@@ -68,6 +75,17 @@ def teardown_red(args, env):
                 f"retrying once before failing the teardown"
                 + (f"; stderr: {(proc.stderr or '')[-300:]}" if proc.stderr else ""))
         else:
+            # Leave the evidence where the post-mortem will look: the test folder
+            # survives the harness crash and the archive carries it out of the worktree.
+            test_dir = getattr(args, "test_dir", None)
+            if test_dir:
+                try:
+                    write_text_atomic(
+                        Path(test_dir) / "bad-auto-destroy.log",
+                        (proc.stdout or "") + "\n=== STDERR ===\n" + (proc.stderr or ""),
+                        mode=0o600)
+                except OSError as e:
+                    log(f"WARNING: could not write bad-auto-destroy.log: {e}")
             raise RuntimeError(
                 f"badauto destroy failed (rc={proc.returncode}) — red01 and its engine NAT "
                 f"rules may still be up. stderr tail: {(proc.stderr or '(captured nothing)')[-500:]}. "

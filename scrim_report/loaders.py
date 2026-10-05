@@ -114,6 +114,16 @@ def load_scoreboard(run_dir):
     return sorted(out, key=lambda rec: rec[0])
 
 
+def load_pacing(run_dir):
+    """red's concurrent-down caps from the run manifest ({} for legacy run dirs)."""
+    try:
+        run = json.loads((Path(run_dir) / RUN_MANIFEST).read_text())
+        pacing = run.get("pacing")
+        return pacing if isinstance(pacing, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def load_final_scoreboard(run_dir):
     """The stage_capture evidence dump (all teams, taken before teardown destroys the DB)."""
     try:

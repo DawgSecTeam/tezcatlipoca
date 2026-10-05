@@ -18,6 +18,12 @@ RUNTIME_FILES = {
 
 def stage_author(args):
     src = Path(args.from_template or DEFAULT_TEMPLATE)
+    if not src.is_dir():
+        valid = sorted(p.name for p in (core.REPO / "competitions").iterdir() if p.is_dir())
+        raise RuntimeError(
+            f"template {src} does not exist. Pass --from-template with one of "
+            f"{valid} (the default template itself is gone — competitions/ dirs are "
+            f"curated; point DEFAULT_TEMPLATE at one that ships Compfile + boxes.json).")
     dst = core.REPO / "competitions" / args.new
     if dst.exists():
         raise RuntimeError(f"{dst} already exists")
@@ -44,6 +50,11 @@ def stage_author(args):
     compfile = (dst / "Compfile").read_text().splitlines()
     compfile[0] = f"name {args.new}"
     (dst / "Compfile").write_text("\n".join(compfile) + "\n")
+    if not (dst / "injects").exists():
+        log("WARNING: template ships no injects/ — blue's inject work is structurally "
+            "impossible on this comp (2026-10-03 scrim-fresh-a: injects gate n/a and "
+            "half of blue's job missing). Author at least two under "
+            f"{dst / 'injects'} before the event.")
     log("authored (scenario/creds carry over; edit Compfile/box_vulns.json to re-theme)")
 
 
@@ -71,6 +82,11 @@ def stage_deploy(args, comp):
            "--teams", str(args.teams), "--yes"]
     if comp.joinpath(".deploy_state.json").exists() and args.resume:
         cmd += ["--from-phase", str(args.resume)]
+        # --force-resume must reach create-competition: it is the operator's answer to
+        # the resume-loop guard; without the pass-through the harness accepted the flag
+        # while the deploy refused anyway (2026-10-04).
+        if args.force_resume:
+            cmd += ["--force-from-phase"]
     r = procs.run(cmd, cwd=core.REPO, timeout=6 * 3600, check=False)
     if r.returncode != 0 and args.run_dir:
         # stderr too: the phase-4 checkpoint SystemExit and a phase-3 ssh timeout both

@@ -29,7 +29,7 @@
     "last_octet": 1,
     "cpu": 1,
     "memory_mb": 512,
-    "disk_gb": 12,
+    "disk_gb": null,
     "template": "pfsense",
     "unmanaged": true,
     "in_path": true

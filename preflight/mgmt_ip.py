@@ -69,7 +69,13 @@ def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
             f"running guest ({takers.get(engine_mgmt_ip, 'unknown')}). Pick another "
             f"TF_VAR_engine_mgmt_ip (or set it to '' for DHCP). The management network is "
             f"shared across nodes, so a guest on ANY node counts.")
-    explicit = bool((os.environ.get("TF_VAR_engine_mgmt_ip") or "").strip())
+    # "Explicitly set" means the OPERATOR set it — not that the code exported the
+    # default into the same variable seconds ago (deploy_lib.inputs). A default IP the
+    # preflight cannot verify is refused outright: the .150 default (.250) drops SSH
+    # mid-build on the tailnet path (2026-10-03), and an unverifiable default was a live
+    # foreign engine's address once before that (2026-10-02).
+    explicit = (bool((os.environ.get("TF_VAR_engine_mgmt_ip") or "").strip())
+                and not os.environ.get("TEZ_ENGINE_MGMT_IP_IS_DEFAULT"))
     if unchecked:
         listing = ", ".join(unchecked[:5]) + ("..." if len(unchecked) > 5 else "")
         if not explicit:
@@ -79,7 +85,9 @@ def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
                 f"({listing}). This is the DEFAULT address, and on this estate the "
                 f"default has already been a live foreign engine's address once "
                 f"(2026-10-02). Set TF_VAR_engine_mgmt_ip to an address you have checked "
-                f"yourself (or '' for DHCP).")
+                f"yourself (or '' for DHCP). On this estate the default (.250) also "
+                f"drops SSH mid-build on the .150 tailnet path (2026-10-03) — the "
+                f"cyberrange env variants pin 10.0.0.252 instead.")
         print(f"  Preflight: engine mgmt IP {engine_mgmt_ip} — UNVERIFIED "
               f"({len(unchecked)} running guest(s) have no agent: {listing}); proceeding "
               f"because TF_VAR_engine_mgmt_ip is set explicitly")

@@ -22,7 +22,7 @@ from redeploy_gate_ops import (deployed_candidates, load_deployed_range,
                                validate_comp_name)
 from redeploy_light_ops import mode_reconfigure, mode_resync, mode_rollback
 from redeploy_plant_ops import prepare_nakon_assets
-from redeploy_rebuild_ops import mode_rebuild
+from redeploy_rebuild_ops import mode_rebuild, reconcile_terraform_state
 from redeploy_reset_ops import mode_reset
 from redeploy_select_ops import select_targets
 from utils import load_compfile, pick_competition
@@ -80,6 +80,12 @@ def main():
     parser.add_argument("--dry-run", action="store_true", dest="dry_run",
                         help="Print the resolved targets and their snapshots, then exit.")
     parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
+    parser.add_argument("--reconcile-state", action="store_true", dest="reconcile_state",
+                        help="With --mode rebuild/reset: re-sync terraform state to the "
+                             "recreated VM (state rm + import, node/vmid ID) so teardown "
+                             "and refresh work against the live box. NOTE: the bpg provider "
+                             "still plans a replacement for imported VMs (ForceNew computed "
+                             "attrs) — state hygiene, not a plan-clean guarantee.")
     parser.add_argument("--reset-event", action="store_true", dest="reset_event",
                         help="With rollback-ready/rollback-base: also restart the event from the "
                              "engine template (fresh scoring DB) and re-run phase 7, so scores "
@@ -116,6 +122,9 @@ def main():
         return
     if args.reset_event and args.mode not in ("rollback-ready", "rollback-base", "reset"):
         raise SystemExit("  ERROR: --reset-event only applies to rollback-ready/rollback-base/reset.")
+    if args.reconcile_state and args.mode not in ("rebuild", "reset"):
+        raise SystemExit("  ERROR: --reconcile-state only applies to rebuild/reset (it "
+                         "imports boxes that were recreated from templates).")
 
     targets = select_targets(comp_dir, teams, boxes, args)
     if not targets:
@@ -125,6 +134,7 @@ def main():
 
     print(f"\n{'='*64}")
     print(f"  Redeploy — {name} ({comp_name})")
+    print(f"  {pipeline_api.env_summary()}")
     print(f"{'='*64}")
     print(f"  Mode: {args.mode}")
     print(f"  {len(targets)} of {len(teams) * len(boxes)} box(es) selected:\n")
@@ -197,9 +207,19 @@ def main():
     elif args.mode == "resync":
         done = mode_resync(targets, ctx, node, comp_dir, state, state_path)
     elif args.mode == "reset":
-        done = mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty)
+        done, levels = mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty)
     else:
         done = mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_bundle)
+
+    if args.reconcile_state:
+        if args.mode == "rebuild":
+            to_import = done
+        else:
+            to_import = [t for t in done if levels.get(t["vm_name"]) == "golden rebuild"]
+        if to_import:
+            reconcile_terraform_state(to_import, ctx, comp_dir, teams, boxes)
+        else:
+            print("  --reconcile-state: nothing was rebuilt from templates — nothing to import.")
 
     if args.reset_event:
         print("\n  --reset-event: restarting the event from the engine template...")

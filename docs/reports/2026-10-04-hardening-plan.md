@@ -183,3 +183,41 @@ directly comparable to run 2's 33 — gate 9 therefore re-scores run 2's archive
 the new code and compares like-for-like. If any acceptance gate fails, the failure is
 triaged into the analysis doc the same day, per the standing rule that fixed issues leave
 `docs/known-issues.md` and git history is the record.
+
+---
+
+## Validation outcome (2026-10-05, run-f9ce55f0)
+
+Executed in worktree `tz-hardening` (branch `hardening-20261004`, merged to `main`), validated
+by a 90-minute `scrim-one` scrim on .150 (run id `run-f9ce55f0`, sealed + archived under
+`~/.tezcatlipoca/automated-tests/scrim-one/`). The deploy itself shook out four more defects,
+each fixed on the branch before the event: golden/smoke clones ignored `TF_VAR_datastore`
+(0b559d6 — they inherited the base template's pool and landed on the full one), the rollback
+re-plant raced the booting Windows guest (01ef93d), `--force-resume` never reached
+create-competition (ba9ff01), and teardown passed a bare `--competition` to badauto destroy —
+the refusal behind all three "transient" teardown rc=1s (387f10b; the captured stderr named it
+on the first occurrence, retroactively closing F3). A parallel session deepened the workstream-D
+expansion retry to span the whole boot window (b1ea097) on the same branch.
+
+| # | acceptance gate | result |
+|---|---|---|
+| 1 | T0 first harness invocation | PASS after deploy resumes (4 pre-T0 aborts were environmental: shared-pool exhaustion, splunk deb, stale known_hosts on a reused engine IP — plus the force-resume gap) |
+| 2 | verify plant_coverage PASS first pass | PASS |
+| 3 | max_simultaneous_down >= pacing end (4) | **FAIL** (2) — rotation landed (spread improved, restore-reactions 23) but the endgame burst never reached the cap |
+| 4 | spread < 40% | **FAIL** (50%) — improved, gate not met; bad-auto F2 stays open |
+| 5 | evictions >= 1 | **PASS (4)** — first recorded evictions: blue removed the frontdesk Domain Admin backdoor (an ad-group-member-win plant that only existed because the stage-split fix landed) and win02 Run-key persistence; the report now counts blue's EVICTED lines (3c6efd2) |
+| 6 | injects >= min(2, published) | PASS (11 of 12) |
+| 7 | teardown completes or names its failure | PASS — the destroy failure carried its cause in stderr; cleanup manual but 30 seconds |
+| 8 | RED-TEAM.md present | **FAIL** — red01 SSH-dark at collection again (engine-jump flap; scp retry landed, needs the deeper F4 look) |
+| 9 | score >= baseline, like-for-like | **PASS — 43 vs run 2's 16 re-scored with the same code** (11 vs 9 gates PASS) |
+| 10 | golden cache timing | n/a — NO-GO spike ([2026-10-04-golden-cache-spike.md](2026-10-04-golden-cache-spike.md)) |
+
+Both repos merged and pushed: tezcatlipoca `main` = 3ee8837 (merge of `hardening-20261004` +
+origin/main), bad-auto `main` = d110d69. Worktrees and branches removed; the validation range
+torn down `--full`; estate clean of this session's objects.
+
+**Still open** (next session's queue): bad-auto endgame breadth (F2 — the one acceptance gate
+that measured red's behavior and failed), red01 endgame SSH-dark (F4), the golden root-disk
+expansion's silent failure mode on LVM (D follow-up: the probe retry helps, but the underlying
+lvexpand never ran — the manual grow was needed again), and the two pre-existing test failures
+on `origin/main` from the parallel session's WIP (mgmt-IP gate test, webui catalog filter).

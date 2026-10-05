@@ -21,6 +21,7 @@ per-team repair stage (nakon_ops.generate_stage_configs), which still runs pre-d
 
 import json
 import os
+import time
 
 from constants import GOLDEN_CLONE_TIMEOUT, GOLDEN_TAG, SNAP_BASE, ownership_tags
 from engine_ops import ensure_nat_forwarding
@@ -31,6 +32,7 @@ from hardening_ops import (
     setup_ubuntu_auth,
 )
 from nakon_ops import build_nakon_bundle, run_nakon
+from vm_ownership import full_clone_data
 from range_ops import (
     clone_marker,
     gc_orphan_volumes,
@@ -117,9 +119,8 @@ def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_
         src = templates.get(t["box"]["template"])
         if src is None:
             raise RuntimeError(f"no stopped template named '{t['box']['template']}' on the node")
-        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone", data={
-            "newid": t["vmid"], "name": t["vm_name"], "full": 1,
-            "description": clone_marker(comp_dir.name)})["data"]
+        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone",
+                           data=full_clone_data(t["vmid"], t["vm_name"], comp_dir.name))["data"]
         wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
             "net0": f"virtio,bridge={t['bridge']}", "tags": ownership_tag_str})
@@ -157,12 +158,8 @@ def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password
             destroy_vm_if_exists(node, t["vmid"], expect_tags=None)
         else:
             gc_orphan_volumes(node, t["vmid"])
-        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone", data={
-            "newid": t["vmid"],
-            "name": t["vm_name"],
-            "full": 1,
-            "description": clone_marker(comp_dir.name),
-        })["data"]
+        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone",
+                           data=full_clone_data(t["vmid"], t["vm_name"], comp_dir.name))["data"]
         wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
             "ipconfig0": f"ip={t['ip']}/24,gw={t['gateway']}",
@@ -178,6 +175,20 @@ def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password
         print(f"    {t['box']['template']} -> {t['vm_name']} (vmid {t['vmid']})")
 
 
+def _base_volumes_missing(node, vmid):
+    """Disk volumes that still lack the base- prefix. The template conversion renames
+    volumes to base-<vmid>-disk-N; linked clones only work from those (live-found
+    2026-10-04: a golden half-converted by an interrupted POST kept template=1 on its
+    plain vm- volume, and every team clone of it died with HTTP 500 "Linked clone
+    feature is not supported")."""
+    cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+    # Disk ifaces only (ide carries the cloudinit drive; its name differs) — a volume
+    # string is "<storage>:<name>,<opts>"; the NAME is what the conversion renames.
+    volids = [str(v) for k, v in cfg.items()
+              if k.startswith(("scsi", "sata", "virtio")) and isinstance(v, str) and ":" in v]
+    return [v for v in volids if not v.split(":", 1)[1].split(",")[0].startswith("base-")]
+
+
 def _convert_goldens(node, targets, ownership_tag_str, golden_hashes):
     """Stop-barrier already passed: convert every target golden to a template (parallel,
     bound 4). Delete-then-convert stays inside one worker."""
@@ -191,6 +202,20 @@ def _convert_goldens(node, targets, ownership_tag_str, golden_hashes):
         if SNAP_BASE in list_snapshots(node, t["vmid"]):
             delete_snapshot(node, t["vmid"], SNAP_BASE)
         proxmox_api("POST", f"/nodes/{node}/qemu/{t['vmid']}/template")["data"]
+        # The POST returns no task to wait on and the rename can lag or lose the race
+        # against an interrupted session; a half-converted golden passes every hash
+        # gate and then breaks apply #2 confusingly. Verify the rename landed.
+        for _ in range(10):
+            missing = _base_volumes_missing(node, t["vmid"])
+            if not missing:
+                break
+            time.sleep(2)
+        if missing:
+            raise RuntimeError(
+                f"golden '{t['box']['name']}' (vmid {t['vmid']}) converted but its disk "
+                f"volume(s) {missing} never became base- volumes — linked clones would "
+                f"fail with 'Linked clone feature is not supported'. Destroy this golden "
+                f"and re-run phase 4 so it is rebuilt from scratch.")
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={"tags": ownership_tag_str})
         # M4: the hash lands on the template (description) AND in the comp's state —
         # reuse/rebuild decisions read it back at the next deploy's hash gate.

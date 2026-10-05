@@ -42,6 +42,10 @@ INTERNAL_ENV = {
     # into scrim.env. Never set by an operator by hand. (MY_PW is also written there
     # but is only ever consumed by the generated shell, never read by Python, so it
     # is deliberately absent here — the staleness check below would flag it.)
+    # Internal handoff within one process: deploy._engine_mgmt_ip_from_env marks its
+    # own DEFAULT export so the preflight cannot read it as an operator-set address
+    # (F5, 2026-10-04). Never set in .env.
+    "TEZ_ENGINE_MGMT_IP_IS_DEFAULT": "deploy.py -> config_ops default marker (same process)",
     "ENGINE_IP": "scrim.env handoff written by run-agent-scrim.py",
     "MY_TEAM": "scrim.env handoff written by run-agent-scrim.py",
     "JAR": "scrim.env handoff written by run-agent-scrim.py",
@@ -168,6 +172,34 @@ class NoTrackedSecrets(unittest.TestCase):
             cwd=_REPO, capture_output=True,
         )
         self.assertEqual(r.returncode, 0, "competitions/*/.automated-tests/ is not gitignored")
+
+    def test_no_runtime_state_is_tracked_in_comp_dirs(self):
+        """A competition directory ships its AUTHORING inputs, never its runtime state.
+
+        Runtime files carry this deploy's secrets (teams.json/credentials.txt are the
+        generated passwords, .deploy_state.json holds every one of them plus the run
+        identity) — and a comp dir that ships them invites a later deploy on another
+        host to adopt them as its own (wrong run id, wrong credentials, preflight
+        refusing on a phantom identity). Same reason as the artifacts rule above,
+        checked against the tracked set rather than the ignore rules.
+
+        Tracked on purpose (and NOT matched here): Compfile, boxes.json,
+        box_services.json, box_vulns.json, domain_roles.json, users.json, packet
+        inputs, injects/, pfsense seed configs."""
+        runtime = (".deploy_state.json", "teams.json", "credentials.txt",
+                   "targets.json", "nakon-config.json", ".frozen.json",
+                   ".template-hashes.json")
+        offenders = []
+        for f in _tracked_files():
+            if not f.startswith("competitions/"):
+                continue
+            name = f.rsplit("/", 1)[-1]
+            if name in runtime or (name.startswith("coverage-run") and name.endswith(".json")):
+                offenders.append(f)
+        self.assertEqual(
+            offenders, [],
+            "runtime state tracked in competition dirs — these carry this deploy's "
+            "secrets and identity:\n  " + "\n  ".join(offenders))
 
 
 class EnvVarStandard(unittest.TestCase):

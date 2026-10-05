@@ -148,7 +148,7 @@ class RedeployCliOffline(unittest.TestCase):
         def rec(name):
             def f(*a, **k):
                 calls[name] = (a, k)
-                return []
+                return ([], {}) if name == "mode_reset" else []
             return f
 
         patches = {n: rec(n) for n in ("mode_rollback", "mode_reconfigure", "mode_resync",

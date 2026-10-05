@@ -1,0 +1,3 @@
+name fw-live-2026-10-04
+scenario Live validation of the pipeline-v3 in-path firewall: one team behind a per-team pfSense (fw01) cloned from template 956, engine routing team traffic through the transit /30. Two scored Linux boxes prove plants and scoring work through the firewall.
+difficulty 3

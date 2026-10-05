@@ -41,6 +41,7 @@ from nakon_run_ops import (  # noqa: F401
     NakonResult,
     _deploy_owner_check,
     _nothing_answered,
+    _reconcile_zero_step_machines,
     run_nakon,
     _run_single_nakon_config,
 )
@@ -80,6 +81,7 @@ __all__ = [
     'NakonResult',
     '_deploy_owner_check',
     '_nothing_answered',
+    '_reconcile_zero_step_machines',
     'run_nakon',
     '_run_single_nakon_config',
 ]
