@@ -895,18 +895,22 @@ def expand_guest_root_disks(targets, ctx):
         "df -h /"
     )
     for t in targets:
-        # The grow itself is retried: a just-booted golden can transiently lack its
-        # device-mapper node (live-found 2026-09-29: the ubuntu golden's /dev/dm-0
-        # appeared seconds after resize2fs died with "No such file or directory").
+        # The grow itself is retried across the whole boot window: a fresh golden's
+        # SSH can be dark for MINUTES under node load (live-found 2026-10-04, the
+        # scrim-one validation: 3x15s of retries all landed inside the dark window,
+        # the expansion was skipped, and splunk01's plant then died on ENOSPC — the
+        # 45s budget assumed a blip, the reality is minutes). Escalating backoff
+        # spans ~6.5 min; each attempt is also the SSH-wait, so no separate probe
+        # phase is needed.
         r = None
-        for attempt in range(3):
+        for attempt, backoff in enumerate((15, 30, 45, 60, 60, 60, 60, 60), 1):
             r = ssh_via_gateway(ctx, t["ip"], f"sudo -H sh -c {shlex.quote(script)}",
                                 timeout=120, user=ctx.get("box_username", "ubuntu"))
             if r.returncode == 0:
                 break
-            print(f"    {t['ip']}: root-disk expansion attempt {attempt + 1} failed "
+            print(f"    {t['ip']}: root-disk expansion attempt {attempt} failed "
                   f"(rc={r.returncode}) — retrying")
-            time.sleep(15)
+            time.sleep(backoff)
         out = (r.stdout or "").strip()
         if r.returncode != 0:
             # Expansion is an ENOSPC guard, not a correctness gate. Fail ONLY when the
@@ -916,12 +920,12 @@ def expand_guest_root_disks(targets, ctx):
             # (live-found 2026-09-29 x3: ssh to the fresh golden flaky for minutes,
             # every box healthy afterwards) — warn and continue; a genuinely undersized
             # root dies loudly at first big plant, named by the plant coverage gate.
-            # The probe gets the SAME retry budget as the grow: a single immediate
-            # attempt inherited the boot-window flakiness and recorded a permanent
-            # "size unmeasurable" degradation on healthy boxes (2026-10-03: x1 + x4
-            # on two .150 runs).
+            # The probe gets the SAME boot-window budget as the grow: a short retry
+            # inherited the flakiness and recorded a permanent "size unmeasurable"
+            # degradation on healthy boxes (2026-10-03: x1 + x4 on two .150 runs;
+            # 2026-10-04: still unmeasurable at 3x15s — the dark window is minutes).
             size_gb = 0.0
-            for attempt in range(3):
+            for attempt, backoff in enumerate((15, 30, 45, 60, 60, 60, 60), 1):
                 try:
                     probe = ssh_via_gateway(ctx, t["ip"],
                                             "df -BK / | awk 'NR==2{print $2}'",
@@ -932,8 +936,8 @@ def expand_guest_root_disks(targets, ctx):
                         break
                 except (ValueError, IndexError, Exception):
                     size_gb = 0.0
-                if attempt < 2:
-                    time.sleep(15)
+                if attempt < 7:
+                    time.sleep(backoff)
             need_gb = max(int(t.get("disk_gb") or 10) - 4, 1)
             if size_gb and size_gb < need_gb:
                 raise RuntimeError(f"root-disk too small on golden {t['ip']} "
