@@ -31,6 +31,9 @@ from ssh_ops import ssh_on_gateway
 # port: the engine already runs the quotient stack (80/443), apt-cacher (3142), postgres
 # and redis, and the port is typed character-by-character into a console.
 FW_CONFIG_PORT = 8611
+# (port, label) of engine services boxes reach at the team gateway address. apt-cacher-ng
+# is the one every box needs (prep_apt's apt proxy points at 192.168.<id>.1:3142).
+ENGINE_GATEWAY_SERVICES = ((3142, "apt-cacher"),)
 # pfSense 2.7.2 boots to its console menu in well under a minute; this is the settle
 # wait before the first (and every re-) drive of the menu, so keystrokes never land in
 # the FreeBSD loader where they would abort autoboot.
@@ -42,7 +45,7 @@ SSH_PROBE_BUDGET_S = 600
 # outside this set, and a silent wrong key would strand a firewall mid-bootstrap.
 _KEY_NAMES = {".": "dot", "/": "slash", "-": "minus", "_": "shift-minus",
               ",": "comma", "=": "equal", " ": "spc", "\n": "ret",
-              ":": "shift-semicolon", "@": "shift-2"}
+              ":": "shift-semicolon", "@": "shift-2", "|": "shift-backslash"}
 
 
 def key_sequence(text):
@@ -130,9 +133,51 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None):
 \t\t\t</destination>
 \t\t</rule>
 \t\t"""
-    x = x.replace("\t\t<rule>", "\t\t" + wan_rule + "<rule>", 1)
+    # The deploy's success probe (and later admin access) is SSH from the engine to the
+    # firewall's own WAN address. pfSense blocks WAN-inbound to itself by default and the
+    # rule above only matches traffic destined to the LAN, so without this the probe can
+    # never answer even though the config applied (live-found 2026-10-05, pfsense-ad).
+    # Source is pinned to the engine's transit address: the transit /30 has no other host.
+    ssh_rule = f"""<rule>
+\t\t\t<type>pass</type>
+\t\t\t<ipprotocol>inet</ipprotocol>
+\t\t\t<descr><![CDATA[Allow engine SSH to the firewall]]></descr>
+\t\t\t<interface>wan</interface>
+\t\t\t<tracker>0100000202</tracker>
+\t\t\t<protocol>tcp</protocol>
+\t\t\t<source>
+\t\t\t\t<address>172.31.{tid}.1</address>
+\t\t\t</source>
+\t\t\t<destination>
+\t\t\t\t<network>(self)</network>
+\t\t\t\t<port>22</port>
+\t\t\t</destination>
+\t\t</rule>
+\t\t"""
+    x = x.replace("\t\t<rule>", "\t\t" + wan_rule + ssh_rule + "<rule>", 1)
 
     nat_rows = "\t\t\t<outbound>\n\t\t\t\t<mode>disabled</mode>\n\t\t\t</outbound>\n"
+    # Services the boxes reach at the gateway address (apt-cacher via the 95proxy
+    # apt.conf) live on the engine; once the firewall owns that address they must be
+    # redirected to the engine's transit address (live-found 2026-10-05: every Linux
+    # domain-join failed on `Unable to connect to 192.168.<id>.1:3142`).
+    for port, desc in ENGINE_GATEWAY_SERVICES:
+        nat_rows += f"""\t\t\t<rule>
+\t\t\t\t<interface>lan</interface>
+\t\t\t\t<ipprotocol>inet</ipprotocol>
+\t\t\t\t<protocol>tcp</protocol>
+\t\t\t\t<source>
+\t\t\t\t\t<any></any>
+\t\t\t\t</source>
+\t\t\t\t<destination>
+\t\t\t\t\t<address>192.168.{tid}.1</address>
+\t\t\t\t\t<port>{port}</port>
+\t\t\t\t</destination>
+\t\t\t\t<target>172.31.{tid}.1</target>
+\t\t\t\t<local-port>{port}</local-port>
+\t\t\t\t<descr><![CDATA[{desc} (engine service at the old gateway address)]]></descr>
+\t\t\t\t<associated-rule-id></associated-rule-id>
+\t\t\t</rule>\n"""
     for spec in red_dnat_spec or []:
         port, target = spec.split("->", 1)
         target = target.replace("{tid}", tid)
@@ -276,7 +321,30 @@ def _probe_tcp(ssh_ctx, ip, port, timeout=4):
     return "UP" in (r.stdout or "")
 
 
-def _drive_console(node, vmid, identifier, config_url):
+def _wait_tcp(ssh_ctx, ip, port, budget_s=300, interval_s=10):
+    """_probe_tcp, retried until `budget_s` elapses (convergence after a network change)."""
+    deadline = time.time() + budget_s
+    while True:
+        if _probe_tcp(ssh_ctx, ip, port, timeout=8):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(interval_s)
+
+
+def fetch_command(config_url, fallback_url=None):
+    """The console `fetch` line. Before the engine cutover the engine still owns the team
+    gateway address, so config_url (on it) works. After the cutover that address is the
+    firewall itself, so a re-run's fetch would hit the firewall; the fallback is the
+    engine's transit address, reachable over the firewall's already-configured WAN
+    (live-found 2026-10-05). `||` so a failed first fetch never clobbers the second."""
+    cmd = f"fetch -o /cf/conf/config.xml {config_url}"
+    if fallback_url:
+        cmd += f" || fetch -o /cf/conf/config.xml {fallback_url}"
+    return cmd
+
+
+def _drive_console(node, vmid, identifier, config_url, fallback_url=None):
     """One full menu→shell→fetch→reboot drive. Runs only after CONSOLE_SETTLE_S, so a
     booting system is never interrupted mid-loader."""
     time.sleep(3)  # let any pending console output flush before we take the keyboard
@@ -287,7 +355,7 @@ def _drive_console(node, vmid, identifier, config_url):
     type_into_console(node, vmid,
                       f"ifconfig vtnet1 inet 192.168.{identifier}.250/24 up")
     time.sleep(2)
-    type_into_console(node, vmid, f"fetch -o /cf/conf/config.xml {config_url}")
+    type_into_console(node, vmid, fetch_command(config_url, fallback_url))
     time.sleep(12)  # fetch + config apply on the appliance's own disk
     type_into_console(node, vmid, "reboot")
 
@@ -322,6 +390,7 @@ def bootstrap_firewalls(node, teams, fw_targets, config_paths, ssh_ctx,
         for t in fw_targets:
             tid = t["identifier"]
             url = f"http://192.168.{tid}.1:{FW_CONFIG_PORT}/config-team{tid}.xml"
+            fallback_url = f"http://172.31.{tid}.1:{FW_CONFIG_PORT}/config-team{tid}.xml"
             log(f"  Bootstrapping {t['team_key']}'s firewall (vmid {t['vmid']}, "
                 f"WAN 172.31.{tid}.2)... console drive → fetch → reboot")
             deadline = time.time() + SSH_PROBE_BUDGET_S
@@ -329,7 +398,7 @@ def bootstrap_firewalls(node, teams, fw_targets, config_paths, ssh_ctx,
             while True:
                 attempt += 1
                 log(f"    console drive #{attempt} (settle {CONSOLE_SETTLE_S}s first)")
-                _drive_console(node, t["vmid"], tid, url)
+                _drive_console(node, t["vmid"], tid, url, fallback_url)
                 # One full boot cycle worth of probing per drive: the fetched config
                 # enables SSH, so an answer on the WAN address IS the success signal.
                 cycle_end = min(deadline, time.time() + CONSOLE_SETTLE_S + 120)
@@ -420,7 +489,9 @@ def verify_in_path(ssh_ctx, teams, managed_first_ip, log=print):
                             f"172.31.{tid}.2 (got: {(r.stdout or '').strip()[:80]})")
             continue
         box_ip = managed_first_ip.get(k)
-        if box_ip and not _probe_tcp(ssh_ctx, box_ip, 22, timeout=8):
+        # The cutover just moved the gateway MAC: give ARP/routing a bounded window to
+        # converge instead of failing on the first probe (live-found 2026-10-05).
+        if box_ip and not _wait_tcp(ssh_ctx, box_ip, 22):
             failures.append(f"{k}: first managed box {box_ip}:22 not reachable through "
                             "the firewall — check the WAN pass rule loaded (pfctl -sr)")
     if failures:

@@ -59,6 +59,18 @@ class KeySequence(unittest.TestCase):
 
 
 class TeamConfig(unittest.TestCase):
+    def test_wan_allows_only_the_engine_to_ssh_the_firewall(self):
+        """The phase-5 success probe is SSH to the firewall's own WAN address; pfSense blocks
+        WAN-inbound to itself unless a rule says otherwise (live-found 2026-10-05)."""
+        out = generate_team_config(SEED, "120")
+        at = out.index("Allow engine SSH to the firewall")
+        rule = out[out.rindex("<rule>", 0, at):out.index("</rule>", at)]
+        self.assertIn("<interface>wan</interface>", rule)
+        self.assertIn("<protocol>tcp</protocol>", rule)
+        self.assertIn("<address>172.31.120.1</address>", rule)   # engine transit only
+        self.assertIn("<network>(self)</network>", rule)
+        self.assertIn("<port>22</port>", rule)
+
     def test_in_path_addresses_and_rules(self):
         out = generate_team_config(SEED, "120")
         # interfaces swapped wholesale: WAN transit /30, LAN = the team gateway
@@ -72,9 +84,20 @@ class TeamConfig(unittest.TestCase):
         # the pfsense-ad 2026-09-28 bug: <network> takes the `lan` keyword, never a CIDR
         self.assertIn("<network>lan</network>", out)
         self.assertNotIn("<network>192.168.120.0/24</network>", out)
-        # the WAN pass rule must be filter's FIRST rule (before the nat block's rules)
-        first_rule = out[out.index("<rule>"):out.index("</rule>")]
+        # the WAN pass rule must be the FILTER section's first rule
+        flt = out[out.index("<filter>"):]
+        first_rule = flt[flt.index("<rule>"):flt.index("</rule>")]
         self.assertIn("Allow engine scoring", first_rule)
+
+    def test_apt_cacher_is_redirected_to_the_engine_by_default(self):
+        """Boxes' apt proxy is the gateway address; the firewall owns it after cutover."""
+        out = generate_team_config(SEED, "123")
+        at = out.index("apt-cacher (engine service")
+        rule = out[out.rindex("<rule>", 0, at):out.index("</rule>", at)]
+        self.assertIn("<address>192.168.123.1</address>", rule)
+        self.assertIn("<port>3142</port>", rule)
+        self.assertIn("<target>172.31.123.1</target>", rule)
+        self.assertIn("<interface>lan</interface>", rule)
 
     def test_dnat_spec_targets_and_substitution(self):
         out = generate_team_config(SEED, "121", red_dnat_spec=["4470->10.200.0.{tid}"])
@@ -84,7 +107,9 @@ class TeamConfig(unittest.TestCase):
 
     def test_no_dnats_no_forward_rule(self):
         out = generate_team_config(SEED, "122")
-        self.assertNotIn("<target>", out)
+        # no red DNATs: the only redirect is the engine's apt-cacher
+        self.assertEqual(out.count("<target>"), 1)
+        self.assertIn("<target>172.31.122.1</target>", out)
         self.assertIn("<mode>disabled</mode>", out)
 
 
@@ -99,6 +124,50 @@ class CutoverNetplan(unittest.TestCase):
         self.assertIn("    ens22:\n      addresses: [\"172.31.121.1/30\"]", yaml)
         self.assertIn("- to: \"192.168.120.0/24\"\n          via: \"172.31.120.2\"", yaml)
         self.assertIn("- to: \"192.168.121.0/24\"\n          via: \"172.31.121.2\"", yaml)
+
+
+class FetchCommand(unittest.TestCase):
+    """After the cutover the gateway address is the firewall itself, so a re-run's fetch needs
+    the engine's transit address as a fallback (live-found 2026-10-05)."""
+
+    def test_fallback_is_chained_with_or_so_a_failed_fetch_never_clobbers_the_second(self):
+        from firewall_ops import fetch_command
+        cmd = fetch_command("http://192.168.7.1:8611/c.xml", "http://172.31.7.1:8611/c.xml")
+        self.assertEqual(cmd, "fetch -o /cf/conf/config.xml http://192.168.7.1:8611/c.xml "
+                              "|| fetch -o /cf/conf/config.xml http://172.31.7.1:8611/c.xml")
+
+    def test_no_fallback_is_the_plain_fetch(self):
+        from firewall_ops import fetch_command
+        self.assertEqual(fetch_command("http://x/c.xml"),
+                         "fetch -o /cf/conf/config.xml http://x/c.xml")
+
+    def test_the_whole_command_is_typeable(self):
+        from firewall_ops import fetch_command, key_sequence
+        key_sequence(fetch_command("http://192.168.7.1:8611/c-1.xml", "http://172.31.7.1:8611/c-1.xml"))
+        self.assertIn("shift-backslash", key_sequence("a || b"))
+
+
+class VerifyInPathConvergence(unittest.TestCase):
+    """The cutover moves the gateway MAC; the box probe must retry, not fail on probe #1."""
+
+    def test_box_probe_retries_until_it_answers(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        answers = iter([False, False, True])
+        clock = {"t": 0.0}
+        with patch.object(fo, "_probe_tcp", side_effect=lambda *a, **k: next(answers)), \
+                patch.object(fo.time, "time", side_effect=lambda: clock["t"]), \
+                patch.object(fo.time, "sleep", side_effect=lambda s: clock.update(t=clock["t"] + s)):
+            self.assertTrue(fo._wait_tcp(None, "192.168.1.2", 22))
+
+    def test_box_probe_gives_up_after_the_budget(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        clock = {"t": 0.0}
+        with patch.object(fo, "_probe_tcp", return_value=False), \
+                patch.object(fo.time, "time", side_effect=lambda: clock["t"]), \
+                patch.object(fo.time, "sleep", side_effect=lambda s: clock.update(t=clock["t"] + s)):
+            self.assertFalse(fo._wait_tcp(None, "192.168.1.2", 22, budget_s=30, interval_s=10))
 
 
 if __name__ == "__main__":

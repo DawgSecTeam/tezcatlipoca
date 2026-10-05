@@ -53,9 +53,11 @@ class RunNakonAndHardenTests(unittest.TestCase):
                  patch.object(pipeline_api, "run_nakon",
                               return_value=MagicMock(failed=[])) as p_nakon, \
                  patch.object(pipeline_api, "fix_services_on_boxes") as p_fix:
+                cfg = comp_dir / "nakon-config.json"
+                cfg.write_text(json.dumps(
+                    {"machines": [{"name": t["machine"]} for t in targets]}))
                 redeploy_plant_ops.run_nakon_and_harden(
-                    targets, ctx, comp_dir, {},
-                    comp_dir / "nakon-config.json", comp_dir / "bundle")
+                    targets, ctx, comp_dir, {}, cfg, comp_dir / "bundle")
         return p_dns, p_auth, p_nakon, p_fix
 
     def test_mixed_input_hardens_linux_only(self):
