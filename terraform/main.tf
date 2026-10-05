@@ -157,8 +157,10 @@ locals {
   # Ownership tags for the parallel cleanup sweep's defense-in-depth check (M1.4):
   # phase 1 refuses to destroy a tagged VM whose tags lack these. event_name is the
   # competition name (validated [a-z0-9._-] at creation); the replace() only matters
-  # for hand-written tfvars.
-  comp_tag = "comp-${replace(lower(var.event_name), " ", "-")}"
+  # for hand-written tfvars. var.competition (the competitions/<dir> name, which every
+  # Python ownership guard uses) wins over event_name: a Compfile name that differs from
+  # its directory (e.g. a dated name) must not split the tag the guards look for.
+  comp_tag = "comp-${replace(lower(var.competition != "" ? var.competition : var.event_name), " ", "-")}"
 }
 
 resource "proxmox_virtual_environment_vm" "scoring_engine" {

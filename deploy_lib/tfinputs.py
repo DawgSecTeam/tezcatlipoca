@@ -89,6 +89,7 @@ def build_terraform_inputs(terraform, comp_dir, spec, secrets, identity, place):
         "box_password": secrets.box_password,
         "box_username": spec.box_username,
         "event_name": spec.name,
+        "competition": spec.comp_name,
         "scoring_vm_id": identity.engine_vmid,
         "ssh_private_key_path": terraform.ssh_key_abs,
         # M3.3 two-apply: apply #1 (phase 2) builds the engine + bridges with an empty

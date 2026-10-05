@@ -44,6 +44,12 @@ variable "box_password" {
   sensitive   = true
 }
 
+variable "competition" {
+  description = "The competitions/<dir> name — the ownership tag's source (falls back to event_name)."
+  type        = string
+  default     = ""
+}
+
 variable "event_name" {
   type    = string
   default = "Range 2026"

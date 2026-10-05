@@ -142,7 +142,7 @@ class MultinodeOfflineE2E(unittest.TestCase):
                                            engine_mgmt_ip="10.0.0.250", check_free=True)
 
         # terraform inputs: satellite providers/routes + per-team slots
-        spec = SimpleNamespace(boxes=BOXES, box_username="ubuntu", name="mn")
+        spec = SimpleNamespace(boxes=BOXES, box_username="ubuntu", name="mn", comp_name="mn")
         secrets = SimpleNamespace(teams=TEAMS, box_password="bp", state={}, run_id="run-0badf00d")
         identity = SimpleNamespace(engine_vmid=1000)
         place = SimpleNamespace(placement=placement)
