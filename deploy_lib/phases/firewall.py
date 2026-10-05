@@ -15,18 +15,17 @@ def phase5_firewall_bootstrap(ctx):
     """[5/8] Bootstrap the in-path firewalls, then cut the engine over.
 
     Runs only when the lineup declares an `in_path` box (an unmanaged firewall): every
-    team's pfSense console is driven to fetch its per-team config.xml from the engine
-    (which still owns 192.168.<id>.1 at this point — that IS the fetch path), then the
-    engine cutover moves the gateway address onto the firewalls and points the engine's
+    team's pfSense (a clone of the `pfsense-provision` template) gets its per-team
+    config.xml pushed over SSH through the engine, then the engine cutover moves the gateway address onto the firewalls and points the engine's
     routes through the transit /30s. From here on every engine→box path (repair sweep,
     final pass, beacons, scoring) is verified to run THROUGH the firewall.
 
     No firewalls in the lineup: print-and-return — the phase index stays stable, so
     checkpoints and resume banners never depend on the box lineup.
 
-    Resumable: a --from-phase 5 re-drives every console (the fetch is idempotent) and
-    re-runs the cutover (the netplan rewrite is idempotent); the completion flag is
-    written for reporting, not for skipping."""
+    Resumable: a --from-phase 5 re-pushes every config (a firewall whose config already
+    matches is left alone, no reboot) and re-runs the cutover (the netplan rewrite is
+    idempotent); the completion flag is written for reporting, not for skipping."""
     if ctx.from_phase > 5:
         print("[5/8] Skipped (resume).")
         return
@@ -34,7 +33,7 @@ def phase5_firewall_bootstrap(ctx):
     if not fw_targets:
         print("[5/8] No in-path firewall in this lineup — skipping.")
         return
-    print("[5/8] Bootstrapping the in-path firewalls (console → fetch → reboot → "
+    print("[5/8] Bootstrapping the in-path firewalls (SSH config push → reboot → "
           "engine cutover)...")
     if ctx.placement and ctx.placement["satellites"]:
         raise SystemExit(
@@ -46,8 +45,7 @@ def phase5_firewall_bootstrap(ctx):
         config_paths = write_team_configs(ctx.comp_dir, ctx.teams,
                                           red_dnat_spec=red_dnat_spec)
     with timed(ctx.comp_dir, 5, "firewall_bootstrap", f"x{len(fw_targets)}"):
-        bootstrap_firewalls(ctx.node, ctx.teams, fw_targets, config_paths, ctx.tf_ctx,
-                            red_dnat_spec=red_dnat_spec, comp_name=ctx.comp_name)
+        bootstrap_firewalls(ctx.teams, fw_targets, config_paths, ctx.tf_ctx)
     with timed(ctx.comp_dir, 5, "engine_cutover"):
         cut_over_engine(ctx.tf_ctx, ctx.teams)
     # The first managed box of each team (boxes.json order) proves the routed path a

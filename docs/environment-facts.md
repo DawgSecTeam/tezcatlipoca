@@ -78,10 +78,14 @@ cloud-init drive passes the preflight but its clones boot unreachable. Measured 
 `1016 base-fedora44-fix`, `127 base-alpine3.23`, plus the challenge/workshop templates tagged
 `cloud-init` (`112`, `132`, `140`, `153`, …).
 
-**cyberrange .150 — appliance (no cloud-init by design):** `956 pfsense` — the in-path
-firewall template (`unmanaged` + `in_path` boxes clone straight from it; the cloud-init rule
-above does not apply to unmanaged boxes). Only exists on .150 — a firewall lineup needs it
-synced (or rebuilt) on any other node before preflight will pass.
+**cyberrange .150 — appliance (no cloud-init by design):** `957 pfsense-provision` — the
+in-path firewall template (`unmanaged` + `in_path` boxes clone straight from it; the cloud-init
+rule above does not apply to unmanaged boxes). It is the stock `956 pfsense` plus SSH on, the
+deploy key in admin's authorizedkeys, LAN `vtnet1` = 192.168.1.1/24 and a serial console —
+built once by `tools/build-pfsense-provision-template.py` (clone 956 → type the config edits at
+the console → halt → convert). 956 stays only as the builder's source. Only exists on .150 — a
+firewall lineup needs it synced (or rebuilt with the tool) on any other node before preflight
+will pass.
 
 **cyberrange .150 — NOT usable (no cloud-init drive):** `106 base-ubuntu24.04`,
 `920 base-debian13-cloudinit` ⚠️, `103 base-ubuntu20.04`, `109 base-fedora44`.

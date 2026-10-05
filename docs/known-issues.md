@@ -23,19 +23,6 @@ idempotent). `verify-competition.py`'s `firewall_in_path` gate now detects the d
 via the transit /30, firewall silent, or the gateway back on the engine). Owning the cutover inside terraform would need the firewall config state round-tripped
 into tfvars — deferred until a deploy actually needs it.
 
-### pfSense console bootstrap is blind typing
-
-**Status: OPEN — accepted risk, mitigated.** The QEMU monitor API offers `sendkey` but no screen
-reading (PVE's `screendump` writes a host file the API cannot read back; `termproxy` is serial-only
-and the pfSense template's console is VGA). `firewall_ops` therefore drives the menu blind:
-`CONSOLE_SETTLE_S=90` keeps keystrokes out of the FreeBSD loader, the drive sequence is idempotent,
-and success is judged functionally — the fetched config enables SSH, so the WAN probe IS the signal.
-A team that never comes up gets a console PNG (`logs/fw-console-<comp>-<team>.png`) plus a re-drive
-hint; the fallback for a wedged console is the manual runbook
-([pfsense-inpath-2026-09-28.md](pfsense-inpath-2026-09-28.md)). A provisioning-friendly pfSense
-template (serial console + SSH on) would replace the whole dance — template work, not code work.
-
-
 ### Planted Linux boxes deny all SSH at the PAM account stage after a restart
 
 **Status: OPEN — root cause unsolved.** Phase-5-planted team1 Linux boxes stop accepting SSH entirely

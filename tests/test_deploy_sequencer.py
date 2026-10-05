@@ -65,7 +65,7 @@ RUN_BANNERS = {
     "phase5_firewall_bootstrap": [
         SKIP_BANNERS[4],
         "[5/8] No in-path firewall in this lineup — skipping.",
-        "[5/8] Bootstrapping the in-path firewalls (console → fetch → reboot → "
+        "[5/8] Bootstrapping the in-path firewalls (SSH config push → reboot → "
         "engine cutover)...",
     ],
     "phase6_repair_sweep": [

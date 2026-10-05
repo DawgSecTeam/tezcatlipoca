@@ -1,4 +1,4 @@
-"""In-path firewall support, offline: the sendkey mapping, the per-team pfSense config
+"""In-path firewall support, offline: the SSH config push, the per-team pfSense config
 surgery (against the same anchor stanzas the real factory seed carries), and the
 post-cutover netplan the engine cutover writes."""
 
@@ -8,8 +8,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from firewall_ops import (FW_CONFIG_PORT, cutover_netplan_yaml, generate_team_config,
-                          key_sequence)
+from firewall_ops import cutover_netplan_yaml, generate_team_config
 
 # The anchors generate_team_config's string surgery keys on — a minimal stand-in for the
 # factory config.xml (the real seed lives in competitions/*/pfsense/, not in the repo
@@ -31,6 +30,7 @@ SEED = """<?xml version="1.0"?>
 \t</interfaces>
 \t<gateways></gateways>
 \t<ssh></ssh>
+\t<user><name>admin</name></user>
 \t<filter>
 \t\t<rule>
 \t\t\t<type>pass</type>
@@ -41,21 +41,6 @@ SEED = """<?xml version="1.0"?>
 """
 TEAMS = {"team2": {"identifier": "121", "password": "x"},
          "team1": {"identifier": "120", "password": "x"}}
-
-
-class KeySequence(unittest.TestCase):
-    def test_console_commands_map_fully(self):
-        # The exact strings phase 5 types: no character may raise, and shift-combos
-        # appear only where the layout needs them.
-        seq = key_sequence(f"fetch -o /cf/conf/config.xml http://192.168.120.1:{FW_CONFIG_PORT}/config-team120.xml")
-        self.assertNotIn("shift-minus", seq)      # '-' is unshifted
-        self.assertIn("shift-semicolon", seq)     # ':'
-        self.assertEqual(seq.count("dot"), 5)
-        self.assertEqual(key_sequence("reboot"), ["r", "e", "b", "o", "o", "t"])
-
-    def test_unknown_char_raises_loudly(self):
-        with self.assertRaises(ValueError):
-            key_sequence("echo 'quote'")
 
 
 class TeamConfig(unittest.TestCase):
@@ -126,25 +111,114 @@ class CutoverNetplan(unittest.TestCase):
         self.assertIn("- to: \"192.168.121.0/24\"\n          via: \"172.31.121.2\"", yaml)
 
 
-class FetchCommand(unittest.TestCase):
-    """After the cutover the gateway address is the firewall itself, so a re-run's fetch needs
-    the engine's transit address as a fallback (live-found 2026-10-05)."""
+class AuthorizedKey(unittest.TestCase):
+    def test_key_lands_in_admins_authorizedkeys(self):
+        import base64
+        out = generate_team_config(SEED, "120", authorized_key="ssh-ed25519 AAAA test@x")
+        self.assertIn("<name>admin</name><authorizedkeys>"
+                      + base64.b64encode(b"ssh-ed25519 AAAA test@x\n").decode()
+                      + "</authorizedkeys>", out)
 
-    def test_fallback_is_chained_with_or_so_a_failed_fetch_never_clobbers_the_second(self):
-        from firewall_ops import fetch_command
-        cmd = fetch_command("http://192.168.7.1:8611/c.xml", "http://172.31.7.1:8611/c.xml")
-        self.assertEqual(cmd, "fetch -o /cf/conf/config.xml http://192.168.7.1:8611/c.xml "
-                              "|| fetch -o /cf/conf/config.xml http://172.31.7.1:8611/c.xml")
+    def test_no_key_leaves_the_config_alone(self):
+        self.assertNotIn("authorizedkeys", generate_team_config(SEED, "120"))
 
-    def test_no_fallback_is_the_plain_fetch(self):
-        from firewall_ops import fetch_command
-        self.assertEqual(fetch_command("http://x/c.xml"),
-                         "fetch -o /cf/conf/config.xml http://x/c.xml")
 
-    def test_the_whole_command_is_typeable(self):
-        from firewall_ops import fetch_command, key_sequence
-        key_sequence(fetch_command("http://192.168.7.1:8611/c-1.xml", "http://172.31.7.1:8611/c-1.xml"))
-        self.assertIn("shift-backslash", key_sequence("a || b"))
+class PushCommand(unittest.TestCase):
+    def test_push_installs_only_when_different_and_reboots_detached(self):
+        import firewall_ops as fo
+        cmd = fo._push_command("<pfsense/>")
+        self.assertIn("openssl base64 -d -A", cmd)
+        self.assertIn("cmp -s /tmp/tez-new.xml /cf/conf/config.xml", cmd)
+        self.assertIn("rm -f /tmp/config.cache", cmd)
+        self.assertIn("nohup sh -c 'sleep 2; /sbin/reboot'", cmd)   # never hangs the ssh session
+        self.assertIn("UNCHANGED", cmd)
+
+
+class PushRetry(unittest.TestCase):
+    def _fake(self, results):
+        import subprocess
+        from unittest.mock import MagicMock
+
+        def run(*a, **k):
+            r = results.pop(0)
+            if r == "timeout":
+                raise subprocess.TimeoutExpired("ssh", 30)
+            return MagicMock(returncode=r[0], stdout=r[1], stderr="")
+        return run
+
+    def test_retries_a_booting_appliance_then_applies(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        res = ["timeout", (255, ""), (0, "APPLIED\n")]
+        with patch.object(fo, "ssh_via_gateway", side_effect=self._fake(res)), \
+                patch.object(fo.time, "sleep"):
+            self.assertEqual(fo._push_config(None, "192.168.1.1", "<x/>", "team1"), "APPLIED")
+
+    def test_gives_up_after_the_budget_naming_the_last_failure(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        clock = {"t": 0.0}
+        with patch.object(fo, "ssh_via_gateway", side_effect=lambda *a, **k: self._fake(["timeout"])()), \
+                patch.object(fo.time, "time", side_effect=lambda: clock["t"]), \
+                patch.object(fo.time, "sleep", side_effect=lambda s: clock.update(t=clock["t"] + 100)):
+            with self.assertRaises(RuntimeError) as cm:
+                fo._push_config(None, "192.168.1.1", "<x/>", "team1", budget_s=150)
+        self.assertIn("no answer within 30s", str(cm.exception))
+
+
+class BootstrapFirewalls(unittest.TestCase):
+    """The orchestration, with the engine/SSH layer faked."""
+
+    def _run(self, wan_up, push_result="APPLIED", boot_ok=True):
+        import tempfile
+        import firewall_ops as fo
+        from unittest.mock import MagicMock, patch
+        calls = []
+        with tempfile.TemporaryDirectory() as d:
+            cfg = Path(d) / "config-team120.xml"
+            cfg.write_text("<pfsense/>")
+            ssh_on = MagicMock(return_value=MagicMock(stdout="", returncode=0))
+
+            def probe(ctx, ip, port, timeout=4):
+                return wan_up if ip == "172.31.120.2" else False
+
+            def wait(ctx, ip, port, budget_s=300, interval_s=10):
+                calls.append(("wait", ip))
+                return boot_ok if ip == fo.BOOTSTRAP_FW_IP else True
+
+            def push(ctx, ip, xml, who):
+                calls.append(("push", ip))
+                return push_result
+
+            with patch.object(fo, "ssh_on_gateway", ssh_on), \
+                    patch.object(fo, "_probe_tcp", side_effect=probe), \
+                    patch.object(fo, "_wait_tcp", side_effect=wait), \
+                    patch.object(fo, "_push_config", side_effect=push):
+                fo.bootstrap_firewalls(
+                    TEAMS, [{"team_key": "team1", "identifier": "120", "vmid": 9}],
+                    {"team1": cfg}, {}, log=lambda *_: None)
+        return calls, ssh_on
+
+    def test_fresh_firewall_is_reached_on_the_borrowed_bootstrap_address(self):
+        calls, ssh_on = self._run(wan_up=False)
+        self.assertEqual(calls, [("wait", "192.168.1.1"), ("push", "192.168.1.1"),
+                                 ("wait", "172.31.120.2")])
+        cmds = [c.args[1] for c in ssh_on.call_args_list]
+        self.assertIn("sudo ip addr add 192.168.1.2/24 dev ens19 || true", cmds)
+        self.assertIn("sudo ip addr del 192.168.1.2/24 dev ens19 || true", cmds)  # always released
+
+    def test_rerun_reaches_the_firewall_on_its_transit_address(self):
+        calls, _ = self._run(wan_up=True)
+        self.assertEqual(calls[0], ("push", "172.31.120.2"))
+
+    def test_unchanged_config_skips_the_reboot_wait(self):
+        calls, _ = self._run(wan_up=True, push_result="UNCHANGED")
+        self.assertEqual(calls, [("push", "172.31.120.2")])
+
+    def test_template_that_never_boots_fails_loudly_and_still_releases_the_address(self):
+        with self.assertRaises(RuntimeError) as cm:
+            self._run(wan_up=False, boot_ok=False)
+        self.assertIn("pfsense-provision", str(cm.exception))
 
 
 class VerifyInPathConvergence(unittest.TestCase):
