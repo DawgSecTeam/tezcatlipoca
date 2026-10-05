@@ -247,22 +247,7 @@ resource "proxmox_virtual_environment_vm" "scoring_engine" {
   ]
 }
 
-data "proxmox_virtual_environment_vms" "templates" {
-  node_name = var.proxmox_node
-  tags      = ["template"]
-}
-
 locals {
-  template_ids = {
-    for vm in data.proxmox_virtual_environment_vms.templates.vms :
-    vm.name => vm.vm_id
-    # Templates are stopped by definition (qm template requires it). A running box with
-    # a stray `template` tag (live-confirmed 2026-09-24: three running competition boxes
-    # carried it, duping names in this map and failing every new apply) must not resolve
-    # as a clone source.
-    if vm.status == "stopped"
-  }
-
   sorted_team_keys = sort(keys(local.slot_teams[0]))
 
   # Satellite routes for the engine: runtime `ip route replace` (apply #1 lands them
