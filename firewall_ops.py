@@ -321,7 +321,7 @@ def _probe_tcp(ssh_ctx, ip, port, timeout=4):
     return "UP" in (r.stdout or "")
 
 
-def _wait_tcp(ssh_ctx, ip, port, budget_s=120, interval_s=10):
+def _wait_tcp(ssh_ctx, ip, port, budget_s=300, interval_s=10):
     """_probe_tcp, retried until `budget_s` elapses (convergence after a network change)."""
     deadline = time.time() + budget_s
     while True:
