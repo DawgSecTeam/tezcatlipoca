@@ -126,6 +126,27 @@ class CutoverNetplan(unittest.TestCase):
         self.assertIn("- to: \"192.168.121.0/24\"\n          via: \"172.31.121.2\"", yaml)
 
 
+class FetchCommand(unittest.TestCase):
+    """After the cutover the gateway address is the firewall itself, so a re-run's fetch needs
+    the engine's transit address as a fallback (live-found 2026-10-05)."""
+
+    def test_fallback_is_chained_with_or_so_a_failed_fetch_never_clobbers_the_second(self):
+        from firewall_ops import fetch_command
+        cmd = fetch_command("http://192.168.7.1:8611/c.xml", "http://172.31.7.1:8611/c.xml")
+        self.assertEqual(cmd, "fetch -o /cf/conf/config.xml http://192.168.7.1:8611/c.xml "
+                              "|| fetch -o /cf/conf/config.xml http://172.31.7.1:8611/c.xml")
+
+    def test_no_fallback_is_the_plain_fetch(self):
+        from firewall_ops import fetch_command
+        self.assertEqual(fetch_command("http://x/c.xml"),
+                         "fetch -o /cf/conf/config.xml http://x/c.xml")
+
+    def test_the_whole_command_is_typeable(self):
+        from firewall_ops import fetch_command, key_sequence
+        key_sequence(fetch_command("http://192.168.7.1:8611/c-1.xml", "http://172.31.7.1:8611/c-1.xml"))
+        self.assertIn("shift-backslash", key_sequence("a || b"))
+
+
 class VerifyInPathConvergence(unittest.TestCase):
     """The cutover moves the gateway MAC; the box probe must retry, not fail on probe #1."""
 

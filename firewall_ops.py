@@ -45,7 +45,7 @@ SSH_PROBE_BUDGET_S = 600
 # outside this set, and a silent wrong key would strand a firewall mid-bootstrap.
 _KEY_NAMES = {".": "dot", "/": "slash", "-": "minus", "_": "shift-minus",
               ",": "comma", "=": "equal", " ": "spc", "\n": "ret",
-              ":": "shift-semicolon", "@": "shift-2"}
+              ":": "shift-semicolon", "@": "shift-2", "|": "shift-backslash"}
 
 
 def key_sequence(text):
@@ -332,7 +332,19 @@ def _wait_tcp(ssh_ctx, ip, port, budget_s=300, interval_s=10):
         time.sleep(interval_s)
 
 
-def _drive_console(node, vmid, identifier, config_url):
+def fetch_command(config_url, fallback_url=None):
+    """The console `fetch` line. Before the engine cutover the engine still owns the team
+    gateway address, so config_url (on it) works. After the cutover that address is the
+    firewall itself, so a re-run's fetch would hit the firewall; the fallback is the
+    engine's transit address, reachable over the firewall's already-configured WAN
+    (live-found 2026-10-05). `||` so a failed first fetch never clobbers the second."""
+    cmd = f"fetch -o /cf/conf/config.xml {config_url}"
+    if fallback_url:
+        cmd += f" || fetch -o /cf/conf/config.xml {fallback_url}"
+    return cmd
+
+
+def _drive_console(node, vmid, identifier, config_url, fallback_url=None):
     """One full menu→shell→fetch→reboot drive. Runs only after CONSOLE_SETTLE_S, so a
     booting system is never interrupted mid-loader."""
     time.sleep(3)  # let any pending console output flush before we take the keyboard
@@ -343,7 +355,7 @@ def _drive_console(node, vmid, identifier, config_url):
     type_into_console(node, vmid,
                       f"ifconfig vtnet1 inet 192.168.{identifier}.250/24 up")
     time.sleep(2)
-    type_into_console(node, vmid, f"fetch -o /cf/conf/config.xml {config_url}")
+    type_into_console(node, vmid, fetch_command(config_url, fallback_url))
     time.sleep(12)  # fetch + config apply on the appliance's own disk
     type_into_console(node, vmid, "reboot")
 
@@ -378,6 +390,7 @@ def bootstrap_firewalls(node, teams, fw_targets, config_paths, ssh_ctx,
         for t in fw_targets:
             tid = t["identifier"]
             url = f"http://192.168.{tid}.1:{FW_CONFIG_PORT}/config-team{tid}.xml"
+            fallback_url = f"http://172.31.{tid}.1:{FW_CONFIG_PORT}/config-team{tid}.xml"
             log(f"  Bootstrapping {t['team_key']}'s firewall (vmid {t['vmid']}, "
                 f"WAN 172.31.{tid}.2)... console drive → fetch → reboot")
             deadline = time.time() + SSH_PROBE_BUDGET_S
@@ -385,7 +398,7 @@ def bootstrap_firewalls(node, teams, fw_targets, config_paths, ssh_ctx,
             while True:
                 attempt += 1
                 log(f"    console drive #{attempt} (settle {CONSOLE_SETTLE_S}s first)")
-                _drive_console(node, t["vmid"], tid, url)
+                _drive_console(node, t["vmid"], tid, url, fallback_url)
                 # One full boot cycle worth of probing per drive: the fetched config
                 # enables SSH, so an answer on the WAN address IS the success signal.
                 cycle_end = min(deadline, time.time() + CONSOLE_SETTLE_S + 120)
