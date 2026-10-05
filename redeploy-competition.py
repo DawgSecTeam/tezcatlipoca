@@ -840,7 +840,49 @@ def mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty):
         raise SystemExit(
             f"\n  {len(still_broken)} box(es) remain broken after the full reset ladder — "
             f"diagnose by hand (verify-competition.py, engine console) before re-running.")
-    return fixed
+    return fixed, levels
+
+
+def reconcile_terraform_state(rebuilt, ctx, comp_dir, teams, boxes):
+    """`terraform import` each rebuilt box back into state (opt-in --reconcile-state).
+
+    mode_rebuild recreates boxes through the API, so on a v2+ range every rebuilt box
+    is a live terraform resource the state no longer matches — the next full
+    `terraform apply` sees drift and REPLACES it, destroying the box again (warned
+    about since the tool existed). Import re-pins the state to the recreated VM with
+    its deterministic vmid, after which a plan reports the box clean. Import ID is
+    the vmid; the for_each key lives in the address (slot 0 = team_box, satellites =
+    team_box_sat1..4). A failed import is printed, never fatal — the warning path
+    (accept the replacement, or `terraform state rm`) remains the fallback."""
+    env = {**os.environ,
+           "TF_VAR_teams": json.dumps(teams),
+           "TF_VAR_boxes_per_team": json.dumps(boxes)}
+    tf_cwd = str(comp_dir / "terraform")
+    node = os.environ["TF_VAR_proxmox_node"]
+    for t in rebuilt:
+        slot = t.get("slot") or 0
+        resource = "proxmox_virtual_environment_vm.team_box" if slot == 0 else \
+            f"proxmox_virtual_environment_vm.team_box_sat{slot}"
+        addr = f'{resource}["{t["vm_name"]}"]'
+        print(f"  Importing {t['vm_name']} (vmid {t['vmid']}) into terraform state...")
+        try:
+            # The address is usually ALREADY in state (the deploy's apply #2 created
+            # it; the rebuild replaced the VM out-of-band) and `terraform import`
+            # refuses managed addresses — live-found 2026-10-04: "Resource already
+            # managed by Terraform". Forget the stale entry first, then adopt the
+            # live VM. A rm of an absent address is fine.
+            run_terraform(["state", "rm", addr], cwd=tf_cwd, env=env, timeout=60,
+                          check=False)
+            # The bpg provider's import ID for VM resources is "node/vmid", not a
+            # bare vmid (live-found 2026-10-04: "unexpected format of ID ()").
+            run_terraform(["import", addr, f"{node}/{t['vmid']}"], cwd=tf_cwd, env=env,
+                          timeout=300)
+        except Exception as e:
+            print(f"    WARNING: import failed for {addr}: {str(e)[:160]} — the box stays "
+                  f"drifted from state; accept the next apply's replacement or "
+                  f"`terraform state rm` + import by hand.")
+    print("  Confirm with: terraform plan  (run in " + tf_cwd + " — the rebuilt box(es) "
+          "should show no changes)")
 
 
 def quote_sshkeys(public_key):
@@ -1000,6 +1042,12 @@ def main():
     parser.add_argument("--dry-run", action="store_true", dest="dry_run",
                         help="Print the resolved targets and their snapshots, then exit.")
     parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
+    parser.add_argument("--reconcile-state", action="store_true", dest="reconcile_state",
+                        help="With --mode rebuild/reset: re-sync terraform state to the "
+                             "recreated VM (state rm + import, node/vmid ID) so teardown "
+                             "and refresh work against the live box. NOTE: the bpg provider "
+                             "still plans a replacement for imported VMs (ForceNew computed "
+                             "attrs) — state hygiene, not a plan-clean guarantee.")
     parser.add_argument("--reset-event", action="store_true", dest="reset_event",
                         help="With rollback-ready/rollback-base: also restart the event from the "
                              "engine template (fresh scoring DB) and re-run phase 7, so scores "
@@ -1049,6 +1097,9 @@ def main():
         return
     if args.reset_event and args.mode not in ("rollback-ready", "rollback-base", "reset"):
         raise SystemExit("  ERROR: --reset-event only applies to rollback-ready/rollback-base/reset.")
+    if args.reconcile_state and args.mode not in ("rebuild", "reset"):
+        raise SystemExit("  ERROR: --reconcile-state only applies to rebuild/reset (it "
+                         "imports boxes that were recreated from templates).")
 
     targets = select_targets(comp_dir, teams, boxes, args)
     if not targets:
@@ -1058,6 +1109,7 @@ def main():
 
     print(f"\n{'='*64}")
     print(f"  Redeploy — {name} ({comp_name})")
+    print(f"  {pipeline_api.env_summary()}")
     print(f"{'='*64}")
     print(f"  Mode: {args.mode}")
     print(f"  {len(targets)} of {len(teams) * len(boxes)} box(es) selected:\n")
@@ -1131,9 +1183,19 @@ def main():
     elif args.mode == "resync":
         done = mode_resync(targets, ctx, node, comp_dir, state, state_path)
     elif args.mode == "reset":
-        done = mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty)
+        done, levels = mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty)
     else:
         done = mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_bundle)
+
+    if args.reconcile_state:
+        if args.mode == "rebuild":
+            to_import = done
+        else:
+            to_import = [t for t in done if levels.get(t["vm_name"]) == "golden rebuild"]
+        if to_import:
+            reconcile_terraform_state(to_import, ctx, comp_dir, teams, boxes)
+        else:
+            print("  --reconcile-state: nothing was rebuilt from templates — nothing to import.")
 
     if args.reset_event:
         print("\n  --reset-event: restarting the event from the engine template...")

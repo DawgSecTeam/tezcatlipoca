@@ -767,6 +767,26 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
 
     print("  Converting golden boxes to templates...")
 
+    def _base_volumes_missing(vmid):
+        """True while any disk volume still lacks the base- prefix. The template
+        conversion renames volumes to base-<vmid>-disk-N; linked clones only work
+        from those (live-found 2026-10-04: a golden half-converted by an interrupted
+        POST kept template=1 on its plain vm- volume, and every team clone of it
+        died with HTTP 500 "Linked clone feature is not supported")."""
+        cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+        # Disk ifaces only (ide carries the cloudinit drive; its name differs) —
+        # a volume string is "<storage>:<name>,<opts>"; the NAME is what the
+        # conversion renames to base-<vmid>-disk-N.
+        volids = [str(v) for k, v in cfg.items()
+                  if k.startswith(("scsi", "sata", "virtio")) and isinstance(v, str)
+                  and ":" in v]
+        missing = []
+        for v in volids:
+            name = v.split(":", 1)[1].split(",")[0]
+            if not name.startswith("base-"):
+                missing.append(v)
+        return missing
+
     def _convert(t):
         # qm template refuses a VM holding snapshots — and the tz-base rollback guard's
         # purpose ends with the plant: a converted set is fatal on re-entry by design.
@@ -775,6 +795,21 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
         if SNAP_BASE in list_snapshots(node, t["vmid"]):
             delete_snapshot(node, t["vmid"], SNAP_BASE)
         proxmox_api("POST", f"/nodes/{node}/qemu/{t['vmid']}/template")["data"]
+        # The POST returns no task to wait on and the rename can lag or lose the race
+        # against an interrupted session; a half-converted golden passes every hash
+        # gate and then breaks apply #2 confusingly. Verify the rename landed.
+        import time as _time
+        for _ in range(10):
+            missing = _base_volumes_missing(t["vmid"])
+            if not missing:
+                break
+            _time.sleep(2)
+        if missing:
+            raise RuntimeError(
+                f"golden '{t['box']['name']}' (vmid {t['vmid']}) converted but its disk "
+                f"volume(s) {missing} never became base- volumes — linked clones would "
+                f"fail with 'Linked clone feature is not supported'. Destroy this golden "
+                f"and re-run phase 4 so it is rebuilt from scratch.")
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={"tags": ownership_tag_str})
         # M4: the hash lands on the template (description) AND in the comp's state —
         # reuse/rebuild decisions read it back at the next deploy's hash gate.

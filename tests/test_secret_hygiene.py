@@ -42,6 +42,10 @@ INTERNAL_ENV = {
     # into scrim.env. Never set by an operator by hand. (MY_PW is also written there
     # but is only ever consumed by the generated shell, never read by Python, so it
     # is deliberately absent here — the staleness check below would flag it.)
+    # Internal handoff within one process: deploy._engine_mgmt_ip_from_env marks its
+    # own DEFAULT export so the preflight cannot read it as an operator-set address
+    # (F5, 2026-10-04). Never set in .env.
+    "TEZ_ENGINE_MGMT_IP_IS_DEFAULT": "deploy.py -> config_ops default marker (same process)",
     "ENGINE_IP": "scrim.env handoff written by run-agent-scrim.py",
     "MY_TEAM": "scrim.env handoff written by run-agent-scrim.py",
     "JAR": "scrim.env handoff written by run-agent-scrim.py",

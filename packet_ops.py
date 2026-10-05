@@ -495,6 +495,88 @@ def build_baseline(p):
     return baseline
 
 
+def packet_secret_files(p):
+    """The packet's SECRET layer: {filename: content} for passwords.json,
+    domain_accounts.json, and box_baseline.json. Compile-packet emits these as 0600
+    gitignored files; ensure_packet_secrets re-emits them for a comp dir that arrived
+    without them. One definition so the two paths cannot drift."""
+    creds = p.get("credentials") or {}
+    credlists = creds.get("credlists") or {}
+    linux_creds = dict(credlists.get("linux") or {})
+    domain_creds = dict(credlists.get("domain") or {})
+    files = {}
+    if creds.get("box_password") or linux_creds or domain_creds:
+        pw = {"credlists": {}}
+        if creds.get("box_password"):
+            pw["box_password"] = creds["box_password"]
+        if linux_creds:
+            pw["credlists"]["linux"] = linux_creds
+        if domain_creds:
+            pw["credlists"]["domain"] = domain_creds
+        files["passwords.json"] = json.dumps(pw, indent=2)
+    if creds.get("domain_accounts"):
+        files["domain_accounts.json"] = json.dumps(
+            {"accounts": creds["domain_accounts"]}, indent=2)
+    baseline = build_baseline(p)
+    if baseline:
+        files["box_baseline.json"] = json.dumps(baseline, indent=2)
+    return files
+
+
+def ensure_packet_secrets(comp_dir):
+    """Compile the packet's SECRET layer into an existing comp dir when missing.
+
+    compile-packet's outputs are 0600 gitignored files, so a comp dir that arrived by
+    git — a stage_author authoring, a manual copy, a fresh clone — deploys without
+    them: the machine list then lacks the packet-promised decoy/local accounts and
+    the harness's pre-T0 `verify --packet` aborts the run (live-found 2026-10-04,
+    scrim-reset: packet_accounts FAIL killed the run before the event window). The
+    Compfile's packet_source names the profile; this re-emits ONLY the secret files
+    it promises, never the public shape (Compfile/boxes/pins are the comp's own).
+    Returns the list of files written."""
+    compfile = comp_dir / "Compfile"
+    if not compfile.exists():
+        return []
+    source = None
+    for line in compfile.read_text().splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0] == "packet_source":
+            source = parts[1].strip()
+            break
+    if not source:
+        return []
+    profile_path = Path(source)
+    if not profile_path.is_absolute():
+        profile_path = REPO_ROOT / source
+    if not profile_path.exists():
+        raise SystemExit(
+            f"  ERROR: {compfile} declares packet_source {source!r}, which does not "
+            f"exist — cannot compile the packet's secret layer (passwords.json, "
+            f"box_baseline.json, domain_accounts.json).")
+    missing = [n for n in ("passwords.json", "box_baseline.json", "domain_accounts.json")
+               if not (comp_dir / n).exists()]
+    if not missing:
+        return []
+    p = load_profile(profile_path)
+    errors = validate_profile(p)
+    if errors:
+        raise SystemExit("  ERROR: packet profile failed validation:\n" +
+                         "\n".join(f"    - {e}" for e in errors))
+    files = packet_secret_files(p)
+    wrote = []
+    for name in missing:
+        if name not in files:
+            continue
+        path = comp_dir / name
+        path.write_text(files[name] + ("" if files[name].endswith("\n") else "\n"))
+        path.chmod(0o600)
+        wrote.append(name)
+    if wrote:
+        print(f"  Packet secret layer compiled from {source}: " + ", ".join(wrote)
+              + " (the comp dir arrived without compile-packet's gitignored outputs)")
+    return wrote
+
+
 def compile_profile(profile_path, competitions_dir=None, force=False, dry_run=False):
     """Validate + emit the competition bundle. Returns (comp_dir, fidelity_md, wrote[])."""
     p = load_profile(profile_path)
@@ -559,21 +641,7 @@ def compile_profile(profile_path, competitions_dir=None, force=False, dry_run=Fa
         {name: pins for name, pins in services_by_box.items()}, indent=2)
     if domain_roles:
         files["domain_roles.json"] = json.dumps(domain_roles, indent=2)
-    if creds.get("box_password") or linux_creds or domain_creds:
-        pw = {"credlists": {}}
-        if creds.get("box_password"):
-            pw["box_password"] = creds["box_password"]
-        if linux_creds:
-            pw["credlists"]["linux"] = linux_creds
-        if domain_creds:
-            pw["credlists"]["domain"] = domain_creds
-        files["passwords.json"] = json.dumps(pw, indent=2)
-    if creds.get("domain_accounts"):
-        files["domain_accounts.json"] = json.dumps(
-            {"accounts": creds["domain_accounts"]}, indent=2)
-    baseline = build_baseline(p)
-    if baseline:
-        files["box_baseline.json"] = json.dumps(baseline, indent=2)
+    files.update(packet_secret_files(p))
 
     fidelity = render_fidelity(p)
 

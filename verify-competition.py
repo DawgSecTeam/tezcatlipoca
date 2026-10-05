@@ -1365,12 +1365,14 @@ def closed_injects(injects, now=None):
 
 _WIN_DOMAIN_PS = (
     "$cs = Get-WmiObject Win32_ComputerSystem; "
+    "'HOST=' + $env:COMPUTERNAME; "
     "'ROLE=' + $cs.DomainRole; 'DOMAIN=' + $cs.Domain; 'PARTOF=' + $cs.PartOfDomain; "
     "'MSID=' + (New-Object System.Security.Principal.NTAccount('Administrator'))"
     ".Translate([System.Security.Principal.SecurityIdentifier]).AccountDomainSid.Value; "
     "if ($cs.DomainRole -ge 4) { try { $d = Get-ADDomain -ErrorAction Stop; "
     "'DSID=' + $d.DomainSID.Value; 'DNSROOT=' + $d.DNSRoot; "
-    "'SVC=' + [bool](Get-ADUser -Filter \"SamAccountName -eq 'svc-support'\" -ErrorAction Stop) "
+    "'SVC=' + [bool](Get-ADUser -Filter \"SamAccountName -eq 'svc-support'\" -ErrorAction Stop); "
+    "'PCS=' + ((Get-ADComputer -Filter * | Select-Object -ExpandProperty Name) -join ',') "
     "} catch { 'ADERR=' + $_.Exception.Message } }"
 )
 
@@ -1385,6 +1387,24 @@ def _valid_domain_sid(sid):
     parts = (sid or "").split("-")
     return (len(parts) == 7 and sid.startswith("S-1-5-21-")
             and all(p.isdigit() for p in parts[3:]))
+
+
+def _member_trusted(job, kv, pcs_by_team):
+    """True/False/None: does the team's DC hold a machine account for this member?
+
+    None = cannot judge (the DC's listing never arrived, or the member reported no
+    hostname) — the gate then leans on the member-side check alone rather than
+    inventing a verdict. False = the member self-reports joined but the DC that must
+    hold its machine account does not: a dead trust, never a pass."""
+    if job["role"] != "member" or not pcs_by_team:
+        return None
+    accounts = pcs_by_team.get(job["team_key"])
+    if accounts is None:
+        return None
+    host = (kv.get("HOST") or "").strip().upper() if kv else ""
+    if not host:
+        return None
+    return host in accounts
 
 
 def check_degradations(comp_dir):
@@ -1515,7 +1535,8 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
                 return {"kv": None, "err": "", "info": [],
                         "fail": f"  FAIL  {team_key}/{name}: guest-agent probe failed "
                                 f"({str(e)[:80]})"}
-        realm_cmd = (f"realm list 2>/dev/null | grep -qi 'domain-name: *{domain}' "
+        realm_cmd = (f"echo HOST=$(hostname -s); "
+                     f"realm list 2>/dev/null | grep -qi 'domain-name: *{domain}' "
                      f"&& echo JOINED=1 || echo JOINED=0")
         try:
             _rc, out, err = guest_agent_exec_root(node, job["vmid"], realm_cmd, timeout=60)
@@ -1543,6 +1564,18 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
                                 f"({str(ssh_err)[:60]})"}
 
     probe_results = run_concurrent(jobs, _probe, max_workers=MAX_CONCURRENCY)
+
+    # DC-side trust map (live-found 2026-10-03, reset matrix): a member can self-report
+    # joined while the DC's freshly re-promoted AD holds NO machine account for it —
+    # Add-Computer then refuses any re-join ("already in that domain") and the dead
+    # trust is invisible to the member-side probe. The DC's Get-ADComputer listing is
+    # the truth; every member's hostname must appear in it.
+    pcs_by_team = {}
+    for job, outcome in zip(jobs, probe_results):
+        kv = outcome.get("kv") if isinstance(outcome, dict) else None
+        if kv and job["role"] == "dc" and kv.get("PCS") is not None:
+            pcs_by_team[job["team_key"]] = {
+                n.strip().upper() for n in kv["PCS"].split(",") if n.strip()}
 
     for job, outcome in zip(jobs, probe_results):
         team_key, name, role = job["team_key"], job["name"], job["role"]
@@ -1583,15 +1616,27 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
             ok &= svc
         elif windows:
             joined = kv.get("PARTOF", "").lower() == "true" and kv.get("DOMAIN", "").lower() == domain
+            trusted = _member_trusted(job, kv, pcs_by_team)
+            verdict = "joined" if joined else "NOT joined"
+            detail = ""
+            if trusted is False:
+                verdict += "; DC has NO machine account for it"
+                detail = " — dead trust (the DC was re-promoted; the member self-report is stale)"
+            elif trusted is True and joined:
+                detail = "; machine account confirmed on the DC"
+            print(f"  {'PASS' if joined and trusted is not False else 'FAIL'}  "
+                  f"{team_key}/{name}: {verdict} to {domain}{detail}")
+            ok &= joined and trusted is not False
             machine_sids.setdefault(kv.get("MSID"), []).append(f"{team_key}/{name}")
-            print(f"  {'PASS' if joined else 'FAIL'}  {team_key}/{name}: "
-                  f"{'joined' if joined else 'NOT joined'} to {domain}")
-            ok &= joined
         else:
             joined = kv.get("JOINED") == "1"
-            print(f"  {'PASS' if joined else 'FAIL'}  {team_key}/{name}: "
-                  f"{'realm-joined' if joined else 'NOT realm-joined'} to {domain}")
-            ok &= joined
+            trusted = _member_trusted(job, kv, pcs_by_team)
+            verdict = "realm-joined" if joined else "NOT realm-joined"
+            if trusted is False:
+                verdict += "; DC has NO machine account for it"
+            print(f"  {'PASS' if joined and trusted is not False else 'FAIL'}  "
+                  f"{team_key}/{name}: {verdict} to {domain}")
+            ok &= joined and trusted is not False
     dupes = {sid: t for sid, t in domain_sids.items() if len(t) > 1}
     if dupes:
         for sid, t in dupes.items():

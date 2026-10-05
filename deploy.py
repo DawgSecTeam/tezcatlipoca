@@ -61,7 +61,7 @@ from template_ops import (
     stored_template_hash,
 )
 from utils import (compfile_flag, degradation_summary, degradations, is_unmanaged,
-                   load_compfile, load_users_config, mint_run_id, valid_comp_name)
+                   env_summary, load_compfile, load_users_config, mint_run_id, valid_comp_name)
 from windows_ops import is_windows_template
 
 ENV_PATH = Path(".env")
@@ -974,6 +974,12 @@ def _engine_mgmt_ip_from_env():
     ip = os.environ.get("TF_VAR_engine_mgmt_ip")
     if ip is None:
         ip = DEFAULT_ENGINE_MGMT_IP
+        # Mark the default AS the default: the preflight's "explicitly set" escape
+        # hatch must not be self-satisfying. Live-found 2026-10-03: the .150 default
+        # (.250) is SSH-poisoned on the tailnet path, and the deploy died 12 minutes
+        # in at compose build because the gate read this exported default as an
+        # explicit operator choice.
+        os.environ["TEZ_ENGINE_MGMT_IP_IS_DEFAULT"] = "1"
         print(f"  Engine mgmt IP: static {ip} (default — override "
               f"TF_VAR_engine_mgmt_ip, set '' for DHCP)")
         os.environ["TF_VAR_engine_mgmt_ip"] = ip
@@ -1456,6 +1462,12 @@ def _load_competition_spec(spec, comp_dir):
     boxes. Known-broken templates only warn — the competition may predate the fix, and
     the deploy still has to be able to refuse later on its own terms."""
     spec.name, spec.scenario, spec.difficulty = load_compfile(comp_dir / "Compfile")
+    # A comp dir that arrived by git (stage_author authoring, manual copy, fresh clone)
+    # lacks compile-packet's gitignored secret layer; without it the machine list has
+    # no packet-promised decoy/local accounts and the harness's pre-T0 verify --packet
+    # aborts the run (live-found 2026-10-04, scrim-reset). Compile-on-demand here.
+    from packet_ops import ensure_packet_secrets
+    ensure_packet_secrets(comp_dir)
     spec.box_username, spec.credlist_usernames = load_users_config(comp_dir)
     # nakon --jobs pass-through (M1.2): per-machine work is atomic in nakon's runner, so N
     # machines plant concurrently with each machine's step order (disruptive last) intact.
@@ -1470,6 +1482,7 @@ def _load_competition_spec(spec, comp_dir):
     spec.comp_name = comp_dir.name
     print(f"\n{'='*60}")
     print(f"  Deploying {spec.comp_name}")
+    print(f"  {env_summary()}")
     print(f"{'='*60}\n")
 
     spec.boxes = load_boxes(comp_dir)
