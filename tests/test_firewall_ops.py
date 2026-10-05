@@ -134,6 +134,38 @@ class PushCommand(unittest.TestCase):
         self.assertIn("UNCHANGED", cmd)
 
 
+class PushRetry(unittest.TestCase):
+    def _fake(self, results):
+        import subprocess
+        from unittest.mock import MagicMock
+
+        def run(*a, **k):
+            r = results.pop(0)
+            if r == "timeout":
+                raise subprocess.TimeoutExpired("ssh", 30)
+            return MagicMock(returncode=r[0], stdout=r[1], stderr="")
+        return run
+
+    def test_retries_a_booting_appliance_then_applies(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        res = ["timeout", (255, ""), (0, "APPLIED\n")]
+        with patch.object(fo, "ssh_via_gateway", side_effect=self._fake(res)), \
+                patch.object(fo.time, "sleep"):
+            self.assertEqual(fo._push_config(None, "192.168.1.1", "<x/>", "team1"), "APPLIED")
+
+    def test_gives_up_after_the_budget_naming_the_last_failure(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        clock = {"t": 0.0}
+        with patch.object(fo, "ssh_via_gateway", side_effect=lambda *a, **k: self._fake(["timeout"])()), \
+                patch.object(fo.time, "time", side_effect=lambda: clock["t"]), \
+                patch.object(fo.time, "sleep", side_effect=lambda s: clock.update(t=clock["t"] + 100)):
+            with self.assertRaises(RuntimeError) as cm:
+                fo._push_config(None, "192.168.1.1", "<x/>", "team1", budget_s=150)
+        self.assertIn("no answer within 30s", str(cm.exception))
+
+
 class BootstrapFirewalls(unittest.TestCase):
     """The orchestration, with the engine/SSH layer faked."""
 

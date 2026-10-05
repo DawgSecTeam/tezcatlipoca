@@ -24,6 +24,7 @@ factory config's exact stanzas, and a hand-rolled seed would fail silently mid-d
 
 import base64
 import os
+import subprocess
 import time
 
 from ssh_ops import ssh_on_gateway, ssh_via_gateway
@@ -36,7 +37,8 @@ BOOTSTRAP_FW_IP = "192.168.1.1"
 BOOTSTRAP_ENGINE_IP = "192.168.1.2"
 FW_USER = "admin"            # uid 0 on pfSense; the deploy key is in its authorizedkeys
 FW_BOOT_BUDGET_S = 420       # a cloned appliance's first boot to SSH
-FW_APPLY_BUDGET_S = 300      # config push → reboot → SSH on the WAN address
+FW_APPLY_BUDGET_S = 600      # config push → reboot → SSH on the WAN address (a loaded node boots slowly)
+FW_PUSH_ATTEMPT_S = 30       # one push attempt; sshd answers before a booting appliance can log in
 
 
 def generate_team_config(seed_xml, team_id, red_dnat_spec=None, authorized_key=None):
@@ -248,13 +250,25 @@ def _push_command(config_xml):
             "(nohup sh -c 'sleep 2; /sbin/reboot' >/dev/null 2>&1 &) && echo APPLIED; fi")
 
 
-def _push_config(ssh_ctx, ip, config_xml, who):
-    r = ssh_via_gateway(ssh_ctx, ip, _push_command(config_xml), timeout=90, user=FW_USER)
-    out = (r.stdout or "").strip()
-    if r.returncode != 0 or out.splitlines()[-1:] not in (["APPLIED"], ["UNCHANGED"]):
-        raise RuntimeError(f"{who}: config push to {ip} failed (rc={r.returncode}): "
-                           f"{(r.stderr or out)[:300]}")
-    return out.splitlines()[-1]
+def _push_config(ssh_ctx, ip, config_xml, who, budget_s=FW_BOOT_BUDGET_S):
+    """Push config_xml, retrying while the appliance is still booting: sshd listens before
+    a login can complete (live-found 2026-10-05: the first push hung its whole 90s on a
+    freshly cloned firewall). The push is idempotent, so a retry after a half-run is safe."""
+    deadline = time.time() + budget_s
+    last = "no attempt"
+    while True:
+        try:
+            r = ssh_via_gateway(ssh_ctx, ip, _push_command(config_xml),
+                                timeout=FW_PUSH_ATTEMPT_S, user=FW_USER)
+            out = (r.stdout or "").strip().splitlines()[-1:]
+            if r.returncode == 0 and out in (["APPLIED"], ["UNCHANGED"]):
+                return out[0]
+            last = f"rc={r.returncode} {(r.stderr or r.stdout or '').strip()[:200]}"
+        except subprocess.TimeoutExpired:
+            last = f"no answer within {FW_PUSH_ATTEMPT_S}s"
+        if time.time() >= deadline:
+            raise RuntimeError(f"{who}: config push to {ip} failed ({last})")
+        time.sleep(10)
 
 
 def _borrow_bootstrap_ip(ssh_ctx, nic, add):
