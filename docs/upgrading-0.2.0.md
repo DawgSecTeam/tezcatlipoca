@@ -20,5 +20,7 @@ clones, `PIPELINE_VERSION = 3`). Things that stop working or change:
   module (`pipeline_api` is the supported surface for redeploy).
 - **nakon needs the 0-step fix** (vendor/nakon `22360ba`): the driver-side workaround is gone, so a
   managed box with no pins relies on it. The preflight warns about zero-pin boxes.
-- **Apply `docs/vulndb-fixes/domain-join-linux.sh`** to the catalog before deploying Fedora
-  domain members (see [vulndb-fixes/README.md](vulndb-fixes/README.md)).
+- **The catalog's Linux `domain-join` row needs the KDC fix** (applied to the shared catalog
+  2026-10-05; a rebuilt/restored catalog must re-apply
+  [vulndb-fixes/domain-join-linux.sh](vulndb-fixes/domain-join-linux.sh)) or Fedora members fail with
+  `Cannot find KDC for realm`.
