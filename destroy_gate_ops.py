@@ -8,6 +8,7 @@ pre-stop, terraform destroy, template teardown)."""
 import json
 import os
 import sys
+from pathlib import Path
 
 
 def refuse_frozen_full_teardown(competition, frozen, full, end_of_competition):
@@ -48,3 +49,23 @@ def load_ownership(comp_dir):
                 f"loaded env targets {current}. Point TF_VAR_* at the deployment's host "
                 f"(same overrides create-competition ran with) and re-run.")
     return deployed_state, run_id
+
+
+def require_terraform_state(comp_dir, deployed_state):
+    """Refuse a teardown whose per-comp terraform state has gone missing.
+
+    A comp that got past terraform (last_phase >= 2) but has no
+    competitions/<id>/terraform/terraform.tfstate would otherwise run `terraform destroy`
+    against an empty state: it "succeeds", destroys nothing, and the operator believes the
+    range is gone. Checked before anything is touched."""
+    if int(deployed_state.get("last_phase") or 0) < 2:
+        return
+    state_file = Path(comp_dir) / "terraform" / "terraform.tfstate"
+    if state_file.exists():
+        return
+    raise SystemExit(
+        f"  ERROR: {state_file} is missing, but this competition was deployed (state reached "
+        f"phase {deployed_state.get('last_phase')}, run id '{deployed_state.get('run_id')}'). "
+        f"Destroying against an empty state would remove nothing. Reconstruct the state file "
+        f"(restore it from backup, or `terraform import` the run's VMs), or tear the range "
+        f"down by the recorded run id's tags on the node. Nothing was destroyed.")

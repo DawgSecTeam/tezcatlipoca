@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 import artifacts_ops
 from constants import ownership_tags
-from destroy_gate_ops import load_ownership, refuse_frozen_full_teardown
+from destroy_gate_ops import load_ownership, refuse_frozen_full_teardown, require_terraform_state
 from destroy_sweep_ops import destroy_with_recovery, pre_stop_windows_boxes, report_remaining
 from destroy_templates_ops import teardown_templates
 from nodes_ops import activate_placement, read_placement, record_of
@@ -136,6 +136,7 @@ def main():
     # .deploy_state.json is read ONCE: it carries the deploy's run id (the
     # destruction-ownership anchor) and the engine vmid, plus the endpoint guard.
     deployed_state, run_id = load_ownership(comp_dir)
+    require_terraform_state(comp_dir, deployed_state)
     print(f"  Ownership: run id '{run_id}' — only VMs carrying this deploy's FULL "
           f"tag set (tezcatlipoca + comp-{competition} + {run_id}) will be touched.")
     print()
