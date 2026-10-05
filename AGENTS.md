@@ -36,14 +36,17 @@ collisions). Legacy state without a run id: teardown's sweep stays OFF until `--
 untagged VMs need `--allow-untagged`. Details:
 [docs/usage-agents.md](docs/usage-agents.md#run-ownership-teardown-only-touches-this-deploys-vms-2026-10-02).
 
-**The preflight now enforces the other half of this.** Before anything else it refuses to start when
-another deploy is live against the same estate — detected by a *held* flock in
-`~/.tezcatlipoca/locks/`, which is the one signal that cannot lie (a stale `.lock` from a dead run is
-ignored, not treated as a competitor). Two sessions at once is what produced the 13xx vmid races, a
-foreign template squatting a golden slot, and the over-broad sweep that took out two other comps'
-engines and goldens. To run two ranges deliberately, give each its own `--scoring-vmid` and
-`TF_VAR_team_identifiers` blocks and set `TEZ_ALLOW_CONCURRENT=1`; the gate then warns instead of
-refusing.
+**Concurrent ranges are supported, from isolated worktrees.** The preflight warns when another
+deploy is live against the same estate — detected by a *held* flock in `~/.tezcatlipoca/locks/`,
+which is the one signal that cannot lie (a stale `.lock` from a dead run is ignored, not treated as
+a competitor) — and proceeds. Safe coexistence is on you: give each range its own `--scoring-vmid`
+and `TF_VAR_team_identifiers` blocks, and let the run-id ownership tags scope each teardown to its
+own deploy's VMs. The preflight still refuses REAL collisions wherever they can be proven (vmid
+clashes, engine mgmt-IP conflicts); what the warning exists for is the uncoordinated case — two
+sessions at once sharing vmid blocks is what produced the 13xx vmid races, a foreign template
+squatting a golden slot, and the over-broad sweep that took out two other comps' engines and
+goldens (the old `TEZ_ALLOW_CONCURRENT` opt-in flag is gone: warning-and-proceeding IS the
+default, 2026-10-04).
 
 Teardown after a practice run is `destroy-competition.py` — it is resumable (stale-lock recovery,
 tag-scoped leftover sweep, foreign VMs skip-and-continue); re-run it until it exits clean. **Never
