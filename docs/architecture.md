@@ -45,7 +45,7 @@ the agent-scrim harness in
 | `nodes_ops.py` | Facade for multi-node placement: `nodes_config.py` (`nodes.json`, `NodeRecord`, env), `placement_record.py` (`placement.json`, accessors, vmid slot math, satellite tfvars), `placement_planner.py` (probes, capacity-fill, `resolve_placement`). See [multi-node.md](multi-node.md) |
 | `jump_ops.py` | Per-satellite jump/router VM: impersonates the engine's gateway IP on the satellite's team bridges, DNAT/SNAT, default-DROP forwarding (pure rule generation in `jump_rules.py`) |
 | `routing_ops.py` | Post-apply #1 fail-loud gate proving the engine can reach every satellite (the routes themselves are written by `team_nics`) |
-| `firewall_ops.py` | In-path firewalls: per-team pfSense `config.xml` generation from the comp's seed, QEMU-monitor console bootstrap (`sendkey` + functional SSH probes), the engine netplan cutover, and the post-cutover routing gate |
+| `firewall_ops.py` | In-path firewalls: per-team pfSense `config.xml` generation from the comp's seed, SSH config push to `pfsense-provision` clones, the engine netplan cutover, and the post-cutover routing gate |
 | `ssh_ops.py` | Gateway SSH (`ProxyCommand -W`), Terraform context, `wait_for_ssh`/`wait_for_boxes_ssh`/`wait_for_http`, `quote_sshkeys` (the one definition) |
 | `constants.py` | `vmid` math, `MAX_TEAMS`/`MAX_BOXES_PER_TEAM`, `SNAP_BASE`/`SNAP_READY`, budgets, `NAKON_DIR`, Windows user |
 | `range_ops.py` | Back-compat facade over `pve_api.py` (API client, node routes, task wait), `guest_exec.py` (agent exec/file pull), `vm_lifecycle.py` (start/stop/snapshots), `vm_ownership.py`, `targets.py` (`enumerate_targets`, `vm_id_for`), `terraform_workdir.py` |
@@ -126,12 +126,12 @@ resumes are refused (`pipeline_version` in `.deploy_state.json`).
    including `alpine_services`-tolerated failures, which are a real gap on the golden disk.
 5. **Firewall bootstrap (in-path firewalls only)** — skipped entirely unless the
    lineup declares an `unmanaged` + `in_path` box. Terraform apply #2 cloned each
-   team's firewall from its own template with two NICs (WAN on the per-team transit
+   team's firewall from the `pfsense-provision` template with two NICs (WAN on the per-team transit
    bridge `vmbrW<id>`, LAN on `vmbr<id>`); this phase generates one pfSense
    `config-team<id>.xml` per team (`firewall_ops`, from the comp's
-   `pfsense/pfsense-config-orig.xml` seed), serves it from the engine, drives each
-   firewall's console to fetch it (`sendkey` via the QEMU monitor API), waits for the
-   config's SSH to answer on the WAN address, then **cuts the engine over**: the
+   `pfsense/pfsense-config-orig.xml` seed), pushes it to each firewall over SSH through
+   the engine (the template boots as 192.168.1.1 with the deploy key authorized), waits for
+   the config's SSH to answer on the WAN address, then **cuts the engine over**: the
    engine's netplan loses `192.168.<id>.1` (the firewall owns the team gateway now)
    and gains `192.168.<id>.0/24 via 172.31.<id>.2` routes. A fail-loud gate proves
    every team subnet routes through its firewall and the first managed box is

@@ -57,7 +57,7 @@ class Phase5Firewall(unittest.TestCase):
                 firewall.phase5_firewall_bootstrap(ctx)
             for ident in ("120", "121"):
                 self.assertTrue((comp / "pfsense" / f"config-team{ident}.xml").exists())
-            paths = boot.call_args.args[3]
+            paths = boot.call_args.args[2]
             self.assertEqual(set(paths), {"team1", "team2"})
             cut.assert_called_once()
             self.assertEqual(ver.call_args.args[2], {"team1": "192.168.120.2",

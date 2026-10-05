@@ -351,9 +351,9 @@ pure router, outbound NAT off. The two traps, both fixed/known:
 
 - **Never inject config host-side** (import the pfSense ZFS pool on the Proxmox host) — OpenZFS
   2.4.4 makes the pool unmountable by pfSense's loader (`mountroot error 22`). Inject **guest-side**:
-  boot the clone, drop to the console shell (option 8), `ifconfig vtnet1` a temp IP on the
-  *unassigned* LAN NIC (pfSense won't revert it), `fetch` the per-team `config.xml` from an HTTP
-  server on the engine's team `.1`, reboot. Keep the pool name `pfSense` (the loader hardcodes it).
+  the `pfsense-provision` template boots with SSH on and LAN 192.168.1.1; the pipeline SSHes in
+  through the engine and replaces `config.xml`, then reboots (the by-hand fallback is the
+  runbook's console dance). Keep the pool name `pfSense` (the loader hardcodes it).
 - **WAN pass rule** in `gen_pfsense_config.py` must be `<network>lan</network>`, not a raw CIDR, or
   pfSense silently drops it and scoring times out.
 - Engine cutover, persistently: one engine reboot with all transit NICs added and the netplan

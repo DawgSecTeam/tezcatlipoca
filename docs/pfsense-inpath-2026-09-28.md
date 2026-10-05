@@ -3,7 +3,9 @@
 > **Superseded as a manual process (2026-10-03):** pipeline v3 folds this entire flow in —
 > terraform builds the transit bridges + two-NIC firewall boxes, `firewall_ops` generates the
 > per-team configs and drives the console, and deploy phase 5 performs the engine cutover and
-> verifies the routed path. This runbook remains the reference for the TRAP LIST below (host ZFS
+> verifies the routed path; since 2026-10-05 the firewalls clone the `pfsense-provision` template
+> (SSH on, LAN 192.168.1.1) and phase 5 pushes the config over SSH — no console typing. This
+> runbook remains the reference for the TRAP LIST below (host ZFS
 > import corrupts pfSense boot, WAN `fetch` reverts, IDE hot-attach, engine NIC hotplug) and as the
 > by-hand fallback for a wedged console.
 

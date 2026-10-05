@@ -30,7 +30,7 @@
     "cpu": 1,
     "memory_mb": 512,
     "disk_gb": null,
-    "template": "pfsense",
+    "template": "pfsense-provision",
     "unmanaged": true,
     "in_path": true
   }
