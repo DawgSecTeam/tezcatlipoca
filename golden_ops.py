@@ -330,10 +330,13 @@ def golden_boot_smoke(node, target, ctx, comp_dir, timeout=None,
           f"multi-user (timeout {timeout}s)...")
     try:
         try:
-            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{target['vmid']}/clone", data={
-                "newid": vmid, "name": name, "full": 1,
-                "description": clone_marker(comp_dir.name),
-            })["data"]
+            data = {"newid": vmid, "name": name, "full": 1,
+                    "description": clone_marker(comp_dir.name)}
+            storage = os.environ.get("TF_VAR_datastore")
+            if storage:
+                data["storage"] = storage
+            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{target['vmid']}/clone",
+                               data=data)["data"]
             wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
         except Exception as e:
             raise RuntimeError(
@@ -485,9 +488,12 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
         src = templates.get(t["box"]["template"])
         if src is None:
             raise RuntimeError(f"no stopped template named '{t['box']['template']}' on the node")
-        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone", data={
-            "newid": t["vmid"], "name": t["vm_name"], "full": 1,
-            "description": clone_marker(comp_dir.name)})["data"]
+        data = {"newid": t["vmid"], "name": t["vm_name"], "full": 1,
+                "description": clone_marker(comp_dir.name)}
+        storage = os.environ.get("TF_VAR_datastore")
+        if storage:
+            data["storage"] = storage
+        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone", data=data)["data"]
         wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
             "net0": f"virtio,bridge={t['bridge']}", "tags": ownership_tag_str})
@@ -570,12 +576,13 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
                 destroy_vm_if_exists(node, t["vmid"], expect_tags=None)
             else:
                 gc_orphan_volumes(node, t["vmid"])
-            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone", data={
-                "newid": t["vmid"],
-                "name": t["vm_name"],
-                "full": 1,
-                "description": clone_marker(comp_dir.name),
-            })["data"]
+            data = {"newid": t["vmid"], "name": t["vm_name"], "full": 1,
+                    "description": clone_marker(comp_dir.name)}
+            storage = os.environ.get("TF_VAR_datastore")
+            if storage:
+                data["storage"] = storage
+            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone",
+                               data=data)["data"]
             wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
             proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
                 "ipconfig0": f"ip={t['ip']}/24,gw={t['gateway']}",
