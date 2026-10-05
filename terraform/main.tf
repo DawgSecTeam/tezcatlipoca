@@ -364,8 +364,11 @@ resource "proxmox_virtual_environment_vm" "team_box" {
   dynamic "network_device" {
     # In-path firewall: net0 = WAN on the transit bridge (172.31.<id>.2/30 per the
     # generated pfSense config), net1 = LAN on the team bridge (the boxes' gateway .1).
-    # Order is load-bearing — pfSense's config keys the interfaces on vtnet0/vtnet1.
-    for_each = each.value.box.in_path ? ["vmbrW${each.value.identifier}"] : []
+    # Order is load-bearing — pfSense's config keys the interfaces on vtnet0/vtnet1,
+    # and net1 must EXIST for the bootstrap's ifconfig/fetch and for the boxes' gateway
+    # path (live-found 2026-10-04: emitting only the WAN device left the firewall
+    # unrouted and the phase-5 fetch never fired).
+    for_each = each.value.box.in_path ? ["vmbrW${each.value.identifier}", "vmbr${each.value.identifier}"] : []
     content {
       bridge = network_device.value
       model  = "virtio"
