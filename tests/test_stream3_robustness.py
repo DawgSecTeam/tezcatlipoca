@@ -165,9 +165,9 @@ class WindowsPreStop(unittest.TestCase):
         def fake_api(method, path, **kwargs):
             calls.append((method, path))
             if method == "GET":
-                return {"data": [{"name": "120-dc01", "vmid": 1400, "status": "running"},
-                                 {"name": "120-win01", "vmid": 1401, "status": "running"},
-                                 {"name": "120-web01", "vmid": 1402, "status": "running"},
+                return {"data": [{"name": "team1-dc01", "vmid": 1400, "status": "running"},
+                                 {"name": "team1-win01", "vmid": 1401, "status": "running"},
+                                 {"name": "team1-web01", "vmid": 1402, "status": "running"},
                                  {"name": "other-vm", "vmid": 999, "status": "running"}]}
             return {"data": "UPID:stop"}
 
@@ -185,8 +185,8 @@ class WindowsPreStop(unittest.TestCase):
         # dc01 (windows) AND web01 (linux) — every team clone, foreign VMs untouched
         self.assertEqual(stops, ["/nodes/node/qemu/1400/status/stop",
                                  "/nodes/node/qemu/1402/status/stop"])
-        self.assertIn("Pre-stopped 120-dc01", out.getvalue())
-        self.assertIn("Pre-stopped 120-web01", out.getvalue())
+        self.assertIn("Pre-stopped team1-dc01", out.getvalue())
+        self.assertIn("Pre-stopped team1-web01", out.getvalue())
 
 
 if __name__ == "__main__":

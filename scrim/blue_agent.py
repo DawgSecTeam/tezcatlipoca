@@ -18,11 +18,41 @@ from scrim import test_folder
 from scrim.core import log
 
 
+LOCAL_BLUE_CTX = 60000
+
+
+def local_endpoint_n_ctx(base_url, timeout=5):
+    """The llama.cpp server's real context size (`/props`), or None when unreadable."""
+    import urllib.request
+    root = re.sub(r"/v1/?$", "", base_url.rstrip("/"))
+    try:
+        with urllib.request.urlopen(f"{root}/props", timeout=timeout) as r:
+            props = json.load(r)
+        return int((props.get("default_generation_settings") or {}).get("n_ctx")
+                   or props.get("n_ctx"))
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def assert_local_ctx(base_url):
+    """opencode's own prompt is ~20k tokens: advertising more context than the endpoint
+    really has makes opencode self-compact fatally. Unreadable /props only warns."""
+    n_ctx = local_endpoint_n_ctx(base_url)
+    if n_ctx is None:
+        log(f"WARNING: could not read n_ctx from {base_url}/props — "
+            f"assuming it holds the advertised {LOCAL_BLUE_CTX}")
+    elif n_ctx < LOCAL_BLUE_CTX:
+        raise SystemExit(f"local blue endpoint {base_url} has n_ctx={n_ctx}, below the "
+                         f"advertised {LOCAL_BLUE_CTX} — restart llama.cpp with a larger -c")
+
+
 def stage_blues(args, comp, run_dir, creds, t0):
     endpoints.api_key(local=core.is_local_endpoint(args.blue_base_url))
     for n in range(1, args.teams + 1):
         base_url, blue_model = endpoints.blue_ep(args, n)
         local_blue = core.is_local_endpoint(base_url)
+        if local_blue:
+            assert_local_ctx(base_url)
         wd = run_dir / f"blue-team{n}"
         wd.mkdir(parents=True, exist_ok=True)
         (wd / "submissions").mkdir(exist_ok=True)
@@ -54,7 +84,7 @@ def stage_blues(args, comp, run_dir, creds, t0):
             .replace("{BASE_URL}", base_url)
             .replace("{API_KEY_FIELD}", "{env:OPENROUTER_API_KEY}" if not local_blue else "local")
             .replace("{MODEL_ID}", blue_model)
-            .replace("{CTX}", "60000" if local_blue else "120000")
+            .replace("{CTX}", str(LOCAL_BLUE_CTX) if local_blue else "120000")
             .replace("{OUT}", "4000" if local_blue else "16000")
             .replace("{EFFORT}", "" if local_blue else endpoints.effort_json(args.reasoning_effort)))
         log(f"blue workdir team{n} ready ({blue_model} @ {base_url})")
