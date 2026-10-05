@@ -329,11 +329,23 @@ def _rfb_frame(ws, d, out_path, Image, Cipher, algorithms, modes, struct):
     return str(out_path)
 
 
+def tcp_probe_cmd(ip, port, timeout=4):
+    """Remote shell probe (run on the engine): prints UP when ip:port accepts a connection."""
+    return f"timeout {timeout} bash -c 'cat < /dev/null > /dev/tcp/{ip}/{port}' && echo UP"
+
+
+def firewall_wan_ip(tid):
+    """The firewall's transit-side (WAN) address for team identifier `tid`."""
+    return f"172.31.{tid}.2"
+
+
+def team_gateway_ip(tid):
+    """The team gateway address: held by the engine pre-cutover, by the firewall after."""
+    return f"192.168.{tid}.1"
+
+
 def _probe_tcp(ssh_ctx, ip, port, timeout=4):
-    r = ssh_on_gateway(
-        ssh_ctx,
-        f"timeout {timeout} bash -c 'cat < /dev/null > /dev/tcp/{ip}/{port}' && echo UP",
-        timeout=timeout + 10)
+    r = ssh_on_gateway(ssh_ctx, tcp_probe_cmd(ip, port, timeout), timeout=timeout + 10)
     return "UP" in (r.stdout or "")
 
 
