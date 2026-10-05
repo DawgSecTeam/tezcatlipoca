@@ -400,6 +400,14 @@ def stage_deploy(args, comp):
            "--teams", str(args.teams), "--yes"]
     if comp.joinpath(".deploy_state.json").exists() and args.resume:
         cmd += ["--from-phase", str(args.resume)]
+        # --force-resume must reach create-competition: it is the operator's answer to
+        # the resume-loop guard, and without the pass-through the harness accepted the
+        # flag while the deploy refused anyway (2026-10-04: two distinct phase-4
+        # failures digit-mask to one signature, both already fixed on the driver, and
+        # the guard still refused every resume — silently, since the harness reported
+        # the refusal as an ordinary deploy failure).
+        if args.force_resume:
+            cmd += ["--force-from-phase"]
     r = run(cmd, cwd=REPO, timeout=6 * 3600, check=False)
     if r.returncode != 0 and args.run_dir:
         # stderr too: the phase-4 checkpoint SystemExit and a phase-3 ssh timeout both
