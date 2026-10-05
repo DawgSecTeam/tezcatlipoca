@@ -19,7 +19,8 @@ a normal deploy, but re-running `terraform apply` on a live firewall range whose
 re-adds `192.168.<id>.1` under the firewalls' feet — duplicate gateway addresses, ARP flux, and
 half the team's traffic bypassing the firewall. If you must re-apply, re-run
 `create-competition.py --competition <id> --from-phase 5 --yes` afterwards (the cutover is
-idempotent). Owning the cutover inside terraform would need the firewall config state round-tripped
+idempotent). `verify-competition.py`'s `firewall_in_path` gate now detects the drift (route not
+via the transit /30, firewall silent, or the gateway back on the engine). Owning the cutover inside terraform would need the firewall config state round-tripped
 into tfvars — deferred until a deploy actually needs it.
 
 ### Planted Linux boxes deny all SSH at the PAM account stage after a restart

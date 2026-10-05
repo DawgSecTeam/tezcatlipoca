@@ -7,6 +7,7 @@ Every check that must pass before a deploy touches Proxmox runs here, in this or
                         vmid/bridge collisions (ownership-proved); datastore headroom
   3. mgmt IPs         - engine static IP, satellite jump IPs vs running guests (cross-node)
   4. catalog          - `nakon catalog check` over the competition's pins
+  5. pins (advisory)  - warns when a managed box carries zero pins (never refuses)
 
 `preflight_gates` (single-node) and `preflight_gates_multinode` build a plan and call it; they are
 kept as thin wrappers so deploy.py's call sites and config_ops' re-exports are unchanged.
@@ -14,7 +15,7 @@ Teardown/redeploy mutate under the same ownership proof (vm_ownership.ownership_
 destroy_vm_if_exists - so "ours" has one definition everywhere."""
 
 from constants import SCORING_ENGINE_VMID
-from preflight import catalog, concurrency, headroom, mgmt_ip
+from preflight import catalog, concurrency, headroom, mgmt_ip, pins
 from preflight.clashes import check_collisions
 from preflight.plan import multinode_plan, single_node_plan
 from preflight.templates import check_share_templates
@@ -41,6 +42,7 @@ def run_preflight(plan):
     if plan.placement:
         mgmt_ip.jump_mgmt_ip_gate(plan)
     catalog.catalog_gate(plan.comp_dir)
+    pins.warn_unpinned_boxes(plan.comp_dir, plan.boxes)
 
 
 def preflight_gates(comp_dir, boxes, num_teams, teams=None, engine_vmid=SCORING_ENGINE_VMID,

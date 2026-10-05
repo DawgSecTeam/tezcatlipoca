@@ -146,7 +146,7 @@ modes; warns, never refuses — concurrent ranges are supported, the per-resourc
 image, jump clone source), `clashes.py` (vmid + bridge collisions via `ownership_verdict`; the
 slot math and labels are `expected_slots`/`expected_bridges`), `headroom.py` (datastore, thin
 factor); (3) `mgmt_ip.py` (engine static IP; satellite jump IPs across all nodes); (4) `catalog.py`
-(`nakon catalog check`). Wording/ordering differences between the modes are confined to the
+(`nakon catalog check`); (5) `pins.py` (advisory only: warns when a managed box carries zero pins — it plants a 0-step plan, a clean no-op since nakon 22360ba). Wording/ordering differences between the modes are confined to the
 `NodeShare.multi` flag (message text and report order only). Tests patch the owning module
 (`preflight.clashes.proxmox_api`, `preflight.headroom.proxmox_api`, `preflight.templates.proxmox_api`,
 `preflight.concurrency.gate_concurrent_deploys`, `preflight.catalog.catalog_gate`).
@@ -507,7 +507,7 @@ table (incl. `resync` and `engine-recovery`) is in
 
 ## verify-competition.py
 
-Post-deploy verifier: logins, services, isolation, misconfig spot-check, injects, pins, plant coverage,
+Post-deploy verifier: logins, services, isolation, in-path firewall (`verifier/firewall.py`), misconfig spot-check, injects, pins, plant coverage,
 domains, red identity, packet. Every gate returns a `GateResult` carrying the module-level `Status`
 (`PASS` / `FAIL` / `SKIP_UNAVAILABLE`), and the SUMMARY and the exit code are both derived from the
 same list — the printed word and the verdict can no longer disagree. The gate list a reader cares

@@ -104,6 +104,48 @@ class Collisions(unittest.TestCase):
             self._run(_share(), [_vm(1140, f"tezcatlipoca;comp-c1;{RUN}")], bridges=["vmbr101"])
 
 
+class UnpinnedBoxWarning(unittest.TestCase):
+    """A managed box with zero pins is advisory (printed), never a refusal."""
+
+    def _comp(self, services, vulns, baseline=None):
+        import json
+        import tempfile
+        d = Path(tempfile.mkdtemp())
+        (d / "box_services.json").write_text(json.dumps(services))
+        (d / "box_vulns.json").write_text(json.dumps(vulns))
+        if baseline is not None:
+            (d / "box_baseline.json").write_text(json.dumps(baseline))
+        return d
+
+    def test_unpinned_managed_box_is_named_and_unmanaged_is_skipped(self):
+        from preflight import pins
+        boxes = BOXES + [{"name": "fw01", "unmanaged": True}]
+        d = self._comp({"web01": [{"name": "nginx"}], "db01": []}, {"web01": [], "db01": []})
+        self.assertEqual(pins.unpinned_managed_boxes(d, boxes), ["db01"])
+
+    def test_any_pin_source_counts(self):
+        from preflight import pins
+        d = self._comp({"web01": [], "db01": []}, {"web01": [], "db01": [{"name": "v"}]},
+                       baseline={"web01": [{"name": "b"}]})
+        self.assertEqual(pins.unpinned_managed_boxes(d, BOXES), [])
+
+    def test_gate_warns_without_refusing(self):
+        import io
+        from contextlib import redirect_stdout
+        from preflight import pins
+        d = self._comp({"web01": [], "db01": []}, {"web01": [], "db01": []})
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(pins.warn_unpinned_boxes(d, BOXES), ["web01", "db01"])
+        self.assertIn("zero pins", buf.getvalue())
+        self.assertIn("strict passes reconcile the no-op", buf.getvalue())
+
+    def test_missing_pin_files_do_not_raise(self):
+        import tempfile
+        from preflight import pins
+        self.assertEqual(pins.unpinned_managed_boxes(Path(tempfile.mkdtemp()), BOXES), [])
+
+
 if __name__ == "__main__":
     os.environ.setdefault("TF_VAR_proxmox_node", "pve")
     unittest.main()

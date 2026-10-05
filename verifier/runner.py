@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from quotient.setup import expected_service_names
 
-from verifier import (creds, domains, engine, isolation, misconfig, packet, red, reports,
+from verifier import (creds, domains, engine, firewall, isolation, misconfig, packet, red, reports,
                       scoreboard, state_gates)
 from verifier.model import CheckError, bool_gate, gate_skip
 
@@ -102,6 +102,8 @@ def run_gates(args, comp_dir, ctx, teams, admin_password, boxes, base_url, budge
             base_url, admin_session, teams, args.strict_services, expected_names))
     if not run.spent("isolation"):
         run.add(isolation.check_isolation(ctx, teams, boxes))
+    if not run.spent("firewall_in_path"):
+        run.add(firewall.check_firewall_in_path(ctx, comp_dir, teams))
     if args.red_identity:
         seg_ip = args.red_seg_ip or red.default_red_seg_ip()
         if not run.spent("red_identity"):
@@ -115,10 +117,20 @@ def run_gates(args, comp_dir, ctx, teams, admin_password, boxes, base_url, budge
     print("\n  (live-ops health check status — informational)")
     if not budget.expired():
         reports.report_healthcheck_status(ctx)
-    if args.expect_no_vulns:
+    clean = args.expect_no_vulns or misconfig.comp_is_clean(comp_dir, boxes)
+    if clean:
+        why = ("--expect-no-vulns" if args.expect_no_vulns
+               else "box_vulns.json is empty and no machine carries a misconfig")
         print("\n[4/5] MISCONFIG SPOT-CHECK")
-        print("  SKIP  — --expect-no-vulns: this comp deliberately plants no misconfigurations")
-        note = "--expect-no-vulns: comp plants no misconfigurations"
+        print(f"  SKIP  — {why}: this comp deliberately plants no misconfigurations")
+        note = f"{why}: comp plants no misconfigurations"
+        run.add(gate_skip("misconfig", note, gating=False))
+        run.add(gate_skip("misconfig_survival", note, gating=False))
+    elif misconfig.misconfigs_unverifiable(comp_dir, boxes):
+        note = ("pinned misconfigs have no verify probe (e.g. Windows-only); plant_coverage "
+                "proves they were planted")
+        print("\n[4/5] MISCONFIG SPOT-CHECK")
+        print(f"  SKIP  — {note}")
         run.add(gate_skip("misconfig", note, gating=False))
         run.add(gate_skip("misconfig_survival", note, gating=False))
     elif not run.spent("misconfig"):

@@ -369,34 +369,12 @@ itself while ftp01 self-reported joined.
 
 ---
 
-## 11. `nakon deploy` fails a 0-step plan as a credential failure (nakon repo) — unpinned boxes hard-fail strict passes
+## 11. `nakon deploy` fails a 0-step plan as a credential failure (nakon repo) — FIXED
 
-> **Status 2026-10-04:** OPEN — worked around driver-side (`nakon_ops._reconcile_zero_step_machines`).
-> Live-found during the firewall live validation ([firewall-live-validation-plan-2026-10-04.md](reports/firewall-live-validation-plan-2026-10-04.md)),
-> fw-live-2026-10-04 stage A: a lineup with an unpinned box hard-failed the STRICT golden
-> plant twice, on fresh clones, on a genuine no-op.
-
-**Symptom.** A machine whose `configurations` list is empty (a legal lineup — `packet_ops`
-only initializes an empty pin list; no comp happened to carry one before) dispatches a 0-step
-plan. The bootstrap runs on the box, writes an empty `report.tsv`, exits 0 — and
-`nakon/deploy/runner.py` (the `elif not outcome.progress.results():` branch after `state["report"]`
-is empty) records the machine as failed with the misleading message **"no output from the remote
-plan (exit 0) — check credentials and sudo access"**. `nakon deploy` then exits 1 and tezcatlipoca's
-strict golden pass aborts — while the box itself accepts SSH and sudo fine throughout (proven by
-hand: paramiko login, `sudo -S id` → uid=0, sshd active).
-
-**Root cause.** The runner treats "empty report AND no step results" as failure without first
-asking whether the PLAN had zero steps to run. A 0-step plan legitimately produces no report and
-no results.
-
-**Required fix.** In the runner: when the machine's plan carries zero steps, a silent clean exit
-(exit 0, no report, no results) is SUCCESS — record the machine as ran with a zero-step outcome
-instead of the credential-failure error. The credential hint should only fire when the plan had
-steps that never reported.
-
-**Acceptance.** `nakon deploy` against a config whose machine list includes one `configurations: []`
-machine exits 0, the JSON outcome shows that machine with no error (steps empty or a zero-step
-marker), and a strict caller does not abort.
+> **Status 2026-10-05:** FIXED upstream in nakon `22360ba` (`deploy/runner.py`: the "no output from
+> the remote plan" error now fires only when the plan had steps); the driver workaround
+> (`_reconcile_zero_step_machines`) is removed. Contract pinned by `tests/test_zero_step_plan.py`.
+> Delete this section once the pin lands in a nakon release.
 
 ---
 

@@ -202,6 +202,14 @@ the old fixed literals, and a purely informational report of `range-healthcheck.
 `report_beacons` and the per-pass `plant integrity` tally from `.deploy_state.json` — none of those
 affect the exit code.
 
+Conditional gates added with the in-path firewall and clean comps: **`firewall_in_path`** (comps
+with an `in_path` firewall: per team, the engine routes `192.168.<id>.1` via `172.31.<id>.2`, the
+firewall answers on `172.31.<id>.2:22`, and the engine no longer holds `192.168.<id>.1` — catches
+an out-of-band `terraform apply` re-writing the pre-cutover netplan; SKIP and non-gating with no
+firewall, SKIP when the engine is unreachable) and an **automatic misconfig SKIP** for a
+deliberately-clean comp (`box_vulns.json` empty and no machine carries a misconfig — informational,
+no flag needed; pinned vulns that the machines lack still FAIL).
+
 Exit code is `0` only when logins all pass, no default creds remain, isolation holds, the
 misconfig spot-check (and, with 2+ teams, the misconfig-survival pass) confirms, injects
 (if any) are present, the round loop is advancing, and the conditional gates above pass — and no
@@ -395,7 +403,7 @@ Everything that exists in argparse but is not part of the happy path, in one pla
 | `--windows-domain-validated` | `verify-competition.py` | Operator attestation that a Windows/domain lineup's run exercised DomainSID uniqueness, machine SIDs, and the three-pass ordering. Required alongside `--freeze` for such a lineup |
 | `--fix-round-loop` | `verify-competition.py` | Issue the `POST /api/competition/start` + `POST /api/engine/pause {pause:false}` pair when the round loop did not auto-resume after an engine reboot |
 | `--freeze` / `--unfreeze --confirm-unfreeze` | `verify-competition.py` | Write / remove the `.frozen.json` record. Freeze requires all gates PASS (incl. plant coverage) and must be the **last** thing you do before the event — committing afterwards trips the drift gate |
-| `--expect-no-vulns` | `verify-competition.py` | Skip the misconfig gates for a packet-compiled comp whose `box_vulns.json` is not authored yet |
+| `--expect-no-vulns` | `verify-competition.py` | Force the misconfig gates to SKIP (a comp with an empty `box_vulns.json` already skips them automatically) |
 | `--allow-unverified <gate>` | `verify-competition.py` | Waive ONE gate's `SKIP` (could-not-evaluate) verdict so it does not fail the exit code. Repeatable; waives only a SKIP, never a FAIL; unknown names are warned about. Without it a gate that couldn't run is not a pass |
 | `--timeout SECONDS` | `verify-competition.py` | Optional whole-run wall-clock budget (default `0` = off), checked **between** gates so it never interrupts a Proxmox task. A gate skipped on budget is recorded `SKIP` — non-passing — so a budget can bound a verify but never turn an unevaluated range into a PASS (waive with `--allow-unverified`) |
 | `--packet <profile>` | `verify-competition.py` | Add the `packet_creds` + `packet_accounts` gates (packet credentials match `credentials.txt`; `out_of_scope` decoy accounts exist) |

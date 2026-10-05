@@ -30,7 +30,7 @@ load_dotenv(".env")
 from pve_api import proxmox_api, wait_for_proxmox_task  # noqa: E402
 
 SOURCE_VMID = 956
-NEWID = int(os.environ.get("PFSENSE_PROVISION_VMID", "957"))
+NEWID = int(os.environ.get("TEZ_PFSENSE_PROVISION_VMID", "957"))
 NAME = "pfsense-provision"
 BOOTSTRAP_LAN = "192.168.1.1"
 PUBKEY_FILE = Path("proxmox.pub")
