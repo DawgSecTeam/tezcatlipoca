@@ -157,9 +157,10 @@ class StateWriteCallSiteTests(unittest.TestCase):
                               return_value=MagicMock(failed=[])), \
                  patch.object(pipeline_api, "fix_services_on_boxes"), \
                  patch.object(redeploy_plant_ops, "write_state") as p_write:
+                cfg = comp_dir / "nakon-config.json"
+                cfg.write_text(json.dumps({"machines": [{"name": LINUX["machine"]}]}))
                 redeploy_plant_ops.run_nakon_and_harden(
-                    [LINUX], ctx, comp_dir, state,
-                    comp_dir / "nakon-config.json", comp_dir / "bundle")
+                    [LINUX], ctx, comp_dir, state, cfg, comp_dir / "bundle")
         p_write.assert_called_once_with(state_path, state)
 
     def test_mode_resync_persists_via_helper(self):
@@ -234,9 +235,11 @@ class HardeningOrderTests(unittest.TestCase):
                  patch.object(pipeline_api, "fix_services_on_boxes"):
                 p_auth.side_effect = lambda *a, **k: order.append("auth")
                 p_dns.side_effect = lambda *a, **k: order.append("dns")
+                cfg = comp_dir / "nakon-config.json"
+                cfg.write_text(json.dumps(
+                    {"machines": [{"name": t["machine"]} for t in targets]}))
                 redeploy_plant_ops.run_nakon_and_harden(
-                    targets, ctx, comp_dir, {},
-                    comp_dir / "nakon-config.json", comp_dir / "bundle")
+                    targets, ctx, comp_dir, {}, cfg, comp_dir / "bundle")
         return order, p_auth, p_dns
 
     def test_auth_grant_lands_before_the_dns_fix(self):

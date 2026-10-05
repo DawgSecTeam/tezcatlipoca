@@ -24,6 +24,7 @@ import tempfile
 import unittest
 from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -421,6 +422,35 @@ class PrepareAssetsTests(unittest.TestCase):
         p_auth.assert_called_once()
         p_fix.assert_called_once()
 
+    def _run_with_stage(self, stage_machines):
+        """run_nakon_and_harden with a non-empty post-clone stage listing `stage_machines`."""
+        ctx = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.9"}
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
+             patch.object(pipeline_api, "setup_ubuntu_auth"), \
+             patch.object(pipeline_api, "fix_dns_on_boxes"), \
+             patch.object(pipeline_api, "ensure_nat_forwarding"), \
+             patch.object(pipeline_api, "run_nakon",
+                          return_value=SimpleNamespace(failed=[])) as p_run, \
+             patch.object(pipeline_api, "fix_services_on_boxes") as p_fix:
+            stage = Path(tmp) / ".nakon-postclone.json"
+            stage.write_text(json.dumps({"machines": [{"name": n} for n in stage_machines]}))
+            redeploy_plant_ops.run_nakon_and_harden([T1], ctx, Path(tmp), {}, stage, object())
+        return p_run, p_fix
+
+    def test_a_box_absent_from_a_non_empty_stage_is_not_handed_to_nakon(self):
+        """Live-found 2026-10-05 (pfsense-ad web01): every plant rides the golden clone, so the
+        box is not in the post-clone stage; `nakon --only` then errored and the retry loop
+        mistook it for a dead ssh session. Skip the plant, still harden."""
+        p_run, p_fix = self._run_with_stage(["some-other-box"])
+        p_run.assert_not_called()
+        p_fix.assert_called_once()
+
+    def test_a_staged_box_is_still_planted(self):
+        p_run, _p_fix = self._run_with_stage([T1["machine"], "some-other-box"])
+        p_run.assert_called_once()
+        self.assertEqual(p_run.call_args.kwargs["only"], [T1["machine"]])
+
 
 class DomainMarkerCascadeTests(unittest.TestCase):
     """A reset DC wipes the entire AD content — every done-marker of that team's
@@ -493,8 +523,10 @@ class FailedStepsTests(unittest.TestCase):
              patch.object(pipeline_api, "run_nakon",
                           return_value=MagicMock(failed=failed)), \
              patch.object(pipeline_api, "fix_services_on_boxes"):
+            cfg = Path(tmp) / "cfg"
+            cfg.write_text(json.dumps({"machines": [{"name": T1["machine"]}]}))
             redeploy_plant_ops.run_nakon_and_harden(
-                [T1], ctx, Path(tmp), state, Path(tmp) / "cfg", Path(tmp) / "bundle")
+                [T1], ctx, Path(tmp), state, cfg, Path(tmp) / "bundle")
         return state
 
     def test_replant_failures_are_appended_to_the_deploy_time_record(self):

@@ -30,11 +30,18 @@ def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon
     pipeline_api.ensure_nat_forwarding(ctx)
 
     machines = [t["machine"] for t in targets]
-    if nakon_bundle is None or nakon_config_path is None:
-        # prepare_nakon_assets returned no stage: every plant for this comp rides the
+    if nakon_bundle is not None and nakon_config_path is not None:
+        # The post-clone stage only lists machines that have post-clone plants. A selected
+        # box whose plants all ride the golden clone is absent from it, and
+        # `nakon --only <it>` then errors ("matched no machine") — which the retry loop
+        # misreads as a dead SSH session (live-found 2026-10-05, pfsense-ad web01).
+        staged = {m["name"] for m in json.loads(Path(nakon_config_path).read_text())["machines"]}
+        machines = [m for m in machines if m in staged]
+    if nakon_bundle is None or nakon_config_path is None or not machines:
+        # No stage, or none of the selected boxes is in it: every plant for them rides the
         # golden clone, so there is nothing for nakon to re-apply. The python-side
         # steps below (auth grant, DNS, service hardening) still re-run.
-        print("  (no nakon replant stage for this competition — skipping the plant pass)")
+        print("  (no nakon replant stage for the selected box(es) — skipping the plant pass)")
     else:
         print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
         # strict=False, mirroring deploy.py's phase-6 stance: these re-plants hit live
