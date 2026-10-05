@@ -31,6 +31,9 @@ from ssh_ops import ssh_on_gateway
 # port: the engine already runs the quotient stack (80/443), apt-cacher (3142), postgres
 # and redis, and the port is typed character-by-character into a console.
 FW_CONFIG_PORT = 8611
+# (port, label) of engine services boxes reach at the team gateway address. apt-cacher-ng
+# is the one every box needs (prep_apt's apt proxy points at 192.168.<id>.1:3142).
+ENGINE_GATEWAY_SERVICES = ((3142, "apt-cacher"),)
 # pfSense 2.7.2 boots to its console menu in well under a minute; this is the settle
 # wait before the first (and every re-) drive of the menu, so keystrokes never land in
 # the FreeBSD loader where they would abort autoboot.
@@ -154,6 +157,27 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None):
     x = x.replace("\t\t<rule>", "\t\t" + wan_rule + ssh_rule + "<rule>", 1)
 
     nat_rows = "\t\t\t<outbound>\n\t\t\t\t<mode>disabled</mode>\n\t\t\t</outbound>\n"
+    # Services the boxes reach at the gateway address (apt-cacher via the 95proxy
+    # apt.conf) live on the engine; once the firewall owns that address they must be
+    # redirected to the engine's transit address (live-found 2026-10-05: every Linux
+    # domain-join failed on `Unable to connect to 192.168.<id>.1:3142`).
+    for port, desc in ENGINE_GATEWAY_SERVICES:
+        nat_rows += f"""\t\t\t<rule>
+\t\t\t\t<interface>lan</interface>
+\t\t\t\t<ipprotocol>inet</ipprotocol>
+\t\t\t\t<protocol>tcp</protocol>
+\t\t\t\t<source>
+\t\t\t\t\t<any></any>
+\t\t\t\t</source>
+\t\t\t\t<destination>
+\t\t\t\t\t<address>192.168.{tid}.1</address>
+\t\t\t\t\t<port>{port}</port>
+\t\t\t\t</destination>
+\t\t\t\t<target>172.31.{tid}.1</target>
+\t\t\t\t<local-port>{port}</local-port>
+\t\t\t\t<descr><![CDATA[{desc} (engine service at the old gateway address)]]></descr>
+\t\t\t\t<associated-rule-id></associated-rule-id>
+\t\t\t</rule>\n"""
     for spec in red_dnat_spec or []:
         port, target = spec.split("->", 1)
         target = target.replace("{tid}", tid)

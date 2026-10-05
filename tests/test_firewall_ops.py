@@ -84,9 +84,20 @@ class TeamConfig(unittest.TestCase):
         # the pfsense-ad 2026-09-28 bug: <network> takes the `lan` keyword, never a CIDR
         self.assertIn("<network>lan</network>", out)
         self.assertNotIn("<network>192.168.120.0/24</network>", out)
-        # the WAN pass rule must be filter's FIRST rule (before the nat block's rules)
-        first_rule = out[out.index("<rule>"):out.index("</rule>")]
+        # the WAN pass rule must be the FILTER section's first rule
+        flt = out[out.index("<filter>"):]
+        first_rule = flt[flt.index("<rule>"):flt.index("</rule>")]
         self.assertIn("Allow engine scoring", first_rule)
+
+    def test_apt_cacher_is_redirected_to_the_engine_by_default(self):
+        """Boxes' apt proxy is the gateway address; the firewall owns it after cutover."""
+        out = generate_team_config(SEED, "123")
+        at = out.index("apt-cacher (engine service")
+        rule = out[out.rindex("<rule>", 0, at):out.index("</rule>", at)]
+        self.assertIn("<address>192.168.123.1</address>", rule)
+        self.assertIn("<port>3142</port>", rule)
+        self.assertIn("<target>172.31.123.1</target>", rule)
+        self.assertIn("<interface>lan</interface>", rule)
 
     def test_dnat_spec_targets_and_substitution(self):
         out = generate_team_config(SEED, "121", red_dnat_spec=["4470->10.200.0.{tid}"])
@@ -96,7 +107,9 @@ class TeamConfig(unittest.TestCase):
 
     def test_no_dnats_no_forward_rule(self):
         out = generate_team_config(SEED, "122")
-        self.assertNotIn("<target>", out)
+        # no red DNATs: the only redirect is the engine's apt-cacher
+        self.assertEqual(out.count("<target>"), 1)
+        self.assertIn("<target>172.31.122.1</target>", out)
         self.assertIn("<mode>disabled</mode>", out)
 
 
