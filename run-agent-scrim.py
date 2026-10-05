@@ -2201,9 +2201,15 @@ def teardown_red(args, env):
     # 2026-10-03: the manual re-run succeeded in seconds). Identity guards live inside
     # badauto, so a retry cannot widen what may be deleted.
     proc = None
+    # The --competition value must be the SAME string stage_red wrote into
+    # config.yaml's competition_dir (the resolved path): bad-auto's destroy
+    # cross-checks the two and refuses a mismatch. The bare name matched nothing
+    # and both 2026-10-03 teardowns failed here — the captured stderr (A2) named
+    # it on the first occurrence.
+    comp_path = str((REPO / "competitions" / args.competition).resolve())
     for attempt in (1, 2):
         proc = run(["python3", "-m", "badauto", "destroy", "--competition",
-                    args.competition, "--yes"],
+                    comp_path, "--yes"],
                    cwd=BAD_AUTO, env=env, timeout=900, check=False)
         if proc.returncode == 0:
             break
