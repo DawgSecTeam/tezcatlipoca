@@ -59,6 +59,18 @@ class KeySequence(unittest.TestCase):
 
 
 class TeamConfig(unittest.TestCase):
+    def test_wan_allows_only_the_engine_to_ssh_the_firewall(self):
+        """The phase-5 success probe is SSH to the firewall's own WAN address; pfSense blocks
+        WAN-inbound to itself unless a rule says otherwise (live-found 2026-10-05)."""
+        out = generate_team_config(SEED, "120")
+        at = out.index("Allow engine SSH to the firewall")
+        rule = out[out.rindex("<rule>", 0, at):out.index("</rule>", at)]
+        self.assertIn("<interface>wan</interface>", rule)
+        self.assertIn("<protocol>tcp</protocol>", rule)
+        self.assertIn("<address>172.31.120.1</address>", rule)   # engine transit only
+        self.assertIn("<network>(self)</network>", rule)
+        self.assertIn("<port>22</port>", rule)
+
     def test_in_path_addresses_and_rules(self):
         out = generate_team_config(SEED, "120")
         # interfaces swapped wholesale: WAN transit /30, LAN = the team gateway

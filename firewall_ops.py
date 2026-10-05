@@ -130,7 +130,28 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None):
 \t\t\t</destination>
 \t\t</rule>
 \t\t"""
-    x = x.replace("\t\t<rule>", "\t\t" + wan_rule + "<rule>", 1)
+    # The deploy's success probe (and later admin access) is SSH from the engine to the
+    # firewall's own WAN address. pfSense blocks WAN-inbound to itself by default and the
+    # rule above only matches traffic destined to the LAN, so without this the probe can
+    # never answer even though the config applied (live-found 2026-10-05, pfsense-ad).
+    # Source is pinned to the engine's transit address: the transit /30 has no other host.
+    ssh_rule = f"""<rule>
+\t\t\t<type>pass</type>
+\t\t\t<ipprotocol>inet</ipprotocol>
+\t\t\t<descr><![CDATA[Allow engine SSH to the firewall]]></descr>
+\t\t\t<interface>wan</interface>
+\t\t\t<tracker>0100000202</tracker>
+\t\t\t<protocol>tcp</protocol>
+\t\t\t<source>
+\t\t\t\t<address>172.31.{tid}.1</address>
+\t\t\t</source>
+\t\t\t<destination>
+\t\t\t\t<network>(self)</network>
+\t\t\t\t<port>22</port>
+\t\t\t</destination>
+\t\t</rule>
+\t\t"""
+    x = x.replace("\t\t<rule>", "\t\t" + wan_rule + ssh_rule + "<rule>", 1)
 
     nat_rows = "\t\t\t<outbound>\n\t\t\t\t<mode>disabled</mode>\n\t\t\t</outbound>\n"
     for spec in red_dnat_spec or []:
