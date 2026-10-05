@@ -77,7 +77,7 @@ def expand_guest_root_disks(targets, ctx):
         "case \"$(stat -f -c %T /)\" in "
         "btrfs) GROW_FS=\"btrfs filesystem resize max /\";; "
         "xfs) GROW_FS=\"xfs_growfs /\";; "
-        "*) GROW_FS=\"resize2fs \\\"$SRC\\\"\";; "
+        "*) GROW_FS=\"resize2fs $SRC\";; "
         "esac; "
         "case \"$SRC\" in "
         "/dev/mapper/*|/dev/dm-*) "

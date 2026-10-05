@@ -37,6 +37,14 @@ class ExpansionScript(unittest.TestCase):
                        "xfs_growfs", "pvs", "lvs"):
             self.assertIn(needle, script)
 
+    def test_resize2fs_device_is_not_wrapped_in_literal_quotes(self):
+        """$GROW_FS is expanded unquoted, so inner quotes become part of the path and
+        resize2fs fails opening '"/dev/mapper/..."' (live-found 2026-10-05: every LVM
+        golden logged 8 failed attempts and a 'size unmeasurable' degradation)."""
+        script = _run()["cmds"][0][1]
+        self.assertIn('GROW_FS="resize2fs $SRC"', script)
+        self.assertNotIn('resize2fs \\"', script)
+
     def test_btrfs_layout_grows_via_btrfs_resize(self):
         """Fedora cloud default: root is btrfs and findmnt reports the subvolume
         suffix ('/dev/sda3[/root]') — the parse must strip it and grow with
