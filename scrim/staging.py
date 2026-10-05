@@ -7,7 +7,7 @@ from scrim.core import log
 from utils import load_users_config
 
 
-DEFAULT_TEMPLATE = core.REPO / "competitions" / "agent-scrim-2026-09-17b"
+DEFAULT_TEMPLATE = core.REPO / "competitions" / "agent-scrim"
 
 
 RUNTIME_FILES = {
