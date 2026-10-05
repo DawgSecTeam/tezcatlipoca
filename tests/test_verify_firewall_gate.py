@@ -100,6 +100,22 @@ class CleanCompTests(unittest.TestCase):
     def test_missing_box_vulns_is_not_clean(self):
         self.assertFalse(v_misconfig.comp_is_clean(self._dir(None), []))
 
+    def test_windows_only_pins_are_unverifiable_not_failing(self):
+        boxes = [{"name": "dc01-team1", "ip": "1.1.1.1",
+                  "configurations": ["local-user-win", "weak-password-policy-win"]}]
+        vulns = {"dc01": [{"name": "local-user-win"}, "weak-password-policy-win"]}
+        self.assertTrue(v_misconfig.misconfigs_unverifiable(self._dir(vulns), boxes))
+
+    def test_pin_that_never_reached_a_machine_stays_a_fail(self):
+        boxes = [{"name": "dc01-team1", "ip": "1.1.1.1", "configurations": []}]
+        self.assertFalse(v_misconfig.misconfigs_unverifiable(
+            self._dir({"dc01": ["local-user-win"]}), boxes))
+
+    def test_a_verifiable_pin_is_checked_not_skipped(self):
+        boxes = [{"name": "w", "ip": "1.1.1.1", "configurations": ["suid-find"]}]
+        self.assertFalse(v_misconfig.misconfigs_unverifiable(
+            self._dir({"web01": ["suid-find"]}), boxes))
+
     def test_machine_carrying_a_misconfig_is_not_clean(self):
         boxes = [{"name": "w", "ip": "1.1.1.1", "configurations": ["suid-find"]}]
         self.assertFalse(v_misconfig.comp_is_clean(self._dir({"web01": []}), boxes))

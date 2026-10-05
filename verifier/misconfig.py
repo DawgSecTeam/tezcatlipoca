@@ -100,6 +100,22 @@ def comp_is_clean(comp_dir, boxes):
                    for b in boxes for c in map(_config_name, b.get("configurations", [])))
 
 
+def misconfigs_unverifiable(comp_dir, boxes):
+    """True when box_vulns.json pins misconfigs, every pin reached a machine's configuration list,
+    and none of them has a probe here (Windows-only pins, catalog rows without a check). The
+    spot-check cannot confirm what it has no probe for; plant_coverage is the gate that proves
+    those pins were planted, so this is a non-gating SKIP, not a FAIL."""
+    try:
+        pinned = json.loads((Path(comp_dir) / "box_vulns.json").read_text())
+    except (OSError, ValueError):
+        return False
+    names = {_config_name(e) for v in pinned.values() for e in v}
+    if not names:
+        return False
+    planted = {c for b in boxes for c in map(_config_name, b.get("configurations", []))}
+    return names <= planted and not (names & set(MISCONFIG_CHECKS))
+
+
 def check_misconfig(ctx, boxes, comp_dir):
     """SSH via gateway to one box and confirm >=1 planted misconfig. Returns bool."""
     print("\n[4/5] MISCONFIG SPOT-CHECK")

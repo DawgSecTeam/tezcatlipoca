@@ -126,6 +126,13 @@ def run_gates(args, comp_dir, ctx, teams, admin_password, boxes, base_url, budge
         note = f"{why}: comp plants no misconfigurations"
         run.add(gate_skip("misconfig", note, gating=False))
         run.add(gate_skip("misconfig_survival", note, gating=False))
+    elif misconfig.misconfigs_unverifiable(comp_dir, boxes):
+        note = ("pinned misconfigs have no verify probe (e.g. Windows-only); plant_coverage "
+                "proves they were planted")
+        print("\n[4/5] MISCONFIG SPOT-CHECK")
+        print(f"  SKIP  — {note}")
+        run.add(gate_skip("misconfig", note, gating=False))
+        run.add(gate_skip("misconfig_survival", note, gating=False))
     elif not run.spent("misconfig"):
         run.add(bool_gate("misconfig", misconfig.check_misconfig(ctx, boxes, comp_dir)))
         run.add(misconfig.check_misconfig_survival(ctx, boxes))
