@@ -412,7 +412,7 @@ def down_windows(snaps):
 
 def blue_metrics(run_dir):
     m = {"cycles_rc0": 0, "cycles_total": 0, "manual_rc0": 0, "timeouts": 0, "injects": 0,
-         "notebook_entries": 0, "eradication": 0}
+         "notebook_entries": 0, "eradication": 0, "evictions_logged": 0}
     erad_re = re.compile(
         r"(tznet|svc-netupdate|TzNet|red_key|authorized_keys|backdoor|rogue|"
         r"uid\s*=?\s*0|unauthorized)", re.I)
@@ -448,6 +448,13 @@ def blue_metrics(run_dir):
         for line in log_text.splitlines():
             if erad_re.search(line) and erad_verbs.search(line):
                 m["eradication"] += 1
+        # E1's eviction loop logs "EVICTED: <what> on <box>" — blue's own record of
+        # attacker persistence it removed (2026-10-04 validation scrim: frontdesk
+        # Domain Admin membership, win02 Run-key persistence). red's foothold
+        # health-checks only see SSH-class footholds, so without this the report
+        # scores a real eviction as 0.
+        m["evictions_logged"] += sum(1 for l in log_text.splitlines()
+                                     if "EVICTED:" in l)
         m["injects"] += count_inject_submissions(wd)
     return m
 
@@ -531,7 +538,8 @@ def build_report(run_dir):
         max_sim = None
     empty_room = (bm["cycles_rc0"] == 0 and restorations == 0
                   and rm["blue_restore_events"] == 0)
-    score = (restorations + rm["restore_reactions"] + rm["evictions"]
+    evictions = max(rm["evictions"], bm["evictions_logged"])
+    score = (restorations + rm["restore_reactions"] + evictions
              + bm["injects"] + bm["eradication"])
     # Per-run gate calibration:
     # - max_simultaneous_down judges against red's own max_concurrent_down_end pacing
@@ -552,7 +560,7 @@ def build_report(run_dir):
         {"takedowns": rm["takedowns"], "restore_reactions": rm["restore_reactions"],
          "distinct_tactics": len(rm["distinct_tactics"]),
          "windows_footholds": rm["windows_footholds"], "max_simultaneous_down": max_sim,
-         "stalls": len(rm["stalls"]), "evictions": rm["evictions"]},
+         "stalls": len(rm["stalls"]), "evictions": evictions},
         {"cycles_rc0": bm["cycles_rc0"], "restorations": restorations,
          "injects": bm["injects"], "notebook_entries": bm["notebook_entries"],
          "timeouts": bm["timeouts"]},
@@ -587,7 +595,7 @@ def build_report(run_dir):
     L.append(f"Interaction score components: restorations {restorations}"
              + (" (inferred from re-kills; no scoreboard series)" if legacy else "")
              + f", red restore-reactions {rm['restore_reactions']}, "
-             f"evictions {rm['evictions']}, "
+             f"evictions {evictions}, "
              f"injects {bm['injects']}, eradication {bm['eradication']}.\n")
 
     L.append("## Red\n")
@@ -646,6 +654,9 @@ def build_report(run_dir):
     else:
         L.append("- restorations/down-minutes: **n/a** (run predates scoreboard-state.jsonl; "
                  "restoration count above is inferred from red's re-kills)")
+    if bm["evictions_logged"]:
+        L.append(f"- evictions logged by blue (EVICTED: lines): **{bm['evictions_logged']}**"
+                 f" (red-observed foothold evictions: {rm['evictions']})")
     L.append(f"- injects submitted: **{bm['injects']}**")
     L.append(f"- notebook liveliness: **{bm['notebook_entries']}** entries\n")
 
