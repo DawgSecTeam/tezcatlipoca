@@ -858,6 +858,7 @@ def reconcile_terraform_state(rebuilt, ctx, comp_dir, teams, boxes):
            "TF_VAR_teams": json.dumps(teams),
            "TF_VAR_boxes_per_team": json.dumps(boxes)}
     tf_cwd = str(comp_dir / "terraform")
+    node = os.environ["TF_VAR_proxmox_node"]
     for t in rebuilt:
         slot = t.get("slot") or 0
         resource = "proxmox_virtual_environment_vm.team_box" if slot == 0 else \
@@ -865,12 +866,21 @@ def reconcile_terraform_state(rebuilt, ctx, comp_dir, teams, boxes):
         addr = f'{resource}["{t["vm_name"]}"]'
         print(f"  Importing {t['vm_name']} (vmid {t['vmid']}) into terraform state...")
         try:
-            run_terraform(["import", addr, str(t["vmid"])], cwd=tf_cwd, env=env,
+            # The address is usually ALREADY in state (the deploy's apply #2 created
+            # it; the rebuild replaced the VM out-of-band) and `terraform import`
+            # refuses managed addresses — live-found 2026-10-04: "Resource already
+            # managed by Terraform". Forget the stale entry first, then adopt the
+            # live VM. A rm of an absent address is fine.
+            run_terraform(["state", "rm", addr], cwd=tf_cwd, env=env, timeout=60,
+                          check=False)
+            # The bpg provider's import ID for VM resources is "node/vmid", not a
+            # bare vmid (live-found 2026-10-04: "unexpected format of ID ()").
+            run_terraform(["import", addr, f"{node}/{t['vmid']}"], cwd=tf_cwd, env=env,
                           timeout=300)
         except Exception as e:
             print(f"    WARNING: import failed for {addr}: {str(e)[:160]} — the box stays "
                   f"drifted from state; accept the next apply's replacement or "
-                  f"`terraform state rm {addr}` by hand.")
+                  f"`terraform state rm` + import by hand.")
     print("  Confirm with: terraform plan  (run in " + tf_cwd + " — the rebuilt box(es) "
           "should show no changes)")
 
@@ -1033,10 +1043,11 @@ def main():
                         help="Print the resolved targets and their snapshots, then exit.")
     parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
     parser.add_argument("--reconcile-state", action="store_true", dest="reconcile_state",
-                        help="With --mode rebuild/reset: terraform-import every rebuilt "
-                             "box back into state, so the next full `terraform apply` no "
-                             "longer sees drift and wants to replace it. Confirm the "
-                             "result with a `terraform plan` in the comp's terraform dir.")
+                        help="With --mode rebuild/reset: re-sync terraform state to the "
+                             "recreated VM (state rm + import, node/vmid ID) so teardown "
+                             "and refresh work against the live box. NOTE: the bpg provider "
+                             "still plans a replacement for imported VMs (ForceNew computed "
+                             "attrs) — state hygiene, not a plan-clean guarantee.")
     parser.add_argument("--reset-event", action="store_true", dest="reset_event",
                         help="With rollback-ready/rollback-base: also restart the event from the "
                              "engine template (fresh scoring DB) and re-run phase 7, so scores "

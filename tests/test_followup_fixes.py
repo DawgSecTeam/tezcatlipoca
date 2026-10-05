@@ -150,19 +150,26 @@ class ReconcileStateTests(unittest.TestCase):
 
     def test_imports_slot0_and_satellite_addresses(self):
         calls = []
-        with patch.object(redeploy, "run_terraform",
-                          side_effect=lambda *a, **k: calls.append((a[0], k))):
-            redeploy.reconcile_terraform_state(
-                [self._target("team1-db01", 1503), self._target("130-web01", 1504, slot=2)],
-                {}, Path("/tmp/comp"), {}, [])
-        self.assertEqual(calls[0][0], ["import",
-                          'proxmox_virtual_environment_vm.team_box["team1-db01"]', "1503"])
+        env = {"TF_VAR_proxmox_node": "pve"}
+        with patch.dict(os.environ, env):
+            with patch.object(redeploy, "run_terraform",
+                              side_effect=lambda *a, **k: calls.append((a[0], k))):
+                redeploy.reconcile_terraform_state(
+                    [self._target("team1-db01", 1503), self._target("130-web01", 1504, slot=2)],
+                    {}, Path("/tmp/comp"), {}, [])
+        self.assertEqual(calls[0][0], ["state", "rm",
+                          'proxmox_virtual_environment_vm.team_box["team1-db01"]'])
         self.assertEqual(calls[1][0], ["import",
-                          'proxmox_virtual_environment_vm.team_box_sat2["130-web01"]', "1504"])
+                          'proxmox_virtual_environment_vm.team_box["team1-db01"]', "pve/1503"])
+        self.assertEqual(calls[2][0], ["state", "rm",
+                          'proxmox_virtual_environment_vm.team_box_sat2["130-web01"]'])
+        self.assertEqual(calls[3][0], ["import",
+                          'proxmox_virtual_environment_vm.team_box_sat2["130-web01"]', "pve/1504"])
         self.assertIn("cwd", calls[0][1])
 
     def test_failed_import_warns_and_continues(self):
-        with patch.object(redeploy, "run_terraform",
+        with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
+             patch.object(redeploy, "run_terraform",
                           side_effect=RuntimeError("provider cannot import")):
             redeploy.reconcile_terraform_state([self._target("team1-db01", 1503)],
                                                {}, Path("/tmp/comp"), {}, [])  # no raise
