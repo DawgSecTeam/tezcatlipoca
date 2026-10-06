@@ -89,7 +89,7 @@ Every VM Terraform creates is a full clone of a Proxmox template you build by ha
 beforehand. There are two different roles, and `main.tf` treats their credentials
 differently — get this distinction right or a clone will boot with no working login.
 
-**Scoring engine template** (`var.template_vm_id`) — Terraform never touches its cloud-init
+**Scoring engine template** (`TF_VAR_template_vm_id`, the base the per-competition engine template is built from) — Terraform never touches its cloud-init
 at clone time (no `initialization` block on `scoring_engine` in `main.tf`), so whatever
 account/key/sudo access the template has baked in is permanently what every clone gets.
 
@@ -426,9 +426,8 @@ For CLI flags that skip these prompts (useful interactively too, e.g. `--yes` or
 `--from-phase`), see [usage-agents.md](usage-agents.md).
 
 **Teardown**: `python3 destroy-competition.py`. It destroys the competition's team boxes and then
-runs `terraform destroy`. On a pipeline-v2 range every team box is in Terraform state, so no
-separate API-clone cleanup is needed; `competitions/<id>/cloned_vms.json` is only read for a
-**legacy** pre-golden range. It needs that competition's `teams.json` + `boxes.json` (both written
+runs `terraform destroy`. Every team box is in Terraform state, so no separate API-clone cleanup
+is needed. It needs a `run_id` in `.deploy_state.json` and that competition's `teams.json` + `boxes.json` (both written
 by the deploy). Templates aren't touched unless you pass `--full`.
 
 **Add a team mid-event**: don't re-run `create-competition.py` for this. A fresh run
@@ -439,7 +438,7 @@ boxes as Terraform-managed linked clones of the relevant goldens, give the engin
 that bridge, and re-push `event.conf` so Quotient knows about the team.
 
 **Add a box type**: see [Adding a template VM](#adding-a-template-vm) to build/tag the template
-— then it just shows up as an option in `create-competition.py`'s box picker. In v2 each box type
+— then it just shows up as an option in `create-competition.py`'s box picker. Each box type
 gets one golden, and **apply #2 builds every team's copy of it as a linked clone**
 (`var.golden_template_ids`).
 
@@ -502,8 +501,7 @@ python3 redeploy-competition.py --competition <id> --teams 3 --platform linux \
 the tool says so and asks before doing it. If you only want to put a dead service back without
 touching the team's work, use `--mode reconfigure`, which re-runs the deploy's configuration
 steps against the live box and rolls nothing back. If the VM is gone entirely or won't boot,
-`--mode rebuild` recreates it as a linked clone of its **golden template** on a v2 range (or, on a
-legacy pre-golden range, of its box template) and replays the post-clone stages. `--mode engine-recovery`
+`--mode rebuild` recreates it as a linked clone of its **golden template** and replays the post-clone stages. `--mode engine-recovery`
 does the same for the scoring-engine VM from the engine template — note the scoring DB comes back
 empty, so re-seed with `create-competition.py --from-phase 7`.
 

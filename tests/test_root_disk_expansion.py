@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import golden_ops
+import golden_disk_ops
 
 CTX = {"box_username": "medic"}
 TARGETS = [{"ip": "192.168.125.242", "vmid": 1242}, {"ip": "192.168.125.243", "vmid": 1243}]
@@ -24,8 +24,8 @@ def _run(rc=0, stdout=""):
         captured.setdefault("cmds", []).append((ip, cmd, user))
         return type("R", (), {"returncode": rc, "stdout": stdout, "stderr": ""})()
 
-    with patch.object(golden_ops, "ssh_via_gateway", side_effect=fake_ssh):
-        golden_ops.expand_guest_root_disks(TARGETS, CTX)  # must not raise
+    with patch.object(golden_disk_ops, "ssh_via_gateway", side_effect=fake_ssh):
+        golden_disk_ops.expand_guest_root_disks(TARGETS, CTX)  # must not raise
     return captured
 
 
@@ -36,6 +36,14 @@ class ExpansionScript(unittest.TestCase):
         for needle in ("growpart", "pvresize", "lvextend -l +100%FREE", "resize2fs",
                        "xfs_growfs", "pvs", "lvs"):
             self.assertIn(needle, script)
+
+    def test_resize2fs_device_is_not_wrapped_in_literal_quotes(self):
+        """$GROW_FS is expanded unquoted, so inner quotes become part of the path and
+        resize2fs fails opening '"/dev/mapper/..."' (live-found 2026-10-05: every LVM
+        golden logged 8 failed attempts and a 'size unmeasurable' degradation)."""
+        script = _run()["cmds"][0][1]
+        self.assertIn('GROW_FS="resize2fs $SRC"', script)
+        self.assertNotIn('resize2fs \\"', script)
 
     def test_btrfs_layout_grows_via_btrfs_resize(self):
         """Fedora cloud default: root is btrfs and findmnt reports the subvolume
@@ -88,25 +96,25 @@ class ExpansionScript(unittest.TestCase):
 
     def test_failure_raises_naming_the_box(self):
         fake, _ = self._grow_fails_probe_returns("6291455")  # just under the 6G floor
-        with patch.object(golden_ops, "ssh_via_gateway", side_effect=fake), \
-             patch.object(golden_ops.time, "sleep"):
+        with patch.object(golden_disk_ops, "ssh_via_gateway", side_effect=fake), \
+             patch.object(golden_disk_ops.time, "sleep"):
             with self.assertRaises(RuntimeError) as cm:
-                golden_ops.expand_guest_root_disks(TARGETS[:1], CTX)
+                golden_disk_ops.expand_guest_root_disks(TARGETS[:1], CTX)
             self.assertIn("192.168.125.242", str(cm.exception))
 
     def test_failure_with_unmeasurable_size_warns_and_continues(self):
         """Live-found 2026-09-29 x3: the boot-window instability that broke the grow
         also broke the size probe — an unmeasurable root must warn, not kill phase 4."""
         fake, _ = self._grow_fails_probe_returns("")  # probe answers nothing
-        with patch.object(golden_ops, "ssh_via_gateway", side_effect=fake), \
-             patch.object(golden_ops.time, "sleep"):
-            golden_ops.expand_guest_root_disks(TARGETS[:1], CTX)  # must not raise
+        with patch.object(golden_disk_ops, "ssh_via_gateway", side_effect=fake), \
+             patch.object(golden_disk_ops.time, "sleep"):
+            golden_disk_ops.expand_guest_root_disks(TARGETS[:1], CTX)  # must not raise
 
     def test_failure_with_adequate_root_continues(self):
         fake, _ = self._grow_fails_probe_returns("13631488")  # 13G >= floor
-        with patch.object(golden_ops, "ssh_via_gateway", side_effect=fake), \
-             patch.object(golden_ops.time, "sleep"):
-            golden_ops.expand_guest_root_disks(TARGETS[:1], CTX)  # must not raise
+        with patch.object(golden_disk_ops, "ssh_via_gateway", side_effect=fake), \
+             patch.object(golden_disk_ops.time, "sleep"):
+            golden_disk_ops.expand_guest_root_disks(TARGETS[:1], CTX)  # must not raise
 
 
 if __name__ == "__main__":

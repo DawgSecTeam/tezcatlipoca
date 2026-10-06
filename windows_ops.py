@@ -25,7 +25,7 @@ _IMAGE_STATE_PS = (
 # How long ONE nested agent wait may block before the enclosing loop gets to re-check its
 # own deadline. The scale8 soak's 40-minute hang was a deadline that never got re-read:
 # _wait_for_windows_setup_complete handed wait_for_guest_agent the ENTIRE remaining budget
-# (windows_ops.py:35, `timeout=max(1, int(deadline - time.time()))` against a 900 s
+# (`timeout=max(1, int(deadline - time.time()))` against a 900 s
 # default), so a host whose agent never answered consumed the whole window in a single
 # uninterruptible call and every outer timeout was decorative. Each poll is now capped,
 # and the loop keeps re-asking — total wait is unchanged for a box that is merely slow,

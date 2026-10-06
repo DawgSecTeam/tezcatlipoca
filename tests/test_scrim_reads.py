@@ -16,8 +16,11 @@ did.
 """
 
 import importlib.util
+import json
+import re
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -33,8 +36,8 @@ def _load(name, filename):
     return mod
 
 
-scrim = _load("run_agent_scrim_reads", "run-agent-scrim.py")
-report = _load("scrim_report_reads", "scrim-report.py")
+from scrim import blue_prompt, compworld, quotient_api
+from scrim_report import blue_side, render
 
 
 def _round(checks, start="2026-10-02T06:36:00Z"):
@@ -54,7 +57,7 @@ class PhantomRound(unittest.TestCase):
             _round([]),                      # in flight — not a verdict
             _round([_check(True)]),          # last completed — UP
         ]}]
-        rows = scrim.services_to_rows(payload)
+        rows = quotient_api.services_to_rows(payload)
         self.assertTrue(rows[0]["up"], "an in-flight round must not invent a DOWN")
 
     def test_a_real_down_in_the_last_completed_round_still_reads_down(self):
@@ -62,30 +65,30 @@ class PhantomRound(unittest.TestCase):
             _round([]),
             _round([_check(False, "no records received")]),
         ]}]
-        rows = scrim.services_to_rows(payload)
+        rows = quotient_api.services_to_rows(payload)
         self.assertFalse(rows[0]["up"])
         self.assertIn("no records received", rows[0]["error"])
 
     def test_no_round_with_checks_stays_down(self):
         # Unmeasured is not up. Fail closed, exactly like every other gate in this repo.
         payload = [{"ServiceName": "db01-sql", "Last10Rounds": [_round([]), _round([])]}]
-        self.assertFalse(scrim.services_to_rows(payload)[0]["up"])
+        self.assertFalse(quotient_api.services_to_rows(payload)[0]["up"])
 
     def test_empty_and_missing_round_lists_do_not_crash(self):
         payload = [{"ServiceName": "a", "Last10Rounds": []},
                    {"ServiceName": "b"},
                    {"ServiceName": "c", "Last10Rounds": None}]
-        rows = scrim.services_to_rows(payload)
+        rows = quotient_api.services_to_rows(payload)
         self.assertEqual([r["service"] for r in rows], ["a", "b", "c"])
         self.assertFalse(any(r["up"] for r in rows))
 
     def test_null_body_is_still_a_legitimate_empty_team(self):
-        self.assertEqual(scrim.services_to_rows(None), [])
+        self.assertEqual(quotient_api.services_to_rows(None), [])
 
     def test_a_multi_check_round_needs_every_check_to_pass(self):
         payload = [{"ServiceName": "web01-nginx",
                     "Last10Rounds": [_round([_check(True), _check(False)])]}]
-        self.assertFalse(scrim.services_to_rows(payload)[0]["up"])
+        self.assertFalse(quotient_api.services_to_rows(payload)[0]["up"])
 
 
 class InjectCounting(unittest.TestCase):
@@ -105,24 +108,24 @@ class InjectCounting(unittest.TestCase):
         # The exact filenames the soak's teams produced.
         d = self._team("sub.md", "sub7.md", "sub8.md", "sub9.md", "sub10.md",
                        "sub11.md", "sub12.md")
-        self.assertEqual(report.count_inject_submissions(d), 7)
+        self.assertEqual(blue_side.count_inject_submissions(d), 7)
 
     def test_documented_hyphenated_form_is_counted(self):
         d = self._team("sub-3.md", "sub-4.txt")
-        self.assertEqual(report.count_inject_submissions(d), 2)
+        self.assertEqual(blue_side.count_inject_submissions(d), 2)
 
     def test_non_numeric_inject_id_is_counted(self):
         d = self._team("sub-m1.md")
-        self.assertEqual(report.count_inject_submissions(d), 1)
+        self.assertEqual(blue_side.count_inject_submissions(d), 1)
 
     def test_submissions_directory_still_counts_whatever_is_in_it(self):
         d = self._team(subdir=("brief.md", "notes.txt"))
-        self.assertEqual(report.count_inject_submissions(d), 2)
+        self.assertEqual(blue_side.count_inject_submissions(d), 2)
 
     def test_unrelated_files_are_not_counted(self):
         # A report that over-counts is as useless as one that under-counts.
         d = self._team("submarine.md", "submission-notes.md", "NOTES.md", "sub.md.bak")
-        self.assertEqual(report.count_inject_submissions(d), 0)
+        self.assertEqual(blue_side.count_inject_submissions(d), 0)
 
     def test_blue_metrics_adds_the_count_across_teams(self):
         rd = Path(tempfile.mkdtemp())
@@ -137,7 +140,7 @@ class InjectCounting(unittest.TestCase):
             else:
                 (wd / "submissions").mkdir()
                 (wd / "submissions" / "sub-1.md").write_text("x")
-        self.assertEqual(report.blue_metrics(rd)["injects"], 6)
+        self.assertEqual(blue_side.blue_metrics(rd)["injects"], 6)
 
     def test_the_harness_prompt_writes_where_the_counter_looks(self):
         # The two halves must agree, or the next run repeats the soak exactly.
@@ -149,10 +152,91 @@ class InjectCounting(unittest.TestCase):
                               "run_dir": "/tmp"})()
         world = {"linux": ["web01", "app01"], "windows": [], "web_unit": "nginx",
                  "name": "probe", "scenario": ""}
-        with mock.patch.object(scrim, "comp_world", return_value=world):
-            prompt = scrim.blue_cycle_prompt(1, creds, args, 0, 120, "", "", "", "")
+        with mock.patch.object(compworld, "comp_world", return_value=world):
+            prompt = blue_prompt.blue_cycle_prompt(1, creds, args, 0, 120, "", "", "", "")
         self.assertIn("submissions/", prompt)
         self.assertNotIn("> sub.md", prompt)
+
+
+class GateCalibration(unittest.TestCase):
+    """Per-run gate calibration (2026-10-04 hardening): the max_simultaneous_down gate
+    judges against red's own pacing cap, and the injects gate gets out of the way when
+    the comp publishes none."""
+
+    def _run_dir(self, pacing=None, injects_published=0, injects_submitted=0):
+        d = Path(tempfile.mkdtemp())
+        run = {"t0": 1000.0, "phase": "event"}
+        if pacing is not None:
+            run["pacing"] = pacing
+        (d / "run.json").write_text(json.dumps(run))
+        ev = d / "evidence"
+        (ev / "red").mkdir(parents=True)
+        (ev / "final-scoreboard.json").write_text(json.dumps({
+            "services": {"team1": [{"service": "web01-http", "up": True}]},
+            "injects": [{"ID": i, "Submissions": []}
+                        for i in range(injects_published)]}))
+        wd = d / "blue-team1"
+        wd.mkdir(exist_ok=True)
+        (wd / "feed.log").write_text("===== cycle 1 rc=0\n")
+        for n in range(injects_submitted):
+            (wd / f"sub-{n}.md").write_text("deliverable")
+        return d
+
+    def _gates(self, out):
+        rows = []
+        for line in (out[0] if isinstance(out, tuple) else out).splitlines():
+            m = re.match(r"\| (\w+) \| (\w+) \| ([^|]*) \| ([^|]*) \| ([^|]+?) \s*\|$", line)
+            if m:
+                rows.append((m.group(2), m.group(3).strip(), m.group(4).strip(), m.group(5)))
+        return rows
+
+    def test_max_sim_judges_against_the_pacing_cap(self):
+        d = self._run_dir(pacing={"max_concurrent_down_start": 2,
+                                  "max_concurrent_down_end": 2})
+        out = render.build_report(d)
+        rows = dict((k, (v, t, verdict)) for k, v, t, verdict in self._gates(out))
+        self.assertEqual(rows["max_simultaneous_down"][1], ">= 2",
+                         "the gate must judge against the cap red was actually given")
+
+    def test_legacy_run_dirs_keep_the_flat_four(self):
+        d = self._run_dir(pacing=None)
+        out = render.build_report(d)
+        rows = dict((k, (v, t, verdict)) for k, v, t, verdict in self._gates(out))
+        self.assertEqual(rows["max_simultaneous_down"][1], ">= 4")
+
+    def test_zero_published_injects_is_na_not_a_fail(self):
+        d = self._run_dir(injects_published=0)
+        out = render.build_report(d)
+        rows = dict((k, (v, t, verdict)) for k, v, t, verdict in self._gates(out))
+        self.assertEqual(rows["injects"][0], "n/a (comp ships none)")
+        self.assertNotIn("injects", [k for k, _, _, v in self._gates(out) if v == "FAIL"])
+
+    def test_submissions_above_published_still_count(self):
+        d = self._run_dir(injects_published=3, injects_submitted=2)
+        out = render.build_report(d)
+        rows = dict((k, (v, t, verdict)) for k, v, t, verdict in self._gates(out))
+        self.assertEqual(rows["injects"][0], "2")
+        self.assertEqual(rows["injects"][2], "PASS")
+
+    def test_spread_metric_names_the_dominant_target(self):
+        d = self._run_dir()
+        ev = d / "evidence" / "red"
+        # 4 takedowns: 3 on one host, 1 on another (run.json t0 anchors T+)
+        lines = []
+        for i, ip in enumerate(["192.168.130.5", "192.168.130.5", "192.168.130.5",
+                                "192.168.130.4"]):
+            ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(1000 + 60 * (i + 1)))
+            lines.append(json.dumps({
+                "ts": ts, "kind": "action", "tactic": "impact_service", "ok": True,
+                "target": ip,
+                "detail": f"svc is DOWN on {ip} (stop_disable)",
+                "data": {"unit": "svc", "mode": "stop_disable"}}))
+        (ev / "events.jsonl").write_text("\n".join(lines) + "\n")
+        (d / "evidence" / "red" / "world.json").write_text(json.dumps({"meta": {}}))
+        out = render.build_report(d)
+        self.assertRegex(out[0] if isinstance(out, tuple) else out,
+                         r"takedown spread: \*\*75%\*\* on one target")
+
 
 
 if __name__ == "__main__":

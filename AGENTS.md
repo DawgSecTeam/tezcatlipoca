@@ -32,18 +32,21 @@ Run identity makes this safe on the host too (2026-10-02): each deploy stamps a 
 `run-<id>` tag on everything it creates and every destroy path requires the full ownership set, so
 two worktrees may deploy the SAME competition ID without their teardowns eating each other's VMs —
 coexistence still needs distinct `--scoring-vmid` + team identifiers (preflight refuses real
-collisions). Legacy state without a run id: teardown's sweep stays OFF until `--legacy-tags`, and
-untagged VMs need `--allow-untagged`. Details:
+collisions). A state file with no run id is refused by teardown outright, and untagged VMs are
+never destroyed unless they carry this competition's clone marker. Details:
 [docs/usage-agents.md](docs/usage-agents.md#run-ownership-teardown-only-touches-this-deploys-vms-2026-10-02).
 
-**The preflight now enforces the other half of this.** Before anything else it refuses to start when
-another deploy is live against the same estate — detected by a *held* flock in
-`~/.tezcatlipoca/locks/`, which is the one signal that cannot lie (a stale `.lock` from a dead run is
-ignored, not treated as a competitor). Two sessions at once is what produced the 13xx vmid races, a
-foreign template squatting a golden slot, and the over-broad sweep that took out two other comps'
-engines and goldens. To run two ranges deliberately, give each its own `--scoring-vmid` and
-`TF_VAR_team_identifiers` blocks and set `TEZ_ALLOW_CONCURRENT=1`; the gate then warns instead of
-refusing.
+**Concurrent ranges are supported, from isolated worktrees.** The preflight warns when another
+deploy is live against the same estate — detected by a *held* flock in `~/.tezcatlipoca/locks/`,
+which is the one signal that cannot lie (a stale `.lock` from a dead run is ignored, not treated as
+a competitor) — and proceeds. Safe coexistence is on you: give each range its own `--scoring-vmid`
+and `TF_VAR_team_identifiers` blocks, and let the run-id ownership tags scope each teardown to its
+own deploy's VMs. The preflight still refuses REAL collisions wherever they can be proven (vmid
+clashes, engine mgmt-IP conflicts); what the warning exists for is the uncoordinated case — two
+sessions at once sharing vmid blocks is what produced the 13xx vmid races, a foreign template
+squatting a golden slot, and the over-broad sweep that took out two other comps' engines and
+goldens (the old `TEZ_ALLOW_CONCURRENT` opt-in flag is gone: warning-and-proceeding IS the
+default, 2026-10-04).
 
 Teardown after a practice run is `destroy-competition.py` — it is resumable (stale-lock recovery,
 tag-scoped leftover sweep, foreign VMs skip-and-continue); re-run it until it exits clean. **Never
@@ -74,7 +77,12 @@ cp /path/to/main-tree/vendor/nakon/.env vendor/nakon/.env
 cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxmox` against terraform/
 ```
 
-- Pick the env file matching the target node and **check the stale-var traps**: the
+- Pick the env file matching the target node and **check the stale-var traps**: on .150 that is
+  `.env.cyberrange-20260930` (the MAIN `.env` targets the down .193 — copying it is the classic
+  wrong-variant mistake; every banner now prints the resolved endpoint/node/datastore so a wrong
+  copy shows immediately). The engine mgmt IP default (.250) is SSH-poisoned on .150's tailnet
+  path — the cyberrange variant pins `TF_VAR_engine_mgmt_ip=10.0.0.252`, and the preflight now
+  REFUSES an unverifiable default IP instead of proceeding. The
   `.env.realm-backup-20260923` (.150) variant shipped `TF_VAR_template_vm_id=9106` (dead vmid — the
   engine-base preflight hard-fails; correct value is **955**) and no `TF_VAR_team_identifiers`
   (default identifiers 101… collide with nothing by themselves, but on a shared node 100–124 are
@@ -116,12 +124,17 @@ Cheap habits that the session logs show being re-learned expensively:
   Never wrap a deploy in `timeout` to make it fit a tool call.
 - **Kill by pid or process group**, never `pkill -f` a pattern that also appears in the invoking
   command line.
+- **Never judge a command's success through a pipe** — `cmd | tail` reports the PIPE's exit code,
+  so a failed pytest/deploy reads as success (live: a red suite was briefly committed, 2026-10-04).
+  Check `${PIPESTATUS[0]}`, or redirect to a file and echo `$?` from the command itself.
+- **Never write "validated" in a commit message before it is.** State what was done and what the
+  next step proves; the report/docs are where validated claims live after they pass.
 
 ## Editing docs
 
 Docs are held to the same standard as code: **verify every claim against the source before writing
-it** (the pipeline is generation "v2" — golden templates + linked clones — and passages written
-against the pre-golden pipeline are still being found), prefer one canonical statement plus links
+it** (there is one pipeline — golden templates + linked clones — and passages written against
+older pipelines may still turn up), prefer one canonical statement plus links
 over copies. If a doc and the
 code disagree and the code looks like the bug, document the code's actual behavior and flag the
 discrepancy (`docs/known-issues.md`) rather than silently "fixing" the doc. Fixed issues are

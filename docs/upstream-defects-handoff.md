@@ -369,6 +369,15 @@ itself while ftp01 self-reported joined.
 
 ---
 
+## 11. `nakon deploy` fails a 0-step plan as a credential failure (nakon repo) — FIXED
+
+> **Status 2026-10-05:** FIXED upstream in nakon `22360ba` (`deploy/runner.py`: the "no output from
+> the remote plan" error now fires only when the plan had steps); the driver workaround
+> (`_reconcile_zero_step_machines`) is removed. Contract pinned by `tests/test_zero_step_plan.py`.
+> Delete this section once the pin lands in a nakon release.
+
+---
+
 ## Definition of done
 
 1. Every catalog change applied via `vulndb-cli`, then **re-read** (`get --json`) to confirm the row.

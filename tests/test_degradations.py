@@ -23,8 +23,8 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import deploy  # noqa: E402
-import hardening_ops  # noqa: E402
+from deploy_lib import failure as dl_failure  # noqa: E402
+import apt_dns_ops  # noqa: E402
 import utils  # noqa: E402
 
 # verify-competition.py has a hyphen, so it is loaded by path (same as test_verify_gates).
@@ -75,7 +75,7 @@ class DeployPersists(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             ctx = self._ctx(Path(d))
             with contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy._record_degradations(ctx)
+                dl_failure.record_degradations(ctx)
         self.assertEqual(ctx.state["degradations"], [])
         self.assertNotIn("tolerated", out.getvalue())   # nothing to print
 
@@ -85,7 +85,7 @@ class DeployPersists(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             ctx = self._ctx(Path(d))
             with contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy._record_degradations(ctx)
+                dl_failure.record_degradations(ctx)
         self.assertEqual(len(ctx.state["degradations"]), 2)
         text = out.getvalue()
         self.assertIn("2 tolerated failure(s)", text)
@@ -147,15 +147,15 @@ class TheSiteActuallyRecords(unittest.TestCase):
         target = {"ip": "192.168.1.5", "vmid": 1150, "identifier": 210}
         failed = types.SimpleNamespace(returncode=1, stdout="", stderr="E: lock held")
         with patch.dict("os.environ", {"TF_VAR_proxmox_node": "pve"}), \
-                patch.object(hardening_ops.subprocess, "run", return_value=failed), \
-                patch.object(hardening_ops.time, "sleep"), \
-                patch.object(hardening_ops, "guest_agent_exec_root",
+                patch.object(apt_dns_ops.subprocess, "run", return_value=failed), \
+                patch.object(apt_dns_ops.time, "sleep"), \
+                patch.object(apt_dns_ops, "guest_agent_exec_root",
                              return_value=(100, "", "no space left")), \
-                patch.object(hardening_ops, "gateway_proxy", return_value=None), \
-                patch.object(hardening_ops, "wait_for_guest_agent", return_value=False), \
-                patch.object(hardening_ops, "wait_boxes_settled", return_value=[]), \
+                patch.object(apt_dns_ops, "gateway_proxy", return_value=None), \
+                patch.object(apt_dns_ops, "wait_for_guest_agent", return_value=False), \
+                patch.object(apt_dns_ops, "wait_boxes_settled", return_value=[]), \
                 contextlib.redirect_stdout(io.StringIO()):
-            hardening_ops.prep_apt_on_boxes([target], {"ssh_key_path": "/k"})
+            apt_dns_ops.prep_apt_on_boxes([target], {"ssh_key_path": "/k"})
         whats = [entry["what"] for entry in utils.degradations()]
         self.assertIn("apt prep failed", whats)
         detail = " ".join(entry["detail"] for entry in utils.degradations())

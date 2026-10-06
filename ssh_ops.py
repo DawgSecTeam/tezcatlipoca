@@ -73,11 +73,10 @@ def forget_engine_host_key(ip, known_hosts=None):
             pass
 
 
-def read_terraform_ctx(comp_dir=None):
-    """Read agent_context from `terraform output -json`. With comp_dir, read the
-    competition's own per-comp state (competitions/<id>/terraform); without it,
-    fall back to the legacy shared terraform/ dir."""
-    tf_dir = str(terraform_dir(comp_dir)) if comp_dir else "terraform"
+def read_terraform_ctx(comp_dir):
+    """Read agent_context from `terraform output -json` in the competition's own
+    per-comp state dir (competitions/<id>/terraform)."""
+    tf_dir = str(terraform_dir(comp_dir))
     raw = subprocess.run(
         ["terraform", "output", "-json"], cwd=tf_dir, capture_output=True, text=True, check=True
     ).stdout
@@ -276,3 +275,11 @@ def wait_for_http(url, timeout=120):
     print(f"  WARNING: {url} did not respond within {timeout}s — continuing anyway")
     record_degradation("endpoint did not respond", f"{url}: {timeout}s")
     return False
+
+
+def quote_sshkeys(public_key):
+    """Proxmox's `sshkeys` config param wants the key URL-encoded. The one definition:
+    golden clones (golden_target_ops._quote_sshkeys is an alias) and redeploy rebuilds
+    both use it."""
+    from urllib.parse import quote
+    return quote(public_key.strip(), safe="")

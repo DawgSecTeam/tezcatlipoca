@@ -42,6 +42,17 @@ _SPEC = importlib.util.spec_from_file_location(
     "verify_parallel_test", _REPO / "verify-competition.py")
 verify = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(verify)
+from range_ops import vm_id_for  # noqa: E402
+from utils import MAX_CONCURRENCY  # noqa: E402
+import verifier.context as v_context  # noqa: E402
+import verifier.creds as v_creds  # noqa: E402
+import verifier.domains as v_domains  # noqa: E402
+import verifier.engine as v_engine  # noqa: E402
+import verifier.isolation as v_isolation  # noqa: E402
+import verifier.misconfig as v_misconfig  # noqa: E402
+import verifier.reports as v_reports  # noqa: E402
+import verifier.scoreboard as v_scoreboard  # noqa: E402
+import verifier.state_gates as v_state_gates  # noqa: E402
 
 CTX = {"ssh_key_path": "/tmp/key", "vm_username": "scoring",
        "scoring_engine_ip": "10.0.0.1", "box_username": "ubuntu"}
@@ -96,11 +107,11 @@ def _domains_run(boxes, roles, probe, teams=None, serial=False, ctx=None):
     (comp_dir / "domain_roles.json").write_text(json.dumps(roles))
     patches = [
         patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}),
-        patch.object(verify, "guest_agent_exec_windows", side_effect=probe),
-        patch.object(verify, "guest_agent_exec_root", side_effect=probe),
+        patch.object(v_domains, "guest_agent_exec_windows", side_effect=probe),
+        patch.object(v_domains, "guest_agent_exec_root", side_effect=probe),
     ]
     if serial:
-        patches.append(patch.object(verify, "run_concurrent",
+        patches.append(patch.object(v_domains, "run_concurrent",
                                     side_effect=_serial_run_concurrent))
     with contextlib.ExitStack() as stack:
         for p in patches:
@@ -123,10 +134,10 @@ def _valid_responses(dc1=_dc_out("team104.local", SID_A),
                      member1=_member_out("team104.local"),
                      member2=_member_out("team105.local")):
     """A fully-answering 2-team x 4-box line-up; each case perturbs one probe."""
-    out = {verify.vm_id_for(104, 0): dc1, verify.vm_id_for(105, 0): dc2}
+    out = {vm_id_for(104, 0): dc1, vm_id_for(105, 0): dc2}
     for i in (1, 2, 3):
-        out[verify.vm_id_for(104, i)] = member1
-        out[verify.vm_id_for(105, i)] = member2
+        out[vm_id_for(104, i)] = member1
+        out[vm_id_for(105, i)] = member2
     return out
 
 
@@ -163,8 +174,8 @@ class DomainsParallelism(unittest.TestCase):
 
     def test_duplicate_message_keeps_the_serial_team_order(self):
         probe = _windows_probe({
-            verify.vm_id_for(104, 0): _dc_out("team104.local", SID_A),
-            verify.vm_id_for(105, 0): _dc_out("team105.local", SID_A),
+            vm_id_for(104, 0): _dc_out("team104.local", SID_A),
+            vm_id_for(105, 0): _dc_out("team105.local", SID_A),
         })
         result, out = _domains_run(WIN_BOXES, ROLES, probe)
         self.assertIs(result.status, verify.Status.FAIL)
@@ -173,7 +184,7 @@ class DomainsParallelism(unittest.TestCase):
     def test_all_probes_failed_is_a_fail_not_a_pass(self):
         """The half-deployed case: every probe times out/errors. Serial semantics were
         one FAIL line per box and a FAIL verdict — the parallel pass must match."""
-        every = {verify.vm_id_for(t, i) for t in (104, 105) for i in range(4)}
+        every = {vm_id_for(t, i) for t in (104, 105) for i in range(4)}
         probe = _windows_probe({}, fail=every)
         result, out = _domains_run(WIN_BOXES, ROLES, probe)
         self.assertIs(result.status, verify.Status.FAIL)
@@ -189,19 +200,19 @@ class DomainsParallelism(unittest.TestCase):
         def probe(node, vmid, script, timeout=120):
             with lock:
                 seen.append(vmid)
-            if vmid == verify.vm_id_for(104, 0):
+            if vmid == vm_id_for(104, 0):
                 raise RuntimeError("agent breaker tripped")
             return 0, _member_out("team104.local"), ""
 
         _domains_run(WIN_BOXES, ROLES, probe)
-        expected = {verify.vm_id_for(t, i) for t in (104, 105) for i in range(4)}
+        expected = {vm_id_for(t, i) for t in (104, 105) for i in range(4)}
         self.assertEqual(sorted(seen), sorted(expected),
                          "a failing probe stopped the other boxes from being probed")
 
     def test_linux_agent_failure_falls_back_to_ssh_with_its_info_line(self):
         boxes = [{"name": "web01", "template": "ubuntu-2204-web", "last_octet": 5}]
         roles = {"web01": "member"}
-        vmid = verify.vm_id_for(104, 0)
+        vmid = vm_id_for(104, 0)
 
         def probe(node, vmid_, script, timeout=60):
             raise RuntimeError("agent exec breaker tripped")
@@ -209,12 +220,12 @@ class DomainsParallelism(unittest.TestCase):
         def fake_ssh(ctx, ip, cmd, timeout=60):
             return _proc(0, "JOINED=1\n")
 
-        with patch.object(verify, "ssh_via_gateway", side_effect=fake_ssh):
+        with patch.object(v_context, "ssh_via_gateway", side_effect=fake_ssh):
             result, out = _domains_run(boxes, roles, probe, teams={"team1": {"identifier": 104}})
         self.assertIs(result.status, verify.Status.PASS)
         self.assertIn("agent channel unavailable, probed over gateway SSH", out)
         self.assertIn("realm-joined", out)
-        self.assertEqual(vmid, verify.vm_id_for(104, 0))
+        self.assertEqual(vmid, vm_id_for(104, 0))
 
     def test_probes_actually_overlap(self):
         """Serial floor: 8 boxes x 0.25s = 2.0s; the 8-worker pool is ~0.25s."""
@@ -230,7 +241,7 @@ class DomainsParallelism(unittest.TestCase):
             time.sleep(0.25)
             with lock:
                 state["cur"] -= 1
-            if vmid == verify.vm_id_for(104, 0):
+            if vmid == vm_id_for(104, 0):
                 return 0, _dc_out("team104.local", SID_A), ""
             return 0, _member_out("team104.local"), ""
 
@@ -242,7 +253,7 @@ class DomainsParallelism(unittest.TestCase):
         self.assertLess(elapsed, 1.0,
                         f"domain probes did not overlap ({elapsed:.2f}s for 8x0.25s)")
         self.assertGreater(state["peak"], 1, "domain probes were not concurrent")
-        self.assertLessEqual(state["peak"], verify.MAX_CONCURRENCY, "pool exceeded its cap")
+        self.assertLessEqual(state["peak"], MAX_CONCURRENCY, "pool exceeded its cap")
 
     def test_reserialised_control_exceeds_the_threshold(self):
         """Gives the threshold teeth: with run_concurrent replaced by a serial runner
@@ -252,7 +263,7 @@ class DomainsParallelism(unittest.TestCase):
 
         def probe(node, vmid, script, timeout=120):
             time.sleep(0.25)
-            if vmid == verify.vm_id_for(104, 0):
+            if vmid == vm_id_for(104, 0):
                 return 0, _dc_out("team104.local", SID_A), ""
             return 0, _member_out("team104.local"), ""
 
@@ -283,9 +294,9 @@ def _survival_run(outputs_by_ip, serial=False):
             raise verify.CheckError("ssh: connect refused")
         return _proc(0, outputs_by_ip[ip])
 
-    patches = [patch.object(verify, "ssh_via_gateway", side_effect=fake)]
+    patches = [patch.object(v_context, "ssh_via_gateway", side_effect=fake)]
     if serial:
-        patches.append(patch.object(verify, "run_concurrent",
+        patches.append(patch.object(v_misconfig, "run_concurrent",
                                     side_effect=_serial_run_concurrent))
     with contextlib.ExitStack() as stack:
         for p in patches:
@@ -332,7 +343,7 @@ class MisconfigSurvivalParallelism(unittest.TestCase):
         def boom(ctx, ip, cmd, timeout=60):
             raise OSError("something unrelated broke")
 
-        with patch.object(verify, "ssh_via_gateway", side_effect=boom):
+        with patch.object(v_context, "ssh_via_gateway", side_effect=boom):
             with self.assertRaises(OSError):
                 _run(verify.check_misconfig_survival, CTX, SURVIVAL_BOXES)
 
@@ -355,7 +366,7 @@ class BeaconsParallelism(unittest.TestCase):
                 return _proc(0, "inactive\n")
             raise verify.CheckError("ssh: connect refused")
 
-        with patch.object(verify, "ssh_via_gateway", side_effect=fake):
+        with patch.object(v_context, "ssh_via_gateway", side_effect=fake):
             _, out = _run(verify.report_beacons, CTX, BEACON_BOXES)
         self.assertIn("LIVE  web01-team104 (192.168.104.5)", out)
         self.assertIn("no beacon unit running (inactive)", out)
@@ -370,7 +381,7 @@ class BeaconsParallelism(unittest.TestCase):
                 raise verify.CheckError("ssh: connect refused")
             return _proc(0, "active\n")
 
-        with patch.object(verify, "ssh_via_gateway", side_effect=fake):
+        with patch.object(v_context, "ssh_via_gateway", side_effect=fake):
             _, out = _run(verify.report_beacons, CTX, BEACON_BOXES)
         self.assertIn("WARN  web01-team104 (192.168.104.5): unreachable", out)
         self.assertIn("LIVE  web01-team105 (192.168.105.5)", out)
@@ -380,7 +391,7 @@ class BeaconsParallelism(unittest.TestCase):
         def boom(ctx, ip, cmd, timeout=30):
             raise OSError("ssh binary vanished")
 
-        with patch.object(verify, "ssh_via_gateway", side_effect=boom):
+        with patch.object(v_context, "ssh_via_gateway", side_effect=boom):
             with self.assertRaises(OSError):
                 _run(verify.report_beacons, CTX, BEACON_BOXES)
 
@@ -395,7 +406,7 @@ class RunBudgetTests(unittest.TestCase):
 
     def test_a_positive_budget_expires_on_the_clock(self):
         clock = {"t": 100.0}
-        with patch.object(verify.time, "monotonic", side_effect=lambda: clock["t"]):
+        with patch.object(time, "monotonic", side_effect=lambda: clock["t"]):
             budget = verify.RunBudget(30)
             self.assertFalse(budget.expired())
             clock["t"] += 31
@@ -416,24 +427,24 @@ class MainBudgetTests(unittest.TestCase):
 
     def _run_main(self, comp_dir, extra=()):
         patches = [
-            patch.object(verify, "read_terraform_ctx",
+            patch.object(v_context, "read_terraform_ctx",
                          side_effect=verify.CheckError("terraform unavailable")),
-            patch.object(verify, "check_logins", return_value=(True, object())),
-            patch.object(verify, "check_no_default_creds", return_value=True),
-            patch.object(verify, "check_services",
-                         return_value=[verify._pass("services", gating=False)]),
-            patch.object(verify, "check_isolation", return_value=verify._skip("isolation")),
-            patch.object(verify, "report_healthcheck_status"),
-            patch.object(verify, "check_misconfig", return_value=True),
-            patch.object(verify, "check_misconfig_survival",
-                         return_value=verify._pass("misconfig_survival")),
-            patch.object(verify, "report_beacons"),
-            patch.object(verify, "check_injects", return_value=(False, True)),
-            patch.object(verify, "check_round_loop", return_value=verify._pass("round_loop")),
-            patch.object(verify, "check_plant_coverage",
-                         return_value=verify._pass("plant_coverage")),
-            patch.object(verify, "check_domains",
-                         return_value=verify._skip("domains", gating=False)),
+            patch.object(v_scoreboard, "check_logins", return_value=(True, object())),
+            patch.object(v_creds, "check_no_default_creds", return_value=True),
+            patch.object(v_scoreboard, "check_services",
+                         return_value=[verify.gate_pass("services", gating=False)]),
+            patch.object(v_isolation, "check_isolation", return_value=verify.gate_skip("isolation")),
+            patch.object(v_reports, "report_healthcheck_status"),
+            patch.object(v_misconfig, "check_misconfig", return_value=True),
+            patch.object(v_misconfig, "check_misconfig_survival",
+                         return_value=verify.gate_pass("misconfig_survival")),
+            patch.object(v_reports, "report_beacons"),
+            patch.object(v_engine, "check_injects", return_value=(False, True)),
+            patch.object(v_engine, "check_round_loop", return_value=verify.gate_pass("round_loop")),
+            patch.object(v_state_gates, "check_plant_coverage",
+                         return_value=verify.gate_pass("plant_coverage")),
+            patch.object(v_domains, "check_domains",
+                         return_value=verify.gate_skip("domains", gating=False)),
             patch.object(sys, "argv",
                          ["verify-competition.py", str(comp_dir), "--engine-ip",
                           "10.0.0.1", *extra]),
@@ -451,8 +462,8 @@ class MainBudgetTests(unittest.TestCase):
         self.assertEqual(rc, 1)  # the patched isolation gate is a non-passing SKIP
         self.assertNotIn("run budget", text)
         # ...and the default path still runs every gate.
-        verify.check_domains.assert_called_once()  # noqa: SLF001 - patched in _run_main
-        verify.check_services.assert_called_once()  # noqa: SLF001
+        v_domains.check_domains.assert_called_once()  # noqa: SLF001 - patched in _run_main
+        v_scoreboard.check_services.assert_called_once()  # noqa: SLF001
 
     def test_exhausted_budget_skips_the_remaining_gates_fail_closed(self):
         comp_dir = self._comp()
@@ -460,7 +471,7 @@ class MainBudgetTests(unittest.TestCase):
         # A monotonic clock that advances 10s per query: RunBudget(15) is created on the
         # first query (0), logins runs on the second (10), and everything after is spent.
         ticks = itertools.count()
-        with patch.object(verify.time, "monotonic", side_effect=lambda: next(ticks) * 10.0):
+        with patch.object(time, "monotonic", side_effect=lambda: next(ticks) * 10.0):
             with contextlib.redirect_stdout(io.StringIO()) as out:
                 rc = verify.main()
         text = out.getvalue()
@@ -470,8 +481,8 @@ class MainBudgetTests(unittest.TestCase):
         self.assertIn(f"{'domains':<18}: SKIP", text)
         self.assertIn("RESULT: FAIL", text)
         # Gates that never ran must not have been called at all.
-        verify.check_domains.assert_not_called()  # noqa: SLF001 - patched in _run_main
-        verify.check_services.assert_not_called()  # noqa: SLF001
+        v_domains.check_domains.assert_not_called()  # noqa: SLF001 - patched in _run_main
+        v_scoreboard.check_services.assert_not_called()  # noqa: SLF001
 
 
 if __name__ == "__main__":

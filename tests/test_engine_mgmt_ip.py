@@ -29,6 +29,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import config_ops  # noqa: E402
+import preflight.mgmt_ip as preflight_mgmt_ip  # noqa: E402
 
 
 def _vm(vmid, node, name, status="running", template=0, tags="tezcatlipoca,comp-other"):
@@ -57,7 +58,7 @@ def _gate(vms, api, ip, engine_vmid=2400, node="proxmox", ours_tags=None, explic
     env.pop("TF_VAR_engine_mgmt_ip", None)
     if explicit is not None:
         env["TF_VAR_engine_mgmt_ip"] = explicit
-    with patch.object(config_ops, "proxmox_api", api), patch.dict(os.environ, env, clear=True):
+    with patch.object(preflight_mgmt_ip, "proxmox_api", api), patch.dict(os.environ, env, clear=True):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             config_ops._engine_mgmt_ip_gate(node, vms, engine_vmid, ip, ours_tags=ours_tags)
     return out.getvalue()

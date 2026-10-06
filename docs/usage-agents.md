@@ -45,12 +45,11 @@ infrastructure, review it, then re-run the same command without `--plan-only` (p
 
 ### Resuming (`--from-phase`)
 
-`deploy()` walks the eight **v3** phases (`deploy_phases.PHASES`) — 1 Cleanup · 2 engine-template + apply #1 · 3 prepare
+`deploy()` walks the eight **v3** phases (`deploy_lib.phases.PHASES`) — 1 Cleanup · 2 engine-template + apply #1 · 3 prepare
 engine from template · 4 golden set + apply #2 · 5 firewall bootstrap (in-path firewalls only) ·
 6 repair-stage sweep · 7 domains → final pass → beacons + `tz-ready` · 8 seed.
 [architecture.md](architecture.md#eight-phase-deploy) is the
-canonical list, plus the [v1 → v2 table](architecture.md#v1-to-v2-migration-what-moved) if you are
-reading an older run's notes. A failed deploy prints which phase it died in; `--from-phase N`
+canonical list. A failed deploy prints which phase it died in; `--from-phase N`
 re-enters there instead of tearing everything down. **Cloning is phase 4** (linked clones in
 apply #2) — phases 6-8 have no clone step and do not read the nakon bundle by hash. Phase 8's three
 sub-steps (seed teams, unpause the engine, create injects) are each gated on their own flag in
@@ -174,7 +173,7 @@ python3 verify-competition.py competitions/<id> [--engine-ip IP] [--admin-passwo
    satellites), so a lineup with no post-clone configs is still recorded — golden-stage failures
    (including `alpine_services`-tolerated ones) map onto every team clone.
 8. **DOMAINS** (`domains`) — AD promotion, joins, AD plants, and cross-team DomainSID uniqueness
-   (see `verify-competition.py`'s `check_domains`). Fail-closed on a malformed `domain_roles.json`.
+   (see `verifier/domains.py`'s `check_domains`). Fail-closed on a malformed `domain_roles.json`.
 9. **RED IDENTITY** (`red_identity`) — only with `--red-identity`: proves red's source address
    survives end-to-end to the boxes (see `--red-ip`/`--red-seg-ip`/`--red-user`).
 10. **PACKET** (`packet_creds` + `packet_accounts`) — only with `--packet <profile>`: the packet's
@@ -203,6 +202,14 @@ the old fixed literals, and a purely informational report of `range-healthcheck.
 `report_beacons` and the per-pass `plant integrity` tally from `.deploy_state.json` — none of those
 affect the exit code.
 
+Conditional gates added with the in-path firewall and clean comps: **`firewall_in_path`** (comps
+with an `in_path` firewall: per team, the engine routes `192.168.<id>.1` via `172.31.<id>.2`, the
+firewall answers on `172.31.<id>.2:22`, and the engine no longer holds `192.168.<id>.1` — catches
+an out-of-band `terraform apply` re-writing the pre-cutover netplan; SKIP and non-gating with no
+firewall, SKIP when the engine is unreachable) and an **automatic misconfig SKIP** for a
+deliberately-clean comp (`box_vulns.json` empty and no machine carries a misconfig — informational,
+no flag needed; pinned vulns that the machines lack still FAIL).
+
 Exit code is `0` only when logins all pass, no default creds remain, isolation holds, the
 misconfig spot-check (and, with 2+ teams, the misconfig-survival pass) confirms, injects
 (if any) are present, the round loop is advancing, and the conditional gates above pass — and no
@@ -222,6 +229,8 @@ from `competitions/<id>/credentials.txt` (override with `--admin-password`), SSH
 `.env`, planted configs from `competitions/<id>/nakon-config.json`.
 
 ## `redeploy-competition.py`
+
+> Module layout (0.2.0): the CLI is unchanged; the code is split into `redeploy_*_ops.py` modules — see [internals.md](internals.md#redeploy-competitionpy).
 
 Puts a **subset** of a live competition's boxes back without tearing down the range — the tool
 for "team 3's web01 is wrecked and the event is still running". `create-competition.py` can't do
@@ -266,7 +275,7 @@ rebuilt box carries the golden-stage installs without inheriting whatever the de
 also what phase 4's apply #2 does at deploy time. The rebuild stamps the full ownership tag set and
 the clone marker onto the new VM explicitly — a clone otherwise *inherits* its golden's tags, and a
 golden reused across runs carries a stale `run-<id>` that would make teardown refuse the box. A
-rebuilt box is recreated outside Terraform, so on a v2 range **every** rebuilt box (M3.3 made all
+rebuilt box is recreated outside Terraform, so **every** rebuilt box (M3.3 made all
 teams Terraform resources) drifts from Terraform state — the tool notes it per box, and the next
 `terraform apply` will want to replace them. Fine mid-event; re-import or accept the replacement
 afterwards.
@@ -308,6 +317,8 @@ state, not a repair. Every mode except `reconfigure` says so and requires confir
 
 ## `destroy-competition.py`
 
+> Module layout (0.2.0): the CLI is unchanged; the code is split into `destroy_gate_ops.py` / `destroy_sweep_ops.py` / `destroy_templates_ops.py` — see [internals.md](internals.md#destroy-competitionpy).
+
 ```bash
 python3 destroy-competition.py                                # teams-only (M4 default)
 python3 destroy-competition.py --competition <id> --full      # also destroy templates
@@ -316,10 +327,9 @@ python3 destroy-competition.py --competition <id> --skip-artifacts  # do not col
 python3 destroy-competition.py --competition <id> --artifacts-timeout 20  # per-file pull budget
 ```
 
-Destroys all of the competition's team boxes, then runs `terraform destroy`. Pipeline-v2 ranges keep
-every team in Terraform state, so `terraform destroy` alone removes them; `cloned_vms.json` is a
-**legacy** path taken only if the file exists (pre-golden ranges whose team2+ boxes were API clones).
-Requires that competition's `teams.json` + `boxes.json` (both written by `deploy()`), and restores
+Destroys all of the competition's team boxes, then runs `terraform destroy`. Every team is in
+Terraform state, so `terraform destroy` alone removes them. Requires a `run_id` in
+`.deploy_state.json` plus that competition's `teams.json` + `boxes.json` (all written by `deploy()`), and restores
 the per-competition `TF_VAR_*` values first so Terraform address-matches the original apply.
 
 **Before the first destructive call** it collects the run's test artifacts into
@@ -349,17 +359,17 @@ other's VMs**. Behavior you will see:
 - A VM tagged with the comp but a DIFFERENT run id (another worktree's run) is refused/skipped
   with a loud warning, everywhere: pre-stop, the leftover sweep, `--full` template destroys,
   and deploy phase-1 reclamation. It is never destroyed from the wrong worktree.
-- An UNTAGGED VM on a computed vmid is refused by default. Escape hatches are explicit:
-  `--allow-untagged` here, `TEZ_ALLOW_UNTAGGED_RECLAIM=1` for deploy phase 1.
-- A state file with no run id (pre-run-id deploy): the leftover sweep is OFF until you pass
-  `--legacy-tags` (comp-tag-only sweep — use it only when no other session runs the same comp
-  ID); recorded-vmid deletes keep the comp-tag guard.
-- A deploy whose preflight finds comp-tagged VMs missing its run tag refuses with a hint: tear
-  the old range down with `--legacy-tags` first, or coordinate with the other session.
+- An UNTAGGED VM on a computed vmid is refused — unless it carries this competition's clone
+  marker (an interrupted clone whose tagging step never ran), which proves ownership. There is
+  no escape hatch.
+- A state file with no run id is refused by teardown before anything is collected or destroyed:
+  ownership cannot be proven, so remove such a range by hand on the node.
+- A deploy whose preflight finds comp-tagged VMs missing its run tag refuses: they are another
+  worktree's run of the same competition ID — coordinate with that session.
 
 `report_remaining` (printed when teardown cannot finish) classifies every survivor the same
-way, so a human always knows what is ours, what belongs to another run, and what predates run
-ids.
+way, so a human always knows what is ours, what belongs to another run, and what carries no
+run tag.
 
 **Lifecycle rule: tear the golden range down once the run has achieved its goal.** Teams-only
 exists for the mid-run loop only — crash resume, iterate, re-run the SAME competition; that
@@ -393,7 +403,7 @@ Everything that exists in argparse but is not part of the happy path, in one pla
 | `--windows-domain-validated` | `verify-competition.py` | Operator attestation that a Windows/domain lineup's run exercised DomainSID uniqueness, machine SIDs, and the three-pass ordering. Required alongside `--freeze` for such a lineup |
 | `--fix-round-loop` | `verify-competition.py` | Issue the `POST /api/competition/start` + `POST /api/engine/pause {pause:false}` pair when the round loop did not auto-resume after an engine reboot |
 | `--freeze` / `--unfreeze --confirm-unfreeze` | `verify-competition.py` | Write / remove the `.frozen.json` record. Freeze requires all gates PASS (incl. plant coverage) and must be the **last** thing you do before the event — committing afterwards trips the drift gate |
-| `--expect-no-vulns` | `verify-competition.py` | Skip the misconfig gates for a packet-compiled comp whose `box_vulns.json` is not authored yet |
+| `--expect-no-vulns` | `verify-competition.py` | Force the misconfig gates to SKIP (a comp with an empty `box_vulns.json` already skips them automatically) |
 | `--allow-unverified <gate>` | `verify-competition.py` | Waive ONE gate's `SKIP` (could-not-evaluate) verdict so it does not fail the exit code. Repeatable; waives only a SKIP, never a FAIL; unknown names are warned about. Without it a gate that couldn't run is not a pass |
 | `--timeout SECONDS` | `verify-competition.py` | Optional whole-run wall-clock budget (default `0` = off), checked **between** gates so it never interrupts a Proxmox task. A gate skipped on budget is recorded `SKIP` — non-passing — so a budget can bound a verify but never turn an unevaluated range into a PASS (waive with `--allow-unverified`) |
 | `--packet <profile>` | `verify-competition.py` | Add the `packet_creds` + `packet_accounts` gates (packet credentials match `credentials.txt`; `out_of_scope` decoy accounts exist) |

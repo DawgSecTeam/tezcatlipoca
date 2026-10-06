@@ -48,7 +48,7 @@ def _load(name, filename):
     return mod
 
 
-scrim = _load("run_agent_scrim_artifacts", "run-agent-scrim.py")
+from scrim import fire_test, quotient_api, blue_agent, blue_prompt, core, endpoints, event_run, evidence, procs, red_link, red_stage, run_manifest, teardown_stage, test_folder
 
 RUN_ID = "run-1a2b3c4d"
 BOXES = [{"name": "dc01", "last_octet": 2, "template": "base-windows-server"},
@@ -85,7 +85,7 @@ class TmpCase(unittest.TestCase):
         """resolve_run_dir with the node/endpoint env a deploy would have set."""
         with mock.patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve",
                                           "TF_VAR_proxmox_endpoint": "https://10.0.0.193:8006"}):
-            return scrim.resolve_run_dir(comp or self.comp, args)
+            return test_folder.resolve_run_dir(comp or self.comp, args)
 
 
 class RunDirResolution(TmpCase):
@@ -176,20 +176,20 @@ class PhaseMirror(TmpCase):
     def test_record_phase_mirrors_into_test_json_and_keeps_run_json(self):
         args = make_args(self.comp, keep_range=True)
         run_dir, test_dir = self.resolve(args)
-        scrim.record_phase(run_dir, args, "stage_red")
-        man = scrim.load_manifest(run_dir)  # run.json, unchanged in shape
+        run_manifest.record_phase(run_dir, args, "stage_red")
+        man = run_manifest.load_manifest(run_dir)  # run.json, unchanged in shape
         self.assertEqual(man["phase"], "stage_red")
         self.assertIsNone(man["t0"])
         self.assertTrue(man["keep_range"])
         self.assertEqual(man["competition"], "demo")
         self.assertEqual(man["teams"], 2)
         self.assertEqual(man["duration_min"], 90)
-        self.assertEqual(os.stat(run_dir / scrim.RUN_MANIFEST).st_mode & 0o777, 0o600)
+        self.assertEqual(os.stat(run_dir / run_manifest.RUN_MANIFEST).st_mode & 0o777, 0o600)
         mirrored = ao.load_manifest(test_dir)
         self.assertEqual([p["phase"] for p in mirrored["phases"]], ["stage_red"])
         self.assertEqual(mirrored["phase"], "stage_red")
-        scrim.record_phase(run_dir, args, "event", t0=1234.5)
-        self.assertEqual(scrim.load_manifest(run_dir)["t0"], 1234.5)
+        run_manifest.record_phase(run_dir, args, "event", t0=1234.5)
+        self.assertEqual(run_manifest.load_manifest(run_dir)["t0"], 1234.5)
         self.assertEqual([p["phase"] for p in ao.load_manifest(test_dir)["phases"]],
                          ["stage_red", "event"])
         self.assertEqual(ao.load_manifest(test_dir)["phases"][1]["t0"], 1234.5)
@@ -200,8 +200,8 @@ class PhaseMirror(TmpCase):
         run_dir.mkdir()
         args = SimpleNamespace(competition="demo", teams=2, duration_min=90,
                                keep_range=True, blue_watchdog=False)
-        scrim.record_phase(run_dir, args, "stage_red")
-        self.assertEqual(scrim.load_manifest(run_dir)["phase"], "stage_red")
+        run_manifest.record_phase(run_dir, args, "stage_red")
+        self.assertEqual(run_manifest.load_manifest(run_dir)["phase"], "stage_red")
 
 
 class AgentIdentity(TmpCase):
@@ -217,8 +217,8 @@ class AgentIdentity(TmpCase):
         (self.bad / "config.yaml").write_text(
             json.dumps({"deploy": {"red_ip": "10.0.0.199"}}))
         (self.comp / "credentials.txt").write_text("engine http://10.0.0.193:8006/\n")
-        for patch in (mock.patch.object(scrim, "REPO", self.repo),
-                      mock.patch.object(scrim, "BAD_AUTO", self.bad),
+        for patch in (mock.patch.object(core, "REPO", self.repo),
+                      mock.patch.object(core, "BAD_AUTO", self.bad),
                       mock.patch.dict(os.environ, {"TF_VAR_vm_username": "sysadmin",
                                                    "TF_VAR_proxmox_node": "pve"})):
             patch.start()
@@ -226,8 +226,8 @@ class AgentIdentity(TmpCase):
 
     def test_red_ssh_spec_is_the_one_helper_red_ssh_ctx_uses(self):
         args = make_args(self.comp, red_ip="10.0.0.198")  # config.yaml disagrees on purpose
-        target, common, jump = scrim._red_ssh_ctx(args)
-        spec, spec_common = scrim._red_ssh_spec(args)
+        target, common, jump = red_link._red_ssh_ctx(args)
+        spec, spec_common = red_link._red_ssh_spec(args)
         self.assertEqual(spec["host"], "10.0.0.199")
         self.assertEqual(spec["user"], "sysadmin")
         self.assertEqual(spec["key"], str(self.repo / "proxmox"))
@@ -245,27 +245,27 @@ class AgentIdentity(TmpCase):
                          llm_base_url="https://openrouter.ai/api/v1", red_model="m",
                          reasoning_effort=None, red_tunnel="off")
         run_dir, test_dir = self.resolve(args)
-        with mock.patch.object(scrim, "run",
+        with mock.patch.object(procs, "run",
                                lambda *a, **k: subprocess.CompletedProcess(a[0], 0, "", "")), \
-                mock.patch.object(scrim, "check_red_llm", lambda *a, **k: True), \
-                mock.patch.object(scrim, "api_key", lambda *a, **k: "k"):
+                mock.patch.object(red_link, "check_red_llm", lambda *a, **k: True), \
+                mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"):
             # creds must be real-shaped: routed red runs the pre-T0 reachability gate,
             # which reads ENGINE_IP/ADMIN_PW (mocked run answers rc=0 for it here)
-            scrim.stage_red(args, self.comp, {"ENGINE_IP": "10.0.0.193",
+            red_stage.stage_red(args, self.comp, {"ENGINE_IP": "10.0.0.193",
                                               "ADMIN_PW": "pw"}, run_dir)
         red = ao.load_manifest(test_dir)["agents"]["red"]
         self.assertTrue(red["present"])
         self.assertEqual(red["ip"], "10.0.0.199")
         self.assertEqual(red["vmid"], 999)
         self.assertEqual(red["node"], "pve")
-        spec, _common = scrim._red_ssh_spec(args)
+        spec, _common = red_link._red_ssh_spec(args)
         self.assertEqual(red["ssh"], spec)
         # the collector's red target is live and dials EXACTLY this spec, not config.yaml
         targets = ao.plan_targets(ao.load_manifest(test_dir), comp_dir=self.comp)
         red_target = next(t for t in targets if t["name"] == "red01")
         self.assertEqual(red_target["ssh"], spec)
         self.assertEqual(red_target["vmid"], 999)
-        scrim.record_red_agent(args)  # a resume re-records; identical, not erased
+        test_folder.record_red_agent(args)  # a resume re-records; identical, not erased
         self.assertEqual(ao.load_manifest(test_dir)["agents"]["red"], red)
 
     def test_agent_records_merge_without_erasing(self):
@@ -273,8 +273,8 @@ class AgentIdentity(TmpCase):
         run_dir, test_dir = self.resolve(args)
         for n in (1, 2):
             (run_dir / f"blue-team{n}").mkdir()
-        scrim.record_agent(args, "red", present=True, ip="10.0.0.199", vmid=999)
-        scrim.record_blue_agents(args, run_dir)
+        test_folder.record_agent(args, "red", present=True, ip="10.0.0.199", vmid=999)
+        test_folder.record_blue_agents(args, run_dir)
         man = ao.load_manifest(test_dir)
         self.assertEqual(man["agents"]["blue"], {"present": True, "teams": 2})
         self.assertTrue(man["agents"]["red"]["present"], "blue must not erase red")
@@ -288,7 +288,7 @@ class AgentIdentity(TmpCase):
         names = [t["name"] for t in ao.plan_targets(man, comp_dir=self.comp)]
         self.assertIn("blue:blue-team1", names)
         self.assertIn("blue:blue-team2", names)
-        scrim.record_blue_agents(args, run_dir)  # resume re-records
+        test_folder.record_blue_agents(args, run_dir)  # resume re-records
         again = ao.load_manifest(test_dir)
         self.assertEqual(again["agents"], man["agents"])
         self.assertEqual(again["paths"], man["paths"])
@@ -323,13 +323,13 @@ class TeardownCollection(TmpCase):
         collect = collect or (lambda *a, **k: self.calls.append("collect") or {"summary": {}})
         ingest = ingest or (lambda *a, **k: self.calls.append("ingest") or {})
         patches = [
-            mock.patch.object(scrim, "api_key", lambda *a, **k: "k"),
-            mock.patch.object(scrim, "run", side_effect=run or self._fake_run),
+            mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"),
+            mock.patch.object(procs, "run", side_effect=run or self._fake_run),
             mock.patch.object(ao, "collect", side_effect=collect),
             mock.patch.object(ao, "ingest_verdict", side_effect=ingest),
         ]
         if log:
-            patches.append(mock.patch.object(scrim, "log",
+            patches.append(mock.patch.object(test_folder, "log",
                                              side_effect=self.warnings.append))
         return patches
 
@@ -337,7 +337,7 @@ class TeardownCollection(TmpCase):
         with contextlib.ExitStack() as stack:
             for patch in self._patches(**kwargs):
                 stack.enter_context(patch)
-            scrim.stage_teardown(self.args, {"ENGINE_IP": "10.0.0.193"})
+            teardown_stage.stage_teardown(self.args, {"ENGINE_IP": "10.0.0.193"})
 
     def test_the_collector_runs_before_badauto_destroy(self):
         self._teardown()
@@ -393,12 +393,12 @@ class TeardownCollection(TmpCase):
             "# INTERACTION — demo\n\n## Verdict\n\n"
             "**GREEN** — interaction score 11; gates 9 pass / 1 fail / 3 n/a\n")
         # the REAL ingest_verdict, so this fails if the report never reaches its source path
-        with mock.patch.object(scrim, "api_key", lambda *a, **k: "k"), \
-                mock.patch.object(scrim, "log", side_effect=self.warnings.append), \
-                mock.patch.object(scrim, "run", side_effect=self._fake_run), \
+        with mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"), \
+                mock.patch.object(test_folder, "log", side_effect=self.warnings.append), \
+                mock.patch.object(procs, "run", side_effect=self._fake_run), \
                 mock.patch.object(ao, "collect",
                                   side_effect=lambda *a, **k: self.calls.append("collect") or {}):
-            scrim.stage_teardown(self.args, {"ENGINE_IP": "10.0.0.193"})
+            teardown_stage.stage_teardown(self.args, {"ENGINE_IP": "10.0.0.193"})
         verdict = ao.load_manifest(self.test_dir).get("verdict") or {}
         self.assertEqual(verdict.get("status"), "GREEN")
         self.assertEqual(verdict.get("score"), 11)
@@ -424,12 +424,12 @@ class Finalize(TmpCase):
 
     def test_finalize_runs_last_on_the_keep_range_path(self):
         self.args.keep_range = True
-        with mock.patch.object(scrim, "stage_run", lambda *a: self.calls.append("stage_run")), \
-                mock.patch.object(scrim, "stage_capture",
+        with mock.patch.object(event_run, "stage_run", lambda *a: self.calls.append("stage_run")), \
+                mock.patch.object(evidence, "stage_capture",
                                   lambda *a: self.calls.append("capture")), \
-                mock.patch.object(scrim, "api_key", lambda *a, **k: "k"), \
-                mock.patch.object(scrim, "log", lambda *a, **k: None), \
-                mock.patch.object(scrim, "run", side_effect=self._fake_run), \
+                mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"), \
+                mock.patch.object(test_folder, "log", lambda *a, **k: None), \
+                mock.patch.object(procs, "run", side_effect=self._fake_run), \
                 mock.patch.object(ao, "collect",
                                   side_effect=lambda *a, **k: self.calls.append("collect") or {}), \
                 mock.patch.object(ao, "ingest_verdict",
@@ -437,7 +437,7 @@ class Finalize(TmpCase):
                 mock.patch.object(ao, "finalize",
                                   side_effect=lambda *a, **k: self.calls.append("finalize")
                                   or {"warnings": []}):
-            failure = scrim.run_event_and_finish(self.args, {"ENGINE_IP": "x"}, 0.0)
+            failure = event_run.run_event_and_finish(self.args, {"ENGINE_IP": "x"}, 0.0)
         self.assertIsNone(failure)
         self.assertEqual(self.calls[-1], "finalize")
         self.assertIn("badauto destroy", self.calls)
@@ -446,13 +446,13 @@ class Finalize(TmpCase):
 
     def test_finalize_failure_only_warns(self):
         warnings = []
-        with mock.patch.object(scrim, "stage_run", lambda *a: None), \
-                mock.patch.object(scrim, "stage_capture", lambda *a: None), \
-                mock.patch.object(scrim, "stage_teardown", lambda *a, **k: None), \
-                mock.patch.object(scrim, "log", side_effect=warnings.append), \
+        with mock.patch.object(event_run, "stage_run", lambda *a: None), \
+                mock.patch.object(evidence, "stage_capture", lambda *a: None), \
+                mock.patch.object(teardown_stage, "stage_teardown", lambda *a, **k: None), \
+                mock.patch.object(event_run, "log", side_effect=warnings.append), \
                 mock.patch.object(ao, "finalize",
                                   side_effect=RuntimeError("no space left on device")):
-            failure = scrim.run_event_and_finish(self.args, {"ENGINE_IP": "x"}, 0.0)
+            failure = event_run.run_event_and_finish(self.args, {"ENGINE_IP": "x"}, 0.0)
         self.assertIsNone(failure)
         self.assertTrue(any("WARNING" in w and "finalize" in w for w in warnings), warnings)
 
@@ -471,7 +471,7 @@ class CaptureRegressions(TmpCase):
         (run_dir / "blue-team2").mkdir()                          # no files: skipped
         ev = run_dir / "evidence"
         ev.mkdir()
-        written = scrim.capture_blue_evidence(run_dir, ev, 2)
+        written = evidence.capture_blue_evidence(run_dir, ev, 2)
         self.assertTrue((ev / "blue-team1" / "sub.md").exists(),
                         "sub.md is the name the cycle prompt tells blue to write")
         self.assertTrue((ev / "blue-team1" / "sub.txt").exists())
@@ -486,7 +486,7 @@ class CaptureRegressions(TmpCase):
         (workdir / "REPORT.md").write_text("# after-action\n")
         ev = run_dir / "evidence"
         ev.mkdir()
-        scrim.capture_blue_evidence(run_dir, ev, 1)
+        evidence.capture_blue_evidence(run_dir, ev, 1)
         self.assertTrue((ev / "blue-team1" / "REPORT.md").exists())
 
     def test_engine_capture_is_copied_not_moved(self):
@@ -495,15 +495,15 @@ class CaptureRegressions(TmpCase):
         (ev / "final-scoreboard.json").write_text('{"teams": []}')
         (ev / "scoreboard-state.jsonl").write_text("{}\n")
         (ev / "final-services-team1.json").write_text("[]")
-        written = scrim.capture_engine_evidence(ev)
+        written = evidence.capture_engine_evidence(ev)
         self.assertEqual(len(written), 3)
         self.assertTrue((ev / "engine" / "final-scoreboard.json").exists())
         self.assertTrue((ev / "engine" / "final-services-team1.json").exists())
         self.assertTrue((ev / "engine" / "scoreboard-state.jsonl").exists())
         # NOT moved: scrim-report.py reads this exact path for the scoreboard section
         self.assertTrue((ev / "final-scoreboard.json").exists())
-        self.assertIn('"evidence" / "final-scoreboard.json"',
-                      (_REPO / "scrim-report.py").read_text())
+        self.assertIn('"evidence" / FINAL_SCOREBOARD',
+                      (_REPO / "scrim_report" / "loaders.py").read_text())
 
 
 class BluePrompt(TmpCase):
@@ -522,23 +522,26 @@ class BluePrompt(TmpCase):
     def test_the_cycle_prompt_asks_for_report_md(self):
         args = SimpleNamespace(competition="demo", run_dir=str(self.run_dir), teams=1,
                                duration_min=90, reasoning_effort="minimal")
-        with mock.patch.object(scrim, "REPO", self.root):
-            prompt = scrim.blue_cycle_prompt(1, self.creds, args, 600, 30, "", "", "", "")
+        with mock.patch.object(core, "REPO", self.root):
+            prompt = blue_prompt.blue_cycle_prompt(1, self.creds, args, 600, 30, "", "", "", "")
         self.assertIn("REPORT.md", prompt)
         self.assertIn("workdir", prompt)
         self.assertIn("what you would change about this competition", prompt)
         # the change is additive: the cycle prompt's structure is untouched
         self.assertIn("CYCLE TASK", prompt)
         self.assertIn("ROE: never attack the engine", prompt)
+        # 2026-10-04 hardening: eviction guidance + the idle case
+        self.assertIn("EVICTED:", prompt)
+        self.assertIn("Idling is not defending", prompt)
 
     def test_stage_blues_asks_for_it_and_records_blue_identity(self):
         args = SimpleNamespace(competition="demo", teams=1, run_dir=str(self.run_dir),
                                blue_base_url="https://openrouter.ai/api/v1",
                                blue_model="m", reasoning_effort="minimal")
         _run_dir, test_dir = self.resolve(args)  # main() resolves before stage_blues
-        with mock.patch.object(scrim, "REPO", self.root), \
-                mock.patch.object(scrim, "api_key", lambda *a, **k: "k"):
-            scrim.stage_blues(args, self.comp, self.run_dir, self.creds, 0.0)
+        with mock.patch.object(core, "REPO", self.root), \
+                mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"):
+            blue_agent.stage_blues(args, self.comp, self.run_dir, self.creds, 0.0)
         workdir = self.run_dir / "blue-team1"
         self.assertIn("REPORT.md", (workdir / "LOG.md").read_text())
         manifest = ao.load_manifest(test_dir)
@@ -546,6 +549,114 @@ class BluePrompt(TmpCase):
         self.assertEqual(manifest["paths"]["blue_workdirs"], [str(workdir)])
         self.assertEqual(manifest["paths"]["engine_evidence"],
                          str(self.run_dir / "evidence" / "engine"))
+
+
+class FireTest(TmpCase):
+    """The fire test, with the box and the scoreboard scripted (no SSH, no engine).
+
+    Pins three behaviors the 2026-10-03 scrims bought the hard way: the residue guard
+    (an aborted earlier run can leave the unit down — restore BEFORE testing), the
+    watched row (web01-<display>, not "first web01*"), and agreement polling (probe and
+    scoreboard must agree within the deadline, not one stale sample)."""
+
+    def setUp(self):
+        super().setUp()
+        (self.comp / "box_services.json").write_text(json.dumps({"web01": ["ssh", "nginx"]}))
+        (self.comp / "targets.json").write_text(json.dumps(
+            {"targets": {"team1-web01": {"ip": "192.168.130.4"}}}))
+        self.creds = {"ENGINE_IP": "10.0.0.250", "TEAM1_ID": "130", "TEAM1_PW": "p",
+                      "BOX_PW": "p", "INJECT_PW": "p", "KEY_PATH": "/tmp/k",
+                      "VM_USER": "u", "BOX_USER": "medic"}
+        self.args = SimpleNamespace(competition="demo", teams=1, duration_min=90)
+        self.sudo_calls = []
+        self.logs = []
+
+    def _ssh(self, states):
+        """ssh_web01 scripted by command content; `states` is the is-active answer queue."""
+        def runner(cmd, timeout=60):
+            if "is-active" in cmd:
+                return SimpleNamespace(returncode=0,
+                                       stdout=(states.pop(0) if states else "inactive") + "\n",
+                                       stderr="")
+            if "list-unit-files" in cmd:
+                return SimpleNamespace(returncode=0, stdout="nginx\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return runner
+
+    def _sudo(self):
+        def runner(script, timeout=120):
+            self.sudo_calls.append(script)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return runner
+
+    def _scoreboard(self, downs):
+        """parsed_status handing out one row-set per poll: `downs` says whether
+        web01-http is down on each successive poll; exhausted -> all green."""
+        seq = [[{"service": "web01-ssh", "up": True},
+                {"service": "web01-http", "up": not d}] for d in downs]
+
+        def parsed(creds, team):
+            return seq.pop(0) if seq else [{"service": "web01-ssh", "up": True},
+                                           {"service": "web01-http", "up": True}]
+        return parsed
+
+    def _run(self, states, downs, codes):
+        """Run the fire test on a FAKE clock: sleep is a no-op and each time.time()
+        call advances 30s, so the deadline loops terminate after a few polls."""
+        clock = {"t": 0.0}
+
+        def fake_time():
+            clock["t"] += 30
+            return clock["t"]
+
+        http_seq = list(codes)
+
+        def fake_run_tree(cmd, **kw):
+            return SimpleNamespace(returncode=0,
+                                   stdout=(http_seq.pop(0) if http_seq else "000"),
+                                   stderr="")
+
+        with mock.patch.object(fire_test.time, "sleep", lambda s: None), \
+                mock.patch.object(fire_test.time, "time", fake_time), \
+                mock.patch.object(quotient_api, "parsed_status", self._scoreboard(downs)), \
+                mock.patch.object(fire_test.procs, "run_tree", fake_run_tree), \
+                mock.patch.object(fire_test, "log", side_effect=self.logs.append):
+            fire_test.run_fire_test(self.args, self.comp, self.creds,
+                                self._ssh(states), self._sudo())
+
+    def test_green_path_stops_and_restores_the_scored_unit(self):
+        self._run(["active"], [True], ["000", "200"])
+        self.assertTrue(any("systemctl stop" in c for c in self.sudo_calls))
+        self.assertTrue(any("systemctl start" in c for c in self.sudo_calls))
+        self.assertEqual(self.args.web_unit, "nginx")
+        self.assertTrue(any("down_detected=True restored=True healed=True" in l
+                            for l in self.logs))
+
+    def test_pre_existing_outage_is_restored_before_the_stop(self):
+        self._run(["inactive", "active", "active"], [True], ["000", "200"])
+        self.assertTrue(any("pre-existing outage" in l for l in self.logs))
+        # the unmask/start came before the stop
+        self.assertLess([i for i, c in enumerate(self.sudo_calls) if "start" in c][0],
+                        [i for i, c in enumerate(self.sudo_calls) if "stop" in c][0])
+
+    def test_unrestorable_outage_aborts_before_the_stop(self):
+        with self.assertRaises(RuntimeError) as raised:
+            # every is-active poll answers inactive; time.time advances 30s per call so
+            # the guard's bounded loop terminates after a handful of polls
+            clock = {"t": 0.0}
+
+            def fake_time():
+                clock["t"] += 30
+                return clock["t"]
+
+            with mock.patch.object(fire_test.time, "sleep", lambda s: None), \
+                    mock.patch.object(fire_test.time, "time", fake_time), \
+                    mock.patch.object(fire_test, "log", side_effect=self.logs.append):
+                fire_test.run_fire_test(self.args, self.comp, self.creds,
+                                    self._ssh(["inactive"]), self._sudo())
+        self.assertIn("pre-existing outage", str(raised.exception))
+        self.assertFalse(any("systemctl stop" in c for c in self.sudo_calls),
+                         "must not stop a unit it could not first bring up")
 
 
 if __name__ == "__main__":

@@ -25,6 +25,14 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import deploy  # noqa: E402
+from _deploy_patch import dpatch  # noqa: E402
+from deploy_lib import gates as dl_gates  # noqa: E402
+from deploy_lib import configs as dl_configs  # noqa: E402
+from deploy_lib import inputs as dl_inputs  # noqa: E402
+from deploy_lib import placement as dl_placement  # noqa: E402
+from deploy_lib import stages as dl_stages  # noqa: E402
+from deploy_lib import targets as dl_targets  # noqa: E402
+from deploy_lib import tfinputs as dl_tfinputs  # noqa: E402
 from constants import (DEFAULT_ENGINE_MGMT_GW, DEFAULT_ENGINE_MGMT_IP,  # noqa: E402
                        SCORING_ENGINE_VMID)
 
@@ -34,7 +42,7 @@ def _spec(**overrides):
                   credlist_usernames=["admin"], nakon_jobs=4, apt_cache=True,
                   comp_name="probe", boxes=[{"name": "web01", "template": "ubuntu-fix"}])
     fields.update(overrides)
-    return deploy.CompetitionSpec(**fields)
+    return dl_stages.CompetitionSpec(**fields)
 
 
 def _secrets(**overrides):
@@ -43,13 +51,13 @@ def _secrets(**overrides):
                   redis_password="r", box_password="b", box_creds={}, domain_creds=None,
                   inject_password=None)
     fields.update(overrides)
-    return deploy.CompetitionSecrets(**fields)
+    return dl_stages.CompetitionSecrets(**fields)
 
 
 def _prior(comp_dir, **overrides):
     fields = dict(state_path=comp_dir / ".deploy_state.json", previous_state={}, resuming=False)
     fields.update(overrides)
-    return deploy.PriorDeployState(**fields)
+    return dl_stages.PriorDeployState(**fields)
 
 
 class EngineVmidResolution(unittest.TestCase):
@@ -57,8 +65,8 @@ class EngineVmidResolution(unittest.TestCase):
 
     def test_fresh_run_takes_the_scoring_vmid_flag(self):
         with tempfile.TemporaryDirectory() as d:
-            identity = deploy.RunIdentity()
-            deploy._resolve_engine_vmid(identity, Path(d), 1, 1234)
+            identity = dl_stages.RunIdentity()
+            dl_inputs.resolve_engine_vmid(identity, Path(d), 1, 1234)
         self.assertEqual(identity.engine_vmid, 1234)
 
     def test_fresh_run_without_a_flag_takes_the_default(self):
@@ -67,8 +75,8 @@ class EngineVmidResolution(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("TF_VAR_scoring_vm_id", None)
-                identity = deploy.RunIdentity()
-                deploy._resolve_engine_vmid(identity, Path(d), 1, None)
+                identity = dl_stages.RunIdentity()
+                dl_inputs.resolve_engine_vmid(identity, Path(d), 1, None)
         self.assertEqual(identity.engine_vmid, SCORING_ENGINE_VMID)
 
     def test_fresh_run_without_a_flag_takes_the_env_vmid(self):
@@ -76,15 +84,15 @@ class EngineVmidResolution(unittest.TestCase):
         # silently ignored (the default 1000 was taken) until a second range collided.
         with tempfile.TemporaryDirectory() as d:
             with patch.dict(os.environ, {"TF_VAR_scoring_vm_id": "777"}):
-                identity = deploy.RunIdentity()
-                deploy._resolve_engine_vmid(identity, Path(d), 1, None)
+                identity = dl_stages.RunIdentity()
+                dl_inputs.resolve_engine_vmid(identity, Path(d), 1, None)
         self.assertEqual(identity.engine_vmid, 777)
 
     def test_a_junk_env_vmid_falls_back_to_the_default(self):
         with tempfile.TemporaryDirectory() as d:
             with patch.dict(os.environ, {"TF_VAR_scoring_vm_id": "not-a-number"}):
-                identity = deploy.RunIdentity()
-                deploy._resolve_engine_vmid(identity, Path(d), 1, None)
+                identity = dl_stages.RunIdentity()
+                dl_inputs.resolve_engine_vmid(identity, Path(d), 1, None)
         self.assertEqual(identity.engine_vmid, SCORING_ENGINE_VMID)
 
     def test_resume_reads_the_vmid_from_state_not_the_flag(self):
@@ -93,17 +101,24 @@ class EngineVmidResolution(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             (comp_dir / ".deploy_state.json").write_text(json.dumps({"scoring_vm_id": 4321}))
-            identity = deploy.RunIdentity()
-            deploy._resolve_engine_vmid(identity, comp_dir, 3, 9999)
+            identity = dl_stages.RunIdentity()
+            dl_inputs.resolve_engine_vmid(identity, comp_dir, 3, 9999)
         self.assertEqual(identity.engine_vmid, 4321)
 
     def test_unreadable_state_on_resume_falls_back_to_the_default(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             (comp_dir / ".deploy_state.json").write_text("{not json")
-            identity = deploy.RunIdentity()
-            deploy._resolve_engine_vmid(identity, comp_dir, 2, None)
+            identity = dl_stages.RunIdentity()
+            dl_inputs.resolve_engine_vmid(identity, comp_dir, 2, None)
         self.assertEqual(identity.engine_vmid, SCORING_ENGINE_VMID)
+
+
+def _load_and_gate(prior, comp_dir, from_phase, force):
+    """What prepare() does with the prior state: load it, then run the resume gates."""
+    dl_inputs.load_prior_deploy_state(prior, comp_dir, from_phase)
+    dl_gates.check_resume_gates(comp_dir, prior.state_path, prior.previous_state,
+                                from_phase, force=force)
 
 
 class PriorStateGuards(unittest.TestCase):
@@ -119,7 +134,7 @@ class PriorStateGuards(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             prior = _prior(Path(d))
             with self.assertRaises(SystemExit) as raised:
-                deploy._load_prior_deploy_state(prior, Path(d), 2, False)
+                _load_and_gate(prior, Path(d), 2, False)
         self.assertIn("doesn't exist", str(raised.exception))
 
     def test_pipeline_v1_state_is_refused(self):
@@ -127,26 +142,25 @@ class PriorStateGuards(unittest.TestCase):
             comp_dir = self._comp_dir(d, {"pipeline_version": 1, "last_phase": 3})
             prior = _prior(comp_dir)
             with self.assertRaises(SystemExit) as raised:
-                deploy._load_prior_deploy_state(prior, comp_dir, 2, False)
+                _load_and_gate(prior, comp_dir, 2, False)
         self.assertIn("pipeline v1", str(raised.exception))
 
     def test_pipeline_v2_state_is_refused(self):
-        # v3 inserted the firewall-bootstrap phase 5 and renumbered 5-7, so a v2
-        # state's --from-phase numbers mean different things now.
+        # A state from another pipeline version numbers its phases differently.
         with tempfile.TemporaryDirectory() as d:
             comp_dir = self._comp_dir(d, {"pipeline_version": 2, "last_phase": 3})
             prior = _prior(comp_dir)
             with self.assertRaises(SystemExit) as raised:
-                deploy._load_prior_deploy_state(prior, comp_dir, 2, False)
+                _load_and_gate(prior, comp_dir, 2, False)
         self.assertIn("pipeline v2", str(raised.exception))
-        self.assertIn("renumbered", str(raised.exception))
+        self.assertIn("different things", str(raised.exception))
 
     def test_guard_resume_from_phase_gets_the_states_last_completed_phase(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 5})
             prior = _prior(comp_dir)
-            with patch.object(deploy, "guard_resume_from_phase") as guard:
-                deploy._load_prior_deploy_state(prior, comp_dir, 6, True)
+            with dpatch("guard_resume_from_phase") as guard:
+                _load_and_gate(prior, comp_dir, 6, True)
         guard.assert_called_once_with(6, 5, comp_dir / ".deploy_state.json", force=True)
 
     def test_the_resume_budget_guard_is_also_wired_in(self):
@@ -155,19 +169,19 @@ class PriorStateGuards(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 3})
             prior = _prior(comp_dir)
-            with patch.object(deploy, "guard_resume_streak") as guard, \
-                    patch.object(deploy, "guard_resume_existence"):
-                deploy._load_prior_deploy_state(prior, comp_dir, 4, False)
+            with dpatch("guard_resume_streak") as guard, \
+                    dpatch("guard_resume_existence"):
+                _load_and_gate(prior, comp_dir, 4, False)
         guard.assert_called_once_with(4, prior.previous_state, force=False)
 
     def test_fresh_run_never_calls_the_resume_guard(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 0})
             prior = _prior(comp_dir)
-            with patch.object(deploy, "guard_resume_from_phase") as guard, \
-                    patch.object(deploy, "guard_resume_streak") as streak_guard, \
-                    patch.object(deploy, "guard_resume_existence") as exist_guard:
-                deploy._load_prior_deploy_state(prior, comp_dir, 1, False)
+            with dpatch("guard_resume_from_phase") as guard, \
+                    dpatch("guard_resume_streak") as streak_guard, \
+                    dpatch("guard_resume_existence") as exist_guard:
+                _load_and_gate(prior, comp_dir, 1, False)
         guard.assert_not_called()
         streak_guard.assert_not_called()   # a fresh deploy is never a resume-loop
         exist_guard.assert_not_called()    # nor a resume of anything
@@ -180,19 +194,19 @@ class PlacementAndLock(unittest.TestCase):
     def _run(self, identity, resolve_return, record=None):
         order = record if record is not None else []
         prior = _prior(Path("/nonexistent"), state_path=Path("/nonexistent/state.json"))
-        with patch.object(deploy, "resolve_placement",
+        with dpatch("resolve_placement",
                           side_effect=lambda *a, **k: order.append(("resolve", a[1])) or resolve_return), \
-                patch.object(deploy, "activate_placement", side_effect=lambda p: order.append("activate")), \
-                patch.object(deploy, "write_state"), \
-                patch.object(deploy, "acquire_engine_lock",
+                dpatch("activate_placement", side_effect=lambda p: order.append("activate")), \
+                dpatch("write_state"), \
+                dpatch("acquire_engine_lock",
                              side_effect=lambda v: order.append(("lock", v))):
-            place = deploy.EnginePlacement()
-            deploy._apply_engine_placement(place, prior, _secrets(), _spec(), identity,
+            place = dl_stages.EnginePlacement()
+            dl_placement.apply_engine_placement(place, prior, _secrets(), _spec(), identity,
                                            Path("/nonexistent"), None, None)
         return place, order
 
     def test_lock_is_taken_after_placement_and_keyed_on_the_resolved_vmid(self):
-        place, order = self._run(deploy.RunIdentity(engine_vmid=1234),
+        place, order = self._run(dl_stages.RunIdentity(engine_vmid=1234),
                                  ({"team_slots": {"team1": 0}}, None))
         # resolve -> activate (env now points at the engine's host) -> lock at that vmid
         self.assertEqual(order, [("resolve", 1234), "activate", ("lock", 1234)])
@@ -202,14 +216,14 @@ class PlacementAndLock(unittest.TestCase):
         import types
         record = types.SimpleNamespace(engine_mgmt_ip="10.0.0.7", engine_mgmt_gw="10.0.0.1")
         with patch.dict(os.environ, {}, clear=True):
-            _place, order = self._run(deploy.RunIdentity(engine_vmid=1),
+            _place, order = self._run(dl_stages.RunIdentity(engine_vmid=1),
                                       ({"team_slots": {}}, record))
             self.assertEqual(order, [("resolve", 1), "activate", ("lock", 1)])
             self.assertEqual(os.environ["TF_VAR_engine_mgmt_ip"], "10.0.0.7")
             self.assertEqual(os.environ["TF_VAR_engine_mgmt_gw"], "10.0.0.1")
 
     def test_no_placement_means_no_activation_and_still_a_lock(self):
-        _place, order = self._run(deploy.RunIdentity(engine_vmid=1), (None, None))
+        _place, order = self._run(dl_stages.RunIdentity(engine_vmid=1), (None, None))
         self.assertEqual(order, [("resolve", 1), ("lock", 1)])
 
 
@@ -221,29 +235,29 @@ class GoldenGatePosition(unittest.TestCase):
             comp_dir = Path(d)
             golden = comp_dir / "golden.json"
             golden.write_text(json.dumps({"machines": []}))
-            generated = deploy.GeneratedConfigs()
+            generated = dl_stages.GeneratedConfigs()
             calls = []
             with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve",
                                          "TF_VAR_ssh_public_key": "ssh-rsa AAAA"}), \
-                    patch.object(deploy, "generate_nakon_config", return_value=golden), \
-                    patch.object(deploy, "unbooted_golden_boxes", return_value=set()), \
-                    patch.object(deploy, "generate_stage_configs",
+                    dpatch("generate_nakon_config", return_value=golden), \
+                    dpatch("unbooted_golden_boxes", return_value=set()), \
+                    dpatch("generate_stage_configs",
                                  return_value=(golden, comp_dir / "r.json",
                                                comp_dir / "f.json", None)), \
-                    patch.object(deploy, "build_nakon_bundle",
+                    dpatch("build_nakon_bundle",
                                  side_effect=lambda p: calls.append("bundle")), \
-                    patch.object(deploy, "_template_vmid_map",
+                    dpatch("_template_vmid_map",
                                  side_effect=lambda n: calls.append("templates") or {}), \
-                    patch.object(deploy, "golden_hash_entries",
+                    dpatch("golden_hash_entries",
                                  side_effect=lambda *a, **k: calls.append("hashes")
                                  or ({"web01": {"config": {}}}, {"web01": "HASH"})), \
-                    patch.object(deploy, "frozen_state",
+                    dpatch("frozen_state",
                                  return_value={"hashes": {"golden": {"web01": {"inputs": {}}}},
                                                "frozen_at": "2026-09-30"}), \
-                    patch.object(deploy, "golden_freeze_gate",
+                    dpatch("golden_freeze_gate",
                                  side_effect=lambda *a: calls.append("gate")
                                  or {"code": True, "config": False}):
-                deploy._generate_stage_configs_and_hashes(generated, comp_dir, _spec(), _secrets())
+                dl_configs.generate_stage_configs_and_hashes(generated, comp_dir, _spec(), _secrets())
         # the gate is the LAST thing that runs, i.e. before prepare() returns and before
         # deploy() reaches phase 1's destroy waves
         self.assertEqual(calls, ["bundle", "templates", "hashes", "gate"])
@@ -255,7 +269,7 @@ class GoldenGatePosition(unittest.TestCase):
             comp_dir = Path(d)
             golden = comp_dir / "golden.json"
             golden.write_text(json.dumps({"machines": []}))
-            generated = deploy.GeneratedConfigs()
+            generated = dl_stages.GeneratedConfigs()
             seen = {}
 
             def gate(name, stored, current, frozen_at, bundle):
@@ -263,20 +277,20 @@ class GoldenGatePosition(unittest.TestCase):
                 return {"code": name == "keepme", "config": name == "keepme"}
 
             with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
-                    patch.object(deploy, "generate_nakon_config", return_value=golden), \
-                    patch.object(deploy, "unbooted_golden_boxes", return_value=set()), \
-                    patch.object(deploy, "generate_stage_configs",
+                    dpatch("generate_nakon_config", return_value=golden), \
+                    dpatch("unbooted_golden_boxes", return_value=set()), \
+                    dpatch("generate_stage_configs",
                                  return_value=(golden, comp_dir / "r.json",
                                                comp_dir / "f.json", None)), \
-                    patch.object(deploy, "build_nakon_bundle", return_value=None), \
-                    patch.object(deploy, "_template_vmid_map", return_value={}), \
-                    patch.object(deploy, "golden_hash_entries",
+                    dpatch("build_nakon_bundle", return_value=None), \
+                    dpatch("_template_vmid_map", return_value={}), \
+                    dpatch("golden_hash_entries",
                                  return_value=({"keepme": {}, "rebuildme": {}},
                                                {"keepme": "K", "rebuildme": "R"})), \
-                    patch.object(deploy, "frozen_state",
+                    dpatch("frozen_state",
                                  return_value={"hashes": {"golden": {}}, "frozen_at": "t"}), \
-                    patch.object(deploy, "golden_freeze_gate", side_effect=gate):
-                deploy._generate_stage_configs_and_hashes(generated, comp_dir, _spec(), _secrets())
+                    dpatch("golden_freeze_gate", side_effect=gate):
+                dl_configs.generate_stage_configs_and_hashes(generated, comp_dir, _spec(), _secrets())
         self.assertEqual(generated.frozen_keep, {"keepme"})
         self.assertEqual(set(seen), {"keepme", "rebuildme"})
 
@@ -287,21 +301,20 @@ class TerraformInputs(unittest.TestCase):
     ENV = {"TF_VAR_ssh_private_key_path": "/tmp/key", "TF_VAR_proxmox_node": "pve",
            "TF_VAR_proxmox_endpoint": "https://new:8006/"}
 
-    def _run(self, comp_dir, tf_dir, env=None, prior=None, identity=None, place=None,
-             from_phase=1):
-        terraform = deploy.TerraformInputs()
+    def _run(self, comp_dir, tf_dir, env=None, identity=None, place=None):
+        terraform = dl_stages.TerraformInputs()
         captured = {}
         with patch.dict(os.environ, env if env is not None else self.ENV, clear=True), \
-                patch.object(deploy, "ensure_terraform_workdir", return_value=tf_dir), \
-                patch.object(deploy, "update_env") as p_env, \
-                patch.object(deploy, "write_text_atomic",
+                dpatch("ensure_terraform_workdir", return_value=tf_dir), \
+                dpatch("update_env") as p_env, \
+                dpatch("write_text_atomic",
                              side_effect=lambda p, t: captured.__setitem__(str(p), t)), \
-                patch.object(deploy, "satellite_tfvars", return_value=[{"name": "sat1"}]), \
-                patch.object(deploy, "satellite_routes_for", return_value=[{"fake": True}]):
-            deploy._build_terraform_inputs(
-                terraform, comp_dir, _spec(), _secrets(), prior or _prior(comp_dir),
-                identity or deploy.RunIdentity(engine_vmid=1000),
-                place or deploy.EnginePlacement(), from_phase)
+                dpatch("satellite_tfvars", return_value=[{"name": "sat1"}]), \
+                dpatch("satellite_routes_for", return_value=[{"fake": True}]):
+            dl_tfinputs.build_terraform_inputs(
+                terraform, comp_dir, _spec(), _secrets(),
+                identity or dl_stages.RunIdentity(engine_vmid=1000),
+                place or dl_stages.EnginePlacement())
             # os.environ is restored when patch.dict exits, so snapshot the two engine
             # vars here — that is where the code under test exported them.
             env_view = {k: os.environ.get(k) for k in
@@ -331,48 +344,45 @@ class TerraformInputs(unittest.TestCase):
             comp_dir = Path(d)
             tf_dir = comp_dir / "terraform"
             tf_dir.mkdir()
-            place = deploy.EnginePlacement(placement={"team_slots": {"team1": 2}})
+            place = dl_stages.EnginePlacement(placement={"team_slots": {"team1": 2}})
             terraform, captured, _env, _view = self._run(comp_dir, tf_dir, place=place)
         tfvars = json.loads(captured[str(tf_dir / "terraform.tfvars.json")])
         self.assertEqual(tfvars["teams"]["team1"]["slot"], 2)
         self.assertEqual(tfvars["satellites"], [{"name": "sat1"}])
         self.assertEqual(tfvars["satellite_routes"], [{"fake": True}])
 
-    def test_stale_state_on_a_different_host_is_refused(self):
+    def _stale_gate(self, previous_state, engine_vmid=1000):
+        """gates.check_stale_terraform_state against a workdir that holds a tfstate."""
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             tf_dir = comp_dir / "terraform"
             tf_dir.mkdir()
             (tf_dir / "terraform.tfstate").write_text("{}")
-            prior = _prior(comp_dir, previous_state={"deployed_endpoint": "https://old:8006",
-                                                     "scoring_vm_id": 1000})
-            with self.assertRaises(SystemExit) as raised:
-                self._run(comp_dir, tf_dir, prior=prior)
+            with patch.dict(os.environ, self.ENV, clear=True):
+                dl_gates.check_stale_terraform_state(comp_dir, "probe", previous_state,
+                                                     engine_vmid, 1)
+
+    def test_stale_state_on_a_different_host_is_refused(self):
+        with self.assertRaises(SystemExit) as raised:
+            self._stale_gate({"deployed_endpoint": "https://old:8006", "scoring_vm_id": 1000})
         self.assertIn("Destroy this competition first", str(raised.exception))
 
     def test_stale_state_on_a_different_engine_vmid_is_refused(self):
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            tf_dir = comp_dir / "terraform"
-            tf_dir.mkdir()
-            (tf_dir / "terraform.tfstate").write_text("{}")
-            prior = _prior(comp_dir, previous_state={
-                "deployed_endpoint": "https://new:8006", "scoring_vm_id": 1090})
-            with self.assertRaises(SystemExit) as raised:
-                self._run(comp_dir, tf_dir, prior=prior,
-                          identity=deploy.RunIdentity(engine_vmid=1000))
+        with self.assertRaises(SystemExit) as raised:
+            self._stale_gate({"deployed_endpoint": "https://new:8006", "scoring_vm_id": 1090})
         self.assertIn("1090", str(raised.exception))
 
     def test_matching_state_is_not_refused(self):
+        self._stale_gate({"deployed_endpoint": "https://new:8006", "scoring_vm_id": 1000})
+
+    def test_a_resume_past_phase_2_skips_the_stale_state_gate(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
-            tf_dir = comp_dir / "terraform"
-            tf_dir.mkdir()
-            (tf_dir / "terraform.tfstate").write_text("{}")
-            prior = _prior(comp_dir, previous_state={
-                "deployed_endpoint": "https://new:8006", "scoring_vm_id": 1000})
-            terraform, captured, _env, _view = self._run(comp_dir, tf_dir, prior=prior)
-        self.assertIn(str(tf_dir / "terraform.tfvars.json"), captured)
+            (comp_dir / "terraform").mkdir()
+            (comp_dir / "terraform" / "terraform.tfstate").write_text("{}")
+            with patch.dict(os.environ, self.ENV, clear=True):
+                dl_gates.check_stale_terraform_state(
+                    comp_dir, "probe", {"deployed_endpoint": "https://old:8006"}, 1000, 3)
 
     def test_engine_mgmt_ip_defaults_to_static_and_gateway_follows(self):
         env = dict(self.ENV)
@@ -414,16 +424,16 @@ class TargetSplit(unittest.TestCase):
             {"vmid": 3, "box": {"name": "fw01", "template": "pfsense-fix", "unmanaged": True}},
         ]
         with tempfile.TemporaryDirectory() as d:
-            stage = deploy.DeployTargets()
+            stage = dl_stages.DeployTargets()
             with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
-                    patch.object(deploy, "enumerate_targets", return_value=targets), \
-                    patch.object(deploy, "persist_targets") as p_persist, \
-                    patch.object(deploy, "is_unmanaged",
+                    dpatch("enumerate_targets", return_value=targets), \
+                    dpatch("persist_targets") as p_persist, \
+                    dpatch("is_unmanaged",
                                  side_effect=lambda b: bool(b.get("unmanaged"))), \
-                    patch.object(deploy, "is_windows_template",
+                    dpatch("is_windows_template",
                                  side_effect=lambda t: "win" in t):
-                deploy._enumerate_deploy_targets(stage, Path(d), _spec(), _secrets(),
-                                                 deploy.EnginePlacement())
+                dl_targets.enumerate_deploy_targets(stage, Path(d), _spec(), _secrets(),
+                                                 dl_stages.EnginePlacement())
         self.assertEqual(stage.node, "pve")
         self.assertEqual(stage.all_targets, targets)
         self.assertEqual([t["vmid"] for t in stage.managed_targets], [1, 2])
@@ -456,37 +466,37 @@ class PrepareSequencer(unittest.TestCase):
             prior.previous_state = {}
             prior.resuming = False
 
-        with patch.object(deploy, "_load_competition_spec",
+        with dpatch("load_competition_spec",
                           side_effect=rec("spec", lambda spec, cd: (
                               setattr(spec, "boxes", [{"name": "web01"}]),
                               setattr(spec, "comp_name", "probe")))), \
-                patch.object(deploy, "_load_prior_deploy_state", side_effect=load_prior), \
-                patch.object(deploy, "_load_competition_inputs", side_effect=rec("inputs")), \
-                patch.object(deploy, "_resolve_competition_teams",
+                dpatch("load_prior_deploy_state", side_effect=load_prior), \
+                dpatch("load_competition_inputs", side_effect=rec("inputs")), \
+                dpatch("resolve_competition_teams",
                              side_effect=rec("teams", lambda secrets, *a, **k: (
                                  setattr(secrets, "state", {}),
                                  setattr(secrets, "teams", {})))), \
-                patch.object(deploy, "_mint_competition_secrets",
+                dpatch("mint_competition_secrets",
                              side_effect=rec("mint")), \
-                patch.object(deploy, "_engine_mgmt_ip_from_env",
+                dpatch("engine_mgmt_ip_from_env",
                              return_value="10.0.0.250"), \
-                patch.object(deploy, "resolve_placement",
+                dpatch("resolve_placement",
                              side_effect=lambda *a, **k: order.append("resolve")
                              or ({"team_slots": {}}, None)), \
-                patch.object(deploy, "activate_placement",
+                dpatch("activate_placement",
                              side_effect=lambda p: order.append("activate")), \
-                patch.object(deploy, "acquire_engine_lock",
+                dpatch("acquire_engine_lock",
                              side_effect=lambda v: order.append(("lock", v))), \
-                patch.object(deploy, "_generate_stage_configs_and_hashes",
+                dpatch("generate_stage_configs_and_hashes",
                              side_effect=rec("generated")), \
-                patch.object(deploy, "_build_terraform_inputs", side_effect=rec("terraform")), \
-                patch.object(deploy, "_run_competition_preflight", side_effect=rec("preflight")), \
-                patch.object(deploy, "confirm_deploy",
+                dpatch("build_terraform_inputs", side_effect=rec("terraform")), \
+                dpatch("run_capacity_preflight", side_effect=rec("preflight")), \
+                dpatch("confirm_deploy",
                              side_effect=lambda *a, **k: order.append("confirm") or confirm), \
-                patch.object(deploy, "_enumerate_deploy_targets", side_effect=rec("targets")), \
-                patch.object(deploy, "_assemble_deploy_context",
+                dpatch("enumerate_deploy_targets", side_effect=rec("targets")), \
+                dpatch("assemble_deploy_context",
                              side_effect=lambda *a, **k: order.append("assemble") or "CTX"), \
-                patch.object(deploy, "write_state"), \
+                dpatch("write_state"), \
                 contextlib.redirect_stdout(buf if buf is not None else io.StringIO()):
             result = deploy.prepare(comp_dir, num_teams=1, assume_yes=False, scoring_vmid=1234)
         return result
@@ -529,21 +539,21 @@ class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):
     def _run(self, comp_dir, frozen):
         golden = comp_dir / "golden.json"
         golden.write_text(json.dumps({"machines": []}))
-        generated = deploy.GeneratedConfigs()
+        generated = dl_stages.GeneratedConfigs()
         with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
-                patch.object(deploy, "generate_nakon_config", return_value=golden), \
-                patch.object(deploy, "unbooted_golden_boxes", return_value=set()), \
-                patch.object(deploy, "generate_stage_configs",
+                dpatch("generate_nakon_config", return_value=golden), \
+                dpatch("unbooted_golden_boxes", return_value=set()), \
+                dpatch("generate_stage_configs",
                              return_value=(golden, comp_dir / "r.json",
                                            comp_dir / "f.json", None)), \
-                patch.object(deploy, "build_nakon_bundle", return_value=None), \
-                patch.object(deploy, "_template_vmid_map", return_value={}), \
-                patch.object(deploy, "golden_hash_entries",
+                dpatch("build_nakon_bundle", return_value=None), \
+                dpatch("_template_vmid_map", return_value={}), \
+                dpatch("golden_hash_entries",
                              return_value=({"web01": {}, "dc01": {}},
                                            {"web01": "H", "dc01": "H2"})), \
-                patch.object(deploy, "frozen_state", return_value=frozen):
+                dpatch("frozen_state", return_value=frozen):
             spec = _spec()
-            deploy._generate_stage_configs_and_hashes(generated, comp_dir, spec, _secrets())
+            dl_configs.generate_stage_configs_and_hashes(generated, comp_dir, spec, _secrets())
         return spec, generated
 
     def test_frozen_run_keeps_the_event_name(self):
@@ -562,7 +572,7 @@ class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):
             return {"code": False, "config": False}
 
         with tempfile.TemporaryDirectory() as d:
-            with patch.object(deploy, "golden_freeze_gate", side_effect=gate):
+            with dpatch("golden_freeze_gate", side_effect=gate):
                 spec, _ = self._run(Path(d), {"hashes": {"golden": {}}, "frozen_at": "t"})
         self.assertEqual(sorted(calls), ["dc01", "web01"])
         self.assertEqual(spec.name, "probe")
@@ -578,9 +588,9 @@ class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):
         clobbering bug, so guard the whole dataclass rather than just `name`."""
         with tempfile.TemporaryDirectory() as d:
             golden_dir = Path(d)
-            with patch.object(deploy, "frozen_state",
+            with dpatch("frozen_state",
                               return_value={"hashes": {"golden": {}}, "frozen_at": "t"}), \
-                    patch.object(deploy, "golden_freeze_gate",
+                    dpatch("golden_freeze_gate",
                                  return_value={"code": True, "config": False}):
                 spec, generated = self._run(
                     golden_dir, {"hashes": {"golden": {}}, "frozen_at": "t"})

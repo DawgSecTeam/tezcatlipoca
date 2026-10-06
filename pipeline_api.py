@@ -33,11 +33,14 @@ from golden_ops import unbooted_golden_boxes
 from hardening_ops import fix_dns_on_boxes, fix_services_on_boxes, setup_ubuntu_auth
 
 # Owned by nakon_ops.
-from nakon_ops import (build_nakon_bundle, generate_nakon_config, generate_stage_configs,
+from nakon_ops import (build_nakon_bundle, generate_stage_configs,
                        os_to_platform, run_nakon)
 
 # Owned by ssh_ops.
 from ssh_ops import read_terraform_ctx, wait_for_boxes_ssh, wait_for_cloud_init
+
+# Owned by utils.
+from utils import env_summary
 
 # Owned by windows_ops.
 from windows_ops import bootstrap_windows_box
@@ -51,9 +54,9 @@ __all__ = [
     "build_nakon_bundle",
     "deploy_domain_configs",
     "ensure_nat_forwarding",
+    "env_summary",
     "fix_dns_on_boxes",
     "fix_services_on_boxes",
-    "generate_nakon_config",
     "generate_stage_configs",
     "list_proxmox_templates",
     "os_to_platform",

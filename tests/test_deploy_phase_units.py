@@ -1,4 +1,4 @@
-"""Per-phase unit tests for the extracted deploy phases (deploy_phases.py).
+"""Per-phase unit tests for the extracted deploy phases (deploy_lib/phases/).
 
 Only the decidable parts are tested — the branching, ordering and state writes that
 used to be buried in deploy(). Every infrastructure call is patched: none of these
@@ -22,7 +22,12 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import deploy  # noqa: E402
 import config_ops  # noqa: E402
-import deploy_phases  # noqa: E402
+from _deploy_patch import dpatch  # noqa: E402
+from deploy_lib.phases import cleanup as dl_cleanup  # noqa: E402
+from deploy_lib.phases import engine as dl_engine  # noqa: E402
+from deploy_lib.phases import golden as dl_golden  # noqa: E402
+from deploy_lib.phases import postclone as dl_postclone  # noqa: E402
+from deploy_lib.phases import seed as dl_seed  # noqa: E402
 from nakon_ops import NakonResult  # noqa: E402
 
 
@@ -53,7 +58,7 @@ def _ctx(comp_dir, **overrides):
 
 
 def _nulltimed():
-    return patch.object(deploy_phases, "timed",
+    return dpatch("timed",
                         side_effect=lambda *a, **k: contextlib.nullcontext())
 
 
@@ -63,11 +68,11 @@ class PhaseResumeGuards(unittest.TestCase):
     def test_phase3_skips_cleanly(self):
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx(Path(d), from_phase=4)
-            with patch.object(deploy_phases, "prepare_engine_from_template") as p_prep, \
-                    patch.object(deploy_phases, "push_event_conf") as p_push, \
-                    patch.object(deploy_phases, "ensure_nat_forwarding") as p_nat, \
+            with dpatch("prepare_engine_from_template") as p_prep, \
+                    dpatch("push_event_conf") as p_push, \
+                    dpatch("ensure_nat_forwarding") as p_nat, \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase3_prepare_engine(ctx)
+                dl_engine.phase3_prepare_engine(ctx)
         self.assertEqual(out.getvalue().strip(), "[3/8] Skipped (resume).")
         p_prep.assert_not_called()
         p_push.assert_not_called()
@@ -76,10 +81,10 @@ class PhaseResumeGuards(unittest.TestCase):
     def test_phase8_skips_cleanly(self):
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx(Path(d), from_phase=9)
-            with patch.object(deploy_phases, "wait_for_http") as p_http, \
-                    patch.object(deploy_phases, "seed_teams") as p_seed, \
+            with dpatch("wait_for_http") as p_http, \
+                    dpatch("seed_teams") as p_seed, \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase8_seed(ctx)
+                dl_seed.phase8_seed(ctx)
         self.assertEqual(out.getvalue().strip(), "[8/8] Skipped (resume).")
         p_http.assert_not_called()
         p_seed.assert_not_called()
@@ -87,10 +92,10 @@ class PhaseResumeGuards(unittest.TestCase):
     def test_phase1_skips_without_destroying(self):
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx(Path(d), from_phase=2)
-            with patch.object(deploy_phases, "destroy_node_waves") as p_waves, \
-                    patch.object(deploy_phases, "destroy_bridge_if_exists") as p_bridge, \
+            with dpatch("destroy_node_waves") as p_waves, \
+                    dpatch("destroy_bridge_if_exists") as p_bridge, \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase1_cleanup(ctx)
+                dl_cleanup.phase1_cleanup(ctx)
         self.assertEqual(out.getvalue().strip(),
                          "[1/8] Skipped (resume) — leaving existing VMs/bridges in place.")
         p_waves.assert_not_called()
@@ -100,32 +105,29 @@ class PhaseResumeGuards(unittest.TestCase):
 class Phase1Cleanup(unittest.TestCase):
     def _run(self, ctx, bridge_in_use=False):
         calls = types.SimpleNamespace(waves=[], bridges=[], markers=[], sleeps=[])
-        with patch.object(deploy_phases, "destroy_node_waves",
+        with dpatch("destroy_node_waves",
                           side_effect=lambda *a, **k: calls.waves.append((a, k))), \
-                patch.object(deploy_phases, "destroy_bridge_if_exists",
+                dpatch("destroy_bridge_if_exists",
                              side_effect=lambda *a: calls.bridges.append(a)), \
-                patch.object(deploy_phases, "_bridge_in_use", return_value=bridge_in_use), \
-                patch.object(deploy_phases, "timed",
+                dpatch("_bridge_in_use", return_value=bridge_in_use), \
+                dpatch("timed",
                              side_effect=lambda *a, **k: contextlib.nullcontext()), \
-                patch.object(deploy_phases, "time") as p_time, \
-                patch.object(deploy, "reset_domain_markers",
+                dpatch("time") as p_time, \
+                dpatch("reset_domain_markers",
                              side_effect=lambda c: calls.markers.append(c)), \
                 contextlib.redirect_stdout(io.StringIO()):
             p_time.sleep.side_effect = lambda s: calls.sleeps.append(s)
-            deploy_phases.phase1_cleanup(ctx)
+            dl_cleanup.phase1_cleanup(ctx)
         return calls
 
-    def test_fresh_run_merges_legacy_clones_and_destroys_wave_1(self):
+    def test_fresh_run_destroys_wave_1(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
-            (comp_dir / "cloned_vms.json").write_text(json.dumps({"web01": 101}))
             (comp_dir / ".postclone-swept").write_text("stale")
             target = {"vmid": 201, "vm_name": "web01-team101", "node": "pve"}
             ctx = _ctx(comp_dir, teams={"team1": {"identifier": "101", "password": "x"}},
                        all_targets=[target])
             calls = self._run(ctx)
-        # legacy API clones are folded into ctx.legacy_clones for wave 1
-        self.assertEqual(ctx.legacy_clones, {101: "web01"})
         self.assertEqual(len(calls.waves), 1)
         (args, kwargs), = calls.waves
         self.assertEqual(args[1:], ("pve", [target], 0))          # node, that node's targets, slot 0
@@ -134,24 +136,15 @@ class Phase1Cleanup(unittest.TestCase):
         self.assertEqual(calls.markers, [comp_dir])
         self.assertFalse((comp_dir / ".postclone-swept").exists())
 
-    def test_unparseable_cloned_vms_warns_and_continues(self):
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            (comp_dir / "cloned_vms.json").write_text("{not json")
-            ctx = _ctx(comp_dir, teams={}, all_targets=[])
-            with contextlib.redirect_stdout(io.StringIO()) as out:
-                self._run_with_stdout(ctx, out)
-        self.assertIn("could not parse cloned_vms.json", out.getvalue())
-
     def _run_with_stdout(self, ctx, out):
-        with patch.object(deploy_phases, "destroy_node_waves"), \
-                patch.object(deploy_phases, "destroy_bridge_if_exists"), \
-                patch.object(deploy_phases, "timed",
+        with dpatch("destroy_node_waves"), \
+                dpatch("destroy_bridge_if_exists"), \
+                dpatch("timed",
                              side_effect=lambda *a, **k: contextlib.nullcontext()), \
-                patch.object(deploy_phases, "time"), \
-                patch.object(deploy, "reset_domain_markers"), \
+                dpatch("time"), \
+                dpatch("reset_domain_markers"), \
                 contextlib.redirect_stdout(out):
-            deploy_phases.phase1_cleanup(ctx)
+            dl_cleanup.phase1_cleanup(ctx)
 
     def test_placement_splits_bridges_and_jumps_by_host(self):
         placement = {
@@ -167,7 +160,7 @@ class Phase1Cleanup(unittest.TestCase):
                        teams={"team1": {"identifier": "101", "password": "x"},
                               "team2": {"identifier": "102", "password": "y"}},
                        all_targets=[])
-            with patch.object(deploy_phases, "record_of",
+            with dpatch("record_of",
                               return_value=types.SimpleNamespace(node="sat-node")):
                 calls = self._run(ctx)
         # one wave pair per hosting node: the engine node's slot 0, then the satellite's
@@ -200,14 +193,14 @@ class Phase3Order(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             order = []
             ctx = _ctx(Path(d))
-            with patch.object(deploy_phases, "prepare_engine_from_template",
+            with dpatch("prepare_engine_from_template",
                               side_effect=lambda *a: order.append("template")), \
-                    patch.object(deploy_phases, "push_event_conf",
+                    dpatch("push_event_conf",
                                  side_effect=lambda *a, **k: order.append("event_conf")), \
-                    patch.object(deploy_phases, "ensure_nat_forwarding",
+                    dpatch("ensure_nat_forwarding",
                                  side_effect=lambda *a: order.append("nat")), \
                     contextlib.redirect_stdout(io.StringIO()):
-                deploy_phases.phase3_prepare_engine(ctx)
+                dl_engine.phase3_prepare_engine(ctx)
         self.assertEqual(order, ["template", "event_conf", "nat"])
 
 
@@ -218,11 +211,11 @@ class Phase5RepairSweep(unittest.TestCase):
             marker = comp_dir / ".postclone-swept"
             marker.write_text("done")
             ctx = _ctx(comp_dir)
-            with patch.object(deploy_phases, "run_nakon") as p_nakon, \
-                    patch.object(deploy_phases, "fix_services_on_boxes") as p_fix, \
-                    patch.object(deploy_phases, "ensure_nat_forwarding") as p_nat, \
+            with dpatch("run_nakon") as p_nakon, \
+                    dpatch("fix_services_on_boxes") as p_fix, \
+                    dpatch("ensure_nat_forwarding") as p_nat, \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase6_repair_sweep(ctx)
+                dl_postclone.phase6_repair_sweep(ctx)
             self.assertIn("[6/8] Resume marker present", out.getvalue())
             p_nakon.assert_not_called()
             p_fix.assert_not_called()
@@ -234,12 +227,12 @@ class Phase5RepairSweep(unittest.TestCase):
             comp_dir = Path(d)
             ctx = _ctx(comp_dir)
             ctx.repair_config_path.write_text(json.dumps({"machines": []}))
-            with patch.object(deploy_phases, "run_nakon") as p_nakon, \
-                    patch.object(deploy_phases, "fix_services_on_boxes") as p_fix, \
-                    patch.object(deploy_phases, "ensure_nat_forwarding"), \
-                    patch.object(deploy_phases, "compfile_flag", return_value=0), \
+            with dpatch("run_nakon") as p_nakon, \
+                    dpatch("fix_services_on_boxes") as p_fix, \
+                    dpatch("ensure_nat_forwarding"), \
+                    dpatch("compfile_flag", return_value=0), \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase6_repair_sweep(ctx)
+                dl_postclone.phase6_repair_sweep(ctx)
             self.assertIn("No repair-stage configurations in this lineup", out.getvalue())
             p_nakon.assert_not_called()
             p_fix.assert_called_once()
@@ -255,12 +248,12 @@ class Phase5RepairSweep(unittest.TestCase):
             comp_dir = Path(d)
             ctx = _ctx(comp_dir)
             ctx.repair_config_path.write_text(json.dumps({"machines": []}))
-            with patch.object(deploy_phases, "run_nakon"), \
-                    patch.object(deploy_phases, "fix_services_on_boxes"), \
-                    patch.object(deploy_phases, "ensure_nat_forwarding"), \
-                    patch.object(deploy_phases, "compfile_flag", return_value=0), \
+            with dpatch("run_nakon"), \
+                    dpatch("fix_services_on_boxes"), \
+                    dpatch("ensure_nat_forwarding"), \
+                    dpatch("compfile_flag", return_value=0), \
                     contextlib.redirect_stdout(io.StringIO()):
-                deploy_phases.phase6_repair_sweep(ctx)
+                dl_postclone.phase6_repair_sweep(ctx)
         self.assertIn("plant_coverage_failed", ctx.state)
         self.assertEqual(ctx.state["plant_coverage_failed"], {})
         self.assertEqual(ctx.state["nakon_failed_steps"], [])
@@ -273,14 +266,14 @@ class Phase5RepairSweep(unittest.TestCase):
             ctx.repair_config_path.write_text(json.dumps({"machines": machines}))
             result = NakonResult(["sshd-hardening"],
                                  [{"name": "web01-team101", "steps": []}])
-            with patch.object(deploy_phases, "run_nakon", return_value=result) as p_nakon, \
-                    patch.object(deploy_phases, "build_nakon_bundle", return_value="bundle"), \
-                    patch.object(deploy_phases, "fix_services_on_boxes"), \
-                    patch.object(deploy_phases, "ensure_nat_forwarding"), \
-                    patch.object(deploy_phases, "compfile_flag", return_value=0), \
-                    patch.object(deploy, "record_stage_coverage") as p_coverage, \
+            with dpatch("run_nakon", return_value=result) as p_nakon, \
+                    dpatch("build_nakon_bundle", return_value="bundle"), \
+                    dpatch("fix_services_on_boxes"), \
+                    dpatch("ensure_nat_forwarding"), \
+                    dpatch("compfile_flag", return_value=0), \
+                    dpatch("record_stage_coverage") as p_coverage, \
                     contextlib.redirect_stdout(io.StringIO()):
-                deploy_phases.phase6_repair_sweep(ctx)
+                dl_postclone.phase6_repair_sweep(ctx)
             self.assertEqual(ctx.state["nakon_failed_steps"], ["repair: sshd-hardening"])
             _args = p_nakon.call_args
             self.assertIs(_args.kwargs["strict"], False)
@@ -303,27 +296,27 @@ class Phase4GoldenCoverage(unittest.TestCase):
         """Run phase4_golden_set with build_golden_set faked; returns (ctx, coverage)."""
         captured = []
         ctx = _ctx(comp_dir, golden_hashes={}, golden_inputs={})
-        with patch.object(deploy_phases, "load_template_hashes", return_value={}), \
-                patch.object(deploy, "golden_rebuild_gate"), \
-                patch.object(deploy_phases, "build_golden_set",
+        with dpatch("load_template_hashes", return_value={}), \
+                dpatch("golden_rebuild_gate"), \
+                dpatch("build_golden_set",
                              side_effect=lambda *a, **k:
                                  (captured.append(k["coverage"]) or {"web01": 1250})), \
-                patch.object(deploy_phases, "_template_vmid_map", return_value={}), \
-                patch.object(deploy_phases, "write_text_atomic"), \
-                patch.object(deploy_phases, "terraform_plugin_cache_dir",
+                dpatch("_template_vmid_map", return_value={}), \
+                dpatch("write_text_atomic"), \
+                dpatch("terraform_plugin_cache_dir",
                              return_value=comp_dir), \
-                patch.object(deploy_phases, "terraform_dir", return_value=comp_dir), \
-                patch.object(deploy_phases, "run_terraform"), \
-                patch.object(deploy_phases, "run_concurrent", return_value=[]), \
-                patch.object(deploy_phases, "wait_for_boxes_ssh"), \
-                patch.object(deploy_phases, "wait_for_cloud_init"), \
-                patch.object(deploy_phases, "setup_ubuntu_auth"), \
-                patch.object(deploy_phases, "fix_dns_on_boxes"), \
-                patch.object(deploy_phases, "prep_apt_on_boxes"), \
-                patch.object(deploy_phases, "snap_base"), \
+                dpatch("terraform_dir", return_value=comp_dir), \
+                dpatch("run_terraform"), \
+                dpatch("run_concurrent", return_value=[]), \
+                dpatch("wait_for_boxes_ssh"), \
+                dpatch("wait_for_cloud_init"), \
+                dpatch("setup_ubuntu_auth"), \
+                dpatch("fix_dns_on_boxes"), \
+                dpatch("prep_apt_on_boxes"), \
+                dpatch("snap_base"), \
                 _nulltimed(), \
                 contextlib.redirect_stdout(io.StringIO()):
-            deploy_phases.phase4_golden_set(ctx)
+            dl_golden.phase4_golden_set(ctx)
         return ctx, captured[0]
 
     @staticmethod
@@ -398,20 +391,20 @@ class Phase4GoldenCoverage(unittest.TestCase):
 class Phase7Seed(unittest.TestCase):
     def _run(self, ctx):
         order = []
-        with patch.object(deploy_phases, "wait_for_http",
+        with dpatch("wait_for_http",
                           side_effect=lambda *a, **k: order.append("http")), \
-                patch.object(deploy_phases, "seed_teams",
+                dpatch("seed_teams",
                              side_effect=lambda *a: order.append("seed")), \
-                patch.object(deploy_phases, "engine_paused", return_value=True), \
-                patch.object(deploy_phases, "unpause_engine",
+                dpatch("engine_paused", return_value=True), \
+                dpatch("unpause_engine",
                              side_effect=lambda *a: order.append("unpause")), \
-                patch.object(deploy_phases, "resolve_inject_times",
+                dpatch("resolve_inject_times",
                              side_effect=lambda *a: order.append("resolve")), \
-                patch.object(deploy_phases, "create_injects",
+                dpatch("create_injects",
                              side_effect=lambda *a: order.append("injects")
                              or ([], [])), \
                 contextlib.redirect_stdout(io.StringIO()):
-            deploy_phases.phase8_seed(ctx)
+            dl_seed.phase8_seed(ctx)
         return order
 
     def test_fresh_seed_then_unpause_then_injects(self):
@@ -433,12 +426,12 @@ class Phase7Seed(unittest.TestCase):
     def test_engine_already_unpaused_is_recorded_without_a_post(self):
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx(Path(d), state={})
-            with patch.object(deploy_phases, "wait_for_http"), \
-                    patch.object(deploy_phases, "seed_teams"), \
-                    patch.object(deploy_phases, "engine_paused", return_value=False), \
-                    patch.object(deploy_phases, "unpause_engine") as p_unpause, \
+            with dpatch("wait_for_http"), \
+                    dpatch("seed_teams"), \
+                    dpatch("engine_paused", return_value=False), \
+                    dpatch("unpause_engine") as p_unpause, \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase8_seed(ctx)
+                dl_seed.phase8_seed(ctx)
         p_unpause.assert_not_called()
         self.assertIn("Engine reports itself unpaused", out.getvalue())
         self.assertTrue(ctx.state["engine_unpaused"])
@@ -447,13 +440,13 @@ class Phase7Seed(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx(Path(d), state={"seeded": True, "engine_unpaused": True},
                        injects=[{"title": "i1"}])
-            with patch.object(deploy_phases, "wait_for_http"), \
-                    patch.object(deploy_phases, "engine_paused", return_value=False), \
-                    patch.object(deploy_phases, "resolve_inject_times"), \
-                    patch.object(deploy_phases, "create_injects",
+            with dpatch("wait_for_http"), \
+                    dpatch("engine_paused", return_value=False), \
+                    dpatch("resolve_inject_times"), \
+                    dpatch("create_injects",
                                  return_value=([], ["Bad inject"])), \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase8_seed(ctx)
+                dl_seed.phase8_seed(ctx)
         self.assertNotIn("injects_created", ctx.state)
         self.assertIn("1 inject(s) failed to create: Bad inject", out.getvalue())
 
@@ -466,13 +459,13 @@ class Phase7Seed(unittest.TestCase):
             stale = config_ops.injects_fingerprint([{"title": "i1"}])
             ctx.state["injects_created"] = True
             ctx.state["injects_fingerprint"] = stale
-            with patch.object(deploy_phases, "wait_for_http"), \
-                    patch.object(deploy_phases, "engine_paused", return_value=False), \
-                    patch.object(deploy_phases, "resolve_inject_times"), \
-                    patch.object(deploy_phases, "create_injects",
+            with dpatch("wait_for_http"), \
+                    dpatch("engine_paused", return_value=False), \
+                    dpatch("resolve_inject_times"), \
+                    dpatch("create_injects",
                                  return_value=([], [])) as p_create, \
                     contextlib.redirect_stdout(io.StringIO()):
-                deploy_phases.phase8_seed(ctx)
+                dl_seed.phase8_seed(ctx)
         p_create.assert_called_once()          # re-ran, so i2 gets created
         self.assertEqual(ctx.state["injects_fingerprint"],
                          config_ops.injects_fingerprint([{"title": "i1"}, {"title": "i2"}]))
@@ -485,11 +478,11 @@ class Phase7Seed(unittest.TestCase):
                                        "injects_fingerprint":
                                            config_ops.injects_fingerprint(injects)},
                        injects=injects)
-            with patch.object(deploy_phases, "wait_for_http"), \
-                    patch.object(deploy_phases, "engine_paused", return_value=False), \
-                    patch.object(deploy_phases, "create_injects") as p_create, \
+            with dpatch("wait_for_http"), \
+                    dpatch("engine_paused", return_value=False), \
+                    dpatch("create_injects") as p_create, \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                deploy_phases.phase8_seed(ctx)
+                dl_seed.phase8_seed(ctx)
         p_create.assert_not_called()
         self.assertIn("already created", out.getvalue())
 
@@ -512,11 +505,11 @@ class Phase7Seed(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx(Path(d), state={"seeded": True, "engine_unpaused": True},
                        injects=[dict(definitions[0])])
-            with patch.object(deploy_phases, "wait_for_http"), \
-                    patch.object(deploy_phases, "engine_paused", return_value=False), \
-                    patch.object(deploy_phases, "create_injects", return_value=([], [])), \
+            with dpatch("wait_for_http"), \
+                    dpatch("engine_paused", return_value=False), \
+                    dpatch("create_injects", return_value=([], [])), \
                     contextlib.redirect_stdout(io.StringIO()):
-                deploy_phases.phase8_seed(ctx)      # real resolve_inject_times runs
+                dl_seed.phase8_seed(ctx)      # real resolve_inject_times runs
         self.assertEqual(ctx.state["injects_fingerprint"], expected)
 
     def test_fingerprint_tracks_titles_windows_and_attachments(self):
@@ -572,31 +565,25 @@ class Phase2EngineTemplate(unittest.TestCase):
                 ("forget_engine_host_key", {}),
                 ("wait_for_ssh", {}),
             ]:
-                stack.enter_context(patch.object(deploy_phases, target, **kwargs))
-            stack.enter_context(patch.object(
-                deploy_phases, "destroy_vm_if_exists",
+                stack.enter_context(dpatch(target, **kwargs))
+            stack.enter_context(dpatch("destroy_vm_if_exists",
                 side_effect=lambda *a, **k: record.destroyed.append(a[1])))
-            stack.enter_context(patch.object(
-                deploy_phases, "destroy_engine_template",
+            stack.enter_context(dpatch("destroy_engine_template",
                 side_effect=lambda *a, **k: record.destroyed.append(a[1])))
-            stack.enter_context(patch.object(
-                deploy_phases, "retag_ownership",
+            stack.enter_context(dpatch("retag_ownership",
                 side_effect=lambda *a, **k: record.retagged.append(a[1])))
-            stack.enter_context(patch.object(
-                deploy_phases, "build_engine_template",
+            stack.enter_context(dpatch("build_engine_template",
                 side_effect=lambda *a, **k: (record.__setattr__("built", record.built + 1)
                                              or (901, {"built": True}))))
-            stack.enter_context(patch.object(
-                deploy_phases, "run_terraform",
+            stack.enter_context(dpatch("run_terraform",
                 side_effect=lambda argv, **k: record.tf.append(argv)))
-            stack.enter_context(patch.object(
-                deploy_phases, "read_terraform_ctx",
+            stack.enter_context(dpatch("read_terraform_ctx",
                 side_effect=lambda *a, **k: {"scoring_engine_ip": "10.0.0.99",
                                              "ssh_key_path": "/k", "vm_username": "ubuntu"}))
             stack.enter_context(_nulltimed())
             out = io.StringIO()
             stack.enter_context(contextlib.redirect_stdout(out))
-            deploy_phases.phase2_engine_template(ctx)
+            dl_engine.phase2_engine_template(ctx)
         return record, out.getvalue()
 
     def test_matching_hash_reuses_the_template_without_destroying_anything(self):
@@ -652,13 +639,13 @@ class PrepareResumeGuards(unittest.TestCase):
             comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 2,
                                           "scoring_vm_id": 1000, "teams": {},
                                           "admin_password": "a", "box_password": "b"})
-            with patch.object(deploy, "load_injects", return_value=[]), \
-                    patch.object(deploy, "load_packet_passwords", return_value=None), \
-                    patch.object(deploy, "_artifact_probes",
+            with dpatch("load_injects", return_value=[]), \
+                    dpatch("load_packet_passwords", return_value=None), \
+                    dpatch("_artifact_probes",
                                  return_value={"vmids_from_state": lambda: [1000],
                                                "vm_exists": lambda: {1000},
                                                "box_reachable": lambda *a: (True, "")}), \
-                    patch.object(deploy, "resolve_placement",
+                    dpatch("resolve_placement",
                                  side_effect=RuntimeError("past the guard")):
                 with self.assertRaises(RuntimeError) as ctx:
                     deploy.prepare(comp_dir, from_phase=3, num_teams=1, assume_yes=True)
@@ -669,9 +656,9 @@ class PrepareResumeGuards(unittest.TestCase):
             comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 2,
                                           "scoring_vm_id": 1000, "teams": {},
                                           "admin_password": "a", "box_password": "b"})
-            with patch.object(deploy, "load_injects", return_value=[]), \
-                    patch.object(deploy, "load_packet_passwords", return_value=None), \
-                    patch.object(deploy, "resolve_placement",
+            with dpatch("load_injects", return_value=[]), \
+                    dpatch("load_packet_passwords", return_value=None), \
+                    dpatch("resolve_placement",
                                  side_effect=RuntimeError("past the guard")):
                 with self.assertRaises(RuntimeError) as ctx:
                     deploy.prepare(comp_dir, from_phase=6, num_teams=1, assume_yes=True,
@@ -719,26 +706,26 @@ class PrepareTfvarsAssembly(unittest.TestCase):
     def _prepare(self, comp_dir, captured):
         teams = {"team1": {"identifier": "101", "password": "pw"}}
         with patch.dict(os.environ, self.ENV), \
-                patch.object(deploy, "collect_teams", return_value=teams), \
-                patch.object(deploy, "write_state"), \
-                patch.object(deploy, "update_env") as p_update_env, \
-                patch.object(deploy, "resolve_placement", return_value=(None, None)), \
-                patch.object(deploy, "acquire_engine_lock"), \
-                patch.object(deploy, "generate_nakon_config",
+                dpatch("collect_teams", return_value=teams), \
+                dpatch("write_state"), \
+                dpatch("update_env") as p_update_env, \
+                dpatch("resolve_placement", return_value=(None, None)), \
+                dpatch("acquire_engine_lock"), \
+                dpatch("generate_nakon_config",
                              return_value=comp_dir / "nakon.json"), \
-                patch.object(deploy, "unbooted_golden_boxes", return_value=set()), \
-                patch.object(deploy, "generate_stage_configs",
+                dpatch("unbooted_golden_boxes", return_value=set()), \
+                dpatch("generate_stage_configs",
                              return_value=(comp_dir / "g.json", comp_dir / "r.json",
                                            comp_dir / "f.json", None)), \
-                patch.object(deploy, "build_nakon_bundle", return_value=object()), \
-                patch.object(deploy, "_template_vmid_map", return_value={}), \
-                patch.object(deploy, "golden_hash_entries", return_value=({}, {})), \
-                patch.object(deploy, "frozen_state", return_value=None), \
-                patch.object(deploy, "write_text_atomic",
+                dpatch("build_nakon_bundle", return_value=object()), \
+                dpatch("_template_vmid_map", return_value={}), \
+                dpatch("golden_hash_entries", return_value=({}, {})), \
+                dpatch("frozen_state", return_value=None), \
+                dpatch("write_text_atomic",
                              side_effect=lambda p, t: captured.__setitem__(str(p), t)), \
-                patch.object(deploy, "ensure_terraform_workdir", return_value=comp_dir), \
-                patch.object(deploy, "preflight_gates") as p_preflight, \
-                patch.object(deploy, "confirm_deploy", return_value=False), \
+                dpatch("ensure_terraform_workdir", return_value=comp_dir), \
+                dpatch("preflight_gates") as p_preflight, \
+                dpatch("confirm_deploy", return_value=False), \
                 contextlib.redirect_stdout(io.StringIO()) as out:
             result = deploy.prepare(comp_dir, num_teams=1, assume_yes=False)
         return result, p_update_env, p_preflight, out.getvalue()
@@ -779,27 +766,27 @@ class PrepareTfvarsAssembly(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = self._comp_dir(d)
             with patch.dict(os.environ, self.ENV), \
-                    patch.object(deploy, "collect_teams",
+                    dpatch("collect_teams",
                                  return_value={"team1": {"identifier": "101", "password": "pw"}}), \
-                    patch.object(deploy, "write_state"), \
-                    patch.object(deploy, "update_env") as p_update_env, \
-                    patch.object(deploy, "resolve_placement", return_value=(None, None)), \
-                    patch.object(deploy, "acquire_engine_lock"), \
-                    patch.object(deploy, "generate_nakon_config",
+                    dpatch("write_state"), \
+                    dpatch("update_env") as p_update_env, \
+                    dpatch("resolve_placement", return_value=(None, None)), \
+                    dpatch("acquire_engine_lock"), \
+                    dpatch("generate_nakon_config",
                                  return_value=comp_dir / "nakon.json"), \
-                    patch.object(deploy, "unbooted_golden_boxes", return_value=set()), \
-                    patch.object(deploy, "generate_stage_configs",
+                    dpatch("unbooted_golden_boxes", return_value=set()), \
+                    dpatch("generate_stage_configs",
                                  return_value=(comp_dir / "g.json", comp_dir / "r.json",
                                                comp_dir / "f.json", None)), \
-                    patch.object(deploy, "build_nakon_bundle", return_value=object()), \
-                    patch.object(deploy, "_template_vmid_map", return_value={}), \
-                    patch.object(deploy, "golden_hash_entries", return_value=({}, {})), \
-                    patch.object(deploy, "frozen_state", return_value=None), \
-                    patch.object(deploy, "write_text_atomic",
+                    dpatch("build_nakon_bundle", return_value=object()), \
+                    dpatch("_template_vmid_map", return_value={}), \
+                    dpatch("golden_hash_entries", return_value=({}, {})), \
+                    dpatch("frozen_state", return_value=None), \
+                    dpatch("write_text_atomic",
                                  side_effect=lambda p, t: captured.__setitem__(str(p), t)), \
-                    patch.object(deploy, "ensure_terraform_workdir", return_value=comp_dir), \
-                    patch.object(deploy, "preflight_gates"), \
-                    patch.object(deploy, "confirm_deploy", return_value=False), \
+                    dpatch("ensure_terraform_workdir", return_value=comp_dir), \
+                    dpatch("preflight_gates"), \
+                    dpatch("confirm_deploy", return_value=False), \
                     contextlib.redirect_stdout(io.StringIO()):
                 deploy.prepare(comp_dir, num_teams=1, assume_yes=False, scoring_vmid=1234)
         tfvars = json.loads(captured[str(Path(comp_dir) / "terraform.tfvars.json")])

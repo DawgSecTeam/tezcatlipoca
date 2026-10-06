@@ -38,8 +38,8 @@ next and vice versa.
 | notebook entries | >= 10 | working memory, not a write-only diary (round 3: 0) |
 | cycle timeouts | == 0 | a timed-out cycle is invisible to `rc=` counts; counted from feed.log TIMEOUT headers since 2026-09-23 |
 
-Scrim-report prints `n/a` for gates whose underlying data a legacy run dir doesn't
-have (everything scoreboard-derived predates `scoreboard-state.jsonl`); `n/a` does not
+Scrim-report prints `n/a` for gates whose underlying data the run dir doesn't
+have (everything scoreboard-derived needs `scoreboard-state.jsonl`); `n/a` does not
 fail the run, the honest red-side numbers carry the verdict.
 
 ## Provenance
@@ -72,6 +72,6 @@ as READY. A check that cannot run is a finding, not a pass.
       timeout + TTR numbers; `--self-test` reproduces the 17c pins; a blue-absent run would
       force the NO-INTERACTION verdict.
 - [ ] Plant-integrity surface: verify prints the `nakon_failed_steps` tally line.
-- [ ] Teardown exit 0, no leftover competition VMIDs (red01's 999 gone), `cloned_vms.json` archived.
+- [ ] Teardown exit 0, no leftover competition VMIDs (red01's 999 gone).
 - [ ] winget/choco Windows fallback observation recorded (known-issues "Windows
       package-manager fallback untested").

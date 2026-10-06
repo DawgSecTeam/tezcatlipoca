@@ -6,7 +6,7 @@ drive the pipeline.
 
 **The pipeline is version 2** (golden templates + linked clones, phases renumbered 2026-09-24).
 [architecture.md](architecture.md#v1-to-v2-migration-what-moved) maps the old phase numbers, and any
-passage written against the pre-golden pipeline is a bug — see [AGENTS.md](../AGENTS.md#editing-docs).
+passage written against an older pipeline is a bug — see [AGENTS.md](../AGENTS.md#editing-docs).
 
 ## Evergreen — how the system works
 
@@ -18,7 +18,7 @@ passage written against the pre-golden pipeline is a bug — see [AGENTS.md](../
 | [multi-node.md](multi-node.md) | You are running one competition across several Proxmox hosts (`nodes.json`, placement, jump routing, per-slot goldens, `sync-template.py`) |
 | [packet-profiles.md](packet-profiles.md) | You are compiling a competition packet into a range, or authoring a `packet.yaml` |
 | [rehearsal-gates.md](rehearsal-gates.md) | You need the numeric pass/fail gates for a scrim run |
-| [benchmark-m02.md](benchmark-m02.md) | You are questioning a timeout, a parallelism setting, or a resource assumption — the linked-vs-full-clone v2 measurements |
+| [benchmark-m02.md](benchmark-m02.md) | You are questioning a timeout, a parallelism setting, or a resource assumption — the linked-vs-full-clone measurements |
 | [benchmark-m04.md](benchmark-m04.md) | Same, for the per-competition template lifecycle: validation matrix, rebuild granularity, Windows/domain numbers |
 | [vulndb-fixes/](vulndb-fixes/) | You are loading a **fresh** vulndb from `nakon/vulndb/seed.sql` and need the catalog rows that were patched by hand |
 
@@ -29,6 +29,7 @@ passage written against the pre-golden pipeline is a bug — see [AGENTS.md](../
 | [usage-people.md](usage-people.md) | You are setting up or driving a deploy by hand — prerequisites, template building (incl. the Windows traps), the **env-var reference**, running, teardown, mid-competition recovery, troubleshooting |
 | [usage-agents.md](usage-agents.md) | You are driving the pipeline non-interactively — CLI flags, pre-authored configs, verify/redeploy/destroy, operational modes |
 | [e2e-testing.md](e2e-testing.md) | A deploy failed and you need to triage it, or you are planning a full pipeline test (§1 triage, §4 cost map, §5 trim-then-resume, §7 checklist, §8 multi-host/pfSense/red) |
+| [upgrading-0.2.0.md](upgrading-0.2.0.md) | You have ranges, envs or scripts from before 0.2.0 — what breaks and what to redo |
 | [known-issues.md](known-issues.md) | Something is broken, or you need a decision. **Open/pending issues only** — fixed issues are deleted, not archived |
 | [environment-facts.md](environment-facts.md) | You are about to pick a template, pool, vmid block, or node — node/storage/template ground truth with verification status |
 | [security-disclosures.md](security-disclosures.md) | You touch credentials, `.env` variants, or git history — exposures, and the open token rotation |
@@ -59,6 +60,7 @@ of a past failure; the evergreen lessons have been folded into the docs above.
 | [reports/scrim-live-2026-09-26-postmortem.md](reports/scrim-live-2026-09-26-postmortem.md) | scrim-live post-mortem |
 | [reports/harness-upgrades-plan.md](reports/harness-upgrades-plan.md) | Scrim harness rev-2 upgrade record (what changed, where it landed, what is left) |
 | [reports/automated-test-artifacts-plan-2026-10-03.md](reports/automated-test-artifacts-plan-2026-10-03.md) | You are changing per-run test artifacts and need the design record: layout rationale, `test.json`/`collection.json` schemas, the teardown collect hook, and the decisions taken |
+| [reports/firewall-live-validation-plan-2026-10-04.md](reports/firewall-live-validation-plan-2026-10-04.md) | You are about to live-test the pipeline-v3 in-path firewall: staged deploy plan for .150 (preconditions, watch points per phase, failure drills, teardown) |
 | [reports/dress-rehearsal-prompt.md](reports/dress-rehearsal-prompt.md) | The full-dress-rehearsal runbook/prompt for the first practice sweep |
 | [reports/deploy-cyberfield-prompt.md](reports/deploy-cyberfield-prompt.md) | The agent prompt + Cyberfield wiring notes from the cyberfield deploy |
 

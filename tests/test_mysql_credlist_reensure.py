@@ -10,8 +10,8 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import hardening_ops
-from hardening_ops import mysql_credlist_reensure_script, reensure_mysql_credlist_users
+import service_fixup_ops
+from service_fixup_ops import mysql_credlist_reensure_script, reensure_mysql_credlist_users
 
 
 CREDS = {"lead": "pw-lead", "records": "pw-records"}
@@ -47,12 +47,12 @@ class ReensureTest(unittest.TestCase):
             self.calls.append(("agent", vmid, script))
             return (0, "", "")
 
-        self._orig = (hardening_ops.ssh_via_gateway, hardening_ops.guest_agent_exec_root)
-        hardening_ops.ssh_via_gateway = fake_ssh
-        hardening_ops.guest_agent_exec_root = fake_agent
+        self._orig = (service_fixup_ops.ssh_via_gateway, service_fixup_ops.guest_agent_exec_root)
+        service_fixup_ops.ssh_via_gateway = fake_ssh
+        service_fixup_ops.guest_agent_exec_root = fake_agent
 
     def tearDown(self):
-        hardening_ops.ssh_via_gateway, hardening_ops.guest_agent_exec_root = self._orig
+        service_fixup_ops.ssh_via_gateway, service_fixup_ops.guest_agent_exec_root = self._orig
 
     def _comp_dir(self, services):
         d = tempfile.mkdtemp(prefix="tz-credlist-")

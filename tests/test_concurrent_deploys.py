@@ -13,16 +13,21 @@ Offline: a private lock directory stands in for ~/.tezcatlipoca/locks.
 """
 
 import fcntl
+import io
 import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import config_ops  # noqa: E402
+import preflight.concurrency  # noqa: E402
+import preflight.plan  # noqa: E402
+import nakon_lock_ops  # noqa: E402
 import nakon_ops  # noqa: E402
 
 
@@ -75,7 +80,7 @@ class InFlightDetection(unittest.TestCase):
         holder = open(path, "a")
         self.addCleanup(holder.close)
         fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        with patch.object(nakon_ops, "held_lock_paths", return_value={path}):
+        with patch.object(nakon_lock_ops, "held_lock_paths", return_value={path}):
             self.assertEqual(nakon_ops.other_deploys_in_flight(), [])
 
     def test_a_missing_locks_dir_is_not_an_error(self):
@@ -84,43 +89,43 @@ class InFlightDetection(unittest.TestCase):
 
 
 class PreflightGate(unittest.TestCase):
-    def test_the_default_is_to_refuse_and_name_the_remedy(self):
+    def test_the_default_is_a_loud_warning_that_proceeds(self):
+        """Concurrency is the supported shape (2026-10-04): the gate warns and gets out
+        of the way; the per-resource collision gates do the refusing."""
         with patch("nakon_ops.other_deploys_in_flight",
                    return_value=[("/home/x/.tezcatlipoca/locks/engine-pve-1080.lock", 12.0)]), \
-                patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("TEZ_ALLOW_CONCURRENT", None)
-            with self.assertRaises(SystemExit) as ctx:
-                config_ops._gate_concurrent_deploys()
-        message = str(ctx.exception)
+             patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TEZ_ALLOW_CONCURRENT", None)  # a stray env var must not matter
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                config_ops._gate_concurrent_deploys()   # no raise
+        message = buf.getvalue()
+        self.assertIn("WARNING", message)
         self.assertIn("engine-pve-1080.lock", message)       # names the holder
-        self.assertIn("TEZ_ALLOW_CONCURRENT=1", message)     # names the opt-out
-        self.assertIn("TF_VAR_team_identifiers", message)    # names what to coordinate
-
-    def test_the_opt_out_proceeds_with_a_warning(self):
-        with patch("nakon_ops.other_deploys_in_flight",
-                   return_value=[("/locks/engine-pve-1080.lock", 12.0)]), \
-                patch.dict(os.environ, {"TEZ_ALLOW_CONCURRENT": "1"}):
-            config_ops._gate_concurrent_deploys()   # no raise
+        self.assertIn("TF_VAR_team_identifiers", message)    # names what to keep distinct
+        self.assertIn("--scoring-vmid", message)
 
     def test_nothing_in_flight_is_a_silent_pass(self):
         with patch("nakon_ops.other_deploys_in_flight", return_value=[]):
-            config_ops._gate_concurrent_deploys()   # no raise
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                config_ops._gate_concurrent_deploys()   # no raise
+        self.assertEqual(buf.getvalue(), "")
 
     def test_a_long_list_is_truncated(self):
         many = [(f"/locks/engine-{i}.lock", float(i)) for i in range(7)]
-        with patch("nakon_ops.other_deploys_in_flight", return_value=many), \
-                patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("TEZ_ALLOW_CONCURRENT", None)
-            with self.assertRaises(SystemExit) as ctx:
-                config_ops._gate_concurrent_deploys()
-        self.assertIn("+3 more", str(ctx.exception))
+        with patch("nakon_ops.other_deploys_in_flight", return_value=many):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                config_ops._gate_concurrent_deploys()   # no raise
+        self.assertIn("+3 more", buf.getvalue())
 
     def test_preflight_gates_calls_the_concurrency_gate_first(self):
         """It must fire before any per-competition check, because it protects other
         competitions, not just this one."""
-        with patch.object(config_ops, "_gate_concurrent_deploys") as gate, \
+        with patch.object(preflight.concurrency, "gate_concurrent_deploys") as gate, \
                 patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
-                patch.object(config_ops, "proxmox_api",
+                patch.object(preflight.plan, "proxmox_api",
                              side_effect=RuntimeError("stop here — we only need the order")):
             with self.assertRaises(SystemExit):
                 config_ops.preflight_gates(Path("/tmp/nope"), [], 1)

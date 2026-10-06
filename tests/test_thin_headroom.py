@@ -10,6 +10,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import config_ops
+import preflight.headroom as preflight_headroom
 
 BOXES = [{"disk_gb": 60}, {"disk_gb": 15}, {}]  # {} -> unset disk counts as 40 GB
 
@@ -24,7 +25,7 @@ def fake_api(avail_gb):
 
 class ThinHeadroomGate(unittest.TestCase):
     def run_gate(self, avail_gb, thin=None):
-        with patch.object(config_ops, "proxmox_api", fake_api(avail_gb)):
+        with patch.object(preflight_headroom, "proxmox_api", fake_api(avail_gb)):
             if thin is None:
                 config_ops.check_datastore_headroom("proxmox", "hdd", BOXES, 2)
             else:
@@ -50,7 +51,7 @@ class ThinHeadroomGate(unittest.TestCase):
                 self.run_gate(avail_gb=1000, thin=bad)
 
     def test_unset_disk_counts_as_40gb(self):
-        with patch.object(config_ops, "proxmox_api", fake_api(1000)):
+        with patch.object(preflight_headroom, "proxmox_api", fake_api(1000)):
             with patch.dict("os.environ", {"TEZ_THIN_HEADROOM": "1.0"}):
                 # 2 teams x (60+15+40) = 230 GB counted, 1000 GB free: passes and
                 # would fail at 40 GB less if the stand-in regressed

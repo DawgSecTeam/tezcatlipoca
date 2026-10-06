@@ -33,6 +33,8 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 import deploy  # noqa: E402
+from _deploy_patch import dpatch  # noqa: E402
+from deploy_lib import gates as dl_gates  # noqa: E402
 import range_ops  # noqa: E402
 
 STATE_RESOURCES = [
@@ -145,7 +147,7 @@ class ResumeExistenceGuard(unittest.TestCase):
 
     def _guard(self, from_phase, *, vmids=(221, 222), live=(221, 222, 1900),
                reachable=(True, ""), state=None, **kw):
-        deploy.guard_resume_existence(
+        dl_gates.guard_resume_existence(
             from_phase, self.comp, self._state(**(state or {})),
             vmids_from_state=lambda: list(vmids),
             vm_exists=lambda: set(live),
@@ -198,7 +200,7 @@ class ResumeExistenceGuard(unittest.TestCase):
         def boom():
             raise RuntimeError("could not run `terraform state list`")
         with self.assertRaises(SystemExit) as raised:
-            deploy.guard_resume_existence(
+            dl_gates.guard_resume_existence(
                 5, self.comp, self._state(), vmids_from_state=boom,
                 vm_exists=lambda: {1900}, box_reachable=lambda *a: (True, ""))
         self.assertIn("cannot be verified", str(raised.exception))
@@ -207,7 +209,7 @@ class ResumeExistenceGuard(unittest.TestCase):
         def boom():
             raise RuntimeError("could not list the cluster's VMs")
         with self.assertRaises(SystemExit) as raised:
-            deploy.guard_resume_existence(
+            dl_gates.guard_resume_existence(
                 3, self.comp, self._state(), vmids_from_state=lambda: [],
                 vm_exists=boom, box_reachable=lambda *a: (True, ""))
         self.assertIn("Refusing to resume blind", str(raised.exception))
@@ -219,11 +221,11 @@ class ResumeExistenceGuard(unittest.TestCase):
     def test_probe_defaults_come_from_the_artifact_probe_seam(self):
         # The seam that makes this testable must be the one production uses.
         calls = []
-        with patch.object(deploy, "_artifact_probes", lambda comp_dir: {
+        with dpatch("_artifact_probes", lambda comp_dir: {
                 "vmids_from_state": lambda: calls.append("state") or [221],
                 "vm_exists": lambda: calls.append("live") or {1900, 221},
                 "box_reachable": lambda *a: (True, "")}):
-            deploy.guard_resume_existence(5, self.comp, self._state())
+            dl_gates.guard_resume_existence(5, self.comp, self._state())
         self.assertEqual(calls, ["live", "state"])
 
 
@@ -236,7 +238,7 @@ class SweepMarkerAndBoxProbe(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
 
     def test_missing_marker_is_reported_by_name(self):
-        ok, why = deploy._any_box_reachable(self.comp, {})
+        ok, why = dl_gates._any_box_reachable(self.comp, {})
         self.assertFalse(ok)
         self.assertIn(".postclone-swept", why)
 
@@ -247,7 +249,7 @@ class SweepMarkerAndBoxProbe(unittest.TestCase):
         with patch("ssh_ops.read_terraform_ctx", return_value={"ssh_key_path": "/k"}), \
                 patch("ssh_ops.ssh_via_gateway",
                       return_value=type("P", (), {"stdout": "RESUME-OK\n"})()):
-            ok, why = deploy._any_box_reachable(self.comp, {})
+            ok, why = dl_gates._any_box_reachable(self.comp, {})
         self.assertTrue(ok, why)
 
     def test_marker_but_no_box_answering_is_refused(self):
@@ -256,7 +258,7 @@ class SweepMarkerAndBoxProbe(unittest.TestCase):
             {"targets": {"team1-web01": {"ip": "192.168.221.4"}}}))
         with patch("ssh_ops.read_terraform_ctx", return_value={"ssh_key_path": "/k"}), \
                 patch("ssh_ops.ssh_via_gateway", side_effect=OSError("no route")):
-            ok, why = deploy._any_box_reachable(self.comp, {})
+            ok, why = dl_gates._any_box_reachable(self.comp, {})
         self.assertFalse(ok)
         self.assertIn("answered over SSH", why)
 
@@ -266,7 +268,7 @@ class SweepMarkerAndBoxProbe(unittest.TestCase):
         (self.comp / ".postclone-swept").write_text("")
         (self.comp / "targets.json").write_text(json.dumps(
             {"targets": {"scoring-engine": {"ip": "10.0.0.252"}}}))
-        ok, why = deploy._any_box_reachable(self.comp, {})
+        ok, why = dl_gates._any_box_reachable(self.comp, {})
         self.assertFalse(ok)
         self.assertIn("no team box addresses", why)
 
@@ -300,7 +302,7 @@ class CheckpointTruth(unittest.TestCase):
     def test_phase_3_refuses_to_stamp_when_the_engine_is_gone(self):
         with tempfile.TemporaryDirectory() as d:
             ctx = self._ctx(Path(d), {"scoring_vm_id": 1900})
-            with patch.object(deploy, "_artifact_probes", lambda c: {
+            with dpatch("_artifact_probes", lambda c: {
                     "vmids_from_state": lambda: [],
                     "vm_exists": lambda: set(),
                     "box_reachable": lambda *a: (True, "")}):
@@ -312,7 +314,7 @@ class CheckpointTruth(unittest.TestCase):
     def test_phase_4_refuses_to_stamp_when_the_boxes_are_gone(self):
         with tempfile.TemporaryDirectory() as d:
             ctx = self._ctx(Path(d), {"scoring_vm_id": 1900})
-            with patch.object(deploy, "_artifact_probes", lambda c: {
+            with dpatch("_artifact_probes", lambda c: {
                     "vmids_from_state": lambda: [221, 222],
                     "vm_exists": lambda: {1900},
                     "box_reachable": lambda *a: (True, "")}):
@@ -322,7 +324,7 @@ class CheckpointTruth(unittest.TestCase):
     def test_phase_4_stamps_when_the_boxes_are_there(self):
         with tempfile.TemporaryDirectory() as d:
             ctx = self._ctx(Path(d), {"scoring_vm_id": 1900})
-            with patch.object(deploy, "_artifact_probes", lambda c: {
+            with dpatch("_artifact_probes", lambda c: {
                     "vmids_from_state": lambda: [221, 222],
                     "vm_exists": lambda: {1900, 221, 222},
                     "box_reachable": lambda *a: (True, "")}):
@@ -335,7 +337,7 @@ class CheckpointTruth(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             for n in (1, 2, 5, 6, 7):
                 ctx = self._ctx(Path(d), {})
-                with patch.object(deploy, "_artifact_probes",
+                with dpatch("_artifact_probes",
                                   side_effect=AssertionError("must not probe")):
                     ctx.checkpoint(n)
                 self.assertEqual(ctx.state["last_phase"], n)

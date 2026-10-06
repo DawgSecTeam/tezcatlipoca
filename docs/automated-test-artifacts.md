@@ -5,8 +5,11 @@ folder of reports and evidence under the competition it tested. Teardown collect
 destroys anything, because the red report and the blue logs live on machines that are about to be
 gone.
 
-Implemented in [artifacts_ops.py](../artifacts_ops.py); inspected and sealed with
-[test-artifacts.py](../test-artifacts.py). Design record and the alternatives that were rejected:
+Implemented in the [artifacts_lib/](../artifacts_lib/) package, imported through the thin
+[artifacts_ops.py](../artifacts_ops.py) facade (the stable API: `ensure_test`, `collect`,
+`collect_for_teardown`, ... — callers and tests patch names there); inspected and sealed with
+[test-artifacts.py](../test-artifacts.py), whose subcommands live in `artifacts_lib/cli_*.py`.
+Module map: [internals.md](internals.md#artifacts_lib--per-run-test-artifacts). Design record and the alternatives that were rejected:
 [reports/automated-test-artifacts-plan-2026-10-03.md](reports/automated-test-artifacts-plan-2026-10-03.md).
 
 ## Layout

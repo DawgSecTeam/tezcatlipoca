@@ -1,18 +1,19 @@
 """Blue watchdog script shape (winad-scrim2 rec 7). Pure string build; no SSH."""
 
-import importlib.util
+import sys
 import unittest
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
-_SPEC = importlib.util.spec_from_file_location("run_agent_scrim", _REPO / "run-agent-scrim.py")
-scrim = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(scrim)
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+
+from scrim import blue_watchdog
 
 
 class WatchdogScript(unittest.TestCase):
     def test_units_and_masked_detection(self):
-        s = scrim.watchdog_script(["nginx", "Enable WinRM", "bind"], "pw")
+        s = blue_watchdog.watchdog_script(["nginx", "Enable WinRM", "bind"], "pw")
         self.assertIn("unmask nginx", s)
         self.assertIn("enable --now named", s)
         self.assertNotIn("WinRM", s)
@@ -21,7 +22,7 @@ class WatchdogScript(unittest.TestCase):
         self.assertIn("list-unit-files nginx.service", s)
 
     def test_password_quoted(self):
-        self.assertIn("""'a'"'"'b'""", scrim.watchdog_script(["nginx"], "a'b"))
+        self.assertIn("""'a'"'"'b'""", blue_watchdog.watchdog_script(["nginx"], "a'b"))
 
 
 if __name__ == "__main__":

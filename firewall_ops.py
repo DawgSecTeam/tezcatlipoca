@@ -1,5 +1,5 @@
-"""In-path firewall plumbing: per-team pfSense config generation, console bootstrap,
-and the engine cutover that moves the team gateway onto the firewall.
+"""In-path firewall plumbing: per-team pfSense config generation, SSH bootstrap, and the
+engine cutover that moves the team gateway onto the firewall.
 
 Per team <id> (the topology docs/pfsense-inpath-2026-09-28.md proved by hand and
 deploy phase 5 now automates):
@@ -7,13 +7,14 @@ deploy phase 5 now automates):
     engine ─transit 172.31.<id>.0/30 (vmbrW<id>)─ pfSense WAN 172.31.<id>.2/30
              pfSense LAN 192.168.<id>.1/24 (vmbr<id>) ─ boxes
 
-The pfSense template predates any provisionable first boot (ZFS pool the host must not
-import — see the runbook's trap list), so configuration rides the CONSOLE: option 8
-shell, a temp address on the LAN NIC, fetch of the per-team config.xml from the engine
-(which still owns the team gateway address at that point), reboot. Keystrokes go through
-the QEMU monitor API (`sendkey`); success is judged functionally — the fetched config
-enables SSH, so each firewall is probed on its WAN address afterward. A failed team is
-re-driven from the menu; the sequence is idempotent.
+The firewall boxes clone the `pfsense-provision` template (built once per node by
+tools/build-pfsense-provision-template.py): SSH on, the deploy key in admin's
+authorizedkeys, LAN vtnet1 = 192.168.1.1/24. Phase 5 therefore needs no console: the
+engine borrows 192.168.1.2/24 on one team NIC at a time, SSH goes through the engine to
+192.168.1.1, the per-team config.xml replaces /cf/conf/config.xml, and the firewall reboots
+into its WAN/LAN addressing. The generated config enables SSH and carries the same key, so a
+re-run reaches the firewall on its transit address instead — and skips the reboot when the
+config on the box already matches.
 
 The seed config is the comp's `pfsense/pfsense-config-orig.xml` (every firewall comp
 carries one — copy from competitions/pfsense-ad/pfsense/ to start a new one). There is
@@ -22,46 +23,25 @@ factory config's exact stanzas, and a hand-rolled seed would fail silently mid-d
 """
 
 import base64
+import os
+import subprocess
 import time
 
-from range_ops import proxmox_api
-from ssh_ops import ssh_on_gateway
+from ssh_ops import ssh_on_gateway, ssh_via_gateway
 
-# The engine-side HTTP server that serves config-team<id>.xml to the consoles. Uncommon
-# port: the engine already runs the quotient stack (80/443), apt-cacher (3142), postgres
-# and redis, and the port is typed character-by-character into a console.
-FW_CONFIG_PORT = 8611
-# pfSense 2.7.2 boots to its console menu in well under a minute; this is the settle
-# wait before the first (and every re-) drive of the menu, so keystrokes never land in
-# the FreeBSD loader where they would abort autoboot.
-CONSOLE_SETTLE_S = 90
-SSH_PROBE_BUDGET_S = 600
-
-# QEMU sendkey names for the characters the console commands need. Everything else
-# printable raises — the fetch URL is machine-built, so there is nothing legitimate
-# outside this set, and a silent wrong key would strand a firewall mid-bootstrap.
-_KEY_NAMES = {".": "dot", "/": "slash", "-": "minus", "_": "shift-minus",
-              ",": "comma", "=": "equal", " ": "spc", "\n": "ret",
-              ":": "shift-semicolon", "@": "shift-2"}
+# (port, label) of engine services boxes reach at the team gateway address. apt-cacher-ng
+# is the one every box needs (prep_apt's apt proxy points at 192.168.<id>.1:3142).
+ENGINE_GATEWAY_SERVICES = ((3142, "apt-cacher"),)
+# The provisioning template's LAN address, and the one the engine borrows beside it.
+BOOTSTRAP_FW_IP = "192.168.1.1"
+BOOTSTRAP_ENGINE_IP = "192.168.1.2"
+FW_USER = "admin"            # uid 0 on pfSense; the deploy key is in its authorizedkeys
+FW_BOOT_BUDGET_S = 420       # a cloned appliance's first boot to SSH
+FW_APPLY_BUDGET_S = 600      # config push → reboot → SSH on the WAN address (a loaded node boots slowly)
+FW_PUSH_ATTEMPT_S = 30       # one push attempt; sshd answers before a booting appliance can log in
 
 
-def key_sequence(text):
-    """Text → QEMU sendkey tokens, one per keystroke (shift-combos for the shifted few)."""
-    out = []
-    for ch in text:
-        if ch.isdigit() or "a" <= ch <= "z":
-            out.append(ch)
-        elif ch in _KEY_NAMES:
-            out.append(_KEY_NAMES[ch])
-        elif "A" <= ch <= "Z":
-            out.append(f"shift-{ch.lower()}")
-        else:
-            raise ValueError(f"no sendkey mapping for {ch!r} in {text!r} — console "
-                             "commands stay within [a-z0-9 .:/@_-] (firewall_ops._KEY_NAMES)")
-    return out
-
-
-def generate_team_config(seed_xml, team_id, red_dnat_spec=None):
+def generate_team_config(seed_xml, team_id, red_dnat_spec=None, authorized_key=None):
     """Render one team's pfSense config.xml from the factory seed (pure string surgery,
     promoted from the per-comp gen_pfsense_config.py copies).
 
@@ -75,11 +55,18 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None):
     red_dnat_spec (optional, Compfile `firewall_dnat` "PORT->TARGET[,...]") adds port
     forwards on the LAN address — the beacon-C2 path when the firewall, not the engine,
     owns the gateway address and the beacon lands on .1. `{tid}` in the target is
-    replaced with the team identifier for per-team routed-segment targets."""
+    replaced with the team identifier for per-team routed-segment targets.
+
+    authorized_key (an OpenSSH public key line) lands in admin's authorizedkeys so the
+    deploy can SSH the firewall after the config replaces the template's."""
     tid = str(team_id)
     x = seed_xml
 
     x = x.replace("<ssh></ssh>", "<ssh><enable>enabled</enable></ssh>")
+    if authorized_key:
+        b64 = base64.b64encode(authorized_key.strip().encode() + b"\n").decode()
+        x = x.replace("<name>admin</name>",
+                      f"<name>admin</name><authorizedkeys>{b64}</authorizedkeys>", 1)
     x = x.replace("<hostname>pfSense</hostname>", f"<hostname>fw-team{tid}</hostname>")
 
     new_ifaces = f"""<interfaces>
@@ -116,7 +103,7 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None):
 \t\t</gateway_item>
 \t</gateways>""")
 
-    wan_rule = f"""<rule>
+    wan_rule = """<rule>
 \t\t\t<type>pass</type>
 \t\t\t<ipprotocol>inet</ipprotocol>
 \t\t\t<descr><![CDATA[Allow engine scoring + routed traffic to LAN]]></descr>
@@ -130,9 +117,51 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None):
 \t\t\t</destination>
 \t\t</rule>
 \t\t"""
-    x = x.replace("\t\t<rule>", "\t\t" + wan_rule + "<rule>", 1)
+    # The deploy's success probe (and later admin access) is SSH from the engine to the
+    # firewall's own WAN address. pfSense blocks WAN-inbound to itself by default and the
+    # rule above only matches traffic destined to the LAN, so without this the probe can
+    # never answer even though the config applied (live-found 2026-10-05, pfsense-ad).
+    # Source is pinned to the engine's transit address: the transit /30 has no other host.
+    ssh_rule = f"""<rule>
+\t\t\t<type>pass</type>
+\t\t\t<ipprotocol>inet</ipprotocol>
+\t\t\t<descr><![CDATA[Allow engine SSH to the firewall]]></descr>
+\t\t\t<interface>wan</interface>
+\t\t\t<tracker>0100000202</tracker>
+\t\t\t<protocol>tcp</protocol>
+\t\t\t<source>
+\t\t\t\t<address>172.31.{tid}.1</address>
+\t\t\t</source>
+\t\t\t<destination>
+\t\t\t\t<network>(self)</network>
+\t\t\t\t<port>22</port>
+\t\t\t</destination>
+\t\t</rule>
+\t\t"""
+    x = x.replace("\t\t<rule>", "\t\t" + wan_rule + ssh_rule + "<rule>", 1)
 
     nat_rows = "\t\t\t<outbound>\n\t\t\t\t<mode>disabled</mode>\n\t\t\t</outbound>\n"
+    # Services the boxes reach at the gateway address (apt-cacher via the 95proxy
+    # apt.conf) live on the engine; once the firewall owns that address they must be
+    # redirected to the engine's transit address (live-found 2026-10-05: every Linux
+    # domain-join failed on `Unable to connect to 192.168.<id>.1:3142`).
+    for port, desc in ENGINE_GATEWAY_SERVICES:
+        nat_rows += f"""\t\t\t<rule>
+\t\t\t\t<interface>lan</interface>
+\t\t\t\t<ipprotocol>inet</ipprotocol>
+\t\t\t\t<protocol>tcp</protocol>
+\t\t\t\t<source>
+\t\t\t\t\t<any></any>
+\t\t\t\t</source>
+\t\t\t\t<destination>
+\t\t\t\t\t<address>192.168.{tid}.1</address>
+\t\t\t\t\t<port>{port}</port>
+\t\t\t\t</destination>
+\t\t\t\t<target>172.31.{tid}.1</target>
+\t\t\t\t<local-port>{port}</local-port>
+\t\t\t\t<descr><![CDATA[{desc} (engine service at the old gateway address)]]></descr>
+\t\t\t\t<associated-rule-id></associated-rule-id>
+\t\t\t</rule>\n"""
     for spec in red_dnat_spec or []:
         port, target = spec.split("->", 1)
         target = target.replace("{tid}", tid)
@@ -157,9 +186,9 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None):
     return x
 
 
-def write_team_configs(comp_dir, teams, fw_box, red_dnat_spec=None):
+def write_team_configs(comp_dir, teams, red_dnat_spec=None):
     """Write config-team<id>.xml for every team into the comp's pfsense/ dir (kept as
-    deploy artifacts — debugging a stuck console means diffing what the firewall got).
+    deploy artifacts — debugging a firewall means diffing what it was given).
     Returns the seed-missing error when there is no seed to work from."""
     seed_path = comp_dir / "pfsense" / "pfsense-config-orig.xml"
     if not seed_path.exists():
@@ -170,190 +199,127 @@ def write_team_configs(comp_dir, teams, fw_box, red_dnat_spec=None):
             "pfSense 2.7.x: Diagnostics > Backup & Restore) into competitions/"
             f"{comp_dir.name}/pfsense/.")
     seed = seed_path.read_text()
+    key = os.environ.get("TF_VAR_ssh_public_key", "").strip()
     out_dir = comp_dir / "pfsense"
     out = {}
     for team_key, team in teams.items():
         path = out_dir / f"config-team{team['identifier']}.xml"
-        path.write_text(generate_team_config(seed, team["identifier"], red_dnat_spec))
+        path.write_text(generate_team_config(seed, team["identifier"], red_dnat_spec, key))
         out[team_key] = path
     return out
 
 
-# ── console driving ──────────────────────────────────────────────────────────────────────
-
-def _monitor(node, vmid, command):
-    """One raw QEMU monitor command via the API (sendkey needs no VNC channel)."""
-    return proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/monitor",
-                       data={"command": command})
+def tcp_probe_cmd(ip, port, timeout=4):
+    """Remote shell probe (run on the engine): prints UP when ip:port accepts a connection."""
+    return f"timeout {timeout} bash -c 'cat < /dev/null > /dev/tcp/{ip}/{port}' && echo UP"
 
 
-def type_into_console(node, vmid, text, inter_key_s=0.05):
-    """Type one line into the VM's console and press Enter. Blind by design: the
-    verification is functional (the fetched config enables SSH), not screen-reading."""
-    for key in key_sequence(text):
-        _monitor(node, vmid, f"sendkey {key}")
-        time.sleep(inter_key_s)
-    _monitor(node, vmid, "sendkey ret")
+def firewall_wan_ip(tid):
+    """The firewall's transit-side (WAN) address for team identifier `tid`."""
+    return f"172.31.{tid}.2"
 
 
-def console_screenshot(node, vmid, out_path):
-    """Best-effort PNG of the console (the runbook's screendump, operator-facing).
-
-    Used when a firewall bootstrap gives up, so the human can see what the driver
-    could not: a loader prompt, a menu in the wrong state, a fetch error. Failures
-    here are swallowed — the bootstrap error itself is what must propagate."""
-    try:
-        import ssl
-        import struct
-        from urllib.parse import quote
-
-        import requests
-        import urllib3
-        import websocket
-        from PIL import Image
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
-        urllib3.disable_warnings()
-        import os
-        endpoint = os.environ["TF_VAR_proxmox_endpoint"].rstrip("/")
-        host = endpoint.split("//")[1].split(":")[0]
-        auth = {"Authorization": f"PVEAPIToken={os.environ['TF_VAR_proxmox_api_token']}"}
-        s = requests.Session()
-        s.headers.update(auth)
-        s.verify = False
-        d = s.post(f"{endpoint}/api2/json/nodes/{node}/qemu/{vmid}/vncproxy",
-                   data={"websocket": 1}, timeout=30).json()["data"]
-        ws = websocket.create_connection(
-            f"wss://{host}:8006/api2/json/nodes/{node}/qemu/{vmid}/vncwebsocket"
-            f"?port={d['port']}&vncticket={quote(d['ticket'])}",
-            header={"Authorization": auth["Authorization"]},
-            sslopt={"cert_reqs": ssl.CERT_NONE}, timeout=60)
-
-        def rx(n):
-            buf = b""
-            while len(buf) < n:
-                chunk = ws.recv()
-                if not chunk:
-                    raise EOFError("websocket closed")
-                buf += chunk
-            return buf
-
-        rx(12)
-        ws.send_binary(b"RFB 003.003\n")
-        sectype = struct.unpack(">I", rx(4))[0]
-        if sectype == 2:
-            challenge = rx(16)
-            key = d["ticket"].encode()[:8].ljust(8, b"\x00")
-            des_key = bytes(int(f"{b:08b}"[::-1], 2) for b in key)
-            enc = Cipher(algorithms.TripleDES(des_key), modes.ECB()).encryptor()
-            ws.send_binary(enc.update(challenge) + enc.finalize())
-            if struct.unpack(">I", rx(4))[0] != 0:
-                raise OSError("VNC auth failed")
-        elif sectype != 1:
-            raise OSError(f"unsupported security type {sectype}")
-        ws.send_binary(b"\x01")
-        init = rx(24)
-        w, h = struct.unpack(">HH", init[:4])
-        pf = bytes([0, 0, 0, 0, 32, 24, 0, 0, 0, 0, 0, 0,
-                    255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0])
-        ws.send_binary(b"\x00" + pf)
-        ws.send_binary(b"\x02" + b"\x00" + struct.pack(">H", 1) + struct.pack(">i", 0))
-        ws.send_binary(b"\x03" + b"\x00" + struct.pack(">HHHH", 0, 0, w, h))
-        hdr = rx(16)
-        px = rx(struct.unpack(">I", hdr[12:16])[0])
-        Image.frombytes("RGBX", (w, h), px).convert("RGB").save(out_path)
-        ws.close()
-        return str(out_path)
-    except Exception as e:  # noqa: BLE001 — diagnostics must never mask the real failure
-        return f"(screenshot failed: {e})"
+def team_gateway_ip(tid):
+    """The team gateway address: held by the engine pre-cutover, by the firewall after."""
+    return f"192.168.{tid}.1"
 
 
 def _probe_tcp(ssh_ctx, ip, port, timeout=4):
-    r = ssh_on_gateway(
-        ssh_ctx,
-        f"timeout {timeout} bash -c 'cat < /dev/null > /dev/tcp/{ip}/{port}' && echo UP",
-        timeout=timeout + 10)
+    r = ssh_on_gateway(ssh_ctx, tcp_probe_cmd(ip, port, timeout), timeout=timeout + 10)
     return "UP" in (r.stdout or "")
 
 
-def _drive_console(node, vmid, identifier, config_url):
-    """One full menu→shell→fetch→reboot drive. Runs only after CONSOLE_SETTLE_S, so a
-    booting system is never interrupted mid-loader."""
-    time.sleep(3)  # let any pending console output flush before we take the keyboard
-    type_into_console(node, vmid, "")            # Enter — dismiss a stale screen safely
-    time.sleep(1)
-    type_into_console(node, vmid, "8")           # pfSense console menu → 8 = Shell
-    time.sleep(3)
-    type_into_console(node, vmid,
-                      f"ifconfig vtnet1 inet 192.168.{identifier}.250/24 up")
-    time.sleep(2)
-    type_into_console(node, vmid, f"fetch -o /cf/conf/config.xml {config_url}")
-    time.sleep(12)  # fetch + config apply on the appliance's own disk
-    type_into_console(node, vmid, "reboot")
+def _wait_tcp(ssh_ctx, ip, port, budget_s=300, interval_s=10):
+    """_probe_tcp, retried until `budget_s` elapses (convergence after a network change)."""
+    deadline = time.time() + budget_s
+    while True:
+        if _probe_tcp(ssh_ctx, ip, port, timeout=8):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(interval_s)
 
 
-def bootstrap_firewalls(node, teams, fw_targets, config_paths, ssh_ctx,
-                        red_dnat_spec=None, comp_name="", log=print):
-    """Drive every team's firewall console to fetch its config, then wait for the
-    appliance to come up on its WAN address.
+def _push_command(config_xml):
+    """Shell line (pfSense admin shell) that installs config_xml and reboots — or reports
+    UNCHANGED and does nothing when the box already runs exactly this config."""
+    b64 = base64.b64encode(config_xml.encode()).decode()
+    return (f"echo {b64} | openssl base64 -d -A > /tmp/tez-new.xml && [ -s /tmp/tez-new.xml ] && "
+            "if cmp -s /tmp/tez-new.xml /cf/conf/config.xml; then echo UNCHANGED; "
+            "else cp /tmp/tez-new.xml /cf/conf/config.xml && rm -f /tmp/config.cache && "
+            "(nohup sh -c 'sleep 2; /sbin/reboot' >/dev/null 2>&1 &) && echo APPLIED; fi")
+
+
+def _push_config(ssh_ctx, ip, config_xml, who, budget_s=FW_BOOT_BUDGET_S):
+    """Push config_xml, retrying while the appliance is still booting: sshd listens before
+    a login can complete (live-found 2026-10-05: the first push hung its whole 90s on a
+    freshly cloned firewall). The push is idempotent, so a retry after a half-run is safe."""
+    deadline = time.time() + budget_s
+    last = "no attempt"
+    while True:
+        try:
+            r = ssh_via_gateway(ssh_ctx, ip, _push_command(config_xml),
+                                timeout=FW_PUSH_ATTEMPT_S, user=FW_USER)
+            out = (r.stdout or "").strip().splitlines()[-1:]
+            if r.returncode == 0 and out in (["APPLIED"], ["UNCHANGED"]):
+                return out[0]
+            last = f"rc={r.returncode} {(r.stderr or r.stdout or '').strip()[:200]}"
+        except subprocess.TimeoutExpired:
+            last = f"no answer within {FW_PUSH_ATTEMPT_S}s"
+        if time.time() >= deadline:
+            raise RuntimeError(f"{who}: config push to {ip} failed ({last})")
+        time.sleep(10)
+
+
+def _borrow_bootstrap_ip(ssh_ctx, nic, add):
+    verb = "add" if add else "del"
+    ssh_on_gateway(ssh_ctx, f"sudo ip addr {verb} {BOOTSTRAP_ENGINE_IP}/24 dev {nic} || true",
+                   timeout=30)
+
+
+def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, log=print):
+    """Push every team's generated config to its firewall over SSH, then wait for the
+    appliance to answer on its WAN address.
 
     fw_targets: one target dict per team's in_path firewall (slot-0 only — the engine
-    node), each carrying team_key/identifier/vmid/node. config_paths: team_key → the
-    generated config-team<id>.xml (served from the engine over HTTP). Idempotent: every
-    re-drive re-fetches the same config and reboots."""
-    dnat_note = f" (+{len(red_dnat_spec or [])} DNAT)" if red_dnat_spec else ""
-    engine_dir = f"/tmp/tez-fwcfg-{comp_name}"
-    quoted = " ".join(f"{k}:{v.name}" for k, v in config_paths.items())
-    log(f"  Serving {quoted} from the engine on :{FW_CONFIG_PORT}{dnat_note}")
-    ssh_on_gateway(ssh_ctx, f"rm -rf {engine_dir} && mkdir -p {engine_dir}", timeout=30)
-    for team_key, path in config_paths.items():
-        b64 = base64.b64encode(path.read_bytes()).decode()
-        ssh_on_gateway(ssh_ctx,
-                       f"echo {b64} | base64 -d | sudo tee {engine_dir}/{path.name} "
-                       f"> /dev/null && sudo chmod 644 {engine_dir}/{path.name}",
-                       timeout=60)
-    try:
-        ssh_on_gateway(ssh_ctx,
-                       f"nohup python3 -m http.server {FW_CONFIG_PORT} --directory "
-                       f"{engine_dir} > {engine_dir}/http.log 2>&1 & echo started",
-                       timeout=30)
-        time.sleep(2)
-
-        for t in fw_targets:
-            tid = t["identifier"]
-            url = f"http://192.168.{tid}.1:{FW_CONFIG_PORT}/config-team{tid}.xml"
-            log(f"  Bootstrapping {t['team_key']}'s firewall (vmid {t['vmid']}, "
-                f"WAN 172.31.{tid}.2)... console drive → fetch → reboot")
-            deadline = time.time() + SSH_PROBE_BUDGET_S
-            attempt = 0
-            while True:
-                attempt += 1
-                log(f"    console drive #{attempt} (settle {CONSOLE_SETTLE_S}s first)")
-                _drive_console(node, t["vmid"], tid, url)
-                # One full boot cycle worth of probing per drive: the fetched config
-                # enables SSH, so an answer on the WAN address IS the success signal.
-                cycle_end = min(deadline, time.time() + CONSOLE_SETTLE_S + 120)
-                while time.time() < cycle_end and \
-                        not _probe_tcp(ssh_ctx, f"172.31.{tid}.2", 22):
-                    time.sleep(20)
-                if _probe_tcp(ssh_ctx, f"172.31.{tid}.2", 22):
-                    log(f"    {t['team_key']}: firewall up — SSH answering on "
-                        f"172.31.{tid}.2 (config applied)")
-                    break
-                if time.time() >= deadline:
-                    shot = console_screenshot(node, t["vmid"],
-                                              f"logs/fw-console-{comp_name}-{tid}.png")
+    node), each carrying team_key/identifier. config_paths: team_key → the generated
+    config-team<id>.xml. Teams run one at a time: every template boots as 192.168.1.1 on
+    its own isolated bridge, and the engine can hold only one borrowed address route at
+    once. Idempotent — a firewall already answering on its transit address is reached
+    there and left alone when its config is unchanged."""
+    keys = sorted(teams)
+    for t in fw_targets:
+        tid, key = t["identifier"], t["team_key"]
+        wan = f"172.31.{tid}.2"
+        config_xml = config_paths[key].read_text()
+        if _probe_tcp(ssh_ctx, wan, 22):
+            log(f"  {key}: firewall already on {wan} — pushing config there")
+            result = _push_config(ssh_ctx, wan, config_xml, key)
+        else:
+            nic = f"ens{19 + keys.index(key)}"
+            log(f"  {key}: waiting for the template's SSH on {BOOTSTRAP_FW_IP} "
+                f"(engine {nic}, vmid {t['vmid']})")
+            _borrow_bootstrap_ip(ssh_ctx, nic, add=True)
+            try:
+                if not _wait_tcp(ssh_ctx, BOOTSTRAP_FW_IP, 22, budget_s=FW_BOOT_BUDGET_S):
                     raise RuntimeError(
-                        f"firewall bootstrap for team {t['team_key']} (vmid {t['vmid']}) "
-                        f"never came up on 172.31.{tid}.2:22 after {attempt} drive(s) — "
-                        f"the console fetch/reboot did not take. Console screenshot: "
-                        f"{shot}. Remedy: check the fetch URL was reachable (engine HTTP "
-                        f"server on :{FW_CONFIG_PORT}), then re-run --from-phase 5.")
-                log("    not up yet — re-driving the console (the drive is idempotent)")
-    finally:
-        ssh_on_gateway(ssh_ctx,
-                       f"pkill -f 'http.server {FW_CONFIG_PORT}' ; rm -rf {engine_dir}",
-                       timeout=30)
+                        f"{key}: firewall vmid {t['vmid']} never answered SSH on "
+                        f"{BOOTSTRAP_FW_IP} through engine {nic} — is it a clone of the "
+                        f"`pfsense-provision` template (tools/build-pfsense-provision-"
+                        f"template.py) with both NICs attached?")
+                result = _push_config(ssh_ctx, BOOTSTRAP_FW_IP, config_xml, key)
+            finally:
+                _borrow_bootstrap_ip(ssh_ctx, nic, add=False)
+        if result == "UNCHANGED":
+            log(f"    {key}: config already current — no reboot")
+            continue
+        log(f"    {key}: config installed, firewall rebooting")
+        if not _wait_tcp(ssh_ctx, wan, 22, budget_s=FW_APPLY_BUDGET_S):
+            raise RuntimeError(
+                f"{key}: firewall did not come back on {wan}:22 within {FW_APPLY_BUDGET_S}s "
+                f"after the config push. Remedy: inspect the console (qm terminal / VNC) "
+                f"for vmid {t['vmid']}, then re-run --from-phase 5.")
+        log(f"    {key}: firewall up on {wan} (config applied)")
 
 
 def cutover_netplan_yaml(teams):
@@ -420,7 +386,9 @@ def verify_in_path(ssh_ctx, teams, managed_first_ip, log=print):
                             f"172.31.{tid}.2 (got: {(r.stdout or '').strip()[:80]})")
             continue
         box_ip = managed_first_ip.get(k)
-        if box_ip and not _probe_tcp(ssh_ctx, box_ip, 22, timeout=8):
+        # The cutover just moved the gateway MAC: give ARP/routing a bounded window to
+        # converge instead of failing on the first probe (live-found 2026-10-05).
+        if box_ip and not _wait_tcp(ssh_ctx, box_ip, 22):
             failures.append(f"{k}: first managed box {box_ip}:22 not reachable through "
                             "the firewall — check the WAN pass rule loaded (pfctl -sr)")
     if failures:

@@ -9,6 +9,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import range_ops
+import vm_ownership
 
 
 class FakePVE:
@@ -34,20 +35,20 @@ class FakePVE:
         return {"data": "UPID:x"}
 
 
-@patch.object(range_ops, "wait_for_proxmox_task", lambda *a, **k: None)
+@patch.object(vm_ownership, "wait_for_proxmox_task", lambda *a, **k: None)
 class InterruptedClone(unittest.TestCase):
     def test_marker_detected(self):
         fake = FakePVE(cfgs={4150: {"description": range_ops.clone_marker("c1")}})
-        with patch.object(range_ops, "proxmox_api", fake):
+        with patch.object(vm_ownership, "proxmox_api", fake):
             self.assertTrue(range_ops.has_clone_marker("n", 4150, "c1"))
             self.assertFalse(range_ops.has_clone_marker("n", 4150, "other"))
 
     def test_locked_untagged_is_unlocked_then_purged(self):
         fake = FakePVE(vms=[{"vmid": 4150, "name": "golden-web01", "status": "stopped"}],
-                       cfgs={4150: {"lock": "clone"}})
-        with patch.object(range_ops, "proxmox_api", fake):
-            range_ops.destroy_vm_if_exists("n", 4150, expect_tags={"tezcatlipoca"},
-                                           allow_untagged=True)
+                       cfgs={4150: {"lock": "clone",
+                                    "description": range_ops.clone_marker("c1")}})
+        with patch.object(vm_ownership, "proxmox_api", fake):
+            range_ops.destroy_vm_if_exists("n", 4150, expect_tags={"tezcatlipoca", "comp-c1"})
         methods = [(m, p) for m, p, _ in fake.calls]
         self.assertIn(("PUT", "/nodes/n/qemu/4150/config"), methods)
         delete = [kw for m, p, kw in fake.calls if m == "DELETE"]
@@ -56,15 +57,14 @@ class InterruptedClone(unittest.TestCase):
     def test_unlock_forbidden_gives_exact_command(self):
         fake = FakePVE(vms=[{"vmid": 4150, "status": "stopped"}],
                        cfgs={4150: {"lock": "clone"}}, unlock_ok=False)
-        with patch.object(range_ops, "proxmox_api", fake):
+        with patch.object(vm_ownership, "proxmox_api", fake):
             with self.assertRaisesRegex(RuntimeError, "qm unlock 4150"):
-                range_ops.destroy_vm_if_exists("n", 4150, expect_tags=set(),
-                                               allow_untagged=True)
+                range_ops.destroy_vm_if_exists("n", 4150, expect_tags=None)
 
     def test_orphan_volumes_gc_only_matching_vmid(self):
         fake = FakePVE(vols={4150: [{"vmid": 4150, "volid": "local-zfs:vm-4150-disk-0"},
                                     {"vmid": 4151, "volid": "local-zfs:vm-4151-disk-0"}]})
-        with patch.object(range_ops, "proxmox_api", fake):
+        with patch.object(vm_ownership, "proxmox_api", fake):
             range_ops.destroy_vm_if_exists("n", 4150)
         deleted = [p for m, p, _ in fake.calls if m == "DELETE"]
         self.assertEqual(deleted, ["/nodes/n/storage/local-zfs/content/local-zfs:vm-4150-disk-0"])

@@ -9,6 +9,7 @@ run proved. Offline; the transport is injected (there is no estate access here).
 
 import json
 import os
+from types import SimpleNamespace
 import shutil
 import sys
 import tempfile
@@ -766,3 +767,55 @@ class TestTeardownEntryPoint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScpRetry(unittest.TestCase):
+    """The route pair retries once on a network-side flap (2026-10-03: the red01
+    pull died on a seconds-long no-route flap on the ENGINE's jump address and the
+    red report was lost; the destroy that ran next reached the same engine fine).
+
+    ao.time is the GLOBAL time module — patches must restore it or every later
+    test in the process inherits a poisoned time.sleep (live-found in this same
+    session: the full suite went 13-red until this was scoped)."""
+
+    def _fake_run(self, successes_after, out_file):
+        """subprocess.run stub: from call N on it succeeds by creating the file;
+        earlier calls answer rc=1 with a no-route stderr."""
+        calls = {"n": 0}
+
+        def run(cmd, capture_output=True, text=True, timeout=None):
+            calls["n"] += 1
+            if calls["n"] > successes_after:
+                Path(out_file).write_text("report body")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return SimpleNamespace(returncode=1, stdout="",
+                                   stderr="ssh: connect to host 10.0.0.250 port 22: "
+                                          "No route to host")
+        return run
+
+    def test_flap_on_both_routes_recovers_on_the_retry_round(self):
+        from artifacts_lib import transport as ao
+        d = Path(tempfile.mkdtemp())
+        sleeps = []
+        # succeeds on the retry round's last attempt (2 routes x 2 rounds)
+        with patch.object(ao.subprocess, "run",
+                               self._fake_run(3, str(d / "report.md"))), \
+                patch.object(ao.time, "sleep", side_effect=sleeps.append):
+            got = ao._scp_files({"key": "/k", "user": "sysadmin", "host": "10.0.0.198",
+                                 "jump": "jump-opt"}, "/var/lib/bad-auto/report-*.md", d)
+        self.assertEqual([p.name for p in got], ["report.md"])
+        self.assertEqual(sleeps, [10], "exactly one inter-round pause")
+
+    def test_still_unreachable_raises_with_the_last_error(self):
+        from artifacts_lib import transport as ao
+        d = Path(tempfile.mkdtemp())
+
+        def always_fail(cmd, capture_output=True, text=True, timeout=None):
+            return SimpleNamespace(returncode=1, stdout="", stderr="No route to host")
+
+        with patch.object(ao.subprocess, "run", always_fail), \
+                patch.object(ao.time, "sleep", lambda s: None):
+            with self.assertRaises(ao.Unreachable) as raised:
+                ao._scp_files({"key": "/k", "user": "sysadmin", "host": "10.0.0.198"},
+                              "/var/lib/bad-auto/report-*.md", d)
+        self.assertIn("No route to host", str(raised.exception))

@@ -22,6 +22,7 @@ def load_module(name, filename):
 
 
 destroy = load_module("destroy_competition_under_test", "destroy-competition.py")
+import destroy_sweep_ops  # noqa: E402
 import golden_ops  # noqa: E402
 
 
@@ -46,23 +47,24 @@ class LeftoverSweep(unittest.TestCase):
     def test_sweep_destroys_only_full_tag_matches(self):
         deleted = []
         vms = [
-            vm(2300, "210-dc01", "tezcatlipoca;comp-loadtest-cr-a"),
-            vm(2313, "211-win01", "tezcatlipoca;comp-loadtest-cr-a", status="running"),
+            vm(2300, "210-dc01", "tezcatlipoca;comp-loadtest-cr-a;run-aaaa0001"),
+            vm(2313, "211-win01", "tezcatlipoca;comp-loadtest-cr-a;run-aaaa0001", status="running"),
             # partial/foreign overlap must NOT be candidates:
+            vm(2400, "212-web01", "tezcatlipoca;comp-loadtest-cr-a;run-bbbb0002"),
             vm(1080, "quotient-engine", "tezcatlipoca;comp-multinode"),
             vm(1333, "golden-web01", "template"),
             vm(9000, "workshop-box", ""),
         ]
-        with patch.object(destroy, "proxmox_api", fake_api(vms, deleted)), \
-             patch.object(destroy, "wait_for_proxmox_task"):
-            destroy.sweep_tagged_leftovers(["proxmox"], "loadtest-cr-a", legacy=True)
+        with patch.object(destroy_sweep_ops, "proxmox_api", fake_api(vms, deleted)), \
+             patch.object(destroy_sweep_ops, "wait_for_proxmox_task"):
+            destroy_sweep_ops.sweep_tagged_leftovers(["proxmox"], "loadtest-cr-a", "run-aaaa0001")
         self.assertEqual(sorted(deleted), [2300, 2313])
 
     def test_sweep_is_silent_when_nothing_matches(self):
         deleted = []
         vms = [vm(1080, "quotient-engine", "tezcatlipoca;comp-multinode")]
-        with patch.object(destroy, "proxmox_api", fake_api(vms, deleted)):
-            destroy.sweep_tagged_leftovers(["proxmox"], "loadtest-cr-a", legacy=True)
+        with patch.object(destroy_sweep_ops, "proxmox_api", fake_api(vms, deleted)):
+            destroy_sweep_ops.sweep_tagged_leftovers(["proxmox"], "loadtest-cr-a", "run-aaaa0001")
         self.assertEqual(deleted, [])
 
 
@@ -71,30 +73,30 @@ class StaleStateLock(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             lock = Path(d) / ".terraform.tfstate.lock.info"
             lock.write_text("{}")
-            with patch.object(destroy.subprocess, "run") as pgrep:
+            with patch.object(destroy_sweep_ops.subprocess, "run") as pgrep:
                 pgrep.return_value.returncode = 1  # pgrep finds no terraform
-                self.assertTrue(destroy.clear_stale_state_lock(d))
+                self.assertTrue(destroy_sweep_ops.clear_stale_state_lock(d))
             self.assertFalse(lock.exists())
 
     def test_lock_kept_while_terraform_process_alive(self):
         with tempfile.TemporaryDirectory() as d:
             lock = Path(d) / ".terraform.tfstate.lock.info"
             lock.write_text("{}")
-            with patch.object(destroy.subprocess, "run") as pgrep:
+            with patch.object(destroy_sweep_ops.subprocess, "run") as pgrep:
                 pgrep.return_value.returncode = 0  # pgrep finds a live terraform
-                self.assertFalse(destroy.clear_stale_state_lock(d))
+                self.assertFalse(destroy_sweep_ops.clear_stale_state_lock(d))
             self.assertTrue(lock.exists())
 
     def test_no_lock_is_a_noop(self):
         with tempfile.TemporaryDirectory() as d:
-            self.assertFalse(destroy.clear_stale_state_lock(d))
+            self.assertFalse(destroy_sweep_ops.clear_stale_state_lock(d))
 
 
 class GoldenDestroySkipsForeign(unittest.TestCase):
     def test_foreign_slot_skips_and_remaining_slots_continue(self):
         calls = []
 
-        def fake_destroy(node, vmid, expect_tags=None, legacy_name=None, allow_untagged=False):
+        def fake_destroy(node, vmid, expect_tags=None):
             calls.append(vmid)
             if vmid == 1331:
                 raise RuntimeError("refusing to destroy vmid 1331: foreign tags")
@@ -106,11 +108,12 @@ class GoldenDestroySkipsForeign(unittest.TestCase):
         self.assertEqual(calls, [1330, 1331, 1332])
 
     def test_engine_template_foreign_skip_does_not_raise(self):
-        def fake_destroy(node, vmid, expect_tags=None, legacy_name=None, allow_untagged=False):
+        def fake_destroy(node, vmid, expect_tags=None):
             raise RuntimeError("refusing to destroy vmid 1320: foreign tags")
 
+        import engine_template_ops
         import template_ops
-        with patch.object(template_ops, "destroy_vm_if_exists", fake_destroy), \
+        with patch.object(engine_template_ops, "destroy_vm_if_exists", fake_destroy), \
              patch("builtins.print"):
             template_ops.destroy_engine_template("proxmox", 1180,
                                                  expect_tags={"tezcatlipoca"})

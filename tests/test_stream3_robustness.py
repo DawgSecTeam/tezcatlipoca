@@ -29,6 +29,7 @@ def _load(name, filename):
 
 verify = _load("verify_comp_s3", "verify-competition.py")
 destroy = _load("destroy_comp_s3", "destroy-competition.py")
+import destroy_sweep_ops  # noqa: E402
 
 
 class AdMisconfigReplay(unittest.TestCase):
@@ -164,18 +165,18 @@ class WindowsPreStop(unittest.TestCase):
         def fake_api(method, path, **kwargs):
             calls.append((method, path))
             if method == "GET":
-                return {"data": [{"name": "120-dc01", "vmid": 1400, "status": "running"},
-                                 {"name": "120-win01", "vmid": 1401, "status": "running"},
-                                 {"name": "120-web01", "vmid": 1402, "status": "running"},
+                return {"data": [{"name": "team1-dc01", "vmid": 1400, "status": "running"},
+                                 {"name": "team1-win01", "vmid": 1401, "status": "running"},
+                                 {"name": "team1-web01", "vmid": 1402, "status": "running"},
                                  {"name": "other-vm", "vmid": 999, "status": "running"}]}
             return {"data": "UPID:stop"}
 
         out = io.StringIO()
-        with patch.object(destroy, "proxmox_api", side_effect=fake_api), \
-             patch.object(destroy, "wait_for_proxmox_task"), \
+        with patch.object(destroy_sweep_ops, "proxmox_api", side_effect=fake_api), \
+             patch.object(destroy_sweep_ops, "wait_for_proxmox_task"), \
              patch.dict(os.environ, {"TF_VAR_proxmox_node": "node"}), \
              contextlib.redirect_stdout(out):
-            destroy.pre_stop_windows_boxes(
+            destroy_sweep_ops.pre_stop_windows_boxes(
                 {"team1": {"identifier": "120"}},
                 [{"name": "dc01", "template": "base-windows-server"},
                  {"name": "web01", "template": "base-ubuntu24.04-fix"}],
@@ -184,8 +185,8 @@ class WindowsPreStop(unittest.TestCase):
         # dc01 (windows) AND web01 (linux) — every team clone, foreign VMs untouched
         self.assertEqual(stops, ["/nodes/node/qemu/1400/status/stop",
                                  "/nodes/node/qemu/1402/status/stop"])
-        self.assertIn("Pre-stopped 120-dc01", out.getvalue())
-        self.assertIn("Pre-stopped 120-web01", out.getvalue())
+        self.assertIn("Pre-stopped team1-dc01", out.getvalue())
+        self.assertIn("Pre-stopped team1-web01", out.getvalue())
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import range_ops  # noqa: E402
+import vm_lifecycle  # noqa: E402
 import utils  # noqa: E402
 
 # Directories that are not this repo's source (a stray copy must not be scanned).
@@ -85,8 +86,8 @@ class SnapshotFailureIsRecorded(unittest.TestCase):
         def failing_api(method, path, **kwargs):
             raise RuntimeError("zfs error: cannot create snapshot 'hdd/vm-1500-disk-0@tz-base': "
                                "out of space")
-        with patch.object(range_ops, "list_snapshots", return_value=set()), \
-                patch.object(range_ops, "proxmox_api", side_effect=failing_api), \
+        with patch.object(vm_lifecycle, "list_snapshots", return_value=set()), \
+                patch.object(vm_lifecycle, "proxmox_api", side_effect=failing_api), \
                 patch("builtins.print"):
             ok = range_ops.take_snapshot("proxmox", 1500, "tz-base")
         self.assertFalse(ok)                       # still never raises, by design
@@ -97,10 +98,10 @@ class SnapshotFailureIsRecorded(unittest.TestCase):
         self.assertIn("out of space", entries[0]["detail"])
 
     def test_a_successful_snapshot_records_nothing(self):
-        with patch.object(range_ops, "list_snapshots", return_value=set()), \
-                patch.object(range_ops, "proxmox_api",
+        with patch.object(vm_lifecycle, "list_snapshots", return_value=set()), \
+                patch.object(vm_lifecycle, "proxmox_api",
                              return_value={"data": "UPID:pve:0001"}), \
-                patch.object(range_ops, "wait_for_proxmox_task"), \
+                patch.object(vm_lifecycle, "wait_for_proxmox_task"), \
                 patch("builtins.print"):
             ok = range_ops.take_snapshot("proxmox", 1500, "tz-ready")
         self.assertTrue(ok)

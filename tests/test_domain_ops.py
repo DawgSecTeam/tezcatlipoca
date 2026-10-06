@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import os
 import tempfile
@@ -8,12 +7,7 @@ from unittest.mock import patch
 
 import domain_ops
 import windows_ops
-
-_REDEPLOY_PATH = Path(__file__).resolve().parents[1] / "redeploy-competition.py"
-_REDEPLOY_SPEC = importlib.util.spec_from_file_location("redeploy_competition_test", _REDEPLOY_PATH)
-_REDEPLOY_MODULE = importlib.util.module_from_spec(_REDEPLOY_SPEC)
-_REDEPLOY_SPEC.loader.exec_module(_REDEPLOY_MODULE)
-_domain_config_path = _REDEPLOY_MODULE._domain_config_path
+from redeploy_plant_ops import _domain_config_path
 
 
 class DomainOrderingTests(unittest.TestCase):

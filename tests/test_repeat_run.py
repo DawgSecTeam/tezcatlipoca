@@ -12,7 +12,9 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import deploy
+from deploy_lib import golden_plan as dl_golden_plan  # noqa: E402
+from deploy_lib.phases import cleanup as dl_cleanup  # noqa: E402
+from deploy_lib import secrets as dl_secrets  # noqa: E402
 from golden_ops import golden_vmid_for
 from range_ops import vm_id_for
 from template_ops import engine_template_vmid
@@ -44,8 +46,8 @@ class RepeatRun(unittest.TestCase):
     def waves(self, node_vms, idents, stored, frozen_keep=()):
         goldens = {golden_vmid_for(ENGINE, i) for i in range(len(BOXES))}
         with contextlib.redirect_stdout(io.StringIO()):
-            return deploy.phase1_destroy_waves(
-                node_vms, targets(idents), {}, ENGINE, BOXES, COMP_TAGS,
+            return dl_golden_plan.phase1_destroy_waves(
+                node_vms, targets(idents), ENGINE, BOXES, COMP_TAGS,
                 lambda vid: vid in goldens, stored, HASHES, frozen_keep=frozen_keep)
 
     def test_second_run_with_fewer_teams(self):
@@ -84,8 +86,8 @@ class RepeatRun(unittest.TestCase):
         stored = {"golden": {"dc01": {"hash": "h-dc"}, "web01": {"hash": "OLD"}}}
         goldens = {golden_vmid_for(ENGINE, 0)}  # web01's golden template is gone
         with contextlib.redirect_stdout(io.StringIO()):
-            _w1, wave2 = deploy.phase1_destroy_waves(
-                node_after_run([101, 102]), targets([101, 102]), {}, ENGINE, BOXES,
+            _w1, wave2 = dl_golden_plan.phase1_destroy_waves(
+                node_after_run([101, 102]), targets([101, 102]), ENGINE, BOXES,
                 COMP_TAGS, lambda vid: vid in goldens, stored, HASHES,
                 frozen_keep={"web01"})
         self.assertIn(golden_vmid_for(ENGINE, 1), wave2)
@@ -99,8 +101,8 @@ class RepeatRun(unittest.TestCase):
         fw_slot = golden_vmid_for(ENGINE, 2)
         vms = node_after_run([101]) + [{"vmid": fw_slot, "tags": TAGS + ";template"}]
         with contextlib.redirect_stdout(io.StringIO()):
-            _w1, wave2 = deploy.phase1_destroy_waves(
-                vms, targets([101]), {}, ENGINE, boxes, COMP_TAGS,
+            _w1, wave2 = dl_golden_plan.phase1_destroy_waves(
+                vms, targets([101]), ENGINE, boxes, COMP_TAGS,
                 lambda vid: vid in goldens,
                 {"golden": {n: {"hash": h} for n, h in HASHES.items()}}, HASHES)
         self.assertIn(fw_slot, wave2)
@@ -112,14 +114,14 @@ class RepeatRun(unittest.TestCase):
             d = Path(d)
             (d / ".nakon-domain-team1-adds.json").write_text("{}")
             (d / ".template-hashes.json").write_text("{}")
-            deploy.reset_domain_markers(d)
+            dl_cleanup.reset_domain_markers(d)
             self.assertFalse((d / ".nakon-domain-team1-adds.json").exists())
             self.assertTrue((d / ".template-hashes.json").exists())
 
     def test_box_password_stable_across_runs(self):
-        first = deploy.carry_box_password({})
-        self.assertEqual(deploy.carry_box_password({"box_password": first}), first)
-        self.assertTrue(deploy.carry_box_password(None))
+        first = dl_secrets.carry_box_password({})
+        self.assertEqual(dl_secrets.carry_box_password({"box_password": first}), first)
+        self.assertTrue(dl_secrets.carry_box_password(None))
 
 
 if __name__ == "__main__":

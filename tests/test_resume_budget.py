@@ -22,35 +22,36 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import deploy  # noqa: E402
+from deploy_lib import failure as dl_failure  # noqa: E402
+from deploy_lib import gates as dl_gates  # noqa: E402
 from constants import RESUME_ATTEMPT_LIMIT  # noqa: E402
 
 
 class FailureSignature(unittest.TestCase):
     def test_volatile_parts_are_normalised_away(self):
-        a = deploy.failure_signature(RuntimeError("vmid 1232 did not come up in 900s"))
-        b = deploy.failure_signature(RuntimeError("vmid 1444 did not come up in 1800s"))
+        a = dl_failure.failure_signature(RuntimeError("vmid 1232 did not come up in 900s"))
+        b = dl_failure.failure_signature(RuntimeError("vmid 1444 did not come up in 1800s"))
         self.assertEqual(a, b, "the same failure on a different box must match")
 
     def test_uuid_and_hex_ids_are_normalised(self):
-        a = deploy.failure_signature(
+        a = dl_failure.failure_signature(
             RuntimeError("task UPID:pve:0001A2B3C4D5 failed 9f8e7d6c-1111-2222-3333-444455556666"))
-        b = deploy.failure_signature(
+        b = dl_failure.failure_signature(
             RuntimeError("task UPID:pve:0009F8E7D6C5 failed aaaa1111-2222-3333-4444-555566667777"))
         self.assertEqual(a, b)
 
     def test_different_failures_do_not_collide(self):
-        a = deploy.failure_signature(RuntimeError("golden did not boot"))
-        b = deploy.failure_signature(RuntimeError("template not found"))
+        a = dl_failure.failure_signature(RuntimeError("golden did not boot"))
+        b = dl_failure.failure_signature(RuntimeError("template not found"))
         self.assertNotEqual(a, b)
 
     def test_exception_type_is_part_of_the_signature(self):
-        a = deploy.failure_signature(RuntimeError("same text"))
-        b = deploy.failure_signature(ValueError("same text"))
+        a = dl_failure.failure_signature(RuntimeError("same text"))
+        b = dl_failure.failure_signature(ValueError("same text"))
         self.assertNotEqual(a, b)
 
     def test_signature_is_bounded_and_single_line(self):
-        sig = deploy.failure_signature(RuntimeError("first line\nsecond line\n" + "x" * 500))
+        sig = dl_failure.failure_signature(RuntimeError("first line\nsecond line\n" + "x" * 500))
         self.assertLessEqual(len(sig), 160)
         self.assertNotIn("\n", sig)
 
@@ -58,28 +59,28 @@ class FailureSignature(unittest.TestCase):
 class StreakRecording(unittest.TestCase):
     def test_first_failure_starts_the_streak(self):
         state = {}
-        self.assertEqual(deploy.record_failure(state, 4, RuntimeError("boom 1")), 1)
+        self.assertEqual(dl_failure.record_failure(state, 4, RuntimeError("boom 1")), 1)
         self.assertEqual(state["failure_streak"]["phase"], 4)
 
     def test_same_phase_and_signature_increments(self):
         state = {}
-        deploy.record_failure(state, 4, RuntimeError("vmid 1 timeout"))
-        self.assertEqual(deploy.record_failure(state, 4, RuntimeError("vmid 2 timeout")), 2)
+        dl_failure.record_failure(state, 4, RuntimeError("vmid 1 timeout"))
+        self.assertEqual(dl_failure.record_failure(state, 4, RuntimeError("vmid 2 timeout")), 2)
 
     def test_a_different_signature_at_the_same_phase_resets(self):
         state = {}
-        deploy.record_failure(state, 4, RuntimeError("disk full"))
-        self.assertEqual(deploy.record_failure(state, 4, RuntimeError("template missing")), 1)
+        dl_failure.record_failure(state, 4, RuntimeError("disk full"))
+        self.assertEqual(dl_failure.record_failure(state, 4, RuntimeError("template missing")), 1)
 
     def test_the_same_signature_at_a_different_phase_resets(self):
         state = {}
-        deploy.record_failure(state, 4, RuntimeError("boom"))
-        self.assertEqual(deploy.record_failure(state, 6, RuntimeError("boom")), 1)
+        dl_failure.record_failure(state, 4, RuntimeError("boom"))
+        self.assertEqual(dl_failure.record_failure(state, 6, RuntimeError("boom")), 1)
 
     def test_clearing_removes_the_streak(self):
         state = {}
-        deploy.record_failure(state, 4, RuntimeError("boom"))
-        deploy.clear_failure_streak(state)
+        dl_failure.record_failure(state, 4, RuntimeError("boom"))
+        dl_failure.clear_failure_streak(state)
         self.assertNotIn("failure_streak", state)
 
 
@@ -88,11 +89,11 @@ class ResumeBudgetGuard(unittest.TestCase):
         return {"failure_streak": {"phase": phase, "signature": signature, "count": count}}
 
     def test_first_repeat_is_allowed(self):
-        deploy.guard_resume_streak(4, self._state(1))          # resume #2 is fine
+        dl_gates.guard_resume_streak(4, self._state(1))          # resume #2 is fine
 
     def test_limit_reached_refuses_with_the_recovery_path(self):
         with self.assertRaises(SystemExit) as ctx:
-            deploy.guard_resume_streak(4, self._state(RESUME_ATTEMPT_LIMIT))
+            dl_gates.guard_resume_streak(4, self._state(RESUME_ATTEMPT_LIMIT))
         message = str(ctx.exception)
         self.assertIn("resume-loop", message)
         self.assertIn("destroy-competition.py", message)      # the path that helps
@@ -100,22 +101,22 @@ class ResumeBudgetGuard(unittest.TestCase):
         self.assertIn("--force-from-phase", message)          # the escape hatch, named
 
     def test_a_streak_at_another_phase_does_not_block_this_one(self):
-        deploy.guard_resume_streak(6, self._state(RESUME_ATTEMPT_LIMIT, phase=4))
+        dl_gates.guard_resume_streak(6, self._state(RESUME_ATTEMPT_LIMIT, phase=4))
 
     def test_force_overrides(self):
-        deploy.guard_resume_streak(4, self._state(99), force=True)
+        dl_gates.guard_resume_streak(4, self._state(99), force=True)
 
     def test_missing_or_malformed_state_is_not_a_refusal(self):
-        deploy.guard_resume_streak(4, {})
-        deploy.guard_resume_streak(4, {"failure_streak": None})
-        deploy.guard_resume_streak(4, {"failure_streak": {"phase": 4, "count": None}})
+        dl_gates.guard_resume_streak(4, {})
+        dl_gates.guard_resume_streak(4, {"failure_streak": None})
+        dl_gates.guard_resume_streak(4, {"failure_streak": {"phase": 4, "count": None}})
 
 
 class LoadGate(unittest.TestCase):
     """`--min-load-free`: the wait operators were doing by hand."""
 
     def setUp(self):
-        import range_ops
+        import pve_api as range_ops  # the owning module (range_ops is a facade)
         self.range_ops = range_ops
 
     def test_waits_until_the_node_falls_below_the_threshold(self):

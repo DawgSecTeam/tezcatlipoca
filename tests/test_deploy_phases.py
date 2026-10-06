@@ -16,8 +16,13 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import config_ops
-import deploy
+from deploy_lib import context as dl_context
+from deploy_lib import tfinputs as dl_tfinputs
+from deploy_lib import coverage as dl_coverage  # noqa: E402
+from deploy_lib import gates as dl_gates  # noqa: E402
+from deploy_lib import golden_plan as dl_golden_plan  # noqa: E402
 from nakon_ops import NakonResult
+from template_ops import hash_from_inputs
 from nodes_ops import golden_vmid_for_slot
 
 ENGINE = 1000
@@ -44,7 +49,7 @@ class GoldenHashEntries(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             # golden_bundle is read through golden_payload_hash; keep it a real dir.
             bundle = _bundle(d)
-            return deploy.golden_hash_entries(
+            return dl_golden_plan.golden_hash_entries(
                 boxes, BASE_IDS, golden_machines or {}, bundle,
                 "boxpw", "medic", "ssh-rsa AAAA", True, unbooted=unbooted)
 
@@ -58,7 +63,7 @@ class GoldenHashEntries(unittest.TestCase):
         self.assertEqual(set(hashes), {"dc01", "web01", "fw01"})
         self.assertEqual(set(inputs), {"dc01", "web01", "fw01"})
         self.assertEqual(inputs["fw01"]["config"]["golden"], "unmanaged")
-        self.assertEqual(hashes["fw01"], deploy.hash_from_inputs(inputs["fw01"]))
+        self.assertEqual(hashes["fw01"], hash_from_inputs(inputs["fw01"]))
 
     def test_unmanaged_entry_is_stable_across_calls(self):
         # .template-hashes.json reuse depends on the value not drifting run to run.
@@ -82,16 +87,19 @@ class GoldenRebuildGate(unittest.TestCase):
     def setUp(self):
         self.boxes = MANAGED_BOXES + [UNMANAGED]
         self.destroyed = []
-        self._orig = (deploy._is_template, deploy.stored_template_hash,
-                      deploy.frozen_gate, deploy.destroy_vm_if_exists)
-        deploy._is_template = lambda node, vid: True       # every slot holds a template
-        deploy.stored_template_hash = lambda node, vid: "stale-on-node"
-        deploy.frozen_gate = lambda *a, **k: True          # rebuild permitted
-        deploy.destroy_vm_if_exists = lambda node, vid, **kw: self.destroyed.append(vid)
-
-    def tearDown(self):
-        (deploy._is_template, deploy.stored_template_hash,
-         deploy.frozen_gate, deploy.destroy_vm_if_exists) = self._orig
+        self._patches = [
+            patch.object(dl_golden_plan, "_is_template",
+                         lambda node, vid: True),       # every slot holds a template
+            patch.object(dl_golden_plan, "stored_template_hash",
+                         lambda node, vid: "stale-on-node"),
+            patch.object(dl_golden_plan, "frozen_gate",
+                         lambda *a, **k: True),         # rebuild permitted
+            patch.object(dl_golden_plan, "destroy_vm_if_exists",
+                         lambda node, vid, **kw: self.destroyed.append(vid)),
+        ]
+        for p_ in self._patches:
+            p_.start()
+            self.addCleanup(p_.stop)
 
     def _slot(self, i):
         return golden_vmid_for_slot(ENGINE, 0, i)
@@ -102,7 +110,7 @@ class GoldenRebuildGate(unittest.TestCase):
         hashes = {"dc01": "h-dc", "web01": "h-web"}
         inputs = {"dc01": {"config": {}}, "web01": {"config": {}}}
         with contextlib.redirect_stdout(io.StringIO()):
-            deploy.golden_rebuild_gate(".", "node1", 0, self.boxes, ENGINE, {}, hashes,
+            dl_golden_plan.golden_rebuild_gate(".", "node1", 0, self.boxes, ENGINE, {}, hashes,
                                        inputs, "c1")
         self.assertEqual(self.destroyed, [self._slot(0), self._slot(1)])  # fw01 skipped
 
@@ -112,22 +120,22 @@ class GoldenRebuildGate(unittest.TestCase):
         # template is rebuilt like any other drifted golden.
         with tempfile.TemporaryDirectory() as d:
             bundle = _bundle(d)
-            inputs, hashes = deploy.golden_hash_entries(
+            inputs, hashes = dl_golden_plan.golden_hash_entries(
                 self.boxes, BASE_IDS,
                 {"dc01": {"configurations": []}, "web01": {"configurations": []}},
                 bundle, "boxpw", "medic", "ssh-rsa AAAA", True)
         with contextlib.redirect_stdout(io.StringIO()):
-            deploy.golden_rebuild_gate(".", "node1", 0, self.boxes, ENGINE, {}, hashes,
+            dl_golden_plan.golden_rebuild_gate(".", "node1", 0, self.boxes, ENGINE, {}, hashes,
                                        inputs, "c1")
         self.assertEqual(self.destroyed, [self._slot(i) for i in range(len(self.boxes))])
 
     def test_matching_stored_hash_is_left_alone(self):
         hashes = {"dc01": "h-dc", "web01": "h-web"}
         inputs = {"dc01": {"config": {}}, "web01": {"config": {}}}
-        deploy.stored_template_hash = lambda node, vid: (
+        dl_golden_plan.stored_template_hash = lambda node, vid: (
             "h-dc" if vid == self._slot(0) else "other")
         with contextlib.redirect_stdout(io.StringIO()):
-            deploy.golden_rebuild_gate(".", "node1", 0, self.boxes, ENGINE, {}, hashes,
+            dl_golden_plan.golden_rebuild_gate(".", "node1", 0, self.boxes, ENGINE, {}, hashes,
                                        inputs, "c1")
         self.assertNotIn(self._slot(0), self.destroyed)   # hash matches -> kept
         self.assertIn(self._slot(1), self.destroyed)
@@ -137,14 +145,14 @@ class ResumeFromPhaseGuard(unittest.TestCase):
     """D2: --from-phase must not skip phases .deploy_state.json never saw complete."""
 
     def test_next_phase_after_last_completed_is_allowed(self):
-        deploy.guard_resume_from_phase(4, 3, ".deploy_state.json")  # no raise
+        dl_gates.guard_resume_from_phase(4, 3, ".deploy_state.json")  # no raise
 
     def test_resuming_earlier_than_last_completed_is_allowed(self):
-        deploy.guard_resume_from_phase(2, 6, ".deploy_state.json")
+        dl_gates.guard_resume_from_phase(2, 6, ".deploy_state.json")
 
     def test_far_beyond_last_completed_is_refused(self):
         with self.assertRaises(SystemExit) as ctx:
-            deploy.guard_resume_from_phase(6, 3, ".deploy_state.json")
+            dl_gates.guard_resume_from_phase(6, 3, ".deploy_state.json")
         msg = str(ctx.exception)
         self.assertIn("--from-phase 6", msg)          # names the requested phase
         self.assertIn("records phase 3", msg)         # and what actually completed
@@ -155,15 +163,15 @@ class ResumeFromPhaseGuard(unittest.TestCase):
         # Missing last_phase reads as 0 — nothing is recorded complete, so even
         # --from-phase 2 would skip phase 1. Refuse rather than assume.
         with self.assertRaises(SystemExit) as ctx:
-            deploy.guard_resume_from_phase(2, None, ".deploy_state.json")
+            dl_gates.guard_resume_from_phase(2, None, ".deploy_state.json")
         self.assertIn("records phase 0", str(ctx.exception))
 
     def test_non_integer_last_phase_is_treated_as_zero(self):
         with self.assertRaises(SystemExit):
-            deploy.guard_resume_from_phase(2, "three", ".deploy_state.json")
+            dl_gates.guard_resume_from_phase(2, "three", ".deploy_state.json")
 
     def test_force_overrides_the_refusal(self):
-        deploy.guard_resume_from_phase(6, 3, ".deploy_state.json", force=True)
+        dl_gates.guard_resume_from_phase(6, 3, ".deploy_state.json", force=True)
 
 
 class CoveragePersistence(unittest.TestCase):
@@ -181,7 +189,7 @@ class CoveragePersistence(unittest.TestCase):
                  "plant_coverage_failed": {"web01-team101": ["smb-v1"]}}
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / ".deploy_state.json"
-            deploy.record_stage_coverage(
+            dl_coverage.record_stage_coverage(
                 state, self._machines(), self._green_result(),
                 lambda: path.write_text(json.dumps(state)))
             self.assertEqual(state.get("plant_coverage_failed"), {})   # in memory
@@ -191,7 +199,7 @@ class CoveragePersistence(unittest.TestCase):
     def test_save_happens_even_when_there_was_nothing_to_clear(self):
         calls = []
         state = {"plant_coverage_failed": {}}
-        deploy.record_stage_coverage(state, self._machines(), self._green_result(),
+        dl_coverage.record_stage_coverage(state, self._machines(), self._green_result(),
                                      lambda: calls.append(1))
         self.assertEqual(calls, [1])
 
@@ -199,9 +207,15 @@ class CoveragePersistence(unittest.TestCase):
         state = {"plant_coverage_failed": {}}
         result = NakonResult([], [{"name": "web01-team101",
                                    "steps": [{"name": "smb-v1", "rc": 1}]}])
-        deploy.record_stage_coverage(state, self._machines(), result, lambda: None)
+        dl_coverage.record_stage_coverage(state, self._machines(), result, lambda: None)
         self.assertEqual(state["plant_coverage_failed"],
                          {"web01-team101": ["smb-v1"]})
+
+
+def _pipeline_source():
+    """deploy.py plus every deploy_lib module, concatenated."""
+    files = [_REPO / "deploy.py", *sorted((_REPO / "deploy_lib").rglob("*.py"))]
+    return "\n".join(f.read_text() for f in files)
 
 
 class SharedStateWriter(unittest.TestCase):
@@ -209,10 +223,10 @@ class SharedStateWriter(unittest.TestCase):
     fourth hand-rolled atomic writer (the guarantee held at 1 of 4 call sites before)."""
 
     def test_deploy_writer_is_the_shared_config_ops_helper(self):
-        self.assertIs(deploy.write_state, config_ops.write_state)
+        self.assertIs(dl_context.write_state, config_ops.write_state)
 
     def test_save_state_routes_through_the_helper(self):
-        src = (_REPO / "deploy.py").read_text()
+        src = _pipeline_source()
         # The state path is now reached through the stage objects prepare() builds
         # (prior.state_path in the resume-secrets step) and through self in
         # DeployContext.save_state; both must be the shared helper, not a fourth
@@ -232,13 +246,13 @@ SECRET_WRITES = [
 
 
 class AtomicSecretWrites(unittest.TestCase):
-    """Every secret-bearing write in deploy.py must go through
+    """Every secret-bearing write in the deploy pipeline (deploy_lib/) must go through
     config_ops.write_text_atomic: 0600 is applied at CREATION (os.open), not by a chmod
     after the process umask already exposed the file, and the content lands via a temp
     file that never survives the rename. These are the exact shapes deploy writes."""
 
     def test_deploy_uses_the_shared_atomic_write_helper(self):
-        self.assertIs(deploy.write_text_atomic, config_ops.write_text_atomic)
+        self.assertIs(dl_tfinputs.write_text_atomic, config_ops.write_text_atomic)
 
     def test_mode_0600_at_creation_and_no_tmp_survives(self):
         for name, text in SECRET_WRITES:
@@ -256,7 +270,7 @@ class AtomicSecretWrites(unittest.TestCase):
                     return real_replace(src, dst)
 
                 with patch("os.replace", side_effect=spy):
-                    deploy.write_text_atomic(path, text)
+                    dl_tfinputs.write_text_atomic(path, text)
 
                 self.assertEqual(seen["tmp_mode"], 0o600)
                 self.assertEqual(seen["tmp_text"], text)
@@ -265,7 +279,7 @@ class AtomicSecretWrites(unittest.TestCase):
                 self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), [name])
 
     def test_deploy_has_no_hand_rolled_secret_writer_left(self):
-        src = (_REPO / "deploy.py").read_text()
+        src = _pipeline_source()
         self.assertNotIn("os.chmod", src)          # no chmod-after-write anywhere
         self.assertNotIn('"teams.json").write_text', src)
         self.assertNotIn("tfvars_path.write_text", src)

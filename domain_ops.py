@@ -76,6 +76,15 @@ def _probe_joined(node, member_box, member_vmid, domain):
         return False
 
 
+def password_trips_ad_complexity(username, password, full_name=""):
+    """True when AD's default complexity rule rejects the password: it may not contain the
+    account name or any 3+ char token of the display name (the CDE packet's `Red123!` for
+    `Red` is exactly that — 10 `New-ADUser` failures per team, live-found 2026-10-06)."""
+    low = password.lower()
+    tokens = [username] + [t for t in full_name.replace(",", " ").split()]
+    return any(len(t) >= 3 and t.lower() in low for t in tokens)
+
+
 def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scoring_user,
                           scoring_ip, box_password, promote_dc=True, force_member_join=False):
     """Per-team AD forest promotion + member joins from domain_roles.json; no-op when absent.
@@ -192,6 +201,18 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                     with PRINT_LOCK:
                         print(f"  [{team_key}] packet AD accounts already planted (resume marker)")
                 else:
+                    if any(password_trips_ad_complexity(
+                            a["username"], a["password"], a.get("full_name") or "")
+                            for a in packet_accounts):
+                        # The packet publishes these exact passwords, so the domain policy
+                        # yields, not the passwords.
+                        with PRINT_LOCK:
+                            print(f"  [{team_key}] packet passwords break AD complexity — "
+                                  f"disabling ComplexityEnabled on {domain}")
+                        guest_agent_exec_windows(
+                            node, dc_vmid,
+                            f"Set-ADDefaultDomainPasswordPolicy -Identity {domain} "
+                            "-ComplexityEnabled $false", timeout=120)
                     pins = []
                     for acct in packet_accounts:
                         pins.append({"name": "Add User Account", "vars": {
