@@ -163,8 +163,8 @@ class PreStopOwnership(unittest.TestCase):
     BOXES = [{"name": "web01"}]
 
     def test_other_run_same_name_is_not_stopped(self):
-        fake = FakePVE(nodes={"n": [vm(301, "101-web01", OTHER, status="running"),
-                                    vm(302, "101-web01", OURS, status="running")]})
+        fake = FakePVE(nodes={"n": [vm(301, "team1-web01", OTHER, status="running"),
+                                    vm(302, "team1-web01", OURS, status="running")]})
         stopped = []
         with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
                 patch.object(destroy_sweep_ops, "wait_for_proxmox_task",
@@ -172,6 +172,19 @@ class PreStopOwnership(unittest.TestCase):
             destroy_sweep_ops.pre_stop_windows_boxes(self.TEAMS, self.BOXES, "n",
                                            expect_tags={"tezcatlipoca", f"comp-{COMP}", RUN})
         self.assertEqual(stopped, ["n"])
+
+    def test_other_teams_use_identifier_name(self):
+        teams = {"team1": {"identifier": "101"}, "team2": {"identifier": "102"}}
+        fake = FakePVE(nodes={"n": [vm(301, "team1-web01", OURS, status="running"),
+                                    vm(302, "102-web01", OURS, status="running"),
+                                    vm(303, "101-web01", OURS, status="running")]})
+        stopped = []
+        with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
+                patch.object(destroy_sweep_ops, "wait_for_proxmox_task",
+                             side_effect=lambda n, u: stopped.append(n)):
+            destroy_sweep_ops.pre_stop_windows_boxes(teams, self.BOXES, "n",
+                                           expect_tags={"tezcatlipoca", f"comp-{COMP}", RUN})
+        self.assertEqual(len(stopped), 2)  # team1-web01 and 102-web01, not 101-web01
 
 class ReportRemainingClassification(unittest.TestCase):
     def test_ours_other_run_and_untagged_run_are_distinguished(self):

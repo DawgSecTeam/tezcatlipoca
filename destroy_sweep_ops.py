@@ -62,7 +62,9 @@ def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None, expect_t
         node = (team_nodes or {}).get(team_key, default_node)
         for v in _live(node):
             vm_name = v.get("name") or ""
-            if vm_name not in {f"{team['identifier']}-{box}" for box in windows}:
+            # team 1 is named `team1-<box>` (terraform main.tf / targets.enumerate_targets)
+            prefix = team_key if team_key == "team1" else team["identifier"]
+            if vm_name not in {f"{prefix}-{box}" for box in windows}:
                 continue
             if expect_tags is not None and not expect_tags <= parse_vm_tags(v.get("tags")):
                 print(f"  Skipping pre-stop of {vm_name} (vmid {v['vmid']}) on {node} — "

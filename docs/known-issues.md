@@ -55,20 +55,6 @@ unreproducible from the repo. **Next action:** commit the diagnostic kit as a sc
 occurrence can be bisected. Full evidence and the kit:
 [reports/pam-account-stage-after-restart-2026-09-24.md](reports/pam-account-stage-after-restart-2026-09-24.md).
 
-### Harness pre-T0 verify fails on packet gates for a stage_author-authored comp
-
-**Status: OPEN — found 2026-10-04, blocks the scrim harness pre-run, unrelated to resets.**
-`run-agent-scrim.py --new <id> --from-template competitions/cde-2026` authors a comp whose
-regenerated `packet.md` contains NONE of the packet profile's decoy accounts
-(scorebot/blackteam/red_scoring), and the harness's pre-T0 `verify-competition.py --packet`
-then FAILs `packet_creds` + `packet_accounts` ("missing on web01-team130: scorebot, blackteam,
-red_scoring") and aborts the run before the event window
-([reports/reset-live-test-2026-10-03-report.md](reports/reset-live-test-2026-10-03-report.md), F7 —
-range and red01 were deployed and healthy; teardown was done by hand). Either packet compile
-drops the decoys from the regenerated packet.md, or verify reads a different profile revision
-than compile planted. **Next action:** diff the profile's account set against
-`packet_ops`' compile output for an authored comp; fix whichever side drifted.
-
 ### Scoring round loop does not auto-resume after an engine reboot
 
 **Status: OPEN — detected, not automated.** After an engine VM reboot the containers restart but the
@@ -107,33 +93,6 @@ templates not yet rebuilt:** the template-build recipe now sets `SELINUX=permiss
 ([usage-people.md](usage-people.md#non-ubuntu-linux-box-templates-fedora-alpine)), which only takes
 effect on the next rebuild, so the Fedora templates currently on the nodes still enforce. Detail and
 the verified SSH route: [environment-facts.md](environment-facts.md#templates).
-
-### llama.cpp local-blue context ceiling
-
-**Status: OPEN — standing constraint.** opencode's own base prompt is ~20k tokens, so the local
-endpoint's advertised context must leave room for it or opencode self-compacts fatally. `60000` is the
-verified local value (cloud blue uses `120000`); do not set `reasoning_effort` for a local endpoint.
-**Next action:** a launch-time assertion against the endpoint's real `n_ctx` instead of prose.
-
-### Teardown's pre-stop never matches team 1's boxes
-
-**Status: OPEN — latent; the name pattern is wrong for exactly one team.** `pre_stop_windows_boxes`
-exists to hard-stop every clone before `terraform destroy`, because a Windows DC whose guest agent is
-down never complies with the provider's graceful shutdown and holds the `qm` lock, hanging the whole
-destroy (`destroy_sweep_ops.pre_stop_windows_boxes`). It matches VM names as `<identifier>-<box>`
-(the `f"{team['identifier']}-{box}"` match in `destroy_sweep_ops.py`), but terraform deliberately names team 1's VMs `team1-<box>` and only
-other teams' `<identifier>-<box>` (`terraform/main.tf:251-261`, comment: "Keys keep the historical
-naming (team1-<box>, <identifier>-<box>)"); `targets.enumerate_targets` implements the same
-special-case, and every `teams.json` in the tree is keyed `team1…`
-(`competitions/*/teams.json`). So team 1's boxes are never pre-stopped and can still hit the
-graceful-shutdown hang the function was written to prevent; other teams pre-stop correctly. Not a
-destroy failure — terraform still removes team 1 from state, just potentially slowly.
-
-**Next action:** build the name from `range_ops.enumerate_targets` (`vm_name`) or apply the same
-`team_key == "team1"` special case instead of re-deriving the pattern. Found 2026-10-03 while
-surveying teardown for
-[reports/automated-test-artifacts-plan-2026-10-03.md](reports/automated-test-artifacts-plan-2026-10-03.md)
-(which must not copy this pattern when it enumerates boxes to collect artifacts from).
 
 ## Pending upstream — owned by the catalog / nakon
 
