@@ -188,8 +188,8 @@ sweep. **[live]**
   | Address | Holder / use | Notes |
   |---|---|---|
   | `10.0.0.250` | the engine *default* — a foreign competition's live `quotient-engine` | never rely on the default |
-  | `10.0.0.252` | practice deploys (6-team / follow-up sessions, 2026-10-04) | free between runs |
-  | `10.0.0.248` | practice deploys (parallel session, 2026-10-04) | free between runs |
+  | `10.0.0.252` | practice deploys (6-team / follow-up sessions, 2026-10-04) | **occupied 2026-10-07** — answers as a live `quotient-engine` (leftover; engine VM not in .193's cluster inventory) |
+  | `10.0.0.248` | practice deploys (parallel session 2026-10-04; cde-2026 practice run 2026-10-07) | free between runs |
   | `10.0.0.243` | pfsense-ad live validation (2026-10-04) | free between runs |
   | `10.0.0.245`, `.246`, `.249` | answered on 2026-10-02 — foreign guests | do not use |
 
