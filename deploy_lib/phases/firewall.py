@@ -3,8 +3,8 @@
 from functools import partial
 
 from constants import SNAP_BASE
-from firewall_ops import (bootstrap_firewalls, cut_over_engine, verify_in_path,
-                          write_team_configs)
+from firewall_ops import (bootstrap_firewalls, cut_over_engine, firewall_kind,
+                          verify_in_path, write_team_configs)
 from timing import timed
 from utils import compfile_value, is_in_path_fw, run_concurrent
 
@@ -14,18 +14,21 @@ from deploy_lib.phases._snapshots import snap_base
 def phase5_firewall_bootstrap(ctx):
     """[5/8] Bootstrap the in-path firewalls, then cut the engine over.
 
-    Runs only when the lineup declares an `in_path` box (an unmanaged firewall): every
-    team's pfSense (a clone of the `pfsense-provision` template) gets its per-team
-    config.xml pushed over SSH through the engine, then the engine cutover moves the gateway address onto the firewalls and points the engine's
-    routes through the transit /30s. From here on every engine→box path (repair sweep,
-    final pass, beacons, scoring) is verified to run THROUGH the firewall.
+    Runs only when the lineup declares an `in_path` box (an unmanaged firewall). The kind
+    follows the template name (firewall_kind): pfSense clones get their per-team
+    config.xml pushed over SSH through the engine and reboot into it; VyOS clones get
+    generated set-command passes applied live. Either way the engine cutover then moves
+    the gateway address onto the firewalls and points the engine's routes through the
+    transit /30s. From here on every engine→box path (repair sweep, final pass, beacons,
+    scoring) is verified to run THROUGH the firewall.
 
     No firewalls in the lineup: print-and-return — the phase index stays stable, so
     checkpoints and resume banners never depend on the box lineup.
 
-    Resumable: a --from-phase 5 re-pushes every config (a firewall whose config already
-    matches is left alone, no reboot) and re-runs the cutover (the netplan rewrite is
-    idempotent); the completion flag is written for reporting, not for skipping."""
+    Resumable: a --from-phase 5 re-pushes every config (a pfSense firewall whose config
+    already matches is left alone, no reboot; a VyOS firewall re-applies harmlessly) and
+    re-runs the cutover (the netplan rewrite is idempotent); the completion flag is
+    written for reporting, not for skipping."""
     if ctx.from_phase > 5:
         print("[5/8] Skipped (resume).")
         return
@@ -33,8 +36,11 @@ def phase5_firewall_bootstrap(ctx):
     if not fw_targets:
         print("[5/8] No in-path firewall in this lineup — skipping.")
         return
-    print("[5/8] Bootstrapping the in-path firewalls (SSH config push → reboot → "
-          "engine cutover)...")
+    kind = firewall_kind(fw_targets[0]["box"].get("template", ""))
+    print("[5/8] Bootstrapping the in-path firewalls (SSH config push → engine cutover)...")
+    print(f"  Firewall kind: {kind}"
+          + (" (generated set-command passes, live apply)" if kind == "vyos"
+             else " (config.xml push + reboot)"))
     if ctx.placement and ctx.placement["satellites"]:
         raise SystemExit(
             "  ERROR: in-path firewalls are engine-node (slot 0) only — preflight should "
@@ -43,7 +49,7 @@ def phase5_firewall_bootstrap(ctx):
     red_dnat_spec = [s.strip() for s in dnat.split(",") if s.strip()] or None
     with timed(ctx.comp_dir, 5, "firewall_configs", f"x{len(fw_targets)}"):
         config_paths = write_team_configs(ctx.comp_dir, ctx.teams,
-                                          red_dnat_spec=red_dnat_spec)
+                                          red_dnat_spec=red_dnat_spec, kind=kind)
     with timed(ctx.comp_dir, 5, "firewall_bootstrap", f"x{len(fw_targets)}"):
         bootstrap_firewalls(ctx.teams, fw_targets, config_paths, ctx.tf_ctx)
     with timed(ctx.comp_dir, 5, "engine_cutover"):
@@ -55,7 +61,7 @@ def phase5_firewall_bootstrap(ctx):
         if not is_in_path_fw(t["box"]):
             first_box.setdefault(t["team_key"], t["ip"])
     with timed(ctx.comp_dir, 5, "verify_in_path"):
-        verify_in_path(ctx.tf_ctx, ctx.teams, first_box)
+        verify_in_path(ctx.tf_ctx, ctx.teams, first_box, kind=kind)
     # The firewalls' tz-base lands HERE, after the cutover — a pre-cutover restore
     # point would capture a firewallless network pretending to be in-path.
     print(f"  Snapshotting the firewalls as '{SNAP_BASE}' (post-cutover restore point)...")

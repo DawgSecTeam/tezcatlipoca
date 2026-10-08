@@ -1,4 +1,5 @@
-"""In-path firewall gate: after phase 5's cutover each team's traffic must still ride its pfSense.
+"""In-path firewall gate: after phase 5's cutover each team's traffic must still ride its
+firewall (pfSense or VyOS — the probes here are OS-agnostic).
 
 Phase 5 proves this once (firewall_ops.verify_in_path). This gate re-proves it on every verify so
 drift is caught — chiefly an out-of-band `terraform apply` that rewrites the pre-cutover engine

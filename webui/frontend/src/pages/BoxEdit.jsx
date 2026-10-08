@@ -43,7 +43,7 @@ function SettingsModal({ comp, box, onClose, onSaved }) {
         </div>
         <label className="flex items-start gap-3 rounded-2xl bg-sunken p-3 text-sm shadow-inset">
           <input type="checkbox" checked={!!form.unmanaged} onChange={(e) => setUnmanaged(e.target.checked)} className="mt-0.5 accent-[var(--accent)]" />
-          <span><b>Unmanaged</b><span className="block text-xs text-muted">No SSH and no nakon, e.g. a pfSense firewall. It can't carry services or misconfigs.</span></span>
+          <span><b>Unmanaged</b><span className="block text-xs text-muted">No SSH and no nakon, e.g. a pfSense or VyOS firewall. It can't carry services or misconfigs.</span></span>
         </label>
         {!!form.unmanaged && (
           <label className="flex items-start gap-3 rounded-2xl bg-sunken p-3 text-sm shadow-inset">

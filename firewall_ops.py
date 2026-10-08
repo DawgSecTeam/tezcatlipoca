@@ -1,25 +1,35 @@
-"""In-path firewall plumbing: per-team pfSense config generation, SSH bootstrap, and the
+"""In-path firewall plumbing: per-team firewall config generation, SSH bootstrap, and the
 engine cutover that moves the team gateway onto the firewall.
 
 Per team <id> (the topology docs/pfsense-inpath-2026-09-28.md proved by hand and
 deploy phase 5 now automates):
 
-    engine ─transit 172.31.<id>.0/30 (vmbrW<id>)─ pfSense WAN 172.31.<id>.2/30
-             pfSense LAN 192.168.<id>.1/24 (vmbr<id>) ─ boxes
+    engine ─transit 172.31.<id>.0/30 (vmbrW<id>)─ firewall WAN 172.31.<id>.2/30
+             firewall LAN 192.168.<id>.1/24 (vmbr<id>) ─ boxes
 
-The firewall boxes clone the `pfsense-provision` template (built once per node by
+Two firewall kinds, dispatched by template name (firewall_kind):
+
+pfSense — the boxes clone the `pfsense-provision` template (built once per node by
 tools/build-pfsense-provision-template.py): SSH on, the deploy key in admin's
 authorizedkeys, LAN vtnet1 = 192.168.1.1/24. Phase 5 therefore needs no console: the
 engine borrows 192.168.1.2/24 on one team NIC at a time, SSH goes through the engine to
 192.168.1.1, the per-team config.xml replaces /cf/conf/config.xml, and the firewall reboots
 into its WAN/LAN addressing. The generated config enables SSH and carries the same key, so a
 re-run reaches the firewall on its transit address instead — and skips the reboot when the
-config on the box already matches.
+config on the box already matches. The seed config is the comp's
+`pfsense/pfsense-config-orig.xml` (copy from competitions/pfsense-ad/pfsense/ to start a
+new one). There is no pipeline-shipped default on purpose: the generator's string surgery
+anchors on the factory config's exact stanzas, and a hand-rolled seed would fail silently
+mid-deploy.
 
-The seed config is the comp's `pfsense/pfsense-config-orig.xml` (every firewall comp
-carries one — copy from competitions/pfsense-ad/pfsense/ to start a new one). There is
-no pipeline-shipped default on purpose: the generator's string surgery anchors on the
-factory config's exact stanzas, and a hand-rolled seed would fail silently mid-deploy.
+VyOS — the boxes clone the `vyos-provision` template (tools/build-vyos-provision-template.py):
+same contract (SSH on, deploy key in vyos's authorized_keys, LAN eth1 = 192.168.1.1/24), but
+the config is fully generated (no seed) and pushed as `set` commands piped into the VyOS CLI,
+which commits LIVE — no reboot. The two-pass split is load-bearing: a commit that moves eth1
+off 192.168.1.1 kills any SSH session riding it, so pass A (everything on eth0: WAN address,
+route, filter, NAT) goes over the bootstrap address, and pass B (the eth1 address flip)
+reconnects over the now-live WAN address, which the session survives. The template's deploy
+key survives every push — VyOS commits never touch /home/vyos/.ssh.
 """
 
 import base64
@@ -27,7 +37,7 @@ import os
 import subprocess
 import time
 
-from ssh_ops import ssh_on_gateway, ssh_via_gateway
+from ssh_ops import gateway_proxy, ssh_on_gateway, ssh_via_gateway
 
 # (port, label) of engine services boxes reach at the team gateway address. apt-cacher-ng
 # is the one every box needs (prep_apt's apt proxy points at 192.168.<id>.1:3142).
@@ -36,6 +46,7 @@ ENGINE_GATEWAY_SERVICES = ((3142, "apt-cacher"),)
 BOOTSTRAP_FW_IP = "192.168.1.1"
 BOOTSTRAP_ENGINE_IP = "192.168.1.2"
 FW_USER = "admin"            # uid 0 on pfSense; the deploy key is in its authorizedkeys
+FW_USER_VYOS = "vyos"        # config mode works as the plain vyos user
 FW_BOOT_BUDGET_S = 420       # a cloned appliance's first boot to SSH
 FW_APPLY_BUDGET_S = 600      # config push → reboot → SSH on the WAN address (a loaded node boots slowly)
 FW_PUSH_ATTEMPT_S = 30       # one push attempt; sshd answers before a booting appliance can log in
@@ -186,10 +197,134 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None, authorized_key=N
     return x
 
 
-def write_team_configs(comp_dir, teams, red_dnat_spec=None):
-    """Write config-team<id>.xml for every team into the comp's pfsense/ dir (kept as
-    deploy artifacts — debugging a firewall means diffing what it was given).
-    Returns the seed-missing error when there is no seed to work from."""
+def firewall_kind(template_name):
+    """Single definition of the firewall-kind rule (windows_ops pattern): a template whose
+    name contains 'vyos' bootstraps via generated VyOS set-commands; any other in_path box
+    is treated as pfSense (config.xml surgery)."""
+    return "vyos" if "vyos" in (template_name or "").lower() else "pfsense"
+
+
+def generate_vyos_commands(team_id, red_dnat_spec=None):
+    """VyOS pass-A CLI script (pure, for tests): everything on eth0, so the commit cannot
+    cut the session that pushed it. WAN eth0 = 172.31.<team_id>.2/30, default route via
+    the engine, WAN-IN filter on eth0, dest-NAT for the engine gateway services and the
+    `firewall_dnat` specs. Syntax targets the 1.5/circinus `firewall ipv4` scheme (the
+    stream builds); verified live against the image at template build time.
+
+    The filter mirrors the pfSense WAN rules: rule 10 established/related (return traffic
+    of LAN-originated flows), rule 20 any→LAN subnet (routed engine scoring — the WAN pass
+    rule's analog), rule 30 engine→WAN tcp/22 (the success probe), then one accept per
+    DNAT rule — VyOS applies the filter to the TRANSLATED destination, so DNAT'd traffic
+    needs its own allow or WAN-IN's default-drop eats it (pfSense gets this for free via
+    associated filter rules)."""
+    tid = str(team_id)
+    wan, gw, lan_gw = f"172.31.{tid}.2", f"172.31.{tid}.1", f"192.168.{tid}.1"
+    lines = [
+        "configure",
+        f"set system host-name fw-team{tid}",
+        "set system console device ttyS0 speed 115200",
+        f"set interfaces ethernet eth0 address {wan}/30",
+        f"set protocols static route 0.0.0.0/0 next-hop {gw}",
+        "set service ssh port 22",
+        f"set firewall group ipv4 network-group LAN-TEAM{tid} network 192.168.{tid}.0/24",
+        "set firewall ipv4 name WAN-IN default-action drop",
+        "set firewall ipv4 name WAN-IN rule 10 action accept",
+        "set firewall ipv4 name WAN-IN rule 10 state established enable",
+        "set firewall ipv4 name WAN-IN rule 10 state related enable",
+        "set firewall ipv4 name WAN-IN rule 20 action accept",
+        f"set firewall ipv4 name WAN-IN rule 20 destination group network-group LAN-TEAM{tid}",
+        "set firewall ipv4 name WAN-IN rule 30 action accept",
+        "set firewall ipv4 name WAN-IN rule 30 protocol tcp",
+        f"set firewall ipv4 name WAN-IN rule 30 source address {gw}",
+        f"set firewall ipv4 name WAN-IN rule 30 destination address {wan}",
+        "set firewall ipv4 name WAN-IN rule 30 destination port 22",
+        "set interfaces ethernet eth0 firewall in name WAN-IN",
+    ]
+    dnat_rule, filt_rule = 10, 40
+    for port, desc in ENGINE_GATEWAY_SERVICES:
+        lines += [
+            f"set nat destination rule {dnat_rule} description '{desc} (engine service "
+            f"at the old gateway address)'",
+            f"set nat destination rule {dnat_rule} destination address {lan_gw}",
+            f"set nat destination rule {dnat_rule} destination port {port}",
+            f"set nat destination rule {dnat_rule} inbound-interface eth1",
+            f"set nat destination rule {dnat_rule} protocol tcp",
+            f"set nat destination rule {dnat_rule} translation address {gw}",
+            f"set nat destination rule {dnat_rule} translation port {port}",
+            f"set firewall ipv4 name WAN-IN rule {filt_rule} action accept",
+            f"set firewall ipv4 name WAN-IN rule {filt_rule} protocol tcp",
+            f"set firewall ipv4 name WAN-IN rule {filt_rule} destination address {gw}",
+            f"set firewall ipv4 name WAN-IN rule {filt_rule} destination port {port}",
+        ]
+        dnat_rule += 10
+        filt_rule += 10
+    for spec in red_dnat_spec or []:
+        port, target = spec.split("->", 1)
+        target = target.replace("{tid}", tid)
+        lines += [
+            "set nat destination rule %d description 'beacon C2 DNAT (firewall owns the "
+            "gateway address)'" % dnat_rule,
+            f"set nat destination rule {dnat_rule} destination address {lan_gw}",
+            f"set nat destination rule {dnat_rule} destination port {port.strip()}",
+            f"set nat destination rule {dnat_rule} inbound-interface eth1",
+            f"set nat destination rule {dnat_rule} protocol tcp_udp",
+            f"set nat destination rule {dnat_rule} translation address {target.strip()}",
+            f"set nat destination rule {dnat_rule} translation port {port.strip()}",
+            f"set firewall ipv4 name WAN-IN rule {filt_rule} action accept",
+            f"set firewall ipv4 name WAN-IN rule {filt_rule} protocol tcp_udp",
+            f"set firewall ipv4 name WAN-IN rule {filt_rule} destination address {target.strip()}",
+            f"set firewall ipv4 name WAN-IN rule {filt_rule} destination port {port.strip()}",
+        ]
+        dnat_rule += 10
+        filt_rule += 10
+    lines += [
+        "commit",
+        "save",
+        "exit",
+        "show configuration commands | grep host-name",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def generate_vyos_lan_commands(team_id):
+    """VyOS pass-B CLI script: move eth1 off the 192.168.1.1 bootstrap address onto the
+    team gateway. Run over the WAN address AFTER pass A — the session rides eth0 and
+    survives the flip. Idempotent: the delete no-ops when the bootstrap address is gone."""
+    tid = str(team_id)
+    return "\n".join([
+        "configure",
+        f"delete interfaces ethernet eth1 address {BOOTSTRAP_FW_IP}/24",
+        f"set interfaces ethernet eth1 address 192.168.{tid}.1/24",
+        "commit",
+        "save",
+        "exit",
+        f"show interfaces ethernet eth1 | grep 192.168.{tid}.1",
+    ]) + "\n"
+
+
+def vyos_lan_config_path(pass_a_path):
+    """The pass-B artifact path for a pass-A config-team<id>.cmds path."""
+    return pass_a_path.with_name(pass_a_path.stem + "-lan.cmds")
+
+
+def write_team_configs(comp_dir, teams, red_dnat_spec=None, kind="pfsense"):
+    """Write each team's generated firewall config into the comp dir (kept as deploy
+    artifacts — debugging a firewall means diffing what it was given). pfSense renders the
+    comp's factory seed (pfsense/config-team<id>.xml; returns the seed-missing error when
+    there is no seed to work from); VyOS needs no seed and writes the pass-A/pass-B
+    command scripts (vyos/config-team<id>.cmds + -lan.cmds).
+    Returns team_key → the path bootstrap_firewalls pushes FIRST (pass A for VyOS)."""
+    if kind == "vyos":
+        out_dir = comp_dir / "vyos"
+        out_dir.mkdir(exist_ok=True)
+        out = {}
+        for team_key, team in teams.items():
+            tid = team["identifier"]
+            path = out_dir / f"config-team{tid}.cmds"
+            path.write_text(generate_vyos_commands(tid, red_dnat_spec))
+            vyos_lan_config_path(path).write_text(generate_vyos_lan_commands(tid))
+            out[team_key] = path
+        return out
     seed_path = comp_dir / "pfsense" / "pfsense-config-orig.xml"
     if not seed_path.exists():
         raise SystemExit(
@@ -277,20 +412,95 @@ def _borrow_bootstrap_ip(ssh_ctx, nic, add):
                    timeout=30)
 
 
+def _push_vyos(ssh_ctx, ip, script, canary, who, budget_s=FW_BOOT_BUDGET_S):
+    """Pipe `script` into the VyOS CLI over SSH — no remote command, the login shell IS
+    the CLI and piped lines execute exactly as console-typed. Success = a live
+    `commit complete` AND the script's closing grep canary answering (a failed commit
+    leaves the running config untouched, so the canary goes quiet). Retried while the
+    appliance is still booting: sshd listens before a login can complete, same wound as
+    the pfSense push. Idempotent — a retry after a half-run is safe."""
+    args = ["ssh", "-i", ssh_ctx["ssh_key_path"],
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=10",
+            "-o", f"ProxyCommand={gateway_proxy(ssh_ctx)}",
+            f"{FW_USER_VYOS}@{ip}"]
+    deadline = time.time() + budget_s
+    last = "no attempt"
+    while True:
+        try:
+            r = subprocess.run(args, input=script, capture_output=True, text=True,
+                               timeout=FW_PUSH_ATTEMPT_S)
+            out = r.stdout or ""
+            if r.returncode == 0 and "commit complete" in out and canary in out:
+                return out
+            last = f"rc={r.returncode} {(r.stderr or out).strip()[:200]}"
+        except subprocess.TimeoutExpired:
+            last = f"no answer within {FW_PUSH_ATTEMPT_S}s"
+        if time.time() >= deadline:
+            raise RuntimeError(f"{who}: config push to {ip} failed ({last})")
+        time.sleep(10)
+
+
+def _bootstrap_vyos(ssh_ctx, target, pass_a_path, nic, log=print):
+    """One team's VyOS bootstrap (kind branch of bootstrap_firewalls): pass A over the
+    template's 192.168.1.1 bootstrap address, then pass B — the eth1 address flip — over
+    the WAN address the live pass-A commit just brought up. No reboot at any step; a
+    firewall already answering on its WAN address takes both passes there."""
+    tid, key, vmid = target["identifier"], target["team_key"], target["vmid"]
+    wan = f"172.31.{tid}.2"
+    pass_a = pass_a_path.read_text()
+    if _probe_tcp(ssh_ctx, wan, 22):
+        log(f"  {key}: firewall already on {wan} — pushing both passes there")
+        _push_vyos(ssh_ctx, wan, pass_a, f"fw-team{tid}", key)
+        _push_vyos(ssh_ctx, wan, vyos_lan_config_path(pass_a_path).read_text(),
+                   f"192.168.{tid}.1", key)
+        return
+    log(f"  {key}: waiting for the template's SSH on {BOOTSTRAP_FW_IP} "
+        f"(engine {nic}, vmid {vmid})")
+    _borrow_bootstrap_ip(ssh_ctx, nic, add=True)
+    try:
+        if not _wait_tcp(ssh_ctx, BOOTSTRAP_FW_IP, 22, budget_s=FW_BOOT_BUDGET_S):
+            raise RuntimeError(
+                f"{key}: firewall vmid {vmid} never answered SSH on "
+                f"{BOOTSTRAP_FW_IP} through engine {nic} — is it a clone of the "
+                f"`vyos-provision` template (tools/build-vyos-provision-template.py) "
+                f"with both NICs attached?")
+        _push_vyos(ssh_ctx, BOOTSTRAP_FW_IP, pass_a, f"fw-team{tid}", key)
+    finally:
+        _borrow_bootstrap_ip(ssh_ctx, nic, add=False)
+    if not _wait_tcp(ssh_ctx, wan, 22, budget_s=FW_APPLY_BUDGET_S):
+        raise RuntimeError(
+            f"{key}: firewall did not come up on {wan}:22 within {FW_APPLY_BUDGET_S}s "
+            f"after the pass-A commit (live apply — this should be seconds). Remedy: "
+            f"inspect the console (qm terminal / VNC) for vmid {vmid}, then re-run "
+            f"--from-phase 5.")
+    log(f"    {key}: WAN up on {wan} — flipping the LAN address (pass B, live commit)")
+    _push_vyos(ssh_ctx, wan, vyos_lan_config_path(pass_a_path).read_text(),
+               f"192.168.{tid}.1", key)
+    log(f"    {key}: config applied live (no reboot)")
+
+
 def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, log=print):
     """Push every team's generated config to its firewall over SSH, then wait for the
-    appliance to answer on its WAN address.
+    appliance to answer on its WAN address. pfSense: config.xml replace + reboot. VyOS:
+    two live-apply command passes (_bootstrap_vyos).
 
     fw_targets: one target dict per team's in_path firewall (slot-0 only — the engine
-    node), each carrying team_key/identifier. config_paths: team_key → the generated
-    config-team<id>.xml. Teams run one at a time: every template boots as 192.168.1.1 on
-    its own isolated bridge, and the engine can hold only one borrowed address route at
-    once. Idempotent — a firewall already answering on its transit address is reached
-    there and left alone when its config is unchanged."""
+    node), each carrying team_key/identifier. config_paths: team_key → the first config
+    to push (the pfSense config-team<id>.xml / the VyOS pass-A .cmds). Teams run one at a
+    time: every template boots as 192.168.1.1 on its own isolated bridge, and the engine
+    can hold only one borrowed address route at once. Idempotent — a firewall already
+    answering on its transit address is reached there and left alone when its config is
+    unchanged (pfSense) / re-applied harmlessly (VyOS)."""
     keys = sorted(teams)
     for t in fw_targets:
         tid, key = t["identifier"], t["team_key"]
         wan = f"172.31.{tid}.2"
+        if firewall_kind((t.get("box") or {}).get("template", "")) == "vyos":
+            _bootstrap_vyos(ssh_ctx, t, config_paths[key],
+                            f"ens{19 + keys.index(key)}", log=log)
+            continue
         config_xml = config_paths[key].read_text()
         if _probe_tcp(ssh_ctx, wan, 22):
             log(f"  {key}: firewall already on {wan} — pushing config there")
@@ -369,11 +579,15 @@ def cut_over_engine(ssh_ctx, teams, log=print):
                            f"{(r.stderr or r.stdout or '').strip()[:300]}")
 
 
-def verify_in_path(ssh_ctx, teams, managed_first_ip, log=print):
+FW_INSPECT_CMD = {"pfsense": "pfctl -sr", "vyos": "show firewall"}
+
+
+def verify_in_path(ssh_ctx, teams, managed_first_ip, log=print, kind="pfsense"):
     """Fail-loud convergence gate after the cutover (routing_ops style): the engine
     must route every team subnet via its firewall, each firewall must answer on its
     transit address, and the first managed box must be reachable THROUGH it (the path
     every later plant/scoring step takes)."""
+    inspect = FW_INSPECT_CMD.get(kind, FW_INSPECT_CMD["pfsense"])
     failures = []
     for k in sorted(teams):
         tid = teams[k]["identifier"]
@@ -390,12 +604,12 @@ def verify_in_path(ssh_ctx, teams, managed_first_ip, log=print):
         # converge instead of failing on the first probe (live-found 2026-10-05).
         if box_ip and not _wait_tcp(ssh_ctx, box_ip, 22):
             failures.append(f"{k}: first managed box {box_ip}:22 not reachable through "
-                            "the firewall — check the WAN pass rule loaded (pfctl -sr)")
+                            f"the firewall — check the WAN filter loaded ({inspect})")
     if failures:
         raise SystemExit(
             "  ERROR: in-path firewall verification failed:\n    - " + "\n    - ".join(failures)
-            + "\n  The range's scoring path runs through each team's firewall, so nothing "
-              "downstream can plant or score until this converges. Inspect with "
-              "`pfctl -sr` on the firewall (SSH, config enables it) and re-run "
-              "--from-phase 5.")
+            + f"\n  The range's scoring path runs through each team's firewall, so nothing "
+              f"downstream can plant or score until this converges. Inspect with "
+              f"`{inspect}` on the firewall (SSH, config enables it) and re-run "
+              f"--from-phase 5.")
     log("  In-path verified: every team subnet routes via its firewall; boxes reachable")

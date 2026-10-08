@@ -1,6 +1,6 @@
 """In-path firewall support, offline: the SSH config push, the per-team pfSense config
-surgery (against the same anchor stanzas the real factory seed carries), and the
-post-cutover netplan the engine cutover writes."""
+surgery (against the same anchor stanzas the real factory seed carries), the per-team
+VyOS set-command generation, and the post-cutover netplan the engine cutover writes."""
 
 import sys
 import unittest
@@ -8,7 +8,9 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from firewall_ops import cutover_netplan_yaml, generate_team_config
+from firewall_ops import (cutover_netplan_yaml, firewall_kind, generate_team_config,
+                          generate_vyos_commands, generate_vyos_lan_commands,
+                          vyos_lan_config_path)
 
 # The anchors generate_team_config's string surgery keys on — a minimal stand-in for the
 # factory config.xml (the real seed lives in competitions/*/pfsense/, not in the repo
@@ -96,6 +98,182 @@ class TeamConfig(unittest.TestCase):
         self.assertEqual(out.count("<target>"), 1)
         self.assertIn("<target>172.31.122.1</target>", out)
         self.assertIn("<mode>disabled</mode>", out)
+
+
+class FirewallKind(unittest.TestCase):
+    def test_vyos_by_substring_everything_else_is_pfsense(self):
+        self.assertEqual(firewall_kind("vyos-provision"), "vyos")
+        self.assertEqual(firewall_kind("base-vyos-1.5"), "vyos")
+        self.assertEqual(firewall_kind("pfsense-provision"), "pfsense")
+        self.assertEqual(firewall_kind("pfsense"), "pfsense")
+        self.assertEqual(firewall_kind(None), "pfsense")   # old fixtures carry no template
+
+
+class VyosCommands(unittest.TestCase):
+    """The generated pass-A/pass-B CLI scripts (pure functions)."""
+
+    def test_wan_side_config_but_no_lan_address_change(self):
+        """Pass A must not touch eth1: a commit that moves it kills the SSH session
+        pushing the config (bootstrap_firewalls flips eth1 as pass B over the WAN)."""
+        out = generate_vyos_commands("120")
+        self.assertIn("set interfaces ethernet eth0 address 172.31.120.2/30", out)
+        self.assertIn("set protocols static route 0.0.0.0/0 next-hop 172.31.120.1", out)
+        self.assertIn("set system host-name fw-team120", out)
+        self.assertIn("set service ssh port 22", out)
+        self.assertNotIn("set interfaces ethernet eth1", out.split("commit")[0])
+
+    def test_wan_in_filter_mirrors_the_pfsense_rules(self):
+        out = generate_vyos_commands("120")
+        self.assertIn("set firewall ipv4 name WAN-IN default-action drop", out)
+        self.assertIn("set firewall ipv4 name WAN-IN rule 10 state established enable", out)
+        # routed scoring: any → the team subnet
+        self.assertIn("set firewall ipv4 name WAN-IN rule 20 destination group "
+                      "network-group LAN-TEAM120", out)
+        # the probe: engine transit → the firewall's own WAN tcp/22
+        self.assertIn("set firewall ipv4 name WAN-IN rule 30 source address 172.31.120.1", out)
+        self.assertIn("set firewall ipv4 name WAN-IN rule 30 destination address 172.31.120.2", out)
+        self.assertIn("set firewall ipv4 name WAN-IN rule 30 destination port 22", out)
+        self.assertIn("set interfaces ethernet eth0 firewall in name WAN-IN", out)
+
+    def test_apt_cacher_dnat_and_its_filter_allow(self):
+        """VyOS filters the TRANSLATED destination, so each DNAT needs its own WAN-IN
+        accept rule or WAN-IN's default-drop eats the redirected traffic."""
+        out = generate_vyos_commands("123")
+        self.assertIn("set nat destination rule 10 destination address 192.168.123.1", out)
+        self.assertIn("set nat destination rule 10 destination port 3142", out)
+        self.assertIn("set nat destination rule 10 translation address 172.31.123.1", out)
+        self.assertIn("set firewall ipv4 name WAN-IN rule 40 destination address 172.31.123.1", out)
+        self.assertIn("set firewall ipv4 name WAN-IN rule 40 destination port 3142", out)
+
+    def test_dnat_spec_targets_and_substitution(self):
+        out = generate_vyos_commands("121", red_dnat_spec=["4470->10.200.0.{tid}"])
+        self.assertIn("set nat destination rule 20 destination port 4470", out)
+        self.assertIn("set nat destination rule 20 translation address 10.200.0.121", out)
+        # the DNAT'd target is reachable post-translation
+        self.assertIn("set firewall ipv4 name WAN-IN rule 50 destination address 10.200.0.121", out)
+        self.assertIn("set firewall ipv4 name WAN-IN rule 50 destination port 4470", out)
+
+    def test_script_commits_saves_and_ends_on_a_grep_canary(self):
+        out = generate_vyos_commands("120")
+        tail = out.strip().splitlines()[-4:]
+        self.assertEqual(tail, ["commit", "save", "exit",
+                                "show configuration commands | grep host-name"])
+
+    def test_lan_pass_flips_eth1_off_the_bootstrap_address(self):
+        out = generate_vyos_lan_commands("120")
+        self.assertIn("delete interfaces ethernet eth1 address 192.168.1.1/24", out)
+        self.assertIn("set interfaces ethernet eth1 address 192.168.120.1/24", out)
+        self.assertIn("show interfaces ethernet eth1 | grep 192.168.120.1", out)
+        self.assertNotIn("eth0", out)
+
+    def test_lan_artifact_path_pairs_with_pass_a(self):
+        self.assertEqual(vyos_lan_config_path(Path("/x/vyos/config-team7.cmds")),
+                         Path("/x/vyos/config-team7-lan.cmds"))
+
+
+class VyosBootstrap(unittest.TestCase):
+    """The two-pass orchestration, with the engine/SSH layer faked."""
+
+    def _run(self, wan_up):
+        import tempfile
+        import firewall_ops as fo
+        from unittest.mock import MagicMock, patch
+        calls = []
+        with tempfile.TemporaryDirectory() as d:
+            cmds = Path(d) / "config-team120.cmds"
+            cmds.write_text("configure\ncommit\n")
+            vyos_lan_config_path(cmds).write_text("configure\ncommit\n")
+
+            def probe(ctx, ip, port, timeout=4):
+                return wan_up if ip == "172.31.120.2" else False
+
+            def wait(ctx, ip, port, budget_s=300, interval_s=10):
+                # the bootstrap address answers (template SSH) and the WAN answers after
+                # pass A's live commit
+                return ip in ("172.31.120.2", fo.BOOTSTRAP_FW_IP)
+
+            def push(ctx, ip, script, canary, who, budget_s=420):
+                calls.append(("push", ip, canary))
+                return script
+
+            with patch.object(fo, "ssh_on_gateway", MagicMock()), \
+                    patch.object(fo, "_probe_tcp", side_effect=probe), \
+                    patch.object(fo, "_wait_tcp", side_effect=wait), \
+                    patch.object(fo, "_push_vyos", side_effect=push):
+                fo.bootstrap_firewalls(
+                    {"team1": {"identifier": "120", "password": "x"}},
+                    [{"team_key": "team1", "identifier": "120", "vmid": 9,
+                      "box": {"name": "fw01", "template": "vyos-provision"}}],
+                    {"team1": cmds}, {}, log=lambda *_: None)
+        return calls
+
+    def test_fresh_firewall_pass_a_on_bootstrap_then_pass_b_on_wan(self):
+        calls = self._run(wan_up=False)
+        self.assertEqual([("push", "192.168.1.1", "fw-team120"),
+                          ("push", "172.31.120.2", "192.168.120.1")], calls)
+
+    def test_rerun_takes_both_passes_on_the_wan_address(self):
+        calls = self._run(wan_up=True)
+        self.assertEqual([c[1] for c in calls], ["172.31.120.2", "172.31.120.2"])
+        self.assertEqual([c[2] for c in calls], ["fw-team120", "192.168.120.1"])
+
+
+FAKE_SSH_CTX = {"ssh_key_path": "k", "vm_username": "ops",
+                "scoring_engine_ip": "10.0.0.252"}
+
+
+class PushVyos(unittest.TestCase):
+    def _fake(self, results):
+        import subprocess
+        from unittest.mock import MagicMock
+
+        def run(*a, **k):
+            r = results.pop(0)
+            if r == "timeout":
+                raise subprocess.TimeoutExpired("ssh", 30)
+            return MagicMock(returncode=r[0], stdout=r[1], stderr="")
+        return run
+
+    def test_success_needs_commit_complete_and_the_canary(self):
+        import firewall_ops as fo
+        from unittest.mock import MagicMock, patch
+        clock = {"t": 0.0}
+
+        def run_static(stdout):
+            def run(*a, **k):
+                return MagicMock(returncode=0, stdout=stdout, stderr="")
+            return run
+        # either signal alone is not success: the canary without a commit means the
+        # config never applied; a commit line without the canary means it did not land
+        for stdout in ("commit complete\n", "fw-team120\n"):
+            with patch.object(fo.subprocess, "run", side_effect=run_static(stdout)), \
+                    patch.object(fo.time, "time", side_effect=lambda: clock["t"]), \
+                    patch.object(fo.time, "sleep",
+                                 side_effect=lambda s: clock.update(t=clock["t"] + 100)):
+                with self.assertRaises(RuntimeError):
+                    fo._push_vyos(FAKE_SSH_CTX, "192.168.1.1", "script", "fw-team120", "team1",
+                                  budget_s=150)
+        with patch.object(fo.subprocess, "run",
+                          side_effect=run_static("commit complete\n"
+                                                 "set system host-name 'fw-team120'\n")), \
+                patch.object(fo.time, "sleep"):
+            fo._push_vyos(FAKE_SSH_CTX, "192.168.1.1", "script", "fw-team120", "team1")
+
+    def test_ssh_has_no_remote_command_and_uses_the_vyos_user(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        seen = {}
+
+        def run(args, **k):
+            seen["args"], seen["input"] = args, k.get("input")
+            return self._fake([(0, "commit complete\nfw-team120\n")])()
+        with patch.object(fo.subprocess, "run", side_effect=run), \
+                patch.object(fo.time, "sleep"):
+            fo._push_vyos(FAKE_SSH_CTX, "192.168.1.1", "configure\n",
+                          "fw-team120", "team1")
+        self.assertTrue(seen["args"][-1].startswith("vyos@"))
+        self.assertNotIn("-c", seen["args"])        # no remote command: stdin drives the CLI
+        self.assertEqual(seen["input"], "configure\n")
 
 
 class CutoverNetplan(unittest.TestCase):
