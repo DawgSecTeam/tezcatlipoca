@@ -12,6 +12,7 @@ from scrim import red_tunnel
 from scrim import test_folder
 from scrim.core import log
 import red_plant_ops
+import realm_c2_ops
 
 
 def verify_red_reaches_teams(args, comp, creds):
@@ -118,6 +119,11 @@ def stage_red(args, comp, creds, run_dir):
     for key in ("realm", "beacon", "evasion", "naming"):
         if carried.get(key):
             cfg[key] = carried[key]
+    # `realm.c2_local: true` moves the C2 ONTO this run's red01: retarget the
+    # carried realm block before the deploy (the engine DNAT bakes c2_ip in at
+    # deploy time) and provision tavern on red01 after the clone (below).
+    if (cfg.get("realm") or {}).get("c2_local"):
+        realm_c2_ops.apply_local_c2(cfg["realm"], args.red_ip)
     # ...and so does the REST of the operator's deploy block. stage_red builds this
     # config from scratch, so anything it does not set is lost: `template` most of
     # all, which then fell back to badauto's built-in default and failed the first
@@ -148,6 +154,23 @@ def stage_red(args, comp, creds, run_dir):
     log(f"deploying red01 at {args.red_ip} (storage {args.red_storage}, mode {red_mode})")
     procs.run(["python3", "-m", "badauto", "deploy", "--competition", str(comp.resolve())],
               cwd=core.BAD_AUTO, env=env, timeout=1800)
+    # The C2 lives on red01 for this run (operator set realm.c2_local): build
+    # tavern there — every callback transport + MCP — and stage the imix
+    # implants, BEFORE the seed (realm_plant refuses without a tavern to
+    # register against and without staged binaries). Raises: this runs pre-T0.
+    if (cfg.get("realm") or {}).get("c2_local"):
+        c2 = realm_c2_ops.provision_realm_c2(
+            comp, args.red_ip, str(core.REPO / "proxmox"), realm=cfg["realm"],
+            repo=cfg["realm"].get("repo", realm_c2_ops.DEFAULT_REPO),
+            go_version=cfg["realm"].get("go_version", realm_c2_ops.DEFAULT_GO_VERSION),
+            implant_host=cfg["realm"].get("implant_host",
+                                          realm_c2_ops.DEFAULT_IMPLANT_HOST))
+        if not c2.get("ok"):
+            raise RuntimeError(f"realm C2 provisioning on red01 failed: "
+                               f"{c2.get('error', 'unknown')} — beacons cannot "
+                               f"plant without their tavern")
+        log(f"realm C2 live on red01 {args.red_ip} "
+            f"(transports: {', '.join(c2['transports'])}; MCP at {c2['mcp']})")
     # Record red01's identity now, while it is known: bad-auto's config.yaml is a rewritten
     # singleton, so a later reader of it can name ANOTHER run's red01 — the manifest is the
     # only per-run source of truth the collector may dial (INV5). Recorded before the LLM

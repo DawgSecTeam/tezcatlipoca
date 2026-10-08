@@ -18,6 +18,15 @@ Gated by the Compfile knob ``assume_breach`` (default 0, so existing Compfiles a
 unchanged). ``assume_breach_depth`` (default 3) picks the seed depth, and
 ``assume_breach_red_ip`` overrides red01's address.
 
+The Realm C2 the seed plants against lives ON red01 by default (``realm_c2_local``
+1; ``0`` keeps the legacy tavern-on-VM101 layout). ``realm_c2_ops`` derives
+bad-auto's config before the deploy — the engine DNAT bakes ``realm.c2_ip`` in at
+deploy time — then builds tavern from source on red01 with every callback
+transport (grpc + http1/dns/quic/icmp redirectors) and the MCP server, relaying
+the prebuilt imix implants from ``realm_c2_implant_host`` (VM101) into bad-auto's
+staging paths. ``realm_c2_repo`` / ``realm_c2_go_version`` / ``realm_c2_implant_host``
+override the upstream URL, the Go toolchain and the implant host.
+
 Failure degrades: it records a degradation and continues — a planting problem must
 not abort a deploy whose range is otherwise healthy. verify-competition and the
 red report catch it before T0.
@@ -34,6 +43,7 @@ import subprocess
 from pathlib import Path
 
 from utils import compfile_flag, compfile_value, record_degradation
+import realm_c2_ops
 
 REPO = Path(__file__).resolve().parent
 BAD_AUTO = REPO.parent / "bad-auto"
@@ -69,11 +79,18 @@ def red_ip_for(comp_dir):
             or _configured_red_ip() or DEFAULT_RED_IP)
 
 
-def _deploy_red(comp_dir, env, timeout=1800):
-    """`badauto deploy` (no --start): red01 + the realm engine DNAT, no director."""
-    return subprocess.run(
-        ["python3", "-m", "badauto", "deploy", "--competition", str(comp_dir)],
-        cwd=str(BAD_AUTO), env=env, capture_output=True, text=True, timeout=timeout)
+def _deploy_red(comp_dir, env, config_path=None, timeout=1800):
+    """`badauto deploy` (no --start): red01 + the realm engine DNAT, no director.
+
+    `config_path` (realm_c2_ops's derived config) makes the deploy point the
+    engine DNAT at red01 itself instead of the static C2 host.
+    """
+    cmd = ["python3", "-m", "badauto"]
+    if config_path:
+        cmd += ["--config", str(config_path)]
+    cmd += ["deploy", "--competition", str(comp_dir)]
+    return subprocess.run(cmd, cwd=str(BAD_AUTO), env=env,
+                          capture_output=True, text=True, timeout=timeout)
 
 
 def destroy_red(comp_dir, env=None, timeout=900):
@@ -139,9 +156,15 @@ def plant_assume_breach(ctx):
         return {"ok": False, "reason": "no ssh key"}
 
     env = {**os.environ, "BAuto_COMPETITION_DIR": str(comp_dir)}
+    # Realm C2 on red01 (default): the engine DNAT must bake in the C2 address
+    # at DEPLOY time, so the derived config is written first. `realm_c2_local 0`
+    # keeps the legacy layout (tavern on the static implant-host VM).
+    c2_cfg_path, realm_cfg = None, None
+    if realm_c2_ops.compfile_knobs(comp_dir)["enabled"]:
+        c2_cfg_path, realm_cfg = realm_c2_ops.prepare_local_c2(comp_dir, red_ip)
     print(f"  assume-breach: deploying red01 + realm engine DNAT (bad-auto)...")
     try:
-        deployed = _deploy_red(comp_dir, env)
+        deployed = _deploy_red(comp_dir, env, config_path=c2_cfg_path)
     except subprocess.TimeoutExpired:
         record_degradation("assume_breach_deploy", "badauto deploy timed out")
         print("  assume-breach: bad-auto deploy timed out — skipped")
@@ -151,6 +174,34 @@ def plant_assume_breach(ctx):
         record_degradation("assume_breach_deploy", tail)
         print("  assume-breach: bad-auto deploy FAILED (see degradations)")
         return {"ok": False, "reason": "deploy failed"}
+
+    # The C2 lives on red01 now: build tavern from source there (all callback
+    # transports + the MCP server) and stage the prebuilt imix implants into
+    # bad-auto's paths. Warn-and-continue — a dead tavern surfaces as plants
+    # that refuse and a degradation, not a lost range.
+    c2_result = None
+    if realm_cfg is not None:
+        knobs = realm_c2_ops.compfile_knobs(comp_dir)
+        print(f"  assume-breach: provisioning the Realm C2 (tavern) on red01 "
+              f"{red_ip} — all transports + MCP (first run builds from source, "
+              f"can take ~10 min)...")
+        try:
+            c2_result = realm_c2_ops.provision_realm_c2(
+                comp_dir, red_ip, ssh_key, realm=realm_cfg,
+                repo=knobs["repo"], go_version=knobs["go_version"],
+                implant_host=knobs["implant_host"])
+        except subprocess.TimeoutExpired:
+            c2_result = {"ok": False, "red_ip": red_ip,
+                         "error": "realm C2 provisioning timed out"}
+        if c2_result.get("ok"):
+            print(f"  realm-c2: tavern live on red01 {red_ip} "
+                  f"(transports: {', '.join(c2_result['transports'])}; "
+                  f"MCP at {c2_result['mcp']})")
+        else:
+            record_degradation("realm_c2_provision", c2_result.get("error", ""))
+            print(f"  realm-c2: WARNING — tavern NOT live on red01 "
+                  f"({c2_result.get('error', 'unknown')}); beacons will refuse "
+                  f"to plant until it is up")
 
     print(f"  assume-breach: seeding access + beacons + persistence "
           f"(depth {depth}) on red01 {red_ip}...")
@@ -167,6 +218,8 @@ def plant_assume_breach(ctx):
         return {"ok": False, "reason": "seed failed"}
 
     summary = {"ok": True, "red_ip": red_ip, "depth": depth, "at": _now()}
+    if c2_result is not None:
+        summary["realm_c2"] = c2_result
     try:
         ctx.state["assume_breach"] = summary
         ctx.save_state()

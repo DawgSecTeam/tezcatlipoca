@@ -38,6 +38,9 @@ competitions/*/.nakon-golden.json
 competitions/*/.nakon-postclone.json
 competitions/*/.nakon-repair.json
 competitions/*/.nakon-final.json
+# realm_c2_ops's per-comp derived bad-auto config (tavern-on-red01): deploy-time
+# state, regenerated from the sibling checkout's config.yaml on every deploy.
+competitions/*/.realm-c2-config.yaml
 competitions/*/.frozen.json
 competitions/*/.template-hashes.json
 competitions/*/.phase6-swept
