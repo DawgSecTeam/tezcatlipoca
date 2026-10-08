@@ -176,3 +176,15 @@ def phase3_prepare_engine(ctx):
 
     ensure_nat_forwarding(ctx.tf_ctx)
 
+    # Remote access (headscale): every deploy enrolls the engine as a subnet router,
+    # pushes the tailnet->team SNAT unit, and re-applies this competition's scoped
+    # ACL block + participant keys. `remote_access 0` in the Compfile opts out; a
+    # failure here fails the deploy — an unreachable headscale must not quietly
+    # yield a range nobody can reach.
+    if compfile_flag(ctx.comp_dir / "Compfile", "remote_access", 1):
+        with timed(ctx.comp_dir, 3, "remote_access"):
+            import remote_access_ops
+            remote_access_ops.setup_remote_access(ctx)
+    else:
+        print("  Remote access: skipped (Compfile remote_access 0).")
+

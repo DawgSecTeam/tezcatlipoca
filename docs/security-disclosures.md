@@ -42,6 +42,18 @@ force-pushed later, coordinate it; `refs/remotes/origin/*` is deliberately left 
 
 ## Security disclosure history
 
+- **2026-10-08 headscale VPS password shared in chat**: the `sysadmin` sudo password for the
+  headscale host (the machine behind `headscale.hnasheralneam.dev`) was pasted into a working
+  session to unblock the remote-access integration; it now lives (by intent) in the gitignored
+  `.env` as `TEZ_HEADSCALE_SSH_PASSWORD`. The value is deliberately **not** recorded here. The
+  session transcript is not a git artifact, but the credential was shared in plaintext and should
+  be treated as exposed-to-that-surface: rotation on the VPS (passwd + any authorized_keys
+  review) is recommended at the next maintenance window, followed by updating `.env` files in
+  checkouts that carry it. Related: the headscale control plane is the newest standing
+  infrastructure secret in the estate — it grants policy rewrite over the whole tailnet
+  (including the subnet router that reaches all of `10.0.0.0/24`), so its rotation matters more
+  than its blast radius suggests.
+
 - **2026-10-01 env-variant leak**: `.env.pre-cde-20260929` was tracked from `8cb755c`
   (the 2026-09-30 loadtest squash-merge) and reached the public remote. It carried a live
   Proxmox API token (`TF_VAR_proxmox_api_token`, `root@pam!agent=…`), the real endpoint,
