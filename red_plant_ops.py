@@ -76,6 +76,20 @@ def _deploy_red(comp_dir, env, timeout=1800):
         cwd=str(BAD_AUTO), env=env, capture_output=True, text=True, timeout=timeout)
 
 
+def destroy_red(comp_dir, env=None, timeout=900):
+    """`badauto destroy`: red01 + its realm NAT rules.
+
+    red01 is bad-auto's VM, not a terraform-managed box, so destroying the range
+    leaves it running — with its LLM key, its beacon tasking and its DNAT rules.
+    That is the scale8 soak leak (red01 998 alive after the driver printed DONE).
+    The harness destroys it in its own teardown; this is the step the standalone
+    teardown was missing for the run whose harness died."""
+    return subprocess.run(
+        ["python3", "-m", "badauto", "destroy", "--competition", str(comp_dir), "--yes"],
+        cwd=str(BAD_AUTO), env=env or {**os.environ, "BAuto_COMPETITION_DIR": str(comp_dir)},
+        capture_output=True, text=True, timeout=timeout)
+
+
 def _seed_red(ssh_key, red_ip, depth, timeout=3600):
     """Run the day-0 seed on red01 — access + implants + persistence + evasion.
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .archive import archive_test
 from .collect import collect, load_collection
-from .constants import SIDES, SKIPPED
+from .constants import REPO, SIDES, SKIPPED
 from .env import in_worktree, iso
 from .index import update_index
 from .manifest import ensure_test, load_manifest, record_paths, update_manifest
@@ -48,6 +48,43 @@ def guess_run_dir(test_path):
         return test_path
     return None
 
+# The same staging scrim/red_link.pull_red_state does for the harness, kept here so
+# the TEARDOWN path can read red's record too: /var/lib/bad-auto is 0600 root and the
+# collector scp's as the box user, so an unstaged target records absent — and for the
+# run whose harness died, this collection is the only copy of what red planted.
+_STAGE_CMD = ("sudo -n mkdir -p /tmp/ba && sudo -n chmod 755 /tmp/ba; "
+              "sudo -n cp /var/lib/bad-auto/world.json /tmp/ba/world.json && "
+              "sudo -n cp /var/lib/bad-auto/events.jsonl /tmp/ba/events.jsonl && "
+              "for f in /var/lib/bad-auto/report-*.md; do "
+              'sudo -n cp "$f" /tmp/ba/ 2>/dev/null; done; '
+              "sudo -n chmod 644 /tmp/ba/* 2>/dev/null; true")
+
+
+def stage_red_artifacts(manifest, timeout=75):
+    """sudo-stage red's artifacts where the collector can read them.
+
+    Returns True when the attempt was made (not when it worked). Never raises: a
+    dead red01 must be recorded as unreachable, not hold up a teardown."""
+    import shutil
+    import subprocess
+
+    red = ((manifest.get("agents") or {}).get("red") or {})
+    spec = red.get("ssh") or {}
+    host = spec.get("host") or red.get("ip")
+    if not host:
+        return False
+    argv = [shutil.which("ssh") or "ssh",
+            "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=15", "-i", spec.get("key") or str(REPO / "proxmox")]
+    if spec.get("jump"):
+        argv += ["-o", spec["jump"]]
+    argv += [f"{spec.get('user') or 'sysadmin'}@{host}", _STAGE_CMD]
+    try:
+        subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+    except Exception:                                        # noqa: BLE001 - best effort
+        return False
+    return True
+
 
 def collect_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=None,
                          nodes=None, script="destroy-competition.py", transport=None,
@@ -87,6 +124,7 @@ def collect_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=
     update_manifest(path, teardown={"at": iso(), "by": script, "dry_run": bool(dry_run),
                                    "collector_timeout_s": timeout})
     manifest = load_manifest(path)
+    stage_red_artifacts(manifest)
     collection = collect(path, plan_targets(manifest, comp_dir=comp_dir), transport=transport,
                          dry_run=dry_run, timeout=timeout)
     # The verdict and gate table come from scrim-report.py, which reads only the run dir (no

@@ -124,3 +124,33 @@ class TestPlanReadsStagedCopies(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTeardownStaging(unittest.TestCase):
+    """The teardown path must stage red's root-owned artifacts too.
+
+    collect_for_teardown is the collector for the run whose harness died, so this is
+    the one path where red's record exists nowhere else — and with the plan reading
+    /tmp/ba it needs the staging step, which the harness happens to do for itself."""
+
+    def test_no_red_agent_means_nothing_to_stage(self):
+        from artifacts_lib import lifecycle
+        self.assertFalse(lifecycle.stage_red_artifacts({}))
+
+    def test_staging_is_attempted_from_the_manifest_ssh_record(self):
+        from artifacts_lib import lifecycle
+        manifest = {"agents": {"red": {"present": True,
+                                       "ssh": {"host": "10.0.0.198", "user": "sysadmin",
+                                               "key": "/k", "jump": "ProxyCommand=x"}}}}
+        argv_seen = {}
+
+        def fake_run(argv, **kwargs):
+            argv_seen["argv"] = argv
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with mock.patch("subprocess.run", fake_run):
+            self.assertTrue(lifecycle.stage_red_artifacts(manifest))
+        self.assertIn("sysadmin@10.0.0.198", argv_seen["argv"])
+        self.assertIn("ProxyCommand=x", argv_seen["argv"])
+        self.assertTrue(any("sudo -n cp /var/lib/bad-auto/world.json" in str(a)
+                            for a in argv_seen["argv"]))
