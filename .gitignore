@@ -90,3 +90,7 @@ competitions/*/run*-archive-*/
 terraform/state-archive-*/
 # Throwaway per-incident scratch scripts (embed live credentials by nature).
 .build-tmp/
+
+# Headscale remote-access artifacts carry per-person enrollment KEYS (single-use
+# preauth secrets) — same class as .env: never tracked.
+competitions/*/remote-access/

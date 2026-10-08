@@ -19,12 +19,16 @@ destroy_vm_if_exists - so "ours" has one definition everywhere."""
 from constants import SCORING_ENGINE_VMID
 from preflight import catalog, concurrency, headroom, mgmt_ip, pins, portal
 from preflight.clashes import check_collisions
+from preflight.headscale import remote_access_gate
 from preflight.plan import multinode_plan, single_node_plan
 from preflight.templates import check_share_templates
+from utils import compfile_flag
 
 
 def run_preflight(plan):
     concurrency.gate_concurrent_deploys()
+    if compfile_flag(plan.comp_dir / "Compfile", "remote_access", 1):
+        remote_access_gate(plan)
     for share in plan.shares:
         share.raw_vms = share.fetch_vms()
         vms = ([vm for vm in share.raw_vms if vm.get("node") == share.node]

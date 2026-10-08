@@ -25,13 +25,23 @@ into tfvars — deferred until a deploy actually needs it.
 
 ### The `pfsense-provision` template exists only on .150, and phase 5 pushes teams one at a time
 
-**Status: OPEN — accepted limitation.** Template `957 pfsense-provision` was built on cyberrange
-.150 by `tools/build-pfsense-provision-template.py`; another node (or a multi-node firewall lineup)
-needs the tool run there (or the template synced) before a deploy. Phase 5 pushes each team's
-config over SSH one team at a time: every clone of the template boots as 192.168.1.1 and the engine
-can borrow only one such address per run, so the bootstrap is not yet per-team concurrent. A fresh
-clone can also take several minutes before it answers on its WAN address when the node is busy
-(the push retries and the apply budget is 600s).
+**Status: OPEN — .150 side done (2026-10-08); .193 blocked on node shell access.** Template
+`pfsense-provision` on .150 is now **vmid 958**: the agentless 957 was retrofitted with the
+qemu-guest-agent offline (`tools/build-pfsense-provision-template.py agent-*` subcommands;
+qemu-ga 11.1.2 + deps from `pkg.freebsd.org/FreeBSD:14:amd64`, ABI-matched to the guest's
+own `pkg config abi`, started at boot via the `<system><afterbootupshellcmd>` tag in
+config.xml — see internals.md). The agentless 957 is kept as
+`pfsense-provision-agentless-bak`; 956 stock is untouched. **.193 has no pfsense-provision
+at all** (it never did), and every transfer path is closed from the dev host: no SSH key or
+password is configured for root@10.0.0.193 (`cyberfield.md` is gone from
+`~/.hermes/infra-registry/`), the `root@pam!agent` API token cannot take file uploads
+(`storage/upload` 400s even for tiny files — same token limit as the amongus import-from
+rejection), and `termproxy` with a token lands on the raw console getty, not a shell. When
+node shell access exists again: `vzdump 958 --stdout | ssh root@10.0.0.193 "qmrestore - 958
+--storage hdrives-zfs"`, then convert to template + tag `template` (or just re-run the
+agent-* subcommands against .193 with its env). Phase 5 still pushes each team's config one
+at a time (every clone boots as 192.168.1.1; the engine can hold only one borrowed address),
+and a busy node can still take minutes before a fresh clone answers on its WAN.
 
 ### Planted Linux boxes deny all SSH at the PAM account stage after a restart
 
