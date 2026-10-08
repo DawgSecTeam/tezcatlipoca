@@ -33,8 +33,14 @@ key survives every push — VyOS commits never touch /home/vyos/.ssh.
 """
 
 import base64
+import fcntl
 import os
+import pty
+import re
+import select
+import struct
 import subprocess
+import termios
 import time
 
 from ssh_ops import gateway_proxy, ssh_on_gateway, ssh_via_gateway
@@ -207,16 +213,24 @@ def firewall_kind(template_name):
 def generate_vyos_commands(team_id, red_dnat_spec=None):
     """VyOS pass-A CLI script (pure, for tests): everything on eth0, so the commit cannot
     cut the session that pushed it. WAN eth0 = 172.31.<team_id>.2/30, default route via
-    the engine, WAN-IN filter on eth0, dest-NAT for the engine gateway services and the
-    `firewall_dnat` specs. Syntax targets the 1.5/circinus `firewall ipv4` scheme (the
-    stream builds); verified live against the image at template build time.
+    the engine, SSH on, dest-NAT for the engine gateway services and the `firewall_dnat`
+    specs.
 
-    The filter mirrors the pfSense WAN rules: rule 10 established/related (return traffic
-    of LAN-originated flows), rule 20 any→LAN subnet (routed engine scoring — the WAN pass
-    rule's analog), rule 30 engine→WAN tcp/22 (the success probe), then one accept per
-    DNAT rule — VyOS applies the filter to the TRANSLATED destination, so DNAT'd traffic
-    needs its own allow or WAN-IN's default-drop eats it (pfSense gets this for free via
-    associated filter rules)."""
+    Deliberately NO filter rules (live-validated against the 2026.03 stream image): the
+    1.5/circinus firewall revamp removed interface-attached rulesets entirely
+    (`set interfaces ethernet ethX firewall in name Y` and `set firewall interface …`
+    are both invalid — base chains are the replacement), and the pfSense WAN rule set's
+    EFFECT (routed scoring any→LAN, boxes→engine services, engine→WAN tcp/22) is exactly
+    what circinus's default-accept forward/input chains already allow. Exposure equals
+    the pfSense config: the transit /30 carries only the engine. If the range ever needs
+    real filtering, write base-chain rules (set firewall ipv4 forward filter rule …),
+    not interface attachment.
+
+    NAT DNAT matches on the destination address alone — `inbound-interface eth1` is not
+    a valid leaf on this image, and the gateway address only exists on eth1 anyway. The
+    script ends on a grep canary at the op-mode prompt and closes with a final `exit` —
+    a script ending at `exit` leaves the canary line to land on a fresh login: prompt
+    and wedges the PTY (live-found 2026-10-08)."""
     tid = str(team_id)
     wan, gw, lan_gw = f"172.31.{tid}.2", f"172.31.{tid}.1", f"192.168.{tid}.1"
     lines = [
@@ -226,38 +240,19 @@ def generate_vyos_commands(team_id, red_dnat_spec=None):
         f"set interfaces ethernet eth0 address {wan}/30",
         f"set protocols static route 0.0.0.0/0 next-hop {gw}",
         "set service ssh port 22",
-        f"set firewall group ipv4 network-group LAN-TEAM{tid} network 192.168.{tid}.0/24",
-        "set firewall ipv4 name WAN-IN default-action drop",
-        "set firewall ipv4 name WAN-IN rule 10 action accept",
-        "set firewall ipv4 name WAN-IN rule 10 state established enable",
-        "set firewall ipv4 name WAN-IN rule 10 state related enable",
-        "set firewall ipv4 name WAN-IN rule 20 action accept",
-        f"set firewall ipv4 name WAN-IN rule 20 destination group network-group LAN-TEAM{tid}",
-        "set firewall ipv4 name WAN-IN rule 30 action accept",
-        "set firewall ipv4 name WAN-IN rule 30 protocol tcp",
-        f"set firewall ipv4 name WAN-IN rule 30 source address {gw}",
-        f"set firewall ipv4 name WAN-IN rule 30 destination address {wan}",
-        "set firewall ipv4 name WAN-IN rule 30 destination port 22",
-        "set interfaces ethernet eth0 firewall in name WAN-IN",
     ]
-    dnat_rule, filt_rule = 10, 40
+    dnat_rule = 10
     for port, desc in ENGINE_GATEWAY_SERVICES:
         lines += [
             f"set nat destination rule {dnat_rule} description '{desc} (engine service "
             f"at the old gateway address)'",
             f"set nat destination rule {dnat_rule} destination address {lan_gw}",
             f"set nat destination rule {dnat_rule} destination port {port}",
-            f"set nat destination rule {dnat_rule} inbound-interface eth1",
             f"set nat destination rule {dnat_rule} protocol tcp",
             f"set nat destination rule {dnat_rule} translation address {gw}",
             f"set nat destination rule {dnat_rule} translation port {port}",
-            f"set firewall ipv4 name WAN-IN rule {filt_rule} action accept",
-            f"set firewall ipv4 name WAN-IN rule {filt_rule} protocol tcp",
-            f"set firewall ipv4 name WAN-IN rule {filt_rule} destination address {gw}",
-            f"set firewall ipv4 name WAN-IN rule {filt_rule} destination port {port}",
         ]
         dnat_rule += 10
-        filt_rule += 10
     for spec in red_dnat_spec or []:
         port, target = spec.split("->", 1)
         target = target.replace("{tid}", tid)
@@ -266,22 +261,17 @@ def generate_vyos_commands(team_id, red_dnat_spec=None):
             "gateway address)'" % dnat_rule,
             f"set nat destination rule {dnat_rule} destination address {lan_gw}",
             f"set nat destination rule {dnat_rule} destination port {port.strip()}",
-            f"set nat destination rule {dnat_rule} inbound-interface eth1",
             f"set nat destination rule {dnat_rule} protocol tcp_udp",
             f"set nat destination rule {dnat_rule} translation address {target.strip()}",
             f"set nat destination rule {dnat_rule} translation port {port.strip()}",
-            f"set firewall ipv4 name WAN-IN rule {filt_rule} action accept",
-            f"set firewall ipv4 name WAN-IN rule {filt_rule} protocol tcp_udp",
-            f"set firewall ipv4 name WAN-IN rule {filt_rule} destination address {target.strip()}",
-            f"set firewall ipv4 name WAN-IN rule {filt_rule} destination port {port.strip()}",
         ]
         dnat_rule += 10
-        filt_rule += 10
     lines += [
         "commit",
         "save",
         "exit",
         "show configuration commands | grep host-name",
+        "exit",
     ]
     return "\n".join(lines) + "\n"
 
@@ -299,6 +289,7 @@ def generate_vyos_lan_commands(team_id):
         "save",
         "exit",
         f"show interfaces ethernet eth1 | grep 192.168.{tid}.1",
+        "exit",
     ]) + "\n"
 
 
@@ -412,31 +403,96 @@ def _borrow_bootstrap_ip(ssh_ctx, nic, add):
                    timeout=30)
 
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[=>]")
+
+
+def _strip_ansi(text):
+    return ANSI_RE.sub("", text).replace("\r", "")
+
+
+def _pty_session(args, script, timeout_s=45):
+    """One ssh session driving `script` through a REAL local PTY sized 24x80 (pure, for
+    tests). Feeding is expect-style — the next line goes in only after the transcript
+    shows a prompt — because blind pacing loses twice on this image (live-found
+    2026-10-08): bulk-written input wedges the CLI inside `save`, and save flushes the
+    tty input queue on return, eating any line still queued behind it. Returns
+    (returncode, transcript)."""
+    master, slave = pty.openpty()
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+        p = subprocess.Popen(args, stdin=slave, stdout=slave, stderr=slave)
+    finally:
+        os.close(slave)
+    buf = bytearray()
+    deadline = time.time() + timeout_s
+    lines = script.splitlines(keepends=True) or ["\n"]
+    fed, marked, prompt_seen, last_output = 0, 0, True, time.time()
+    while True:
+        r, _, _ = select.select([master], [], [], 0.2)
+        got = False
+        if r:
+            try:
+                chunk = os.read(master, 8192)
+            except OSError:              # EIO: session closed
+                break
+            if not chunk:
+                break
+            buf += chunk
+            got = True
+            last_output = time.time()
+        clean = _strip_ansi(buf.decode(errors="replace"))
+        prompt_seen = bool(re.search(r"[#$] $", clean[marked:]))
+        if prompt_seen and fed < len(lines):
+            os.write(master, lines[fed].encode())
+            fed += 1
+            marked = len(clean)
+        if p.poll() is not None and fed >= len(lines):
+            while select.select([master], [], [], 0.2)[0]:
+                try:
+                    chunk = os.read(master, 8192)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                buf += chunk
+            break
+        # stall fallbacks: no output for 12s mid-script (wedged save) or all fed and
+        # quiet — treat as done; a wedged session gets killed below
+        if (not got and time.time() - last_output > 12 and fed >= len(lines)):
+            break
+        if not got and time.time() - last_output > 12 and time.time() > deadline:
+            break
+        if time.time() > deadline + 30:
+            break
+    if p.poll() is None:
+        p.kill()
+        p.wait()
+    os.close(master)
+    return p.returncode, buf.decode(errors="replace")
+
+
 def _push_vyos(ssh_ctx, ip, script, canary, who, budget_s=FW_BOOT_BUDGET_S):
-    """Pipe `script` into the VyOS CLI over SSH — no remote command, the login shell IS
-    the CLI and piped lines execute exactly as console-typed. Success = a live
-    `commit complete` AND the script's closing grep canary answering (a failed commit
-    leaves the running config untouched, so the canary goes quiet). Retried while the
-    appliance is still booting: sshd listens before a login can complete, same wound as
-    the pfSense push. Idempotent — a retry after a half-run is safe."""
-    args = ["ssh", "-i", ssh_ctx["ssh_key_path"],
+    """Run `script` through the VyOS CLI over SSH (no remote command — the login shell
+    IS the CLI; lines execute exactly as console-typed). A circinus commit prints
+    NOTHING on success, so success = clean ssh exit AND the script's closing grep canary
+    answering (a failed commit leaves the running config untouched, so the canary goes
+    quiet). Retried while the appliance is still booting: sshd listens before a login
+    can complete, same wound as the pfSense push. Idempotent — a retry after a half-run
+    is safe."""
+    args = ["ssh", "-tt", "-i", ssh_ctx["ssh_key_path"],
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ConnectTimeout=10",
+            "-o", "SetEnv=TERM=xterm",
             "-o", f"ProxyCommand={gateway_proxy(ssh_ctx)}",
             f"{FW_USER_VYOS}@{ip}"]
     deadline = time.time() + budget_s
     last = "no attempt"
     while True:
-        try:
-            r = subprocess.run(args, input=script, capture_output=True, text=True,
-                               timeout=FW_PUSH_ATTEMPT_S)
-            out = r.stdout or ""
-            if r.returncode == 0 and "commit complete" in out and canary in out:
-                return out
-            last = f"rc={r.returncode} {(r.stderr or out).strip()[:200]}"
-        except subprocess.TimeoutExpired:
-            last = f"no answer within {FW_PUSH_ATTEMPT_S}s"
+        rc, out = _pty_session(args, script, timeout_s=45)
+        if rc == 0 and canary in out:
+            return out
+        last = f"rc={rc} {out.strip()[-200:]}"
         if time.time() >= deadline:
             raise RuntimeError(f"{who}: config push to {ip} failed ({last})")
         time.sleep(10)

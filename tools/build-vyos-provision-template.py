@@ -32,6 +32,7 @@ then drive the rest with `type`. Env knobs:
 
 import base64
 import os
+import re
 import subprocess
 import sys
 import time
@@ -65,7 +66,8 @@ _KEYS = {".": "dot", "/": "slash", "-": "minus", "_": "shift-minus", ",": "comma
          "=": "equal", " ": "spc", ":": "shift-semicolon", "@": "shift-2",
          "|": "shift-backslash", "<": "shift-comma", ">": "shift-dot", "'": "apostrophe",
          '"': "shift-apostrophe", "+": "shift-equal", ";": "semicolon", "&": "shift-7",
-         "(": "shift-9", ")": "shift-0", "#": "shift-3", "!": "shift-1", "*": "shift-8"}
+         "(": "shift-9", ")": "shift-0", "#": "shift-3", "!": "shift-1", "*": "shift-8",
+         "`": "grave", "~": "shift-grave"}
 
 
 def node():
@@ -161,22 +163,84 @@ def _node_ssh(cmd, timeout=30):
         capture_output=True, text=True, timeout=timeout)
 
 
-def _guest_argv(cmd=None):
-    """SSH argv to the guest through the node (node-side alias on BRIDGE). With cmd:
-    one-shot remote command. Without: reads the CLI session from stdin (the VyOS login
-    shell IS the CLI; piped lines execute exactly as console-typed)."""
+def _guest_argv():
+    """SSH argv to the guest through the node (node-side alias on BRIDGE), no remote
+    command: the CLI session arrives on stdin, forced-PTY (-tt — the 2026.03 CLI ignores
+    piped stdin without a tty; one-shot `ssh vyos@host 'show ...'` does NOT reach the
+    CLI on this build)."""
     proxy = f"ssh -i {Path('proxmox').resolve()} -o BatchMode=yes -W %h:%p root@{node_host()}"
-    args = ["ssh", "-i", str(Path("proxmox").resolve()), "-o", "BatchMode=yes",
+    return ["ssh", "-tt", "-i", str(Path("proxmox").resolve()), "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+            # without TERM the CLI throws a "Press RETURN" prompt that eats script lines
+            "-o", "SetEnv=TERM=xterm",
             "-o", f"ProxyCommand={proxy}", f"vyos@{BOOTSTRAP_LAN}"]
-    if cmd:
-        args.append(cmd)
-    return args
 
 
-def _guest_ssh(cmd, timeout=90, script=None):
-    return subprocess.run(_guest_argv(cmd), input=script,
-                          capture_output=True, text=True, timeout=timeout)
+def _strip_ansi(text):
+    return re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[=>]", "", text).replace("\r", "")
+
+
+def _guest_ssh(script=None, timeout=120):
+    """Run `script` (CLI lines) through the guest over a REAL local PTY sized 24x80,
+    expect-style: the next line goes in only after the transcript shows a prompt.
+    Blind feeding loses twice on this image (live-found 2026-10-08): bulk-written
+    input wedges the CLI inside `save`, and save flushes the tty input queue on
+    return, eating any line still queued behind it. Returns (returncode, transcript)."""
+    import fcntl
+    import pty
+    import select
+    import struct
+    import termios
+    master, slave = pty.openpty()
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+        p = subprocess.Popen(_guest_argv(), stdin=slave, stdout=slave, stderr=slave)
+    finally:
+        os.close(slave)
+    buf = bytearray()
+    deadline = time.time() + timeout
+    lines = (script or "exit\n").splitlines(keepends=True)
+    fed, marked, prompt_seen, last_output = 0, 0, True, time.time()
+    while True:
+        r, _, _ = select.select([master], [], [], 0.2)
+        got = False
+        if r:
+            try:
+                chunk = os.read(master, 8192)
+            except OSError:
+                break
+            if not chunk:
+                break
+            buf += chunk
+            got = True
+            last_output = time.time()
+        clean = _strip_ansi(buf.decode(errors="replace"))
+        prompt_seen = bool(re.search(r"[#$] $", clean[marked:]))
+        if prompt_seen and fed < len(lines):
+            os.write(master, lines[fed].encode())
+            fed += 1
+            marked = len(clean)
+        if p.poll() is not None and fed >= len(lines):
+            while select.select([master], [], [], 0.2)[0]:
+                try:
+                    chunk = os.read(master, 8192)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                buf += chunk
+            break
+        if not got and time.time() - last_output > 12 and fed >= len(lines):
+            break
+        if not got and time.time() - last_output > 12 and time.time() > deadline:
+            break
+        if time.time() > deadline + 30:
+            break
+    if p.poll() is None:
+        p.kill()
+        p.wait()
+    os.close(master)
+    return p.returncode, buf.decode(errors="replace")
 
 
 def node_host():
@@ -227,37 +291,49 @@ def create():
 
 
 def install():
-    """Console-typed `install image`. The live ISO autologins as vyos on tty1; the prompt
-    sequence below matches the 2026.03 stream. VERIFY each stage with `shot` — when a
-    prompt differs, finish the walk with `type`."""
+    """Console-typed `install image`. The live ISO does NOT autologin (2026.03 stream):
+    log in vyos/vyos first. The prompt sequence below matches the 2026.03 stream
+    (verified live 2026-10-08): continue → image name (default) → vyos password ×2 →
+    console (default K) → disk (default /dev/sda) → delete-all-data Yes → free space
+    (default) → boot config file (default 1). VERIFY with `shot` — when a prompt
+    differs, finish the walk with `type`."""
     print("typing the installer walk (assumes the live-boot login prompt, ~90s after start)")
-    type_line("", after_s=2)                 # wake the console / clear a half line
+    type_line("vyos", after_s=2)             # login:
+    type_line("vyos", after_s=3)             # Password: (live ISO default creds)
     type_line("install image", after_s=4)
-    type_line("Yes", after_s=3)              # Would you like to continue? [No]
+    type_line("Yes", after_s=3)              # Would you like to continue? [y/N]
     type_line("", after_s=3)                 # image name: accept the default
     type_line(PW, after_s=2)                 # password for user 'vyos'
     type_line(PW, after_s=2)                 # confirm
-    type_line("", after_s=3)                 # default console [KVM]
-    type_line("", after_s=3)                 # continue prompts if any
-    print("typed; the squashfs copy takes minutes — `shot` until you see "
-          "`Setup complete`, then run `reboot-into-disk`")
-    type_line("")                            # in case a final [Yes]-style confirm remains
+    type_line("", after_s=3)                 # default console [K]
+    type_line("", after_s=3)                 # disk: accept /dev/sda
+    type_line("Yes", after_s=3)              # delete all data on the drive? [y/N]
+    type_line("", after_s=3)                 # all free space? [Y/n]
+    type_line("", after_s=3)                 # boot config file: default 1
+    print("typed; the squashfs copy takes ~1min — `shot` until you see "
+          "`The image installed successfully`, then run `reboot-into-disk`")
 
 
 def reboot_into_disk():
     """The installer left the ISO attached; detach it BEFORE rebooting or the live ISO
-    boots again (boot order is ide2 first)."""
+    boots again (boot order is ide2 first). The 2026.03 `reboot` op command asks for a
+    confirmation."""
     n = node()
     print("detaching the ISO, then rebooting into the installed disk")
     proxmox_api("PUT", f"/nodes/{n}/qemu/{VMID}/config", data={"delete": "ide2"})
-    type_line("reboot", after_s=2)
+    type_line("reboot", after_s=3)
+    type_line("Yes", after_s=2)              # Are you sure you want to reboot?
     print("rebooting — ~60-90s to the installed system's login prompt")
 
 
 def provision():
     """Console-typed bootstrap contract: eth1 = 192.168.1.1/24, SSH on, serial getty,
-    deploy key in vyos's authorized_keys. Assumes the installed system's login prompt."""
-    key_b64 = base64.b64encode(PUBKEY_FILE.read_bytes().strip() + b"\n").decode()
+    deploy key in vyos's config (system_login.py regenerates authorized_keys from the
+    config at boot — a file-based key is wiped on the first reboot), and NO hw-id pins:
+    VyOS stamps each configured interface's MAC as `hw-id` and pins the interface NAME
+    to it at boot, so a clone with fresh MACs gets bumped to eth2/eth3 and the config
+    fails to apply. Unpinned names assign in PCI order on every clone (live-found
+    2026-10-08). Assumes the installed system's login prompt."""
     print("logging in and typing the provision config")
     type_line("vyos", after_s=2)             # login:
     type_line(PW, after_s=3)                 # Password:
@@ -268,11 +344,19 @@ def provision():
     type_line("set system host-name vyos-provision", after_s=1)
     type_line("commit", after_s=4)
     type_line("save", after_s=4)
+    type_line("delete interfaces ethernet eth0 hw-id", after_s=1)
+    type_line("delete interfaces ethernet eth1 hw-id", after_s=1)
+    type_line("commit", after_s=4)
+    type_line("save", after_s=4)
     type_line("exit", after_s=2)             # back to op mode
-    print("installing the deploy key (b64 → authorized_keys)")
-    type_line("mkdir -p ~/.ssh", after_s=1)
-    type_line(f"echo {key_b64} | base64 -d >> ~/.ssh/authorized_keys", after_s=1)
-    type_line("chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys", after_s=1)
+    key = PUBKEY_FILE.read_text().strip().split()
+    print("setting the deploy key in the config (boot-persistent)")
+    type_line("configure", after_s=2)
+    type_line(f"set system login user vyos authentication public-keys deploy type {key[0]}", after_s=1)
+    type_line(f"set system login user vyos authentication public-keys deploy key {key[1]}", after_s=1)
+    type_line("commit", after_s=4)
+    type_line("save", after_s=4)
+    type_line("exit", after_s=2)
     print("typed; verify with `shot`, then `check-key` (needs the node-side alias)")
 
 
@@ -286,20 +370,13 @@ def alias(add=True):
 
 def check_key():
     """Proof the deploy's SSH path works: alias on the node bridge, then the deploy key
-    answers on the bootstrap address."""
+    answers on the bootstrap address (piped CLI: one-shot commands don't reach it)."""
     alias(add=True)
     try:
-        r = subprocess.run(
-            ["ssh", "-i", str(Path("proxmox").resolve()), "-o", "BatchMode=yes",
-             "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-             f"-o", f"ProxyCommand=ssh -i {Path('proxmox').resolve()} -o BatchMode=yes "
-                    f"-W %h:%p root@{node_host()}",
-             f"vyos@{BOOTSTRAP_LAN}", "show version | grep Version"],
-            capture_output=True, text=True, timeout=60)
-        print(r.stdout.strip() or r.stderr.strip())
-        if r.returncode != 0:
-            raise SystemExit(f"deploy-key SSH failed rc={r.returncode}: "
-                             f"{(r.stderr or '').strip()[:300]}")
+        rc, out = _guest_ssh("show version | grep Version\nexit\n", timeout=60)
+        print(out.strip()[-400:])
+        if rc != 0 or "Version:" not in out:
+            raise SystemExit(f"deploy-key CLI session failed rc={rc}: {out.strip()[-300:]}")
     finally:
         alias(add=False)
 
@@ -312,38 +389,40 @@ def check():
     moves eth1 off the bootstrap address; its syntax is a subset of pass A's."""
     alias(add=True)
     try:
-        eth = _guest_ssh("show interfaces | grep -E '^[A-Z]'", timeout=60).stdout
+        rc, eth = _guest_ssh("show interfaces | grep eth\nexit\n", timeout=60)
         for nic in ("eth0", "eth1"):
             if nic not in eth:
                 raise SystemExit(f"no {nic} in `show interfaces` — NIC naming differs "
-                                 f"from the terraform net0/net1 WAN/LAN order:\n{eth}")
+                                 f"from the terraform net0/net1 WAN/LAN order:\n{eth[-1500:]}")
         print("eth0/eth1 present (terraform NIC order holds)")
 
         pass_a = generate_vyos_commands(CHECK_TID, CHECK_DNAT)
-        out = _guest_ssh(script=pass_a, timeout=120).stdout
-        if "commit complete" not in out or f"fw-team{CHECK_TID}" not in out:
-            raise SystemExit("generated pass-A script FAILED against this image:\n"
-                             + out[-2000:])
+        rc, out = _guest_ssh(pass_a, timeout=120)
+        if rc != 0 or f"fw-team{CHECK_TID}" not in out:
+            raise SystemExit(f"generated pass-A script FAILED against this image "
+                             f"(rc={rc}):\n" + out[-2000:])
         print("pass-A script committed clean (syntax + canary verified live)")
 
         undo = "\n".join([
             "configure",
             f"delete interfaces ethernet eth0 address 172.31.{CHECK_TID}.2/30",
             "delete protocols static route 0.0.0.0/0",
-            "delete firewall",
             "delete nat",
-            "delete system host-name",
+            "delete firewall",
+            "set system host-name vyos-provision",
             "commit",
             "save",
             "exit",
+            "show configuration commands | grep host-name",
+            "exit",
         ]) + "\n"
-        out = _guest_ssh(script=undo, timeout=120).stdout
-        if "commit complete" not in out:
-            raise SystemExit(f"check cleanup failed:\n{out[-2000:]}")
-        eth1 = _guest_ssh(f"show interfaces ethernet eth1 | grep {BOOTSTRAP_LAN}",
-                          timeout=30).stdout
+        rc, out = _guest_ssh(undo, timeout=120)
+        if rc != 0 or "vyos-provision" not in out:
+            raise SystemExit(f"check cleanup failed (rc={rc}):\n{out[-2000:]}")
+        rc, eth1 = _guest_ssh(f"show interfaces ethernet eth1 | grep {BOOTSTRAP_LAN}\nexit\n",
+                              timeout=30)
         if BOOTSTRAP_LAN not in eth1:
-            raise SystemExit(f"eth1 lost its bootstrap address during check:\n{eth1}")
+            raise SystemExit(f"eth1 lost its bootstrap address during check:\n{eth1[-1000:]}")
         print(f"cleanup committed; eth1 still {BOOTSTRAP_LAN} — template state intact")
     finally:
         alias(add=False)
@@ -351,7 +430,12 @@ def check():
 
 def seal():
     n = node()
-    _guest_ssh("poweroff", timeout=30)
+    st = proxmox_api("GET", f"/nodes/{n}/qemu/{VMID}/status/current")["data"]["status"]
+    if st == "running":
+        # console-typed: `poweroff` asks "Are you sure ...? [y/N]" and the expect-style
+        # CLI feeder cannot see a y/N prompt, so answer both lines at the VGA console
+        type_line("poweroff", after_s=3)
+        type_line("Yes", after_s=2)
     wait_status("stopped", 300, "poweroff after provisioning")
     proxmox_api("PUT", f"/nodes/{n}/qemu/{VMID}/config", data={"tags": "template"})
     up = proxmox_api("POST", f"/nodes/{n}/qemu/{VMID}/template")
