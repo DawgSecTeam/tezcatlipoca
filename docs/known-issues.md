@@ -109,6 +109,52 @@ templates not yet rebuilt:** the template-build recipe now sets `SELINUX=permiss
 effect on the next rebuild, so the Fedora templates currently on the nodes still enforce. Detail and
 the verified SSH route: [environment-facts.md](environment-facts.md#templates).
 
+### Student portal: what the first live run did not cover
+
+**Status: OPEN — needs follow-up runs.** The first live run (2026-10-08, `portal-live-2026-10-08`
+on cyberfield .193: 2 teams × Ubuntu 20.04 + Windows Server 2019) proved several things:
+- the engine reaches `:8006`;
+- the console token is minted with exactly one `TezConsole` ACL per team VM;
+- noVNC (capped at RFB 3.3) renders real consoles on Linux and Windows in a real browser;
+- keystroke typing reaches the guest;
+- the gate and cross-team refusals hold;
+- the full `verify-competition.py` passes ([portal.md](portal.md#verification)).
+
+Still unproven:
+1. **The Cloudflare tunnel path.** No tunnel token was used. This includes the one-owner check and
+   cookies and websockets behind Cloudflare.
+2. **`pveproxy` under event-size concurrency.** At most one console was open at a time.
+3. **Box rebuilds.** Whether Proxmox drops a rebuilt VM's console ACL
+   (`portal-access.py <comp> resync`).
+4. **Multi-node.** No satellite consoles yet.
+5. **Teardown revocation.** The run was left up for inspection, so `destroy-competition.py` has not
+   yet removed a live console user.
+
+### Quotient did not enforce "one session per account" on 2026-10-08
+
+**Status: OPEN — the documented rule may be stale.** Several modules and docs build on "Quotient
+allows ONE session per account; a second login kills the first cookie":
+- the `scoring` second-admin account (`quotient/setup.py` `_admin_accounts`);
+- `engine_guard_ops.py`;
+- `deploy_lib/stages.py`;
+- the round-loop entry above;
+- `usage-people.md`.
+
+On `portal-live-2026-10-08`'s engine (Quotient `dab6a98`, 2026-09-13), two logins in a row as
+`team1`, and separately as `admin`, both left the **first** cookie valid: `/api/teams` returned
+200 for both, and 401 anonymously. Either upstream changed, or the eviction depends on something
+this probe didn't reproduce (client identity, a different endpoint). Re-test before relying on the
+rule either way. The separate `scoring` account is harmless if the rule is gone. The student
+portal doesn't depend on it, because it never logs into Quotient
+([portal.md](portal.md#logins-never-touch-quotient)).
+
+### Student portal logins are shared per team
+
+**Status: OPEN — accepted limitation.** The portal reuses Quotient's logins, and those are one
+account per team (`team1`…). The only per-student attribution is the optional display name typed
+at login, which is self-asserted and recorded in the access log. Per-student identity would mean
+moving Quotient itself to LDAP/OIDC.
+
 ## Pending upstream — owned by the catalog / nakon
 
 - `mailenable-cleartext-mail-win` — the only Windows pin still in `KNOWN_BROKEN_CONFIGS`. The row

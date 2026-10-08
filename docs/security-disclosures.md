@@ -40,6 +40,24 @@ force-push is no longer the cheap fix it was on 2026-10-01 — rotation is. If t
 force-pushed later, coordinate it; `refs/remotes/origin/*` is deliberately left un-rewritten so
 `git status` keeps showing the divergence.
 
+## Student portal secrets (where they live)
+
+A competition with Compfile `portal 1` carries three more secrets ([portal.md](portal.md)):
+
+| Secret | Where it lives |
+|---|---|
+| Per-comp console token (`tezcon-<comp>-<run_id>@pve!portal`, `VM.Console` on this comp's team VMs only) | `.deploy_state.json` (`portal_console_tokens`), `competitions/<id>/portal.json`, and `/opt/tez-portal/portal.json` on the engine |
+| Portal session-signing key | `.deploy_state.json` and `/opt/tez-portal/.env` |
+| Cloudflare tunnel token | Event env file (`TEZ_PORTAL_TUNNEL_TOKEN`) and `/opt/tez-portal/.env` |
+
+File modes:
+- Comp-dir files are 0600 and gitignored. `portal-access.log` is also gitignored, because it holds
+  team logins and source IPs.
+- Engine files are 0600 root.
+
+Teardown deletes the console user on every node, by exact name. If a destroy warns that it could
+not, re-run it; until then the token can still open consoles on that comp's VMs.
+
 ## Security disclosure history
 
 - **2026-10-01 env-variant leak**: `.env.pre-cde-20260929` was tracked from `8cb755c`

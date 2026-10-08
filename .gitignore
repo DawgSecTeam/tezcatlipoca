@@ -26,6 +26,10 @@ competitions/*/teams.json
 competitions/*/event.conf
 competitions/*/linux.credlist
 competitions/*/credentials.txt
+# Student portal: portal.json carries this run's Proxmox console token; the access log
+# carries team logins/IPs. Both 0600, never committed.
+competitions/*/portal.json
+competitions/*/portal-access.log
 competitions/*/.deploy_state.json
 competitions/*/.deploy-timings.jsonl
 competitions/*/nakon-config.json

@@ -19,6 +19,8 @@ from destroy_gate_ops import load_ownership, refuse_frozen_full_teardown, requir
 from destroy_sweep_ops import destroy_with_recovery, pre_stop_windows_boxes, report_remaining
 from destroy_templates_ops import teardown_templates
 from nodes_ops import activate_placement, read_placement, record_of
+from portal_ops import portal_enabled, teardown_portal
+from ssh_ops import read_terraform_ctx
 from template_ops import frozen_state
 from utils import load_compfile, pick_competition
 
@@ -161,6 +163,23 @@ def main():
     env["TF_VAR_teams"] = json.dumps(teams)
     env["TF_VAR_boxes_per_team"] = json.dumps(boxes)
     env["TF_VAR_event_name"] = name
+
+    # ── Student portal: save its access log, revoke this run's console user ──────────────
+    # Before artifact collection, so the comp-dir copy of portal-access.log rides the
+    # collection; and before the VMs go, while the engine can still be read. The console
+    # user is deleted by its exact deterministic name (pve_console_ops) — never a prefix.
+    if (deployed_state.get("portal_console_tokens") or deployed_state.get("portal_up")
+            or portal_enabled(comp_dir)):
+        try:
+            try:
+                portal_tf_ctx = read_terraform_ctx(comp_dir)
+            except Exception:  # noqa: BLE001 - no terraform outputs: skip the log, still revoke
+                portal_tf_ctx = None
+            teardown_portal(comp_dir, competition, run_id, deployed_state, teams, boxes,
+                            placement, default_node, tf_ctx=portal_tf_ctx)
+        except Exception as e:  # never let the portal outrank destroying the range
+            print(f"  WARNING: portal teardown step failed ({type(e).__name__}: {e}) — "
+                  "continuing; re-run the destroy to retry the console-user removal.")
 
     # ── Collect this run's test artifacts — BEFORE anything is stopped or deleted ──────────
     # Last chance by construction: the red report and the blue logs live on machines that are
