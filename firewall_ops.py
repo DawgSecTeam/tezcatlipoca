@@ -27,6 +27,8 @@ import os
 import subprocess
 import time
 
+from guest_exec import guest_agent_exec_root
+from pve_api import proxmox_api
 from ssh_ops import ssh_on_gateway, ssh_via_gateway
 
 # (port, label) of engine services boxes reach at the team gateway address. apt-cacher-ng
@@ -36,6 +38,11 @@ ENGINE_GATEWAY_SERVICES = ((3142, "apt-cacher"),)
 BOOTSTRAP_FW_IP = "192.168.1.1"
 BOOTSTRAP_ENGINE_IP = "192.168.1.2"
 FW_USER = "admin"            # uid 0 on pfSense; the deploy key is in its authorizedkeys
+# Starts the qemu-guest-agent at boot (qemu-ga-11.1.2 is sealed into pfsense-provision
+# 958). pfSense boot never runs /usr/local/etc/rc.d/* — find_local_scripts_new only
+# globs *.sh — so the rc.conf enable is inert; the pfSense-native hook is this
+# <system><afterbootupshellcmd> tag, which /etc/rc.bootup mwexec's at the end of bootup.
+QGA_START_SHELLCMD = "/usr/local/etc/rc.d/qemu-guest-agent start"
 FW_BOOT_BUDGET_S = 420       # a cloned appliance's first boot to SSH
 FW_APPLY_BUDGET_S = 600      # config push → reboot → SSH on the WAN address (a loaded node boots slowly)
 FW_PUSH_ATTEMPT_S = 30       # one push attempt; sshd answers before a booting appliance can log in
@@ -50,7 +57,8 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None, authorized_key=N
     the internet); WAN pass rule any→lan so routed engine scoring gets in. The WAN rule
     must be the FIRST <rule> in the filter block and its destination must be the
     `lan` KEYWORD — pfSense's <network> field takes a keyword/alias, not a CIDR, and a
-    raw CIDR there silently drops the rule (pfsense-ad 2026-09-28).
+    raw CIDR there silently drops the rule (pfsense-ad 2026-09-28). An
+    <afterbootupshellcmd> starts the qemu-guest-agent (absent seeds get it injected).
 
     red_dnat_spec (optional, Compfile `firewall_dnat` "PORT->TARGET[,...]") adds port
     forwards on the LAN address — the beacon-C2 path when the firewall, not the engine,
@@ -63,6 +71,9 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None, authorized_key=N
     x = seed_xml
 
     x = x.replace("<ssh></ssh>", "<ssh><enable>enabled</enable></ssh>")
+    if "afterbootupshellcmd" not in x:
+        x = x.replace("<system>",
+                      f"<system><afterbootupshellcmd>{QGA_START_SHELLCMD}</afterbootupshellcmd>", 1)
     if authorized_key:
         b64 = base64.b64encode(authorized_key.strip().encode() + b"\n").decode()
         x = x.replace("<name>admin</name>",
@@ -277,13 +288,52 @@ def _borrow_bootstrap_ip(ssh_ctx, nic, add):
                    timeout=30)
 
 
-def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, log=print):
+def _agent_answers(node, vmid, timeout=45):
+    """Silent REST /agent/ping wait (clones of the pre-retrofit template answer False —
+    that is normal, not a failure; the loud wait_for_guest_agent is for managed boxes
+    where an agentless VM IS a problem)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/agent/ping", data={})
+            return True
+        except Exception:
+            time.sleep(5)
+    return False
+
+
+def fw_agent_diagnostic(node, vmid):
+    """Best-effort agent readback for a failed firewall wait — guest interface
+    addresses plus whether the pushed config.xml landed (size + the agent's boot
+    shellcmd marker). Returns '' when the agent doesn't answer (pre-retrofit clones)
+    or anything else goes wrong; diagnostics must never become the failure."""
+    if not node or not _agent_answers(node, vmid, timeout=10):
+        return ""
+    try:
+        rc, out, err = guest_agent_exec_root(
+            node, vmid,
+            "ifconfig 2>/dev/null | grep 'inet ' ; ls -l /cf/conf/config.xml; "
+            "grep -c afterbootupshellcmd /cf/conf/config.xml",
+            timeout=20, shell="sh")
+        body = (out or err or "").strip()
+        if not body:
+            return ""
+        return "\n    agent diagnostics (vmid %s):\n      " % vmid \
+            + "\n      ".join(body.splitlines())
+    except Exception:
+        return ""
+
+
+def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, log=print, node=None):
     """Push every team's generated config to its firewall over SSH, then wait for the
     appliance to answer on its WAN address.
 
     fw_targets: one target dict per team's in_path firewall (slot-0 only — the engine
     node), each carrying team_key/identifier. config_paths: team_key → the generated
-    config-team<id>.xml. Teams run one at a time: every template boots as 192.168.1.1 on
+    config-team<id>.xml. node (optional, the Proxmox node name): when given, the
+    qemu-guest-agent (sealed into pfsense-provision 958) adds a post-boot confirmation
+    log line and its readback to the failure text; agentless clones are normal and
+    stay silent. Teams run one at a time: every template boots as 192.168.1.1 on
     its own isolated bridge, and the engine can hold only one borrowed address route at
     once. Idempotent — a firewall already answering on its transit address is reached
     there and left alone when its config is unchanged."""
@@ -306,7 +356,8 @@ def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, log=print):
                         f"{key}: firewall vmid {t['vmid']} never answered SSH on "
                         f"{BOOTSTRAP_FW_IP} through engine {nic} — is it a clone of the "
                         f"`pfsense-provision` template (tools/build-pfsense-provision-"
-                        f"template.py) with both NICs attached?")
+                        f"template.py) with both NICs attached?"
+                        + fw_agent_diagnostic(node, t["vmid"]))
                 result = _push_config(ssh_ctx, BOOTSTRAP_FW_IP, config_xml, key)
             finally:
                 _borrow_bootstrap_ip(ssh_ctx, nic, add=False)
@@ -318,7 +369,10 @@ def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, log=print):
             raise RuntimeError(
                 f"{key}: firewall did not come back on {wan}:22 within {FW_APPLY_BUDGET_S}s "
                 f"after the config push. Remedy: inspect the console (qm terminal / VNC) "
-                f"for vmid {t['vmid']}, then re-run --from-phase 5.")
+                f"for vmid {t['vmid']}, then re-run --from-phase 5."
+                + fw_agent_diagnostic(node, t["vmid"]))
+        if node and _agent_answers(node, t["vmid"], timeout=45):
+            log(f"    {key}: guest agent answered — config-applied boot confirmed")
         log(f"    {key}: firewall up on {wan} (config applied)")
 
 

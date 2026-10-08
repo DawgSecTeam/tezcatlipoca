@@ -83,9 +83,13 @@ in-path firewall template (`unmanaged` + `in_path` boxes clone straight from it;
 rule above does not apply to unmanaged boxes). It is the stock `956 pfsense` plus SSH on, the
 deploy key in admin's authorizedkeys, LAN `vtnet1` = 192.168.1.1/24 and a serial console —
 built once by `tools/build-pfsense-provision-template.py` (clone 956 → type the config edits at
-the console → halt → convert). 956 stays only as the builder's source. Only exists on .150 — a
-firewall lineup needs it synced (or rebuilt with the tool) on any other node before preflight
-will pass.
+the console → halt → convert). 956 stays only as the builder's source. Since 2026-10-08 the
+template is **vmid 958** and carries the **qemu-guest-agent** (qemu-ga 11.1.2, installed
+offline from the FreeBSD 14 ABI-matched repo; booted by the `<system><afterbootupshellcmd>`
+tag in its config.xml — pfSense never runs `/usr/local/etc/rc.d/*`, see internals.md). The
+agentless pre-retrofit template is kept as `957 pfsense-provision-agentless-bak`. Only exists
+on .150 — a firewall lineup needs it synced (or rebuilt with the tool) on any other node
+before preflight will pass; .193 has no pfSense template at all (known-issues).
 
 **cyberrange .150 — NOT usable (no cloud-init drive):** `106 base-ubuntu24.04`,
 `920 base-debian13-cloudinit` ⚠️, `103 base-ubuntu20.04`, `109 base-fedora44`.
@@ -95,8 +99,12 @@ will pass.
 > it "920 / debian13-lite"; the vmid was right and the name was stale.
 
 **cyberfield .193 — usable:** `1007 base-ubuntu24.04-fix`, `1006 base-debian13-lite-fix`,
-`1015 base-fedora44-fix`, `1019 base-alpine3.23-fix`, `1032 base-centos8-fix`,
-`1033 base-ubuntu20.04-fix`, `1220 engine-template` (cde-2026).
+`1019 base-alpine3.23-fix`, `1032 base-centos8-fix`, `1033 base-ubuntu20.04-fix`,
+`1220 engine-template` (historical CDE run).
+
+**cyberfield .193 — not present in the 2026-10-08 inventory:** `base-fedora44-fix` (older records
+associate it with VMID `1015`, but the live listing identified `1015` as `pfsense-provision-agentless-bak`).
+Refresh the inventory before relying on the older Fedora entry or scheduling any lineup that needs it.
 
 **cyberfield .193 — NOT usable:** `1001 base-ubuntu20.04`, `1002 base-ubuntu24.04`,
 `1005 base-debian13-cloudinit` ⚠️, `1004 base-alpine3.23`, `1003 base-fedora44`, and the
