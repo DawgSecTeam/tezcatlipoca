@@ -168,6 +168,42 @@ They hold vmids, consume `hdd`, and their golden templates can squat a slot a co
 wants. Reclaim with `destroy-competition.py` from the matching comp dir/worktree — never an ad-hoc
 sweep. **[live]**
 
+## Headscale
+
+The tailnet's control plane is an external headscale instance the pipeline administers over
+ssh+sudo (`TEZ_HEADSCALE_*` in `.env`; remote access ships with every deploy —
+[remote-access.md](remote-access.md)). Facts captured 2026-10-08 **[live]**:
+
+- **Host**: a Debian 13 VPS at `45.76.27.253`, public name `headscale.hnasheralneam.dev`
+  (`server_url`), TLS via a Caddy container (80/443) proxying the headscale container's 8080.
+- **Runtime**: `headscale/headscale:latest` (**v0.29.1** verified), container name `headscale`,
+  mounts `/home/sysadmin/headscale/config → /etc/headscale` and `/home/sysadmin/headscale/data →
+  /var/lib/headscale`; sqlite DB. `docker` is root-only — every CLI call is
+  `sudo docker exec headscale headscale …`. Embedded DERP enabled (region 999, STUN udp/3479) —
+  participant clients relay here when no direct path exists.
+- **DNS**: MagicDNS on, base domain `vpn.hnasheralneam.dev` (node `eng-<comp>` is reachable as
+  `eng-<comp>.vpn.hnasheralneam.dev` inside the tailnet).
+- **Policy**: `policy.mode: file`, `policy.path: /etc/headscale/acl.hujson` (wired up 2026-10-08;
+  before that the file shipped with `path: ""` and the tailnet ran **policy-less = allow-all**).
+  The pipeline regenerates the whole policy from `tezcatlipoca-remote-access.json` beside it;
+  rollback backup: `config.yaml.bak-tezcatlipoca-20261008`.
+- **Users (2026-10-08)**: `cyberrange-infra` (service account, owns the infra nodes + our router
+  nodes), `hnasher1`, `dipam1`, `sdavis24`, `ckegly`. All pre-existing nodes are untagged and
+  keep full access via `group:full-access`.
+- **v0.29 CLI quirks**: there is **no `routes` command** (removed upstream — approvals ride the
+  policy's `autoApprovers`; listing is `nodes list-routes`); policy v2 syntax requires
+  `@`-suffixed usernames in groups AND in grant/acl sources (a bare name parses as a host
+  reference and fails validation); `policy check` wants `--file`; `users destroy -n <name>
+  --force` refuses while the user owns nodes; `nodes delete -i <id> --force`.
+- **Tag-sourced grants do not reach routers' packet filters** (live-proven 2026-10-08): a node
+  enrolled with a tagged key sees its netmap routes filtered correctly, but every tag-sourced
+  dial black-holes at the router — user and group sources work fine. tezcatlipoca therefore keys
+  participant grants on usernames, not tags (docs/remote-access.md). Upstream-worthy defect.
+- **The VPS is itself a tailnet node** (`headscale-vps`, 100.64.0.21); the mgmt-LAN subnet
+  router is `headscale-network-bridge` (100.64.0.4, hnasher1) advertising `10.0.0.0/24` — its
+  route predates the policy and stays Approved. Watch the classic trap: **a tailnet bridge can
+  answer ICMP for itself while forwarding nothing** — probe service ports, never ping.
+
 ## Node runtime behavior
 
 - **.150 (cyberrange) RAM is the binding constraint for satellite-heavy Windows ranges.** The

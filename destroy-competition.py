@@ -19,6 +19,7 @@ from destroy_gate_ops import load_ownership, refuse_frozen_full_teardown, requir
 from destroy_sweep_ops import destroy_with_recovery, pre_stop_windows_boxes, report_remaining
 from destroy_templates_ops import teardown_templates
 from nodes_ops import activate_placement, read_placement, record_of
+from remote_access_ops import teardown_remote_access
 from template_ops import frozen_state
 from utils import load_compfile, pick_competition
 
@@ -204,6 +205,16 @@ def main():
     # clone.
     teardown_templates(comp_dir, competition, run_id, boxes, deployed_state, placement,
                        full=args.full)
+
+    # Headscale remote access: revoke the engine's tailnet node (kills its node key),
+    # delete this comp's participant users, re-apply the policy without this comp.
+    # Warn-and-proceed like the rest of teardown — a dead headscale host must never
+    # block destroying a range.
+    try:
+        teardown_remote_access(comp_dir, state=deployed_state)
+    except Exception as e:
+        print(f"  WARNING: headscale remote-access cleanup failed "
+              f"({type(e).__name__}: {e}) — continuing.")
 
     print(f"\nInfrastructure for '{competition}' destroyed.")
     print(f"Competition files preserved at competitions/{competition}/")
