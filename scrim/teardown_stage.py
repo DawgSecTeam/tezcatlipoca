@@ -7,6 +7,7 @@ from config_ops import write_text_atomic
 from scrim import core
 from scrim import endpoints
 from scrim import procs
+from scrim import red_link
 from scrim import test_folder
 from scrim.core import log
 
@@ -20,6 +21,20 @@ def _config_red_vmid():
         cfg = json.loads((core.BAD_AUTO / "config.yaml").read_text())
         return (cfg.get("deploy") or {}).get("red_vmid")
     except (OSError, ValueError):
+        return None
+
+
+def _manifest_red_vmid(args):
+    """red's vmid from this run's manifest, when the run recorded one."""
+    test_dir = getattr(args, "test_dir", None)
+    if not test_dir:
+        return None
+    try:
+        import artifacts_ops
+        red = ((artifacts_ops.load_manifest(test_dir).get("agents") or {})
+               .get("red") or {})
+        return red.get("vmid") or None
+    except Exception:                                        # noqa: BLE001 - best effort
         return None
 
 
@@ -48,6 +63,14 @@ def teardown_red(args, env):
     up on the range. Both halves are needed: surface the exit code, and assert the
     specific vmid this run deployed."""
     log("teardown: red01 + NAT")
+    # Pull what red actually planted BEFORE destroy erases the VM. The artifact
+    # collector also lists world.json, but it treats red01 as one target and skips
+    # every remaining file once the first scp fails — so the record the persistence
+    # verification depends on is fetched out-of-band here, via sudo-staged copies.
+    try:
+        red_link.pull_red_state(args)
+    except Exception as e:  # evidence capture must never block teardown
+        log(f"WARNING: red state pull failed before teardown: {type(e).__name__}: {e}")
     configured = _config_red_vmid()
     if args.red_vmid and configured and int(configured) != int(args.red_vmid):
         # Not fatal — badauto's identity guards are the authority on what is safe to
@@ -94,7 +117,13 @@ def teardown_red(args, env):
                 f"{core.BAD_AUTO}, or destroy vmid {args.red_vmid} by hand and re-run "
                 f"destroy-competition.py.")
 
-    vmid = args.red_vmid or configured
+    # Order matters: what this run deployed, then what the run recorded, then what
+    # config.yaml says, then bad-auto's own default — one of them is the number
+    # `badauto destroy` acted on, and an unknown vmid is an unverifiable teardown
+    # (2026-10-08 run 6b logged "vmid None could not be verified gone" because
+    # --red-vmid was not passed and the config omits it).
+    vmid = (args.red_vmid or _manifest_red_vmid(args) or configured
+            or core.bad_auto_deploy_default("red_vmid"))
     still = _red_vm_still_exists(vmid)
     if still:
         raise RuntimeError(

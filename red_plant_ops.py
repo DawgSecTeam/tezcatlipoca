@@ -41,6 +41,9 @@ BAD_AUTO = REPO.parent / "bad-auto"
 DEFAULT_RED_IP = "10.0.0.199"
 RED_USER = "sysadmin"
 SEED_DEPTH_MAX = 3
+# Where `badauto deploy` stages the package on red01 (the systemd unit's
+# WorkingDirectory — the package is imported by cwd, never pip-installed).
+INSTALL_DIR = "/opt/bad-auto"
 
 
 def _bad_auto_present():
@@ -74,8 +77,14 @@ def _deploy_red(comp_dir, env, timeout=1800):
 
 
 def _seed_red(ssh_key, red_ip, depth, timeout=3600):
-    """Run the day-0 seed on red01 — access + implants + persistence + evasion."""
-    remote = (f"sudo -n python3 -m badauto seed"
+    """Run the day-0 seed on red01 — access + implants + persistence + evasion.
+
+    `cd` into the install dir first: badauto is not pip-installed on red01, it is
+    imported by cwd (the systemd unit sets WorkingDirectory=/opt/bad-auto), so
+    `sudo -n python3 -m badauto` from the login dir dies with "No module named
+    badauto" and the whole pre-T0 seed is lost.
+    """
+    remote = (f"cd {INSTALL_DIR} && sudo -n python3 -m badauto seed"
               f" --competition /var/lib/bad-auto/intel --state-dir /var/lib/bad-auto"
               f" --intel nakon --depth {depth}")
     return subprocess.run(

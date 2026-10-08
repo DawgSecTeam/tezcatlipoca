@@ -118,8 +118,12 @@ class RunFolderAndResume(Base):
         r1, t1 = test_folder.resolve_run_dir(self.comp, a1)
         self.assertEqual(r1, t1)
         self.assertEqual(t1.parent.name, ".automated-tests")
-        r2, t2 = test_folder.resolve_run_dir(self.comp, _args(None))
+        # a resume reuses the folder; a second FRESH run mints its own (`-run2`)
+        r2, t2 = test_folder.resolve_run_dir(self.comp, _args(None, resume_event=True))
         self.assertEqual((r1, t1), (r2, t2))
+        r2b, t2b = test_folder.resolve_run_dir(self.comp, _args(None))
+        self.assertNotEqual(t2b, t1)
+        self.assertTrue(t2b.name.endswith("-run2"))
         override = self.tmp / "elsewhere"
         a3 = _args(str(override))
         r3, t3 = test_folder.resolve_run_dir(self.comp, a3)

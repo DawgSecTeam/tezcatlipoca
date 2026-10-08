@@ -40,9 +40,14 @@ def down_windows(snaps):
 def blue_metrics(run_dir):
     m = {"cycles_rc0": 0, "cycles_total": 0, "manual_rc0": 0, "timeouts": 0, "injects": 0,
          "notebook_entries": 0, "eradication": 0, "evictions_logged": 0}
+    # Artifact names are drawn per family now (badauto/artifactnames.py), so
+    # attribution is behavioural: keys, drop-ins, cron dir, immutability, SUID,
+    # Windows task/service/WMI machinery — not red's old literals.
     erad_re = re.compile(
         r"(tznet|svc-netupdate|TzNet|red_key|authorized_keys|backdoor|rogue|"
-        r"uid\s*=?\s*0|unauthorized)", re.I)
+        r"uid\s*=?\s*0|unauthorized|cron\.d|chattr|ld\.so\.preload|"
+        r"schtasks|auto-start service|__EventFilter|attrib \+h|suid|"
+        r"sshd_config\.d|profile\.d)", re.I)
     erad_verbs = re.compile(r"(removed|deleted|disabled|uninstalled|locked|changed.*back|reset)", re.I)
     for wd in sorted(Path(run_dir).glob("blue-team*")):
         if not wd.is_dir():

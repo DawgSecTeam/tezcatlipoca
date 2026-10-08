@@ -45,6 +45,31 @@ def red_pacing_caps():
             "max_concurrent_down_endgame": 6}
 
 
+def _existing_blackbox():
+    """realm/beacon/evasion blocks from the on-disk bad-auto config, if any.
+
+    These describe the club's C2 infrastructure (tavern on the malware-dev VM,
+    the per-transport imix table, the raw-socket channel), NOT the run's pacing
+    — so this stage owns llm/pacing/deploy and must carry them through instead
+    of wiping them. Before this, stage_red rewrote config.yaml with no realm
+    block at all, which silently dropped every run to the raw-socket beacon
+    tier: realm_plant on red01 saw realm.enabled false and the "newly improved"
+    multi-transport beacons were never planted on a range.
+    """
+    path = core.BAD_AUTO / "config.yaml"
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8")
+    try:
+        return json.loads(text) or {}
+    except ValueError:
+        try:
+            import yaml
+            return yaml.safe_load(text) or {}
+        except Exception:
+            return {}
+
+
 def stage_red(args, comp, creds, run_dir):
     # Local endpoints (llama.cpp/qwen) are slow: tighter call timeout and no
     # JSON-retry double-call, or one decision can eat 8-16 min of a 90-min event.
@@ -87,6 +112,21 @@ def stage_red(args, comp, creds, run_dir):
                    **({"red_subnet": args.red_subnet} if args.red_subnet else {}),
                    **({"red_seg_ip": args.red_seg_ip} if args.red_seg_ip else {})},
     }
+    # The operator's C2 blocks survive: stage_red builds llm/pacing/deploy/limits,
+    # and `badauto deploy` stages this config onto red01, where realm_plant runs.
+    carried = _existing_blackbox()
+    for key in ("realm", "beacon", "evasion", "naming"):
+        if carried.get(key):
+            cfg[key] = carried[key]
+    # ...and so does the REST of the operator's deploy block. stage_red builds this
+    # config from scratch, so anything it does not set is lost: `template` most of
+    # all, which then fell back to badauto's built-in default and failed the first
+    # clean clone of a red01 (the lookup is skipped when the VM already exists, so
+    # this only broke every other run — the one that follows a teardown). Keys the
+    # harness owns (red_ip/red_gw/red_storage/red_vmid/mode/subnet) still win.
+    op_deploy = carried.get("deploy") or {}
+    cfg["deploy"] = {**{k: v for k, v in op_deploy.items() if k not in cfg["deploy"]},
+                     **cfg["deploy"]}
     # Atomic: a torn config.yaml would break every subsequent badauto call, and the
     # file may name an internal endpoint.
     write_text_atomic(core.BAD_AUTO / "config.yaml", json.dumps(cfg, indent=2), mode=0o600)
@@ -106,12 +146,17 @@ def stage_red(args, comp, creds, run_dir):
         args.red_tunnel = tunnel
     red_mode = args.red_mode or "routed (bad-auto default)"
     log(f"deploying red01 at {args.red_ip} (storage {args.red_storage}, mode {red_mode})")
-    procs.run(["python3", "-m", "badauto", "deploy", "--competition", str(comp.resolve()), "--start"],
+    procs.run(["python3", "-m", "badauto", "deploy", "--competition", str(comp.resolve())],
               cwd=core.BAD_AUTO, env=env, timeout=1800)
     # Record red01's identity now, while it is known: bad-auto's config.yaml is a rewritten
     # singleton, so a later reader of it can name ANOTHER run's red01 — the manifest is the
     # only per-run source of truth the collector may dial (INV5). Recorded before the LLM
     # gate below so a run that dies there still lets teardown collect from red01.
+    # The vmid is optional on the command line but never optional to teardown,
+    # which has to assert the VM is gone: fill it from bad-auto's default so the
+    # manifest (and the destroy verification) always knows the number.
+    if not getattr(args, "red_vmid", None):
+        args.red_vmid = core.bad_auto_deploy_default("red_vmid")
     test_folder.record_red_agent(args)
 
     red_base = cfg["llm"]["base_url"]
@@ -130,6 +175,21 @@ def stage_red(args, comp, creds, run_dir):
     # Runs last so a seed failure stops the run before scored time (same contract as
     # the two gates above — a scrim with no beacons planted is not the event asked for).
     seed_assume_breach(args, run_dir)
+    # The deploy/seed has just written itself into every box's logs — auth.log, the
+    # journal, apt history, the shell histories. Wipe them BEFORE blue can log in:
+    # an agent that greps those gets the whole plant, names and all, which is the
+    # one thing the randomized naming cannot protect against. Best-effort: a wipe
+    # that fails is reported, never fatal.
+    try:
+        from scrim import clean_trails
+        clean_trails.clean_trails(comp, creds)
+    except Exception as e:                                   # noqa: BLE001 - never fatal
+        log(f"WARNING: trail wipe failed ({type(e).__name__}: {e}) — blue may be able "
+            f"to read the deploy out of the box logs")
+    # Only now start the director: it must load the SEEDED world, not an empty one
+    # (and red's event clock should start at T0, which the harness stamps right
+    # after stage_red returns).
+    red_link.start_red_director(args)
 
 
 def seed_assume_breach(args, run_dir=None):

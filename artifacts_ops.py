@@ -117,6 +117,9 @@ from artifacts_lib.manifest import (
     update_manifest,
 )
 from artifacts_lib.paths import (
+    latest_run_key,
+    next_run_key,
+    run_folders,
     artifacts_root,
     comp_name,
     run_id_from_state,
@@ -198,6 +201,9 @@ __all__ = [
     'run_id_from_state',
     'test_dir',
     'test_key',
+    'next_run_key',
+    'latest_run_key',
+    'run_folders',
     'plan_targets',
     'want_label',
     'render_report_skeleton',

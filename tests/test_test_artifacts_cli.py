@@ -229,7 +229,7 @@ class TestPlan(CliTestCase):
                                          "blue": {"present": False}})
         code, out = self.run_cli("plan", "demo", RUN_ID)
         self.assertEqual(code, 0, out)
-        self.assertIn("/var/lib/bad-auto/report-*.md", out)
+        self.assertIn("/tmp/ba/report-*.md", out)   # the sudo-staged, readable copies
         self.assertIn("evidence/red/", out)
         self.assertNotRegex(out, r"(?m)^\s+\? ->",
                             "every wanted item must be named, whatever shape its want dict has")

@@ -8,7 +8,7 @@ from .constants import SIDES, SKIPPED
 from .env import in_worktree, iso
 from .index import update_index
 from .manifest import ensure_test, load_manifest, record_paths, update_manifest
-from .paths import test_dir, test_key
+from .paths import latest_run_key, test_dir, test_key
 from .plan import plan_targets
 from .report import write_report_skeleton, write_stub
 from .status import warn_summary, why_missing
@@ -71,9 +71,12 @@ def collect_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=
         # `artifacts_ops.default_transport` keep steering the teardown collector.
         import artifacts_ops
         transport = artifacts_ops.default_transport()
-    prior = load_manifest(test_dir(comp_dir, test_key(comp_dir, run_id)))
+    # The harness mints a per-run folder now, so the folder to collect is the
+    # newest one belonging to this deploy run id — not the base key.
+    key, run_id = latest_run_key(comp_dir, run_id)
+    prior = load_manifest(test_dir(comp_dir, key))
     path, manifest = ensure_test(
-        comp_dir, kind=prior.get("kind") or "deploy", run_id=run_id, script=script,
+        comp_dir, kind=prior.get("kind") or "deploy", run_id=run_id, key=key, script=script,
         teams=len(teams) if hasattr(teams, "__len__") else teams,
         boxes=[b.get("name") for b in boxes] if boxes else None,
         node=node, nodes=nodes)

@@ -28,12 +28,15 @@ def plan_targets(manifest, *, comp_dir=None):
                      "missing red report after a normal harness run is expected unless the "
                      "harness or teardown collected before that"),
             "want": [
-                {"remote": "/var/lib/bad-auto/report-*.md", "to": "evidence/red/",
+                # The sudo-staged copies: the originals are 0600 root, and one
+                # unreadable file used to make the collector give up on the whole
+                # red target (taking world.json with it).
+                {"remote": "/tmp/ba/report-*.md", "to": "evidence/red/",
                  "canonical": SIDES["red"]},
-                {"remote": "/var/lib/bad-auto/events.jsonl",
+                {"remote": "/tmp/ba/events.jsonl",
                  "local": "evidence/red/events.jsonl"},
-                {"remote": "/var/lib/bad-auto/world.json", "local": "evidence/red/world.json"},
-                {"remote": "/var/lib/bad-auto/report-secrets.md",
+                {"remote": "/tmp/ba/world.json", "local": "evidence/red/world.json"},
+                {"remote": "/tmp/ba/report-secrets.md",
                  "local": "evidence/red/report-secrets.md"},
                 {"cmd": "sudo -n journalctl -u bad-auto --no-pager",
                  "local": "evidence/red/bad-auto-journal.log"},

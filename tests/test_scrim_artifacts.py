@@ -76,6 +76,11 @@ def make_args(comp, **over):
 
 class TmpCase(unittest.TestCase):
     def setUp(self):
+        # `_red_vm_still_exists` asks the real cluster (range_ops.live_vmids): with a
+        # resolvable vmid a live red01 made teardown assert "STILL PRESENT" and fail
+        # tests that are about ordering. Pin it for every test in this file.
+        self.addCleanup(mock.patch.object(teardown_stage, "_red_vm_still_exists",
+                                          lambda *a, **k: False).start)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -123,13 +128,23 @@ class RunDirResolution(TmpCase):
         self.assertEqual(man["paths"]["run_dir"], str(test_dir))
 
     def test_untagged_comp_gets_one_stable_key(self):
+        """The untagged fallback is stable per deploy AND per run.
+
+        Stable: a resume returns to the folder its first attempt made. Per run: a
+        second fresh run gets its own folder, so one run's REPORT.md can never sit
+        next to another's (the 2026-10-08 evidence-mixing bug)."""
         comp = make_comp(self.root, name="legacy", run_id=None)
-        first = self.resolve(make_args(comp), comp=comp)
-        second = self.resolve(make_args(comp), comp=comp)
-        self.assertEqual(first[1], second[1])
-        self.assertTrue(first[1].name.startswith("untagged-"))
+        first_run, first_test = self.resolve(make_args(comp), comp=comp)
+        self.assertTrue(first_test.name.startswith("untagged-"))
+        self.assertEqual(first_run, first_test)
+        resumed = self.resolve(make_args(comp, resume_event=True), comp=comp)
+        self.assertEqual(resumed[0], first_run)
+        self.assertEqual(resumed[1], first_test)
+        second_run, second_test = self.resolve(make_args(comp), comp=comp)
+        self.assertNotEqual(second_test, first_test)
+        self.assertTrue(second_test.name.endswith("-run2"))
         folders = sorted(p.name for p in (comp / ao.DIRNAME).iterdir() if p.is_dir())
-        self.assertEqual(folders, [first[1].name])
+        self.assertEqual(folders, [first_test.name, second_test.name])
 
     def test_resume_resolves_to_the_same_folder(self):
         first_run, first_test = self.resolve(make_args(self.comp))
@@ -137,18 +152,23 @@ class RunDirResolution(TmpCase):
         (first_run / "T0.txt").write_text(json.dumps({"t0": 1000.0, "duration_min": 90}))
         (first_run / "run.json").write_text(json.dumps({"phase": "event", "t0": 1000.0}))
         # the --resume-event call: a fresh args object, no --run-dir
-        second_run, second_test = self.resolve(make_args(self.comp))
+        second_run, second_test = self.resolve(make_args(self.comp, resume_event=True))
         self.assertEqual(second_run, first_run)
         self.assertEqual(second_test, first_test)
         folders = sorted(p.name for p in (self.comp / ao.DIRNAME).iterdir() if p.is_dir())
         self.assertEqual(folders, [RUN_ID], "a resume must not mint a second key")
+        # ...but a second RUN does, which is what keeps two runs' evidence apart
+        third_run, third_test = self.resolve(make_args(self.comp))
+        self.assertNotEqual(third_test, first_test)
+        self.assertEqual(third_run, third_test)
+        self.assertTrue(third_test.name.endswith("-run2"))
 
     def test_recorded_run_dir_is_authoritative_for_the_resume(self):
         elsewhere = self.root / "elsewhere-run"
         elsewhere.mkdir()
         first = self.resolve(make_args(self.comp, run_dir=str(elsewhere)))
         self.assertEqual(first[0], elsewhere)
-        second = self.resolve(make_args(self.comp, run_dir=None))
+        second = self.resolve(make_args(self.comp, run_dir=None, resume_event=True))
         self.assertEqual(second[0], elsewhere, "the recorded paths.run_dir is authoritative")
         self.assertEqual(second[1], first[1])
         folders = sorted(p.name for p in (self.comp / ao.DIRNAME).iterdir() if p.is_dir())
@@ -248,7 +268,11 @@ class AgentIdentity(TmpCase):
         with mock.patch.object(procs, "run",
                                lambda *a, **k: subprocess.CompletedProcess(a[0], 0, "", "")), \
                 mock.patch.object(red_link, "check_red_llm", lambda *a, **k: True), \
-                mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"):
+                mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"), \
+                mock.patch.object(red_stage.red_plant_ops, "seed_via_red01",
+                                  lambda *a, **k: subprocess.CompletedProcess(
+                                      ["seed"], 0, "seeded", "")), \
+                mock.patch.object(red_link, "start_red_director", lambda *a, **k: None):
             # creds must be real-shaped: routed red runs the pre-T0 reachability gate,
             # which reads ENGINE_IP/ADMIN_PW (mocked run answers rc=0 for it here)
             red_stage.stage_red(args, self.comp, {"ENGINE_IP": "10.0.0.193",

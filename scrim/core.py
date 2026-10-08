@@ -54,6 +54,23 @@ def vm_username():
     return os.environ.get("TF_VAR_vm_username", "sysadmin")
 
 
+def bad_auto_deploy_default(field, fallback=None):
+    """bad-auto's built-in default for `deploy.<field>`.
+
+    Teardown has to assert the vmid `badauto destroy` will act on, and none of the
+    run's own sources always carry it: `--red-vmid` is optional, the harness-written
+    config.yaml omits it, and a manifest recorded before this change has null. The
+    default in bad-auto's source is what its CLI actually falls back to, so read it
+    from there rather than guessing."""
+    import re as _re
+    try:
+        text = (BAD_AUTO / "badauto" / "config.py").read_text(encoding="utf-8")
+    except OSError:
+        return fallback
+    m = _re.search(rf'"{_re.escape(field)}":\s*(\d+)', text)
+    return int(m.group(1)) if m else fallback
+
+
 def is_local_endpoint(base_url):
     """True for an operator-side (non-openrouter) LLM endpoint: slower, key-less, tunnelled."""
     return "openrouter" not in base_url

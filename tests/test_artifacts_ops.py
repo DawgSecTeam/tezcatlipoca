@@ -22,7 +22,9 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import artifacts_ops as ao
 
-RED_REPORT = "/var/lib/bad-auto/report-*.md"
+# the red artifacts are pulled from the sudo-staged copies (/tmp/ba): the originals
+# are 0600 root, and one unreadable file used to mark the whole target unreachable
+RED_REPORT = "/tmp/ba/report-*.md"
 
 
 def make_comp(root, *, run_id="run-1a2b3c4d", comp="demo"):
@@ -244,9 +246,9 @@ class TestCollect(unittest.TestCase):
 
     def test_newest_report_becomes_the_canonical_document(self):
         calls = []
-        files = {"/var/lib/bad-auto/report-20261003-0100.md": "old",
-                 "/var/lib/bad-auto/report-20261003-0200.md": "new",
-                 "/var/lib/bad-auto/events.jsonl": '{"a":1}\n'}
+        files = {"/tmp/ba/report-20261003-0100.md": "old",
+                 "/tmp/ba/report-20261003-0200.md": "new",
+                 "/tmp/ba/events.jsonl": '{"a":1}\n'}
         os.utime(self.path, None)
         collection = ao.collect(self.path, self.targets,
                                 transport=fake_transport(files, calls))
@@ -275,7 +277,7 @@ class TestCollect(unittest.TestCase):
 
     def test_second_run_does_not_refetch_and_keeps_provenance(self):
         calls = []
-        files = {"/var/lib/bad-auto/report-20261003-0200.md": "new"}
+        files = {"/tmp/ba/report-20261003-0200.md": "new"}
         first = ao.collect(self.path, self.targets, transport=fake_transport(files, calls))
         sha = first["derived"][0]["sha256"]
         calls.clear()
@@ -287,7 +289,7 @@ class TestCollect(unittest.TestCase):
         self.assertTrue(second["derived"][0]["reverified_at"])
 
     def test_tampered_artifact_is_recollected_rather_than_trusted(self):
-        files = {"/var/lib/bad-auto/report-20261003-0200.md": "new"}
+        files = {"/tmp/ba/report-20261003-0200.md": "new"}
         ao.collect(self.path, self.targets, transport=fake_transport(files))
         collected = self.path / "evidence" / "red" / "report-20261003-0200.md"
         collected.write_text("tampered")
@@ -298,7 +300,7 @@ class TestCollect(unittest.TestCase):
         self.assertTrue(second["derived"][0]["sha256"])
 
     def test_dry_run_touches_nothing(self):
-        files = {"/var/lib/bad-auto/report-20261003-0200.md": "new"}
+        files = {"/tmp/ba/report-20261003-0200.md": "new"}
         collection = ao.collect(self.path, self.targets, transport=fake_transport(files),
                                 dry_run=True)
         self.assertTrue(all(i["status"] == ao.SKIPPED
@@ -333,7 +335,7 @@ class TestCollect(unittest.TestCase):
                 {"remote": "/x", "local": "evidence/x"}]}])
 
     def test_red_journal_is_captured_through_the_command_channel(self):
-        files = {"/var/lib/bad-auto/events.jsonl": '{"a":1}\n'}
+        files = {"/tmp/ba/events.jsonl": '{"a":1}\n'}
         calls = []
         collection = ao.collect(self.path, self.targets,
                                 transport=fake_transport(files, calls,
@@ -471,7 +473,7 @@ class TestWarningsAndStubs(unittest.TestCase):
                                                       "ssh": {"host": "10.0.0.198"}},
                                               "blue": {"present": False}})
         targets = ao.plan_targets(ao.load_manifest(self.path), comp_dir=self.comp)
-        files = {"/var/lib/bad-auto/report-20261003-0200.md": "the red report"}
+        files = {"/tmp/ba/report-20261003-0200.md": "the red report"}
         collection = ao.collect(self.path, targets, transport=fake_transport(files))
         ao.finalize(self.path, manifest=ao.load_manifest(self.path))
         self.assertEqual(ao.warn_summary(collection, ao.load_manifest(self.path), self.path), [])
@@ -802,7 +804,7 @@ class ScpRetry(unittest.TestCase):
                                self._fake_run(3, str(d / "report.md"))), \
                 patch.object(ao.time, "sleep", side_effect=sleeps.append):
             got = ao._scp_files({"key": "/k", "user": "sysadmin", "host": "10.0.0.198",
-                                 "jump": "jump-opt"}, "/var/lib/bad-auto/report-*.md", d)
+                                 "jump": "jump-opt"}, "/tmp/ba/report-*.md", d)
         self.assertEqual([p.name for p in got], ["report.md"])
         self.assertEqual(sleeps, [10], "exactly one inter-round pause")
 
@@ -817,5 +819,5 @@ class ScpRetry(unittest.TestCase):
                 patch.object(ao.time, "sleep", lambda s: None):
             with self.assertRaises(ao.Unreachable) as raised:
                 ao._scp_files({"key": "/k", "user": "sysadmin", "host": "10.0.0.198"},
-                              "/var/lib/bad-auto/report-*.md", d)
+                              "/tmp/ba/report-*.md", d)
         self.assertIn("No route to host", str(raised.exception))
