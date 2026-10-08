@@ -84,10 +84,14 @@ def destroy_red(comp_dir, env=None, timeout=900):
     That is the scale8 soak leak (red01 998 alive after the driver printed DONE).
     The harness destroys it in its own teardown; this is the step the standalone
     teardown was missing for the run whose harness died."""
+    # BAuto_COMPETITION_DIR must be set: bad-auto's destroy verifies the VM's deploy
+    # stamp against the competition directory, and without it the identity guard
+    # refuses the target ("mismatched target is refused") — caught live 2026-10-08,
+    # where destroy-competition's env reached the call without it.
+    env = {**(env if env is not None else os.environ), "BAuto_COMPETITION_DIR": str(comp_dir)}
     return subprocess.run(
         ["python3", "-m", "badauto", "destroy", "--competition", str(comp_dir), "--yes"],
-        cwd=str(BAD_AUTO), env=env or {**os.environ, "BAuto_COMPETITION_DIR": str(comp_dir)},
-        capture_output=True, text=True, timeout=timeout)
+        cwd=str(BAD_AUTO), env=env, capture_output=True, text=True, timeout=timeout)
 
 
 def _seed_red(ssh_key, red_ip, depth, timeout=3600):

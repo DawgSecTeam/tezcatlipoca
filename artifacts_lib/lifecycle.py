@@ -88,7 +88,7 @@ def stage_red_artifacts(manifest, timeout=75):
 
 def collect_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=None,
                          nodes=None, script="destroy-competition.py", transport=None,
-                         dry_run=False, timeout=45, echo=print):
+                         dry_run=False, timeout=45, echo=print, stage_red=None):
     """Teardown's whole artifact step: the one call destroy-competition.py makes.
 
     Ordering is the entire point. destroy-competition.py calls this after the confirmation
@@ -124,7 +124,10 @@ def collect_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=
     update_manifest(path, teardown={"at": iso(), "by": script, "dry_run": bool(dry_run),
                                    "collector_timeout_s": timeout})
     manifest = load_manifest(path)
-    stage_red_artifacts(manifest)
+    # Injectable like `transport`: the offline lifecycle tests must not reach the
+    # network at all (their whole point), and a fixture host would otherwise wait
+    # out a real connect timeout.
+    (stage_red or stage_red_artifacts)(manifest)
     collection = collect(path, plan_targets(manifest, comp_dir=comp_dir), transport=transport,
                          dry_run=dry_run, timeout=timeout)
     # The verdict and gate table come from scrim-report.py, which reads only the run dir (no
