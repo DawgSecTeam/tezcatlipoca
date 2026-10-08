@@ -35,28 +35,33 @@ class RenderPolicyTest(unittest.TestCase):
                       '"dipam1@", "sdavis24@", "ckegly@",]', text)
         self.assertIn('"tag:range-router": ["cyberrange-infra@"],', text)
         self.assertIn('"192.168.0.0/16": ["tag:range-router"]', text)
-        self.assertEqual(text.count('"action": "accept"'), 1)
+        self.assertEqual(text.count('"src"'), 1)
+        self.assertIn('{"src": ["group:full-access"], "dst": ["*"], "ip": ["*"]},', text)
 
-    def test_participant_team_gets_scoped_acl(self):
+    def test_participant_team_gets_scoped_grants(self):
         text = ra.render_policy(FULL_ACCESS, COMPS_ONE)
-        self.assertIn('"tag:comp-cde-2026-team-101"', text)  # tagOwners entry
-        self.assertIn('{"action": "accept", "src": ["tag:comp-cde-2026-team-101"], '
-                      '"dst": ["192.168.101.0/24:*", "10.0.0.252:80"]},', text)
-        # team 102 has no participants: no ACL line, no tagOwners entry
-        self.assertNotIn("comp-cde-2026-team-102", text)
-        self.assertEqual(text.count('"action": "accept"'), 2)
+        # participants keyed by USERNAME (@-form), not node tag
+        self.assertIn('"comp-cde-2026-alice@"', text)
+        self.assertIn('"comp-cde-2026-bob@"', text)
+        self.assertIn('{"src": ["comp-cde-2026-alice@", "comp-cde-2026-bob@"], '
+                      '"dst": ["192.168.101.0/24"], "ip": ["*"]},', text)
+        self.assertIn('"dst": ["10.0.0.252"], "ip": ["80"]},', text)
+        # team 102 has no participants: no grant lines
+        self.assertNotIn("192.168.102.0/24", text)
+        self.assertEqual(text.count('"src"'), 3)
 
     def test_two_comps_deterministic_and_scoped(self):
         a = ra.render_policy(FULL_ACCESS, COMPS_TWO)
         b = ra.render_policy(FULL_ACCESS, list(reversed(COMPS_TWO)))
         self.assertEqual(a, b)  # sorted by comp id: output order is canonical
-        self.assertIn("tag:comp-scrim-two-team-130", a)
-        self.assertIn('"192.168.130.0/24:*", "10.0.0.250:80"', a)
+        self.assertIn('"comp-scrim-two-carol@"', a)
+        self.assertIn('"dst": ["192.168.130.0/24"], "ip": ["*"]', a)
+        self.assertIn('"dst": ["10.0.0.250"], "ip": ["80"]', a)
 
     def test_engine_ip_without_prefix(self):
         comps = [{"comp_id": "x", "engine_ip": "10.0.0.7",
                   "teams": [{"identifier": "101", "participants": ["a"]}]}]
-        self.assertIn('"10.0.0.7:80"', ra.render_policy(FULL_ACCESS, comps))
+        self.assertIn('"dst": ["10.0.0.7"], "ip": ["80"]', ra.render_policy(FULL_ACCESS, comps))
 
     def test_valid_hujson_up_to_comments(self):
         # strip // comments and trailing commas -> must parse as strict JSON
@@ -170,7 +175,8 @@ class RouteConflictTest(unittest.TestCase):
 
 class VerifyRemoteAccessTest(unittest.TestCase):
     STATE = {"remote_access": {"enabled": True, "comp_id": "mine",
-                               "router_node": "eng-mine"}}
+                               "router_node": "eng-mine",
+                               "participants": ["comp-mine-alice"]}}
 
     def test_disabled_is_skip(self):
         ok, problems = ra.verify_remote_access({}, "mine", ["101"])
@@ -180,10 +186,19 @@ class VerifyRemoteAccessTest(unittest.TestCase):
         routes = [{"name": "eng-mine",
                    "approved_routes": ["192.168.101.0/24"],
                    "subnet_routes": ["192.168.101.0/24"]}]
-        with _hs_patch(routes=routes):
+        with _hs_patch(routes=routes, policy_text='"comp-mine-alice@"'):
             ok, problems = ra.verify_remote_access(self.STATE, "mine", ["101"])
         self.assertTrue(ok)
         self.assertEqual(problems, [])
+
+    def test_policy_missing_participant_fails(self):
+        routes = [{"name": "eng-mine",
+                   "approved_routes": ["192.168.101.0/24"],
+                   "subnet_routes": ["192.168.101.0/24"]}]
+        with _hs_patch(routes=routes, policy_text=""):
+            ok, problems = ra.verify_remote_access(self.STATE, "mine", ["101"])
+        self.assertFalse(ok)
+        self.assertTrue(any("grant" in p for p in problems))
 
     def test_unapproved_route_fails(self):
         routes = [{"name": "eng-mine", "approved_routes": [], "subnet_routes": []}]

@@ -184,8 +184,13 @@ ssh+sudo (`TEZ_HEADSCALE_*` in `.env`; remote access ships with every deploy —
   keep full access via `group:full-access`.
 - **v0.29 CLI quirks**: there is **no `routes` command** (removed upstream — approvals ride the
   policy's `autoApprovers`; listing is `nodes list-routes`); policy v2 syntax requires
-  `@`-suffixed usernames in groups (`"hnasher1@"`); `policy check` wants `--file`; `users
-  destroy -n <name> --force`; `nodes delete -i <id> --force`.
+  `@`-suffixed usernames in groups AND in grant/acl sources (a bare name parses as a host
+  reference and fails validation); `policy check` wants `--file`; `users destroy -n <name>
+  --force` refuses while the user owns nodes; `nodes delete -i <id> --force`.
+- **Tag-sourced grants do not reach routers' packet filters** (live-proven 2026-10-08): a node
+  enrolled with a tagged key sees its netmap routes filtered correctly, but every tag-sourced
+  dial black-holes at the router — user and group sources work fine. tezcatlipoca therefore keys
+  participant grants on usernames, not tags (docs/remote-access.md). Upstream-worthy defect.
 - **The VPS is itself a tailnet node** (`headscale-vps`, 100.64.0.21); the mgmt-LAN subnet
   router is `headscale-network-bridge` (100.64.0.4, hnasher1) advertising `10.0.0.0/24` — its
   route predates the policy and stays Approved. Watch the classic trap: **a tailnet bridge can

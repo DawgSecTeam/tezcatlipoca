@@ -14,13 +14,22 @@ Caddy on a VPS; embedded DERP on the same host relays participant traffic). See
 | Range object | Headscale object |
 |---|---|
 | Engine (per deploy) | tailscale node `eng-<comp-id>`, tag `tag:range-router`, advertising every team `/24` |
-| Participant person | user `comp-<id>-<person>` + single-use preauth key (TTL `TEZ_REMOTE_KEY_TTL`, default 72h) |
+| Participant person | user `comp-<id>-<person>` + single-use UNTAGGED preauth key (TTL `TEZ_REMOTE_KEY_TTL`, default 72h) |
 | Person → team | `people.json` roster in the comp dir: `{"team1": ["alice"], ...}` |
-| Team `<id>` grant | ACL: `tag:comp-<id>-team-<id>` → `192.168.<id>.0/24:*` + `10.0.0.<engine>:80` |
-| Pre-existing users | `group:full-access` → `*:*` (the policy-less allow-all they had before 2026-10-08) |
+| Team `<id>` grant | grants keyed on the usernames: `comp-<id>-<person>@` → `192.168.<id>.0/24` (all ports) + `10.0.0.<engine>` (port 80) |
+| Pre-existing users | `group:full-access` → `*` (the policy-less allow-all they had before 2026-10-08) |
 
 One router advertises ALL team subnets — per-team router VMs are not needed: tailscaled on the
 engine enforces the ACL per destination subnet before a packet ever reaches a team bridge.
+
+**Why usernames, not tags, key the participant grants** (live-proven 2026-10-08, headscale
+v0.29.1): a node enrolled with a tagged key gets its netmap routes filtered correctly, but
+headscale never expands tag sources into the ROUTERS' packet filters — every tag-sourced dial
+black-holes at the router while group/user-sourced dials pass. So participant devices enroll
+UNTAGGED (their identity is the person's user) and each team's grant names its people with
+`@`-suffixed usernames (bare usernames parse as host references in the v2 policy). Port
+granularity needs the `grants` form: one line for the /24 (`ip: ["*"]`), one for the scoreboard
+(`ip: ["80"]`).
 
 ## Traffic path
 
@@ -60,8 +69,9 @@ engine's `192.168/16 → 192.168/16` FORWARD DROP, and the portless team bridges
    `tailscale up --login-server … --authkey …` commands) and `keys.json` (gitignored, 0600).
 
 Teardown (`destroy-competition.py`) deletes the engine's headscale node (revoking its key),
-deletes the comp's participant users, and re-applies the policy without this comp —
-warn-and-proceed like the rest of teardown.
+deletes each participant's devices first (headscale refuses `users destroy` while a user still
+owns nodes: "user not empty"), then the comp's participant users, and re-applies the policy
+without this comp — warn-and-proceed like the rest of teardown.
 
 ## Running it
 

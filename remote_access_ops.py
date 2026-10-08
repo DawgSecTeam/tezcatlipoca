@@ -94,37 +94,39 @@ def render_policy(full_access_users, comps):
 
     `full_access_users`: headscale usernames WITH the trailing @ the v2 policy
     syntax requires. `comps`: [{"comp_id", "engine_ip", "teams": [{"identifier",
-    "participants"}]}]. Only teams that actually have participants get an ACL line:
-    a tag nobody holds grants nothing but clutters the policy."""
+    "participants"}]}]. Grants are keyed on the participant's USERNAME, not a node
+    tag: live-proven 2026-10-08, headscale v0.29 builds routers' packet filters for
+    user/group sources but NOT for tag sources (tag-sourced dials black-hole at the
+    router while netmap route visibility still works), so participant nodes enroll
+    untagged and each team's grant names its people directly. Two grant lines per
+    team: the whole /24 on every port, the scoreboard on 80 only. Teams without
+    participants emit nothing."""
     out = []
     out.append("{")
     out.append("  // Managed by tezcatlipoca (remote_access_ops.render_policy) — do not")
     out.append("  // hand-edit: regenerated from tezcatlipoca-remote-access.json on every")
     out.append("  // deploy/teardown that touches remote access. Foundation behavior:")
     out.append("  // the tailnet ran with NO policy (allow-all) until 2026-10-08; the")
-    out.append("  // full-access group preserves that for the pre-existing users.")
+    out.append("  // full-access grant preserves that for the pre-existing users.")
     users = ", ".join(f'"{u}"' for u in full_access_users)
     out.append(f'  "groups": {{"group:full-access": [{users},]}},')
     out.append("  \"tagOwners\": {")
     out.append('    "tag:range-router": ["cyberrange-infra@"],')
-    for comp in sorted(comps, key=lambda c: c["comp_id"]):
-        for team in sorted(comp["teams"], key=lambda t: str(t["identifier"])):
-            if team["participants"]:
-                out.append(f'    "{team_tag(comp["comp_id"], team["identifier"])}": '
-                           f'["cyberrange-infra@"],')
     out.append("  },")
     out.append('  "autoApprovers": {"routes": {"192.168.0.0/16": ["tag:range-router"]}},')
-    out.append('  "acls": [')
-    out.append('    {"action": "accept", "src": ["group:full-access"], "dst": ["*:*"]},')
+    out.append('  "grants": [')
+    out.append('    {"src": ["group:full-access"], "dst": ["*"], "ip": ["*"]},')
     for comp in sorted(comps, key=lambda c: c["comp_id"]):
         ip = comp["engine_ip"]
-        scoreboard = f'"{ip if ip.startswith("10.0.0.") else "10.0.0." + ip}:80"'
+        scoreboard = f'"{ip if ip.startswith("10.0.0.") else "10.0.0." + ip}"'
         for team in sorted(comp["teams"], key=lambda t: str(t["identifier"])):
             if not team["participants"]:
                 continue
-            tag = team_tag(comp["comp_id"], team["identifier"])
-            out.append(f'    {{"action": "accept", "src": ["{tag}"], '
-                       f'"dst": ["{team_subnet(team["identifier"])}:*", {scoreboard}]}},')
+            srcs = ", ".join(f'"comp-{comp["comp_id"]}-{p}@"'
+                             for p in sorted(team["participants"]))
+            out.append(f'    {{"src": [{srcs}], '
+                       f'"dst": ["{team_subnet(team["identifier"])}"], "ip": ["*"]}},')
+            out.append(f'    {{"src": [{srcs}], "dst": [{scoreboard}], "ip": ["80"]}},')
     out.append("  ],")
     out.append("}")
     return "\n".join(out) + "\n"
@@ -277,7 +279,12 @@ def _ensure_user(name):
 
 
 def _mint_preauth_key(user_id, tags, expiration):
-    out = hs_json(f"preauthkeys create -u {user_id} --tags {tags} --expiration {expiration}")
+    """`tags` may be None for an untagged key (node keeps its user identity) or a
+    comma-separated tag list."""
+    args = f"preauthkeys create -u {user_id} --expiration {expiration}"
+    if tags:
+        args += f" --tags {tags}"
+    out = hs_json(args)
     key = out.get("key")
     if not key:
         raise SystemExit(f"  ERROR: preauthkeys create returned no key material: "
@@ -386,14 +393,23 @@ def _engine_cmd(ctx, cmd, **kw):
 
 
 def engine_tailscale_enrolled(ctx, server_url):
+    """True when the engine's tailscaled is Running against OUR control server.
+
+    `status --json` reports the control server as CurrentTailnet.Name (bare host,
+    no scheme) on current tailscale versions; older shapes exposed ControlURL —
+    accept either, and fail the check on any JSON the field hunt can't satisfy."""
     r = _engine_cmd(ctx, "sudo tailscale status --json 2>/dev/null || true",
                     check=False, timeout=30, capture=True, step="tailscale status")
     try:
         data = json.loads(r.stdout or "{}")
     except ValueError:
         return False
-    control = (data.get("CurrentTailnet") or {}).get("ControlURL") or ""
-    return data.get("BackendState") == "Running" and server_url.rstrip("/") in control
+    if data.get("BackendState") != "Running":
+        return False
+    tailnet = data.get("CurrentTailnet") or {}
+    host = server_url.rstrip("/").removeprefix("https://").removeprefix("http://")
+    control_url = (tailnet.get("ControlURL") or "").rstrip("/")
+    return host in (control_url, (tailnet.get("Name") or "").rstrip("/"))
 
 
 def enroll_engine_router(ctx, comp_id, all_identifiers):
@@ -405,8 +421,16 @@ def enroll_engine_router(ctx, comp_id, all_identifiers):
     hostname = router_node_name(comp_id)
     if not engine_tailscale_enrolled(ctx, server_url):
         print("  Installing tailscale on the engine (first run)...")
-        _engine_cmd(ctx, f"sudo {TAILSCALE_INSTALL} > /dev/null 2>&1 || true; "
-                         "tailscale version", timeout=600, step="install tailscale")
+        # Retry loop, not `|| true`: the engine's apt machinery races phase 3
+        # (documented class — masked install failures resurface as a 127 on the
+        # version check), and a silently-missing binary is worse than a loud one.
+        _engine_cmd(ctx,
+                    "for i in 1 2 3; do command -v tailscale >/dev/null && break; "
+                    f"sudo {TAILSCALE_INSTALL} > /tmp/ts-install.log 2>&1 || true; "
+                    "sleep 5; done; "
+                    "command -v tailscale >/dev/null || { echo 'tailscale install "
+                    "failed:'; cat /tmp/ts-install.log; exit 127; }; tailscale version",
+                    timeout=900, step="install tailscale")
         user_id = _infra_user_id()
         key = _mint_preauth_key(user_id, "tag:range-router", "12h")
         print(f"  Enrolling engine as headscale node '{hostname}' "
@@ -424,15 +448,16 @@ def enroll_engine_router(ctx, comp_id, all_identifiers):
                 step="tailscale status confirm")
 
 
-def push_remote_access_firewall(ctx, local_ids, satellite_ids):
+def push_remote_access_firewall(tf_ctx, engine_mgmt_ip, local_ids, satellite_ids):
     """The per-deploy SNAT/forward unit — separate from the template's
-    range-firewall.sh so the engine template hash never moves."""
-    script = remote_access_firewall_script(local_ids, satellite_ids, ctx.engine_mgmt_ip)
+    range-firewall.sh so the engine template hash never moves. `tf_ctx` is the
+    terraform connection dict every engine SSH hop takes."""
+    script = remote_access_firewall_script(local_ids, satellite_ids, engine_mgmt_ip)
     service, timer = remote_access_systemd_units()
     s_b64 = base64.b64encode(script.encode()).decode()
     svc_b64 = base64.b64encode(service.encode()).decode()
     tmr_b64 = base64.b64encode(timer.encode()).decode()
-    _engine_cmd(ctx, (
+    _engine_cmd(tf_ctx, (
         f"echo '{s_b64}' | base64 -d | sudo tee /usr/local/sbin/range-remote-access.sh "
         f"> /dev/null && sudo chmod +x /usr/local/sbin/range-remote-access.sh && "
         f"echo '{svc_b64}' | base64 -d | sudo tee /etc/systemd/system/range-remote-access.service "
@@ -441,8 +466,8 @@ def push_remote_access_firewall(ctx, local_ids, satellite_ids):
         f"> /dev/null && "
         "sudo systemctl daemon-reload && sudo systemctl enable --now range-remote-access.timer"
     ), timeout=30, step="install range-remote-access unit+timer")
-    _engine_cmd(ctx, "sudo /usr/local/sbin/range-remote-access.sh && "
-                     "sudo iptables -t nat -S POSTROUTING | grep -c SNAT || true",
+    _engine_cmd(tf_ctx, "sudo /usr/local/sbin/range-remote-access.sh && "
+                        "sudo iptables -t nat -S POSTROUTING | grep -c SNAT || true",
                 timeout=30, step="assert remote-access SNAT rules")
 
 
@@ -494,16 +519,18 @@ def setup_remote_access(ctx):
 
     enroll_engine_router(ctx.tf_ctx, comp_id, all_ids)
     print("  Pushing range-remote-access unit (tailnet->team SNAT, re-asserted 30s)...")
-    push_remote_access_firewall(ctx.tf_ctx, local_ids, satellite_ids)
+    push_remote_access_firewall(ctx.tf_ctx, ctx.engine_mgmt_ip, local_ids, satellite_ids)
 
     entries = []
     for team in teams:
         for person in team["participants"]:
             user = f"comp-{comp_id}-{person}"
             uid = _ensure_user(user)
-            tag = team_tag(comp_id, team["identifier"])
             ttl = os.environ.get("TEZ_REMOTE_KEY_TTL", "72h")
-            key = _mint_preauth_key(uid, tag, ttl)
+            # Deliberately UNTAGGED: a tagged node's identity is its tag, and
+            # headscale v0.29 does not expand tag sources into routers' packet
+            # filters (live-proven 2026-10-08) — the username is the grant key.
+            key = _mint_preauth_key(uid, None, ttl)
             entries.append({"person": person, "team": team["identifier"], "key": key,
                             "user": user})
     policy_upsert_comp(comp_id, engine_ip,
@@ -525,8 +552,6 @@ def setup_remote_access(ctx):
         "router_node": router_node_name(comp_id),
         "teams": {team_keys_by_id[t["identifier"]]: t["identifier"] for t in teams},
         "participants": [e["user"] for e in entries],
-        "tags": sorted({team_tag(comp_id, t["identifier"]) for t in teams
-                        if t["participants"]}),
     }
     print(f"  Remote access ready: {len(entries)} participant key(s) in "
           f"competitions/{comp_id}/remote-access/ (full access for pre-existing "
@@ -557,6 +582,18 @@ def teardown_remote_access(comp_dir, state=None):
                       "(revokes the engine's tailnet key).")
     except (subprocess.SubprocessError, ValueError, OSError, KeyError) as e:
         print(f"  WARNING: could not delete the engine's headscale node: {e}")
+    # headscale refuses `users destroy` while the user still owns nodes
+    # ("user not empty: node(s) found"), so participant devices go first.
+    try:
+        prefix = f"comp-{comp_id}-"
+        for entry in hs_json("nodes list"):
+            owner = (entry.get("user") or {}).get("name") or ""
+            if owner.startswith(prefix):
+                hs_cli(f"nodes delete -i {entry['id']} --force")
+                print(f"  Deleted participant device '{entry.get('name')}' "
+                      f"(user {owner}).")
+    except (subprocess.SubprocessError, ValueError, OSError, KeyError) as e:
+        print(f"  WARNING: could not delete participant devices: {e}")
     for user in ra.get("participants", []):
         try:
             hs_cli(f"users destroy -n {user} --force")
@@ -602,7 +639,7 @@ def verify_remote_access(state, comp_id, planned_identifiers):
         policy_text = hs_cli("policy get", check=False).stdout
     except (subprocess.SubprocessError, OSError) as e:
         return None, [f"headscale unreachable for policy check: {e}"]
-    for tag in ra.get("tags", []):
-        if tag not in policy_text:
-            problems.append(f"policy does not carry this comp's grant for {tag}")
+    for user in ra.get("participants", []):
+        if f'"{user}@"' not in policy_text:
+            problems.append(f"policy does not carry this comp's grant for {user}")
     return (not problems), problems

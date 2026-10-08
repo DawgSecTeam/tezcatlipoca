@@ -44,25 +44,18 @@ def check_remote_access(comp_dir, teams, ctx):
         return gate_skip("remote_access", "not enabled for this deploy", gating=False)
 
     identifiers = _identifiers(teams)
-    # Engine side: enrolled to OUR control plane.
+    # Engine side: enrolled to OUR control plane (shared logic with the deploy).
     server_url = os.environ.get("TEZ_HEADSCALE_URL", "").rstrip("/")
     if not server_url:
         print("  FAIL  — TEZ_HEADSCALE_URL not set; cannot confirm the engine's "
               "control plane (the deploy required it)")
         return gate_fail("remote_access", "TEZ_HEADSCALE_URL unset")
     try:
-        proc = context.ssh_to_engine(ctx, "sudo tailscale status --json 2>/dev/null || true")
-    except CheckError as e:
+        enrolled = remote_access_ops.engine_tailscale_enrolled(ctx, server_url)
+    except RuntimeError as e:
         print(f"  SKIP  — engine SSH failed ({str(e)[:80]})")
         return gate_skip("remote_access", "engine unreachable")
-    enrolled = False
-    try:
-        data = json.loads(proc.stdout or "{}")
-        control = (data.get("CurrentTailnet") or {}).get("ControlURL") or ""
-        enrolled = data.get("BackendState") == "Running" and server_url in control
-    except ValueError:
-        enrolled = False
-    if proc.returncode != 0 or not enrolled:
+    if not enrolled:
         print("  FAIL  — engine tailscale is not Running against "
               f"{server_url} (BackendState/control mismatch)")
         return gate_fail("remote_access", "engine not enrolled to the headscale control plane")
