@@ -220,6 +220,17 @@ class ExecutionTests(unittest.TestCase):
         mv = ssh.call_args_list[-1][0][2]
         self.assertIn(rc.INSTALL_DIR, mv)
 
+    def test_stage_implants_honours_the_configured_install_dir(self):
+        """bad-auto's realm_plant reads install_dir from its staged config, so the
+        relay must land the binaries in THAT dir or the plants refuse."""
+        with mock.patch.object(rc, "_scp", return_value=_CP(0)), \
+             mock.patch.object(rc, "_ssh", return_value=_CP(0)) as ssh:
+            out = rc.stage_implants("key", "10.0.0.198", "10.0.0.117",
+                                    {"install_dir": "/opt/custom-realm"})
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["install_dir"], "/opt/custom-realm")
+        self.assertIn("/opt/custom-realm", ssh.call_args_list[-1][0][2])
+
     def test_stage_implants_failure_names_the_host(self):
         with mock.patch.object(rc, "_scp", return_value=_CP(1, err="nope")):
             out = rc.stage_implants("key", "10.0.0.198", "10.0.0.117")

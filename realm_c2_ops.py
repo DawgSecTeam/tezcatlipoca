@@ -409,6 +409,10 @@ def stage_implants(ssh_key, red_ip, implant_host, realm=None, timeout=900):
     paths `realm_plant`/`realm_plant_win` upload from.
     """
     realm = realm or {}
+    # bad-auto's realm_plant reads its own install_dir (default /opt/bad-auto/realm)
+    # from the config the deploy stages onto red01 — stage into the SAME dir or the
+    # plants refuse with "imix not staged".
+    install_dir = realm.get("install_dir") or INSTALL_DIR
     win_src = realm.get("win_payload") or WIN_IMPLANT_SRC_DEFAULT
     tmp = tempfile.mkdtemp(prefix="realm-c2-implants-")
     try:
@@ -432,17 +436,17 @@ def stage_implants(ssh_key, red_ip, implant_host, realm=None, timeout=900):
                     f"could not push implants to red01: "
                     f"{(r3.stderr or r3.stdout or '').strip()[-200:]}"}
         mv = _ssh(ssh_key, red_ip,
-                  f"sudo -n mkdir -p {INSTALL_DIR} && "
+                  f"sudo -n mkdir -p {install_dir} && "
                   f"sudo -n mv /tmp/.realm-c2-stage/imix "
-                  f"/tmp/.realm-c2-stage/{WIN_IMPLANT_DST} {INSTALL_DIR}/ && "
-                  f"sudo -n chmod 755 {INSTALL_DIR}/imix "
-                  f"{INSTALL_DIR}/{WIN_IMPLANT_DST} && "
+                  f"/tmp/.realm-c2-stage/{WIN_IMPLANT_DST} {install_dir}/ && "
+                  f"sudo -n chmod 755 {install_dir}/imix "
+                  f"{install_dir}/{WIN_IMPLANT_DST} && "
                   f"rm -rf /tmp/.realm-c2-stage", timeout=60)
         if mv.returncode != 0:
             return {"ok": False, "error":
                     f"red01 refused the implant install: "
                     f"{(mv.stderr or mv.stdout or '').strip()[-200:]}"}
-        return {"ok": True, "install_dir": INSTALL_DIR,
+        return {"ok": True, "install_dir": install_dir,
                 "implants": ["imix", WIN_IMPLANT_DST]}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
