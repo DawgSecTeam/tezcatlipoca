@@ -1,0 +1,165 @@
+{
+  "dc01": [
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "svc_backup",
+        "PASSWORD": "Spr1ngfield#88"
+      }
+    },
+    "audit-policy-off-win",
+    "defender-disabled-win",
+    "smb1-enabled-win",
+    "weak-password-policy-win",
+    "windows-updates-frozen-win",
+    "insecure-interactive-logon",
+    "theme-readme-win"
+  ],
+  "win01": [
+    {
+      "name": "local-user-win",
+      "vars": {
+        "USERNAME": "webadmin",
+        "PASSWORD": "Summ3rNights!77"
+      }
+    },
+    {
+      "name": "runkey-persistence-win",
+      "vars": {
+        "RUN_VALUE_NAME": "PulseSyncAgent",
+        "PAYLOAD_PATH": "C:\\ProgramData\\PulseSync\\pulsesync.ps1",
+        "PAYLOAD_BODY": "Start-Sleep -Seconds 45; whoami | Out-File C:\\ProgramData\\PulseSync\\pulse.log -Append"
+      }
+    },
+    {
+      "name": "scheduled-task-persistence-win",
+      "vars": {
+        "TASK_NAME": "TelemetrySync",
+        "PAYLOAD_PATH": "C:\\ProgramData\\TelemetrySync\\sync.ps1",
+        "PAYLOAD_BODY": "Get-Date | Out-File C:\\ProgramData\\TelemetrySync\\lastsync.txt"
+      }
+    },
+    {
+      "name": "autologin-win",
+      "vars": {
+        "USERNAME": "webadmin",
+        "PASSWORD": "Summ3rNights!77"
+      }
+    },
+    {
+      "name": "sensitive-file-win",
+      "vars": {
+        "FILE_PATH": "C:\\ProgramData\\TelemetrySync\\creds.txt",
+        "FILE_CONTENT": "svc_web=H4rd3n3dF41l#7\ndomain_join=Summ3rNights!77"
+      }
+    },
+    {
+      "name": "insecure-file-acl-win",
+      "vars": {
+        "FILE_PATH": "C:\\ProgramData\\TelemetrySync\\creds.txt"
+      }
+    },
+    {
+      "name": "insecure-smb-share-win",
+      "vars": {
+        "SHARE_NAME": "TelemetryShare",
+        "SHARE_PATH": "C:\\ProgramData\\TelemetrySync"
+      }
+    },
+    {
+      "name": "hosts-redirect-win",
+      "vars": {
+        "IP": "10.0.0.117",
+        "HOSTNAME": "c2.dawgsec.range"
+      }
+    },
+    "guest-enabled-win",
+    "uac-disabled-win",
+    "firewall-disabled-win",
+    "rdp-no-nla-win",
+    "rdp-secondary-port-win",
+    "iis-webshell",
+    "llm-corpus-credentials-win"
+  ],
+  "web01": [
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "deploy"
+      }
+    },
+    "empty-password-account",
+    "passwordless-sudo",
+    {
+      "name": "uid0-user",
+      "vars": {
+        "USERNAME": "deploy"
+      }
+    },
+    "unauthorized-admin-user",
+    "nginx-off-by-slash",
+    "nginx-server-tokens-on",
+    "suid-find",
+    "suid-nano",
+    "cron-d-rogue-job",
+    {
+      "name": "crontab-persistence",
+      "vars": {
+        "USERNAME": "deploy",
+        "SCHEDULE": "*/15 * * * *",
+        "JOB_COMMAND": "/usr/local/bin/.pkg-cache-sync >> /var/log/pkg-cache-sync.log 2>&1"
+      }
+    },
+    "hidden-cron-persistence",
+    {
+      "name": "systemd-user-unit-persistence",
+      "vars": {
+        "USERNAME": "deploy",
+        "UNIT_NAME": "pkg-cache-sync",
+        "EXEC_START": "/bin/bash -c 'sleep 30'"
+      }
+    },
+    {
+      "name": "realm-beacon",
+      "vars": {
+        "SERVICE_NAME": "tide-sync"
+      }
+    },
+    "ssh-root-login",
+    "sshd-config-weak",
+    "ssh-backdoor-listener-2222",
+    "samba-guest-share",
+    "bad-perms-userConfig",
+    "suspicious-user-home-script",
+    "unprivileged-users-enabled"
+  ],
+  "db01": [
+    {
+      "name": "local-user",
+      "vars": {
+        "USERNAME": "dbadmin"
+      }
+    },
+    "mysql-root-nopassword",
+    "mysql-remote-root",
+    "mysql-anon-user",
+    "mysql-insecure-server-flags",
+    "mysql-root-hash-reuse",
+    "empty-password-account",
+    "sudo-nopasswd",
+    "suid-python",
+    "at-job-any-user",
+    "exploitable-cron-job",
+    "pam-no-password-quality",
+    "password-policy-missing",
+    "postfix-expn-vrfy",
+    "dovecot-debug-plaintext",
+    "ssh-empty-passwords",
+    {
+      "name": "raw-socket-beacon",
+      "vars": {
+        "SERVICE_NAME": "sysmon-relay"
+      }
+    }
+  ]
+}

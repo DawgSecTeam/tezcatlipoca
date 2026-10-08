@@ -1,3 +1,4 @@
 name scrim-one
 scenario Meridian Health regional clinic: a small Active Directory network behind a pfSense perimeter firewall. The Windows domain controller (dc01) hosts AD DS and DNS; a second Windows box (win02) exposes the clinic's FTP drop, while the Linux tier runs web (web01), mail (mail01), database (db01), and log-analytics (splunk01) workloads. An in-path pfSense firewall (fw01) routes all team traffic and is left clean/undamaged. Defenders keep the scored services alive and hunt planted misconfigurations. The firewall is infrastructure, not a target.
 difficulty 6
+firewall_dnat 4470->10.0.0.198

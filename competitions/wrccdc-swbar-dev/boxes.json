@@ -1,0 +1,9 @@
+[
+  {"name": "sing3po", "last_octet": 134, "template": "fedora37-karaoke"},
+  {"name": "wookie", "last_octet": 20, "template": "alpine3.22-wordpress"},
+  {"name": "ashla", "last_octet": 202, "template": "debian12-filesvc"},
+  {"name": "bogan", "last_octet": 203, "template": "debian12-mail"},
+  {"name": "tython", "last_octet": 201, "template": "debian12-k3s-pos"},
+  {"name": "deathstar", "last_octet": 105, "template": "win-svr-2019-dc"},
+  {"name": "kamino", "last_octet": 11, "template": "win-svr-2016-kiosk"}
+]
