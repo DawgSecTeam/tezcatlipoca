@@ -76,8 +76,23 @@ a **separate `scoring` admin account** for exactly this (`event.conf`'s `admin` 
 password in `credentials.txt`), and `round_loop.py` holds the one definition of "the loop is
 stopped" — shared with verify's gate so the two cannot disagree. The actor is
 `tools/round_loop_guard.py`, installed on the engine as a 60s timer when the Compfile sets
-**`round_loop_guard 1`** (default off). **Remaining:** run it on a live range — kill the loop
-deliberately, watch the timer heal it, and only then consider it done.
+**`round_loop_guard 1`** (default off).
+
+**Live trial 2026-10-07 (cde-2026 on .193, clean engine reboot): the guard cannot heal the
+signature actually observed.** After the reboot the engine came back with `running:false`
+(**paused**) plus the Go-zero `current_round_time`, not the unpaused-stale shape the 2026-09-29
+pfsense-ad incident produced. `round_loop_state()` classifies paused as intentional and returns
+PAUSED — so the guard (verified via its own `--dry-run`: "paused: nothing to do") stays silent,
+AND `verify-competition.py`'s round-loop gate returns PASS ("engine paused") at
+`verifier/engine.py` before the `--fix-round-loop` branch is ever reached, so the operator path
+cannot fire either. The scoreboard stayed frozen ~10 minutes until the two POSTs were issued
+manually (as the `scoring` account); the loop advanced within one Delay of the unpause. **Two
+code sites share the gap:** `round_loop.py` (paused ⇒ never stale) and `verifier/engine.py`
+(paused ⇒ PASS before the fix branch). Suggested fix: when paused AND `current_round_time` is the
+Go zero time AND `last_round.StartTime` is older than the freshness window (a deliberately-paused
+live loop has real round times; a reboot-frozen one does not), treat as healable in both the
+guard and the fix branch. Until then, healing a rebooted engine is manual: the POST pair
+(`/api/competition/start {"started":true}` then `/api/engine/pause {"pause":false}`).
 
 ### Fedora goldens cannot be built on SELinux-enforcing nodes
 

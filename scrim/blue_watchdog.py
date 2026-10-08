@@ -18,7 +18,13 @@ def watchdog_script(services, box_pw):
     Prints one 'RESTORED <unit>' line per unit it had to bring back."""
     units = []
     for svc in services:
-        units.extend(compworld._WATCHDOG_UNITS.get(svc, []))
+        # box_services entries are strings OR dicts ({name, plant_only, score_only, ...})
+        # — the dict form used to raise TypeError (unhashable) in .get / `in` (scrim-one
+        # 2026-10-07: win02's plant_only/score_only pins killed the watchdog at T+1min).
+        name = svc.get("name") if isinstance(svc, dict) else svc
+        if not name:
+            continue
+        units.extend(compworld._WATCHDOG_UNITS.get(name, []))
     lines = [f"S() {{ echo {shlex.quote(box_pw)} | sudo -S -p '' \"$@\"; }}"]
     for u in dict.fromkeys(units):
         lines.append(
@@ -37,7 +43,9 @@ def blue_watchdog_loop(args, creds, t0, stop):
     comp = core.REPO / "competitions" / args.competition
     boxes = core.read_comp_json(comp, "boxes.json")
     box_services = core.read_comp_json(comp, "box_services.json")
-    linux = [b for b in boxes if any(s in compworld._WATCHDOG_UNITS for s in box_services.get(b["name"], []))]
+    linux = [b for b in boxes if any((s.get("name") if isinstance(s, dict) else s)
+                                     in compworld._WATCHDOG_UNITS
+                                     for s in box_services.get(b["name"], []))]
     base = core.box_ssh_base(creds, connect_timeout=15)
     wlog = Path(args.run_dir) / "watchdog.log"
     team_ids = sorted(v for k, v in creds.items() if re.fullmatch(r"TEAM\d+_ID", k))

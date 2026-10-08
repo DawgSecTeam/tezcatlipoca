@@ -1,0 +1,4 @@
+name practice-4box-2026-09
+scenario Assumed-breach CCDC practice: 4-box team range (Windows DC + member, Linux web + db) with dense nakon-planted misconfigs and both beacon families; tlaloc red01 applies continuous red pressure against Quotient-scored services
+difficulty 4
+team_beacons 1

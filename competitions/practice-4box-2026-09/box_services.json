@@ -1,0 +1,26 @@
+{
+  "dc01": [
+    "IIS HTTP",
+    "IIS FTP",
+    "OpenSSH Client and Authentication Setup",
+    "RDP misconfigs"
+  ],
+  "win01": [
+    "IIS HTTP",
+    "IIS FTP",
+    "OpenSSH Client and Authentication Setup",
+    "RDP misconfigs",
+    "TFTP",
+    "Telnet"
+  ],
+  "web01": [
+    "nginx",
+    "ssh"
+  ],
+  "db01": [
+    "mysql",
+    "ssh",
+    "postfix",
+    "dovecot"
+  ]
+}

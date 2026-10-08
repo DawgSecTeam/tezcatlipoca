@@ -9,6 +9,7 @@ from domain_ops import deploy_domain_configs
 from engine_ops import ensure_nat_forwarding
 from hardening_ops import reensure_mysql_credlist_users
 from nakon_ops import build_nakon_bundle, run_nakon
+from red_plant_ops import plant_assume_breach
 from timing import timed
 from utils import compfile_flag, run_concurrent
 
@@ -71,6 +72,16 @@ def phase7_domains_and_final(ctx):
         with timed(ctx.comp_dir, 7, "beacons"):
             plant_team_beacons(ctx.teams, ctx.boxes, ctx.tf_ctx, box_username=ctx.box_username,
                                box_password=ctx.box_password)
+
+    # Assume-breach (CCDC realism): red is ALREADY inside when the clock starts.
+    # Deploy red01 + the realm engine DNAT and run the day-0 seed (access +
+    # prebaked Realm C2 beacons + the persistence/evasion layer) BEFORE the
+    # snapshot, so the restore point every box carries is already-compromised
+    # and phase 8 starts the clock on a range red owns.
+    if compfile_flag(ctx.comp_dir / "Compfile", "assume_breach"):
+        print("  Planting assume-breach red presence (red01 + beacons + persistence)...")
+        with timed(ctx.comp_dir, 7, "assume_breach"):
+            plant_assume_breach(ctx)
 
     print(f"  Snapshotting all boxes as '{SNAP_READY}' (as-delivered restore point)...")
     run_concurrent(ctx.all_targets, partial(snap_ready, ctx), max_workers=4)

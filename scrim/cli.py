@@ -34,6 +34,11 @@ def main():
     p.add_argument("--from-template", default=None)
     p.add_argument("--teams", type=int, default=2)
     p.add_argument("--duration-min", type=int, default=90)
+    p.add_argument("--no-seed-red", dest="seed_red", action="store_false",
+                   help="skip the pre-T0 assume-breach seed (no pre-planted beacons)")
+    p.add_argument("--seed-depth", type=int, default=3, choices=[0, 1, 2, 3],
+                   help="assume-breach seed depth: 0 access | 1 +implant | 2 +artifacts "
+                        "| 3 +evasion (default 3)")
     p.add_argument("--blue-model", default="openai/gpt-5.6-luna", help="cheap cloud model for blue agents")
     p.add_argument("--red-model", default="openai/gpt-5.6-luna", help="cheap cloud model for bad-auto")
     p.add_argument("--reasoning-effort", default="minimal",

@@ -74,3 +74,15 @@ competitions/*/box_baseline.json
 competitions/*/domain_accounts.json
 nodes.json
 coverage-run1.json
+
+# Local run snapshot: a point-in-time copy of a competition run — bad-auto world
+# state (cred pool), blue-team tool caches (.opencode/npm, ~180 MB), jars and
+# team reports. Quotes credentials and is a snapshot, not a source artifact.
+competitions/*/run*-archive-*/
+# Terraform state ARCHIVE: carries compiled team passwords
+# (outputs.team_passwords + per-box user_account passwords). Unlike the three
+# reference comps kept tracked on purpose, this is a working archive — never
+# publish it; force-add deliberately if that ever changes.
+terraform/state-archive-*/
+# Throwaway per-incident scratch scripts (embed live credentials by nature).
+.build-tmp/

@@ -23,7 +23,7 @@
 			<priv>page-all</priv>
 		</group>
 		<user>
-			<name>admin</name>
+			<name>admin</name><authorizedkeys>c3NoLWVkMjU1MTkgQUFBQUMzTnphQzFsWkRJMU5URTVBQUFBSUc4R1dDVGQrWFJzU0ZwZlJiQmhHcnZ6bll4UlpJa21LTlptUzVpZVZvZkkgc3lzYWRtaW5AbG9jYWxob3N0Cg==</authorizedkeys>
 			<descr><![CDATA[System Administrator]]></descr>
 			<scope>system</scope>
 			<groupname>admins</groupname>
@@ -90,26 +90,42 @@
 		<filterdescriptions>1</filterdescriptions>
 	</syslog>
 	<nat>
-		<outbound>
-			<mode>disabled</mode>
-		</outbound>
-		<rule>
-			<interface>lan</interface>
-			<ipprotocol>inet</ipprotocol>
-			<protocol>tcp/udp</protocol>
-			<source>
-				<any></any>
-			</source>
-			<destination>
-				<address>192.168.120.1</address>
-				<port>4470</port>
-			</destination>
-			<target>10.200.0.10</target>
-			<local-port>4470</local-port>
-			<descr><![CDATA[beacon C2 DNAT to red01 (routed segment)]]></descr>
-			<associated-rule-id></associated-rule-id>
-		</rule>
-	</nat>
+			<outbound>
+				<mode>disabled</mode>
+			</outbound>
+			<rule>
+				<interface>lan</interface>
+				<ipprotocol>inet</ipprotocol>
+				<protocol>tcp</protocol>
+				<source>
+					<any></any>
+				</source>
+				<destination>
+					<address>192.168.120.1</address>
+					<port>3142</port>
+				</destination>
+				<target>172.31.120.1</target>
+				<local-port>3142</local-port>
+				<descr><![CDATA[apt-cacher (engine service at the old gateway address)]]></descr>
+				<associated-rule-id></associated-rule-id>
+			</rule>
+			<rule>
+				<interface>lan</interface>
+				<ipprotocol>inet</ipprotocol>
+				<protocol>tcp/udp</protocol>
+				<source>
+					<any></any>
+				</source>
+				<destination>
+					<address>192.168.120.1</address>
+					<port>4470</port>
+				</destination>
+				<target>10.0.0.198</target>
+				<local-port>4470</local-port>
+				<descr><![CDATA[beacon C2 DNAT (firewall owns the gateway address)]]></descr>
+				<associated-rule-id></associated-rule-id>
+			</rule>
+		</nat>
 	<filter>
 		<rule>
 			<type>pass</type>
@@ -122,6 +138,21 @@
 			</source>
 			<destination>
 				<network>lan</network>
+			</destination>
+		</rule>
+		<rule>
+			<type>pass</type>
+			<ipprotocol>inet</ipprotocol>
+			<descr><![CDATA[Allow engine SSH to the firewall]]></descr>
+			<interface>wan</interface>
+			<tracker>0100000202</tracker>
+			<protocol>tcp</protocol>
+			<source>
+				<address>172.31.120.1</address>
+			</source>
+			<destination>
+				<network>(self)</network>
+				<port>22</port>
 			</destination>
 		</rule>
 		<rule>

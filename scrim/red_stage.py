@@ -11,6 +11,7 @@ from scrim import red_link
 from scrim import red_tunnel
 from scrim import test_folder
 from scrim.core import log
+import red_plant_ops
 
 
 def verify_red_reaches_teams(args, comp, creds):
@@ -66,7 +67,16 @@ def stage_red(args, comp, creds, run_dir):
                    "endgame_start_remaining_min": 15,
                    "endgame_decision_window_sec": 60, "endgame_force_active": True,
                    "min_standing_services": 2, "credlist_gate_min": args.duration_min // 4,
-                   "credlist_max_per_team": 1, "lockout_gate_pct": 0.75},
+                   "credlist_max_per_team": 1, "lockout_gate_pct": 0.75,
+                   # Severity ramp + burndown, explicit so the manifest records them:
+                   # no takedowns for the first 10 min (blue's discovery window),
+                   # recoverable stops only until halfway, then everything unlocks,
+                   # and the last 5 min lock every blue login out.
+                   "impact_start_min": 10, "unrecoverable_at_pct": 0.5,
+                   # The CDE packet's escalation ladder, made harder (brutal tier
+                   # combines rename+config-break). Times scale to the event.
+                   "escalation": {"enabled": True, "pause_after_restore_min": 5},
+                   "burndown_enabled": True, "burndown_remaining_min": 5},
         "limits": {"nmap_timing": "T3", "nmap_top_ports": 200,
                    "max_retries_per_service": 4, "spray_attempts_per_target": 24,
                    "action_timeout": 120, "scan_timeout": 900},
@@ -114,3 +124,36 @@ def stage_red(args, comp, creds, run_dir):
     # Second pre-T0 gate, same reasoning as the LLM one above: red that cannot dial the
     # teams cannot attack them, and the soak burned 40 minutes finding that out.
     verify_red_reaches_teams(args, comp, creds)
+    # Third pre-T0 step: the day-0 seed. CCDC reality is that red is ALREADY inside
+    # when the clock starts, so access + the prebaked Realm C2 beacons + the
+    # persistence/evasion layer are planted BEFORE T0, not live during the event.
+    # Runs last so a seed failure stops the run before scored time (same contract as
+    # the two gates above — a scrim with no beacons planted is not the event asked for).
+    seed_assume_breach(args, run_dir)
+
+
+def seed_assume_breach(args, run_dir=None):
+    """Plant the assume-breach presence on every team box over red01, pre-T0.
+
+    Delegates to bad-auto's `seed` on red01 (its own transport + intel + guardrails
+    — one implementation, no drift from the deploy-time path in `red_plant_ops`).
+    Raises on failure: it runs before T0, so aborting costs nothing scored, and
+    the whole point of the mode is that the beacons are already planted.
+    """
+    if not getattr(args, "seed_red", True):
+        log("--no-seed-red: skipping the day-0 assume-breach seed (no pre-planted beacons)")
+        return
+    depth = int(getattr(args, "seed_depth", 3) or 3)
+    ssh_key = core.REPO / "proxmox"
+    log(f"seeding assume-breach presence on red01 {args.red_ip} (depth {depth}) — "
+        f"access + realm beacons + persistence, before T0")
+    res = red_plant_ops.seed_via_red01(str(ssh_key), args.red_ip, depth, timeout=5400)
+    tail = ((res.stdout or "") + (res.stderr or ""))[-600:]
+    for line in (res.stdout or "").splitlines()[-12:]:
+        print("   ", line)
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"assume-breach seed failed on red01 (rc={res.returncode}) — refusing to start "
+            f"an event with no pre-planted beacons. Fix and re-run with --skip-deploy, "
+            f"or pass --no-seed-red to run without the seeded presence.\n{tail}")
+    log("assume-breach presence seeded — every box is compromised before T0")
