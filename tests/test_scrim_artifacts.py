@@ -81,6 +81,12 @@ class TmpCase(unittest.TestCase):
         # tests that are about ordering. Pin it for every test in this file.
         self.addCleanup(mock.patch.object(teardown_stage, "_red_vm_still_exists",
                                           lambda *a, **k: False).start)
+        # These tests assert teardown ORDERING and collection; they must not dial
+        # red01 (a real ssh attempt per case turned a 1s file into 170s).
+        self.addCleanup(mock.patch.object(red_link, "pull_red_state",
+                                          lambda *a, **k: []).start)
+        self.addCleanup(mock.patch.object(red_link, "start_red_director",
+                                          lambda *a, **k: True).start)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
