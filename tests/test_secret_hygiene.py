@@ -53,6 +53,16 @@ INTERNAL_ENV = {
     # artifacts_ops.py seal step: default author attribution from the OS user, not
     # operator configuration.
     "USER": "OS username, recorded as the default write-up author on seal",
+    # Student portal container env: written by portal_ops into /opt/tez-portal/.env (or set
+    # by portal/compose.yaml defaults) and read only inside the container by portal/app.py.
+    # Operators configure the portal through TEZ_PORTAL_* (.env.example), never these.
+    "PORTAL_SECRET_KEY": "portal container env (portal_ops -> /opt/tez-portal/.env)",
+    "PORTAL_CONFIG": "portal container env (path default /config/portal.json)",
+    "PORTAL_EVENT_CONF": "portal container env (path default /config/event.conf)",
+    "PORTAL_STATE_DIR": "portal container env (path default /state)",
+    "PORTAL_OPEN": "portal container env (portal_ops from TEZ_PORTAL_OPEN)",
+    "PORTAL_COOKIE_SECURE": "portal container env (portal_ops writes 1)",
+    "PORTAL_DIST": "portal container env (built frontend path, default next to app.py)",
 }
 
 # High-signal secret shapes. Deliberately narrow: a broad "long string" rule would

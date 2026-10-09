@@ -14,6 +14,7 @@ All guidance lives in `docs/` — start with:
 - [docs/usage-people.md](docs/usage-people.md) — setup/operation by hand, env-var reference, troubleshooting
 - [docs/multi-node.md](docs/multi-node.md) — one competition across multiple Proxmox hosts (nodes.json placement, jump routing, per-slot goldens, sync-template)
 - [docs/packet-profiles.md](docs/packet-profiles.md) — competition packets → ranges (profiles, compile-packet, packet verify gates)
+- [docs/remote-access.md](docs/remote-access.md) — headscale participant access (engine-as-router, per-team scoping, `TEZ_HEADSCALE_*` env, roster)
 - [docs/known-issues.md](docs/known-issues.md) — **open/pending issues only; fixed issues are deleted, not archived**
 - [docs/environment-facts.md](docs/environment-facts.md) — node/storage/template/vmid ground truth
 - [docs/security-disclosures.md](docs/security-disclosures.md) — credential exposures + the open rotation

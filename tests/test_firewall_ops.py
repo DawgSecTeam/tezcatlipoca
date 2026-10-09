@@ -409,5 +409,123 @@ class VerifyInPathConvergence(unittest.TestCase):
             self.assertFalse(fo._wait_tcp(None, "192.168.1.2", 22, budget_s=30, interval_s=10))
 
 
+class GuestAgentShellcmd(unittest.TestCase):
+    """The qemu-guest-agent's boot hook. pfSense never runs /usr/local/etc/rc.d/* (the
+    local-script pass in /etc/rc only globs *.sh), so rc.conf.local alone is inert —
+    the <system><afterbootupshellcmd> tag in config.xml (/etc/rc.bootup mwexec's it)
+    is the only mechanism that survives, and it must ride EVERY config the firewall
+    runs: the template's (sealed 2026-10-08) and the generated per-team ones."""
+
+    def test_generated_config_carries_the_agent_boot_hook(self):
+        out = generate_team_config(SEED, "120")
+        self.assertIn("<afterbootupshellcmd>/usr/local/etc/rc.d/qemu-guest-agent start"
+                      "</afterbootupshellcmd>", out)
+
+    def test_seed_already_carrying_the_hook_is_not_double_tagged(self):
+        seeded = SEED.replace(
+            "<system>",
+            "<system><afterbootupshellcmd>/usr/local/etc/rc.d/qemu-guest-agent start"
+            "</afterbootupshellcmd>", 1)
+        out = generate_team_config(seeded, "120")
+        self.assertEqual(out.count("<afterbootupshellcmd>"), 1)
+
+
+class AgentDiagnostics(unittest.TestCase):
+    """fw_agent_diagnostic: never raises, never fires on agentless (pre-retrofit)
+    clones, and when the agent answers it reports interfaces + whether the pushed
+    config.xml actually landed."""
+
+    def test_agentless_clone_returns_empty_string(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        clock = {"t": 0.0}
+        with patch.object(fo, "proxmox_api", side_effect=RuntimeError("agent not running")), \
+                patch.object(fo.time, "time", side_effect=lambda: clock["t"]), \
+                patch.object(fo.time, "sleep", side_effect=lambda s: clock.update(t=clock["t"] + s)):
+            self.assertEqual(fo.fw_agent_diagnostic("pve", 9), "")
+
+    def test_no_node_returns_empty_string_without_touching_the_api(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        with patch.object(fo, "proxmox_api") as api:
+            self.assertEqual(fo.fw_agent_diagnostic(None, 9), "")
+            api.assert_not_called()
+
+    def test_answering_agent_reports_interfaces_and_config_state(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        with patch.object(fo, "_agent_answers", return_value=True), \
+                patch.object(fo, "guest_agent_exec_root",
+                             return_value=(0, "inet 192.168.120.1\n256 1\n", "")):
+            d = fo.fw_agent_diagnostic("pve", 9)
+        self.assertIn("agent diagnostics (vmid 9)", d)
+        self.assertIn("inet 192.168.120.1", d)
+
+    def test_agent_error_still_returns_not_raises(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        with patch.object(fo, "_agent_answers", return_value=True), \
+                patch.object(fo, "guest_agent_exec_root", side_effect=RuntimeError("channel dead")):
+            self.assertEqual(fo.fw_agent_diagnostic("pve", 9), "")
+
+
+class BootstrapAgentWiring(unittest.TestCase):
+    """node= wires the agent into the bootstrap: success logs the boot confirmation,
+    the failure text carries the diagnostic block, and agentless clones change
+    nothing."""
+
+    def _run(self, node, agent_answers, boot_ok=True):
+        import tempfile
+        import firewall_ops as fo
+        from unittest.mock import MagicMock, patch
+        logs = []
+        cm = None
+        with tempfile.TemporaryDirectory() as d:
+            cfg = Path(d) / "config-team120.xml"
+            cfg.write_text("<pfsense/>")
+            patches = [
+                patch.object(fo, "ssh_on_gateway", MagicMock(return_value=MagicMock(stdout="", returncode=0))),
+                patch.object(fo, "_probe_tcp", return_value=False),
+                patch.object(fo, "_wait_tcp", return_value=boot_ok),
+                patch.object(fo, "_push_config", return_value="APPLIED"),
+                patch.object(fo, "_agent_answers", return_value=agent_answers),
+                patch.object(fo, "guest_agent_exec_root", return_value=(0, "inet 192.168.120.1", "")),
+            ]
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+                if boot_ok:
+                    fo.bootstrap_firewalls(
+                        TEAMS, [{"team_key": "team1", "identifier": "120", "vmid": 9}],
+                        {"team1": cfg}, {}, log=logs.append, node=node)
+                else:
+                    with self.assertRaises(RuntimeError) as cm:
+                        fo.bootstrap_firewalls(
+                            TEAMS, [{"team_key": "team1", "identifier": "120", "vmid": 9}],
+                            {"team1": cfg}, {}, log=logs.append, node=node)
+        return logs, cm
+
+    def test_success_with_agent_logs_the_boot_confirmation(self):
+        logs, _ = self._run(node="pve", agent_answers=True)
+        self.assertTrue(any("guest agent answered" in line for line in logs))
+
+    def test_success_agentless_stays_silent(self):
+        logs, _ = self._run(node="pve", agent_answers=False)
+        self.assertFalse(any("guest agent" in line for line in logs))
+
+    def test_failure_text_carries_the_diagnostic_when_the_agent_answers(self):
+        _, cm = self._run(node="pve", agent_answers=True, boot_ok=False)
+        self.assertIn("agent diagnostics (vmid 9)", str(cm.exception))
+
+    def test_failure_text_stays_clean_when_the_agent_is_absent(self):
+        _, cm = self._run(node="pve", agent_answers=False, boot_ok=False)
+        self.assertNotIn("agent diagnostics", str(cm.exception))
+
+    def test_no_node_no_agent_calls_at_all(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        with patch.object(fo, "_agent_answers") as answers:
+            self._run(node=None, agent_answers=True)
+            answers.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

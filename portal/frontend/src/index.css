@@ -1,0 +1,126 @@
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/fraunces";
+@import "@fontsource-variable/jetbrains-mono";
+@import "tailwindcss";
+
+/* Theme: one set of semantic tokens, redefined for dark. Components only ever use the tokens
+   (bg-bg, text-fg, border-edge, shadow-float…), so both themes come from this file. */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+:root {
+  --bg: #efefef;          /* page AND panel surface — panels float by rim + shadow, not by tint */
+  --sunken: #e4e4e4;      /* inputs, wells */
+  --fg: #1d1d1f;
+  --muted: #5f6368;
+  --faint: #9a9da3;
+  --edge: #ffffff;        /* the bright rim on floating panels */
+  --line: #dcdcdc;        /* dividers inside a panel */
+  --accent: #0f766e;      /* jade */
+  --accent-soft: #d5ebe7;
+  --accent-fg: #ffffff;
+  --danger: #b42318;
+  --danger-soft: #fbe3e0;
+  --win: #2563eb;
+  --lin: #c2410c;
+  --fw: #be123c;
+  --eng: #7c3aed;
+  --shadow-float: 0 22px 60px -12px rgb(0 0 0 / 0.20), 0 6px 18px -6px rgb(0 0 0 / 0.08);
+  --shadow-tile: 0 10px 26px -10px rgb(0 0 0 / 0.20), 0 2px 6px -2px rgb(0 0 0 / 0.06);
+  --shadow-inset: inset 0 2px 5px rgb(0 0 0 / 0.08);
+  color-scheme: light;
+}
+
+:root[data-theme=dark] {
+  --bg: #1f2024;
+  --sunken: #17181b;
+  --fg: #ececec;
+  --muted: #a3a6ad;
+  --faint: #6c7078;
+  --edge: #34363c;
+  --line: #2d2f34;
+  --accent: #2dd4bf;
+  --accent-soft: #123b37;
+  --accent-fg: #0b1f1d;
+  --danger: #f87171;
+  --danger-soft: #3a1d1d;
+  --win: #60a5fa;
+  --lin: #fb923c;
+  --fw: #fb7185;
+  --eng: #a78bfa;
+  --shadow-float: 0 24px 60px -10px rgb(0 0 0 / 0.65), 0 6px 18px -6px rgb(0 0 0 / 0.5);
+  --shadow-tile: 0 12px 28px -10px rgb(0 0 0 / 0.7), 0 2px 6px -2px rgb(0 0 0 / 0.4);
+  --shadow-inset: inset 0 2px 5px rgb(0 0 0 / 0.45);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-sunken: var(--sunken);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-edge: var(--edge);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-win: var(--win);
+  --color-lin: var(--lin);
+  --color-fw: var(--fw);
+  --color-eng: var(--eng);
+  --shadow-float: var(--shadow-float);
+  --shadow-tile: var(--shadow-tile);
+  --shadow-inset: var(--shadow-inset);
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Fraunces Variable', ui-serif, Georgia, serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+}
+
+html, body { background: var(--bg); color: var(--fg); font-family: var(--font-sans); font-feature-settings: 'cv11', 'ss01'; }
+::selection { background: var(--accent-soft); color: var(--fg); }
+
+/* Headings use the soft serif from the reference ("hi"); body stays Inter. */
+.display { font-family: var(--font-display); font-variation-settings: 'SOFT' 100, 'WONK' 0; letter-spacing: -0.02em; font-weight: 600; }
+
+/* Panels settle in when a page mounts. */
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise .35s cubic-bezier(.2,.7,.2,1) both; }
+.rise-1 { animation-delay: .04s; } .rise-2 { animation-delay: .08s; } .rise-3 { animation-delay: .12s; } .rise-4 { animation-delay: .16s; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(12px) scale(.97); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .rise, .toast { animation: none !important; } }
+
+kbd { @apply rounded-md border border-line bg-sunken px-1.5 py-0.5 font-mono text-[10px] text-muted; }
+body { transition: background-color .2s, color .2s; }
+
+@layer components {
+  /* Big floating panel (the reference image): same surface as the page, bright rim, soft halo. */
+  .panel { @apply rounded-[28px] border-[3px] border-edge bg-bg shadow-float; }
+  /* Smaller floating element: list rows, cards, buttons. */
+  .tile { @apply rounded-2xl border-2 border-edge bg-bg shadow-tile; }
+  .tile-hover { @apply transition duration-200 hover:-translate-y-0.5 hover:shadow-float; }
+  /* Sunken input well. */
+  .field { @apply w-full rounded-xl border-2 border-transparent bg-sunken px-3 py-2 text-sm text-fg shadow-inset placeholder:text-faint focus:border-accent focus:outline-none; }
+  .label { @apply mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.12em] text-faint; }
+
+  .btn { @apply inline-flex items-center justify-center gap-1.5 rounded-full border-2 border-edge bg-bg px-4 py-2 text-sm font-medium text-fg shadow-tile transition duration-200 hover:-translate-y-0.5 active:translate-y-0 disabled:pointer-events-none disabled:opacity-45; }
+  .btn-primary { @apply border-transparent bg-accent text-accent-fg; }
+  .btn-danger { @apply text-danger; }
+  .btn-ghost { @apply border-transparent bg-transparent shadow-none hover:bg-sunken hover:translate-y-0; }
+
+  .chip { @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold; }
+}
+
+/* Hatched "selected" fill from the sketch, in accent. */
+.hatched {
+  background-image: repeating-linear-gradient(135deg, var(--accent-soft) 0 7px, transparent 7px 14px);
+}
+
+/* Scrollbars that don't fight the soft look. */
+* { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+
+/* ── portal-only additions (everything above is webui/frontend/src/index.css verbatim, minus the
+   typography plugin; tests/test_portal_frontend.py keeps the two in step) ─────────────────── */
+/* noVNC paints into a canvas inside this well; black so letterboxing reads as "screen edge". */
+.screen-well { @apply overflow-hidden rounded-[22px] bg-black shadow-inset; }

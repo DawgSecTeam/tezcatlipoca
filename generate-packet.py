@@ -6,7 +6,7 @@ import json
 import sys
 from pathlib import Path
 
-from utils import load_compfile, load_users_config
+from utils import compfile_flag, compfile_value, load_compfile, load_users_config
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -154,6 +154,28 @@ def build_packet(comp_dir):
         f"not in this packet."
     )
     lines.append("")
+    if compfile_flag(comp_dir / "Compfile", "portal", 0):
+        # Student portal (docs/portal.md): Quotient team login -> Proxmox web console.
+        where = compfile_value(comp_dir / "Compfile", "portal_hostname", "")
+        lines.append("### Web console")
+        lines.append("")
+        lines.append(
+            (f"Reach your boxes through the range portal at **https://{where}**. "
+             if where else
+             "Reach your boxes through the range portal (its address is announced at "
+             "competition start). ")
+            + "Sign in with your team's scoreboard (Quotient) login: the portal lists your "
+            "team's boxes, and each one has a **Console** button that opens its screen in "
+            "the browser. Log in at the console with the box credentials above. Consoles "
+            "unlock when the competition starts."
+        )
+        lines.append("")
+        lines.append(
+            "The console is the machine's own screen, so it keeps working even if you "
+            "firewall the box or break its network. There is no clipboard: use the "
+            "console's **Type text…** button to send text as keystrokes."
+        )
+        lines.append("")
 
     lines.append("## Rules of engagement")
     lines.append("")

@@ -26,6 +26,10 @@ competitions/*/teams.json
 competitions/*/event.conf
 competitions/*/linux.credlist
 competitions/*/credentials.txt
+# Student portal: portal.json carries this run's Proxmox console token; the access log
+# carries team logins/IPs. Both 0600, never committed.
+competitions/*/portal.json
+competitions/*/portal-access.log
 competitions/*/.deploy_state.json
 competitions/*/.deploy-timings.jsonl
 competitions/*/nakon-config.json
@@ -86,3 +90,7 @@ competitions/*/run*-archive-*/
 terraform/state-archive-*/
 # Throwaway per-incident scratch scripts (embed live credentials by nature).
 .build-tmp/
+
+# Headscale remote-access artifacts carry per-person enrollment KEYS (single-use
+# preauth secrets) — same class as .env: never tracked.
+competitions/*/remote-access/

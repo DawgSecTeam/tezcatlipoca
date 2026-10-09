@@ -83,9 +83,13 @@ in-path firewall template (`unmanaged` + `in_path` boxes clone straight from it;
 rule above does not apply to unmanaged boxes). It is the stock `956 pfsense` plus SSH on, the
 deploy key in admin's authorizedkeys, LAN `vtnet1` = 192.168.1.1/24 and a serial console —
 built once by `tools/build-pfsense-provision-template.py` (clone 956 → type the config edits at
-the console → halt → convert). 956 stays only as the builder's source. Only exists on .150 — a
-firewall lineup needs it synced (or rebuilt with the tool) on any other node before preflight
-will pass.
+the console → halt → convert). 956 stays only as the builder's source. Since 2026-10-08 the
+template is **vmid 958** and carries the **qemu-guest-agent** (qemu-ga 11.1.2, installed
+offline from the FreeBSD 14 ABI-matched repo; booted by the `<system><afterbootupshellcmd>`
+tag in its config.xml — pfSense never runs `/usr/local/etc/rc.d/*`, see internals.md). The
+agentless pre-retrofit template is kept as `957 pfsense-provision-agentless-bak`. Only exists
+on .150 — a firewall lineup needs it synced (or rebuilt with the tool) on any other node
+before preflight will pass; .193 has no pfSense template at all (known-issues).
 
 **cyberrange .150 — appliance (VyOS, second firewall kind):** `962 vyos-provision` — the VyOS
 in-path firewall template for `firewall_kind "vyos"` (any `in_path` box whose template name
@@ -107,8 +111,12 @@ apply; the pin-free config lets names assign in PCI order on every clone. Only e
 > it "920 / debian13-lite"; the vmid was right and the name was stale.
 
 **cyberfield .193 — usable:** `1007 base-ubuntu24.04-fix`, `1006 base-debian13-lite-fix`,
-`1015 base-fedora44-fix`, `1019 base-alpine3.23-fix`, `1032 base-centos8-fix`,
-`1033 base-ubuntu20.04-fix`, `1220 engine-template` (cde-2026).
+`1019 base-alpine3.23-fix`, `1032 base-centos8-fix`, `1033 base-ubuntu20.04-fix`,
+`1220 engine-template` (historical CDE run).
+
+**cyberfield .193 — not present in the 2026-10-08 inventory:** `base-fedora44-fix` (older records
+associate it with VMID `1015`, but the live listing identified `1015` as `pfsense-provision-agentless-bak`).
+Refresh the inventory before relying on the older Fedora entry or scheduling any lineup that needs it.
 
 **cyberfield .193 — NOT usable:** `1001 base-ubuntu20.04`, `1002 base-ubuntu24.04`,
 `1005 base-debian13-cloudinit` ⚠️, `1004 base-alpine3.23`, `1003 base-fedora44`, and the
@@ -171,6 +179,42 @@ three past competitions were still on the nodes, 20 of them running:
 They hold vmids, consume `hdd`, and their golden templates can squat a slot a concurrent comp
 wants. Reclaim with `destroy-competition.py` from the matching comp dir/worktree — never an ad-hoc
 sweep. **[live]**
+
+## Headscale
+
+The tailnet's control plane is an external headscale instance the pipeline administers over
+ssh+sudo (`TEZ_HEADSCALE_*` in `.env`; remote access ships with every deploy —
+[remote-access.md](remote-access.md)). Facts captured 2026-10-08 **[live]**:
+
+- **Host**: a Debian 13 VPS at `45.76.27.253`, public name `headscale.hnasheralneam.dev`
+  (`server_url`), TLS via a Caddy container (80/443) proxying the headscale container's 8080.
+- **Runtime**: `headscale/headscale:latest` (**v0.29.1** verified), container name `headscale`,
+  mounts `/home/sysadmin/headscale/config → /etc/headscale` and `/home/sysadmin/headscale/data →
+  /var/lib/headscale`; sqlite DB. `docker` is root-only — every CLI call is
+  `sudo docker exec headscale headscale …`. Embedded DERP enabled (region 999, STUN udp/3479) —
+  participant clients relay here when no direct path exists.
+- **DNS**: MagicDNS on, base domain `vpn.hnasheralneam.dev` (node `eng-<comp>` is reachable as
+  `eng-<comp>.vpn.hnasheralneam.dev` inside the tailnet).
+- **Policy**: `policy.mode: file`, `policy.path: /etc/headscale/acl.hujson` (wired up 2026-10-08;
+  before that the file shipped with `path: ""` and the tailnet ran **policy-less = allow-all**).
+  The pipeline regenerates the whole policy from `tezcatlipoca-remote-access.json` beside it;
+  rollback backup: `config.yaml.bak-tezcatlipoca-20261008`.
+- **Users (2026-10-08)**: `cyberrange-infra` (service account, owns the infra nodes + our router
+  nodes), `hnasher1`, `dipam1`, `sdavis24`, `ckegly`. All pre-existing nodes are untagged and
+  keep full access via `group:full-access`.
+- **v0.29 CLI quirks**: there is **no `routes` command** (removed upstream — approvals ride the
+  policy's `autoApprovers`; listing is `nodes list-routes`); policy v2 syntax requires
+  `@`-suffixed usernames in groups AND in grant/acl sources (a bare name parses as a host
+  reference and fails validation); `policy check` wants `--file`; `users destroy -n <name>
+  --force` refuses while the user owns nodes; `nodes delete -i <id> --force`.
+- **Tag-sourced grants do not reach routers' packet filters** (live-proven 2026-10-08): a node
+  enrolled with a tagged key sees its netmap routes filtered correctly, but every tag-sourced
+  dial black-holes at the router — user and group sources work fine. tezcatlipoca therefore keys
+  participant grants on usernames, not tags (docs/remote-access.md). Upstream-worthy defect.
+- **The VPS is itself a tailnet node** (`headscale-vps`, 100.64.0.21); the mgmt-LAN subnet
+  router is `headscale-network-bridge` (100.64.0.4, hnasher1) advertising `10.0.0.0/24` — its
+  route predates the policy and stays Approved. Watch the classic trap: **a tailnet bridge can
+  answer ICMP for itself while forwarding nothing** — probe service ports, never ping.
 
 ## Node runtime behavior
 

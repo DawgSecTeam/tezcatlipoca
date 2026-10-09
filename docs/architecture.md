@@ -153,7 +153,9 @@ resumes are refused (`pipeline_version` in `.deploy_state.json`).
    phase 5, after the cutover — a pre-cutover restore point would be a firewallless
    network pretending to be in-path.)
 8. **Seed** — unchanged: poll Quotient HTTP, `seed_teams`, `unpause_engine`,
-   `create_injects`; each gated on `.deploy_state.json` flags.
+   `create_injects`; each gated on `.deploy_state.json` flags. Then, opt-in (Compfile
+   `portal 1`) and non-fatal, the student portal: per-comp console token, `/opt/tez-portal`
+   compose project on the engine ([portal.md](portal.md)).
 
 ## Data flow
 
@@ -365,7 +367,7 @@ module's source for the authoritative list).
 
 | File | Owns | Key fields |
 |---|---|---|
-| `.deploy_state.json` (0600) | The resume contract + every per-run secret | `last_phase`, `pipeline_version`, `scoring_vm_id`, `deployed_endpoint`, `multi_node`, `teams`, `admin_password`, `inject_password`, `postgres_password`, `redis_password`, `box_password`, `box_creds`, `domain_creds`, `engine_template_vmid`, `engine_template_hash`, `engine_build_info`, `golden_template_ids`, `golden_ids_by_slot`, `golden_hashes`, `plant_coverage_failed`, `nakon_failed_steps`, `seeded`, `engine_unpaused`, `injects_created` |
+| `.deploy_state.json` (0600) | The resume contract + every per-run secret | `last_phase`, `pipeline_version`, `scoring_vm_id`, `deployed_endpoint`, `multi_node`, `teams`, `admin_password`, `inject_password`, `postgres_password`, `redis_password`, `box_password`, `box_creds`, `domain_creds`, `engine_template_vmid`, `engine_template_hash`, `engine_build_info`, `golden_template_ids`, `golden_ids_by_slot`, `golden_hashes`, `plant_coverage_failed`, `nakon_failed_steps`, `seeded`, `engine_unpaused`, `injects_created`, `portal_console_tokens`, `portal_session_secret`, `portal_up`, `portal_url` |
 | `.template-hashes.json` (0600) | M4 reuse gate: content hash + hash inputs per template | `engine` = `{hash, inputs}`, `golden` = `{<box name>: {hash, inputs}}`, plus an `updated` timestamp |
 | `.frozen.json` (0600) | Freeze record for a verified competition | `frozen_at`, `code` (git commit info), `hashes` = `{engine, golden}`, `verify_report` = `{gates, plant_coverage}`, `windows_domain_validated` |
 | `placement.json` | Multi-node placement (absent = single node) | `version`, `comp`, `engine_vmid`, `engine_node`, `nodes` (per-host records), `slots`, `team_nodes`, `team_slots`, `team_identifiers`, `satellites[]` (`name`, `slot`, `teams`, `jump_vmid`, `jump_mgmt_ip`, `anchor_identifier`), `jump_mgmt_ips`, `probe_summary`, `computed_at`; see [multi-node.md](multi-node.md) |

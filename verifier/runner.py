@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 
 from quotient.setup import expected_service_names
 
-from verifier import (creds, domains, engine, firewall, isolation, misconfig, packet, red, reports,
-                      scoreboard, state_gates)
+from verifier import (creds, domains, engine, firewall, isolation, misconfig, packet, portal,
+                      red, remote_access, reports, scoreboard, state_gates)
 from verifier.model import CheckError, bool_gate, gate_skip
 
 
@@ -104,6 +104,14 @@ def run_gates(args, comp_dir, ctx, teams, admin_password, boxes, base_url, budge
         run.add(isolation.check_isolation(ctx, teams, boxes))
     if not run.spent("firewall_in_path"):
         run.add(firewall.check_firewall_in_path(ctx, comp_dir, teams))
+    if not run.spent("portal"):
+        run.add(portal.check_portal_gate(ctx, comp_dir, teams, admin_password))
+    if not run.spent("remote_access"):
+        try:
+            run.add(remote_access.check_remote_access(comp_dir, teams, ctx))
+        except CheckError as e:
+            print(f"  SKIP  — remote-access check couldn't run: {e}")
+            run.add(gate_skip("remote_access", "check couldn't run"))
     if args.red_identity:
         seg_ip = args.red_seg_ip or red.default_red_seg_ip()
         if not run.spent("red_identity"):

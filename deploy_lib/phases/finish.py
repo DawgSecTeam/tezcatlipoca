@@ -31,6 +31,10 @@ def write_credentials_file(ctx):
         f"Scoreboard:  http://{ctx.scoring_ip}",
         f"admin  {ctx.admin_password}",
     ]
+    portal = getattr(ctx, "state", None) or {}
+    if portal.get("portal_up"):
+        cred_lines.append(f"Portal:  {portal.get('portal_url')}  (team + admin logins "
+                          "above; team consoles open when an admin opens access)")
     if getattr(ctx, "scoring_password", ""):
         cred_lines.append("# automation account: a SECOND admin, so a scheduled login "
                           "(round-loop watchdog, unattended verify) never evicts the "
@@ -61,6 +65,9 @@ def print_live_summary(ctx):
     print(f"Scenario: {ctx.scenario}")
     print(f"Saved to: competitions/{ctx.comp_name}/  (credentials.txt, mode 0600)")
     print(f"\nScoreboard:    http://{ctx.scoring_ip}")
+    portal = getattr(ctx, "state", None) or {}
+    if portal.get("portal_up"):
+        print(f"Portal:        {portal.get('portal_url')}")
     print(f"Admin login:   admin / {ctx.admin_password}")
     if getattr(ctx, "scoring_password", ""):
         print(f"Scoring login: scoring / {ctx.scoring_password}   (automation; separate "

@@ -51,7 +51,7 @@ def phase5_firewall_bootstrap(ctx):
         config_paths = write_team_configs(ctx.comp_dir, ctx.teams,
                                           red_dnat_spec=red_dnat_spec, kind=kind)
     with timed(ctx.comp_dir, 5, "firewall_bootstrap", f"x{len(fw_targets)}"):
-        bootstrap_firewalls(ctx.teams, fw_targets, config_paths, ctx.tf_ctx)
+        bootstrap_firewalls(ctx.teams, fw_targets, config_paths, ctx.tf_ctx, node=ctx.node)
     with timed(ctx.comp_dir, 5, "engine_cutover"):
         cut_over_engine(ctx.tf_ctx, ctx.teams)
     # The first managed box of each team (boxes.json order) proves the routed path a
