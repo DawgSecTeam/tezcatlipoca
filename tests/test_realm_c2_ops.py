@@ -88,6 +88,30 @@ class LocalConfigTests(unittest.TestCase):
         self.assertEqual(path.name, ".realm-c2-config.yaml")
         self.assertEqual(realm["c2_ip"], "10.0.0.198")
 
+    def test_engine_ip_comes_from_the_comps_credentials_file(self):
+        """Same source bad-auto reads: the published scoreboard URL."""
+        (Path(self.tmp) / "credentials.txt").write_text(
+            "Competition: scrim-one\nScoreboard:  http://10.0.0.252\nadmin  pw\n")
+        self.assertEqual(rc.engine_ip_for(self.tmp), "10.0.0.252")
+
+    def test_engine_ip_falls_back_to_the_deploy_env(self):
+        with mock.patch.dict(os.environ, {"TF_VAR_engine_mgmt_ip": "10.0.0.251"}):
+            self.assertEqual(rc.engine_ip_for(self.tmp), "10.0.0.251")
+        with mock.patch.dict(os.environ, {"TF_VAR_engine_mgmt_ip": ""}, clear=False):
+            os.environ.pop("TF_VAR_engine_mgmt_ip", None)
+            self.assertIsNone(rc.engine_ip_for(self.tmp))
+
+    def test_derived_config_carries_the_engine_ip(self):
+        """`badauto deploy` needs the engine address for the DNAT; the derived config
+        must be self-sufficient (a relative --competition path broke its own lookup)."""
+        import yaml
+        self.bad_auto_cfg.write_text("realm:\n  enabled: true\n")
+        (Path(self.tmp) / "credentials.txt").write_text("Scoreboard:  http://10.0.0.252\n")
+        path, _ = rc.prepare_local_c2(self.tmp, "10.0.0.198")
+        cfg = yaml.safe_load(path.read_text())
+        self.assertEqual(cfg["deploy"]["engine_ip"], "10.0.0.252")
+        self.assertEqual(cfg["deploy"]["red_ip"], "10.0.0.198")
+
 
 class UnitGenerationTests(unittest.TestCase):
     def test_default_realm_gets_every_transport(self):
@@ -205,6 +229,43 @@ class BashUnitTests(unittest.TestCase):
                                  env=env, capture_output=True, text=True)
         self.assertNotEqual(run.returncode, 0)
         self.assertIn("DBPW", run.stderr + run.stdout)
+
+
+class PubkeyTests(unittest.TestCase):
+    """The server key every planted beacon must encrypt to (IMIX_SERVER_PUBKEY)."""
+
+    JOURNAL = ('time=2026-10-09T02:39:15Z level=INFO msg="public key: '
+               'grXG751R6OJm07dagC9m0iSlvWmSHGuGa+4XHRrY5E4="')
+    PK = "grXG751R6OJm07dagC9m0iSlvWmSHGuGa+4XHRrY5E4="
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="tz-realmc2-pk-")
+
+    def test_pubkey_is_read_from_the_tavern_journal(self):
+        with mock.patch.object(rc, "_ssh", return_value=_CP(0, out=self.JOURNAL)):
+            self.assertEqual(rc.tavern_pubkey("10.0.0.198", "key"), self.PK)
+
+    def test_missing_pubkey_is_none(self):
+        with mock.patch.object(rc, "_ssh", return_value=_CP(0, out="nothing here")):
+            self.assertIsNone(rc.tavern_pubkey("10.0.0.198", "key"))
+
+    def test_push_sends_a_quoted_base64_payload(self):
+        import base64
+        with mock.patch.object(rc, "_ssh", return_value=_CP(0)) as ssh:
+            rc.set_realm_pubkey("key", "10.0.0.198", self.PK)
+        cmd = ssh.call_args[0][2]
+        self.assertIn("base64 -d", cmd)
+        decoded = base64.b64decode(cmd.split()[1]).decode()
+        self.assertIn("realm.pubkey", decoded)
+        self.assertIn(self.PK, decoded)
+
+    def test_successful_provision_reports_and_pushes_the_pubkey(self):
+        with mock.patch.object(rc, "_scp", return_value=_CP(0)), \
+             mock.patch.object(rc, "_ssh", return_value=_CP(0, out=self.JOURNAL)) as ssh:
+            out = rc.provision_realm_c2(self.tmp, "10.0.0.198", "key", {})
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["pubkey"], self.PK)
+        self.assertTrue(any("base64 -d" in str(c) for c in ssh.call_args_list))
 
 
 class ExecutionTests(unittest.TestCase):

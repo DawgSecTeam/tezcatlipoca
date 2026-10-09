@@ -43,7 +43,9 @@ Teardown needs nothing extra: tavern lives on red01, which `badauto destroy`
 already removes.
 """
 
+import base64
 import json
+import os
 import re
 import secrets
 import shlex
@@ -121,6 +123,27 @@ def compfile_knobs(comp_dir):
     }
 
 
+_ENGINE_URL_RE = re.compile(r"https?://(\d+\.\d+\.\d+\.\d+)")
+
+
+def engine_ip_for(comp_dir):
+    """The scoring engine's mgmt IP, or None.
+
+    Source order matches the consumer: the competition's `credentials.txt` is where
+    tezcatlipoca publishes the scoreboard URL (`Scoreboard: http://<engine>`) and is
+    what `badauto deploy` reads for its DNAT, with the deploy environment's
+    `TF_VAR_engine_mgmt_ip` as the fallback.
+    """
+    try:
+        text = (Path(comp_dir) / "credentials.txt").read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    m = _ENGINE_URL_RE.search(text)
+    if m:
+        return m.group(1)
+    return os.environ.get("TF_VAR_engine_mgmt_ip") or None
+
+
 def load_bad_auto_config(config_path=None):
     """bad-auto's standing config (YAML or JSON — stage_red rewrites it as JSON)."""
     path = Path(config_path) if config_path else (BAD_AUTO / "config.yaml")
@@ -180,6 +203,12 @@ def prepare_local_c2(comp_dir, red_ip):
 
     Called from plant_assume_breach BEFORE `badauto deploy`, because the engine
     DNAT bakes in `realm.c2_ip` at deploy time.
+
+    The derived config also carries `deploy.engine_ip`: `badauto deploy` needs the
+    scoring engine's address to install the DNAT, and its own fallback reads
+    `<comp_dir>/credentials.txt` — which only works when that path is absolute
+    (see red_plant_ops._deploy_red). Setting it here makes the deployed config
+    self-sufficient.
     """
     if not (BAD_AUTO / "config.yaml").exists():
         print("  realm-c2: no bad-auto config.yaml — C2 stays on its configured host")
@@ -188,6 +217,9 @@ def prepare_local_c2(comp_dir, red_ip):
     if cfg is None:
         print("  realm-c2: realm disabled in bad-auto config — no tavern to provision")
         return None, None
+    engine_ip = engine_ip_for(comp_dir)
+    if engine_ip and not (cfg.get("deploy") or {}).get("engine_ip"):
+        cfg.setdefault("deploy", {})["engine_ip"] = engine_ip
     return write_local_c2_config(comp_dir, cfg), cfg["realm"]
 
 
@@ -296,6 +328,27 @@ UDIR="$HOME/.config/systemd/user"
 
 : "${{DBPW:?DBPW env var must carry the tavern DB password}}"
 
+# The tavern build is a from-source Go build. Its caches and scratch default to
+# /tmp and ~/go on the ROOT filesystem, and a fresh red01 clone ships a 10G root
+# LV — a build dies mid-compile with "mkdir /tmp/go-build…: no space left on
+# device" (live 2026-10-08) that reads like a code error. Claim any unallocated
+# VG space, keep every Go dir on the disk, and say plainly if headroom is short
+# (the operator then resizes red01's disk and grows the filesystem: growpart +
+# pvresize + lvextend -r -l +100%FREE + resize2fs).
+export TMPDIR="$HOME/.cache/tmp" GOCACHE="$HOME/.cache/go-build" GOMODCACHE="$HOME/go/pkg/mod"
+mkdir -p "$TMPDIR" "$GOCACHE" "$GOMODCACHE"
+say "growing the root filesystem into unallocated VG space (if any)"
+ROOT=$(findmnt -no SOURCE /)
+if sudo -n lvs "$ROOT" >/dev/null 2>&1; then
+  sudo -n lvextend -r -l +100%FREE "$ROOT" >/dev/null 2>&1 || true
+fi
+FREE_MB=$(df -Pm / | awk 'NR==2 {{print $4}}')
+say "root filesystem: $(df -h / | awk 'NR==2 {{print $2" total, "$4" free"}}')"
+if [ "$FREE_MB" -lt 8000 ]; then
+  say "WARNING: only ${{FREE_MB}}MB free on / — the tavern build wants ~8GB."
+  say "         resize red01's disk, then growpart+pvresize+lvextend -r -l +100%FREE+resize2fs"
+fi
+
 if systemctl --user is-active --quiet tavern.service 2>/dev/null && [ -x "$BIN" ]; then
   say "tavern already provisioned and active — nothing to do"
   exit 0
@@ -401,6 +454,54 @@ def _scp(ssh_key, *args, timeout=180):
         capture_output=True, text=True, timeout=timeout)
 
 
+# ------------------------------------------------------- server key propagation
+
+_PUBKEY_RE = re.compile(r"public key: ([A-Za-z0-9+/=]{20,})")
+# Merge realm.pubkey into red01's live config (JSON on the VM) through base64, so
+# no shell/heredoc quoting can eat it.
+_SET_PUBKEY_PY = """
+import json
+p = '/etc/bad-auto/config.yaml'
+with open(p) as fh:
+    cfg = json.load(fh)
+cfg.setdefault('realm', {})['pubkey'] = '%s'
+with open(p, 'w') as fh:
+    json.dump(cfg, fh, indent=2)
+print('realm.pubkey set on red01')
+"""
+
+
+def tavern_pubkey(red_ip, ssh_key, timeout=90):
+    """The tavern server public key (base64) as tavern logs it at startup.
+
+    Every planted beacon must carry it as ``IMIX_SERVER_PUBKEY``: imix encrypts its
+    callbacks with the server key and silently falls back to a compiled-in one when
+    the env var is unset — a beacon built against a DIFFERENT tavern then registers
+    nothing and dies with "failed to decrypt chacha20poly1305". The key is generated
+    once (SECRETS_FILE_PATH persists it), so it is stable for the range's life.
+    Returns None when it cannot be read.
+    """
+    run = _ssh(ssh_key, red_ip,
+               "journalctl --user -u tavern.service --no-pager 2>/dev/null "
+               "| grep -oE 'public key: [A-Za-z0-9+/=]+' | tail -1", timeout=timeout)
+    m = _PUBKEY_RE.search((run.stdout or "") + (run.stderr or ""))
+    return m.group(1) if m else None
+
+
+def set_realm_pubkey(ssh_key, red_ip, pubkey, timeout=90):
+    """Write ``realm.pubkey`` into red01's /etc/bad-auto/config.yaml.
+
+    The planters run ON red01 and read that file, and the key only exists once
+    tavern has generated it — which is AFTER the deploy wrote the config. So the
+    first provision of a range pushes it here, before the day-0 seed plants any
+    beacon. (`realm.pubkey` is in bad-auto's CONFIG_CONTRACT, so later deploys
+    carry it from the operator's config and this becomes a no-op refresh.)
+    """
+    payload = base64.b64encode((_SET_PUBKEY_PY % pubkey).encode()).decode()
+    return _ssh(ssh_key, red_ip,
+                f"echo {payload} | base64 -d | sudo -n python3 -", timeout=timeout)
+
+
 def stage_implants(ssh_key, red_ip, implant_host, realm=None, timeout=900):
     """Relay the prebuilt imix implants implant_host -> red01's staging paths.
 
@@ -487,4 +588,17 @@ def provision_realm_c2(comp_dir, red_ip, ssh_key, realm, *,
         return summary
     summary["ok"] = True
     summary["mcp"] = "/mcp"
+    # Give the planters the key every beacon must encrypt to. Without it imix falls
+    # back to a compiled-in key: the beacon plants, looks active, and never
+    # registers (tavern answers "failed to decrypt chacha20poly1305").
+    pubkey = tavern_pubkey(red_ip, ssh_key)
+    if pubkey:
+        push = set_realm_pubkey(ssh_key, red_ip, pubkey)
+        summary["pubkey"] = pubkey
+        if push.returncode != 0:
+            print("  realm-c2: WARNING — could not write realm.pubkey on red01 "
+                  f"({(push.stderr or push.stdout or '').strip()[-120:]})")
+    else:
+        print("  realm-c2: WARNING — could not read tavern's public key; planted "
+              "beacons will fall back to imix's built-in key and never register")
     return summary
