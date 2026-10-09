@@ -75,12 +75,13 @@ function NewFirewallModal({ open, onClose, comp, onCreated }) {
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value })
   const taken = comp.boxes.some((b) => b.name === form.name)
   const exists = comp.boxes.some((b) => b.in_path)
-  // Default the template to whatever pfSense-shaped template the node knows; the
-  // OsPicker stays available for a differently-named appliance template.
+  // Default the template to whatever firewall-shaped template the node knows (pfSense
+  // first, VyOS as the second kind); the OsPicker stays available for a
+  // differently-named appliance template.
   useEffect(() => {
     if (open && !form.template) {
       api.templates().then((ts) => {
-        const fw = ts.find((t) => /pfsense|opnsense/i.test(t.name))
+        const fw = ts.find((t) => /pfsense|opnsense|vyos/i.test(t.name))
         if (fw) setForm((f) => ({ ...f, template: fw.name }))
       }).catch(() => {})
     }
@@ -112,7 +113,7 @@ function NewFirewallModal({ open, onClose, comp, onCreated }) {
             </div>
           </Field>
         </div>
-        <Field label="Operating system" hint="A pfSense-class appliance template on the node">
+        <Field label="Operating system" hint="A pfSense- or VyOS-class appliance template on the node">
           <button type="button" onClick={() => setPicking(true)} className={`${inputCls} flex items-center justify-between text-left font-mono ${form.template ? '' : 'text-faint'}`}>
             <span>{form.template || 'Choose a template…'}</span>
             {form.template ? <PlatformBadge platform="firewall" /> : <Icon name="chevron" className="h-3.5 w-3.5" />}

@@ -72,6 +72,33 @@ class Phase5Firewall(unittest.TestCase):
                 firewall.phase5_firewall_bootstrap(ctx)
             self.assertIn("pfsense-config-orig.xml", str(cm.exception))
 
+    def test_vyos_lineup_needs_no_seed_and_writes_both_passes(self):
+        """The VyOS config is fully generated — the pfSense seed-missing error must not
+        fire for a vyos template, and the pass-A/pass-B artifacts both land."""
+        with tempfile.TemporaryDirectory() as root:
+            comp = self._comp(root, with_seed=False)
+            ctx = self._ctx(comp)
+            for t in ctx.all_targets:
+                if t["box"]["name"] == "fw01":
+                    t["box"]["template"] = "vyos-provision"
+            with patch.object(firewall, "bootstrap_firewalls") as boot, \
+                    patch.object(firewall, "cut_over_engine"), \
+                    patch.object(firewall, "verify_in_path") as ver, \
+                    patch.object(firewall, "run_concurrent"), \
+                    patch("builtins.print"):
+                firewall.phase5_firewall_bootstrap(ctx)
+            for ident in ("120", "121"):
+                a = comp / "vyos" / f"config-team{ident}.cmds"
+                b = comp / "vyos" / f"config-team{ident}-lan.cmds"
+                self.assertTrue(a.exists() and b.exists())
+                self.assertIn("eth0 address 172.31." + ident, a.read_text())
+                self.assertIn(f"eth1 address 192.168.{ident}.1/24", b.read_text())
+            self.assertFalse((comp / "pfsense").exists() and
+                             any((comp / "pfsense").glob("config-team*.xml")))
+            self.assertIn("vyos-provision", str(boot.call_args))
+            self.assertEqual(ver.call_args.kwargs.get("kind"), "vyos")
+            self.assertTrue(ctx.state["firewalls_bootstrapped"])
+
     def test_skips_without_firewall_or_on_resume_past_5(self):
         with tempfile.TemporaryDirectory() as root:
             comp = self._comp(root)

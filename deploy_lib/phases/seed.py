@@ -1,6 +1,8 @@
-"""Phase 8: seed teams, unpause the engine, create injects — each once."""
+"""Phase 8: seed teams, unpause the engine, create injects — each once; then the
+student portal (opt-in, non-fatal)."""
 
 from config_ops import injects_fingerprint, resolve_inject_times
+from portal_ops import deploy_portal
 from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
 from ssh_ops import wait_for_http
 from timing import timed
@@ -72,3 +74,7 @@ def phase8_seed(ctx):
             ctx.save_state()
     elif ctx.injects:
         print("  Injects already created (resume) — skipping.")
+
+    # Last: the portal needs Quotient's final event.conf (team logins) and the final box
+    # set. Opt-in via Compfile `portal 1`, and it never fails the deploy (portal_ops).
+    deploy_portal(ctx)

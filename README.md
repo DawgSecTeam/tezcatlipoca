@@ -36,6 +36,7 @@ Operations, or Reports, with one line on when to read it. The most-used entry po
 | [docs/security-disclosures.md](docs/security-disclosures.md) | Credential-exposure history and the current open rotation |
 | [docs/tests.md](docs/tests.md) | The offline test suite: how to run it, what it covers |
 | [webui/README.md](webui/README.md) | The web UI: what each screen edits, the catalog source, the deploy panel |
+| [docs/portal.md](docs/portal.md) | The student portal: Quotient team login → Proxmox web console per box (Compfile `portal 1`) |
 | [AGENTS.md](AGENTS.md) | Repo rules for coding agents, including the practice-run worktree rule |
 
 ## Quickstart

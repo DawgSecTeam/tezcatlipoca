@@ -88,7 +88,10 @@ def plan_targets(manifest, *, comp_dir=None):
         targets.append({"name": "comp", "route": "local", "kind": "local",
                         "root": str(comp_dir), "to": "evidence/harness/",
                         "note": "per-competition deploy sidecar",
-                        "want": [{"local_name": ".deploy-timings.jsonl"}]})
+                        "want": [{"local_name": ".deploy-timings.jsonl"}],
+                        # Saved by portal_ops.teardown_portal when the comp ran the
+                        # student portal; a glob, so comps without one record nothing.
+                        "want_globs": [{"pattern": "portal-access.log"}]})
 
     engine = resolve_recorded(paths.get("engine_evidence"), comp_dir)
     if engine and Path(engine).is_dir():

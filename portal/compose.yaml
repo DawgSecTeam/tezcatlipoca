@@ -1,0 +1,40 @@
+# /opt/tez-portal/compose.yaml on the scoring engine (pushed by portal_ops.deploy_portal).
+#
+# The portal is published on 127.0.0.1 ONLY: team boxes reach the engine on 192.168.<id>.1,
+# and anything bound wider would put the console relay (and its Proxmox token) one hop from
+# every team. Students arrive through cloudflared, which dials out; operators use
+#   ssh -L 8443:127.0.0.1:8443 <user>@<engine>
+services:
+  portal:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8443:8000"
+    # event.conf is a single-file bind mount: it follows Quotient's in-place rewrites
+    # (push_event_conf writes through `sudo tee`, same inode). A writer that replaced the
+    # file by rename would leave the portal on the old inode until `compose restart portal`.
+    volumes:
+      - /opt/quotient/config/event.conf:/config/event.conf:ro
+      - ./portal.json:/config/portal.json:ro
+      - ./state:/state
+    # Its own healthcheck, deliberately not a line in range-healthcheck.sh: that script is
+    # baked into the engine TEMPLATE (engine_health_ops via bootstrap_scoring_engine), and
+    # touching it would rebuild every competition's engine template for an opt-in feature.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Started only with `--profile tunnel` (TEZ_PORTAL_TUNNEL_TOKEN set and the stable hostname
+  # not owned by another live range — portal_ops.tunnel_decision).
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.1
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - portal

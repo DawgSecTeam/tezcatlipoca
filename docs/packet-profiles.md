@@ -12,8 +12,9 @@ Two profiles ship as references:
   5 boxes incl. in-path pfSense, `mira-{team}.corp.sus`, 9 scored services with
   dual-credit SSH pairs, packet-published credentials, day schedule with a lunch freeze.
 - `packets/maccdc-q-2026/packet.yaml` — MACCDC Qualifier rehearsal: the 11-VM pod
-  collapses to 8 boxes; every PA/FTD/VyOS/Win11/POP3/public-pool gap is recorded in the
-  fidelity report rather than silently dropped.
+  collapses to 8 boxes; the VyOS perimeter is expressed for real (the `vyos-provision`
+  in-path firewall kind, live-proven 2026-10-08); every remaining PA/FTD/Win11/POP3/
+  public-pool gap is recorded in the fidelity report rather than silently dropped.
 
 ## The workflow
 

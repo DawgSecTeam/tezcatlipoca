@@ -1,0 +1,8 @@
+configure
+delete interfaces ethernet eth1 address 192.168.1.1/24
+set interfaces ethernet eth1 address 192.168.142.1/24
+commit
+save
+exit
+show interfaces ethernet eth1 | grep 192.168.142.1
+exit

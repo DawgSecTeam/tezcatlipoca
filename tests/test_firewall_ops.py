@@ -1,6 +1,6 @@
 """In-path firewall support, offline: the SSH config push, the per-team pfSense config
-surgery (against the same anchor stanzas the real factory seed carries), and the
-post-cutover netplan the engine cutover writes."""
+surgery (against the same anchor stanzas the real factory seed carries), the per-team
+VyOS set-command generation, and the post-cutover netplan the engine cutover writes."""
 
 import sys
 import unittest
@@ -8,7 +8,9 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from firewall_ops import cutover_netplan_yaml, generate_team_config
+from firewall_ops import (cutover_netplan_yaml, firewall_kind, generate_team_config,
+                          generate_vyos_commands, generate_vyos_lan_commands,
+                          vyos_lan_config_path)
 
 # The anchors generate_team_config's string surgery keys on — a minimal stand-in for the
 # factory config.xml (the real seed lives in competitions/*/pfsense/, not in the repo
@@ -96,6 +98,169 @@ class TeamConfig(unittest.TestCase):
         self.assertEqual(out.count("<target>"), 1)
         self.assertIn("<target>172.31.122.1</target>", out)
         self.assertIn("<mode>disabled</mode>", out)
+
+
+class FirewallKind(unittest.TestCase):
+    def test_vyos_by_substring_everything_else_is_pfsense(self):
+        self.assertEqual(firewall_kind("vyos-provision"), "vyos")
+        self.assertEqual(firewall_kind("base-vyos-1.5"), "vyos")
+        self.assertEqual(firewall_kind("pfsense-provision"), "pfsense")
+        self.assertEqual(firewall_kind("pfsense"), "pfsense")
+        self.assertEqual(firewall_kind(None), "pfsense")   # old fixtures carry no template
+
+
+class VyosCommands(unittest.TestCase):
+    """The generated pass-A/pass-B CLI scripts (pure functions)."""
+
+    def test_wan_side_config_but_no_lan_address_change(self):
+        """Pass A must not touch eth1: a commit that moves it kills the SSH session
+        pushing the config (bootstrap_firewalls flips eth1 as pass B over the WAN)."""
+        out = generate_vyos_commands("120")
+        self.assertIn("set interfaces ethernet eth0 address 172.31.120.2/30", out)
+        self.assertIn("set protocols static route 0.0.0.0/0 next-hop 172.31.120.1", out)
+        self.assertIn("set system host-name fw-team120", out)
+        self.assertIn("set service ssh port 22", out)
+        self.assertNotIn("set interfaces ethernet eth1", out.split("commit")[0])
+
+    def test_no_filter_rules_circinus_default_accepts_the_path(self):
+        """The 1.5 firewall revamp removed interface-attached rulesets AND the
+        `firewall interface` attachment (live-found 2026-10-08); the pfSense WAN rule
+        set's effect is what circinus's default-accept chains already allow, so the
+        generated script ships none of it."""
+        out = generate_vyos_commands("120")
+        self.assertNotIn("set firewall", out)
+        self.assertNotIn("inbound-interface", out)
+
+    def test_apt_cacher_dnat(self):
+        out = generate_vyos_commands("123")
+        self.assertIn("set nat destination rule 10 destination address 192.168.123.1", out)
+        self.assertIn("set nat destination rule 10 destination port 3142", out)
+        self.assertIn("set nat destination rule 10 translation address 172.31.123.1", out)
+
+    def test_dnat_spec_targets_and_substitution(self):
+        out = generate_vyos_commands("121", red_dnat_spec=["4470->10.200.0.{tid}"])
+        self.assertIn("set nat destination rule 20 destination port 4470", out)
+        self.assertIn("set nat destination rule 20 translation address 10.200.0.121", out)
+
+    def test_script_commits_saves_and_ends_on_a_grep_canary_then_exit(self):
+        out = generate_vyos_commands("120")
+        tail = out.strip().splitlines()[-5:]
+        self.assertEqual(tail, ["commit", "save", "exit",
+                                "show configuration commands | grep host-name",
+                                "exit"])
+
+    def test_lan_pass_flips_eth1_off_the_bootstrap_address(self):
+        out = generate_vyos_lan_commands("120")
+        self.assertIn("delete interfaces ethernet eth1 address 192.168.1.1/24", out)
+        self.assertIn("set interfaces ethernet eth1 address 192.168.120.1/24", out)
+        self.assertIn("show interfaces ethernet eth1 | grep 192.168.120.1", out)
+        self.assertNotIn("eth0", out)
+
+    def test_lan_artifact_path_pairs_with_pass_a(self):
+        self.assertEqual(vyos_lan_config_path(Path("/x/vyos/config-team7.cmds")),
+                         Path("/x/vyos/config-team7-lan.cmds"))
+
+
+class VyosBootstrap(unittest.TestCase):
+    """The two-pass orchestration, with the engine/SSH layer faked."""
+
+    def _run(self, wan_up):
+        import tempfile
+        import firewall_ops as fo
+        from unittest.mock import MagicMock, patch
+        calls = []
+        with tempfile.TemporaryDirectory() as d:
+            cmds = Path(d) / "config-team120.cmds"
+            cmds.write_text("configure\ncommit\n")
+            vyos_lan_config_path(cmds).write_text("configure\ncommit\n")
+
+            def probe(ctx, ip, port, timeout=4):
+                return wan_up if ip == "172.31.120.2" else False
+
+            def wait(ctx, ip, port, budget_s=300, interval_s=10):
+                # the bootstrap address answers (template SSH) and the WAN answers after
+                # pass A's live commit
+                return ip in ("172.31.120.2", fo.BOOTSTRAP_FW_IP)
+
+            def push(ctx, ip, script, canary, who, budget_s=420):
+                calls.append(("push", ip, canary))
+                return script
+
+            with patch.object(fo, "ssh_on_gateway", MagicMock()), \
+                    patch.object(fo, "_probe_tcp", side_effect=probe), \
+                    patch.object(fo, "_wait_tcp", side_effect=wait), \
+                    patch.object(fo, "_push_vyos", side_effect=push):
+                fo.bootstrap_firewalls(
+                    {"team1": {"identifier": "120", "password": "x"}},
+                    [{"team_key": "team1", "identifier": "120", "vmid": 9,
+                      "box": {"name": "fw01", "template": "vyos-provision"}}],
+                    {"team1": cmds}, {}, log=lambda *_: None)
+        return calls
+
+    def test_fresh_firewall_pass_a_on_bootstrap_then_pass_b_on_wan(self):
+        calls = self._run(wan_up=False)
+        self.assertEqual([("push", "192.168.1.1", "fw-team120"),
+                          ("push", "172.31.120.2", "192.168.120.1")], calls)
+
+    def test_rerun_takes_both_passes_on_the_wan_address(self):
+        calls = self._run(wan_up=True)
+        self.assertEqual([c[1] for c in calls], ["172.31.120.2", "172.31.120.2"])
+        self.assertEqual([c[2] for c in calls], ["fw-team120", "192.168.120.1"])
+
+
+FAKE_SSH_CTX = {"ssh_key_path": "k", "vm_username": "ops",
+                "scoring_engine_ip": "10.0.0.252"}
+
+
+class PushVyos(unittest.TestCase):
+    def test_success_needs_clean_exit_and_the_canary(self):
+        """circinus commits print NOTHING on success — canary + clean exit are the only
+        signals; a non-zero exit or a quiet canary is a failure either way."""
+        import firewall_ops as fo
+        from unittest.mock import patch
+        clock = {"t": 0.0}
+        for rc, out in ((1, "set system host-name 'fw-team120'\n"),
+                        (0, "nothing useful")):
+            with patch.object(fo, "_pty_session", return_value=(rc, out)), \
+                    patch.object(fo.time, "time", side_effect=lambda: clock["t"]), \
+                    patch.object(fo.time, "sleep",
+                                 side_effect=lambda s: clock.update(t=clock["t"] + 100)):
+                with self.assertRaises(RuntimeError):
+                    fo._push_vyos(FAKE_SSH_CTX, "192.168.1.1", "script", "fw-team120",
+                                  "team1", budget_s=150)
+        with patch.object(fo, "_pty_session",
+                          return_value=(0, "set system host-name 'fw-team120'\n")), \
+                patch.object(fo.time, "sleep"):
+            fo._push_vyos(FAKE_SSH_CTX, "192.168.1.1", "script", "fw-team120", "team1")
+
+    def test_retries_a_booting_appliance_then_gives_up_naming_the_failure(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        clock = {"t": 0.0}
+        with patch.object(fo, "_pty_session", return_value=(255, "")), \
+                patch.object(fo.time, "time", side_effect=lambda: clock["t"]), \
+                patch.object(fo.time, "sleep",
+                             side_effect=lambda s: clock.update(t=clock["t"] + 100)):
+            with self.assertRaises(RuntimeError) as cm:
+                fo._push_vyos(FAKE_SSH_CTX, "192.168.1.1", "script", "fw-team120",
+                              "team1", budget_s=150)
+        self.assertIn("rc=255", str(cm.exception))
+
+    def test_session_targets_the_vyos_cli_with_no_remote_command(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        seen = {}
+
+        def fake(args, script, timeout_s=45):
+            seen["args"], seen["script"] = args, script
+            return 0, "fw-team120"
+        with patch.object(fo, "_pty_session", side_effect=fake):
+            fo._push_vyos(FAKE_SSH_CTX, "192.168.1.1", "configure\n", "fw-team120",
+                          "team1")
+        self.assertTrue(seen["args"][-1].startswith("vyos@"))
+        self.assertIn("-tt", seen["args"])
+        self.assertNotIn("-c", seen["args"])    # no remote command: stdin drives the CLI
+        self.assertEqual(seen["script"], "configure\n")
 
 
 class CutoverNetplan(unittest.TestCase):
@@ -242,6 +407,124 @@ class VerifyInPathConvergence(unittest.TestCase):
                 patch.object(fo.time, "time", side_effect=lambda: clock["t"]), \
                 patch.object(fo.time, "sleep", side_effect=lambda s: clock.update(t=clock["t"] + s)):
             self.assertFalse(fo._wait_tcp(None, "192.168.1.2", 22, budget_s=30, interval_s=10))
+
+
+class GuestAgentShellcmd(unittest.TestCase):
+    """The qemu-guest-agent's boot hook. pfSense never runs /usr/local/etc/rc.d/* (the
+    local-script pass in /etc/rc only globs *.sh), so rc.conf.local alone is inert —
+    the <system><afterbootupshellcmd> tag in config.xml (/etc/rc.bootup mwexec's it)
+    is the only mechanism that survives, and it must ride EVERY config the firewall
+    runs: the template's (sealed 2026-10-08) and the generated per-team ones."""
+
+    def test_generated_config_carries_the_agent_boot_hook(self):
+        out = generate_team_config(SEED, "120")
+        self.assertIn("<afterbootupshellcmd>/usr/local/etc/rc.d/qemu-guest-agent start"
+                      "</afterbootupshellcmd>", out)
+
+    def test_seed_already_carrying_the_hook_is_not_double_tagged(self):
+        seeded = SEED.replace(
+            "<system>",
+            "<system><afterbootupshellcmd>/usr/local/etc/rc.d/qemu-guest-agent start"
+            "</afterbootupshellcmd>", 1)
+        out = generate_team_config(seeded, "120")
+        self.assertEqual(out.count("<afterbootupshellcmd>"), 1)
+
+
+class AgentDiagnostics(unittest.TestCase):
+    """fw_agent_diagnostic: never raises, never fires on agentless (pre-retrofit)
+    clones, and when the agent answers it reports interfaces + whether the pushed
+    config.xml actually landed."""
+
+    def test_agentless_clone_returns_empty_string(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        clock = {"t": 0.0}
+        with patch.object(fo, "proxmox_api", side_effect=RuntimeError("agent not running")), \
+                patch.object(fo.time, "time", side_effect=lambda: clock["t"]), \
+                patch.object(fo.time, "sleep", side_effect=lambda s: clock.update(t=clock["t"] + s)):
+            self.assertEqual(fo.fw_agent_diagnostic("pve", 9), "")
+
+    def test_no_node_returns_empty_string_without_touching_the_api(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        with patch.object(fo, "proxmox_api") as api:
+            self.assertEqual(fo.fw_agent_diagnostic(None, 9), "")
+            api.assert_not_called()
+
+    def test_answering_agent_reports_interfaces_and_config_state(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        with patch.object(fo, "_agent_answers", return_value=True), \
+                patch.object(fo, "guest_agent_exec_root",
+                             return_value=(0, "inet 192.168.120.1\n256 1\n", "")):
+            d = fo.fw_agent_diagnostic("pve", 9)
+        self.assertIn("agent diagnostics (vmid 9)", d)
+        self.assertIn("inet 192.168.120.1", d)
+
+    def test_agent_error_still_returns_not_raises(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        with patch.object(fo, "_agent_answers", return_value=True), \
+                patch.object(fo, "guest_agent_exec_root", side_effect=RuntimeError("channel dead")):
+            self.assertEqual(fo.fw_agent_diagnostic("pve", 9), "")
+
+
+class BootstrapAgentWiring(unittest.TestCase):
+    """node= wires the agent into the bootstrap: success logs the boot confirmation,
+    the failure text carries the diagnostic block, and agentless clones change
+    nothing."""
+
+    def _run(self, node, agent_answers, boot_ok=True):
+        import tempfile
+        import firewall_ops as fo
+        from unittest.mock import MagicMock, patch
+        logs = []
+        cm = None
+        with tempfile.TemporaryDirectory() as d:
+            cfg = Path(d) / "config-team120.xml"
+            cfg.write_text("<pfsense/>")
+            patches = [
+                patch.object(fo, "ssh_on_gateway", MagicMock(return_value=MagicMock(stdout="", returncode=0))),
+                patch.object(fo, "_probe_tcp", return_value=False),
+                patch.object(fo, "_wait_tcp", return_value=boot_ok),
+                patch.object(fo, "_push_config", return_value="APPLIED"),
+                patch.object(fo, "_agent_answers", return_value=agent_answers),
+                patch.object(fo, "guest_agent_exec_root", return_value=(0, "inet 192.168.120.1", "")),
+            ]
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+                if boot_ok:
+                    fo.bootstrap_firewalls(
+                        TEAMS, [{"team_key": "team1", "identifier": "120", "vmid": 9}],
+                        {"team1": cfg}, {}, log=logs.append, node=node)
+                else:
+                    with self.assertRaises(RuntimeError) as cm:
+                        fo.bootstrap_firewalls(
+                            TEAMS, [{"team_key": "team1", "identifier": "120", "vmid": 9}],
+                            {"team1": cfg}, {}, log=logs.append, node=node)
+        return logs, cm
+
+    def test_success_with_agent_logs_the_boot_confirmation(self):
+        logs, _ = self._run(node="pve", agent_answers=True)
+        self.assertTrue(any("guest agent answered" in line for line in logs))
+
+    def test_success_agentless_stays_silent(self):
+        logs, _ = self._run(node="pve", agent_answers=False)
+        self.assertFalse(any("guest agent" in line for line in logs))
+
+    def test_failure_text_carries_the_diagnostic_when_the_agent_answers(self):
+        _, cm = self._run(node="pve", agent_answers=True, boot_ok=False)
+        self.assertIn("agent diagnostics (vmid 9)", str(cm.exception))
+
+    def test_failure_text_stays_clean_when_the_agent_is_absent(self):
+        _, cm = self._run(node="pve", agent_answers=False, boot_ok=False)
+        self.assertNotIn("agent diagnostics", str(cm.exception))
+
+    def test_no_node_no_agent_calls_at_all(self):
+        import firewall_ops as fo
+        from unittest.mock import patch
+        with patch.object(fo, "_agent_answers") as answers:
+            self._run(node=None, agent_answers=True)
+            answers.assert_not_called()
 
 
 if __name__ == "__main__":

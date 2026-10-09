@@ -98,7 +98,8 @@ class FlagGating(unittest.TestCase):
 
     def _ctx(self, comp_dir, flag):
         return types.SimpleNamespace(
-            comp_dir=comp_dir, tf_ctx={"ssh_key_path": "/k"}, scoring_password="pw",
+            comp_dir=comp_dir, comp_name=comp_dir.name,
+            tf_ctx={"ssh_key_path": "/k"}, scoring_password="pw",
             from_phase=3, state={},
             teams={}, boxes=[], name="probe", inject_password=None,
             admin_password="a", postgres_password="p", redis_password="r",
@@ -113,6 +114,7 @@ class FlagGating(unittest.TestCase):
                 dpatch("timed",
                              side_effect=lambda *a, **k: contextlib.nullcontext()), \
                 dpatch("install_round_loop_guard") as installer, \
+                patch("remote_access_ops.setup_remote_access"), \
                 contextlib.redirect_stdout(io.StringIO()):
             dl_engine.phase3_prepare_engine(ctx)
         return installer

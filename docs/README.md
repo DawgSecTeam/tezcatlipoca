@@ -35,6 +35,7 @@ passage written against an older pipeline is a bug — see [AGENTS.md](../AGENTS
 | [security-disclosures.md](security-disclosures.md) | You touch credentials, `.env` variants, or git history — exposures, and the open token rotation |
 | [upstream-defects-handoff.md](upstream-defects-handoff.md) | You own the vulndb catalog or nakon — the defects not fixable from this repo |
 | [../webui/README.md](../webui/README.md) | You are authoring or deploying a competition from the browser — what each screen edits in `competitions/<id>/`, the catalog source, the deploy panel |
+| [portal.md](portal.md) | You are giving blue teams browser access to their boxes: the student portal (Quotient team login → Proxmox web console), its isolation argument, the per-comp console token, the gate, the Cloudflare tunnel, operating it |
 | [scrim-harness.md](scrim-harness.md) | You are running or modifying the red-vs-blue agent scrim (`run-agent-scrim.py`, `scrim-report.py`, `beacon_ops.py`) |
 | [automated-test-artifacts.md](automated-test-artifacts.md) | You are looking for a run's reports or evidence, adding a consumer of `competitions/<id>/.automated-tests/`, or changing what teardown collects |
 | [tests.md](tests.md) | You are running the offline suite, adding a test, or wondering what the suite does *not* cover |

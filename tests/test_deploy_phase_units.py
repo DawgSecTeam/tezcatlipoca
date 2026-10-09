@@ -199,9 +199,25 @@ class Phase3Order(unittest.TestCase):
                                  side_effect=lambda *a, **k: order.append("event_conf")), \
                     dpatch("ensure_nat_forwarding",
                                  side_effect=lambda *a: order.append("nat")), \
+                    patch("remote_access_ops.setup_remote_access",
+                          side_effect=lambda *a: order.append("remote_access")), \
                     contextlib.redirect_stdout(io.StringIO()):
                 dl_engine.phase3_prepare_engine(ctx)
-        self.assertEqual(order, ["template", "event_conf", "nat"])
+        self.assertEqual(order, ["template", "event_conf", "nat", "remote_access"])
+
+    def test_remote_access_disabled_flag_skips_the_step(self):
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = Path(d)
+            (comp_dir / "Compfile").write_text("remote_access 0\n")
+            ctx = _ctx(comp_dir)
+            with dpatch("prepare_engine_from_template"), \
+                    dpatch("push_event_conf"), \
+                    dpatch("ensure_nat_forwarding"), \
+                    patch("remote_access_ops.setup_remote_access") as p_ra, \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                dl_engine.phase3_prepare_engine(ctx)
+            p_ra.assert_not_called()
+            self.assertIn("remote_access 0", out.getvalue())
 
 
 class Phase5RepairSweep(unittest.TestCase):

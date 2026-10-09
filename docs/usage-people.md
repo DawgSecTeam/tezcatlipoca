@@ -203,6 +203,20 @@ Fedora needs no boot-once step — the official Cloud Base qcow2 already ships c
 qemu-guest-agent (the `base-fedora44-fix` template was sealed unbooted, mirroring the
 `cloud-init;general;template` tag set used by this cluster's library).
 
+#### The VyOS firewall template (vyos-provision)
+
+The second in-path firewall kind is VyOS — an appliance built from the official stream ISO,
+not a cloud image. `tools/build-vyos-provision-template.py` does the whole dance per node
+(`download → create → install → provision → check → seal`; run it with the target node's env
+exported, from the worktree root). Contract phase 5 depends on: SSH on with the deploy key in
+the **config** (`system login user vyos authentication public-keys` — VyOS regenerates
+authorized_keys from it at boot; a key written straight into `authorized_keys` is wiped on the
+first reboot), LAN `eth1` = `192.168.1.1/24`, serial getty, and **no `hw-id` lines** — VyOS
+pins interface names to MACs, so a template saved with pins hands every fresh-MAC clone a
+boot-time rename to eth2/eth3 and a dead config. If the build ever needs re-verifying without
+a deploy: `check` pushes the real generated phase-5 script against a running scratch and
+undoes it; `check-key` proves the deploy-key path.
+
 **Set SELinux permissive before sealing a Fedora template.** Mount the image (or boot it once)
 and set `SELINUX=permissive` in `/etc/selinux/config`. An enforcing Fedora guest cannot be
 golden-built at all: the qemu-guest-agent domain is confined, so the build's `setenforce 0` is
@@ -310,6 +324,8 @@ allowlisted, which is what keeps this table from drifting again.
 | `TF_VAR_team_identifiers` | Pin team subnets explicitly instead of deriving them from the team index. Comma/space separated identifiers, e.g. `120,121,122,123`. Set it when the node hosts challenge templates whose vmids collide with the default 101+ blocks |
 | `TEZ_THIN_HEADROOM` | Fraction `(0, 1]` of the *provisioned* disk math the datastore-headroom preflight counts, for thin-provisioned pools where provisioned ≫ used (linked clones allocate only written blocks). Unset = strict provisioned-bytes gate. See [environment-facts.md](environment-facts.md#storage) |
 | `TEZ_RED_SEGMENT` | Routed red's own segment, matching bad-auto's `deploy.red_subnet` (default `10.200.0.0/24`). Set it and each satellite jump VM accepts red→its local teams and SNATs red to `192.168.<id>.1`; unset leaves those rules out, correct for single-node ranges and `masq`-mode red. A malformed value is a hard error. See [multi-node.md § Routed red](multi-node.md#routed-red) |
+| `TEZ_PORTAL_TUNNEL_TOKEN` / `TEZ_PORTAL_HOSTNAME` | Student portal (Compfile `portal 1`): the Cloudflare tunnel token and its stable public hostname. **Event env file only**: a practice worktree carrying them would claim the public name. Unset = the portal is reachable via `ssh -L` only. See [portal.md](portal.md) |
+| `TEZ_PORTAL_OPEN` | `1` starts the portal with team console access open (practice runs). Default: closed until an admin opens it |
 | `PROXMOX_CA_BUNDLE` / `PROXMOX_TLS_FINGERPRINT` | Pin Proxmox API TLS verification to a CA bundle or a sha256 cert fingerprint instead of the default unverified self-signed cert. Set at most one |
 | `TF_VAR_proxmox_api_token_<node>` (e.g. `_193`) | Multi-node: `nodes.json` references per-host tokens **by env-var name**, so each additional host's token gets its own variable. See [multi-node.md](multi-node.md) |
 
