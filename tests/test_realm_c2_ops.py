@@ -158,6 +158,9 @@ class UnitGenerationTests(unittest.TestCase):
         self.assertIn(":8001 ", script)                          # http1 listen check
         self.assertIn(":5300 ", script)                          # dns listen check
         self.assertIn(":8443 ", script)                          # quic listen check
+        self.assertIn("ss -tln | grep -q ':8000 '", script)       # CORE listen check (redirectors alone said OK with the core dead)
+        self.assertIn("CORE FAILED", script)                      # a dead core is fatal, never soft
+        self.assertIn("systemctl --user restart tavern.service", script)  # first-start secrets write
         self.assertIn("mariadb", script.lower())                 # durable state pair
         self.assertIn("TimeoutStartSec=1800", script)            # first-init timeout lesson
 

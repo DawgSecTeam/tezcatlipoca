@@ -358,8 +358,11 @@ if [ "$FREE_MB" -lt 8000 ]; then
   say "         resize red01's disk, then growpart+pvresize+lvextend -r -l +100%FREE+resize2fs"
 fi
 
-if systemctl --user is-active --quiet tavern.service 2>/dev/null && [ -x "$BIN" ]; then
-  say "tavern already provisioned and active — nothing to do"
+# "active" is NOT enough: tavern writes its secrets file on FIRST start and only
+# binds the core port after a restart, so an active-but-unbound tavern must NOT
+# short-circuit a repair (live 2026-10-09).
+if systemctl --user is-active --quiet tavern.service 2>/dev/null && [ -x "$BIN" ] && ss -tln | grep -q ':{c2_port} '; then
+  say "tavern already provisioned, active, and serving :{c2_port} — nothing to do"
   exit 0
 fi
 
@@ -429,6 +432,14 @@ sudo -n loginctl enable-linger "$USER"
 systemctl --user daemon-reload
 systemctl --user enable --now {unit_names}
 
+# Tavern generates secrets/tavern-secrets on its FIRST start and does not bind the
+# core port until it is restarted after that write (live 2026-10-09: the unit read
+# `active`, :{c2_port} never listened, tavern_pubkey could not read the key, and every
+# planted beacon went out keyless — tavern then answered "failed to decrypt
+# chacha20poly1305"). Restart once so the core server actually comes up.
+say "restarting tavern so it binds the core port after the first-start secrets write"
+systemctl --user restart tavern.service
+
 sleep 2
 fail=0
 for u in {unit_names}; do
@@ -439,7 +450,18 @@ for u in {unit_names}; do
   fi
 done
 [ "$fail" = 0 ] || exit 1
-curl -s -o /dev/null http://127.0.0.1:{c2_port}/ || true   # any HTTP answer is fine
+core_up=0
+for i in $(seq 1 30); do
+  if ss -tln | grep -q ':{c2_port} ' && curl -sS -o /dev/null --max-time 5 http://127.0.0.1:{c2_port}/ 2>/dev/null; then
+    core_up=1; break
+  fi
+  sleep 2
+done
+if [ "$core_up" != 1 ]; then
+  say "CORE FAILED: tavern is not serving on :{c2_port} — the planters read its public key from that process"
+  journalctl --user -u tavern.service --no-pager | tail -20 || true
+  exit 1
+fi
 ss -tln | grep -q ':8001 ' || {{ say "http1 redirector not listening"; exit 1; }}
 ss -uln | grep -q ':5300 ' || {{ say "dns redirector not listening"; exit 1; }}
 ss -uln | grep -q ':8443 ' || {{ say "quic redirector not listening"; exit 1; }}
