@@ -182,7 +182,11 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
             f"{scoring_user}@{scoring_ip}",
             "cd /opt/quotient && sudo docker compose restart",
         ],
-        check=True, timeout=60,
+        # A full-stack restart stops and starts db + redis + server + 5 runners +
+        # divisor; on a loaded / ZFS-backed range node the postgres stop+start
+        # alone runs past a minute (seen live 2026-10-08: 60 s timed out mid-phase
+        # 3 and aborted the deploy after everything had actually come up).
+        check=True, timeout=300,
     )
 
     print("  Event configuration pushed to scoring engine")

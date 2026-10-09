@@ -4,3 +4,8 @@ difficulty 6
 firewall_dnat 4470->10.0.0.198
 assume_breach 1
 assume_breach_depth 3
+
+# Remote access (headscale participant routing) OFF for this verification run:
+# docs/remote-access.md says runs that must not consume the shared remote-access
+# slots opt out here. Delete this line for a real event deploy.
+remote_access 0
