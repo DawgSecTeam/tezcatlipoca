@@ -192,8 +192,16 @@ def build_local_c2_config(red_ip, config_path=None):
 
 
 def write_local_c2_config(comp_dir, cfg):
-    """Derived config next to the comp's own state; never inside bad-auto's tree."""
-    path = Path(comp_dir) / ".realm-c2-config.yaml"
+    """Derived config next to the comp's own state; never inside bad-auto's tree.
+
+    Returns an ABSOLUTE path: bad-auto runs with cwd=bad-auto, so a relative
+    `--config` resolves inside its own tree, `load_config` finds no file and
+    silently falls back to its built-in defaults (red01 then comes up on the
+    default red_ip 10.0.0.199 while everything else targets the comp's 10.0.0.198 —
+    caught live 2026-10-09, after a 95-minute deploy whose entire red presence died
+    with `No route to host`).
+    """
+    path = (Path(comp_dir) / ".realm-c2-config.yaml").resolve()
     path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
     return path
 

@@ -90,10 +90,26 @@ def _deploy_red(comp_dir, env, config_path=None, timeout=1800):
     a relative path would look there instead of in the competition directory and
     die with "engine IP unknown" (caught live 2026-10-08).
     """
+    comp_abs = Path(comp_dir).resolve()
     cmd = ["python3", "-m", "badauto"]
     if config_path:
-        cmd += ["--config", str(config_path)]
-    cmd += ["deploy", "--competition", str(Path(comp_dir).resolve())]
+        # Resolve: badauto runs with cwd=BAD_AUTO, so a relative --config resolves
+        # inside ITS tree. And never hand it a path that isn't there: load_config
+        # then falls back to the built-in defaults WITHOUT a word, which is how a
+        # 95-minute deploy built red01 at the default red_ip 10.0.0.199 while every
+        # other component targeted the comp's 10.0.0.198 and the whole red presence
+        # died with "No route to host" (2026-10-09).
+        cfg_path = Path(config_path).resolve()
+        if not cfg_path.exists():
+            return subprocess.CompletedProcess(
+                cmd, 2, "",
+                f"derived config not found: {cfg_path} — refusing to deploy red01 on "
+                f"badauto's built-in defaults (red01 would come up at the wrong address)")
+        cmd += ["--config", str(cfg_path)]
+        # An explicit --config makes any inherited BAuto_CONFIG redundant; dropping it
+        # keeps a stale value in the deploy's environment from shadowing ours.
+        env = {k: v for k, v in (env or {}).items() if k != "BAuto_CONFIG"}
+    cmd += ["deploy", "--competition", str(comp_abs)]
     return subprocess.run(cmd, cwd=str(BAD_AUTO), env=env,
                           capture_output=True, text=True, timeout=timeout)
 

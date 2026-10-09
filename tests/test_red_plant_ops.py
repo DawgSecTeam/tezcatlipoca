@@ -86,15 +86,19 @@ class PlantAssumeBreachTests(unittest.TestCase):
     def test_deploy_red_passes_an_absolute_competition_path(self):
         """badauto runs with cwd=bad-auto and resolves <comp>/credentials.txt for the
         engine IP; a relative path then looks in the wrong tree and dies with
-        'engine IP unknown' (live 2026-10-08)."""
+        'engine IP unknown' (live 2026-10-08). The derived config must exist, or
+        _deploy_red now refuses outright (see DeployRedConfigPathTests)."""
+        import tempfile
+        cfg = Path(tempfile.mkdtemp(prefix="tz-abs-")) / "derived.yaml"
+        cfg.write_text("deploy: {red_ip: 10.0.0.198}\n")
         with mock.patch.object(rp.subprocess, "run") as run:
             run.return_value = _CP(0)
             rp._deploy_red(Path("competitions/scrim-one"), {"X": "1"},
-                           config_path=Path("/tmp/derived.yaml"))
+                           config_path=cfg)
         argv = run.call_args[0][0]
         comp_arg = argv[argv.index("--competition") + 1]
         self.assertTrue(Path(comp_arg).is_absolute(), comp_arg)
-        self.assertEqual(argv[argv.index("--config") + 1], "/tmp/derived.yaml")
+        self.assertEqual(argv[argv.index("--config") + 1], str(cfg.resolve()))
 
     def test_local_c2_default_on_provisions_between_deploy_and_seed(self):
         """Default knob ON: derived config feeds the deploy, tavern provisioner
@@ -203,6 +207,41 @@ class DestroyRedTests(unittest.TestCase):
         self.assertTrue(Path(arg).is_absolute(), arg)
         env = run.call_args[1]["env"]
         self.assertTrue(Path(env["BAuto_COMPETITION_DIR"]).is_absolute())
+
+
+class DeployRedConfigPathTests(unittest.TestCase):
+    """_deploy_red must resolve --config and REFUSE a missing one.
+
+    badauto's load_config falls back to its built-in defaults without a word when
+    the override file cannot be found — so a relative (or absent) --config builds
+    red01 at the compiled-in red_ip 10.0.0.199 while the rest of the pipeline
+    targets the comp's 10.0.0.198: the C2 provision and the whole seed then die with
+    "No route to host" (live 2026-10-09, after a 95-minute deploy).
+    """
+
+    def test_missing_config_is_refused_not_deployed_on_defaults(self):
+        with mock.patch.object(rp.subprocess, "run") as run:
+            out = rp._deploy_red("/tmp/whatever", env={},
+                                 config_path="/tmp/nowhere/.realm-c2-config.yaml")
+        self.assertFalse(run.called, "must not deploy against badauto's built-in defaults")
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("derived config not found", out.stderr)
+
+    def test_existing_config_is_passed_absolute_and_stale_env_dropped(self):
+        import tempfile
+        d = tempfile.mkdtemp(prefix="tz-deploy-cfg-")
+        cfg = Path(d) / ".realm-c2-config.yaml"
+        cfg.write_text("deploy: {red_ip: 10.0.0.198}\n")
+        with mock.patch.object(rp.subprocess, "run", return_value=_CP(0)) as run:
+            rp._deploy_red("competitions/scrim-one",
+                           env={"BAuto_CONFIG": "/stale/config.yaml"},
+                           config_path=str(cfg))
+        cmd = run.call_args[0][0]
+        passed = cmd[cmd.index("--config") + 1]
+        self.assertTrue(Path(passed).is_absolute(), passed)
+        self.assertEqual(Path(passed), cfg.resolve())
+        self.assertNotIn("BAuto_CONFIG", run.call_args[1]["env"],
+                         "an explicit --config makes an inherited BAuto_CONFIG redundant")
 
 
 if __name__ == "__main__":
