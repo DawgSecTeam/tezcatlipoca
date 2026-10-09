@@ -185,5 +185,25 @@ class PlantAssumeBreachTests(unittest.TestCase):
             self.assertEqual(rp.red_ip_for(d), rp.DEFAULT_RED_IP)
 
 
+class DestroyRedTests(unittest.TestCase):
+    """destroy_red must hand badauto an ABSOLUTE competition path.
+
+    It runs with cwd=BAD_AUTO, and badauto resolves the engine IP from
+    <comp_dir>/credentials.txt; a relative path resolves under bad-auto, discovery
+    fails, and the identity guard refuses with "engine IP unknown" — which leaves
+    red01 (and its LLM key + DNAT rules) alive after the range is already gone.
+    Caught live 2026-10-09.
+    """
+
+    def test_competition_path_is_absolute(self):
+        with mock.patch.object(rp.subprocess, "run", return_value=_CP(0)) as run:
+            rp.destroy_red("competitions/scrim-one", env={})
+        cmd = run.call_args[0][0]
+        arg = cmd[cmd.index("--competition") + 1]
+        self.assertTrue(Path(arg).is_absolute(), arg)
+        env = run.call_args[1]["env"]
+        self.assertTrue(Path(env["BAuto_COMPETITION_DIR"]).is_absolute())
+
+
 if __name__ == "__main__":
     unittest.main()

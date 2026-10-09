@@ -110,6 +110,13 @@ def destroy_red(comp_dir, env=None, timeout=900):
     # stamp against the competition directory, and without it the identity guard
     # refuses the target ("mismatched target is refused") — caught live 2026-10-08,
     # where destroy-competition's env reached the call without it.
+    #
+    # Absolute for the same reason _deploy_red resolves: this runs with cwd=BAD_AUTO
+    # and badauto discovers the engine IP from <comp_dir>/credentials.txt, so a
+    # relative path resolves under bad-auto, discovery fails and the guard refuses
+    # with "engine IP unknown" — caught live 2026-10-09, with the range already gone
+    # and red01 the only thing left standing.
+    comp_dir = Path(comp_dir).resolve()
     env = {**(env if env is not None else os.environ), "BAuto_COMPETITION_DIR": str(comp_dir)}
     return subprocess.run(
         ["python3", "-m", "badauto", "destroy", "--competition", str(comp_dir), "--yes"],
