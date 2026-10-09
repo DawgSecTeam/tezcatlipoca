@@ -84,11 +84,16 @@ def _deploy_red(comp_dir, env, config_path=None, timeout=1800):
 
     `config_path` (realm_c2_ops's derived config) makes the deploy point the
     engine DNAT at red01 itself instead of the static C2 host.
+
+    The competition path is ABSOLUTE on purpose: this runs with cwd=BAD_AUTO, and
+    `badauto deploy` resolves `<comp_dir>/credentials.txt` (its engine-IP source) —
+    a relative path would look there instead of in the competition directory and
+    die with "engine IP unknown" (caught live 2026-10-08).
     """
     cmd = ["python3", "-m", "badauto"]
     if config_path:
         cmd += ["--config", str(config_path)]
-    cmd += ["deploy", "--competition", str(comp_dir)]
+    cmd += ["deploy", "--competition", str(Path(comp_dir).resolve())]
     return subprocess.run(cmd, cwd=str(BAD_AUTO), env=env,
                           capture_output=True, text=True, timeout=timeout)
 

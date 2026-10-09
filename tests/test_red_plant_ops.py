@@ -83,6 +83,19 @@ class PlantAssumeBreachTests(unittest.TestCase):
         self.assertEqual(depth, 2)
         self.assertEqual(red_ip, out["red_ip"])
 
+    def test_deploy_red_passes_an_absolute_competition_path(self):
+        """badauto runs with cwd=bad-auto and resolves <comp>/credentials.txt for the
+        engine IP; a relative path then looks in the wrong tree and dies with
+        'engine IP unknown' (live 2026-10-08)."""
+        with mock.patch.object(rp.subprocess, "run") as run:
+            run.return_value = _CP(0)
+            rp._deploy_red(Path("competitions/scrim-one"), {"X": "1"},
+                           config_path=Path("/tmp/derived.yaml"))
+        argv = run.call_args[0][0]
+        comp_arg = argv[argv.index("--competition") + 1]
+        self.assertTrue(Path(comp_arg).is_absolute(), comp_arg)
+        self.assertEqual(argv[argv.index("--config") + 1], "/tmp/derived.yaml")
+
     def test_local_c2_default_on_provisions_between_deploy_and_seed(self):
         """Default knob ON: derived config feeds the deploy, tavern provisioner
         runs after it and BEFORE the seed, and the summary carries the C2."""
