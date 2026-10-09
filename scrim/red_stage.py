@@ -71,15 +71,30 @@ def _existing_blackbox():
             return {}
 
 
-def stage_red(args, comp, creds, run_dir):
-    # Local endpoints (llama.cpp/qwen) are slow: tighter call timeout and no
-    # JSON-retry double-call, or one decision can eat 8-16 min of a 90-min event.
-    local_llm = core.is_local_endpoint(args.llm_base_url)
+def red_llm_config(args):
+    """The `llm` block of red's generated config.
+
+    Local endpoints (llama.cpp/qwen) are slow AND may be reasoning models, so the
+    numbers here must clear both costs at once: a small prompt already takes ~60 s
+    and the model emits reasoning tokens before any content. At timeout 120 /
+    max_tokens 4096 every decision came back ok=false ("Read timed out") or
+    finish=length with empty content, so the director silently fell back to
+    scripted tactics — red looked busy for a whole event and decided nothing
+    (live 2026-10-09). 300 s + 6144 still bounds a single decision and a fast
+    model simply answers early; cloud keeps the tighter 240/1 pair.
+    """
+    local = core.is_local_endpoint(args.llm_base_url)
     llm = {"base_url": args.llm_base_url, "model": args.red_model,
-           "max_tokens": 4096, "timeout": 120 if local_llm else 240,
-           "json_retries": 0 if local_llm else 1}
+           "max_tokens": 6144 if local else 4096,
+           "timeout": 300 if local else 240,
+           "json_retries": 0 if local else 1}
     if args.reasoning_effort:
         llm["reasoning_effort"] = args.reasoning_effort
+    return llm
+
+
+def stage_red(args, comp, creds, run_dir):
+    llm = red_llm_config(args)
     cfg = {
         "llm": llm,
         "intel": "nakon",

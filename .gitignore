@@ -99,3 +99,6 @@ competitions/*/remote-access/
 # Run evidence (samples, box snapshots, transcripts) never enters git:
 # it quotes credentials and flags by design.
 competitions/*/persistence-evidence-*/
+# A pre-wipe run dir kept for the record (world.json + report-secrets.md):
+# same class — credentials by design.
+competitions/*/.prev-run-*/
