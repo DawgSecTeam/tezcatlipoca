@@ -1,0 +1,4 @@
+[
+  {"name": "fw01", "last_octet": 1, "cpu": 1, "memory_mb": 512, "disk_gb": null, "template": "vyos-provision", "unmanaged": true, "in_path": true},
+  {"name": "web01", "last_octet": 2, "cpu": 1, "memory_mb": 1024, "disk_gb": 15, "template": "base-ubuntu24.04-fix"}
+]

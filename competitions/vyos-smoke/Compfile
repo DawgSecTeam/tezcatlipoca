@@ -1,0 +1,4 @@
+name vyos-smoke-2026-10-08
+scenario VyOS as the second in-path firewall kind: fw01 clones the vyos-provision template, phase 5 pushes generated set-command passes (live apply, no reboot), the engine cutover routes the team subnet through it, and a firewall_dnat port-forward proves the DNAT path (gw:22 must land on web01's sshd, not the firewall).
+difficulty 1
+firewall_dnat 22->192.168.{tid}.2
