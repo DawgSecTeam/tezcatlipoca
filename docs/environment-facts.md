@@ -87,6 +87,18 @@ the console → halt → convert). 956 stays only as the builder's source. Only 
 firewall lineup needs it synced (or rebuilt with the tool) on any other node before preflight
 will pass.
 
+**cyberrange .150 — appliance (VyOS, second firewall kind):** `962 vyos-provision` — the VyOS
+in-path firewall template for `firewall_kind "vyos"` (any `in_path` box whose template name
+contains `vyos`). VyOS 2026.03 stream installed from the official ISO by
+`tools/build-vyos-provision-template.py` (download → create → install → provision → check →
+seal): SSH on with the deploy key **in the config** (`system login user vyos authentication
+public-keys` — VyOS regenerates authorized_keys from it at boot, a file-based key is wiped on
+the first reboot), LAN `eth1` = 192.168.1.1/24, serial getty, and deliberately **no `hw-id`
+lines** — VyOS stamps each configured interface's MAC as `hw-id` and pins the interface NAME
+to it at boot, so clones with fresh MACs get bumped to eth2/eth3 and the config fails to
+apply; the pin-free config lets names assign in PCI order on every clone. Only exists on
+.150 — sync or rebuild on any other node before a firewall lineup there. **[live] 2026-10-08**
+
 **cyberrange .150 — NOT usable (no cloud-init drive):** `106 base-ubuntu24.04`,
 `920 base-debian13-cloudinit` ⚠️, `103 base-ubuntu20.04`, `109 base-fedora44`.
 

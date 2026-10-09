@@ -3,9 +3,11 @@
 # Encoded from "2026 Mid-Atlantic Collegiate Cyber Defense Competition Qualifier —
 # Team Packet" (National CyberWatch Center). This is a REHEARSAL profile: the real
 # qualifier runs on NETLAB+ VE with Palo Alto + Cisco FTD + VyOS and a NISE inject
-# portal, none of which this pipeline can express. Every substitution is recorded in
-# the compiled packet-fidelity.md — use it to drill the shape (dual-firewall-era
-# service lineup, drop-flag flow, HTTP/SMTP/mail checks), not to claim parity.
+# portal. The VyOS leg is expressed for real (the vyos-provision in-path firewall
+# kind); PA + FTD and the NISE portal are not expressible here. Every substitution
+# is recorded in the compiled packet-fidelity.md — use it to drill the shape
+# (dual-firewall-era service lineup, drop-flag flow, HTTP/SMTP/mail checks), not
+# to claim parity.
 
 packet:
   source: "2026 MACCDC Qualifier Team Packet (National CyberWatch Center)"
@@ -40,16 +42,17 @@ credentials:
 boxes:
   - name: fw01
     packet_os: "Palo Alto 11.0.2 + Cisco FTD 7.2.9 + VyOS 1.4.3 perimeter"
-    template: pfsense
+    template: vyos-provision
     unmanaged: true
     last_octet: 1
     cpu: 1
     memory_mb: 2048
-    fidelity: unsupported
+    fidelity: substituted
     note: >-
-      PA/FTD/VyOS templates do not exist here; a single in-path pfSense (manual
-      runbook) stands in for the whole perimeter. Real qualifier = 3 managed network
-      devices + no team access to the L2 switch.
+      The VyOS leg of the perimeter is real now (the vyos-provision in-path
+      firewall kind, live-proven 2026-10-08); PA + FTD do not exist here and stay
+      collapsed into it. Real qualifier = 3 managed network devices + no team
+      access to the L2 switch.
   - name: ad01
     packet_os: "Server 2019 Std — AD/DNS"
     template: base-windows-server

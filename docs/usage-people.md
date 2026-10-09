@@ -203,6 +203,20 @@ Fedora needs no boot-once step — the official Cloud Base qcow2 already ships c
 qemu-guest-agent (the `base-fedora44-fix` template was sealed unbooted, mirroring the
 `cloud-init;general;template` tag set used by this cluster's library).
 
+#### The VyOS firewall template (vyos-provision)
+
+The second in-path firewall kind is VyOS — an appliance built from the official stream ISO,
+not a cloud image. `tools/build-vyos-provision-template.py` does the whole dance per node
+(`download → create → install → provision → check → seal`; run it with the target node's env
+exported, from the worktree root). Contract phase 5 depends on: SSH on with the deploy key in
+the **config** (`system login user vyos authentication public-keys` — VyOS regenerates
+authorized_keys from it at boot; a key written straight into `authorized_keys` is wiped on the
+first reboot), LAN `eth1` = `192.168.1.1/24`, serial getty, and **no `hw-id` lines** — VyOS
+pins interface names to MACs, so a template saved with pins hands every fresh-MAC clone a
+boot-time rename to eth2/eth3 and a dead config. If the build ever needs re-verifying without
+a deploy: `check` pushes the real generated phase-5 script against a running scratch and
+undoes it; `check-key` proves the deploy-key path.
+
 **Set SELinux permissive before sealing a Fedora template.** Mount the image (or boot it once)
 and set `SELINUX=permissive` in `/etc/selinux/config`. An enforcing Fedora guest cannot be
 golden-built at all: the qemu-guest-agent domain is confined, so the build's `setenforce 0` is

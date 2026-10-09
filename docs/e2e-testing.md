@@ -362,7 +362,7 @@ pure router, outbound NAT off. The two traps, both fixed/known:
 - Firewalls need `onboot=1`. The Windows-DC guest-agent may be down after a reboot — that only
   breaks `verify-competition`'s agent probe, not scoring (WinRM is a network check).
 
-### 8.3 bad-auto red teamer against a pfSense range
+### 8.3 bad-auto red teamer against an in-path firewall range (pfSense or VyOS)
 
 `../bad-auto`, OpenRouter LLM, `python3 -m badauto {deploy,run,status,destroy}`, `config.yaml`
 (`competition_dir`, `event.duration_min`, `deploy.red_*`). Point it at the comp dir and set the
@@ -375,10 +375,11 @@ duration before `deploy`.
   (legacy) MASQUERADEs `red_ip → 192.168.0.0/16`, sourcing attacks from the team gateway IP,
   which is unblockable-by-IP by design (blocking it cuts blue's own gateway + scoring).
 - **pfSense caveat (both modes):** neither mode is validated against the pfSense in-path
-  topology. Routed mode needs a red-segment → transit route on pfSense (engine transit
-  `172.31.<id>.1` sources attack traffic as before — the WAN pass rule allows it — but return
-  traffic to `10.200.0.0/24` needs a route back via the engine). The **raw-socket beacon C2
-  does not** survive pfSense in either mode: blue boxes beacon to their gateway `.1`, which is
-  now pfSense (not the engine that DNATs the beacon port to red01). Deploy without the beacon,
-  or add a matching pfSense LAN→red01 port-forward. Core attacks (recon/spray/exploit) don't
-  need it.
+  topology. Routed mode needs a red-segment → transit route on the firewall (engine transit
+  `172.31.<id>.1` sources attack traffic as before — the pfSense WAN pass rule and the VyOS
+  default-accept chains allow it — but return traffic to `10.200.0.0/24` needs a route back
+  via the engine). The **raw-socket beacon C2 does not** survive either firewall kind in
+  either mode: blue boxes beacon to their gateway `.1`, which is now the firewall (not the
+  engine that DNATs the beacon port to red01). Deploy without the beacon, or add a matching
+  `firewall_dnat` port-forward — the pipeline generates it for both kinds (pfSense LAN
+  port-forward / VyOS dest-NAT). Core attacks (recon/spray/exploit) don't need it.
