@@ -52,6 +52,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import yaml
@@ -479,7 +480,7 @@ print('realm.pubkey set on red01')
 """
 
 
-def tavern_pubkey(red_ip, ssh_key, timeout=90):
+def tavern_pubkey(red_ip, ssh_key, timeout=90, attempts=6, delay=5):
     """The tavern server public key (base64) as tavern logs it at startup.
 
     Every planted beacon must carry it as ``IMIX_SERVER_PUBKEY``: imix encrypts its
@@ -487,13 +488,22 @@ def tavern_pubkey(red_ip, ssh_key, timeout=90):
     the env var is unset — a beacon built against a DIFFERENT tavern then registers
     nothing and dies with "failed to decrypt chacha20poly1305". The key is generated
     once (SECRETS_FILE_PATH persists it), so it is stable for the range's life.
-    Returns None when it cannot be read.
+
+    Retried: on a FIRST provision the units have only just started and tavern prints
+    the key a few seconds later, so a single read races it and reports "no key" —
+    which then plants beacons that cannot decrypt (caught live 2026-10-09). Returns
+    None only when it is still unreadable after the whole window.
     """
-    run = _ssh(ssh_key, red_ip,
-               "journalctl --user -u tavern.service --no-pager 2>/dev/null "
-               "| grep -oE 'public key: [A-Za-z0-9+/=]+' | tail -1", timeout=timeout)
-    m = _PUBKEY_RE.search((run.stdout or "") + (run.stderr or ""))
-    return m.group(1) if m else None
+    cmd = ("journalctl --user -u tavern.service --no-pager 2>/dev/null "
+           "| grep -oE 'public key: [A-Za-z0-9+/=]+' | tail -1")
+    for i in range(max(1, attempts)):
+        run = _ssh(ssh_key, red_ip, cmd, timeout=timeout)
+        m = _PUBKEY_RE.search((run.stdout or "") + (run.stderr or ""))
+        if m:
+            return m.group(1)
+        if i < attempts - 1:
+            time.sleep(delay)
+    return None
 
 
 def set_realm_pubkey(ssh_key, red_ip, pubkey, timeout=90):

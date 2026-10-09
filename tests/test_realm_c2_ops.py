@@ -247,7 +247,19 @@ class PubkeyTests(unittest.TestCase):
 
     def test_missing_pubkey_is_none(self):
         with mock.patch.object(rc, "_ssh", return_value=_CP(0, out="nothing here")):
-            self.assertIsNone(rc.tavern_pubkey("10.0.0.198", "key"))
+            self.assertIsNone(rc.tavern_pubkey("10.0.0.198", "key", attempts=1))
+
+    def test_pubkey_read_retries_a_first_provision_race(self):
+        """Tavern logs its key a few seconds after the units start, so the first read
+        right after provisioning finds nothing — without the retry the beacons are
+        planted with no key and never register (live 2026-10-09)."""
+        answers = [_CP(0, out="(no key yet)"), _CP(0, out="(still nothing)"),
+                   _CP(0, out=self.JOURNAL)]
+        with mock.patch.object(rc, "_ssh", side_effect=answers) as ssh, \
+             mock.patch.object(rc.time, "sleep") as slept:
+            self.assertEqual(rc.tavern_pubkey("10.0.0.198", "key"), self.PK)
+        self.assertEqual(ssh.call_count, 3)
+        self.assertEqual(slept.call_count, 2)
 
     def test_push_sends_a_quoted_base64_payload(self):
         import base64
@@ -310,6 +322,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_provision_success_reports_mcp_and_transports(self):
         with mock.patch.object(rc, "_scp", return_value=_CP(0)), \
+             mock.patch.object(rc.time, "sleep"), \
              mock.patch.object(rc, "_ssh", return_value=_CP(0, out="[realm-c2] OK")):
             out = rc.provision_realm_c2(self.tmp, "10.0.0.198", "key",
                                         {"c2_port": 8000})
@@ -341,6 +354,7 @@ class ExecutionTests(unittest.TestCase):
             return _CP(0, out="[realm-c2] OK")
 
         with mock.patch.object(rc, "_scp", return_value=_CP(0)), \
+             mock.patch.object(rc.time, "sleep"), \
              mock.patch.object(rc, "_ssh", side_effect=_ssh):
             out = rc.provision_realm_c2(self.tmp, "10.0.0.198", "key", {})
         self.assertTrue(out["ok"])
