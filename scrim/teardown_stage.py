@@ -144,6 +144,16 @@ def stage_teardown(args, creds=None):
         tunnel.shutdown()
         log("teardown: red LLM tunnel stopped")
     if creds:
+        # The final red pull MUST land BEFORE the report is generated. The report grades
+        # red's own world.json (footholds, artifact set, beacon score), but that pull used
+        # to live only inside teardown_red — i.e. AFTER write_interaction_report — so the
+        # report raced it and graded red's PREVIOUS state. Live run4 2026-10-09: world.json
+        # held 2 Windows footholds while the report written 2 s earlier read 0, and the
+        # rehearsal's windows_footholds gate failed against a world that did not exist yet.
+        try:
+            red_link.pull_red_state(args)
+        except Exception as e:  # evidence capture must never block teardown
+            log(f"WARNING: red state pull failed before the report: {type(e).__name__}: {e}")
         # The collector owns the red01 pull now — one implementation shared with
         # destroy-competition.py (artifacts_ops.py's docstring: two callers must agree) —
         # and it MUST run before `badauto destroy` below, which erases red01. It never
