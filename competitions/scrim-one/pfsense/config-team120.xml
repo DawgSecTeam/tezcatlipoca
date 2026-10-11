@@ -2,7 +2,7 @@
 <pfsense>
 	<version>23.3</version>
 	<lastchange></lastchange>
-	<system>
+	<system><afterbootupshellcmd>/usr/local/etc/rc.d/qemu-guest-agent start</afterbootupshellcmd>
 		<optimization>normal</optimization>
 		<hostname>fw-team120</hostname>
 		<domain>home.arpa</domain>

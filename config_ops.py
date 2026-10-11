@@ -85,15 +85,23 @@ def random_password():
             return pw
 
 
-def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID):
+def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
+                  identifier_defaults=None):
     teams = {}
     import os as _os
     override = (_os.environ.get("TF_VAR_team_identifiers") or "").strip()
-    ids = [s.strip() for s in override.split(",")] if override else [
-        str(100 + i) for i in range(1, number_of_teams + 1)
-    ]
-    if override and len(ids) < number_of_teams:
-        ids += [str(100 + i) for i in range(len(ids) + 1, number_of_teams + 1)]
+    if override:
+        ids = [s.strip() for s in override.split(",")]
+        if len(ids) < number_of_teams:
+            ids += [str(100 + i) for i in range(len(ids) + 1, number_of_teams + 1)]
+    else:
+        ids = [str(value) for value in (identifier_defaults or [])[:number_of_teams]]
+        candidate = 101
+        while len(ids) < number_of_teams:
+            value = str(candidate)
+            if value not in ids:
+                ids.append(value)
+            candidate += 1
     seen = set()
     for i in range(1, number_of_teams + 1):
         key = f"team{i}"

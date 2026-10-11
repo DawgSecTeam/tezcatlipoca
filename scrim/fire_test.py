@@ -44,7 +44,47 @@ def stage_verify(args, comp, creds):
     run_fire_test(args, comp, creds, ssh_web01, sudo_web01)
 
 
+def _ensure_round_loop(comp, creds):
+    """A paused engine cannot register a service going down.
+
+    The harness PAUSES the scoring loop at teardown (correct — the event is over)
+    and the loop does not self-resume, so the NEXT run's pre-T0 fire test watched a
+    healthy web01 for its whole deadline, saw no transition, and aborted before T0
+    (2026-10-08, run 6). It only appeared to work before because red01/loop state
+    happened to survive from the run before. Prove the scoring path against a live
+    loop: unpause first, with the same two POSTs verify's --fix-round-loop issues.
+    """
+    base = f"http://{creds['ENGINE_IP']}"
+    try:
+        import requests
+        from verifier.creds import load_admin_password
+        pw = creds.get("ADMIN_PW") or load_admin_password(comp, None)
+    except Exception as e:                                   # noqa: BLE001
+        log(f"fire test: cannot resolve the admin session ({e}) — round loop unchecked")
+        return
+    try:
+        s = requests.Session()
+        r = s.post(f"{base}/api/login", json={"username": "admin", "password": pw},
+                   timeout=10)
+        if r.status_code != 200:
+            log(f"fire test: admin login HTTP {r.status_code} — round loop unchecked")
+            return
+        eng = s.get(f"{base}/api/engine", timeout=10).json()
+    except Exception as e:                                   # noqa: BLE001
+        log(f"fire test: /api/engine unreadable ({e}) — round loop unchecked")
+        return
+    if not isinstance(eng, dict) or eng.get("running") is not False:
+        return
+    try:
+        r2 = s.post(f"{base}/api/engine/pause", json={"pause": False}, timeout=10)
+        log(f"fire test: scoring loop was PAUSED (left by the previous teardown) — "
+            f"unpaused (HTTP {r2.status_code}); the scoreboard advances again")
+    except Exception as e:                                   # noqa: BLE001
+        log(f"fire test: unpause failed ({e}) — the fire test will likely fail")
+
+
 def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
+
     """Prove the scoring path end to end: stop web01's scored unit, watch the scoreboard
     register it down, restore it, watch the scoreboard heal. Raises (aborting before T0)
     rather than warning: firing blue into an unproven scoring path is how a whole event
@@ -52,6 +92,7 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
 
     `ssh_web01(cmd)` runs a shell command as the box user, `sudo_web01(script)` as root —
     injected so tests can script the box without SSH."""
+    _ensure_round_loop(comp, creds)
     units, svc_port, svc_display = compworld._web01_units(comp)
     web_ip = (json.loads((comp / "targets.json").read_text()).get("targets", {})
               .get("team1-web01", {}).get("ip"))

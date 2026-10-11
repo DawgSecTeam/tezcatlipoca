@@ -70,9 +70,6 @@ def check_round_loop(base_url, admin_session, fix=False):
         return gate_skip("round_loop", "could not read /api/engine")
     if not isinstance(eng, dict):
         return gate_skip("round_loop", "unexpected /api/engine payload")
-    if eng.get("running") is False:
-        print("  PASS  — engine paused (round loop not expected to advance)")
-        return gate_pass("round_loop", "engine paused")
 
     # The judgement itself lives in round_loop.py so the engine-side watchdog
     # (tools/round_loop_guard.py) cannot drift from this gate — two definitions of "the
@@ -81,6 +78,9 @@ def check_round_loop(base_url, admin_session, fix=False):
     if verdict["state"] == round_loop.UNKNOWN:
         print("  SKIP  — /api/engine did not answer a usable document")
         return gate_skip("round_loop", "unexpected /api/engine payload")
+    if verdict["state"] == round_loop.PAUSED:
+        print("  PASS  — engine intentionally paused (round loop not expected to advance)")
+        return gate_pass("round_loop", "engine paused")
     if verdict["state"] == round_loop.ADVANCING:
         print("  PASS  — round loop advancing")
         return gate_pass("round_loop", "loop advancing")

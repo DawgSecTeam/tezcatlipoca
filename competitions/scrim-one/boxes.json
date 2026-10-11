@@ -2,8 +2,8 @@
   {
     "name": "dc01",
     "last_octet": 2,
-    "cpu": 2,
-    "memory_mb": 4096,
+    "cpu": 4,
+    "memory_mb": 6144,
     "disk_gb": 60,
     "disk_iface": "sata0",
     "template": "base-windows-server"
@@ -11,8 +11,8 @@
   {
     "name": "win02",
     "last_octet": 3,
-    "cpu": 2,
-    "memory_mb": 4096,
+    "cpu": 4,
+    "memory_mb": 6144,
     "disk_gb": 60,
     "disk_iface": "sata0",
     "template": "base-windows-server"

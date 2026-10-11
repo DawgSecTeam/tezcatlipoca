@@ -226,7 +226,12 @@ fresh round); `--freeze` (with `--windows-domain-validated` for Windows/domain l
 Data sources (all read at runtime): scoring-engine IP from `terraform output -json`
 (override with `--engine-ip`), team creds from `competitions/<id>/teams.json`, admin password
 from `competitions/<id>/credentials.txt` (override with `--admin-password`), SSH key/user from
-`.env`, planted configs from `competitions/<id>/nakon-config.json`.
+`.env`, planted configs from `competitions/<id>/nakon-config.json`. On a fresh deploy, team subnet
+identifiers prefer `TF_VAR_team_identifiers`, then saved local identifiers, then the tracked packet
+profile suggestions (if declared), and finally the legacy 101+ defaults. Check the derived VMID blocks
+and live occupancy before deploying; the fallback is not an availability check. When passing a password as a
+shell variable, use the equals form (`--admin-password="$AP"`): a password beginning with `-`
+can otherwise be parsed as another option.
 
 ## `redeploy-competition.py`
 

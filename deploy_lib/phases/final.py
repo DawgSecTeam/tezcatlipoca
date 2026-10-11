@@ -83,5 +83,18 @@ def phase7_domains_and_final(ctx):
         with timed(ctx.comp_dir, 7, "assume_breach"):
             plant_assume_breach(ctx)
 
+    # Trails first, snapshot second: the wipe has to be inside the restore point,
+    # or a rollback to tz-ready hands blue every deploy log back.
+    try:
+        from scrim import clean_trails
+        clean_trails.clean_trails(ctx.comp_dir, clean_trails.creds_for_deploy(ctx),
+                                 targets=[{"ip": t["ip"], "name": t.get("box_name") or "",
+                                           "windows": bool(t.get("windows"))}
+                                          for t in ctx.managed_targets
+                                          if (t.get("box_name") or "") != "fw01"])
+    except Exception as e:                                   # noqa: BLE001 - never fatal
+        print(f"  WARNING: trail wipe failed ({type(e).__name__}: {e}) — box logs still "
+              f"hold the deploy")
+
     print(f"  Snapshotting all boxes as '{SNAP_READY}' (as-delivered restore point)...")
     run_concurrent(ctx.all_targets, partial(snap_ready, ctx), max_workers=4)

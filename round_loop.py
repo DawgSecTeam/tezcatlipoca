@@ -6,10 +6,13 @@ to re-derive it — two implementations of the same judgement, drifting apart, w
 exactly the failure mode this repo keeps paying for.
 
 The signature of a stopped loop (live-confirmed 2026-09-29, pfsense-ad):
-`GET /api/engine` reports `running` not False (the engine is *not* paused), the Go zero
-time in `current_round_time` (`0001-01-01T00:00:00Z` means "not cycling"), and a
-`last_round.StartTime` older than a few rounds. The containers came back after the
-reboot; the loop did not.
+`GET /api/engine` reports the Go zero time in `current_round_time`
+(`0001-01-01T00:00:00Z` means "not cycling") and a `last_round.StartTime` older than
+freshness window. After an engine reboot, `running` may be false as well as the loop
+stopping; that paused state is healable only with this old-round signature. An intentional
+pause with a real `current_round_time` remains paused and is never restarted.
+
+The containers came back after the reboot; the loop did not.
 
 Nothing here talks to the network — see `tools/round_loop_guard.py` for the engine-side
 actor that uses it.
@@ -24,7 +27,7 @@ ROUND_DELAY_SECONDS = 60
 FRESHNESS_ROUNDS = 5
 
 # The states a caller has to act on, in the order the gate checks them.
-PAUSED = "paused"          # engine paused on purpose — the loop is not expected to run
+PAUSED = "paused"          # engine intentionally paused; no stale reboot signature
 ADVANCING = "advancing"    # current_round_time is real: the loop is cycling
 PENDING = "pending"        # not cycling yet, but within the freshness window
 STALE = "stale"            # not cycling and past the window: the loop is STOPPED
@@ -65,19 +68,25 @@ def round_loop_state(engine_payload, now=None, freshness_seconds=None) -> dict:
         else freshness_seconds
     now = _naive_utc(now) or datetime.now(timezone.utc).replace(tzinfo=None)
 
-    if engine_payload.get("running") is False:
-        return {"state": PAUSED, "age_seconds": None, "started": None}
-
     current = parse_rfc3339(engine_payload.get("current_round_time"))
-    if current is not None and current.year <= 1:
+    zero_current = current is not None and current.year <= 1
+    if zero_current:
         current = None  # the Go zero time — the loop is not cycling
     started = parse_rfc3339((engine_payload.get("last_round") or {}).get("StartTime"))
 
-    if started is None or current is not None:
-        return {"state": ADVANCING, "age_seconds": None, "started": started}
+    age_seconds = None if started is None else (now - _naive_utc(started)).total_seconds()
+    stale = age_seconds is not None and age_seconds >= window
 
-    age_seconds = (now - _naive_utc(started)).total_seconds()
-    state = STALE if age_seconds >= window else PENDING
+    if engine_payload.get("running") is False:
+        state = STALE if zero_current and stale else PAUSED
+        return {"state": state, "age_seconds": age_seconds if state == STALE else None,
+                "started": started if state == STALE else None}
+    if current is not None:
+        return {"state": ADVANCING, "age_seconds": None, "started": started}
+    if started is None:
+        return {"state": ADVANCING, "age_seconds": None, "started": None}
+
+    state = STALE if stale else PENDING
     return {"state": state, "age_seconds": age_seconds, "started": started}
 
 

@@ -39,9 +39,19 @@ class RoundLoopState(unittest.TestCase):
     def state(self, payload, **kw):
         return round_loop.round_loop_state(payload, now=NOW, **kw)["state"]
 
-    def test_a_paused_engine_is_not_stale(self):
-        """Paused is a deliberate operator state — never restart the loop under it."""
-        self.assertEqual(self.state(_engine(running=False, started_min_ago=600)),
+    def test_a_paused_engine_with_a_real_round_is_not_stale(self):
+        """An intentional pause has a real current round time; never restart it."""
+        current = (NOW - timedelta(seconds=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.assertEqual(self.state(_engine(running=False, current=current,
+                                            started_min_ago=600)), round_loop.PAUSED)
+
+    def test_paused_engine_with_zero_time_and_stale_round_is_stale(self):
+        """The reboot signature remains healable when the engine reports paused."""
+        self.assertEqual(self.state(_engine(running=False, started_min_ago=30)),
+                         round_loop.STALE)
+
+    def test_paused_engine_with_zero_time_and_fresh_round_is_paused(self):
+        self.assertEqual(self.state(_engine(running=False, started_min_ago=1)),
                          round_loop.PAUSED)
 
     def test_a_real_current_round_time_means_advancing(self):
@@ -86,8 +96,11 @@ class RoundLoopState(unittest.TestCase):
     def test_is_stale_is_the_single_question(self):
         self.assertTrue(round_loop.is_stale(_engine(started_min_ago=30), now=NOW))
         self.assertFalse(round_loop.is_stale(_engine(started_min_ago=1), now=NOW))
-        self.assertFalse(round_loop.is_stale(_engine(running=False, started_min_ago=30),
-                                            now=NOW))
+        self.assertTrue(round_loop.is_stale(_engine(running=False, started_min_ago=30),
+                                           now=NOW))
+        current = (NOW - timedelta(seconds=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.assertFalse(round_loop.is_stale(_engine(running=False, current=current,
+                                                    started_min_ago=30), now=NOW))
 
     def test_a_naive_now_is_accepted(self):
         """The engine-side actor has no reason to build a tz-aware clock."""

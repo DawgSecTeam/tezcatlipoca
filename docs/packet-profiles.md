@@ -36,7 +36,7 @@ layer, authored after compilation. A packet-compiled bundle deploys clean
 | Section | Fields | Notes |
 |---|---|---|
 | `packet` | `source` | provenance line for the fidelity report |
-| `event` | `comp_id`, `name`, `scenario`, `difficulty`, `teams_suggested`, `team_identifiers` | `comp_id` must be free (or pass `--force`). `teams_suggested`/`team_identifiers` are **inert** — no Python consumer reads them; they are documentation for whoever runs `create-competition.py --teams N` (and the `TF_VAR_team_identifiers` suggestion) |
+| `event` | `comp_id`, `name`, `scenario`, `difficulty`, `teams_suggested`, `team_identifiers` | `comp_id` must be free (or pass `--force`). For a fresh deploy, `team_identifiers` are fallback defaults when neither `TF_VAR_team_identifiers` nor saved local identifiers exist; an explicit environment override wins. `teams_suggested` remains descriptive |
 | `domain` | `name_template` | e.g. `"mira-{team}.corp.sus"` → Compfile `domain_prefix`/`domain_suffix`; omit for the `team<id>.local` default |
 | `credentials` | `box_username`, `box_password`, `credlists.{linux,domain}`, `domain_accounts[]`, `out_of_scope[]`, `note` | verbatim packet credentials; see below |
 | `boxes[]` | `name`, `packet_os`, `template`, `last_octet`, `cpu`, `memory_mb`, `disk_gb`, `disk_iface`, `unmanaged`, `in_path`, `domain_role`, `fidelity`, `note` | `fidelity` ∈ exact/substituted/unsupported is REQUIRED per box; `in_path` (with `unmanaged`) makes the box the team's in-path gateway at `.1` |

@@ -145,6 +145,17 @@ class RoundLoopCheck(unittest.TestCase):
         self.assertEqual([u for u, _ in s.posts], ["http://e/api/competition/start",
                                                    "http://e/api/engine/pause"])
 
+    def test_fix_round_loop_heals_paused_reboot_signature(self):
+        s = _Session({"running": False, "competition_started": True,
+                      "last_round": {"StartTime": "2020-01-01T00:00:00Z"},
+                      "current_round_time": "0001-01-01T00:00:00Z"})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            verify.check_round_loop("http://e", s, fix=True)
+        self.assertIn("--fix-round-loop", out.getvalue())
+        self.assertEqual([u for u, _ in s.posts], ["http://e/api/competition/start",
+                                                   "http://e/api/engine/pause"])
+
     def test_healthy_loop_passes(self):
         s = _Session({"running": True, "competition_started": True,
                       "last_round": {"StartTime": "2020-01-01T00:00:00Z"},

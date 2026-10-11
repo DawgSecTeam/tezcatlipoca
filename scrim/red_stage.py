@@ -12,6 +12,7 @@ from scrim import red_tunnel
 from scrim import test_folder
 from scrim.core import log
 import red_plant_ops
+import realm_c2_ops
 
 
 def verify_red_reaches_teams(args, comp, creds):
@@ -45,15 +46,55 @@ def red_pacing_caps():
             "max_concurrent_down_endgame": 6}
 
 
-def stage_red(args, comp, creds, run_dir):
-    # Local endpoints (llama.cpp/qwen) are slow: tighter call timeout and no
-    # JSON-retry double-call, or one decision can eat 8-16 min of a 90-min event.
-    local_llm = core.is_local_endpoint(args.llm_base_url)
+def _existing_blackbox():
+    """realm/beacon/evasion blocks from the on-disk bad-auto config, if any.
+
+    These describe the club's C2 infrastructure (tavern on the malware-dev VM,
+    the per-transport imix table, the raw-socket channel), NOT the run's pacing
+    — so this stage owns llm/pacing/deploy and must carry them through instead
+    of wiping them. Before this, stage_red rewrote config.yaml with no realm
+    block at all, which silently dropped every run to the raw-socket beacon
+    tier: realm_plant on red01 saw realm.enabled false and the "newly improved"
+    multi-transport beacons were never planted on a range.
+    """
+    path = core.BAD_AUTO / "config.yaml"
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8")
+    try:
+        return json.loads(text) or {}
+    except ValueError:
+        try:
+            import yaml
+            return yaml.safe_load(text) or {}
+        except Exception:
+            return {}
+
+
+def red_llm_config(args):
+    """The `llm` block of red's generated config.
+
+    Local endpoints (llama.cpp/qwen) are slow AND may be reasoning models, so the
+    numbers here must clear both costs at once: a small prompt already takes ~60 s
+    and the model emits reasoning tokens before any content. At timeout 120 /
+    max_tokens 4096 every decision came back ok=false ("Read timed out") or
+    finish=length with empty content, so the director silently fell back to
+    scripted tactics — red looked busy for a whole event and decided nothing
+    (live 2026-10-09). 300 s + 6144 still bounds a single decision and a fast
+    model simply answers early; cloud keeps the tighter 240/1 pair.
+    """
+    local = core.is_local_endpoint(args.llm_base_url)
     llm = {"base_url": args.llm_base_url, "model": args.red_model,
-           "max_tokens": 4096, "timeout": 120 if local_llm else 240,
-           "json_retries": 0 if local_llm else 1}
+           "max_tokens": 6144 if local else 4096,
+           "timeout": 300 if local else 240,
+           "json_retries": 0 if local else 1}
     if args.reasoning_effort:
         llm["reasoning_effort"] = args.reasoning_effort
+    return llm
+
+
+def stage_red(args, comp, creds, run_dir):
+    llm = red_llm_config(args)
     cfg = {
         "llm": llm,
         "intel": "nakon",
@@ -87,6 +128,26 @@ def stage_red(args, comp, creds, run_dir):
                    **({"red_subnet": args.red_subnet} if args.red_subnet else {}),
                    **({"red_seg_ip": args.red_seg_ip} if args.red_seg_ip else {})},
     }
+    # The operator's C2 blocks survive: stage_red builds llm/pacing/deploy/limits,
+    # and `badauto deploy` stages this config onto red01, where realm_plant runs.
+    carried = _existing_blackbox()
+    for key in ("realm", "beacon", "evasion", "naming"):
+        if carried.get(key):
+            cfg[key] = carried[key]
+    # `realm.c2_local: true` moves the C2 ONTO this run's red01: retarget the
+    # carried realm block before the deploy (the engine DNAT bakes c2_ip in at
+    # deploy time) and provision tavern on red01 after the clone (below).
+    if (cfg.get("realm") or {}).get("c2_local"):
+        realm_c2_ops.apply_local_c2(cfg["realm"], args.red_ip)
+    # ...and so does the REST of the operator's deploy block. stage_red builds this
+    # config from scratch, so anything it does not set is lost: `template` most of
+    # all, which then fell back to badauto's built-in default and failed the first
+    # clean clone of a red01 (the lookup is skipped when the VM already exists, so
+    # this only broke every other run — the one that follows a teardown). Keys the
+    # harness owns (red_ip/red_gw/red_storage/red_vmid/mode/subnet) still win.
+    op_deploy = carried.get("deploy") or {}
+    cfg["deploy"] = {**{k: v for k, v in op_deploy.items() if k not in cfg["deploy"]},
+                     **cfg["deploy"]}
     # Atomic: a torn config.yaml would break every subsequent badauto call, and the
     # file may name an internal endpoint.
     write_text_atomic(core.BAD_AUTO / "config.yaml", json.dumps(cfg, indent=2), mode=0o600)
@@ -106,12 +167,34 @@ def stage_red(args, comp, creds, run_dir):
         args.red_tunnel = tunnel
     red_mode = args.red_mode or "routed (bad-auto default)"
     log(f"deploying red01 at {args.red_ip} (storage {args.red_storage}, mode {red_mode})")
-    procs.run(["python3", "-m", "badauto", "deploy", "--competition", str(comp.resolve()), "--start"],
+    procs.run(["python3", "-m", "badauto", "deploy", "--competition", str(comp.resolve())],
               cwd=core.BAD_AUTO, env=env, timeout=1800)
+    # The C2 lives on red01 for this run (operator set realm.c2_local): build
+    # tavern there — every callback transport + MCP — and stage the imix
+    # implants, BEFORE the seed (realm_plant refuses without a tavern to
+    # register against and without staged binaries). Raises: this runs pre-T0.
+    if (cfg.get("realm") or {}).get("c2_local"):
+        c2 = realm_c2_ops.provision_realm_c2(
+            comp, args.red_ip, str(core.REPO / "proxmox"), realm=cfg["realm"],
+            repo=cfg["realm"].get("repo", realm_c2_ops.DEFAULT_REPO),
+            go_version=cfg["realm"].get("go_version", realm_c2_ops.DEFAULT_GO_VERSION),
+            implant_host=cfg["realm"].get("implant_host",
+                                          realm_c2_ops.DEFAULT_IMPLANT_HOST))
+        if not c2.get("ok"):
+            raise RuntimeError(f"realm C2 provisioning on red01 failed: "
+                               f"{c2.get('error', 'unknown')} — beacons cannot "
+                               f"plant without their tavern")
+        log(f"realm C2 live on red01 {args.red_ip} "
+            f"(transports: {', '.join(c2['transports'])}; MCP at {c2['mcp']})")
     # Record red01's identity now, while it is known: bad-auto's config.yaml is a rewritten
     # singleton, so a later reader of it can name ANOTHER run's red01 — the manifest is the
     # only per-run source of truth the collector may dial (INV5). Recorded before the LLM
     # gate below so a run that dies there still lets teardown collect from red01.
+    # The vmid is optional on the command line but never optional to teardown,
+    # which has to assert the VM is gone: fill it from bad-auto's default so the
+    # manifest (and the destroy verification) always knows the number.
+    if not getattr(args, "red_vmid", None):
+        args.red_vmid = core.bad_auto_deploy_default("red_vmid")
     test_folder.record_red_agent(args)
 
     red_base = cfg["llm"]["base_url"]
@@ -130,6 +213,21 @@ def stage_red(args, comp, creds, run_dir):
     # Runs last so a seed failure stops the run before scored time (same contract as
     # the two gates above — a scrim with no beacons planted is not the event asked for).
     seed_assume_breach(args, run_dir)
+    # The deploy/seed has just written itself into every box's logs — auth.log, the
+    # journal, apt history, the shell histories. Wipe them BEFORE blue can log in:
+    # an agent that greps those gets the whole plant, names and all, which is the
+    # one thing the randomized naming cannot protect against. Best-effort: a wipe
+    # that fails is reported, never fatal.
+    try:
+        from scrim import clean_trails
+        clean_trails.clean_trails(comp, creds)
+    except Exception as e:                                   # noqa: BLE001 - never fatal
+        log(f"WARNING: trail wipe failed ({type(e).__name__}: {e}) — blue may be able "
+            f"to read the deploy out of the box logs")
+    # Only now start the director: it must load the SEEDED world, not an empty one
+    # (and red's event clock should start at T0, which the harness stamps right
+    # after stage_red returns).
+    red_link.start_red_director(args)
 
 
 def seed_assume_breach(args, run_dir=None):

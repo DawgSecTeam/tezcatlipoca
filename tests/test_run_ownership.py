@@ -286,6 +286,49 @@ class RunIdMinting(unittest.TestCase):
         self.assertRegex(secrets.run_id, r"^run-[0-9a-f]{8}$")
         self.assertEqual(secrets.state["run_id"], secrets.run_id)
 
+    def test_fresh_deploy_uses_saved_identifiers_but_not_saved_passwords(self):
+        with tempfile.TemporaryDirectory() as d:
+            state_path = Path(d) / ".deploy_state.json"
+            prior = dl_stages.PriorDeployState(
+                state_path=state_path,
+                previous_state={"teams": {"team1": {"identifier": "120",
+                                                       "password": "old-secret"}}},
+                resuming=False)
+            secrets = dl_stages.CompetitionSecrets()
+            calls = {}
+
+            def collect(count, engine_vmid, identifier_defaults=None):
+                calls["defaults"] = identifier_defaults
+                calls["password"] = config_ops.random_password()
+                return {"team1": {"identifier": identifier_defaults[0],
+                                  "password": calls["password"]}}
+
+            with dpatch("write_state"), dpatch("collect_teams", side_effect=collect):
+                dl_secrets.resolve_competition_teams(
+                    secrets, prior, self._spec(), 1,
+                    dl_stages.RunIdentity(engine_vmid=1000), 1)
+            self.assertEqual(calls["defaults"], ["120"])
+            self.assertNotEqual(secrets.teams["team1"]["password"], "old-secret")
+
+    def test_fresh_worktree_uses_tracked_packet_identifiers(self):
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = Path(d) / "comp"
+            comp_dir.mkdir()
+            (comp_dir / "Compfile").write_text(
+                "packet_source packets/cde-2026/packet.yaml\n")
+            prior = dl_stages.PriorDeployState(
+                state_path=comp_dir / ".deploy_state.json", previous_state={}, resuming=False)
+            secrets = dl_stages.CompetitionSecrets()
+            with dpatch("write_state"), dpatch(
+                    "collect_teams",
+                    side_effect=lambda count, engine_vmid, identifier_defaults=None: {
+                        "team1": {"identifier": str(identifier_defaults[0]), "password": "fresh"},
+                        "team2": {"identifier": str(identifier_defaults[1]), "password": "fresh"}}):
+                dl_secrets.resolve_competition_teams(
+                    secrets, prior, self._spec(), 2,
+                    dl_stages.RunIdentity(engine_vmid=1080), 1)
+            self.assertEqual([t["identifier"] for t in secrets.teams.values()], ["120", "121"])
+
     def test_resume_reuses_the_prior_run_id(self):
         with tempfile.TemporaryDirectory() as d:
             state_path = Path(d) / ".deploy_state.json"

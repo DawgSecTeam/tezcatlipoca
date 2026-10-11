@@ -42,13 +42,21 @@ def resolve_run_dir(comp, args):
     """
     test_path, manifest = artifacts_ops.ensure_test(
         comp, kind="scrim", script="run-agent-scrim.py",
+        # only when starting fresh: a resume must land in the folder its first
+        # attempt created (paths.run_dir/`recorded` below)
+        # only when starting fresh: a resume lands in the folder its first attempt
+        # created (recorded in the manifest's paths.run_dir, used below)
+        key=(None if (getattr(args, "run_dir", None)
+                      or getattr(args, "resume_event", False))
+             else artifacts_ops.next_run_key(comp)),
         teams=getattr(args, "teams", None), boxes=_box_names(comp),
         node=os.environ.get("TF_VAR_proxmox_node"),
         endpoint=os.environ.get("TF_VAR_proxmox_endpoint"))
     args.test_dir = str(test_path)
     explicit = getattr(args, "run_dir", None)
     recorded = (manifest.get("paths") or {}).get("run_dir")
-    run_dir = Path(explicit or recorded or test_path)
+    run_dir = Path(explicit or (recorded if getattr(args, "resume_event", False) else None)
+                   or test_path)
     artifacts_ops.record_paths(test_path, run_dir=str(run_dir))
     return run_dir, test_path
 

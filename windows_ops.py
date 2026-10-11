@@ -70,8 +70,17 @@ def _wait_for_windows_setup_complete(node, vmid, deadline):
     return False
 
 
-def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, timeout=900):
-    """Post-clone Windows setup (IP/gateway/DNS, admin password, sshd) via the QEMU guest agent."""
+def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, timeout=1800):
+    """Post-clone Windows setup (IP/gateway/DNS, admin password, sshd) via the QEMU guest agent.
+
+    `timeout` is the budget for the image's first boot (see
+    `_wait_for_windows_setup_complete`), and 1800 s is the value the golden-build path
+    (`golden_ops`) has always passed. The post-clone path used to take the 900 s default:
+    on a loaded range node a fresh DC clone — its golden is deliberately unbooted, so the
+    clone runs the whole specialize+OOBE itself — is IO-bound for far longer than that
+    (live 2026-10-08: ~1.5 MB/s disk reads, ~0% CPU, still incomplete at 900 s), and the
+    hard-cycle that follows throws the partial progress away and starts over. Give it the
+    same window the golden path gets."""
     deadline = time.time() + timeout
     if not _wait_for_windows_setup_complete(node, vmid, deadline):
         # A clone's first boot can deadlock pre-specialize at IDLE cpu with no agent

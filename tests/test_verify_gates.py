@@ -206,8 +206,18 @@ class RoundLoop(unittest.TestCase):
         _, passed = verify.gate_verdict([result])
         self.assertFalse(passed)
 
-    def test_paused_engine_passes(self):
-        payload = {"running": False, "current_round_time": "0001-01-01T00:00:00Z"}
+    def test_paused_engine_with_stale_reboot_signature_fails(self):
+        payload = {"running": False, "current_round_time": "0001-01-01T00:00:00Z",
+                   "last_round": {"StartTime": "2020-01-01T00:00:00Z"}}
+        session = self._session(payload)
+        session.get = lambda url, timeout=None: _Resp(payload)
+        result, out = _run(verify.check_round_loop, "http://e", session)
+        self.assertIs(result.status, verify.Status.FAIL)
+        self.assertIn("STOPPED", out)
+
+    def test_paused_engine_with_real_current_time_passes(self):
+        payload = {"running": False, "current_round_time": "2026-10-02T11:59:50Z",
+                   "last_round": {"StartTime": "2020-01-01T00:00:00Z"}}
         session = self._session(payload)
         session.get = lambda url, timeout=None: _Resp(payload)
         result, _ = _run(verify.check_round_loop, "http://e", session)

@@ -35,9 +35,11 @@ problems are in [known-issues.md](known-issues.md).
       on .150: `106 base-ubuntu24.04`, `920 base-debian13-cloudinit` ⚠️, `103`, `109`. On .193:
       `1001`, `1002`, `1005 base-debian13-cloudinit` ⚠️, `1003`, `1004`. Use the `-fix` variants
       (`955`/`1007` ubuntu, `951`/`1006` debian-lite, `1016`/`1015` fedora, `127`/`1019` alpine).
-- [ ] **Pass `TF_VAR_team_identifiers` explicitly.** Default 101+ collides with challenge/workshop/
-      livefire VMs on **both** nodes (on .150, 100–124 are all occupied). The collision preflight
-      names the clash; choose a free block.
+- [ ] **Check team identifiers against live VMID/bridge occupancy.** Packet-backed comps can fall
+      back to their tracked `event.team_identifiers` when local history is absent, but those are only
+      defaults, not availability evidence. Prefer an explicit `TF_VAR_team_identifiers` free block;
+      legacy non-packet comps still fall back to 101+, which collides with challenge/workshop/livefire
+      VMs on both nodes. The collision preflight names VMID clashes; choose a free block.
 - [ ] **Check for a squatting golden/engine slot before deploying** if another session may have
       allocated an ad-hoc template vmid in the same 13xx/20xx block.
 - [ ] **Check the env variant matches the node and has no stale vmids.** The dead-`TF_VAR_template_vm_id`

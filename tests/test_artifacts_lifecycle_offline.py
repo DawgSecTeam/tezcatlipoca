@@ -19,6 +19,11 @@ import artifacts_ops  # noqa: E402
 RUN_ID = "run-deadbeef"
 
 
+def _no_stage(*a, **k):
+    '''The offline contract: never touch the network, not even to stage red's files.'''
+    return False
+
+
 def _fake_transport():
     """scp-jump: red01 has the report + events but no world.json; the ssh-cmd channel is dead."""
     from artifacts_lib.constants import Unreachable
@@ -83,7 +88,8 @@ class ArtifactLifecycleOffline(unittest.TestCase):
     def test_full_lifecycle(self):
         lines = []
         collection = artifacts_ops.collect_for_teardown(
-            self.comp, run_id=RUN_ID, transport=_fake_transport(), echo=lines.append)
+            self.comp, run_id=RUN_ID, transport=_fake_transport(), echo=lines.append,
+            stage_red=_no_stage)
         self.assertIn("summary", collection)
         for rel in ("RED-TEAM.md", "BLUE-TEAM.md", "REPORT.md", "collection.json",
                     "evidence/red/events.jsonl", "evidence/harness/run.json"):
@@ -132,11 +138,11 @@ class ArtifactLifecycleOffline(unittest.TestCase):
         self.assertTrue((self.archive / "synth" / RUN_ID / "REPORT.md").exists())
 
     def test_teardown_twice_does_not_split_folder_or_overwrite_report(self):
-        artifacts_ops.collect_for_teardown(self.comp, run_id=RUN_ID,
+        artifacts_ops.collect_for_teardown(self.comp, run_id=RUN_ID, stage_red=_no_stage,
                                            transport=_fake_transport(), echo=lambda *_: None)
         report = self.path / "REPORT.md"
         report.write_text("hand written\n")
-        artifacts_ops.collect_for_teardown(self.comp, run_id=RUN_ID,
+        artifacts_ops.collect_for_teardown(self.comp, run_id=RUN_ID, stage_red=_no_stage,
                                            transport=_fake_transport(), echo=lambda *_: None)
         self.assertEqual(report.read_text(), "hand written\n")
         keys = [p.name for p in (self.comp / ".automated-tests").iterdir() if p.is_dir()]
@@ -148,7 +154,8 @@ class ArtifactLifecycleOffline(unittest.TestCase):
         def dead(*a, **k):
             raise Unreachable("down")
         coll = artifacts_ops.collect_for_teardown(
-            self.comp, run_id=RUN_ID, transport={"scp-jump": dead, "ssh-cmd": dead,
+            self.comp, run_id=RUN_ID, stage_red=_no_stage,
+            transport={"scp-jump": dead, "ssh-cmd": dead,
                                                  "local": artifacts_ops.default_transport()["local"]},
             echo=lambda *_: None)
         self.assertIn("unreachable", json.dumps(coll))

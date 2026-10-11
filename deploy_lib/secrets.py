@@ -1,10 +1,60 @@
 """The competition's secrets: carried on a resume, minted on a fresh deploy."""
 
 import json
+from pathlib import Path
 
 from config_ops import collect_teams, random_password, write_state
 from constants import MAX_TEAMS, PIPELINE_VERSION
 from utils import mint_run_id
+
+
+def _tracked_team_identifier_defaults(comp_dir):
+    """Read a packet's non-secret team identifier suggestions for fresh-worktree defaults."""
+    compfile = Path(comp_dir) / "Compfile"
+    source = None
+    if compfile.is_file():
+        for line in compfile.read_text().splitlines():
+            parts = line.split(None, 1)
+            if len(parts) == 2 and parts[0] == "packet_source":
+                source = parts[1].strip()
+                break
+    if not source:
+        return []
+    profile_path = Path(source)
+    if not profile_path.is_absolute():
+        profile_path = Path(__file__).resolve().parents[1] / profile_path
+    if not profile_path.is_file():
+        return []
+    if not profile_path.is_file():
+        return []
+    from packet_ops import load_profile
+    profile = load_profile(profile_path)
+    return (profile.get("event") or {}).get("team_identifiers") or []
+
+
+def _fresh_identifier_defaults(comp_dir, previous_state):
+    """Prefer identifiers from local history, then tracked packet metadata."""
+    saved = (previous_state or {}).get("teams") or {}
+    identifiers = ([team.get("identifier") for team in saved.values()
+                    if isinstance(team, dict) and team.get("identifier") is not None]
+                   if isinstance(saved, dict) else [])
+    path = Path(comp_dir) / "teams.json"
+    if path.is_file():
+        try:
+            teams = json.loads(path.read_text())
+            identifiers.extend(team.get("identifier") for team in teams.values()
+                               if isinstance(team, dict)
+                               and team.get("identifier") is not None)
+        except (OSError, ValueError):
+            pass
+    identifiers.extend(_tracked_team_identifier_defaults(comp_dir))
+    defaults, seen = [], set()
+    for value in identifiers:
+        normalized = str(value)
+        if normalized not in seen:
+            defaults.append(value)
+            seen.add(normalized)
+    return defaults
 
 
 def carry_box_password(previous_state):
@@ -77,7 +127,10 @@ def resolve_competition_teams(secrets, prior, spec, num_teams, identity, from_ph
                     break
                 print(f"  Enter a number from 1 to {MAX_TEAMS} "
                       f"(team identifiers are 192.168.<101-254>.x).")
-        secrets.teams = collect_teams(secrets.number_of_teams, identity.engine_vmid)
+        secrets.teams = collect_teams(
+            secrets.number_of_teams, identity.engine_vmid,
+            identifier_defaults=_fresh_identifier_defaults(
+                prior.state_path.parent, prior.previous_state))
         # Skeleton only — the mint step adds the secrets after preflight. An abort at
         # the gates leaves a state with the lineage (run id) but no credentials.
         secrets.state = {

@@ -63,6 +63,9 @@ def main():
     parser.add_argument("--end-of-competition", action="store_true", dest="end_of_competition",
                         help="required with --full when the competition is FROZEN — an "
                              "accidental full teardown during the event must be impossible.")
+    parser.add_argument("--keep-red", action="store_true", dest="keep_red",
+                        help="do not destroy bad-auto's red01 (default: destroy it — it is "
+                             "not terraform-managed and survives the range otherwise)")
     parser.add_argument("--skip-artifacts", action="store_true", dest="skip_artifacts",
                         help="Skip collecting this run's test artifacts into "
                              "competitions/<id>/.automated-tests/<run-id>/ before destroying. "
@@ -202,6 +205,29 @@ def main():
         except Exception as e:  # never let bookkeeping outrank destroying the range
             print(f"  WARNING: artifact collection failed ({type(e).__name__}: {e}) — "
                   "continuing with the teardown; nothing was destroyed by this step.")
+        print()
+
+    # ── red01 is bad-auto's VM: nothing below touches it ───────────────────────────────────
+    # A normal harness run destroys red01 in its own teardown, so reaching here with red01
+    # alive means the harness died. Without this step red01 survives the range destruction
+    # with its LLM key and beacon tasking (the scale8 soak leak). Evidence is already
+    # collected above, which is the whole reason this runs after the artifact step.
+    if getattr(args, "keep_red", False):
+        print("  red01      : kept (--keep-red)")
+    else:
+        import red_plant_ops
+        print("  red01      : badauto destroy (not terraform-managed — this script cannot "
+              "remove it any other way)...")
+        try:
+            r = red_plant_ops.destroy_red(comp_dir, env=env)
+            tail = " ".join(((r.stderr or "") + (r.stdout or "")).split())[-200:]
+            if r.returncode == 0:
+                print(f"  red01      : destroyed ({tail or 'no output'})")
+            else:
+                print(f"  WARNING: red01 destroy exited {r.returncode} ({tail}) — check for a "
+                      f"surviving red VM by hand (it holds the LLM key)")
+        except Exception as e:                       # a red destroy must not wedge the range
+            print(f"  WARNING: red01 destroy failed ({type(e).__name__}: {e}) — check by hand")
         print()
 
     pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=team_nodes,

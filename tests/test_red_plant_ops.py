@@ -47,7 +47,8 @@ class PlantAssumeBreachTests(unittest.TestCase):
     def test_no_bad_auto_checkout_degrades(self):
         ctx = FakeCtx(_write_compfile(self.tmp))
         with mock.patch.object(rp, "_bad_auto_present", return_value=False), \
-             mock.patch.object(rp, "record_degradation") as deg:
+             mock.patch.object(rp, "record_degradation") as deg, \
+             mock.patch.object(rp.realm_c2_ops, "prepare_local_c2", return_value=(None, None)):
             out = rp.plant_assume_breach(ctx)
         self.assertFalse(out["ok"])
         self.assertEqual(out["reason"], "no bad-auto checkout")
@@ -58,7 +59,8 @@ class PlantAssumeBreachTests(unittest.TestCase):
         with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
              mock.patch.object(rp, "_deploy_red", return_value=_CP(1, err="boom")) as dep, \
              mock.patch.object(rp, "_seed_red") as seed, \
-             mock.patch.object(rp, "record_degradation") as deg:
+             mock.patch.object(rp, "record_degradation") as deg, \
+             mock.patch.object(rp.realm_c2_ops, "prepare_local_c2", return_value=(None, None)):
             out = rp.plant_assume_breach(ctx)
         self.assertEqual(out["reason"], "deploy failed")
         dep.assert_called_once()
@@ -69,7 +71,8 @@ class PlantAssumeBreachTests(unittest.TestCase):
         ctx = FakeCtx(_write_compfile(self.tmp, "assume_breach_depth 2\n"))
         with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
              mock.patch.object(rp, "_deploy_red", return_value=_CP(0)), \
-             mock.patch.object(rp, "_seed_red", return_value=_CP(0)) as seed:
+             mock.patch.object(rp, "_seed_red", return_value=_CP(0)) as seed, \
+             mock.patch.object(rp.realm_c2_ops, "prepare_local_c2", return_value=(None, None)):
             out = rp.plant_assume_breach(ctx)
         self.assertTrue(out["ok"])
         self.assertEqual(out["depth"], 2)
@@ -80,12 +83,87 @@ class PlantAssumeBreachTests(unittest.TestCase):
         self.assertEqual(depth, 2)
         self.assertEqual(red_ip, out["red_ip"])
 
+    def test_deploy_red_passes_an_absolute_competition_path(self):
+        """badauto runs with cwd=bad-auto and resolves <comp>/credentials.txt for the
+        engine IP; a relative path then looks in the wrong tree and dies with
+        'engine IP unknown' (live 2026-10-08). The derived config must exist, or
+        _deploy_red now refuses outright (see DeployRedConfigPathTests)."""
+        import tempfile
+        cfg = Path(tempfile.mkdtemp(prefix="tz-abs-")) / "derived.yaml"
+        cfg.write_text("deploy: {red_ip: 10.0.0.198}\n")
+        with mock.patch.object(rp.subprocess, "run") as run:
+            run.return_value = _CP(0)
+            rp._deploy_red(Path("competitions/scrim-one"), {"X": "1"},
+                           config_path=cfg)
+        argv = run.call_args[0][0]
+        comp_arg = argv[argv.index("--competition") + 1]
+        self.assertTrue(Path(comp_arg).is_absolute(), comp_arg)
+        self.assertEqual(argv[argv.index("--config") + 1], str(cfg.resolve()))
+
+    def test_local_c2_default_on_provisions_between_deploy_and_seed(self):
+        """Default knob ON: derived config feeds the deploy, tavern provisioner
+        runs after it and BEFORE the seed, and the summary carries the C2."""
+        ctx = FakeCtx(_write_compfile(self.tmp))
+        order = []
+        cfg_path, realm_cfg = Path(self.tmp) / ".realm-c2-config.yaml", {"realm": {"c2_ip": "1.2.3.4"}}
+        def _prov(*a, **k):
+            order.append("provision")
+            return {"ok": True, "transports": ["grpc"], "mcp": "/mcp"}
+        with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
+             mock.patch.object(rp, "_deploy_red", return_value=_CP(0),
+                               side_effect=lambda *a, **k: order.append("deploy") or _CP(0)), \
+             mock.patch.object(rp.realm_c2_ops, "prepare_local_c2",
+                               return_value=(cfg_path, realm_cfg)), \
+             mock.patch.object(rp.realm_c2_ops, "provision_realm_c2",
+                               side_effect=_prov), \
+             mock.patch.object(rp, "_seed_red", return_value=_CP(0),
+                               side_effect=lambda *a, **k: order.append("seed") or _CP(0)):
+            out = rp.plant_assume_breach(ctx)
+            self.assertEqual(rp._deploy_red.call_args.kwargs["config_path"], cfg_path)
+        self.assertTrue(out["ok"])
+        self.assertEqual(order, ["deploy", "provision", "seed"])
+        self.assertEqual(out["realm_c2"]["ok"], True)
+        self.assertEqual(ctx.state["assume_breach"]["realm_c2"]["ok"], True)
+
+    def test_local_c2_provision_failure_degrades_but_still_seeds(self):
+        ctx = FakeCtx(_write_compfile(self.tmp))
+        with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
+             mock.patch.object(rp, "_deploy_red", return_value=_CP(0)), \
+             mock.patch.object(rp.realm_c2_ops, "prepare_local_c2",
+                               return_value=(Path(self.tmp) / "c.yaml", {"realm": {}})), \
+             mock.patch.object(rp.realm_c2_ops, "provision_realm_c2",
+                               return_value={"ok": False, "error": "build died"}), \
+             mock.patch.object(rp, "_seed_red", return_value=_CP(0)) as seed, \
+             mock.patch.object(rp, "record_degradation") as deg:
+            out = rp.plant_assume_breach(ctx)
+        self.assertTrue(out["ok"])                      # degrade, never abort
+        self.assertFalse(out["realm_c2"]["ok"])
+        seed.assert_called_once()                       # the seed still runs
+        deg.assert_called_once()                        # ...and the failure is named
+        self.assertEqual(deg.call_args[0][0], "realm_c2_provision")
+
+    def test_local_c2_knob_off_keeps_legacy_layout(self):
+        ctx = FakeCtx(_write_compfile(self.tmp, "realm_c2_local 0\n"))
+        with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
+             mock.patch.object(rp, "_deploy_red", return_value=_CP(0)) as dep, \
+             mock.patch.object(rp.realm_c2_ops, "prepare_local_c2") as prep, \
+             mock.patch.object(rp.realm_c2_ops, "provision_realm_c2") as prov, \
+             mock.patch.object(rp, "_seed_red", return_value=_CP(0)):
+            out = rp.plant_assume_breach(ctx)
+        self.assertTrue(out["ok"])
+        prep.assert_not_called()
+        prov.assert_not_called()
+        self.assertIsNone(dep.call_args.kwargs.get("config_path"))
+        self.assertNotIn("realm_c2", out)
+
     def test_seed_failure_degrades(self):
         ctx = FakeCtx(_write_compfile(self.tmp))
         with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
              mock.patch.object(rp, "_deploy_red", return_value=_CP(0)), \
              mock.patch.object(rp, "_seed_red", return_value=_CP(1, err="nope")), \
-             mock.patch.object(rp, "record_degradation") as deg:
+             mock.patch.object(rp, "record_degradation") as deg, \
+             mock.patch.object(rp.realm_c2_ops, "prepare_local_c2",
+                               return_value=(None, None)):
             out = rp.plant_assume_breach(ctx)
         self.assertEqual(out["reason"], "seed failed")
         deg.assert_called_once()
@@ -95,7 +173,9 @@ class PlantAssumeBreachTests(unittest.TestCase):
         ctx = FakeCtx(_write_compfile(self.tmp, "assume_breach_depth 9\n"))
         with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
              mock.patch.object(rp, "_deploy_red", return_value=_CP(0)), \
-             mock.patch.object(rp, "_seed_red", return_value=_CP(0)):
+             mock.patch.object(rp, "_seed_red", return_value=_CP(0)), \
+             mock.patch.object(rp.realm_c2_ops, "prepare_local_c2",
+                               return_value=(None, None)):
             out = rp.plant_assume_breach(ctx)
         self.assertEqual(out["depth"], rp.SEED_DEPTH_MAX)
 
@@ -107,6 +187,61 @@ class PlantAssumeBreachTests(unittest.TestCase):
         d = _write_compfile(self.tmp)
         with mock.patch.object(rp, "_configured_red_ip", return_value=None):
             self.assertEqual(rp.red_ip_for(d), rp.DEFAULT_RED_IP)
+
+
+class DestroyRedTests(unittest.TestCase):
+    """destroy_red must hand badauto an ABSOLUTE competition path.
+
+    It runs with cwd=BAD_AUTO, and badauto resolves the engine IP from
+    <comp_dir>/credentials.txt; a relative path resolves under bad-auto, discovery
+    fails, and the identity guard refuses with "engine IP unknown" — which leaves
+    red01 (and its LLM key + DNAT rules) alive after the range is already gone.
+    Caught live 2026-10-09.
+    """
+
+    def test_competition_path_is_absolute(self):
+        with mock.patch.object(rp.subprocess, "run", return_value=_CP(0)) as run:
+            rp.destroy_red("competitions/scrim-one", env={})
+        cmd = run.call_args[0][0]
+        arg = cmd[cmd.index("--competition") + 1]
+        self.assertTrue(Path(arg).is_absolute(), arg)
+        env = run.call_args[1]["env"]
+        self.assertTrue(Path(env["BAuto_COMPETITION_DIR"]).is_absolute())
+
+
+class DeployRedConfigPathTests(unittest.TestCase):
+    """_deploy_red must resolve --config and REFUSE a missing one.
+
+    badauto's load_config falls back to its built-in defaults without a word when
+    the override file cannot be found — so a relative (or absent) --config builds
+    red01 at the compiled-in red_ip 10.0.0.199 while the rest of the pipeline
+    targets the comp's 10.0.0.198: the C2 provision and the whole seed then die with
+    "No route to host" (live 2026-10-09, after a 95-minute deploy).
+    """
+
+    def test_missing_config_is_refused_not_deployed_on_defaults(self):
+        with mock.patch.object(rp.subprocess, "run") as run:
+            out = rp._deploy_red("/tmp/whatever", env={},
+                                 config_path="/tmp/nowhere/.realm-c2-config.yaml")
+        self.assertFalse(run.called, "must not deploy against badauto's built-in defaults")
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("derived config not found", out.stderr)
+
+    def test_existing_config_is_passed_absolute_and_stale_env_dropped(self):
+        import tempfile
+        d = tempfile.mkdtemp(prefix="tz-deploy-cfg-")
+        cfg = Path(d) / ".realm-c2-config.yaml"
+        cfg.write_text("deploy: {red_ip: 10.0.0.198}\n")
+        with mock.patch.object(rp.subprocess, "run", return_value=_CP(0)) as run:
+            rp._deploy_red("competitions/scrim-one",
+                           env={"BAuto_CONFIG": "/stale/config.yaml"},
+                           config_path=str(cfg))
+        cmd = run.call_args[0][0]
+        passed = cmd[cmd.index("--config") + 1]
+        self.assertTrue(Path(passed).is_absolute(), passed)
+        self.assertEqual(Path(passed), cfg.resolve())
+        self.assertNotIn("BAuto_CONFIG", run.call_args[1]["env"],
+                         "an explicit --config makes an inherited BAuto_CONFIG redundant")
 
 
 if __name__ == "__main__":

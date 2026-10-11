@@ -25,6 +25,27 @@ class TeamVmidArithmetic(unittest.TestCase):
             if old is not None:
                 os.environ["TF_VAR_team_identifiers"] = old
 
+    def test_identifier_defaults_are_used_without_an_environment_override(self):
+        import os
+        old = os.environ.pop("TF_VAR_team_identifiers", None)
+        try:
+            teams = collect_teams(2, engine_vmid=1080,
+                                  identifier_defaults=[120, 121, 122, 123])
+            self.assertEqual([t["identifier"] for t in teams.values()], ["120", "121"])
+        finally:
+            if old is not None:
+                os.environ["TF_VAR_team_identifiers"] = old
+
+    def test_environment_override_takes_precedence_over_identifier_defaults(self):
+        import os
+        os.environ["TF_VAR_team_identifiers"] = "130,131"
+        try:
+            teams = collect_teams(2, engine_vmid=1080,
+                                  identifier_defaults=[120, 121])
+            self.assertEqual([t["identifier"] for t in teams.values()], ["130", "131"])
+        finally:
+            os.environ.pop("TF_VAR_team_identifiers", None)
+
     def test_safe_identifiers_accepted(self):
         import os
         os.environ["TF_VAR_team_identifiers"] = "120,121"

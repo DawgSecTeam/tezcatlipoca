@@ -79,9 +79,9 @@ cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxm
 ```
 
 - Pick the env file matching the target node and **check the stale-var traps**: on .150 that is
-  `.env.cyberrange-20260930` (the MAIN `.env` targets the down .193 — copying it is the classic
-  wrong-variant mistake; every banner now prints the resolved endpoint/node/datastore so a wrong
-  copy shows immediately). The engine mgmt IP default (.250) is SSH-poisoned on .150's tailnet
+  `.env.cyberrange-20260930`; the main `.env` targets cyberfield .193 (which has had hardware
+  instability, so verify it is reachable before deployment). Every banner prints the resolved
+  endpoint/node/datastore so a wrong copy shows immediately. The engine mgmt IP default (.250) is SSH-poisoned on .150's tailnet
   path — the cyberrange variant pins `TF_VAR_engine_mgmt_ip=10.0.0.252`, and the preflight now
   REFUSES an unverifiable default IP instead of proceeding. The
   `.env.realm-backup-20260923` (.150) variant shipped `TF_VAR_template_vm_id=9106` (dead vmid — the

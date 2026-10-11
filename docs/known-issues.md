@@ -67,42 +67,21 @@ occurrence can be bisected. Full evidence and the kit:
 
 ### Scoring round loop does not auto-resume after an engine reboot
 
-**Status: OPEN — detected, not automated.** After an engine VM reboot the containers restart but the
-round loop stays stopped; `/api/engine` shows a stale `last_round.StartTime` and zero
-`current_round_time`, and the scoreboard reads as frozen (verify reads the *last scored* round, so a
-stopped loop reports stale DOWN as if live).
+**Status: OPEN — unattended healing remains opt-in.** After an engine VM reboot the containers
+restart but the round loop can stay stopped; `/api/engine` may show `running:false` (paused), a stale
+`last_round.StartTime`, and the Go-zero `current_round_time`, while the scoreboard reads as frozen.
 
-Mitigated: `verify-competition.py` detects the signature (old StartTime + zero current_round_time,
-engine unpaused), **FAILs** the run, and `--fix-round-loop` issues the two POSTs
-(`/api/competition/start {"started":true}`, then `/api/engine/pause {"pause":false}`); re-run verify
-to confirm a fresh round.
+The 2026-10-07 live finding is fixed in the shared classifier: a paused engine with zero current time
+and a last round older than the freshness window is now `STALE`; a deliberate pause with a real
+current round time, or without the old-round reboot signature, remains `PAUSED`. Both the engine-side
+watchdog and `verify-competition.py` consume that state, so the watchdog can issue its POST pair and
+`--fix-round-loop` can reach its repair branch. Regression tests cover both cases. A live reboot trial
+is still needed to validate the code path on an engine.
 
-**Next action:** an engine-side watchdog that issues the same POSTs when the stale signature appears
-(same pattern as the live `range-firewall.timer`), so a reboot — including the owner-confirmed .193
-hard-downs — heals without an operator. **Automation implemented 2026-10-02, opt-in and not yet trialled live:** the blocker was that a
-watchdog could not simply log in — Quotient allows one session per account, so the login would evict
-whichever operator, `verify-competition` or harness session held `admin`. Every competition now seeds
-a **separate `scoring` admin account** for exactly this (`event.conf`'s `admin` list; per-competition
-password in `credentials.txt`), and `round_loop.py` holds the one definition of "the loop is
-stopped" — shared with verify's gate so the two cannot disagree. The actor is
-`tools/round_loop_guard.py`, installed on the engine as a 60s timer when the Compfile sets
-**`round_loop_guard 1`** (default off).
-
-**Live trial 2026-10-07 (cde-2026 on .193, clean engine reboot): the guard cannot heal the
-signature actually observed.** After the reboot the engine came back with `running:false`
-(**paused**) plus the Go-zero `current_round_time`, not the unpaused-stale shape the 2026-09-29
-pfsense-ad incident produced. `round_loop_state()` classifies paused as intentional and returns
-PAUSED — so the guard (verified via its own `--dry-run`: "paused: nothing to do") stays silent,
-AND `verify-competition.py`'s round-loop gate returns PASS ("engine paused") at
-`verifier/engine.py` before the `--fix-round-loop` branch is ever reached, so the operator path
-cannot fire either. The scoreboard stayed frozen ~10 minutes until the two POSTs were issued
-manually (as the `scoring` account); the loop advanced within one Delay of the unpause. **Two
-code sites share the gap:** `round_loop.py` (paused ⇒ never stale) and `verifier/engine.py`
-(paused ⇒ PASS before the fix branch). Suggested fix: when paused AND `current_round_time` is the
-Go zero time AND `last_round.StartTime` is older than the freshness window (a deliberately-paused
-live loop has real round times; a reboot-frozen one does not), treat as healable in both the
-guard and the fix branch. Until then, healing a rebooted engine is manual: the POST pair
-(`/api/competition/start {"started":true}` then `/api/engine/pause {"pause":false}`).
+The watchdog remains opt-in: a competition must set `round_loop_guard 1` in its Compfile to install
+`tools/round_loop_guard.py` as a 60-second timer using the dedicated `scoring` account. Without that
+setting, verify detects and FAILs a frozen loop; `--fix-round-loop` issues the start/unpause POSTs,
+and verify must be rerun to confirm a fresh round.
 
 ### Fedora goldens cannot be built on SELinux-enforcing nodes
 
@@ -164,6 +143,35 @@ portal doesn't depend on it, because it never logs into Quotient
 account per team (`team1`…). The only per-student attribution is the optional display name typed
 at login, which is self-asserted and recorded in the access log. Per-student identity would mean
 moving Quotient itself to LDAP/OIDC.
+
+### Hand-run realm deploys need the FULL realm block in bad-auto's config.yaml
+
+**Status: OPEN — operator trap, live-found 2026-10-11 (scrim-one redeploy).** The deploy derives
+red01's config from the operator's `~/dev/dawgsec/bad-auto/config.yaml` through field allowlists;
+a realm block that sets only `enabled`/`c2_ip`/`base_url` (what `realm_c2_ops.apply_local_c2`
+rewrites) silently takes the legacy path server-side too: ONE http1 beacon per box aimed at the
+team gateway address (dead behind an in-path firewall), zero tavern rows, and no DNAT rules for
+any transport — while the provisioner still prints "tavern live … all transports" and the seed
+records `implant: True` per box. Everything looks green but the C2 is dark. The block must carry
+`transports` (all five, with gw_port/c2_port/domain) AND `callback_ip` (the engine transit IP,
+e.g. `172.31.120.1` on this estate) — `config.example.yaml` `realm:` is the canonical shape. Repair
+path used live: fix config → `realm_c2_ops.prepare_local_c2` → merge the `_red01_realm_cfg` subset
+into red01's `/etc/bad-auto/config.yaml` (preserve `realm.pubkey`) → `engine_nat.install` with the
+deploy-stamp args → clear `meta.seed[ip].implant` → re-seed. Same run also found the GX10 chat
+template 500s on `reasoning_effort: "minimal"` ("Unexpected reasoning effort") — every red LLM
+decision then falls back to scripted tactics; leave the key off for local endpoints.
+
+### bad-auto world.json has no concurrent-writer protection
+
+**Status: OPEN — upstream-worthy (bad-auto).** `World.save()` is a bare atomic write of the
+in-memory dict: last writer wins. The director runs for the whole event holding a stale copy, so
+any operator-side `badauto seed` that adds artifacts (e.g. re-running the implant stage after a
+config fix) is clobbered by the director's next `save()` — live-found 2026-10-11: the 07:46
+multi-transport re-seed's 24+ realm-imix artifact records vanished when the director's 07:47:23
+health_check saved its 07:31-era world, while the planted units themselves stayed live on the
+boxes (tavern had all 36 rows). The record-keeping undercounts red's real presence until the next
+plant. A fix needs a save-side reload-merge (or director file locks), not just an flock — defer
+to bad-auto, hand off with the upstream defects.
 
 ## Pending upstream — owned by the catalog / nakon
 

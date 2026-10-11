@@ -70,12 +70,21 @@ class GuardActsOnlyOnAStaleLoop(unittest.TestCase):
         self.assertEqual(posts[0][2], {"started": True})
         self.assertEqual(posts[1][2], {"pause": False})
 
-    def test_a_paused_engine_is_never_touched(self):
-        """Paused is a deliberate operator state, not a fault."""
+    def test_a_paused_engine_without_stale_round_is_never_touched(self):
+        """A pause without an old-round reboot signature is intentional."""
         engine = FakeEngine({"running": False, "current_round_time": ZERO})
         outcome = guard.guard_once(engine, "scoring", "pw", now=NOW)
+        self.assertEqual(outcome["state"], round_loop.PAUSED)
         self.assertEqual(outcome["action"], "none")
         self.assertEqual([c for c in engine.calls if c[0] == "post"], [])
+
+    def test_a_reboot_paused_engine_gets_healed(self):
+        engine = FakeEngine(_stale() | {"running": False})
+        outcome = guard.guard_once(engine, "scoring", "pw", now=NOW)
+        self.assertEqual(outcome["state"], round_loop.STALE)
+        self.assertEqual(outcome["action"], "fixed")
+        self.assertEqual([c[1] for c in engine.calls if c[0] == "post"],
+                         ["/api/competition/start", "/api/engine/pause"])
 
     def test_a_pending_first_round_is_never_touched(self):
         engine = FakeEngine(_stale(minutes=1))

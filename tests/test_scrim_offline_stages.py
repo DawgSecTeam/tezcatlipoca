@@ -41,6 +41,28 @@ CREDS = {"ENGINE_IP": "10.0.0.50", "ADMIN_PW": "adminpw", "INJECT_PW": "injpw", 
          "TEAM1_PW": "t1pw", "TEAM2_PW": "t2pw", "TEAM1_ID": "101", "TEAM2_ID": "102"}
 
 
+class RedLlmHeadroom(unittest.TestCase):
+    """A local red endpoint gets headroom for a REASONING model: at timeout 120 /
+    max_tokens 4096 every decision timed out or truncated to empty content and the
+    director fell back to scripted tactics without saying so (2026-10-09)."""
+
+    def test_local_endpoint_gets_reasoning_model_headroom(self):
+        from scrim import red_stage
+        llm = red_stage.red_llm_config(
+            _args(None, llm_base_url="http://100.64.0.19:8000/v1", red_model="qwen3.8-flash-next"))
+        self.assertEqual(llm["timeout"], 300)
+        self.assertEqual(llm["max_tokens"], 6144)
+        self.assertEqual(llm["json_retries"], 0)
+        self.assertEqual(llm["model"], "qwen3.8-flash-next")
+
+    def test_cloud_endpoint_keeps_the_tighter_pair(self):
+        from scrim import red_stage
+        llm = red_stage.red_llm_config(_args(None))  # openrouter URL in _args
+        self.assertEqual(llm["timeout"], 240)
+        self.assertEqual(llm["max_tokens"], 4096)
+        self.assertEqual(llm["json_retries"], 1)
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -118,8 +140,12 @@ class RunFolderAndResume(Base):
         r1, t1 = test_folder.resolve_run_dir(self.comp, a1)
         self.assertEqual(r1, t1)
         self.assertEqual(t1.parent.name, ".automated-tests")
-        r2, t2 = test_folder.resolve_run_dir(self.comp, _args(None))
+        # a resume reuses the folder; a second FRESH run mints its own (`-run2`)
+        r2, t2 = test_folder.resolve_run_dir(self.comp, _args(None, resume_event=True))
         self.assertEqual((r1, t1), (r2, t2))
+        r2b, t2b = test_folder.resolve_run_dir(self.comp, _args(None))
+        self.assertNotEqual(t2b, t1)
+        self.assertTrue(t2b.name.endswith("-run2"))
         override = self.tmp / "elsewhere"
         a3 = _args(str(override))
         r3, t3 = test_folder.resolve_run_dir(self.comp, a3)
