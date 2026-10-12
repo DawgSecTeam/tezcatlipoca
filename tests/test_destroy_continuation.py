@@ -22,7 +22,14 @@ def load_module(name, filename):
 
 
 destroy = load_module("destroy_competition_under_test", "destroy-competition.py")
-import destroy_sweep_ops  # noqa: E402
+from teardown import machinery as destroy_sweep_ops  # noqa: E402
+from vm_ownership import Ownership  # noqa: E402
+
+
+def _ownership():
+    return Ownership("loadtest-cr-a", "run-aaaa0001")
+
+
 import golden_ops  # noqa: E402
 
 
@@ -57,14 +64,14 @@ class LeftoverSweep(unittest.TestCase):
         ]
         with patch.object(destroy_sweep_ops, "proxmox_api", fake_api(vms, deleted)), \
              patch.object(destroy_sweep_ops, "wait_for_proxmox_task"):
-            destroy_sweep_ops.sweep_tagged_leftovers(["proxmox"], "loadtest-cr-a", "run-aaaa0001")
+            destroy_sweep_ops.sweep_tagged_leftovers(["proxmox"], _ownership())
         self.assertEqual(sorted(deleted), [2300, 2313])
 
     def test_sweep_is_silent_when_nothing_matches(self):
         deleted = []
         vms = [vm(1080, "quotient-engine", "tezcatlipoca;comp-multinode")]
         with patch.object(destroy_sweep_ops, "proxmox_api", fake_api(vms, deleted)):
-            destroy_sweep_ops.sweep_tagged_leftovers(["proxmox"], "loadtest-cr-a", "run-aaaa0001")
+            destroy_sweep_ops.sweep_tagged_leftovers(["proxmox"], _ownership())
         self.assertEqual(deleted, [])
 
 

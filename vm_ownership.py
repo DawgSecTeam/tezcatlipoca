@@ -15,13 +15,58 @@ Only OWNED and MARKER VMs are ever touched. A same-comp VM without this run's ta
 worktree's run (2026-10-02 near-miss) and is MISSING, never reclaimed."""
 
 import os
+from dataclasses import dataclass, field
 
+from constants import ownership_tags
 from pve_api import proxmox_api, wait_for_proxmox_task
 
 OWNED = "owned"
 MARKER = "marker"
 UNPROVEN = "unproven"
 MISSING = "missing"
+
+
+@dataclass(frozen=True)
+class Ownership:
+    """The destruction-identity of one deploy: which VMs a teardown may touch.
+
+    Wraps constants.ownership_tags as a first-class type (teardown-redesign):
+    every destroy-shaped API takes an Ownership, and the only way to build one
+    is the state file's run id. `extra` carries role tags (golden, engine-
+    template, jump) that narrow the set to one VM role."""
+    comp: str
+    run_id: str = ""
+    extra: frozenset = field(default_factory=frozenset)
+
+    @property
+    def tags(self):
+        return frozenset(ownership_tags(self.comp, self.run_id or None, *self.extra))
+
+    def with_role(self, *role_tags):
+        """The same identity narrowed to one VM role (e.g. goldens only)."""
+        return Ownership(self.comp, self.run_id, self.extra | frozenset(role_tags))
+
+
+class Refusal(RuntimeError):
+    """The ONE refusal vocabulary: what I saw, what I expected, what changes my mind.
+
+    Subclasses RuntimeError so every existing `except RuntimeError` around the
+    ownership guard keeps catching it. `detail` is the human prose (rendered by
+    str); `as_line()` is the machine contract bad-auto speaks too — every layer
+    renders refusals through one of these two shapes, never ad-hoc prose."""
+
+    def __init__(self, saw, expected, remedy, detail=None):
+        self.saw, self.expected, self.remedy = saw, expected, remedy
+        self.detail = detail or f"saw {saw}; expected {expected}; remedy: {remedy}"
+        super().__init__(self.detail)
+
+    def __str__(self):
+        return self.detail
+
+    def as_line(self):
+        import json
+        return "TEARDOWN-REFUSAL " + json.dumps(
+            {"saw": self.saw, "expected": self.expected, "remedy": self.remedy})
 
 
 def parse_vm_tags(raw):
@@ -136,16 +181,23 @@ def destroy_vm_if_exists(node, vmid, expect_tags=None):
         if verdict == UNPROVEN:
             # Ownership must be PROVEN. An untagged VM is ours only when it carries this
             # competition's clone marker (an interrupted clone: the tag PUT never ran).
-            raise RuntimeError(
-                f"refusing to destroy UNTAGGED vmid {vmid} ({vm.get('name')}): ownership "
-                f"cannot be proven (no tags, no clone marker of this competition).")
+            raise Refusal(
+                saw=f"UNTAGGED vmid {vmid} ({vm.get('name')})",
+                expected="proof of ownership: this competition's tags or its clone marker",
+                remedy="none — ownership cannot be proven, so this VM is never destroyed here",
+                detail=f"refusing to destroy UNTAGGED vmid {vmid} ({vm.get('name')}): ownership "
+                       f"cannot be proven (no tags, no clone marker of this competition).")
         if verdict == MARKER:
             print(f"    vmid {vmid} untagged but carries this competition's clone marker — "
                   f"interrupted clone, destroying")
         elif verdict == MISSING:
-            raise RuntimeError(
-                f"refusing to destroy vmid {vmid} ({vm.get('name')}): its tags '{raw}' are "
-                f"missing {sorted(missing)} — outside this deploy's ownership set")
+            expected = sorted(set(missing) | set(parse_vm_tags(raw)))
+            raise Refusal(
+                saw=f"vmid {vmid} ({vm.get('name')}) carrying tags '{raw}'",
+                expected=f"the full ownership set {expected}",
+                remedy="none — it belongs to another run/competition and is never touched here",
+                detail=f"refusing to destroy vmid {vmid} ({vm.get('name')}): its tags '{raw}' are "
+                       f"missing {sorted(missing)} — outside this deploy's ownership set")
     lock = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"].get("lock")
     if lock:
         unlock_vm(node, vmid, lock)

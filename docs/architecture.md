@@ -55,7 +55,7 @@ the agent-scrim harness in
 | `vendor/nakon` | Submodule (pinned release) — CLI-only catalog access and bundle builder |
 | `verify-competition.py` + `verifier/` | Thin CLI entrypoint + the gate package (one module per concern — see [internals.md](internals.md#verify-competitionpy)). Post-deploy checks (login, services, isolation, misconfig, injects, pins, plant coverage, domains, red identity, packet) on a tri-state gate model — PASS / FAIL / SKIP, where a SKIP is non-passing unless waived with `--allow-unverified` |
 | `redeploy-competition.py` | Thin CLI: flags, confirmation, mode dispatch. Delegates to `redeploy_gate_ops.py` (state-version/run-id gate, before any Proxmox call), `redeploy_select_ops.py` (target selection), `redeploy_plant_ops.py` (shared configure half), `redeploy_light_ops.py` (resync/rollback/reconfigure), `redeploy_rebuild_ops.py`, `redeploy_reset_ops.py`, `redeploy_engine_ops.py` (engine recovery + reseed) |
-| `destroy-competition.py` | Thin CLI: tears down all team boxes + `terraform destroy` (+ golden templates on `--full`). Delegates to `destroy_gate_ops.py` (frozen/run-id/endpoint refusals, before anything is touched), `destroy_sweep_ops.py` (pre-stop, bounded destroy with recovery, tagged sweep) and `destroy_templates_ops.py` (golden/jump/engine template teardown) |
+| `destroy-competition.py` | Thin CLI over the teardown object model (`teardown/`): gates -> evidence -> portal -> red01 -> pre-stop -> bounded `terraform destroy` with recovery -> template teardown -> remote-access cleanup, then `verify_clean` — exit 0 means the estate is verified clean for this deploy's ownership set. See [teardown-redesign.md](teardown-redesign.md) |
 | `packet_ops.py` | Packet-profile load/validate/compile into a competition bundle + fidelity report (inverse of `generate-packet.py`) |
 | `compile-packet.py` | CLI over `packet_ops`: `packets/<event>/packet.yaml` → `competitions/<id>/` |
 | `run-schedule.py` | Event-day schedule driver over a packet's `schedule:` windows (start / freeze / resume / end) |
@@ -81,7 +81,7 @@ resumes are refused (`pipeline_version` in `.deploy_state.json`).
    stale slot beyond the lineup. M4: **hash-matching golden templates survive cleanup** —
    that is the test-run reuse (build once per competition, reuse across ITS runs — never
    across competitions: the hash inputs are per-competition, so a different competition
-   always rebuilds them; when a run has achieved its goal, `destroy-competition.py --full`
+   always rebuilds them; when a run has achieved its goal, the default (full) `destroy-competition.py` teardown
    tears the golden range down). The
    engine template is never touched here. Linked clones must die before their
    templates. Bridges serial. Skipped on `--from-phase >1`.
@@ -411,7 +411,7 @@ box passwords.
 - **Golden reuse is per-competition only.** A golden set built for competition A can never
   serve competition B (tags `comp-a`, per-competition hash inputs — B's phase 1 would
   rebuild it anyway), so once a run has achieved its goal the golden range is torn down
-  with `--full` rather than left on the datastore "for reuse". Teams-only teardown is a
+  (the default full teardown) rather than left on the datastore "for reuse". Teams-only teardown is a
   mid-run mode, not an end state.
 - **Never deploy over a per-comp terraform state from another host or engine vmid** — the
   stale-state guard refuses; terraform would otherwise "reconcile" old state and destroy

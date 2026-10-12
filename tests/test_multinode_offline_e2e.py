@@ -136,6 +136,7 @@ class MultinodeOfflineE2E(unittest.TestCase):
         self.addCleanup(nodes_ops.deactivate_placement, {})
         with patch.object(pve_api, "proxmox_api_for", self.fake), \
                 patch("preflight.concurrency.gate_concurrent_deploys"), \
+                patch("preflight.gate.remote_access_gate"), \
                 patch("preflight.catalog.catalog_gate"), \
                 patch("vm_ownership.has_clone_marker", return_value=False):
             gate.preflight_gates_multinode(self.comp, BOXES, TEAMS, 1000, placement,

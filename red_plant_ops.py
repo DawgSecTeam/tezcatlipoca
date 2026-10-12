@@ -73,6 +73,46 @@ def _configured_red_ip():
     return ((cfg.get("deploy") or {}).get("red_ip")) or None
 
 
+def red_vmid_candidates(comp_dir, deployed_state=None):
+    """Every place red01's vmid is recorded, most-authoritative first: bad-auto's
+    config.yaml (deploy.red_vmid — what `badauto destroy` actually acts on),
+    then the deploy state's assume-breach record. Teardown's verify step uses
+    this to prove the specific VM is gone (2026-10-08: an unknown vmid made the
+    check unverifiable and the leak invisible)."""
+    del comp_dir  # config is repo-level; kept in the signature for call-site symmetry
+    candidates = [_configured_red_vmid()]
+    recorded = ((deployed_state or {}).get("assume_breach") or {}).get("vmid")
+    if recorded:
+        candidates.append(recorded)
+    return [c for c in candidates if c]
+
+
+def _configured_red_vmid():
+    cfg_path = BAD_AUTO / "config.yaml"
+    if not cfg_path.exists():
+        return None
+    try:
+        import yaml
+        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return None
+    return ((cfg.get("deploy") or {}).get("red_vmid")) or None
+
+
+def parse_teardown_refusal(proc):
+    """The bad-auto contract's machine line (exit 17): TEARDOWN-REFUSAL
+    {"saw","expected","remedy"} on stdout — the shared refusal vocabulary,
+    parsed so the teardown renders bad-auto's refusals like its own."""
+    import json
+    for line in ((proc.stdout or "") + "\n" + (proc.stderr or "")).splitlines():
+        if line.startswith("TEARDOWN-REFUSAL "):
+            try:
+                return json.loads(line.split(" ", 1)[1])
+            except ValueError:
+                return None
+    return None
+
+
 def red_ip_for(comp_dir):
     """Compfile override -> bad-auto config -> built-in default."""
     return (compfile_value(comp_dir / "Compfile", "assume_breach_red_ip", "")
@@ -137,6 +177,20 @@ def destroy_red(comp_dir, env=None, timeout=900):
     return subprocess.run(
         ["python3", "-m", "badauto", "destroy", "--competition", str(comp_dir), "--yes"],
         cwd=str(BAD_AUTO), env=env, capture_output=True, text=True, timeout=timeout)
+
+
+def _record_attempt(ctx, red_ip, reason):
+    """Record a FAILED assume-breach attempt in the deploy state too. A failed
+    deploy may still have left red01 standing (live-found 2026-10-12: the V1
+    validation deploy failed after `badauto deploy` created the VM, and the
+    teardown exited 0 with red01 up because nothing recorded the attempt).
+    verify_clean keys on this record to demand red01's destruction."""
+    try:
+        ctx.state["assume_breach"] = {"ok": False, "red_ip": red_ip,
+                                      "reason": reason, "at": _now()}
+        ctx.save_state()
+    except Exception:
+        pass  # state bookkeeping must never fail the deploy
 
 
 def _seed_red(ssh_key, red_ip, depth, timeout=3600):
@@ -219,6 +273,7 @@ def plant_assume_breach(ctx):
         tail = ((deployed.stderr or "") + (deployed.stdout or ""))[-300:]
         record_degradation("assume_breach_deploy", tail)
         print("  assume-breach: bad-auto deploy FAILED (see degradations)")
+        _record_attempt(ctx, red_ip, "deploy failed")
         return {"ok": False, "reason": "deploy failed"}
 
     # The C2 lives on red01 now: build tavern from source there (all callback
@@ -261,6 +316,7 @@ def plant_assume_breach(ctx):
         tail = ((seeded.stderr or "") + (seeded.stdout or ""))[-300:]
         record_degradation("assume_breach_seed", tail)
         print("  assume-breach: seed FAILED (see degradations)")
+        _record_attempt(ctx, red_ip, "seed failed")
         return {"ok": False, "reason": "seed failed"}
 
     summary = {"ok": True, "red_ip": red_ip, "depth": depth, "at": _now()}

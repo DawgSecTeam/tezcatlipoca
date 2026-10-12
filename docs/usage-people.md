@@ -441,10 +441,12 @@ SSH command — copy this down, it's the only place team/admin passwords are sho
 For CLI flags that skip these prompts (useful interactively too, e.g. `--yes` or
 `--from-phase`), see [usage-agents.md](usage-agents.md).
 
-**Teardown**: `python3 destroy-competition.py`. It destroys the competition's team boxes and then
-runs `terraform destroy`. Every team box is in Terraform state, so no separate API-clone cleanup
-is needed. It needs a `run_id` in `.deploy_state.json` and that competition's `teams.json` + `boxes.json` (both written
-by the deploy). Templates aren't touched unless you pass `--full`.
+**Teardown**: `python3 destroy-competition.py --competition <id>`. The default is a FULL
+teardown — team boxes, `terraform destroy`, then the golden + engine templates — and exit 0
+means the estate is verified clean (nothing of this deploy left, evidence archived). It needs
+a `run_id` in `.deploy_state.json` and that competition's `teams.json` + `boxes.json` (both
+written by the deploy). `--teams-only` keeps the templates for the competition's next run; a
+FROZEN competition requires `--end-of-competition`.
 
 **Add a team mid-event**: don't re-run `create-competition.py` for this. A fresh run
 regenerates **every** team's password *and* its phase [1/8] destroys the existing team boxes,

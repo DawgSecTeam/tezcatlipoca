@@ -8,13 +8,16 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-from destroy_gate_ops import require_terraform_state  # noqa: E402
+from teardown import machinery
+
+require_terraform_state = machinery.require_terraform_state
+from vm_ownership import Refusal  # noqa: E402
 
 
 class RequireTerraformStateTests(unittest.TestCase):
     def test_deployed_comp_without_state_is_refused(self):
         with tempfile.TemporaryDirectory() as d:
-            with self.assertRaises(SystemExit) as cm:
+            with self.assertRaises(Refusal) as cm:
                 require_terraform_state(Path(d), {"last_phase": 7, "run_id": "run-x"})
             self.assertIn("Reconstruct the state file", str(cm.exception))
 

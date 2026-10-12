@@ -41,7 +41,9 @@ class TeardownOrdering(unittest.TestCase):
              mock.patch.object(test_folder, "write_interaction_report",
                                lambda *a, **k: order.append("report")), \
              mock.patch.object(teardown_stage, "teardown_red",
-                               lambda *a, **k: order.append("teardown_red")), \
+                               lambda *a, **k: order.append("teardown_red") or 999), \
+             mock.patch.object(teardown_stage, "run_range_teardown",
+                               lambda *a, **k: order.append("destroy-competition")), \
              mock.patch.object(teardown_stage.procs, "run", _fake_proc):
             teardown_stage.stage_teardown(args, creds={"user": "sysadmin"})
         self.assertEqual(order[:3], ["pull", "collect", "report"],
@@ -54,7 +56,9 @@ class TeardownOrdering(unittest.TestCase):
              mock.patch.object(test_folder, "collect_run_artifacts",
                                lambda *a, **k: order.append("collect")), \
              mock.patch.object(teardown_stage, "teardown_red",
-                               lambda *a, **k: order.append("teardown_red")), \
+                               lambda *a, **k: order.append("teardown_red") or 999), \
+             mock.patch.object(teardown_stage, "run_range_teardown",
+                               lambda *a, **k: order.append("destroy-competition")), \
              mock.patch.object(teardown_stage.procs, "run", _fake_proc):
             teardown_stage.stage_teardown(args, creds=None)
         self.assertEqual([x for x in order if x in ("pull", "collect")], [],

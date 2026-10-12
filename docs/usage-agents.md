@@ -322,36 +322,39 @@ state, not a repair. Every mode except `reconfigure` says so and requires confir
 
 ## `destroy-competition.py`
 
-> Module layout (0.2.0): the CLI is unchanged; the code is split into `destroy_gate_ops.py` / `destroy_sweep_ops.py` / `destroy_templates_ops.py` — see [internals.md](internals.md#destroy-competitionpy).
+> The teardown object model (teardown-redesign, 2026-10-12): this CLI is a thin shim over
+> `teardown/` (Ownership, Inventory, plan of steps, engine with journal + verify_clean) —
+> see [teardown-redesign.md](teardown-redesign.md) and
+> [internals.md](internals.md#the-teardown-object-model).
 
 ```bash
-python3 destroy-competition.py                                # teams-only (M4 default)
-python3 destroy-competition.py --competition <id> --full      # also destroy templates
+python3 destroy-competition.py --competition <id>            # FULL teardown (the default)
+python3 destroy-competition.py --competition <id> --teams-only  # mid-event: keep templates
 python3 destroy-competition.py --competition <id> --full --end-of-competition  # frozen comp
-python3 destroy-competition.py --competition <id> --skip-artifacts  # do not collect reports
 python3 destroy-competition.py --competition <id> --artifacts-timeout 20  # per-file pull budget
 ```
 
-Destroys all of the competition's team boxes, then runs `terraform destroy`. Every team is in
-Terraform state, so `terraform destroy` alone removes them. Requires a `run_id` in
-`.deploy_state.json` plus that competition's `teams.json` + `boxes.json` (all written by `deploy()`), and restores
-the per-competition `TF_VAR_*` values first so Terraform address-matches the original apply.
-
-**Before the first destructive call** it collects the run's test artifacts into
-`competitions/<id>/.automated-tests/<run-id>/` — the red report from red01, blue's logs and report,
-the engine capture, the harness evidence, then `REPORT.md`. This is the last moment it can: the
-next calls purge clones and hard-stop every team box. It is also the safety net for a run whose
-harness died, since teardown is the step that always happens. Collection **warns and proceeds**
-(never blocks), so `--skip-artifacts` exists only to save time, and `--artifacts-timeout` bounds a
-dead source at 45s per file by default. See
-[automated-test-artifacts.md](automated-test-artifacts.md).
-
-M4 teardown modes: the default is **teams-only** — team clones, the engine VM, and the
-bridges die; the competition's golden templates and engine template are KEPT and the next
-deploy reuses them by hash (test-run reuse). `--full` additionally destroys the templates
-(clones strictly first — linked clones die with their base disks) and removes
-`.template-hashes.json`. On a FROZEN competition `--full` refuses without
+The DEFAULT is a **full teardown**: everything this deploy created — team boxes, engine VM,
+bridges, golden + engine templates (clones strictly first — linked clones die with their base
+disks; `.template-hashes.json` goes with them) — and **exit 0 means the estate is verified
+clean** for this deploy's ownership set: nothing of ours running or tagged, red01 gone, no
+terraform state lock, evidence archived. A FROZEN competition refuses without
 `--end-of-competition`, so an accidental full teardown mid-event is impossible.
+`--teams-only` is the mid-event mode (templates kept for THIS competition's next run, reported
+as kept-by-design).
+
+Requires a `run_id` in `.deploy_state.json` plus that competition's `teams.json` + `boxes.json`
+(all written by `deploy()`), and restores the per-competition `TF_VAR_*` values first so
+Terraform address-matches the original apply.
+
+**Before the first destructive call** the plan collects the run's test artifacts into
+`competitions/<id>.automated-tests/<run-id>/` — the red report from red01, blue's logs and
+report, the engine capture, the harness evidence, then `REPORT.md`. This is the last moment it
+can: the next steps purge clones and hard-stop every team box. It is also the safety net for a
+run whose harness died, since teardown is the step that always happens. Collection **warns and
+proceeds** (never blocks); `--artifacts-timeout` bounds a dead source at 45s per file by
+default. There is no `--skip-artifacts`: on a resume the completion journal marks collection
+done and skips it. See [automated-test-artifacts.md](automated-test-artifacts.md).
 
 ### Run ownership: teardown only touches THIS deploy's VMs (2026-10-02)
 
@@ -372,9 +375,9 @@ other's VMs**. Behavior you will see:
 - A deploy whose preflight finds comp-tagged VMs missing its run tag refuses: they are another
   worktree's run of the same competition ID — coordinate with that session.
 
-`report_remaining` (printed when teardown cannot finish) classifies every survivor the same
-way, so a human always knows what is ours, what belongs to another run, and what carries no
-run tag.
+`verify_clean` (the exit-0 gate) classifies every survivor the same way, so a human always
+knows what is ours (a problem — the teardown failed on it), what belongs to another run (a
+note — never touched), and what carries no run tag (a note).
 
 **Lifecycle rule: tear the golden range down once the run has achieved its goal.** Teams-only
 exists for the mid-run loop only — crash resume, iterate, re-run the SAME competition; that
@@ -382,8 +385,9 @@ is the only reuse a golden set supports. It can never serve a DIFFERENT competit
 templates are tagged `comp-<id>` and every M4 hash input (box list, pins, box_password, ssh
 key) is this competition's, so another competition's phase-1 hash gate would destroy and
 rebuild them regardless. Once the goal is reached (validation pass done, event over, evidence
-captured), run `--full` (add `--end-of-competition` if frozen) — leaving goldens behind just
-strands templates on the datastore squatting on the competition's golden vmids.
+captured), run the DEFAULT full teardown (add `--end-of-competition` if frozen) — teams-only
+past the goal just strands templates on the datastore squatting on the competition's golden
+vmids.
 
 Related M4 commands:
 

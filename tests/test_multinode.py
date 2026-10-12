@@ -599,6 +599,7 @@ class MultinodePreflightResumeTest(unittest.TestCase):
                 patch("preflight.clashes.proxmox_api", return_value={"data": []}), \
                 patch("preflight.headroom.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
                 patch("preflight.concurrency.gate_concurrent_deploys"), \
+                patch("preflight.gate.remote_access_gate"), \
                 patch("preflight.catalog.catalog_gate"), \
                 patch("jump_ops.find_jump_template", return_value={"alpine": 900}):
             config_ops.preflight_gates_multinode(

@@ -30,7 +30,8 @@ def load_module(name, filename):
 
 
 destroy = load_module("destroy_competition_for_timeout_test", "destroy-competition.py")
-import destroy_sweep_ops  # noqa: E402
+from teardown import machinery as destroy_sweep_ops  # noqa: E402
+from vm_ownership import Ownership  # noqa: E402
 
 
 def _timeout():
@@ -43,7 +44,7 @@ class DestroyAttemptTimeoutTests(unittest.TestCase):
              patch.object(destroy_sweep_ops, "clear_stale_state_lock") as p_lock, \
              patch.object(destroy_sweep_ops, "sweep_tagged_leftovers") as p_sweep:
             result = destroy_sweep_ops.destroy_with_recovery(
-                {}, "terraform", ["pve"], "cde-2026", "run-aaaa0001")
+                {}, "terraform", ["pve"], Ownership("cde-2026", "run-aaaa0001"))
         return result, p_run, p_lock, p_sweep
 
     def test_every_attempt_passes_the_bounded_timeout(self):
@@ -65,7 +66,7 @@ class DestroyAttemptTimeoutTests(unittest.TestCase):
         self.assertEqual(p_run.call_count, 2)
         # Attempt 2 begins with the documented recovery steps.
         p_lock.assert_called_once_with("terraform")
-        p_sweep.assert_called_once_with(["pve"], "cde-2026", run_id="run-aaaa0001")
+        p_sweep.assert_called_once_with(["pve"], Ownership("cde-2026", "run-aaaa0001"))
         # And the timeout was re-applied to the retry, not only the first attempt.
         self.assertEqual([c.kwargs["timeout"] for c in p_run.call_args_list],
                          [destroy_sweep_ops.DESTROY_ATTEMPT_TIMEOUT_S] * 2)
@@ -77,7 +78,7 @@ class DestroyAttemptTimeoutTests(unittest.TestCase):
         # Recovery runs before attempts 2, 3 and 4.
         self.assertEqual(p_lock.call_count, 3)
         self.assertEqual(p_sweep.call_args_list,
-                         [call(["pve"], "cde-2026", run_id="run-aaaa0001")] * 3)
+                         [call(["pve"], Ownership("cde-2026", "run-aaaa0001"))] * 3)
 
     def test_failed_attempt_still_runs_recovery_before_the_retry(self):
         result, p_run, p_lock, p_sweep = self._run(
@@ -85,7 +86,7 @@ class DestroyAttemptTimeoutTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(p_run.call_count, 2)
         p_lock.assert_called_once_with("terraform")
-        p_sweep.assert_called_once_with(["pve"], "cde-2026", run_id="run-aaaa0001")
+        p_sweep.assert_called_once_with(["pve"], Ownership("cde-2026", "run-aaaa0001"))
 
     def test_success_on_the_first_attempt_skips_recovery(self):
         result, p_run, p_lock, p_sweep = self._run([MagicMock(returncode=0)])

@@ -577,6 +577,7 @@ def destroy_golden_set(node, engine_vmid, num_box_types, expect_tags=None, slot=
     if skipped:
         print(f"  {len(skipped)} golden slot(s) skipped as foreign — they belong to "
               f"another deployment; inspect them manually.")
+    return skipped
 
 
 __all__ = [

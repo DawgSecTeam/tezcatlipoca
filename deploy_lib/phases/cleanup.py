@@ -1,4 +1,9 @@
-"""Phase 1: tear down the previous range (team boxes, then their templates, then bridges)."""
+"""Phase 1: tear down the previous range (team boxes, then their templates, then bridges).
+
+The mechanics (waves, bridge-in-use, marker resets) live here, module-side and
+patchable; the SEQUENCING is a RECLAIM plan executed by the teardown engine
+(teardown-redesign: one engine, one policy vocabulary; RECLAIM carries no
+evidence steps — the prior run's evidence was that run's teardown's job)."""
 
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +18,9 @@ from timing import timed
 from utils import is_in_path_fw, record_degradation
 
 from deploy_lib.golden_plan import phase1_destroy_waves
+import teardown
+from teardown import CallStep, Inventory, Ownership, TeardownContext, TeardownEngine
+from teardown.modes import build_reclaim_plan
 
 
 def reset_domain_markers(comp_dir):
@@ -102,37 +110,86 @@ def phase1_cleanup(ctx):
 
     Wave 1: every team box (the computed set covers ALL teams now that terraform
     builds them). Linked clones must die BEFORE their templates. Wave 2 (goldens/engine/stale slots)
-    is phase1_destroy_waves' job; this function is only the node/bridge walk and
-    the resume markers around it."""
+    is phase1_destroy_waves' job; the node/bridge walk is composed into a RECLAIM
+    plan here and executed by the teardown engine (journaling off: a resume at
+    phase 1 must re-reclaim, never skip)."""
     if ctx.from_phase > 1:
         print("[1/8] Skipped (resume) — leaving existing VMs/bridges in place.")
         return
     print("[1/8] Cleaning up previous deployment (parallel; deletes are metadata-light "
           "— the datastore-saturation hazard belongs to bulk clone writes, not deletes)...")
-    # Wave 1: every team box (the computed set covers ALL teams now that terraform
-    # builds them). Linked clones must die BEFORE their templates.
-    destroy_node_waves(ctx, ctx.node,
-                       [t for t in ctx.all_targets if t.get("node") == ctx.node], 0)
+
+    steps = []
+
+    def waves(destroy_node, node_targets, slot, extra_destroy=None):
+        return lambda: destroy_node_waves(ctx, destroy_node, node_targets, slot,
+                                          extra_destroy=extra_destroy)
+
+    def bridge(node, name):
+        return lambda: _reclaim_bridge(ctx, node, name)
+
+    # Engine node: that node's VMs and its slot-0 golden span.
+    steps.append(CallStep(
+        "waves:engine-node",
+        waves(ctx.node, [t for t in ctx.all_targets if t.get("node") == ctx.node], 0)))
     if ctx.placement:
         for sat in ctx.placement["satellites"]:
             sat_rec = record_of(ctx.placement, sat["name"])
-            destroy_node_waves(
-                ctx, sat_rec.node,
-                [t for t in ctx.all_targets if t.get("node") == sat_rec.node],
-                sat["slot"],
-                extra_destroy={sat["jump_vmid"]: f"jump-{ctx.comp_name}-{sat['slot']}"})
+            steps.append(CallStep(
+                f"waves:satellite-{sat['name']}",
+                waves(sat_rec.node,
+                      [t for t in ctx.all_targets if t.get("node") == sat_rec.node],
+                      sat["slot"],
+                      extra_destroy={sat["jump_vmid"]: f"jump-{ctx.comp_name}-{sat['slot']}"})))
             for team_key in ctx.placement["team_nodes"]:
                 if ctx.placement["team_nodes"][team_key] != sat["name"]:
                     continue
-                _reclaim_bridge(ctx, sat_rec.node, f"vmbr{ctx.teams[team_key]['identifier']}")
+                steps.append(CallStep(
+                    f"bridge:sat-{sat['name']}-vmbr{ctx.teams[team_key]['identifier']}",
+                    bridge(sat_rec.node, f"vmbr{ctx.teams[team_key]['identifier']}"),
+                    failure="warn", destructive=False))
     for team_key, team in ctx.teams.items():
         if ctx.placement and ctx.placement["team_nodes"][team_key] != ctx.placement["engine_node"]:
             continue  # satellite bridge — destroyed above on its own host
-        _reclaim_bridge(ctx, ctx.node, f"vmbr{team['identifier']}")
+        steps.append(CallStep(
+            f"bridge:vmbr{team['identifier']}",
+            bridge(ctx.node, f"vmbr{team['identifier']}"),
+            failure="warn", destructive=False))
         if any(is_in_path_fw(b) for b in ctx.boxes):
             # In-path firewalls add an engine-node transit bridge per team — same
             # in-use guard, same "another run may share the identifier" tolerance.
-            _reclaim_bridge(ctx, ctx.node, f"vmbrW{team['identifier']}")
+            steps.append(CallStep(
+                f"bridge:vmbrW{team['identifier']}",
+                bridge(ctx.node, f"vmbrW{team['identifier']}"),
+                failure="warn", destructive=False))
+    steps.append(CallStep("markers", lambda: reset_domain_markers(ctx.comp_dir),
+                          failure="warn", destructive=False))
+
+    nodes = [ctx.node] + ([record_of(ctx.placement, s["name"]).node
+                           for s in (ctx.placement or {}).get("satellites", [])])
+    reclaim_run = (getattr(ctx, "reclaim_tag", None)
+                   or getattr(ctx, "reclaim_run_id", None)
+                   or getattr(ctx, "run_id", "") or "")
+    comp = getattr(ctx, "comp_name", None) or Path(ctx.comp_dir).name
+    engine_ctx = TeardownContext(
+        comp_dir=ctx.comp_dir, env={}, teams=ctx.teams, boxes=ctx.boxes,
+        deployed_state={"run_id": reclaim_run},
+        ownership=Ownership(comp, reclaim_run),
+        placement=ctx.placement, nodes=nodes, default_node=ctx.node,
+        inventory=Inventory(nodes))
+    results = TeardownEngine(engine_ctx, log=print, journal=False).execute(
+        build_reclaim_plan(steps))
+    failed = [r for r in results if r.status == "failed"]
+    if failed:
+        raise RuntimeError(f"phase-1 reclaim step '{failed[0].name}' failed: "
+                           f"{failed[0].detail}")
+
     (ctx.comp_dir / ".postclone-swept").unlink(missing_ok=True)
-    reset_domain_markers(ctx.comp_dir)
+    # A fresh deploy starts a new teardown cycle: the journal of the PREVIOUS
+    # teardown must not survive into this run's — with a reused run id (the
+    # comp dir mints it once) the stale journal would skip red01/artifacts of
+    # the NEW range (live-found 2026-10-12: '[red01] skipped — journalled done'
+    # on the redeployed range). Resumes of THIS deploy keep it (that is the
+    # resumability contract).
+    (ctx.comp_dir / teardown.TEARDOWN_JOURNAL).unlink(missing_ok=True)
     time.sleep(5)

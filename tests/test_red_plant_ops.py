@@ -210,7 +210,11 @@ class PlantAssumeBreachTests(unittest.TestCase):
             out = rp.plant_assume_breach(ctx)
         self.assertEqual(out["reason"], "seed failed")
         deg.assert_called_once()
-        self.assertNotIn("assume_breach", ctx.state)
+        # A failed attempt IS recorded (ok=False): red01 may be standing, and
+        # teardown's verify_clean must know an attempt happened (live-found
+        # 2026-10-12: a failed deploy left red01 up and the teardown exited 0).
+        self.assertEqual(ctx.state["assume_breach"]["ok"], False)
+        self.assertEqual(ctx.state["assume_breach"]["reason"], "seed failed")
 
     def test_depth_is_clamped(self):
         ctx = FakeCtx(_write_compfile(self.tmp, "assume_breach_depth 9\n"))

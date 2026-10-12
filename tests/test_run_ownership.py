@@ -42,7 +42,14 @@ def load_destroy():
 
 
 destroy = load_destroy()
-import destroy_sweep_ops  # noqa: E402
+
+
+def _terminal_plan(ctx):
+    from teardown.modes import build_terminal_plan
+    return build_terminal_plan(Path("competitions/x"), frozen={}, full=True,
+                               end_of_competition=False)
+from teardown import machinery as destroy_sweep_ops  # noqa: E402
+from vm_ownership import Ownership  # noqa: E402
 import deploy  # noqa: E402
 from _deploy_patch import dpatch  # noqa: E402
 from deploy_lib import secrets as dl_secrets  # noqa: E402
@@ -144,7 +151,7 @@ class LeftoverSweep(unittest.TestCase):
                                     vm(1080, "foreign", "tezcatlipoca;comp-other")]})
         with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
                 patch.object(destroy_sweep_ops, "wait_for_proxmox_task"):
-            destroy_sweep_ops.sweep_tagged_leftovers(["n"], COMP, run_id=RUN)
+            destroy_sweep_ops.sweep_tagged_leftovers(["n"], Ownership(COMP, RUN))
         self.assertEqual(fake.deleted, [2300])
 
     def test_partial_overlap_is_never_a_candidate(self):
@@ -152,7 +159,7 @@ class LeftoverSweep(unittest.TestCase):
                                     vm(1333, "golden", "template")]})
         with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
                 patch.object(destroy_sweep_ops, "wait_for_proxmox_task"):
-            destroy_sweep_ops.sweep_tagged_leftovers(["n"], COMP, run_id=RUN)
+            destroy_sweep_ops.sweep_tagged_leftovers(["n"], Ownership(COMP, RUN))
         self.assertEqual(fake.deleted, [])
 
 
@@ -170,7 +177,7 @@ class PreStopOwnership(unittest.TestCase):
                 patch.object(destroy_sweep_ops, "wait_for_proxmox_task",
                              side_effect=lambda n, u: stopped.append(n)):
             destroy_sweep_ops.pre_stop_windows_boxes(self.TEAMS, self.BOXES, "n",
-                                           expect_tags={"tezcatlipoca", f"comp-{COMP}", RUN})
+                                           ownership=Ownership(COMP, RUN))
         self.assertEqual(stopped, ["n"])
 
     def test_other_teams_use_identifier_name(self):
@@ -183,23 +190,33 @@ class PreStopOwnership(unittest.TestCase):
                 patch.object(destroy_sweep_ops, "wait_for_proxmox_task",
                              side_effect=lambda n, u: stopped.append(n)):
             destroy_sweep_ops.pre_stop_windows_boxes(teams, self.BOXES, "n",
-                                           expect_tags={"tezcatlipoca", f"comp-{COMP}", RUN})
+                                           ownership=Ownership(COMP, RUN))
         self.assertEqual(len(stopped), 2)  # team1-web01 and 102-web01, not 101-web01
 
 class ReportRemainingClassification(unittest.TestCase):
+    """verify_clean (the engine's exit contract) is the successor of
+    report_remaining: every competition-tagged survivor is classified —
+    OURS (a problem: the teardown failed on it), same comp DIFFERENT run
+    (a note: another worktree's), or competition-tagged with no run tag."""
+
     def test_ours_other_run_and_untagged_run_are_distinguished(self):
+        from teardown import TeardownContext, TeardownEngine, Inventory
         fake = FakePVE(nodes={"n": [vm(2300, "ours", OURS),
                                     vm(2313, "other-run", OTHER),
                                     vm(2314, "legacy", f"tezcatlipoca,comp-{COMP}")]})
-        out = io.StringIO()
-        with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
-                contextlib.redirect_stdout(out):
-            destroy_sweep_ops.report_remaining(["n"], COMP, {"team1": {"identifier": "101"}},
-                                     run_id=RUN)
-        text = out.getvalue()
-        self.assertIn("OURS", text)
-        self.assertIn("DIFFERENT run", text)
-        self.assertIn("carries no run tag", text)
+        ctx = TeardownContext(
+            comp_dir=Path("."), env={}, teams={"team1": {"identifier": "101"}},
+            boxes=[], deployed_state={"run_id": RUN}, ownership=Ownership(COMP, RUN),
+            placement=None, nodes=["n"], default_node="n", inventory=Inventory(["n"], api=fake),
+            full=True)
+        report = TeardownEngine(ctx, journal_path=Path("_unused-journal.json")).verify_clean(
+            _terminal_plan(ctx))
+        self.assertTrue(any("ours" in p and "2300" in p for p in report.problems),
+                        report.problems)
+        self.assertTrue(any("DIFFERENT run" in n and "other-run" in n for n in report.notes),
+                        report.notes)
+        self.assertTrue(any("no run tag" in n and "legacy" in n for n in report.notes),
+                        report.notes)
 
 
 class RetagOwnership(unittest.TestCase):
@@ -405,6 +422,7 @@ class MultinodePreflightRunAware(unittest.TestCase):
                 patch("preflight.clashes.proxmox_api", return_value={"data": []}), \
                 patch("preflight.headroom.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
                 patch("preflight.concurrency.gate_concurrent_deploys"), \
+                patch("preflight.gate.remote_access_gate"), \
                 patch("preflight.catalog.catalog_gate"):
             config_ops.preflight_gates_multinode(
                 Path("competitions/example"), boxes, self.TEAMS, 1000, self.PLACEMENT,

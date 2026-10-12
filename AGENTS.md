@@ -50,22 +50,27 @@ squatting a golden slot, and the over-broad sweep that took out two other comps'
 goldens (the old `TEZ_ALLOW_CONCURRENT` opt-in flag is gone: warning-and-proceeding IS the
 default, 2026-10-04).
 
-Teardown after a practice run is `destroy-competition.py` — it is resumable (stale-lock recovery,
-tag-scoped leftover sweep, foreign VMs skip-and-continue); re-run it until it exits clean. **Never
-substitute ad-hoc destroy scripts**: sweep predicates that match names or partial tags will destroy
-other sessions' infrastructure (live-found 2026-09-30 — an over-broad sweep took out two other comps'
-engines and goldens).
+Teardown after a practice run is `destroy-competition.py` — the thin CLI over the teardown
+engine (`teardown/`, [docs/teardown-redesign.md](docs/teardown-redesign.md)). It is resumable by
+construction (a completion journal skips what a prior pass finished; a warned step is retried by
+re-running), and its exit 0 means the estate is VERIFIED clean for this deploy's ownership set —
+nothing of ours running or left tagged, red01 gone, no terraform state lock, evidence archived.
+**Never substitute ad-hoc destroy scripts**: there is no other path that can destroy a VM — every
+destroy-shaped API takes the deploy's `Ownership` (comp tag + per-deploy run id) and refuses
+anything less (live-found 2026-09-30 — an over-broad sweep took out two other comps' engines and
+goldens; the guarded path is the only path now).
 
-Teardown also collects this run's reports and evidence into
+Teardown collects this run's reports and evidence into
 `competitions/<id>/.automated-tests/<run-id>/` **before** it destroys anything (red report pulled
 from red01, blue logs sealed, engine capture, then `REPORT.md` with the machine sections filled and
 the judgement sections marked `TODO(author)`). It warns and proceeds — a dead box never blocks a
 destroy — and what it could not get is recorded in `collection.json` and in the report's caveats
-rather than left as an empty folder; `--skip-artifacts` bypasses it entirely. **Because the
-competition dir is per-worktree, archive before discarding the worktree:** `python3
-test-artifacts.py archive <comp> --all`, or keep the copy teardown already made under
-`~/.tezcatlipoca/automated-tests/` (it archives automatically when it detects a linked worktree, and
-again on `test-artifacts.py verify --seal` once the write-up is finished).
+rather than left as an empty folder. (There is no `--skip-artifacts`: on a resume the journal
+marks collection done and skips it.) **Because the competition dir is per-worktree, archive
+before discarding the worktree:** `python3 test-artifacts.py archive <comp> --all`, or keep the
+copy teardown already made under `~/.tezcatlipoca/automated-tests/` (it archives automatically
+when it detects a linked worktree, and again on `test-artifacts.py verify --seal` once the
+write-up is finished).
 
 A linked worktree has none of the gitignored local state the deploy reads, and every path resolves
 from the worktree root — run all commands from there. Pre-flight:

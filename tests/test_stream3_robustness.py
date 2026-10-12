@@ -29,7 +29,7 @@ def _load(name, filename):
 
 verify = _load("verify_comp_s3", "verify-competition.py")
 destroy = _load("destroy_comp_s3", "destroy-competition.py")
-import destroy_sweep_ops  # noqa: E402
+from teardown import machinery as destroy_sweep_ops  # noqa: E402
 
 
 class AdMisconfigReplay(unittest.TestCase):

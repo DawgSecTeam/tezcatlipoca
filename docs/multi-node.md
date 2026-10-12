@@ -175,8 +175,8 @@ so reuse/rebuild logic works per node.
 
 `destroy-competition.py`, `verify-competition.py`, and `redeploy-competition.py`
 activate the placement record first; per-target ops (snapshots, rollbacks,
-rebuilds, Windows pre-stop) go to the target's own node. `--full` destroys every
-slot's golden set and the jump VMs in addition to the usual.
+rebuilds, the pre-stop) go to the target's own node. The default FULL teardown
+destroys every slot's golden set and the jump VMs in addition to the usual.
 
 ## Template copies
 

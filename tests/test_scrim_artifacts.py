@@ -357,6 +357,9 @@ class TeardownCollection(TmpCase):
             mock.patch.object(procs, "run", side_effect=run or self._fake_run),
             mock.patch.object(ao, "collect", side_effect=collect),
             mock.patch.object(ao, "ingest_verdict", side_effect=ingest),
+            # the range teardown is in-process now: the label records the seam
+            mock.patch.object(teardown_stage, "run_range_teardown",
+                              side_effect=lambda *a, **k: self.calls.append("destroy-competition")),
         ]
         if log:
             patches.append(mock.patch.object(test_folder, "log",
@@ -426,6 +429,8 @@ class TeardownCollection(TmpCase):
         with mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"), \
                 mock.patch.object(test_folder, "log", side_effect=self.warnings.append), \
                 mock.patch.object(procs, "run", side_effect=self._fake_run), \
+                mock.patch.object(teardown_stage, "run_range_teardown",
+                                  side_effect=lambda *a, **k: self.calls.append("destroy-competition")), \
                 mock.patch.object(ao, "collect",
                                   side_effect=lambda *a, **k: self.calls.append("collect") or {}):
             teardown_stage.stage_teardown(self.args, {"ENGINE_IP": "10.0.0.193"})

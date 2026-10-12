@@ -15,7 +15,8 @@ from unittest.mock import MagicMock, patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import destroy_templates_ops as dto  # noqa: E402
+from teardown import machinery as dto  # noqa: E402
+from vm_ownership import Ownership  # noqa: E402
 import redeploy_light_ops as light  # noqa: E402
 from constants import SNAP_BASE, SNAP_READY  # noqa: E402
 
@@ -143,7 +144,8 @@ class TeardownTemplates(unittest.TestCase):
                     patch.object(dto, "destroy_engine_template") as e, \
                     patch.object(dto, "record_of", return_value=SimpleNamespace(node="pve2")), \
                     patch.dict("os.environ", {"TF_VAR_proxmox_node": "pve1"}), quiet():
-                dto.teardown_templates(comp, "c", "run-0badf00d", [LIN, WIN], {"scoring_vm_id": "1234"},
+                dto.teardown_templates(comp, {"scoring_vm_id": "1234"},
+                                       Ownership("c", "run-0badf00d"), [LIN, WIN],
                                        placement, full)
             return g, j, e, (comp / ".template-hashes.json").exists()
 

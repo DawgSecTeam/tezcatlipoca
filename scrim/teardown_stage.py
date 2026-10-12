@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from config_ops import write_text_atomic
+from utils import load_compfile
 
 from scrim import core
 from scrim import endpoints
@@ -54,7 +55,9 @@ def _red_vm_still_exists(vmid):
 
 
 def teardown_red(args, env):
-    """Destroy red01 + its NAT, then PROVE the VM is gone.
+    """Destroy red01 + its NAT, then PROVE the VM is gone. Returns the vmid the
+    proof ran against (None when unknowable) so the caller can journal it for
+    verify_clean.
 
     scale8 soak 2026-10-02: red01 (998) survived `badauto destroy` and had to be
     destroyed by hand. The stage ran with check=False and never looked at the result, so
@@ -136,6 +139,32 @@ def teardown_red(args, env):
     else:
         log(f"teardown: red01 vmid {vmid} could not be verified gone — check by hand "
             f"(badauto destroy exited 0)")
+    return vmid
+
+
+def run_range_teardown(args, *, evidence_done=False, red_vmid=None):
+    """The range half of the harness teardown: the SAME terminal teardown the
+    standalone CLI runs, in-process (teardown-redesign: one engine, no
+    subprocess re-entry). The harness's own evidence work and red destroy are
+    journalled as done so the plan skips them instead of re-running them."""
+    from teardown import Refusal
+    from teardown.runner import record_evidence_done, run_terminal_teardown
+
+    comp_dir = (core.REPO / "competitions" / args.competition).resolve()
+    teams = json.loads((comp_dir / "teams.json").read_text())
+    boxes = json.loads((comp_dir / "boxes.json").read_text())
+    name, _, _ = load_compfile(comp_dir / "Compfile")
+    if evidence_done:
+        record_evidence_done(comp_dir, test_dir=getattr(args, "test_dir", None),
+                             red_vmid=red_vmid)
+    try:
+        report = run_terminal_teardown(comp_dir, teams, boxes, name,
+                                       env={**os.environ}, log=log)
+    except Refusal as r:
+        raise RuntimeError(f"range teardown refused: {r}") from r
+    if not report.clean:
+        raise RuntimeError("range teardown did not come back clean:\n"
+                           + report.render())
 
 
 def stage_teardown(args, creds=None):
@@ -162,10 +191,9 @@ def stage_teardown(args, creds=None):
         test_folder.write_interaction_report(args)
     log("teardown: red01 + NAT")
     env = {**os.environ, "BAuto_LLM_API_KEY": endpoints.api_key(local=True)}
-    teardown_red(args, env)
+    red_vmid = teardown_red(args, env)
     if args.keep_range:
         log("--keep-range: leaving the competition range up")
         return
     log("teardown: competition range")
-    procs.run(["python3", "destroy-competition.py", "--competition", args.competition, "--yes"],
-              cwd=core.REPO, timeout=3600)
+    run_range_teardown(args, evidence_done=bool(creds), red_vmid=red_vmid)

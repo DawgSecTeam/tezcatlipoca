@@ -49,7 +49,7 @@ Measured 2026-10-02 **[live]**:
   roughly 155 GiB: two goldens (30 + 60 GB) plus a ~40 GB engine template, i.e. the
   full clones dominate. `TEZ_THIN_HEADROOM` does not help here — these are full copies,
   not linked clones. Budget for goldens + engine template before trusting the gate, and
-  tear down with `destroy-competition.py --full` as soon as a run's goal is met. **[live]**
+  tear down with `destroy-competition.py` (the default full teardown) as soon as a run's goal is met. **[live]**
 
 - **The preflight headroom gate counts provisioned bytes** (≈ teams × Σ`disk_gb`), which does not
   match what linked clones actually allocate. `TEZ_THIN_HEADROOM=<0..1>` relaxes it by counting that
