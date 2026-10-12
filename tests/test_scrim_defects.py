@@ -708,9 +708,11 @@ class PasswordHandling(unittest.TestCase):
 # D10 --------------------------------------------------------------------------
 class ResumeGuardAndManifest(unittest.TestCase):
     def test_resume_window_threshold(self):
+        from scrim import core
+        boundary = run_manifest.RESUME_MIN_CYCLES * (core.CYCLE_TARGET_PERIOD / 60.0) + 2
         self.assertFalse(run_manifest.resume_window_ok(5))
-        self.assertFalse(run_manifest.resume_window_ok(21))
-        self.assertTrue(run_manifest.resume_window_ok(22))
+        self.assertFalse(run_manifest.resume_window_ok(boundary - 1))
+        self.assertTrue(run_manifest.resume_window_ok(boundary))
         self.assertTrue(run_manifest.resume_window_ok(90))
 
     def test_resume_refusal_message_and_force_override(self):

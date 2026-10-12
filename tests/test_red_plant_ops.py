@@ -105,7 +105,8 @@ class PlantAssumeBreachTests(unittest.TestCase):
         runs after it and BEFORE the seed, and the summary carries the C2."""
         ctx = FakeCtx(_write_compfile(self.tmp))
         order = []
-        cfg_path, realm_cfg = Path(self.tmp) / ".realm-c2-config.yaml", {"realm": {"c2_ip": "1.2.3.4"}}
+        cfg_path, realm_cfg = Path(self.tmp) / ".realm-c2-config.yaml", {
+            "transports": {"grpc": {}}, "callback_ip": "172.31.120.1"}
         def _prov(*a, **k):
             order.append("provision")
             return {"ok": True, "transports": ["grpc"], "mcp": "/mcp"}
@@ -127,10 +128,11 @@ class PlantAssumeBreachTests(unittest.TestCase):
 
     def test_local_c2_provision_failure_degrades_but_still_seeds(self):
         ctx = FakeCtx(_write_compfile(self.tmp))
+        complete = {"transports": {"grpc": {}}, "callback_ip": "172.31.120.1"}
         with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
              mock.patch.object(rp, "_deploy_red", return_value=_CP(0)), \
              mock.patch.object(rp.realm_c2_ops, "prepare_local_c2",
-                               return_value=(Path(self.tmp) / "c.yaml", {"realm": {}})), \
+                               return_value=(Path(self.tmp) / "c.yaml", complete)), \
              mock.patch.object(rp.realm_c2_ops, "provision_realm_c2",
                                return_value={"ok": False, "error": "build died"}), \
              mock.patch.object(rp, "_seed_red", return_value=_CP(0)) as seed, \
@@ -141,6 +143,47 @@ class PlantAssumeBreachTests(unittest.TestCase):
         seed.assert_called_once()                       # the seed still runs
         deg.assert_called_once()                        # ...and the failure is named
         self.assertEqual(deg.call_args[0][0], "realm_c2_provision")
+
+    def test_incomplete_derived_block_refuses_the_whole_phase(self):
+        """The dark-C2 trap (2026-10-11): a block lacking transports/callback_ip
+        deployed 'successfully', printed tavern-live, and nothing phoned home.
+        plant_assume_breach must refuse LOUDLY — degradation, banner, no deploy,
+        no seed."""
+        ctx = FakeCtx(_write_compfile(self.tmp))
+        with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
+             mock.patch.object(rp, "_deploy_red", return_value=_CP(0)) as dep, \
+             mock.patch.object(rp.realm_c2_ops, "prepare_local_c2",
+                               return_value=(Path(self.tmp) / "c.yaml",
+                                             {"realm": {"c2_ip": "10.0.0.198"}})), \
+             mock.patch.object(rp.realm_c2_ops, "provision_realm_c2") as prov, \
+             mock.patch.object(rp, "_seed_red", return_value=_CP(0)) as seed, \
+             mock.patch.object(rp, "record_degradation") as deg:
+            out = rp.plant_assume_breach(ctx)
+        self.assertFalse(out["ok"])
+        self.assertIn("missing", out["reason"])
+        dep.assert_not_called()
+        prov.assert_not_called()
+        seed.assert_not_called()
+        deg.assert_called_once()
+        self.assertEqual(deg.call_args[0][0], "realm_c2_config")
+
+    def test_prepare_local_c2_valueerror_refuses_the_whole_phase(self):
+        """prepare_local_c2 raising (no derivable callback_ip) is the same refusal,
+        surfaced as a degradation instead of a traceback."""
+        ctx = FakeCtx(_write_compfile(self.tmp))
+        with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
+             mock.patch.object(rp, "_deploy_red", return_value=_CP(0)) as dep, \
+             mock.patch.object(rp.realm_c2_ops, "prepare_local_c2",
+                               side_effect=ValueError("derived realm block is "
+                                                      "missing callback_ip")), \
+             mock.patch.object(rp, "_seed_red", return_value=_CP(0)) as seed, \
+             mock.patch.object(rp, "record_degradation") as deg:
+            out = rp.plant_assume_breach(ctx)
+        self.assertFalse(out["ok"])
+        self.assertIn("callback_ip", out["reason"])
+        dep.assert_not_called()
+        seed.assert_not_called()
+        deg.assert_called_once_with("realm_c2_config", mock.ANY)
 
     def test_local_c2_knob_off_keeps_legacy_layout(self):
         ctx = FakeCtx(_write_compfile(self.tmp, "realm_c2_local 0\n"))

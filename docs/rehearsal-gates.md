@@ -31,7 +31,7 @@ next and vice versa.
 
 | gate | threshold | why |
 |---|---|---|
-| cycles rc=0 | >= 8 | the orchestrator must actually run (round 3: 0 of 40) |
+| cycles rc=0 | >= 6 | the orchestrator must actually run (round 3: 0 of 40). Tuned 2026-10-12 after two full rehearsals on the GX10 qwen-flash: a blue cycle with real incident work measures 8-10 min (run4: 1 rc=0 + 5 overruns of a 540 s cap; run3: 2 of 2 overruns of a 1800 s cap), so >= 8 in a 60-min event is not reachable at zero timeouts — the gate follows the measured cadence, not the old endpoint's |
 | restorations | >= 2 | blue answers red's takedowns |
 | time-to-restore | <= 15 min | a restore 40 min later is not a game (rendered since 2026-09-23: `fast of total`) |
 | injects | >= 2 | the paperwork layer of CCDC is real points (round 3: 0) |

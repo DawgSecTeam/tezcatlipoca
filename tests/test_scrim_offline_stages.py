@@ -54,6 +54,11 @@ class RedLlmHeadroom(unittest.TestCase):
         self.assertEqual(llm["max_tokens"], 6144)
         self.assertEqual(llm["json_retries"], 0)
         self.assertEqual(llm["model"], "qwen3.8-flash-next")
+        # run4 (2026-10-12): a 360 s decide budget turned endpoint latency into
+        # a 20-min red stall; the harness bounds the decision wait so the
+        # deterministic ladder (which presses) takes over.
+        self.assertEqual(llm["decide_budget_sec"], 180)
+        self.assertEqual(llm["first_decision_budget_sec"], 90)
 
     def test_cloud_endpoint_keeps_the_tighter_pair(self):
         from scrim import red_stage

@@ -237,6 +237,7 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
             print(f"\n  Nakon plant FAILED steps: {len(failed_steps)}")
             for line in failed_steps[:10]:
                 print(f"    {line[:180]}")
+        _preserve_failed_run(ssh_base, opt_dir, failed_steps)
         raise RuntimeError(
             f"nakon deploy failed rc={proc.returncode}"
             + (f" ({len(failed_steps)} FAILED steps above)" if failed_steps else ""))
@@ -256,6 +257,45 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
                            check=False, timeout=60)
         except Exception:
             pass
+
+
+def _preserve_failed_run(ssh_base, opt_dir, failed_steps, runner=None):
+    """Move a failed plant's staging (its run logs included) aside, then print
+    the failed steps' output tails.
+
+    The per-machine .log under <bundle>/runs/<stamp>/ is the ONLY record of WHY
+    a step failed, and run_nakon's finally deletes the whole staging dir — so
+    the first IIS FTP golden failure (2026-10-11) printed a `logs:` path that
+    stopped existing seconds later and was undiagnosable without a re-run.
+    Failed runs keep their evidence at /opt/nakon/failed-<tag>-<ts>; successful
+    runs are still cleaned up normally.
+    """
+    if not failed_steps:
+        return None
+    run = runner or (lambda argv, timeout=90:
+                     subprocess.run(argv, capture_output=True, text=True,
+                                    timeout=timeout))
+    keep = (f"/opt/nakon/failed-{opt_dir.rsplit('/', 1)[-1]}"
+            f"-{time.strftime('%Y%m%d-%H%M%S')}")
+    moved = run(ssh_base + [f"sudo mv {opt_dir} {keep} && "
+                            f"sudo chmod -R a+rX {keep}; test -d {keep}"])
+    if moved.returncode != 0:
+        print("  (failed-run logs could not be preserved — staging already gone)")
+        return None
+    print(f"  failed-run logs preserved on the engine at {keep}")
+    machines = []
+    for line in failed_steps:
+        m = re.search(r"\[([-\w.]+)\].*?(?:FAILED|failed)", line)
+        if m and m.group(1) not in machines:
+            machines.append(m.group(1))
+    for machine in machines[:5]:
+        tail = run(ssh_base + [
+            f"for f in {keep}/*/runs/*/{machine}.log {keep}/runs/*/{machine}.log; do "
+            f'[ -f "$f" ] && echo "--- $f" && tail -n 50 "$f"; done | head -120'])
+        text = (tail.stdout or "").strip()
+        print(text[:4000] if text else
+              f"  (no per-machine log for {machine} under {keep})")
+    return keep
 
 
 def _run_single_nakon_config(machine, configurations, key, scoring_user, scoring_ip, comp_dir,

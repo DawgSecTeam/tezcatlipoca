@@ -189,7 +189,25 @@ def plant_assume_breach(ctx):
     # keeps the legacy layout (tavern on the static implant-host VM).
     c2_cfg_path, realm_cfg = None, None
     if realm_c2_ops.compfile_knobs(comp_dir)["enabled"]:
-        c2_cfg_path, realm_cfg = realm_c2_ops.prepare_local_c2(comp_dir, red_ip)
+        try:
+            c2_cfg_path, realm_cfg = realm_c2_ops.prepare_local_c2(comp_dir, red_ip)
+        except ValueError as e:
+            record_degradation("realm_c2_config", str(e))
+            print("  " + "!" * 70)
+            print(f"  realm-c2: REFUSING to deploy the local C2: {e}")
+            print("  realm-c2: the 2026-10-11 deploy ran exactly this state — it printed")
+            print("  realm-c2: 'tavern live … all transports', seeded implant flags, and")
+            print("  realm-c2: the C2 was DARK. Fix teams.json / the bad-auto realm")
+            print("  realm-c2: block, then re-run. No red01 was deployed for this.")
+            print("  " + "!" * 70)
+            return {"ok": False, "reason": "derived realm block missing transports/callback_ip"}
+        missing = (realm_c2_ops.missing_local_c2_keys(realm_cfg)
+                   if realm_cfg is not None else [])
+        if missing:
+            record_degradation("realm_c2_config", f"derived block missing {missing}")
+            print(f"  realm-c2: WARNING — derived realm block lacks {missing}; "
+                  f"beacons will not phone home (see docs/known-issues.md)")
+            return {"ok": False, "reason": f"realm block missing {missing}"}
     print(f"  assume-breach: deploying red01 + realm engine DNAT (bad-auto)...")
     try:
         deployed = _deploy_red(comp_dir, env, config_path=c2_cfg_path)

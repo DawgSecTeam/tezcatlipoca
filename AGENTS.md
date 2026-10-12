@@ -15,7 +15,8 @@ All guidance lives in `docs/` — start with:
 - [docs/multi-node.md](docs/multi-node.md) — one competition across multiple Proxmox hosts (nodes.json placement, jump routing, per-slot goldens, sync-template)
 - [docs/packet-profiles.md](docs/packet-profiles.md) — competition packets → ranges (profiles, compile-packet, packet verify gates)
 - [docs/remote-access.md](docs/remote-access.md) — headscale participant access (engine-as-router, per-team scoping, `TEZ_HEADSCALE_*` env, roster)
-- [docs/known-issues.md](docs/known-issues.md) — **open/pending issues only; fixed issues are deleted, not archived**
+- [docs/known-issues.md](docs/known-issues.md) — **open/pending issues only; a temporary
+  writepad drained every run cycle — nothing lives here permanently**
 - [docs/environment-facts.md](docs/environment-facts.md) — node/storage/template/vmid ground truth
 - [docs/security-disclosures.md](docs/security-disclosures.md) — credential exposures + the open rotation
 - [docs/upstream-defects-handoff.md](docs/upstream-defects-handoff.md) — catalog/nakon defects to hand off
@@ -112,6 +113,23 @@ real `--teams N --yes`, verify, destroy — all from the worktree root. Worked e
 
 Cheap habits that the session logs show being re-learned expensively:
 
+- **Fix causes, not symptoms — this is the project's first discipline.** A test
+  run exists to find defects so they can be killed at the root: the goal is a
+  stack that runs end-to-end with no agent intervention, not a run that an
+  agent shepherds past its failures. Diagnose from evidence before retrying; a
+  failure you cannot explain is not resolved, and "flaky" means broken. Every
+  fix lands in code with a regression test. No workarounds during a run (no
+  manual SSH repairs, hand-edited VMs, hand-cleared flags, `--force`) — if a
+  workaround feels necessary, the thing that made it feel necessary is the
+  bug. Fixes may cross layers when that is the elegant fix; the exception is
+  the blast-radius rules (teardown tag matching, run ownership, never sweep),
+  which are safety rails, not workarounds. Architectural redesigns and
+  anything that could touch another competition's infrastructure go to the
+  user first; everything else is yours to decide, with the reasoning recorded.
+- **Complexity belongs in the tool, not the operator.** Anything a guide or
+  prompt tells an agent to "remember" or "watch out for" is a bug filed
+  against the code. When you write a trap recipe, also file — and prefer to
+  fix — the defect that made the recipe necessary.
 - **Read a file before editing it**, and prefer a small anchored edit over a large literal block.
   The single most common tool failure in the recorded sessions is `File has not been read yet`
   (40 times), followed by `File has been modified since read` (30) — the latter is concurrency, not

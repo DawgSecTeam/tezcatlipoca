@@ -17,6 +17,22 @@ from deploy_lib.coverage import record_clean_coverage, record_stage_coverage
 from deploy_lib.phases._snapshots import snap_ready
 
 
+def _wipe_targets(managed_targets):
+    """clean_trails target rows from managed_targets.
+
+    The box record (name, template) is nested under t["box"] — reading top-level
+    keys silently yielded name="" windows=False for EVERY box, dispatching
+    Windows boxes into the Linux wipe path where they hung out their 180 s
+    budget (live 2026-10-11, dc01 NOT cleaned). fw01 needs no filter here:
+    unmanaged boxes never enter managed_targets.
+    """
+    from windows_ops import is_windows_template
+    return [{"ip": t["ip"],
+             "name": (t.get("box") or {}).get("name") or "",
+             "windows": is_windows_template((t.get("box") or {}).get("template", ""))}
+            for t in managed_targets]
+
+
 def phase7_domains_and_final(ctx):
     """[7/8] AD domains, then the final disruption/boot-hostile pass and beacons.
 
@@ -88,10 +104,7 @@ def phase7_domains_and_final(ctx):
     try:
         from scrim import clean_trails
         clean_trails.clean_trails(ctx.comp_dir, clean_trails.creds_for_deploy(ctx),
-                                 targets=[{"ip": t["ip"], "name": t.get("box_name") or "",
-                                           "windows": bool(t.get("windows"))}
-                                          for t in ctx.managed_targets
-                                          if (t.get("box_name") or "") != "fw01"])
+                                 targets=_wipe_targets(ctx.managed_targets))
     except Exception as e:                                   # noqa: BLE001 - never fatal
         print(f"  WARNING: trail wipe failed ({type(e).__name__}: {e}) — box logs still "
               f"hold the deploy")

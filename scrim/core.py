@@ -11,9 +11,19 @@ BAD_AUTO = REPO.parent / "bad-auto"
 SSH_OPTS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 # The same two options as argv pairs, for the callers that build an ssh/scp argv list.
 SSH_NOCHECK = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
-CYCLE_TIMEOUT = 1800
-CYCLE_TARGET_PERIOD = 600
-MONITOR_INTERVAL = 300
+# A blue cycle is a SCOPED visit, not a shift: the old 1800 s budget let each
+# opencode run pace to its prompt's "25 wall-clock minutes" and the whole event
+# collapsed to two TIMED OUT cycles (run3 2026-10-11: 0 of 2 cycles rc=0 against
+# the gates' >= 8). 600 s hard cap + a prompt scoped to ONE change keeps the
+# cadence honest: measured on the GX10 qwen-flash (run4 2026-10-12), a cycle
+# with real incident work needs 8-10 min — 540 killed 5 of 6 — so the cap gives
+# the one-action scope headroom while the target period keeps ~6 starts/hour.
+CYCLE_TIMEOUT = 600
+CYCLE_TARGET_PERIOD = 480
+# Board samples every minute: at 300 s a blue restoring in 2-5 min (live run3)
+# left every DOWN->UP transition between samples — the scoreboard never showed a
+# down state, and restorations/max-simultaneous-down graded on nothing.
+MONITOR_INTERVAL = 60
 
 
 def log(msg):

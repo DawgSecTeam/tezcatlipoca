@@ -73,23 +73,28 @@ on it):
   ./submit-inject <injectId> submissions/sub-<injectId>.md   # submit BEFORE close time
   curl -s -b "$JAR" http://$ENGINE_IP/api/injects | python3 -c "import json,sys;[print(i['ID'],i['Title'],'due',i['DueTime'][11:16],'subs',len(i.get('Submissions') or [])) for i in json.load(sys.stdin)]"
 
-CYCLE TASK — you have ~25 wall-clock minutes for this whole cycle; pace for it,
-update the notebook BEFORE acting (so an interrupted cycle still hands over context),
-then AT MOST TWO change/fix actions, then STOP. Read-only investigation (status queries,
-hunts) is fine inside your budget — two changes is the cap, not two commands:
+CYCLE TASK — you have ~6 wall-clock minutes for this whole cycle; the orchestrator
+kills overrun cycles and neither of us scores from a dead session. Update the
+notebook BEFORE acting (so an interrupted cycle still hands over context), then
+EXACTLY ONE change/fix action, then STOP and end your reply. Read-only status
+checks are fine — one CHANGE is the cap, not one command. A blue-watchdog
+process restores stopped services automatically between cycles, so do NOT spend
+this cycle babysitting a restart; spend it on the cause:
 0. FIRST: update NOTEBOOK.md (SNAPSHOT line: current state + next action; move finished
    items to DONE; add new incidents/findings) and append one timestamped line to LOG.md.
-1. If any service above is DOWN (or CHANGES shows a new DOWN): restore it NOW {restore_example}. Availability beats everything.
-   If the SAME service goes down again after you restored it, the attacker still has a way in —
-   close the ENTRY VECTOR in the same cycle (e.g. a harvested password over SSH: set
+1. If a service is DOWN and the watchdog has not fixed it in ~2 minutes: restore it NOW
+   {restore_example} — and nothing else this cycle.
+   If the SAME service goes down again after a restore, the attacker still has a way in —
+   make YOUR one change the ENTRY VECTOR (e.g. a harvested password over SSH: set
    `PasswordAuthentication no` in sshd_config AND any sshd_config.d drop-in, reload ssh — your
    own access is key-based; rotate/lock the abused account). Restoring the symptom alone gets
    re-undone every minute.
-2. Else if an inject is due within 30 minutes and unsubmitted: investigate on the boxes, write the deliverable, ./submit-inject.
-3. Else if the scoreboard is green and an attacker has been active (any DOWN in CHANGES history, or red's name in a hunt finding): ONE eviction item — hunt the foothold, not just the symptom: unknown services/listeners, new cron/systemd units/scheduled tasks/Run keys, rogue accounts or UID-0, unfamiliar active sessions (`w`, `ss -tnp`, Windows logged-on users). When you find attacker persistence, REMOVE it and log the line `EVICTED: <what> on <box>` in LOG.md — the report counts evictions.
-4. Else (everything green, no attacker trace, no inject due): harden something REAL — a file backup of /etc plus a verify, a detection cron that logs new cron entries/units, package updates, password rotation on non-credlist accounts. Idling is not defending; leave the notebook a line saying what you hardened and why.
-5. Wrap up by minute 20: finish the current step, re-check the scoreboard, leave the
-   SNAPSHOT line + LOG.md current so the next cycle starts warm.
+2. Else if an inject is due within 30 minutes and unsubmitted: your one change is the deliverable — investigate, write, ./submit-inject.
+3. Else if the scoreboard is green and an attacker has been active (any DOWN in CHANGES history, or red's name in a hunt finding): your one change is an EVICTION — hunt the foothold, not just the symptom: unknown services/listeners, new cron/systemd units/scheduled tasks/Run keys, rogue accounts or UID-0, unfamiliar active sessions (`w`, `ss -tnp`, Windows logged-on users). When you find attacker persistence, REMOVE it and log the line `EVICTED: <what> on <box>` in LOG.md — the report counts evictions.
+4. Else (everything green, no attacker trace, no inject due): your one change is hardening something REAL — a file backup of /etc plus a verify, a detection cron that logs new cron entries/units, package updates, password rotation on non-credlist accounts. Idling is not defending; leave the notebook a line saying what you hardened and why.
+5. By minute 5 of the cycle: re-check the scoreboard, leave the
+   SNAPSHOT line + LOG.md current so the next cycle starts warm — then END YOUR REPLY.
+   Do not start a new investigation in the last minute.
 AFTER-ACTION REPORT: when you conclude — at the end of your last cycle, or as soon as you
    know you cannot continue — write REPORT.md in your workdir. An operator reads it after
    the event to grade the defence, so make it self-contained: what you found, what you

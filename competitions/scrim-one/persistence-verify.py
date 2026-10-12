@@ -23,10 +23,35 @@ import uuid
 from collections import defaultdict
 from pathlib import Path
 
-TAVERN = "http://10.0.0.117:8000/graphql"
 GENESIS = "gRPC/HTTP1/DNS/ICMP/QUIC + multi (one independent beacon per channel)"
 KEY = Path.home() / "dev/dawgsec/tezcatlipoca/proxmox"
 ENGINE = "10.0.0.252"
+TAVERN = None          # resolved from <comp_dir>/.realm-c2-config.yaml in main()
+
+
+def tavern_url(comp_dir):
+    """The tavern graphql endpoint for this comp's local C2.
+
+    The legacy C2 VM (10.0.0.117) is dead history for a realm_c2_local range:
+    the base_url lives in the comp's derived .realm-c2-config.yaml, which is
+    what the deploy actually provisioned. Falls back to the legacy address with
+    a warning so an old comp dir still runs — against the right box is the
+    operator's problem there.
+    """
+    p = Path(comp_dir) / ".realm-c2-config.yaml"
+    try:
+        import yaml
+        realm = (yaml.safe_load(p.read_text(encoding="utf-8")) or {}).get("realm") or {}
+        base = realm.get("base_url")
+        if base:
+            return str(base).rstrip("/") + "/graphql"
+    except (OSError, ValueError) as e:                       # yaml can raise its own
+        print(f"WARNING: could not read {p} ({e}) — falling back to the legacy "
+              f"C2 address", file=sys.stderr)
+        return "http://10.0.0.117:8000/graphql"
+    print(f"WARNING: {p} has no realm.base_url — falling back to the legacy "
+          f"C2 address", file=sys.stderr)
+    return "http://10.0.0.117:8000/graphql"
 
 
 def sh(cmd, timeout=90, cwd=None, env=None):
@@ -86,6 +111,9 @@ def main():
             world_path = argv[i + 1]
         if a == "--user":
             globals()["USER"] = argv[i + 1]
+
+    globals()["TAVERN"] = tavern_url(comp)
+    print(f"tavern: {TAVERN}")
 
     teams = json.loads((comp / "teams.json").read_text())
     boxes = json.loads((comp / "boxes.json").read_text())

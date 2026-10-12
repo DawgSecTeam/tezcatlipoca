@@ -8,14 +8,27 @@ Copy everything below the line into a fresh session. It redeploys **this same co
 You are the operator for a tezcatlipoca range build. Work autonomously; report at each
 gate. Do not ask questions unless a GO/NO-GO gate fails.
 
-## Ground truth (verified 2026-10-09 — trust this over any older doc)
+## Ground truth (verified 2026-10-11 — trust this over any older doc)
 
-- Checkout: `/home/hna/dev/dawgsec/tezcatlipoca` (branch `main`). Python: **always**
-  `.venv/bin/python` (system python3 is too old for vendored nakon).
+- Workstation: **omnibook** (NOT ai-server — there is no hermes orchestrator here; that
+  trap does not apply). Checkout: `/home/hna/dev/dawgsec/tezcatlipoca` (branch `main`).
+  Python: **always `.venv/bin/python`** in tezcatlipoca (deps installed: python-dotenv
+  PyYAML requests urllib3 toml mysql-connector-python paramiko); **`/usr/bin/python3`**
+  for bad-auto (pytest, never unittest there).
+- **Slow uplink: this host reaches the estate over tailscale at ~30 KB/s bulk**
+  (interactive SSH is fine). Anything that moves more than ~2 MB to a VM needs gzip and a
+  generous timeout — implant staging already streams gzip on the wire (realm_c2_ops,
+  900 s/leg, sha256-checked); never wrap long operations in `timeout`.
 - Node: **`proxmox` @ 10.0.0.150** (the shared Cyber Realm estate — 107 VMs live there, so
   never sweep anything you do not own; use `destroy-competition.py` from the comp dir).
   API endpoint `https://realm.hnasheralneam.dev:443`; that hostname resolves through
   Cloudflare and is **not SSHable** — use the LAN IP for `qm`/`pvesh`.
+- LLM endpoint: **ONE proven endpoint, the GX10 at `http://100.64.0.19:8000/v1`, model
+  `qwen3.8-flash-next`. ALWAYS pass `--reasoning-effort ''`** (harness) / leave
+  `reasoning_effort` unset in bad-auto configs — the GX10 chat template 500s on
+  `"minimal"` and every red decision then silently falls back to scripted tactics.
+  `bad-auto validate-llm` now sends the director's exact request shape and prints the
+  HTTP body — run it before T0 and require PASS.
 - Engine: **mgmt 10.0.0.252, gw 10.0.0.1, vmid 1000** (`.env` `TF_VAR_engine_mgmt_ip`).
   Never .250/.249 (tailscale-poisoned/contested).
 - Team identifier **120** → subnet 192.168.120.0/24, boxes .2–.8, vmids 1400–1406.
@@ -27,6 +40,14 @@ gate. Do not ask questions unless a GO/NO-GO gate fails.
   default `hdrives-zfs` exists only on the other node).
 - red01: **10.0.0.198** (`deploy.red_ip`), gw .1, vmid 999, `bad-auto` from the sibling
   checkout `~/dev/dawgsec/bad-auto` (git remote `DawgSecTeam/tlaloc`).
+- **The realm block must be COMPLETE.** A realm config missing `transports`/`callback_ip`
+  deploys a tavern that prints "tavern live … all transports" while the C2 is dark (one
+  dead legacy http1 beacon per box, no engine DNAT — live 2026-10-11). The sibling
+  `~/dev/dawgsec/bad-auto/config.yaml` carries the full block (all five transports with
+  gw_port/c2_port, `dns.domain c2.dawgsec.range`, `callback_ip 172.31.120.1`); the deploy
+  and the harness now synthesize missing pieces from `teams.json` and **refuse loudly**
+  when the derived block is still incomplete — if you see that refusal, fix teams.json or
+  the sibling config, never hand-patch the VM.
 - Compfile knobs already set: `assume_breach 1`, `assume_breach_depth 3` (all persistence
   families on Linux + Windows, every beacon transport), `remote_access 0` (do not consume
   the shared headscale slots for a verification run), `firewall_dnat 4470->10.0.0.198`.
@@ -41,9 +62,10 @@ git status -sb                      # must NOT show 'HEAD (no branch)' / 'UU' �
                                     # pull --rebase silently strips uncommitted work.
                                     # Recover: git rebase --abort, then ONE merge.
 git log --oneline -1                # confirm your feature commits are on disk
-python3 -m unittest discover -s tests 2>&1 | tail -3
-#   expected: Ran 1309 tests ... FAILED (failures=1, errors=3, skipped=17) — the 4
-#   test_multinode/test_run_ownership failures are upstream-broken, not yours.
+.venv/bin/python -m unittest discover -s tests 2>&1 | tail -3
+#   expected: Ran 1343 tests ... with 4 failures/errors in test_multinode /
+#   test_run_ownership — those hit the live headscale VPS and are
+#   environment-broken, not yours. Everything else must pass.
 scripts/orphan-sweep.sh 8180 4470   # stray reverse tunnels / beacon listeners
 ```
 
@@ -114,12 +136,23 @@ red flag): if it appears, push the key and re-plant —
 ssh -i proxmox sysadmin@10.0.0.198 'cd /opt/bad-auto && sudo -n python3 -m badauto seed --competition /var/lib/bad-auto/intel --state-dir /var/lib/bad-auto --intel nakon --depth 1'
 ```
 
+If the deploy log shows `realm-c2: REFUSING to deploy the local C2: derived realm block is
+missing transports/callback_ip` — that is the dark-C2 guard doing its job; the fix is in the
+comp's `teams.json` or bad-auto's realm block, never on the VM. Implant staging prints
+per-leg throughput (`realm-c2: linux implant relayed: N B wire bytes …`); at ~30 KB/s the
+legs take minutes, not the old 180 s scp timeout, and a sha256 mismatch fails staging loudly.
+
 ## Step 5 — red team bring-up (what "ready for a human blue team" means)
 
 1. **LLM path.** `bad-auto.service`'s config points at `http://localhost:8180/v1` — supply the
    tunnel the harness normally does, from this host:
    `ssh -N -R 8180:100.64.0.19:8000 -o ExitOnForwardFailure=yes -i proxmox sysadmin@10.0.0.198`
    (GX10 serves `qwen3.8-flash-next`.) Verify from red01: `curl localhost:8180/v1/models` → 200.
+   Then prove the DECISION path, not just reachability, from the operator host:
+   `cd ~/dev/dawgsec/bad-auto && /usr/bin/python3 -m badauto validate-llm --reasoning-effort ''`
+   must print PASS with the params line — a template-500 shows up there with the response
+   body instead of as 14 silent fallback cycles after T0. The staged/standing config must
+   carry NO `reasoning_effort` (or an empty one): `"minimal"` 500s the GX10 chat template.
 2. **Timeout.** `llm.timeout` must be 300 (and `max_tokens` 6144): a reasoning model needs
    >2 min per call, and at 120 every decision falls back silently — red looks busy and thinks
    nothing. Proof to demand: `{"kind":"llm","ok":true}` **and** a `cycle` with
@@ -159,9 +192,13 @@ the scoreboard loop. Teardown when done:
 - **`badauto seed` skips stages already recorded done** (`world.json` → `meta.seed[ip]`):
   a re-seed reports `boxes: 7` and plants nothing. Clear the flag you want re-run.
 - **Pause the Hourly Orchestrator cron job** (`2398d312c7b3`, script
-  `~/.hermes-qa/hourly-orchestrator.sh`) before a deploy and resume it after: its
-  `git pull --rebase` in this checkout parked a conflicted rebase twice and silently stripped
-  uncommitted work both times.
+  `~/.hermes-qa/hourly-orchestrator.sh`) before a deploy and resume it after — IF this box
+  runs hermes at all. **omnibook does not** (that trap is ai-server-only); `crontab -l |
+  grep hermes` is the 5-second check.
 - **Windows beacons must be launched from a scheduled task, never `sc create`** — imix's
   default features exclude `win_service`, so the SCM kills the process after its single
   check-in.
+- **Trail wipe + integrity:** the wipe reads red01's `world.json` first and never touches a
+  planted path (decoys died that way), and it re-runs the artifact checks after itself —
+  a `POST-WIPE CASUALTY` line in the launch log means the wipe killed a plant; treat that
+  as a deploy defect, not a blue win.

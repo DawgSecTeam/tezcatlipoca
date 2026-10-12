@@ -41,8 +41,10 @@ def main():
                         "| 3 +evasion (default 3)")
     p.add_argument("--blue-model", default="openai/gpt-5.6-luna", help="cheap cloud model for blue agents")
     p.add_argument("--red-model", default="openai/gpt-5.6-luna", help="cheap cloud model for bad-auto")
-    p.add_argument("--reasoning-effort", default="minimal",
-                   help="reasoning effort sent to the LLM (GPT-5.x/o-series); '' disables")
+    p.add_argument("--reasoning-effort", default="",
+                   help="reasoning effort sent to the LLM (GPT-5.x/o-series only — "
+                        "the local qwen endpoints 500 on it); pass e.g. 'minimal' "
+                        "for cloud reasoning models")
     p.add_argument("--llm-base-url", default="https://openrouter.ai/api/v1")
     p.add_argument("--blue-base-url", default=None,
                    help="LLM base URL for blues only (defaults to --llm-base-url); "

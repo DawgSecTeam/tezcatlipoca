@@ -87,7 +87,15 @@ def red_llm_config(args):
     llm = {"base_url": args.llm_base_url, "model": args.red_model,
            "max_tokens": 6144 if local else 4096,
            "timeout": 300 if local else 240,
-           "json_retries": 0 if local else 1}
+           "json_retries": 0 if local else 1,
+           # Bound the DECISION wait, not just the HTTP read: the director's
+           # default decide budget is 360 s, and under load (blue cycles on the
+           # same endpoint) a slow decision burned 3x that as one silent stall —
+           # red's 20-min no-action window in run4 (2026-10-12) is three such
+           # waits. 180 s: two re-prompts' worth; past it the deterministic
+           # ladder takes the cycle, and the ladder presses instead of idling.
+           "decide_budget_sec": 180,
+           "first_decision_budget_sec": 90}
     if args.reasoning_effort:
         llm["reasoning_effort"] = args.reasoning_effort
     return llm
@@ -137,8 +145,18 @@ def stage_red(args, comp, creds, run_dir):
     # `realm.c2_local: true` moves the C2 ONTO this run's red01: retarget the
     # carried realm block before the deploy (the engine DNAT bakes c2_ip in at
     # deploy time) and provision tavern on red01 after the clone (below).
+    # apply_local_c2 synthesizes the FULL block (transports/callback_ip), and the
+    # completeness check refuses pre-T0 rather than stage a dark C2 — the harness
+    # path raises where the deploy path degrades.
     if (cfg.get("realm") or {}).get("c2_local"):
-        realm_c2_ops.apply_local_c2(cfg["realm"], args.red_ip)
+        realm_c2_ops.apply_local_c2(cfg["realm"], args.red_ip,
+                                    callback_ip=realm_c2_ops.callback_ip_for(comp))
+        missing = realm_c2_ops.missing_local_c2_keys(cfg["realm"])
+        if missing:
+            raise RuntimeError(
+                f"realm.c2_local is on but the staged realm block lacks {missing} — "
+                "this plants dead beacons under a 'tavern live' banner (2026-10-11). "
+                "Fix the bad-auto realm block or the comp's teams.json and re-run.")
     # ...and so does the REST of the operator's deploy block. stage_red builds this
     # config from scratch, so anything it does not set is lost: `template` most of
     # all, which then fell back to badauto's built-in default and failed the first

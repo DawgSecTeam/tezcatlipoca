@@ -56,12 +56,18 @@ class LocalConfigTests(unittest.TestCase):
         self.bad_auto_cfg = rc.BAD_AUTO / "config.yaml"
         self.had_cfg = self.bad_auto_cfg.exists()
         self.orig = self.bad_auto_cfg.read_text() if self.had_cfg else None
+        # callback_ip derives from teams.json; every prepare_local_c2 test needs one
+        self.write_teams(120)
 
     def tearDown(self):
         if self.had_cfg:
             self.bad_auto_cfg.write_text(self.orig)
         elif self.bad_auto_cfg.exists():
             self.bad_auto_cfg.unlink()
+
+    def write_teams(self, ident):
+        (Path(self.tmp) / "teams.json").write_text(
+            '{"team1": {"identifier": %d, "name": "Team One"}}' % ident)
 
     def test_build_local_c2_config_retargets_at_red01(self):
         self.bad_auto_cfg.write_text(
@@ -87,6 +93,58 @@ class LocalConfigTests(unittest.TestCase):
         self.assertEqual(path.parent, Path(self.tmp))
         self.assertEqual(path.name, ".realm-c2-config.yaml")
         self.assertEqual(realm["c2_ip"], "10.0.0.198")
+
+    def test_derived_block_synthesizes_the_full_realm_table(self):
+        """The skeletal-operator-config regression (2026-10-11): a derived block
+        without transports/callback_ip planted one dead legacy beacon per box
+        while the deploy printed 'tavern live … all transports'."""
+        import yaml
+        self.bad_auto_cfg.write_text("realm:\n  enabled: true\n")
+        path, realm = rc.prepare_local_c2(self.tmp, "10.0.0.198")
+        self.assertEqual(sorted(realm["transports"]),
+                         ["dns", "grpc", "http1", "icmp", "quic"])
+        self.assertEqual(realm["transports"]["grpc"],
+                         {"gw_port": 8000, "c2_port": 8000})
+        self.assertEqual(realm["transports"]["http1"],
+                         {"gw_port": 8001, "c2_port": 8001})
+        self.assertEqual(realm["transports"]["dns"],
+                         {"gw_port": 53, "c2_port": 5300,
+                          "domain": rc.DEFAULT_DNS_DOMAIN})
+        self.assertEqual(realm["transports"]["quic"],
+                         {"gw_port": 8443, "c2_port": 8443})
+        self.assertEqual(realm["callback_ip"], "172.31.120.1")
+        self.assertEqual(realm["mcp_path"], "/mcp")
+        self.assertEqual(realm["install_dir"], rc.INSTALL_DIR)
+        self.assertEqual(realm["interval"], 10)
+        self.assertTrue(realm["multi_beacon"])
+        self.assertEqual(realm["rawsock_budget"], 2)
+        on_disk = yaml.safe_load(path.read_text())["realm"]
+        self.assertEqual(on_disk, realm)                  # written == returned
+
+    def test_operator_transport_overrides_survive_synthesis(self):
+        self.bad_auto_cfg.write_text(
+            "realm:\n  enabled: true\n  transports:\n    http1:\n      c2_port: 9001\n")
+        _, realm = rc.prepare_local_c2(self.tmp, "10.0.0.198")
+        self.assertEqual(realm["transports"]["http1"],
+                         {"gw_port": 8001, "c2_port": 9001})
+        self.assertEqual(sorted(realm["transports"]),
+                         ["dns", "grpc", "http1", "icmp", "quic"])
+
+    def test_prepare_local_c2_refuses_without_a_derivable_callback_ip(self):
+        """No teams.json -> no callback_ip -> beacons would aim at nothing. The
+        deploy must refuse loudly, not warn-and-continue into a dark C2."""
+        self.bad_auto_cfg.write_text("realm:\n  enabled: true\n")
+        (Path(self.tmp) / "teams.json").unlink()
+        with self.assertRaises(ValueError) as caught:
+            rc.prepare_local_c2(self.tmp, "10.0.0.198")
+        self.assertIn("callback_ip", str(caught.exception))
+
+    def test_missing_local_c2_keys_is_the_dark_c2_test(self):
+        self.assertEqual(rc.missing_local_c2_keys({}), ["transports", "callback_ip"])
+        self.assertEqual(rc.missing_local_c2_keys({"transports": {}}),
+                         ["transports", "callback_ip"])       # empty = none configured
+        self.assertEqual(rc.missing_local_c2_keys(
+            {"transports": {"grpc": {}}, "callback_ip": "172.31.120.1"}), [])
 
     def test_engine_ip_comes_from_the_comps_credentials_file(self):
         """Same source bad-auto reads: the published scoreboard URL."""
@@ -168,6 +226,19 @@ class UnitGenerationTests(unittest.TestCase):
 class _CP:
     def __init__(self, returncode=0, out="", err=""):
         self.returncode, self.stdout, self.stderr = returncode, out, err
+
+
+def _relay_pull(ssh_key, host, src, gz, timeout=None):
+    """Stand-in for _gzip_pull: writes the local .gz the real one streams."""
+    Path(gz).write_bytes(b"gz-bytes")
+    return _CP(0)
+
+
+def _relay_patches():
+    """Context-manager triple mocking a successful gzip relay (pull/push/sha)."""
+    return (mock.patch.object(rc, "_gzip_pull", side_effect=_relay_pull),
+            mock.patch.object(rc, "_gunzip_push", return_value=_CP(0)),
+            mock.patch.object(rc, "_sha256_on", return_value="a" * 64))
 
 
 class BashUnitTests(unittest.TestCase):
@@ -275,7 +346,8 @@ class PubkeyTests(unittest.TestCase):
         self.assertIn(self.PK, decoded)
 
     def test_successful_provision_reports_and_pushes_the_pubkey(self):
-        with mock.patch.object(rc, "_scp", return_value=_CP(0)), \
+        pulls, push_, shas = _relay_patches()
+        with pulls, push_, shas, \
              mock.patch.object(rc, "_ssh", return_value=_CP(0, out=self.JOURNAL)) as ssh:
             out = rc.provision_realm_c2(self.tmp, "10.0.0.198", "key", {})
         self.assertTrue(out["ok"])
@@ -287,20 +359,76 @@ class ExecutionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="tz-realmc2-exec-")
 
+    @staticmethod
+    def _relay_mocks(pull_rc=0, pull_err=b"", sha="a" * 64):
+        """Mocks for the gzip relay: successful legs, matching hashes. The pull
+        mock writes the local .gz (the real one streams ssh stdout into it)."""
+        def _pull(ssh_key, host, src, gz, timeout=None):
+            if pull_rc == 0:
+                return _relay_pull(ssh_key, host, src, gz, timeout=timeout)
+            return _CP(pull_rc, err=pull_err)
+        pull = mock.Mock(side_effect=_pull)
+        push = mock.Mock(return_value=_CP(0))
+        sha_on = mock.Mock(return_value=sha)
+        return pull, push, sha_on
+
     def test_stage_implants_relays_both_implants(self):
-        with mock.patch.object(rc, "_scp", return_value=_CP(0)) as scp, \
-             mock.patch.object(rc, "_ssh", return_value=_CP(0)) as ssh:
+        pull, push, sha_on = self._relay_mocks()
+        with mock.patch.object(rc, "_gzip_pull", pull), \
+             mock.patch.object(rc, "_gunzip_push", push), \
+             mock.patch.object(rc, "_sha256_on", sha_on), \
+             mock.patch.object(rc, "_ssh", return_value=_CP(0)) as ssh, \
+             mock.patch.object(rc.time, "sleep"):
             out = rc.stage_implants("key", "10.0.0.198", "10.0.0.117")
         self.assertTrue(out["ok"])
-        self.assertEqual(scp.call_count, 3)          # pull linux, pull win, push both
+        self.assertEqual(pull.call_count, 2)          # linux + windows legs
+        self.assertEqual(push.call_count, 2)
+        self.assertEqual(sha_on.call_count, 4)        # src + dst hash per implant
         mv = ssh.call_args_list[-1][0][2]
         self.assertIn(rc.INSTALL_DIR, mv)
+
+    def test_relay_streams_gzip_on_the_wire(self):
+        """~18 MB at ~30 KB/s cannot survive an scp leg; the relay helpers must
+        stream gzip both directions (compressed bytes, never the raw file)."""
+        fake = mock.Mock(return_value=_CP(0))
+        with mock.patch.object(rc.subprocess, "run", fake), \
+             tempfile.TemporaryDirectory(prefix="tz-relay-") as d:
+            gz = Path(d) / "imix.gz"
+            gz.write_bytes(b"gz-bytes")
+            rc._gzip_pull("key", "10.0.0.117", "realm/implants/imix", gz)
+            rc._gunzip_push("key", "10.0.0.198", gz, "/tmp/.realm-c2-stage/imix")
+        pull_cmd = fake.call_args_list[0][0][0]
+        push_cmd = fake.call_args_list[1][0][0]
+        self.assertIn("gzip -c", " ".join(pull_cmd))
+        self.assertIn("realm/implants/imix", " ".join(pull_cmd))
+        self.assertIn("gunzip -c", " ".join(push_cmd))
+        self.assertIn("/tmp/.realm-c2-stage/imix", " ".join(push_cmd))
+        self.assertIsNotNone(fake.call_args_list[0].kwargs["stdout"])   # pull -> file
+        self.assertIsNotNone(fake.call_args_list[1].kwargs["stdin"])    # push <- file
+
+    def test_stage_implants_legs_get_the_slow_uplink_timeout(self):
+        """Each relay leg is bounded by `timeout` (>= 900 s default), not scp's
+        old 180 s — the deploy burned a manual relay on exactly that."""
+        pull, push, sha_on = self._relay_mocks()
+        with mock.patch.object(rc, "_gzip_pull", pull), \
+             mock.patch.object(rc, "_gunzip_push", push), \
+             mock.patch.object(rc, "_sha256_on", sha_on), \
+             mock.patch.object(rc, "_ssh", return_value=_CP(0)), \
+             mock.patch.object(rc.time, "sleep"):
+            rc.stage_implants("key", "10.0.0.198", "10.0.0.117", timeout=1200)
+        self.assertEqual({c.kwargs["timeout"] for c in pull.call_args_list}, {1200})
+        self.assertEqual({c.kwargs["timeout"] for c in push.call_args_list}, {1200})
+        self.assertGreaterEqual(rc.RELAY_LEG_TIMEOUT, 900)
 
     def test_stage_implants_honours_the_configured_install_dir(self):
         """bad-auto's realm_plant reads install_dir from its staged config, so the
         relay must land the binaries in THAT dir or the plants refuse."""
-        with mock.patch.object(rc, "_scp", return_value=_CP(0)), \
-             mock.patch.object(rc, "_ssh", return_value=_CP(0)) as ssh:
+        pull, push, sha_on = self._relay_mocks()
+        with mock.patch.object(rc, "_gzip_pull", pull), \
+             mock.patch.object(rc, "_gunzip_push", push), \
+             mock.patch.object(rc, "_sha256_on", sha_on), \
+             mock.patch.object(rc, "_ssh", return_value=_CP(0)) as ssh, \
+             mock.patch.object(rc.time, "sleep"):
             out = rc.stage_implants("key", "10.0.0.198", "10.0.0.117",
                                     {"install_dir": "/opt/custom-realm"})
         self.assertTrue(out["ok"])
@@ -308,13 +436,38 @@ class ExecutionTests(unittest.TestCase):
         self.assertIn("/opt/custom-realm", ssh.call_args_list[-1][0][2])
 
     def test_stage_implants_failure_names_the_host(self):
-        with mock.patch.object(rc, "_scp", return_value=_CP(1, err="nope")):
+        pull, push, sha_on = self._relay_mocks(pull_rc=1, pull_err=b"nope")
+        with mock.patch.object(rc, "_gzip_pull", pull), \
+             mock.patch.object(rc.time, "sleep"):
             out = rc.stage_implants("key", "10.0.0.198", "10.0.0.117")
         self.assertFalse(out["ok"])
         self.assertIn("10.0.0.117", out["error"])
 
+    def test_stage_implants_pull_timeout_is_reported(self):
+        import subprocess as sp
+        with mock.patch.object(rc, "_gzip_pull",
+                               side_effect=sp.TimeoutExpired(cmd="ssh", timeout=900)), \
+                mock.patch.object(rc.time, "sleep"):
+            out = rc.stage_implants("key", "10.0.0.198", "10.0.0.117")
+        self.assertFalse(out["ok"])
+        self.assertIn("timed out", out["error"])
+
+    def test_stage_implants_sha_mismatch_fails_closed(self):
+        """A relay that silently corrupts the implant must never report ok — the
+        sha256 comparison is the only proof the binary survived the wire."""
+        pull, push, sha_on = self._relay_mocks()
+        sha_on.side_effect = ["a" * 64, "b" * 64]     # src hash, then dst differs
+        with mock.patch.object(rc, "_gzip_pull", pull), \
+             mock.patch.object(rc, "_gunzip_push", push), \
+             mock.patch.object(rc, "_sha256_on", sha_on), \
+             mock.patch.object(rc.time, "sleep"):
+            out = rc.stage_implants("key", "10.0.0.198", "10.0.0.117")
+        self.assertFalse(out["ok"])
+        self.assertIn("sha256 mismatch", out["error"])
+
     def test_provision_failure_carries_tail_and_ok_false(self):
-        with mock.patch.object(rc, "_scp", return_value=_CP(0)), \
+        pulls, push_, shas = _relay_patches()
+        with pulls, push_, shas, \
              mock.patch.object(rc, "_ssh", return_value=_CP(1, out="[realm-c2] build died")):
             out = rc.provision_realm_c2(self.tmp, "10.0.0.198", "key",
                                         {"c2_port": 8000})
@@ -324,7 +477,8 @@ class ExecutionTests(unittest.TestCase):
         self.assertNotIn("mcp", out)
 
     def test_provision_success_reports_mcp_and_transports(self):
-        with mock.patch.object(rc, "_scp", return_value=_CP(0)), \
+        pulls, push_, shas = _relay_patches()
+        with pulls, push_, shas, \
              mock.patch.object(rc.time, "sleep"), \
              mock.patch.object(rc, "_ssh", return_value=_CP(0, out="[realm-c2] OK")):
             out = rc.provision_realm_c2(self.tmp, "10.0.0.198", "key",
@@ -338,7 +492,8 @@ class ExecutionTests(unittest.TestCase):
         """A hung ssh at ANY step (staging or the provision script) comes back
         as a summary, never as an exception — the module documents never-raise."""
         import subprocess as sp
-        with mock.patch.object(rc, "_scp", return_value=_CP(0)), \
+        pulls, push_, shas = _relay_patches()
+        with pulls, push_, shas, \
              mock.patch.object(rc, "_ssh",
                                side_effect=sp.TimeoutExpired(cmd="ssh", timeout=1)):
             out = rc.provision_realm_c2(self.tmp, "10.0.0.198", "key", {})
@@ -351,14 +506,14 @@ class ExecutionTests(unittest.TestCase):
         still built — the warning names the staging failure only."""
         import subprocess as sp
 
-        def _ssh(ssh_key, target_ip, script, timeout=120, env_prefix=""):
-            if script.startswith("mkdir -p /tmp/.realm-c2-stage"):
-                raise sp.TimeoutExpired(cmd="ssh", timeout=timeout)
-            return _CP(0, out="[realm-c2] OK")
+        def _push(*a, **k):
+            raise sp.TimeoutExpired(cmd="ssh", timeout=900)
 
-        with mock.patch.object(rc, "_scp", return_value=_CP(0)), \
+        with mock.patch.object(rc, "_gzip_pull", side_effect=_relay_pull), \
+             mock.patch.object(rc, "_sha256_on", return_value="a" * 64), \
+             mock.patch.object(rc, "_gunzip_push", side_effect=_push), \
              mock.patch.object(rc.time, "sleep"), \
-             mock.patch.object(rc, "_ssh", side_effect=_ssh):
+             mock.patch.object(rc, "_ssh", return_value=_CP(0, out="[realm-c2] OK")):
             out = rc.provision_realm_c2(self.tmp, "10.0.0.198", "key", {})
         self.assertTrue(out["ok"])
         self.assertFalse(out["implants"]["ok"])

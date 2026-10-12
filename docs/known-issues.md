@@ -1,7 +1,13 @@
 # Known issues — open and pending
 
-This file is the **open list only**: problems that are not fixed, or that need a decision. Fixed
-issues are **deleted, not archived** — git history is the record. The pre-deploy trap checklist is
+This file is a **temporary writepad, not a ledger**: every entry is open work
+with a concrete next action, and it is drained at the start of every test-run
+cycle. Nothing lives here permanently — fixed issues are **deleted
+immediately** (git history is the record), and a workaround may be recorded
+only next to the issue that will remove it. An entry that survives two run
+cycles without movement is either fixed or raised to the user. "Accepted
+caveat" / "root cause unsolved" are not terminal states; they name what the
+next action is and who decides it. The pre-deploy trap checklist is
 [e2e-testing.md §0](e2e-testing.md#0-read-before-you-deploy--live-traps); node/storage/template
 ground truth is [environment-facts.md](environment-facts.md); credential exposure is
 [security-disclosures.md](security-disclosures.md); defects owned by the catalog/nakon are
@@ -175,6 +181,21 @@ to bad-auto, hand off with the upstream defects.
 
 ## Pending upstream — owned by the catalog / nakon
 
+- **`IIS FTP` golden plant step is timing-fragile and non-idempotent** (catalog DB step body,
+  not repo source). Live 2026-10-11, two phase-4 plants 28 minutes apart on identical goldens:
+  attempt 1 rc=1 in 351 s, attempt 2 (after the phase-4 rollback to `tz-base`) rc=0 in 329 s —
+  `Install-WindowsFeature` completes both times, so the failure is a transient non-terminating
+  error in the post-install window (`Start-Service FTPSVC` / `Import-Module WebAdministration` /
+  `New-WebFtpSite` racing the just-installed config store), and the step's
+  `$Error.Count -gt 0 → rc 1` footer converts it into a hard step failure that aborts phase 4.
+  The body also never re-runs cleanly (`New-Item` without `-Force` on an existing ftproot,
+  `New-WebFtpSite` without removing the existing site) — safe only because phase-4 re-entry
+  rolls the goldens back to `tz-base` first. Fix belongs in the catalog step (idempotent
+  dir/site creation, retry the service start); until then the recovery is
+  `create-competition.py --competition <id> --from-phase 4 --yes`, which re-plants clean.
+  Failure evidence is no longer destroyed with the staging: `nakon_run_ops._preserve_failed_run`
+  (2026-10-11) moves a failed plant's run logs to `/opt/nakon/failed-<tag>-<ts>` on the engine
+  and prints the failed machines' log tails — the next occurrence is fully diagnosable.
 - `mailenable-cleartext-mail-win` — the only Windows pin still in `KNOWN_BROKEN_CONFIGS`. The row
   plants no mail service at all: `choco install mailenable` names a package the community feed does
   not have, so only its firewall rule lands. A fix candidate (MailEnable's own installer + the real
