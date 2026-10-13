@@ -42,7 +42,7 @@ class KnownBrokenList(unittest.TestCase):
         # The four Linux rows were fixed and verified live 2026-10-02, as was unrealircd's
         # rc=127 (it now installs a runtime or exits rc=1 with a reason), as were four of the
         # five "Windows user-policy" rows (the whole account/policy diagnosis was wrong — see
-        # docs/upstream-defects-handoff.md §5 and docs/vulndb-fixes/).
+        # docs/upstream-defects-handoff.md §5).
         for name in ("tftpd-hpa-anon-write", "postgresql-no-auth", "postgresql-remote-access",
                      "sshd-force-sftp-broken-chroot", "unrealircd-backdoor-container",
                      "local-user-win", "powershell-execution-unrestricted",

@@ -5,15 +5,14 @@ scoring config and nakon's machine list, then runs an eight-phase deploy (pipeli
 golden templates and linked clones). Companion scripts: `verify-competition.py`,
 `redeploy-competition.py`, and `destroy-competition.py`.
 
-The phases, components, and invariants are described in
+The phases and components are described in
 [docs/architecture.md](docs/architecture.md).
 
 ## Web UI
 
-A browser front end covers most day-to-day work. You can author and edit competitions, pick
-catalog pins for services and misconfigs, and launch plan, deploy, and verify jobs. It edits the
-same `competitions/<id>/` files and runs the same CLI scripts an operator would type, so nothing
-in it is a second source of truth.
+. You can author and edit competitions, pick catalog pins for services and misconfigs, and launch
+plan, deploy, and verify jobs. It edits the `competitions/<id>/` files and runs the CLI scripts an
+operator would type.
 
 Run it with `python3 webui/server.py` and open http://127.0.0.1:8765. Setup, the screen guide,
 and the keyboard map are in [webui/README.md](webui/README.md).
@@ -53,10 +52,4 @@ Setup details, the env-var reference, and troubleshooting live in
 [docs/usage-agents.md](docs/usage-agents.md).
 
 nakon is vendored at `vendor/nakon` (currently v0.1.7) and needs `vendor/nakon/.env` for
-build-time catalog access. Never commit `competitions/*/` secrets or either `.env`; the full
-secret inventory is in [docs/architecture.md](docs/architecture.md#secrets).
-
-The offline test suite lives in `tests/` and runs with `python3 -m pytest tests/ -q`. It is a
-regression suite over the deploy-path helpers, not a full pipeline suite; see
-[docs/tests.md](docs/tests.md). The real integration gate is `verify-competition.py` against a
-deployed range.
+build-time catalog access. 

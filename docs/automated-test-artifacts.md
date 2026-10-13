@@ -9,8 +9,7 @@ Implemented in the [artifacts_lib/](../artifacts_lib/) package, imported through
 [artifacts_lib/artifacts_ops.py](../artifacts_lib/artifacts_ops.py) facade (the stable API: `ensure_test`, `collect`,
 `collect_for_teardown`, ... — callers and tests patch names there); inspected and sealed with
 [test-artifacts.py](../test-artifacts.py), whose subcommands live in `artifacts_lib/cli_*.py`.
-Module map: [internals.md](internals.md#artifacts_lib--per-run-test-artifacts). Design record and the alternatives that were rejected:
-[reports/automated-test-artifacts-plan-2026-10-03.md](reports/automated-test-artifacts-plan-2026-10-03.md).
+Module map: [internals.md](internals.md#artifacts_lib).
 
 ## Layout
 
@@ -31,11 +30,10 @@ competitions/<comp>/.automated-tests/
 ```
 
 **The key is the run id, and that is the point.** `run-<8hex>` is minted once per competition
-directory ([common/utils.py](../common/utils.py)), persisted in `.deploy_state.json`, stamped on every VM as an
-ownership tag ([common/constants.py](../common/constants.py)), reused across resume/redeploy, and required by every
-destruction path. So the artifact folder and the VMs it describes are keyed on the same identity, and
-two worktrees running the same competition ID cannot collide. State that predates run ids (all seven
-comp dirs on disk as of 2026-10-03) gets `untagged-<deploy timestamp>` — derived from
+directory, persisted in `.deploy_state.json`, stamped on every VM as an ownership tag, reused
+across resume/redeploy, and required by every destruction path. So the artifact folder and the
+VMs it describes are keyed on the same identity, and two worktrees running the same competition ID
+cannot collide. State that predates run ids gets `untagged-<deploy timestamp>` — derived from
 `.deploy_state.json`'s mtime, so re-running teardown does **not** create a second folder.
 
 The whole tree is **gitignored, with no publish path** (`.gitignore` +

@@ -1,287 +1,51 @@
 # Environment facts — nodes, storage, templates, vmids
 
-Hardware and environment reality for the Proxmox hosts this pipeline deploys onto. These are **not**
-bugs — they are the ground truth a deploy has to fit into. Split out of
-[known-issues.md](known-issues.md) so that
-"something is broken" and "this is how the estate is" stop competing for attention.
-
-**Verification column:** **[live]** = read back from the Proxmox API or a guest agent on 2026-10-02;
-**[code]** = verified in the source tree; **[doc]** = inherited fact that cannot be re-verified
-(historical, behavioral, or owner-reported). Anything marked **[live]** should be re-checked before
-it is relied on — space and vmids move.
+Hardware/environment ground truth for the Proxmox hosts. Re-verify anything vmid/space-related before relying on it; it moves.
 
 ## Nodes
 
 | Node | Endpoint | Env variant | Notes |
 |---|---|---|---|
 | cyberrange | `https://10.0.0.150:8006` | `.env.cyberrange-20260930` | node `proxmox`; shared with challenge/workshop/livefire VMs — the busy node |
-| cyberfield | `https://10.0.0.193:8006` | `.env` | node `pve`; **known hardware instability** — can lose ping/SSH/API with no self-recovery and needs a physical power cycle. Running VMs come back intact, but the scoring loop needs `POST /api/competition/start` + `POST /api/engine/pause` (or `verify --fix-round-loop`). Owner-confirmed, not load-related. **[doc]** |
+| cyberfield | `https://10.0.0.193:8006` | `.env` | node `pve`; unstable hardware — can lose ping/SSH/API with no self-recovery and needs a physical power cycle. VMs survive; the scoring loop needs `verify --fix-round-loop` afterward |
 
-Only the Proxmox API (:8006) and the guest-agent channel are reachable from the dev host;
-arbitrary VM ports TCP-RST. **Ping is not a liveness signal** for a node — a 10 h site-level outage
-once left the tailnet bridge answering ICMP for itself while forwarding nothing. Probe the API port
-(`curl -k https://<node>:8006/` — any HTTP code, not `000`). Deploy state (`.deploy_state.json`,
-snapshots, VM disks) survives such an outage on the node; resume with `--from-phase`. **[doc]**
-
-## Storage
-
-Measured 2026-10-02 **[live]**:
-
-| Datastore | Type | Node | Free / Total |
-|---|---|---|---|
-| `hdd` | zfspool | .150 | 197 GiB / 2613 GiB |
-| `ssd` | zfspool | .150 | 383 GiB / 899 GiB |
-| `wkshp-pool` | zfspool | .150 | 755 GiB / 899 GiB |
-| `local` | dir | .150 | 145 GiB / 212 GiB |
-| `local-lvm` | lvmthin | .150 | 16 GiB / 16 GiB |
-| `hdrives-zfs` | zfspool | .193 | 2059 GiB / 4333 GiB |
-| `local-lvm` | lvmthin | .193 | 117 GiB / 137 GiB |
-| `local` | dir | .193 | 12 GiB / 66 GiB |
-
-- **The headroom preflight under-counts by design, and Windows-heavy comps pay for it.**
-  It compares free space against `teams × Σdisk_gb` of the *team* disks, but the real
-  allocation is the **full clones**: one golden per box type plus the engine template.
-  Live 2026-10-02, `same-type-2box-2026-09-29` on `hdd` (1 team × 90 GB provisioned):
-  the preflight said "189 GB free vs ~90 GB needed" and the pool reached **0.2 GiB free**
-  mid-run, at which point both `tz-base` and `tz-ready` snapshots failed with
-  `zfs error: cannot create snapshot … out of space` — silently, leaving the range with
-  **no rollback point**. Teardown returned it to 154.5 GiB, so the run itself consumed
-  roughly 155 GiB: two goldens (30 + 60 GB) plus a ~40 GB engine template, i.e. the
-  full clones dominate. `TEZ_THIN_HEADROOM` does not help here — these are full copies,
-  not linked clones. Budget for goldens + engine template before trusting the gate, and
-  tear down with `destroy-competition.py` (the default full teardown) as soon as a run's goal is met. **[live]**
-
-- **The preflight headroom gate counts provisioned bytes** (≈ teams × Σ`disk_gb`), which does not
-  match what linked clones actually allocate. `TEZ_THIN_HEADROOM=<0..1>` relaxes it by counting that
-  fraction of the provisioned math. Size the factor to the pool (0.25 has been enough for
-  Windows-heavy comps on `.150` `hdd`). **[code]**
-- **Snapshot-capable datastores are ZFS, LVM-thin, Ceph, or qcow2-on-file.** Thick LVM cannot
-  snapshot, so a range there has no `tz-base`/`tz-ready` restore points and `redeploy` falls back to
-  `reconfigure`/`rebuild`. No thick-LVM datastore is currently in use on either node. **[live]**
-- On .150, **only `wkshp-pool` comfortably fits a 10-box × 2-team comp** — `hdd` was down to 197 GiB
-  at the last check (the 2026-09-29 note that it "recovered to ~900 GB" no longer holds). **[live]**
-- Datastore saturation under parallel full clones produced pvestatd hangs and HTTP 596 errors; that
-  is why terraform runs `-parallelism=1`. The Proxmox **task-wait budget is the bpg provider default
-  of 1800 s, not a terraform setting** — and goldens override it via `constants.GOLDEN_CLONE_TIMEOUT`
-  (5400 s), because the 1800 s default once aborted a healthy clone. The apply timeout is
-  `600 + 300 × <target count>`, i.e. it scales with the number of VMs, **not** with disk size or
-  Windows-vs-Linux lineage (an older claim that it scaled per Windows box was wrong). v2's team boxes
-  are *linked* clones, so this pressure is mostly historical. **[code]**
+Only the API port (:8006) and the guest-agent channel are reachable from the dev host; other VM ports TCP-RST. **Ping is not a liveness signal** (a tailnet bridge can answer ICMP while forwarding nothing) — probe `curl -k https://<node>:8006/` for any HTTP code, not `000`. State, snapshots, and disks survive a node outage; resume with `--from-phase`.
 
 ## Templates
 
-Cloud-init capability is what makes a template usable by this pipeline — a tagged template with no
-cloud-init drive passes the preflight but its clones boot unreachable. Measured 2026-10-02
-**[live]** (`ide2` etc. containing `cloudinit`):
+Cloud-init capability is what makes a template usable.
 
-**cyberrange .150 — usable:** `955 base-ubuntu24.04-fix`, `951 base-debian13-lite-fix`,
-`1016 base-fedora44-fix`, `127 base-alpine3.23`, plus the challenge/workshop templates tagged
-`cloud-init` (`112`, `132`, `140`, `153`, …).
-
-**cyberrange .150 — appliance (no cloud-init by design):** `957 pfsense-provision` — the
-in-path firewall template (`unmanaged` + `in_path` boxes clone straight from it; the cloud-init
-rule above does not apply to unmanaged boxes). It is the stock `956 pfsense` plus SSH on, the
-deploy key in admin's authorizedkeys, LAN `vtnet1` = 192.168.1.1/24 and a serial console —
-built once by `tools/build-pfsense-provision-template.py` (clone 956 → type the config edits at
-the console → halt → convert). 956 stays only as the builder's source. Since 2026-10-08 the
-template is **vmid 958** and carries the **qemu-guest-agent** (qemu-ga 11.1.2, installed
-offline from the FreeBSD 14 ABI-matched repo; booted by the `<system><afterbootupshellcmd>`
-tag in its config.xml — pfSense never runs `/usr/local/etc/rc.d/*`, see internals.md). The
-agentless pre-retrofit template is kept as `957 pfsense-provision-agentless-bak`. Only exists
-on .150 — a firewall lineup needs it synced (or rebuilt with the tool) on any other node
-before preflight will pass; .193 has no pfSense template at all (known-issues).
-
-**cyberrange .150 — appliance (VyOS, second firewall kind):** `962 vyos-provision` — the VyOS
-in-path firewall template for `firewall_kind "vyos"` (any `in_path` box whose template name
-contains `vyos`). VyOS 2026.03 stream installed from the official ISO by
-`tools/build-vyos-provision-template.py` (download → create → install → provision → check →
-seal): SSH on with the deploy key **in the config** (`system login user vyos authentication
-public-keys` — VyOS regenerates authorized_keys from it at boot, a file-based key is wiped on
-the first reboot), LAN `eth1` = 192.168.1.1/24, serial getty, and deliberately **no `hw-id`
-lines** — VyOS stamps each configured interface's MAC as `hw-id` and pins the interface NAME
-to it at boot, so clones with fresh MACs get bumped to eth2/eth3 and the config fails to
-apply; the pin-free config lets names assign in PCI order on every clone. Only exists on
-.150 — sync or rebuild on any other node before a firewall lineup there. **[live] 2026-10-08**
-
-**cyberrange .150 — NOT usable (no cloud-init drive):** `106 base-ubuntu24.04`,
-`920 base-debian13-cloudinit` ⚠️, `103 base-ubuntu20.04`, `109 base-fedora44`.
-
-> ⚠️ **vmid 920 is named `base-debian13-cloudinit` but has no cloud-init drive** (its .193 sibling,
-> `1005`, is the same). Do not trust the name — check the config. The old known-issues entry called
-> it "920 / debian13-lite"; the vmid was right and the name was stale.
-
-**cyberfield .193 — usable:** `1007 base-ubuntu24.04-fix`, `1006 base-debian13-lite-fix`,
-`1019 base-alpine3.23-fix`, `1032 base-centos8-fix`, `1033 base-ubuntu20.04-fix`,
-`1220 engine-template` (historical CDE run).
-
-**cyberfield .193 — not present in the 2026-10-08 inventory:** `base-fedora44-fix` (older records
-associate it with VMID `1015`, but the live listing identified `1015` as `pfsense-provision-agentless-bak`).
-Refresh the inventory before relying on the older Fedora entry or scheduling any lineup that needs it.
-
-**cyberfield .193 — NOT usable:** `1001 base-ubuntu20.04`, `1002 base-ubuntu24.04`,
-`1005 base-debian13-cloudinit` ⚠️, `1004 base-alpine3.23`, `1003 base-fedora44`, and the
-`challenge-*` / `workshop-*` templates that carry no `cloud-init` tag.
-
-**This is enforced, not just documented** (since 2026-10-02): the single-node and multinode
-preflights read each selected Linux template's config and refuse one with no cloud-init drive.
-**[code]**
-
-**Distro-specific template requirements:**
-
-- **`base-fedora44` ships without cloud-init** (cannot take identity). Build a `-fix` variant
-  (`.150` → `1016`, `.193` → `1015`); Fedora also needs SSH password-auth forced via a `00-*` drop-in
-  (sshd is first-match-wins), `named` bound to more than `127.0.0.1`, and `httpd` with
-  `ServerName localhost`. Per-box httpd/named fixes are folded into `fix_services_on_boxes`.
-  **[code/doc]**
-- **Alpine templates need persistent `ssh_pwauth` and a `%wheel` rule in the MAIN sudoers file.**
-  The image ships `PasswordAuthentication no` + `ssh_pwauth: false`, and a clone's first-boot
-  cloud-init re-disables password auth even if the template fixed `sshd_config`; Alpine's sudo also
-  ships no `%wheel` rule, so a NOPASSWD entry living only in `sudoers.d` vanishes the moment a
-  `writable-sudoers`-class plant makes that dir 0777. Anything that sh-commands `sudo` on a
-  post-sweep box must assume password-sudo at best. **[doc]**
-- **Fedora + the guest agent = confined.** Live-confirmed 2026-10-02 on a Fedora 44 clone on .150:
-  guest-exec runs as root but inside `virt_qemu_ga_t` (SELinux enforcing), where `dnf`/`rpm` are
-  `Permission denied`, `/etc` is unwritable, `systemctl` is `Access denied`, and both `setenforce 0`
-  and the `virt_qemu_ga_run_unconfined` boolean are denied. **SSH is the working path** — logging in
-  as the image's cloud user with the repo key lands in `unconfined_t` with passwordless sudo, i.e.
-  real root. Since the pipeline plants over SSH, this only blocks agent-only flows (the golden-build
-  fallback): keep Fedora out of lineups where the agent is the only path, or flip
-  `/etc/selinux/config` to permissive at template-build time. **[live]**
-- **Windows:** the stock template ships all firewall profiles disabled, so firewall-rule effects do
-  nothing until `Set-NetFirewallProfile -All -Enabled True` (now done by `bootstrap_windows_box`,
-  along with enabling `RemoteDesktop-UserMode-In-TCP/UDP` — the DC template ships that rule group
-  disabled, so `fDenyTSConnections=0` alone does not make RDP reachable). A Windows clone's guest
-  agent takes ~8 min to appear (bootstrap polls within a 900 s deadline). **[live/code]**
+- **`base-fedora44` ships without cloud-init.** Use the `-fix` variant (`1016`/.150, `1015`/.193). Fedora also needs SSH password-auth forced via a `00-*` drop-in, `named` bound beyond `127.0.0.1`, and `httpd` with `ServerName localhost` — folded into `fix_services_on_boxes`.
+- **Alpine needs persistent `ssh_pwauth` and a `%wheel` rule in the main sudoers file.** The image ships password auth off and no `%wheel` rule, so a NOPASSWD entry living only in `sudoers.d` vanishes if a `writable-sudoers` plant makes that dir 0777.
+- **Fedora + the guest agent is confined** (SELinux `virt_qemu_ga_t`): `dnf`/`rpm`/`systemctl` denied, `setenforce 0` denied. SSH as the cloud user lands `unconfined_t` with real root — the working path. Keep Fedora out of agent-only lineups, or set `/etc/selinux/config` permissive at template-build time.
+- **Windows** ships all firewall profiles disabled, so firewall-rule effects do nothing until `Set-NetFirewallProfile -All -Enabled True` (`bootstrap_windows_box` does this, plus enabling `RemoteDesktop-UserMode-In-TCP/UDP`, since the DC template ships that rule group disabled too). A Windows clone's guest agent takes ~8 min to appear.
 
 ## vmid occupancy
 
-**Default team identifiers (101+) collide on both nodes.** Observed 2026-10-02 **[live]**:
-on .150 vmids 100–124 are all occupied (challenge, workshop, livefire, base and service VMs); on
-.193 vmids 100–118 are largely occupied. The vmid-collision preflight names the conflict; pass
-`TF_VAR_team_identifiers` explicitly for a predictable block.  **[doc + live]**
-
-**red01's slot is per-competition, never 999.** Since 2026-10-12 (see
-[bad-auto-isolation.md](bad-auto-isolation.md)) each comp reserves its own red01: vmid
-Compfile `red01_vmid`, else `<scoring-vmid>+170` (clear of the +140 template / +150 golden /
-+130 jump offsets), IP Compfile `red01_ip` (or legacy `assume_breach_red_ip`), else
-`10.0.0.198` — and both are preflight-gated like the engine's: an occupied red01 vmid or an
-IP a live guest answers is a REFUSAL naming the owner (the bad-auto description marker), and
-an unverifiable network refuses the DEFAULT addresses. The old shared defaults (vmid 999,
-`10.0.0.198`/`.199` for every comp) are what let one session's deploy recycle another
-session's red01. Concurrent comps still need separated blocks: scoring vmids +10 apart
-overlap (1300's golden 1450 = 1310's template 1450 — refused live 2026-10-12); leave room
-for engine+140…+170 and the golden box count.  **[code + live]**
-
-**Engine management IPs are shared unless you separate them.** `clean_engine_for_template` delivers
-its cleanup by SSH to the *planned* engine mgmt IP, so two engines (or an engine and a build VM) on
-one node can ARP-flap and the cleanup can land on the wrong, live engine — observed once destroying
-another engine's `.env`, `event.conf` and host keys. Give each concurrent comp its own
-`TF_VAR_engine_mgmt_ip`. See the open item in [known-issues.md](known-issues.md). **[code + doc]**
-
-**Un-reclaimed ranges are a standing estate problem.** At the last check, 43 tezcatlipoca VMs from
-three past competitions were still on the nodes, 20 of them running:
-
-| Node | Competition | VMs | Running | Surviving state |
-|---|---|---|---|---|
-| .150 | `scale8-scrim-2026-10-01` | 16 | 10 | branch `scale8-2026-10-01`, `.tez-backups/scale8-preserve/` |
-| .193 | `cde-2026` | 14 | 9 | `competitions/cde-2026/` |
-| .193 | `scale8-scrim-2026-10-01` | 7 | 1 | same branch/backup |
-| .193 | `amongus-cde-2026` | 6 | 0 | `competitions/amongus-cde/` |
-
-They hold vmids, consume `hdd`, and their golden templates can squat a slot a concurrent comp
-wants. Reclaim with `destroy-competition.py` from the matching comp dir/worktree — never an ad-hoc
-sweep. **[live]**
+- **Default team identifiers (101+) collide on both nodes** (100–124 occupied on .150, 100–118 on .193 by challenge/workshop/livefire/base VMs). Pass `TF_VAR_team_identifiers` explicitly.
+- **red01's slot is per-competition, never 999** (see [AGENTS.md § bad-auto isolation](../AGENTS.md)): vmid from Compfile `red01_vmid`, else `<scoring-vmid>+170`; IP from Compfile `red01_ip`, else `10.0.0.198`. Both are preflight-gated — an occupied vmid or an answering IP is a refusal naming the owner; an unverifiable network refuses the default too. Concurrent comps need scoring vmids spaced more than 10 apart (the +140/+150/+170 offsets and golden box count must not overlap).
+- **Engine management IPs are shared across concurrent deploys unless separated.** `clean_engine_for_template` SSHes to the *planned* mgmt IP, so a collision can land cleanup on a live foreign engine's `.env`/`event.conf`/host keys. Give each concurrent comp its own `TF_VAR_engine_mgmt_ip`; the preflight scans cluster-wide and refuses the default address when any guest on it is unverifiable.
+- **Reclaim orphaned ranges with `destroy-competition.py` from the matching comp dir**, never an ad-hoc sweep. Per-node occupancy: `environment-facts` doesn't track a live count — check via the Proxmox API before a deploy.
 
 ## Headscale
 
-The tailnet's control plane is an external headscale instance the pipeline administers over
-ssh+sudo (`TEZ_HEADSCALE_*` in `.env`; remote access ships with every deploy —
-[remote-access.md](remote-access.md)). Facts captured 2026-10-08 **[live]**:
+External headscale instance the pipeline administers over ssh+sudo (`TEZ_HEADSCALE_*` in `.env`; [remote-access.md](remote-access.md)).
 
-- **Host**: a Debian 13 VPS at `45.76.27.253`, public name `headscale.hnasheralneam.dev`
-  (`server_url`), TLS via a Caddy container (80/443) proxying the headscale container's 8080.
-- **Runtime**: `headscale/headscale:latest` (**v0.29.1** verified), container name `headscale`,
-  mounts `/home/sysadmin/headscale/config → /etc/headscale` and `/home/sysadmin/headscale/data →
-  /var/lib/headscale`; sqlite DB. `docker` is root-only — every CLI call is
-  `sudo docker exec headscale headscale …`. Embedded DERP enabled (region 999, STUN udp/3479) —
-  participant clients relay here when no direct path exists.
-- **DNS**: MagicDNS on, base domain `vpn.hnasheralneam.dev` (node `eng-<comp>` is reachable as
-  `eng-<comp>.vpn.hnasheralneam.dev` inside the tailnet).
-- **Policy**: `policy.mode: file`, `policy.path: /etc/headscale/acl.hujson` (wired up 2026-10-08;
-  before that the file shipped with `path: ""` and the tailnet ran **policy-less = allow-all**).
-  The pipeline regenerates the whole policy from `tezcatlipoca-remote-access.json` beside it;
-  rollback backup: `config.yaml.bak-tezcatlipoca-20261008`.
-- **Users (2026-10-08)**: `cyberrange-infra` (service account, owns the infra nodes + our router
-  nodes), `hnasher1`, `dipam1`, `sdavis24`, `ckegly`. All pre-existing nodes are untagged and
-  keep full access via `group:full-access`.
-- **v0.29 CLI quirks**: there is **no `routes` command** (removed upstream — approvals ride the
-  policy's `autoApprovers`; listing is `nodes list-routes`); policy v2 syntax requires
-  `@`-suffixed usernames in groups AND in grant/acl sources (a bare name parses as a host
-  reference and fails validation); `policy check` wants `--file`; `users destroy -n <name>
-  --force` refuses while the user owns nodes; `nodes delete -i <id> --force`.
-- **Tag-sourced grants do not reach routers' packet filters** (live-proven 2026-10-08): a node
-  enrolled with a tagged key sees its netmap routes filtered correctly, but every tag-sourced
-  dial black-holes at the router — user and group sources work fine. tezcatlipoca therefore keys
-  participant grants on usernames, not tags (docs/remote-access.md). Upstream-worthy defect.
-- **The VPS is itself a tailnet node** (`headscale-vps`, 100.64.0.21); the mgmt-LAN subnet
-  router is `headscale-network-bridge` (100.64.0.4, hnasher1) advertising `10.0.0.0/24` — its
-  route predates the policy and stays Approved. Watch the classic trap: **a tailnet bridge can
-  answer ICMP for itself while forwarding nothing** — probe service ports, never ping.
+- **Host**: Debian 13 VPS, public name `headscale.hnasheralneam.dev`, TLS via Caddy proxying the headscale container. Runtime `headscale/headscale` (v0.29.x), sqlite DB; `docker` is root-only, so every CLI call is `sudo docker exec headscale headscale …`. Embedded DERP enabled for clients with no direct path.
+- **DNS**: MagicDNS on, base domain `vpn.hnasheralneam.dev` (`eng-<comp>.vpn.hnasheralneam.dev`).
+- **Policy**: `policy.mode: file`; the pipeline regenerates the whole policy from `tezcatlipoca-remote-access.json` beside it. Pre-existing nodes are untagged and keep access via `group:full-access`.
+- **v0.29 CLI**: no `routes` command (approvals ride the policy's `autoApprovers`; list with `nodes list-routes`); policy v2 group/grant sources need `@`-suffixed usernames (a bare name parses as a host reference); `policy check` wants `--file`; `users destroy -n <name> --force` refuses while the user owns nodes.
+- **Tag-sourced grants do not reach routers' packet filters** — a tag-sourced dial black-holes at the router even though the node's own routes are filtered correctly; user/group sources work. tezcatlipoca keys participant grants on usernames, not tags ([remote-access.md](remote-access.md)). Upstream-worthy defect.
+- The VPS is itself a tailnet node; the mgmt-LAN subnet router advertises `10.0.0.0/24`. Probe service ports, never ping, for the same ICMP-without-forwarding trap as above.
 
 ## Node runtime behavior
 
-- **.150 (cyberrange) RAM is the binding constraint for satellite-heavy Windows ranges.** The
-  2026-10-02 soak measured 50–70 GB *available* against our ~48 GB committed for 4 satellite teams
-  (dc01+win01, plus the jump and slot-1 goldens) — a ~2 GB margin on a node also carrying 73
-  co-tenant VMs; KSM and ARC absorbed it, but nothing else would have. Before placing 4
-  Windows-heavy teams there again, choose deliberately: trim `dc01`/`win01` memory (check the
-  Windows pagefile/commit charge first), reduce co-tenancy, or split 6/2 instead of 4/4 and treat
-  .150 as the 4-team ceiling. Deploy time budget:
-  [multi-node.md § Phase budget](multi-node.md#phase-budget-8-teams--5-boxes-two-nodes). **[live]**
-- **The management network is ONE flat `10.0.0.0/24` L2 shared by both hosts.** A VM on .193 and a
-  VM on .150 are on the same segment, so `TF_VAR_engine_mgmt_ip` (and `jump_mgmt_ip`) are contested
-  **cluster-wide**, not per node — the engine's default `10.0.0.250` is what every competition gets
-  unless someone sets otherwise. Live-found 2026-10-02: `10.0.0.250` was a foreign competition's
-  live `quotient-engine` (verified: `ssh sysadmin@10.0.0.250 hostname` → `quotient-engine`) while a
-  .150 practice deploy was handed the same address by default; the build VM came up on it and died
-  at phase 2 with an opaque `ssh … exit status 255`. **Always set an explicit, checked
-  `TF_VAR_engine_mgmt_ip` when anything else is running on the estate**; `.245`, `.246`, `.249` and
-  `.250` all answered on 2026-10-02. The preflight now scans cluster-wide and refuses the *default*
-  address when any guest is unverifiable (see `infra.collisions.engine_mgmt_ip_gate`). **[live/code]**
-- **Engine management-IP allocation table.** Three concurrent deploys on 2026-10-04 worked only
-  because each session hand-picked a distinct address. Claim yours here (and put it in the run's
-  `.env` as `TF_VAR_engine_mgmt_ip`) before deploying; the preflight still verifies the claim
-  against the live estate, so a stale row costs a refusal, not a clash. **[doc + live]**
-
-  | Address | Holder / use | Notes |
-  |---|---|---|
-  | `10.0.0.250` | the engine *default* — a foreign competition's live `quotient-engine` | never rely on the default |
-  | `10.0.0.252` | practice deploys (6-team / follow-up sessions, 2026-10-04) | **occupied 2026-10-07** — answers as a live `quotient-engine` (leftover; engine VM not in .193's cluster inventory) |
-  | `10.0.0.248` | practice deploys (parallel session 2026-10-04; cde-2026 practice run 2026-10-07) | free between runs |
-  | `10.0.0.243` | pfsense-ad live validation (2026-10-04) | free between runs |
-  | `10.0.0.245`, `.246`, `.249` | answered on 2026-10-02 — foreign guests | do not use |
-
-  Rows marked "free between runs" are only free when `ssh sysadmin@<ip>` and ping both fail and
-  the preflight's cluster-wide scan agrees.
+- **.150 (cyberrange) RAM is the binding constraint for satellite-heavy Windows ranges.** A 4-satellite Windows soak measured only a ~2 GB margin against ~73 co-tenant VMs. Before placing 4 Windows-heavy teams, trim DC/member memory, reduce co-tenancy, or treat .150 as a 4-team ceiling. Deploy time budget: [multi-node.md § Phase budget](multi-node.md#phase-budget-8-teams--5-boxes-two-nodes).
+- **The management network is one flat `10.0.0.0/24` L2 shared by both hosts.** `TF_VAR_engine_mgmt_ip`/`jump_mgmt_ip` are contested cluster-wide, not per node — the default `10.0.0.250` is whatever every competition gets unless set otherwise. **Always set an explicit, checked `TF_VAR_engine_mgmt_ip`** when anything else is running on the estate; the preflight scans cluster-wide and refuses the default when it's unverifiable.
 - **netplan refuses world-readable configs** — the engine's team-NIC netplan files are mode `0600`.
-  Verified on both running engines 2026-10-02. **[live]**
-- **Docker re-syncs iptables on every container start/restart**: `FORWARD` goes to `DROP` and the
-  custom team-subnet MASQUERADE + team-to-team DROP rules vanish. Mitigations are live and verified
-  on both running engines: `range-firewall.timer` and `range-healthcheck.timer` **active**,
-  `FORWARD` policy `ACCEPT`, 3 MASQUERADE rules present, 9 Quotient containers up.
-  `ensure_nat_forwarding` also re-asserts the rules before each nakon pass. **[live/code]**
-- **Quotient crash-loops without `event.conf`**, so it is pushed before nakon ever runs. **[code]**
-- **New VirtIO NICs need a cold boot** — a guest-level reboot does not trigger the PCI scan, so the
-  engine's team NICs are addressed only after a hypervisor-level stop/start. **[doc]**
-- **Fresh clones can boot with an empty `/etc/resolv.conf`** (cloud-init ignores `dns.servers` when
-  the IP is static) and nakon installs services with apt — so `fix_dns_on_boxes` exists and runs in
-  the deploy. **[code]** Related: never point boxes at their own team's `dns*` box from Terraform —
-  deadlock (bind is installed by nakon via apt, which needs a working resolver). **[doc]**
-- **Stale ifupdown2 runtime state breaks `ifreload -a` node-wide**: `/run/network/ifstatenew` can
-  carry dead bridges from long-gone comps, and every API-driven network change then fails on a
-  missing `/sys/class/net/vmbrNNN/brif/`. **The API list does not show this state.** Repair on the
-  node: `rm /run/network/ifstatenew && ifreload -a`. Tear team bridges down with `ifdown`, never raw
-  `ip link del` (which is what creates the stale state). **[doc]**
-- **Quotient secrets are plaintext-but-`0600` on the engine** (`/opt/quotient/.env`), generated fresh
-  per deploy. Box/credlist usernames are themeable and not secret; the passwords always are.
-  **[live/code]**
+- **Docker re-syncs iptables on every container start/restart** (`FORWARD` → DROP, team rules wiped). `range-firewall.timer`/`range-healthcheck.timer` and `ensure_nat_forwarding` cover this; see [architecture.md](architecture.md#network-and-isolation).
+- **Quotient crash-loops without `event.conf`**, so it's pushed before nakon runs.
+- **New VirtIO NICs need a cold boot** — a guest-level reboot doesn't trigger the PCI scan.
+- **Fresh clones can boot with an empty `/etc/resolv.conf`** (cloud-init ignores `dns.servers` on a static IP), so `fix_dns_on_boxes` runs in the deploy. Never point boxes at their own team's `dns*` box from Terraform — deadlock (its bind9 needs a working resolver to install via apt).
+- **Stale ifupdown2 state breaks `ifreload -a` node-wide**: `/run/network/ifstatenew` can carry dead bridges from gone comps, failing every API-driven network change on a missing `/sys/class/net/vmbrNNN/brif/` (invisible via the API). Repair: `rm /run/network/ifstatenew && ifreload -a`. Tear team bridges down with `ifdown`, never raw `ip link del` (which creates this state).
+- **Quotient secrets are plaintext-but-0600** on the engine (`/opt/quotient/.env`), generated fresh per deploy. Box/credlist usernames are themeable and not secret; passwords always are.

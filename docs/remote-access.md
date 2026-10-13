@@ -22,14 +22,13 @@ Caddy on a VPS; embedded DERP on the same host relays participant traffic). See
 One router advertises ALL team subnets — per-team router VMs are not needed: tailscaled on the
 engine enforces the ACL per destination subnet before a packet ever reaches a team bridge.
 
-**Why usernames, not tags, key the participant grants** (live-proven 2026-10-08, headscale
-v0.29.1): a node enrolled with a tagged key gets its netmap routes filtered correctly, but
-headscale never expands tag sources into the ROUTERS' packet filters — every tag-sourced dial
-black-holes at the router while group/user-sourced dials pass. So participant devices enroll
-UNTAGGED (their identity is the person's user) and each team's grant names its people with
-`@`-suffixed usernames (bare usernames parse as host references in the v2 policy). Port
-granularity needs the `grants` form: one line for the /24 (`ip: ["*"]`), one for the scoreboard
-(`ip: ["80"]`).
+**Why usernames, not tags, key the participant grants.** A node enrolled with a tagged key gets
+its netmap routes filtered correctly, but headscale never expands tag sources into the routers'
+packet filters — every tag-sourced dial black-holes at the router while group/user-sourced dials
+pass. So participant devices enroll UNTAGGED (identity is the person's user) and each team's
+grant names its people with `@`-suffixed usernames (bare usernames parse as host references in
+the v2 policy). Port granularity needs the `grants` form: one line for the /24 (`ip: ["*"]`), one
+for the scoreboard (`ip: ["80"]`).
 
 ## Traffic path
 
@@ -103,6 +102,6 @@ sudo docker exec headscale headscale nodes delete -i <id> --force
 sudo docker exec headscale headscale users destroy -n <name> --force
 ```
 
-Rollback of the whole policy foundation: `config.yaml.bak-tezcatlipoca-20261008` and
-`acl.hujson` live in `/home/sysadmin/headscale/config/` on the VPS; removing the
-`policy.path` line + restart returns the tailnet to policy-less allow-all.
+A backed-up pre-policy `config.yaml` and `acl.hujson` live in `/home/sysadmin/headscale/config/`
+on the VPS; removing the `policy.path` line and restarting returns the tailnet to policy-less
+allow-all.
