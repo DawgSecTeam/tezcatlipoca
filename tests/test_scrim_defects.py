@@ -718,6 +718,21 @@ class AuthoredCompSweepMarker(unittest.TestCase):
         # post-clone swept and deploy skipped the sweep the fresh range needs.
         self.assertFalse((dst / ".postclone-swept").exists())
 
+    def test_bare_from_template_name_resolves_against_competitions(self):
+    # full-scrim-20261013d: --from-template agent-scrim was Path("agent-scrim"),
+    #     a cwd-relative path, so a driver launched from anywhere but the repo root
+    #     died in authoring on a template that demonstrably exists.
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "competitions" / "tmpl").mkdir(parents=True)
+        (tmp / "competitions" / "tmpl" / "Compfile").write_text("name tmpl\n")
+        old_repo = core.REPO
+        core.REPO = tmp
+        try:
+            staging.stage_author(SimpleNamespace(new="demo", from_template="tmpl"))
+        finally:
+            core.REPO = old_repo
+        self.assertTrue((tmp / "competitions" / "demo" / "Compfile").exists())
+
 class RedReachabilityGate(unittest.TestCase):
 # D13: pre-T0 gate that red01 can dial a box on every team.
 #

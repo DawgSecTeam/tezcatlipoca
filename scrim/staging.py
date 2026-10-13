@@ -18,6 +18,11 @@ RUNTIME_FILES = {
 
 def stage_author(args):
     src = Path(args.from_template or DEFAULT_TEMPLATE)
+    # A bare --from-template NAME names a competition under competitions/, not a
+    # cwd-relative path: full-scrim-20261013d died in authoring because Path(NAME)
+    # resolved against the driver's cwd and missed the worktree's competitions dir.
+    if not src.is_absolute() and not src.is_dir():
+        src = core.REPO / "competitions" / src
     if not src.is_dir():
         valid = sorted(p.name for p in (core.REPO / "competitions").iterdir() if p.is_dir())
         raise RuntimeError(
