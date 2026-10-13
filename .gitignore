@@ -103,3 +103,6 @@ competitions/*/persistence-evidence-*/
 # A pre-wipe run dir kept for the record (world.json + report-secrets.md):
 # same class — credentials by design.
 competitions/*/.prev-run-*/
+
+# vim swap files (a twin session's live editor buffer must never be commit-swallowed)
+*.swp
