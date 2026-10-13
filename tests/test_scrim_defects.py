@@ -743,12 +743,17 @@ class RedReachabilityGate(unittest.TestCase):
             with mock.patch.object(core, "REPO", Path(tmp)):
                 yield comp
 
+    PASS_OUT = (
+        "  red_identity      : PASS  10.200.0.11 visible end-to-end\n"
+        "  red_teams         : PASS  red01 reached all 2 teams\n"
+        "RESULT: FAIL — see failing checks above.\n")
+
     def test_routed_run_checks_every_team_and_fails_hard(self):
         calls = []
 
         def fake_run(cmd, **kw):
             calls.append((cmd, kw))
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return SimpleNamespace(returncode=0, stdout=self.PASS_OUT, stderr="")
 
         with self._repo_rooted() as comp, \
                 mock.patch.object(procs, "run", side_effect=fake_run), \
@@ -761,8 +766,30 @@ class RedReachabilityGate(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--red-teams") + 1], "all")
         self.assertIn("--red-identity", cmd)
         self.assertEqual(cmd[cmd.index("--red-ip") + 1], "10.0.0.196")
-        self.assertIs(kw.get("check"), True,
-                      "a range red cannot reach must stop the run, not warn")
+
+    def test_unrelated_estate_fails_do_not_kill_the_red_gate(self):
+    # full-scrim-20261013c: verify exited rc=1 on misconfig/plant_coverage while
+    #     red_identity/red_teams both PASSED — the gate read the estate's rc and
+    #     killed the run before T0. The gate's subject is red's path only.
+        with self._repo_rooted() as comp, \
+                mock.patch.object(procs, "run", return_value=SimpleNamespace(
+                    returncode=1, stdout=self.PASS_OUT, stderr="")), \
+                mock.patch.object(compworld, "_verify_flags", return_value=[]):
+            red_stage.verify_red_reaches_teams(
+                self._args(), comp, {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
+
+    def test_red_check_failure_stops_the_run(self):
+        for stdout in (self.PASS_OUT.replace("red_teams         : PASS",
+                                             "red_teams         : FAIL"),
+                       "RESULT: FAIL\n"):
+            with self._repo_rooted() as comp, \
+                    mock.patch.object(procs, "run", return_value=SimpleNamespace(
+                        returncode=1, stdout=stdout, stderr="boom")), \
+                    mock.patch.object(compworld, "_verify_flags", return_value=[]):
+                with self.assertRaises(RuntimeError):
+                    red_stage.verify_red_reaches_teams(
+                        self._args(), comp,
+                        {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
 
     def test_masq_mode_is_skipped(self):
         calls = []
@@ -779,7 +806,10 @@ class RedReachabilityGate(unittest.TestCase):
         calls = []
         with self._repo_rooted() as comp, \
                 mock.patch.object(procs, "run",
-                                  side_effect=lambda *a, **k: calls.append(a)), \
+                                  side_effect=lambda *a, **k: (
+                                      calls.append(a),
+                                      SimpleNamespace(returncode=0, stdout=self.PASS_OUT,
+                                                      stderr=""))[1]), \
                 mock.patch.object(compworld, "_verify_flags", return_value=[]):
             red_stage.verify_red_reaches_teams(
                 self._args(), comp, {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})

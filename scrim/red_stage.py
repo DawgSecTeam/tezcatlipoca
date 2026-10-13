@@ -25,14 +25,31 @@ def verify_red_reaches_teams(args, comp, creds):
 
     Raises (stopping the run before T0) rather than warning: a range where red cannot
     reach half the teams is not an event worth starting. Masq-mode red shares the team
-    gateways and has no path of its own to prove, so it is skipped."""
+    gateways and has no path of its own to prove, so it is skipped.
+
+    Judged from red's own summary lines, not the verify exit code: the full run's rc
+    also carries unrelated estate gates (misconfig, plant_coverage), and full-scrim-
+    20261013c died at this gate with red_identity/red_teams both PASS because those
+    pre-existing FAILs rode the same rc=1."""
     if (args.red_mode or "routed") == "masq":
         log("--red-mode masq: red shares the team gateways, skipping the reachability gate")
         return
     log("pre-T0: red01 -> every team reachability gate")
-    procs.run(compworld.verify_cmd(comp, creds, "--red-ip", args.red_ip,
-                                   "--red-identity", "--red-teams", "all"),
-              cwd=core.REPO, timeout=900, check=True, tail=25)
+    r = procs.run(compworld.verify_cmd(comp, creds, "--red-ip", args.red_ip,
+                                       "--red-identity", "--red-teams", "all"),
+                  cwd=core.REPO, timeout=900, check=False, tail=25)
+    summary = {}
+    for line in (r.stdout or "").splitlines():
+        parts = line.split()
+        if parts and parts[0] in ("red_identity", "red_teams"):
+            summary[parts[0]] = line
+    failed = [k for k in ("red_identity", "red_teams")
+              if "PASS" not in summary.get(k, "")]
+    if failed:
+        raise RuntimeError(
+            f"red reachability gate failed: {', '.join(failed)} did not PASS "
+            f"(verify rc={r.returncode}); red01 cannot reach every team — not an "
+            f"event to start. stderr: {(r.stderr or '')[-400:]}")
 
 
 def red_pacing_caps():

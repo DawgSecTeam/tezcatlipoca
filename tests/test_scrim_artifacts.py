@@ -273,8 +273,11 @@ class AgentIdentity(TmpCase):
                          llm_base_url="https://openrouter.ai/api/v1", red_model="m",
                          reasoning_effort=None, red_tunnel="off")
         run_dir, test_dir = self.resolve(args)
+        gate_out = ("  red_identity      : PASS  10.200.0.11 visible end-to-end\n"
+                    "  red_teams         : PASS  red01 reached all 2 teams\n")
         with mock.patch.object(procs, "run",
-                               lambda *a, **k: subprocess.CompletedProcess(a[0], 0, "", "")), \
+                               lambda *a, **k: subprocess.CompletedProcess(
+                                   a[0], 0, gate_out, "")), \
                 mock.patch.object(red_link, "check_red_llm", lambda *a, **k: True), \
                 mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"), \
                 mock.patch.object(red_stage.red_plant_ops, "_seed_red",
@@ -282,7 +285,7 @@ class AgentIdentity(TmpCase):
                                       ["seed"], 0, "seeded", "")), \
                 mock.patch.object(red_link, "start_red_director", lambda *a, **k: None):
             # creds must be real-shaped: routed red runs the pre-T0 reachability gate,
-            # which reads ENGINE_IP/ADMIN_PW (mocked run answers rc=0 for it here)
+            # which reads ENGINE_IP/ADMIN_PW (mocked run answers with PASS lines)
             red_stage.stage_red(args, self.comp, {"ENGINE_IP": "10.0.0.193",
                                               "ADMIN_PW": "pw"}, run_dir)
         red = ao.load_manifest(test_dir)["agents"]["red"]
