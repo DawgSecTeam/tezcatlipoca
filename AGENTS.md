@@ -165,7 +165,13 @@ Cheap habits that the session logs show being re-learned expensively:
   when its task record vanished) — `setsid nohup` plus log polling instead.
 - **Push after changes** (user directive 2026-09-29): committing is not finishing — push to origin
   as part of the task. Fetch and check divergence first; parallel sessions push to main too, so
-  rebase rather than force-push. Never push anything carrying live secrets.
+  rebase rather than force-push (force-push is for sanctioned history rewrites only, like the
+  2026-10-13 squash — never casually). Never push anything carrying live secrets.
+- **One commit per branch** (user directive 2026-10-13): a finished branch lands on main as a
+  SINGLE squash commit with a brief one-line message — `git merge --squash <branch>` + commit,
+  never a merge commit carrying the branch's incremental train. main's history was rewritten to
+  this shape on 2026-10-13 (old history: local ref `backup-pre-squash-20261013`), so stale
+  worktrees must NOT `git pull` — finish and squash-merge, or re-cut the branch.
 - **Before a long operation, check for a twin.** Parallel agent sessions are normal here, and two
   sessions driving the same competition/branch reap each other's deploys and live state. Check
   `pgrep -af create-competition` and recent `git log` for fresh co-authored commits — also the
