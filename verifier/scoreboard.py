@@ -1,45 +1,10 @@
-"""Quotient scoreboard gates: logins and per-team service UP/DOWN (with freshness and pin registration)."""
+"""Quotient scoreboard gates: logins and per-team service UP/DOWN (with pin registration)."""
 
 import json
-from datetime import datetime, timezone
 
 import requests
 
 from verifier.model import Status, bool_gate, gate_fail, gate_skip
-
-
-# Round cadence: quotient/setup.py build_event_conf's MiscSettings.Delay. Used as
-# the freshness unit — a scored round older than _FRESHNESS_ROUNDS × Delay means
-# the scoreboard is frozen and an old UP is not a live UP (see D7 / the
-# pfsense-ad frozen-scoreboard incident).
-_ROUND_DELAY_SECONDS = 60
-
-
-_FRESHNESS_ROUNDS = 5
-
-
-def _rfc3339(value):
-# Parse an RFC3339 timestamp; None when absent/unparseable.
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        when = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return when.replace(tzinfo=timezone.utc) if when.tzinfo is None else when
-
-
-# Quotient's Last10Rounds key casing is not guaranteed; tolerate the variants the
-# codebase already sees elsewhere (check_round_loop reads the capital form).
-_ROUND_START_KEYS = ("StartTime", "start_time", "startTime")
-
-
-def _round_start(round_entry):
-# StartTime of one Last10Rounds entry, however it's cased.
-    if not isinstance(round_entry, dict):
-        return None
-    raw = next((round_entry[k] for k in _ROUND_START_KEYS if round_entry.get(k)), None)
-    return _rfc3339(raw)
 
 
 def check_logins(base_url, teams, admin_password):
@@ -93,9 +58,8 @@ def check_services(base_url, admin_session, teams, strict, expected_names=frozen
 #
 #     Under --strict-services nothing-scored is a FAIL, not a vacuous pass (live-found
 #     2026-10-02: a range where the engine had never scored a round still passed strict
-#     mode because every service was skipped as "not yet scored"), and the newest scored
-#     round must be within _FRESHNESS_ROUNDS × Delay — otherwise the scoreboard is frozen
-#     and an old UP is not a live UP.
+#     mode because every service was skipped as "not yet scored"). Round freshness is
+#     check_round_loop's job (verifier/engine.py), not this gate's.
     print("\n[2/5] SERVICES")
     name = "services(strict)" if strict else "services"
 
@@ -130,7 +94,6 @@ def check_services(base_url, admin_session, teams, strict, expected_names=frozen
     actual_names = set()
     any_service = False
     any_scored = False
-    newest_round = None
     for t in api_teams:
         tid, tname = t.get("ID"), t.get("Name", t.get("Identifier"))
         try:
@@ -150,10 +113,6 @@ def check_services(base_url, admin_session, teams, strict, expected_names=frozen
             any_service = True
             name_ = svc.get("ServiceName", "?")
             rounds = svc.get("Last10Rounds") or []
-            for rnd in rounds:
-                when = _round_start(rnd)
-                if when is not None and (newest_round is None or when > newest_round):
-                    newest_round = when
             first_round = rounds[0] if rounds else None
             checks = (first_round.get("Checks") if isinstance(first_round, dict) else None) or []
             if not checks:
@@ -180,20 +139,8 @@ def check_services(base_url, admin_session, teams, strict, expected_names=frozen
         print("  FAIL  --strict-services: no service has been scored yet (the engine may "
               "never have run a round) — an unscored scoreboard is not a passing one.")
         all_up = False
-    elif strict and newest_round is not None:
-        age_s = (datetime.now(timezone.utc) - newest_round).total_seconds()
-        if age_s > _FRESHNESS_ROUNDS * _ROUND_DELAY_SECONDS:
-            print(f"  FAIL  --strict-services: newest scored round started "
-                  f"{age_s / 60:.0f} min ago (> {_FRESHNESS_ROUNDS}×"
-                  f"{_ROUND_DELAY_SECONDS}s) — the scoreboard is stale/frozen, so this "
-                  "UP is not a live UP (engine rebooted? the loop does not self-resume).")
-            all_up = False
-    elif strict and newest_round is None:
-        print("  FAIL  --strict-services: no parseable round StartTime in Last10Rounds — "
-              "cannot establish the scoreboard is fresh.")
-        all_up = False
     if strict and not all_up:
-        print("  --strict-services: some services DOWN/unscored/stale -> counts against "
+        print("  --strict-services: some services DOWN/unscored -> counts against "
               "exit code")
     pins_ok = True
     if expected_names:
@@ -208,7 +155,7 @@ def check_services(base_url, admin_session, teams, strict, expected_names=frozen
             print(f"  EXPECTED-PINS  all {len(expected_names)} pinned checks registered")
         if extras:
             print(f"  WARN  scoreboard services not derived from box_services.json: {', '.join(extras)}")
-    detail = f"{'UP' if all_up else 'some DOWN/unscored/stale'} " \
+    detail = f"{'UP' if all_up else 'some DOWN/unscored'} " \
              f"({'query ok' if query_ok else 'query failed'})"
     out = [bool_gate(name, all_up, detail, gating=strict, label="services")]
     pins = _pins_status(pins_ok, f"{len(expected_names)} pinned checks")

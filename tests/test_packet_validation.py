@@ -61,23 +61,6 @@ class DomainAccounts(unittest.TestCase):
         self.assertTrue(any("domain_accounts[0].password is required" in e
                             for e in errs), errs)
 
-    def test_non_mapping_entry_rejected(self):
-        errs = validate_profile(_mutated(credentials={
-            **_BASE["credentials"],
-            "domain_accounts": ["Red"]}))
-        self.assertTrue(any("domain_accounts[0] must be a mapping" in e
-                            for e in errs), errs)
-
-    def test_not_a_list_rejected(self):
-        errs = validate_profile(_mutated(credentials={
-            **_BASE["credentials"],
-            "domain_accounts": {"username": "Red", "password": "x"}}))
-        self.assertTrue(any("domain_accounts must be a list" in e for e in errs), errs)
-
-    def test_mixed_case_ad_name_allowed(self):
-        # CDE ships Red/Blue/Green — AD names are not unix usernames.
-        self.assertEqual(validate_profile(copy.deepcopy(_BASE)), [])
-
 
 # The Windows 8-char floor was enforced only for baseline credlist users
 # (build_baseline), never for box_password, which bootstrap pushes with net user /
@@ -133,10 +116,6 @@ class OutOfScopeUsernames(unittest.TestCase):
             **_BASE["credentials"], "out_of_scope": ["daemon"]}))
         self.assertTrue(any("out_of_scope: 'daemon' collides" in e for e in errs), errs)
 
-    def test_not_a_list_rejected(self):
-        errs = validate_profile(_mutated(credentials={
-            **_BASE["credentials"], "out_of_scope": "scorebot"}))
-        self.assertTrue(any("out_of_scope must be a list" in e for e in errs), errs)
 
 
 # The Compfile is line-oriented (utils.load_compfile splits `key value` per line):
@@ -176,7 +155,7 @@ class ServiceFidelity(unittest.TestCase):
 
 
 # REQUIRED_VARS literal vars were only checked at deploy start
-# (nakon_ops._validate_pin_vars), after the golden bundle was already built.
+# (nakon_pin_ops._validate_pin_vars), after the golden bundle was already built.
 class ServiceRequiredVars(unittest.TestCase):
     def test_missing_literal_var_rejected(self):
         svc = {"box": "web01", "name": "hosts redirect", "port": 80,

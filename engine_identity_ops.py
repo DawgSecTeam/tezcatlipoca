@@ -4,18 +4,16 @@ from engine_cmd_ops import _run_engine_cmd
 from engine_bootstrap_ops import push_quotient_env
 
 
-def clean_engine_for_template(ctx, vmid=None):
+def clean_engine_for_template(ctx, vmid):
 # Strip every per-deploy / per-competition trace before qm template (M4 template
 #     point): containers + data volumes (no scoring DB, teams or injects baked), .env and
 #     event.conf secrets, machine-id, cloud-init state, SSH host keys. The apt-cacher-ng
 #     package cache is deliberately KEPT — a warm cache speeds up every later run.
 #
-#     `vmid` is the engine-template BUILD VM. Pass it whenever it is known: the command
-#     below runs over SSH to a management IP that a second competition's engine can share,
-#     and this is the most destructive command in the pipeline. See
-#     assert_engine_build_identity().
-    if vmid is not None:
-        assert_engine_build_identity(ctx, vmid)
+#     `vmid` is the engine-template BUILD VM. The command below runs over SSH to a
+#     management IP that a second competition's engine can share, and this is the most
+#     destructive command in the pipeline. See assert_engine_build_identity().
+    assert_engine_build_identity(ctx, vmid)
     _run_engine_cmd(ctx, (
         "cd /opt/quotient && sudo docker compose down -v --remove-orphans 2>/dev/null; "
         # ~1 GB of image build cache is dead weight once the images exist.

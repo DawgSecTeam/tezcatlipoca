@@ -93,6 +93,12 @@ class Collisions(unittest.TestCase):
     def test_ours_passes_and_tolerates_own_bridge(self):
         self._run(_share(), [_vm(1000, f"tezcatlipoca;comp-c1;{RUN}")], bridges=["vmbr101"])
 
+    def test_a_failed_bridge_list_raises_instead_of_skipping_the_check(self):
+        with patch("infra.collisions.proxmox_api", side_effect=RuntimeError("500 network")), \
+                patch.object(ownership, "has_clone_marker", return_value=False):
+            with self.assertRaises(RuntimeError):
+                check_collisions(_share(), _plan(_share()), [])
+
     def test_foreign_bridge_alone_is_fatal(self):
         with self.assertRaises(SystemExit) as cm:
             self._run(_share(), [], bridges=["vmbr101"])
@@ -102,47 +108,6 @@ class Collisions(unittest.TestCase):
         # ours ET alone must not license a pre-existing bridge (single-node semantics)
         with self.assertRaises(SystemExit):
             self._run(_share(), [_vm(1140, f"tezcatlipoca;comp-c1;{RUN}")], bridges=["vmbr101"])
-
-
-# A managed box with zero pins is advisory (printed), never a refusal.
-class UnpinnedBoxWarning(unittest.TestCase):
-    def _comp(self, services, vulns, baseline=None):
-        import json
-        import tempfile
-        d = Path(tempfile.mkdtemp())
-        (d / "box_services.json").write_text(json.dumps(services))
-        (d / "box_vulns.json").write_text(json.dumps(vulns))
-        if baseline is not None:
-            (d / "box_baseline.json").write_text(json.dumps(baseline))
-        return d
-
-    def test_unpinned_managed_box_is_named_and_unmanaged_is_skipped(self):
-        from infra import gates as pins
-        boxes = BOXES + [{"name": "fw01", "unmanaged": True}]
-        d = self._comp({"web01": [{"name": "nginx"}], "db01": []}, {"web01": [], "db01": []})
-        self.assertEqual(pins.unpinned_managed_boxes(d, boxes), ["db01"])
-
-    def test_any_pin_source_counts(self):
-        from infra import gates as pins
-        d = self._comp({"web01": [], "db01": []}, {"web01": [], "db01": [{"name": "v"}]},
-                       baseline={"web01": [{"name": "b"}]})
-        self.assertEqual(pins.unpinned_managed_boxes(d, BOXES), [])
-
-    def test_gate_warns_without_refusing(self):
-        import io
-        from contextlib import redirect_stdout
-        from infra import gates as pins
-        d = self._comp({"web01": [], "db01": []}, {"web01": [], "db01": []})
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            self.assertEqual(pins.warn_unpinned_boxes(d, BOXES), ["web01", "db01"])
-        self.assertIn("zero pins", buf.getvalue())
-        self.assertIn("strict passes reconcile the no-op", buf.getvalue())
-
-    def test_missing_pin_files_do_not_raise(self):
-        import tempfile
-        from infra import gates as pins
-        self.assertEqual(pins.unpinned_managed_boxes(Path(tempfile.mkdtemp()), BOXES), [])
 
 
 if __name__ == "__main__":

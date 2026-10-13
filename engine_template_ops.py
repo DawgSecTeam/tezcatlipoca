@@ -41,7 +41,8 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 #     gets a fresh identity and fresh host keys. The apt-cacher-ng cache on the template is
 #     EMPTY (nothing has used the cacher at build time); the cache that speeds prep_apt is
 #     built on the linked-clone engine during a deploy and dies with it.
-    from engine_ops import bootstrap_scoring_engine, clean_engine_for_template
+    from engine_bootstrap_ops import bootstrap_scoring_engine
+    from engine_identity_ops import clean_engine_for_template
     from ssh_ops import forget_engine_host_key, wait_for_ssh
 
     vmid = engine_template_vmid(engine_vmid)
@@ -58,7 +59,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     # wearing 'cloud-init;template' — the strict guard would refuse it forever. A
     # NOT-yet-converted VM on the reserved slot carrying the reserved NAME is our
     # dead attempt; adopt it loudly. Converted templates keep the strict check.
-    from golden_ops import _is_template  # local: golden_ops imports this module back
+    from golden_target_ops import _is_template  # local: golden_ops imports this module back
 
     if vmid in {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]} \
             and not _is_template(node, vmid):
@@ -70,10 +71,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
             destroy_vm_if_exists(node, vmid, expect_tags=None)
     destroy_vm_if_exists(node, vmid, expect_tags=expect_tags)
 
-    live_vmids = {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
-    if vmid in live_vmids:
-        raise RuntimeError(f"engine template vmid {vmid} is occupied and not ours to remove")
-    upid = proxmox_api("POST", f"/nodes/{node}/qemu/{base_engine_vm_id}/clone", data={
+    upid =proxmox_api("POST", f"/nodes/{node}/qemu/{base_engine_vm_id}/clone", data={
         "newid": vmid,
         "name": vm_name,
         "full": 1,
@@ -147,12 +145,12 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     # 2026-09-25: apt rc=100, dpkg lock held by the image's own apt). Wait for the
     # real settle condition first. On realm the guest agent returns NULL data, so
     # this exercises the SSH settle fallback.
-    from hardening_ops import wait_boxes_settled, _box_settled_via_ssh
+    from box_settle_ops import wait_boxes_settled, _box_settled_via_ssh
     # Stamp the build VM before anything else touches it: every later SSH goes to a
     # management IP that another competition's engine can share, and the template clean
     # is the most destructive command in the pipeline (known-issues: the wrong-engine
     # wipe). A wrong machine now fails the identity check instead of losing its state.
-    from engine_ops import stamp_engine_build
+    from engine_identity_ops import stamp_engine_build
     stamp_engine_build(build_ctx, vmid)
 
     print("    Waiting for the build VM to settle (unattended-upgrades done, dpkg lock free)...")

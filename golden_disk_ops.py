@@ -15,7 +15,7 @@ _SIZE_TO_GB = {"": 1 / 1024 ** 3, "K": 1 / 1024 ** 2, "M": 1 / 1024, "G": 1, "T"
 # Parsed from the config because the clone inherits the template's size verbatim —
 # there is no other record of it (svc-matrix: the 15 GB ubuntu template disk filled
 # mid-plant on splunk's .deb unpack while team clones got their terraform disk_gb).
-def _root_disk_gb(cfg, vmid):
+def _root_disk_gb(cfg):
     for key in sorted(k for k in cfg
                       if k.startswith(("scsi", "virtio", "sata", "ide"))):
         val = cfg[key]
@@ -37,7 +37,7 @@ def ensure_golden_disk_size(node, vmid, disk_gb):
     if not disk_gb:
         return
     cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
-    key, cur_gb = _root_disk_gb(cfg, vmid)
+    key, cur_gb = _root_disk_gb(cfg)
     if key is None:
         print(f"    WARNING: golden {vmid} has no root disk — disk_gb={disk_gb} not applied")
         return
@@ -109,41 +109,12 @@ def expand_guest_root_disks(targets, ctx):
             time.sleep(backoff)
         out = (r.stdout or "").strip()
         if r.returncode != 0:
-            # Expansion is an ENOSPC guard, not a correctness gate. Fail ONLY when the
-            # root fs is measurably too small for the plants (the regression-4x1 shape:
-            # a 10G LV inside a 30G disk). When the size can't be measured — the same
-            # boot-window instability that broke the grow usually breaks the probe too
-            # (live-found 2026-09-29 x3) — warn and continue; a genuinely undersized
-            # root dies loudly at first big plant, named by the plant coverage gate.
-            # The probe gets the SAME boot-window budget as the grow: a short retry
-            # inherited the flakiness and recorded a permanent "size unmeasurable"
-            # degradation on healthy boxes (2026-10-03, 2026-10-04).
-            size_gb = 0.0
-            for attempt, backoff in enumerate((15, 30, 45, 60, 60, 60, 60), 1):
-                try:
-                    probe = ssh_via_gateway(ctx, t["ip"], "df -BK / | awk 'NR==2{print $2}'",
-                                            timeout=60, user=ctx.get("box_username", "ubuntu"))
-                    size_gb = int((probe.stdout or "0").strip().splitlines()[-1]) / 1024 ** 2
-                    if size_gb:
-                        break
-                except (ValueError, IndexError, Exception):
-                    size_gb = 0.0
-                if attempt < 7:
-                    time.sleep(backoff)
-            need_gb = max(int(t.get("disk_gb") or 10) - 4, 1)
-            if size_gb and size_gb < need_gb:
-                raise RuntimeError(f"root-disk too small on golden {t['ip']} "
-                                   f"({size_gb:.0f}G < {need_gb}G) and expansion failed "
-                                   f"(rc={r.returncode}): {(r.stderr or out).strip()[:200]}")
-            if not size_gb:
-                record_degradation("golden root-disk expansion failed",
-                                   f"{t['ip']}: size unmeasurable")
-                print(f"    {t['ip']}: WARNING expansion failed (size unmeasurable) — "
-                      f"continuing; first big plant will surface a truly undersized root")
-            else:
-                print(f"    {t['ip']}: expansion failed but root measures "
-                      f"{size_gb:.0f}G >= {need_gb}G — continuing without a degradation "
-                      f"(probe succeeded after retry; disk is big enough for the plants)")
+            # Expansion is an ENOSPC guard, not a correctness gate: warn and continue. A
+            # genuinely undersized root dies loudly at first big plant, named by the plant
+            # coverage gate.
+            record_degradation("golden root-disk expansion failed", f"{t['ip']}: rc={r.returncode}")
+            print(f"    {t['ip']}: WARNING expansion failed (rc={r.returncode}) — continuing; "
+                  f"first big plant will surface a truly undersized root")
         df_lines = [l for l in out.splitlines() if l.startswith("/dev/")]
         print(f"    {t['ip']}: root-disk expansion done"
               + (f" ({df_lines[-1].split()[2] if len(df_lines[-1].split()) > 2 else 'used=?'} used)" if df_lines else ""))

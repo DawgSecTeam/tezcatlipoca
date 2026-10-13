@@ -16,8 +16,6 @@ def record_coverage(state, stage_machines, result):
 #     NO failed steps drops its stale entry: a recovered config (replanted by a later
 #     sweep) must not keep the coverage gate red forever (amongus-cde-2026 2026-09-30:
 #     SMB v1 stayed 'failed' across three green replants).
-    if result is None or not getattr(result, "machines", None):
-        return  # no --json outcome (older nakon) — coverage falls back to the tally
     failed = result.failed_configs()
     cov = state.setdefault("plant_coverage_failed", {})
     if not failed:

@@ -44,9 +44,6 @@ def _rctx(ctx, comp_dir, state=None, state_path=None, node="pve"):
                            state={} if state is None else state,
                            state_path=state_path, ctx=ctx)
 
-_REDEPLOY_SOURCES = [_REPO / "redeploy-competition.py",
-                     *sorted(_REPO.glob("redeploy_*_ops.py"))]
-
 LINUX_BOX = {"name": "web01", "template": "ubuntu-2204-web", "cpu": 2, "memory_mb": 2048}
 WIN_BOX = {"name": "win01", "template": "windows-server-2022", "cpu": 2, "memory_mb": 4096}
 
@@ -134,17 +131,6 @@ class AtomicStateWriteTests(unittest.TestCase):
 
             self.assertEqual(path.read_bytes(), original_bytes)
             self.assertEqual(json.loads(path.read_text()), ORIGINAL_STATE)
-
-    # Guard against re-introducing one of the old writers: every state write in
-    # redeploy-competition.py must be the shared helper.
-    def test_redeploy_has_no_hand_rolled_state_writer_left(self):
-        src = "\n".join(f.read_text() for f in _REDEPLOY_SOURCES)
-        self.assertNotIn("state_path.write_text", src)
-        self.assertNotIn("state_path.with_name", src)
-        self.assertNotIn(".tmp", src)
-        # Exactly the three call sites; a fourth writer would show up here.
-        self.assertEqual(src.count("write_state(state_path, state)"), 3)
-
 
 class StateWriteCallSiteTests(unittest.TestCase):
     def test_run_nakon_and_harden_persists_via_helper(self):

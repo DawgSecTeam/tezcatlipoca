@@ -38,17 +38,14 @@ collisions). A state file with no run id is refused by teardown outright, and un
 never destroyed unless they carry this competition's clone marker. Details:
 [docs/usage-agents.md](docs/usage-agents.md#run-ownership-teardown-only-touches-this-deploys-vms-2026-10-02).
 
-**Concurrent ranges are supported, from isolated worktrees.** The preflight warns when another
-deploy is live against the same estate — detected by a *held* flock in `~/.tezcatlipoca/locks/`,
-which is the one signal that cannot lie (a stale `.lock` from a dead run is ignored, not treated as
-a competitor) — and proceeds. Safe coexistence is on you: give each range its own `--scoring-vmid`
-and `TF_VAR_team_identifiers` blocks, and let the run-id ownership tags scope each teardown to its
-own deploy's VMs. The preflight still refuses REAL collisions wherever they can be proven (vmid
-clashes, engine mgmt-IP conflicts); what the warning exists for is the uncoordinated case — two
-sessions at once sharing vmid blocks is what produced the 13xx vmid races, a foreign template
-squatting a golden slot, and the over-broad sweep that took out two other comps' engines and
-goldens (the old `TEZ_ALLOW_CONCURRENT` opt-in flag is gone: warning-and-proceeding IS the
-default, 2026-10-04).
+**Concurrent ranges are supported, from isolated worktrees.** Nothing warns when another deploy is
+live against the same estate. The preflight refuses REAL collisions wherever they can be proven
+(vmid clashes, engine mgmt-IP conflicts), and a second deploy against the same scoring engine is
+refused by the engine flock (`acquire_engine_lock`, `~/.tezcatlipoca/locks/`). Safe coexistence is
+otherwise on you: give each range its own `--scoring-vmid` and `TF_VAR_team_identifiers` blocks, and
+let the run-id ownership tags scope each teardown to its own deploy's VMs. Sessions sharing vmid
+blocks produced the 13xx vmid races, a foreign template squatting a golden slot, and the over-broad
+sweep that took out two other comps' engines and goldens.
 
 **bad-auto state is per-competition — nothing is shared but the code.** red01's config, deploy
 stamp and identity live in `competitions/<id>/` (`.badauto-config.yaml` + the stamp bad-auto

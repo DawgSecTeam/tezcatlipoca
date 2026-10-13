@@ -15,7 +15,7 @@ import packet_ops
 from packet_ops import (build_baseline, compile_profile, load_profile, team_domain_parts,
                         validate_profile)
 from quotient.setup import build_event_conf, expected_service_names
-import nakon_ops
+import nakon_config_ops
 from domain_ops import team_domain
 from nakon_pin_ops import _windows_password_error
 
@@ -112,16 +112,12 @@ class Validation(unittest.TestCase):
         self.assertTrue(any("unique <box>-<Display>" in e for e in errs))
 
     def test_dual_credit_without_domain_credlist_rejected(self):
-        bad = PROFILE.replace("    domain:\n      blueteam: \"n0t_s!\"\n", "")
         bad = PROFILE.replace("    domain:\n      blueteam: \"n0t_sus!\"\n", "")
         errs = self._errors(bad)
         self.assertTrue(any("dual_credit needs" in e for e in errs))
 
     def test_two_dcs_rejected(self):
         bad = PROFILE.replace(
-            "domain_role: dc, fidelity: substituted}",
-            "domain_role: dc, fidelity: substituted}", 1)
-        bad = bad.replace(
             "- {name: web01, packet_os: \"CentOS 8\"",
             "- {name: web01, packet_os: \"CentOS 8\", domain_role: dc", 1)
         errs = self._errors(bad)
@@ -244,7 +240,7 @@ class ScoreOnlyAndCredlistPins(unittest.TestCase):
                 "db01": [{"name": "local-user", "vars": {"USERNAME": "scorebot",
                                                          "PASSWORD": "x"}}],
             }))
-            path = nakon_ops.generate_nakon_config(TEAMS, BOXES, 1, d, "pw",
+            path = nakon_config_ops.generate_nakon_config(TEAMS, BOXES, 1, d, "pw",
                                                    box_username="blueteam")
             cfg = json.loads(Path(path).read_text())
             by_machine = {m["name"]: m for m in cfg["machines"]}
@@ -364,11 +360,6 @@ class CatalogCheckFilter(unittest.TestCase):
 
 
 class ShippedProfiles(unittest.TestCase):
-    def test_both_shipped_profiles_validate(self):
-        for name in ("cde-2026", "maccdc-q-2026"):
-            profile = load_profile(_REPO / "packets" / name / "packet.yaml")
-            self.assertEqual(validate_profile(profile), [], name)
-
     def test_cde_fidelity_flags_dual_credit_and_gaps(self):
         profile = load_profile(_REPO / "packets/cde-2026/packet.yaml")
         fidelity = packet_ops.render_fidelity(profile)

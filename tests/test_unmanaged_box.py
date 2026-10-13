@@ -10,8 +10,8 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import utils
-import nakon_ops
-from golden_ops import golden_targets, golden_vmid_for
+import nakon_config_ops
+from golden_target_ops import golden_targets, golden_vmid_for
 
 BOXES = [
     {"name": "fw01", "last_octet": 1, "template": "pfsense-fix", "unmanaged": True},
@@ -53,7 +53,7 @@ class UnmanagedBox(unittest.TestCase):
             # pinned mode → no vulndb/nakon call; give managed boxes empty pins
             (d / "box_services.json").write_text(json.dumps({"dc01": [], "web01": [], "app01": []}))
             (d / "box_vulns.json").write_text(json.dumps({"dc01": [], "web01": [], "app01": []}))
-            path = nakon_ops.generate_nakon_config(TEAMS, BOXES, 1, d, "pw", box_username="medic")
+            path = nakon_config_ops.generate_nakon_config(TEAMS, BOXES, 1, d, "pw", box_username="medic")
             cfg = json.loads(Path(path).read_text())
             names = [m["name"] for m in cfg["machines"]]
             self.assertNotIn("fw01-team120", names)

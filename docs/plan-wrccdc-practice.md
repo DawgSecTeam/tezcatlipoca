@@ -53,7 +53,7 @@ VMs (tagged `dev`) running, tlaloc brain-tested against the target set.
   (ashla), K3s/POS (tython), AD/DNS/IIS (deathstar), kiosk/uvicorn (kamino),
   MailEnable/WingFTP (tat10ine), pfSense DNS/DHCP.
 - Deploy engine VM with one NIC on untrustedbr, static 192.168.220.x: bootstrap
-  Docker + Quotient (reuse `engine_ops.bootstrap_scoring_engine()`), push the
+  Docker + Quotient (reuse `engine_bootstrap_ops.bootstrap_scoring_engine()`), push the
   hand-authored event.conf. Do NOT run create-competition.py (it would clone
   fresh team boxes and nakon-plant them, burning the scenario).
 - Verify: scoring rounds all-green on the untouched range; scoreboard reachable

@@ -3,13 +3,12 @@
 import json
 
 from verifier.freeze import freeze_hashes
-from verifier.loaders import read_deploy_state
 from verifier.verdict import summary_lines
 
 
 def print_summary(results, allow_unverified, comp_dir):
-# The SUMMARY block: per-gate lines (from the GateResults), the plant-integrity tally,
-#     the recorded template hashes, and the freeze marker.
+# The SUMMARY block: per-gate lines (from the GateResults), the recorded template hashes,
+#     and the freeze marker.
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
@@ -20,17 +19,6 @@ def print_summary(results, allow_unverified, comp_dir):
     if unknown_allowed:
         print(f"  WARN  --allow-unverified names no gate in this run: "
               f"{', '.join(unknown_allowed)}")
-    state = read_deploy_state(comp_dir)
-    tally = state.get("nakon_failed_steps") if state is not None else None
-    if tally is None:
-        print("  plant integrity  : no nakon FAILED tally in .deploy_state.json "
-              "(pre-tally deploy)")
-    elif tally:
-        print(f"  plant integrity  : WARNING — last nakon plant recorded {len(tally)} "
-              f"FAILED step(s): {', '.join(str(s)[:60] for s in tally[:3])}"
-              f"{' …' if len(tally) > 3 else ''}")
-    else:
-        print("  plant integrity  : last nakon plant recorded 0 FAILED steps")
     hashes = freeze_hashes(comp_dir)
     if hashes and (hashes.get("engine") or {}).get("hash"):
         golden_short = {k: v["hash"][:12] for k, v in (hashes.get("golden") or {}).items()}

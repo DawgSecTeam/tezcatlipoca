@@ -586,12 +586,6 @@ def _ssh(ssh_key, target_ip, script, timeout=120, env_prefix=""):
         capture_output=True, text=True, timeout=timeout)
 
 
-def _scp(ssh_key, *args, timeout=180):
-    return subprocess.run(
-        ["scp", *_ssh_base(ssh_key), *args],
-        capture_output=True, text=True, timeout=timeout)
-
-
 # The workstation reaches the estate over tailscale at ~30 KB/s bulk, so the
 # implant relay streams gzip on the wire and each leg gets a generous bound
 # (the old 180 s per-leg scp timeout could not move ~18 MB even uncompressed).

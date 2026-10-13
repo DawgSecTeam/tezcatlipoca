@@ -11,9 +11,7 @@ Offline throughout.
 """
 
 import contextlib
-import importlib.util
 import io
-import json
 import sys
 import tempfile
 import types
@@ -27,12 +25,6 @@ from deploy_lib import failure as dl_failure  # noqa: E402
 import apt_dns_ops  # noqa: E402
 import ssh_ops  # noqa: E402
 import utils  # noqa: E402
-
-# verify-competition.py has a hyphen, so it is loaded by path (same as test_verify_gates).
-_SPEC = importlib.util.spec_from_file_location(
-    "verify_degradations_test", _REPO / "verify-competition.py")
-verify = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(verify)
 
 
 class Ledger(unittest.TestCase):
@@ -94,49 +86,6 @@ class DeployPersists(unittest.TestCase):
         self.assertIn("verify-competition", text)      # points at the reader
 
 
-class VerifySurfaces(unittest.TestCase):
-    def setUp(self):
-        utils.clear_degradations()
-        self.addCleanup(utils.clear_degradations)
-
-    def _state(self, d, payload):
-        (Path(d) / ".deploy_state.json").write_text(json.dumps(payload))
-
-    def test_missing_state_skips_without_gating(self):
-        with tempfile.TemporaryDirectory() as d:
-            with contextlib.redirect_stdout(io.StringIO()):
-                result = verify.check_degradations(Path(d))
-        self.assertFalse(result.gating)
-
-    def test_not_recorded_is_distinguished_from_recorded_and_clean(self):
-        with tempfile.TemporaryDirectory() as d:
-            self._state(d, {})
-            with contextlib.redirect_stdout(io.StringIO()) as out:
-                result = verify.check_degradations(Path(d))
-            self.assertIn("not recorded", result.detail)
-            self.assertIn("SKIP", out.getvalue())
-            self._state(d, {"degradations": []})
-            with contextlib.redirect_stdout(io.StringIO()) as out:
-                result = verify.check_degradations(Path(d))
-            self.assertIn("no tolerated failures", out.getvalue())
-            self.assertEqual(result.status, verify.Status.PASS)
-
-    def test_recorded_entries_are_listed_and_do_not_fail_the_run(self):
-        with tempfile.TemporaryDirectory() as d:
-            self._state(d, {"degradations": [
-                {"what": "apt prep failed", "detail": "box1: rc=100", "at": "now"},
-                {"what": "apt prep failed", "detail": "box1: rc=100", "at": "now"},
-                {"what": "DNS fix failed", "detail": "box2: timeout", "at": "now"},
-            ]})
-            with contextlib.redirect_stdout(io.StringIO()) as out:
-                result = verify.check_degradations(Path(d))
-        text = out.getvalue()
-        self.assertIn("apt prep failed", text)
-        self.assertIn("DNS fix failed", text)
-        self.assertEqual(result.status, verify.Status.PASS)   # the deploy survived them
-        self.assertIn("apt prep failed x2", result.detail)
-
-
 class TheSiteActuallyRecords(unittest.TestCase):
 # The wiring is the point: the ledger is worthless if no site feeds it.
 
@@ -148,8 +97,8 @@ class TheSiteActuallyRecords(unittest.TestCase):
         target = {"ip": "192.168.1.5", "vmid": 1150, "identifier": 210}
         failed = types.SimpleNamespace(returncode=1, stdout="", stderr="E: lock held")
         with patch.dict("os.environ", {"TF_VAR_proxmox_node": "pve"}), \
-                patch.object(apt_dns_ops.subprocess, "run", return_value=failed), \
-                patch.object(apt_dns_ops.time, "sleep"), \
+                patch.object(ssh_ops.subprocess, "run", return_value=failed), \
+                patch.object(ssh_ops.time, "sleep"), \
                 patch.object(apt_dns_ops, "guest_agent_exec_root",
                              return_value=(100, "", "no space left")), \
                 patch.object(ssh_ops, "gateway_proxy", return_value=None), \

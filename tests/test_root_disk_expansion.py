@@ -82,39 +82,16 @@ class ExpansionScript(unittest.TestCase):
         out = "growpart unavailable - skipping"
         _run(stdout=out)  # rc=0 → no raise even though nothing grew
 
-    @staticmethod
-    def _grow_fails_probe_returns(stdout):
-        calls = {"n": 0}
-
-        def fake(ctx, ip, cmd, timeout=0, user="ubuntu"):
-            if "df -BK" in cmd:
-                return type("R", (), {"returncode": 0, "stdout": stdout, "stderr": ""})
-            calls["n"] += 1
-            return type("R", (), {"returncode": 1, "stdout": "", "stderr": "boom"})
-
-        return fake, calls
-
-    def test_failure_raises_naming_the_box(self):
-        fake, _ = self._grow_fails_probe_returns("6291455")  # just under the 6G floor
-        with patch.object(golden_disk_ops, "ssh_via_gateway", side_effect=fake), \
-             patch.object(golden_disk_ops.time, "sleep"):
-            with self.assertRaises(RuntimeError) as cm:
-                golden_disk_ops.expand_guest_root_disks(TARGETS[:1], CTX)
-            self.assertIn("192.168.125.242", str(cm.exception))
-
-    def test_failure_with_unmeasurable_size_warns_and_continues(self):
-    # Live-found 2026-09-29 x3: the boot-window instability that broke the grow
-    #         also broke the size probe — an unmeasurable root must warn, not kill phase 4.
-        fake, _ = self._grow_fails_probe_returns("")  # probe answers nothing
-        with patch.object(golden_disk_ops, "ssh_via_gateway", side_effect=fake), \
-             patch.object(golden_disk_ops.time, "sleep"):
+    def test_failure_warns_and_continues_with_a_degradation(self):
+        # Live-found 2026-09-29 x3: the boot-window instability that breaks the grow must
+        # warn, not kill phase 4 — the plant coverage gate catches a truly undersized root.
+        failed = type("R", (), {"returncode": 1, "stdout": "", "stderr": "boom"})()
+        with patch.object(golden_disk_ops, "ssh_via_gateway", return_value=failed), \
+             patch.object(golden_disk_ops.time, "sleep"), \
+             patch.object(golden_disk_ops, "record_degradation") as degr:
             golden_disk_ops.expand_guest_root_disks(TARGETS[:1], CTX)  # must not raise
-
-    def test_failure_with_adequate_root_continues(self):
-        fake, _ = self._grow_fails_probe_returns("13631488")  # 13G >= floor
-        with patch.object(golden_disk_ops, "ssh_via_gateway", side_effect=fake), \
-             patch.object(golden_disk_ops.time, "sleep"):
-            golden_disk_ops.expand_guest_root_disks(TARGETS[:1], CTX)  # must not raise
+        degr.assert_called_once()
+        self.assertIn("192.168.125.242", degr.call_args.args[1])
 
 
 if __name__ == "__main__":

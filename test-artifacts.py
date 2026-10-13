@@ -56,8 +56,6 @@ def build_parser():
     p.add_argument("comp", nargs="?", help="competition id under competitions/ (or a path "
                                           "containing a Compfile); omit to scan every competition")
     p.add_argument("--json", action="store_true", help="machine-readable rows")
-    p.add_argument("--refresh", action="store_true",
-                   help="rebuild index.json from the test folders even when it looks current")
     p.set_defaults(func=cmd_list)
 
     p = sub.add_parser("show", help="identity, target/file statuses, warnings and drift")

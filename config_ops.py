@@ -1,30 +1,14 @@
-"""Competition configuration: packet passwords, team identity/secrets, .env + state writers.
-
-Back-compat facade. The other responsibilities that used to live here are split out and every
-name stays importable from `config_ops`:
-
-  config_prompts.py     interactive prompts (collect_boxes, collect_users_config, confirm_deploy)
-  injects_config.py     load_injects / resolve_inject_times / injects_fingerprint
-  infra.gates           ALL pre-Proxmox gates — import from infra.gates, not here
-
-Patching a gate/prompt name here no longer changes the moved implementation; patch the owning
-module (docs/internals.md)."""
+"""Competition configuration: packet passwords, team identity/secrets, .env + state writers."""
 
 import contextlib
 import json
 import os
-import re
 import secrets
 import string
 from pathlib import Path
 
-from config_prompts import (_prompt_difficulty, collect_boxes, collect_users_config,  # noqa: F401
-                            confirm_deploy, list_proxmox_templates)
 from constants import (ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_VMID_OFFSET,
                        MAX_BOXES_PER_TEAM, SCORING_ENGINE_VMID)
-from injects_config import injects_fingerprint, load_injects, resolve_inject_times  # noqa: F401
-
-ENV_PATH = Path(".env")
 
 
 def load_packet_passwords(comp_dir):
@@ -132,15 +116,6 @@ def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
     return teams
 
 
-def update_env(updates: dict):
-    text = ENV_PATH.read_text()
-    for key, value in updates.items():
-        line = f"{key}={value}"
-        new_text, count = re.subn(rf"^{re.escape(key)}=.*$", lambda _m: line, text, flags=re.MULTILINE)
-        text = new_text if count else text + f"\n{line}\n"
-        os.environ[key] = value
-    write_text_atomic(ENV_PATH, text, mode=0o600)
-
 
 def write_text_atomic(path, text, mode=0o600):
 # Write `text` to `path` so a torn write can never be observed, then chmod.
@@ -178,21 +153,11 @@ def load_boxes(comp_dir):
     return json.loads(path.read_text()) if path.exists() else None
 
 __all__ = [
-    "ENV_PATH",
-    "_prompt_difficulty",
-    "collect_boxes",
     "collect_teams",
-    "collect_users_config",
-    "confirm_deploy",
-    "injects_fingerprint",
-    "list_proxmox_templates",
     "load_boxes",
-    "load_injects",
     "load_packet_passwords",
     "load_previous_competitions",
     "random_password",
-    "resolve_inject_times",
-    "update_env",
     "write_state",
     "write_text_atomic",
 ]

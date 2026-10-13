@@ -23,7 +23,7 @@ def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
     # soft-fail until the grant does"). Same order as deploy.py phase 4. Re-inverting
     # these two is a silent ~2-minute-per-box regression: without the grant, DNS_FIX_CMD's
     # sudo is rejected, so fix_dns_on_boxes burns its full 8x15s retry ladder before
-    # falling back to the root guest agent (hardening_ops.py), which is the only reason
+    # falling back to the root guest agent (apt_dns_ops.py), which is the only reason
     # the wrong order "works" at all.
     pipeline_api.setup_ubuntu_auth(linux_targets, ctx)
     pipeline_api.fix_dns_on_boxes(linux_targets, ctx)

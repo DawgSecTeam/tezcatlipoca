@@ -162,21 +162,6 @@ def configure_jump(ip, user, key_path, team_identifiers, engine_mgmt_ip,
             raise RuntimeError(
                 f"jump configuration step failed on {ip}: {cmd.split(';')[0][:60]}... "
                 f"rc={r.returncode}: {(r.stderr or r.stdout).strip()[:200]}")
-    verify_jump(ip, user, key_path)
-
-
-def verify_jump(ip, user, key_path):
-    # /usr/sbin PATH fix: sysctl and iptables live there on Debian and the
-    # non-login SSH shell doesn't include it.
-    r = _jump_ssh(ip, user, key_path,
-                  "export PATH=$PATH:/usr/sbin:/sbin; "
-                  "sysctl -n net.ipv4.ip_forward; iptables -S FORWARD | wc -l",
-                  timeout=30)
-    out = (r.stdout or "").split()
-    if r.returncode != 0 or not out or out[0].strip() != "1":
-        raise RuntimeError(f"jump {ip} not forwarding after configuration "
-                           f"(rc={r.returncode}, out={(r.stdout or '').strip()[:80]})")
-
 
 
 def _log(*args, **kwargs):
@@ -202,7 +187,7 @@ def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
 #     here is a *full* clone onto a datastore, and a satellite host may be running
 #     several. 4 keeps clone-write saturation and the Proxmox task load in the range the
 #     M0.2/M2.1 benchmarks validated, while still collapsing the wait.
-    from nodes_ops import record_of
+    from placement_record import record_of
     sats = list(placement["satellites"])
 
     def _one(sat):
@@ -319,7 +304,7 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
 
 def destroy_jump_vms(placement, comp_tags):
 # Phase-1/teardown half: destroy every satellite's jump VM (ownership-checked).
-    from nodes_ops import record_of
+    from placement_record import record_of
     for sat in placement.get("satellites", []):
         rec = record_of(placement, sat["name"])
         try:
@@ -337,6 +322,5 @@ __all__ = [
     "jump_rules",
     "jump_sysctl_script",
     "red_segment_from_env",
-    "verify_jump",
     "wait_jump_ready",
 ]

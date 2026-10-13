@@ -4,11 +4,10 @@ import json
 import time
 
 from constants import PER_MACHINE_NAKON_BUDGET
-from engine_ops import ensure_nat_forwarding
-from hardening_ops import ensure_alpine_services, fix_services_on_boxes
-from nakon_ops import build_nakon_bundle, run_nakon
+from service_fixup_ops import fix_services_on_boxes
+from nakon_bundle_ops import build_nakon_bundle
+from nakon_run_ops import run_nakon
 from timing import timed
-from utils import compfile_flag
 
 from deploy_lib.coverage import record_clean_coverage, record_stage_coverage
 
@@ -27,7 +26,6 @@ def phase6_repair_sweep(ctx):
         print("[6/8] Resume marker present — post-clone sweep already done; skipping")
     else:
         print("[6/8] Repair-stage sweep (sshd/sudoers) on every team box...")
-        ensure_nat_forwarding(ctx.tf_ctx)
         repair_machines = json.loads(ctx.repair_config_path.read_text())["machines"]
         if repair_machines:
             repair_bundle = build_nakon_bundle(ctx.repair_config_path)
@@ -59,8 +57,4 @@ def phase6_repair_sweep(ctx):
         # pass (whose disruptive configs would break its apt/SSH needs).
         with timed(ctx.comp_dir, 6, "fix_services"):
             fix_services_on_boxes(ctx.comp_dir, ctx.linux_targets, ctx.tf_ctx, box_creds=ctx.box_creds)
-            if compfile_flag(ctx.comp_dir / "Compfile", "alpine_services"):
-                # Clones usually inherit the shim-installed services from the
-                # golden disk; this pass is the idempotent safety net.
-                ensure_alpine_services(ctx.comp_dir, ctx.linux_targets, ctx.tf_ctx)
         swept_marker.write_text(time.strftime("%Y-%m-%d %H:%M:%S"))

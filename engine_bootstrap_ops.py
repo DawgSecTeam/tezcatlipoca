@@ -80,7 +80,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
     # apt-cacher-ng defaults to port 3142 on all interfaces; the boxes' gateway IP is the
     # engine's team-NIC address, so no listener change is needed. Enable it here so it is
     # serving before the first box-side apt prep (phase 5). Not fatal if the probe fails:
-    # the per-box proxy write in hardening_ops is gated by the same Compfile flag and apt
+    # the per-box proxy write in apt_dns_ops is gated by the same Compfile flag and apt
     # works unproxied, just slower.
     print("  Enabling apt-cacher-ng (package mirror cache for team boxes)...")
     _run_engine_cmd(ctx, (

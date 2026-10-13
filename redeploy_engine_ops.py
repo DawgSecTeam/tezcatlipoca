@@ -6,9 +6,11 @@ import sys
 import pipeline_api
 
 from config_ops import write_state
-from engine_ops import ensure_nat_forwarding, prepare_engine_from_template, push_event_conf
-from nakon_ops import acquire_engine_lock
-from template_ops import stored_template_hash
+from engine_event_ops import push_event_conf
+from engine_health_ops import ensure_nat_forwarding
+from engine_identity_ops import prepare_engine_from_template
+from nakon_lock_ops import acquire_engine_lock
+from template_freeze import stored_template_hash
 from timing import timed
 from ssh_ops import forget_engine_host_key, wait_for_ssh
 from utils import run_terraform

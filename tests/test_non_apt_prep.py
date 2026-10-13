@@ -10,7 +10,9 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from hardening_ops import ALPINE_SERVICES, _APT_PREP_BODY, _SETTLE_CHECK
+from alpine_ops import ALPINE_SERVICES
+from apt_dns_ops import _APT_PREP_BODY
+from box_settle_ops import _SETTLE_CHECK
 
 
 class AlpineShim(unittest.TestCase):
@@ -21,23 +23,6 @@ class AlpineShim(unittest.TestCase):
 
 
 class NonAptPrep(unittest.TestCase):
-    def test_prep_body_guards_before_any_apt_call(self):
-        body = _APT_PREP_BODY.lstrip()
-        self.assertTrue(body.startswith("set +e\n"))
-        guard = "command -v apt-get >/dev/null 2>&1 || exit 0"
-        first_apt = body.find("apt-get")
-        self.assertGreater(first_apt, -1)
-        self.assertLess(body.find(guard), first_apt,
-                        "apt-guard must precede the first apt-get invocation")
-
-    def test_settle_check_guards_before_dpkg_probe(self):
-        check = _SETTLE_CHECK.lstrip()
-        guard = "command -v apt-get"
-        first_probe = check.find("apt-get -o")
-        self.assertGreater(first_probe, -1)
-        self.assertLess(check.find(guard), first_probe,
-                        "settle guard must precede the apt-get check probe")
-
     @classmethod
     def setUpClass(cls):
         cls.empty_bin = tempfile.mkdtemp(prefix="tz-non-apt-path-")

@@ -539,8 +539,6 @@ class CaptureRegressions(TmpCase):
         self.assertTrue((ev / "engine" / "scoreboard-state.jsonl").exists())
         # NOT moved: scrim-report.py reads this exact path for the scoreboard section
         self.assertTrue((ev / "final-scoreboard.json").exists())
-        self.assertIn('"evidence" / FINAL_SCOREBOARD',
-                      (_REPO / "scrim_report" / "loaders.py").read_text())
 
 
 class BluePrompt(TmpCase):

@@ -13,7 +13,7 @@ from verifier.loaders import load_boxes, load_teams
 from verifier.model import CheckError
 from verifier.runner import PacketProfileError, run_gates
 from verifier.summary import print_summary
-from verifier.verdict import RunBudget, gate_verdict
+from verifier.verdict import gate_verdict
 
 
 def build_parser():
@@ -43,13 +43,7 @@ def build_parser():
                              "accounts must exist on the boxes")
     parser.add_argument("--freeze", action="store_true",
                         help="M4: after a PASSING verify (all gates + plant-coverage), "
-                             "record the template hashes + code commit in .frozen.json. "
-                             "Windows/domain lineups also need --windows-domain-validated.")
-    parser.add_argument("--windows-domain-validated", action="store_true", dest="windows_domain_validated",
-                        help="operator attestation that this run exercised the Windows/"
-                             "domain validation (DomainSIDs unique per team, machine SIDs "
-                             "assessed, three-pass ordering held) — required to freeze "
-                             "such lineups.")
+                             "record the template hashes + code commit in .frozen.json.")
     parser.add_argument("--unfreeze", action="store_true",
                         help="M4: remove .frozen.json (needs --confirm-unfreeze; for use "
                              "BEFORE the competition starts).")
@@ -71,13 +65,6 @@ def build_parser():
     parser.add_argument("--red-seg-ip", default=None,
                         help="red01's red-segment address for --red-identity "
                              "(default: the comp's bad-auto config, else 10.200.0.10)")
-    parser.add_argument("--timeout", type=int, default=0, metavar="SECONDS",
-                        help="overall wall-clock budget for the gate run (default 0 = no "
-                             "budget). Checked BETWEEN gates, never mid-flight, so it "
-                             "never interrupts a Proxmox task; a gate that never ran is "
-                             "SKIP — deliberately non-passing — so a budget can bound the "
-                             "run but can never turn an unverified range into a PASS "
-                             "(waive with --allow-unverified <gate>).")
     return parser
 
 
@@ -86,10 +73,6 @@ def main(argv=None):
 
     load_dotenv(ENV_PATH)
 
-    # Starts before the terraform/ctx load so the budget covers the whole run; disabled
-    # (and therefore inert) at the default --timeout 0.
-    budget = RunBudget(args.timeout)
-
     comp_dir = Path(args.comp_dir).resolve()
     if not comp_dir.is_dir():
         print(f"ERROR: competition directory not found: {comp_dir}", file=sys.stderr)
@@ -97,7 +80,7 @@ def main(argv=None):
 
     # Multi-node: activate the recorded placement (env -> engine host, node routes
     # for any node-scoped API call) before anything talks to Proxmox.
-    from nodes_ops import activate_placement, read_placement
+    from placement_record import activate_placement, read_placement
     placement = read_placement(comp_dir)
     if placement:
         activate_placement(placement)
@@ -127,8 +110,7 @@ def main(argv=None):
         return 0 if do_unfreeze(comp_dir, args.confirm_unfreeze) else 1
 
     try:
-        outcome = run_gates(args, comp_dir, ctx, teams, admin_password, boxes,
-                            base_url, budget)
+        outcome = run_gates(args, comp_dir, ctx, teams, admin_password, boxes, base_url)
     except PacketProfileError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
@@ -140,10 +122,7 @@ def main(argv=None):
     print("\n" + ("RESULT: PASS — competition looks healthy."
                   if passed else "RESULT: FAIL — see failing checks above."))
     if args.freeze:
-        # coverage_result is None only when the budget skipped the gate; a gate that
-        # never ran cannot attest coverage, so the freeze is refused (fail-closed).
-        ok = do_freeze(comp_dir, args, gate,
-                       coverage_result is not None and coverage_result.passed)
+        ok = do_freeze(comp_dir, args, gate, coverage_result.passed)
         return 0 if (passed and ok) else 1
     return 0 if passed else 1
 

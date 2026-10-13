@@ -5,7 +5,6 @@ Offline — generate_stage_configs / generate_slot_golden_config run against a w
 nakon-config.json (Proxmox/Nakon boundaries are upstream)."""
 
 import copy
-import inspect
 import json
 import sys
 import tempfile
@@ -15,8 +14,9 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
+import constants
 import nakon_config_ops
-import nakon_ops
+import nakon_pin_ops
 
 BOXES = [
     {"name": "web01", "last_octet": 4, "template": "base-fedora44-fix"},
@@ -49,9 +49,9 @@ class GoldenIdentityBan(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             _write_crossbox(comp_dir)
-            with patch.dict(nakon_ops.REQUIRED_VARS, CROSSBOX_ONLY):
+            with patch.dict(constants.REQUIRED_VARS, CROSSBOX_ONLY):
                 with self.assertRaises(SystemExit) as cm:
-                    nakon_ops.generate_stage_configs(comp_dir, TEAMS, BOXES)
+                    nakon_config_ops.generate_stage_configs(comp_dir, TEAMS, BOXES)
             self.assertIn("hypothetical-crossbox", str(cm.exception))
             self.assertFalse((comp_dir / ".nakon-golden.json").exists())
 
@@ -62,9 +62,9 @@ class GoldenIdentityBan(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             _write_crossbox(comp_dir)
-            with patch.dict(nakon_ops.REQUIRED_VARS, CROSSBOX_ONLY):
+            with patch.dict(constants.REQUIRED_VARS, CROSSBOX_ONLY):
                 with self.assertRaises(SystemExit) as cm:
-                    nakon_ops.generate_slot_golden_config(
+                    nakon_config_ops.generate_slot_golden_config(
                         comp_dir, BOXES, frozenset(), 105, 2)
             self.assertIn("hypothetical-crossbox", str(cm.exception))
             self.assertFalse((comp_dir / ".nakon-golden-slot2.json").exists())
@@ -72,8 +72,8 @@ class GoldenIdentityBan(unittest.TestCase):
     def test_both_paths_share_one_identity_ban_definition(self):
         # The ban is computed inside _golden_stage_machines via
         # _identity_banned_configs, so slot 0 and the satellites cannot diverge.
-        with patch.dict(nakon_ops.REQUIRED_VARS, CROSSBOX_ONLY):
-            banned = nakon_ops._identity_banned_configs()
+        with patch.dict(constants.REQUIRED_VARS, CROSSBOX_ONLY):
+            banned = nakon_pin_ops._identity_banned_configs()
         self.assertIn("hypothetical-crossbox", banned)   # ip:<box>
         self.assertIn("hosts-redirect-linux", banned)    # ip
         self.assertIn("airship-webapp", banned)          # ip:polus
@@ -84,7 +84,7 @@ class GoldenIdentityBan(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             _write_crossbox(comp_dir, config_name="install-nginx")
-            path = nakon_ops.generate_slot_golden_config(
+            path = nakon_config_ops.generate_slot_golden_config(
                 comp_dir, BOXES, frozenset(), 105, 2)
             names = [(m["name"], [c if isinstance(c, str) else c["name"]
                                   for c in m["configurations"]])
@@ -125,7 +125,7 @@ class PostCloneMerge(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             self._write(comp_dir, copy.deepcopy(decoys))
-            _, repair_p, _, postclone_p = nakon_ops.generate_stage_configs(
+            _, repair_p, _, postclone_p = nakon_config_ops.generate_stage_configs(
                 comp_dir, self.COLD_TEAMS, self.COLD_BOXES, unbooted={"dc01"})
             repair = self._pins(repair_p)
             postclone = self._pins(postclone_p)
@@ -145,27 +145,10 @@ class PostCloneMerge(unittest.TestCase):
                               nakon_config_ops.REPAIR_STAGE_CONFIGS | {"both-stage-x"}), \
                  patch.object(nakon_config_ops, "FINAL_STAGE_CONFIGS",
                               nakon_config_ops.FINAL_STAGE_CONFIGS | {"both-stage-x"}):
-                _, _, _, postclone_p = nakon_ops.generate_stage_configs(
+                _, _, _, postclone_p = nakon_config_ops.generate_stage_configs(
                     comp_dir, self.COLD_TEAMS, self.COLD_BOXES)
             postclone = self._pins(postclone_p)
         self.assertEqual(postclone, [("both-stage-x", {"K": "v"})])
-
-
-# D4: three functions took a parameter they never used. Removing them is only
-# safe because every caller reaches the two public ones positionally/keyword-only
-# from files this stream does not own (deploy.py, redeploy-competition.py).
-class DeadParameters(unittest.TestCase):
-    def test_generate_stage_configs_dropped_box_username(self):
-        self.assertNotIn("box_username",
-                         inspect.signature(nakon_ops.generate_stage_configs).parameters)
-
-    def test_generate_slot_golden_config_dropped_teams(self):
-        self.assertNotIn("teams", inspect.signature(
-            nakon_ops.generate_slot_golden_config).parameters)
-
-    def test_golden_stage_machines_dropped_boxes(self):
-        self.assertNotIn("boxes", inspect.signature(
-            nakon_ops._golden_stage_machines).parameters)
 
 
 if __name__ == "__main__":

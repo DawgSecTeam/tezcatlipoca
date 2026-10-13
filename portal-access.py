@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(".env"))
 
 from config_ops import write_state  # noqa: E402
-from nodes_ops import activate_placement, read_placement  # noqa: E402
+from placement_record import activate_placement, read_placement  # noqa: E402
 from portal_ops import access_state, portal_enabled, set_access  # noqa: E402
 from infra.console import mint_console_tokens, node_targets  # noqa: E402
 from ssh_ops import read_terraform_ctx  # noqa: E402

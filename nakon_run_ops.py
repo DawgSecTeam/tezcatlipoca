@@ -4,7 +4,6 @@ import json
 import os
 import re
 import shlex
-import socket
 import subprocess
 import threading
 import time
@@ -42,37 +41,6 @@ class NakonResult:
         return out
 
 
-def _deploy_owner_check(ssh_base, action="deploy"):
-# Cross-host collision guard. Since M2.3 staging is per-run, same-host concurrent
-#     runs don't collide — but two operators on two hosts running against the same engine
-#     still clobber each other's range mid-plant (scrim-extreme-2026-09-20: a second
-#     operator at 10.0.0.159 ran a full deploy against the same engine). The global
-#     /opt/nakon/.deploy-owner marker records the last writer; a fresh marker from a
-#     DIFFERENT hostname means stand down and escalate.
-    import getpass
-    me = f"{getpass.getuser()}@{socket.gethostname()}"
-    try:
-        out = subprocess.run(
-            ssh_base + ["cat /opt/nakon/.deploy-owner 2>/dev/null || true"],
-            capture_output=True, text=True, timeout=30).stdout.strip()
-    except Exception:
-        out = ""
-    if out:
-        try:
-            holder, ts = out.split()
-            if holder != me and time.time() - float(ts) < 45 * 60:
-                raise SystemExit(
-                    f"  ERROR: the scoring engine's staging dir is claimed by '{holder}' "
-                    f"({int((time.time()-float(ts))/60)} min ago) — refusing to {action} "
-                    "concurrently from a different host. Coordinate with that operator "
-                    "(ssh engine: sudo cat /opt/nakon/.deploy-owner; sudo rm the marker "
-                    "only once they confirm they are done)."
-                )
-        except ValueError:
-            pass
-    return me
-
-
 def _nothing_answered(machines):
 # Why a rc=0 plant applied nothing, or None when the run was real.
 #
@@ -106,8 +74,7 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
 #     Staging is per-run (M2.3): /tmp/nakon-<tag> on the way up, /opt/nakon/<tag> on
 #     the engine, created and removed only by the run that owns them. Concurrent
 #     nakon runs (M2.4's parallel domain passes) no longer race on a shared staging
-#     slot — the global .deploy-owner marker now only arbitrates across HOSTS, since
-#     same-host runs identify as the same holder.
+#     slot.
     ssh_base = [
         "ssh", "-i", str(key), *_engine_opts(host=scoring_ip),
         f"{scoring_user}@{scoring_ip}",
@@ -118,8 +85,6 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
     run_tag = re.sub(r"[^A-Za-z0-9._-]", "_", run_tag)
     tmp_dir = f"/tmp/nakon-{run_tag}"
     opt_dir = f"/opt/nakon/{run_tag}"
-
-    me = _deploy_owner_check(ssh_base, action=f"run Nakon config {Path(config_path).name}")
 
     subprocess.run(ssh_base + [f"rm -rf {tmp_dir} && mkdir -p {tmp_dir}"],
                    check=True, timeout=60)
@@ -145,8 +110,6 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
 
     setup_cmd = (
         f"sudo mkdir -p {opt_dir} && "
-        f"echo '{me} {int(time.time())}' | sudo tee /opt/nakon/.deploy-owner > /dev/null && "
-        f"echo '{me} {int(time.time())}' | sudo tee {opt_dir}/.deploy-owner > /dev/null && "
         f"sudo cp -r {tmp_dir}/. {opt_dir}/ && "
         # paramiko is needed by the remote nakon (root's python3). Check before install:
         # a blind install on every deploy races concurrent runs on the engine's pip.
@@ -161,17 +124,6 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
 
     try:
         subprocess.run(ssh_base + [setup_cmd], check=True, timeout=300)
-        # A missing archive used to surface as a cryptic 'bundle is missing its plan
-        # archive' deep into the plant (scrim-extreme-2026-09-20); prove the staging
-        # landed intact before committing hours to it.
-        staged = subprocess.run(
-            ssh_base + [f"test -s {opt_dir}/{bundle.name} && test -s {remote_config}"],
-            capture_output=True, timeout=30)
-        if staged.returncode != 0:
-            raise RuntimeError(
-                f"staged files missing on the engine after the copy "
-                f"({opt_dir}/{bundle.name}) — the staging push failed or was wiped; "
-                "refusing to start a plant that would die mid-way.")
         failed_steps = []
         machines_json = None
         # Long plants (minutes, over the operator's LAN) sometimes lose the outer

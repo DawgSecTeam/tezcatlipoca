@@ -105,11 +105,8 @@ def check_collisions(share, plan, vms):
             foreign += 1
             clashes.append(slot.label)
 
-    try:
-        nets = proxmox_api("GET", f"/nodes/{node}/network")["data"]
-        existing_bridges = {n.get("iface") for n in nets}
-    except Exception:
-        existing_bridges = set()
+    nets = proxmox_api("GET", f"/nodes/{node}/network")["data"]
+    existing_bridges = {n.get("iface") for n in nets}
     for bridge in expected_bridges(share, plan.boxes):
         # Bridges carry no per-comp tags. Tolerate one only when the VM leftovers are
         # unambiguously all ours (a retry) — a foreign bridge stays fatal.
@@ -162,6 +159,27 @@ def guest_ipv4s(vm):
             if addr.get("ip-address-type") == "ipv4"]
 
 
+def running_guest_ips(vms, skip_vmids, ours_tags=None):
+    """(takers, unchecked): the first running guest to answer each address, and the guests
+    whose agent cannot say. Both mgmt-IP gates scan the mgmt L2 this way."""
+    takers, unchecked = {}, []
+    for vm in vms:
+        if vm.get("status") != "running" or vm.get("template") == 1 or vm.get("vmid") in skip_vmids:
+            continue
+        # Broader than the vmid skip: ANY VM tagged as this deploy's answers the IP only until
+        # phase 1 recycles it — only a FOREIGN guest squatting the address is a collision.
+        if ours_tags and set(ours_tags) <= parse_vm_tags(vm.get("tags")):
+            continue
+        label = f"{vm.get('vmid')} ({vm.get('name') or '?'} on {vm.get('node') or '?'})"
+        addrs = guest_ipv4s(vm)
+        if addrs is None:
+            unchecked.append(label)
+            continue
+        for ip in addrs:
+            takers.setdefault(ip, label)
+    return takers, unchecked
+
+
 def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
     """Static engine mgmt IP must not collide with any running guest on the mgmt L2.
 
@@ -182,33 +200,16 @@ def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
 
     Guests without a working agent can't be checked; count them out loud instead of
     claiming the range is clean."""
-    unchecked, taken, takers = [], set(), {}
-    for vm in vms:
-        if vm.get("status") != "running" or vm.get("template") == 1:
-            continue
-        if vm.get("vmid") == engine_vmid:
-            # Our own engine from a prior failed attempt — it holds the planned
-            # mgmt IP until phase 1 destroys it seconds from now (live-found
-            # 2026-09-29: every retry after a phase-2+ failure re-tripped this
-            # gate against our own leftover).
-            continue
-        # Broader than the vmid check: ANY VM tagged as this competition's (a
-        # leftover box, not just the engine) answers the IP only until phase 1
-        # recycles it — only a FOREIGN guest squatting the address is a collision.
-        if ours_tags and set(ours_tags) <= parse_vm_tags(vm.get("tags")):
-            continue
-        label = f"{vm.get('vmid')} ({vm.get('name') or '?'} on {vm.get('node') or '?'})"
-        addrs = guest_ipv4s(vm)
-        if addrs is None:
-            unchecked.append(label)
-            continue
-        for ip in addrs:
-            taken.add(ip)
-            takers.setdefault(ip, label)
-    if engine_mgmt_ip in taken:
+    # Our own engine from a prior failed attempt holds the planned mgmt IP until phase 1
+    # destroys it (live-found 2026-09-29: every retry after a phase-2+ failure re-tripped
+    # this gate against our own leftover). Kept by vmid, not only by tag: a state file
+    # predating run ids gives the resume no run tag to match, and the collision gate that
+    # would otherwise catch it is off on resume.
+    takers, unchecked = running_guest_ips(vms, {engine_vmid}, ours_tags)
+    if engine_mgmt_ip in takers:
         raise SystemExit(
             f"  ERROR: static engine mgmt IP {engine_mgmt_ip} is already answered by a "
-            f"running guest ({takers.get(engine_mgmt_ip, 'unknown')}). Pick another "
+            f"running guest ({takers[engine_mgmt_ip]}). Pick another "
             f"TF_VAR_engine_mgmt_ip (or set it to '' for DHCP). The management network is "
             f"shared across nodes, so a guest on ANY node counts.")
     # "Explicitly set" means the OPERATOR set it — not that the code exported the
@@ -244,21 +245,12 @@ def jump_mgmt_ip_gate(plan):
     if not jump_ips:
         return
     skip = {plan.engine_vmid} | {s["jump_vmid"] for s in placement["satellites"]}
-    taken, unchecked = set(), 0
-    for share in plan.shares:
-        for vm in share.raw_vms:
-            if vm.get("node") != share.node or vm.get("status") != "running" \
-                    or vm.get("template") == 1 or vm.get("vmid") in skip:
-                continue
-            addrs = guest_ipv4s(vm)
-            if addrs is None:
-                unchecked += 1
-                continue
-            taken.update(addrs)
-    dupes = sorted(set(jump_ips) & taken)
+    vms = [vm for share in plan.shares for vm in share.raw_vms if vm.get("node") == share.node]
+    takers, unchecked = running_guest_ips(vms, skip, plan.our_tags)
+    dupes = sorted(set(jump_ips) & set(takers))
     if dupes:
         raise SystemExit(
             f"  ERROR: jump mgmt IP(s) {dupes} already answered by a running guest "
             "on the mgmt LAN — set explicit jump_mgmt_ip values in nodes.json.")
-    note = (f" ({unchecked} guest(s) unverifiable — agent down)" if unchecked else "")
+    note = (f" ({len(unchecked)} guest(s) unverifiable — agent down)" if unchecked else "")
     print(f"  Preflight: jump mgmt IP(s) {jump_ips} free{note}")

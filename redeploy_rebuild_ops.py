@@ -7,35 +7,19 @@ import pipeline_api
 
 from config_ops import write_state
 from constants import SNAP_BASE, SNAP_READY, ownership_tags
-from nakon_ops import build_nakon_bundle
+from nakon_bundle_ops import build_nakon_bundle
 from infra.client import proxmox_api, wait_for_proxmox_task
 from infra.lifecycle import start_vm, take_snapshot
 from infra.ownership import clone_marker, destroy_vm_if_exists
 from targets import describe_target
 from terraform_workdir import terraform_dir
-from template_ops import stored_template_hash
+from template_freeze import stored_template_hash
 from timing import timed
 from ssh_ops import quote_sshkeys
 from utils import compfile_flag, run_terraform
 from pathlib import Path
 from redeploy_select_ops import box_platform
 from redeploy_plant_ops import rerun_domain_configs
-
-
-def template_vmid_for(box):
-# Resolve a box's template name to a vmid, the way main.tf's templates data source does.
-    scoring_template_id = int(os.environ["TF_VAR_template_vm_id"])
-    data = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
-    for vm in data:
-        if (vm.get("name") == box["template"]
-                and vm.get("template") == 1
-                and "template" in (vm.get("tags") or "").split(";")
-                and vm.get("vmid") != scoring_template_id):
-            return vm["vmid"]
-    raise SystemExit(
-        f"  ERROR: no Proxmox template named '{box['template']}' (tagged 'template'). "
-        f"Available: " + ", ".join(pipeline_api.list_proxmox_templates())
-    )
 
 
 def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
@@ -62,7 +46,7 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
         # per-slot ids); single-node keeps the flat map.
         by_slot = state.get("golden_ids_by_slot") or {}
         if by_slot:
-            from nodes_ops import read_placement, slot_of_team
+            from placement_record import read_placement, slot_of_team
             pl = read_placement(comp_dir)
             slot = slot_of_team(pl, t["team_key"]) if pl else 0
             slot_ids = by_slot.get(str(slot)) or {}

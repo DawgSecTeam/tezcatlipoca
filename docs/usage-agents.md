@@ -146,13 +146,13 @@ Post-deploy smoke test — reproduces the manual checks run by hand after a depl
 
 ```bash
 python3 verify-competition.py competitions/<id> [--engine-ip IP] [--admin-password PW] \
-    [--strict-services] [--allow-unverified GATE]... [--timeout SECONDS]
+    [--strict-services] [--allow-unverified GATE]...
 ```
 
 1. **LOGIN** — every team account and admin can `POST /api/login` (HTTP 200).
 2. **SERVICES** — each team's services report UP in the latest scored round (informational
-   unless `--strict-services`, which also requires something to have been scored and the newest
-   round to be fresh).
+   unless `--strict-services`, which also fails when nothing has been scored; round freshness is
+   gate 11's job).
 3. **ISOLATION** — the team-to-team DROP rule (`range-firewall.sh`) is present in the engine's
    `FORWARD` chain, and — with 2+ teams — an actual connection from one team's box to
    another's is confirmed blocked **while the target is provably alive and that same box still
@@ -167,8 +167,9 @@ python3 verify-competition.py competitions/<id> [--engine-ip IP] [--admin-passwo
 6. **PINS** (`pins_registered`) — every pinned service's `<box>-<Display>` check is registered in
    Quotient. Gate is active only when the comp has pinned services.
 7. **PLANT COVERAGE** (`plant_coverage`) — reads `.deploy_state.json`'s per-machine
-   expected-vs-planted record, falls back to the nakon FAILED tally, and **fails closed**: when
-   neither source exists it FAILs ("coverage was never recorded") rather than passing vacuously.
+   expected-vs-planted record (`plant_coverage_failed`) and **fails closed**: when that record was
+   never written it FAILs ("coverage was never recorded") rather than passing vacuously. The nakon
+   FAILED tally is informational only.
    Phase 4's golden plant records its own verdict (the `{box}-golden` keys, slot-qualified on
    satellites), so a lineup with no post-clone configs is still recorded — golden-stage failures
    (including `alpine_services`-tolerated ones) map onto every team clone.
@@ -178,8 +179,8 @@ python3 verify-competition.py competitions/<id> [--engine-ip IP] [--admin-passwo
    survives end-to-end to the boxes (see `--red-ip`/`--red-seg-ip`/`--red-user`).
 10. **PACKET** (`packet_creds` + `packet_accounts`) — only with `--packet <profile>`: the packet's
     published credentials match `credentials.txt`, and its `out_of_scope` decoy accounts exist.
-11. **ROUND LOOP** (`round_loop`) — the scoring round loop is actually advancing; it does not
-    auto-resume after an engine reboot.
+11. **ROUND LOOP** (`round_loop`) — the scoring round loop is actually advancing and the latest
+    round is fresh; it does not auto-resume after an engine reboot.
 
 **Gate model: PASS / FAIL / SKIP, and a SKIP is not a pass.** Every gate returns a tri-state
 result, and the SUMMARY and the exit code are generated from the same results, so they cannot
@@ -188,19 +189,11 @@ point) and is **non-passing** by default — a check that never ran exiting 0 is
 reads as a healthy range (live-found 2026-10-02: isolation's cross-team probe passed on stopped
 VMs). A few results are deliberately *non-gating* and shown as `[informational]` in the SUMMARY:
 the structurally-not-applicable cases (no `nakon-config.json`, no `domain_roles.json`, no
-`injects/` dir, `--expect-no-vulns`, fewer than 2 teams for misconfig-survival). Waive a gating
+`injects/` dir, `--expect-no-vulns`, a comp that plants no misconfigurations). Waive a gating
 gate's SKIP with `--allow-unverified <gate>` (repeatable); it waives only a SKIP,
-never a FAIL, and names that match no gate in the run are warned about. `--timeout SECONDS` sets
-an optional whole-run wall-clock budget (default `0` = off), checked **between** gates so it never
-interrupts a Proxmox task; a gate skipped on budget is recorded `SKIP` and so is non-passing too.
+never a FAIL, and names that match no gate in the run are warned about.
 **Operators: a range whose verify used to exit 0 can now exit non-zero for a gate that never
 ran** — that is the intended fail-closed behavior; fix the gate or waive it explicitly.
-
-Two diagnostic lines: a `no_default_creds` regression guard (part of the exit-code gate, same as
-logins/isolation/misconfig/injects) confirming `credentials.txt`'s box-login/credlist lines aren't
-the old fixed literals, and a purely informational report of `range-healthcheck.timer`'s status plus
-`report_beacons` and the per-pass `plant integrity` tally from `.deploy_state.json` — none of those
-affect the exit code.
 
 Conditional gates added with the in-path firewall and clean comps: **`firewall_in_path`** (comps
 with an `in_path` firewall: per team, the engine routes `192.168.<id>.1` via `172.31.<id>.2`, the
@@ -210,9 +203,8 @@ firewall, SKIP when the engine is unreachable) and an **automatic misconfig SKIP
 deliberately-clean comp (`box_vulns.json` empty and no machine carries a misconfig — informational,
 no flag needed; pinned vulns that the machines lack still FAIL).
 
-Exit code is `0` only when logins all pass, no default creds remain, isolation holds, the
-misconfig spot-check (and, with 2+ teams, the misconfig-survival pass) confirms, injects
-(if any) are present, the round loop is advancing, and the conditional gates above pass — and no
+Exit code is `0` only when logins all pass, isolation holds, the misconfig gate confirms its
+planted configs (on every team clone, with 2+ teams), injects (if any) are present, the round loop is advancing, and the conditional gates above pass — and no
 gating gate is an unwaived SKIP. Service DOWN is reported but not fatal unless
 `--strict-services`. Isolation is **not** demoted to informational the way services are — a failed
 isolation check means teams can reach each other right now.
@@ -220,8 +212,8 @@ isolation check means teams can reach each other right now.
 Other flags: `--expect-no-vulns` skips the misconfig gates for a packet-compiled comp that has not
 authored `box_vulns.json` yet; `--fix-round-loop` POSTs the start/unpause pair when the engine's
 round loop did not auto-resume after a reboot (the run still FAILs — re-run verify to confirm a
-fresh round); `--freeze` (with `--windows-domain-validated` for Windows/domain lineups) writes the
-`.frozen.json` record, and `--unfreeze --confirm-unfreeze` removes it.
+fresh round); `--freeze` writes the `.frozen.json` record, and `--unfreeze --confirm-unfreeze`
+removes it.
 
 Data sources (all read at runtime): scoring-engine IP from `terraform output -json`
 (override with `--engine-ip`), team creds from `competitions/<id>/teams.json`, admin password
@@ -330,7 +322,7 @@ state, not a repair. Every mode except `reconfigure` says so and requires confir
 ```bash
 python3 destroy-competition.py --competition <id>            # FULL teardown (the default)
 python3 destroy-competition.py --competition <id> --teams-only  # mid-event: keep templates
-python3 destroy-competition.py --competition <id> --full --end-of-competition  # frozen comp
+python3 destroy-competition.py --competition <id> --end-of-competition  # frozen comp
 python3 destroy-competition.py --competition <id> --artifacts-timeout 20  # per-file pull budget
 ```
 
@@ -365,7 +357,7 @@ anything — so **two worktrees deploying the same competition ID can no longer 
 other's VMs**. Behavior you will see:
 
 - A VM tagged with the comp but a DIFFERENT run id (another worktree's run) is refused/skipped
-  with a loud warning, everywhere: pre-stop, the leftover sweep, `--full` template destroys,
+  with a loud warning, everywhere: pre-stop, the leftover sweep, full-teardown template destroys,
   and deploy phase-1 reclamation. It is never destroyed from the wrong worktree.
 - An UNTAGGED VM on a computed vmid is refused — unless it carries this competition's clone
   marker (an interrupted clone whose tagging step never ran), which proves ownership. There is
@@ -392,7 +384,7 @@ vmids.
 Related M4 commands:
 
 ```bash
-python3 verify-competition.py competitions/<id> --freeze --windows-domain-validated
+python3 verify-competition.py competitions/<id> --freeze
 python3 verify-competition.py competitions/<id> --unfreeze --confirm-unfreeze
 python3 redeploy-competition.py --competition <id> --mode engine-recovery   # fresh engine from template
 python3 redeploy-competition.py --competition <id> --teams team2 --mode rebuild --yes  # team rebuild
@@ -408,13 +400,11 @@ Everything that exists in argparse but is not part of the happy path, in one pla
 | `--mode resync` | `redeploy-competition.py` | Align `.deploy_state.json` with the engine-authoritative secrets (event.conf, credlist, `/opt/quotient/.env`), then re-set the selected boxes' passwords via the guest agent. No rollback. Cannot recover `box_password` (baked in at bootstrap; see internals) |
 | `--mode engine-recovery` | `redeploy-competition.py` | Re-clone the engine VM from the competition's engine template, `-replace` on that resource only. Ignored box-selection flags; fresh **empty** scoring DB — re-seed with `--from-phase 7` |
 | `--reset-event` | `redeploy-competition.py` | Valid only with `rollback-ready`/`rollback-base`/`reset`: after the rollback(s), also restart the event from the engine template and re-run phase 7, so scores reset and injects re-open anchored at now. Use for scrim reruns |
-| `--end-of-competition` | `destroy-competition.py` | Required with `--full` on a **frozen** competition — makes an accidental mid-event full teardown impossible |
-| `--windows-domain-validated` | `verify-competition.py` | Operator attestation that a Windows/domain lineup's run exercised DomainSID uniqueness, machine SIDs, and the three-pass ordering. Required alongside `--freeze` for such a lineup |
+| `--end-of-competition` | `destroy-competition.py` | Required for a full teardown of a **frozen** competition — makes an accidental mid-event full teardown impossible |
 | `--fix-round-loop` | `verify-competition.py` | Issue the `POST /api/competition/start` + `POST /api/engine/pause {pause:false}` pair when the round loop did not auto-resume after an engine reboot |
 | `--freeze` / `--unfreeze --confirm-unfreeze` | `verify-competition.py` | Write / remove the `.frozen.json` record. Freeze requires all gates PASS (incl. plant coverage) and must be the **last** thing you do before the event — committing afterwards trips the drift gate |
 | `--expect-no-vulns` | `verify-competition.py` | Force the misconfig gates to SKIP (a comp with an empty `box_vulns.json` already skips them automatically) |
 | `--allow-unverified <gate>` | `verify-competition.py` | Waive ONE gate's `SKIP` (could-not-evaluate) verdict so it does not fail the exit code. Repeatable; waives only a SKIP, never a FAIL; unknown names are warned about. Without it a gate that couldn't run is not a pass |
-| `--timeout SECONDS` | `verify-competition.py` | Optional whole-run wall-clock budget (default `0` = off), checked **between** gates so it never interrupts a Proxmox task. A gate skipped on budget is recorded `SKIP` — non-passing — so a budget can bound a verify but never turn an unevaluated range into a PASS (waive with `--allow-unverified`) |
 | `--packet <profile>` | `verify-competition.py` | Add the `packet_creds` + `packet_accounts` gates (packet credentials match `credentials.txt`; `out_of_scope` decoy accounts exist) |
 | `--red-identity` | `verify-competition.py` | Prove red's **routed-mode** source address survives end-to-end: holds a TCP connection from red01 to a Linux box's `:22` and reads the box's `ss` table, expecting red's segment IP as the peer rather than the team gateway. Tri-state like the isolation check (SKIP when unverifiable). Requires red01 deployed |
 | `--red-ip` / `--red-user` / `--red-seg-ip` | `verify-competition.py` | Inputs for `--red-identity`. Defaults: the comp's own bad-auto config
@@ -424,13 +414,6 @@ IP `10.200.0.10` |
 
 The red team's network mode itself (`routed` vs `masq`) is owned by `../bad-auto`, not this repo;
 [architecture.md](architecture.md#red-team-identity-bad-auto-side-not-this-pipeline) describes both.
-
-## `run-deploy.sh`
-
-A minimal example wrapper around `create-competition.py`'s old stdin-driven interface, logging
-to a gitignored file — not a documented interface in its own right. Prefer the flags above
-directly; adapt the wrapper's `printf`/logging pattern only if you specifically need
-stdin-driven prompt answers instead.
 
 ## Running a deploy that outlives your shell
 
@@ -454,11 +437,6 @@ echo "pid $! — follow with: tail -f logs/<id>-*.log"
   `pkill -f`/`pgrep -f` a pattern that also appears in the invoking command line: it matches the
   caller itself and self-kills. That has happened twice on this project.
 - Never combine "kill" and "relaunch" in one pattern; kill, confirm it is gone, then relaunch.
-- In-process equivalent: `utils.spawn_detached(cmd, log_path)` returns `(pid, log_path)` for code
-  that needs to start one.
-
-`run-deploy.sh` remains the stdin-driven example wrapper; the recipe above is what a non-interactive
-run should use.
 
 ## Deploying from a worktree
 

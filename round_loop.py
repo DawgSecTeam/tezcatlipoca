@@ -14,8 +14,7 @@ pause with a real `current_round_time` remains paused and is never restarted.
 
 The containers came back after the reboot; the loop did not.
 
-Nothing here talks to the network — see `tools/round_loop_guard.py` for the engine-side
-actor that uses it.
+Nothing here talks to the network.
 """
 
 from datetime import datetime, timezone

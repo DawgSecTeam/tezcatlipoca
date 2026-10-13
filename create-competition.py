@@ -8,17 +8,7 @@ happened to import so that redeploy-competition.py could load it via importlib â
 left redeploy's real dependency set invisible and let this file's surface drift silently.
 """
 
-from pathlib import Path
-
-from dotenv import load_dotenv  # noqa: E402
-
-# Load .env before deploy is imported: the pipeline reads TF_VAR_* and Proxmox creds from
-# the environment at import time. deploy.py loads the same file at its own module scope,
-# but owning it here keeps the entry point self-describing. load_dotenv does not overwrite
-# variables that are already set, so the second load is a no-op.
-load_dotenv(Path(".env"))
-
-import deploy  # noqa: E402
+import deploy  # noqa: E402  (loads .env at import time)
 
 if __name__ == "__main__":
     deploy.main()

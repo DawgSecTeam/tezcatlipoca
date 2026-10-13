@@ -13,7 +13,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import nakon_ops
+import nakon_config_ops
 from quotient.setup import build_event_conf, expected_service_names
 
 BOXES = [
@@ -56,7 +56,7 @@ class SameTypePins(unittest.TestCase):
             d = Path(d)
             (d / "box_services.json").write_text(json.dumps({"win01": pins}))
             (d / "box_vulns.json").write_text(json.dumps({"win01": []}))
-            path = nakon_ops.generate_nakon_config(TEAMS, BOXES, 1, d, "pw", box_username="medic")
+            path = nakon_config_ops.generate_nakon_config(TEAMS, BOXES, 1, d, "pw", box_username="medic")
             cfg = json.loads(Path(path).read_text())
             win = next(m for m in cfg["machines"] if m["name"] == "win01-team120")
             planted = win["configurations"]

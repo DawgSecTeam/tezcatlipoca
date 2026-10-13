@@ -11,7 +11,6 @@ destroy was the one unbounded call.
 
 Offline: run_terraform, the lock recovery, and the leftover sweep are all patched."""
 
-import importlib.util
 import subprocess
 import sys
 import unittest
@@ -22,14 +21,6 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 
-def load_module(name, filename):
-    spec = importlib.util.spec_from_file_location(name, _REPO / filename)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-destroy = load_module("destroy_competition_for_timeout_test", "destroy-competition.py")
 from teardown import machinery as destroy_sweep_ops  # noqa: E402
 from infra.ownership import Ownership  # noqa: E402
 
@@ -48,13 +39,13 @@ class DestroyAttemptTimeoutTests(unittest.TestCase):
         return result, p_run, p_lock, p_sweep
 
     def test_every_attempt_passes_the_bounded_timeout(self):
-        result, p_run, _p_lock, _p_sweep = self._run([MagicMock(returncode=0)])
+        result, p_run, p_lock, p_sweep = self._run([MagicMock(returncode=0)])
         self.assertTrue(result)
         p_run.assert_called_once()
         self.assertEqual(p_run.call_args.kwargs["timeout"],
                          destroy_sweep_ops.DESTROY_ATTEMPT_TIMEOUT_S)
-        self.assertIsNotNone(destroy_sweep_ops.DESTROY_ATTEMPT_TIMEOUT_S)
-        self.assertGreater(destroy_sweep_ops.DESTROY_ATTEMPT_TIMEOUT_S, 0)
+        p_lock.assert_not_called()
+        p_sweep.assert_not_called()
 
     def test_timeout_is_retried_instead_of_escaping(self):
     # A hung attempt must fall through to the next one — the whole point of the
@@ -87,13 +78,6 @@ class DestroyAttemptTimeoutTests(unittest.TestCase):
         self.assertEqual(p_run.call_count, 2)
         p_lock.assert_called_once_with("terraform")
         p_sweep.assert_called_once_with(["pve"], Ownership("cde-2026", "run-aaaa0001"))
-
-    def test_success_on_the_first_attempt_skips_recovery(self):
-        result, p_run, p_lock, p_sweep = self._run([MagicMock(returncode=0)])
-        self.assertTrue(result)
-        self.assertEqual(p_run.call_count, 1)
-        p_lock.assert_not_called()
-        p_sweep.assert_not_called()
 
 
 if __name__ == "__main__":

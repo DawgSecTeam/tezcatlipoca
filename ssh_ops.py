@@ -26,7 +26,7 @@ def _engine_opts(known_hosts=None, host=None):
 #
 #     With host, the options multiplex over one ControlMaster socket (M1.5): every per-box
 #     ProxyCommand and every direct engine call reuses a single authenticated engine
-#     connection instead of paying a fresh double handshake per call. engine_ops raises
+#     connection instead of paying a fresh double handshake per call. engine_bootstrap_ops raises
 #     sshd's MaxSessions to 64 so M2's concurrent workers can share the master.
     kh = known_hosts or DEFAULT_KNOWN_HOSTS
     Path(kh).parent.mkdir(parents=True, exist_ok=True)
@@ -74,6 +74,30 @@ def box_ssh_argv(ctx, target_ip, user, remote=None, *, extra_opts=()):
     if remote is not None:
         argv.append(remote)
     return argv
+
+
+def box_ssh_retry(ctx, ip, user, remote_cmd, *, timeout, attempts, what):
+# Run remote_cmd on a box over SSH, retrying through boot-time timeouts. Returns
+#     (True, "") on success; (False, stderr) on a definitive rejection, where retries
+#     cannot help; (False, "") once the attempts are spent. A False is the caller's cue to
+#     fall back to the guest agent.
+    for attempt in range(1, attempts + 1):
+        try:
+            r = subprocess.run(box_ssh_argv(ctx, ip, user, remote_cmd),
+                               capture_output=True, text=True, timeout=timeout)
+            if r.returncode == 0:
+                return True, ""
+            err = r.stderr or ""
+            if any(s in err for s in ("Permission denied", "REMOTE HOST IDENTIFICATION",
+                                      "Host key verification failed")):
+                return False, err
+        except subprocess.TimeoutExpired:
+            pass  # box still booting — retry
+        if attempt < attempts:
+            with PRINT_LOCK:
+                print(f"    {what} attempt {attempt}/{attempts} failed for {ip}, retrying in 15s...")
+            time.sleep(15)
+    return False, ""
 
 
 def forget_engine_host_key(ip, known_hosts=None):
@@ -156,11 +180,6 @@ def ssh_on_gateway(ctx, cmd, timeout=30):
          f"{ctx['vm_username']}@{ctx['scoring_engine_ip']}", cmd],
         capture_output=True, text=True, timeout=timeout,
     )
-
-
-def ssh_to_engine(ctx, cmd, timeout=30):
-# Alias for ssh_on_gateway — SSH directly to the scoring engine itself.
-    return ssh_on_gateway(ctx, cmd, timeout=timeout)
 
 
 def wait_for_ssh(key, user, host, timeout=300):

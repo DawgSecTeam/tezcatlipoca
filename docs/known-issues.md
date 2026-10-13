@@ -73,21 +73,17 @@ occurrence can be bisected. Full evidence and the kit:
 
 ### Scoring round loop does not auto-resume after an engine reboot
 
-**Status: OPEN — unattended healing remains opt-in.** After an engine VM reboot the containers
+**Status: OPEN — no unattended healing; `--fix-round-loop` is the repair.** After an engine VM reboot the containers
 restart but the round loop can stay stopped; `/api/engine` may show `running:false` (paused), a stale
 `last_round.StartTime`, and the Go-zero `current_round_time`, while the scoreboard reads as frozen.
 
 The 2026-10-07 live finding is fixed in the shared classifier: a paused engine with zero current time
 and a last round older than the freshness window is now `STALE`; a deliberate pause with a real
-current round time, or without the old-round reboot signature, remains `PAUSED`. Both the engine-side
-watchdog and `verify-competition.py` consume that state, so the watchdog can issue its POST pair and
-`--fix-round-loop` can reach its repair branch. Regression tests cover both cases. A live reboot trial
+current round time, or without the old-round reboot signature, remains `PAUSED`. `verify-competition.py` consumes that state, so `--fix-round-loop` can reach its repair branch. Regression tests cover both cases. A live reboot trial
 is still needed to validate the code path on an engine.
 
-The watchdog remains opt-in: a competition must set `round_loop_guard 1` in its Compfile to install
-`tools/round_loop_guard.py` as a 60-second timer using the dedicated `scoring` account. Without that
-setting, verify detects and FAILs a frozen loop; `--fix-round-loop` issues the start/unpause POSTs,
-and verify must be rerun to confirm a fresh round.
+Verify detects and FAILs a frozen loop; `--fix-round-loop` issues the start/unpause POSTs, and
+verify must be rerun to confirm a fresh round.
 
 ### Fedora goldens cannot be built on SELinux-enforcing nodes
 
@@ -130,8 +126,7 @@ Still unproven:
 **Status: OPEN — the documented rule may be stale.** Several modules and docs build on "Quotient
 allows ONE session per account; a second login kills the first cookie":
 - the `scoring` second-admin account (`quotient/setup.py` `_admin_accounts`);
-- `engine_guard_ops.py`;
-- `deploy_lib/stages.py`;
+- `deploy_lib/context.py` (the `scoring_password` comment);
 - the round-loop entry above;
 - `usage-people.md`.
 
@@ -187,14 +182,14 @@ to bad-auto, hand off with the upstream defects.
   Handoff: [upstream-defects-handoff.md §5](upstream-defects-handoff.md).
 - `nakon randomize` handing out names whose script needs vars it cannot supply — **catalog half
   fixed**: `nakon catalog check` now reports `missing-vars` (`f86c11d`), and the driver additionally
-  filters unplantable bare names on the fresh path (`nakon_ops._drop_unplantable_bare`). `randomize`
+  filters unplantable bare names on the fresh path (`nakon_pin_ops._drop_unplantable_bare`). `randomize`
   itself was deliberately left unchanged, so a direct `nakon randomize` can still return such a name;
   `catalog check` is the gate.
 - Windows package-manager fallback — the step now writes `.nakon-step-rc` and states plainly that it
   has never run against real winget/chocolatey (`12c3195`). Still not live-verified on Windows.
 
 The repo-side guard for the broken catalog names is `constants.KNOWN_BROKEN_CONFIGS`, enforced by
-`nakon_ops._validate_known_broken_pins` at generate time and by `packet_ops` at packet-compile time.
+`nakon_pin_ops._validate_known_broken_pins` at generate time and by `packet_ops` at packet-compile time.
 It is now down to the single Windows row above (`mailenable-cleartext-mail-win`). Scoping,
 deliberately: a **fresh selection** that gets past
 the driver's `_drop_unplantable_bare` filter is a hard error; a competition that **already records**

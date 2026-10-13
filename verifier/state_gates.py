@@ -1,42 +1,9 @@
-"""Gates fed by .deploy_state.json: tolerated-failure ledger and plant coverage."""
+"""Plant-coverage gate, fed by .deploy_state.json."""
 
 import json
 
 from verifier.loaders import read_deploy_state
 from verifier.model import gate_fail, gate_pass, gate_skip
-
-
-def check_degradations(comp_dir):
-# Surface the prerequisites that failed while the deploy continued anyway.
-#
-#     The deploy tolerates some failures on purpose (each site has its own reason), but
-#     it records every one of them in `.deploy_state.json["degradations"]` — apt prep that
-#     installed nothing, an auth ladder that failed on both transports, a box that never
-#     settled, a node scan that never happened. Without this line those exist only as
-#     WARNING text in a scrollback nobody reads, which is how a range can come up "green"
-#     with every service down. Warning-level, not gating: the deploy did survive them, and
-#     the plant-coverage/service gates are what decide whether the range actually works.
-    state = read_deploy_state(comp_dir)
-    if state is None:
-        return gate_skip("degradations", "no readable .deploy_state.json", gating=False)
-    entries = state.get("degradations")
-    if entries is None:
-        print("  SKIP  — this deploy recorded no degradation ledger "
-              "(pre-dates the ledger, or state was rewritten).")
-        return gate_skip("degradations", "not recorded by this deploy", gating=False)
-    if not entries:
-        print("  PASS  — no tolerated failures recorded.")
-        return gate_pass("degradations", "none recorded")
-    seen = {}
-    for entry in entries:
-        seen[entry.get("what", "?")] = seen.get(entry.get("what", "?"), 0) + 1
-    detail = ", ".join(f"{what} x{count}" if count > 1 else what
-                       for what, count in sorted(seen.items()))
-    for entry in entries:
-        print(f"  WARN  — {entry.get('what')}: {str(entry.get('detail', ''))[:110]}")
-    print(f"  WARN  — {len(entries)} tolerated failure(s) recorded; see "
-          f".deploy_state.json['degradations']")
-    return gate_pass("degradations", f"{len(entries)} tolerated: {detail[:150]}")
 
 
 def check_plant_coverage(comp_dir):
@@ -61,9 +28,8 @@ def check_plant_coverage(comp_dir):
 #     SUMMARY said "plant integrity: WARNING — last nakon plant recorded N FAILED
 #     step(s)". The whole premise of verify (docs/known-issues.md: nakon failures are
 #     silent by design) was vacuous in exactly that case. It now fails CLOSED: the
-#     nakon tally `deploy_lib/coverage.py` promises as the fallback is consulted, a non-empty tally
-#     can never PASS, and when neither source exists the gate FAILs with "coverage was
-#     never recorded".
+#     nakon tally is never a substitute for the record: a missing record FAILs with
+#     "coverage was never recorded".
 #
 #     Returns a GateResult (never a bare tuple — the old (checked, ok) arity was part of
 #     the D1 unpacking crash family).
@@ -83,6 +49,10 @@ def check_plant_coverage(comp_dir):
         return gate_fail("plant_coverage", f"cannot read nakon-config.json ({str(e)[:60]})")
 
     recorded = failed if isinstance(failed, dict) else None
+    if recorded is None:
+        print("  FAIL  — plant coverage was never recorded: no 'plant_coverage_failed' in "
+              ".deploy_state.json. An unrecorded coverage gate is not a passing one.")
+        return gate_fail("plant_coverage", "coverage was never recorded")
     unplanted = {}
     for m in machines:
         name = m.get("name", "?")
@@ -113,35 +83,14 @@ def check_plant_coverage(comp_dir):
         for name, cfgs in sorted(unplanted.items()):
             print(f"  FAIL  {name}: not planted: {', '.join(cfgs)}")
         problems.append(f"{sum(len(c) for c in unplanted.values())} unplanted config(s)")
-    if tally and recorded is None:
-        # The tally GATES only when it is the fallback (no structured record — older
-        # nakon). When a record exists it is the authority: the tally is merged
-        # history ("repair: X FAILED" stays listed even after a later stage replanted
-        # X green, scrim-one 2026-10-03), and gating on it means a recovered failure
-        # keeps the gate red forever — the tally twin of the stale-record bug the
-        # record side already fixed.
-        print(f"  FAIL  nakon recorded {len(tally)} FAILED plant step(s): "
-              f"{', '.join(str(s)[:80] for s in tally[:3])}"
-              f"{' …' if len(tally) > 3 else ''}")
-        problems.append(f"{len(tally)} failed nakon step(s)")
-    elif tally:
+    if tally:
+        # The tally is merged history, never the authority: "repair: X FAILED" stays listed
+        # even after a later stage replanted X green (scrim-one 2026-10-03).
         print(f"  (informational) nakon history: {len(tally)} FAILED plant step(s) on "
               f"record — superseded failures stay listed; the coverage record above is "
               f"authoritative")
     if problems:
         return gate_fail("plant_coverage", "; ".join(problems))
 
-    if recorded is None:
-        if tally is None:
-            print("  FAIL  — plant coverage was never recorded: no "
-                  "'plant_coverage_failed' in .deploy_state.json and no nakon FAILED "
-                  "tally to fall back on (pre-tally deploy?). An unrecorded coverage "
-                  "gate is not a passing one.")
-            return gate_fail("plant_coverage", "coverage was never recorded")
-        # deploy.py's documented fallback: "no --json outcome (older nakon) —
-        # coverage falls back to the tally", and the tally here is present and clean.
-        print(f"  PASS  no coverage record (older nakon --json), so coverage falls back "
-              f"to the tally: 0 FAILED steps for {len(machines)} machine(s)")
-        return gate_pass("plant_coverage", f"tally clean (no coverage record; {len(machines)} machines)")
     print(f"  PASS  all {len(machines)} machine(s) report full config coverage")
     return gate_pass("plant_coverage", f"all {len(machines)} machine(s)")

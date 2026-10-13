@@ -17,24 +17,24 @@ unused re-export here is invisible again by construction, which is the bug we re
 # Owned by constants.
 from constants import PER_MACHINE_NAKON_BUDGET
 
-# Owned by config_ops.
-from config_ops import list_proxmox_templates
-
 # Owned by domain_ops.
 from domain_ops import deploy_domain_configs
 
-# Owned by engine_ops.
-from engine_ops import ensure_nat_forwarding
+# Owned by engine_health_ops.
+from engine_health_ops import ensure_nat_forwarding
 
-# Owned by golden_ops.
-from golden_ops import unbooted_golden_boxes
+# Owned by golden_target_ops.
+from golden_target_ops import unbooted_golden_boxes
 
-# Owned by hardening_ops.
-from hardening_ops import fix_dns_on_boxes, fix_services_on_boxes, setup_ubuntu_auth
+# Owned by apt_dns_ops, service_fixup_ops and ubuntu_auth_ops.
+from apt_dns_ops import fix_dns_on_boxes
+from service_fixup_ops import fix_services_on_boxes
+from ubuntu_auth_ops import setup_ubuntu_auth
 
-# Owned by nakon_ops.
-from nakon_ops import (build_nakon_bundle, generate_stage_configs,
-                       os_to_platform, run_nakon)
+# Owned by nakon_config_ops, nakon_bundle_ops and nakon_run_ops.
+from nakon_bundle_ops import build_nakon_bundle
+from nakon_config_ops import generate_stage_configs, os_to_platform
+from nakon_run_ops import run_nakon
 
 # Owned by ssh_ops.
 from ssh_ops import read_terraform_ctx, wait_for_boxes_ssh, wait_for_cloud_init
@@ -58,7 +58,6 @@ __all__ = [
     "fix_dns_on_boxes",
     "fix_services_on_boxes",
     "generate_stage_configs",
-    "list_proxmox_templates",
     "os_to_platform",
     "read_terraform_ctx",
     "run_nakon",

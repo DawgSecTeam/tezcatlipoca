@@ -87,7 +87,7 @@ def cmd_collect(args):
         print("  recorded as `skipped` so the plan is visible in collection.json.")
     else:
         print("  LIVE COLLECTION — this reads from the estate: scp to red01 through the jump")
-        print("  host, guest-agent reads, and local copies from the recorded run dir / blue")
+        print("  host, and local copies from the recorded run dir / blue")
         print("  workdirs. It changes nothing on any box, and an unreachable source is recorded")
         print("  as such rather than retried.")
     print(f"  {len(targets)} target(s), {wanted} wanted item(s) — from plan_targets()")

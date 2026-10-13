@@ -247,7 +247,7 @@ ssh+sudo (`TEZ_HEADSCALE_*` in `.env`; remote access ships with every deploy —
   at phase 2 with an opaque `ssh … exit status 255`. **Always set an explicit, checked
   `TF_VAR_engine_mgmt_ip` when anything else is running on the estate**; `.245`, `.246`, `.249` and
   `.250` all answered on 2026-10-02. The preflight now scans cluster-wide and refuses the *default*
-  address when any guest is unverifiable (see `config_ops._engine_mgmt_ip_gate`). **[live/code]**
+  address when any guest is unverifiable (see `infra.collisions.engine_mgmt_ip_gate`). **[live/code]**
 - **Engine management-IP allocation table.** Three concurrent deploys on 2026-10-04 worked only
   because each session hand-picked a distinct address. Claim yours here (and put it in the run's
   `.env` as `TF_VAR_engine_mgmt_ip`) before deploying; the preflight still verifies the claim

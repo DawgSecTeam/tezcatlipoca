@@ -3,12 +3,13 @@
 from functools import partial
 
 from constants import SNAP_BASE
-from golden_ops import _template_vmid_map, build_golden_set
-from hardening_ops import fix_dns_on_boxes, prep_apt_on_boxes, setup_ubuntu_auth
-from nakon_ops import generate_slot_golden_config
-from nodes_ops import record_of
+from golden_target_ops import _template_vmid_map
+from golden_ops import build_golden_set
+from apt_dns_ops import fix_dns_on_boxes, prep_apt_on_boxes
+from nakon_config_ops import generate_slot_golden_config
+from placement_record import record_of
 from ssh_ops import wait_for_boxes_ssh, wait_for_cloud_init
-from template_ops import load_template_hashes, save_template_hashes
+from template_freeze import load_template_hashes, save_template_hashes
 from timing import timed
 from utils import is_unmanaged, run_concurrent, run_terraform
 from windows_ops import bootstrap_windows_box
@@ -182,8 +183,6 @@ def bootstrap_clones(ctx):
         wait_for_boxes_ssh(ctx.tf_ctx, ctx.managed_targets, timeout=300)
     with timed(ctx.comp_dir, 4, "wait_cloud_init"):
         wait_for_cloud_init(ctx.tf_ctx, ctx.managed_targets, timeout=240)
-    with timed(ctx.comp_dir, 4, "setup_auth"):
-        setup_ubuntu_auth(ctx.linux_targets, ctx.tf_ctx)
     with timed(ctx.comp_dir, 4, "fix_dns"):
         fix_dns_on_boxes(ctx.linux_targets, ctx.tf_ctx)
     with timed(ctx.comp_dir, 4, "prep_apt"):

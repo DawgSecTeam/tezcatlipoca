@@ -16,7 +16,7 @@ machine SID, so DCs cloned from one booted golden gave every team the same Domai
 (winad-testrun 2026-09-25). Domain-controller box types therefore get an UNBOOTED
 golden: a full clone of the sysprepped base converted straight to a template, so each
 team's clone runs specialize itself (fresh SID). Their planted configs move to the
-per-team repair stage (nakon_ops.generate_stage_configs), which still runs pre-domain.
+per-team repair stage (nakon_config_ops.generate_stage_configs), which still runs pre-domain.
 """
 
 import json
@@ -24,60 +24,30 @@ import os
 import time
 
 from constants import GOLDEN_CLONE_TIMEOUT, GOLDEN_TAG, SNAP_BASE, ownership_tags
-from engine_ops import ensure_nat_forwarding
-from hardening_ops import (
-    ensure_alpine_services,
-    fix_dns_on_boxes,
-    prep_apt_on_boxes,
-    setup_ubuntu_auth,
-)
-from nakon_ops import build_nakon_bundle, run_nakon
+from alpine_ops import ensure_alpine_services
+from apt_dns_ops import fix_dns_on_boxes, prep_apt_on_boxes
+from ubuntu_auth_ops import setup_ubuntu_auth
+from nakon_bundle_ops import build_nakon_bundle
+from nakon_run_ops import run_nakon
 from infra.ownership import full_clone_data
 from infra.client import proxmox_api, wait_for_proxmox_task
 from infra.lifecycle import (delete_snapshot, list_snapshots, rollback_snapshot, start_vm, stop_vm, take_snapshot,)
 from infra.ownership import (clone_marker, destroy_vm_if_exists, gc_orphan_volumes, retag_ownership,)
-from nodes_ops import golden_vmid_for_slot
+from placement_record import golden_vmid_for_slot
 from ssh_ops import ssh_via_gateway, wait_for_boxes_ssh, wait_for_cloud_init
-from template_ops import (
-    golden_plant_checkpoints,
-    save_template_hashes,
-    stored_template_hash,
-    write_template_hash,
+from template_freeze import (
+    golden_plant_checkpoints, save_template_hashes, stored_template_hash, write_template_hash,
 )
 from utils import PRINT_LOCK, compfile_flag, run_concurrent
 from windows_ops import bootstrap_windows_box, is_windows_template
-# Names that moved to sibling modules stay importable from here (this module is the
-# public path; see docs/internals.md 'golden_ops split').
 from golden_target_ops import (
     _quote_sshkeys,
-    golden_vmid_for,
-    golden_ip_for,
     _is_template,
     _vm_exists,
     _template_vmid_map,
-    unbooted_golden_boxes,
     golden_targets,
 )
-from golden_smoke_ops import (
-    BOOT_SMOKE_PASS,
-    BOOT_SMOKE_UNBOOTABLE,
-    BOOT_SMOKE_UNVERIFIED,
-    GOLDEN_BOOT_SMOKE_TAG,
-    GOLDEN_BOOT_SMOKE_TIMEOUT,
-    GOLDEN_BOOT_SMOKE_WIN_TIMEOUT,
-    GOLDEN_BOOT_SMOKE_POLL,
-    _smoke_vmid,
-    _destroy_smoke_clone,
-    _probe_boot,
-    _boot_smoke_error,
-    golden_boot_smoke,
-)
-from golden_disk_ops import (
-    _SIZE_TO_GB,
-    _root_disk_gb,
-    ensure_golden_disk_size,
-    expand_guest_root_disks,
-)
+from golden_disk_ops import ensure_golden_disk_size, expand_guest_root_disks
 
 
 def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_tag_str,
@@ -211,9 +181,8 @@ def _convert_goldens(node, targets, ownership_tag_str, golden_hashes):
     # MAX_CONCURRENCY's 8: each unit drives Proxmox tasks and 4 is the validated
     # per-box VM-work bound (deploy.py's snapshot/Windows-bootstrap pools, jump_ops).
     #
-    # The `if boot_smoke:` block ABOVE is a hard phase barrier: it runs first and
-    # raises on any non-PASS verdict, so a golden that failed its boot smoke can never
-    # reach POST /template no matter how this pool schedules. The clone loops (cold
+    # Every golden is stopped before this pool runs, so no POST /template can precede a
+    # failed step in the build. The clone loops (cold
     # path, and `missing`) are deliberately NOT parallel: full clones are
     # crash-consistent copies and saturate the datastore (see the module note on the
     # cold path and deploy.py's -parallelism=1).
@@ -312,13 +281,11 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     # tz-base and re-plant the whole set; measured across the cde-2026 attempts,
     # `Golden re-entry: rolling golden-<name> back to 'tz-base'` appears 33 times — 11
     # each for web01, ftp01 and db01 — over 10 runs, while only ftp01 was ever the
-    # problem. A golden that already passed its plant AND its boot smoke on an
-    # unchanged hash does not need either redone.
+    # problem. A golden that already passed its plant on an unchanged hash does not
+    # need it redone.
     #
     # The conversion barrier is deliberately NOT relaxed: every golden is still stopped
-    # and every *pending* one still smoked before any POST /template, so one failed
-    # smoke still blocks the whole conversion (tests/test_parallel_golden.py pins that).
-    # A checkpoint is only trusted while SNAP_BASE still exists on the box — a fresh
+    # before any POST /template. A checkpoint is only trusted while SNAP_BASE still exists on the box — a fresh
     # clone has no such snapshot, so a re-cloned golden is never mistaken for a done one.
     checkpoint_record = golden_plant_checkpoints(comp_dir) if golden_hashes else {}
     checkpointed = set()
@@ -329,23 +296,11 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
             checkpointed.add(t["box"]["name"])
     if checkpointed:
         print(f"  Golden checkpoint: {', '.join(sorted(checkpointed))} already planted and "
-              f"smoke-passed on this hash — skipping their rollback, plant and smoke")
-    # Everything below that does WORK (start, wait, prepare, snapshot, plant, smoke,
+              f"planted on this hash — skipping their rollback and plant")
+    # Everything below that does WORK (start, wait, prepare, snapshot, plant,
     # cloud-init clean) is scoped to `work`; the stop-and-convert barrier still covers
     # all of `targets`.
     work = [t for t in targets if t["box"]["name"] not in checkpointed]
-
-    # Boot smoke gate (Compfile `golden_boot_smoke`, default ON): the ONLY way to skip
-    # verifying the boot-hostile-config invariant is to say so deliberately — and then
-    # the warning below is printed, because the alternative is discovering the breakage
-    # on every team clone one phase later (2026-09-24 systemd-system-masked).
-    boot_smoke = bool(compfile_flag(comp_dir / "Compfile", "golden_boot_smoke", 1))
-    if not boot_smoke:
-        print("  WARNING: golden_boot_smoke is OFF in the Compfile — the boot-hostile "
-              "config invariant is UNVERIFIED this run. A golden that cannot boot will be "
-              "converted to a template and every linked team clone will fail to boot "
-              "(2026-09-24 systemd-system-masked). Re-enable `golden_boot_smoke 1` to "
-              "verify before conversion.")
 
     if missing:
         _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password,
@@ -426,16 +381,14 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     # max 103.3s — bench-parallel-2026-09-24 phase 4 alone was 12 snapshots / 135s — so
     # an 8-box-type golden build paid ~60-100s of serial waiting. Bound 4, the same
     # per-box bound deploy.py validated. run_concurrent joins the whole pool before it
-    # returns, so every box's snapshot still exists before the plant, the smoke gate,
-    # and the conversion that follow: the rollback-guard ordering is unchanged.
+    # returns, so every box's snapshot still exists before the plant and the conversion
+    # that follow: the rollback-guard ordering is unchanged.
     snap_results = run_concurrent(work, _snap_base, max_workers=4)
     # take_snapshot warns and returns False instead of raising, so the serial semantics
     # are warn-and-continue; anything that still escaped it must keep propagating.
     for _t, r in zip(work, snap_results):
         if isinstance(r, Exception):
             raise r
-
-    ensure_nat_forwarding(ctx)
 
     # With the alpine_services knob, catalog service steps are EXPECTED to fail on
     # Alpine (vulndb scripts are apt/dnf/yum-only) — the plant runs non-strict and
@@ -451,7 +404,7 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
         if coverage:
             coverage(_coverage_machines(t["box"]["name"] for t in targets), None)
     elif not work:
-        print("  Every golden is already planted and smoke-passed — skipping the plant")
+        print("  Every golden is already planted — skipping the plant")
         if coverage:
             coverage(_coverage_machines(t["box"]["name"] for t in targets), None)
     else:
@@ -493,31 +446,16 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
             print(f"    WARNING: cloud-init clean rc={r.returncode} on {t['ip']} "
                   f"— clones may inherit golden's machine-id")
 
-    # The golden is stopped BEFORE the smoke check: PVE only linked-clones templates, so
-    # the throwaway is a full clone, and a full clone of a running VM would be a
-    # crash-consistent copy rather than the exact bytes qm template will seal. Stopping
-    # does not mutate the disk (no reboot, no cloud-init re-init) — it is the same stop
-    # the conversion below needs, just moved up.
-    print("  Stopping golden boxes (clean shutdown before the boot smoke check and "
-          "template conversion)...")
+    print("  Stopping golden boxes (clean shutdown before template conversion)...")
     for t in targets:
         stop_vm(node, t["vmid"])
 
-    if boot_smoke:
-        planted_configs = sorted(
-            c if isinstance(c, str) else c.get("name", "")
-            for m in _golden_cfg() for c in (m.get("configurations") or []))
-        # Only the boxes this run planted need re-smoking: a checkpointed golden's disk
-        # has not changed since it passed, and it was never started this run. A failure
-        # here still raises BEFORE the conversion below, so the barrier holds.
+    # Record per-box before the conversion, so a later failure does not throw this
+    # box's plant away on the next re-entry.
+    if golden_hashes:
         for t in work:
-            golden_boot_smoke(node, t, ctx, comp_dir, planted_configs=planted_configs,
-                              run_id=run_id)
-            # Record per-box, immediately: if the NEXT box's smoke fails, this one's
-            # work must not be thrown away by the next re-entry.
-            if golden_hashes:
-                save_template_hashes(comp_dir, golden_planted={
-                    t["box"]["name"]: golden_hashes[t["box"]["name"]]})
+            save_template_hashes(comp_dir, golden_planted={
+                t["box"]["name"]: golden_hashes[t["box"]["name"]]})
 
     _convert_goldens(node, targets, ownership_tag_str, golden_hashes)
 
@@ -545,31 +483,4 @@ def destroy_golden_set(node, engine_vmid, num_box_types, expect_tags=None, slot=
     return skipped
 
 
-__all__ = [
-    'build_golden_set',
-    'destroy_golden_set',
-    '_quote_sshkeys',
-    'golden_vmid_for',
-    'golden_ip_for',
-    '_is_template',
-    '_vm_exists',
-    '_template_vmid_map',
-    'unbooted_golden_boxes',
-    'golden_targets',
-    'BOOT_SMOKE_PASS',
-    'BOOT_SMOKE_UNBOOTABLE',
-    'BOOT_SMOKE_UNVERIFIED',
-    'GOLDEN_BOOT_SMOKE_TAG',
-    'GOLDEN_BOOT_SMOKE_TIMEOUT',
-    'GOLDEN_BOOT_SMOKE_WIN_TIMEOUT',
-    'GOLDEN_BOOT_SMOKE_POLL',
-    '_smoke_vmid',
-    '_destroy_smoke_clone',
-    '_probe_boot',
-    '_boot_smoke_error',
-    'golden_boot_smoke',
-    '_SIZE_TO_GB',
-    '_root_disk_gb',
-    'ensure_golden_disk_size',
-    'expand_guest_root_disks',
-]
+__all__ = ['build_golden_set', 'destroy_golden_set']

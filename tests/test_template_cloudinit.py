@@ -13,7 +13,6 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import config_ops
 import infra.resources as preflight_templates
 
 

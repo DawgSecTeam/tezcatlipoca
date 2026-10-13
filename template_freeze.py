@@ -5,7 +5,7 @@ Lifecycle (per competition, never a cross-competition cache):
     build -> test runs (reuse; rebuild on config change) -> freeze -> competition -> destroy
 
 Every template belongs to exactly one competition: reused across that competition's test
-runs, frozen for the event, destroyed at --full teardown. Templates are never patched in
+runs, frozen for the event, destroyed at full teardown. Templates are never patched in
 place — every fix goes into the catalog/config and the templates rebuild from it.
 
 Hashes cover ONLY what affects disk contents, and every input is tagged config-class vs
@@ -74,14 +74,6 @@ def save_template_hashes(comp_dir, **entries):
         os.chmod(path, 0o600)
     except OSError:
         pass
-
-
-def bundle_id(bundle_path):
-# The content-addressed id of a built nakon bundle (its manifest's bundle_id).
-    try:
-        return json.loads((Path(bundle_path) / "manifest.json").read_text())["bundle_id"]
-    except (OSError, ValueError, KeyError):
-        return None
 
 
 def engine_template_vmid(engine_vmid):
@@ -178,7 +170,7 @@ def tf_resource_block(tf_text, rtype, rname):
 
 
 def _clean_func():
-    from engine_ops import clean_engine_for_template
+    from engine_identity_ops import clean_engine_for_template
     return clean_engine_for_template
 
 
@@ -254,26 +246,12 @@ def classify_drift(stored_inputs, current_inputs):
     return drift
 
 
-def golden_freeze_gate(name, stored_inputs, current_inputs, frozen_at, golden_bundle):
+def golden_freeze_gate(name, stored_inputs, current_inputs, frozen_at):
 # One golden's frozen-record comparison, before phase 1 destroys anything.
 #
-#     Frozen records written before the per-box payload-hash migration carried the
-#     whole-bundle bundle_id. Preserve such a record only when the bundle itself is
-#     unchanged; a changed bundle still enters the normal hard-fail path. Config-class
-#     drift raises (naming the fields — nothing was destroyed); code-class drift warns
-#     and proceeds off the frozen template. Returns the drift classification so
-#     callers can act on code-only drift (phase 1 keeps the frozen golden).
-    stored_config = (stored_inputs or {}).get("config") or {}
-    current_config = (current_inputs or {}).get("config") or {}
-    if (stored_config.get("bundle_id")
-            and "payload_hash" not in stored_config
-            and stored_config.get("bundle_id") == bundle_id(golden_bundle)):
-        stored_inputs = {**stored_inputs,
-                         "config": {k: v for k, v in stored_config.items()
-                                     if k != "bundle_id"}}
-        current_inputs = {**current_inputs,
-                          "config": {k: v for k, v in current_config.items()
-                                      if k != "payload_hash"}}
+#     Config-class drift raises (naming the fields — nothing was destroyed); code-class
+#     drift warns and proceeds off the frozen template. Returns the drift classification
+#     so callers can act on code-only drift (phase 1 keeps the frozen golden).
     drift = classify_drift(stored_inputs, current_inputs)
     if drift["config"]:
         raise SystemExit(
@@ -324,7 +302,7 @@ def frozen_code_drift(frozen):
 #
 #     Deliberately NOT fatal: resuming a range after a docs/test commit is a normal
 #     flow, and the operator unfreezes explicitly when a change must invalidate the
-#     freeze. `frozen` is the parsed .frozen.json (template_ops.frozen_state).
+#     freeze. `frozen` is the parsed .frozen.json (template_freeze.frozen_state).
     stored = (frozen or {}).get("code") or {}
     stored_commit = str(stored.get("commit") or "").strip()
     if not stored_commit or stored_commit == "unknown":

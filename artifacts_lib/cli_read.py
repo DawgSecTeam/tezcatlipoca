@@ -16,7 +16,7 @@ def cmd_list(args):
         if comp_dir is None:
             return unknown_comp(args.comp)
         try:
-            rows = index_rows(comp_dir, refresh=args.refresh)
+            rows = index_rows(comp_dir)
         except RuntimeError as e:
             return error(str(e), EXIT_FINDINGS)
         root = ao.artifacts_root(comp_dir)
@@ -38,7 +38,7 @@ def cmd_list(args):
             if not ao.artifacts_root(comp_dir).is_dir():
                 continue
             try:
-                scan[comp_dir.name] = index_rows(comp_dir, refresh=args.refresh)
+                scan[comp_dir.name] = index_rows(comp_dir)
             except RuntimeError as e:
                 # One broken comp must not hide every other comp's rows from the scan.
                 print(f"WARNING: {comp_dir.name}: {e}", file=sys.stderr)

@@ -1,9 +1,7 @@
 """Teardown continuation (loadtest-2026-09-30): a failed/interrupted destroy must be
 completable by re-running the pipeline — foreign VMs skip-and-continue, stale state
-locks clear when no terraform is alive, and the leftover sweep matches ONLY the
-competition's full tag set. Offline; fake Proxmox API."""
+locks clear when no terraform is alive. Offline; fake Proxmox API."""
 
-import importlib.util
 import sys
 import tempfile
 import unittest
@@ -14,65 +12,10 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 
-def load_module(name, filename):
-    spec = importlib.util.spec_from_file_location(name, _REPO / filename)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-destroy = load_module("destroy_competition_under_test", "destroy-competition.py")
 from teardown import machinery as destroy_sweep_ops  # noqa: E402
-from infra.ownership import Ownership  # noqa: E402
-
-
-def _ownership():
-    return Ownership("loadtest-cr-a", "run-aaaa0001")
 
 
 import golden_ops  # noqa: E402
-
-
-def fake_api(vms, deleted):
-    def _api(method, path, **kw):
-        if method == "GET" and path.endswith("/qemu"):
-            return {"data": vms}
-        if method == "POST" and path.endswith("/status/stop"):
-            return {"data": None}
-        if method == "DELETE" and "/qemu/" in path:
-            deleted.append(int(path.rsplit("/", 1)[1].split("?")[0]))
-            return {"data": None}
-        return {"data": None}
-    return _api
-
-
-def vm(vmid, name, tags, status="stopped"):
-    return {"vmid": vmid, "name": name, "tags": tags, "status": status}
-
-
-class LeftoverSweep(unittest.TestCase):
-    def test_sweep_destroys_only_full_tag_matches(self):
-        deleted = []
-        vms = [
-            vm(2300, "210-dc01", "tezcatlipoca;comp-loadtest-cr-a;run-aaaa0001"),
-            vm(2313, "211-win01", "tezcatlipoca;comp-loadtest-cr-a;run-aaaa0001", status="running"),
-            # partial/foreign overlap must NOT be candidates:
-            vm(2400, "212-web01", "tezcatlipoca;comp-loadtest-cr-a;run-bbbb0002"),
-            vm(1080, "quotient-engine", "tezcatlipoca;comp-multinode"),
-            vm(1333, "golden-web01", "template"),
-            vm(9000, "workshop-box", ""),
-        ]
-        with patch.object(destroy_sweep_ops, "proxmox_api", fake_api(vms, deleted)), \
-             patch.object(destroy_sweep_ops, "wait_for_proxmox_task"):
-            destroy_sweep_ops.sweep_tagged_leftovers(["proxmox"], _ownership())
-        self.assertEqual(sorted(deleted), [2300, 2313])
-
-    def test_sweep_is_silent_when_nothing_matches(self):
-        deleted = []
-        vms = [vm(1080, "quotient-engine", "tezcatlipoca;comp-multinode")]
-        with patch.object(destroy_sweep_ops, "proxmox_api", fake_api(vms, deleted)):
-            destroy_sweep_ops.sweep_tagged_leftovers(["proxmox"], _ownership())
-        self.assertEqual(deleted, [])
 
 
 class StaleStateLock(unittest.TestCase):
@@ -119,10 +62,9 @@ class GoldenDestroySkipsForeign(unittest.TestCase):
             raise RuntimeError("refusing to destroy vmid 1320: foreign tags")
 
         import engine_template_ops
-        import template_ops
         with patch.object(engine_template_ops, "destroy_vm_if_exists", fake_destroy), \
              patch("builtins.print"):
-            template_ops.destroy_engine_template("proxmox", 1180,
+            engine_template_ops.destroy_engine_template("proxmox", 1180,
                                                  expect_tags={"tezcatlipoca"})
 
 

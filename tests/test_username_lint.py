@@ -13,7 +13,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import config_ops
+import config_prompts
 import utils
 
 
@@ -51,7 +51,7 @@ class GenerateTimePath(unittest.TestCase):
     def test_flag_operator_falls_back_with_warning(self):
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            box_username, _ = config_ops.collect_users_config(
+            box_username, _ = config_prompts.collect_users_config(
                 box_username_flag="operator", credlist_flag="admin,user1,user2")
         self.assertEqual(utils.BOX_USERNAME_DEFAULT, box_username)
         self.assertIn("legacy distro system account", stdout.getvalue())
@@ -59,7 +59,7 @@ class GenerateTimePath(unittest.TestCase):
     def test_flag_medic_kept(self):
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            box_username, _ = config_ops.collect_users_config(
+            box_username, _ = config_prompts.collect_users_config(
                 box_username_flag="medic", credlist_flag="admin,user1,user2")
         self.assertEqual("medic", box_username)
         self.assertEqual("", stdout.getvalue())

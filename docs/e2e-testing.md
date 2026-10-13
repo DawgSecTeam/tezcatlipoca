@@ -177,16 +177,15 @@ aborts): **environmental saturation and unvetted pin density, not pipeline code.
   with a fail-fast snapshot precheck. Snapshots need a snapshot-capable datastore — the current
   `hdd` zfs pool is fine; thick LVM cannot snapshot at all.
 - **Verify gate.** `verify-competition.py` (logins, services, isolation, misconfig survival,
-  injects, no-default-creds, plus pins/plant-coverage/domains/red-identity/packet gates when
+  injects, plus pins/plant-coverage/domains/red-identity/packet gates when
   applicable — see [usage-agents.md](usage-agents.md#verify-competitionpy)) is the pass/fail gate
   for any deploy claim. Gates are tri-state (PASS/FAIL/SKIP) and an unwaived SKIP fails the run —
-  triage a non-zero exit for a gate that never ran before assuming the range is broken; the budget
-  flag is `--timeout`. The offline suite (`python3 -m pytest tests/`) covers deploy-path helpers
+  triage a non-zero exit for a gate that never ran before assuming the range is broken. The offline suite (`python3 -m pytest tests/`) covers deploy-path helpers
   but is **not** a pipeline test — this gate against a deployed range *is* the integration test.
   See [tests.md](tests.md).
 - **Logs — nothing captures them by default.** `run-agent-scrim.py` writes `<run_dir>/deploy.log`
   **only when the deploy fails** (the write is guarded on `returncode != 0` in `stage_deploy`), so a
-  *successful* harness run leaves no deploy log; `run-deploy.sh` tees to repo-root `deploy.log`; a
+  *successful* harness run leaves no deploy log; a
   bare `create-competition.py` run leaves only the console scrollback. Two post-mortems (17b/17c)
   were possible only because a run-dir happened to capture output. Always launch with capture
   (§7) — the per-run artifact folder keeps phase markers and the timing sidecar, not stdout
@@ -205,7 +204,7 @@ pipeline never justifies starting over.
 | 3 | apt/compose timeout on the engine (engine prep from template) | `--from-phase 3` — the prepare-engine steps are idempotent; resumed this way 4 times across runs | Don't rebuild boxes for an engine-side timeout |
 | 4 | golden plant strict abort on a bad vulndb row; golden build/convert; apply #2 clone race | Trim broken rows (§5) → `--from-phase 4`. **This is the only strict pass**, so it is the one that aborts on pin density | Don't `--from-phase 1` — you'd re-roll every golden and environmental dice to avoid one bad vulndb row. Note a partially *converted* golden set is fatal (templates can't be un-templated) |
 | 5 | in-path firewall bootstrap + engine cutover (no-op without an `in_path` box) | See [packet-profiles.md](packet-profiles.md) / the firewall notes; `--from-phase 5` re-drives it | Don't skip it on a firewall lineup — every later path must run THROUGH the firewall |
-| 6 | repair-stage sweep (lenient, so usually a tally not an abort); DNS/auth retries; fix_services | Trim (§5) → `--from-phase 6`. `.postclone-swept` gates the sweep; it is unlinked by apply #2 so a phase-4 re-entry always re-sweeps. If it was a transient (scp reset, one flaky step): re-run once first | Don't assume a phase-6 resume re-clones — cloning is phase 4 |
+| 6 | repair-stage sweep (lenient, so usually a tally not an abort); DNS/auth retries; fix_services | Trim (§5) → `--from-phase 6`. `.postclone-swept` lets a resume skip the sweep; apply #2 unlinks it so a phase-4 re-entry always re-sweeps. If it was a transient (scp reset, one flaky step): re-run once first | Don't assume a phase-6 resume re-clones — cloning is phase 4 |
 | 7 | domains (ADDS/join race, realmd timeouts); final-stage pass; beacons; `tz-ready` | Trim (§5) → `--from-phase 7`: join races are almost always just resume-and-retry, and the ADDS artifact guards re-promotion. Don't trust it on a domain comp without checking the `.nakon-domain-*-adds.json` artifacts exist | Don't expect a phase-7 resume to re-clone |
 | 8 | seed/inject/unpause failure | Re-run `--from-phase 8` — sub-steps are individually flag-gated | Don't re-run past an already-unpaused engine |
 
@@ -253,7 +252,7 @@ should be expected to iterate; don't author it the night the range needs to be g
    there leaks nothing new). Until
    then, §7's launch commands include the capture explicitly. This is the cheapest fix on this
    list and retroactively enables every post-mortem.
-3. **Preflight pin lint** — **implemented 2026-09-23** (`config_ops.preflight_gates`, run
+3. **Preflight pin lint** — **implemented 2026-09-23** (`infra.gates.run_preflight`, run
    automatically before terraform apply on every fresh deploy): `nakon catalog check`
    (boxes/services/vulns) is now a blocking gate, alongside template resolution (every
    `boxes.json` template must resolve to a tagged template cluster-wide, engine template vmid
@@ -261,7 +260,7 @@ should be expected to iterate; don't author it the night the range needs to be g
    40 GB). The remaining spec piece: linting against a maintained known-broken-rows list so
    the same vulndb row doesn't abort two runs in a row.
 4. **Datastore headroom check** — **implemented 2026-09-23**, part of the same
-   `preflight_gates` (see item 3). The worst incident on record (17c node crash) was local-lvm
+   `run_preflight` (see item 3). The worst incident on record (17c node crash) was local-lvm
    saturation from clones landing on the template's pool; the gate fails the deploy before
    phase 1 teardown when headroom is short. Still manual: confirming templates/disks live on
    the intended pool.
@@ -356,7 +355,7 @@ pure router, outbound NAT off. The two traps, both fixed/known:
   the `pfsense-provision` template boots with SSH on and LAN 192.168.1.1; the pipeline SSHes in
   through the engine and replaces `config.xml`, then reboots (the by-hand fallback is the
   runbook's console dance). Keep the pool name `pfSense` (the loader hardcodes it).
-- **WAN pass rule** in `gen_pfsense_config.py` must be `<network>lan</network>`, not a raw CIDR, or
+- **WAN pass rule** in the generated pfSense `config.xml` (`firewall_ops.generate_team_config`) must be `<network>lan</network>`, not a raw CIDR, or
   pfSense silently drops it and scoring times out.
 - Engine cutover, persistently: one engine reboot with all transit NICs added and the netplan
   MAC-matching each (`set-name: transit<id>`, `172.31.<id>.1/30`, route via `.2`) and **no** `.1`

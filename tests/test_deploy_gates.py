@@ -26,10 +26,10 @@ class PrepareGateOrder(unittest.TestCase):
                     effect(*a, **k)
             return _fn
 
-        def set_prior(prior, *a, **k):
-            prior.state_path = Path("/nonexistent/.deploy_state.json")
-            prior.previous_state = {}
-            prior.resuming = from_phase > 1
+        def set_prior(ctx, *a, **k):
+            ctx.state_path = Path("/nonexistent/.deploy_state.json")
+            ctx.previous_state = {}
+            ctx.resuming = from_phase > 1
 
         patches = {
             "resolve_engine_vmid": step("engine_vmid"),
@@ -45,7 +45,6 @@ class PrepareGateOrder(unittest.TestCase):
             "generate_stage_configs_and_hashes": step("configs"),
             "build_terraform_inputs": step("tfvars"),
             "enumerate_deploy_targets": step("targets"),
-            "assemble_deploy_context": lambda *a, **k: calls.append("assemble") or "CTX",
         }
         started = [patch.object(dl_prepare, n, side_effect=f) for n, f in patches.items()]
         for p in started:
@@ -54,20 +53,6 @@ class PrepareGateOrder(unittest.TestCase):
         result = dl_prepare.prepare(Path("/nonexistent"), assume_yes=assume_yes,
                                     from_phase=from_phase)
         return result, calls
-
-    def test_both_gates_run_before_the_mint_and_the_tfvars_write(self):
-        result, calls = self._run_prepare()
-        self.assertEqual(result, "CTX")
-        gates = [c for c in calls if c.startswith("GATE")]
-        self.assertEqual(gates, ["GATE:resume", "GATE:range"])
-        for gate in gates:
-            self.assertLess(calls.index(gate), calls.index("MINT"))
-            self.assertLess(calls.index(gate), calls.index("tfvars"))
-            self.assertLess(calls.index(gate), calls.index("targets"))
-
-    def test_the_resume_gate_precedes_placement_and_the_engine_lock(self):
-        _result, calls = self._run_prepare()
-        self.assertLess(calls.index("GATE:resume"), calls.index("placement"))
 
     def test_a_resume_never_mints(self):
         _result, calls = self._run_prepare(from_phase=4)

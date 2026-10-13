@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import config_ops
 import infra.resources as preflight_headroom
 
 BOXES = [{"disk_gb": 60}, {"disk_gb": 15}, {}]  # {} -> unset disk counts as 40 GB
@@ -37,6 +36,11 @@ class ThinHeadroomGate(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.run_gate(avail_gb=100)  # need 230 GB provisioned
             self.run_gate(avail_gb=300)      # passes at factor 1.0
+
+    def test_a_failed_status_read_raises_instead_of_skipping_the_gate(self):
+        with patch.object(preflight_headroom, "proxmox_api", side_effect=RuntimeError("500")):
+            with self.assertRaises(RuntimeError):
+                preflight_headroom.check_datastore_headroom("proxmox", "hdd", BOXES, 2)
 
     def test_thin_factor_counts_fraction(self):
         self.run_gate(avail_gb=100, thin="0.25")  # 230 x 0.25 = 57.5 GB counted

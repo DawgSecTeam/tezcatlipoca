@@ -9,12 +9,12 @@ import json
 import os
 from pathlib import Path
 
-from nodes_ops import activate_placement, read_placement, record_of
+from placement_record import activate_placement, read_placement, record_of
 from teardown import (Inventory, TeardownContext, TeardownEngine, load_ownership,
                       refuse_frozen_full_teardown, require_terraform_state)
 from teardown.engine import TEARDOWN_JOURNAL
 from teardown.modes import build_terminal_plan
-from template_ops import frozen_state
+from template_freeze import frozen_state
 
 
 def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
@@ -61,8 +61,7 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
         nodes=placement_nodes, default_node=default_node,
         inventory=Inventory(placement_nodes),
         full=full, keep_red=keep_red, artifacts_timeout=artifacts_timeout)
-    plan = build_terminal_plan(comp_dir, frozen, full=full,
-                               end_of_competition=end_of_competition)
+    plan = build_terminal_plan()
     engine = TeardownEngine(ctx, log=log)
     results = engine.execute(plan)
     return engine.verify_clean(plan, results)

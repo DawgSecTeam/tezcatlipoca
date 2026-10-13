@@ -3,11 +3,9 @@
 import os
 import re
 import shlex
-import subprocess
-import time
 
 from infra.guest_exec import guest_agent_exec_detached
-from ssh_ops import box_ssh_argv
+from ssh_ops import box_ssh_retry
 from utils import PRINT_LOCK, run_concurrent, valid_unix_username
 
 
@@ -66,30 +64,14 @@ def setup_ubuntu_auth(targets, ctx):
                     f"auth setup failed on {ip}: SSH unusable ({reason}) and the "
                     f"guest-agent fallback raised ({e})") from e
 
-        for attempt in range(1, 9):
-            try:
-                r = subprocess.run(
-                    box_ssh_argv(ctx, ip, box_username, auth_cmd),
-                    capture_output=True, text=True, timeout=40,
-                )
-                if r.returncode == 0:
-                    with PRINT_LOCK:
-                        print(f"    Auth configured on {ip}")
-                    return True
-                err = r.stderr or ""
-                # Definitive rejections can't heal by waiting: a rejected key/password
-                # or a dead gateway leg stays rejected on every retry. Straight to the
-                # agent fallback instead of burning 8x15s (live: cyberrange loadtest).
-                if ("Permission denied" in err or "REMOTE HOST IDENTIFICATION" in err
-                        or "Host key verification failed" in err):
-                    return _via_agent(err.strip().splitlines()[-1][:120]
-                                      if err.strip() else "rejected")
-            except subprocess.TimeoutExpired:
-                pass  # box still booting — retry
-            if attempt < 8:
-                with PRINT_LOCK:
-                    print(f"    Auth attempt {attempt}/8 failed for {ip}, retrying in 15s...")
-                time.sleep(15)
+        ok, rejection = box_ssh_retry(ctx, ip, box_username, auth_cmd,
+                                      timeout=40, attempts=8, what="Auth")
+        if ok:
+            with PRINT_LOCK:
+                print(f"    Auth configured on {ip}")
+            return True
+        if rejection:
+            return _via_agent(rejection.strip().splitlines()[-1][:120])
         return _via_agent("unreachable after 8 attempts")
 
     results = run_concurrent(targets, _auth)

@@ -58,7 +58,7 @@ def ensure_alpine_services(comp_dir, targets, ctx):
         if unknown:
             raise RuntimeError(
                 f"alpine_services shim has no apk mapping for {unknown} pinned on {box_name} — "
-                f"add it to hardening_ops.ALPINE_SERVICES or drop the pin")
+                f"add it to alpine_ops.ALPINE_SERVICES or drop the pin")
         wanted = [ALPINE_SERVICES[s] for s in pin_names]
         if wanted:
             pending.append((t, wanted))

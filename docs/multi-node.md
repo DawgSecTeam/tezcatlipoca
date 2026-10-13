@@ -114,7 +114,7 @@ template / collision / headroom checks the single-node deploy runs as a one-shar
 engine and jump mgmt-IP sweeps and the catalog check. `in_path` firewalls on satellite teams are
 refused while the plan is built. See [internals.md](internals.md#preflight--the-single-pre-proxmox-gate).
 The placement code is `nodes_config.py` / `placement_record.py` / `placement_planner.py`
-(`nodes_ops` re-exports them); tests patch the owning module.
+(there is no facade; import from the owning module).
 
 Absent `nodes.json` → every deploy/op behaves exactly as the single-node design.
 
@@ -161,7 +161,7 @@ so reuse/rebuild logic works per node.
 - **Phase 2** apply #1 builds bridges on every host, the engine, and the engine's
   satellite routes (persisted as a systemd oneshot so an engine reboot re-asserts
   them); then the jump VMs are cloned + configured **concurrently on a bounded pool of 4**
-  (cloud-init static IPs, iptables-restore ruleset, `verify_jump`; each satellite is an
+  (cloud-init static IPs, iptables-restore ruleset; each satellite is an
   independent host, and one that never comes up still aborts the deploy), and `routing_ops`
   fail-loud gates engine→jump reachability before anything depends on it.
 - **Phase 4** builds the golden set on the engine node as today, then once per

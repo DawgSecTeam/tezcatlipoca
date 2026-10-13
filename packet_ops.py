@@ -23,7 +23,8 @@ import yaml
 
 from config_ops import random_password
 from constants import KNOWN_BROKEN_CONFIGS, MAX_BOXES_PER_TEAM, REQUIRED_VARS
-from nakon_ops import os_to_platform, _windows_password_error
+from nakon_config_ops import os_to_platform
+from nakon_pin_ops import _windows_password_error
 from quotient.setup import _SERVICE_TO_CHECK
 from utils import is_legacy_account_name, valid_comp_name, valid_unix_username
 
@@ -52,7 +53,6 @@ _BASELINE_LINUX_CONFIG = "local-user"
 # on exactly the property that keeps a range deployable. The old local copy claimed to
 # spare packet_ops the config_ops -> infra.client -> requests chain, but that isolation was
 # already nominal: quotient.setup (imported above) pulls requests regardless.
-_gen_password = random_password
 
 
 def team_domain_parts(name_template):
@@ -73,6 +73,13 @@ def _has_control_chars(value):
 #     a YAML `|` block scalar with a trailing newline is enough (audit-found 2026-10-02:
 #     event.name/event.scenario/domain.name_template reach compile_profile raw).
     return any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in str(value))
+
+
+def _check_username(err, where, user):
+    if not valid_unix_username(str(user)):
+        err(f"{where}: username {user!r} must match [a-z_][a-z0-9_-]*")
+    elif is_legacy_account_name(str(user)):
+        err(f"{where}: {user!r} collides with a legacy distro system account")
 
 
 def load_profile(path):
@@ -159,12 +166,7 @@ def validate_profile(p):
             # These become local-user/local-user-win USERNAME vars on every managed
             # box (build_baseline), so they get the same name rules as credlist users.
             for user in out_of_scope:
-                if not valid_unix_username(str(user)):
-                    err(f"credentials.out_of_scope: username {user!r} must match "
-                        "[a-z_][a-z0-9_-]*")
-                elif is_legacy_account_name(str(user)):
-                    err(f"credentials.out_of_scope: {user!r} collides with a legacy "
-                        "distro system account")
+                _check_username(err, "credentials.out_of_scope", user)
     accounts = creds.get("domain_accounts")
     if accounts is not None:
         if not isinstance(accounts, list):
@@ -197,12 +199,7 @@ def validate_profile(p):
             err(f"credentials.credlists.{name} must be a non-empty user->password mapping")
             continue
         for user in pairs:
-            if not valid_unix_username(str(user)):
-                err(f"credentials.credlists.{name}: username {user!r} must match "
-                    "[a-z_][a-z0-9_-]*")
-            elif is_legacy_account_name(str(user)):
-                err(f"credentials.credlists.{name}: {user!r} collides with a legacy "
-                    "distro system account")
+            _check_username(err, f"credentials.credlists.{name}", user)
     if credlists.get("domain") and not domain.get("name_template"):
         err("credentials.credlists.domain needs domain.name_template (the domain "
             "credlist authenticates against the per-team AD forest)")
@@ -300,7 +297,7 @@ def validate_profile(p):
                 f"would plant but score nothing. Fix the name, use a score-only pin "
                 f"({SCORE_PIN_PREFIX}<check>), or mark it `scored: false` (plant-only)")
         # Known-broken gate: same list the deploy-time pin gate enforces
-        # (nakon_ops._validate_known_broken_pins). A packet that pins one of these
+        # (nakon_pin_ops._validate_known_broken_pins). A packet that pins one of these
         # would compile into a bundle the deploy then refuses, so fail at compile time.
         broken = KNOWN_BROKEN_CONFIGS.get(str(pin))
         if broken:
@@ -317,7 +314,7 @@ def validate_profile(p):
         if svc_vars is not None and not isinstance(svc_vars, dict):
             err(f"service {s.get('name')!r}: vars must be a mapping (got {svc_vars!r})")
         # REQUIRED_VARS "literal" vars must be pinned at compile time, not discovered
-        # at deploy start (nakon_ops._validate_pin_vars) after the golden is built.
+        # at deploy start (nakon_pin_ops._validate_pin_vars) after the golden is built.
         # Identity kinds are exempt: they are auto-filled per machine.
         required = REQUIRED_VARS.get(str(pin)) or {}
         missing = [v for v, kind in required.items()
@@ -445,7 +442,7 @@ def _cred_carrying_services(p, box_name):
 
 
 def _platform_of(template):
-# Packet-side wrapper over the one template->platform map (nakon_ops.os_to_platform).
+# Packet-side wrapper over the one template->platform map (nakon_config_ops.os_to_platform).
 #
 #     The shared map calls `.lower()` straight on its argument; packet YAML tolerates a box
 #     with no `template` key, so coerce first. This wrapper historically read
@@ -482,16 +479,16 @@ def build_baseline(p):
             if platform == "windows":
                 # New-LocalUser caps -Description at 48 chars (Windows API) — live-found
                 # 2026-09-30: 54-char descriptions died in ParameterBindingValidation.
-                password = _gen_password()
+                password = random_password()
                 while _windows_password_error(user, password, "Scoring infrastructure"):
-                    password = _gen_password()
+                    password = random_password()
                 pins.append({"name": win_cfg, "vars": {
                     "USERNAME": user, "PASSWORD": password,
                     "FULLNAME": "Scoring infrastructure",
                     "DESCRIPTION": f"{user} - out of scope, do not touch"}})
             else:
                 pins.append({"name": linux_cfg, "vars": {
-                    "USERNAME": user, "PASSWORD": _gen_password()}})
+                    "USERNAME": user, "PASSWORD": random_password()}})
         if platform == "windows" and credlist_users and _cred_carrying_services(p, b["name"]):
             for user in credlist_users:
                 # Windows local-account creation enforces a minimum password length

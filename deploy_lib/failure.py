@@ -1,6 +1,4 @@
-"""Failure bookkeeping: the resume-loop streak and the tolerated-failure ledger."""
-
-import re
+"""Failure bookkeeping: the tolerated-failure ledger."""
 
 from utils import degradation_summary, degradations
 
@@ -29,38 +27,3 @@ def record_degradations(ctx):
         print(f"      - {item['what']}{count}: {item['detail'][:120]}")
     print("      (recorded in .deploy_state.json as `degradations`; verify-competition "
           "surfaces them)")
-
-
-def failure_signature(exc):
-# A stable identity for "the same failure again", for the resume budget.
-#
-#     Raw messages differ every run (vmids, uuids, temp paths, elapsed seconds), so a
-#     naive signature would never match and the guard could never fire. Normalise the
-#     volatile parts and keep the shape. Erring toward *matching* is deliberate: the
-#     guard only ever refuses a resume, and --force-from-phase overrides it.
-    text = f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}"
-    text = re.sub(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-                  r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", "<uuid>", text)
-    text = re.sub(r"\b[0-9a-fA-F]{12,}\b", "<hex>", text)
-    text = re.sub(r"\d+", "N", text)
-    return re.sub(r"\s+", " ", text).strip()[:160]
-
-
-def record_failure(state, phase, exc):
-# Count consecutive failures of the same phase with the same signature.
-#
-#     Returns the new count. A different signature at the same phase is a *new*
-#     failure, not a repeat, so the budget resets — that is why the streak is keyed on
-#     the signature and not just the phase.
-    signature = failure_signature(exc)
-    previous = state.get("failure_streak") or {}
-    repeated = (previous.get("phase") == phase
-                and previous.get("signature") == signature)
-    count = int(previous.get("count") or 0) + 1 if repeated else 1
-    state["failure_streak"] = {"phase": phase, "signature": signature, "count": count}
-    return count
-
-
-def clear_failure_streak(state):
-# Drop the streak after a phase run that made it through.
-    return state.pop("failure_streak", None)

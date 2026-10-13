@@ -329,11 +329,10 @@ allowlisted, which is what keeps this table from drifting again.
 | `PROXMOX_CA_BUNDLE` / `PROXMOX_TLS_FINGERPRINT` | Pin Proxmox API TLS verification to a CA bundle or a sha256 cert fingerprint instead of the default unverified self-signed cert. Set at most one |
 | `TF_VAR_proxmox_api_token_<node>` (e.g. `_193`) | Multi-node: `nodes.json` references per-host tokens **by env-var name**, so each additional host's token gets its own variable. See [multi-node.md](multi-node.md) |
 
-**Driver-written mechanically, and read back on resume:** `TF_VAR_teams`,
+**Read by the driver, never rewritten by it:** `TF_VAR_teams`,
 `TF_VAR_boxes_per_team`, `TF_VAR_box_username`, `TF_VAR_box_password`, `TF_VAR_event_name`,
 `TF_VAR_scoring_vm_id`, `TF_VAR_engine_mgmt_ip`, `TF_VAR_engine_mgmt_gw` (the last four only when
-set). The first four are rewritten in `.env` by `update_env()` every time you create or reuse a
-competition. An old env's stale `TF_VAR_teams`/`TF_VAR_boxes_per_team` are overridden from the comp
+set). An old env's stale `TF_VAR_teams`/`TF_VAR_boxes_per_team` are overridden from the comp
 dir at terraform time, so they are cosmetic.
 
 Not `.env` variables at all: Quotient's `admin` **and `scoring`** passwords (both minted in
@@ -341,7 +340,7 @@ memory each run and saved to `competitions/<id>/credentials.txt`), plus the
 inject/postgres/redis passwords. **`scoring` is a second admin account for automation** —
 Quotient allows one session per account, so a scheduled login on `admin` would evict whichever
 operator, `verify-competition`, or harness session holds it. Anything that authenticates on its
-own timetable (a round-loop watchdog, an unattended verify) must use `scoring`, and both accounts
+own timetable (an unattended verify, a harness) must use `scoring`, and both accounts
 are seeded into `event.conf` for every competition. Boxes are instead
 per-event on purpose (that's the point of nakon scaling
 difficulty per box) — `create-competition.py` queries Proxmox for templates tagged `template`

@@ -5,8 +5,8 @@ import json
 import sys
 from pathlib import Path
 
-from config_ops import (_prompt_difficulty, collect_boxes, collect_users_config,
-                        load_previous_competitions)
+from config_prompts import _prompt_difficulty, collect_boxes, collect_users_config
+from config_ops import load_previous_competitions
 from utils import valid_comp_name
 
 from deploy_lib.runner import deploy
@@ -41,11 +41,6 @@ def build_parser():
                              "not record as completed. Only for a known-stale checkpoint (e.g. the "
                              "process died after a phase finished but before it was checkpointed); "
                              "the skipped phases build the machines the later ones target.")
-    parser.add_argument("--min-load-free", type=float, default=None, dest="min_load_free",
-                        help="On a resume into a phase that previously failed, wait until the "
-                             "node's 1-minute load is below this before starting. Phase-4 retries "
-                             "used to be hand-throttled this way; a contended node, not a short "
-                             "timeout, is what made cde-2026 loop eleven times.")
     parser.add_argument("--scoring-vmid", type=int, default=None, dest="scoring_vmid",
                         help="VMID for this competition's scoring engine (default 1000). Give each "
                              "concurrent competition on a shared node a distinct free VMID so their "
@@ -192,4 +187,4 @@ def main():
 
     deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase,
            scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node,
-           force_from_phase=args.force_from_phase, min_load_free=args.min_load_free)
+           force_from_phase=args.force_from_phase)

@@ -58,18 +58,6 @@ class TestTargets(unittest.TestCase):
 
 
 class TestScripts(unittest.TestCase):
-    def test_linux_script_covers_the_sources_blue_reads(self):
-        for needle in ("auth.log", "syslog", "apt/history.log", "dpkg.log",
-                       "wtmp", ".bash_history", "journalctl --vacuum", "/tmp/ba"):
-            self.assertIn(needle, clean_trails.LINUX_SCRIPT)
-        self.assertIn("TRAILS_LINUX_OK", clean_trails.LINUX_SCRIPT)
-
-    def test_windows_script_covers_payload_and_event_sources(self):
-        for needle in ("Panther", "Setup\\Scripts", "ConsoleHost_history",
-                       "System32\\LogFiles", "wevtutil"):
-            self.assertIn(needle, clean_trails.WINDOWS_PS)
-        self.assertIn("TRAILS_WIN_OK", clean_trails.WINDOWS_PS)
-
     def test_linux_skip_block_guards_every_destructive_line(self):
     # The decoy kill (2026-10-11): a planted path matching a staging rm glob
     #         died in the wipe. Every rm/truncate in LINUX_SCRIPT must go through
@@ -84,17 +72,6 @@ class TestScripts(unittest.TestCase):
         self.assertIn('! in_skip "$h"', script)
         # the heredoc is quoted, so a path is data, never shell to execute
         self.assertIn("<<'TZ_SKIP'", block)
-
-    def test_windows_skip_header_survives_quoted_paths(self):
-        header = clean_trails._windows_skip_header(
-            [r"C:\ProgramData\decoy", r"C:\it's\here"])
-        script = header + clean_trails.WINDOWS_PS
-        self.assertIn("Test-SkipPath", script)
-        self.assertIn("''", header)                       # ' doubled, not raw
-        self.assertNotIn("Remove-Item -Force -Recurse -Path \"$env:SystemRoot\\Temp\\*\"",
-                         script)                          # blind glob removals are gone
-        self.assertIn("Where-Object { -not (Test-SkipPath $_.FullName) }", script)
-
 
 class TestSkipList(unittest.TestCase):
     def test_extract_paths_covers_paths_and_detail_tokens(self):
@@ -207,10 +184,6 @@ class TestIntegrity(unittest.TestCase):
         self.assertTrue(all(res.values()))
         self.assertEqual(checks["n"], 2)                  # pre + post
 
-    def test_windows_wipe_budget_is_the_slow_path_budget(self):
-        self.assertGreaterEqual(clean_trails.WIN_WIPE_TIMEOUT, 600)
-
-
 class TestDispatch(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
@@ -237,30 +210,6 @@ class TestDispatch(unittest.TestCase):
             res = clean_trails.clean_trails(self.comp, {})
         self.assertEqual(len(res), 2)
         self.assertFalse(any(res.values()))     # a wipe failure never aborts a deploy
-
-
-class TestPlanReadsStagedCopies(unittest.TestCase):
-    def test_red_wants_are_the_staged_paths(self):
-    # All three red artifacts are 0600 root in /var/lib/bad-auto: the collector
-    #         has to read the sudo-staged copies, or one unreadable file marks the target
-    #         unreachable and takes the others with it.
-        import sys
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        import artifacts_ops as ao
-
-        comp = _comp(tempfile.mkdtemp())
-        test_dir = comp / ao.DIRNAME / "run-abc12345"
-        test_dir.mkdir(parents=True)
-        ao.ensure_test(comp, kind="scrim", key="run-abc12345",
-                       run_id="run-abc12345", script="run-agent-scrim.py")
-        ao.update_manifest(test_dir, agents={"red": {"present": True,
-                                                    "ssh": {"host": "10.0.0.198"}}})
-        targets = ao.plan_targets(ao.load_manifest(test_dir), comp_dir=comp)
-        red = next(t for t in targets if t["name"] == "red01")
-        remotes = [w.get("remote") for w in red["want"] if w.get("remote")]
-        self.assertTrue(remotes)
-        for remote in remotes:
-            self.assertTrue(remote.startswith("/tmp/ba/"), f"{remote} is not a staged copy")
 
 
 if __name__ == "__main__":

@@ -35,7 +35,7 @@ def _inject_reanchor_plan(comp_injects, remote_injects):
 # attachment NOT listed under keep-files, so every existing InjectFileNames entry is
 # re-listed on each POST
 def reanchor_injects(args, comp, creds):
-    from config_ops import load_injects, resolve_inject_times
+    from injects_config import load_injects, resolve_inject_times
 
     injects = load_injects(comp)
     if not injects:

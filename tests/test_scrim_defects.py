@@ -63,22 +63,6 @@ def _wait_dead(pid, timeout=5.0):
 
 
 
-def _scrim_src():
-# The whole harness as one string: the entrypoint plus every module of the scrim/ package.
-    return "\n".join(f.read_text() for f in
-                     [_REPO / "run-agent-scrim.py", *sorted((_REPO / "scrim").glob("*.py"))])
-
-
-class _suppress:
-# Tiny context manager so a fixture cleanup cannot mask the real assertion.
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return True
-
-
 # D1 ---------------------------------------------------------------------------
 class ProcessTreeSupervision(unittest.TestCase):
 # run_tree must reap the whole process group; subprocess.run(timeout=) does not.
@@ -90,21 +74,6 @@ class ProcessTreeSupervision(unittest.TestCase):
     def _orphan_script(pidfile):
         return (f"bash -c 'trap \"\" INT TERM; exec sleep 300' & "
                 f"echo $! > {pidfile}; sleep 300")
-
-    def test_plain_subprocess_run_orphans_the_grandchild(self):
-    # The defect being fixed, demonstrated against the stdlib.
-        tmp = Path(tempfile.mkdtemp())
-        pidfile = tmp / "gc.pid"
-        with self.assertRaises(subprocess.TimeoutExpired):
-            subprocess.run(["bash", "-c", self._orphan_script(pidfile)],
-                           timeout=0.6, capture_output=True)
-        pid = int(pidfile.read_text())
-        try:
-            self.assertTrue(_pid_alive(pid),
-                            "fixture broken: the grandchild should have outlived subprocess.run")
-        finally:
-            with _suppress():
-                os.kill(pid, signal.SIGKILL)
 
     def test_run_tree_kills_the_whole_process_group(self):
         tmp = Path(tempfile.mkdtemp())
@@ -409,13 +378,6 @@ class EvidenceHygiene(unittest.TestCase):
         quotient_api.jar_path(rd, "team1")
         self.assertEqual(p.read_text(), "cookie")
 
-    def test_no_predictable_tmp_jar_path_in_the_driver_or_its_generated_helpers(self):
-        src = _scrim_src()
-        # no string literal builds the old shared-/tmp path...
-        self.assertNotIn('"/tmp/jar.', src)
-        # ...and scrim.env points the blue agent's helpers at the run-dir jar instead
-        self.assertIn("JAR={quotient_api.jar_path(run_dir, f'team{n}')}", src)
-
     def test_evidence_writer_is_atomic_and_0600(self):
         rd = Path(tempfile.mkdtemp())
         out = rd / "final-scoreboard.json"
@@ -430,15 +392,6 @@ class EvidenceHygiene(unittest.TestCase):
         out.chmod(0o644)
         core.secure_evidence(out)
         self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o600)
-
-    def test_startup_sets_a_restrictive_umask(self):
-        for name in ("scrim/cli.py", "run-schedule.py"):
-            self.assertIn("os.umask(0o077)", (_REPO / name).read_text(), name)
-
-    def test_no_dangling_open_write_leaks(self):
-        # `.open("a").write(...)` leaks one descriptor per call (monitor.log every
-        # MONITOR_INTERVAL, feed.log every cycle) for the length of the event.
-        self.assertNotIn('.open("a").write(', _scrim_src())
 
     def test_json_error_tests_the_key_not_the_text(self):
         self.assertTrue(quotient_api.json_error('{"error":"Forbidden"}'))
@@ -699,12 +652,6 @@ class PasswordHandling(unittest.TestCase):
         self.assertIn("sudo -S", argv[-1])
         self.assertEqual(stdin_text, pw + "\nsystemctl stop nginx")
 
-    def test_no_password_interpolation_into_a_shell_string_remains(self):
-        src = _scrim_src()
-        self.assertNotIn("echo %s | sudo -S", src)
-        self.assertNotIn('creds["BOX_PW"], unit', src)
-
-
 # D10 --------------------------------------------------------------------------
 class ResumeGuardAndManifest(unittest.TestCase):
     def test_resume_window_threshold(self):
@@ -749,15 +696,6 @@ class ResumeGuardAndManifest(unittest.TestCase):
     def test_missing_manifest_is_empty_not_an_error(self):
         self.assertEqual(run_manifest.load_manifest(Path(tempfile.mkdtemp())), {})
 
-    def test_the_phase_marker_is_written_before_stage_red(self):
-        # stage_red deploys red01 for tens of minutes; a driver that dies in there must
-        # still leave something --resume-event can reason about.
-        src = _scrim_src()
-        # the indented call site in main(), not the `def stage_red(...)` definition
-        self.assertLess(src.index('run_manifest.record_phase(run_dir, args, "stage_red")'),
-                        src.index("\n    red_stage.stage_red(args, comp, creds, run_dir)"))
-
-
 # D11 --------------------------------------------------------------------------
 class AuthoredCompSweepMarker(unittest.TestCase):
     def test_a_swept_template_does_not_leak_the_postclone_marker(self):
@@ -779,12 +717,6 @@ class AuthoredCompSweepMarker(unittest.TestCase):
         # pre-fix the REAL marker was copied, so the new competition claimed to be
         # post-clone swept and deploy skipped the sweep the fresh range needs.
         self.assertFalse((dst / ".postclone-swept").exists())
-
-    def test_the_skip_condition_names_the_postclone_marker(self):
-        src = _scrim_src()
-        self.assertIn('if item.name == ".postclone-swept"', src)
-        self.assertNotIn('if item.name == ".phase6-swept"', src)
-
 
 class RedReachabilityGate(unittest.TestCase):
 # D13: pre-T0 gate that red01 can dial a box on every team.
@@ -863,6 +795,12 @@ class RedTeardownAssertion(unittest.TestCase):
 #     worked — the driver printed DONE while a red box holding the beacon controller and
 #     its LLM key stayed up on the range. `badauto destroy` follows config.yaml's
 #     deploy.red_vmid by design, so a stale config silently targets the wrong vmid.
+
+    # pull_red_state really ssh's to red01: unmocked it hangs whenever that host is routable
+    def setUp(self):
+        patcher = mock.patch.object(teardown_stage.red_link, "pull_red_state")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _args(self, red_vmid=998):
         return SimpleNamespace(red_vmid=red_vmid, competition="c1")

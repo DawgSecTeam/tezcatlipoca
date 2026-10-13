@@ -20,7 +20,7 @@ sys.path.insert(0, str(_REPO))
 import packet_ops  # noqa: E402
 from deploy_lib import inputs as dl_inputs  # noqa: E402
 from deploy_lib import secrets as dl_secrets  # noqa: E402
-from deploy_lib import stages as dl_stages  # noqa: E402
+from deploy_lib.context import DeployContext  # noqa: E402
 from deploy_lib.phases import finish  # noqa: E402
 from verifier import packet as vpacket  # noqa: E402
 
@@ -55,42 +55,38 @@ class PacketPipelineOffline(unittest.TestCase):
             for secret in ("passwords.json", "box_baseline.json", "domain_accounts.json"):
                 if (comp / secret).exists():
                     self.assertEqual((comp / secret).stat().st_mode & 0o777, 0o600, secret)
-            spec = dl_stages.CompetitionSpec()
-            dl_inputs.load_competition_spec(spec, comp)
-            self.assertEqual(spec.box_username, profile["credentials"]["box_username"])
-            self.assertEqual([b["name"] for b in spec.boxes],
+            dctx = DeployContext()
+            dl_inputs.load_competition_spec(dctx, comp)
+            self.assertEqual(dctx.box_username, profile["credentials"]["box_username"])
+            self.assertEqual([b["name"] for b in dctx.boxes],
                              [b["name"] for b in profile["boxes"]])
             # every box template is a non-empty name; deploy preflight resolves it later
-            self.assertTrue(all(b.get("template") for b in spec.boxes))
+            self.assertTrue(all(b.get("template") for b in dctx.boxes))
 
     def test_secret_mint_keeps_packet_credentials_and_verify_gate_passes(self):
         for name, root in self._each():
           with self.subTest(packet=name):
             profile, comp = _compile(root, name)
-            spec = dl_stages.CompetitionSpec()
-            dl_inputs.load_competition_spec(spec, comp)
-            inputs = dl_stages.CompetitionInputs()
-            dl_inputs.load_competition_inputs(inputs, comp)
-            prior = dl_stages.PriorDeployState(state_path=comp / ".deploy_state.json",
-                                               previous_state={}, resuming=False)
-            secrets = dl_stages.CompetitionSecrets(
-                state={"last_phase": 0}, teams={"team1": {"identifier": "101", "password": "tp"}},
-                number_of_teams=1, run_id="run-0badf00d")
-            identity = dl_stages.RunIdentity()
-            identity.engine_vmid = 1000
+            dctx = DeployContext(state_path=comp / ".deploy_state.json", previous_state={},
+                                 resuming=False, state={"last_phase": 0},
+                                 teams={"team1": {"identifier": "101", "password": "tp"}},
+                                 number_of_teams=1, run_id="run-0badf00d", engine_vmid=1000)
+            dl_inputs.load_competition_spec(dctx, comp)
+            dl_inputs.load_competition_inputs(dctx, comp)
             with patch("builtins.print"):
-                dl_secrets.mint_competition_secrets(secrets, prior, spec, inputs, identity)
+                dl_secrets.mint_competition_secrets(dctx)
             creds = profile["credentials"]
-            self.assertEqual(secrets.box_password, creds["box_password"])
-            self.assertEqual(secrets.box_creds, creds["credlists"]["linux"])
-            self.assertEqual(secrets.domain_creds, creds["credlists"].get("domain"))
+            self.assertEqual(dctx.box_password, creds["box_password"])
+            self.assertEqual(dctx.box_creds, creds["credlists"]["linux"])
+            self.assertEqual(dctx.domain_creds, creds["credlists"].get("domain"))
 
             ctx = SimpleNamespace(
-                name=spec.name, scoring_ip="10.0.0.9", admin_password=secrets.admin_password,
-                scoring_password=secrets.scoring_password, packet_pw=inputs.packet_pw,
-                inject_password=secrets.inject_password, teams=secrets.teams,
-                box_username=spec.box_username, box_password=secrets.box_password,
-                box_creds=secrets.box_creds, domain_creds=secrets.domain_creds, comp_dir=comp)
+                name=dctx.name, scoring_ip="10.0.0.9", admin_password=dctx.admin_password,
+                scoring_password=dctx.scoring_password, packet_pw=dctx.packet_pw,
+                inject_password=dctx.inject_password, teams=dctx.teams,
+                box_username=dctx.box_username, box_password=dctx.box_password,
+                box_creds=dctx.box_creds, domain_creds=dctx.domain_creds, comp_dir=comp,
+                state={})
             finish.write_credentials_file(ctx)
             self.assertEqual((comp / "credentials.txt").stat().st_mode & 0o777, 0o600)
             with patch("builtins.print"):
@@ -130,20 +126,20 @@ class PacketPipelineOffline(unittest.TestCase):
                              Status.SKIP_UNAVAILABLE)
 
     def test_machine_lists_and_event_conf_from_compiled_bundle(self):
-        import nakon_ops
+        import nakon_config_ops
         from quotient.setup import build_event_conf, expected_service_names
         for name, root in self._each():
           with self.subTest(packet=name):
             profile, comp = _compile(root, name)
-            spec = dl_stages.CompetitionSpec()
-            dl_inputs.load_competition_spec(spec, comp)
+            dctx = DeployContext()
+            dl_inputs.load_competition_spec(dctx, comp)
             teams = {"team1": {"identifier": "101", "password": "tp"},
                      "team2": {"identifier": "102", "password": "tp"}}
             cwd = os.getcwd()
             try:
                 os.chdir(root)
-                cfg = nakon_ops.generate_nakon_config(
-                    teams, spec.boxes, spec.difficulty, comp, "bp", box_username=spec.box_username)
+                cfg = nakon_config_ops.generate_nakon_config(
+                    teams, dctx.boxes, dctx.difficulty, comp, "bp", box_username=dctx.box_username)
             finally:
                 os.chdir(cwd)
             machines = json.loads(Path(cfg).read_text())["machines"]
@@ -152,11 +148,11 @@ class PacketPipelineOffline(unittest.TestCase):
             blob = json.dumps(machines)
             self.assertNotIn("score/", blob)
             box_services = json.loads((comp / "box_services.json").read_text())
-            names = expected_service_names(box_services, spec.boxes)
+            names = expected_service_names(box_services, dctx.boxes)
             self.assertTrue(names)
             conf = build_event_conf(
                 {"teams": {k: v["identifier"] for k, v in teams.items()},
-                 "boxes_per_team": spec.boxes, "event_name": spec.name,
+                 "boxes_per_team": dctx.boxes, "event_name": dctx.name,
                  "team_passwords": {k: "tp" for k in teams},
                  "quotient_admin_password": "ap", "quotient_scoring_password": "sp",
                  "inject_password": None}, box_services)

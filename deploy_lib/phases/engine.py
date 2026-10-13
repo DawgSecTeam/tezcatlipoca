@@ -3,18 +3,20 @@
 import os
 
 from constants import DEFAULT_ENGINE_MGMT_GW
-from engine_ops import (bootstrap_scoring_engine, ensure_nat_forwarding,
-                        install_round_loop_guard, prepare_engine_from_template,
-                        push_event_conf)
-from golden_ops import _quote_sshkeys
+from engine_bootstrap_ops import bootstrap_scoring_engine
+from engine_event_ops import push_event_conf
+from engine_health_ops import ensure_nat_forwarding
+from engine_identity_ops import prepare_engine_from_template
+from golden_target_ops import _quote_sshkeys
 from jump_ops import build_jump_vms, red_segment_from_env
 from infra.ownership import destroy_vm_if_exists, retag_ownership
 from routing_ops import verify_satellite_routing
 from ssh_ops import forget_engine_host_key, read_terraform_ctx, wait_for_ssh
-from template_ops import (build_engine_template, destroy_engine_template,
-                          engine_hash_inputs, find_engine_template, frozen_gate,
-                          hash_from_inputs, load_template_hashes,
-                          save_template_hashes, stored_template_hash)
+from engine_template_ops import build_engine_template, destroy_engine_template, find_engine_template
+from template_freeze import (
+    engine_hash_inputs, frozen_gate, hash_from_inputs, load_template_hashes, save_template_hashes,
+    stored_template_hash,
+)
 from timing import timed
 from utils import compfile_flag, compfile_value, run_terraform
 
@@ -129,7 +131,7 @@ def phase2_engine_template(ctx):
     write_tfvars(ctx)
     apply_engine_terraform(ctx)
 
-    apply_ctx = read_terraform_ctx(ctx.comp_dir)
+    apply_ctx = ctx.tf_ctx = read_terraform_ctx(ctx.comp_dir)
     # Fresh engine VM => new host key; drop any stale pin so accept-new re-pins it.
     forget_engine_host_key(apply_ctx["scoring_engine_ip"])
     with timed(ctx.comp_dir, 2, "wait_engine_ssh", apply_ctx["scoring_engine_ip"]):
@@ -165,14 +167,6 @@ def phase3_prepare_engine(ctx):
                         box_creds=ctx.box_creds,
                         extra_credlists=({"domain": ctx.domain_creds}
                                          if ctx.domain_creds else None))
-
-    # Opt-in (Compfile `round_loop_guard 1`). After an engine reboot the containers come
-    # back but the round loop does not, and the scoreboard freezes while everything that
-    # reads it keeps working. Off by default: it is an unattended actor on a live engine,
-    # and the account it logs in as only exists from this deploy onward.
-    if compfile_flag(ctx.comp_dir / "Compfile", "round_loop_guard", 0) and ctx.scoring_password:
-        with timed(ctx.comp_dir, 3, "round_loop_guard"):
-            install_round_loop_guard(ctx.tf_ctx, ctx.comp_dir, ctx.scoring_password)
 
     ensure_nat_forwarding(ctx.tf_ctx)
 

@@ -12,7 +12,7 @@ def is_windows_template(template_name):
 #     nakon's machine routing, ssh_ops' gateway auth choice, golden_ops/deploy's target
 #     split and redeploy's box_platform all classify the same free-text template name, and
 #     a divergence builds the wrong OS path for a box. There used to be three copies
-#     (here, ssh_ops, nakon_ops) plus nakon's private alias, with nothing enforcing that
+#     (here, ssh_ops, nakon_config_ops) plus nakon's private alias, with nothing enforcing that
 #     they agreed; callers import this one instead.
     return "win" in template_name.lower()
 

@@ -520,7 +520,7 @@ def _agent_answers(node, vmid, timeout=45):
 # Best-effort readback for a failed firewall wait; returns '' when the agent doesn't
 # answer (pre-retrofit clones) — diagnostics must never become the failure.
 def fw_agent_diagnostic(node, vmid):
-    if not node or not _agent_answers(node, vmid, timeout=10):
+    if not _agent_answers(node, vmid, timeout=10):
         return ""
     try:
         rc, out, err = guest_agent_exec_root(
@@ -539,7 +539,7 @@ def fw_agent_diagnostic(node, vmid):
 
 # Teams run one at a time: every template boots as 192.168.1.1 on its own isolated
 # bridge, and the engine can hold only one borrowed address route at once.
-def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, log=print, node=None):
+def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, node, log=print):
     keys = sorted(teams)
     for t in fw_targets:
         tid, key = t["identifier"], t["team_key"]
@@ -578,8 +578,6 @@ def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, log=print, nod
                 f"after the config push. Remedy: inspect the console (qm terminal / VNC) "
                 f"for vmid {t['vmid']}, then re-run --from-phase 5."
                 + fw_agent_diagnostic(node, t["vmid"]))
-        if node and _agent_answers(node, t["vmid"], timeout=45):
-            log(f"    {key}: guest agent answered — config-applied boot confirmed")
         log(f"    {key}: firewall up on {wan} (config applied)")
 
 
@@ -630,9 +628,6 @@ def verify_in_path(ssh_ctx, teams, managed_first_ip, log=print, kind="pfsense"):
     failures = []
     for k in sorted(teams):
         tid = teams[k]["identifier"]
-        if not _probe_tcp(ssh_ctx, f"172.31.{tid}.2", 22):
-            failures.append(f"{k}: firewall WAN 172.31.{tid}.2:22 unreachable from engine")
-            continue
         r = ssh_on_gateway(ssh_ctx, f"ip route get 192.168.{tid}.1", timeout=15)
         if f"via 172.31.{tid}.2" not in (r.stdout or ""):
             failures.append(f"{k}: engine does not route 192.168.{tid}.0/24 via "

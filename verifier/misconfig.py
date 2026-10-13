@@ -118,121 +118,77 @@ def misconfigs_unverifiable(comp_dir, boxes):
 
 
 def check_misconfig(ctx, boxes, comp_dir):
-# SSH via gateway to one box and confirm >=1 planted misconfig. Returns bool.
+# One gate for the planted misconfigs, one probe per (box, verifiable config).
+#
+#     Every team's copy of a box must carry the configs its clones share (clone-race
+#     guard), and at least one planted misconfig must be confirmed somewhere — over SSH,
+#     or via the guest agent for a box whose SSH is dead. With one team there is no second
+#     copy to compare, so the confirmation alone decides. Unprovable everywhere is SKIP,
+#     never a pass.
     print("\n[4/5] MISCONFIG SPOT-CHECK")
-    target = None
+    candidates = []
     for box in boxes:
         verifiable = [c for c in map(_config_name, box.get("configurations", []))
                       if c in MISCONFIG_CHECKS]
         if box.get("ip") and verifiable:
-            target = (box, verifiable)
-            break
-    if target is None:
+            candidates.append((box, verifiable))
+    if not candidates:
         print("  FAIL  — no box in nakon-config.json carries a verifiable misconfig.")
-        return False
-    box, verifiable = target
-    ip = box["ip"]
-    print(f"  target: {box.get('name', ip)} ({ip}) — candidates: {', '.join(verifiable)}")
-    ssh_dead = False
-    for config in verifiable:
-        cmd, predicate = MISCONFIG_CHECKS[config]
-        try:
-            proc = context.ssh_via_gateway(ctx, ip, cmd)
-        except subprocess.TimeoutExpired:
-            print(f"  WARN  {config}: SSH timed out.")
-            ssh_dead = True
-            continue
-        except CheckError as e:
-            print(f"  WARN  SSH to the box is unavailable ({e})")
-            ssh_dead = True
-            break
-        if proc.returncode != 0:
-            print(f"  WARN  {config}: command failed (rc={proc.returncode}): "
-                  f"{(proc.stderr or '').strip()[:120]}")
-            continue
-        out = proc.stdout
-        if predicate(out):
-            print(f"  PASS  confirmed '{config}' — `{cmd}` -> {out.strip()[:80]}")
-            return True
-        print(f"  ....  '{config}' not present: {out.strip()[:80]}")
-    if ssh_dead:
-        if misconfig_via_guest_agent(comp_dir, box, verifiable):
-            return True
-    print("  FAIL  — no planted misconfig could be confirmed on the target box.")
-    return False
+        return gate_fail("misconfig", "no box carries a verifiable misconfig")
 
-
-def check_misconfig_survival(ctx, boxes):
-# Confirm every team's copy of each box carries same verifiable misconfigs (clone race guard).
-#
-#     Returns a GateResult: present-on-all PASSes, present-on-some FAILs, and — the
-#     branch the old code was missing — absent-on-every-team FAILs too (the case
-#     matched no branch at all, so it printed nothing and left all_ok True). All
-#     probes unprovable (SSH dead) is SKIP, never a pass.
-    print("\n  (cross-team misconfig survival check)")
-    groups = {}
-    for box in boxes:
-        if not box.get("ip"):
-            continue
-        configs = tuple(_config_name(c) for c in box.get("configurations", []))
-        verifiable = [c for c in configs if c in MISCONFIG_CHECKS]
-        if not verifiable:
-            continue
-        groups.setdefault(configs, []).append(box)
-
-    multi_team_groups = [(configs, machines) for configs, machines in groups.items()
-                          if len(machines) > 1]
-    if not multi_team_groups:
-        print("  SKIP  — fewer than 2 teams, or no box's misconfigs are both shared and "
-              "verifiable.")
-        return gate_skip("misconfig_survival",
-                     "fewer than 2 teams or nothing shared+verifiable", gating=False)
-
-    all_ok = True
-    any_unverified = False
-    # Work units in the serial order: groups -> configs -> machines. Each unit is one
-    # independent 60s SSH probe, so a groups x configs x machines loop is minutes of
-    # sequential waiting. The probes run on the full MAX_CONCURRENCY pool (pure SSH over
-    # the ControlMaster channel, no Proxmox task), and the present/absent/unknown
-    # classification is aggregated BACK IN SERIAL ORDER below, so every verdict AND
-    # every printed line (present on {present} but MISSING on {absent}) is unchanged.
+    units = [(box, config) for box, verifiable in candidates for config in verifiable]
 
     def _probe(unit):
-        config, m = unit
+        box, config = unit
         cmd, predicate = MISCONFIG_CHECKS[config]
         try:
-            proc = context.ssh_via_gateway(ctx, m["ip"], cmd)
+            proc = context.ssh_via_gateway(ctx, box["ip"], cmd)
         except (subprocess.TimeoutExpired, CheckError):
-            return "unknown"
+            return "unreachable"
         if proc.returncode != 0:
             return "unknown"
         return "present" if predicate(proc.stdout) else "absent"
 
-    # The serial loop ran (config, machine) pairs in this exact order; the pool keeps
-    # that order in its result list, so walk the same nesting and consume in step.
-    ordered = [(config, m) for configs, machines in multi_team_groups
-               for config in [c for c in configs if c in MISCONFIG_CHECKS]
-               for m in machines]
-    probe_results = iter(run_concurrent(ordered, _probe, max_workers=MAX_CONCURRENCY))
-
-    def _outcome():
-        r = next(probe_results)
-        # The serial loop only caught TimeoutExpired/CheckError; any other exception
-        # escaped check_misconfig_survival, so a non-caught slot must raise here.
+    outcome = {}
+    for (box, config), r in zip(units, run_concurrent(units, _probe, max_workers=MAX_CONCURRENCY)):
+        # Only the two SSH failures are classified above; anything else escapes here.
         if isinstance(r, Exception):
             raise r
-        return r
+        outcome[(box["ip"], config)] = r
+        name = box.get("name", box["ip"])
+        if r == "present":
+            print(f"  PASS  confirmed '{config}' on {name}")
+        elif r == "absent":
+            print(f"  ....  '{config}' not present on {name}")
+        elif r == "unreachable":
+            print(f"  WARN  {name}: '{config}' SSH unreachable")
+        else:
+            print(f"  WARN  {name}: '{config}' command failed")
 
-    for configs, machines in multi_team_groups:
-        verifiable = [c for c in configs if c in MISCONFIG_CHECKS]
-        for config in verifiable:
+    confirmed = any(r == "present" for r in outcome.values())
+    for box, verifiable in candidates:
+        if all(outcome[(box["ip"], c)] == "unreachable" for c in verifiable):
+            if misconfig_via_guest_agent(comp_dir, box, verifiable):
+                confirmed = True
+
+    groups = {}
+    for box, _ in candidates:
+        configs = tuple(_config_name(c) for c in box.get("configurations", []))
+        groups.setdefault(configs, []).append(box)
+
+    all_ok = True
+    any_unverified = False
+    for configs, machines in groups.items():
+        if len(machines) < 2:
+            continue
+        for config in [c for c in configs if c in MISCONFIG_CHECKS]:
             present, absent, unknown = [], [], []
             for m in machines:
                 name = m.get("name", m["ip"])
-                outcome = _outcome()
-                if outcome == "present":
+                r = outcome[(m["ip"], config)]
+                if r == "present":
                     present.append(name)
-                elif outcome == "absent":
+                elif r == "absent":
                     absent.append(name)
                 else:
                     unknown.append(name)
@@ -241,21 +197,24 @@ def check_misconfig_survival(ctx, boxes):
                 print(f"  FAIL  '{config}' present on {present} but MISSING on {absent} — "
                       f"didn't survive cloning")
             elif absent and not present:
-                # D4: previously this matched no branch — no output, all_ok stayed True.
-                # Every team's copy reports the config as absent, so the plant never
-                # landed anywhere (or no longer matches); that is not a pass.
                 all_ok = False
                 note = f" (unverified: {unknown})" if unknown else ""
                 print(f"  FAIL  '{config}' absent on every team ({absent}){note} — the "
                       f"config didn't plant on any clone")
-            elif present and not absent:
+            elif present:
                 note = f" (unverified: {unknown})" if unknown else ""
                 print(f"  PASS  '{config}' present on all {len(present)} team(s): {present}{note}")
-            elif unknown and not present and not absent:
+            else:
                 any_unverified = True
                 print(f"  SKIP  '{config}' — could not verify on any team ({unknown})")
     if not all_ok:
-        return gate_fail("misconfig_survival", "misconfig did not survive cloning everywhere")
+        return gate_fail("misconfig", "misconfig did not survive cloning everywhere")
+    if not confirmed:
+        if any(r == "absent" for r in outcome.values()):
+            print("  FAIL  — no planted misconfig could be confirmed on any box.")
+            return gate_fail("misconfig", "no planted misconfig could be confirmed")
+        print("  SKIP  — no misconfig could be probed (SSH and guest agent unavailable).")
+        return gate_skip("misconfig", "could not verify any misconfig (SSH unavailable)")
     if any_unverified:
-        return gate_skip("misconfig_survival", "some configs unprovable (SSH dead)")
-    return gate_pass("misconfig_survival", "verifiable configs present on every team")
+        return gate_skip("misconfig", "some configs unprovable (SSH dead)")
+    return gate_pass("misconfig", "verifiable configs present on every team")

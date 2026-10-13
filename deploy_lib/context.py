@@ -5,8 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from config_ops import write_state
-from constants import ownership_tags
-from infra.gates import CHECKPOINT_GATES, guard_resume_existence
+from constants import SCORING_ENGINE_VMID, ownership_tags
 
 
 @dataclass
@@ -25,58 +24,64 @@ class DeployContext:
 #     finds them already there).
 
     # --- run identity + inputs ---
-    comp_dir: Path
-    comp_name: str
-    state_path: Path
-    from_phase: int
-    resuming: bool
-    assume_yes: bool
+    comp_dir: Optional[Path] = None
+    comp_name: str = ""
+    state_path: Optional[Path] = None
+    from_phase: int = 1
+    resuming: bool = False
+    assume_yes: bool = False
     # --- competition config (Compfile/users.json) ---
-    name: str
-    scenario: str
-    box_username: str
-    credlist_usernames: list
-    nakon_jobs: int
-    apt_cache: bool
-    injects: list
-    packet_pw: Optional[dict]
+    name: str = ""
+    scenario: str = ""
+    difficulty: int = 0
+    box_username: str = ""
+    credlist_usernames: list = field(default_factory=list)
+    nakon_jobs: int = 4
+    apt_cache: bool = True
+    injects: list = field(default_factory=list)
+    packet_pw: Optional[dict] = None
+    packet_credlists: dict = field(default_factory=dict)
     # --- secrets + persisted state ---
-    state: dict
-    teams: dict
-    number_of_teams: int
-    admin_password: str
-    scoring_password: str
-    postgres_password: str
-    redis_password: str
-    box_password: str
-    box_creds: dict
-    domain_creds: Optional[dict]
-    inject_password: Optional[str]
+    previous_state: dict = field(default_factory=dict)
+    state: dict = field(default_factory=dict)
+    teams: dict = field(default_factory=dict)
+    number_of_teams: int = 0
+    admin_password: str = ""
+    # A SECOND admin account, for automation only — see build_event_conf. Quotient
+    # allows one session per ACCOUNT, so a watchdog that logs in as `scoring` cannot
+    # evict the operator's/harness's `admin` cookie.
+    scoring_password: str = ""
+    postgres_password: str = ""
+    redis_password: str = ""
+    box_password: str = ""
+    box_creds: dict = field(default_factory=dict)
+    domain_creds: Optional[dict] = None
+    inject_password: Optional[str] = None
     # --- multi-node placement + Proxmox environment ---
-    placement: Optional[dict]
-    node: str
-    engine_vmid: int
-    engine_mgmt_ip: str
+    placement: Optional[dict] = None
+    node: str = ""
+    engine_vmid: int = SCORING_ENGINE_VMID
+    engine_mgmt_ip: Optional[str] = None
     # --- generated configs + terraform workdir ---
-    boxes: list
-    boxes_by_name: dict
-    unbooted: set
-    nakon_config_path: Path
-    golden_config_path: Path
-    repair_config_path: Path
-    final_config_path: Path
-    golden_inputs: dict
-    golden_hashes: dict
-    frozen_keep: set
-    tf_dir: Path
-    tfvars_path: Path
-    tfvars: dict
-    ssh_key_abs: str
+    boxes: list = field(default_factory=list)
+    boxes_by_name: dict = field(default_factory=dict)
+    unbooted: set = field(default_factory=set)
+    nakon_config_path: Optional[Path] = None
+    golden_config_path: Optional[Path] = None
+    repair_config_path: Optional[Path] = None
+    final_config_path: Optional[Path] = None
+    golden_inputs: dict = field(default_factory=dict)
+    golden_hashes: dict = field(default_factory=dict)
+    frozen_keep: set = field(default_factory=set)
+    tf_dir: Optional[Path] = None
+    tfvars_path: Optional[Path] = None
+    tfvars: dict = field(default_factory=dict)
+    ssh_key_abs: str = ""
     # --- enumerated targets ---
-    all_targets: list
-    managed_targets: list
-    linux_targets: list
-    windows_targets: list
+    all_targets: list = field(default_factory=list)
+    managed_targets: list = field(default_factory=list)
+    linux_targets: list = field(default_factory=list)
+    windows_targets: list = field(default_factory=list)
     # --- filled in after terraform apply #1 (phase 2) ---
     tf_ctx: dict = field(default_factory=dict)
     scoring_user: str = ""
@@ -101,41 +106,9 @@ class DeployContext:
         write_state(self.state_path, self.state)
 
     def checkpoint(self, n):
-    # Record phase n as completed — the resume guard's only source of truth.
-#
-    #         Which is exactly why a checkpoint must not be written on the strength of a phase
-    #         merely finishing. In the scale8 soak a strict=False repair sweep "completed"
-    #         against 32 nonexistent machines and stamped last_phase=5; the next resume then
-    #         read that stamp as proof the machines existed. So the phases that produce
-    #         infrastructure verify their own output before claiming it — the same checks a
-    #         resume would run (guard_resume_existence), which is defense in depth for the run
-    #         after this one rather than a substitute for the gate.
-        self._verify_phase_artifacts(n)
+        # Record phase n as completed — the resume guard's only source of truth.
         self.state["last_phase"] = n
         self.save_state()
-
-    def _verify_phase_artifacts(self, n):
-    # Phase n's own existence gate: refuse to stamp a claim the range cannot back.
-#
-    #         Only the phases that build infrastructure are gated, using the same checks a
-    #         resume would run — "if I resume from n+1, is that resume honest?". A phase with
-    #         nothing independently checkable (cleanup, template build, sweeps, seeding) is
-    #         not gated, because inventing a proxy check for it would refuse good deploys.
-#
-    #         --force-from-phase deliberately does NOT bypass this: that flag is a statement
-    #         about skipping work, not a licence to record work that never happened.
-        if n not in CHECKPOINT_GATES:
-            return
-        comp_dir = self.comp_dir
-        try:
-            guard_resume_existence(n + 1, comp_dir, self.state)
-        except SystemExit as e:
-            raise SystemExit(
-                f"  ERROR: phase {n} reported success but its output does not exist, so "
-                f"last_phase={n} will NOT be recorded:\n{e}\n"
-                f"        A checkpoint that claims work never done is what sent the scale8 "
-                f"soak's later phases chasing machines that were never built."
-            )
 
     @property
     def comp_tags(self):

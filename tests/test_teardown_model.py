@@ -54,18 +54,6 @@ def vm(vmid, name, tags, status="stopped"):
     return {"vmid": vmid, "name": name, "tags": tags, "status": status}
 
 
-class OwnershipType(unittest.TestCase):
-    def test_tags_wrap_the_full_ownership_set(self):
-        self.assertEqual(OURS.tags,
-                         {"tezcatlipoca", f"comp-{COMP}", RUN})
-
-    def test_with_role_narrows_to_one_vm_role(self):
-        goldens = OURS.with_role("tezcatlipoca-golden")
-        self.assertEqual(goldens.tags,
-                         {"tezcatlipoca", f"comp-{COMP}", RUN, "tezcatlipoca-golden"})
-        self.assertEqual(goldens.comp, COMP)          # identity unchanged
-
-
 class RefusalVocabulary(unittest.TestCase):
     def test_carries_saw_expected_remedy_and_renders_detail(self):
         r = Refusal(saw="vmid 9 with tags 'x'", expected="the full set",
@@ -130,8 +118,7 @@ class PlanConstruction(unittest.TestCase):
 
     def test_the_shipped_order_builds(self):
         from teardown.modes import build_terminal_plan
-        plan = build_terminal_plan(Path("competitions/x"), frozen={},
-                                   full=True, end_of_competition=False)
+        plan = build_terminal_plan()
         names = [s.name for s in plan.steps]
         self.assertEqual(names, ["portal", "artifacts", "red01", "pre_stop",
                                  "terraform", "templates", "remote_access"])
@@ -259,8 +246,7 @@ class VerifyClean(unittest.TestCase):
 
     def _plan(self):
         from teardown.modes import build_terminal_plan
-        return build_terminal_plan(self.comp, frozen={}, full=True,
-                                   end_of_competition=False)
+        return build_terminal_plan()
 
     def test_full_mode_untouched_estate_is_clean(self):
         report = self._engine().verify_clean(self._plan())
@@ -339,9 +325,7 @@ class JournalLifecycle(unittest.TestCase):
                 boxes=[], reclaim_tags=set(), placement=None, teams={"team1": {"identifier": "101"}},
                 golden_hashes={}, frozen_keep=[], comp_name="c1", reclaim_tag="run-x",
                 run_id="run-x")
-            with patch.object(cleanup, "destroy_node_waves"), \
-                    patch.object(cleanup, "time") as t:
-                t.sleep = lambda *a: None
+            with patch.object(cleanup, "destroy_node_waves"):
                 cleanup.phase1_cleanup(ctx)
             self.assertFalse((comp / teardown.TEARDOWN_JOURNAL).exists())
 

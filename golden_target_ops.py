@@ -2,8 +2,9 @@
 
 import json
 
+from constants import GOLDEN_IP_BASE
 from infra.client import cluster_vms_for, proxmox_api
-from nodes_ops import golden_vmid_for_slot
+from placement_record import golden_vmid_for_slot
 from ssh_ops import quote_sshkeys
 from utils import is_unmanaged
 
@@ -12,7 +13,7 @@ from utils import is_unmanaged
 _quote_sshkeys = quote_sshkeys
 
 
-# Slot 0 of golden_vmid_for_slot (satellite slots shift by box-stride — nodes_ops).
+# Slot 0 of golden_vmid_for_slot (satellite slots shift by box-stride — placement_record).
 # Golden boxes sit just above the engine's slot; preflight gates the span for
 # collisions with team vmid space.
 def golden_vmid_for(engine_vmid, box_idx):
@@ -23,7 +24,7 @@ def golden_vmid_for(engine_vmid, box_idx):
 # box exists. Satellite slots anchor on their first local team (the jump answers .1
 # there and routes to the engine).
 def golden_ip_for(anchor_identifier, box_idx):
-    return f"192.168.{anchor_identifier}.{240 + box_idx}"
+    return f"192.168.{anchor_identifier}.{GOLDEN_IP_BASE + box_idx}"
 
 
 def _is_template(node, vmid):
@@ -77,14 +78,12 @@ def unbooted_golden_boxes(comp_dir):
             f"  ERROR: {path} has invalid role value(s): "
             + ", ".join(f"{name}={role!r}" for name, role in sorted(bad.items()))
             + " (expected 'dc' or 'member')")
-    boxes_path = comp_dir / "boxes.json"
-    if boxes_path.exists():
-        names = {b["name"] for b in json.loads(boxes_path.read_text())}
-        unknown = [name for name in roles if name not in names]
-        if unknown:
-            raise SystemExit(
-                f"  ERROR: {path} names box(es) absent from boxes.json: "
-                + ", ".join(sorted(unknown)))
+    names = {b["name"] for b in json.loads((comp_dir / "boxes.json").read_text())}
+    unknown = [name for name in roles if name not in names]
+    if unknown:
+        raise SystemExit(
+            f"  ERROR: {path} names box(es) absent from boxes.json: "
+            + ", ".join(sorted(unknown)))
     return {name for name, role in roles.items() if role == "dc"}
 
 
@@ -110,15 +109,3 @@ def golden_targets(engine_vmid, teams, boxes, slot=0, anchor_identifier=None):
         for box_idx, box in enumerate(boxes)
         if not is_unmanaged(box)  # no golden for firewall/appliance boxes; box_idx stays positional
     ]
-
-
-# The invariant "no boot-hostile config rides the golden" was, until now, enforced by a
-# comment and the hand-maintained constants.FINAL_STAGE_CONFIGS set — nothing else. It
-# already failed for real on 2026-09-24: `systemd-system-masked` was planted into the
-# golden disk and every linked clone was bootless (masked multi-user/graphical/default
-# targets => systemd boots with no multi-user.target => no cloud-init, no network; see
-# docs/benchmark-m02.md and the constants.py note). strict=True does not catch it: the
-# plant returns rc=0 while the disk is unbootable, and the golden's own running system
-# stays reachable (masking a target does not stop the current boot), so the damage only
-# surfaces one phase later, on every team clone at once. Hence a real boot of a
-# throwaway clone of the exact disk about to be sealed.

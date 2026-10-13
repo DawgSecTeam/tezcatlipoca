@@ -36,18 +36,18 @@ class FakePVE:
 
 class RootDiskDetection(unittest.TestCase):
     def test_scsi_root_seen_cdrom_and_cloudinit_skipped(self):
-        key, gb = golden_disk_ops._root_disk_gb(UBUNTU_CFG, 1204)
+        key, gb = golden_disk_ops._root_disk_gb(UBUNTU_CFG)
         self.assertEqual("scsi0", key)
         self.assertEqual(15, gb)
 
     def test_megabyte_sizes_parse(self):
         key, gb = golden_disk_ops._root_disk_gb(
-            {"virtio0": "local:vm-1-disk-0,size=20480M"}, 1)
+            {"virtio0": "local:vm-1-disk-0,size=20480M"})
         self.assertEqual("virtio0", key)
         self.assertEqual(20, gb)
 
     def test_no_disk(self):
-        key, gb = golden_disk_ops._root_disk_gb({"ide2": "local-lvm:vm-1-cloudinit,media=cdrom,size=4M"}, 1)
+        key, gb = golden_disk_ops._root_disk_gb({"ide2": "local-lvm:vm-1-cloudinit,media=cdrom,size=4M"})
         self.assertIsNone(key)
         self.assertEqual(0, gb)
 

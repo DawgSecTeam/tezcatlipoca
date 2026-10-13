@@ -213,7 +213,7 @@ def retag_ownership(node, vmid, ownership):
     """Re-stamp an ADOPTED VM's tags to the current run's full ownership set.
 
     Templates kept across runs (M4 hash reuse) and ranges deployed before run ids
-    existed carry the old tag set; without this, the next --full teardown's strict
+    existed carry the old tag set; without this, the next full teardown's strict
     guard would skip them as foreign and the next preflight would refuse them as
     clashes. Only re-tags VMs already carrying this competition's comp tag — a
     foreign VM is left alone (loudly)."""

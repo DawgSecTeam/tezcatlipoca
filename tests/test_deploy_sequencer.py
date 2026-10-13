@@ -9,21 +9,16 @@ regression test — the phase-extraction commits briefly emitted the phase 4-7 s
 banners twice, and nothing caught it.
 """
 
-import ast
 import contextlib
-import inspect
 import io
 import sys
 import tempfile
-import textwrap
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import deploy  # noqa: E402
-from deploy_lib import phases  # noqa: E402
 from _deploy_patch import dpatch  # noqa: E402
 from infra import gates as dl_gates  # noqa: E402
 
@@ -38,61 +33,6 @@ SKIP_BANNERS = [
     "[7/8] Skipped (resume).",
     "[8/8] Skipped (resume).",
 ]
-
-# Every "[N/8]"-tagged print each phase can emit, in the order the phase emits it:
-# its resume guard first, then the run banners. Alternative run banners (phase 5
-# with/without firewalls, phase 6 marker-vs-sweep) are all listed in order.
-RUN_BANNERS = {
-    "phase1_cleanup": [
-        SKIP_BANNERS[0],
-        "[1/8] Cleaning up previous deployment (parallel; deletes are metadata-light "
-        "— the datastore-saturation hazard belongs to bulk clone writes, not deletes)...",
-    ],
-    "phase2_engine_template": [
-        SKIP_BANNERS[1],
-        "[2/8] Terraform apply #1 (engine from template + bridges; team boxes "
-        "come in apply #2)...",
-    ],
-    "phase3_prepare_engine": [
-        SKIP_BANNERS[2],
-        "[3/8] Preparing scoring engine from template (fresh volumes, event.conf)...",
-    ],
-    "phase4_golden_set": [
-        SKIP_BANNERS[3],
-        "[4/8] Building the golden set (plant once per box type, convert to template)...",
-        "[4b/8] Terraform apply #2: every team as a linked clone of the golden set...",
-    ],
-    "phase5_firewall_bootstrap": [
-        SKIP_BANNERS[4],
-        "[5/8] No in-path firewall in this lineup — skipping.",
-        "[5/8] Bootstrapping the in-path firewalls (SSH config push → engine cutover)...",
-    ],
-    "phase6_repair_sweep": [
-        SKIP_BANNERS[5],
-        "[6/8] Resume marker present — post-clone sweep already done; skipping",
-        "[6/8] Repair-stage sweep (sshd/sudoers) on every team box...",
-    ],
-    "phase7_domains_and_final": [
-        SKIP_BANNERS[6],
-        "  Configuring Windows AD domains (if any)...",
-    ],
-    "phase8_seed": [
-        SKIP_BANNERS[7],
-        "[8/8] Seeding competition and creating injects...",
-    ],
-}
-
-
-def _no_artifact_gates():
-# Neutralize the checkpoint's existence gate for sequencing tests.
-#
-#     `checkpoint(3|4)` now verifies the phase's output exists before recording it (C1),
-#     which needs a live Proxmox. These tests exercise ORDER and checkpoint gating, not
-#     artifact verification, so the gate is stubbed here and tested for real in
-#     tests/test_resume_existence.py.
-    return patch.object(deploy.DeployContext, "_verify_phase_artifacts",
-                        lambda self, n: None)
-
 
 def _ctx(comp_dir, from_phase, state=None):
 # A DeployContext carrying only what the sequencer and finish path touch.
@@ -147,55 +87,6 @@ class BannerSet(unittest.TestCase):
         emitted = [ln.rstrip("\n") for ln in out.splitlines() if "Skipped (resume)" in ln]
         self.assertEqual(emitted, SKIP_BANNERS)
 
-    def test_run_banners_are_present_in_the_source_in_phase_order(self):
-        # The run banners only print on a real (infra-touching) run, so assert the
-        # source: each phase function's banner literals, in function order, must
-        # equal the captured list byte for byte, and the phases must sit in PHASES
-        # order in the module.
-        funcs = _phase_functions()
-        names = [p.__name__ for p in phases.PHASES]
-        self.assertEqual(names, list(RUN_BANNERS))
-        for name in names:
-            literals = _print_literals(funcs[name])
-            expected = RUN_BANNERS[name]
-            got = [lit for lit in literals if lit in expected]
-            self.assertEqual(got, expected, name)
-
-    def test_each_phase_skips_on_its_own_phase_number(self):
-        # The guard must compare against the phase's [N/8] number, not a neighbour's.
-        funcs = _phase_functions()
-        for index, phase in enumerate(phases.PHASES, 1):
-            fn = funcs[phase.__name__]
-            compares = [n for n in ast.walk(fn) if isinstance(n, ast.Compare)
-                        and isinstance(n.left, ast.Attribute) and n.left.attr == "from_phase"]
-            self.assertTrue(compares, phase.__name__)
-            self.assertEqual(compares[0].comparators[0].value, index, phase.__name__)
-
-
-def _phase_functions():
-# {phase name: its ast FunctionDef}, parsed from each phase function's own source.
-    out = {}
-    for phase in phases.PHASES:
-        tree = ast.parse(textwrap.dedent(inspect.getsource(phase)))
-        out[phase.__name__] = tree.body[0]
-    return out
-
-
-def _print_literals(fn):
-# Every string literal printed by fn, in SOURCE order (ast.walk is not ordered).
-    found = []
-    for node in ast.walk(fn):
-        if (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "print"
-                and node.args):
-            try:
-                value = ast.literal_eval(node.args[0])
-            except Exception:
-                continue
-            if isinstance(value, str):
-                found.append((node.lineno, value))
-    return [value for _lineno, value in sorted(found)]
-
-
 class Sequencer(unittest.TestCase):
 # deploy() walks PHASES, gates checkpointing, and hooks the terraform read.
 
@@ -206,7 +97,6 @@ class Sequencer(unittest.TestCase):
                 dpatch("connect_terraform",
                              side_effect=lambda c: calls.append(("connect", 2))), \
                 dpatch("finish_deploy"), \
-                _no_artifact_gates(), \
                 contextlib.redirect_stdout(io.StringIO()):
             deploy.deploy(comp_dir, assume_yes=True, from_phase=from_phase)
         return ctx

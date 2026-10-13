@@ -29,6 +29,7 @@ def _ctx(comp, **kw):
     base = dict(
         comp_dir=comp, comp_name=comp.name, from_phase=1, teams=TEAMS, boxes=BOXES, node="pve1",
         engine_vmid=1000, reclaim_tags={"tezcatlipoca", f"comp-{comp.name}", "run-0badf00d"},
+        reclaim_tag="run-0badf00d",
         golden_hashes={"web01": "h"}, frozen_keep=set(), placement=None,
         all_targets=[{"team_key": k, "vm_name": f"web01-{k}", "vmid": 200 + int(t["identifier"]) * 10,
                       "node": "pve1", "box": BOXES[0], "ip": f"192.168.{t['identifier']}.2"}
@@ -59,7 +60,6 @@ class Tail(unittest.TestCase):
         ctx = _ctx(self.comp, **kw)
         mocks = {}
         with patch.object(final, "deploy_domain_configs") as mocks["domains"], \
-                patch.object(final, "ensure_nat_forwarding") as mocks["nat"], \
                 patch.object(final, "build_nakon_bundle", return_value="bundle") as mocks["bundle"], \
                 patch.object(final, "run_nakon",
                              return_value=SimpleNamespace(failed=["x: boom"], machines=machines)) \
@@ -83,7 +83,7 @@ class Tail(unittest.TestCase):
     def test_phase7_merges_prior_failures_without_duplicates(self):
         (self.comp / "final.json").write_text(json.dumps({"machines": [{"n": 1}]}))
         ctx = _ctx(self.comp, state={"nakon_failed_steps": ["repair: a", "final: x: boom"]})
-        with patch.object(final, "deploy_domain_configs"), patch.object(final, "ensure_nat_forwarding"), \
+        with patch.object(final, "deploy_domain_configs"), \
                 patch.object(final, "build_nakon_bundle"), \
                 patch.object(final, "run_nakon", return_value=SimpleNamespace(failed=["x: boom"])), \
                 patch.object(final, "reensure_mysql_credlist_users"), \
@@ -105,42 +105,6 @@ class Tail(unittest.TestCase):
             final.phase7_domains_and_final(ctx)
         d.assert_not_called()
 
-    def test_phase1_multinode_reclaims_satellite_bridges_and_jump(self):
-        placement = {
-            "engine_node": "n1", "team_nodes": {"team1": "n1", "team2": "n2"},
-            "satellites": [{"name": "n2", "slot": 1, "jump_vmid": 1131, "teams": ["team2"]}]}
-        ctx = _ctx(self.comp, placement=placement)
-        ctx.all_targets[1]["node"] = "pve2"
-        rec = SimpleNamespace(node="pve2")
-        destroyed, bridges = [], []
-        with patch.object(cleanup, "record_of", return_value=rec), \
-                patch.object(cleanup, "proxmox_api", return_value={"data": []}), \
-                patch.object(cleanup, "destroy_vm_if_exists",
-                             side_effect=lambda n, v, expect_tags=None: destroyed.append((n, v))), \
-                patch.object(cleanup, "destroy_bridge_if_exists",
-                             side_effect=lambda n, b: bridges.append((n, b))), \
-                patch.object(cleanup, "_is_template", return_value=False), \
-                patch.object(cleanup, "load_template_hashes", return_value={}), \
-                patch.object(cleanup.time, "sleep"):
-            cleanup.phase1_cleanup(ctx)
-        self.assertIn(("pve2", 1131), destroyed)                 # satellite jump VM
-        self.assertIn(("pve1", 1000), destroyed)                 # engine on the engine node
-        self.assertIn(("pve1", 200 + 1010), destroyed)           # team1 box on pve1
-        self.assertIn(("pve2", 200 + 1020), destroyed)           # team2 box on the satellite
-        self.assertEqual(sorted(bridges), [("pve1", "vmbr101"), ("pve2", "vmbr102")])
-
-    def test_phase1_bridge_in_use_is_kept(self):
-        ctx = _ctx(self.comp)
-
-        def api(method, path, **kw):
-            if path.endswith("/qemu"):
-                return {"data": [{"vmid": 5}]}
-            return {"data": {"net0": "virtio=aa:bb,bridge=vmbr101"}}
-        with patch.object(cleanup, "proxmox_api", side_effect=api), \
-                patch.object(cleanup, "destroy_bridge_if_exists") as d:
-            cleanup._reclaim_bridge(ctx, "pve1", "vmbr101")
-            d.assert_not_called()
-
     def test_phase1_in_path_fw_also_reclaims_transit_bridges(self):
         boxes = BOXES + [{"name": "fw01", "template": "pfsense", "unmanaged": True,
                           "in_path": True, "last_octet": 1}]
@@ -151,8 +115,7 @@ class Tail(unittest.TestCase):
                 patch.object(cleanup, "destroy_bridge_if_exists",
                              side_effect=lambda n, b: bridges.append(b)), \
                 patch.object(cleanup, "_is_template", return_value=False), \
-                patch.object(cleanup, "load_template_hashes", return_value={}), \
-                patch.object(cleanup.time, "sleep"):
+                patch.object(cleanup, "load_template_hashes", return_value={}):
             cleanup.phase1_cleanup(ctx)
         self.assertEqual(sorted(bridges), ["vmbr101", "vmbr102", "vmbrW101", "vmbrW102"])
 

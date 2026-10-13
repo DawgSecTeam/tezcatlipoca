@@ -2,11 +2,9 @@
 
 import os
 import shlex
-import subprocess
-import time
 
 from infra.guest_exec import (diagnose_unreachable_box, guest_agent_exec_root, wait_for_guest_agent,)
-from ssh_ops import box_ssh_argv
+from ssh_ops import box_ssh_retry
 from utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT, PRINT_LOCK, record_degradation, run_concurrent
 from box_settle_ops import wait_boxes_settled, _box_settled_via_ssh
 
@@ -83,25 +81,12 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
         script = _apt_prep_script(gateway)
         remote_cmd = f"sudo bash -c {shlex.quote(script)}"
         wait_for_guest_agent(node, t["vmid"], timeout=120)
-        for attempt in range(1, 6):
-            try:
-                r = subprocess.run(
-                    box_ssh_argv(ctx, ip, box_username, remote_cmd),
-                    capture_output=True, text=True, timeout=240,
-                )
-                if r.returncode == 0:
-                    with PRINT_LOCK:
-                        print(f"    apt prepped on {ip}")
-                    return True
-                err = r.stderr or ""
-                if "Permission denied" in err or "Host key verification failed" in err:
-                    break  # definitive rejection: retries can't help — go to the agent
-            except subprocess.TimeoutExpired:
-                pass  # box still booting — retry
-            if attempt < 5:
-                with PRINT_LOCK:
-                    print(f"    apt prep attempt {attempt}/5 failed for {ip}, retrying in 15s...")
-                time.sleep(15)
+        ok, _ = box_ssh_retry(ctx, ip, box_username, remote_cmd,
+                              timeout=240, attempts=5, what="apt prep")
+        if ok:
+            with PRINT_LOCK:
+                print(f"    apt prepped on {ip}")
+            return True
         try:
             rc, _out, err = guest_agent_exec_root(node, t["vmid"], script, timeout=240)
             if rc == 0:
@@ -130,25 +115,12 @@ def fix_dns_on_boxes(targets, ctx):
 
     def _fix(t):
         ip = t["ip"]
-        for attempt in range(1, 9):
-            try:
-                r = subprocess.run(
-                    box_ssh_argv(ctx, ip, box_username, DNS_FIX_CMD),
-                    capture_output=True, text=True, timeout=40,
-                )
-                if r.returncode == 0:
-                    with PRINT_LOCK:
-                        print(f"    DNS fixed on {ip}")
-                    return True
-                err = r.stderr or ""
-                if "Permission denied" in err or "Host key verification failed" in err:
-                    break  # definitive rejection: retries can't help — go to the agent
-            except subprocess.TimeoutExpired:
-                pass  # box still booting — retry
-            if attempt < 8:
-                with PRINT_LOCK:
-                    print(f"    DNS fix attempt {attempt}/8 failed for {ip}, retrying in 15s...")
-                time.sleep(15)
+        ok, _ = box_ssh_retry(ctx, ip, box_username, DNS_FIX_CMD,
+                              timeout=40, attempts=8, what="DNS fix")
+        if ok:
+            with PRINT_LOCK:
+                print(f"    DNS fixed on {ip}")
+            return True
         try:
             rc, _out, err = guest_agent_exec_root(
                 node, t["vmid"], DNS_FIX_CMD_ROOT, timeout=40)

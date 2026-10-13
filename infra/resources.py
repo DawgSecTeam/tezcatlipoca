@@ -21,11 +21,7 @@ def check_datastore_headroom(node, datastore, boxes, num_teams, label="", node_n
     hosting node over that node's share."""
     # The storage LIST zeroes/omits free on some pools (cyberfield hdrives-zfs);
     # the per-store STATUS endpoint's avail is the authoritative number.
-    try:
-        st = proxmox_api("GET", f"/nodes/{node}/storage/{datastore}/status")["data"]
-        free = st.get("avail")
-    except Exception:
-        free = None
+    free = proxmox_api("GET", f"/nodes/{node}/storage/{datastore}/status")["data"].get("avail")
     if free is None:
         print(f"  WARNING: could not read free space on datastore '{datastore}' — "
               f"headroom unchecked" if not label else

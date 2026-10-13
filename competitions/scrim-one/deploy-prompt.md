@@ -72,7 +72,7 @@ scripts/orphan-sweep.sh 8180 4470   # stray reverse tunnels / beacon listeners
 ## Step 1 — tear down whatever is live (own it first)
 
 ```bash
-.venv/bin/python destroy-competition.py --competition scrim-one --yes --full --end-of-competition
+.venv/bin/python destroy-competition.py --competition scrim-one --yes --end-of-competition
 # then, if red01 survived (its destroy is separate from terraform):
 .venv/bin/python -c "import sys;sys.path.insert(0,'.');import red_plant_ops as rp;print(rp.destroy_red('competitions/scrim-one').stdout[-400:])"
 ```
@@ -180,7 +180,7 @@ beacons live, last LLM action), and how to start a fresh play — `systemctl res
 on red01 (lines red's clock up with the play) then
 `verify-competition.py competitions/scrim-one --strict-services --fix-round-loop` to re-arm
 the scoreboard loop. Teardown when done:
-`destroy-competition.py --competition scrim-one --yes --full --end-of-competition`.
+`destroy-competition.py --competition scrim-one --yes --end-of-competition`.
 
 ## Traps that cost real time (do not rediscover these)
 

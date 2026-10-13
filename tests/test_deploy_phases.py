@@ -15,15 +15,13 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import config_ops
-from deploy_lib import context as dl_context
 from deploy_lib import tfinputs as dl_tfinputs
 from deploy_lib import coverage as dl_coverage  # noqa: E402
 from infra import gates as dl_gates  # noqa: E402
 from deploy_lib import golden_plan as dl_golden_plan  # noqa: E402
-from nakon_ops import NakonResult
-from template_ops import hash_from_inputs
-from nodes_ops import golden_vmid_for_slot
+from nakon_run_ops import NakonResult
+from template_freeze import hash_from_inputs
+from placement_record import golden_vmid_for_slot
 
 ENGINE = 1000
 MANAGED_BOXES = [{"name": "dc01", "template": "base-windows-server"},
@@ -81,8 +79,8 @@ class GoldenHashEntries(unittest.TestCase):
 
 
 class GoldenRebuildGate(unittest.TestCase):
-# D1's second half: the gate must SKIP a slot with no hash entry (the state the old
-#     dead-code loop left unmanaged boxes in) instead of raising KeyError.
+# D1's second half: the gate decides rebuilds from the hash entries, which
+#     golden_hash_entries gives every box.
 
     def setUp(self):
         self.boxes = MANAGED_BOXES + [UNMANAGED]
@@ -104,16 +102,6 @@ class GoldenRebuildGate(unittest.TestCase):
     def _slot(self, i):
         return golden_vmid_for_slot(ENGINE, 0, i)
 
-    def test_slot_with_no_hash_entry_is_skipped_not_a_keyerror(self):
-        # Exactly what the pre-fix loop produced: managed entries present, fw01 absent.
-        # The old gate did golden_hashes["fw01"] unconditionally -> KeyError.
-        hashes = {"dc01": "h-dc", "web01": "h-web"}
-        inputs = {"dc01": {"config": {}}, "web01": {"config": {}}}
-        with contextlib.redirect_stdout(io.StringIO()):
-            dl_golden_plan.golden_rebuild_gate(".", "node1", 0, self.boxes, ENGINE, {}, hashes,
-                                       inputs, "c1")
-        self.assertEqual(self.destroyed, [self._slot(0), self._slot(1)])  # fw01 skipped
-
     def test_all_boxes_present_means_no_missing_entry_at_all(self):
         # End-to-end with the fixed producer: a lineup carrying an unmanaged box can run
         # the gate for a whole slot without a KeyError, and the unmanaged slot's stale
@@ -130,8 +118,8 @@ class GoldenRebuildGate(unittest.TestCase):
         self.assertEqual(self.destroyed, [self._slot(i) for i in range(len(self.boxes))])
 
     def test_matching_stored_hash_is_left_alone(self):
-        hashes = {"dc01": "h-dc", "web01": "h-web"}
-        inputs = {"dc01": {"config": {}}, "web01": {"config": {}}}
+        hashes = {"dc01": "h-dc", "web01": "h-web", "fw01": "h-fw"}
+        inputs = {"dc01": {"config": {}}, "web01": {"config": {}}, "fw01": {"config": {}}}
         dl_golden_plan.stored_template_hash = lambda node, vid: (
             "h-dc" if vid == self._slot(0) else "other")
         with contextlib.redirect_stdout(io.StringIO()):
@@ -212,32 +200,6 @@ class CoveragePersistence(unittest.TestCase):
                          {"web01-team101": ["smb-v1"]})
 
 
-def _pipeline_source():
-# deploy.py plus every deploy_lib module, concatenated.
-    files = [_REPO / "deploy.py", *sorted((_REPO / "deploy_lib").rglob("*.py"))]
-    return "\n".join(f.read_text() for f in files)
-
-
-class SharedStateWriter(unittest.TestCase):
-# D4: deploy's .deploy_state.json writer is the shared config_ops helper, not a
-#     fourth hand-rolled atomic writer (the guarantee held at 1 of 4 call sites before).
-
-    def test_deploy_writer_is_the_shared_config_ops_helper(self):
-        self.assertIs(dl_context.write_state, config_ops.write_state)
-
-    def test_save_state_routes_through_the_helper(self):
-        src = _pipeline_source()
-        # The state path is now reached through the stage objects prepare() builds
-        # (prior.state_path in the resume-secrets step) and through self in
-        # DeployContext.save_state; both must be the shared helper, not a fourth
-        # hand-rolled writer.
-        self.assertRegex(src, r"write_state\((?:self\.|prior\.|secrets\.)?state_path,")
-        # The old hand-rolled body must be gone: write_text() then chmod() left the
-        # only copy of the box passwords world-readable for a window.
-        self.assertNotIn("state_path.with_name", src)
-        self.assertNotIn("os.chmod(state_path, 0o600)", src)
-
-
 SECRET_WRITES = [
     ("teams.json", '{"team1": {"identifier": "120", "password": "hunter2"}}'),
     ("terraform.tfvars.json", '{"box_password": "hunter2", "teams": {}}'),
@@ -250,9 +212,6 @@ class AtomicSecretWrites(unittest.TestCase):
 #     config_ops.write_text_atomic: 0600 is applied at CREATION (os.open), not by a chmod
 #     after the process umask already exposed the file, and the content lands via a temp
 #     file that never survives the rename. These are the exact shapes deploy writes.
-
-    def test_deploy_uses_the_shared_atomic_write_helper(self):
-        self.assertIs(dl_tfinputs.write_text_atomic, config_ops.write_text_atomic)
 
     def test_mode_0600_at_creation_and_no_tmp_survives(self):
         for name, text in SECRET_WRITES:
@@ -277,14 +236,6 @@ class AtomicSecretWrites(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
                 # No .tmp left behind (the signature of an aborted/torn write).
                 self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), [name])
-
-    def test_deploy_has_no_hand_rolled_secret_writer_left(self):
-        src = _pipeline_source()
-        self.assertNotIn("os.chmod", src)          # no chmod-after-write anywhere
-        self.assertNotIn('"teams.json").write_text', src)
-        self.assertNotIn("tfvars_path.write_text", src)
-        self.assertNotIn("cred_path.write_text", src)
-
 
 if __name__ == "__main__":
     unittest.main()

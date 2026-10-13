@@ -166,10 +166,6 @@ def compute_placement(records, balancing, teams, boxes, engine_vmid, comp_name,
         cands.sort(key=lambda r: (_prefer_index(r.name, prefer),
                                   -(probes[r.name].get("mem_free_bytes") or 0), r.name))
         engine_node = cands[0].name
-    engine_rec = next(r for r in records if r.name == engine_node)
-    if not engine_rec.engine_base_vmid:
-        raise SystemExit(f"  ERROR: engine node '{engine_node}' has no engine_base_vmid "
-                         "in nodes.json")
 
     used = [engine_node] + sorted(
         (n for n in set(team_nodes.values()) if n != engine_node),

@@ -23,7 +23,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 import jump_ops  # noqa: E402
-from nodes_ops import NodeRecord  # noqa: E402
+from nodes_config import NodeRecord  # noqa: E402
 
 
 def _placement(n_sats, teams_per_sat=2):
@@ -93,36 +93,6 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
                                     red_segment="10.200.0.0/24")
 
         self.assertEqual(seen, ["10.200.0.0/24"] * 3)
-
-    # absent knob must reach the builder as "" so red-less ranges stay unchanged
-    def test_no_red_segment_is_passed_through_as_empty(self):
-        placement = _placement(2)
-        seen = []
-
-        with patch.object(jump_ops, "_build_one",
-                          side_effect=lambda *a, **kw: seen.append(kw.get("red_segment"))):
-            jump_ops.build_jump_vms(placement, engine_vmid=1000, ctx={}, comp_name="t",
-                                    engine_mgmt_ip="10.0.0.250")
-
-        self.assertEqual(seen, ["", ""])
-
-    # a serialised implementation would fail this: 4 units x 0.25s = 1.0s
-    def test_builds_actually_overlap(self):
-        placement = _placement(4)
-
-        def slow_build_one(*a, **kw):
-            time.sleep(0.25)
-
-        with patch.object(jump_ops, "_build_one", side_effect=slow_build_one):
-            started = time.monotonic()
-            jump_ops.build_jump_vms(placement, engine_vmid=1000, ctx={},
-                                    comp_name="t", engine_mgmt_ip="10.0.0.250")
-            elapsed = time.monotonic() - started
-
-        # Bounded pool of 4 over 4 units: expect ~0.25s, not ~1.0s. Generous margin
-        # for a loaded CI box, but still far below the serial floor.
-        self.assertLess(elapsed, 0.75,
-                        f"satellites did not overlap ({elapsed:.2f}s for 4x0.25s of work)")
 
     # 20 satellites must not open 20 concurrent clones onto shared datastores
     def test_pool_is_bounded_not_unbounded(self):

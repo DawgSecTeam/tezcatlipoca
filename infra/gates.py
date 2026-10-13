@@ -12,20 +12,15 @@ Two layers, one module:
                                 collision / template preflight (infra.collisions / .resources).
   - the pre-Proxmox-mutation preflight (formerly the preflight/ package): run_preflight(plan)
     is the single pre-mutation entry point, in this order:
-      1. concurrency      - no other deploy live on this host (flock signal)         [once]
-      2. per node share   - templates resolve + carry cloud-init + engine base image + jump
+      1. per node share   - templates resolve + carry cloud-init + engine base image + jump
                             source (infra.resources); vmid/bridge collisions
                             (infra.collisions, ownership-proved); datastore headroom
-      3. mgmt IPs         - engine static IP, satellite jump IPs vs running guests
+      2. mgmt IPs         - engine static IP, satellite jump IPs vs running guests
                             (infra.collisions, cross-node)
-      4. catalog          - `nakon catalog check` over the competition's pins
-      5. pins (advisory)  - warns when a managed box carries zero pins (never refuses)
-      6. portal (advisory) - Compfile `portal 1`: console-token privileges, tunnel-token
-                            hygiene in practice worktrees (never refuses)
+      3. catalog          - `nakon catalog check` over the competition's pins
 
-The small gates (concurrency warning, catalog, unpinned-pins advisory, remote-access, portal
-advisory) live here too rather than in one-file-each modules. `preflight_gates` (single-node)
-and `preflight_gates_multinode` build a plan and call run_preflight.
+The small gates (catalog, remote-access) live here too rather than in one-file-each modules.
+run_capacity_preflight builds the plan (infra.plan) and calls run_preflight.
 
 Teardown/redeploy mutate under the same ownership proof (infra.ownership.ownership_verdict) -
 see destroy_vm_if_exists - so "ours" has one definition everywhere. The destroy-side ownership
@@ -39,12 +34,10 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
 
-from constants import NAKON_DIR, PIPELINE_VERSION, RESUME_ATTEMPT_LIMIT, SCORING_ENGINE_VMID
+from constants import NAKON_DIR, PIPELINE_VERSION, SCORING_ENGINE_VMID
 from infra.collisions import (check_collisions, engine_mgmt_ip_gate,  # noqa: F401
                               jump_mgmt_ip_gate)
-from infra.console import probe_permissions
 from infra.resources import check_datastore_headroom, check_share_templates
 from utils import compfile_flag
 
@@ -76,9 +69,9 @@ def check_resume_gates(comp_dir, state_path, previous_state, from_phase, force=F
     Refuses a resume with no state file (there are no saved secrets to resume with),
     refuses state written by a different pipeline version (the phase numbers are part of
     what the version means), then runs the checkpoint guards: guard_resume_from_phase (do
-    not skip phases the state never saw complete), guard_resume_streak (no resume-loops)
-    and guard_resume_existence (the checkpoint's machines are really there). `force` is
-    --force-from-phase, which relaxes only those three."""
+    not skip phases the state never saw complete) and guard_resume_existence (the
+    checkpoint's machines are really there). `force` is --force-from-phase, which relaxes
+    only those two."""
     if from_phase > 1 and not state_path.exists():
         raise SystemExit(
             f"  ERROR: --from-phase {from_phase} but {state_path} doesn't exist — there are no "
@@ -90,11 +83,7 @@ def check_resume_gates(comp_dir, state_path, previous_state, from_phase, force=F
         return
     # A state file from another pipeline version numbers its phases differently, so
     # resuming across versions is refused rather than silently misinterpreted.
-    _pv = None
-    try:
-        _pv = json.loads(state_path.read_text()).get("pipeline_version")
-    except (ValueError, OSError):
-        pass
+    _pv = previous_state.get("pipeline_version")
     if _pv != PIPELINE_VERSION:
         raise SystemExit(
             f"  ERROR: {state_path} was written by pipeline v{_pv}, this code is "
@@ -105,9 +94,6 @@ def check_resume_gates(comp_dir, state_path, previous_state, from_phase, force=F
     # the machines the later ones target (see guard_resume_from_phase).
     guard_resume_from_phase(from_phase, previous_state.get("last_phase"), state_path,
                             force=force)
-    # ...and refuse a resume-loop: the same phase failing the same way over and
-    # over is not a repair (see guard_resume_streak).
-    guard_resume_streak(from_phase, previous_state, force=force)
     # ...and refuse to trust a checkpoint whose work is not actually there. The two
     # guards above read the checkpoint as a fact; this one checks the fact
     # (see guard_resume_existence for the 2026-10-02 soak that proved why).
@@ -143,8 +129,7 @@ def check_stale_terraform_state(comp_dir, comp_name, previous_state, engine_vmid
             )
 
 
-def run_capacity_preflight(comp_dir, spec, secrets, identity, place, terraform,
-                           prior, from_phase):
+def run_capacity_preflight(ctx, comp_dir, from_phase):
     """Run the competition preflight gates, at the phase-2 boundary.
 
     Gated on from_phase <= 2 because the gates check free capacity and template
@@ -156,27 +141,27 @@ def run_capacity_preflight(comp_dir, spec, secrets, identity, place, terraform,
         # state it falls back to the minted id — pre-existing comp-tagged VMs then
         # classify as foreign and the gate refuses (fail-closed beats guessing whose
         # VM it is).
-        reclaim_tag = prior.previous_state.get("run_id") or secrets.run_id
-        if place.placement:
-            preflight_gates_multinode(comp_dir, spec.boxes, secrets.teams, identity.engine_vmid, place.placement,
-                                      engine_mgmt_ip=terraform.engine_mgmt_ip,
-                                      check_free=not prior.resuming, our_run_tag=reclaim_tag)
+        reclaim_tag = ctx.previous_state.get("run_id") or ctx.run_id
+        from infra.plan import multinode_plan, single_node_plan
+        if ctx.placement:
+            run_preflight(multinode_plan(comp_dir, ctx.boxes, ctx.teams, ctx.engine_vmid,
+                                         ctx.placement, ctx.engine_mgmt_ip,
+                                         not ctx.resuming, reclaim_tag))
         else:
-            preflight_gates(comp_dir, spec.boxes, secrets.number_of_teams, teams=secrets.teams,
-                            engine_vmid=identity.engine_vmid, check_free=not prior.resuming,
-                            engine_mgmt_ip=terraform.engine_mgmt_ip, our_run_tag=reclaim_tag)
+            run_preflight(single_node_plan(comp_dir, ctx.boxes, ctx.number_of_teams,
+                                           ctx.teams, ctx.engine_vmid, not ctx.resuming,
+                                           ctx.engine_mgmt_ip, reclaim_tag))
 
 
-def run_range_gates(comp_dir, spec, secrets, identity, place, terraform, prior, from_phase):
+def run_range_gates(ctx, comp_dir, from_phase):
     """Every refusal that needs the resolved placement, before any credential is minted.
 
     Order: the cheap local stale-terraform-state check first, then the capacity /
     collision / template preflight (which queries Proxmox). Both must run before the fresh
     secret mint — see prepare()'s order note on credential-desync corpses."""
-    check_stale_terraform_state(comp_dir, spec.comp_name, prior.previous_state,
-                                identity.engine_vmid, from_phase)
-    run_capacity_preflight(comp_dir, spec, secrets, identity, place, terraform, prior,
-                           from_phase)
+    check_stale_terraform_state(comp_dir, ctx.comp_name, ctx.previous_state,
+                                ctx.engine_vmid, from_phase)
+    run_capacity_preflight(ctx, comp_dir, from_phase)
 
 
 def guard_resume_from_phase(from_phase, last_phase, state_path, force=False):
@@ -207,7 +192,7 @@ def guard_resume_from_phase(from_phase, last_phase, state_path, force=False):
 
 
 def _artifact_probes(comp_dir):
-    """The three infrastructure probes guard_resume_existence needs, as one dict.
+    """The two infrastructure probes guard_resume_existence needs, as one dict.
 
     Indirection on purpose: it is the single seam a test patches to exercise the gate
     offline, and the single place a caller could inject a cheaper probe. Resolved at
@@ -215,12 +200,11 @@ def _artifact_probes(comp_dir):
     from infra.client import live_vmids
     from terraform_workdir import team_vmids_from_state
     return {"vmids_from_state": lambda: team_vmids_from_state(comp_dir),
-            "vm_exists": live_vmids,
-            "box_reachable": _any_box_reachable}
+            "vm_exists": live_vmids}
 
 
 def guard_resume_existence(from_phase, comp_dir, state, force=False,
-                           vmids_from_state=None, vm_exists=None, box_reachable=None):
+                           vmids_from_state=None, vm_exists=None):
     """Refuse a resume whose skipped phases left no artifacts behind.
 
     `guard_resume_from_phase` reads the checkpoint, which is a claim about work done —
@@ -231,15 +215,13 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
     run spent ~40 minutes in wait_for_windows_sshd before anyone understood why.
 
     So: before trusting a skipped phase, verify the thing it produces. Each check is a
-    separate callable so every branch is testable without Proxmox, and so the checkpoint
-    path (C-checkpoint) can reuse them. Escalation stays available — an operator who
-    genuinely has the infrastructure passes --force-from-phase; what this removes is the
-    SILENT skip.
+    separate callable so every branch is testable without Proxmox. Escalation stays
+    available — an operator who genuinely has the infrastructure passes --force-from-phase;
+    what this removes is the SILENT skip.
 
     Checks, by the phase whose output is being trusted:
       > 2  the engine VM exists (phase 2's terraform apply #1)
       > 4  every team box in terraform state exists as a live VM (apply #2)
-      > 5  the postclone sweep ran and at least one box answers on SSH
     """
     if force:
         return
@@ -249,11 +231,9 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
     # Phase 2's apply #1 creates the engine; phase 4's apply #2 creates the
     # team boxes (its first half builds the goldens they clone from). So a resume that
     # skips phase 2 needs a live engine, and one that skips phase 4 needs live boxes.
-    needs_engine = from_phase > 2
-    needs_boxes = from_phase > 4
-    needs_live_boxes = from_phase > 5
-    if not needs_engine:
+    if from_phase <= 2:
         return
+    needs_boxes = from_phase > 4
 
     try:
         live = set(probe_live())
@@ -261,20 +241,19 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
         raise SystemExit(
             f"  ERROR: --from-phase {from_phase} cannot confirm the machines exist: {e}\n"
             f"        Refusing to resume blind — re-run with --from-phase "
-            f"{_safe_resume_target(2)}, or pass --force-from-phase once you have confirmed "
+            f"2, or pass --force-from-phase once you have confirmed "
             f"the machines exist by hand."
         )
 
-    if needs_engine:
-        engine_vmid = state.get("scoring_vm_id", SCORING_ENGINE_VMID)
-        if int(engine_vmid) not in live:
-            raise SystemExit(
-                f"  ERROR: --from-phase {from_phase} skips the phase that creates the scoring "
-                f"engine, but vmid {engine_vmid} does not exist.\n"
-                f"        Every later phase targets it (scoring setup, terraform context, "
-                f"box images).\n"
-                f"        Re-run with --from-phase 2 to recreate it."
-            )
+    engine_vmid = state.get("scoring_vm_id", SCORING_ENGINE_VMID)
+    if int(engine_vmid) not in live:
+        raise SystemExit(
+            f"  ERROR: --from-phase {from_phase} skips the phase that creates the scoring "
+            f"engine, but vmid {engine_vmid} does not exist.\n"
+            f"        Every later phase targets it (scoring setup, terraform context, "
+            f"box images).\n"
+            f"        Re-run with --from-phase 2 to recreate it."
+        )
 
     if not needs_boxes:
         return
@@ -285,7 +264,7 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
         raise SystemExit(
             f"  ERROR: --from-phase {from_phase} would trust phases 2-{from_phase - 1}, but their "
             f"output cannot be verified: {e}\n"
-            f"        Refusing to resume blind. Re-run with --from-phase {_safe_resume_target(2)} "
+            f"        Refusing to resume blind. Re-run with --from-phase 2 "
             f"to rebuild, or pass --force-from-phase once you have confirmed the machines "
             f"exist by hand."
         )
@@ -304,140 +283,6 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
             f"ghosts and checkpointed it).\n"
             f"        Re-run with --from-phase 4 to recreate them."
         )
-
-    if not needs_live_boxes:
-        return
-
-    reachable = box_reachable or probes["box_reachable"]
-    ok, why = reachable(comp_dir, state)
-    if not ok:
-        raise SystemExit(
-            f"  ERROR: --from-phase {from_phase} trusts the post-clone work, but {why}.\n"
-            f"        Re-run with --from-phase 5 so the bootstrap/sweep phases run against the "
-            f"existing VMs."
-        )
-
-
-def _safe_resume_target(phase):
-    """The earliest phase that rebuilds the missing artifact — what the operator
-    should actually type, rather than the phase they asked for."""
-    return max(1, phase)
-
-
-# Phases whose output is independently checkable, so their checkpoint can be verified
-# before it is written. Phase 3 is "prepare the engine clone" (apply #1 has created it),
-# phase 4 is "goldens + apply #2" (the team boxes now exist). Everything else either
-# builds nothing durable (1, 7) or builds images/state that the resume gates already
-# cover indirectly — inventing a proxy check would refuse good deploys, which is worse
-# than the lie it would prevent.
-CHECKPOINT_GATES = {3, 4}
-
-
-def _any_box_reachable(comp_dir, state):
-    """(ok, why) for 'the post-clone sweep ran and at least one box answers'.
-
-    Two separate facts, deliberately: the marker proves the sweep executed, the SSH
-    probe proves the boxes are real. A range whose marker exists but whose boxes are
-    dark is exactly the state that produced the phantom repair sweep."""
-    marker = Path(comp_dir) / ".postclone-swept"
-    if not marker.exists():
-        return False, f"{marker.name} is absent (the post-clone sweep never completed)"
-    # Cheapest and most specific first: with no team boxes on record there is nothing to
-    # probe, and reading the terraform context to discover that would run terraform (and
-    # could fail) for no reason.
-    targets = _team_box_ips(comp_dir)
-    if not targets:
-        return False, "no team box addresses are recorded to probe"
-    try:
-        from ssh_ops import read_terraform_ctx, ssh_via_gateway
-        ctx = read_terraform_ctx(comp_dir)
-    except Exception as e:                                  # noqa: BLE001 - reported
-        return False, f"the engine context could not be read to probe a box ({e})"
-    for ip in targets[:3]:
-        try:
-            proc = ssh_via_gateway(ctx, ip, "echo RESUME-OK", timeout=25)
-        except Exception:                                   # noqa: BLE001 - try the next
-            continue
-        if "RESUME-OK" in (proc.stdout or ""):
-            return True, ""
-    return False, (f"none of the first {min(3, len(targets))} team box(es) answered over SSH "
-                   f"({', '.join(targets[:3])})")
-
-
-def _team_box_ips(comp_dir):
-    """Every team box IP recorded for this competition, engine excluded.
-
-    targets.json is written by phase 2 and is the deploy's own record of what it built;
-    nakon-config.json is the fallback for a range deployed before targets.json existed."""
-    try:
-        data = json.loads((Path(comp_dir) / "targets.json").read_text())
-    except (OSError, ValueError):
-        return []
-    out = []
-    for name, rec in (data.get("targets") or {}).items():
-        ip = (rec or {}).get("ip") if isinstance(rec, dict) else None
-        if ip and str(name).startswith("team"):
-            out.append(str(ip))
-    return out
-
-
-def guard_resume_streak(from_phase, state, limit=RESUME_ATTEMPT_LIMIT, force=False):
-    """Refuse the (limit+1)-th consecutive resume of a phase failing the same way.
-
-    `docs/e2e-testing.md` has always said "max 2 repair-resume cycles; a third
-    consecutive resume is not a repair, it's a resume-loop", but that lived only in
-    prose and cde-2026 burned eleven attempts (deploy6 -> deploy16, 2026-09-29/30)
-    on a single Windows golden. This is the enforceable version. It refuses *before*
-    any infrastructure work, and names the path that actually helps.
-    """
-    if force:
-        return
-    streak = state.get("failure_streak") or {}
-    count = int(streak.get("count") or 0)
-    if streak.get("phase") != from_phase or count < limit:
-        return
-    raise SystemExit(
-        f"  ERROR: phase {from_phase} has now failed {count} time(s) in a row with the "
-        f"same error:\n"
-        f"    {streak.get('signature')}\n"
-        f"  That is a resume-loop, not a repair (docs/e2e-testing.md: max 2 repair-resume "
-        f"cycles). Resuming again would repeat it. Either fix the underlying cause and "
-        f"pass --force-from-phase once you have, or tear the range down and redeploy:\n"
-        f"    python3 destroy-competition.py <competition>\n"
-        f"    python3 create-competition.py --competition <competition> --teams N --yes"
-    )
-
-
-def gate_concurrent_deploys():
-    """Warn loudly when another deploy is live on this host, then proceed.
-
-    Concurrency is the supported shape (2026-10-04): worktree-isolated runs with their
-    own `--scoring-vmid` / `TF_VAR_team_identifiers` blocks coexist by design, and the
-    gates that refuse REAL conflicts are per-resource — the vmid-collision and
-    engine-mgmt-IP checks, plus run-id ownership tags scoping every teardown. This flock
-    check stays as the loud signal, not a gate: the locks directory is the one
-    concurrency signal that cannot lie (a holder is a live process, the kernel releases
-    the flock when it dies, so a leftover `.lock` file is never a false positive), which
-    is exactly what a WARNING should be built on. Two UNCOORDINATED sessions sharing vmid
-    blocks is still the documented cause of the 13xx vmid races, the foreign-golden squat
-    and the over-broad sweep (AGENTS.md) — the warning names the holder so the operator
-    can check before the collision gates have to.
-
-    The signal is only meaningful because of the call order in `deploy_lib.prepare`: the
-    engine lock is taken BEFORE the preflight runs this gate, so any deploy that has got
-    far enough to matter is already holding a lock."""
-    from nakon_ops import other_deploys_in_flight
-
-    in_flight = other_deploys_in_flight()
-    if not in_flight:
-        return
-    summary = ", ".join(f"{Path(path).name} ({int(age)}s)" for path, age in in_flight[:4])
-    if len(in_flight) > 4:
-        summary += f", +{len(in_flight) - 4} more"
-    print(f"  WARNING: {len(in_flight)} other deploy(s) in flight on this host ({summary}). "
-          f"Concurrent ranges are supported — give this one its own --scoring-vmid and "
-          f"TF_VAR_team_identifiers blocks (the preflight refuses real collisions); "
-          f"teardowns are scoped by run-id ownership tags.")
 
 
 def catalog_check_paths(comp_dir):
@@ -492,35 +337,11 @@ def catalog_gate(comp_dir):
     print("  Preflight: nakon catalog check 0 errors")
 
 
-def unpinned_managed_boxes(comp_dir, boxes):
-    """Names of managed boxes with no entry in box_services/box_vulns/box_baseline.
-    Unreadable pin files yield [] — the catalog gate owns reporting those."""
-    pinned = set()
-    for fname in ("box_services.json", "box_vulns.json", "box_baseline.json"):
-        try:
-            data = json.loads((comp_dir / fname).read_text())
-        except (OSError, ValueError):
-            if fname != "box_baseline.json":
-                return []
-            continue
-        pinned |= {box for box, pins in data.items() if pins}
-    return [b["name"] for b in boxes if not b.get("unmanaged") and b["name"] not in pinned]
-
-
-def warn_unpinned_boxes(comp_dir, boxes):
-    """Non-fatal: a zero-pin box plants a 0-step plan, which is a clean no-op."""
-    names = unpinned_managed_boxes(comp_dir, boxes)
-    if names:
-        print(f"  Preflight WARNING: managed box(es) with zero pins: {', '.join(names)} — "
-              f"the golden will be pristine and strict passes reconcile the no-op")
-    return names
-
-
 def remote_access_gate(plan):
-    """Headscale remote-access gate: the env contract is present, the headscale host is
-    reachable, and no OTHER node already advertises a subnet this deploy will claim.
+    """Headscale remote-access gate: the env contract is present and the headscale host is
+    reachable. The subnet-overlap refusal lives in remote_access_ops.setup_remote_access.
 
-    Raise SystemExit on the three refusal conditions; silent pass otherwise. Runs before
+    Raise SystemExit on the two refusal conditions; silent pass otherwise. Runs before
     any Proxmox mutation (remote access ships with every deploy, so a dead headscale host
     should stop a deploy at the gate, not mid-phase-3)."""
     import remote_access_ops
@@ -545,77 +366,10 @@ def remote_access_gate(plan):
             "access ships with every deploy, so the headscale host must be reachable "
             "before the deploy touches Proxmox. Fix TEZ_HEADSCALE_* in .env or set "
             "`remote_access 0` in the Compfile to opt out.")
-    conflicts = remote_access_ops.route_conflicts(plan.comp_name, identifiers)
-    if conflicts:
-        raise SystemExit(
-            "  ERROR: headscale already has live subnet route(s) overlapping this "
-            "competition's team subnets — two routers advertising the same /24 are one "
-            "HA route group and would cross-route each other's participants:\n    "
-            + "\n    ".join(conflicts)
-            + "\n  Tear down the other range first, or deploy with disjoint team "
-              "identifiers (TF_VAR_team_identifiers).")
-
-
-def _linked_worktree(path):
-    """True inside a linked git worktree (its `.git` is a file, not a directory)."""
-    for d in [Path(path).resolve(), *Path(path).resolve().parents]:
-        git = d / ".git"
-        if git.exists():
-            return git.is_file()
-    return False
-
-
-def _node_tokens(placement):
-    if placement:
-        for name, rec in placement["nodes"].items():
-            yield name, rec["endpoint"], os.environ.get(rec["token_env"], "")
-    else:
-        yield (os.environ.get("TF_VAR_proxmox_node", "pve"),
-               os.environ.get("TF_VAR_proxmox_endpoint", ""),
-               os.environ.get("TF_VAR_proxmox_api_token", ""))
-
-
-def portal_gate(comp_dir, placement=None, probe=probe_permissions):
-    """Advisory gate: will the student portal (Compfile `portal 1`) be able to do its job?
-
-    Never refuses — the portal is non-fatal by design (portal_ops) — but its two failure
-    modes are far cheaper to hear about before an hour of cloning than at phase 8:
-
-      - the deploy token cannot mint the per-comp console user/ACLs (infra.console), which
-        would leave the portal up with consoles off;
-      - a practice run from a linked worktree is about to claim the event's stable public
-        hostname (TEZ_PORTAL_TUNNEL_TOKEN in a copied .env) — portal_ops refuses only when
-        another LIVE range answers on it, so an idle event hostname would be taken silently.
-    """
-    from portal_ops import portal_enabled
-
-    if not portal_enabled(comp_dir):
-        return
-    for name, endpoint, token in _node_tokens(placement):
-        if not endpoint or not token:
-            print(f"  WARNING: student portal — no endpoint/token for node {name}; its consoles "
-                  "will be off")
-            continue
-        try:
-            missing = probe(endpoint, token)
-        except Exception as e:  # noqa: BLE001 - advisory
-            print(f"  WARNING: student portal — could not probe {name}'s token permissions "
-                  f"({type(e).__name__}: {e})")
-            continue
-        if missing:
-            print(f"  WARNING: student portal — the deploy token on {name} lacks "
-                  f"{', '.join(missing)}: the portal will come up with consoles OFF on that "
-                  "node (docs/portal.md → Operating it)")
-    if os.environ.get("TEZ_PORTAL_TUNNEL_TOKEN") and _linked_worktree(comp_dir):
-        print("  WARNING: student portal — TEZ_PORTAL_TUNNEL_TOKEN is set in a linked worktree. "
-              "A practice run will claim the stable public hostname "
-              f"({os.environ.get('TEZ_PORTAL_HOSTNAME') or 'unset'}) unless a live range "
-              "already answers on it; unset it for practice runs.")
 
 
 def run_preflight(plan):
     """The single pre-Proxmox-mutation entry point."""
-    gate_concurrent_deploys()
     if compfile_flag(plan.comp_dir / "Compfile", "remote_access", 1):
         remote_access_gate(plan)
     for share in plan.shares:
@@ -639,31 +393,3 @@ def run_preflight(plan):
     from infra.red01 import red01_gate
     red01_gate(plan)
     catalog_gate(plan.comp_dir)
-    warn_unpinned_boxes(plan.comp_dir, plan.boxes)
-    portal_gate(plan.comp_dir, plan.placement)
-
-
-def preflight_gates(comp_dir, boxes, num_teams, teams=None, engine_vmid=SCORING_ENGINE_VMID,
-                    check_free=True, engine_mgmt_ip=None, our_run_tag=None):
-    """Single-node preflight (a one-share plan over the whole cluster view).
-
-    The collision gate (check_free) makes concurrent competitions on one node safe: it fails
-    fast if this comp's engine vmid, any team vmid, or any team bridge already exists (i.e.
-    belongs to another range). our_run_tag (the prior state's run id) scopes the "ours"
-    exemption to THIS deploy's lineage — a same-comp VM without it is another run's and stays
-    a collision (2026-10-02 near-miss)."""
-    from infra.plan import single_node_plan
-    run_preflight(single_node_plan(comp_dir, boxes, num_teams, teams, engine_vmid, check_free,
-                                   engine_mgmt_ip, our_run_tag))
-
-
-def preflight_gates_multinode(comp_dir, boxes, teams, engine_vmid, placement,
-                              engine_mgmt_ip=None, check_free=True, our_run_tag=None):
-    """Per-node preflight for a multi-node placement: every hosting node gets its own
-    template/collision/headroom gate scoped to exactly what it will hold (engine node:
-    engine base + slot-0 goldens + its teams; each satellite: its slot's goldens, the
-    jump VM, its teams). A satellite that would have died mid-clone on another host fails
-    here instead."""
-    from infra.plan import multinode_plan
-    run_preflight(multinode_plan(comp_dir, boxes, teams, engine_vmid, placement,
-                                 engine_mgmt_ip, check_free, our_run_tag))

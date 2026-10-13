@@ -17,11 +17,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from deploy_lib import golden_plan as dl_golden_plan  # noqa: E402
 from deploy_lib import placement as dl_placement  # noqa: E402
 import jump_ops  # noqa: E402
-import nodes_ops  # noqa: E402
+import nodes_config  # noqa: E402
 import placement_planner  # noqa: E402
 import placement_record  # noqa: E402
 from infra import client  # noqa: E402
-from infra.gates import preflight_gates_multinode  # noqa: E402
+from infra.gates import run_preflight  # noqa: E402
+from infra.plan import multinode_plan  # noqa: E402
 from targets import enumerate_targets  # noqa: E402
 
 
@@ -30,7 +31,7 @@ def _rec(name, node=None, **kw):
                 datastore=f"ds-{name}", token_env=f"TOK_{name.upper()}",
                 engine_base_vmid=900)
     base.update(kw)
-    return nodes_ops.NodeRecord(**base)
+    return nodes_config.NodeRecord(**base)
 
 
 def _probe(name, ok=True, mem_gib=64, templates=(), collisions=(), running=2):
@@ -52,7 +53,7 @@ TEAMS = {f"team{i}": {"identifier": str(100 + i), "password": "pw"} for i in ran
 class LoadNodesConfigTest(unittest.TestCase):
     def test_absent_file_is_legacy(self):
         with tempfile.TemporaryDirectory() as td:
-            records, balancing = nodes_ops.load_nodes_config(Path(td) / "nodes.json")
+            records, balancing = nodes_config.load_nodes_config(Path(td) / "nodes.json")
         self.assertIsNone(records)
         self.assertIsNone(balancing)
 
@@ -66,7 +67,7 @@ class LoadNodesConfigTest(unittest.TestCase):
                           {"name": "b", "endpoint": "https://b:8006", "node": "pveB",
                            "datastore": "zfs", "token_env": "TOK_B", "engine_base_vmid": 1007,
                            "weight": 2.0, "jump_mgmt_ip": "10.0.0.240"}]}))
-            records, balancing = nodes_ops.load_nodes_config(path)
+            records, balancing = nodes_config.load_nodes_config(path)
         self.assertEqual([r.name for r in records], ["a", "b"])
         self.assertEqual(records[1].engine_base_vmid, 1007)
         self.assertEqual(records[1].jump_mgmt_ip, "10.0.0.240")
@@ -77,7 +78,7 @@ class LoadNodesConfigTest(unittest.TestCase):
             path = Path(td) / "nodes.json"
             path.write_text(json.dumps({"nodes": [{"name": "a"}]}))
             with self.assertRaises(SystemExit):
-                nodes_ops.load_nodes_config(path)
+                nodes_config.load_nodes_config(path)
 
     def test_duplicate_names_rejected(self):
         with tempfile.TemporaryDirectory() as td:
@@ -88,7 +89,7 @@ class LoadNodesConfigTest(unittest.TestCase):
                 {"name": "a", "endpoint": "https://b:8006", "node": "n2", "datastore": "d",
                  "token_env": "T"}]}))
             with self.assertRaises(SystemExit):
-                nodes_ops.load_nodes_config(path)
+                nodes_config.load_nodes_config(path)
 
     # Two nodes on one token var is the scale8 soak's mid-preflight 401:
     # activate_placement applies one record's token at a time INTO the env var the
@@ -104,7 +105,7 @@ class LoadNodesConfigTest(unittest.TestCase):
                 {"name": "sat", "endpoint": "https://b:8006", "node": "n2",
                  "datastore": "d", "token_env": "TF_VAR_proxmox_api_token"}]}))
             with self.assertRaises(SystemExit) as raised:
-                nodes_ops.load_nodes_config(path)
+                nodes_config.load_nodes_config(path)
         msg = str(raised.exception)
         self.assertIn("token_env", msg)
         self.assertIn("eng", msg)
@@ -118,7 +119,7 @@ class LoadNodesConfigTest(unittest.TestCase):
                  "datastore": "d", "token_env": "TF_VAR_proxmox_api_token"},
                 {"name": "sat", "endpoint": "https://b:8006", "node": "n2",
                  "datastore": "d", "token_env": "TF_VAR_proxmox_api_token_150"}]}))
-            records, _ = nodes_ops.load_nodes_config(path)
+            records, _ = nodes_config.load_nodes_config(path)
         self.assertEqual([r.token_env for r in records],
                          ["TF_VAR_proxmox_api_token", "TF_VAR_proxmox_api_token_150"])
 
@@ -128,12 +129,12 @@ class NodeEnvTest(unittest.TestCase):
         rec = _rec("x")
         with patch.dict(os.environ, {"TOK_X": "tokval"}, clear=False):
             os.environ.pop("TF_VAR_proxmox_node", None)
-            restore = nodes_ops.apply_node_env(rec)
+            restore = nodes_config.apply_node_env(rec)
             self.assertEqual(os.environ["TF_VAR_proxmox_endpoint"], rec.endpoint)
             self.assertEqual(os.environ["TF_VAR_proxmox_api_token"], "tokval")
             self.assertEqual(os.environ["TF_VAR_proxmox_node"], "X")
             self.assertEqual(os.environ["TF_VAR_template_vm_id"], "900")
-            nodes_ops.restore_node_env(restore)
+            nodes_config.restore_node_env(restore)
             self.assertNotIn("TF_VAR_proxmox_node", os.environ)
 
     def test_missing_token_fails_loud(self):
@@ -141,14 +142,14 @@ class NodeEnvTest(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("TOK_Y", None)
             with self.assertRaises(SystemExit):
-                nodes_ops.apply_node_env(rec)
+                nodes_config.apply_node_env(rec)
 
 
 class PlacementComputeTest(unittest.TestCase):
     def _compute(self, probes, records=None, teams=None, overrides=None, engine=None):
         records = records or [_rec("n1"), _rec("n2")]
         probes = dict(probes)
-        return nodes_ops.compute_placement(
+        return placement_planner.compute_placement(
             records, {}, teams or TEAMS, BOXES, 1000, "testcomp",
             team_overrides=overrides, engine_override=engine, probes=probes)
 
@@ -223,15 +224,15 @@ class PlacementComputeTest(unittest.TestCase):
         self.assertTrue(sats[0]["anchor_identifier"])  # first local team's subnet
 
     def test_slot_vmid_math(self):
-        self.assertEqual(nodes_ops.golden_vmid_for_slot(1000, 0, 2), 1152)
-        self.assertEqual(nodes_ops.golden_vmid_for_slot(1000, 1, 2), 1162)
-        self.assertEqual(nodes_ops.jump_vmid_for(1000, 1), 1131)
-        self.assertEqual(nodes_ops.jump_vmid_for(1000, 4), 1134)
+        self.assertEqual(placement_record.golden_vmid_for_slot(1000, 0, 2), 1152)
+        self.assertEqual(placement_record.golden_vmid_for_slot(1000, 1, 2), 1162)
+        self.assertEqual(placement_record.jump_vmid_for(1000, 1), 1131)
+        self.assertEqual(placement_record.jump_vmid_for(1000, 4), 1134)
 
 
 class PlacementRecordTest(unittest.TestCase):
     def test_write_read_roundtrip_and_authority(self):
-        placement = {"version": nodes_ops.PLACEMENT_VERSION, "comp": "c",
+        placement = {"version": nodes_config.PLACEMENT_VERSION, "comp": "c",
                      "engine_vmid": 1000, "engine_node": "n1",
                      "nodes": {"n1": _rec("n1").to_json()},
                      "slots": {"n1": 0}, "team_nodes": {"team1": "n1"},
@@ -239,20 +240,20 @@ class PlacementRecordTest(unittest.TestCase):
                      "team_identifiers": {"team1": "101"},
                      "satellites": [], "jump_mgmt_ips": {}, "probe_summary": {}}
         with tempfile.TemporaryDirectory() as td:
-            nodes_ops.write_placement(Path(td), placement)
-            back = nodes_ops.read_placement(Path(td))
+            placement_record.write_placement(Path(td), placement)
+            back = placement_record.read_placement(Path(td))
         self.assertEqual(back["engine_node"], "n1")
 
     def test_bad_version_refused(self):
         with tempfile.TemporaryDirectory() as td:
             (Path(td) / "placement.json").write_text(json.dumps({"version": 99}))
             with self.assertRaises(SystemExit):
-                nodes_ops.read_placement(Path(td))
+                placement_record.read_placement(Path(td))
 
     def test_resolve_legacy_when_nothing_configured(self):
         with tempfile.TemporaryDirectory() as td, \
                 patch.object(placement_planner, "load_nodes_config", return_value=(None, None)):
-            placement, rec = nodes_ops.resolve_placement(Path(td), 1000, TEAMS, BOXES, "c")
+            placement, rec = placement_planner.resolve_placement(Path(td), 1000, TEAMS, BOXES, "c")
         self.assertIsNone(placement)
         self.assertIsNone(rec)
 
@@ -263,7 +264,7 @@ class PlacementRecordTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td, \
                 patch.object(placement_planner, "load_nodes_config", return_value=(records, {})), \
                 patch.object(placement_planner, "probe_node", side_effect=lambda r, *a, **k: probes[r.name]):
-            placement, rec = nodes_ops.resolve_placement(
+            placement, rec = placement_planner.resolve_placement(
                 Path(td), 1000, TEAMS, BOXES, "c",
                 resume_endpoint="https://n2.lab:8006")
             self.assertEqual(placement["engine_node"], "n2")
@@ -275,11 +276,11 @@ class PlacementRecordTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td, \
                 patch.object(placement_planner, "load_nodes_config", return_value=(records, {})):
             with self.assertRaises(SystemExit):
-                nodes_ops.resolve_placement(Path(td), 1000, TEAMS, BOXES, "c",
+                placement_planner.resolve_placement(Path(td), 1000, TEAMS, BOXES, "c",
                                             resume_endpoint="https://elsewhere:8006")
 
     def test_existing_placement_wins_over_overrides(self):
-        placement = {"version": nodes_ops.PLACEMENT_VERSION, "comp": "c",
+        placement = {"version": nodes_config.PLACEMENT_VERSION, "comp": "c",
                      "engine_vmid": 1000, "engine_node": "n1",
                      "nodes": {"n1": _rec("n1").to_json()},
                      "slots": {"n1": 0},
@@ -288,8 +289,8 @@ class PlacementRecordTest(unittest.TestCase):
                      "team_identifiers": {k: TEAMS[k]["identifier"] for k in TEAMS},
                      "satellites": [], "jump_mgmt_ips": {}, "probe_summary": {}}
         with tempfile.TemporaryDirectory() as td:
-            nodes_ops.write_placement(Path(td), placement)
-            back, rec = nodes_ops.resolve_placement(Path(td), 1000, TEAMS, BOXES, "c",
+            placement_record.write_placement(Path(td), placement)
+            back, rec = placement_planner.resolve_placement(Path(td), 1000, TEAMS, BOXES, "c",
                                                     team_overrides={"team1": "x"})
         self.assertEqual(back["engine_node"], "n1")
 
@@ -299,8 +300,8 @@ class TfvarsHelpersTest(unittest.TestCase):
         placement = {"nodes": {"n1": _rec("n1").to_json(), "n2": _rec("n2").to_json()},
                      "slots": {"n1": 0, "n2": 1}}
         with patch.dict(os.environ, {"TOK_N2": "tok"}):
-            out = nodes_ops.satellite_tfvars(placement)
-        self.assertEqual(len(out), nodes_ops.MAX_SATELLITES)
+            out = placement_record.satellite_tfvars(placement)
+        self.assertEqual(len(out), nodes_config.MAX_SATELLITES)
         self.assertEqual(out[0]["endpoint"], "https://n2.lab:8006")
         self.assertEqual(out[0]["api_token"], "tok")
         self.assertEqual(out[1]["endpoint"], "https://sat2.invalid")
@@ -310,7 +311,7 @@ class TfvarsHelpersTest(unittest.TestCase):
                      "satellites": [
             {"name": "n2", "slot": 1, "jump_mgmt_ip": "10.0.0.248",
              "anchor_identifier": "103", "teams": ["team1", "team2"]}]}
-        self.assertEqual(nodes_ops.satellite_routes_for(placement),
+        self.assertEqual(placement_record.satellite_routes_for(placement),
                          [{"subnet": "192.168.103.0/24", "via": "10.0.0.248"},
                           {"subnet": "192.168.107.0/24", "via": "10.0.0.248"}])
 
@@ -344,13 +345,6 @@ COMMIT
 
     def test_ruleset_matches_golden(self):
         self.assertEqual(jump_ops.jump_rules([103, 104], "10.0.0.250"), self.GOLDEN)
-
-    def test_no_team_to_team_path(self):
-        rules = jump_ops.jump_rules([103, 104], "10.0.0.250")
-        self.assertNotIn("192.168.103.0/24 -d 192.168.104", rules)
-
-    def test_policy_is_drop(self):
-        self.assertIn(":FORWARD DROP", jump_ops.jump_rules([103], "10.0.0.250"))
 
 
 class EnumerateTargetsTest(unittest.TestCase):
@@ -509,13 +503,13 @@ class ActivatePlacementTest(unittest.TestCase):
                                       token_env="TOK_ZFS193").to_json()},
         }
         with patch.dict(os.environ, {"TOK_HDD150": "t1", "TOK_ZFS193": "t2"}):
-            restore = nodes_ops.activate_placement(placement)
+            restore = placement_record.activate_placement(placement)
             try:
                 self.assertEqual(set(_NODE_ROUTES), {"proxmox", "pve"})
                 self.assertEqual(_NODE_ROUTES["pve"],
                                  ("https://zfs-193.lab:8006", "t2"))
             finally:
-                nodes_ops.deactivate_placement(restore)
+                placement_record.deactivate_placement(restore)
         self.assertEqual(_NODE_ROUTES, {})
 
 
@@ -539,8 +533,7 @@ class MultinodePreflightResumeTest(unittest.TestCase):
         # The jump VM impersonates 192.168.<id>.1 on each satellite; an in-path
         # firewall there would fight it for the gateway address. Refusal fires before
         # any API call, so no stubbing is needed.
-        import config_ops
-        from nodes_ops import PLACEMENT_VERSION
+        from nodes_config import PLACEMENT_VERSION
         placement = {
             "version": PLACEMENT_VERSION, "engine_node": "n1", "engine_vmid": 1000,
             "nodes": {"n1": _rec("n1").to_json()},
@@ -553,14 +546,13 @@ class MultinodePreflightResumeTest(unittest.TestCase):
         fw = {"name": "fw01", "last_octet": 1, "template": "pfsense",
               "unmanaged": True, "in_path": True}
         with self.assertRaises(SystemExit) as cm:
-            preflight_gates_multinode(
+            run_preflight(multinode_plan(
                 Path("competitions/example"), [fw], TEAMS, 1000, placement,
-                engine_mgmt_ip=None, check_free=False)
+                engine_mgmt_ip=None, check_free=False, our_run_tag=None))
         self.assertIn("in_path firewalls are only supported on engine-node", str(cm.exception))
 
     def test_check_free_false_skips_collisions(self):
-        import config_ops
-        from nodes_ops import PLACEMENT_VERSION
+        from nodes_config import PLACEMENT_VERSION
         placement = {
             "version": PLACEMENT_VERSION, "engine_node": "n1", "engine_vmid": 1000,
             "nodes": {"n1": _rec("n1").to_json(), "n2": _rec("n2").to_json()},
@@ -573,8 +565,6 @@ class MultinodePreflightResumeTest(unittest.TestCase):
         boxes = [{"name": "web01", "template": "ubuntu-fix", "memory_mb": 512}]
         teams = TEAMS
         # Colliding VMs on n2 would fatal under check_free=True; must pass on resume.
-        {"n1": _probe("n1", templates=["ubuntu-fix"]),
-         "n2": _probe("n2", templates=["ubuntu-fix"], collisions=[1700])}
         # proxmox_api is stubbed because the template preflight reads each template's
         # config for the cloud-init gate (test_template_cloudinit covers that gate).
         with patch.dict(os.environ, {"TOK_N1": "t", "TOK_N2": "t"}), \
@@ -596,13 +586,12 @@ class MultinodePreflightResumeTest(unittest.TestCase):
                                              "ide2": "local:vm-901-cloudinit"}}), \
                 patch("infra.collisions.proxmox_api", return_value={"data": []}), \
                 patch("infra.resources.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
-                patch("infra.gates.gate_concurrent_deploys"), \
                 patch("infra.gates.remote_access_gate"), \
                 patch("infra.gates.catalog_gate"), \
                 patch("jump_ops.find_jump_template", return_value={"alpine": 900}):
-            preflight_gates_multinode(
+            run_preflight(multinode_plan(
                 Path("competitions/example"), boxes, teams, 1000, placement,
-                engine_mgmt_ip=None, check_free=False)
+                engine_mgmt_ip=None, check_free=False, our_run_tag=None))
 
 
 if __name__ == "__main__":

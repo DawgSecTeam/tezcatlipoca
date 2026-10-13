@@ -1,7 +1,7 @@
 """Phase 8: seed teams, unpause the engine, create injects — each once; then the
 student portal (opt-in, non-fatal)."""
 
-from config_ops import injects_fingerprint, resolve_inject_times
+from injects_config import injects_fingerprint, resolve_inject_times
 from portal_ops import deploy_portal
 from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
 from ssh_ops import wait_for_http

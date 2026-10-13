@@ -287,7 +287,7 @@ fails on a script that hard-codes `sudo`/`wheel`.
 > **Status 2026-10-02:** the catalog half landed in nakon `f86c11d` — `catalog check` reports
 > `missing-vars` for a bare/incomplete pin, and rows expose `required_vars`. `randomize` itself was
 > deliberately left unchanged (the driver filters unplantable bare names itself, see
-> `nakon_ops._drop_unplantable_bare`), so a direct `randomize` call can still return such a name;
+> `nakon_pin_ops._drop_unplantable_bare`), so a direct `randomize` call can still return such a name;
 > the durable fix is still a `required_vars` column in the catalog rather than a derived scan.
 
 **Symptom.** `nakon randomize` returns names without the vars some configs require, and pinned

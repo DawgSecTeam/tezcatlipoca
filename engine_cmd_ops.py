@@ -5,8 +5,7 @@ import subprocess
 from ssh_ops import engine_ssh_opts
 
 
-def _run_engine_cmd(ctx, cmd, check=True, timeout=60, capture=False, step=None,
-                    input=None):
+def _run_engine_cmd(ctx, cmd, step, check=True, timeout=60, capture=False, input=None):
 # One SSH command to the scoring engine — the shared body of every bootstrap step.
 #
 #     `step` names the pipeline step this command belongs to. Every command here runs
@@ -20,19 +19,8 @@ def _run_engine_cmd(ctx, cmd, check=True, timeout=60, capture=False, step=None,
 #     `sudo tar xzf - -C <dir>` (portal_ops.deploy_portal); captured output then stays bytes.
     argv = ["ssh", "-i", ctx["ssh_key_path"], *engine_ssh_opts(ctx),
             f"{ctx['vm_username']}@{ctx['scoring_engine_ip']}", cmd]
-    # Guard: _fork_exec dies with an opaque "expected str, bytes or os.PathLike
-    # object, not tuple" when a non-string sneaks into the argv (live-found
-    # 2026-09-25, first engine-template build). Fail with the full context instead.
-    bad = [(i, repr(a)) for i, a in enumerate(argv) if not isinstance(a, str)]
-    if bad:
-        raise RuntimeError(
-            f"engine SSH argv has non-string element(s) {bad} — ctx keys "
-            f"{sorted(ctx)}: ssh_key_path={ctx.get('ssh_key_path')!r:.120} "
-            f"vm_username={ctx.get('vm_username')!r} "
-            f"scoring_engine_ip={ctx.get('scoring_engine_ip')!r}")
     try:
         return subprocess.run(argv, check=check, timeout=timeout, input=input,
                               capture_output=capture, text=capture and input is None)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        label = repr(step) if step else "<unnamed>"
-        raise RuntimeError(f"engine step {label} failed: {e}") from e
+        raise RuntimeError(f"engine step {step!r} failed: {e}") from e

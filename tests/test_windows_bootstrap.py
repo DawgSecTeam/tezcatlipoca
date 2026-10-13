@@ -29,6 +29,13 @@ def _capture_bootstrap_script():
     return captured["script"]
 
 
+class WindowsTemplateRule(unittest.TestCase):
+    def test_rule(self):
+        for template, expected in [("tmpl-ubuntu-22", False), ("", False), ("win", True),
+                                   ("WIN-2022", True), ("windows-server-2022", True)]:
+            self.assertIs(windows_ops.is_windows_template(template), expected)
+
+
 class FirewallProfiles(unittest.TestCase):
     def test_enables_all_profiles(self):
         script = _capture_bootstrap_script()

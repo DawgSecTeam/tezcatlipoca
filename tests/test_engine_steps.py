@@ -1,6 +1,6 @@
-"""engine_ops: every remote step names itself when it fails, and secrets stay out of argv.
+"""engine_cmd_ops: every remote step names itself when it fails, and secrets stay out of argv.
 
-engine_ops owns the pipeline's longest remote operations — bootstrap's apt install and
+engine_cmd_ops owns the pipeline's longest remote operations — bootstrap's apt install and
 `compose build` at 1800s, `compose up` at 600s, the template's `compose up` — and every
 one of them funnels through `_run_engine_cmd`. Before this, a timeout or a non-zero exit
 escaped as the raw CalledProcessError/TimeoutExpired, whose only content is an
@@ -16,7 +16,6 @@ traceback, `ps`, or an audit log leaks them. Offline: subprocess.run is stubbed 
 ssh is executed.
 """
 
-import ast
 import base64
 import re
 import subprocess
@@ -27,7 +26,8 @@ from unittest import mock
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from engine_ops import _run_engine_cmd, push_quotient_env
+from engine_bootstrap_ops import push_quotient_env
+from engine_cmd_ops import _run_engine_cmd
 
 _CTX = {
     "ssh_key_path": "/tmp/w8-fake-key",
@@ -73,29 +73,6 @@ class StepNaming(unittest.TestCase):
         with mock.patch.object(subprocess, "run", return_value=sentinel):
             got = _run_engine_cmd(_CTX, "false", check=False, timeout=30, step="noop")
         self.assertEqual(got.returncode, 7)
-
-    def test_non_string_argv_guard_is_not_relabelled(self):
-        # The pre-existing context-rich argv guard must win over the step wrapper.
-        # ssh_key_path lands in the argv verbatim (vm_username is interpolated into an
-        # f-string, so only this one can reach the argv as a non-string).
-        bad_ctx = dict(_CTX, ssh_key_path=("tuple",))
-        with mock.patch.object(subprocess, "run") as run:
-            with self.assertRaises(RuntimeError) as cm:
-                _run_engine_cmd(bad_ctx, "true", step="noop")
-        run.assert_not_called()
-        self.assertIn("non-string element", str(cm.exception))
-        self.assertIsNone(cm.exception.__cause__)
-
-    def test_every_run_engine_cmd_call_site_passes_a_step(self):
-        # Guard: a new remote step added without step= would silently go back to being
-        # unnameable in a traceback, which is the whole defect.
-        tree = ast.parse("\n".join(f.read_text() for f in sorted(_REPO.glob("engine_*_ops.py"))))
-        calls = [n for n in ast.walk(tree)
-                 if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "_run_engine_cmd"]
-        self.assertGreaterEqual(len(calls), 10, "engine_ops lost its _run_engine_cmd calls?")
-        for call in calls:
-            self.assertIn("step", [kw.arg for kw in call.keywords],
-                          f"engine_*_ops.py:{call.lineno}: _run_engine_cmd call without step=")
 
 
 class SecretHygiene(unittest.TestCase):

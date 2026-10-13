@@ -21,7 +21,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import nakon_config_ops
-import nakon_ops
+import nakon_pin_ops
 from constants import KNOWN_BROKEN_CONFIGS
 from packet_ops import validate_profile
 
@@ -54,7 +54,7 @@ class ValidateKnownBrokenPins(unittest.TestCase):
     def test_bare_name_raises_naming_config_reason_and_where(self):
         name = "mailenable-cleartext-mail-win"
         with self.assertRaises(SystemExit) as cm:
-            nakon_ops._validate_known_broken_pins([name], "pins for 'web01'")
+            nakon_pin_ops._validate_known_broken_pins([name], "pins for 'web01'")
         msg = str(cm.exception)
         self.assertIn(name, msg)
         self.assertIn(KNOWN_BROKEN_CONFIGS[name][:30], msg)  # reason carried verbatim
@@ -62,18 +62,18 @@ class ValidateKnownBrokenPins(unittest.TestCase):
 
     def test_dict_pin_is_checked_too(self):
         with self.assertRaises(SystemExit):
-            nakon_ops._validate_known_broken_pins(
+            nakon_pin_ops._validate_known_broken_pins(
                 [{"name": "mailenable-cleartext-mail-win", "vars": {}}], "pins for 'web01'")
 
     def test_exempt_pin_warns_instead_of_raising(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertIsNone(nakon_ops._validate_known_broken_pins(
+            self.assertIsNone(nakon_pin_ops._validate_known_broken_pins(
                 ["mailenable-cleartext-mail-win"], "pins for 'ad01'", exempt={"mailenable-cleartext-mail-win"}))
         self.assertIn("WARNING", out.getvalue())
 
     def test_healthy_config_is_silent(self):
-        self.assertIsNone(nakon_ops._validate_known_broken_pins(
+        self.assertIsNone(nakon_pin_ops._validate_known_broken_pins(
             ["apache"], "pins for 'web01'"))
 
 
@@ -96,13 +96,13 @@ class WindowsLocalUserPasswordGate(unittest.TestCase):
                 "USERNAME": "svc_imaging", "PASSWORD": "Imaging2026!",
                 "FULLNAME": "Imaging Sync Service"}}]})
             with self.assertRaisesRegex(SystemExit, "full name"):
-                nakon_ops.generate_nakon_config(TEAMS, BOXES, 1, comp, "pw")
+                nakon_config_ops.generate_nakon_config(TEAMS, BOXES, 1, comp, "pw")
 
     def test_passwordless_pin_allowed(self):
         with tempfile.TemporaryDirectory() as tmp:
             comp = _comp(tmp, {"web01": [{"name": "local-user-win", "vars": {
                 "USERNAME": "audit_svc"}}]})
-            nakon_ops.generate_nakon_config(TEAMS, BOXES, 1, comp, "pw")
+            nakon_config_ops.generate_nakon_config(TEAMS, BOXES, 1, comp, "pw")
 
 
 class GenerateNakonConfigGate(unittest.TestCase):
@@ -111,7 +111,7 @@ class GenerateNakonConfigGate(unittest.TestCase):
             comp = _comp(tmp, {"web01": ["mailenable-cleartext-mail-win"]})
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                nakon_ops.generate_nakon_config(TEAMS, BOXES, 1, comp, "pw")
+                nakon_config_ops.generate_nakon_config(TEAMS, BOXES, 1, comp, "pw")
             self.assertIn("WARNING", out.getvalue())
             machines = json.loads((comp / "nakon-config.json").read_text())["machines"]
             self.assertIn("mailenable-cleartext-mail-win", machines[0]["configurations"])
@@ -127,7 +127,7 @@ class GenerateNakonConfigGate(unittest.TestCase):
                               return_value=(["apache", "airship-webapp"],
                                              ["mailenable-cleartext-mail-win", "suid-find"])):
                 with contextlib.redirect_stdout(out):
-                    nakon_ops.generate_nakon_config(TEAMS, BOXES, 1, comp, "pw")
+                    nakon_config_ops.generate_nakon_config(TEAMS, BOXES, 1, comp, "pw")
             self.assertIn("known-broken", out.getvalue())
             self.assertIn("mailenable-cleartext-mail-win", out.getvalue())
             machines = json.loads((comp / "nakon-config.json").read_text())["machines"]
@@ -141,7 +141,7 @@ class DropUnplantableBare(unittest.TestCase):
     def test_keeps_healthy_and_drops_string_and_dict_pins(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            kept = nakon_ops._drop_unplantable_bare(
+            kept = nakon_pin_ops._drop_unplantable_bare(
                 ["suid-find", "mailenable-cleartext-mail-win",
                  {"name": "mailenable-cleartext-mail-win", "vars": {}}],
                 "fresh selection for 'web01'")
@@ -154,7 +154,7 @@ class DropUnplantableBare(unittest.TestCase):
     def test_all_healthy_is_silent(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            kept = nakon_ops._drop_unplantable_bare(["apache", "suid-find"], "x")
+            kept = nakon_pin_ops._drop_unplantable_bare(["apache", "suid-find"], "x")
         self.assertEqual(kept, ["apache", "suid-find"])
         self.assertEqual(out.getvalue(), "")
 
@@ -163,7 +163,7 @@ class DropUnplantableBare(unittest.TestCase):
         # identity vars would be plantable, so the predicate is literal-scoped, not name-based.
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            kept = nakon_ops._drop_unplantable_bare(
+            kept = nakon_pin_ops._drop_unplantable_bare(
                 ["hosts-redirect-linux", "apache"], "fresh selection for 'web01'")
         self.assertEqual(kept, ["apache"])
         self.assertIn("requires operator vars", out.getvalue())

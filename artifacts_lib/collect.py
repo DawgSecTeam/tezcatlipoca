@@ -60,7 +60,7 @@ def collect(test_path, targets, *, transport=None, skip_existing=True, dry_run=F
             timeout=120, stop_on_unreachable=True):
 # Fetch/seal everything in `targets` into the test folder, then write collection.json.
 #
-# `transport` is injected (defaults to the real scp/guest-agent/local trio) so the whole
+# `transport` is injected (defaults to the real scp/local/ssh-cmd trio) so the whole
 # collector is exercised offline by tests/test_artifacts_ops.py.
 #
 # `stop_on_unreachable` gives up on a target after its first unreachable transfer instead of
@@ -103,13 +103,6 @@ def collect(test_path, targets, *, transport=None, skip_existing=True, dry_run=F
         if target.get("route") == "scp-jump" and not (target.get("ssh") or {}).get("host"):
             entry["status"] = UNREACHABLE
             entry["errors"].append("no address recorded for this target")
-            counters[UNREACHABLE] += 1
-            collected["targets"].append(entry)
-            continue
-        if target.get("route") == "guest-agent" and not (target.get("node")
-                                                         and target.get("vmid")):
-            entry["status"] = UNREACHABLE
-            entry["errors"].append("no node/vmid recorded for this target")
             counters[UNREACHABLE] += 1
             collected["targets"].append(entry)
             continue

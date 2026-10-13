@@ -7,13 +7,15 @@ a destroy safe are read in one file.
 """
 
 from constants import GOLDEN_TAG, MAX_BOXES_PER_TEAM, ownership_tags
-from golden_ops import _is_template, build_golden_set
-from hardening_ops import _APT_PREP_BODY, _apt_prep_script
-from nodes_ops import golden_vmid_for_slot
+from golden_target_ops import _is_template
+from golden_ops import build_golden_set
+from apt_dns_ops import _APT_PREP_BODY, _apt_prep_script
+from placement_record import golden_vmid_for_slot
 from infra.ownership import destroy_vm_if_exists
-from template_ops import (code_hash, engine_template_vmid, frozen_gate,
-                          golden_hash_inputs, golden_payload_hash,
-                          hash_from_inputs, stored_template_hash)
+from template_freeze import (
+    code_hash, engine_template_vmid, frozen_gate, golden_hash_inputs, golden_payload_hash,
+    hash_from_inputs, stored_template_hash,
+)
 from utils import is_unmanaged
 
 
@@ -67,27 +69,15 @@ def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden
 def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored,
                         golden_hashes, golden_inputs, comp_name, run_tag=None):
 # Destroy each golden template in `slot` whose stored M4 hash no longer matches.
-#
-#     A slot with no hash/inputs entry is SKIPPED, not subscripted. The unconditional
-#     `golden_hashes[b["name"]]` here raised KeyError out of phase 4 for an
-#     unmanaged-carried lineup (whose box had no entry — see golden_hash_entries) on a
-#     --from-phase 4 resume or a box flipped to `unmanaged: true` under a live golden,
-#     the exact case deploy() anticipates when it maps an unmanaged slot to its base
-#     template (live-found 2026-09-29, cyberfield hdrives-zfs). With no computed hash
-#     there is nothing to compare the stored one against, so skipping is correct; the
-#     old code moved the KeyError here instead of fixing it.
     for i, b in enumerate(boxes):
         vid = golden_vmid_for_slot(engine_vmid, slot, i)
         if not _is_template(destroy_node, vid):
             continue
-        box_hash = golden_hashes.get(b["name"])
-        box_inputs = golden_inputs.get(b["name"])
-        if box_hash is None or box_inputs is None:
-            continue
+        box_hash = golden_hashes[b["name"]]
         if stored_template_hash(destroy_node, vid) == box_hash:
             continue
         entry = stored.get("golden", {}).get(b["name"]) or {}
-        if frozen_gate(comp_dir, entry.get("inputs"), box_inputs,
+        if frozen_gate(comp_dir, entry.get("inputs"), golden_inputs[b["name"]],
                        f"golden template for '{b['name']}'"):
             print(f"  golden-{b['name']} hash differs — rebuilding...")
             destroy_vm_if_exists(destroy_node, vid, expect_tags=ownership_tags(

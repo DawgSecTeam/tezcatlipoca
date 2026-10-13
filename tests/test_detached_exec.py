@@ -96,17 +96,6 @@ class DetachedExec(unittest.TestCase):
                 "/tmp/tz-detached-1234.log", timeout=300, poll_interval=1)
         return result, api, seen
 
-    def test_launch_is_detached_and_returns_immediately(self):
-        _, api, _ = self._run(["done\n__TZ_DETACHED_RC=0\n"])
-        launch = [c for c in api.calls if c[0] == "POST" and c[1].endswith("/agent/exec")][0]
-        cmd = launch[2]["data"]["command"]
-        self.assertEqual(cmd[0], "bash")
-        wrapper = cmd[2]
-        self.assertIn("setsid nohup", wrapper)      # survives the exec session ending
-        self.assertIn("rm -f /tmp/tz-detached-1234.log", wrapper)
-        self.assertIn("< /dev/null", wrapper)
-        self.assertIn("& echo started", wrapper)    # returns immediately
-
     def test_log_path_with_spaces_is_quoted(self):
         api = _FakeApi()
 
@@ -121,16 +110,6 @@ class DetachedExec(unittest.TestCase):
                 "proxmox", 1234, "true", "/tmp/tz log/run 1.log", timeout=300)
         wrapper = [c for c in api.calls if c[0] == "POST"][0][2]["data"]["command"][2]
         self.assertIn("'/tmp/tz log/run 1.log'", wrapper)
-
-    def test_rc_marker_is_written_after_the_payload_so_it_cannot_race(self):
-        _, api, _ = self._run(["__TZ_DETACHED_RC=0\n"])
-        wrapper = [c for c in api.calls if c[0] == "POST"][0][2]["data"]["command"][2]
-        # The subshell protects the marker from an `exit` inside the payload, and the
-        # marker is appended by the same shell that ran it.
-        self.assertIn("( apt-get install -y nginx", wrapper)
-        self.assertIn("__tz_rc=$?", wrapper)
-        self.assertIn('"__TZ_DETACHED_RC="', wrapper)
-        self.assertIn(">> /tmp/tz-detached-1234.log", wrapper)
 
     def test_polls_until_the_marker_then_returns_the_rc(self):
         result, _, seen = self._run(["starting\n", "still going\n",

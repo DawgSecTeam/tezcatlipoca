@@ -4,13 +4,13 @@ over root SSH (`vzdump --stdout | ssh qmrestore`).
 Satellites need their own copies of every box template (plus an alpine base for the
 jump VM clone) before they can host teams — linked clones and full clones never
 cross hosts on separate storages. This is the tool that closes that gap; the
-per-node template gates (preflight_gates_multinode, placement probes) point here on
+per-node template gates (run_preflight over a multinode_plan, placement probes) point here on
 failure."""
 
 import os
 import subprocess
 
-from nodes_ops import load_nodes_config
+from nodes_config import load_nodes_config
 from infra.client import proxmox_api_for
 
 SYNC_MARKER_TAG = "template"

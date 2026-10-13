@@ -5,7 +5,6 @@ check (with one team, uniqueness alone is vacuous), and a present-but-invalid
 domain_roles.json must FAIL, never silently skip boxes or crash the verifier."""
 
 import contextlib
-import importlib.util
 import io
 import json
 import os
@@ -17,10 +16,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-_SPEC = importlib.util.spec_from_file_location(
-    "verify_domains_test", _REPO / "verify-competition.py")
-verify = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(verify)
+import verifier.model as v_model  # noqa: E402
 import verifier.domains as v_domains  # noqa: E402
 
 TEAMS = {"team1": {"identifier": 104}, "team2": {"identifier": 105}}
@@ -66,7 +62,7 @@ class CheckDomainsTests(unittest.TestCase):
              patch.object(v_domains, "guest_agent_exec_windows", side_effect=probe), \
              patch.object(v_domains, "guest_agent_exec_root", side_effect=probe), \
              contextlib.redirect_stdout(stdout):
-            result = verify.check_domains(comp_dir, teams, BOXES)
+            result = v_domains.check_domains(comp_dir, teams, BOXES)
         return result, stdout.getvalue()
 
     def test_two_teams_valid_distinct_dsids_pass(self):
@@ -156,7 +152,7 @@ class CheckDomainsTests(unittest.TestCase):
 
     def test_absent_roles_skips(self):
         result, out = self._run(self._comp_dir(None), {})
-        self.assertIs(result.status, verify.Status.SKIP_UNAVAILABLE)
+        self.assertIs(result.status, v_model.Status.SKIP_UNAVAILABLE)
         self.assertIn("SKIP", out)
 
 

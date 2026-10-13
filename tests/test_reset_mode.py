@@ -285,7 +285,7 @@ class ProbeTests(unittest.TestCase):
 class PortsClosedFromEngineTests(unittest.TestCase):
 
     def _engine(self, stdout):
-        return patch.object(redeploy_reset_ops, "ssh_to_engine",
+        return patch.object(redeploy_reset_ops, "ssh_on_gateway",
                             return_value=MagicMock(returncode=0, stdout=stdout))
 
     # P2=OK must not satisfy a P22 probe (or vice versa) — matching is by whole
@@ -296,12 +296,12 @@ class PortsClosedFromEngineTests(unittest.TestCase):
         self.assertEqual(closed, {2})
 
     def test_engine_failure_marks_every_port_closed(self):
-        with patch.object(redeploy_reset_ops, "ssh_to_engine", side_effect=RuntimeError("dead")):
+        with patch.object(redeploy_reset_ops, "ssh_on_gateway", side_effect=RuntimeError("dead")):
             closed = redeploy_reset_ops.ports_closed_from_engine(CTX, "192.168.104.10", [22, 80])
         self.assertEqual(closed, {22, 80})
 
     def test_no_ports_never_touches_the_engine(self):
-        with patch.object(redeploy_reset_ops, "ssh_to_engine",
+        with patch.object(redeploy_reset_ops, "ssh_on_gateway",
                           side_effect=AssertionError("must not be called")):
             self.assertEqual(redeploy_reset_ops.ports_closed_from_engine(CTX, "1.2.3.4", []), set())
 

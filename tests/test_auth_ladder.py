@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
+import ssh_ops
 import ubuntu_auth_ops
 from infra.guest_exec import DetachedExecResult
 
@@ -43,8 +44,8 @@ class AuthLadder(unittest.TestCase):
             return DetachedExecResult(rc, err or out, log_path)
 
         with patch.dict("os.environ", ENV):
-            with patch.object(ubuntu_auth_ops.subprocess, "run", side_effect=fake_run), \
-                 patch.object(ubuntu_auth_ops.time, "sleep"), \
+            with patch.object(ssh_ops.subprocess, "run", side_effect=fake_run), \
+                 patch.object(ssh_ops.time, "sleep"), \
                  patch.object(ubuntu_auth_ops, "guest_agent_exec_detached",
                               side_effect=fake_agent):
                 ubuntu_auth_ops.setup_ubuntu_auth(TARGETS, CTX)
@@ -54,28 +55,23 @@ class AuthLadder(unittest.TestCase):
         calls = self.run_auth([FakeProc(0)])
         self.assertEqual((calls["ssh"], calls["agent"]), (1, 0))
 
-    def test_permission_denied_goes_straight_to_agent(self):
-        denied = FakeProc(1, stderr="ssh: Permission denied (publickey,password).")
-        calls = self.run_auth([denied])
-        self.assertEqual(calls["ssh"], 1)   # no retry ladder
-        self.assertEqual(calls["agent"], 1)
+    def test_definitive_rejection_goes_straight_to_agent(self):
+        cases = [FakeProc(1, stderr="ssh: Permission denied (publickey,password)."),
+                 FakeProc(255, stderr="Host key verification failed.")]
+        for result in cases:
+            with self.subTest(stderr=result.stderr):
+                calls = self.run_auth([result])
+                self.assertEqual(calls["ssh"], 1)   # no retry ladder
+                self.assertEqual(calls["agent"], 1)
 
-    def test_host_key_failure_goes_straight_to_agent(self):
-        badkey = FakeProc(255, stderr="Host key verification failed.")
-        calls = self.run_auth([badkey])
-        self.assertEqual(calls["ssh"], 1)
-        self.assertEqual(calls["agent"], 1)
-
-    def test_generic_failure_still_retries_then_agent(self):
-        flaky = FakeProc(255, stderr="ssh: connect timed out")
-        calls = self.run_auth([flaky])
-        self.assertEqual(calls["ssh"], 8)   # full ladder for boot-time flakiness
-        self.assertEqual(calls["agent"], 1)
-
-    def test_timeout_ladder_then_agent(self):
-        calls = self.run_auth([subprocess.TimeoutExpired("ssh", 40)])
-        self.assertEqual(calls["ssh"], 8)
-        self.assertEqual(calls["agent"], 1)
+    def test_boot_time_failures_retry_full_ladder_then_agent(self):
+        cases = [FakeProc(255, stderr="ssh: connect timed out"),
+                 subprocess.TimeoutExpired("ssh", 40)]
+        for result in cases:
+            with self.subTest(result=result):
+                calls = self.run_auth([result])
+                self.assertEqual(calls["ssh"], 8)   # full ladder for boot-time flakiness
+                self.assertEqual(calls["agent"], 1)
 
 
 if __name__ == "__main__":

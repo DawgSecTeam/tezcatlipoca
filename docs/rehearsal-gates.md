@@ -46,9 +46,6 @@ fail the run, the honest red-side numbers carry the verdict.
 
 - Round-3 baseline: `scrim-runs/agent-scrim-2026-09-17c/INTERACTION.md` (score 2 —
   1 inferred restoration, 1 accidental re-kill, 0 injects).
-- The self-test pin lives in `scrim-report.py --self-test` and must always reproduce
-  the 17c numbers; if the metrics change, re-verify against FINDINGS.md before
-  re-pinning.
 
 ## Fix-coverage checklist (E2E #3, 2026-09-23)
 
@@ -69,9 +66,9 @@ as READY. A check that cannot run is a finding, not a pass.
 - [ ] Verifier all-PASS, plus the misconfig-via-guest-agent fallback drill (stop sshd on the
       misconfig target → verify still PASS via agent → restore sshd).
 - [ ] Report honesty: INTERACTION.md carries the eviction metric, a Blue interaction section,
-      timeout + TTR numbers; `--self-test` reproduces the 17c pins; a blue-absent run would
+      timeout + TTR numbers; a blue-absent run would
       force the NO-INTERACTION verdict.
-- [ ] Plant-integrity surface: verify prints the `nakon_failed_steps` tally line.
+- [ ] Plant coverage: verify's plant_coverage gate passes on the recorded per-machine coverage (the nakon FAILED tally is informational only).
 - [ ] Teardown exit 0, no leftover competition VMIDs (red01's 999 gone).
 - [ ] winget/choco Windows fallback observation recorded (known-issues "Windows
       package-manager fallback untested").

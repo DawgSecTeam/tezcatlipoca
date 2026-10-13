@@ -8,14 +8,13 @@ in `tests/` replaces it.
 
 ## Patching after the 0.2.0 module split
 
-`golden_ops`, `nakon_ops`, `hardening_ops`, `engine_ops` are re-export facades and the two
-hyphenated scripts delegate to `redeploy_*_ops.py` / `destroy_*_ops.py`. A `patch.object` only takes
-effect on the module whose function *looks the name up*, so patch the module that owns the
-caller: e.g. `golden_smoke_ops` / `golden_disk_ops` for the smoke and disk helpers,
-`nakon_run_ops` for `run_nakon`'s collaborators, `ubuntu_auth_ops` / `apt_dns_ops` /
-`service_fixup_ops` for hardening, `engine_identity_ops` / `engine_guard_ops` for engine steps,
-`destroy_sweep_ops` for the teardown sweep, and the matching `redeploy_<mode>_ops` for each redeploy
-mode. Importing a name from the facade (`from golden_ops import golden_targets`) stays fine.
+The 0.2.0 facades (`nakon_ops`, `engine_ops`, `hardening_ops`, `nodes_ops`, `template_ops`) are
+gone, and `golden_ops` / `config_ops` no longer re-export names. A `patch.object` only takes effect
+on the module whose function *looks the name up*, so patch the module that owns the caller: e.g.
+`golden_disk_ops` for the disk helpers, `nakon_run_ops` for `run_nakon`'s collaborators,
+`ubuntu_auth_ops` / `apt_dns_ops` / `service_fixup_ops` for hardening, `engine_identity_ops` /
+`engine_cmd_ops` for engine steps, and the matching `redeploy_<mode>_ops` for each redeploy mode.
+Import each name from the module that defines it.
 
 ## Run them
 
@@ -48,13 +47,12 @@ drift, so read them from `git ls-files tests/` and the pytest run above rather t
 
 **Range/config contracts**
 
-**Patch the owning module, not the facade.** `config_ops`, `nodes_ops`, `template_ops`
-are re-export facades, and `infra/` is one package of owning modules: patch
-`infra.client.proxmox_api`, `infra.guest_exec.*`, `infra.ownership.*`,
+**Patch the owning module.** Each name is defined in one module, and `infra/` is a package of
+those owning modules: patch `infra.client.proxmox_api`, `infra.guest_exec.*`, `infra.ownership.*`,
 `infra.lifecycle.*`, `infra.collisions/resources.proxmox_api`, `placement_record.record_of`,
 `placement_planner.probe_node`, `engine_template_ops.destroy_vm_if_exists`, `template_freeze.*`
-(patching the facade name does not reach the moved code, and an unpatched `proxmox_api` in a preflight
-module makes a real network call).
+(patching a name in a module that only imported it does not reach the caller, and an unpatched
+`proxmox_api` in a preflight module makes a real network call).
 
 | File | Guards |
 |---|---|
@@ -77,8 +75,7 @@ module makes a real network call).
 | `test_golden_disk.py` | Golden-set disk sizing (svc-matrix: a 15 GB template disk filled mid-plant) |
 | `test_root_disk_expansion.py` | Guest-side root-disk expansion (regression-4x1: cloud-init/partition parsing on btrfs) |
 | `test_interrupted_clone.py` | Interrupted-clone recovery (winad-testrun rec 3): clone marker, stale-lock unlock, orphan handling |
-| `test_golden_boot_smoke.py` | The boot-smoke gate (2026-09-24 `systemd-system-masked`): stop → smoke → convert ordering, fail-closed tri-state, the `golden_boot_smoke 0` waiver, throwaway-clone teardown |
-| `test_parallel_golden.py` | `build_golden_set`'s snapshot/convert passes on the 4-worker pool without weakening the boot-smoke barrier or the delete-snapshot→convert ordering |
+| `test_parallel_golden.py` | `build_golden_set`'s snapshot/convert passes on the 4-worker pool without weakening the delete-snapshot→convert ordering |
 | `test_nakon_stages.py` | Three-stage split safety: the golden identity ban on both golden paths (slot 0 and every satellite), and the combined post-clone pin merge |
 
 **Deploy robustness**
@@ -106,9 +103,8 @@ module makes a real network call).
 | `tests/_deploy_patch.py` | Not a test: `dpatch(name)` patches one name in every `deploy_lib` module that binds it (the pipeline is many small modules, each importing what it uses) |
 | `test_deploy_phases.py` | Phase-boundary defects offline: the M4 golden hash loop (every box gets an entry, unmanaged included), the `--from-phase` resume guard against `last_phase`, and phase 6's always-persist coverage repair |
 | `test_deploy_phase_units.py` | Per-phase units for `deploy_lib/phases/` — the branching, ordering and state writes that used to be buried in `deploy()`, with every infra call patched |
-| `test_pipeline_api.py` | `pipeline_api`'s explicit surface: one minimal `__all__`, every name resolved from the module that owns it, and no return of the importlib `driver` loader |
-| `test_helper_dedup.py` | One definition per shared helper (audit 2026-10-02): `is_windows_template`, `os_to_platform`, and the generated-secret charset cannot be silently re-duplicated |
-| `test_engine_steps.py` | engine_ops: every remote step names itself when it fails (timeout/non-zero instead of an undifferentiated SSH argv), and the Quotient `.env` secrets never appear in argv |
+| `test_pipeline_api.py` | `create-competition.py --plan-only` still runs through `pipeline_api` (the surface itself is no longer pinned) |
+| `test_engine_steps.py` | engine_cmd_ops: every remote step names itself when it fails (timeout/non-zero instead of an undifferentiated SSH argv), and the Quotient `.env` secrets never appear in argv |
 | `test_destroy_teardown.py` | `terraform destroy` is bounded per attempt and a timeout is a retryable failure (pfsense-rvb: a hung Windows-DC destroy held the lock and printed nothing) |
 | `test_redeploy_state.py` | `.deploy_state.json` writers all go through `config_ops.write_state` (D1, winad-testrun), and redeploy's Linux hardening order holds (sudoers grant before the DNS fix) |
 | `test_jump_parallel.py` | `build_jump_vms` runs satellites concurrently (bound 4) without dropping one or turning a hard abort into a partial build (multinode-spread-2026-09-30) |
@@ -122,7 +118,7 @@ anything they **patch** (an SSH hop, `run_concurrent`, `guest_agent_exec_*`, a g
 
 | File | Guards |
 |---|---|
-| `test_verify_gates.py` | verify gate correctness, each against a reproduced defect (D1–D8): fail-closed plant coverage, tri-state SKIP semantics, the isolation decision table, strict-services freshness, and the SUMMARY/exit-code single source of truth (`--allow-unverified`) |
+| `test_verify_gates.py` | verify gate correctness, each against a reproduced defect (D1–D8): fail-closed plant coverage, tri-state SKIP semantics, the isolation decision table, strict-services "nothing scored" failure, and the SUMMARY/exit-code single source of truth (`--allow-unverified`) |
 | `test_parallel_verify.py` | verify's domain / misconfig-survival / beacon loops on the 8-worker pool, with parallel and re-serialised runs producing byte-identical stdout and the same statuses and exit code |
 
 **Packets, scrim, hygiene**
@@ -135,10 +131,9 @@ anything they **patch** (an SSH hop, `run_concurrent`, `guest_agent_exec_*`, a g
 | `test_amongus_cde.py` | amongus-cde-2026 wiring: Windows service mappings and post-domain AD configs |
 | `test_multinode.py` | Multi-node placement, jump rules, slot vmid math, and the sync planner — all offline (the largest file) |
 | `test_secret_hygiene.py` | Repo hygiene: no secret-bearing file is tracked, and no env var drifts — it fails the suite if code reads a variable neither declared in `.env.example` nor allowlisted in `INTERNAL_ENV` |
-| `test_bundle_lint.py` | Bundle var-lint false positives that once blocked a valid deploy (live-found 2026-09-26) |
 | `test_packet_validation.py` | Compile-boundary packet shapes that used to survive `validate_profile` and die later in a live deploy — some only at phase 6, after DC promotion (D3) |
 | `test_service_fixups.py` | `fix_services_on_boxes`' generated hardening script is **byte-identical** to the pre-refactor output across the full service case matrix |
-| `test_scrim_defects.py` | The red-vs-blue scrim defect audit findings D1–D12 (process-tree timeouts, worker supervision, lineup, secret hygiene) — each pins a live-only failure path. The scrim tests import the `scrim/` and `scrim_report/` modules directly and patch a function in the module that *defines* it (see the module map in [scrim-harness.md](scrim-harness.md)); source-grep assertions read the whole package via `_scrim_src()` |
+| `test_scrim_defects.py` | The red-vs-blue scrim defect audit findings D1–D12 (process-tree timeouts, worker supervision, lineup, secret hygiene) — each pins a live-only failure path. The scrim tests import the `scrim/` and `scrim_report/` modules directly and patch a function in the module that *defines* it (see the module map in [scrim-harness.md](scrim-harness.md)) |
 
 ## Adding one
 

@@ -1,7 +1,7 @@
 """nodes.json: multi-node constants, NodeRecord, config loading and per-node env application.
 
-The module docstring of the multi-node model lives in docs/multi-node.md; nodes_ops re-exports
-everything here and in placement_record / placement_planner."""
+The module docstring of the multi-node model lives in docs/multi-node.md; placement state is
+in placement_record and planning in placement_planner."""
 
 import json
 import os

@@ -167,6 +167,17 @@ class OwnershipTotality(unittest.TestCase):
             self.assertIn("terraform.tfstate", msg)
             self.assertIn("Nothing was destroyed", msg)
 
+    def test_state_present_passes_the_tfstate_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = Path(tmp)
+            (comp / "terraform").mkdir()
+            (comp / "terraform" / "terraform.tfstate").write_text("{}")
+            machinery.require_terraform_state(comp, {"last_phase": 7, "run_id": RUN})
+
+    def test_never_applied_comp_passes_the_tfstate_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            machinery.require_terraform_state(Path(tmp), {"last_phase": 1, "run_id": RUN})
+
     def test_sweep_ignores_a_clone_marker_only_vm(self):
     # The leftover sweep matches TAGS only; an interrupted clone (marker, no
     #         tags) is reclaimable solely through the guarded delete primitive.
@@ -324,7 +335,7 @@ class MainSequence(unittest.TestCase):
 
     def test_i6_frozen_full_teardown_is_refused_before_any_mutation(self):
         with self.assertRaises(SystemExit):
-            self._main(["--yes", "--full"], frozen={"frozen_at": "2026-10-01"})
+            self._main(["--yes"], frozen={"frozen_at": "2026-10-01"})
         self.assertIn("FROZEN", self.out)
         self.assertIn("--end-of-competition", self.out)     # remedy
         self.assertEqual(self.log, [])

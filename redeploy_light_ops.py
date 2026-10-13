@@ -6,7 +6,7 @@ import pipeline_api
 
 from config_ops import write_state
 from constants import SNAP_BASE, SNAP_READY, WINDOWS_ADMIN_USER
-from engine_ops import read_event_conf
+from engine_event_ops import read_event_conf
 from infra.guest_exec import guest_agent_exec_root, guest_agent_exec_windows
 from infra.lifecycle import (delete_snapshot, list_snapshots, rollback_snapshot, take_snapshot,)
 from targets import describe_target

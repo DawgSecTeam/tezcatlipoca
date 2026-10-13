@@ -107,14 +107,6 @@ class CleanVerifiesBeforeDestroying(unittest.TestCase):
         destroy_cmd = rec.destructive()[0]["cmd"]
         self.assertIn(f"rm -f {engine_identity_ops.ENGINE_BUILD_STAMP}", destroy_cmd)
 
-    def test_a_clean_without_a_vmid_stays_backward_compatible(self):
-    # The shim at template_ops._clean_func() and any older caller pass only ctx.
-        rec = _CmdRecorder()
-        with patch.object(engine_identity_ops, "_run_engine_cmd", rec):
-            engine_identity_ops.clean_engine_for_template(_ctx())
-        self.assertEqual(rec.probed(), [])
-        self.assertEqual(len(rec.destructive()), 1)
-
 
 class Stamping(unittest.TestCase):
     def test_stamping_writes_the_identity_with_sudo(self):

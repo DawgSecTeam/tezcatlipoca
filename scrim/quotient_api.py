@@ -109,13 +109,6 @@ def _team_tid(creds, user, jar, team):
     return str(tid)
 
 
-def team_down(creds, team):
-    try:
-        return any(not s["up"] for s in parsed_status(creds, team))
-    except Exception:
-        return False
-
-
 # Last10Rounds is newest-first and at >=8 teams a poll can land mid-round: rounds[0] is
 # then the round in flight, with an empty Checks array that is not a verdict at all —
 # reading it as "no check passed" reports a phantom DOWN the soak's monitors, fire-tests

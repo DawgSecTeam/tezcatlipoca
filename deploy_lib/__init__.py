@@ -4,8 +4,7 @@
   runner.py       deploy(): lock -> prepare -> walk PHASES -> checkpoint -> finish
   prepare.py      prepare(): the ordered pre-phase steps, producing a DeployContext
   gates.py        EVERY pre-flight / ownership / state-version refusal, in one place
-  context.py      DeployContext (the object the phases share) + checkpoint
-  stages.py       the per-step records prepare() fills in
+  context.py      DeployContext (the object the phases share, filled in by prepare()) + checkpoint
   inputs.py       read Compfile/boxes/users/state/injects from disk
   secrets.py      carry or mint the competition's credentials
   placement.py    multi-node placement + the engine lock

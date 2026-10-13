@@ -5,16 +5,15 @@ patchable; the SEQUENCING is a RECLAIM plan executed by the teardown engine
 (teardown-redesign: one engine, one policy vocabulary; RECLAIM carries no
 evidence steps — the prior run's evidence was that run's teardown's job)."""
 
-import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from infra.client import destroy_bridge_if_exists
-from golden_ops import _is_template
-from nodes_ops import record_of
+from golden_target_ops import _is_template
+from placement_record import record_of
 from infra.client import proxmox_api
 from infra.ownership import destroy_vm_if_exists
-from template_ops import load_template_hashes
+from template_freeze import load_template_hashes
 from timing import timed
 from utils import is_in_path_fw, record_degradation
 
@@ -168,14 +167,10 @@ def phase1_cleanup(ctx):
 
     nodes = [ctx.node] + ([record_of(ctx.placement, s["name"]).node
                            for s in (ctx.placement or {}).get("satellites", [])])
-    reclaim_run = (getattr(ctx, "reclaim_tag", None)
-                   or getattr(ctx, "reclaim_run_id", None)
-                   or getattr(ctx, "run_id", "") or "")
-    comp = getattr(ctx, "comp_name", None) or Path(ctx.comp_dir).name
     engine_ctx = TeardownContext(
         comp_dir=ctx.comp_dir, env={}, teams=ctx.teams, boxes=ctx.boxes,
-        deployed_state={"run_id": reclaim_run},
-        ownership=Ownership(comp, reclaim_run),
+        deployed_state={"run_id": ctx.reclaim_tag},
+        ownership=Ownership(ctx.comp_name, ctx.reclaim_tag),
         placement=ctx.placement, nodes=nodes, default_node=ctx.node,
         inventory=Inventory(nodes))
     results = TeardownEngine(engine_ctx, log=print, journal=False).execute(
@@ -193,4 +188,3 @@ def phase1_cleanup(ctx):
     # on the redeployed range). Resumes of THIS deploy keep it (that is the
     # resumability contract).
     (ctx.comp_dir / teardown.TEARDOWN_JOURNAL).unlink(missing_ok=True)
-    time.sleep(5)

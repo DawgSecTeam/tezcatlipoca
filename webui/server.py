@@ -110,7 +110,7 @@ def pin_name(pin) -> str:
 
 
 def os_to_platform(template: str) -> str:
-    # Same rule nakon_ops.os_to_platform uses; duplicated so the UI imports nothing heavy.
+    # Same rule nakon_config_ops.os_to_platform uses; duplicated so the UI imports nothing heavy.
     return "windows" if "win" in (template or "").lower() else "linux"
 
 
@@ -512,7 +512,7 @@ def get_templates():
     live = []
     if os.getenv("TF_VAR_proxmox_endpoint") and os.getenv("TF_VAR_proxmox_api_token"):
         try:
-            from config_ops import list_proxmox_templates
+            from config_prompts import list_proxmox_templates
             live = list_proxmox_templates()
         except Exception:
             live = []

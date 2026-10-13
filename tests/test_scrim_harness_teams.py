@@ -62,14 +62,12 @@ class InjectReanchorPlan(unittest.TestCase):
 
 class BlueEndpoints(unittest.TestCase):
     ARGS = SimpleNamespace(blue_base_url="http://shared", blue_model="m",
-                           blue2_base_url=None, blue2_model=None,
-                           blue3_base_url="http://three", blue3_model=None,
-                           blue4_base_url=None, blue4_model=None)
+                           blue2_base_url="http://two", blue2_model=None)
 
     def test_per_team_endpoint_and_fallback(self):
-        self.assertEqual(endpoints.blue_ep(self.ARGS, 3), ("http://three", "m"))
+        self.assertEqual(endpoints.blue_ep(self.ARGS, 2), ("http://two", "m"))
+        self.assertEqual(endpoints.blue_ep(self.ARGS, 3), ("http://shared", "m"))
         self.assertEqual(endpoints.blue_ep(self.ARGS, 4), ("http://shared", "m"))
-        self.assertEqual(endpoints.blue_ep(self.ARGS, 2), ("http://shared", "m"))
 
     def test_one_lock_per_distinct_endpoint(self):
         import threading

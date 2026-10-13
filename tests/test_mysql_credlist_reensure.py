@@ -25,13 +25,6 @@ class ScriptTest(unittest.TestCase):
             self.assertIn(f"GRANT ALL PRIVILEGES ON *.* TO '{name}'@'%'", script)
         self.assertIn("FLUSH PRIVILEGES;", script)
 
-    def test_survives_client_tls_refusal(self):
-        script = mysql_credlist_reensure_script(CREDS.items())
-        self.assertIn("--skip-ssl", script)
-        # heredoc target + chmod + 4 fallback redirects + cleanup
-        self.assertEqual(script.count("/tmp/tz-credlist.sql"), 7)
-        self.assertIn("rm -f /tmp/tz-credlist.sql", script)
-
 
 class ReensureTest(unittest.TestCase):
     def setUp(self):

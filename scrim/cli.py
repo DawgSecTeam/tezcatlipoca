@@ -53,11 +53,6 @@ def main():
                    help="separate LLM base URL for team2's blue (default: same as --blue-base-url)")
     p.add_argument("--blue2-model", default=None,
                    help="model for team2's blue when --blue2-base-url is set")
-    for n in (3, 4):
-        p.add_argument(f"--blue{n}-base-url", default=None,
-                       help=f"separate LLM base URL for team{n}'s blue (default: --blue-base-url)")
-        p.add_argument(f"--blue{n}-model", default=None,
-                       help=f"model for team{n}'s blue when --blue{n}-base-url is set")
     p.add_argument("--red-ip", default="10.0.0.198", help="red01 IP on the cluster (realm default)")
     p.add_argument("--red-gw", default="10.0.0.1", help="red01 gateway")
     p.add_argument("--red-storage", default="hdd", help="storage pool red01 clones from")

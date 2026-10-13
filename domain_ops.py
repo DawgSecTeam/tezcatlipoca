@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from constants import WINDOWS_ADMIN_USER
-from nakon_ops import _run_single_nakon_config
+from nakon_run_ops import _run_single_nakon_config
 from infra.guest_exec import (guest_agent_exec_root, guest_agent_exec_windows, wait_for_guest_agent,)
 from targets import box_index, vm_id_for
 from windows_ops import (

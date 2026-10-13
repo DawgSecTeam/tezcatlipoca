@@ -1,16 +1,13 @@
 """deploy(): the sequencer. Takes the lock, prepares, walks PHASES, checkpoints, reports."""
 
-from constants import MIN_LOAD_FREE_TIMEOUT, RESUME_ATTEMPT_LIMIT
-from infra.client import wait_for_node_load
-
 from deploy_lib import phases
-from deploy_lib.failure import clear_failure_streak, record_degradations, record_failure
+from deploy_lib.failure import record_degradations
 from infra.gates import acquire_deploy_lock
 from deploy_lib.prepare import prepare
 
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
-           team_node=None, engine_node=None, force_from_phase=False, min_load_free=None):
+           team_node=None, engine_node=None, force_from_phase=False):
 # Run the eight-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
 #
 #     scoring_vmid overrides the scoring-engine VMID (default 1000) so several
@@ -28,25 +25,11 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     if ctx is None:
         return
 
-    wait_out_contention(ctx, min_load_free)
     run_pipeline(ctx)
 
-    clear_failure_streak(ctx.state)
     record_degradations(ctx)
     ctx.save_state()
     phases.finish_deploy(ctx)
-
-
-def wait_out_contention(ctx, min_load_free):
-# `--min-load-free N` on a resume into a phase that previously failed: wait for the
-#     node to come down before starting. The retries that produced the eleven-attempt
-#     cde-2026 storm were pure contention, and an operator was doing this by hand.
-    if min_load_free is not None and ctx.from_phase > 1:
-        streak_phase = (ctx.state.get("failure_streak") or {}).get("phase")
-        if streak_phase == ctx.from_phase:
-            print(f"  Phase {ctx.from_phase} failed on the previous attempt — waiting for "
-                  f"node '{ctx.node}' to fall below load {min_load_free}...")
-            wait_for_node_load(ctx.node, float(min_load_free), timeout=MIN_LOAD_FREE_TIMEOUT)
 
 
 def run_pipeline(ctx):
@@ -80,18 +63,9 @@ def run_pipeline(ctx):
 
 
 def report_failure(ctx, current_phase, exc):
-# Record the tolerated-failure ledger and the failure streak, print the resume hint.
+# Record the tolerated-failure ledger, print the resume hint.
     record_degradations(ctx)
     print(f"\n  [!] Deploy failed during phase {current_phase} of '{ctx.comp_name}'.")
-    try:
-        count = record_failure(ctx.state, current_phase, exc)
-        ctx.save_state()
-        print(f"      Attempt {count} at phase {current_phase} with this signature"
-              + (f" — {RESUME_ATTEMPT_LIMIT} is the limit before a resume is refused."
-                 if count >= RESUME_ATTEMPT_LIMIT else "."))
-    except Exception as record_error:
-        # Never let bookkeeping mask the real failure.
-        print(f"      (could not record the failure streak: {record_error})")
     resume_phase = current_phase
     if current_phase >= 2 and "already exists" in str(exc).lower():
         resume_phase = 1

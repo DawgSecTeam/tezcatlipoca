@@ -63,7 +63,7 @@ time", tolerated, deferred, and documented-around are not gone.
 
 ```bash
 # 1. Reset — must exit clean on its own; a teardown that needs coaxing is an issue
-.venv/bin/python destroy-competition.py --competition scrim-one --yes --full --end-of-competition
+.venv/bin/python destroy-competition.py --competition scrim-one --yes --end-of-competition
 
 # 2. Run — detached, start to finish, no intervention
 setsid nohup .venv/bin/python -u run-agent-scrim.py --competition scrim-one \

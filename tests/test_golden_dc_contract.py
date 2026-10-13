@@ -17,7 +17,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import golden_ops
-import nakon_ops
+import nakon_config_ops
 
 TEAMS = {"team1": {"identifier": 104}, "team2": {"identifier": 105}}
 BOXES = [{"name": "dc01", "template": "windows-server-2022"},
@@ -49,7 +49,7 @@ class GenerateStageConfigsTests(unittest.TestCase):
             ]
             (comp_dir / "nakon-config.json").write_text(
                 json.dumps({"machines": machines}))
-            golden_p, repair_p, final_p, _ = nakon_ops.generate_stage_configs(
+            golden_p, repair_p, final_p, _ = nakon_config_ops.generate_stage_configs(
                 comp_dir, TEAMS, BOXES, unbooted={"dc01"})
             golden = json.loads(golden_p.read_text())["machines"]
             repair = json.loads(repair_p.read_text())["machines"]

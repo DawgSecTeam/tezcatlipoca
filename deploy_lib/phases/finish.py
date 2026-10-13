@@ -17,7 +17,9 @@ def connect_terraform(ctx):
 #     and a resume from phase 3+ never runs the apply at all. A failure here must
 #     be reported as the phase the operator asked to resume at, which is why the
 #     sequencer does not set current_phase for it.
-    ctx.tf_ctx = read_terraform_ctx(ctx.comp_dir)
+    # Phase 2 fills tf_ctx on a fresh run; only a --from-phase 3+ resume still needs the read.
+    if not ctx.tf_ctx:
+        ctx.tf_ctx = read_terraform_ctx(ctx.comp_dir)
     ctx.ssh_key = Path(ctx.tf_ctx["ssh_key_path"])
     ctx.scoring_user = os.environ["TF_VAR_vm_username"]
     ctx.scoring_ip = ctx.tf_ctx["scoring_engine_ip"]
@@ -31,11 +33,11 @@ def write_credentials_file(ctx):
         f"Scoreboard:  http://{ctx.scoring_ip}",
         f"admin  {ctx.admin_password}",
     ]
-    portal = getattr(ctx, "state", None) or {}
+    portal = ctx.state
     if portal.get("portal_up"):
         cred_lines.append(f"Portal:  {portal.get('portal_url')}  (team + admin logins "
                           "above; team consoles open when an admin opens access)")
-    if getattr(ctx, "scoring_password", ""):
+    if ctx.scoring_password:
         cred_lines.append("# automation account: a SECOND admin, so a scheduled login "
                           "(round-loop watchdog, unattended verify) never evicts the "
                           "operator's admin session — Quotient allows one per account")
@@ -65,11 +67,11 @@ def print_live_summary(ctx):
     print(f"Scenario: {ctx.scenario}")
     print(f"Saved to: competitions/{ctx.comp_name}/  (credentials.txt, mode 0600)")
     print(f"\nScoreboard:    http://{ctx.scoring_ip}")
-    portal = getattr(ctx, "state", None) or {}
+    portal = ctx.state
     if portal.get("portal_up"):
         print(f"Portal:        {portal.get('portal_url')}")
     print(f"Admin login:   admin / {ctx.admin_password}")
-    if getattr(ctx, "scoring_password", ""):
+    if ctx.scoring_password:
         print(f"Scoring login: scoring / {ctx.scoring_password}   (automation; separate "
               f"session from admin)")
     if ctx.inject_password:

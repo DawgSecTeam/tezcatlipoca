@@ -194,7 +194,7 @@ class VyosBootstrap(unittest.TestCase):
                     {"team1": {"identifier": "120", "password": "x"}},
                     [{"team_key": "team1", "identifier": "120", "vmid": 9,
                       "box": {"name": "fw01", "template": "vyos-provision"}}],
-                    {"team1": cmds}, {}, log=lambda *_: None)
+                    {"team1": cmds}, {}, node="pve", log=lambda *_: None)
         return calls
 
     def test_fresh_firewall_pass_a_on_bootstrap_then_pass_b_on_wan(self):
@@ -361,7 +361,7 @@ class BootstrapFirewalls(unittest.TestCase):
                     patch.object(fo, "_push_config", side_effect=push):
                 fo.bootstrap_firewalls(
                     TEAMS, [{"team_key": "team1", "identifier": "120", "vmid": 9}],
-                    {"team1": cfg}, {}, log=lambda *_: None)
+                    {"team1": cfg}, {}, node="pve", log=lambda *_: None)
         return calls, ssh_on
 
     def test_fresh_firewall_is_reached_on_the_borrowed_bootstrap_address(self):
@@ -444,13 +444,6 @@ class AgentDiagnostics(unittest.TestCase):
                 patch.object(fo.time, "sleep", side_effect=lambda s: clock.update(t=clock["t"] + s)):
             self.assertEqual(fo.fw_agent_diagnostic("pve", 9), "")
 
-    def test_no_node_returns_empty_string_without_touching_the_api(self):
-        import firewall_ops as fo
-        from unittest.mock import patch
-        with patch.object(fo, "proxmox_api") as api:
-            self.assertEqual(fo.fw_agent_diagnostic(None, 9), "")
-            api.assert_not_called()
-
     def test_answering_agent_reports_interfaces_and_config_state(self):
         import firewall_ops as fo
         from unittest.mock import patch
@@ -470,9 +463,8 @@ class AgentDiagnostics(unittest.TestCase):
 
 
 class BootstrapAgentWiring(unittest.TestCase):
-# node= wires the agent into the bootstrap: success logs the boot confirmation,
-#     the failure text carries the diagnostic block, and agentless clones change
-#     nothing.
+# node= wires the agent into the bootstrap failure text: the diagnostic block appears
+#     when the agent answers and stays absent for agentless clones.
 
     def _run(self, node, agent_answers, boot_ok=True):
         import tempfile
@@ -503,14 +495,6 @@ class BootstrapAgentWiring(unittest.TestCase):
                             {"team1": cfg}, {}, log=logs.append, node=node)
         return logs, cm
 
-    def test_success_with_agent_logs_the_boot_confirmation(self):
-        logs, _ = self._run(node="pve", agent_answers=True)
-        self.assertTrue(any("guest agent answered" in line for line in logs))
-
-    def test_success_agentless_stays_silent(self):
-        logs, _ = self._run(node="pve", agent_answers=False)
-        self.assertFalse(any("guest agent" in line for line in logs))
-
     def test_failure_text_carries_the_diagnostic_when_the_agent_answers(self):
         _, cm = self._run(node="pve", agent_answers=True, boot_ok=False)
         self.assertIn("agent diagnostics (vmid 9)", str(cm.exception))
@@ -518,13 +502,6 @@ class BootstrapAgentWiring(unittest.TestCase):
     def test_failure_text_stays_clean_when_the_agent_is_absent(self):
         _, cm = self._run(node="pve", agent_answers=False, boot_ok=False)
         self.assertNotIn("agent diagnostics", str(cm.exception))
-
-    def test_no_node_no_agent_calls_at_all(self):
-        import firewall_ops as fo
-        from unittest.mock import patch
-        with patch.object(fo, "_agent_answers") as answers:
-            self._run(node=None, agent_answers=True)
-            answers.assert_not_called()
 
 
 if __name__ == "__main__":

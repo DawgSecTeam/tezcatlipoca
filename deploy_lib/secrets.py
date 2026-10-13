@@ -25,8 +25,6 @@ def _tracked_team_identifier_defaults(comp_dir):
         profile_path = Path(__file__).resolve().parents[1] / profile_path
     if not profile_path.is_file():
         return []
-    if not profile_path.is_file():
-        return []
     from packet_ops import load_profile
     profile = load_profile(profile_path)
     return (profile.get("event") or {}).get("team_identifiers") or []
@@ -64,8 +62,8 @@ def carry_box_password(previous_state):
     return (previous_state or {}).get("box_password") or random_password()
 
 
-def resolve_competition_teams(secrets, prior, spec, num_teams, identity, from_phase):
-# Resolve the run id and the team roster (carried on a resume), into `secrets`.
+def resolve_competition_teams(ctx, num_teams, from_phase):
+# Resolve the run id and the team roster (carried on a resume), into `ctx`.
 #
 #     Deliberately split from the credential mint: preflight must be able to abort a
 #     fresh deploy before any secret exists to desync (see prepare()'s order note). The
@@ -73,40 +71,40 @@ def resolve_competition_teams(secrets, prior, spec, num_teams, identity, from_ph
 #     from prior state when the competition directory has one — a resume, a crash-loop
 #     re-run and a redeploy must reclaim and re-tag the SAME lineage, and a fresh mint
 #     would orphan every kept template's ownership.
-    secrets.run_id = prior.previous_state.get("run_id") or mint_run_id()
-    if prior.resuming:
-        secrets.state = json.loads(prior.state_path.read_text())
-        secrets.teams = {
+    ctx.run_id = ctx.previous_state.get("run_id") or mint_run_id()
+    if ctx.resuming:
+        ctx.state = json.loads(ctx.state_path.read_text())
+        ctx.teams = {
             k: {"identifier": v["identifier"], "password": v["password"]}
-            for k, v in secrets.state["teams"].items()
+            for k, v in ctx.state["teams"].items()
         }
-        secrets.number_of_teams = len(secrets.teams)
+        ctx.number_of_teams = len(ctx.teams)
         # Carried, not minted; fill gaps only (the mint step never runs on a resume).
-        secrets.admin_password = secrets.state.get("admin_password") or random_password()
-        secrets.scoring_password = secrets.state.get("scoring_password") or random_password()
-        secrets.postgres_password = secrets.state.get("postgres_password") or random_password()
-        secrets.redis_password = secrets.state.get("redis_password") or random_password()
-        secrets.box_password = secrets.state.get("box_password") or random_password()
-        secrets.box_creds = secrets.state.get("box_creds") or {
-            name: random_password() for name in spec.credlist_usernames
+        ctx.admin_password = ctx.state.get("admin_password") or random_password()
+        ctx.scoring_password = ctx.state.get("scoring_password") or random_password()
+        ctx.postgres_password = ctx.state.get("postgres_password") or random_password()
+        ctx.redis_password = ctx.state.get("redis_password") or random_password()
+        ctx.box_password = ctx.state.get("box_password") or random_password()
+        ctx.box_creds = ctx.state.get("box_creds") or {
+            name: random_password() for name in ctx.credlist_usernames
         }
-        secrets.domain_creds = secrets.state.get("domain_creds")
-        secrets.inject_password = secrets.state.get("inject_password")
-        secrets.state.update({
-            "admin_password": secrets.admin_password,
-            "scoring_password": secrets.scoring_password,
-            "postgres_password": secrets.postgres_password,
-            "redis_password": secrets.redis_password,
-            "box_password": secrets.box_password,
-            "box_creds": secrets.box_creds,
-            "domain_creds": secrets.domain_creds,
-            "inject_password": secrets.inject_password,
-            "scoring_vm_id": identity.engine_vmid,
-            "run_id": secrets.run_id,
+        ctx.domain_creds = ctx.state.get("domain_creds")
+        ctx.inject_password = ctx.state.get("inject_password")
+        ctx.state.update({
+            "admin_password": ctx.admin_password,
+            "scoring_password": ctx.scoring_password,
+            "postgres_password": ctx.postgres_password,
+            "redis_password": ctx.redis_password,
+            "box_password": ctx.box_password,
+            "box_creds": ctx.box_creds,
+            "domain_creds": ctx.domain_creds,
+            "inject_password": ctx.inject_password,
+            "scoring_vm_id": ctx.engine_vmid,
+            "run_id": ctx.run_id,
         })
-        write_state(prior.state_path, secrets.state)
+        write_state(ctx.state_path, ctx.state)
         print(f"  Resuming from phase {from_phase} "
-              f"({secrets.number_of_teams} team(s), last completed phase {secrets.state.get('last_phase')})")
+              f"({ctx.number_of_teams} team(s), last completed phase {ctx.state.get('last_phase')})")
     else:
         if num_teams is not None:
             if not (1 <= num_teams <= MAX_TEAMS):
@@ -114,41 +112,41 @@ def resolve_competition_teams(secrets, prior, spec, num_teams, identity, from_ph
                     f"--teams must be between 1 and {MAX_TEAMS} (team identifiers are "
                     f"192.168.<101-254>.x)"
                 )
-            secrets.number_of_teams = num_teams
+            ctx.number_of_teams = num_teams
         else:
             while True:
                 raw = input("How many teams? ").strip()
                 try:
-                    secrets.number_of_teams = int(raw)
+                    ctx.number_of_teams = int(raw)
                 except ValueError:
                     print("  Enter a whole number.")
                     continue
-                if 1 <= secrets.number_of_teams <= MAX_TEAMS:
+                if 1 <= ctx.number_of_teams <= MAX_TEAMS:
                     break
                 print(f"  Enter a number from 1 to {MAX_TEAMS} "
                       f"(team identifiers are 192.168.<101-254>.x).")
-        secrets.teams = collect_teams(
-            secrets.number_of_teams, identity.engine_vmid,
+        ctx.teams = collect_teams(
+            ctx.number_of_teams, ctx.engine_vmid,
             identifier_defaults=_fresh_identifier_defaults(
-                prior.state_path.parent, prior.previous_state))
+                ctx.state_path.parent, ctx.previous_state))
         # Skeleton only — the mint step adds the secrets after preflight. An abort at
         # the gates leaves a state with the lineage (run id) but no credentials.
-        secrets.state = {
+        ctx.state = {
             "last_phase": 0,
             "pipeline_version": PIPELINE_VERSION,
-            "teams": secrets.teams,
-            "scoring_vm_id": identity.engine_vmid,
-            "run_id": secrets.run_id,
+            "teams": ctx.teams,
+            "scoring_vm_id": ctx.engine_vmid,
+            "run_id": ctx.run_id,
         }
 
 
-def mint_competition_secrets(secrets, prior, spec, inputs, identity):
-# Mint the fresh deploy's secrets into `secrets` and persist them (preflight has
+def mint_competition_secrets(ctx):
+# Mint the fresh deploy's secrets into `ctx` and persist them (preflight has
 #     already passed — see prepare()'s order note).
-    secrets.admin_password = random_password()
-    secrets.scoring_password = random_password()
-    secrets.postgres_password = random_password()
-    secrets.redis_password = random_password()
+    ctx.admin_password = random_password()
+    ctx.scoring_password = random_password()
+    ctx.postgres_password = random_password()
+    ctx.redis_password = random_password()
     # M4: box_password is a golden-hash INPUT (baked into /etc/shadow +
     # cloud-init on the golden disk) — a fresh deploy that re-minted it would
     # rebuild every golden and break the lifecycle's "2-team test run → 8-team
@@ -157,23 +155,23 @@ def mint_competition_secrets(secrets, prior, spec, inputs, identity):
     # new competition. passwords.json (packet profile) outranks both: the
     # packet's default credentials ARE the competition, and an operator edit
     # to passwords.json is a deliberate re-key (goldens rebuild — correct).
-    secrets.box_password = ((inputs.packet_pw or {}).get("box_password")
-                            or carry_box_password(prior.previous_state))
-    if inputs.packet_pw:
+    ctx.box_password = ((ctx.packet_pw or {}).get("box_password")
+                            or carry_box_password(ctx.previous_state))
+    if ctx.packet_pw:
         print("  Box credentials come from passwords.json (packet profile) — "
               "not re-minted")
-    secrets.box_creds = (dict(inputs.packet_credlists.get("linux") or {})
-                         or {name: random_password() for name in spec.credlist_usernames})
-    secrets.domain_creds = (dict(inputs.packet_credlists.get("domain") or {}) or None)
-    secrets.inject_password = random_password() if inputs.injects else None
-    secrets.state.update({
-        "admin_password": secrets.admin_password,
-        "scoring_password": secrets.scoring_password,
-        "inject_password": secrets.inject_password,
-        "postgres_password": secrets.postgres_password,
-        "redis_password": secrets.redis_password,
-        "box_password": secrets.box_password,
-        "box_creds": secrets.box_creds,
-        "domain_creds": secrets.domain_creds,
+    ctx.box_creds = (dict(ctx.packet_credlists.get("linux") or {})
+                         or {name: random_password() for name in ctx.credlist_usernames})
+    ctx.domain_creds = (dict(ctx.packet_credlists.get("domain") or {}) or None)
+    ctx.inject_password = random_password() if ctx.injects else None
+    ctx.state.update({
+        "admin_password": ctx.admin_password,
+        "scoring_password": ctx.scoring_password,
+        "inject_password": ctx.inject_password,
+        "postgres_password": ctx.postgres_password,
+        "redis_password": ctx.redis_password,
+        "box_password": ctx.box_password,
+        "box_creds": ctx.box_creds,
+        "domain_creds": ctx.domain_creds,
     })
-    write_state(prior.state_path, secrets.state)
+    write_state(ctx.state_path, ctx.state)

@@ -28,7 +28,7 @@ def check_injects(base_url, admin_session, comp_dir):
         print(f"  FAIL  — could not fetch /api/injects: {e}")
         return True, False
     for inj in injects:
-        title = inj.get("Title") or inj.get("title") or "?"
+        title = inj.get("Title") or "?"
         print(f"      - {title}")
     ok = len(injects) == expected
     print(f"  {'PASS' if ok else 'FAIL'}  engine has {len(injects)} inject(s), "
@@ -39,9 +39,6 @@ def check_injects(base_url, admin_session, comp_dir):
               "Offsets are anchored at the phase-7 deploy time, so a reset/rerun long after "
               f"deploy finds them expired: {', '.join(t for t, _ in closed)}")
     return True, ok
-
-
-_INJECT_CLOSE_KEYS = ("CloseTime", "close_time", "CloseAt", "close_at", "Close", "close")
 
 
 def check_round_loop(base_url, admin_session, fix=False):
@@ -68,12 +65,9 @@ def check_round_loop(base_url, admin_session, fix=False):
     except (requests.RequestException, ValueError) as e:
         print(f"  WARN  — could not read /api/engine: {e}")
         return gate_skip("round_loop", "could not read /api/engine")
-    if not isinstance(eng, dict):
-        return gate_skip("round_loop", "unexpected /api/engine payload")
 
-    # The judgement itself lives in round_loop.py so the engine-side watchdog
-    # (tools/round_loop_guard.py) cannot drift from this gate — two definitions of "the
-    # loop is stopped" is precisely the failure mode this repo keeps paying for.
+    # The judgement itself lives in round_loop.py so there is one definition of "the loop
+    # is stopped" for every caller.
     verdict = round_loop.round_loop_state(eng)
     if verdict["state"] == round_loop.UNKNOWN:
         print("  SKIP  — /api/engine did not answer a usable document")
@@ -107,12 +101,12 @@ def check_round_loop(base_url, admin_session, fix=False):
 
 
 def closed_injects(injects, now=None):
-# [(title, close_time)] for injects whose close time is already past. Tolerant of the
-#     engine's JSON key casing; injects with no parseable close time are ignored.
+# [(title, close_time)] for injects whose close time is already past. Injects with no
+#     parseable close time are ignored.
     now = now or datetime.now(timezone.utc)
     out = []
     for inj in injects:
-        raw = next((inj[k] for k in _INJECT_CLOSE_KEYS if inj.get(k)), None)
+        raw = inj.get("CloseTime")
         if not isinstance(raw, str):
             continue
         try:
@@ -122,5 +116,5 @@ def closed_injects(injects, now=None):
         if when.tzinfo is None:
             when = when.replace(tzinfo=timezone.utc)
         if when < now:
-            out.append((inj.get("Title") or inj.get("title") or "?", raw))
+            out.append((inj.get("Title") or "?", raw))
     return out

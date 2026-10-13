@@ -30,7 +30,7 @@ def _args(run_dir, **kw):
                 reasoning_effort="minimal", llm_base_url="https://openrouter.ai/api/v1",
                 blue_base_url="https://openrouter.ai/api/v1", red_ip="10.0.0.198",
                 run_dir=None if run_dir is None else str(run_dir), keep_range=False, blue_watchdog=False, resume_event=False,
-                blue2_base_url=None, blue3_base_url=None, blue4_base_url=None,
+                blue2_base_url=None,
                 red_tunnel="auto", red_vmid=None)
     base.update(kw)
     return Namespace(**base)

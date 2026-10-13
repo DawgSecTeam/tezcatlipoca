@@ -14,10 +14,10 @@ from pathlib import Path
 from constants import GOLDEN_TAG, SCORING_ENGINE_VMID
 from golden_ops import destroy_golden_set
 from jump_ops import destroy_jump_vms
-from nodes_ops import record_of
+from placement_record import record_of
 from infra.client import proxmox_api, wait_for_proxmox_task
 from infra.ownership import parse_vm_tags
-from template_ops import destroy_engine_template
+from engine_template_ops import destroy_engine_template
 from utils import run_terraform
 from infra.ownership import Ownership, Refusal
 
@@ -33,7 +33,7 @@ TEARDOWN_WORKERS = 4
 DESTROY_ATTEMPT_TIMEOUT_S = 1800
 
 
-# a frozen competition's templates are the verified artifacts the event runs on: --full needs --end-of-competition
+# a frozen competition's templates are the verified artifacts the event runs on: a full teardown needs --end-of-competition
 def refuse_frozen_full_teardown(competition, frozen, full, end_of_competition):
     if full and frozen and not end_of_competition:
         raise Refusal(
@@ -241,7 +241,7 @@ def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, fu
     node = os.environ.get("TF_VAR_proxmox_node", "pve")
     if not full:
         print("  Teams-only teardown — templates kept for THIS competition's next run only.")
-        print("  Goldens never carry across competitions; tear down --full once the "
+        print("  Goldens never carry across competitions; run a full teardown (no --teams-only) once the "
               "run's goal is met.")
         return skipped
     print(f"  Destroying golden templates (engine vmid {engine_vmid} + 150 + i)...")

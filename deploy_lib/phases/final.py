@@ -6,9 +6,9 @@ from functools import partial
 from beacon_ops import plant_team_beacons
 from constants import PER_MACHINE_NAKON_BUDGET, SNAP_READY
 from domain_ops import deploy_domain_configs
-from engine_ops import ensure_nat_forwarding
-from hardening_ops import reensure_mysql_credlist_users
-from nakon_ops import build_nakon_bundle, run_nakon
+from service_fixup_ops import reensure_mysql_credlist_users
+from nakon_bundle_ops import build_nakon_bundle
+from nakon_run_ops import run_nakon
 from red_plant_ops import plant_assume_breach
 from timing import timed
 from utils import compfile_flag, run_concurrent
@@ -57,7 +57,6 @@ def phase7_domains_and_final(ctx):
         record_clean_coverage(ctx)
     if final_machines:
         print(f"  Final-stage pass (disruption + boot-hostile) on {len(final_machines)} machine(s)...")
-        ensure_nat_forwarding(ctx.tf_ctx)
         final_bundle = build_nakon_bundle(ctx.final_config_path)
         with timed(ctx.comp_dir, 7, "nakon", f"final x{len(final_machines)}"):
             result = run_nakon(ctx.ssh_key, ctx.scoring_user, ctx.scoring_ip, final_bundle,

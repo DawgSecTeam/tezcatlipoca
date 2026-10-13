@@ -6,7 +6,7 @@ import time
 from constants import SNAP_BASE, SNAP_READY
 from infra.guest_exec import wait_for_guest_agent
 from infra.lifecycle import list_snapshots
-from ssh_ops import classify_ssh_failure, ssh_to_engine
+from ssh_ops import classify_ssh_failure, ssh_on_gateway
 from redeploy_select_ops import box_platform
 from redeploy_plant_ops import prepare_nakon_assets
 from redeploy_light_ops import mode_rollback
@@ -63,7 +63,7 @@ def ports_closed_from_engine(ctx, ip, ports, per_port_timeout=3):
         f"&& echo P{p}=OK || echo P{p}=CLOSED"
         for p in ports)
     try:
-        r = ssh_to_engine(ctx, probe, timeout=per_port_timeout * len(ports) + 20)
+        r = ssh_on_gateway(ctx, probe, timeout=per_port_timeout * len(ports) + 20)
     except Exception:
         return set(ports)
     if r.returncode != 0:

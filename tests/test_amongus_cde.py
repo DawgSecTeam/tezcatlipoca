@@ -12,7 +12,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import nakon_ops
+import nakon_config_ops
 from quotient.setup import build_event_conf, expected_service_names
 
 BOXES = [
@@ -108,7 +108,7 @@ class CrossBoxIdentityVars(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             _write_machines(tmp, pins)
-            golden_p, repair_p, final_p, _ = nakon_ops.generate_stage_configs(
+            golden_p, repair_p, final_p, _ = nakon_config_ops.generate_stage_configs(
                 Path(tmp), TEAMS, BOXES)
             golden_configs = [c for cfgs in _stage_names(golden_p).values()
                               for c in cfgs]
@@ -133,7 +133,7 @@ class CrossBoxIdentityVars(unittest.TestCase):
             (Path(tmp) / "nakon-config.json").write_text(
                 json.dumps({"machines": machines}))
             with self.assertRaises(SystemExit):
-                nakon_ops.generate_stage_configs(Path(tmp), TEAMS, BOXES)
+                nakon_config_ops.generate_stage_configs(Path(tmp), TEAMS, BOXES)
 
 
 class PostDomainStageRouting(unittest.TestCase):
@@ -146,7 +146,7 @@ class PostDomainStageRouting(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             _write_machines(tmp, pins)
-            golden_p, repair_p, final_p, _ = nakon_ops.generate_stage_configs(
+            golden_p, repair_p, final_p, _ = nakon_config_ops.generate_stage_configs(
                 Path(tmp), TEAMS, BOXES, unbooted={"mira"})
             self.assertNotIn("mira-golden", _stage_names(golden_p),
                              "the DC's golden stays generalized: no golden machine")

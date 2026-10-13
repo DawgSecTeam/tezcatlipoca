@@ -27,13 +27,13 @@ BOXES = [{"name": "fw01", "template": "pfsense", "last_octet": 1, "unmanaged": T
 
 
 class Phase5Firewall(unittest.TestCase):
-    def _ctx(self, comp, from_phase=5, placement=None):
+    def _ctx(self, comp, from_phase=5):
         targets = [{"team_key": k, "box": b, "ip": f"192.168.{t['identifier']}.{b['last_octet']}",
                     "vm_name": f"{b['name']}-{k}", "vmid": 1}
                    for k, t in TEAMS.items() for b in BOXES]
         saved = []
         return SimpleNamespace(
-            from_phase=from_phase, all_targets=targets, placement=placement, comp_dir=comp,
+            from_phase=from_phase, all_targets=targets, comp_dir=comp,
             teams=TEAMS, node="pve1", tf_ctx={}, comp_name=comp.name, state={},
             save_state=lambda: saved.append(1))
 
@@ -108,12 +108,6 @@ class Phase5Firewall(unittest.TestCase):
                 firewall.phase5_firewall_bootstrap(ctx)
                 firewall.phase5_firewall_bootstrap(self._ctx(comp, from_phase=6))
             w.assert_not_called()
-
-    def test_refuses_satellite_placement(self):
-        with tempfile.TemporaryDirectory() as root:
-            ctx = self._ctx(self._comp(root), placement={"satellites": [{"name": "n2"}]})
-            with patch("builtins.print"), self.assertRaises(SystemExit):
-                firewall.phase5_firewall_bootstrap(ctx)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ module is the fail-loud gate, not the writer."""
 
 import time
 
-from ssh_ops import ssh_to_engine
+from ssh_ops import ssh_on_gateway
 
 
 def verify_satellite_routing(placement, ctx, timeout=120):
@@ -47,13 +47,13 @@ def _check(placement, ctx, sat):
     jump_ip = sat["jump_mgmt_ip"]
     if not anchor:
         return False, "satellite has no anchor team (no subnet to route)"
-    r = ssh_to_engine(ctx, f"ip route get 192.168.{anchor}.1 2>&1", timeout=15)
+    r = ssh_on_gateway(ctx, f"ip route get 192.168.{anchor}.1 2>&1", timeout=15)
     if r.returncode != 0:
         return False, f"ip route get failed: {(r.stderr or r.stdout).strip()[:120]}"
     if f"via {jump_ip}" not in r.stdout:
         return False, (f"engine routes 192.168.{anchor}.1 without the jump "
                        f"(want 'via {jump_ip}', got '{r.stdout.strip()[:120]}')")
-    r = ssh_to_engine(
+    r = ssh_on_gateway(
         ctx,
         f"timeout 4 bash -c 'cat < /dev/null > /dev/tcp/{jump_ip}/22' 2>&1 && echo REACHABLE",
         timeout=15)

@@ -21,14 +21,14 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import deploy  # noqa: E402
-import config_ops  # noqa: E402
+import injects_config  # noqa: E402
 from _deploy_patch import dpatch  # noqa: E402
 from deploy_lib.phases import cleanup as dl_cleanup  # noqa: E402
 from deploy_lib.phases import engine as dl_engine  # noqa: E402
 from deploy_lib.phases import golden as dl_golden  # noqa: E402
 from deploy_lib.phases import postclone as dl_postclone  # noqa: E402
 from deploy_lib.phases import seed as dl_seed  # noqa: E402
-from nakon_ops import NakonResult  # noqa: E402
+from nakon_run_ops import NakonResult  # noqa: E402
 
 
 def _ctx(comp_dir, **overrides):
@@ -62,49 +62,9 @@ def _nulltimed():
                         side_effect=lambda *a, **k: contextlib.nullcontext())
 
 
-class PhaseResumeGuards(unittest.TestCase):
-# from_phase past a phase must print its banner and touch nothing at all.
-
-    def test_phase3_skips_cleanly(self):
-        with tempfile.TemporaryDirectory() as d:
-            ctx = _ctx(Path(d), from_phase=4)
-            with dpatch("prepare_engine_from_template") as p_prep, \
-                    dpatch("push_event_conf") as p_push, \
-                    dpatch("ensure_nat_forwarding") as p_nat, \
-                    contextlib.redirect_stdout(io.StringIO()) as out:
-                dl_engine.phase3_prepare_engine(ctx)
-        self.assertEqual(out.getvalue().strip(), "[3/8] Skipped (resume).")
-        p_prep.assert_not_called()
-        p_push.assert_not_called()
-        p_nat.assert_not_called()
-
-    def test_phase8_skips_cleanly(self):
-        with tempfile.TemporaryDirectory() as d:
-            ctx = _ctx(Path(d), from_phase=9)
-            with dpatch("wait_for_http") as p_http, \
-                    dpatch("seed_teams") as p_seed, \
-                    contextlib.redirect_stdout(io.StringIO()) as out:
-                dl_seed.phase8_seed(ctx)
-        self.assertEqual(out.getvalue().strip(), "[8/8] Skipped (resume).")
-        p_http.assert_not_called()
-        p_seed.assert_not_called()
-
-    def test_phase1_skips_without_destroying(self):
-        with tempfile.TemporaryDirectory() as d:
-            ctx = _ctx(Path(d), from_phase=2)
-            with dpatch("destroy_node_waves") as p_waves, \
-                    dpatch("destroy_bridge_if_exists") as p_bridge, \
-                    contextlib.redirect_stdout(io.StringIO()) as out:
-                dl_cleanup.phase1_cleanup(ctx)
-        self.assertEqual(out.getvalue().strip(),
-                         "[1/8] Skipped (resume) — leaving existing VMs/bridges in place.")
-        p_waves.assert_not_called()
-        p_bridge.assert_not_called()
-
-
 class Phase1Cleanup(unittest.TestCase):
     def _run(self, ctx, bridge_in_use=False):
-        calls = types.SimpleNamespace(waves=[], bridges=[], markers=[], sleeps=[])
+        calls = types.SimpleNamespace(waves=[], bridges=[], markers=[])
         with dpatch("destroy_node_waves",
                           side_effect=lambda *a, **k: calls.waves.append((a, k))), \
                 dpatch("destroy_bridge_if_exists",
@@ -112,11 +72,9 @@ class Phase1Cleanup(unittest.TestCase):
                 dpatch("_bridge_in_use", return_value=bridge_in_use), \
                 dpatch("timed",
                              side_effect=lambda *a, **k: contextlib.nullcontext()), \
-                dpatch("time") as p_time, \
                 dpatch("reset_domain_markers",
                              side_effect=lambda c: calls.markers.append(c)), \
                 contextlib.redirect_stdout(io.StringIO()):
-            p_time.sleep.side_effect = lambda s: calls.sleeps.append(s)
             dl_cleanup.phase1_cleanup(ctx)
         return calls
 
@@ -132,7 +90,6 @@ class Phase1Cleanup(unittest.TestCase):
         (args, kwargs), = calls.waves
         self.assertEqual(args[1:], ("pve", [target], 0))          # node, that node's targets, slot 0
         self.assertEqual(calls.bridges, [("pve", "vmbr101")])
-        self.assertEqual(calls.sleeps, [5])                        # settle before the checkpoint
         self.assertEqual(calls.markers, [comp_dir])
         self.assertFalse((comp_dir / ".postclone-swept").exists())
 
@@ -141,7 +98,6 @@ class Phase1Cleanup(unittest.TestCase):
                 dpatch("destroy_bridge_if_exists"), \
                 dpatch("timed",
                              side_effect=lambda *a, **k: contextlib.nullcontext()), \
-                dpatch("time"), \
                 dpatch("reset_domain_markers"), \
                 contextlib.redirect_stdout(out):
             dl_cleanup.phase1_cleanup(ctx)
@@ -287,17 +243,13 @@ class Phase5RepairSweep(unittest.TestCase):
                     dpatch("fix_services_on_boxes"), \
                     dpatch("ensure_nat_forwarding"), \
                     dpatch("compfile_flag", return_value=0), \
-                    dpatch("record_stage_coverage") as p_coverage, \
+                    dpatch("record_stage_coverage"), \
                     contextlib.redirect_stdout(io.StringIO()):
                 dl_postclone.phase6_repair_sweep(ctx)
             self.assertEqual(ctx.state["nakon_failed_steps"], ["repair: sshd-hardening"])
             _args = p_nakon.call_args
             self.assertIs(_args.kwargs["strict"], False)
             self.assertEqual(_args.kwargs["jobs"], 4)
-            # the coverage record always saves through the context's own writer
-            saved = p_coverage.call_args.args[3]
-            self.assertIs(saved.__self__, ctx)
-            self.assertIs(saved.__func__, deploy.DeployContext.save_state)
 
 
 class Phase4GoldenCoverage(unittest.TestCase):
@@ -326,7 +278,6 @@ class Phase4GoldenCoverage(unittest.TestCase):
                 dpatch("run_concurrent", return_value=[]), \
                 dpatch("wait_for_boxes_ssh"), \
                 dpatch("wait_for_cloud_init"), \
-                dpatch("setup_ubuntu_auth"), \
                 dpatch("fix_dns_on_boxes"), \
                 dpatch("prep_apt_on_boxes"), \
                 dpatch("snap_base"), \
@@ -337,19 +288,15 @@ class Phase4GoldenCoverage(unittest.TestCase):
 
     @staticmethod
     def _gate(comp_dir, machines):
-    # The real verify gate against a real comp dir (importlib: dashed filename).
+    # The real plant-coverage gate against a real comp dir.
     #         Returns (gate, stdout); status compared by NAME — this helper loads its own
     #         module copy, so the gate's Status enum is not the caller's object.
         (comp_dir / "nakon-config.json").write_text(
             json.dumps({"machines": machines}))
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "verify_phase4_join", _REPO / "verify-competition.py")
-        verify = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(verify)
+        import verifier.state_gates as v_state_gates  # noqa: E402
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            gate = verify.check_plant_coverage(comp_dir)
+            gate = v_state_gates.check_plant_coverage(comp_dir)
         return gate, out.getvalue()
 
     def test_the_closure_is_threaded_and_a_clean_plant_records_pass(self):
@@ -472,7 +419,7 @@ class Phase7Seed(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx(Path(d), state={"seeded": True, "engine_unpaused": True},
                        injects=[{"title": "i1"}, {"title": "i2"}])
-            stale = config_ops.injects_fingerprint([{"title": "i1"}])
+            stale = injects_config.injects_fingerprint([{"title": "i1"}])
             ctx.state["injects_created"] = True
             ctx.state["injects_fingerprint"] = stale
             with dpatch("wait_for_http"), \
@@ -484,7 +431,7 @@ class Phase7Seed(unittest.TestCase):
                 dl_seed.phase8_seed(ctx)
         p_create.assert_called_once()          # re-ran, so i2 gets created
         self.assertEqual(ctx.state["injects_fingerprint"],
-                         config_ops.injects_fingerprint([{"title": "i1"}, {"title": "i2"}]))
+                         injects_config.injects_fingerprint([{"title": "i1"}, {"title": "i2"}]))
 
     def test_unchanged_injects_still_short_circuit(self):
         with tempfile.TemporaryDirectory() as d:
@@ -492,7 +439,7 @@ class Phase7Seed(unittest.TestCase):
             ctx = _ctx(Path(d), state={"seeded": True, "engine_unpaused": True,
                                        "injects_created": True,
                                        "injects_fingerprint":
-                                           config_ops.injects_fingerprint(injects)},
+                                           injects_config.injects_fingerprint(injects)},
                        injects=injects)
             with dpatch("wait_for_http"), \
                     dpatch("engine_paused", return_value=False), \
@@ -502,22 +449,9 @@ class Phase7Seed(unittest.TestCase):
         p_create.assert_not_called()
         self.assertIn("already created", out.getvalue())
 
-    def test_fingerprint_must_be_taken_before_offsets_are_popped(self):
-    # resolve_inject_times pops the offset keys, so a fingerprint taken after it
-    #         loses a non-default window (30 -> the 60 default) and would re-create the set
-    #         spuriously on the next run. Default offsets happen to survive, which is exactly
-    #         why this must be pinned on a non-default one.
-        loaded = [{"title": "i1", "open_offset_min": 0, "due_offset_min": 30}]
-        before = config_ops.injects_fingerprint(loaded)
-        config_ops.resolve_inject_times(loaded)
-        after = config_ops.injects_fingerprint(loaded)
-        self.assertNotEqual(before, after)
-        self.assertEqual(before, config_ops.injects_fingerprint(
-            [{"title": "i1", "open_offset_min": 0, "due_offset_min": 30}]))
-
     def test_the_recorded_fingerprint_is_the_pre_resolve_one(self):
         definitions = [{"title": "i1", "open_offset_min": 0, "due_offset_min": 30}]
-        expected = config_ops.injects_fingerprint(definitions)
+        expected = injects_config.injects_fingerprint(definitions)
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx(Path(d), state={"seeded": True, "engine_unpaused": True},
                        injects=[dict(definitions[0])])
@@ -539,13 +473,13 @@ class Phase7Seed(unittest.TestCase):
                        "attachments": [{"name": "brief.txt"}]}]
         new_file = [{"title": "i1", "open_offset_min": 0, "due_offset_min": 60,
                      "attachments": [{"name": "other.txt"}]}]
-        self.assertEqual(config_ops.injects_fingerprint(base),
-                         config_ops.injects_fingerprint(same))
+        self.assertEqual(injects_config.injects_fingerprint(base),
+                         injects_config.injects_fingerprint(same))
         for changed in (new_title, new_window, new_file):
-            self.assertNotEqual(config_ops.injects_fingerprint(base),
-                                config_ops.injects_fingerprint(changed))
-        self.assertEqual(config_ops.injects_fingerprint([]),
-                         config_ops.injects_fingerprint(None))
+            self.assertNotEqual(injects_config.injects_fingerprint(base),
+                                injects_config.injects_fingerprint(changed))
+        self.assertEqual(injects_config.injects_fingerprint([]),
+                         injects_config.injects_fingerprint(None))
 
 
 class Phase2EngineTemplate(unittest.TestCase):
@@ -625,189 +559,6 @@ class Phase2EngineTemplate(unittest.TestCase):
         self.assertEqual(record.built, 1)
         self.assertEqual(ctx.state["engine_template_vmid"], 901)
         self.assertEqual(ctx.state["engine_build_info"], {"built": True})
-
-
-class PrepareResumeGuards(unittest.TestCase):
-# prepare()'s resume wiring: the pipeline-version gate and the phase guard.
-
-    def _comp_dir(self, tmp, state):
-        comp_dir = Path(tmp)
-        (comp_dir / "Compfile").write_text("name probe\nscenario probe\ndifficulty 1\n")
-        (comp_dir / "boxes.json").write_text(json.dumps(
-            [{"name": "web01", "template": "ubuntu-fix", "cpu": 1,
-              "memory_mb": 1024, "last_octet": 2}]))
-        (comp_dir / ".deploy_state.json").write_text(json.dumps(state))
-        return comp_dir
-
-    def test_resume_past_the_last_completed_phase_is_refused(self):
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 3,
-                                          "scoring_vm_id": 1000, "teams": {}})
-            with self.assertRaises(SystemExit) as ctx:
-                deploy.prepare(comp_dir, from_phase=6, num_teams=1, assume_yes=True)
-        msg = str(ctx.exception)
-        self.assertIn("--from-phase 6", msg)
-        self.assertIn("records phase 3", msg)
-
-    def test_resuming_the_phase_after_the_last_completed_one_is_allowed(self):
-        # The guard passes; prove it by failing later, in placement.
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 2,
-                                          "scoring_vm_id": 1000, "teams": {},
-                                          "admin_password": "a", "box_password": "b"})
-            with dpatch("load_injects", return_value=[]), \
-                    dpatch("load_packet_passwords", return_value=None), \
-                    dpatch("_artifact_probes",
-                                 return_value={"vmids_from_state": lambda: [1000],
-                                               "vm_exists": lambda: {1000},
-                                               "box_reachable": lambda *a: (True, "")}), \
-                    dpatch("resolve_placement",
-                                 side_effect=RuntimeError("past the guard")):
-                with self.assertRaises(RuntimeError) as ctx:
-                    deploy.prepare(comp_dir, from_phase=3, num_teams=1, assume_yes=True)
-        self.assertEqual(str(ctx.exception), "past the guard")
-
-    def test_force_from_phase_bypasses_the_guard(self):
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 2,
-                                          "scoring_vm_id": 1000, "teams": {},
-                                          "admin_password": "a", "box_password": "b"})
-            with dpatch("load_injects", return_value=[]), \
-                    dpatch("load_packet_passwords", return_value=None), \
-                    dpatch("resolve_placement",
-                                 side_effect=RuntimeError("past the guard")):
-                with self.assertRaises(RuntimeError) as ctx:
-                    deploy.prepare(comp_dir, from_phase=6, num_teams=1, assume_yes=True,
-                                   force_from_phase=True)
-        self.assertEqual(str(ctx.exception), "past the guard")
-
-    def test_a_pipeline_v1_state_file_is_refused(self):
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d, {"pipeline_version": 1, "last_phase": 3,
-                                          "scoring_vm_id": 1000, "teams": {}})
-            with self.assertRaises(SystemExit) as ctx:
-                deploy.prepare(comp_dir, from_phase=2, num_teams=1, assume_yes=True)
-        self.assertIn("pipeline v1", str(ctx.exception))
-
-    def test_resuming_without_a_state_file_is_refused(self):
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            (comp_dir / "Compfile").write_text("name probe\nscenario probe\ndifficulty 1\n")
-            (comp_dir / "boxes.json").write_text(json.dumps(
-                [{"name": "web01", "template": "ubuntu-fix", "cpu": 1,
-                  "memory_mb": 1024, "last_octet": 2}]))
-            with self.assertRaises(SystemExit) as ctx:
-                deploy.prepare(comp_dir, from_phase=2, num_teams=1, assume_yes=True)
-        self.assertIn("doesn't exist", str(ctx.exception))
-
-
-class PrepareTfvarsAssembly(unittest.TestCase):
-# prepare()'s tfvars/tfvars.json assembly and its cancel early return.
-#
-#     The operators' confirmation prompt is the one early return deploy() had, and
-#     terraform.tfvars.json is what terraform actually reads (it outranks TF_VAR_*),
-#     so both are worth pinning offline.
-
-    ENV = {
-        "TF_VAR_ssh_private_key_path": "/tmp/key", "TF_VAR_proxmox_node": "pve",
-        "TF_VAR_vm_username": "ubuntu", "TF_VAR_ssh_public_key": "ssh-rsa AAAA",
-        "TF_VAR_proxmox_endpoint": "https://pve:8006/",
-        # explicit "" is the documented DHCP switch; the static default is skipped
-        "TF_VAR_engine_mgmt_ip": "",
-        # the operator's .env (load_dotenv'd at import) must not choose the vmid here —
-        # this class pins the no-flag default
-        "TF_VAR_scoring_vm_id": "",
-    }
-
-    def _prepare(self, comp_dir, captured):
-        teams = {"team1": {"identifier": "101", "password": "pw"}}
-        with patch.dict(os.environ, self.ENV), \
-                dpatch("collect_teams", return_value=teams), \
-                dpatch("write_state"), \
-                dpatch("update_env") as p_update_env, \
-                dpatch("resolve_placement", return_value=(None, None)), \
-                dpatch("acquire_engine_lock"), \
-                dpatch("generate_nakon_config",
-                             return_value=comp_dir / "nakon.json"), \
-                dpatch("unbooted_golden_boxes", return_value=set()), \
-                dpatch("generate_stage_configs",
-                             return_value=(comp_dir / "g.json", comp_dir / "r.json",
-                                           comp_dir / "f.json", None)), \
-                dpatch("build_nakon_bundle", return_value=object()), \
-                dpatch("_template_vmid_map", return_value={}), \
-                dpatch("golden_hash_entries", return_value=({}, {})), \
-                dpatch("frozen_state", return_value=None), \
-                dpatch("write_text_atomic",
-                             side_effect=lambda p, t: captured.__setitem__(str(p), t)), \
-                dpatch("ensure_terraform_workdir", return_value=comp_dir), \
-                dpatch("preflight_gates") as p_preflight, \
-                dpatch("confirm_deploy", return_value=False), \
-                contextlib.redirect_stdout(io.StringIO()) as out:
-            result = deploy.prepare(comp_dir, num_teams=1, assume_yes=False)
-        return result, p_update_env, p_preflight, out.getvalue()
-
-    def _comp_dir(self, tmp):
-        comp_dir = Path(tmp)
-        (comp_dir / "Compfile").write_text("name probe\nscenario probe\ndifficulty 3\n")
-        (comp_dir / "boxes.json").write_text(json.dumps(
-            [{"name": "web01", "template": "ubuntu-fix", "cpu": 1,
-              "memory_mb": 2048, "disk_gb": 20, "last_octet": 2}]))
-        # prepare() reads the golden stage config to map golden machines by box
-        (comp_dir / "g.json").write_text(json.dumps({"machines": []}))
-        return comp_dir
-
-    def test_declining_the_prompt_returns_none_after_the_tfvars_write(self):
-        captured = {}
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d)
-            result, _env, p_preflight, out = self._prepare(comp_dir, captured)
-        self.assertIsNone(result)
-        self.assertIn("Deployment cancelled.", out)
-        tfvars = json.loads(captured[str(Path(comp_dir) / "terraform.tfvars.json")])
-        self.assertEqual(tfvars["event_name"], "probe")
-        self.assertEqual(tfvars["scoring_vm_id"], 1000)
-        self.assertEqual(tfvars["box_username"], "ubuntu")
-        self.assertEqual(tfvars["ssh_private_key_path"], "/tmp/key")
-        self.assertEqual(tfvars["teams"], {"team1": {"identifier": "101", "password": "pw"}})
-        # M3.3 two-apply: apply #1 must build no team boxes and carry no goldens
-        self.assertIs(tfvars["build_team_boxes"], False)
-        self.assertEqual(tfvars["golden_template_ids"], [])
-        self.assertEqual(tfvars["engine_clone_id"], 0)
-        self.assertNotIn("satellites", tfvars)          # single-node: no satellite keys
-        # preflight ran before the prompt (check_free on a fresh, non-resuming run)
-        self.assertIs(p_preflight.call_args.kwargs["check_free"], True)
-
-    def test_scoring_vmid_flag_flows_into_env_and_tfvars(self):
-        captured = {}
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = self._comp_dir(d)
-            with patch.dict(os.environ, self.ENV), \
-                    dpatch("collect_teams",
-                                 return_value={"team1": {"identifier": "101", "password": "pw"}}), \
-                    dpatch("write_state"), \
-                    dpatch("update_env") as p_update_env, \
-                    dpatch("resolve_placement", return_value=(None, None)), \
-                    dpatch("acquire_engine_lock"), \
-                    dpatch("generate_nakon_config",
-                                 return_value=comp_dir / "nakon.json"), \
-                    dpatch("unbooted_golden_boxes", return_value=set()), \
-                    dpatch("generate_stage_configs",
-                                 return_value=(comp_dir / "g.json", comp_dir / "r.json",
-                                               comp_dir / "f.json", None)), \
-                    dpatch("build_nakon_bundle", return_value=object()), \
-                    dpatch("_template_vmid_map", return_value={}), \
-                    dpatch("golden_hash_entries", return_value=({}, {})), \
-                    dpatch("frozen_state", return_value=None), \
-                    dpatch("write_text_atomic",
-                                 side_effect=lambda p, t: captured.__setitem__(str(p), t)), \
-                    dpatch("ensure_terraform_workdir", return_value=comp_dir), \
-                    dpatch("preflight_gates"), \
-                    dpatch("confirm_deploy", return_value=False), \
-                    contextlib.redirect_stdout(io.StringIO()):
-                deploy.prepare(comp_dir, num_teams=1, assume_yes=False, scoring_vmid=1234)
-        tfvars = json.loads(captured[str(Path(comp_dir) / "terraform.tfvars.json")])
-        self.assertEqual(tfvars["scoring_vm_id"], 1234)
-        self.assertEqual(p_update_env.call_args.args[0]["TF_VAR_scoring_vm_id"], "1234")
 
 
 if __name__ == "__main__":

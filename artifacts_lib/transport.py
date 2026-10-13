@@ -9,13 +9,12 @@ from pathlib import Path
 from config_ops import write_text_atomic
 
 from .constants import Unreachable
-from .hashing import seal_local_file, write_bytes_atomic
+from .hashing import seal_local_file
 
 
 def default_transport():
 # route name -> fetch callable. Injected so the collector is testable with no estate.
-    return {"scp-jump": _scp_files, "guest-agent": _guest_files, "local": _local_files,
-            "ssh-cmd": _ssh_capture}
+    return {"scp-jump": _scp_files, "local": _local_files, "ssh-cmd": _ssh_capture}
 
 def _ssh_options(ssh):
 # (user, host, common option args, jump option) shared by the scp and ssh channels.
@@ -71,24 +70,6 @@ def _scp_files(ssh, remote, dest_dir, timeout=120):
         if round_no == 1:
             time.sleep(10)
     raise Unreachable(f"scp from {user}@{host} failed: {last_error}")
-
-
-def _guest_files(source, remote, dest_dir, timeout=60):
-# Read one file from a team box over the guest-agent channel (Windows branch included).
-#
-#     The agent channel is the only route that needs no network path (virtio-serial), which is why
-#     it is preferred for team boxes; `infra.guest_exec.guest_file_read` raises FileNotFoundError vs
-#     RuntimeError precisely so this collector can record `absent` vs `failed`.
-    if any(ch in remote for ch in "*?["):
-        raise RuntimeError(
-            f"the guest-agent route cannot expand {remote!r} — list the files with a shell exec "
-            "first, or use the scp route for this target")
-    import infra.guest_exec  # lazy: keeps this module importable without the Proxmox client stack
-
-    dest = Path(dest_dir) / Path(remote).name
-    data = infra.guest_exec.guest_file_read(source["node"], int(source["vmid"]), remote,
-                                     timeout=timeout, windows=bool(source.get("windows")))
-    return [write_bytes_atomic(dest, data)]
 
 
 def _local_files(source, pattern, dest_dir):
@@ -161,7 +142,4 @@ def fetch(target, want, test_path, timeout, transport):
     if target.get("route") == "scp-jump":
         return fetcher(target.get("ssh") or {}, want.get("remote") or want.get("pattern"),
                        dest_dir, timeout=timeout)
-    if target.get("route") == "guest-agent":
-        return fetcher(target, want.get("remote") or want.get("pattern"), dest_dir,
-                       timeout=timeout)
     raise RuntimeError(f"unknown route {target.get('route')!r}")

@@ -130,6 +130,31 @@ class SelfCollisionsAreNotForeign(unittest.TestCase):
             _gate(vms, _Cluster({1100: ["10.0.0.250"]}), "10.0.0.250", ours_tags=ours)
 
 
+class JumpGateSharesTheScan(unittest.TestCase):
+# jump_mgmt_ip_gate runs the same running-guest scan as the engine gate.
+
+    def _plan(self, vms):
+        from types import SimpleNamespace
+        share = SimpleNamespace(node="proxmox", raw_vms=vms)
+        return SimpleNamespace(
+            placement={"satellites": [{"jump_mgmt_ip": "10.0.0.249", "jump_vmid": 900}]},
+            engine_vmid=2400, our_tags={"tezcatlipoca", "comp-ours"}, shares=[share])
+
+    def _run(self, vms, api):
+        with patch.object(preflight_mgmt_ip, "proxmox_api", api):
+            with contextlib.redirect_stdout(io.StringIO()):
+                preflight_mgmt_ip.jump_mgmt_ip_gate(self._plan(vms))
+
+    def test_a_foreign_guest_on_a_jump_ip_is_refused(self):
+        vms = [_vm(1100, "proxmox", "quotient-engine", tags="tezcatlipoca,comp-cde-2026")]
+        with self.assertRaises(SystemExit):
+            self._run(vms, _Cluster({1100: ["10.0.0.249"]}))
+
+    def test_our_own_tagged_guest_on_a_jump_ip_is_not_a_collision(self):
+        vms = [_vm(1500, "proxmox", "web01", tags="tezcatlipoca,comp-ours")]
+        self._run(vms, _Cluster({1500: ["10.0.0.249"]}))
+
+
 class TemplatesAndStoppedGuestsAreIrrelevant(unittest.TestCase):
     def test_stopped_and_template_rows_are_ignored(self):
         vms = [_vm(1100, "pve", "t", status="stopped"),

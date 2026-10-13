@@ -59,9 +59,9 @@ test.
 `scrim_report/` (the interaction report): `cli.py` (flags), `loaders.py` (run-dir readers),
 `host_labels.py` (box labels, Windows octets), `timefmt.py`, `red_side.py` (red metrics),
 `blue_side.py` (blue metrics, down windows, inject counting), `gate_table.py` (rehearsal gates,
-components, pinned self-test), `render.py` (`build_report`).
+components), `render.py` (`build_report`).
 
-`beacon_ops.py`, `run-schedule.py`, `observe-soak.py` and `generate-packet.py` are single-purpose
+`beacon_ops.py`, `run-schedule.py` and `generate-packet.py` are single-purpose
 scripts and were not split.
 
 ## run-agent-scrim.py
@@ -108,8 +108,7 @@ into `test.json` — see [automated-test-artifacts.md](automated-test-artifacts.
   `last_phase == 7` in `.deploy_state.json`; resume with `--from-phase`.
 - `stage_verify` — fire test: stop nginx on team1 web01, wait 150 s, expect
   team1 DOWN on the scoreboard AND a dead HTTP probe from the engine's network
-  path (the scoreboard alone lies twice: `team_down` swallows exceptions into
-  "up", and run-12's stop left the unit dead with nobody checking). Restore:
+  path (the scoreboard alone lies: run-12's stop left the unit dead with nobody checking). Restore:
   unmask + start with up to 3 attempts, then require scoreboard-up AND a live
   probe — `fire test: down_detected=X restored=Y healed=Z`. Any miss ABORTS
   with the manual fix (resume re-validates; failing closed before T0 is
@@ -170,9 +169,9 @@ into `test.json` — see [automated-test-artifacts.md](automated-test-artifacts.
   local endpoint has few slots (and rejects oversized prompts), and even
   cloud runs shouldn't have opencode DBs racing. Serialization is per
   ENDPOINT (`stage_run` builds one lock per distinct base URL): teams sharing
-  an endpoint share its lock; a team with its own `--blue{N}-base-url`
-  (any N — `--blue2-*`, `--blue3-*`, `--blue4-*` are defined; blue_ep falls
-  back to the shared endpoint for anything unset) runs concurrently
+  an endpoint share its lock; team2 can have its own endpoint (`--blue2-base-url`,
+  `--blue2-model`), and every other team uses the shared one, so that endpoint's
+  lock serializes all of them. Team2's endpoint runs concurrently
   (`blue_ep` resolves the team's endpoint/model; `RUNTIME_FILES` is the
   per-deploy regenerated file set never copied into a fresh competition).
   Before 2026-09-29 the lock/endpoint choice was hardcoded 2-team — teams 3/4
@@ -185,11 +184,11 @@ into `test.json` — see [automated-test-artifacts.md](automated-test-artifacts.
 - **How many endpoints a run needs** — the lock serves one team at a time per
   endpoint, in rotation. At 4 teams that is tolerable; at 8 the soak measured each
   team getting a cycle every ~10 minutes of wall time, which halves blue's effective
-  attention per team and is the largest single lever on blue's score. **At ≥6 teams,
-  spread the blues over ≥2 LLM endpoints** with `--blue2-base-url`/`--blue2-model`
-  (`--blue3-*`, `--blue4-*` exist too; each distinct base URL gets its own lock, and
-  teams sharing one still serialize). Decide the split before launching — `stage_run`
-  builds the lock table from those flags at startup.
+  attention per team and is the largest single lever on blue's score. Only team2 has a
+  per-team endpoint flag (`--blue2-base-url`/`--blue2-model`; the `--blue3-*`/`--blue4-*`
+  flags were removed in the 2026-10 prune), so every other team serializes on the shared
+  endpoint. Decide the split before launching — `stage_run` builds the lock table from
+  those flags at startup.
 - pacing (`blue_feed_loop` tail) — pace off ACTUAL cycle duration: local qwen
   turns are slow, so a fixed pre-cycle sleep both starves throughput and
   can't know a cycle overran; sleep = clamp(30..600 s,
@@ -369,11 +368,6 @@ folder by `REPORT.md`).
 - `GATES` — the machine source of the rehearsal gates; `docs/rehearsal-gates.md`
   is the human-readable contract. Tune after the first rehearsal, not before
   (a gate nobody has failed yet is a guess).
-- `EXPECTED_17C` — self-test pin (`--self-test`) verified against the
-  agent-scrim-2026-09-17c run's FINDINGS.md evidence: takedowns 4,
-  distinct_tactics 3, restore_reactions 1, restorations 1, injects 0,
-  interaction_score 2, stalls 2. If metrics change, re-verify against
-  FINDINGS.md before re-pinning.
 - `parse_ts` — event timestamps are red01's clock, treated as UTC
   (`calendar.timegm`), optional fraction.
 - `load_red_events` — merges the final `events.jsonl` with the in-run
@@ -427,8 +421,6 @@ folder by `REPORT.md`).
   red_key, authorized_keys, backdoor, rogue, uid 0, unauthorized) AND a
   removal verb (removed/deleted/disabled/uninstalled/locked/changed-back/
   reset); injects = `sub-*.md`/`sub-*.txt` plus everything in `submissions/`.
-- `compute_components` — score components alone, for the pinned self-test;
-  a pin mismatch prints "re-check against FINDINGS.md evidence".
 
 ## beacon_ops.py
 

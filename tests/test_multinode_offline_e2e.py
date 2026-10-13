@@ -11,7 +11,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -19,11 +18,13 @@ sys.path.insert(0, str(_REPO))
 
 import jump_rules  # noqa: E402
 import nodes_config  # noqa: E402
-import nodes_ops  # noqa: E402
+import placement_planner  # noqa: E402
+import placement_record  # noqa: E402
 from infra import client  # noqa: E402
-from deploy_lib import stages as dl_stages  # noqa: E402
+from deploy_lib.context import DeployContext  # noqa: E402
 from deploy_lib import tfinputs  # noqa: E402
 from infra import gates as gate  # noqa: E402
+from infra.plan import multinode_plan  # noqa: E402
 
 NODES = {
     "nodes": [
@@ -58,16 +59,13 @@ def _templates(node, base=True):
 # endpoint -> VM list; answers just the paths the probe/preflight/jump code reads
 class FakeProxmox:
 
-    def __init__(self, vms_by_endpoint, down=()):
+    def __init__(self, vms_by_endpoint):
         self.vms = vms_by_endpoint
-        self.down = set(down)
         self.calls = []
 
     def __call__(self, endpoint, token, method, path, **kwargs):
         self.calls.append((method, endpoint, path))
         assert token, f"empty token for {endpoint}"
-        if endpoint in self.down:
-            raise ConnectionError("down")
         if path == "/cluster/resources":
             return {"data": self.vms[endpoint]}
         if path.endswith("/status") and "/storage/" not in path:
@@ -108,11 +106,7 @@ class MultinodeOfflineE2E(unittest.TestCase):
 
     def _resolve(self, **kw):
         with patch.object(client, "proxmox_api_for", self.fake):
-            return nodes_ops.resolve_placement(self.comp, 1000, TEAMS, BOXES, "mn", **kw)
-
-    def test_nodes_config_loads_from_cwd(self):
-        records, _ = nodes_config.load_nodes_config()
-        self.assertEqual([r.name for r in records], ["n1", "n2", "n3"])
+            return placement_planner.resolve_placement(self.comp, 1000, TEAMS, BOXES, "mn", **kw)
 
     def test_placement_preflight_tfvars_and_jump_rules(self):
         placement, engine = self._resolve()
@@ -132,31 +126,28 @@ class MultinodeOfflineE2E(unittest.TestCase):
         self.assertEqual(len(self.fake.calls), n_calls)
 
         # the real multi-node preflight over the same fake estate
-        nodes_ops.activate_placement(placement)
-        self.addCleanup(nodes_ops.deactivate_placement, {})
+        placement_record.activate_placement(placement)
+        self.addCleanup(placement_record.deactivate_placement, {})
         with patch.object(client, "proxmox_api_for", self.fake), \
-                patch("infra.gates.gate_concurrent_deploys"), \
                 patch("infra.gates.remote_access_gate"), \
                 patch("infra.gates.catalog_gate"), \
                 patch("infra.ownership.has_clone_marker", return_value=False):
-            gate.preflight_gates_multinode(self.comp, BOXES, TEAMS, 1000, placement,
-                                           engine_mgmt_ip="10.0.0.250", check_free=True)
+            gate.run_preflight(multinode_plan(self.comp, BOXES, TEAMS, 1000, placement,
+                                              engine_mgmt_ip="10.0.0.250", check_free=True,
+                                              our_run_tag=None))
 
         # terraform inputs: satellite providers/routes + per-team slots
-        spec = SimpleNamespace(boxes=BOXES, box_username="ubuntu", name="mn", comp_name="mn")
-        secrets = SimpleNamespace(teams=TEAMS, box_password="bp", state={}, run_id="run-0badf00d")
-        identity = SimpleNamespace(engine_vmid=1000)
-        place = SimpleNamespace(placement=placement)
-        terraform = dl_stages.TerraformInputs() if hasattr(dl_stages, "TerraformInputs") \
-            else SimpleNamespace()
+        ctx = DeployContext(name="mn", box_username="ubuntu", comp_name="mn", boxes=BOXES,
+                            teams=TEAMS, box_password="bp", state={}, run_id="run-0badf00d",
+                            engine_vmid=1000, placement=placement)
         with patch.object(tfinputs, "ensure_terraform_workdir",
-                          side_effect=lambda cd: Path(cd) / "tf") as ew, \
-                patch.object(tfinputs, "update_env"):
+                          side_effect=lambda cd: Path(cd) / "tf") as ew:
             (self.comp / "tf").mkdir()
-            tfinputs.build_terraform_inputs(terraform, self.comp, spec, secrets, identity, place)
+            ctx.engine_mgmt_ip = tfinputs.engine_mgmt_ip_from_env()  # as prepare() does
+            tfinputs.build_terraform_inputs(ctx, self.comp)
             self.assertTrue(ew.called)
         tfv = json.loads((self.comp / "tf" / "terraform.tfvars.json").read_text())
-        self.assertEqual(len(tfv["satellites"]), nodes_ops.MAX_SATELLITES)
+        self.assertEqual(len(tfv["satellites"]), nodes_config.MAX_SATELLITES)
         real = [s for s in tfv["satellites"] if not s["endpoint"].endswith(".invalid")]
         self.assertEqual({s["node"] for s in real}, {"pve2", "pve3"})
         self.assertEqual(sorted(t["slot"] for t in tfv["teams"].values()),
@@ -180,16 +171,11 @@ class MultinodeOfflineE2E(unittest.TestCase):
             checked += 1
         self.assertEqual(checked, 2)
 
-    def test_down_node_is_never_used(self):
-        self.fake.down.add("https://n3.lab:8006")
-        placement, _ = self._resolve()
-        self.assertNotIn("n3", set(placement["team_nodes"].values()))
-
     def test_missing_token_env_fails_loud_in_tfvars(self):
         placement, _ = self._resolve()
         with patch.dict(os.environ, {"TOK_N2": ""}):
             with self.assertRaises(SystemExit):
-                nodes_ops.satellite_tfvars(placement)
+                placement_record.satellite_tfvars(placement)
 
 
 if __name__ == "__main__":

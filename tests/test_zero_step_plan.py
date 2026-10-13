@@ -17,14 +17,12 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "vendor" / "nakon"))
 
-import nakon_ops  # noqa: E402
+import nakon_run_ops  # noqa: E402
 from nakon.deploy import runner  # noqa: E402
 
 
 class DriverHasNoWorkaround(unittest.TestCase):
     def test_reconcile_symptom_patch_is_gone(self):
-        self.assertFalse(hasattr(nakon_ops, "_reconcile_zero_step_machines"))
-        import nakon_run_ops
         self.assertFalse(hasattr(nakon_run_ops, "_reconcile_zero_step_machines"))
 
     def test_clean_zero_step_outcome_passes_through_untouched(self):
@@ -32,7 +30,7 @@ class DriverHasNoWorkaround(unittest.TestCase):
     #         machine is a clean outcome the nothing-answered floor accepts alongside a ran one.
         machines = [{"name": "db01", "error": None, "steps": []},
                     {"name": "web01", "error": None, "steps": [{"name": "x", "rc": 0}]}]
-        self.assertIsNone(nakon_ops._nothing_answered(machines))
+        self.assertIsNone(nakon_run_ops._nothing_answered(machines))
         self.assertEqual(machines[0], {"name": "db01", "error": None, "steps": []})
 
 

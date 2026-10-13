@@ -53,12 +53,12 @@ messages of the files listed; the headline entries:)
 | 2026-09-30 | **over-broad sweep destroyed 10 foreign VMs** (ad-hoc script bypassed the guard) | full-tag-set-only sweep; guarded path is the ONLY ergonomic path; never sweep by name | `sweep_leftovers` takes an Ownership, matches `expect ⊆ tags`; no name predicates exist |
 | 2026-09-30 | graceful ACPI shutdown burned minutes and hung on agent-down DCs | force-stop everything owned, no clean shutdowns (owner directive) | PreStopStep + delete primitive use `status/stop` only |
 | 2026-10-02 | smoke vs live-2box: same comp id, two worktrees, indistinguishable | per-deploy run id; full set required everywhere | Ownership(run_id) anchor; no-run-id state refused |
-| 2026-10-02 | clean-for-template landed on a live FOREIGN engine (lost ssh host keys) | identity assert before the most destructive command; flock liveness warning | engine-build identity + `other_deploys_in_flight` stay (deploy-side, untouched) |
+| 2026-10-02 | clean-for-template landed on a live FOREIGN engine (lost ssh host keys) | identity assert before the most destructive command; flock liveness warning | engine-build identity stays (`other_deploys_in_flight` since removed in the 2026-10 prune) |
 | 2026-10-02 | terraform destroy hung forever on a qm lock (agent-down DC) | bounded per-attempt timeout; timeout reaches recovery | TerraformStep keeps 4×1800s + lock-clear + sweep between attempts |
 | 2026-10-02 | torn `.deploy_state.json` write; world-readable passwords | atomic single-writer state | config_ops.write_state stays; engine reads through it |
-| 2026-10-04 | sanctioned concurrent deploy queued 90 min behind a held lock | concurrency = warn (liveness cannot lie), identity = refuse | flock warning stays a warning; ownership stays a refusal |
+| 2026-10-04 | sanctioned concurrent deploy queued 90 min behind a held lock | concurrency = warn (liveness cannot lie), identity = refuse | flock warning since removed (2026-10 prune); ownership stays a refusal |
 | 2026-10-04 | destroy failures rc=1 with zero diagnostics | failure evidence survives the crash | bad-auto-destroy.log + destroy-failure.log contract stays; engine journals every step |
-| 2026-10-05 | missing tfstate: destroy "succeeded" against nothing | refuse when state gone but last_phase ≥ 2 | tfstate gate in the engine's gate phase |
+| 2026-10-05 | missing tfstate: destroy "succeeded" against nothing | refuse when state gone but last_phase ≥ 2 | tfstate refusal in `teardown/runner.py`, before the plan runs |
 | 2026-10-03/08 | red01 survived the range (scale8); identity guards needed env plumbing | red01 destroyed with the range; env contract explicit | RedStep owns the badauto call + BAuto_COMPETITION_DIR |
 | 2026-10-09 | report raced the final red pull (graded a world that didn't exist yet) | evidence ordering INSIDE evidence: pull → report → destroy | ArtifactStep(EVIDENCE) ordering validated at plan construction |
 | 2026-10-02 (templates) | same-run golden destroyed right after its own gate passed | frozen-keep respected by phase-1 waves | frozen_keep rides the ReclaimPlan |
@@ -187,8 +187,9 @@ class TeardownEngine:
     def verify_clean(self, plan) -> CleanReport
 ```
 
-`execute`: (1) run the gates (run-id anchor, endpoint guard, tfstate presence,
-frozen-vs-intent — all refusing with `Refusal`); (2) load the journal
+`execute`: (1) run the plan's gates (the terminal plan carries none: its refusals — run-id
+anchor, endpoint guard, tfstate presence, frozen-vs-intent, all `Refusal` — fire in
+`teardown/runner.py` before the plan is built); (2) load the journal
 (`competitions/<id>/.teardown-journal.json`, atomic writes) and skip steps it
 records as done — this is what makes re-running idempotent and replaces
 `--skip-artifacts`; (3) run steps, honoring each step's failure policy, journal
@@ -220,8 +221,7 @@ RECLAIM plan on the same engine; the pure wave computation
 (`deploy_lib/golden_plan.phase1_destroy_waves`) stays.
 
 Flags: `--skip-artifacts` DIES (journal makes it meaningless — collection is
-skipped on resume exactly when it already succeeded). `--full` stays (named
-operation: also destroy templates), `--end-of-competition` stays (frozen
+skipped on resume exactly when it already succeeded). `--full` was kept as a named operation (also destroy templates) and has since been removed: the default is the full teardown; `--end-of-competition` stays (frozen
 intent), `--keep-red` stays, `--artifacts-timeout` stays, `--competition`/`--yes`
 stay. DEFAULT MODE FLIPS to full-teardown for non-frozen comps (owner DoD:
 "exit 0, no flags beyond --competition/--yes, nothing left tagged");

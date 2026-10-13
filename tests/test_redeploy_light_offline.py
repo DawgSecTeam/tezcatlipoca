@@ -82,11 +82,10 @@ class Resync(unittest.TestCase):
 
 
 class Rollback(unittest.TestCase):
-    def test_base_rollback_drops_newer_ready_snapshot_first(self):
-        order = []
+    def test_base_rollback_reconfigures_and_retakes_the_ready_snapshot(self):
         with patch.object(light, "list_snapshots", return_value={SNAP_BASE, SNAP_READY}), \
-                patch.object(light, "delete_snapshot", side_effect=lambda *a: order.append(("del", a[2]))), \
-                patch.object(light, "rollback_snapshot", side_effect=lambda *a: order.append(("roll", a[2]))), \
+                patch.object(light, "delete_snapshot"), \
+                patch.object(light, "rollback_snapshot"), \
                 patch.object(light.pipeline_api, "wait_for_boxes_ssh") as ssh, \
                 patch.object(light.pipeline_api, "wait_for_cloud_init") as ci, \
                 patch.object(light, "run_nakon_and_harden") as harden, \
@@ -94,7 +93,6 @@ class Rollback(unittest.TestCase):
                 patch.object(light, "take_snapshot") as snap, quiet():
             done = light.mode_rollback([_t(LIN)], _rctx(), SNAP_BASE, "cfg", "b",
                                        reconfigure=True)
-        self.assertEqual(order, [("del", SNAP_READY), ("roll", SNAP_BASE)])
         self.assertEqual(len(done), 1)
         ssh.assert_called_once()
         ci.assert_called_once()

@@ -3,8 +3,7 @@
 This decision used to live only inside `verify-competition.py`'s gate. An engine-side
 watchdog would have had to re-derive it, and two implementations of the same judgement
 drift — the failure mode this repo keeps paying for. `round_loop.py` is now canonical
-and both callers use it: verify's gate and the watchdog
-(`tools/round_loop_guard.py`).
+and verify's gate uses it.
 
 The live signature (pfsense-ad 2026-09-28, and the guaranteed aftermath of the
 owner-confirmed .193 hard-downs): after an engine VM reboots, Docker brings the

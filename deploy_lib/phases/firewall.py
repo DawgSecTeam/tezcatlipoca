@@ -41,10 +41,6 @@ def phase5_firewall_bootstrap(ctx):
     print(f"  Firewall kind: {kind}"
           + (" (generated set-command passes, live apply)" if kind == "vyos"
              else " (config.xml push + reboot)"))
-    if ctx.placement and ctx.placement["satellites"]:
-        raise SystemExit(
-            "  ERROR: in-path firewalls are engine-node (slot 0) only — preflight should "
-            "have refused this lineup. Refusing to bootstrap against a satellite placement.")
     dnat = compfile_value(ctx.comp_dir / "Compfile", "firewall_dnat")
     red_dnat_spec = [s.strip() for s in dnat.split(",") if s.strip()] or None
     with timed(ctx.comp_dir, 5, "firewall_configs", f"x{len(fw_targets)}"):

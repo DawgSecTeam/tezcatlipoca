@@ -29,7 +29,7 @@ SLOW_SERVICES = ("splunk", "roundcube")
 
 # Per-pin scoring overrides for dict-form box_services.json pins, e.g.
 # {"name": "IIS HTTP", "display": "iis-alt"}. quotient/setup.py merges them over the
-# service's base check config (event.conf); nakon_ops.py strips them from machine lists,
+# service's base check config (event.conf); nakon_config_ops.py strips them from machine lists,
 # so nakon plants the catalog config once while the SCORED CHECK differs. Quotient
 # requires unique <box>-<Display> check names — display is how same-TYPE pins coexist.
 # "credlist" swaps which credlist file the check authenticates with (packet dual-credit:
@@ -146,7 +146,7 @@ REQUIRED_VARS = {
 }
 # Catalog configs that must never be *newly* pinned: each is a live-confirmed defect in the
 # shared vulndb catalog that takes a scored service down until it is fixed upstream. Pinning
-# one is a generate-time error (nakon_ops._validate_known_broken_pins, packet_ops' compiler)
+# one is a generate-time error (nakon_pin_ops._validate_known_broken_pins, packet_ops' compiler)
 # instead of a mid-plant surprise. Pin sets used to carry this as prose + per-competition JSON
 # pruning, so a new comp could silently re-pin them. Reasons: docs/known-issues.md and
 # docs/upstream-defects-handoff.md; shrink the table as upstream fixes land.
@@ -189,7 +189,7 @@ KNOWN_BROKEN_CONFIGS = {
 
 # M4 per-competition templates: the engine template sits just below the golden block
 # so one preflight scan covers both. Not a cross-competition cache: every template
-# belongs to exactly one competition and dies with it (--full teardown).
+# belongs to exactly one competition and dies with it (full teardown).
 ENGINE_TEMPLATE_VMID_OFFSET = 140
 ENGINE_TEMPLATE_NAME = "engine-template"
 
@@ -219,20 +219,6 @@ def ownership_tags(comp_name, run_id=None, *extra):
     if run_id:
         tags.add(run_id)
     return tags | set(extra)
-
-# How many times the SAME phase may fail with the SAME signature before a resume at
-# that phase is refused. `docs/e2e-testing.md` has always said "max 2 repair-resume
-# cycles; a third consecutive resume is not a repair, it's a resume-loop", but that
-# lived only in prose: cde-2026 burned eleven attempts (deploy6 -> deploy16,
-# 2026-09-29/30) on one Windows golden. A DIFFERENT failure at the same phase resets
-# the budget — that is new information, not a loop. `--force-from-phase` still overrides.
-RESUME_ATTEMPT_LIMIT = 2
-
-# `--min-load-free N`: on a resume into a phase that previously failed, wait for the
-# node's 1-minute load to drop below N before starting. Operators hand-throttled this
-# by eye ("load=32.06 (attempt 1/36) ... load below 10 - launching phase-4 resume",
-# 2026-09-30); raising the sysprep timeout 900s -> 1800s did not help, the load did.
-MIN_LOAD_FREE_TIMEOUT = 3600
 
 WINDOWS_ADMIN_USER = "Administrator"
 

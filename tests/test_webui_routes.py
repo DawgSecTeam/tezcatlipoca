@@ -1,6 +1,6 @@
 """Every webui/server.py route, offline: temp competitions/ root, fixture catalog, Popen
 replaced by a stub. The web UI was not part of the 0.2.0 split, so this pins that the names it
-reaches into the pipeline (config_ops.list_proxmox_templates, constants, the CLI flags it
+reaches into the pipeline (config_prompts.list_proxmox_templates, constants, the CLI flags it
 builds) still resolve."""
 
 import importlib.util
@@ -81,7 +81,7 @@ class WebUIRoutesTest(unittest.TestCase):
         self.assertIn("base-ubuntu24.04-fix", [t["name"] for t in r])
         with patch.dict(os.environ, {"TF_VAR_proxmox_endpoint": "https://x",
                                      "TF_VAR_proxmox_api_token": "t"}), \
-                patch("config_ops.list_proxmox_templates", return_value=["live-tpl"]):
+                patch("config_prompts.list_proxmox_templates", return_value=["live-tpl"]):
             r = self.client.get("/api/templates").json()
         self.assertTrue([t for t in r if t["name"] == "live-tpl" and t["live"]])
 

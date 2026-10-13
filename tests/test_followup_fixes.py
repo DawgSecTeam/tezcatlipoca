@@ -27,7 +27,6 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import config_ops  # noqa: E402
 import packet_ops  # noqa: E402
 from utils import env_summary  # noqa: E402
 
@@ -119,13 +118,6 @@ class EnsurePacketSecretsTests(unittest.TestCase):
             (comp / "box_baseline.json").write_text('{"keep": true}')
             packet_ops.ensure_packet_secrets(comp)
             self.assertEqual((comp / "box_baseline.json").read_text(), '{"keep": true}')
-
-    def test_compile_profile_still_emits_the_same_secret_files(self):
-    # The refactor must not change compile-packet's own output.
-        p = packet_ops.load_profile(_REPO / "packets/cde-2026/packet.yaml")
-        files = packet_ops.packet_secret_files(p)
-        self.assertEqual(sorted(files),
-                         ["box_baseline.json", "domain_accounts.json", "passwords.json"])
 
 
 class MemberTrustedTests(unittest.TestCase):

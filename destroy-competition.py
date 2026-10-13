@@ -20,9 +20,8 @@ from pathlib import Path
 import urllib3
 from dotenv import load_dotenv
 
-from nodes_ops import read_placement  # noqa: F401  (re-exported for tests)
 from teardown import Refusal
-from template_ops import frozen_state
+from template_freeze import frozen_state
 from utils import load_compfile, pick_competition
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -56,9 +55,6 @@ def main():
                         help="competition directory under competitions/ (skips the picker)")
     parser.add_argument("--yes", action="store_true",
                         help="skip the type-the-ID confirmation (for scripted teardown)")
-    parser.add_argument("--full", action="store_true",
-                        help="explicit spelling of the default (full teardown, "
-                             "templates included); accepted for command compatibility")
     parser.add_argument("--teams-only", action="store_true", dest="teams_only",
                         help="mid-event mode: destroy the team boxes but KEEP the "
                              "golden + engine templates (the next deploy reuses them "

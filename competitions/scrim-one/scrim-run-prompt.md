@@ -53,7 +53,7 @@ git merge origin/main --no-edit   # picks up 5f114f5 routed-red mode (red01 real
 python3 -m unittest discover -s tests 2>&1 | tail -2
 ```
 
-If the merge conflicts, resolve conservatively (the branch's template_ops.py /
+If the merge conflicts, resolve conservatively (the branch's template_freeze.py /
 constants.py / quotient fixes are live-found and must survive) and note it in the
 final report. Confirm `.env` still has `TF_VAR_engine_mgmt_ip=10.0.0.252` and
 `TF_VAR_engine_mgmt_gw=10.0.0.1` after the merge.
@@ -85,7 +85,7 @@ quirk, docs/known-issues.md). After the deploy, `verify-competition.py
 
 Per `docs/pfsense-inpath-2026-09-28.md`: transit bridge `vmbrW120`; full-clone
 the pfSense template **vmid 956** (`pfsense-fix`) to a free vmid (suggest 1410);
-net0→vmbrW120 / net1→vmbr120; per-team config via `pfsense/gen_pfsense_config.py`
+net0→vmbrW120 / net1→vmbr120; per-team config via the pipeline's generator (`firewall_ops.generate_team_config`)
 (WAN `172.31.120.2/30`, LAN `192.168.120.1/24`, WAN pass rule `<network>lan</network>`);
 serve the XML from the engine and fetch it via the pfSense console
 (`qm sendkey` + screendump; temp IP on the unassigned LAN NIC; **never inject
@@ -96,7 +96,7 @@ the engine's `192.168.120.1`). `onboot=1` on the firewall.
 
 Also add the **beacon C2 DNAT port-forward on the pfSense LAN** (docs/e2e-testing.md
 §8.3): without it, red's raw-socket beacon check-ins die at the firewall — the
-known gap from the pfsense-rvb run. If gen_pfsense_config.py can't render the
+known gap from the pfsense-rvb run. If the generator can't render the
 forward, add it through the console shell (`pfSsh.php`/config.xml edit + `fetch`)
 and prove it with a check-in before moving on. If you truly cannot get C2 through,
 note it and continue — the run is still valid, C2 health is then informational.
@@ -112,9 +112,8 @@ python3 verify-competition.py competitions/scrim-one \
 ```
 
 The engine rebooted in step 2, so if the round loop didn't resume, re-run with
-`--fix-round-loop`. AD domain: pass `--windows-domain-validated` only after you
-actually confirm domain join (verify output will tell you what it saw). ALL gates
-must pass (logins, no_default_creds, isolation, misconfig, misconfig_survival,
+`--fix-round-loop`. AD domain: the domains gate checks the join live; read its output if it fails. ALL gates
+must pass (logins, isolation, misconfig,
 services strict, pins_registered, plant_coverage, domains, injects). Failures:
 fix and re-verify; do not proceed past a red gate.
 
@@ -173,9 +172,9 @@ then `--keep-range` semantics apply only if you passed it — you did NOT, so
 **pass `--keep-range` in step 5** if you want the range preserved for the user to
 inspect after the run (recommended: keep it; the user plays these boxes).
 Teardown later is:
-`python3 destroy-competition.py --competition scrim-one --full --end-of-competition`
+`python3 destroy-competition.py --competition scrim-one --end-of-competition`
 from the worktree (add `--end-of-competition` because a frozen/post-run comp
-refuses `--full` without it; `--skip-vm` logic for red01 is in bad-auto's own
+refuses teardown without it; `--skip-vm` logic for red01 is in bad-auto's own
 destroy if needed).
 
 Final report to the user (no misconfig details): deploy/verify/coverage outcomes,

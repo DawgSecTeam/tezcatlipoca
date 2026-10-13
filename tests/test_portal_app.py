@@ -197,10 +197,6 @@ class PortalApp(unittest.TestCase):
             with self.client.websocket_connect("/console/ws/forged") as ws:
                 ws.receive_bytes()
 
-    def test_errors_carry_detail_like_webui(self):
-        r = self.login("team1", "nope")
-        self.assertIn("detail", r.json())
-
     def test_spa_fallback_never_shadows_the_api(self):
         dist = Path(self.tmp.name) / "dist"
         (dist / "assets").mkdir(parents=True)

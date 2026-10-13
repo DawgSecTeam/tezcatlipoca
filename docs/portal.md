@@ -203,7 +203,7 @@ not a look-alike: `src/components/ui.jsx` and `kit.jsx` are verbatim copies of
 `webui/frontend/src/components/`, and `src/index.css` is webui's theme file verbatim (minus the
 typography plugin) followed by portal-only rules. They are copies rather than cross-tree imports
 because the image is built on the engine from `portal/` alone. `tests/test_portal_frontend.py`
-fails when either side drifts, and also when the shared dependency versions drift.
+pins the noVNC release tarball and its integrity hash; it does not check the copies for drift.
 
 - **Views.** `/` is sign-in, then either the team's boxes or the white-team view (gate, every
   team, access log). `/console/<team>/<box>` is one console per tab. The FastAPI app serves the

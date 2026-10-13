@@ -46,20 +46,19 @@ destroy = load_destroy()
 
 def _terminal_plan(ctx):
     from teardown.modes import build_terminal_plan
-    return build_terminal_plan(Path("competitions/x"), frozen={}, full=True,
-                               end_of_competition=False)
+    return build_terminal_plan()
 from teardown import machinery as destroy_sweep_ops  # noqa: E402
 from infra.ownership import Ownership  # noqa: E402
 import deploy  # noqa: E402
 from _deploy_patch import dpatch  # noqa: E402
 from deploy_lib import secrets as dl_secrets  # noqa: E402
-from deploy_lib import stages as dl_stages  # noqa: E402
+from deploy_lib.context import DeployContext  # noqa: E402
 from deploy_lib import tfinputs as dl_tfinputs  # noqa: E402
 import config_ops  # noqa: E402
 import placement_record  # noqa: E402
 from infra import client  # noqa: E402
-from infra.gates import preflight_gates_multinode  # noqa: E402
-from infra.gates import preflight_gates_multinode  # noqa: E402
+from infra.gates import run_preflight  # noqa: E402
+from infra.plan import multinode_plan  # noqa: E402
 
 
 class FakePVE:
@@ -284,36 +283,29 @@ class RunIdMinting(unittest.TestCase):
 # resolve_competition_teams + mint_competition_secrets: the run id is minted
 #     once per comp dir and reused forever after.
 
-    def _spec(self):
-        return dl_stages.CompetitionSpec(comp_name=COMP, credlist_usernames=[])
+    def _ctx(self, state_path, **kw):
+        fields = dict(comp_name=COMP, credlist_usernames=[], state_path=state_path,
+                      previous_state={}, resuming=False, engine_vmid=1000)
+        fields.update(kw)
+        return DeployContext(**fields)
 
     def test_fresh_deploy_mints_a_run_id_into_state(self):
         with tempfile.TemporaryDirectory() as d:
-            prior = dl_stages.PriorDeployState(state_path=Path(d) / "s.json",
-                                            previous_state={}, resuming=False)
-            secrets = dl_stages.CompetitionSecrets()
+            ctx = self._ctx(Path(d) / "s.json")
             with dpatch("write_state"), \
                     dpatch("collect_teams",
                                  return_value={"team1": {"identifier": "101",
                                                          "password": "x"}}):
-                dl_secrets.resolve_competition_teams(
-                    secrets, prior, self._spec(), 1,
-                    dl_stages.RunIdentity(engine_vmid=1000), 1)
-                dl_secrets.mint_competition_secrets(
-                    secrets, prior, self._spec(), dl_stages.CompetitionInputs(),
-                    dl_stages.RunIdentity(engine_vmid=1000))
-        self.assertRegex(secrets.run_id, r"^run-[0-9a-f]{8}$")
-        self.assertEqual(secrets.state["run_id"], secrets.run_id)
+                dl_secrets.resolve_competition_teams(ctx, 1, 1)
+                dl_secrets.mint_competition_secrets(ctx)
+        self.assertRegex(ctx.run_id, r"^run-[0-9a-f]{8}$")
+        self.assertEqual(ctx.state["run_id"], ctx.run_id)
 
     def test_fresh_deploy_uses_saved_identifiers_but_not_saved_passwords(self):
         with tempfile.TemporaryDirectory() as d:
             state_path = Path(d) / ".deploy_state.json"
-            prior = dl_stages.PriorDeployState(
-                state_path=state_path,
-                previous_state={"teams": {"team1": {"identifier": "120",
-                                                       "password": "old-secret"}}},
-                resuming=False)
-            secrets = dl_stages.CompetitionSecrets()
+            ctx = self._ctx(state_path, previous_state={
+                "teams": {"team1": {"identifier": "120", "password": "old-secret"}}})
             calls = {}
 
             def collect(count, engine_vmid, identifier_defaults=None):
@@ -323,11 +315,9 @@ class RunIdMinting(unittest.TestCase):
                                   "password": calls["password"]}}
 
             with dpatch("write_state"), dpatch("collect_teams", side_effect=collect):
-                dl_secrets.resolve_competition_teams(
-                    secrets, prior, self._spec(), 1,
-                    dl_stages.RunIdentity(engine_vmid=1000), 1)
+                dl_secrets.resolve_competition_teams(ctx, 1, 1)
             self.assertEqual(calls["defaults"], ["120"])
-            self.assertNotEqual(secrets.teams["team1"]["password"], "old-secret")
+            self.assertNotEqual(ctx.teams["team1"]["password"], "old-secret")
 
     def test_fresh_worktree_uses_tracked_packet_identifiers(self):
         with tempfile.TemporaryDirectory() as d:
@@ -335,18 +325,14 @@ class RunIdMinting(unittest.TestCase):
             comp_dir.mkdir()
             (comp_dir / "Compfile").write_text(
                 "packet_source packets/cde-2026/packet.yaml\n")
-            prior = dl_stages.PriorDeployState(
-                state_path=comp_dir / ".deploy_state.json", previous_state={}, resuming=False)
-            secrets = dl_stages.CompetitionSecrets()
+            ctx = self._ctx(comp_dir / ".deploy_state.json", engine_vmid=1080)
             with dpatch("write_state"), dpatch(
                     "collect_teams",
                     side_effect=lambda count, engine_vmid, identifier_defaults=None: {
                         "team1": {"identifier": str(identifier_defaults[0]), "password": "fresh"},
                         "team2": {"identifier": str(identifier_defaults[1]), "password": "fresh"}}):
-                dl_secrets.resolve_competition_teams(
-                    secrets, prior, self._spec(), 2,
-                    dl_stages.RunIdentity(engine_vmid=1080), 1)
-            self.assertEqual([t["identifier"] for t in secrets.teams.values()], ["120", "121"])
+                dl_secrets.resolve_competition_teams(ctx, 2, 1)
+            self.assertEqual([t["identifier"] for t in ctx.teams.values()], ["120", "121"])
 
     def test_resume_reuses_the_prior_run_id(self):
         with tempfile.TemporaryDirectory() as d:
@@ -354,15 +340,11 @@ class RunIdMinting(unittest.TestCase):
             state_path.write_text(json.dumps({
                 "run_id": RUN, "last_phase": 3,
                 "teams": {"team1": {"identifier": "101", "password": "x"}}}))
-            prior = dl_stages.PriorDeployState(state_path=state_path,
-                                            previous_state={"run_id": RUN}, resuming=True)
-            secrets = dl_stages.CompetitionSecrets()
+            ctx = self._ctx(state_path, previous_state={"run_id": RUN}, resuming=True)
             with dpatch("write_state"):
-                dl_secrets.resolve_competition_teams(
-                    secrets, prior, self._spec(), None,
-                    dl_stages.RunIdentity(engine_vmid=1000), 4)
-        self.assertEqual(secrets.run_id, RUN)
-        self.assertEqual(secrets.state["run_id"], RUN)
+                dl_secrets.resolve_competition_teams(ctx, None, 4)
+        self.assertEqual(ctx.run_id, RUN)
+        self.assertEqual(ctx.state["run_id"], RUN)
 
 
 class TfvarsCarryRunTag(unittest.TestCase):
@@ -371,22 +353,17 @@ class TfvarsCarryRunTag(unittest.TestCase):
             comp_dir = Path(d)
             tf_dir = comp_dir / "terraform"
             tf_dir.mkdir()
-            secrets = dl_stages.CompetitionSecrets(run_id=RUN, teams={}, number_of_teams=0)
-            terraform = dl_stages.TerraformInputs()
+            ctx = DeployContext(comp_name=COMP, boxes=[{"name": "web01", "template": "t"}],
+                                run_id=RUN, teams={}, number_of_teams=0, engine_vmid=1000)
             captured = {}
             env = {"TF_VAR_ssh_private_key_path": "/tmp/key",
                    "TF_VAR_proxmox_node": "pve",
                    "TF_VAR_proxmox_endpoint": "https://pve:8006/"}
             with patch.dict(os.environ, env, clear=True), \
                     dpatch("ensure_terraform_workdir", return_value=tf_dir), \
-                    dpatch("update_env"), \
                     dpatch("write_text_atomic",
                                  side_effect=lambda p, t: captured.__setitem__(str(p), t)):
-                dl_tfinputs.build_terraform_inputs(
-                    terraform, comp_dir,
-                    dl_stages.CompetitionSpec(comp_name=COMP, boxes=[{"name": "web01",
-                                                                   "template": "t"}]),
-                    secrets, dl_stages.RunIdentity(1000), dl_stages.EnginePlacement())
+                dl_tfinputs.build_terraform_inputs(ctx, comp_dir)
         tfvars = json.loads(captured[str(tf_dir / "terraform.tfvars.json")])
         self.assertEqual(tfvars["run_tag"], RUN)
 
@@ -423,12 +400,11 @@ class MultinodePreflightRunAware(unittest.TestCase):
                                              "ide2": "local:vm-900-cloudinit"}}), \
                 patch("infra.collisions.proxmox_api", return_value={"data": []}), \
                 patch("infra.resources.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
-                patch("infra.gates.gate_concurrent_deploys"), \
                 patch("infra.gates.remote_access_gate"), \
                 patch("infra.gates.catalog_gate"):
-            preflight_gates_multinode(
+            run_preflight(multinode_plan(
                 Path("competitions/example"), boxes, self.TEAMS, 1000, self.PLACEMENT,
-                engine_mgmt_ip=None, check_free=True, our_run_tag=RUN)
+                engine_mgmt_ip=None, check_free=True, our_run_tag=RUN))
 
     def test_same_comp_tag_without_run_tag_is_a_collision(self):
         with self.assertRaises(SystemExit) as ctx:

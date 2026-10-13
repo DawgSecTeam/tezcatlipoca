@@ -16,7 +16,7 @@ canonical prose lands in docs/automated-test-artifacts.md with step 7 of that pl
 Why this is a module and not logic inside destroy-competition.py: **two callers must agree
 exactly.** The scrim harness collects before `badauto destroy` erases red01; teardown collects
 when the harness never got there (crash, kill, session death). A second copy of the pull logic
-is how those two drift apart — tests/test_helper_dedup.py exists because that keeps happening.
+is how those two drift apart.
 
 Why the folder is keyed on the run id: it already exists (utils.mint_run_id), it is persisted in
 .deploy_state.json, it is stamped on every VM as an ownership tag, it is reused across
@@ -44,7 +44,7 @@ range is never held hostage by a dead guest box (operator decision, 2026-10-03).
 #   constants  vocabulary (file names, statuses, kinds)      env        timestamps, git, worktree
 #   paths      test-folder location + key                    manifest   test.json read/write
 #   hashing    sha256, 0600 sealing, atomic bytes            plan       what to collect (pure)
-#   transport  scp / guest-agent / local / ssh-cmd           collect    collector + collection.json
+#   transport  scp / local / ssh-cmd           collect    collector + collection.json
 #   verdict    INTERACTION.md -> machine verdict             status     document state + warnings
 #   report     stubs + REPORT.md skeleton                    index      index.json roll-up
 #   archive    durable verified copies                       seal       verify + seal write-up
@@ -66,14 +66,11 @@ from artifacts_lib.collect import (
     load_collection,
 )
 from artifacts_lib.constants import (
-    REPO,
-    SCHEMA,
     DIRNAME,
     INDEX_NAME,
     MANIFEST_NAME,
     COLLECTION_NAME,
     REPORT_NAME,
-    KINDS,
     SIDES,
     EVIDENCE_DIRS,
     OK,
@@ -83,22 +80,16 @@ from artifacts_lib.constants import (
     UNREACHABLE,
     UNRECOVERABLE,
     SKIPPED,
-    NOT_COLLECTED,
     STATUSES,
     LOST,
-    RUN_ID_RE,
-    TODO_MARK,
     Unreachable,
 )
 from artifacts_lib.env import (
-    git_facts,
     in_worktree,
 )
 from artifacts_lib.hashing import (
-    file_facts,
     seal_local_file,
     sha256_file,
-    write_bytes_atomic,
 )
 from artifacts_lib.index import (
     list_tests,
@@ -117,23 +108,17 @@ from artifacts_lib.manifest import (
     update_manifest,
 )
 from artifacts_lib.paths import (
-    latest_run_key,
     next_run_key,
-    run_folders,
     artifacts_root,
-    comp_name,
     run_id_from_state,
     test_dir,
     test_key,
 )
 from artifacts_lib.plan import (
     plan_targets,
-    want_label,
 )
 from artifacts_lib.report import (
-    render_report_skeleton,
     write_report_skeleton,
-    write_stub,
 )
 from artifacts_lib.seal import (
     seal_test,
@@ -157,14 +142,11 @@ __all__ = [
     'default_archive_root',
     'collect',
     'load_collection',
-    'REPO',
-    'SCHEMA',
     'DIRNAME',
     'INDEX_NAME',
     'MANIFEST_NAME',
     'COLLECTION_NAME',
     'REPORT_NAME',
-    'KINDS',
     'SIDES',
     'EVIDENCE_DIRS',
     'OK',
@@ -174,18 +156,12 @@ __all__ = [
     'UNREACHABLE',
     'UNRECOVERABLE',
     'SKIPPED',
-    'NOT_COLLECTED',
     'STATUSES',
     'LOST',
-    'RUN_ID_RE',
-    'TODO_MARK',
     'Unreachable',
-    'git_facts',
     'in_worktree',
-    'file_facts',
     'seal_local_file',
     'sha256_file',
-    'write_bytes_atomic',
     'list_tests',
     'update_index',
     'collect_for_teardown',
@@ -197,18 +173,12 @@ __all__ = [
     'save_manifest',
     'update_manifest',
     'artifacts_root',
-    'comp_name',
     'run_id_from_state',
     'test_dir',
     'test_key',
     'next_run_key',
-    'latest_run_key',
-    'run_folders',
     'plan_targets',
-    'want_label',
-    'render_report_skeleton',
     'write_report_skeleton',
-    'write_stub',
     'seal_test',
     'verify_test',
     'warn_summary',

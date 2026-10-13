@@ -86,7 +86,7 @@ def _index_is_stale(root):
     return False
 
 
-def index_rows(comp_dir, *, refresh=False):
+def index_rows(comp_dir):
 # Index rows for `comp_dir`, rebuilding a missing or stale index first.
 #
 # A comp with no `.automated-tests/` at all returns [] without calling update_index: `list` is
@@ -98,7 +98,7 @@ def index_rows(comp_dir, *, refresh=False):
     if not root.is_dir():
         return []
     try:
-        if refresh or _index_is_stale(root):
+        if _index_is_stale(root):
             ao.update_index(comp_dir)
         return ao.list_tests(comp_dir)
     except OSError as e:

@@ -52,7 +52,7 @@ annotations, and a `credlists.domain` without a `domain.name_template`.
 
 Validation does **not** resolve box templates: `packet_ops.validate_profile()` only requires
 `boxes[].template` to be non-empty. Whether that name resolves to a template tagged `template` on
-the target node is checked later, by the deploy preflight (`config_ops.preflight_gates`), which
+the target node is checked later, by the deploy preflight (`infra.gates.run_preflight`), which
 hard-fails before touching infrastructure. A compile that passes is therefore not yet proof the
 lineup can deploy.
 

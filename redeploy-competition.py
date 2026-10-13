@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 import pipeline_api
 from constants import SNAP_BASE, SNAP_READY
-from nakon_ops import acquire_engine_lock, release_engine_lock
+from nakon_lock_ops import acquire_engine_lock, release_engine_lock
 from infra.client import proxmox_api
 from infra.lifecycle import list_snapshots, snapshot_support_hint
 from infra.ownership import parse_vm_tags
@@ -133,7 +133,7 @@ def main():
 
     # Multi-node: the placement record is authoritative — env -> engine host and
     # node routes registered before anything node-scoped (snapshots, clones).
-    from nodes_ops import activate_placement, read_placement
+    from placement_record import activate_placement, read_placement
     placement = read_placement(comp_dir)
     if placement:
         activate_placement(placement)

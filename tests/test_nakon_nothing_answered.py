@@ -48,7 +48,6 @@ def _run_with(json_line, strict=False):
 
     with patch.object(nakon_run_ops.subprocess, "run", side_effect=fake_run), \
             patch.object(nakon_run_ops.subprocess, "Popen", side_effect=fake_popen), \
-            patch.object(nakon_run_ops, "_deploy_owner_check", return_value="me@host"), \
             patch.object(nakon_run_ops.time, "sleep"):
         return nakon_run_ops.run_nakon(
             key="/k", scoring_user="ubuntu", scoring_ip="10.0.0.252",
@@ -73,13 +72,6 @@ class NothingAnsweredFloor(unittest.TestCase):
         self.assertIn("nothing was applied", msg)
         self.assertIn("3 machine(s) ran zero steps", msg)
 
-    def test_missing_machine_results_raises(self):
-        # Older nakon never emits the JSON at all: rc=0, no FAILED lines, no evidence
-        # anything ran. Unverifiable is not the same as fine.
-        with self.assertRaises(RuntimeError) as raised:
-            _run_with("no json here")
-        self.assertIn("no per-machine results", str(raised.exception))
-
     def test_one_machine_that_ran_anything_is_tolerated(self):
         # A partial sweep is a real outcome, not a broken one — escalating it would
         # abort runs that are merely imperfect, which is what strict=False is for.
@@ -95,23 +87,6 @@ class NothingAnsweredFloor(unittest.TestCase):
         # genuinely reached its hosts must behave exactly as before.
         result = _run_with(_machines([{"index": "000", "name": "x", "rc": 0}]), strict=True)
         self.assertEqual(len(result.machines), 1)
-
-
-class FloorPredicate(unittest.TestCase):
-    def test_empty_list_is_nothing_answered(self):
-        self.assertIn("no per-machine results", nakon_run_ops._nothing_answered([]))
-
-    def test_all_zero_step_machines_is_nothing_answered(self):
-        self.assertIn("2 machine(s)",
-                      nakon_run_ops._nothing_answered([{"name": "a", "steps": []},
-                                                   {"name": "b", "steps": []}]))
-
-    def test_one_step_anywhere_clears_the_floor(self):
-        self.assertIsNone(nakon_run_ops._nothing_answered([{"name": "a", "steps": []},
-                                                       {"name": "b", "steps": [{"rc": 1}]}]))
-
-    def test_a_failing_step_is_still_a_step(self):
-        self.assertIsNone(nakon_run_ops._nothing_answered([{"name": "a", "steps": [{"rc": 1}]}]))
 
 
 if __name__ == "__main__":

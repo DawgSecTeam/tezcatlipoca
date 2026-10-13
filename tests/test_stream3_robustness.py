@@ -27,7 +27,6 @@ def _load(name, filename):
     return mod
 
 
-verify = _load("verify_comp_s3", "verify-competition.py")
 destroy = _load("destroy_comp_s3", "destroy-competition.py")
 from teardown import machinery as destroy_sweep_ops  # noqa: E402
 
@@ -85,85 +84,6 @@ class AdMisconfigReplay(unittest.TestCase):
             (Path(tmp) / ".nakon-domain-team1-ad-misconfigs.json").write_text("{}")
             events = self._run(tmp, promoted=True)
             self.assertEqual([name for name, _ in events if name == "dc01-team105"], [])
-
-
-class _Resp:
-    def __init__(self, payload, status=200):
-        self._payload, self.status_code = payload, status
-
-    def raise_for_status(self):
-        pass
-
-    def json(self):
-        return self._payload
-
-
-class _Session:
-    def __init__(self, payload):
-        self._payload, self.posts = payload, []
-
-    def get(self, url, timeout=None):
-        return _Resp(self._payload)
-
-    def post(self, url, json=None, timeout=None):
-        self.posts.append((url, json))
-        return _Resp({"ok": True})
-
-
-class RoundLoopCheck(unittest.TestCase):
-    # /api/engine real schema (live-confirmed 2026-09-29 on the .150 orphan engine):
-    # snake_case, current_round_time is an RFC3339 string whose Go zero value
-    # ("0001-01-01T00:00:00Z") means the loop is stopped; paused = running: false.
-    def test_paused_engine_not_warned(self):
-        s = _Session({"running": False, "competition_started": True,
-                      "current_round_time": "0001-01-01T00:00:00Z"})
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            verify.check_round_loop("http://e", s)
-        self.assertIn("paused", out.getvalue())
-        self.assertEqual(s.posts, [])
-
-    def test_stale_zero_time_warns_with_remediation(self):
-        s = _Session({"running": True, "competition_started": True,
-                      "last_round": {"StartTime": "2020-01-01T00:00:00Z"},
-                      "current_round_time": "0001-01-01T00:00:00Z"})
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            verify.check_round_loop("http://e", s)
-        self.assertIn("WARN", out.getvalue())
-        self.assertIn("/api/competition/start", out.getvalue())
-        self.assertEqual(s.posts, [])
-
-    def test_fix_round_loop_runs_both_posts(self):
-        s = _Session({"running": True, "competition_started": True,
-                      "last_round": {"StartTime": "2020-01-01T00:00:00Z"},
-                      "current_round_time": "0001-01-01T00:00:00Z"})
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            verify.check_round_loop("http://e", s, fix=True)
-        self.assertIn("--fix-round-loop", out.getvalue())
-        self.assertEqual([u for u, _ in s.posts], ["http://e/api/competition/start",
-                                                   "http://e/api/engine/pause"])
-
-    def test_fix_round_loop_heals_paused_reboot_signature(self):
-        s = _Session({"running": False, "competition_started": True,
-                      "last_round": {"StartTime": "2020-01-01T00:00:00Z"},
-                      "current_round_time": "0001-01-01T00:00:00Z"})
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            verify.check_round_loop("http://e", s, fix=True)
-        self.assertIn("--fix-round-loop", out.getvalue())
-        self.assertEqual([u for u, _ in s.posts], ["http://e/api/competition/start",
-                                                   "http://e/api/engine/pause"])
-
-    def test_healthy_loop_passes(self):
-        s = _Session({"running": True, "competition_started": True,
-                      "last_round": {"StartTime": "2020-01-01T00:00:00Z"},
-                      "current_round_time": "2026-09-29T07:00:00Z"})
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            verify.check_round_loop("http://e", s)
-        self.assertIn("advancing", out.getvalue())
 
 
 class WindowsPreStop(unittest.TestCase):

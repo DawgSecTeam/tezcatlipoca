@@ -75,10 +75,6 @@ def seal_test(test_path, *, author=None, force=False):
                                 "completed_at": iso()})
     save_manifest(test_path, manifest)
     collection = load_collection(test_path)
-    for derived in collection.get("derived", []):
-        path = test_path / derived["path"]
-        if path.exists():
-            derived["sha256_after_writeup"] = sha256_file(path)
     if collection:
         write_state(test_path / COLLECTION_NAME, collection)
     comp_dir = Path(manifest.get("comp_dir") or test_path.parent.parent)

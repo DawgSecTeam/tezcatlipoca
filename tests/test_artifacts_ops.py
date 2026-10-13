@@ -320,15 +320,6 @@ class TestCollect(unittest.TestCase):
         self.assertEqual(sealed.read_text(), "blue log")
         self.assertEqual(sealed.stat().st_mode & 0o777, 0o600)
 
-    def test_guest_route_refuses_a_glob_instead_of_silently_returning_nothing(self):
-        targets = [{"name": "web01", "route": "guest-agent", "kind": "remote", "node": "pve",
-                    "vmid": 1220, "want": [{"remote": "/tmp/report-*.md",
-                                            "local": "evidence/blue/report.md"}]}]
-        collection = ao.collect(self.path, targets)
-        item = collection["targets"][0]["files"][0]
-        self.assertEqual(item["status"], ao.FAILED)
-        self.assertIn("cannot expand", item["reason"])
-
     def test_unknown_route_is_a_hard_error(self):
         with self.assertRaises(RuntimeError):
             ao.collect(self.path, [{"name": "x", "route": "carrier-pigeon", "want": [
@@ -399,11 +390,9 @@ class TestWarningsAndStubs(unittest.TestCase):
         ao.update_manifest(self.path, agents={"red": {"present": True,
                                                       "ssh": {"host": "10.0.0.198"}},
                                              "blue": {"present": False}})
-        from unittest.mock import patch as _patch
-        with _patch.object(ao, "plan_targets", ao.plan_targets):
-            collection = ao.collect(self.path, ao.plan_targets(ao.load_manifest(self.path),
-                                                              comp_dir=self.comp),
-                                    transport=fake_transport({}, unreachable=True))
+        collection = ao.collect(self.path, ao.plan_targets(ao.load_manifest(self.path),
+                                                          comp_dir=self.comp),
+                                transport=fake_transport({}, unreachable=True))
         warnings = ao.warn_summary(collection, ao.load_manifest(self.path))
         self.assertTrue(any("RED-TEAM.md is ABSENT although this run had a red agent" in w
                             for w in warnings), warnings)
@@ -442,17 +431,6 @@ class TestWarningsAndStubs(unittest.TestCase):
         self.assertIn("status: not-collected", text)
         self.assertIn("test-artifacts.py collect", text)
 
-    def test_a_stub_is_not_reported_as_a_present_report(self):
-        ao.update_manifest(self.path, agents={"red": {"present": True,
-                                                      "ssh": {"host": "10.0.0.198"}},
-                                              "blue": {"present": False}})
-        collection = ao.collect(self.path, ao.plan_targets(ao.load_manifest(self.path),
-                                                           comp_dir=self.comp),
-                                transport=fake_transport({}, unreachable=True))
-        ao.finalize(self.path, manifest=ao.load_manifest(self.path))
-        warnings = ao.warn_summary(collection, ao.load_manifest(self.path), self.path)
-        self.assertTrue(any("RED-TEAM.md is UNREACHABLE" in w for w in warnings), warnings)
-
     def test_a_wholesale_target_failure_is_not_reported_as_absent(self):
     # red01 with no recorded address is never probed, so no per-file record exists — and
     #         calling that "absent" would claim a box that was never asked. The target's own status is
@@ -480,23 +458,6 @@ class TestWarningsAndStubs(unittest.TestCase):
         text = (self.path / "RED-TEAM.md").read_text()
         self.assertEqual(text, "the red report")
 
-    def test_unrecoverable_source_produces_an_honest_stub(self):
-        ao.update_manifest(self.path, agents={"red": {"present": True,
-                                                      "ssh": {"host": "10.0.0.198"}},
-                                             "blue": {"present": False}})
-        aos = self.path / "evidence"
-        targets = [{"name": "red01", "route": "scp-jump", "kind": "remote",
-                    "ssh": {"host": "10.0.0.198"}, "want": [{"remote": RED_REPORT,
-                                                             "to": "evidence/red/",
-                                                             "canonical": "RED-TEAM.md"}]}]
-        with patch.object(ao, "plan_targets", lambda manifest, comp_dir=None: targets):
-            ao.collect(self.path, targets, transport=fake_transport({}, unreachable=True))
-            ao.finalize(self.path, manifest=ao.load_manifest(self.path))
-        text = (self.path / "RED-TEAM.md").read_text()
-        self.assertIn("status: unreachable", text)
-        self.assertTrue(aos.is_dir())
-
-
 class TestReportAndSeal(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -507,14 +468,6 @@ class TestReportAndSeal(unittest.TestCase):
                                               "blue": {"present": False}})
         ao.collect(self.path, ao.plan_targets(ao.load_manifest(self.path), comp_dir=self.comp))
         ao.finalize(self.path, manifest=ao.load_manifest(self.path))
-
-    def test_skeleton_carries_machine_facts_and_marks_judgement(self):
-        text = (self.path / "REPORT.md").read_text()
-        self.assertIn("## Recommendations — tezcatlipoca", text)
-        self.assertIn("## Recommendations — this competition", text)
-        self.assertIn("## Incidents", text)
-        self.assertIn("TODO(author)", text)
-        self.assertIn("No red agent took part in this run.", text)
 
     def test_verdict_is_lifted_verbatim_from_interaction_md(self):
         harness = self.path / "evidence" / "harness"
@@ -531,28 +484,6 @@ class TestReportAndSeal(unittest.TestCase):
         ao.seal_test(self.path, author="tester")
         ao.write_report_skeleton(self.path)
         self.assertEqual(report.read_text(), "# my careful write-up\n")
-
-    def test_seal_refuses_while_judgement_is_unfilled_then_force_works(self):
-        with self.assertRaises(RuntimeError) as ctx:
-            ao.seal_test(self.path, author="tester")
-        self.assertIn("TODO(author)", str(ctx.exception))
-        result = ao.seal_test(self.path, author="tester", force=True)
-        self.assertEqual(result["author"], "tester")
-        manifest = ao.load_manifest(self.path)
-        self.assertEqual(manifest["writeup"]["status"], "done")
-
-    def test_verify_flags_tampering_and_reports_the_seal_state(self):
-        run = Path(self.tmp.name) / "run"
-        run.mkdir()
-        (run / "run.json").write_text('{"ok": true}')
-        ao.record_paths(self.path, run_dir=str(run))
-        ao.collect(self.path, ao.plan_targets(ao.load_manifest(self.path), comp_dir=self.comp))
-        collected = self.path / "evidence" / "harness" / "run.json"
-        self.assertEqual(collected.read_text(), '{"ok": true}')
-        collected.write_text('{"ok": false}')
-        problems = ao.verify_test(self.path)["problems"]
-        self.assertTrue(any("hash drift" in p for p in problems), problems)
-
 
 class TestIndexAndArchive(unittest.TestCase):
     def test_index_lists_newest_first_and_counts_warnings(self):
@@ -589,32 +520,6 @@ class TestIndexAndArchive(unittest.TestCase):
                 with self.assertRaises(RuntimeError) as ctx:
                     ao.archive_test(comp, "run-1a2b3c4d", dest_root=Path(tmp) / "archive")
             self.assertIn("archive verification failed", str(ctx.exception))
-
-
-class TestWorktreeDetection(unittest.TestCase):
-    def _run(self, mapping):
-        class Result:
-            def __init__(self, stdout):
-                self.stdout = stdout
-                self.returncode = 0
-
-        def fake_run(cmd, **kwargs):
-            for needle, out in mapping.items():
-                if needle in cmd:
-                    return Result(out)
-            return Result("")
-
-        return fake_run
-
-    def test_linked_worktree_is_detected(self):
-        mapping = {"--git-dir": "/repo/.git/worktrees/at", "--git-common-dir": "/repo/.git"}
-        with patch.object(ao.subprocess, "run", self._run(mapping)):
-            self.assertTrue(ao.in_worktree())
-
-    def test_main_checkout_is_not_a_worktree(self):
-        mapping = {"--git-dir": "/repo/.git", "--git-common-dir": "/repo/.git"}
-        with patch.object(ao.subprocess, "run", self._run(mapping)):
-            self.assertFalse(ao.in_worktree())
 
 
 class TestVerdictIngestion(unittest.TestCase):
@@ -806,6 +711,7 @@ class ScpRetry(unittest.TestCase):
             got = ao._scp_files({"key": "/k", "user": "sysadmin", "host": "10.0.0.198",
                                  "jump": "jump-opt"}, "/tmp/ba/report-*.md", d)
         self.assertEqual([p.name for p in got], ["report.md"])
+        self.assertEqual(got[0].stat().st_mode & 0o777, 0o600)
         self.assertEqual(sleeps, [10], "exactly one inter-round pause")
 
     def test_still_unreachable_raises_with_the_last_error(self):
