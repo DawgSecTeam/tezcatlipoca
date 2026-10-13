@@ -29,10 +29,46 @@ import time
 from urllib.parse import quote, urlparse
 
 import requests
-
-from infra.console import vncproxy_mint
+from requests.adapters import HTTPAdapter
+from urllib3.poolmanager import PoolManager
 
 RELAY_TTL = 30  # seconds between mint and the browser's websocket open
+
+
+class _FingerprintAdapter(HTTPAdapter):
+    # TLS pinning by peer-cert sha256 — the same shape as infra.client._FingerprintAdapter.
+    def __init__(self, fingerprint, **kw):
+        self._fingerprint = fingerprint
+        super().__init__(**kw)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **kw):
+        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block,
+                                       assert_fingerprint=self._fingerprint, **kw)
+
+
+def vncproxy_mint(endpoint, token, pve_node, vmid, fingerprint=None, timeout=30):
+    """Mint a PVE noVNC ticket: POST /nodes/<pve_node>/qemu/<vmid>/vncproxy {websocket: 1}.
+
+    Returns {port: int, ticket: str}. Deliberately self-contained: the portal IMAGE ships
+    only portal/ (portal/Dockerfile + portal.portal_ops._SHIP), so it must not import the
+    driver's `infra` package — `infra/__init__` imports `infra.gates`, which drags the whole
+    deploy driver into the container and dies there (live-found 2026-10-13: the portal
+    container raised ModuleNotFoundError on both this import and `requests`). Wire shape and
+    TLS rule match infra.console.vncproxy_mint / infra.client.proxmox_request: pin the peer
+    cert with a recorded sha256, else the lab default (no CA these hosts lack).
+    """
+    url = f"{endpoint.rstrip('/')}/api2/json/nodes/{pve_node}/qemu/{int(vmid)}/vncproxy"
+    session = requests.Session()
+    if fingerprint:
+        session.mount("https://", _FingerprintAdapter(fingerprint.replace(":", "").strip().lower()))
+    r = session.post(url, data={"websocket": 1},
+                     headers={"Authorization": f"PVEAPIToken={token}"},
+                     verify=False, timeout=timeout)
+    r.raise_for_status()
+    data = r.json().get("data") or {}
+    if not data.get("port") or not data.get("ticket"):
+        raise ValueError("Proxmox returned no console port/ticket")
+    return {"port": int(data["port"]), "ticket": str(data["ticket"])}
 
 
 class ConsoleError(RuntimeError):

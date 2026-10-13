@@ -291,8 +291,15 @@ def catalog_check_paths(comp_dir):
     config; box_baseline.json pins plant like vulns but live in their own file. When
     neither is present the bundle's real files pass straight through. Returns
     (services_path, vulns_path, cleanup_fn)."""
-    services = json.loads((comp_dir / "box_services.json").read_text())
-    vulns = json.loads((comp_dir / "box_vulns.json").read_text())
+    services_path = comp_dir / "box_services.json"
+    vulns_path = comp_dir / "box_vulns.json"
+    if not services_path.exists() and not vulns_path.exists():
+        # A fresh competition has no pins yet: generate_nakon_config() writes both files
+        # later in the pipeline, AFTER the gates run (see deploy_lib.prepare). There is
+        # nothing to validate here yet, so report "no pins" instead of crashing.
+        return (None, None, None)
+    services = json.loads(services_path.read_text()) if services_path.exists() else {}
+    vulns = json.loads(vulns_path.read_text()) if vulns_path.exists() else {}
     baseline_path = comp_dir / "box_baseline.json"
     baseline = json.loads(baseline_path.read_text()) if baseline_path.exists() else {}
 
@@ -303,8 +310,9 @@ def catalog_check_paths(comp_dir):
                          for box, pins in services.items()}
     merged_vulns = {box: list(v) + list(baseline.get(box, []))
                     for box, v in vulns.items()}
-    if filtered_services == services and merged_vulns == vulns:
-        return (comp_dir / "box_services.json", comp_dir / "box_vulns.json", None)
+    if (filtered_services == services and merged_vulns == vulns
+            and services_path.exists() and vulns_path.exists()):
+        return (services_path, vulns_path, None)
 
     tmp_services = comp_dir / ".catalog-check-services.json"
     tmp_vulns = comp_dir / ".catalog-check-vulns.json"
@@ -320,6 +328,10 @@ def catalog_check_paths(comp_dir):
 
 def catalog_gate(comp_dir):
     svc_path, vuln_path, cleanup = catalog_check_paths(comp_dir)
+    if svc_path is None:
+        print("  Preflight: no pin files yet (fresh competition) — "
+              "catalog check runs after pin generation")
+        return
     catalog = subprocess.run(
         [sys.executable, "-m", "nakon", "catalog", "check",
          "--boxes-json", str((comp_dir / "boxes.json").resolve()),

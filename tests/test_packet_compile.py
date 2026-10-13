@@ -358,6 +358,33 @@ class CatalogCheckFilter(unittest.TestCase):
             self.assertIsNone(cleanup)
             self.assertEqual(svc, d / "box_services.json")
 
+    def test_fresh_comp_without_pins_is_skipped(self):
+        # Regression: a brand-new competition has no pin files yet (generate_nakon_config
+        # writes them AFTER the gates), and reading them unconditionally crashed every
+        # fresh deploy with FileNotFoundError.
+        from infra.gates import catalog_check_paths as _catalog_check_paths
+        with tempfile.TemporaryDirectory() as tmp:
+            svc, vuln, cleanup = _catalog_check_paths(Path(tmp))
+            self.assertIsNone(svc)
+            self.assertIsNone(vuln)
+            self.assertIsNone(cleanup)
+
+    def test_catalog_gate_noop_without_pins(self):
+        from infra.gates import catalog_gate
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog_gate(Path(tmp))  # must not raise / must not shell out
+
+    def test_one_sided_pins_tolerated(self):
+        from infra.gates import catalog_check_paths as _catalog_check_paths
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "box_services.json").write_text(json.dumps({"web01": ["nginx"]}))
+            svc, vuln, cleanup = _catalog_check_paths(d)
+            self.assertIsNotNone(svc)
+            self.assertEqual(json.loads(svc.read_text())["web01"], ["nginx"])
+            self.assertEqual(json.loads(vuln.read_text()), {})
+            cleanup()
+
 
 class ShippedProfiles(unittest.TestCase):
     def test_cde_fidelity_flags_dual_credit_and_gaps(self):

@@ -119,10 +119,20 @@ def tunnel_decision(hostname, comp_name, run_id, tunnel_token, fetch=None):
                     f"(run {data.get('run_id')!r}) — tear that down or unset the tunnel token")
 
 
-def _env_file(session_secret, open_gate, tunnel_token):
+def _env_file(session_secret, open_gate, tunnel_token, cookie_secure=True):
+# The portal's .env on the engine.
+#
+#     cookie_secure gates SessionMiddleware's `https_only`. It must follow how the browser
+#     actually reaches the portal: with cloudflared the public side is HTTPS (Secure is
+#     correct and required), but the tunnel-less path documented in docs/portal.md is
+#     `ssh -L 8443:…` over plain HTTP — and any host that is not localhost/127.0.0.1 is not
+#     a secure context, so a Secure cookie is REJECTED by the browser and login is
+#     impossible (live-found 2026-10-13: an operator forwarding the portal to a LAN address
+#     got 'Cookie "tez_portal" has been rejected because a non-HTTPS cookie can't be set as
+#     "secure"'). Callers pass use_tunnel.
     lines = [f"PORTAL_SECRET_KEY={session_secret}",
              f"PORTAL_OPEN={'1' if open_gate else '0'}",
-             "PORTAL_COOKIE_SECURE=1"]
+             f"PORTAL_COOKIE_SECURE={'1' if cookie_secure else '0'}"]
     if tunnel_token:
         lines.append(f"TUNNEL_TOKEN={tunnel_token}")
     return "\n".join(lines) + "\n"
@@ -206,7 +216,8 @@ def _deploy_portal(ctx, env):
 
     tar = bundle(config, _env_file(ctx.state["portal_session_secret"],
                                    env.get("TEZ_PORTAL_OPEN") == "1",
-                                   tunnel_token if use_tunnel else ""))
+                                   tunnel_token if use_tunnel else "",
+                                   cookie_secure=use_tunnel))
     _run_engine_cmd(ctx.tf_ctx,
                     f"sudo mkdir -p {REMOTE_DIR}/state && sudo tar xzf - -C {REMOTE_DIR} && "
                     f"sudo chmod 600 {REMOTE_DIR}/portal.json {REMOTE_DIR}/.env",

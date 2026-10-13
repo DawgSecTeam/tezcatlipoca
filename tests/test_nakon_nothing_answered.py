@@ -88,6 +88,23 @@ class NothingAnsweredFloor(unittest.TestCase):
         result = _run_with(_machines([{"index": "000", "name": "x", "rc": 0}]), strict=True)
         self.assertEqual(len(result.machines), 1)
 
+    def test_result_glued_to_status_line_is_still_parsed(self):
+        # live-found 2026-10-13 (crimson-relay phase 7): nakon's status line lost its
+        # trailing newline, gluing the JSON onto it ("...exit 0.{...}"). Requiring the
+        # line to START with "{" dropped the whole result set, and the rc=0 floor then
+        # aborted a fully-green pass.
+        glued = ("[nakon] All configurations completed with exit 0."
+                 + _machines([{"index": "000", "name": "nginx", "rc": 0}]))
+        result = _run_with(glued)
+        self.assertEqual(result.machines[0]["name"], "box1")
+
+    def test_machines_from_line_tolerates_prefix_and_glue(self):
+        payload = _machines([{"index": "000", "name": "x", "rc": 0}])
+        self.assertIsNone(nakon_run_ops._machines_from_line("no json here"))
+        self.assertIsNone(nakon_run_ops._machines_from_line('{"machines": "notalist"}'))
+        self.assertEqual(len(nakon_run_ops._machines_from_line(payload)), 1)
+        self.assertEqual(len(nakon_run_ops._machines_from_line("[nakon] done." + payload)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

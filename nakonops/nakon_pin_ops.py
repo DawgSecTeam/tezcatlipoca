@@ -2,8 +2,10 @@
 
 import json
 import re
+import subprocess
+import sys
 
-from common.constants import KNOWN_BROKEN_CONFIGS, REQUIRED_VARS
+from common.constants import KNOWN_BROKEN_CONFIGS, NAKON_DIR, REQUIRED_VARS
 
 
 def _config_name(c):
@@ -163,6 +165,51 @@ def _validate_known_broken_pins(configurations, where, exempt=frozenset()):
             f"({where}): {reason} Unpin it from box_vulns.json/box_services.json "
             f"(the list lives in constants.KNOWN_BROKEN_CONFIGS; it shrinks as upstream "
             f"fixes land — see docs/upstream-defects-handoff.md).")
+
+
+def catalog_required_var_names(timeout=180):
+# Config names the nakon catalog itself declares required_vars for.
+#
+#     The curated REQUIRED_VARS table encodes var KINDS (literal vs ip) but is an
+#     incomplete mirror of the catalog's own metadata — a fresh randomize kept selecting
+#     catalog-var configs the table did not list (2026-10-13: raw-socket-beacon,
+#     desktop-autostart, rc-local-persistence, MSSQL), each aborting the deploy at the
+#     generate-time var gate or the bundle lint. This asks the catalog directly so the
+#     fresh-selection drop no longer depends on the table being complete.
+#     Cached per process; returns frozenset() (fail-open to the curated table, and the
+#     lint still catches a straggler) when the catalog is unreachable.
+    global _CATALOG_VAR_NAMES
+    if _CATALOG_VAR_NAMES is None:
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "nakon", "catalog", "list", "--json"],
+                cwd=str(NAKON_DIR), capture_output=True, text=True, timeout=timeout)
+            data = json.loads(proc.stdout)
+            _CATALOG_VAR_NAMES = frozenset(
+                e.get("name") for e in data if e.get("name") and e.get("required_vars"))
+        except Exception:
+            _CATALOG_VAR_NAMES = frozenset()
+    return _CATALOG_VAR_NAMES
+
+
+_CATALOG_VAR_NAMES = None
+
+
+def _drop_catalog_var_bare(names, where, banned):
+# Drop bare names the catalog declares required_vars for; a dict pin with vars survives.
+    kept, dropped = [], []
+    for c in names:
+        name = _config_name(c)
+        has_vars = isinstance(c, dict) and bool(c.get("vars"))
+        if name in banned and not has_vars:
+            dropped.append(name)
+        else:
+            kept.append(c)
+    if dropped:
+        print(f"  Skipping {len(dropped)} catalog-var bare config(s) in {where}: "
+              f"{', '.join(sorted(set(dropped)))} — the catalog declares required_vars, "
+              f"randomize cannot satisfy them; pin explicitly with vars")
+    return kept
 
 
 def _bare_unplantable_reason(name):

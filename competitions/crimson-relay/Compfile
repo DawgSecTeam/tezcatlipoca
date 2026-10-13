@@ -1,0 +1,9 @@
+name crimson-relay
+scenario Crimson Relay Logistics runs a single-subnet regional freight depot. The Windows domain controller (dc01) provides AD DS and DNS for the depot; a second Windows host (win02) presents the depot's IIS HTTP intranet and FTP drop. The Linux tier carries an nginx web front end with an authoritative DNS service (web01) and a MySQL shipment-tracking database (db01). Defenders keep the scored services online and hunt planted misconfigurations across the mixed estate. No in-path firewall; remote access disabled for this practice run.
+difficulty 4
+remote_access 0
+
+# Student portal (Quotient team login → browser console on the team's own VMs).
+# Practice run: no Cloudflare tunnel, reach it with ssh -L; gate opened via TEZ_PORTAL_OPEN=1.
+portal 1
+portal_scoreboard_url http://10.0.0.253

@@ -27,6 +27,7 @@ from config.packet_ops import validate_profile
 
 REMAINING = {
     "mailenable-cleartext-mail-win",
+    "MSSQL",
 }
 
 
@@ -125,14 +126,19 @@ class GenerateNakonConfigGate(unittest.TestCase):
             out = io.StringIO()
             with patch.object(nakon_config_ops, "_nakon_randomize",
                               return_value=(["apache", "airship-webapp"],
-                                             ["mailenable-cleartext-mail-win", "suid-find"])):
+                                             ["mailenable-cleartext-mail-win", "suid-find",
+                                              "rc-local-persistence"])), \
+                 patch.object(nakon_config_ops, "catalog_required_var_names",
+                              return_value=frozenset({"rc-local-persistence"})):
                 with contextlib.redirect_stdout(out):
                     nakon_config_ops.generate_nakon_config(TEAMS, BOXES, 1, comp, "pw")
             self.assertIn("known-broken", out.getvalue())
             self.assertIn("mailenable-cleartext-mail-win", out.getvalue())
+            self.assertIn("catalog-var", out.getvalue())
             machines = json.loads((comp / "nakon-config.json").read_text())["machines"]
             self.assertIn("suid-find", machines[0]["configurations"])
             self.assertNotIn("mailenable-cleartext-mail-win", machines[0]["configurations"])
+            self.assertNotIn("rc-local-persistence", machines[0]["configurations"])
             self.assertIn("apache", machines[0]["configurations"])
             self.assertNotIn("airship-webapp", machines[0]["configurations"])
 
@@ -168,6 +174,30 @@ class DropUnplantableBare(unittest.TestCase):
         self.assertEqual(kept, ["apache"])
         self.assertIn("requires operator vars", out.getvalue())
         self.assertIn("hosts-redirect-linux", out.getvalue())
+
+    def test_catalog_var_configs_dropped_from_fresh_selection(self):
+        # Regression 2026-10-13: raw-socket-beacon (SERVICE_NAME) and desktop-autostart
+        # (DEST, EXEC) carry catalog required_vars but were missing from REQUIRED_VARS, so a
+        # fresh randomize selected them as BARE names and the nakon bundle lint aborted the
+        # whole deploy ("catalog payload(s) reference variable(s) their step does not declare").
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kept = nakon_pin_ops._drop_unplantable_bare(
+                ["raw-socket-beacon", "desktop-autostart", "nginx"],
+                "fresh selection for 'web01'")
+        self.assertEqual(kept, ["nginx"])
+        self.assertIn("requires operator vars", out.getvalue())
+
+    def test_catalog_var_bare_dropped_dict_with_vars_survives(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            kept = nakon_pin_ops._drop_catalog_var_bare(
+                ["rc-local-persistence", {"name": "rc-local-persistence", "vars": {"RC_LINE": "x"}},
+                 "apache"],
+                "fresh selection for 'db01'", frozenset({"rc-local-persistence"}))
+        self.assertEqual(len(kept), 2)
+        self.assertIn("apache", [k if isinstance(k, str) else k["name"] for k in kept])
+        self.assertIn("catalog-var", out.getvalue())
 
 
 class PacketCompilerGate(unittest.TestCase):

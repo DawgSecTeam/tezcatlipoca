@@ -62,6 +62,22 @@ def _nothing_answered(machines):
     return f"all {len(machines)} machine(s) ran zero steps ({names})"
 
 
+def _machines_from_line(line):
+# Parse a nakon result line into its machine list, tolerating a glued status line and a
+# "[nakon] " prefix. Returns None when the line carries no result object.
+    if '"machines"' not in line:
+        return None
+    idx = line.find("{")
+    if idx < 0:
+        return None
+    try:
+        parsed, _ = json.JSONDecoder().raw_decode(line[idx:])
+    except ValueError:
+        return None
+    machines = parsed.get("machines")
+    return machines if isinstance(machines, list) else None
+
+
 def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, timeout=2400,
               strict=True, jobs=1, run_tag=None):
 # Push the bundle to the scoring engine and run `nakon deploy` there.
@@ -139,18 +155,17 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
                     print(line, end="")
                     if "FAILED" in line:
                         failed_steps.append(line.strip())
-                    # nakon deploy --json prints the structured outcomes as the final
-                    # line: one JSON object with a "machines" key. Older nakon versions
-                    # (or a failed bootstrap) simply never emit it — coverage then falls
-                    # back to the failed-lines tally only.
-                    stripped = line.strip()
-                    if stripped.startswith("{") and '"machines"' in stripped:
-                        try:
-                            parsed = json.loads(stripped)
-                            if isinstance(parsed.get("machines"), list):
-                                machines_json = parsed["machines"]
-                        except ValueError:
-                            pass
+                    # nakon deploy --json prints the structured outcomes as one JSON
+                    # object with a "machines" key. It is USUALLY the final line, but
+                    # nakon's status line can land without a trailing newline, gluing the
+                    # JSON onto it ("...exit 0.{...}") — and it carries a "[nakon] " prefix
+                    # on some builds. Requiring the line to START with "{" then silently
+                    # drops the whole result set, and the rc=0 "nothing answered" guard
+                    # below aborts a fully-green pass (live-found 2026-10-13 on
+                    # crimson-relay phase 7). Decode from the first "{" instead.
+                    parsed = _machines_from_line(line)
+                    if parsed is not None:
+                        machines_json = parsed
 
             pump = threading.Thread(target=_pump, daemon=True)
             pump.start()

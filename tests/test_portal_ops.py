@@ -123,6 +123,28 @@ class Bundle(unittest.TestCase):
                              for n in members))
 
 
+class EnvFileCookieSecure(unittest.TestCase):
+    """`PORTAL_COOKIE_SECURE` must follow how the browser actually reaches the portal.
+
+    Secure cookies are rejected over plain HTTP on any host that is not localhost (a secure
+    context), so a hardcoded Secure made login impossible on the documented tunnel-less
+    `ssh -L` path (live-found 2026-10-13). Behind cloudflared the public side IS https, so
+    the flag is still on there.
+    """
+
+    def test_follows_the_tunnel(self):
+        with_tunnel = portal_ops._env_file("s", True, "tunnel-token", cookie_secure=True)
+        no_tunnel = portal_ops._env_file("s", True, "", cookie_secure=False)
+        self.assertIn("PORTAL_COOKIE_SECURE=1", with_tunnel)
+        self.assertIn("TUNNEL_TOKEN=tunnel-token", with_tunnel)
+        self.assertIn("PORTAL_COOKIE_SECURE=0", no_tunnel)
+        self.assertNotIn("TUNNEL_TOKEN", no_tunnel)
+
+    def test_default_is_secure(self):
+        # conservative default: an HTTPS deployment is the case Secure exists for
+        self.assertIn("PORTAL_COOKIE_SECURE=1", portal_ops._env_file("s", False, ""))
+
+
 class CheckArgs(unittest.TestCase):
     def test_one_sample_per_tokened_node(self):
         args = portal_ops.check_args("probe", TEAMS, "adminpw", _config())

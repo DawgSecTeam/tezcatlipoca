@@ -103,6 +103,12 @@ DOMAIN_DEPENDENT_CONFIG_PREFIXES = ("ad-",)
 DOMAIN_DEPENDENT_CONFIGS = {
     "gpo-persistence-win",
     "gpp-cpassword-win",
+    # ldap-signing-off-win seeds the DC's NTDS LDAP-signing parameters, which only exist
+    # once a DC is promoted — run in the phase-6 repair sweep it dies rc=1 with
+    # "NTDS Parameters key not found -- this seed only applies to a domain controller"
+    # (live-found 2026-10-13 on crimson-relay dc01; the name has no `ad-` prefix so the
+    # prefix rule missed it).
+    "ldap-signing-off-win",
 }
 
 
@@ -143,6 +149,18 @@ REQUIRED_VARS = {
     # is the DATABASE box's address on the same team subnet, not the web box's own.
     "airship-webapp": {"DB_USER": "literal", "DB_PASS": "literal",
                        "DB_HOST": "ip:polus"},
+    # Random-selection guard (2026-10-13): these carry catalog `required_vars` but were
+    # absent from this table, so `nakon randomize` returned them as BARE names on a fresh
+    # competition, the generate-time var gate had nothing to reject, and the nakon bundle
+    # lint aborted the whole deploy with "catalog payload(s) reference variable(s) their
+    # step does not declare" (raw-socket-beacon: SERVICE_NAME; desktop-autostart:
+    # DEST, EXEC). Listing them here makes _bare_unplantable_reason drop them from fresh
+    # random selections and forces an explicit {"name": ..., "vars": {...}} pin.
+    # NOTE: this curated table is a known-incomplete mirror of the catalog's own
+    # required_vars metadata; the fresh-selection drop is now ALSO driven from that
+    # metadata (catalog_required_var_names), so this table only carries the var KINDS.
+    "raw-socket-beacon": {"SERVICE_NAME": "literal"},
+    "desktop-autostart": {"DEST": "literal", "EXEC": "literal"},
 }
 # Catalog configs that must never be *newly* pinned: each is a live-confirmed defect in the
 # shared vulndb catalog that takes a scored service down until it is fixed upstream. Pinning
@@ -158,6 +176,13 @@ KNOWN_BROKEN_CONFIGS = {
         "Planted cleartext-mail finding never lands: `choco install mailenable` is a "
         "wrong package id (no such package in the community feed), so nothing installs and "
         "only the firewall rule is created.",
+    "MSSQL":
+        "Planted MSSQL service never comes up: the payload runs `Install-Module SqlServer` "
+        "without bootstrapping the NuGet provider (Install-Module aborts with \"NuGet "
+        "provider is required to interact with NuGet-based repositories\"), then "
+        "`Invoke-Sqlcmd -ServerInstance \"YourServerName\"` against an unparameterized "
+        "placeholder — the step exits rc=1 in ~23s. live-found 2026-10-13 on crimson-relay "
+        "win02-golden, where a FRESH randomize selected it and aborted phase 4.",
 }
 
 # M4 per-competition templates: the engine template sits just below the golden block

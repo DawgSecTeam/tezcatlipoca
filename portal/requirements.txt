@@ -3,3 +3,8 @@ fastapi~=0.139
 uvicorn[standard]~=0.49
 websockets~=15.0
 itsdangerous~=2.2
+# console.py's Proxmox calls (vncproxy POST). Must be listed: the image installs ONLY this
+# file, so a direct import that is not declared here is a runtime ModuleNotFoundError in the
+# container (live-found 2026-10-13). starlette is NOT listed on purpose — it arrives as a
+# fastapi dependency and app.py imports it from there.
+requests~=2.34

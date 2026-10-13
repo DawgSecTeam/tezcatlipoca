@@ -32,6 +32,8 @@ from nakonops.nakon_pin_ops import (
     _validate_windows_local_user_pins,
     _validate_known_broken_pins,
     _drop_unplantable_bare,
+    _drop_catalog_var_bare,
+    catalog_required_var_names,
 )
 
 
@@ -98,6 +100,11 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             where = f"fresh selection for '{box['name']}'"
             services = _drop_unplantable_bare(services, where)
             vulns = _drop_unplantable_bare(vulns, where)
+            # The curated REQUIRED_VARS table is an incomplete mirror of the catalog's own
+            # required_vars metadata, so also drop whatever the catalog itself declares.
+            banned = catalog_required_var_names()
+            services = _drop_catalog_var_bare(services, where, banned)
+            vulns = _drop_catalog_var_bare(vulns, where, banned)
             box_configs[box["name"]] = (services, vulns)
 
         services_path.write_text(
