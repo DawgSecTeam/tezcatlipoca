@@ -16,8 +16,8 @@ from portal.auth import EventConfAuth  # noqa: E402
 from quotient.setup import build_event_conf  # noqa: E402
 
 
+# a real build_event_conf output — the portal must parse what the pipeline writes
 def _conf(team_pw="t1pw", admin_pw="adminpw"):
-    """A real build_event_conf output — the portal must parse what the pipeline writes."""
     ctx = {"teams": {"team1": "101", "team2": "102"},
            "boxes_per_team": [{"name": "web01", "last_octet": 10}],
            "team_passwords": {"team1": team_pw, "team2": "t2pw"},

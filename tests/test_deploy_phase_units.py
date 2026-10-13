@@ -32,7 +32,7 @@ from nakon_ops import NakonResult  # noqa: E402
 
 
 def _ctx(comp_dir, **overrides):
-    """A DeployContext with harmless defaults; override what a test exercises."""
+# A DeployContext with harmless defaults; override what a test exercises.
     fields = dict(
         comp_dir=comp_dir, comp_name=comp_dir.name,
         state_path=comp_dir / ".deploy_state.json", from_phase=1, resuming=False,
@@ -63,7 +63,7 @@ def _nulltimed():
 
 
 class PhaseResumeGuards(unittest.TestCase):
-    """from_phase past a phase must print its banner and touch nothing at all."""
+# from_phase past a phase must print its banner and touch nothing at all.
 
     def test_phase3_skips_cleanly(self):
         with tempfile.TemporaryDirectory() as d:
@@ -255,11 +255,11 @@ class Phase5RepairSweep(unittest.TestCase):
             self.assertTrue((comp_dir / ".postclone-swept").exists())
 
     def test_a_lineup_with_no_postclone_configs_records_a_clean_verdict(self):
-        """Live-found 2026-10-02: a lineup whose configs are ALL golden-stage
-        (same-type-2box) never reached record_stage_coverage, so
-        `plant_coverage_failed` was never created and verify's coverage gate failed
-        closed on a completely clean run — "coverage was never recorded (pre-tally
-        deploy?)". "Nothing to plant post-clone" is a clean result, not an absent one."""
+    # Live-found 2026-10-02: a lineup whose configs are ALL golden-stage
+    #         (same-type-2box) never reached record_stage_coverage, so
+    #         `plant_coverage_failed` was never created and verify's coverage gate failed
+    #         closed on a completely clean run — "coverage was never recorded (pre-tally
+    #         deploy?)". "Nothing to plant post-clone" is a clean result, not an absent one.
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             ctx = _ctx(comp_dir)
@@ -301,15 +301,15 @@ class Phase5RepairSweep(unittest.TestCase):
 
 
 class Phase4GoldenCoverage(unittest.TestCase):
-    """Phase 4 records the golden plant's coverage verdict like a post-clone stage's:
-    the closure threaded into build_golden_set writes plant_coverage_failed (and the
-    stage-prefixed tally on tolerated failures) and persists through ctx.save_state.
-    The integration halves join here with the REAL check_plant_coverage — a golden-only
-    lineup (same-type-2box shape) must come out PASS on a clean plant and FAIL, with
-    the (golden-stage) annotation, on an alpine-tolerated one."""
+# Phase 4 records the golden plant's coverage verdict like a post-clone stage's:
+#     the closure threaded into build_golden_set writes plant_coverage_failed (and the
+#     stage-prefixed tally on tolerated failures) and persists through ctx.save_state.
+#     The integration halves join here with the REAL check_plant_coverage — a golden-only
+#     lineup (same-type-2box shape) must come out PASS on a clean plant and FAIL, with
+#     the (golden-stage) annotation, on an alpine-tolerated one.
 
     def _run_phase4(self, comp_dir):
-        """Run phase4_golden_set with build_golden_set faked; returns (ctx, coverage)."""
+    # Run phase4_golden_set with build_golden_set faked; returns (ctx, coverage).
         captured = []
         ctx = _ctx(comp_dir, golden_hashes={}, golden_inputs={})
         with dpatch("load_template_hashes", return_value={}), \
@@ -337,9 +337,9 @@ class Phase4GoldenCoverage(unittest.TestCase):
 
     @staticmethod
     def _gate(comp_dir, machines):
-        """The real verify gate against a real comp dir (importlib: dashed filename).
-        Returns (gate, stdout); status compared by NAME — this helper loads its own
-        module copy, so the gate's Status enum is not the caller's object."""
+    # The real verify gate against a real comp dir (importlib: dashed filename).
+    #         Returns (gate, stdout); status compared by NAME — this helper loads its own
+    #         module copy, so the gate's Status enum is not the caller's object.
         (comp_dir / "nakon-config.json").write_text(
             json.dumps({"machines": machines}))
         import importlib.util
@@ -389,9 +389,9 @@ class Phase4GoldenCoverage(unittest.TestCase):
         self.assertIn("apache (golden-stage)", out)
 
     def test_a_skip_verdict_never_erases_a_recorded_failure(self):
-        """result=None (reuse / checkpoint / pristine / cold): the record must come
-        into existence if absent, but a previously recorded failure survives — the
-        disk is proven by hash, not by a fresh plant."""
+    # result=None (reuse / checkpoint / pristine / cold): the record must come
+    #         into existence if absent, but a previously recorded failure survives — the
+    #         disk is proven by hash, not by a fresh plant.
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             ctx, coverage = self._run_phase4(comp_dir)
@@ -467,8 +467,8 @@ class Phase7Seed(unittest.TestCase):
         self.assertIn("1 inject(s) failed to create: Bad inject", out.getvalue())
 
     def test_an_inject_added_after_the_first_run_is_not_skipped(self):
-        """The bug: `injects_created` was a bare boolean, so a new inject was never
-        posted on a resume — create_injects dedups on titles, but nothing re-ran it."""
+    # The bug: `injects_created` was a bare boolean, so a new inject was never
+    #         posted on a resume — create_injects dedups on titles, but nothing re-ran it.
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx(Path(d), state={"seeded": True, "engine_unpaused": True},
                        injects=[{"title": "i1"}, {"title": "i2"}])
@@ -503,10 +503,10 @@ class Phase7Seed(unittest.TestCase):
         self.assertIn("already created", out.getvalue())
 
     def test_fingerprint_must_be_taken_before_offsets_are_popped(self):
-        """resolve_inject_times pops the offset keys, so a fingerprint taken after it
-        loses a non-default window (30 -> the 60 default) and would re-create the set
-        spuriously on the next run. Default offsets happen to survive, which is exactly
-        why this must be pinned on a non-default one."""
+    # resolve_inject_times pops the offset keys, so a fingerprint taken after it
+    #         loses a non-default window (30 -> the 60 default) and would re-create the set
+    #         spuriously on the next run. Default offsets happen to survive, which is exactly
+    #         why this must be pinned on a non-default one.
         loaded = [{"title": "i1", "open_offset_min": 0, "due_offset_min": 30}]
         before = config_ops.injects_fingerprint(loaded)
         config_ops.resolve_inject_times(loaded)
@@ -549,7 +549,7 @@ class Phase7Seed(unittest.TestCase):
 
 
 class Phase2EngineTemplate(unittest.TestCase):
-    """The reuse-vs-rebuild decision, which is the whole point of the M4 hash gate."""
+# The reuse-vs-rebuild decision, which is the whole point of the M4 hash gate.
 
     ENV = {"TF_VAR_template_vm_id": "9000", "TF_VAR_vm_username": "ubuntu",
            "TF_VAR_ssh_public_key": "ssh-rsa AAAA", "TF_VAR_proxmox_endpoint": "https://pve:8006/",
@@ -628,7 +628,7 @@ class Phase2EngineTemplate(unittest.TestCase):
 
 
 class PrepareResumeGuards(unittest.TestCase):
-    """prepare()'s resume wiring: the pipeline-version gate and the phase guard."""
+# prepare()'s resume wiring: the pipeline-version gate and the phase guard.
 
     def _comp_dir(self, tmp, state):
         comp_dir = Path(tmp)
@@ -702,11 +702,11 @@ class PrepareResumeGuards(unittest.TestCase):
 
 
 class PrepareTfvarsAssembly(unittest.TestCase):
-    """prepare()'s tfvars/tfvars.json assembly and its cancel early return.
-
-    The operators' confirmation prompt is the one early return deploy() had, and
-    terraform.tfvars.json is what terraform actually reads (it outranks TF_VAR_*),
-    so both are worth pinning offline."""
+# prepare()'s tfvars/tfvars.json assembly and its cancel early return.
+#
+#     The operators' confirmation prompt is the one early return deploy() had, and
+#     terraform.tfvars.json is what terraform actually reads (it outranks TF_VAR_*),
+#     so both are worth pinning offline.
 
     ENV = {
         "TF_VAR_ssh_private_key_path": "/tmp/key", "TF_VAR_proxmox_node": "pve",

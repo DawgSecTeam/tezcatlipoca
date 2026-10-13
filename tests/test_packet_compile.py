@@ -324,7 +324,7 @@ class DomainKnob(unittest.TestCase):
 
 class CatalogCheckFilter(unittest.TestCase):
     def test_filter_when_score_only_or_baseline_present(self):
-        from config_ops import _catalog_check_paths
+        from infra.gates import catalog_check_paths as _catalog_check_paths
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             (d / "box_services.json").write_text(json.dumps(
@@ -343,7 +343,7 @@ class CatalogCheckFilter(unittest.TestCase):
             self.assertFalse(vuln.exists())
 
     def test_passthrough_when_nothing_to_filter(self):
-        from config_ops import _catalog_check_paths
+        from infra.gates import catalog_check_paths as _catalog_check_paths
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             (d / "box_services.json").write_text(json.dumps({"ad01": ["ADDS"]}))

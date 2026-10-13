@@ -94,8 +94,6 @@ class PortalApp(unittest.TestCase):
         self.assertEqual(self.login("admin", "adminpw", admin).status_code, 200)
         self.assertEqual(admin.post("/api/admin/access", json={"open": True}).status_code, 200)
 
-    # -- login ---------------------------------------------------------------------------
-
     def test_unauthenticated_requests_get_401(self):
         self.assertEqual(self.client.get("/api/me").status_code, 401)
         self.assertEqual(self.client.post("/api/console", json={"box": "web01"}).status_code, 401)
@@ -122,8 +120,7 @@ class PortalApp(unittest.TestCase):
                              headers={"Origin": "https://evil.example"})
         self.assertEqual(r.status_code, 403)
 
-    # -- team scoping (the isolation boundary) ------------------------------------------
-
+    # team scoping (the isolation boundary)
     def test_team_sees_only_its_own_boxes_and_no_vmids(self):
         self.login("team1", "t1pw")
         me = self.client.get("/api/me").json()
@@ -140,8 +137,8 @@ class PortalApp(unittest.TestCase):
         self.assertEqual(r.status_code, 403)
         self.assertEqual(self.broker.minted, [])
 
+    # team2's web01 shares team1's box NAME: a team session always gets its own
     def test_a_box_name_resolves_inside_the_session_team_only(self):
-        """team2's web01 shares team1's box NAME: a team session always gets its own."""
         self.open_gate()
         self.login("team1", "t1pw")
         r = self.client.post("/api/console", json={"box": "web01"})
@@ -159,8 +156,6 @@ class PortalApp(unittest.TestCase):
         self.assertEqual(self.client.get("/api/admin/teams").status_code, 403)
         self.assertEqual(self.client.post("/api/admin/access", json={"open": True}).status_code,
                          403)
-
-    # -- the gate -----------------------------------------------------------------------
 
     def test_gate_closed_by_default_returns_423_for_teams(self):
         self.login("team1", "t1pw")
@@ -193,8 +188,6 @@ class PortalApp(unittest.TestCase):
         self.make(broker=FakeBroker(configured=False), default_open=True)
         self.login("team1", "t1pw")
         self.assertEqual(self.client.post("/api/console", json={"box": "web01"}).status_code, 503)
-
-    # -- relay endpoint -----------------------------------------------------------------
 
     def test_websocket_without_a_valid_relay_id_is_refused(self):
         from starlette.websockets import WebSocketDisconnect

@@ -9,10 +9,10 @@ from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
 
 
 def check_packet_creds(comp_dir, profile):
-    """--packet gate: credentials.txt must carry the packet's published default
-    credentials verbatim. In a packet-driven competition the packet IS the credential
-    distribution — teams rotate at minute zero — so the guard inverts: instead of
-    rejecting known-default literals, every published pair must match exactly."""
+# --packet gate: credentials.txt must carry the packet's published default
+#     credentials verbatim. In a packet-driven competition the packet IS the credential
+#     distribution — teams rotate at minute zero — so the guard inverts: instead of
+#     rejecting known-default literals, every published pair must match exactly.
     creds = profile.get("credentials") or {}
     credlists = creds.get("credlists") or {}
     expected_pw = creds.get("box_password")
@@ -47,11 +47,11 @@ def check_packet_creds(comp_dir, profile):
 
 
 def check_packet_accounts(ctx, profile, boxes):
-    """--packet gate: out-of-scope decoy accounts (scorebot/blackteam/red_scoring) exist
-    on a Linux box. The packet promises these accounts exist and stay untouched — teams
-    enumerate local accounts in minute-zero IR, and a missing decoy breaks that promise.
-    Unprovable (SSH dead) is a SKIP, not a pass — the old code returned True on every
-    unprovable path, so a dead SSH exited 0 (live-found 2026-10-02)."""
+# --packet gate: out-of-scope decoy accounts (scorebot/blackteam/red_scoring) exist
+#     on a Linux box. The packet promises these accounts exist and stay untouched — teams
+#     enumerate local accounts in minute-zero IR, and a missing decoy breaks that promise.
+#     Unprovable (SSH dead) is a SKIP, not a pass — the old code returned True on every
+#     unprovable path, so a dead SSH exited 0 (live-found 2026-10-02).
     users = list((profile.get("credentials") or {}).get("out_of_scope") or [])
     if not users:
         return gate_pass("packet_accounts", "packet declares no out-of-scope accounts")

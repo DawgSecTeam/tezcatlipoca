@@ -10,16 +10,16 @@ from constants import (
     ENGINE_TEMPLATE_NAME,
     ownership_tags,
 )
-from pve_api import proxmox_api, wait_for_proxmox_task
-from vm_lifecycle import start_vm, stop_vm
-from vm_ownership import destroy_vm_if_exists
+from infra.client import proxmox_api, wait_for_proxmox_task
+from infra.lifecycle import start_vm, stop_vm
+from infra.ownership import destroy_vm_if_exists
 from template_freeze import engine_template_vmid, write_template_hash
 from utils import record_degradation
 
 
 def find_engine_template(node, engine_vmid):
-    """vmid of this competition's engine template, or None. Identified by the reserved
-    vmid; ownership-tagged like everything else we create."""
+# vmid of this competition's engine template, or None. Identified by the reserved
+#     vmid; ownership-tagged like everything else we create.
     vmid = engine_template_vmid(engine_vmid)
     try:
         cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
@@ -31,16 +31,16 @@ def find_engine_template(node, engine_vmid):
 def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                           postgres_password, redis_password, quotient_ref,
                           hash_value, inputs, run_id=None):
-    """Build the per-competition engine template (API-driven, mirroring golden_ops —
-    terraform only consumes the finished template as apply #1's clone source).
-
-    Template point: after bootstrap (packages, Docker, Quotient images, apt-cacher-ng)
-    and BEFORE any competition state exists. Before conversion: containers stopped and
-    every data volume removed (no scoring DB/teams/injects baked in), /opt/quotient/.env
-    and host keys removed, /etc/machine-id truncated and cloud-init cleaned — each clone
-    gets a fresh identity and fresh host keys. The apt-cacher-ng cache on the template is
-    EMPTY (nothing has used the cacher at build time); the cache that speeds prep_apt is
-    built on the linked-clone engine during a deploy and dies with it."""
+# Build the per-competition engine template (API-driven, mirroring golden_ops —
+#     terraform only consumes the finished template as apply #1's clone source).
+#
+#     Template point: after bootstrap (packages, Docker, Quotient images, apt-cacher-ng)
+#     and BEFORE any competition state exists. Before conversion: containers stopped and
+#     every data volume removed (no scoring DB/teams/injects baked in), /opt/quotient/.env
+#     and host keys removed, /etc/machine-id truncated and cloud-init cleaned — each clone
+#     gets a fresh identity and fresh host keys. The apt-cacher-ng cache on the template is
+#     EMPTY (nothing has used the cacher at build time); the cache that speeds prep_apt is
+#     built on the linked-clone engine during a deploy and dies with it.
     from engine_ops import bootstrap_scoring_engine, clean_engine_for_template
     from ssh_ops import forget_engine_host_key, wait_for_ssh
 
@@ -123,7 +123,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     if not build_ip:
         # Primary-mode: the base image networks itself (as the terraform engine does
         # today); discover the address via the guest agent once the agent is up.
-        from range_ops import wait_for_guest_agent
+        from infra.guest_exec import wait_for_guest_agent
         wait_for_guest_agent(node, vmid, timeout=300)
         build_ip = _discover_vm_ipv4(node, vmid)
         if not build_ip:
@@ -179,8 +179,8 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 
 
 def _discover_vm_ipv4(node, vmid):
-    """First non-loopback IPv4 the guest agent reports (primary-mode build VMs DHCP on
-    vmbr0, exactly as the terraform engine does). Never raises."""
+# First non-loopback IPv4 the guest agent reports (primary-mode build VMs DHCP on
+#     vmbr0, exactly as the terraform engine does). Never raises.
     try:
         ifaces = proxmox_api(
             "GET", f"/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"
@@ -195,9 +195,9 @@ def _discover_vm_ipv4(node, vmid):
 
 
 def destroy_engine_template(node, engine_vmid, expect_tags=None):
-    """Remove this competition's engine template. Callers destroy its clones first.
-    A FOREIGN VM in the slot is skipped with a loud warning instead of aborting the
-    teardown — same policy as destroy_golden_set."""
+# Remove this competition's engine template. Callers destroy its clones first.
+#     A FOREIGN VM in the slot is skipped with a loud warning instead of aborting the
+#     teardown — same policy as destroy_golden_set.
     try:
         destroy_vm_if_exists(node, engine_template_vmid(engine_vmid), expect_tags=expect_tags)
     except RuntimeError as e:

@@ -2,14 +2,12 @@
 from scrim import core
 
 
+# one case branch per box from boxes.json: the helper used to hardcode the 5-box
+# dc01/win01/web01/app01/db01 lineup with fixed octets — on any other comp (cde-2026:
+# ad01/ftp01/web01/db01, db01 at .5) it silently targeted the wrong hosts or refused
+# known boxes. Windows = boxes whose template name contains "windows" (password auth as
+# Administrator); everything else = key auth as the provisioning user
 def mybox_script(comp):
-    """Per-comp mybox helper: one case branch per box from boxes.json.
-
-    The helper used to hardcode the 5-box dc01/win01/web01/app01/db01 lineup with
-    fixed octets — on any other comp (cde-2026: ad01/ftp01/web01/db01, db01 at .5)
-    it silently targeted the wrong hosts or refused known boxes. Windows = boxes
-    whose template name contains "windows" (password auth as Administrator);
-    everything else = key auth as the provisioning user."""
     boxes = core.read_comp_json(comp, "boxes.json")
     proxy = f'"ProxyCommand=ssh -i $KEY_PATH {core.SSH_OPTS} -W %h:%p $VM_USER@$ENGINE_IP"'
     lines = ["#!/usr/bin/env bash", "set -euo pipefail", 'cd "$(dirname "$0")"',
@@ -152,11 +150,11 @@ OPENCODE_PROJECT_CFG = """{
 """
 
 
+# per-comp scored-check oracle: runs each pinned check the way the engine does, from the
+# engine's vantage (HTTP GET / credlist password login / TCP connect), so blue can
+# reconcile 'locally healthy but scorer DOWN' — run 1 showed both teams flying blind on
+# exactly that after sshd hardening broke the scored ssh check
 def scorch_script(comp):
-    """Per-comp scored-check oracle: runs each pinned check the way the engine does,
-    from the engine's vantage (HTTP GET / credlist password login / TCP connect), so
-    blue can reconcile 'locally healthy but scorer DOWN' — run 1 showed both teams
-    flying blind on exactly that after sshd hardening broke the scored ssh check."""
     boxes = {b["name"]: b for b in core.read_comp_json(comp, "boxes.json")}
     pins = core.read_comp_json(comp, "box_services.json")
     http_specs, port_specs, ssh_specs = [], [], []

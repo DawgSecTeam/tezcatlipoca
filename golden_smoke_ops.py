@@ -4,17 +4,12 @@ import subprocess
 import time
 
 from constants import FINAL_STAGE_CONFIGS, GOLDEN_CLONE_TIMEOUT, ownership_tags
-from range_ops import (
-    cluster_vms_for,
-    gc_orphan_volumes,
-    destroy_vm_if_exists,
-    proxmox_api,
-    start_vm,
-    wait_for_guest_agent,
-    wait_for_proxmox_task,
-)
+from infra.client import cluster_vms_for, proxmox_api, wait_for_proxmox_task
+from infra.guest_exec import wait_for_guest_agent
+from infra.lifecycle import start_vm
+from infra.ownership import destroy_vm_if_exists, gc_orphan_volumes
 from ssh_ops import ssh_via_gateway
-from vm_ownership import full_clone_data
+from infra.ownership import full_clone_data
 from windows_ops import is_windows_template
 
 
@@ -31,13 +26,11 @@ GOLDEN_BOOT_SMOKE_WIN_TIMEOUT = 1800
 GOLDEN_BOOT_SMOKE_POLL = 15
 
 
+# PVE's own allocator (/cluster/nextid, as template_sync_ops also uses) plus a
+# node-local existence check: with a multi-node placement the allocator may be
+# answered by the primary endpoint while this golden lives on a satellite host,
+# where that id can already be taken.
 def _smoke_vmid(node):
-    """A free vmid for the throwaway boot clone.
-
-    PVE's own allocator (/cluster/nextid, as template_sync_ops also uses) plus a
-    node-local existence check: with a multi-node placement the allocator may be
-    answered by the primary endpoint while this golden lives on a satellite host,
-    where that id can already be taken."""
     existing = {int(v["vmid"]) for v in cluster_vms_for(node)}
     try:
         vmid = int(proxmox_api("GET", "/cluster/nextid")["data"])
@@ -48,12 +41,10 @@ def _smoke_vmid(node):
     return vmid
 
 
+# Identity is the clone NAME (unique to this build) plus its full ownership tag set
+# (comp tag + this run's run tag): never bare vmid math. A vmid we created but that
+# now carries another name is left alone, loudly.
 def _destroy_smoke_clone(node, vmid, name, comp_dir, run_id=None):
-    """Destroy the throwaway boot clone — but only if it is really ours.
-
-    Identity is the clone NAME (unique to this build) plus its full ownership tag
-    set (comp tag + this run's run tag): never bare vmid math. A vmid we created
-    but that now carries another name is left alone, loudly."""
     try:
         vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
     except Exception as e:
@@ -71,18 +62,12 @@ def _destroy_smoke_clone(node, vmid, name, comp_dir, run_id=None):
     destroy_vm_if_exists(node, vmid, expect_tags=ownership_tags(comp_dir.name, run_id))
 
 
+# The explicit multi-user check makes the 2026-09-24 signature (systemd up, no
+# multi-user.target because it is masked) legible in the failure detail instead of a
+# bare timeout; the Windows guest-agent answer is the same readiness signal
+# wait_for_boxes_ssh uses. An exception that waiting cannot fix (bad ctx/key, no ssh
+# binary) is UNVERIFIED — immediate, never a silent pass and never a full-budget spin.
 def _probe_boot(node, vmid, target, ctx, timeout, poll):
-    """(status, detail) — BOOT_SMOKE_PASS / _UNBOOTABLE / _UNVERIFIED.
-
-    Linux: SSH must answer a `systemctl is-active multi-user.target` that prints
-    `active`. sshd is WantedBy=multi-user.target, so a successful command already
-    implies multi-user; the explicit check makes the 2026-09-24 signature (systemd up,
-    no multi-user.target because it is masked) legible in the failure detail instead of
-    a bare timeout. Windows: the guest agent answering is the same readiness signal
-    wait_for_boxes_ssh uses for Windows team clones.
-
-    An exception that waiting cannot fix (bad ctx/key, no ssh binary) is
-    UNVERIFIED — immediate, never a silent pass and never a full-budget spin."""
     if is_windows_template(target["box"]["template"]):
         if wait_for_guest_agent(node, vmid, timeout=timeout):
             return BOOT_SMOKE_PASS, "guest agent answered"
@@ -131,25 +116,16 @@ def _boot_smoke_error(box, target, status, detail, planted_configs):
     return " ".join(lines)
 
 
+# Why a throwaway FULL clone, not the golden itself: rebooting the golden would mutate
+# the very disk about to be templated (cloud-init identity/hostname/IP), and PVE only
+# creates linked clones from templates — the point is to verify BEFORE the golden
+# becomes one. One clone + boot per box type, run sequentially with the golden stopped.
+# Tri-state, fail-closed: PASS returns True; UNBOOTABLE and UNVERIFIED both raise. A
+# clone that cannot be created or a probe that cannot run is a FAILURE, never a pass —
+# this project's gates have failed open before, and that is exactly how the 2026-09-24
+# incident reached the clone phase.
 def golden_boot_smoke(node, target, ctx, comp_dir, timeout=None,
                       poll=GOLDEN_BOOT_SMOKE_POLL, planted_configs=(), run_id=None):
-    """Prove the golden disk boots by booting ONE throwaway clone of it.
-
-    Why a clone and not the golden itself: rebooting the golden would mutate the very
-    disk about to be templated (cloud-init identity/hostname/IP) and would still test
-    the wrong thing — a throwaway clone boots the bytes the template will hold, exactly
-    what every team's linked clone experiences after the golden's cloud-init clean.
-
-    Why the clone is FULL and not linked: PVE only creates linked clones from templates
-    (qm(1): "--full ... This is always done when you clone a normal VM"), and the whole
-    point is to verify BEFORE this golden becomes a template. It is one clone + boot per
-    box type, run sequentially with the golden stopped, so it does not stack a second
-    booting guest next to a running one.
-
-    Tri-state, fail-closed: BOOT_SMOKE_PASS returns True; BOOT_SMOKE_UNBOOTABLE and
-    BOOT_SMOKE_UNVERIFIED both raise. A clone that cannot be created or a probe that
-    cannot run is a FAILURE, never a pass — this project's gates have failed open
-    before, and that is exactly how the 2026-09-24 incident reached the clone phase."""
     box = target["box"]["name"]
     windows = is_windows_template(target["box"]["template"])
     if timeout is None:

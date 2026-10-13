@@ -64,13 +64,13 @@ def _wait_dead(pid, timeout=5.0):
 
 
 def _scrim_src():
-    """The whole harness as one string: the entrypoint plus every module of the scrim/ package."""
+# The whole harness as one string: the entrypoint plus every module of the scrim/ package.
     return "\n".join(f.read_text() for f in
                      [_REPO / "run-agent-scrim.py", *sorted((_REPO / "scrim").glob("*.py"))])
 
 
 class _suppress:
-    """Tiny context manager so a fixture cleanup cannot mask the real assertion."""
+# Tiny context manager so a fixture cleanup cannot mask the real assertion.
 
     def __enter__(self):
         return self
@@ -81,7 +81,7 @@ class _suppress:
 
 # D1 ---------------------------------------------------------------------------
 class ProcessTreeSupervision(unittest.TestCase):
-    """run_tree must reap the whole process group; subprocess.run(timeout=) does not."""
+# run_tree must reap the whole process group; subprocess.run(timeout=) does not.
 
     # A grandchild that IGNORES SIGINT/SIGTERM: only the SIGKILL escalation can reap it,
     # which is exactly the terraform/nakon/badauto case (they keep mutating infra and
@@ -92,7 +92,7 @@ class ProcessTreeSupervision(unittest.TestCase):
                 f"echo $! > {pidfile}; sleep 300")
 
     def test_plain_subprocess_run_orphans_the_grandchild(self):
-        """The defect being fixed, demonstrated against the stdlib."""
+    # The defect being fixed, demonstrated against the stdlib.
         tmp = Path(tempfile.mkdtemp())
         pidfile = tmp / "gc.pid"
         with self.assertRaises(subprocess.TimeoutExpired):
@@ -143,7 +143,7 @@ class ProcessTreeSupervision(unittest.TestCase):
 
 # D2 ---------------------------------------------------------------------------
 class TrackingLock:
-    """Records the exact acquire/release order (a plain Lock cannot show the interval)."""
+# Records the exact acquire/release order (a plain Lock cannot show the interval).
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -512,7 +512,7 @@ class FakeResp:
 
 
 class FakeSession:
-    """Minimal requests.Session stand-in for dump_scoreboard/end_event."""
+# Minimal requests.Session stand-in for dump_scoreboard/end_event.
 
     def __init__(self, teams=None, raises=None, post_status=200, post_raises=None):
         self._teams = [{"ID": 1, "Name": "team1"}] if teams is None else teams
@@ -787,25 +787,24 @@ class AuthoredCompSweepMarker(unittest.TestCase):
 
 
 class RedReachabilityGate(unittest.TestCase):
-    """D13: pre-T0 gate that red01 can dial a box on every team.
-
-    scale8-soak-2026-10-02: routed red01 could not reach any satellite team box (15/15
-    cred_sprays, both db_attacks "unreachable over SSH", 0 footholds) and the run went
-    40 minutes before anyone noticed. `verify --red-identity` only proved red reached
-    ONE box on its own segment, and stage_verify runs before red exists, so nothing
-    checked red's path across the range before T0.
-
-    The gate must (a) run the every-team verify, (b) fail the run rather than warn, and
-    (c) stay out of a masq-mode run, where red shares the team gateways and has no path
-    of its own to prove.
-    """
+# D13: pre-T0 gate that red01 can dial a box on every team.
+#
+#     scale8-soak-2026-10-02: routed red01 could not reach any satellite team box (15/15
+#     cred_sprays, both db_attacks "unreachable over SSH", 0 footholds) and the run went
+#     40 minutes before anyone noticed. `verify --red-identity` only proved red reached
+#     ONE box on its own segment, and stage_verify runs before red exists, so nothing
+#     checked red's path across the range before T0.
+#
+#     The gate must (a) run the every-team verify, (b) fail the run rather than warn, and
+#     (c) stay out of a masq-mode run, where red shares the team gateways and has no path
+#     of its own to prove.
 
     def _args(self, mode=None, red_ip="10.0.0.196"):
         return SimpleNamespace(red_mode=mode, red_ip=red_ip)
 
     @contextlib.contextmanager
     def _repo_rooted(self):
-        """Point core.REPO at a temp root so `comp.relative_to(REPO)` resolves."""
+    # Point core.REPO at a temp root so `comp.relative_to(REPO)` resolves.
         with tempfile.TemporaryDirectory() as tmp:
             comp = Path(tmp) / "competitions" / "c1"
             comp.mkdir(parents=True)
@@ -856,15 +855,14 @@ class RedReachabilityGate(unittest.TestCase):
 
 
 class RedTeardownAssertion(unittest.TestCase):
-    """D14: red01 must not survive teardown, and a failed destroy must not read as DONE.
-
-    scale8-soak-2026-10-02: red01 (998) outlived `badauto destroy` and had to be removed
-    by hand. The stage ran with check=False and never looked at the result or at the
-    cluster, so a destroy that removed nothing was indistinguishable from one that
-    worked — the driver printed DONE while a red box holding the beacon controller and
-    its LLM key stayed up on the range. `badauto destroy` follows config.yaml's
-    deploy.red_vmid by design, so a stale config silently targets the wrong vmid.
-    """
+# D14: red01 must not survive teardown, and a failed destroy must not read as DONE.
+#
+#     scale8-soak-2026-10-02: red01 (998) outlived `badauto destroy` and had to be removed
+#     by hand. The stage ran with check=False and never looked at the result or at the
+#     cluster, so a destroy that removed nothing was indistinguishable from one that
+#     worked — the driver printed DONE while a red box holding the beacon controller and
+#     its LLM key stayed up on the range. `badauto destroy` follows config.yaml's
+#     deploy.red_vmid by design, so a stale config silently targets the wrong vmid.
 
     def _args(self, red_vmid=998):
         return SimpleNamespace(red_vmid=red_vmid, competition="c1")
@@ -932,7 +930,7 @@ class RedTeardownAssertion(unittest.TestCase):
         self.assertTrue(any("could not be verified gone" in l for l in lines), lines)
 
     def test_stale_config_vmid_is_called_out(self):
-        # config.yaml pointing at another run's vmid is what lost red01 in the first place.
+        # a comp config pointing at another run's vmid is what lost red01 in the first place.
         lines = []
         with mock.patch.object(procs, "run",
                                side_effect=lambda *a, **k: SimpleNamespace(
@@ -941,7 +939,7 @@ class RedTeardownAssertion(unittest.TestCase):
                 mock.patch.object(teardown_stage, "_config_red_vmid", return_value=999), \
                 mock.patch.object(teardown_stage, "_red_vm_still_exists", return_value=False):
             teardown_stage.teardown_red(self._args(red_vmid=998), {})
-        self.assertTrue(any("follows config.yaml" in l for l in lines), lines)
+        self.assertTrue(any("follows its config" in l for l in lines), lines)
 
     def test_the_assertion_uses_the_runs_own_vmid_when_config_is_silent(self):
         seen = []

@@ -28,8 +28,8 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import config_ops  # noqa: E402
-import preflight.mgmt_ip as preflight_mgmt_ip  # noqa: E402
+
+from infra import collisions as preflight_mgmt_ip  # noqa: E402
 
 
 def _vm(vmid, node, name, status="running", template=0, tags="tezcatlipoca,comp-other"):
@@ -38,7 +38,7 @@ def _vm(vmid, node, name, status="running", template=0, tags="tezcatlipoca,comp-
 
 
 class _Cluster:
-    """Fake proxmox_api: returns agent interfaces per vmid, or raises when agentless."""
+# Fake proxmox_api: returns agent interfaces per vmid, or raises when agentless.
 
     def __init__(self, answers, agentless=()):
         self.answers = answers          # vmid -> [ip, ...]
@@ -60,12 +60,12 @@ def _gate(vms, api, ip, engine_vmid=2400, node="proxmox", ours_tags=None, explic
         env["TF_VAR_engine_mgmt_ip"] = explicit
     with patch.object(preflight_mgmt_ip, "proxmox_api", api), patch.dict(os.environ, env, clear=True):
         with contextlib.redirect_stdout(io.StringIO()) as out:
-            config_ops._engine_mgmt_ip_gate(node, vms, engine_vmid, ip, ours_tags=ours_tags)
+            preflight_mgmt_ip.engine_mgmt_ip_gate(node, vms, engine_vmid, ip, ours_tags=ours_tags)
     return out.getvalue()
 
 
 class ForeignGuestOnAnotherNode(unittest.TestCase):
-    """The exact live failure: the squatter was on .193 while the deploy was on .150."""
+# The exact live failure: the squatter was on .193 while the deploy was on .150.
 
     def test_a_guest_on_another_node_blocks_the_address(self):
         vms = [_vm(1100, "pve", "quotient-engine")]
@@ -110,7 +110,7 @@ class UnverifiableIsNotFree(unittest.TestCase):
 
 
 class SelfCollisionsAreNotForeign(unittest.TestCase):
-    """Regression guard: a retry meets its own leftovers, which phase 1 recycles."""
+# Regression guard: a retry meets its own leftovers, which phase 1 recycles.
 
     def test_our_own_engine_vmid_is_skipped(self):
         vms = [_vm(2400, "proxmox", "engine")]

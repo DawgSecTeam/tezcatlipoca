@@ -1,8 +1,8 @@
-"""dpatch: patch one name in every deploy_lib module (and the `deploy` facade) that binds it.
+"""dpatch: patch one name in every deploy_lib/infra module (and the `deploy` facade) that binds it.
 
 The deploy pipeline is split across many small modules, each of which imports the names it
-uses (`from range_ops import destroy_vm_if_exists`), so a test cannot know -- and should not
-care -- which module's binding the code under test resolves. dpatch("destroy_vm_if_exists")
+uses (`from infra.ownership import destroy_vm_if_exists`), so a test cannot know -- and should
+not care -- which module's binding the code under test resolves. dpatch("destroy_vm_if_exists")
 replaces the binding everywhere it exists, with ONE shared mock, and restores it on exit.
 Usable as a context manager, via ExitStack.enter_context, or with start()/stop().
 """
@@ -18,13 +18,15 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 import deploy_lib  # noqa: E402
+import infra  # noqa: E402
 
 
 def _modules():
     mods = [importlib.import_module("deploy")]
-    for info in pkgutil.walk_packages(deploy_lib.__path__, "deploy_lib."):
-        mods.append(importlib.import_module(info.name))
-    mods.append(deploy_lib)
+    for pkg in (deploy_lib, infra):
+        for info in pkgutil.walk_packages(pkg.__path__, f"{pkg.__name__}."):
+            mods.append(importlib.import_module(info.name))
+        mods.append(pkg)
     return mods
 
 

@@ -20,7 +20,7 @@ from deploy_lib.phases._terraform import terraform_env_and_cwd, write_tfvars
 
 
 def boot_win(ctx, t):
-    """Bootstrap one Windows box (apply #2 re-created it as a fresh clone)."""
+# Bootstrap one Windows box (apply #2 re-created it as a fresh clone).
     print(f"    Bootstrapping Windows box {t['ip']} (vmid {t['vmid']})...")
     gw = f"192.168.{t['identifier']}.1"
     with timed(ctx.comp_dir, 4, "bootstrap_windows", t["ip"]):
@@ -30,14 +30,14 @@ def boot_win(ctx, t):
 
 
 def golden_coverage_recorder(ctx):
-    """The `coverage` callback build_golden_set threads through its plant.
-
-    The golden plant's coverage verdict, recorded like a post-clone stage's. result is
-    None on every skip path (M4 reuse / checkpointed / pristine / cold): the disk is then
-    proven by hash, not by a fresh plant, so guarantee the record exists but never erase a
-    previously recorded failure. A real result records through record_coverage —
-    including alpine_services-tolerated failures, which are a genuine gap on the golden
-    disk and must reach verify's gate."""
+# The `coverage` callback build_golden_set threads through its plant.
+#
+#     The golden plant's coverage verdict, recorded like a post-clone stage's. result is
+#     None on every skip path (M4 reuse / checkpointed / pristine / cold): the disk is then
+#     proven by hash, not by a fresh plant, so guarantee the record exists but never erase a
+#     previously recorded failure. A real result records through record_coverage —
+#     including alpine_services-tolerated failures, which are a genuine gap on the golden
+#     disk and must reach verify's gate.
     def _golden_coverage(machines, result):
         if result is None or not getattr(result, "machines", None):
             ctx.state.setdefault("plant_coverage_failed", {})
@@ -51,14 +51,14 @@ def golden_coverage_recorder(ctx):
 
 
 def build_goldens(ctx, stored):
-    """Plant + convert the golden set on the engine node and on every satellite.
-
-    Returns (golden_ids, golden_ids_by_slot): slot 0 is the engine node's map, satellites
-    get their own (same planted content, built ON each satellite from its own templates).
-    M4 hash gate: a converted golden whose stored hash differs is rebuilt — unless the
-    competition is frozen, in which case config drift hard-fails (frozen_gate) and
-    code-only drift reuses the template with a warning. Matching templates reach
-    build_golden_set and short-circuit the build."""
+# Plant + convert the golden set on the engine node and on every satellite.
+#
+#     Returns (golden_ids, golden_ids_by_slot): slot 0 is the engine node's map, satellites
+#     get their own (same planted content, built ON each satellite from its own templates).
+#     M4 hash gate: a converted golden whose stored hash differs is rebuilt — unless the
+#     competition is frozen, in which case config drift hard-fails (frozen_gate) and
+#     code-only drift reuses the template with a warning. Matching templates reach
+#     build_golden_set and short-circuit the build.
     _golden_coverage = golden_coverage_recorder(ctx)
 
     # Slot-0 goldens only exist when the engine node actually hosts teams —
@@ -109,7 +109,7 @@ def build_goldens(ctx, stored):
 
 
 def record_golden_set(ctx, golden_ids, golden_ids_by_slot):
-    """Persist the built goldens (state + the per-competition template-hash file)."""
+# Persist the built goldens (state + the per-competition template-hash file).
     ctx.state["golden_template_ids"] = golden_ids
     ctx.state["golden_ids_by_slot"] = {str(k): v for k, v in golden_ids_by_slot.items()}
     ctx.state["golden_hashes"] = ctx.golden_hashes
@@ -120,16 +120,16 @@ def record_golden_set(ctx, golden_ids, golden_ids_by_slot):
 
 
 def apply_team_boxes(ctx, golden_ids, golden_ids_by_slot):
-    """Flip build_team_boxes on and run terraform apply #2: every team box, linked-cloned.
-
-    Positional per box: two box types may share one base template, so a name-keyed
-    map would silently cross-wire golden disks (live-found 2026-09-24: web01
-    clones came from golden-db01's disk).
-    Length must equal boxes_per_team (positional). Unmanaged boxes (pfSense) have
-    no golden — terraform's team_box unmanaged branch clones them from their own
-    base template instead, so their slot here carries that base template's vmid
-    — ON THE TEAM'S OWN NODE for satellite slots (their clone must resolve
-    locally)."""
+# Flip build_team_boxes on and run terraform apply #2: every team box, linked-cloned.
+#
+#     Positional per box: two box types may share one base template, so a name-keyed
+#     map would silently cross-wire golden disks (live-found 2026-09-24: web01
+#     clones came from golden-db01's disk).
+#     Length must equal boxes_per_team (positional). Unmanaged boxes (pfSense) have
+#     no golden — terraform's team_box unmanaged branch clones them from their own
+#     base template instead, so their slot here carries that base template's vmid
+#     — ON THE TEAM'S OWN NODE for satellite slots (their clone must resolve
+#     locally).
     _tmap = _template_vmid_map(ctx.node)
     ctx.tfvars["golden_template_ids"] = [
         int(_tmap[b["template"]]) if is_unmanaged(b)
@@ -162,7 +162,7 @@ def apply_team_boxes(ctx, golden_ids, golden_ids_by_slot):
 
 
 def bootstrap_clones(ctx):
-    """Bring the fresh clones to a plantable state and take the pre-sweep restore point."""
+# Bring the fresh clones to a plantable state and take the pre-sweep restore point.
     # Apply #2 (re-)created the team boxes: any surviving .postclone-swept
     # marker describes the OLD clones, and a phase-5 resume would skip the
     # repair sweep/credlist/shim on the fresh ones (hit twice on
@@ -194,13 +194,13 @@ def bootstrap_clones(ctx):
 
 
 def phase4_golden_set(ctx):
-    """[4/8] Plant the golden set, then terraform apply #2 to build every team box.
-
-    Two halves on purpose: the goldens must exist as templates before apply #2
-    flips build_team_boxes on, and both are timed under phase 4 so the timing
-    summary shows the plant and the linked-clone burst separately. The [4/8] and
-    [4b/8] banners stay distinct because operators (and incident logs) key on
-    them."""
+# [4/8] Plant the golden set, then terraform apply #2 to build every team box.
+#
+#     Two halves on purpose: the goldens must exist as templates before apply #2
+#     flips build_team_boxes on, and both are timed under phase 4 so the timing
+#     summary shows the plant and the linked-clone burst separately. The [4/8] and
+#     [4b/8] banners stay distinct because operators (and incident logs) key on
+#     them.
     if ctx.from_phase > 4:
         print("[4/8] Skipped (resume).")
         return

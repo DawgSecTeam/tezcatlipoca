@@ -66,8 +66,8 @@ def _require(cond, msg):
 
 
 def load_nodes_config(path=None):
-    """Parse and validate nodes.json. Returns (records, balancing) or (None, None)
-    when the file is absent — the single-node signal."""
+# Parse and validate nodes.json. Returns (records, balancing) or (None, None)
+#     when the file is absent — the single-node signal.
     path = Path(path or NODES_CONFIG_PATH)
     if not path.exists():
         return None, None
@@ -127,13 +127,12 @@ def load_nodes_config(path=None):
     return records, dict(data.get("balancing") or {})
 
 
-# ---------------------------------------------------------------- env application
 
 def apply_node_env(record):
-    """Point the process env (TF_VAR_*) at `record` — the engine-node record for a
-    deploy, or the recorded engine node for companion ops. Terraform reads the same
-    env natively, and every env-sourced read in the pipeline keeps working. Returns
-    a restore dict for restore_node_env()."""
+# Point the process env (TF_VAR_*) at `record` — the engine-node record for a
+#     deploy, or the recorded engine node for companion ops. Terraform reads the same
+#     env natively, and every env-sourced read in the pipeline keeps working. Returns
+#     a restore dict for restore_node_env().
     token = os.environ.get(record.token_env)
     if not token:
         raise SystemExit(

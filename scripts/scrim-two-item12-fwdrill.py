@@ -9,7 +9,7 @@ sys.path.insert(0, '/home/hna/dev/dawgsec/tezcatlipoca')
 from dotenv import load_dotenv
 load_dotenv('/home/hna/dev/dawgsec/tezcatlipoca/.env')
 from verifier.creds import load_admin_password
-import range_ops
+import infra.client
 
 NODE = 'proxmox'
 E = 'http://10.0.0.252'
@@ -34,18 +34,15 @@ rid, n, up, down, sample = round_state()
 print('check schema sample keys:', sorted(sample.keys()))
 print(f'baseline round {rid}: {n} checks up={up} down={down}')
 
-def is_up(c):
-    return bool(c.get('Result'))
-
 def counts():
     rid, n, _, _, _ = round_state()
     e = s.get(E + '/api/engine', timeout=15).json()
     checks = (e.get('last_round') or {}).get('Checks') or []
-    ups = sum(1 for c in checks if is_up(c))
+    ups = sum(1 for c in checks if bool(c.get('Result')))
     return e['last_round']['ID'], len(checks), ups
 
 print('STOPPING fw01 (1410)')
-range_ops.proxmox_api('POST', f'/nodes/{NODE}/qemu/1410/status/stop')
+infra.client.proxmox_api('POST', f'/nodes/{NODE}/qemu/1410/status/stop')
 t_stop = time.time()
 all_down_at = None
 timeline = []
@@ -60,7 +57,7 @@ while time.time() - t_stop < 600:
 print('ALL DOWN at', f'{all_down_at-t_stop:.0f}s' if all_down_at else 'NEVER within 600s')
 
 print('STARTING fw01 (1410)')
-range_ops.proxmox_api('POST', f'/nodes/{NODE}/qemu/1410/status/start')
+infra.client.proxmox_api('POST', f'/nodes/{NODE}/qemu/1410/status/start')
 t_start = time.time()
 converged_at = None
 while time.time() - t_start < 900:

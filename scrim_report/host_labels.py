@@ -5,16 +5,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 
+# the fixed HOST_BY_OCTET table hardcoded the 17b lineup, so every red timeline entry and
+# target label was WRONG on any other competition (cde-2026 is ad01/ftp01/web01/db01,
+# amongus-cde-2026 is mira/skeld/airship/polus) even though the report already knew the
+# competition directory through the run dir's name (audit find D8). Returns {} when it
+# cannot resolve one, so host_label degrades to the raw dotted octet instead of inventing
+# a name from the wrong lineup.
 def box_labels(run_dir):
-    """octet(str) -> box name, resolved from the competition's own boxes.json.
-
-    The fixed HOST_BY_OCTET table hardcoded the 17b lineup, so every red timeline entry
-    and every target label was WRONG on any other competition (cde-2026 is
-    ad01/ftp01/web01/db01, amongus-cde-2026 is mira/skeld/airship/polus) — even though
-    the report already knew the competition directory through the run dir's name
-    (audit find D8). Returns {} when it cannot resolve one, so host_label degrades to the
-    raw dotted octet instead of inventing a name from the wrong lineup.
-    """
     name = Path(run_dir).resolve().name
     comps = REPO / "competitions"
     cands = [comps / name / "boxes.json"]
@@ -44,13 +41,11 @@ def box_labels(run_dir):
     return {}
 
 
+# the windows_footholds fallback used to hardcode octets 2/3 (the 17b dc01/win01 slots);
+# scrim-fresh-a's only Windows box sits at .5, so red's two real win01 cred_spray
+# footholds counted 0 and the gate failed red for footholds it held. Unresolvable -> no
+# Windows octets (the gate counts none rather than guessing).
 def windows_octets(run_dir):
-    """The last octets that are WINDOWS boxes, from the competition's boxes.json.
-
-    The windows_footholds fallback used to hardcode octets 2/3 (the 17b dc01/win01
-    slots); scrim-fresh-a's only Windows box sits at .5, so red's two real win01
-    cred_spray footholds counted 0 and the gate failed red for footholds it held.
-    Unresolvable -> no Windows octets (the gate counts none rather than guessing)."""
     p = Path(run_dir).resolve()
     cands = []
     if ".automated-tests" in p.parts:

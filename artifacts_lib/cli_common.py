@@ -19,12 +19,12 @@ STUB_STATUS_RE = re.compile(r"^status:\s*(\S+)", re.M)
 
 
 def resolve_comp(name):
-    """The comp dir for `name`, or None.
-
-    Two shapes are accepted because the same operator habit drives both: the bare id used by
-    destroy-competition.py (`competitions/<id>`), and a path to a comp dir anywhere on disk (a
-    practice run's worktree is a different checkout, so a path is sometimes all you have).
-    A Compfile is required either way — it is what makes a directory a competition."""
+# The comp dir for `name`, or None.
+#
+# Two shapes are accepted because the same operator habit drives both: the bare id used by
+# destroy-competition.py (`competitions/<id>`), and a path to a comp dir anywhere on disk (a
+# practice run's worktree is a different checkout, so a path is sometimes all you have).
+# A Compfile is required either way — it is what makes a directory a competition.
     for candidate in (Path(name), COMPETITIONS_DIR / name):
         if (candidate / "Compfile").is_file():
             return candidate
@@ -32,10 +32,10 @@ def resolve_comp(name):
 
 
 def locate_test(args):
-    """(comp_dir, test_path, None), or (None, None, exit_code) after printing why not.
-
-    The shared preamble of every key-taking subcommand: unknown comp and unknown key are both
-    usage errors with the same message."""
+# (comp_dir, test_path, None), or (None, None, exit_code) after printing why not.
+#
+# The shared preamble of every key-taking subcommand: unknown comp and unknown key are both
+# usage errors with the same message.
     comp_dir = resolve_comp(args.comp)
     if comp_dir is None:
         return None, None, unknown_comp(args.comp)
@@ -46,7 +46,7 @@ def locate_test(args):
 
 
 def existing_keys(comp_dir):
-    """Test folder names on disk — the truth `archive --all` and the miss message both use."""
+# Test folder names on disk — the truth `archive --all` and the miss message both use.
     root = ao.artifacts_root(comp_dir)
     if not root.is_dir():
         return []
@@ -55,7 +55,7 @@ def existing_keys(comp_dir):
 
 
 def resolve_test(comp_dir, key):
-    """(test_path, None) or (None, message). Every key-taking subcommand needs the same miss."""
+# (test_path, None) or (None, message). Every key-taking subcommand needs the same miss.
     path = ao.test_dir(comp_dir, key)
     if path.is_dir():
         return path, None
@@ -65,10 +65,10 @@ def resolve_test(comp_dir, key):
 
 
 def _index_is_stale(root):
-    """True when a test folder is newer than the index that is supposed to summarize it.
-
-    The index is derived, so being wrong here costs a reprinted table — but a stale verdict
-    is the one thing an operator must not have to doubt, and the check is a few stat() calls."""
+# True when a test folder is newer than the index that is supposed to summarize it.
+#
+# The index is derived, so being wrong here costs a reprinted table — but a stale verdict
+# is the one thing an operator must not have to doubt, and the check is a few stat() calls.
     try:
         index_mtime = (root / ao.INDEX_NAME).stat().st_mtime
     except OSError:
@@ -87,13 +87,13 @@ def _index_is_stale(root):
 
 
 def index_rows(comp_dir, *, refresh=False):
-    """Index rows for `comp_dir`, rebuilding a missing or stale index first.
-
-    A comp with no `.automated-tests/` at all returns [] without calling update_index: `list` is
-    a read, and creating the drop point for it would make the absence of artifacts invisible.
-    `update_index` re-reads every manifest and stub, so one unreadable file raises there — that is
-    reported as a finding instead of a traceback, because "the index is unreadable" is exactly the
-    kind of thing this command exists to tell the operator."""
+# Index rows for `comp_dir`, rebuilding a missing or stale index first.
+#
+# A comp with no `.automated-tests/` at all returns [] without calling update_index: `list` is
+# a read, and creating the drop point for it would make the absence of artifacts invisible.
+# `update_index` re-reads every manifest and stub, so one unreadable file raises there — that is
+# reported as a finding instead of a traceback, because "the index is unreadable" is exactly the
+# kind of thing this command exists to tell the operator.
     root = ao.artifacts_root(comp_dir)
     if not root.is_dir():
         return []
@@ -108,7 +108,7 @@ def index_rows(comp_dir, *, refresh=False):
 
 
 def error(message, code=EXIT_USAGE):
-    """Usage-level failure: one clear line on stderr, non-zero exit, no traceback."""
+# Usage-level failure: one clear line on stderr, non-zero exit, no traceback.
     print(f"ERROR: {message}", file=sys.stderr)
     return code
 
@@ -126,7 +126,7 @@ def show(value):
 
 
 def print_table(headers, rows, indent="  "):
-    """Fixed-width table. A missing cell prints as `-` so a gap is visibly a gap."""
+# Fixed-width table. A missing cell prints as `-` so a gap is visibly a gap.
     cells = [[show(cell) for cell in row] for row in rows]
     widths = [len(header) for header in headers]
     for row in cells:
@@ -138,29 +138,24 @@ def print_table(headers, rows, indent="  "):
 
 
 def display_label(want):
-    """A wanted item's human id: remote path, local filename, glob, or capture destination.
-
-    Wants come in three shapes — a remote/local file, a glob, and a read-only command whose
-    stdout is captured (`cmd` + `local`). The label prefers a path in every case: `?` tells the
-    operator nothing about which item is missing, and a command string is the least useful name
-    for something whose result lands in a named file."""
+# A wanted item's human id: remote path, local filename, glob, or capture destination.
+#
+# Wants come in three shapes — a remote/local file, a glob, and a read-only command whose
+# stdout is captured (`cmd` + `local`). The label prefers a path in every case: `?` tells the
+# operator nothing about which item is missing, and a command string is the least useful name
+# for something whose result lands in a named file.
     return (want.get("remote") or want.get("local_name") or want.get("pattern")
             or (Path(want["local"]).name if want.get("local") else None)
             or want.get("cmd") or "?")
 
 
 def wants(target):
-    """Every wanted item of a planned target: files plus globs."""
+# Every wanted item of a planned target: files plus globs.
     return list(target.get("want") or []) + list(target.get("want_globs") or [])
 
 
-def agents_label(agents):
-    present = [side for side in ("red", "blue") if (agents or {}).get(side)]
-    return "+".join(present) if present else "-"
-
-
 def agents_line(manifest):
-    """`red present (10.0.0.198, vmid 999); blue absent` — who took part, from the manifest."""
+# `red present (10.0.0.198, vmid 999); blue absent` — who took part, from the manifest.
     agents = manifest.get("agents") or {}
     parts = []
     for side in ("red", "blue"):
@@ -180,7 +175,7 @@ def agents_line(manifest):
 
 
 def summary_line(collection):
-    """One line for collection.json's counters — the file record total and every status."""
+# One line for collection.json's counters — the file record total and every status.
     summary = collection.get("summary") or {}
     if not summary:
         return "no summary recorded"
@@ -194,8 +189,9 @@ def summary_line(collection):
 
 
 def list_row(row):
+    present = [side for side in ("red", "blue") if (row.get("agents") or {}).get(side)]
     return (row.get("key"), row.get("run_id"), row.get("kind"), row.get("created_at"),
-            row.get("phase"), row.get("verdict"), agents_label(row.get("agents")),
+            row.get("phase"), row.get("verdict"), "+".join(present) if present else "-",
             row.get("writeup"), row.get("warnings"), "yes" if row.get("report") else "-")
 
 

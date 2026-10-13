@@ -4,14 +4,10 @@ from scrim import core
 from scrim.core import log
 
 
+# a worker dying on its own must not let the harness exit clean: a dead feed leaves a team
+# unattended, a dead monitor leaves the post-hoc report without its evidence (audit find D3)
 class WorkerDiedError(RuntimeError):
-    """A monitor/feed/watchdog worker thread stopped on its own during the event.
-
-    The event itself keeps running (the surviving teams still need their feeds and the
-    watchdog is still keeping services up), but the harness must not report a clean run:
-    a dead feed thread means that team's agent was unattended, and a dead monitor thread
-    means the evidence the post-hoc report depends on simply is not there (audit find D3).
-    """
+    pass
 
 
 # A worker may be parked inside a full opencode cycle when the window closes; 10s used to
@@ -21,22 +17,14 @@ class WorkerDiedError(RuntimeError):
 WORKER_JOIN_BUDGET = core.CYCLE_TIMEOUT + 120
 
 
+# polled rather than assumed: nothing else observed these threads, so a worker killed by
+# an exception escaping its own handler otherwise goes unnoticed to run completion
 def dead_workers(threads, reported):
-    """Threads that stopped without being asked to, excluding already-reported ones.
-
-    Liveness is polled rather than assumed: nothing observed these threads before, so a
-    worker killed by a StopIteration on an error body (or any other exception escaping
-    its own handler) left the harness running to completion with no indication that its
-    monitoring had stopped.
-    """
     return [t for t in threads if not t.is_alive() and t not in reported]
 
 
+# budget resolved at call time so tests (and an operator override) can shorten it
 def join_workers(threads, budget=None):
-    """Join every worker against ONE shared deadline; return the still-alive ones.
-
-    Budget is resolved at call time so tests (and an operator override) can shorten it.
-    """
     budget = WORKER_JOIN_BUDGET if budget is None else budget
     deadline = time.time() + budget
     for t in threads:
@@ -45,11 +33,6 @@ def join_workers(threads, budget=None):
 
 
 def supervise_workers(threads, deadline, stop, poll=60, t0=None):
-    """Poll worker liveness until `deadline`, then stop and join them all.
-
-    Returns the workers that died on their own or refused to stop within the join budget.
-    An empty list means every worker ran to the end of the window and shut down cleanly.
-    """
     reported = []
     try:
         while time.time() < deadline:

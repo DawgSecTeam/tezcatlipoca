@@ -16,8 +16,8 @@ The seven invariants (docs/teardown-redesign.md):
   I6 one refusal vocabulary: saw / expected / remedy
   I7 exit 0 means the estate is clean for this ownership set
 
-Offline: the API is faked at EVERY owning module (range_ops for the
-Inventory, vm_ownership for the delete primitive) — a partial patch sends
+Offline: the API is faked at EVERY owning module (infra.client/infra.ownership for the
+Inventory, ownership for the delete primitive) — a partial patch sends
 the other half LIVE, where the ownership guard will refuse it but the test
 would dial the node.
 """
@@ -39,13 +39,14 @@ sys.path.insert(0, str(_REPO))
 
 import artifacts_ops  # noqa: E402
 import red_plant_ops  # noqa: E402
-import range_ops  # noqa: E402
-import vm_ownership  # noqa: E402
+
+from infra import client as infra_client  # noqa: E402
+from infra import ownership  # noqa: E402
 from artifacts_lib import lifecycle as alifecycle  # noqa: E402
 from artifacts_lib import paths as apaths  # noqa: E402
 from teardown import machinery  # noqa: E402
 from teardown import runner as trunner  # noqa: E402
-from vm_ownership import Ownership, Refusal  # noqa: E402
+from infra.ownership import Ownership, Refusal  # noqa: E402
 
 RUN = "run-abcdef01"
 OTHER_RUN = "run-12345678"
@@ -67,7 +68,7 @@ destroy = load_destroy()
 
 
 class FakePVE:
-    """Minimal PVE: node VM listings, per-VM configs, method/path capture."""
+# Minimal PVE: node VM listings, per-VM configs, method/path capture.
 
     def __init__(self, nodes=None, cfgs=None, listing_fails=()):
         self.nodes = nodes or {}
@@ -107,21 +108,21 @@ def vm(vmid, name, tags, status="stopped"):
 # ── I1: ownership is total and verified ─────────────────────────────────────────
 
 
-@patch.object(vm_ownership, "wait_for_proxmox_task", lambda *a, **k: None)
+@patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None)
 class OwnershipTotality(unittest.TestCase):
     def test_full_tag_set_is_the_only_tags_path_to_destroy(self):
         fake = FakePVE(nodes={"n": [vm(10, "ours", "tezcatlipoca,comp-c1,run-abcdef01")]},
                        cfgs={10: {"tags": "tezcatlipoca;comp-c1;run-abcdef01"}})
-        with patch.object(vm_ownership, "proxmox_api", fake):
-            vm_ownership.destroy_vm_if_exists("n", 10, expect_tags=OURS.tags)
+        with patch.object(ownership, "proxmox_api", fake):
+            ownership.destroy_vm_if_exists("n", 10, expect_tags=OURS.tags)
         self.assertEqual(fake.deleted, [10])
 
     def test_partial_tag_overlap_is_refused_with_saw_and_missing(self):
         fake = FakePVE(nodes={"n": [vm(11, "theirs", FULL_OTHER)]},
                        cfgs={11: {"tags": f"tezcatlipoca;comp-c1;{OTHER_RUN}"}})
-        with patch.object(vm_ownership, "proxmox_api", fake):
+        with patch.object(ownership, "proxmox_api", fake):
             with self.assertRaises(Refusal) as ctx:
-                vm_ownership.destroy_vm_if_exists("n", 11, expect_tags=OURS.tags)
+                ownership.destroy_vm_if_exists("n", 11, expect_tags=OURS.tags)
         msg = str(ctx.exception)
         self.assertIn("11", msg)                       # saw: the vmid
         self.assertIn(OTHER_RUN, msg)                  # saw: the tags it carries
@@ -167,10 +168,10 @@ class OwnershipTotality(unittest.TestCase):
             self.assertIn("Nothing was destroyed", msg)
 
     def test_sweep_ignores_a_clone_marker_only_vm(self):
-        """The leftover sweep matches TAGS only; an interrupted clone (marker, no
-        tags) is reclaimable solely through the guarded delete primitive."""
+    # The leftover sweep matches TAGS only; an interrupted clone (marker, no
+    #         tags) is reclaimable solely through the guarded delete primitive.
         fake = FakePVE(nodes={"n": [vm(12, "half-clone", "")]},
-                       cfgs={12: {"description": vm_ownership.clone_marker(COMP)}})
+                       cfgs={12: {"description": ownership.clone_marker(COMP)}})
         with patch.object(machinery, "proxmox_api", fake), \
                 patch.object(machinery, "wait_for_proxmox_task", lambda *a, **k: None):
             machinery.sweep_tagged_leftovers(["n"], OURS)
@@ -198,9 +199,9 @@ class ForceByDefault(unittest.TestCase):
         fake = FakePVE(nodes={"n": [vm(21, "ours", "tezcatlipoca,comp-c1,run-abcdef01",
                                        status="running")]},
                        cfgs={21: {"tags": "tezcatlipoca;comp-c1;run-abcdef01"}})
-        with patch.object(vm_ownership, "proxmox_api", fake), \
-                patch.object(vm_ownership, "wait_for_proxmox_task", lambda *a, **k: None):
-            vm_ownership.destroy_vm_if_exists("n", 21, expect_tags=OURS.tags)
+        with patch.object(ownership, "proxmox_api", fake), \
+                patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None):
+            ownership.destroy_vm_if_exists("n", 21, expect_tags=OURS.tags)
         seq = [(m, p, prm) for m, p, prm in fake.calls if m in ("POST", "DELETE")]
         self.assertEqual(seq[0][:2], ("POST", "/nodes/n/qemu/21/status/stop"))
         self.assertTrue(seq[-1][0] == "DELETE" and "/qemu/21" in seq[-1][1])
@@ -215,9 +216,9 @@ BOXES = [{"name": "dc01", "last_octet": 2, "template": "base-windows-server"}]
 
 
 class MainSequence(unittest.TestCase):
-    """drives destroy-competition.main() offline with every destructive call
-    replaced by a log entry — the ordering and the exit contract are the code
-    under test."""
+# drives destroy-competition.main() offline with every destructive call
+#     replaced by a log entry — the ordering and the exit contract are the code
+#     under test.
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -250,10 +251,10 @@ class MainSequence(unittest.TestCase):
             patch.object(machinery, "destroy_with_recovery", side_effect=tf),
             patch.object(artifacts_ops, "collect_for_teardown", side_effect=collect),
             patch.object(red_plant_ops, "destroy_red", side_effect=red),
-            patch.object(range_ops, "proxmox_api", FakePVE()),
-            patch.object(vm_ownership, "proxmox_api", FakePVE()),
-            patch.object(vm_ownership, "wait_for_proxmox_task", lambda *a, **k: None),
-            patch.object(range_ops, "live_vmids", lambda: []),
+            patch.object(infra_client, "proxmox_api", FakePVE()),
+            patch.object(ownership, "proxmox_api", FakePVE()),
+            patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None),
+            patch.object(infra_client, "live_vmids", lambda: []),
             patch.object(red_plant_ops, "red_vmid_candidates", lambda *a, **k: [999]),
             patch.object(sys, "argv", argv),
         ]
@@ -303,8 +304,8 @@ class MainSequence(unittest.TestCase):
         self.assertIn("evidence was not archived", self.out)
 
     def test_i4_rerun_needs_no_flag(self):
-        """The contract is 're-run until it exits clean' — a second pass with the
-        same no-extra-flags invocation must be valid (steps are idempotent)."""
+    # The contract is 're-run until it exits clean' — a second pass with the
+    #         same no-extra-flags invocation must be valid (steps are idempotent).
         first = self._main(["--yes"])
         second = self._main(["--yes"])
         self.assertEqual(first, second)
@@ -333,8 +334,8 @@ class MainSequence(unittest.TestCase):
 
 
 class BridgeReclaim(unittest.TestCase):
-    """phase-1's bridge reclaim: a bridge another run's VM still sits on
-    survives, loudly; unreadable state fails closed."""
+# phase-1's bridge reclaim: a bridge another run's VM still sits on
+#     survives, loudly; unreadable state fails closed.
 
     def _run(self, configs):
         from deploy_lib.phases import cleanup
@@ -352,8 +353,8 @@ class BridgeReclaim(unittest.TestCase):
         self.assertTrue(in_use)
 
     def test_unreadable_config_fails_closed(self):
-        """A VM whose config cannot be read counts as attached — the bridge
-        survives to teardown/terraform rather than being ripped out."""
+    # A VM whose config cannot be read counts as attached — the bridge
+    #         survives to teardown/terraform rather than being ripped out.
         from deploy_lib.phases import cleanup
         fake = FakePVE(nodes={"n": [vm(31, "opaque", FULL_OTHER)]})
 
@@ -370,15 +371,15 @@ class BridgeReclaim(unittest.TestCase):
 
 
 class RefusalVocabulary(unittest.TestCase):
-    """Every refusal names what it saw, what it expected, and what would change
-    its mind — as structured fields, not just prose."""
+# Every refusal names what it saw, what it expected, and what would change
+#     its mind — as structured fields, not just prose.
 
-    @patch.object(vm_ownership, "wait_for_proxmox_task", lambda *a, **k: None)
+    @patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None)
     def test_untagged_refusal_names_vmid_and_carries_all_three_fields(self):
         fake = FakePVE(nodes={"n": [vm(40, "mystery", "")]}, cfgs={40: {}})
-        with patch.object(vm_ownership, "proxmox_api", fake):
+        with patch.object(ownership, "proxmox_api", fake):
             with self.assertRaises(Refusal) as ctx:
-                vm_ownership.destroy_vm_if_exists("n", 40, expect_tags=OURS.tags)
+                ownership.destroy_vm_if_exists("n", 40, expect_tags=OURS.tags)
         self.assertIn("40", str(ctx.exception))
         self.assertIn("UNTAGGED", ctx.exception.saw)
         self.assertTrue(ctx.exception.expected)

@@ -48,9 +48,10 @@ drift, so read them from `git ls-files tests/` and the pytest run above rather t
 
 **Range/config contracts**
 
-**Patch the owning module, not the facade.** `range_ops`, `config_ops`, `nodes_ops`, `template_ops`
-are re-export facades: patch `pve_api.proxmox_api`, `guest_exec.*`, `vm_ownership.*`,
-`vm_lifecycle.*`, `preflight.<gate>.proxmox_api`, `placement_record.record_of`,
+**Patch the owning module, not the facade.** `config_ops`, `nodes_ops`, `template_ops`
+are re-export facades, and `infra/` is one package of owning modules: patch
+`infra.client.proxmox_api`, `infra.guest_exec.*`, `infra.ownership.*`,
+`infra.lifecycle.*`, `infra.collisions/resources.proxmox_api`, `placement_record.record_of`,
 `placement_planner.probe_node`, `engine_template_ops.destroy_vm_if_exists`, `template_freeze.*`
 (patching the facade name does not reach the moved code, and an unpatched `proxmox_api` in a preflight
 module makes a real network call).

@@ -4,7 +4,8 @@ import json
 import os
 
 from domain_ops import team_domain
-from range_ops import guest_agent_exec_root, guest_agent_exec_windows, vm_id_for
+from infra.guest_exec import guest_agent_exec_root, guest_agent_exec_windows
+from targets import vm_id_for
 from utils import MAX_CONCURRENCY, run_concurrent
 from windows_ops import is_windows_template
 
@@ -31,20 +32,20 @@ def _kv(out):
 
 
 def _valid_domain_sid(sid):
-    """S-1-5-21-<a>-<b>-<c> — a DOMAIN SID has exactly three sub-authorities and no
-    trailing RID (an 8-part value is an account SID, not a domain SID)."""
+# S-1-5-21-<a>-<b>-<c> — a DOMAIN SID has exactly three sub-authorities and no
+#     trailing RID (an 8-part value is an account SID, not a domain SID).
     parts = (sid or "").split("-")
     return (len(parts) == 7 and sid.startswith("S-1-5-21-")
             and all(p.isdigit() for p in parts[3:]))
 
 
 def _member_trusted(job, kv, pcs_by_team):
-    """True/False/None: does the team's DC hold a machine account for this member?
-
-    None = cannot judge (the DC's listing never arrived, or the member reported no
-    hostname) — the gate then leans on the member-side check alone rather than
-    inventing a verdict. False = the member self-reports joined but the DC that must
-    hold its machine account does not: a dead trust, never a pass."""
+# True/False/None: does the team's DC hold a machine account for this member?
+#
+#     None = cannot judge (the DC's listing never arrived, or the member reported no
+#     hostname) — the gate then leans on the member-side check alone rather than
+#     inventing a verdict. False = the member self-reports joined but the DC that must
+#     hold its machine account does not: a dead trust, never a pass.
     if job["role"] != "member" or not pcs_by_team:
         return None
     accounts = pcs_by_team.get(job["team_key"])
@@ -57,17 +58,17 @@ def _member_trusted(job, kv, pcs_by_team):
 
 
 def check_domains(comp_dir, teams, boxes, ctx=None):
-    """Domain gate (replaces the freeze's operator attestation with a live check).
-
-    Per team: the DC answers Get-ADDomain for team<id>.local with a syntactically
-    valid DomainSID, the planted AD misconfig (svc-support) exists, and every member
-    box is actually joined. Across teams: DomainSIDs must be unique (a collision
-    means DC promotion reused image state — winad-testrun 2026-09-25 found exactly
-    that); with a single team uniqueness cannot be exercised, so the PASS says so
-    instead of claiming it. Member machine SIDs are reported, not gated: members
-    linked-cloned from one golden share them by design, which is harmless for
-    isolated forests. A present-but-malformed domain_roles.json fails closed.
-    Returns a SKIP GateResult (gating=False) when the lineup has no domain_roles.json."""
+# Domain gate (replaces the freeze's operator attestation with a live check).
+#
+#     Per team: the DC answers Get-ADDomain for team<id>.local with a syntactically
+#     valid DomainSID, the planted AD misconfig (svc-support) exists, and every member
+#     box is actually joined. Across teams: DomainSIDs must be unique (a collision
+#     means DC promotion reused image state — winad-testrun 2026-09-25 found exactly
+#     that); with a single team uniqueness cannot be exercised, so the PASS says so
+#     instead of claiming it. Member machine SIDs are reported, not gated: members
+#     linked-cloned from one golden share them by design, which is harmless for
+#     isolated forests. A present-but-malformed domain_roles.json fails closed.
+#     Returns a SKIP GateResult (gating=False) when the lineup has no domain_roles.json.
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
         print("  SKIP  — no domain_roles.json")
@@ -130,13 +131,12 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
             })
 
     def _probe(job):
-        """One box's probe, returning an outcome instead of printing it.
-
-        The main thread then walks `jobs` in the serial order and aggregates, so every
-        verdict, every printed line, and (critically) the team order inside the
-        duplicate-DomainSID message stay exactly what the serial loop produced — the
-        2026-10-02 tri-state gate contract: same status, same message, same exit code.
-        """
+    # One box's probe, returning an outcome instead of printing it.
+#
+    #         The main thread then walks `jobs` in the serial order and aggregates, so every
+    #         verdict, every printed line, and (critically) the team order inside the
+    #         duplicate-DomainSID message stay exactly what the serial loop produced — the
+    #         2026-10-02 tri-state gate contract: same status, same message, same exit code.
         team_key, name = job["team_key"], job["name"]
         ident, domain = job["ident"], job["domain"]
         if job["windows"]:

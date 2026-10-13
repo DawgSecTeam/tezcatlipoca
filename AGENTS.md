@@ -50,6 +50,15 @@ squatting a golden slot, and the over-broad sweep that took out two other comps'
 goldens (the old `TEZ_ALLOW_CONCURRENT` opt-in flag is gone: warning-and-proceeding IS the
 default, 2026-10-04).
 
+**bad-auto state is per-competition — nothing is shared but the code.** red01's config, deploy
+stamp and identity live in `competitions/<id>/` (`.badauto-config.yaml` + the stamp bad-auto
+writes next to it), its vmid is reserved per comp (Compfile `red01_vmid`, else derived
+`<scoring-vmid>+170`) and its IP pinned (`red01_ip`, else 10.0.0.198) — both preflight-GATED
+like the engine's: an occupied red01 slot is a REFUSAL naming the owner, never a silent default
+onto vmid 999 (that default shared across sessions is the 2026-10-12 red01 kill; see
+[docs/bad-auto-isolation.md](docs/bad-auto-isolation.md)). Two worktrees may deploy ranges with
+red01s concurrently against the one shared bad-auto checkout with zero coordination.
+
 Teardown after a practice run is `destroy-competition.py` — the thin CLI over the teardown
 engine (`teardown/`, [docs/teardown-redesign.md](docs/teardown-redesign.md)). It is resumable by
 construction (a completion journal skips what a prior pass finished; a warned step is retried by
@@ -58,7 +67,10 @@ nothing of ours running or left tagged, red01 gone, no terraform state lock, evi
 **Never substitute ad-hoc destroy scripts**: there is no other path that can destroy a VM — every
 destroy-shaped API takes the deploy's `Ownership` (comp tag + per-deploy run id) and refuses
 anything less (live-found 2026-09-30 — an over-broad sweep took out two other comps' engines and
-goldens; the guarded path is the only path now).
+goldens; the guarded path is the only path now). Every teardown path force-stops (status/stop) the
+VMs it owns before deleting — never graceful ACPI shutdowns: a doomed VM gains nothing from grace
+and agent-less boxes hang it, so graceful shutdown is only for VMs that survive the operation
+(2026-10-01).
 
 Teardown collects this run's reports and evidence into
 `competitions/<id>/.automated-tests/<run-id>/` **before** it destroys anything (red report pulled
@@ -99,6 +111,10 @@ cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxm
   variant: a dead vmid here hard-fails the engine-base preflight, and every variant has carried one
   at some point. Correct template vmids by node: 955/1007 ubuntu, 951/1006 debian-lite, 1016/1015 fedora,
   127/1019 alpine — see [docs/environment-facts.md](docs/environment-facts.md#templates).
+- All competition ops on Proxmox run on the `terraform@pam!comp-automation` token — never the
+  workshop portal's `root@pam!guac-provisioner` (user directive 2026-10-09). When copying an env
+  variant across nodes, re-export `TF_VAR_proxmox_api_token` explicitly instead of inheriting
+  whatever the source file carried; check it before any deploy/destroy.
 - `TF_VAR_teams` / `TF_VAR_boxes_per_team` in an old env are overridden by the comp dir at terraform
   time — stale values there are cosmetic, not fatal.
 - `TEZ_THIN_HEADROOM=<0..1>` relaxes the datastore headroom gate on thin-provisioned pools (ZFS,
@@ -106,9 +122,11 @@ cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxm
   only allocate written blocks (goldens + engine are the only full copies). Unset keeps the strict
   provisioned-bytes gate. Size the factor to the pool, not to hope: 0.25 has been enough for
   Windows-heavy comps on cyberrange `hdd`.
-- The sibling-repo tools have their own env fallback: `bad-auto/deploy` loads `../tezcatlipoca/.env`
-  via `setdefault`, so export the worktree's `TF_VAR_proxmox_*` trio before calling it if the main
-  tree points at a different node.
+- The sibling-repo tools have one read-only shared fallback: `bad-auto/deploy` loads
+  `../tezcatlipoca/.env` (the MAIN tree's) via `setdefault`, so export the worktree's
+  `TF_VAR_proxmox_*` trio before calling bad-auto by hand if the main tree points at a different
+  node. (Deploy identity is NOT shared — it lives in each comp's own
+  `competitions/<id>/.badauto-config.yaml`.)
 
 Then the normal flow: `create-competition.py --competition <id> --scoring-vmid <free> --plan-only`,
 real `--teams N --yes`, verify, destroy — all from the worktree root. Worked example:
@@ -145,7 +163,19 @@ Cheap habits that the session logs show being re-learned expensively:
   the artifact the subagent must produce, so a retry can see what already exists.
 - **Long operations are detached** — see
   [usage-agents.md → Running a deploy that outlives your shell](docs/usage-agents.md#running-a-deploy-that-outlives-your-shell).
-  Never wrap a deploy in `timeout` to make it fit a tool call.
+  Never wrap a deploy in `timeout` to make it fit a tool call, and never carry an hour-scale run in
+  a background tool task: the harness reaps task records (live: a scrim driver died at T+92 of 180
+  when its task record vanished) — `setsid nohup` plus log polling instead.
+- **Push after changes** (user directive 2026-09-29): committing is not finishing — push to origin
+  as part of the task. Fetch and check divergence first; parallel sessions push to main too, so
+  rebase rather than force-push. Never push anything carrying live secrets.
+- **Before a long operation, check for a twin.** Parallel agent sessions are normal here, and two
+  sessions driving the same competition/branch reap each other's deploys and live state. Check
+  `pgrep -af create-competition` and recent `git log` for fresh co-authored commits — also the
+  first move when file state "contradicts" what you saved, before assuming corruption.
+- **Capability claims need the remote nakon catalog.** The pinned submodule shows mechanism only —
+  the configs live in the remote vulndb — so "not supported" concluded from grepping the submodule
+  is wrong by construction: run `python3 -m nakon catalog list --json` first.
 - **Kill by pid or process group**, never `pkill -f` a pattern that also appears in the invoking
   command line.
 - **Never judge a command's success through a pipe** — `cmd | tail` reports the PIPE's exit code,
@@ -153,6 +183,17 @@ Cheap habits that the session logs show being re-learned expensively:
   Check `${PIPESTATUS[0]}`, or redirect to a file and echo `$?` from the command itself.
 - **Never write "validated" in a commit message before it is.** State what was done and what the
   next step proves; the report/docs are where validated claims live after they pass.
+
+## Code style
+
+**Minimum code (user directive 2026-10-12, standing):** write the minimum code that solves the
+problem — no error handling, input validation, logging, config options, or abstractions not asked
+for; no try/except around code that can't meaningfully fail; no helpers used only once (flat over
+nested, inline over extracted). Comments explain WHY only (non-obvious intent, workarounds,
+gotchas), default zero, never narration; no docstrings except public API, then one line without
+restating types. Change only what's needed — no reformatting, renaming, or "cleanup" of untouched
+lines. After changes: no preamble, no summary — explain only decisions the user would likely
+question. Design "why" prose belongs in `docs/internals.md`, not comments.
 
 ## Editing docs
 
@@ -164,4 +205,6 @@ code disagree and the code looks like the bug, document the code's actual behavi
 discrepancy (`docs/known-issues.md`) rather than silently "fixing" the doc. Fixed issues are
 deleted from `docs/known-issues.md`, not archived — git history
 is the record. Never edit code from a
-docs pass.
+docs pass. Run/scrim reports lead with interaction reality: blue presence and red-blue interaction
+counts first — a red-vs-empty-room run is a failed run no matter how good red's log looks, and is
+never framed as a red success.

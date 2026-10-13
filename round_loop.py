@@ -35,7 +35,7 @@ UNKNOWN = "unknown"        # /api/engine did not answer usably
 
 
 def parse_rfc3339(value) -> Optional[datetime]:
-    """Parse an RFC3339 timestamp; None when absent or unparseable."""
+# Parse an RFC3339 timestamp; None when absent or unparseable.
     if not isinstance(value, str) or not value:
         return None
     try:
@@ -51,12 +51,11 @@ def _naive_utc(when: Optional[datetime]) -> Optional[datetime]:
 
 
 def round_loop_state(engine_payload, now=None, freshness_seconds=None) -> dict:
-    """Classify `/api/engine` into one of the states above.
-
-    Returns {"state": ..., "age_seconds": float|None, "started": datetime|None}.
-    `age_seconds` is the age of the last round (None when there is nothing to age), so a
-    caller can print it without re-deriving.
-    """
+# Classify `/api/engine` into one of the states above.
+#
+#     Returns {"state": ..., "age_seconds": float|None, "started": datetime|None}.
+#     `age_seconds` is the age of the last round (None when there is nothing to age), so a
+#     caller can print it without re-deriving.
     if not isinstance(engine_payload, dict):
         return {"state": UNKNOWN, "age_seconds": None, "started": None}
     # `/api/engine` always reports `running`; its absence means we did not get the
@@ -91,6 +90,6 @@ def round_loop_state(engine_payload, now=None, freshness_seconds=None) -> dict:
 
 
 def is_stale(engine_payload, now=None, freshness_seconds=None) -> bool:
-    """The single question an unattended actor asks: should I restart the loop?"""
+# The single question an unattended actor asks: should I restart the loop?
     return round_loop_state(engine_payload, now=now,
                             freshness_seconds=freshness_seconds)["state"] == STALE

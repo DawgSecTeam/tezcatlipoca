@@ -16,10 +16,11 @@ import red_plant_ops as rp  # noqa: E402
 
 
 class FakeCtx:
-    def __init__(self, comp_dir, ssh_key="key.pem"):
+    def __init__(self, comp_dir, ssh_key="key.pem", engine_vmid=1300):
         self.comp_dir = Path(comp_dir)
         self.ssh_key_abs = ssh_key
         self.ssh_key = ssh_key
+        self.engine_vmid = engine_vmid
         self.state = {}
         self.saved = 0
 
@@ -83,11 +84,11 @@ class PlantAssumeBreachTests(unittest.TestCase):
         self.assertEqual(depth, 2)
         self.assertEqual(red_ip, out["red_ip"])
 
+    # badauto runs with cwd=bad-auto and resolves <comp>/credentials.txt for the
+    # engine IP; a relative path then looks in the wrong tree and dies with
+    # 'engine IP unknown' (live 2026-10-08). The derived config must exist, or
+    # _deploy_red now refuses outright (see DeployRedConfigPathTests).
     def test_deploy_red_passes_an_absolute_competition_path(self):
-        """badauto runs with cwd=bad-auto and resolves <comp>/credentials.txt for the
-        engine IP; a relative path then looks in the wrong tree and dies with
-        'engine IP unknown' (live 2026-10-08). The derived config must exist, or
-        _deploy_red now refuses outright (see DeployRedConfigPathTests)."""
         import tempfile
         cfg = Path(tempfile.mkdtemp(prefix="tz-abs-")) / "derived.yaml"
         cfg.write_text("deploy: {red_ip: 10.0.0.198}\n")
@@ -100,9 +101,9 @@ class PlantAssumeBreachTests(unittest.TestCase):
         self.assertTrue(Path(comp_arg).is_absolute(), comp_arg)
         self.assertEqual(argv[argv.index("--config") + 1], str(cfg.resolve()))
 
+    # Default knob ON: derived config feeds the deploy, tavern provisioner runs
+    # after it and BEFORE the seed, and the summary carries the C2.
     def test_local_c2_default_on_provisions_between_deploy_and_seed(self):
-        """Default knob ON: derived config feeds the deploy, tavern provisioner
-        runs after it and BEFORE the seed, and the summary carries the C2."""
         ctx = FakeCtx(_write_compfile(self.tmp))
         order = []
         cfg_path, realm_cfg = Path(self.tmp) / ".realm-c2-config.yaml", {
@@ -144,11 +145,11 @@ class PlantAssumeBreachTests(unittest.TestCase):
         deg.assert_called_once()                        # ...and the failure is named
         self.assertEqual(deg.call_args[0][0], "realm_c2_provision")
 
+    # The dark-C2 trap (2026-10-11): a block lacking transports/callback_ip
+    # deployed 'successfully', printed tavern-live, and nothing phoned home.
+    # plant_assume_breach must refuse LOUDLY — degradation, banner, no deploy,
+    # no seed.
     def test_incomplete_derived_block_refuses_the_whole_phase(self):
-        """The dark-C2 trap (2026-10-11): a block lacking transports/callback_ip
-        deployed 'successfully', printed tavern-live, and nothing phoned home.
-        plant_assume_breach must refuse LOUDLY — degradation, banner, no deploy,
-        no seed."""
         ctx = FakeCtx(_write_compfile(self.tmp))
         with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
              mock.patch.object(rp, "_deploy_red", return_value=_CP(0)) as dep, \
@@ -167,9 +168,9 @@ class PlantAssumeBreachTests(unittest.TestCase):
         deg.assert_called_once()
         self.assertEqual(deg.call_args[0][0], "realm_c2_config")
 
+    # prepare_local_c2 raising (no derivable callback_ip) is the same refusal,
+    # surfaced as a degradation instead of a traceback.
     def test_prepare_local_c2_valueerror_refuses_the_whole_phase(self):
-        """prepare_local_c2 raising (no derivable callback_ip) is the same refusal,
-        surfaced as a degradation instead of a traceback."""
         ctx = FakeCtx(_write_compfile(self.tmp))
         with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
              mock.patch.object(rp, "_deploy_red", return_value=_CP(0)) as dep, \
@@ -186,7 +187,10 @@ class PlantAssumeBreachTests(unittest.TestCase):
         deg.assert_called_once_with("realm_c2_config", mock.ANY)
 
     def test_local_c2_knob_off_keeps_legacy_layout(self):
-        ctx = FakeCtx(_write_compfile(self.tmp, "realm_c2_local 0\n"))
+        """Knob off: no realm layer, but the deploy still runs on the COMP'S OWN
+        config — isolation is not conditional on the C2 layout (2026-10-12)."""
+        comp = _write_compfile(self.tmp, "realm_c2_local 0\n")
+        ctx = FakeCtx(comp)
         with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
              mock.patch.object(rp, "_deploy_red", return_value=_CP(0)) as dep, \
              mock.patch.object(rp.realm_c2_ops, "prepare_local_c2") as prep, \
@@ -196,7 +200,8 @@ class PlantAssumeBreachTests(unittest.TestCase):
         self.assertTrue(out["ok"])
         prep.assert_not_called()
         prov.assert_not_called()
-        self.assertIsNone(dep.call_args.kwargs.get("config_path"))
+        self.assertEqual(dep.call_args.kwargs["config_path"],
+                         rp.badauto_config_ops.config_path(comp))
         self.assertNotIn("realm_c2", out)
 
     def test_seed_failure_degrades(self):
@@ -233,19 +238,17 @@ class PlantAssumeBreachTests(unittest.TestCase):
     def test_red_ip_falls_back_to_default(self):
         d = _write_compfile(self.tmp)
         with mock.patch.object(rp, "_configured_red_ip", return_value=None):
-            self.assertEqual(rp.red_ip_for(d), rp.DEFAULT_RED_IP)
+            self.assertEqual(rp.red_ip_for(d), rp.badauto_config_ops.DEFAULT_RED01_IP)
 
 
+# destroy_red must hand badauto an ABSOLUTE competition path.
+#
+# It runs with cwd=BAD_AUTO, and badauto resolves the engine IP from
+# <comp_dir>/credentials.txt; a relative path resolves under bad-auto, discovery
+# fails, and the identity guard refuses with "engine IP unknown" — which leaves
+# red01 (and its LLM key + DNAT rules) alive after the range is already gone.
+# Caught live 2026-10-09.
 class DestroyRedTests(unittest.TestCase):
-    """destroy_red must hand badauto an ABSOLUTE competition path.
-
-    It runs with cwd=BAD_AUTO, and badauto resolves the engine IP from
-    <comp_dir>/credentials.txt; a relative path resolves under bad-auto, discovery
-    fails, and the identity guard refuses with "engine IP unknown" — which leaves
-    red01 (and its LLM key + DNAT rules) alive after the range is already gone.
-    Caught live 2026-10-09.
-    """
-
     def test_competition_path_is_absolute(self):
         with mock.patch.object(rp.subprocess, "run", return_value=_CP(0)) as run:
             rp.destroy_red("competitions/scrim-one", env={})
@@ -256,16 +259,14 @@ class DestroyRedTests(unittest.TestCase):
         self.assertTrue(Path(env["BAuto_COMPETITION_DIR"]).is_absolute())
 
 
+# _deploy_red must resolve --config and REFUSE a missing one.
+#
+# badauto's load_config falls back to its built-in defaults without a word when
+# the override file cannot be found — so a relative (or absent) --config builds
+# red01 at the compiled-in red_ip 10.0.0.199 while the rest of the pipeline
+# targets the comp's 10.0.0.198: the C2 provision and the whole seed then die with
+# "No route to host" (live 2026-10-09, after a 95-minute deploy).
 class DeployRedConfigPathTests(unittest.TestCase):
-    """_deploy_red must resolve --config and REFUSE a missing one.
-
-    badauto's load_config falls back to its built-in defaults without a word when
-    the override file cannot be found — so a relative (or absent) --config builds
-    red01 at the compiled-in red_ip 10.0.0.199 while the rest of the pipeline
-    targets the comp's 10.0.0.198: the C2 provision and the whole seed then die with
-    "No route to host" (live 2026-10-09, after a 95-minute deploy).
-    """
-
     def test_missing_config_is_refused_not_deployed_on_defaults(self):
         with mock.patch.object(rp.subprocess, "run") as run:
             out = rp._deploy_red("/tmp/whatever", env={},

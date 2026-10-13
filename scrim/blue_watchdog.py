@@ -14,8 +14,6 @@ WATCHDOG_INTERVAL = 60
 
 
 def watchdog_script(services, box_pw):
-    """Idempotent: for each scored unit that exists and is not active, unmask + enable --now.
-    Prints one 'RESTORED <unit>' line per unit it had to bring back."""
     units = []
     for svc in services:
         # box_services entries are strings OR dicts ({name, plant_only, score_only, ...})
@@ -35,11 +33,10 @@ def watchdog_script(services, box_pw):
     return "\n".join(lines)
 
 
+# non-LLM dead-man's switch (winad-scrim2 rec 7): an account-wide rate limit killed both
+# blue agents at once and web01 sat ~2h unwatched; keeps availability up only — it does
+# not hunt or close the entry vector
 def blue_watchdog_loop(args, creds, t0, stop):
-    """Non-LLM dead-man's switch (winad-scrim2 rec 7): an account-wide rate limit killed BOTH
-    blue agents at once and web01 sat down ~2h, unwatched. Every WATCHDOG_INTERVAL this
-    restores any scored Linux unit that is stopped/masked, over the operator's key via the
-    engine. It only keeps availability up — it does not hunt or close the entry vector."""
     comp = core.REPO / "competitions" / args.competition
     boxes = core.read_comp_json(comp, "boxes.json")
     box_services = core.read_comp_json(comp, "box_services.json")

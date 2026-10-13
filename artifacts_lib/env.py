@@ -13,7 +13,7 @@ def iso(ts=None):
 
 
 def git_facts():
-    """(rev, dirty) for this tree. Never raises: a report must not fail on git."""
+# (rev, dirty) for this tree. Never raises: a report must not fail on git.
     try:
         rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO,
                              capture_output=True, text=True, timeout=10).stdout.strip()
@@ -25,11 +25,11 @@ def git_facts():
 
 
 def in_worktree():
-    """True when REPO is a linked worktree rather than the main checkout.
-
-    Practice runs must happen in a throwaway worktree (AGENTS.md), and the competition dir — with
-    every artifact in it — is per-worktree. The collector uses this to decide whether the
-    finished test folder needs archiving somewhere durable before the worktree is removed."""
+# True when REPO is a linked worktree rather than the main checkout.
+#
+#     Practice runs must happen in a throwaway worktree (AGENTS.md), and the competition dir — with
+#     every artifact in it — is per-worktree. The collector uses this to decide whether the
+#     finished test folder needs archiving somewhere durable before the worktree is removed.
     try:
         git_dir = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=REPO,
                                  capture_output=True, text=True, timeout=10).stdout.strip()

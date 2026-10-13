@@ -43,8 +43,8 @@ import subprocess
 import termios
 import time
 
-from guest_exec import guest_agent_exec_root
-from pve_api import proxmox_api
+from infra.guest_exec import guest_agent_exec_root
+from infra.client import proxmox_api
 from ssh_ops import gateway_proxy, ssh_on_gateway, ssh_via_gateway
 
 # (port, label) of engine services boxes reach at the team gateway address. apt-cacher-ng
@@ -65,25 +65,10 @@ FW_APPLY_BUDGET_S = 600      # config push → reboot → SSH on the WAN address
 FW_PUSH_ATTEMPT_S = 30       # one push attempt; sshd answers before a booting appliance can log in
 
 
+# The WAN pass rule must be the FIRST <rule> in the filter block and its destination
+# the `lan` KEYWORD — pfSense's <network> field takes a keyword/alias, not a CIDR, and
+# a raw CIDR there silently drops the rule (pfsense-ad 2026-09-28).
 def generate_team_config(seed_xml, team_id, red_dnat_spec=None, authorized_key=None):
-    """Render one team's pfSense config.xml from the factory seed (pure string surgery,
-    promoted from the per-comp gen_pfsense_config.py copies).
-
-    WAN vtnet0 = 172.31.<team_id>.2/30 (gw = engine 172.31.<team_id>.1); LAN vtnet1 =
-    192.168.<team_id>.1/24; SSH on; outbound NAT disabled (the engine masquerades to
-    the internet); WAN pass rule any→lan so routed engine scoring gets in. The WAN rule
-    must be the FIRST <rule> in the filter block and its destination must be the
-    `lan` KEYWORD — pfSense's <network> field takes a keyword/alias, not a CIDR, and a
-    raw CIDR there silently drops the rule (pfsense-ad 2026-09-28). An
-    <afterbootupshellcmd> starts the qemu-guest-agent (absent seeds get it injected).
-
-    red_dnat_spec (optional, Compfile `firewall_dnat` "PORT->TARGET[,...]") adds port
-    forwards on the LAN address — the beacon-C2 path when the firewall, not the engine,
-    owns the gateway address and the beacon lands on .1. `{tid}` in the target is
-    replaced with the team identifier for per-team routed-segment targets.
-
-    authorized_key (an OpenSSH public key line) lands in admin's authorizedkeys so the
-    deploy can SSH the firewall after the config replaces the template's."""
     tid = str(team_id)
     x = seed_xml
 
@@ -214,34 +199,23 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None, authorized_key=N
     return x
 
 
+# Single definition of the firewall-kind rule (windows_ops pattern).
 def firewall_kind(template_name):
-    """Single definition of the firewall-kind rule (windows_ops pattern): a template whose
-    name contains 'vyos' bootstraps via generated VyOS set-commands; any other in_path box
-    is treated as pfSense (config.xml surgery)."""
     return "vyos" if "vyos" in (template_name or "").lower() else "pfsense"
 
 
+# VyOS pass-A script: everything on eth0, so the commit cannot cut the session that
+# pushed it. Deliberately NO filter rules (live-validated against the 2026.03 stream
+# image): the circinus firewall revamp removed interface-attached rulesets entirely,
+# and its default-accept forward/input chains already allow exactly the pfSense rule
+# set's effect (routed scoring any→LAN, boxes→engine services, engine→WAN tcp/22; the
+# transit /30 carries only the engine). If real filtering is ever needed, write
+# base-chain rules, not interface attachment. NAT DNAT matches on the destination
+# address alone — `inbound-interface eth1` is not a valid leaf on this image. The
+# script ends on a grep canary at the op-mode prompt and closes with a final `exit` —
+# a script ending at `exit` leaves the canary line to land on a fresh login prompt
+# and wedges the PTY (live-found 2026-10-08).
 def generate_vyos_commands(team_id, red_dnat_spec=None):
-    """VyOS pass-A CLI script (pure, for tests): everything on eth0, so the commit cannot
-    cut the session that pushed it. WAN eth0 = 172.31.<team_id>.2/30, default route via
-    the engine, SSH on, dest-NAT for the engine gateway services and the `firewall_dnat`
-    specs.
-
-    Deliberately NO filter rules (live-validated against the 2026.03 stream image): the
-    1.5/circinus firewall revamp removed interface-attached rulesets entirely
-    (`set interfaces ethernet ethX firewall in name Y` and `set firewall interface …`
-    are both invalid — base chains are the replacement), and the pfSense WAN rule set's
-    EFFECT (routed scoring any→LAN, boxes→engine services, engine→WAN tcp/22) is exactly
-    what circinus's default-accept forward/input chains already allow. Exposure equals
-    the pfSense config: the transit /30 carries only the engine. If the range ever needs
-    real filtering, write base-chain rules (set firewall ipv4 forward filter rule …),
-    not interface attachment.
-
-    NAT DNAT matches on the destination address alone — `inbound-interface eth1` is not
-    a valid leaf on this image, and the gateway address only exists on eth1 anyway. The
-    script ends on a grep canary at the op-mode prompt and closes with a final `exit` —
-    a script ending at `exit` leaves the canary line to land on a fresh login: prompt
-    and wedges the PTY (live-found 2026-10-08)."""
     tid = str(team_id)
     wan, gw, lan_gw = f"172.31.{tid}.2", f"172.31.{tid}.1", f"192.168.{tid}.1"
     lines = [
@@ -287,10 +261,9 @@ def generate_vyos_commands(team_id, red_dnat_spec=None):
     return "\n".join(lines) + "\n"
 
 
+# Pass B: run over the WAN address AFTER pass A — the session rides eth0 and
+# survives the eth1 flip.
 def generate_vyos_lan_commands(team_id):
-    """VyOS pass-B CLI script: move eth1 off the 192.168.1.1 bootstrap address onto the
-    team gateway. Run over the WAN address AFTER pass A — the session rides eth0 and
-    survives the flip. Idempotent: the delete no-ops when the bootstrap address is gone."""
     tid = str(team_id)
     return "\n".join([
         "configure",
@@ -305,17 +278,12 @@ def generate_vyos_lan_commands(team_id):
 
 
 def vyos_lan_config_path(pass_a_path):
-    """The pass-B artifact path for a pass-A config-team<id>.cmds path."""
     return pass_a_path.with_name(pass_a_path.stem + "-lan.cmds")
 
 
+# Configs are kept as deploy artifacts — debugging a firewall means diffing what it
+# was given.
 def write_team_configs(comp_dir, teams, red_dnat_spec=None, kind="pfsense"):
-    """Write each team's generated firewall config into the comp dir (kept as deploy
-    artifacts — debugging a firewall means diffing what it was given). pfSense renders the
-    comp's factory seed (pfsense/config-team<id>.xml; returns the seed-missing error when
-    there is no seed to work from); VyOS needs no seed and writes the pass-A/pass-B
-    command scripts (vyos/config-team<id>.cmds + -lan.cmds).
-    Returns team_key → the path bootstrap_firewalls pushes FIRST (pass A for VyOS)."""
     if kind == "vyos":
         out_dir = comp_dir / "vyos"
         out_dir.mkdir(exist_ok=True)
@@ -347,17 +315,14 @@ def write_team_configs(comp_dir, teams, red_dnat_spec=None, kind="pfsense"):
 
 
 def tcp_probe_cmd(ip, port, timeout=4):
-    """Remote shell probe (run on the engine): prints UP when ip:port accepts a connection."""
     return f"timeout {timeout} bash -c 'cat < /dev/null > /dev/tcp/{ip}/{port}' && echo UP"
 
 
 def firewall_wan_ip(tid):
-    """The firewall's transit-side (WAN) address for team identifier `tid`."""
     return f"172.31.{tid}.2"
 
 
 def team_gateway_ip(tid):
-    """The team gateway address: held by the engine pre-cutover, by the firewall after."""
     return f"192.168.{tid}.1"
 
 
@@ -367,7 +332,6 @@ def _probe_tcp(ssh_ctx, ip, port, timeout=4):
 
 
 def _wait_tcp(ssh_ctx, ip, port, budget_s=300, interval_s=10):
-    """_probe_tcp, retried until `budget_s` elapses (convergence after a network change)."""
     deadline = time.time() + budget_s
     while True:
         if _probe_tcp(ssh_ctx, ip, port, timeout=8):
@@ -378,8 +342,6 @@ def _wait_tcp(ssh_ctx, ip, port, budget_s=300, interval_s=10):
 
 
 def _push_command(config_xml):
-    """Shell line (pfSense admin shell) that installs config_xml and reboots — or reports
-    UNCHANGED and does nothing when the box already runs exactly this config."""
     b64 = base64.b64encode(config_xml.encode()).decode()
     return (f"echo {b64} | openssl base64 -d -A > /tmp/tez-new.xml && [ -s /tmp/tez-new.xml ] && "
             "if cmp -s /tmp/tez-new.xml /cf/conf/config.xml; then echo UNCHANGED; "
@@ -387,10 +349,10 @@ def _push_command(config_xml):
             "(nohup sh -c 'sleep 2; /sbin/reboot' >/dev/null 2>&1 &) && echo APPLIED; fi")
 
 
+# Retried while the appliance is still booting: sshd listens before a login can
+# complete (live-found 2026-10-05: the first push hung its whole 90s on a freshly
+# cloned firewall). The push is idempotent, so a retry after a half-run is safe.
 def _push_config(ssh_ctx, ip, config_xml, who, budget_s=FW_BOOT_BUDGET_S):
-    """Push config_xml, retrying while the appliance is still booting: sshd listens before
-    a login can complete (live-found 2026-10-05: the first push hung its whole 90s on a
-    freshly cloned firewall). The push is idempotent, so a retry after a half-run is safe."""
     deadline = time.time() + budget_s
     last = "no attempt"
     while True:
@@ -421,13 +383,11 @@ def _strip_ansi(text):
     return ANSI_RE.sub("", text).replace("\r", "")
 
 
+# Feeding is expect-style — the next line goes in only after the transcript shows a
+# prompt — because blind pacing loses twice on this image (live-found 2026-10-08):
+# bulk-written input wedges the CLI inside `save`, and save flushes the tty input
+# queue on return, eating any line still queued behind it.
 def _pty_session(args, script, timeout_s=45):
-    """One ssh session driving `script` through a REAL local PTY sized 24x80 (pure, for
-    tests). Feeding is expect-style — the next line goes in only after the transcript
-    shows a prompt — because blind pacing loses twice on this image (live-found
-    2026-10-08): bulk-written input wedges the CLI inside `save`, and save flushes the
-    tty input queue on return, eating any line still queued behind it. Returns
-    (returncode, transcript)."""
     master, slave = pty.openpty()
     try:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
@@ -482,14 +442,13 @@ def _pty_session(args, script, timeout_s=45):
     return p.returncode, buf.decode(errors="replace")
 
 
+# No remote command — the login shell IS the CLI; lines execute exactly as
+# console-typed. A circinus commit prints NOTHING on success, so success = clean ssh
+# exit AND the script's closing grep canary answering (a failed commit leaves the
+# running config untouched, so the canary goes quiet). Retried while the appliance is
+# still booting, same wound as the pfSense push; idempotent, so a retry after a
+# half-run is safe.
 def _push_vyos(ssh_ctx, ip, script, canary, who, budget_s=FW_BOOT_BUDGET_S):
-    """Run `script` through the VyOS CLI over SSH (no remote command — the login shell
-    IS the CLI; lines execute exactly as console-typed). A circinus commit prints
-    NOTHING on success, so success = clean ssh exit AND the script's closing grep canary
-    answering (a failed commit leaves the running config untouched, so the canary goes
-    quiet). Retried while the appliance is still booting: sshd listens before a login
-    can complete, same wound as the pfSense push. Idempotent — a retry after a half-run
-    is safe."""
     args = ["ssh", "-tt", "-i", ssh_ctx["ssh_key_path"],
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
@@ -510,10 +469,6 @@ def _push_vyos(ssh_ctx, ip, script, canary, who, budget_s=FW_BOOT_BUDGET_S):
 
 
 def _bootstrap_vyos(ssh_ctx, target, pass_a_path, nic, log=print):
-    """One team's VyOS bootstrap (kind branch of bootstrap_firewalls): pass A over the
-    template's 192.168.1.1 bootstrap address, then pass B — the eth1 address flip — over
-    the WAN address the live pass-A commit just brought up. No reboot at any step; a
-    firewall already answering on its WAN address takes both passes there."""
     tid, key, vmid = target["identifier"], target["team_key"], target["vmid"]
     wan = f"172.31.{tid}.2"
     pass_a = pass_a_path.read_text()
@@ -548,10 +503,10 @@ def _bootstrap_vyos(ssh_ctx, target, pass_a_path, nic, log=print):
     log(f"    {key}: config applied live (no reboot)")
 
 
+# Silent REST /agent/ping wait: clones of the pre-retrofit template answer False —
+# that is normal, not a failure; the loud wait_for_guest_agent is for managed boxes
+# where an agentless VM IS a problem.
 def _agent_answers(node, vmid, timeout=45):
-    """Silent REST /agent/ping wait (clones of the pre-retrofit template answer False —
-    that is normal, not a failure; the loud wait_for_guest_agent is for managed boxes
-    where an agentless VM IS a problem)."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -562,11 +517,9 @@ def _agent_answers(node, vmid, timeout=45):
     return False
 
 
+# Best-effort readback for a failed firewall wait; returns '' when the agent doesn't
+# answer (pre-retrofit clones) — diagnostics must never become the failure.
 def fw_agent_diagnostic(node, vmid):
-    """Best-effort agent readback for a failed firewall wait — guest interface
-    addresses plus whether the pushed config.xml landed (size + the agent's boot
-    shellcmd marker). Returns '' when the agent doesn't answer (pre-retrofit clones)
-    or anything else goes wrong; diagnostics must never become the failure."""
     if not node or not _agent_answers(node, vmid, timeout=10):
         return ""
     try:
@@ -584,21 +537,9 @@ def fw_agent_diagnostic(node, vmid):
         return ""
 
 
+# Teams run one at a time: every template boots as 192.168.1.1 on its own isolated
+# bridge, and the engine can hold only one borrowed address route at once.
 def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, log=print, node=None):
-    """Push every team's generated config to its firewall over SSH, then wait for the
-    appliance to answer on its WAN address. pfSense: config.xml replace + reboot. VyOS:
-    two live-apply command passes (_bootstrap_vyos).
-
-    fw_targets: one target dict per team's in_path firewall (slot-0 only — the engine
-    node), each carrying team_key/identifier. config_paths: team_key → the first config
-    to push (the pfSense config-team<id>.xml / the VyOS pass-A .cmds). node (optional,
-    the Proxmox node name): when given, the qemu-guest-agent (sealed into
-    pfsense-provision 958) adds a post-boot confirmation log line and its readback to
-    the failure text; agentless clones are normal and stay silent — VyOS clones have no
-    agent layer. Teams run one at a time: every template boots as 192.168.1.1 on its own
-    isolated bridge, and the engine can hold only one borrowed address route at once.
-    Idempotent — a firewall already answering on its transit address is reached there
-    and left alone when its config is unchanged (pfSense) / re-applied harmlessly (VyOS)."""
     keys = sorted(teams)
     for t in fw_targets:
         tid, key = t["identifier"], t["team_key"]
@@ -642,14 +583,10 @@ def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, log=print, nod
         log(f"    {key}: firewall up on {wan} (config applied)")
 
 
+# NIC naming must match terraform's team_nics exactly: ens19+ are the team NICs in
+# sorted team key order; the transit NICs continue the same positional sequence (one
+# per team, same order).
 def cutover_netplan_yaml(teams):
-    """The post-cutover /etc/netplan/60-team-ifaces.yaml body (pure, for tests).
-
-    NIC naming must match terraform's team_nics exactly: ens19+ are the team NICs in
-    sorted team key order, the transit NICs continue the same positional sequence (one
-    per team, same order). Team NICs stay up but carry no address (the firewall owns
-    the gateway now); each transit NIC holds 172.31.<id>.1/30 and the route to its
-    team subnet via 172.31.<id>.2."""
     keys = sorted(teams)
     n = len(keys)
     lines = ["network:", "  version: 2", "  ethernets:"]
@@ -668,13 +605,9 @@ def cutover_netplan_yaml(teams):
     return "\n".join(lines) + "\n"
 
 
+# CAVEAT (docs/internals.md): a future `terraform apply` re-writes the pre-cutover
+# netplan file.
 def cut_over_engine(ssh_ctx, teams, log=print):
-    """Move every team's gateway address from the engine to its firewall.
-
-    Rewrites /etc/netplan/60-team-ifaces.yaml (the file terraform's team_nics
-    provisioner wrote — see cutover_netplan_yaml), then `netplan apply` — no reboot,
-    the NICs already exist. Idempotent. CAVEAT (docs/internals.md): a future
-    `terraform apply` re-writes the pre-cutover file."""
     log("  Engine cutover: 192.168.<team>.1 moves to the firewalls; engine routes "
         "team subnets via the transit /30s")
     b64 = base64.b64encode(cutover_netplan_yaml(teams).encode()).decode()
@@ -693,10 +626,6 @@ FW_INSPECT_CMD = {"pfsense": "pfctl -sr", "vyos": "show firewall"}
 
 
 def verify_in_path(ssh_ctx, teams, managed_first_ip, log=print, kind="pfsense"):
-    """Fail-loud convergence gate after the cutover (routing_ops style): the engine
-    must route every team subnet via its firewall, each firewall must answer on its
-    transit address, and the first managed box must be reachable THROUGH it (the path
-    every later plant/scoring step takes)."""
     inspect = FW_INSPECT_CMD.get(kind, FW_INSPECT_CMD["pfsense"])
     failures = []
     for k in sorted(teams):

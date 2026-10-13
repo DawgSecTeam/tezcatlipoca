@@ -4,7 +4,8 @@ import json
 import time
 
 from constants import SNAP_BASE, SNAP_READY
-from range_ops import list_snapshots, wait_for_guest_agent
+from infra.guest_exec import wait_for_guest_agent
+from infra.lifecycle import list_snapshots
 from ssh_ops import classify_ssh_failure, ssh_to_engine
 from redeploy_select_ops import box_platform
 from redeploy_plant_ops import prepare_nakon_assets
@@ -13,14 +14,14 @@ from redeploy_rebuild_ops import mode_rebuild
 
 
 def scored_ports_for(comp_dir):
-    """box_name -> sorted scored TCP ports, from box_services.json pins.
-
-    Bare catalog names resolve through quotient's own _SERVICE_TO_CHECK — the same
-    mapping that builds event.conf — so the probe tests exactly what Quotient will
-    connect to. plant_only pins emit no scored check (their score rides a separate
-    score/tcp pin that carries the port). Best-effort by design: a missing or
-    unreadable box_services.json means fewer probed ports, never a crash — the SSH /
-    guest-agent leg still gates the verdict."""
+# box_name -> sorted scored TCP ports, from box_services.json pins.
+#
+#     Bare catalog names resolve through quotient's own _SERVICE_TO_CHECK — the same
+#     mapping that builds event.conf — so the probe tests exactly what Quotient will
+#     connect to. plant_only pins emit no scored check (their score rides a separate
+#     score/tcp pin that carries the port). Best-effort by design: a missing or
+#     unreadable box_services.json means fewer probed ports, never a crash — the SSH /
+#     guest-agent leg still gates the verdict.
     path = comp_dir / "box_services.json"
     if not path.exists():
         return {}
@@ -52,9 +53,9 @@ def scored_ports_for(comp_dir):
 
 
 def ports_closed_from_engine(ctx, ip, ports, per_port_timeout=3):
-    """The subset of `ports` the ENGINE cannot connect to on `ip` — Quotient's own
-    vantage, so an in-path firewall is traversed exactly as scoring traverses it.
-    Empty set = every scored port accepts a connection."""
+# The subset of `ports` the ENGINE cannot connect to on `ip` — Quotient's own
+#     vantage, so an in-path firewall is traversed exactly as scoring traverses it.
+#     Empty set = every scored port accepts a connection.
     if not ports:
         return set()
     probe = "; ".join(
@@ -76,14 +77,14 @@ RESET_PROBE_GAP_S = 20
 
 
 def probe_box_health(ctx, t, ports, node):
-    """Health verdict for one box after a reset rung: ('healthy'|'pam-trap'|'unhealthy',
-    detail). Healthy = the management transport answers (SSH via the gateway for Linux,
-    guest agent for Windows) AND every scored port accepts a connection from the engine.
-
-    The SSH leg doubles as the PAM planted-box trap detector: a tz-ready rollback boots
-    a post-plant disk, and a box that fell into the trap dies at SSH preauth with its
-    services possibly still listening — ports alone would call it healthy right before
-    it fails every auth-based scored check."""
+# Health verdict for one box after a reset rung: ('healthy'|'pam-trap'|'unhealthy',
+#     detail). Healthy = the management transport answers (SSH via the gateway for Linux,
+#     guest agent for Windows) AND every scored port accepts a connection from the engine.
+#
+#     The SSH leg doubles as the PAM planted-box trap detector: a tz-ready rollback boots
+#     a post-plant disk, and a box that fell into the trap dies at SSH preauth with its
+#     services possibly still listening — ports alone would call it healthy right before
+#     it fails every auth-based scored check.
     windows = box_platform(t["box"]) == "windows"
     detail = "no attempt"
     for attempt in range(1, RESET_PROBE_ATTEMPTS + 1):
@@ -108,15 +109,16 @@ def probe_box_health(ctx, t, ports, node):
     return "unhealthy", detail
 
 
-def mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty):
-    """Cheapest-that-works per-box reset: tz-ready rollback -> tz-base rollback + replant
-    -> golden rebuild. Each rung only receives the boxes the previous rung left
-    unhealthy (engine-vantage probe decides), so a box the cheap rung fixed is never
-    escalated and a box it cannot fix is never left behind.
-
-    A PAM-trap verdict escalates one rung rather than straight to rebuild: the trap
-    lives on the post-plant disk, the tz-base disk is pre-plant, and rebuild remains
-    the documented last resort (docs/known-issues.md)."""
+def mode_reset(targets, rctx):
+# Cheapest-that-works per-box reset: tz-ready rollback -> tz-base rollback + replant
+#     -> golden rebuild. Each rung only receives the boxes the previous rung left
+#     unhealthy (engine-vantage probe decides), so a box the cheap rung fixed is never
+#     escalated and a box it cannot fix is never left behind.
+#
+#     A PAM-trap verdict escalates one rung rather than straight to rebuild: the trap
+#     lives on the post-plant disk, the tz-base disk is pre-plant, and rebuild remains
+#     the documented last resort (docs/known-issues.md).
+    ctx, node, comp_dir, boxes = rctx.ctx, rctx.node, rctx.comp_dir, rctx.boxes
     print(f"\n  Reset ladder: '{SNAP_READY}' rollback -> '{SNAP_BASE}' rollback + replant "
           f"-> golden rebuild. Escalating only the boxes each rung leaves unhealthy.")
     ports_by_box = scored_ports_for(comp_dir)
@@ -129,10 +131,10 @@ def mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty):
         return assets
 
     def _rung(batch, run):
-        """(restored, carry). On success carry is empty. On a wholesale failure
-        (mode_rollback raises when NOTHING was restored, mode_rebuild on config
-        errors) the rung touched nobody, so the whole batch carries to the next
-        rung unprobed. KeyboardInterrupt still aborts."""
+    # (restored, carry). On success carry is empty. On a wholesale failure
+    #         (mode_rollback raises when NOTHING was restored, mode_rebuild on config
+    #         errors) the rung touched nobody, so the whole batch carries to the next
+    #         rung unprobed. KeyboardInterrupt still aborts.
         try:
             return run(batch) or [], []
         except (Exception, SystemExit) as e:
@@ -149,8 +151,8 @@ def mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty):
         return have, missing
 
     def _probe_all(batch, level_label):
-        """Probe a rung's output; healthy boxes earn their level label, and the boxes
-        the next rung must handle are returned."""
+    # Probe a rung's output; healthy boxes earn their level label, and the boxes
+    #         the next rung must handle are returned.
         escalate = []
         for t in batch:
             verdict, detail = probe_box_health(ctx, t, ports_by_box.get(t["box_name"], ()), node)
@@ -175,7 +177,7 @@ def mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty):
     if have_ready:
         print(f"\n  [reset 1/3] {len(have_ready)} box(es): rollback to '{SNAP_READY}'...")
         restored, carry = _rung(have_ready, lambda b: mode_rollback(
-            b, ctx, node, SNAP_READY, comp_dir, state, None, None, reconfigure=False))
+            b, rctx, SNAP_READY, None, None, reconfigure=False))
         pending += carry + _probe_all(restored, f"'{SNAP_READY}' rollback")
 
     # Rung 2: the pre-plant disk, re-planted and domain-chained by mode_rollback.
@@ -186,7 +188,7 @@ def mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty):
         print(f"\n  [reset 2/3] {len(have_base)} box(es): rollback to '{SNAP_BASE}' + replant...")
         cfg, bundle = nakon_assets()
         restored, carry = _rung(have_base, lambda b: mode_rollback(
-            b, ctx, node, SNAP_BASE, comp_dir, state, cfg, bundle, reconfigure=True))
+            b, rctx, SNAP_BASE, cfg, bundle, reconfigure=True))
         pending += carry + _probe_all(restored, f"'{SNAP_BASE}' rollback + replant")
 
     # Rung 3: golden rebuild — the documented PAM-trap workaround.
@@ -194,7 +196,7 @@ def mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty):
         print(f"\n  [reset 3/3] {len(pending)} box(es): rebuild from golden template...")
         cfg, bundle = nakon_assets()
         rebuilt, carry = _rung(pending, lambda b: mode_rebuild(
-            b, ctx, node, comp_dir, state, cfg, bundle))
+            b, rctx, cfg, bundle))
         pending += carry + _probe_all(rebuilt, "golden rebuild")
 
     print(f"\n{'='*64}")

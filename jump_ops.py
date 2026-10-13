@@ -22,18 +22,18 @@ import time
 from constants import DEFAULT_ENGINE_MGMT_GW, ownership_tags
 from jump_rules import (APT_CACHER_PORT, JUMP_TAGS_EXTRA, jump_rules, jump_sysctl_script,  # noqa: F401
                         red_segment_from_env)
-from guest_exec import wait_for_guest_agent
-from pve_api import cluster_vms_for, proxmox_api, wait_for_proxmox_task
-from vm_lifecycle import start_vm, vm_status
-from vm_ownership import clone_marker, destroy_vm_if_exists, gc_orphan_volumes
+from infra.guest_exec import wait_for_guest_agent
+from infra.client import cluster_vms_for, proxmox_api, wait_for_proxmox_task
+from infra.lifecycle import start_vm, vm_status
+from infra.ownership import clone_marker, destroy_vm_if_exists, gc_orphan_volumes
 from ssh_ops import DEFAULT_KNOWN_HOSTS, forget_engine_host_key
 from utils import PRINT_LOCK, run_concurrent
 
 
 
 def find_jump_template(node, hint=""):
-    """The satellite's alpine base template (jump clone source). Name-substring match,
-    stopped, tagged `template`, ON this node — mirrors _template_vmid_map's rules."""
+# The satellite's alpine base template (jump clone source). Name-substring match,
+#     stopped, tagged `template`, ON this node — mirrors _template_vmid_map's rules.
     hint = hint or "alpine"
     matches = {}
     for vm in cluster_vms_for(node):
@@ -63,8 +63,8 @@ def _node_template_names(node):
 
 
 def _jump_ssh(ip, user, key_path, cmd, timeout=60):
-    """Direct SSH to the jump's mgmt IP (deploy host and jump share the mgmt LAN;
-    no engine hop needed)."""
+# Direct SSH to the jump's mgmt IP (deploy host and jump share the mgmt LAN;
+#     no engine hop needed).
     return subprocess.run(
         ["ssh", "-i", key_path,
          "-o", "StrictHostKeyChecking=accept-new",
@@ -75,14 +75,14 @@ def _jump_ssh(ip, user, key_path, cmd, timeout=60):
 
 
 def wait_jump_ready(node, vmid, ip, user, key_path, expected_key, timeout=900):
-    """Wait for the jump to be SSH-able, watching the PREREQUISITES over the guest
-    agent (no SSH needed): cloud-init must have installed THE DEPLOY KEY (a fresh
-    clone carries the template's build key in authorized_keys before cloud-init
-    runs — "non-empty" would pass on stale state) and unlocked the account (a
-    shadow-locked user is refused even with a valid key). Cold clones take ~10 min
-    from first agent ping to sshd-ready, so the agent channel is the signal; only
-    then poll SSH briefly."""
-    from range_ops import guest_agent_exec_root
+# Wait for the jump to be SSH-able, watching the PREREQUISITES over the guest
+#     agent (no SSH needed): cloud-init must have installed THE DEPLOY KEY (a fresh
+#     clone carries the template's build key in authorized_keys before cloud-init
+#     runs — "non-empty" would pass on stale state) and unlocked the account (a
+#     shadow-locked user is refused even with a valid key). Cold clones take ~10 min
+#     from first agent ping to sshd-ready, so the agent channel is the signal; only
+#     then poll SSH briefly.
+    from infra.guest_exec import guest_agent_exec_root
     key_body = expected_key.split()[1] if len(expected_key.split()) > 1 else expected_key
     # cloud-init-done is the real gate: the template's build key IS the deploy key
     # (same operator key built the template), so key-matching alone passes instantly
@@ -116,8 +116,8 @@ def wait_jump_ready(node, vmid, ip, user, key_path, expected_key, timeout=900):
 
 def configure_jump(ip, user, key_path, team_identifiers, engine_mgmt_ip,
                    red_segment=""):
-    """Push forwarding + NAT rules and make them persistent (Alpine OpenRC or
-    Debian netfilter-persistent, detected from the guest itself)."""
+# Push forwarding + NAT rules and make them persistent (Alpine OpenRC or
+#     Debian netfilter-persistent, detected from the guest itself).
     rules = jump_rules(team_identifiers, engine_mgmt_ip, red_segment=red_segment)
     quoted = subprocess.list2cmdline([rules]).replace("'", "'\\''")
     probe = _jump_ssh(ip, user, key_path,
@@ -180,8 +180,8 @@ def verify_jump(ip, user, key_path):
 
 
 def _log(*args, **kwargs):
-    """print() under the shared lock: _build_one runs on a thread pool (build_jump_vms),
-    so an unwrapped multi-line print from one satellite interleaves into another's."""
+# print() under the shared lock: _build_one runs on a thread pool (build_jump_vms),
+#     so an unwrapped multi-line print from one satellite interleaves into another's.
     with PRINT_LOCK:
         print(*args, **kwargs)
 
@@ -189,20 +189,19 @@ def _log(*args, **kwargs):
 def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
                    engine_mgmt_gw=DEFAULT_ENGINE_MGMT_GW, engine_node_name=None,
                    run_id=None, red_segment=""):
-    """Clone + configure one jump per satellite. Returns {node_name: jump_vmid}.
-
-    Satellites run CONCURRENTLY. Each is a different Proxmox host reached over the
-    direct API path (node-scoped calls follow the placement route table) with its SSH
-    configuration going over the mgmt LAN, and each build is dominated by a full clone
-    plus a first-boot cloud-init wait — measured 17s to 547s, avg ~150s, across
-    17 samples in multinode-spread-2026-09-30. Serially that made an 8-satellite
-    spread pay ~18 minutes of pure waiting for no reason.
-
-    Bounded at 4 rather than the pool's default 8: unlike the per-box work, each unit
-    here is a *full* clone onto a datastore, and a satellite host may be running
-    several. 4 keeps clone-write saturation and the Proxmox task load in the range the
-    M0.2/M2.1 benchmarks validated, while still collapsing the wait.
-    """
+# Clone + configure one jump per satellite. Returns {node_name: jump_vmid}.
+#
+#     Satellites run CONCURRENTLY. Each is a different Proxmox host reached over the
+#     direct API path (node-scoped calls follow the placement route table) with its SSH
+#     configuration going over the mgmt LAN, and each build is dominated by a full clone
+#     plus a first-boot cloud-init wait — measured 17s to 547s, avg ~150s, across
+#     17 samples in multinode-spread-2026-09-30. Serially that made an 8-satellite
+#     spread pay ~18 minutes of pure waiting for no reason.
+#
+#     Bounded at 4 rather than the pool's default 8: unlike the per-box work, each unit
+#     here is a *full* clone onto a datastore, and a satellite host may be running
+#     several. 4 keeps clone-write saturation and the Proxmox task load in the range the
+#     M0.2/M2.1 benchmarks validated, while still collapsing the wait.
     from nodes_ops import record_of
     sats = list(placement["satellites"])
 
@@ -246,7 +245,7 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
         _log("    jump VM already running from a previous attempt — reconfiguring in place")
         # Re-stamp ownership so a jump adopted from an earlier attempt is recognized
         # by this run's teardown guards.
-        from range_ops import retag_ownership
+        from infra.ownership import retag_ownership
         try:
             retag_ownership(node, vmid, ownership)
         except Exception as e:
@@ -319,7 +318,7 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
 
 
 def destroy_jump_vms(placement, comp_tags):
-    """Phase-1/teardown half: destroy every satellite's jump VM (ownership-checked)."""
+# Phase-1/teardown half: destroy every satellite's jump VM (ownership-checked).
     from nodes_ops import record_of
     for sat in placement.get("satellites", []):
         rec = record_of(placement, sat["name"])

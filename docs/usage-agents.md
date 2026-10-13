@@ -417,7 +417,9 @@ Everything that exists in argparse but is not part of the happy path, in one pla
 | `--timeout SECONDS` | `verify-competition.py` | Optional whole-run wall-clock budget (default `0` = off), checked **between** gates so it never interrupts a Proxmox task. A gate skipped on budget is recorded `SKIP` — non-passing — so a budget can bound a verify but never turn an unevaluated range into a PASS (waive with `--allow-unverified`) |
 | `--packet <profile>` | `verify-competition.py` | Add the `packet_creds` + `packet_accounts` gates (packet credentials match `credentials.txt`; `out_of_scope` decoy accounts exist) |
 | `--red-identity` | `verify-competition.py` | Prove red's **routed-mode** source address survives end-to-end: holds a TCP connection from red01 to a Linux box's `:22` and reads the box's `ss` table, expecting red's segment IP as the peer rather than the team gateway. Tri-state like the isolation check (SKIP when unverifiable). Requires red01 deployed |
-| `--red-ip` / `--red-user` / `--red-seg-ip` | `verify-competition.py` | Inputs for `--red-identity`. Defaults: red01 `10.0.0.198`, user `sysadmin`, segment IP from `../bad-auto/config.yaml` else `10.200.0.10` |
+| `--red-ip` / `--red-user` / `--red-seg-ip` | `verify-competition.py` | Inputs for `--red-identity`. Defaults: the comp's own bad-auto config
+(`competitions/<id>/.badauto-config.yaml`) else red01 `10.0.0.198`, user `sysadmin`, segment
+IP `10.200.0.10` |
 | `--scoring-vmid N` | `create-competition.py` | Pick a free engine vmid for this run (dodges the default 1000 where it is taken) |
 
 The red team's network mode itself (`routed` vs `masq`) is owned by `../bad-auto`, not this repo;

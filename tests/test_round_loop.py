@@ -40,13 +40,13 @@ class RoundLoopState(unittest.TestCase):
         return round_loop.round_loop_state(payload, now=NOW, **kw)["state"]
 
     def test_a_paused_engine_with_a_real_round_is_not_stale(self):
-        """An intentional pause has a real current round time; never restart it."""
+    # An intentional pause has a real current round time; never restart it.
         current = (NOW - timedelta(seconds=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.assertEqual(self.state(_engine(running=False, current=current,
                                             started_min_ago=600)), round_loop.PAUSED)
 
     def test_paused_engine_with_zero_time_and_stale_round_is_stale(self):
-        """The reboot signature remains healable when the engine reports paused."""
+    # The reboot signature remains healable when the engine reports paused.
         self.assertEqual(self.state(_engine(running=False, started_min_ago=30)),
                          round_loop.STALE)
 
@@ -60,8 +60,8 @@ class RoundLoopState(unittest.TestCase):
                          round_loop.ADVANCING)
 
     def test_zero_time_with_a_fresh_start_is_only_pending(self):
-        """A fresh deploy has not scored its first round yet; Delay+Jitter has to elapse
-        before that means anything."""
+    # A fresh deploy has not scored its first round yet; Delay+Jitter has to elapse
+    #         before that means anything.
         self.assertEqual(self.state(_engine(started_min_ago=1)), round_loop.PENDING)
 
     def test_zero_time_with_an_old_start_is_stale(self):
@@ -81,7 +81,7 @@ class RoundLoopState(unittest.TestCase):
         self.assertEqual(self.state(just_outside), round_loop.STALE)
 
     def test_a_missing_start_time_cannot_be_judged(self):
-        """No last round at all is not evidence of a stopped loop."""
+    # No last round at all is not evidence of a stopped loop.
         payload = {"running": True, "current_round_time": ZERO}
         self.assertEqual(self.state(payload), round_loop.ADVANCING)
 
@@ -103,7 +103,7 @@ class RoundLoopState(unittest.TestCase):
                                                     started_min_ago=30), now=NOW))
 
     def test_a_naive_now_is_accepted(self):
-        """The engine-side actor has no reason to build a tz-aware clock."""
+    # The engine-side actor has no reason to build a tz-aware clock.
         result = round_loop.round_loop_state(_engine(started_min_ago=30),
                                              now=datetime(2026, 10, 2, 12, 0, 0))
         self.assertEqual(result["state"], round_loop.STALE)

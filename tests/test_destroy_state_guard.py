@@ -11,7 +11,7 @@ sys.path.insert(0, str(_REPO))
 from teardown import machinery
 
 require_terraform_state = machinery.require_terraform_state
-from vm_ownership import Refusal  # noqa: E402
+from infra.ownership import Refusal  # noqa: E402
 
 
 class RequireTerraformStateTests(unittest.TestCase):

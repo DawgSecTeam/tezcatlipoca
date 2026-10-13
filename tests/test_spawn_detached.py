@@ -49,7 +49,7 @@ class SpawnDetached(unittest.TestCase):
         self.assertEqual(log, str(self.log))
 
     def test_the_child_leads_its_own_session(self):
-        """That is what makes it survive the caller and what makes a group kill work."""
+    # That is what makes it survive the caller and what makes a group kill work.
         pid, _ = self._spawn("sleep 5")
         time.sleep(0.3)
         self.assertEqual(os.getpgid(pid), pid)

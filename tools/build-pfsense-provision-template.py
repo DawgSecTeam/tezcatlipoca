@@ -45,7 +45,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 load_dotenv(".env")
 
-from pve_api import proxmox_api, wait_for_proxmox_task  # noqa: E402
+from infra.client import proxmox_api, wait_for_proxmox_task  # noqa: E402
 
 SOURCE_VMID = 956
 NEWID = int(os.environ.get("TEZ_PFSENSE_PROVISION_VMID", "957"))
@@ -64,64 +64,10 @@ def _monitor(vmid, command):
 
 
 def console_screenshot(vmid, out_path):
-    """PNG of the VM's VGA console via the PVE vncwebsocket (raw RFB, 3.3-style handshake:
-    PVE rejects the 3.8 type-list path over vncwebsocket). PVE packs several RFB messages
-    into one websocket frame, so reads are buffered, not per-frame."""
-    import ssl
-    import struct
-    from urllib.parse import quote
-
-    import requests
-    import urllib3
-    import websocket
-    from PIL import Image
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
-    urllib3.disable_warnings()
-    endpoint = os.environ["TF_VAR_proxmox_endpoint"].rstrip("/")
-    host = endpoint.split("//")[1].split(":")[0]
-    auth = {"Authorization": f"PVEAPIToken={os.environ['TF_VAR_proxmox_api_token']}"}
-    sess = requests.Session()
-    sess.headers.update(auth)
-    sess.verify = False
-    d = sess.post(f"{endpoint}/api2/json/nodes/{node()}/qemu/{vmid}/vncproxy",
-                  data={"websocket": 1}, timeout=30).json()["data"]
-    ws = websocket.create_connection(
-        f"wss://{host}:8006/api2/json/nodes/{node()}/qemu/{vmid}/vncwebsocket"
-        f"?port={d['port']}&vncticket={quote(d['ticket'])}",
-        header=auth, sslopt={"cert_reqs": ssl.CERT_NONE}, timeout=60)
-    pending = bytearray()
-
-    def rx(n):
-        while len(pending) < n:
-            pending.extend(ws.recv())
-        out = bytes(pending[:n])
-        del pending[:n]
-        return out
-
-    try:
-        rx(12)
-        ws.send_binary(b"RFB 003.003\n")
-        if struct.unpack(">I", rx(4))[0] == 2:
-            key = d["ticket"].encode()[:8].ljust(8, b"\x00")
-            des = bytes(int(f"{b:08b}"[::-1], 2) for b in key)
-            enc = Cipher(algorithms.TripleDES(des), modes.ECB()).encryptor()
-            ws.send_binary(enc.update(rx(16)) + enc.finalize())
-            if struct.unpack(">I", rx(4))[0] != 0:
-                raise OSError("VNC auth failed")
-        ws.send_binary(b"\x01")
-        init = rx(24)
-        w, h = struct.unpack(">HH", init[:4])
-        rx(struct.unpack(">I", init[20:24])[0])
-        pf = struct.pack(">BBBBHHHBBB3x", 32, 24, 0, 1, 255, 255, 255, 16, 8, 0)
-        ws.send_binary(b"\x00\x00\x00\x00" + pf)
-        ws.send_binary(b"\x02\x00" + struct.pack(">Hi", 1, 0))
-        ws.send_binary(b"\x03\x00" + struct.pack(">HHHH", 0, 0, w, h))
-        rx(16)
-        Image.frombytes("RGBX", (w, h), rx(w * h * 4), "raw", "BGRX").convert("RGB").save(out_path)
-        return out_path
-    finally:
-        ws.close()
+    """PNG of the VM's VGA console via the shared infra.console RFB handshake."""
+    from infra.console import vnc_screenshot
+    return vnc_screenshot(os.environ["TF_VAR_proxmox_endpoint"].rstrip("/"),
+                          os.environ["TF_VAR_proxmox_api_token"], node(), vmid, out_path)
 
 
 def node():
@@ -187,7 +133,6 @@ def seal():
     print(f"{NEWID} sealed as a template")
 
 
-# ---------------------------------------------------------------------------
 # qemu-guest-agent retrofit
 
 
@@ -261,19 +206,6 @@ def _wait_guest_ssh():
                              f"{QGA_BOOT_BUDGET_S}s — is the scratch VM running with "
                              f"net1 on {QGA_BRIDGE} and the node alias in place?")
         time.sleep(10)
-
-
-def _catalog_entries(catalog_yaml, names):
-    """packagesite.yaml is JSON-lines: one package object per line."""
-    found = {}
-    with open(catalog_yaml) as fh:
-        for line in fh:
-            for want in names:
-                if f'"name":"{want}"' in line:
-                    obj = json.loads(line)
-                    found[obj["name"]] = obj
-                    break
-    return found
 
 
 def _resolve_packages(branch, want="qemu-guest-agent"):

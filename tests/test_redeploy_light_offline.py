@@ -16,8 +16,9 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 from teardown import machinery as dto  # noqa: E402
-from vm_ownership import Ownership  # noqa: E402
+from infra.ownership import Ownership  # noqa: E402
 import redeploy_light_ops as light  # noqa: E402
+from redeploy_context import RedeployContext  # noqa: E402
 from constants import SNAP_BASE, SNAP_READY  # noqa: E402
 
 LIN = {"name": "web01", "template": "base-ubuntu24.04-fix"}
@@ -30,6 +31,13 @@ def _t(box, team="team1", vmid=1, node=None):
     if node:
         t["node"] = node
     return t
+
+
+def _rctx(ctx=None, node="pve1", comp_dir=Path("."), state=None, state_path=None):
+    return RedeployContext(comp_dir=comp_dir, name="x", comp_name="x", node=node,
+                           teams=None, boxes=None, difficulty=None,
+                           state={} if state is None else state,
+                           state_path=state_path, ctx={} if ctx is None else ctx)
 
 
 @contextlib.contextmanager
@@ -54,8 +62,9 @@ class Resync(unittest.TestCase):
                     patch.object(light, "guest_agent_exec_root",
                                  side_effect=lambda n, v, c, timeout: lin_calls.append((n, c)) or (1, "", "bad")), \
                     quiet() as out:
-                done = light.mode_resync([_t(LIN, node="pve2"), _t(WIN)], {}, "pve1", comp, state,
-                                         comp / ".deploy_state.json")
+                done = light.mode_resync([_t(LIN, node="pve2"), _t(WIN)],
+                                         _rctx(comp_dir=comp, state=state,
+                                               state_path=comp / ".deploy_state.json"))
             self.assertEqual(len(done), 2)
             self.assertEqual(state["admin_password"], "new")
             self.assertEqual(state["box_creds"], {"a": "y"})
@@ -69,7 +78,7 @@ class Resync(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, \
                 patch.object(light, "read_event_conf", return_value={}), quiet():
             with self.assertRaises(SystemExit):
-                light.mode_resync([], {}, "pve1", Path(d), {}, Path(d) / "s.json")
+                light.mode_resync([], _rctx(comp_dir=Path(d), state={}, state_path=Path(d) / "s.json"))
 
 
 class Rollback(unittest.TestCase):
@@ -83,7 +92,7 @@ class Rollback(unittest.TestCase):
                 patch.object(light, "run_nakon_and_harden") as harden, \
                 patch.object(light, "rerun_domain_configs", return_value=True), \
                 patch.object(light, "take_snapshot") as snap, quiet():
-            done = light.mode_rollback([_t(LIN)], {}, "pve1", SNAP_BASE, Path("."), {}, "cfg", "b",
+            done = light.mode_rollback([_t(LIN)], _rctx(), SNAP_BASE, "cfg", "b",
                                        reconfigure=True)
         self.assertEqual(order, [("del", SNAP_READY), ("roll", SNAP_BASE)])
         self.assertEqual(len(done), 1)
@@ -99,7 +108,7 @@ class Rollback(unittest.TestCase):
                 patch.object(light.pipeline_api, "wait_for_boxes_ssh"), \
                 patch.object(light, "run_nakon_and_harden") as harden, \
                 patch.object(light, "take_snapshot") as snap, quiet():
-            light.mode_rollback([_t(LIN)], {}, "pve1", SNAP_READY, Path("."), {}, None, None,
+            light.mode_rollback([_t(LIN)], _rctx(), SNAP_READY, None, None,
                                 reconfigure=False)
         harden.assert_not_called()
         snap.assert_not_called()
@@ -108,7 +117,7 @@ class Rollback(unittest.TestCase):
         with patch.object(light, "list_snapshots", return_value=set()), \
                 patch.object(light, "rollback_snapshot", side_effect=RuntimeError("nope")), quiet():
             with self.assertRaises(SystemExit):
-                light.mode_rollback([_t(LIN)], {}, "pve1", SNAP_READY, Path("."), {}, None, None, False)
+                light.mode_rollback([_t(LIN)], _rctx(), SNAP_READY, None, None, False)
         with patch.object(light, "list_snapshots", return_value=set()), \
                 patch.object(light, "rollback_snapshot"), \
                 patch.object(light.pipeline_api, "wait_for_boxes_ssh"), \
@@ -117,7 +126,7 @@ class Rollback(unittest.TestCase):
                 patch.object(light, "rerun_domain_configs", side_effect=RuntimeError("dc")), \
                 patch.object(light, "take_snapshot") as snap, quiet():
             with self.assertRaises(RuntimeError):
-                light.mode_rollback([_t(LIN)], {}, "pve1", SNAP_BASE, Path("."), {}, "c", "b", True)
+                light.mode_rollback([_t(LIN)], _rctx(), SNAP_BASE, "c", "b", True)
         snap.assert_not_called()
 
 
@@ -128,7 +137,7 @@ class Reconfigure(unittest.TestCase):
             (comp / "domain_roles.json").write_text(json.dumps({"dc01": "dc"}))
             with patch.object(light.pipeline_api, "wait_for_boxes_ssh") as ssh, \
                     patch.object(light, "run_nakon_and_harden") as harden, quiet() as out:
-                done = light.mode_reconfigure([_t(WIN)], {}, comp, {}, "cfg", "bundle")
+                done = light.mode_reconfigure([_t(WIN)], _rctx(comp_dir=comp, state={}), "cfg", "bundle")
             self.assertEqual(len(done), 1)
             self.assertEqual(ssh.call_args.kwargs["timeout"], 900)
             harden.assert_called_once()

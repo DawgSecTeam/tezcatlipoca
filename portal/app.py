@@ -45,17 +45,9 @@ LOGIN_WINDOW = 300       # seconds
 LOGIN_MAX_FAILS = 10     # per client IP per window
 
 
-def _client_ip(request):
-    # The portal listens on 127.0.0.1 only: every request arrives via cloudflared (which sets
-    # CF-Connecting-IP) or an operator's ssh -L. Nothing else can reach it to forge the header.
-    return (request.headers.get("cf-connecting-ip")
-            or (request.client.host if request.client else "?"))
-
-
+# state/access.json: {open, opened_at, opened_by} — re-read per request: the CLI toggle in
+# portal_ops writes it out-of-band
 class AccessGate:
-    """state/access.json: {open, opened_at, opened_by}. Read per request (it is tiny and the
-    CLI toggle in portal_ops writes it out-of-band)."""
-
     def __init__(self, state_dir, default_open=False):
         self.path = Path(state_dir) / "access.json"
         self.default_open = default_open
@@ -81,9 +73,7 @@ class AccessGate:
 
 
 class AccessLog:
-    """JSON-lines audit trail: logins, console opens/closes, gate flips. Collected into
-    .automated-tests/<run-id>/ at teardown."""
-
+    # JSON-lines audit trail, collected into .automated-tests/<run-id>/ at teardown
     def __init__(self, state_dir):
         self.path = Path(state_dir) / "access.log"
         self._lock = threading.Lock()
@@ -164,7 +154,6 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
         return origin_host in {h for h in allowed if h}
 
     def resolve_box(s, team_req, box_name):
-        """(team_key, box) the session may open, or an error response."""
         if s["role"] == "team":
             if team_req and team_req != s["team"]:
                 return None, err(403, "not your team")
@@ -190,7 +179,11 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
     async def login(request: Request):
         if not same_origin(request):
             return err(403, "cross-origin request refused")
-        ip = _client_ip(request)
+        # The portal listens on 127.0.0.1 only: every request arrives via cloudflared (which
+        # sets CF-Connecting-IP) or an operator's ssh -L. Nothing else can reach it to forge
+        # the header.
+        ip = (request.headers.get("cf-connecting-ip")
+              or (request.client.host if request.client else "?"))
         if limiter.blocked(ip):
             log.write("login_blocked", ip=ip)
             return err(429, "too many failed logins — wait a few minutes")
@@ -363,11 +356,11 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
     return app
 
 
-def app_from_env():
+if os.environ.get("PORTAL_SECRET_KEY"):  # container entrypoint: `uvicorn app:app`
     secret = os.environ.get("PORTAL_SECRET_KEY")
     if not secret:
         raise SystemExit("PORTAL_SECRET_KEY is required")
-    return create_app(
+    app = create_app(
         os.environ.get("PORTAL_CONFIG", "/config/portal.json"),
         os.environ.get("PORTAL_EVENT_CONF", "/config/event.conf"),
         os.environ.get("PORTAL_STATE_DIR", "/state"),
@@ -376,7 +369,3 @@ def app_from_env():
         cookie_secure=os.environ.get("PORTAL_COOKIE_SECURE", "1") != "0",
         dist_dir=os.environ.get("PORTAL_DIST") or DIST_DIR,
     )
-
-
-if os.environ.get("PORTAL_SECRET_KEY"):  # container entrypoint: `uvicorn app:app`
-    app = app_from_env()

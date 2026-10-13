@@ -39,7 +39,7 @@ def _target(vmid=1150, ip="192.168.104.240"):
 
 
 class FakePVE:
-    """proxmox_api stub for the smoke path: nextid, clone, tags, node VM list."""
+# proxmox_api stub for the smoke path: nextid, clone, tags, node VM list.
 
     def __init__(self, clone_error=None, listed_name=SMOKE_NAME, listed=True):
         self.clone_error = clone_error
@@ -242,8 +242,8 @@ class GoldenBootSmokeTests(unittest.TestCase):
 
 
 class BuildGoldenSetBootSmokeTests(unittest.TestCase):
-    """The gate's integration point: stop -> smoke -> convert, with `golden_boot_smoke`
-    as the only off switch (and a loud warning when it is off)."""
+# The gate's integration point: stop -> smoke -> convert, with `golden_boot_smoke`
+#     as the only off switch (and a loud warning when it is off).
 
     def _build(self, compfile_text, smoke, boxes=BOXES, unbooted=frozenset(),
                template_map=TEMPLATE_MAP, configurations=()):
@@ -269,8 +269,8 @@ class BuildGoldenSetBootSmokeTests(unittest.TestCase):
                 stack.enter_context(patch.object(golden_ops, "_template_vmid_map",
                                                  return_value=template_map))
                 stack.enter_context(patch.object(golden_ops, "wait_for_proxmox_task"))
-                # gc_orphan_volumes lives in range_ops and reaches the real API through
-                # range_ops' own globals — stub it rather than the whole env.
+                # gc_orphan_volumes lives in infra.ownership and reaches the real API through
+                # infra.ownership's own globals — stub it rather than the whole env.
                 stack.enter_context(patch.object(golden_ops, "gc_orphan_volumes"))
                 stack.enter_context(patch.object(golden_ops, "destroy_vm_if_exists"))
                 stack.enter_context(patch.object(golden_ops, "start_vm"))

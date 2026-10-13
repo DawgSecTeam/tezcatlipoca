@@ -106,7 +106,7 @@ def _read(path):
 
 class NoTrackedSecrets(unittest.TestCase):
     def test_no_env_variant_is_tracked_except_the_template(self):
-        """The 2026-10-01 leak: a hand-named .env backup reached the public remote."""
+    # The 2026-10-01 leak: a hand-named .env backup reached the public remote.
         offenders = [
             f for f in _tracked_files()
             if (Path(f).name == ".env" or Path(f).name.startswith(".env."))
@@ -120,7 +120,7 @@ class NoTrackedSecrets(unittest.TestCase):
         )
 
     def test_env_variants_are_gitignored(self):
-        """Belt and braces: .gitignore must actually ignore the variants."""
+    # Belt and braces: .gitignore must actually ignore the variants.
         for probe in (".env", ".env.pre-old", ".env.realm-backup-20260101", ".env.local"):
             r = subprocess.run(
                 ["git", "check-ignore", "-q", probe], cwd=_REPO, capture_output=True
@@ -150,7 +150,7 @@ class NoTrackedSecrets(unittest.TestCase):
         )
 
     def test_no_private_key_material_is_tracked(self):
-        """The repo ships proxmox.pub on purpose; the private half must never appear."""
+    # The repo ships proxmox.pub on purpose; the private half must never appear.
         offenders = []
         for f in _tracked_files():
             name = Path(f).name
@@ -159,18 +159,18 @@ class NoTrackedSecrets(unittest.TestCase):
         self.assertEqual(offenders, [], f"private key material tracked: {offenders}")
 
     def test_no_test_artifact_is_tracked(self):
-        """`competitions/*/.automated-tests/` holds box-pulled evidence, and it stays untracked.
-
-        These reports quote flags, credentials and inject answers by construction (the red report
-        even ships a separate 0600 credlist table), and a `KEY=<16+ chars>` line in one of them
-        would be caught by the pattern net above while a password quoted in prose would not —
-        the net is a shape matcher, not a safety guarantee. The decision is therefore "ignored,
-        with no publish path": a recommendation leaves this folder by being written into
-        docs/known-issues.md or a fixes plan, never by copying the artifact into git.
-
-        A .gitignore line alone is not enough here: competitions/pfsense-ad/terraform/terraform.tfstate
-        is tracked today despite `competitions/*/terraform/` being ignored, so this asserts the
-        tracked set directly rather than trusting the rule."""
+    # `competitions/*/.automated-tests/` holds box-pulled evidence, and it stays untracked.
+#
+    #         These reports quote flags, credentials and inject answers by construction (the red report
+    #         even ships a separate 0600 credlist table), and a `KEY=<16+ chars>` line in one of them
+    #         would be caught by the pattern net above while a password quoted in prose would not —
+    #         the net is a shape matcher, not a safety guarantee. The decision is therefore "ignored,
+    #         with no publish path": a recommendation leaves this folder by being written into
+    #         docs/known-issues.md or a fixes plan, never by copying the artifact into git.
+#
+    #         A .gitignore line alone is not enough here: competitions/pfsense-ad/terraform/terraform.tfstate
+    #         is tracked today despite `competitions/*/terraform/` being ignored, so this asserts the
+    #         tracked set directly rather than trusting the rule.
         offenders = [f for f in _tracked_files() if "/.automated-tests/" in f]
         self.assertEqual(
             offenders, [],
@@ -184,18 +184,18 @@ class NoTrackedSecrets(unittest.TestCase):
         self.assertEqual(r.returncode, 0, "competitions/*/.automated-tests/ is not gitignored")
 
     def test_no_runtime_state_is_tracked_in_comp_dirs(self):
-        """A competition directory ships its AUTHORING inputs, never its runtime state.
-
-        Runtime files carry this deploy's secrets (teams.json/credentials.txt are the
-        generated passwords, .deploy_state.json holds every one of them plus the run
-        identity) — and a comp dir that ships them invites a later deploy on another
-        host to adopt them as its own (wrong run id, wrong credentials, preflight
-        refusing on a phantom identity). Same reason as the artifacts rule above,
-        checked against the tracked set rather than the ignore rules.
-
-        Tracked on purpose (and NOT matched here): Compfile, boxes.json,
-        box_services.json, box_vulns.json, domain_roles.json, users.json, packet
-        inputs, injects/, pfsense seed configs."""
+    # A competition directory ships its AUTHORING inputs, never its runtime state.
+#
+    #         Runtime files carry this deploy's secrets (teams.json/credentials.txt are the
+    #         generated passwords, .deploy_state.json holds every one of them plus the run
+    #         identity) — and a comp dir that ships them invites a later deploy on another
+    #         host to adopt them as its own (wrong run id, wrong credentials, preflight
+    #         refusing on a phantom identity). Same reason as the artifacts rule above,
+    #         checked against the tracked set rather than the ignore rules.
+#
+    #         Tracked on purpose (and NOT matched here): Compfile, boxes.json,
+    #         box_services.json, box_vulns.json, domain_roles.json, users.json, packet
+    #         inputs, injects/, pfsense seed configs.
         runtime = (".deploy_state.json", "teams.json", "credentials.txt",
                    "targets.json", "nakon-config.json", ".frozen.json",
                    ".template-hashes.json")
@@ -229,7 +229,7 @@ class EnvVarStandard(unittest.TestCase):
                 self.used.setdefault(m.group(1), set()).add(f)
 
     def test_every_env_var_read_is_declared_or_allowlisted(self):
-        """Drift guard: four real variables were undocumented before this test existed."""
+    # Drift guard: four real variables were undocumented before this test existed.
         undeclared = {
             name: sorted(files)
             for name, files in self.used.items()
@@ -244,11 +244,10 @@ class EnvVarStandard(unittest.TestCase):
         )
 
     def test_env_names_follow_the_naming_standard(self):
-        """New variables must be TF_VAR_* (terraform), TEZ_* (our knobs), or vendored.
-
-        INTERNAL_ENV members are exempt: they are handoff keys between this repo's own
-        processes, not operator-facing configuration.
-        """
+    # New variables must be TF_VAR_* (terraform), TEZ_* (our knobs), or vendored.
+#
+    #         INTERNAL_ENV members are exempt: they are handoff keys between this repo's own
+    #         processes, not operator-facing configuration.
         bad = sorted(
             n for n in self.used
             if n not in INTERNAL_ENV and not _ENV_NAME_RE.match(n)
@@ -260,7 +259,7 @@ class EnvVarStandard(unittest.TestCase):
         )
 
     def test_internal_allowlist_has_no_dead_entries(self):
-        """A stale allowlist entry silently weakens the gate above."""
+    # A stale allowlist entry silently weakens the gate above.
         dead = sorted(n for n in INTERNAL_ENV if n not in self.used)
         self.assertEqual(
             dead, [],

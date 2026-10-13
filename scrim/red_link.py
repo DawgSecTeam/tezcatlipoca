@@ -1,4 +1,3 @@
-import json
 import subprocess
 from pathlib import Path
 
@@ -13,18 +12,23 @@ def _red_ssh_spec(args):
     Two callers, one construction: `_red_ssh_ctx` (the harness's own scp/ssh) and
     `record_red_agent` (the `ssh` record in test.json that the teardown-time collector
     dials). They must not be able to disagree — a collector pointing at a different address
-    fails silently as `unreachable`, and the manifest is the only per-run source of truth
-    because bad-auto's config.yaml is a rewritten singleton."""
-    red_ip = getattr(args, "red_ip", None) or "10.0.0.198"
-    try:
-        red_ip = json.loads((core.BAD_AUTO / "config.yaml").read_text())["deploy"]["red_ip"]
-    except Exception:
-        pass
+    fails silently as `unreachable`. The address is THIS run's own: the competition's
+    bad-auto config (written by stage_red from the comp's reservation) when it
+    carries one, else the CLI arg — never the sibling checkout's shared
+    config.yaml, which on concurrent sessions names whichever red01 staged last
+    (that read used to overwrite --red-ip outright; 2026-10-12)."""
+    import badauto_config_ops
+    red_ip = getattr(args, "red_ip", None) or badauto_config_ops.DEFAULT_RED01_IP
+    comp = core.REPO / "competitions" / args.competition
+    configured = ((badauto_config_ops.load_config(comp).get("deploy") or {})
+                  .get("red_ip"))
+    if configured:
+        red_ip = configured
     key = str(core.REPO / "proxmox")
     user = core.vm_username()
     engine = None
     try:
-        engine = core.engine_ip_from(core.REPO / "competitions" / args.competition)
+        engine = core.engine_ip_from(comp)
     except Exception:
         pass
     common = [*core.SSH_NOCHECK, "-o", "ConnectTimeout=15", "-i", key]

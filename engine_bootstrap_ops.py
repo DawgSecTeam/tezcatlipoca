@@ -8,12 +8,12 @@ from engine_health_ops import install_range_healthcheck
 
 
 def _clone_quotient_cmd(quotient_ref):
-    """The git clone command for the pinned Quotient ref.
-
-    A 40-hex commit can't be `git clone --branch`ed, so it goes through an explicit
-    fetch + checkout (GitHub serves arbitrary SHA fetches at depth 1). Branch/tag refs
-    clone directly. Empty ref = historical behavior: depth-1 HEAD of the default
-    branch (deterministic only because the template freezes whatever it built)."""
+# The git clone command for the pinned Quotient ref.
+#
+#     A 40-hex commit can't be `git clone --branch`ed, so it goes through an explicit
+#     fetch + checkout (GitHub serves arbitrary SHA fetches at depth 1). Branch/tag refs
+#     clone directly. Empty ref = historical behavior: depth-1 HEAD of the default
+#     branch (deterministic only because the template freezes whatever it built).
     url = "https://github.com/dbaseqp/Quotient.git"
     ref = (quotient_ref or "").strip()
     if re.fullmatch(r"[0-9a-f]{40}", ref):
@@ -34,12 +34,12 @@ def _clone_quotient_cmd(quotient_ref):
 
 
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_ref=None):
-    """Bootstrap the scoring engine: install packages, Docker, Quotient.
-
-    M4: runs on the engine-TEMPLATE build VM (never on the deployed engine, which
-    clones from that template). Returns build info {"quotient_head": ...} for
-    traceability record; the HASH input is the pinned ref from config, not this
-    realized HEAD."""
+# Bootstrap the scoring engine: install packages, Docker, Quotient.
+#
+#     M4: runs on the engine-TEMPLATE build VM (never on the deployed engine, which
+#     clones from that template). Returns build info {"quotient_head": ...} for
+#     traceability record; the HASH input is the pinned ref from config, not this
+#     realized HEAD.
     _run_engine_cmd(ctx, (
         # Stop the apt machinery for the build window: unattended-upgrades both holds
         # the dpkg lock past Lock::Timeout and re-fires when `apt-get update` refreshes
@@ -128,9 +128,9 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
 
 
 def _install_firewall_and_healthcheck(ctx):
-    """Disk state every engine carries: forwarding rules, sshd multiplexing headroom,
-    the range-firewall + range-healthcheck units. Runs at template build; the firewall
-    timer re-asserts the rules on every clone."""
+# Disk state every engine carries: forwarding rules, sshd multiplexing headroom,
+#     the range-firewall + range-healthcheck units. Runs at template build; the firewall
+#     timer re-asserts the rules on every clone.
     print("  Restoring network forwarding rules after Docker start...")
     _run_engine_cmd(ctx, (
             "sudo iptables -P FORWARD ACCEPT && "
@@ -192,10 +192,10 @@ def _install_firewall_and_healthcheck(ctx):
 
 
 def push_quotient_env(ctx, postgres_password, redis_password):
-    """Write /opt/quotient/.env (per-competition DB secrets). Extracted from bootstrap:
-    the template build removes this file before conversion, and every engine clone
-    re-writes it BEFORE compose up so the fresh postgres volume initializes with the
-    right credentials."""
+# Write /opt/quotient/.env (per-competition DB secrets). Extracted from bootstrap:
+#     the template build removes this file before conversion, and every engine clone
+#     re-writes it BEFORE compose up so the fresh postgres volume initializes with the
+#     right credentials.
     print("  Writing Quotient .env...")
     quotient_env = (
         f"POSTGRES_PASSWORD={postgres_password}\n"

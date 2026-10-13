@@ -38,17 +38,17 @@ class ExpansionScript(unittest.TestCase):
             self.assertIn(needle, script)
 
     def test_resize2fs_device_is_not_wrapped_in_literal_quotes(self):
-        """$GROW_FS is expanded unquoted, so inner quotes become part of the path and
-        resize2fs fails opening '"/dev/mapper/..."' (live-found 2026-10-05: every LVM
-        golden logged 8 failed attempts and a 'size unmeasurable' degradation)."""
+    # $GROW_FS is expanded unquoted, so inner quotes become part of the path and
+    #         resize2fs fails opening '"/dev/mapper/..."' (live-found 2026-10-05: every LVM
+    #         golden logged 8 failed attempts and a 'size unmeasurable' degradation).
         script = _run()["cmds"][0][1]
         self.assertIn('GROW_FS="resize2fs $SRC"', script)
         self.assertNotIn('resize2fs \\"', script)
 
     def test_btrfs_layout_grows_via_btrfs_resize(self):
-        """Fedora cloud default: root is btrfs and findmnt reports the subvolume
-        suffix ('/dev/sda3[/root]') — the parse must strip it and grow with
-        `btrfs filesystem resize`, not resize2fs (live-found 2026-09-29)."""
+    # Fedora cloud default: root is btrfs and findmnt reports the subvolume
+    #         suffix ('/dev/sda3[/root]') — the parse must strip it and grow with
+    #         `btrfs filesystem resize`, not resize2fs (live-found 2026-09-29).
         captured = _run()
         script = captured["cmds"][0][1]
         self.assertIn("${ROOT_SRC%%\\[*}", script)
@@ -64,9 +64,9 @@ class ExpansionScript(unittest.TestCase):
         self.assertLess(script.index("GROW_FS="), script.index("/dev/mapper/*"))
 
     def test_script_is_valid_shell(self):
-        """Live-found 2026-09-29: a '; ;' where a case branch needs ';;' survived the
-        substring tests and died as a syntax error on the golden. sh -n parses without
-        executing."""
+    # Live-found 2026-09-29: a '; ;' where a case branch needs ';;' survived the
+    #         substring tests and died as a syntax error on the golden. sh -n parses without
+    #         executing.
         captured = _run()
         script = captured["cmds"][0][1]
         proc = subprocess.run(["sh", "-n"], input=script, capture_output=True, text=True)
@@ -103,8 +103,8 @@ class ExpansionScript(unittest.TestCase):
             self.assertIn("192.168.125.242", str(cm.exception))
 
     def test_failure_with_unmeasurable_size_warns_and_continues(self):
-        """Live-found 2026-09-29 x3: the boot-window instability that broke the grow
-        also broke the size probe — an unmeasurable root must warn, not kill phase 4."""
+    # Live-found 2026-09-29 x3: the boot-window instability that broke the grow
+    #         also broke the size probe — an unmeasurable root must warn, not kill phase 4.
         fake, _ = self._grow_fails_probe_returns("")  # probe answers nothing
         with patch.object(golden_disk_ops, "ssh_via_gateway", side_effect=fake), \
              patch.object(golden_disk_ops.time, "sleep"):

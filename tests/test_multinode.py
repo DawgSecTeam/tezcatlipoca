@@ -20,8 +20,9 @@ import jump_ops  # noqa: E402
 import nodes_ops  # noqa: E402
 import placement_planner  # noqa: E402
 import placement_record  # noqa: E402
-import pve_api  # noqa: E402
-from range_ops import enumerate_targets  # noqa: E402
+from infra import client  # noqa: E402
+from infra.gates import preflight_gates_multinode  # noqa: E402
+from targets import enumerate_targets  # noqa: E402
 
 
 def _rec(name, node=None, **kw):
@@ -89,14 +90,12 @@ class LoadNodesConfigTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 nodes_ops.load_nodes_config(path)
 
+    # Two nodes on one token var is the scale8 soak's mid-preflight 401:
+    # activate_placement applies one record's token at a time INTO the env var the
+    # record names, so a shared name means the last write is used for every node —
+    # the satellite authenticated with the engine node's token and 401'd. Distinct
+    # node names here, so this failure can only come from the token check.
     def test_shared_token_env_rejected(self):
-        """Two nodes on one token var is the scale8 soak's mid-preflight 401.
-
-        activate_placement applies one record's token at a time INTO the env var the
-        record names, so a shared name means the last write is used for every node —
-        the satellite authenticated with the engine node's token and 401'd. Distinct
-        node names here, so this failure can only come from the token check.
-        """
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "nodes.json"
             path.write_text(json.dumps({"nodes": [
@@ -368,14 +367,13 @@ class EnumerateTargetsTest(unittest.TestCase):
         self.assertEqual(slots["team2"], 1)
 
 
+# Routed red -> satellite teams (scale8 soak 2026-10-02): red01 sat on its own segment
+# (10.200.0.0/24) with the engine as its gateway, and the jump's FORWARD policy is DROP
+# with accepts only for the engine and team egress, so red's source matched nothing —
+# all 15 cred_sprays + 2 db_attacks against satellite teams failed "unreachable over
+# SSH", 0 footholds, and half the range was never attackable. `TEZ_RED_SEGMENT` adds the
+# path; empty must stay a no-op.
 class RedSegmentRulesTest(unittest.TestCase):
-    """Routed red -> satellite teams (scale8 soak 2026-10-02).
-
-    Red01 sat on its own segment (10.200.0.0/24) with the engine as its gateway. The
-    jump's FORWARD policy is DROP with accepts only for the engine and team egress, so
-    red's source matched nothing: all 15 cred_sprays + 2 db_attacks against satellite
-    teams failed "unreachable over SSH", 0 footholds, and half the range was never
-    attackable. `TEZ_RED_SEGMENT` adds the path; empty must stay a no-op."""
 
     RED = "10.200.0.0/24"
 
@@ -439,8 +437,8 @@ class RedSegmentRulesTest(unittest.TestCase):
                           f"--tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu", rules)
 
 
+# TEZ_RED_SEGMENT parsing: empty is the safe default, a typo is a hard error
 class RedSegmentFromEnvTest(unittest.TestCase):
-    """`TEZ_RED_SEGMENT` parsing: empty is the safe default, a typo is a hard error."""
 
     def test_unset_and_blank_are_empty(self):
         os.environ.pop("TEZ_RED_SEGMENT", None)
@@ -502,7 +500,7 @@ class Phase1WavesSlotTest(unittest.TestCase):
 
 class ActivatePlacementTest(unittest.TestCase):
     def test_routes_keyed_by_pve_host_name(self):
-        from range_ops import _NODE_ROUTES
+        from infra.client import _NODE_ROUTES
         placement = {
             "engine_node": "hdd-150",
             "nodes": {"hdd-150": _rec("hdd-150", node="proxmox",
@@ -555,7 +553,7 @@ class MultinodePreflightResumeTest(unittest.TestCase):
         fw = {"name": "fw01", "last_octet": 1, "template": "pfsense",
               "unmanaged": True, "in_path": True}
         with self.assertRaises(SystemExit) as cm:
-            config_ops.preflight_gates_multinode(
+            preflight_gates_multinode(
                 Path("competitions/example"), [fw], TEAMS, 1000, placement,
                 engine_mgmt_ip=None, check_free=False)
         self.assertIn("in_path firewalls are only supported on engine-node", str(cm.exception))
@@ -583,7 +581,7 @@ class MultinodePreflightResumeTest(unittest.TestCase):
                 patch.object(placement_record, "record_of", side_effect=lambda pl, n: _rec(n)), \
                 patch.object(placement_record, "teams_on_node",
                              side_effect=lambda pl, n: [k for k, v in pl["team_nodes"].items() if v == n]), \
-                patch.object(pve_api, "cluster_vms_for",
+                patch.object(client, "cluster_vms_for",
                              return_value=[{"vmid": 1700, "node": "N2", "name": "foreign",
                                             "tags": "x", "status": "stopped"},
                                            {"vmid": 900, "node": "N1", "name": "engine-base",
@@ -592,17 +590,17 @@ class MultinodePreflightResumeTest(unittest.TestCase):
                                            {"vmid": 901, "node": "N2", "name": "ubuntu-fix",
                                             "tags": "template", "template": 1,
                                             "status": "stopped"}]), \
-                patch("vm_ownership.has_clone_marker", return_value=False), \
-                patch("preflight.templates.proxmox_api",
+                patch("infra.ownership.has_clone_marker", return_value=False), \
+                patch("infra.resources.proxmox_api",
                       return_value={"data": {"ostype": "l26",
                                              "ide2": "local:vm-901-cloudinit"}}), \
-                patch("preflight.clashes.proxmox_api", return_value={"data": []}), \
-                patch("preflight.headroom.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
-                patch("preflight.concurrency.gate_concurrent_deploys"), \
-                patch("preflight.gate.remote_access_gate"), \
-                patch("preflight.catalog.catalog_gate"), \
+                patch("infra.collisions.proxmox_api", return_value={"data": []}), \
+                patch("infra.resources.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
+                patch("infra.gates.gate_concurrent_deploys"), \
+                patch("infra.gates.remote_access_gate"), \
+                patch("infra.gates.catalog_gate"), \
                 patch("jump_ops.find_jump_template", return_value={"alpine": 900}):
-            config_ops.preflight_gates_multinode(
+            preflight_gates_multinode(
                 Path("competitions/example"), boxes, teams, 1000, placement,
                 engine_mgmt_ip=None, check_free=False)
 

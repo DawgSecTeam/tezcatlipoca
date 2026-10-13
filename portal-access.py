@@ -27,13 +27,13 @@ load_dotenv(Path(".env"))
 from config_ops import write_state  # noqa: E402
 from nodes_ops import activate_placement, read_placement  # noqa: E402
 from portal_ops import access_state, portal_enabled, set_access  # noqa: E402
-from pve_console_ops import mint_console_tokens, node_targets  # noqa: E402
+from infra.console import mint_console_tokens, node_targets  # noqa: E402
 from ssh_ops import read_terraform_ctx  # noqa: E402
 from targets import load_targets  # noqa: E402
 
 
 def resync(comp_dir):
-    """Re-apply this run's console ACLs on every node (the token itself is reused)."""
+# Re-apply this run's console ACLs on every node (the token itself is reused).
     import os
 
     state_path = comp_dir / ".deploy_state.json"

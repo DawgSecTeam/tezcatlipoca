@@ -16,20 +16,36 @@ from dotenv import load_dotenv
 import pipeline_api
 from constants import SNAP_BASE, SNAP_READY
 from nakon_ops import acquire_engine_lock, release_engine_lock
-from range_ops import describe_target, list_snapshots, parse_vm_tags, proxmox_api, snapshot_support_hint
+from infra.client import proxmox_api
+from infra.lifecycle import list_snapshots, snapshot_support_hint
+from infra.ownership import parse_vm_tags
+from targets import describe_target
 from redeploy_engine_ops import engine_recovery, reseed_event
-from redeploy_gate_ops import (deployed_candidates, load_deployed_range,
-                               validate_comp_name)
+from redeploy_gate_ops import load_deployed_range
+from redeploy_context import RedeployContext
 from redeploy_light_ops import mode_reconfigure, mode_resync, mode_rollback
 from redeploy_plant_ops import prepare_nakon_assets
 from redeploy_rebuild_ops import mode_rebuild, reconcile_terraform_state
 from redeploy_reset_ops import mode_reset
 from redeploy_select_ops import select_targets
-from utils import load_compfile, pick_competition
+from utils import load_compfile, pick_competition, valid_comp_name
 
 ENV_PATH = Path(".env")
 load_dotenv(ENV_PATH)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# mode -> (targets, rctx, nakon_config_path, nakon_bundle) -> (done, levels|None).
+# Only reset returns per-box levels; the rest report just the boxes they touched.
+MODES = {
+    "rollback-ready": lambda t, r, cfg, bundle: (
+        mode_rollback(t, r, SNAP_READY, cfg, bundle, reconfigure=False), None),
+    "rollback-base": lambda t, r, cfg, bundle: (
+        mode_rollback(t, r, SNAP_BASE, cfg, bundle, reconfigure=True), None),
+    "reconfigure": lambda t, r, cfg, bundle: (mode_reconfigure(t, r, cfg, bundle), None),
+    "resync": lambda t, r, cfg, bundle: (mode_resync(t, r), None),
+    "reset": lambda t, r, cfg, bundle: mode_reset(t, r),
+    "rebuild": lambda t, r, cfg, bundle: (mode_rebuild(t, r, cfg, bundle), None),
+}
 
 
 def main():
@@ -93,9 +109,14 @@ def main():
     args = parser.parse_args()
 
     comp_name = args.competition
-    validate_comp_name(comp_name)
+    if comp_name is not None and not valid_comp_name(comp_name):
+        raise SystemExit(f"  ERROR: invalid competition name {comp_name!r} — use "
+                         "[a-z0-9._-], no path separators.")
     if not comp_name:
-        candidates = deployed_candidates()
+        candidates = [
+            p.name for p in sorted(Path("competitions").iterdir())
+            if p.is_dir() and (p / "Compfile").exists() and (p / "teams.json").exists()
+        ]
         if not candidates:
             raise SystemExit("No deployed competitions found (need Compfile + teams.json).")
         comp_name = pick_competition(candidates, label="deployed",
@@ -189,6 +210,10 @@ def main():
 
     acquire_engine_lock(int(state.get("scoring_vm_id") or 1000))
     ctx = pipeline_api.read_terraform_ctx(comp_dir)
+    rctx = RedeployContext(
+        comp_dir=comp_dir, name=name, comp_name=comp_name, node=node,
+        teams=teams, boxes=boxes, difficulty=difficulty, state=state,
+        state_path=state_path, ctx=ctx)
 
     nakon_config_path = nakon_bundle = None
     if args.mode in ("rollback-base", "reconfigure", "rebuild"):
@@ -196,20 +221,7 @@ def main():
         # must not demand stage files it would never have used.
         nakon_config_path, nakon_bundle = prepare_nakon_assets(comp_dir, boxes)
 
-    if args.mode == "rollback-ready":
-        done = mode_rollback(targets, ctx, node, SNAP_READY, comp_dir, state,
-                             nakon_config_path, nakon_bundle, reconfigure=False)
-    elif args.mode == "rollback-base":
-        done = mode_rollback(targets, ctx, node, SNAP_BASE, comp_dir, state,
-                             nakon_config_path, nakon_bundle, reconfigure=True)
-    elif args.mode == "reconfigure":
-        done = mode_reconfigure(targets, ctx, comp_dir, state, nakon_config_path, nakon_bundle)
-    elif args.mode == "resync":
-        done = mode_resync(targets, ctx, node, comp_dir, state, state_path)
-    elif args.mode == "reset":
-        done, levels = mode_reset(targets, ctx, node, comp_dir, state, teams, boxes, difficulty)
-    else:
-        done = mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_bundle)
+    done, levels = MODES[args.mode](targets, rctx, nakon_config_path, nakon_bundle)
 
     if args.reconcile_state:
         if args.mode == "rebuild":
@@ -217,7 +229,7 @@ def main():
         else:
             to_import = [t for t in done if levels.get(t["vm_name"]) == "golden rebuild"]
         if to_import:
-            reconcile_terraform_state(to_import, ctx, comp_dir, teams, boxes)
+            reconcile_terraform_state(to_import, rctx)
         else:
             print("  --reconcile-state: nothing was rebuilt from templates — nothing to import.")
 

@@ -32,18 +32,25 @@ import packet_ops  # noqa: E402
 from utils import env_summary  # noqa: E402
 
 import redeploy_rebuild_ops as redeploy  # noqa: E402  (owns reconcile_terraform_state)
-from preflight import mgmt_ip as mgmt_ip_mod  # noqa: E402  (owns the engine mgmt-IP gate)
+from redeploy_context import RedeployContext  # noqa: E402
+
+
+def _rctx(comp_dir, teams, boxes, ctx=None, node="pve"):
+    return RedeployContext(comp_dir=comp_dir, name="x", comp_name="x", node=node,
+                           teams=teams, boxes=boxes, difficulty=None, state={},
+                           state_path=None, ctx={} if ctx is None else ctx)
+from infra import collisions as mgmt_ip_mod  # noqa: E402  (owns the engine mgmt-IP gate)
 
 
 class EngineMgmtGateTests(unittest.TestCase):
-    """F5: "explicitly set" must mean the OPERATOR set it."""
+# F5: "explicitly set" must mean the OPERATOR set it.
 
     GUEST = [{"vmid": 500, "name": "foreign-thing", "node": "n1", "status": "running",
               "tags": "", "template": 0}]
 
     def _gate(self):
         with patch.dict(os.environ, {"TF_VAR_proxmox_node": "n1"}, clear=False):
-            config_ops._engine_mgmt_ip_gate("n1", self.GUEST, 1000, "10.0.0.250")
+            mgmt_ip_mod.engine_mgmt_ip_gate("n1", self.GUEST, 1000, "10.0.0.250")
 
     def test_unverifiable_default_is_refused(self):
         with patch.dict(os.environ, {"TEZ_ENGINE_MGMT_IP_IS_DEFAULT": "1"}), \
@@ -68,7 +75,7 @@ class EngineMgmtGateTests(unittest.TestCase):
 
 
 class EnsurePacketSecretsTests(unittest.TestCase):
-    """F7: the secret layer is compiled on demand, never silently absent."""
+# F7: the secret layer is compiled on demand, never silently absent.
 
     COMPFILE = "name Test\npacket_source packets/cde-2026/packet.yaml\n"
 
@@ -114,7 +121,7 @@ class EnsurePacketSecretsTests(unittest.TestCase):
             self.assertEqual((comp / "box_baseline.json").read_text(), '{"keep": true}')
 
     def test_compile_profile_still_emits_the_same_secret_files(self):
-        """The refactor must not change compile-packet's own output."""
+    # The refactor must not change compile-packet's own output.
         p = packet_ops.load_profile(_REPO / "packets/cde-2026/packet.yaml")
         files = packet_ops.packet_secret_files(p)
         self.assertEqual(sorted(files),
@@ -122,7 +129,7 @@ class EnsurePacketSecretsTests(unittest.TestCase):
 
 
 class MemberTrustedTests(unittest.TestCase):
-    """F6: the member's self-report is not the DC's truth."""
+# F6: the member's self-report is not the DC's truth.
 
     def _job(self, role="member", team="team1"):
         return {"team_key": team, "role": role}
@@ -138,7 +145,7 @@ class MemberTrustedTests(unittest.TestCase):
 
 
 class ReconcileStateTests(unittest.TestCase):
-    """F9: import rebuilt boxes by deterministic vmid; warn, never die."""
+# F9: import rebuilt boxes by deterministic vmid; warn, never die.
 
     def _target(self, vm_name, vmid, slot=0):
         return {"vm_name": vm_name, "vmid": vmid, "slot": slot}
@@ -151,7 +158,7 @@ class ReconcileStateTests(unittest.TestCase):
                               side_effect=lambda *a, **k: calls.append((a[0], k))):
                 redeploy.reconcile_terraform_state(
                     [self._target("team1-db01", 1503), self._target("130-web01", 1504, slot=2)],
-                    {}, Path("/tmp/comp"), {}, [])
+                    _rctx(Path("/tmp/comp"), {}, []))
         self.assertEqual(calls[0][0], ["state", "rm",
                           'proxmox_virtual_environment_vm.team_box["team1-db01"]'])
         self.assertEqual(calls[1][0], ["import",
@@ -167,11 +174,11 @@ class ReconcileStateTests(unittest.TestCase):
              patch.object(redeploy, "run_terraform",
                           side_effect=RuntimeError("provider cannot import")):
             redeploy.reconcile_terraform_state([self._target("team1-db01", 1503)],
-                                               {}, Path("/tmp/comp"), {}, [])  # no raise
+                                               _rctx(Path("/tmp/comp"), {}, []))  # no raise
 
 
 class EnvSummaryTests(unittest.TestCase):
-    """F8: the banner line names the estate."""
+# F8: the banner line names the estate.
 
     def test_summary_carries_all_five_facts(self):
         env = {"TF_VAR_proxmox_endpoint": "https://10.0.0.150:8006",

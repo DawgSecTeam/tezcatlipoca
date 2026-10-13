@@ -35,8 +35,8 @@ so red's source matched no rule and every attack on a satellite team died
 "unreachable over SSH" in the scale8 soak (15/15 cred_sprays, 2/2 db_attacks,
 0 footholds, half the range never attackable).
 
-Set **`TEZ_RED_SEGMENT`** (see `.env.example`) to the same CIDR as bad-auto's
-`deploy.red_subnet`. Each jump then accepts red→its local teams, accepts the replies
+Set **`TEZ_RED_SEGMENT`** (see `.env.example`) to the same CIDR as the comp's
+bad-auto config `deploy.red_subnet` (default `10.200.0.0/24`). Each jump then accepts red→its local teams, accepts the replies
 back, and SNATs red to `192.168.<id>.1` so the boxes' gateway-IP-only SSH trust still
 holds. Leave it unset for single-node ranges and for `masq`-mode red, which shares the
 team gateways and needs no path of its own.

@@ -16,16 +16,8 @@ from verifier.isolation import _team_identifiers
 from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
 
 
-def has_in_path_firewall(comp_dir):
-    try:
-        boxes = json.loads((comp_dir / "boxes.json").read_text())
-    except (OSError, ValueError):
-        return False
-    return any(is_in_path_fw(b) for b in boxes)
-
-
 def _engine(ctx, cmd):
-    """(rc, stdout) of one engine command; CheckError/timeout surface as CheckError."""
+# (rc, stdout) of one engine command; CheckError/timeout surface as CheckError.
     try:
         proc = context.ssh_to_engine(ctx, cmd)
     except subprocess.TimeoutExpired as e:
@@ -50,9 +42,13 @@ def _team_problems(ctx, tid):
 
 
 def check_firewall_in_path(ctx, comp_dir, teams):
-    """GateResult: SKIP without an in_path firewall; FAIL on any per-team drift; SKIP when the
-    engine can't be reached (an unrun check is not a pass)."""
-    if not has_in_path_firewall(comp_dir):
+# GateResult: SKIP without an in_path firewall; FAIL on any per-team drift; SKIP when the
+#     engine can't be reached (an unrun check is not a pass).
+    try:
+        boxes = json.loads((comp_dir / "boxes.json").read_text())
+    except (OSError, ValueError):
+        boxes = []
+    if not any(is_in_path_fw(b) for b in boxes):
         return gate_skip("firewall_in_path", "no in_path firewall in this competition",
                          gating=False)
     print("\n  (in-path firewall — route via transit, firewall answers, engine gateway released)")

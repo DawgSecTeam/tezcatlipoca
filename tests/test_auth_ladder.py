@@ -12,7 +12,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import ubuntu_auth_ops
-from range_ops import DetachedExecResult
+from infra.guest_exec import DetachedExecResult
 
 ENV = {"TF_VAR_proxmox_node": "proxmox", "TF_VAR_ssh_public_key": "ssh-ed25519 AAAAtest"}
 CTX = {"ssh_key_path": "/tmp/fake-key", "vm_username": "sysadmin",
@@ -27,7 +27,7 @@ class FakeProc:
 
 class AuthLadder(unittest.TestCase):
     def run_auth(self, results, agent_rc=(0, "", "")):
-        """Run setup_ubuntu_auth with scripted ssh results; return (result, agent_calls)."""
+    # Run setup_ubuntu_auth with scripted ssh results; return (result, agent_calls).
         calls = {"ssh": 0, "agent": 0}
 
         def fake_run(*a, **kw):

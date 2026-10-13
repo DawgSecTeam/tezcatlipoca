@@ -74,13 +74,10 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
         self.assertEqual(by_name["sat1"], ("201", "202"))
         self.assertEqual(by_name["sat3"], ("205", "206"))
 
+    # scale8 soak 2026-10-02: routed red could not reach any satellite team because the
+    # jump's FORWARD policy dropped its source — a segment that stops at build_jump_vms
+    # leaves the range unreachable; it must survive the thread-pool hop.
     def test_red_segment_reaches_every_satellite_build(self):
-        """The segment must survive the thread-pool hop, not just the signature.
-
-        scale8 soak 2026-10-02: routed red could not reach any satellite team because
-        the jump's FORWARD policy dropped its source. The fix is only as good as this
-        plumbing — a segment that stops at build_jump_vms leaves the range unreachable.
-        """
         placement = _placement(3)
         seen = []
         lock = threading.Lock()
@@ -97,8 +94,8 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
 
         self.assertEqual(seen, ["10.200.0.0/24"] * 3)
 
+    # absent knob must reach the builder as "" so red-less ranges stay unchanged
     def test_no_red_segment_is_passed_through_as_empty(self):
-        """Absent knob must reach the builder as "" so red-less ranges stay unchanged."""
         placement = _placement(2)
         seen = []
 
@@ -109,8 +106,8 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
 
         self.assertEqual(seen, ["", ""])
 
+    # a serialised implementation would fail this: 4 units x 0.25s = 1.0s
     def test_builds_actually_overlap(self):
-        """A serialised implementation would fail this: 4 units x 0.25s = 1.0s."""
         placement = _placement(4)
 
         def slow_build_one(*a, **kw):
@@ -127,8 +124,8 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
         self.assertLess(elapsed, 0.75,
                         f"satellites did not overlap ({elapsed:.2f}s for 4x0.25s of work)")
 
+    # 20 satellites must not open 20 concurrent clones onto shared datastores
     def test_pool_is_bounded_not_unbounded(self):
-        """20 satellites must not open 20 concurrent clones onto shared datastores."""
         placement = _placement(20)
         state = {"cur": 0, "peak": 0}
         lock = threading.Lock()
@@ -148,8 +145,8 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
         self.assertLessEqual(state["peak"], 4, "worker pool exceeded its bound")
         self.assertGreater(state["peak"], 1, "work was not actually concurrent")
 
+    # the serial loop raised on the first failure; that must be preserved
     def test_a_failing_satellite_aborts_the_deploy(self):
-        """The serial loop raised on the first failure; that must be preserved."""
         placement = _placement(3)
 
         def explode_on_sat2(rec, sat, *a, **kw):

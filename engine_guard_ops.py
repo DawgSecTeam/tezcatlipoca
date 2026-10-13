@@ -8,22 +8,21 @@ from engine_cmd_ops import _run_engine_cmd
 
 
 def install_round_loop_guard(ctx, comp_dir, scoring_password):
-    """Install the round-loop watchdog on the engine (opt-in, Compfile `round_loop_guard`).
-
-    After an engine reboot Docker brings the containers back but the round loop stays
-    stopped, and the scoreboard freezes while everything that reads it keeps working —
-    an old UP is reported as a live UP (docs/known-issues.md). verify detects it and
-    `--fix-round-loop` repairs it, but both need someone to run them.
-
-    The timer authenticates as the dedicated `scoring` account, never `admin`: Quotient
-    allows one session per account, so an unattended login on `admin` would evict the
-    operator's, verify's or the harness's session on every tick. The decision itself is
-    round_loop.round_loop_state — the same function verify's gate uses, pushed here so
-    the two cannot drift.
-
-    Idempotent: re-pushing the same files and re-enabling the timer is safe, so a resume
-    or a redeploy with a fresh `scoring` password just rewrites them.
-    """
+# Install the round-loop watchdog on the engine (opt-in, Compfile `round_loop_guard`).
+#
+#     After an engine reboot Docker brings the containers back but the round loop stays
+#     stopped, and the scoreboard freezes while everything that reads it keeps working —
+#     an old UP is reported as a live UP (docs/known-issues.md). verify detects it and
+#     `--fix-round-loop` repairs it, but both need someone to run them.
+#
+#     The timer authenticates as the dedicated `scoring` account, never `admin`: Quotient
+#     allows one session per account, so an unattended login on `admin` would evict the
+#     operator's, verify's or the harness's session on every tick. The decision itself is
+#     round_loop.round_loop_state — the same function verify's gate uses, pushed here so
+#     the two cannot drift.
+#
+#     Idempotent: re-pushing the same files and re-enabling the timer is safe, so a resume
+#     or a redeploy with a fresh `scoring` password just rewrites them.
     tools_dir = Path(__file__).resolve().parent / "tools"
     round_loop_src = (Path(__file__).resolve().parent / "round_loop.py").read_text()
     guard_src = (tools_dir / "round_loop_guard.py").read_text()

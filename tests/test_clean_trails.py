@@ -71,9 +71,9 @@ class TestScripts(unittest.TestCase):
         self.assertIn("TRAILS_WIN_OK", clean_trails.WINDOWS_PS)
 
     def test_linux_skip_block_guards_every_destructive_line(self):
-        """The decoy kill (2026-10-11): a planted path matching a staging rm glob
-        died in the wipe. Every rm/truncate in LINUX_SCRIPT must go through
-        in_skip, and the skip block must define it before any use."""
+    # The decoy kill (2026-10-11): a planted path matching a staging rm glob
+    #         died in the wipe. Every rm/truncate in LINUX_SCRIPT must go through
+    #         in_skip, and the skip block must define it before any use.
         block = clean_trails._linux_skip_block(["/tmp/.imix-decoy", "/opt/plant"])
         script = block + clean_trails.LINUX_SCRIPT
         self.assertIn("SKIP_PATHS=", block)
@@ -175,8 +175,8 @@ class TestIntegrity(unittest.TestCase):
         self.assertEqual(casualties[0][1], "realm-imix")
 
     def test_clean_trails_runs_the_pre_and_post_check(self):
-        """The wipe must re-run the artifact checks around itself and name
-        anything that died in the window (the vanished decoy, 2026-10-11)."""
+    # The wipe must re-run the artifact checks around itself and name
+    #         anything that died in the window (the vanished decoy, 2026-10-11).
         checks = {"n": 0}
 
         def fake_integrity(comp, creds, artifacts):
@@ -241,9 +241,9 @@ class TestDispatch(unittest.TestCase):
 
 class TestPlanReadsStagedCopies(unittest.TestCase):
     def test_red_wants_are_the_staged_paths(self):
-        """All three red artifacts are 0600 root in /var/lib/bad-auto: the collector
-        has to read the sudo-staged copies, or one unreadable file marks the target
-        unreachable and takes the others with it."""
+    # All three red artifacts are 0600 root in /var/lib/bad-auto: the collector
+    #         has to read the sudo-staged copies, or one unreadable file marks the target
+    #         unreachable and takes the others with it.
         import sys
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         import artifacts_ops as ao
@@ -268,11 +268,11 @@ if __name__ == "__main__":
 
 
 class TestTeardownStaging(unittest.TestCase):
-    """The teardown path must stage red's root-owned artifacts too.
-
-    collect_for_teardown is the collector for the run whose harness died, so this is
-    the one path where red's record exists nowhere else — and with the plan reading
-    /tmp/ba it needs the staging step, which the harness happens to do for itself."""
+# The teardown path must stage red's root-owned artifacts too.
+#
+#     collect_for_teardown is the collector for the run whose harness died, so this is
+#     the one path where red's record exists nowhere else — and with the plan reading
+#     /tmp/ba it needs the staging step, which the harness happens to do for itself.
 
     def test_no_red_agent_means_nothing_to_stage(self):
         from artifacts_lib import lifecycle

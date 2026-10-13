@@ -12,13 +12,12 @@ from placement_record import (anchor_identifier, default_jump_mgmt_ip, engine_re
                               write_placement)
 
 
-# ---------------------------------------------------------------- node probe
 
 def probe_node(record, need_templates, engine_vmid, team_identifiers):
-    """Read-only eligibility probe of one node. Returns a dict; ok=False carries the
-    reason. need_templates: template names this node might have to host (per-team
-    eligibility checks them; a node missing some is still usable for other teams)."""
-    from pve_api import proxmox_api_for
+# Read-only eligibility probe of one node. Returns a dict; ok=False carries the
+#     reason. need_templates: template names this node might have to host (per-team
+#     eligibility checks them; a node missing some is still usable for other teams).
+    from infra.client import proxmox_api_for
     probe = {"name": record.name, "node": record.node, "ok": True, "reasons": [],
              "missing_templates": [], "collisions": [], "mem_free_bytes": None,
              "datastore_free": None, "running_ours": 0, "templates": {}}
@@ -76,7 +75,6 @@ def probe_node(record, need_templates, engine_vmid, team_identifiers):
     return probe
 
 
-# ---------------------------------------------------------------- placement compute
 
 def _team_reservation_mb(boxes):
     return sum(int(b.get("memory_mb") or 1024) for b in boxes)
@@ -88,9 +86,9 @@ def _prefer_index(name, prefer):
 
 def compute_placement(records, balancing, teams, boxes, engine_vmid, comp_name,
                       team_overrides=None, engine_override=None, probes=None):
-    """Capacity-fill team placement. Teams pack biggest-first onto the eligible node
-    with the most effective free RAM (mem_free / weight minus reservations). Explicit
-    overrides win outright. Returns the placement dict (not yet persisted)."""
+# Capacity-fill team placement. Teams pack biggest-first onto the eligible node
+#     with the most effective free RAM (mem_free / weight minus reservations). Explicit
+#     overrides win outright. Returns the placement dict (not yet persisted).
     team_overrides = dict(team_overrides or {})
     identifiers = {k: str(t["identifier"]) for k, t in teams.items()}
     by_identifier = {v: k for k, v in identifiers.items()}
@@ -224,7 +222,7 @@ def compute_placement(records, balancing, teams, boxes, engine_vmid, comp_name,
 
 
 def placement_decision_table(placement, probes=None):
-    """Human-readable placement summary for the deploy log / --plan-only preview."""
+# Human-readable placement summary for the deploy log / --plan-only preview.
     probes = probes or placement.get("probe_summary") or {}
     lines = ["  Multi-node placement:"]
     eng = placement["engine_node"]
@@ -243,18 +241,17 @@ def placement_decision_table(placement, probes=None):
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------- resolution entry
 
 def resolve_placement(comp_dir, engine_vmid, teams, boxes, comp_name,
                       team_overrides=None, engine_override=None, resume_endpoint=None):
-    """(placement, engine_record) or (None, None).
-
-    Order: an existing placement.json always wins (authoritative for resume/redeploy
-    and every companion op). Otherwise nodes.json triggers a fresh capacity-fill
-    compute — except on a resume with no placement.json, where the range already
-    lives on resume_endpoint: re-balancing a live range would strand it, so all
-    teams adopt that node as a single-slot placement instead. Neither config present
-    => single-node (None)."""
+# (placement, engine_record) or (None, None).
+#
+#     Order: an existing placement.json always wins (authoritative for resume/redeploy
+#     and every companion op). Otherwise nodes.json triggers a fresh capacity-fill
+#     compute — except on a resume with no placement.json, where the range already
+#     lives on resume_endpoint: re-balancing a live range would strand it, so all
+#     teams adopt that node as a single-slot placement instead. Neither config present
+#     => single-node (None).
     placement = read_placement(comp_dir)
     if placement:
         if set(placement["team_nodes"]) != set(teams):

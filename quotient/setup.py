@@ -66,13 +66,6 @@ _SERVICE_TO_CHECK = {
 
 
 def _resolve_pin(pin):
-    """(svc_name, check_key, check_cfg) for one box_services.json pin.
-
-    Pins are a bare catalog name or {"name": ..., "vars": {...}} plus optional scoring
-    overrides (PIN_CHECK_OVERRIDES); score-only pins ({"score_only": true, "check":
-    "Tcp", "display": ..., "port": ...}) carry no plant at all. Unknown service names
-    return check_key=None (the caller warns). check_cfg is a fresh dict whenever
-    overrides apply."""
     svc_name = pin if isinstance(pin, str) else pin.get("name")
     if isinstance(pin, dict) and pin.get("plant_only"):
         # Mirror of score_only: the pin rides the machine list (a real plant) but
@@ -122,11 +115,9 @@ def _resolve_pin(pin):
     return svc_name, check_key, cfg
 
 
+# Quotient registers every emitted check (Box.Web etc. are slices); these names are its
+# global uniqueness domain, so verify gates the live set against this
 def expected_service_names(box_services: dict, boxes: list) -> set:
-    """Scoreboard ServiceNames the current pins must produce (<box>-<Display>).
-
-    Quotient registers every emitted check (Box.Web etc. are slices); these names are
-    its global uniqueness domain, so verify gates the live set against this."""
     names = set()
     for box in boxes:
         for pin in box_services.get(box["name"], []):
@@ -137,15 +128,10 @@ def expected_service_names(box_services: dict, boxes: list) -> set:
     return names
 
 
+# Quotient allows ONE session per account: a scheduled login on `admin` would kill the
+# operator's/harness's cookie, so automation gets the separate `scoring` account (optional —
+# a caller without a scoring password gets the single `admin` entry)
 def _admin_accounts(ctx):
-    """The `admin` role list: the operator account, plus a dedicated automation account.
-
-    Quotient allows ONE session per account, so a scheduled login on `admin` would kill
-    the operator's/harness's cookie. `scoring` is a separate account for automation
-    (round-loop watchdog, unattended verify) so the two can never evict each other.
-    Optional: a caller that does not supply a scoring password gets the single `admin`
-    entry, which keeps the pin/compile tests and any older caller working.
-    """
     accounts = [{"name": "admin", "pw": ctx["quotient_admin_password"]}]
     scoring_pw = ctx.get("quotient_scoring_password")
     if scoring_pw:
@@ -229,8 +215,8 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
     return conf
 
 
+# Quotient's IP comes off Terraform as a bare address; requests needs a scheme
 def _normalize_host(host: str) -> str:
-    """Quotient's IP comes off Terraform as a bare address; requests needs a scheme."""
     if host.startswith("http://") or host.startswith("https://"):
         return host.rstrip("/")
     return f"http://{host}"
@@ -257,7 +243,6 @@ def _admin_session(host: str, ctx: dict) -> requests.Session:
 
 
 def seed_teams(host: str, ctx: dict) -> None:
-    """Assign team identifiers and set started flag (idempotent)."""
     host = _normalize_host(host)
     _wait_for_quotient(host)
     session = _admin_session(host, ctx)
@@ -281,9 +266,8 @@ def seed_teams(host: str, ctx: dict) -> None:
     print(f"[quotient] competition started (DB) → {r.status_code}")
 
 
+# not idempotent; gate with a state flag
 def unpause_engine(host: str, ctx: dict) -> None:
-    """Unblock scoring round loop (StartPaused=true). Not idempotent; gate with state flag."""
-
     host = _normalize_host(host)
     _wait_for_quotient(host)
     session = _admin_session(host, ctx)
@@ -292,11 +276,10 @@ def unpause_engine(host: str, ctx: dict) -> None:
     print(f"[quotient] engine unpaused → {r.status_code}")
 
 
+# the engine's actual pause state, or None when the endpoint won't say — lets a resume ask
+# the engine instead of blindly re-POSTing after a crash in the window between the unpause
+# POST and the state-flag save
 def engine_paused(host: str, ctx: dict):
-    """The engine's actual pause state, or None when the endpoint won't say.
-
-    Lets a resume ask the engine instead of blindly re-POSTing after a crash
-    in the window between the unpause POST and the state-flag save."""
     host = _normalize_host(host)
     try:
         session = _admin_session(host, ctx)
@@ -312,12 +295,9 @@ def engine_paused(host: str, ctx: dict):
         return None
 
 
+# a resume re-runs safely (dedup on titles), so the deploy only records injects_created
+# when nothing failed
 def create_injects(host: str, admin_password: str, injects: list) -> tuple:
-    """Create injects via Quotient API (multipart POST). Skips titles already present.
-
-    Returns (created_count, failed_titles); a resume re-runs safely (dedup on
-    titles), so the deploy only records injects_created when nothing failed."""
-
     if not injects:
         return 0, []
 

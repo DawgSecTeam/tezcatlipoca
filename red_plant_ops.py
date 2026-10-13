@@ -43,12 +43,12 @@ import subprocess
 from pathlib import Path
 
 from utils import compfile_flag, compfile_value, record_degradation
+import badauto_config_ops
 import realm_c2_ops
 
 REPO = Path(__file__).resolve().parent
 BAD_AUTO = REPO.parent / "bad-auto"
 
-DEFAULT_RED_IP = "10.0.0.199"
 RED_USER = "sysadmin"
 SEED_DEPTH_MAX = 3
 # Where `badauto deploy` stages the package on red01 (the systemd unit's
@@ -60,43 +60,30 @@ def _bad_auto_present():
     return (BAD_AUTO / "badauto" / "__main__.py").exists()
 
 
-def _configured_red_ip():
-    """red01's address from bad-auto's config.yaml, when a sibling checkout exists."""
-    cfg_path = BAD_AUTO / "config.yaml"
-    if not cfg_path.exists():
-        return None
-    try:
-        import yaml
-        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return None
+def _configured_red_ip(comp_dir):
+    """red01's address from the competition's own bad-auto config, when one exists."""
+    cfg = badauto_config_ops.load_config(comp_dir)
     return ((cfg.get("deploy") or {}).get("red_ip")) or None
 
 
+def _configured_red_vmid(comp_dir):
+    """red01's vmid from the competition's own bad-auto config (deploy.red_vmid —
+    what `badauto destroy` actually acts on)."""
+    cfg = badauto_config_ops.load_config(comp_dir)
+    return ((cfg.get("deploy") or {}).get("red_vmid")) or None
+
+
 def red_vmid_candidates(comp_dir, deployed_state=None):
-    """Every place red01's vmid is recorded, most-authoritative first: bad-auto's
-    config.yaml (deploy.red_vmid — what `badauto destroy` actually acts on),
+    """Every place red01's vmid is recorded, most-authoritative first: the comp's
+    bad-auto config (deploy.red_vmid — what `badauto destroy` actually acts on),
     then the deploy state's assume-breach record. Teardown's verify step uses
     this to prove the specific VM is gone (2026-10-08: an unknown vmid made the
     check unverifiable and the leak invisible)."""
-    del comp_dir  # config is repo-level; kept in the signature for call-site symmetry
-    candidates = [_configured_red_vmid()]
+    candidates = [_configured_red_vmid(comp_dir)]
     recorded = ((deployed_state or {}).get("assume_breach") or {}).get("vmid")
     if recorded:
         candidates.append(recorded)
     return [c for c in candidates if c]
-
-
-def _configured_red_vmid():
-    cfg_path = BAD_AUTO / "config.yaml"
-    if not cfg_path.exists():
-        return None
-    try:
-        import yaml
-        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return None
-    return ((cfg.get("deploy") or {}).get("red_vmid")) or None
 
 
 def parse_teardown_refusal(proc):
@@ -114,9 +101,10 @@ def parse_teardown_refusal(proc):
 
 
 def red_ip_for(comp_dir):
-    """Compfile override -> bad-auto config -> built-in default."""
+    """Compfile override -> the comp's own bad-auto config -> built-in default."""
     return (compfile_value(comp_dir / "Compfile", "assume_breach_red_ip", "")
-            or _configured_red_ip() or DEFAULT_RED_IP)
+            or compfile_value(comp_dir / "Compfile", "red01_ip", "")
+            or _configured_red_ip(comp_dir) or badauto_config_ops.DEFAULT_RED01_IP)
 
 
 def _deploy_red(comp_dir, env, config_path=None, timeout=1800):
@@ -174,19 +162,29 @@ def destroy_red(comp_dir, env=None, timeout=900):
     # and red01 the only thing left standing.
     comp_dir = Path(comp_dir).resolve()
     env = {**(env if env is not None else os.environ), "BAuto_COMPETITION_DIR": str(comp_dir)}
-    return subprocess.run(
-        ["python3", "-m", "badauto", "destroy", "--competition", str(comp_dir), "--yes"],
-        cwd=str(BAD_AUTO), env=env, capture_output=True, text=True, timeout=timeout)
+    cmd = ["python3", "-m", "badauto"]
+    # The comp's own config (with its own deploy stamp next to it) when there is
+    # one — never a missing path: load_config falls back to built-in DEFAULTS
+    # (red_vmid 999) without a word, and destroy would aim at the wrong target.
+    cfg_path = badauto_config_ops.config_path(comp_dir)
+    if cfg_path.exists():
+        cmd += ["--config", str(cfg_path)]
+        # Symmetric with _deploy_red: an explicit --config makes an inherited
+        # BAuto_CONFIG redundant; dropping it keeps a stale value from shadowing.
+        env = {k: v for k, v in env.items() if k != "BAuto_CONFIG"}
+    cmd += ["destroy", "--competition", str(comp_dir), "--yes"]
+    return subprocess.run(cmd, cwd=str(BAD_AUTO), env=env,
+                          capture_output=True, text=True, timeout=timeout)
 
 
-def _record_attempt(ctx, red_ip, reason):
+def _record_attempt(ctx, red_ip, reason, vmid=None):
     """Record a FAILED assume-breach attempt in the deploy state too. A failed
     deploy may still have left red01 standing (live-found 2026-10-12: the V1
     validation deploy failed after `badauto deploy` created the VM, and the
     teardown exited 0 with red01 up because nothing recorded the attempt).
     verify_clean keys on this record to demand red01's destruction."""
     try:
-        ctx.state["assume_breach"] = {"ok": False, "red_ip": red_ip,
+        ctx.state["assume_breach"] = {"ok": False, "red_ip": red_ip, "vmid": vmid,
                                       "reason": reason, "at": _now()}
         ctx.save_state()
     except Exception:
@@ -238,13 +236,33 @@ def plant_assume_breach(ctx):
         return {"ok": False, "reason": "no ssh key"}
 
     env = {**os.environ, "BAuto_COMPETITION_DIR": str(comp_dir)}
+    # The competition's OWN bad-auto config — written before anything else, so
+    # every badauto call in this deploy (and its destroy, and its stamp) points
+    # at THIS deploy's red01. The base carries the reserved vmid/IP; the realm
+    # layer below retargets the C2 the same way it always did.
+    engine_vmid = getattr(ctx, "engine_vmid", None)
+    if not engine_vmid:
+        engine_vmid = (ctx.state or {}).get("scoring_vm_id")
+    try:
+        base_path, red_vmid, red_ip = badauto_config_ops.prepare_deploy_config(
+            comp_dir, engine_vmid, engine_ip=realm_c2_ops.engine_ip_for(comp_dir))
+        config_path = base_path
+    except (TypeError, ValueError) as e:
+        record_degradation("assume_breach_config", f"cannot reserve red01 identity: {e}")
+        print(f"  assume-breach: could not reserve red01's vmid/IP ({e}) — skipped")
+        return {"ok": False, "reason": f"red01 reservation failed: {e}"}
+
     # Realm C2 on red01 (default): the engine DNAT must bake in the C2 address
     # at DEPLOY time, so the derived config is written first. `realm_c2_local 0`
     # keeps the legacy layout (tavern on the static implant-host VM).
-    c2_cfg_path, realm_cfg = None, None
+    c2_result = None
+    realm_cfg = None
     if realm_c2_ops.compfile_knobs(comp_dir)["enabled"]:
         try:
-            c2_cfg_path, realm_cfg = realm_c2_ops.prepare_local_c2(comp_dir, red_ip)
+            c2_cfg_path, realm_cfg = realm_c2_ops.prepare_local_c2(
+                comp_dir, red_ip, red_vmid=red_vmid)
+            if c2_cfg_path is not None:
+                config_path = c2_cfg_path
         except ValueError as e:
             record_degradation("realm_c2_config", str(e))
             print("  " + "!" * 70)
@@ -262,9 +280,9 @@ def plant_assume_breach(ctx):
             print(f"  realm-c2: WARNING — derived realm block lacks {missing}; "
                   f"beacons will not phone home (see docs/known-issues.md)")
             return {"ok": False, "reason": f"realm block missing {missing}"}
-    print(f"  assume-breach: deploying red01 + realm engine DNAT (bad-auto)...")
+    print("  assume-breach: deploying red01 + realm engine DNAT (bad-auto)...")
     try:
-        deployed = _deploy_red(comp_dir, env, config_path=c2_cfg_path)
+        deployed = _deploy_red(comp_dir, env, config_path=config_path)
     except subprocess.TimeoutExpired:
         record_degradation("assume_breach_deploy", "badauto deploy timed out")
         print("  assume-breach: bad-auto deploy timed out — skipped")
@@ -273,14 +291,13 @@ def plant_assume_breach(ctx):
         tail = ((deployed.stderr or "") + (deployed.stdout or ""))[-300:]
         record_degradation("assume_breach_deploy", tail)
         print("  assume-breach: bad-auto deploy FAILED (see degradations)")
-        _record_attempt(ctx, red_ip, "deploy failed")
+        _record_attempt(ctx, red_ip, "deploy failed", vmid=red_vmid)
         return {"ok": False, "reason": "deploy failed"}
 
     # The C2 lives on red01 now: build tavern from source there (all callback
     # transports + the MCP server) and stage the prebuilt imix implants into
     # bad-auto's paths. Warn-and-continue — a dead tavern surfaces as plants
     # that refuse and a degradation, not a lost range.
-    c2_result = None
     if realm_cfg is not None:
         knobs = realm_c2_ops.compfile_knobs(comp_dir)
         print(f"  assume-breach: provisioning the Realm C2 (tavern) on red01 "
@@ -316,10 +333,11 @@ def plant_assume_breach(ctx):
         tail = ((seeded.stderr or "") + (seeded.stdout or ""))[-300:]
         record_degradation("assume_breach_seed", tail)
         print("  assume-breach: seed FAILED (see degradations)")
-        _record_attempt(ctx, red_ip, "seed failed")
+        _record_attempt(ctx, red_ip, "seed failed", vmid=red_vmid)
         return {"ok": False, "reason": "seed failed"}
 
-    summary = {"ok": True, "red_ip": red_ip, "depth": depth, "at": _now()}
+    summary = {"ok": True, "red_ip": red_ip, "vmid": red_vmid,
+               "depth": depth, "at": _now()}
     if c2_result is not None:
         summary["realm_c2"] = c2_result
     try:

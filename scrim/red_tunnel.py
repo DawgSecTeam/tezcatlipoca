@@ -9,15 +9,10 @@ from scrim import core
 from scrim.core import log
 
 
+# reverse SSH tunnel so red01 (node LAN, no tailscale) can reach an operator-side LLM
+# endpoint; keepalives + a restart supervisor because the dress rehearsal ran an event
+# red-LLM-less after a plain `ssh -R` died unnoticed
 class RedTunnel:
-    """Reverse SSH tunnel so red01 can reach an operator-side LLM endpoint.
-
-    red01 sits on the node LAN with no tailscale, so a local endpoint is
-    unreachable from it: this ssh -N -R (run on the operator, binding on
-    red01) forwards red01's localhost:<remote_port> through the connection to
-    the endpoint. The dress rehearsal ran an event red-LLM-less because a
-    plain `ssh -R` died and nobody noticed — this one keepalives and has a
-    supervisor that restarts it until teardown."""
 
     def __init__(self, llm_base_url, red_ip, key, user):
         url = urlparse(llm_base_url if "//" in llm_base_url else f"http://{llm_base_url}")
@@ -61,15 +56,11 @@ class RedTunnel:
                 log("red LLM tunnel died — restarting")
                 self._spawn()
 
+    # _supervise only notices a proc that has exited; an ssh still running but wedged
+    # (no longer forwarding) needs an explicit kill+respawn — SIGKILL after a short grace
+    # so a hung ssh cannot hold the forwarded port and fail the respawn with
+    # ExitOnForwardFailure
     def restart(self):
-        """Tear down and respawn the tunnel — the one-shot rescue for a WEDGED process.
-
-        _supervise only notices a proc that has exited; an ssh that is still running but
-        no longer forwarding traffic (the dress-rehearsal failure: "a plain ssh -R died
-        and nobody noticed") needs an explicit kill+respawn. SIGTERM the session, then
-        SIGKILL after a short grace so a hung ssh cannot hold the forwarded port and
-        make the respawn fail with ExitOnForwardFailure.
-        """
         if self.proc is not None and self.proc.poll() is None:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(self.proc.pid, signal.SIGTERM)
@@ -89,7 +80,6 @@ class RedTunnel:
 
 
 def maybe_start_red_tunnel(args):
-    """auto: tunnel local (non-openrouter) endpoints; openrouter needs none."""
     mode = getattr(args, "red_tunnel", "auto") or "auto"
     local = core.is_local_endpoint(args.llm_base_url)
     if mode == "off" or (mode == "auto" and not local):

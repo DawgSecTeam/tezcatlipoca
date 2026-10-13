@@ -68,14 +68,6 @@ def engine_ctx(args, comp_dir):
     return f"http://{ip}", password
 
 
-def session_for(base_url, password):
-    s = requests.Session()
-    r = s.post(f"{base_url}/api/login",
-               json={"username": "admin", "password": password}, timeout=10)
-    r.raise_for_status()
-    return s
-
-
 def print_plan(schedule, t0):
     print(f"\n  Schedule plan (T0 = {t0:%Y-%m-%d %H:%M %Z})")
     print("  " + "-" * 56)
@@ -90,14 +82,13 @@ def print_plan(schedule, t0):
 
 
 def dump_scoreboard(base_url, session, comp_dir):
-    """Capture the final scoreboard; returns the list of capture errors ([] = clean).
-
-    Deliberately tolerant: the engine can answer 500 or a non-JSON body mid-round, and
-    the old `.json()` calls propagated straight out of main() BEFORE `end` paused the
-    engine — the schedule then said the event was over while scoring kept running
-    (audit find D7). Every failure is recorded inside the dump instead, so the pause
-    below always gets its turn and the operator still gets (partial) evidence on disk.
-    """
+# Capture the final scoreboard; returns the list of capture errors ([] = clean).
+#
+#     Deliberately tolerant: the engine can answer 500 or a non-JSON body mid-round, and
+#     the old `.json()` calls propagated straight out of main() BEFORE `end` paused the
+#     engine — the schedule then said the event was over while scoring kept running
+#     (audit find D7). Every failure is recorded inside the dump instead, so the pause
+#     below always gets its turn and the operator still gets (partial) evidence on disk.
     out_dir = comp_dir / "evidence"
     out_dir.mkdir(parents=True, exist_ok=True)
     dump = {"captured_at": datetime.now().astimezone().isoformat(timespec="seconds")}
@@ -146,7 +137,7 @@ def dump_scoreboard(base_url, session, comp_dir):
 
 
 def pause_engine(base_url, session):
-    """POST engine/pause True; returns (ok, detail). Never raises."""
+# POST engine/pause True; returns (ok, detail). Never raises.
     try:
         r = session.post(f"{base_url}/api/engine/pause", json={"pause": True}, timeout=10)
     except requests.RequestException as e:
@@ -157,12 +148,11 @@ def pause_engine(base_url, session):
 
 
 def end_event(base_url, session, comp_dir):
-    """Capture, then pause — the pause is attempted even when the capture fails.
-
-    Returns the process exit code: non-zero when the capture was incomplete OR the pause
-    failed, because an event whose engine keeps scoring is not "over" however green the
-    printed schedule looks.
-    """
+# Capture, then pause — the pause is attempted even when the capture fails.
+#
+#     Returns the process exit code: non-zero when the capture was incomplete OR the pause
+#     failed, because an event whose engine keeps scoring is not "over" however green the
+#     printed schedule looks.
     errors = []
     try:
         errors = dump_scoreboard(base_url, session, comp_dir)
@@ -209,7 +199,10 @@ def main():
         return 0
 
     base_url, password = engine_ctx(args, comp_dir)
-    session = session_for(base_url, password)
+    session = requests.Session()
+    r = session.post(f"{base_url}/api/login",
+                     json={"username": "admin", "password": password}, timeout=10)
+    r.raise_for_status()
     action = args.execute
     if action == "start":
         r1 = session.post(f"{base_url}/api/competition/start",

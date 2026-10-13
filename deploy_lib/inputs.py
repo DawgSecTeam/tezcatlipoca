@@ -14,11 +14,11 @@ from utils import compfile_flag, env_summary, load_compfile, load_users_config
 
 
 def resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid):
-    """Settle the scoring-engine VMID into `identity` (see RunIdentity for why first).
-
-    A corrupt or absent .deploy_state.json here falls back to the default rather than
-    raising: load_prior_deploy_state reads the same file a few steps later and does the
-    refusing, with a message that names the actual problem."""
+# Settle the scoring-engine VMID into `identity` (see RunIdentity for why first).
+#
+#     A corrupt or absent .deploy_state.json here falls back to the default rather than
+#     raising: load_prior_deploy_state reads the same file a few steps later and does the
+#     refusing, with a message that names the actual problem.
     # Resolve this competition's scoring-engine VMID before taking the engine lock
     # (the lock is keyed on it) and before phase-1 cleanup destroys it. On resume it
     # is authoritative from .deploy_state.json; on a fresh deploy it comes from the
@@ -46,11 +46,11 @@ def resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid):
 
 
 def load_competition_spec(spec, comp_dir):
-    """Load the Compfile, users.json and boxes.json into `spec`; print the banner.
-
-    A missing boxes.json is fatal here: every later step (and every phase) enumerates
-    boxes. Known-broken templates only warn — the competition may predate the fix, and
-    the deploy still has to be able to refuse later on its own terms."""
+# Load the Compfile, users.json and boxes.json into `spec`; print the banner.
+#
+#     A missing boxes.json is fatal here: every later step (and every phase) enumerates
+#     boxes. Known-broken templates only warn — the competition may predate the fix, and
+#     the deploy still has to be able to refuse later on its own terms.
     spec.name, spec.scenario, spec.difficulty = load_compfile(comp_dir / "Compfile")
     # A comp dir that arrived by git (stage_author authoring, manual copy, fresh clone)
     # lacks compile-packet's gitignored secret layer; without it the machine list has
@@ -90,11 +90,11 @@ def load_competition_spec(spec, comp_dir):
 
 
 def load_prior_deploy_state(prior, comp_dir, from_phase):
-    """Read .deploy_state.json into `prior` and decide whether this is a resume.
-
-    A corrupt or unreadable file reads as empty state. The refusals that depend on the
-    file (missing on resume, pipeline version, skipped phases, resume-loop, missing
-    machines) are gates.check_resume_gates, which prepare() runs right after this."""
+# Read .deploy_state.json into `prior` and decide whether this is a resume.
+#
+#     A corrupt or unreadable file reads as empty state. The refusals that depend on the
+#     file (missing on resume, pipeline version, skipped phases, resume-loop, missing
+#     machines) are gates.check_resume_gates, which prepare() runs right after this.
     prior.state_path = comp_dir / ".deploy_state.json"
     prior.previous_state = {}
     if prior.state_path.exists():
@@ -106,11 +106,11 @@ def load_prior_deploy_state(prior, comp_dir, from_phase):
 
 
 def load_competition_inputs(inputs, comp_dir):
-    """Load injects and the packet-published credentials into `inputs`.
-
-    Loaded after the resume guards and before the secrets step: passwords.json outranks
-    both state and a fresh mint, and the secrets step needs the packet's derived
-    credlists, so the two inputs are materialised together in one place."""
+# Load injects and the packet-published credentials into `inputs`.
+#
+#     Loaded after the resume guards and before the secrets step: passwords.json outranks
+#     both state and a fresh mint, and the secrets step needs the packet's derived
+#     credlists, so the two inputs are materialised together in one place.
     inputs.injects = load_injects(comp_dir)
     # Packet-published credentials (compile-packet.py -> passwords.json): when present,
     # box_password and the credlists are the packet's default credentials verbatim, not

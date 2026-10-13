@@ -21,7 +21,6 @@ PROXY = (f"ssh -i {KEY} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/n
 
 
 def checks_for(artifact):
-    """[shell test lines] for one artifact — 'label<TAB>shell' pairs."""
     kind = artifact.get("kind") or ""
     det = str(artifact.get("detail") or "")
     out = []
@@ -68,11 +67,10 @@ def checks_for(artifact):
     return out
 
 
+# runs as the login user (no sudo): the range's planted world-writable-sudoers misconfig
+# makes sudo refuse outright, and root login is blocked by sshd — so root-only facts (key
+# contents under /root) are reported as unverifiable rather than silently missing
 def run_box(ip, script, password, timeout=90):
-    """Run the audit as the login user (no sudo): the range's planted
-    world-writable-sudoers misconfig makes sudo refuse outright, and root login
-    is blocked by sshd — so root-only facts (key contents under /root) are
-    reported as unverifiable rather than silently missing."""
     import base64
     b64 = base64.b64encode(script.encode()).decode()
     remote = ("echo %s | base64 -d > /tmp/.audit.sh; "

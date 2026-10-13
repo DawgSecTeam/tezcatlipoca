@@ -8,12 +8,8 @@ from scrim import quotient_api
 from scrim.core import log
 
 
+# title is the join key, mirroring create_injects' title dedup
 def _inject_reanchor_plan(comp_injects, remote_injects):
-    """Match comp injects to engine injects by title; return (updates, missing_titles).
-
-    Each update is (engine_id, form_fields, keep_files) with times already RFC3339.
-    Matching mirrors create_injects' title dedup — title is the join key.
-    """
     by_title = {}
     for r in remote_injects or []:
         title = r.get("Title")
@@ -33,15 +29,12 @@ def _inject_reanchor_plan(comp_injects, remote_injects):
     return updates, missing
 
 
+# inject offsets resolve to absolute times at phase-7 deploy time, so a --skip-deploy
+# restart or a long staging gap reaches T0 with every inject already expired
+# (shakedown-5x4: blue inject score was a guaranteed 0); UpdateInject deletes any
+# attachment NOT listed under keep-files, so every existing InjectFileNames entry is
+# re-listed on each POST
 def reanchor_injects(args, comp, creds):
-    """Re-anchor the engine's inject clocks at T0 (idempotent; run right before stage_run).
-
-    Inject offsets resolve to absolute times at phase-7 deploy time, so a --skip-deploy
-    restart or a long staging gap reaches T0 with every inject already expired
-    (shakedown-5x4: blue inject score was a guaranteed 0). UpdateInject deletes any
-    attachment NOT listed under keep-files, so every existing InjectFileNames entry is
-    re-listed on each POST.
-    """
     from config_ops import load_injects, resolve_inject_times
 
     injects = load_injects(comp)
@@ -88,7 +81,6 @@ def reanchor_injects(args, comp, creds):
 
 
 def inject_brief(creds, team):
-    """One line per inject with submission state; flags due-within-30-min as task #1."""
     jar = quotient_api.jar_path(creds["RUN_DIR"], team)
     try:
         r = quotient_api.qget(creds, team, jar, "/api/injects")

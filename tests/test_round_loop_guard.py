@@ -27,7 +27,7 @@ ZERO = "0001-01-01T00:00:00Z"
 
 
 class FakeEngine:
-    """Records calls; answers login, /api/engine, and the two fix POSTs."""
+# Records calls; answers login, /api/engine, and the two fix POSTs.
 
     def __init__(self, engine_payload=None, fail_login=False, fail_fix=False):
         self.engine_payload = engine_payload if engine_payload is not None else {}
@@ -71,7 +71,7 @@ class GuardActsOnlyOnAStaleLoop(unittest.TestCase):
         self.assertEqual(posts[1][2], {"pause": False})
 
     def test_a_paused_engine_without_stale_round_is_never_touched(self):
-        """A pause without an old-round reboot signature is intentional."""
+    # A pause without an old-round reboot signature is intentional.
         engine = FakeEngine({"running": False, "current_round_time": ZERO})
         outcome = guard.guard_once(engine, "scoring", "pw", now=NOW)
         self.assertEqual(outcome["state"], round_loop.PAUSED)
@@ -101,8 +101,8 @@ class GuardActsOnlyOnAStaleLoop(unittest.TestCase):
         self.assertEqual([c for c in engine.calls if c[0] == "post"], [])
 
     def test_it_authenticates_as_the_dedicated_account(self):
-        """The whole point: automation must not log in as `admin`, or it evicts the
-        operator's session (one session per account)."""
+    # The whole point: automation must not log in as `admin`, or it evicts the
+    #         operator's session (one session per account).
         engine = FakeEngine(_stale())
         guard.guard_once(engine, "scoring", "pw", now=NOW)
         self.assertEqual(engine.calls[0], ("login", "scoring"))
@@ -128,7 +128,7 @@ class GuardFailsSafe(unittest.TestCase):
         self.assertEqual([c for c in engine.calls if c[0] == "post"], [])
 
     def _run_main(self, engine, *extra):
-        """Drive the real CLI: a temp config, the fake client injected."""
+    # Drive the real CLI: a temp config, the fake client injected.
         import json
         import tempfile
         from unittest.mock import patch
@@ -142,7 +142,7 @@ class GuardFailsSafe(unittest.TestCase):
                 return guard.main(["--config", str(config), "--quiet", *extra])
 
     def test_a_healthy_loop_exits_zero(self):
-        """A timer that exits nonzero on every healthy tick would drown the journal."""
+    # A timer that exits nonzero on every healthy tick would drown the journal.
         engine = FakeEngine(_stale(minutes=1))
         self.assertEqual(self._run_main(engine), 0)
 
@@ -150,8 +150,8 @@ class GuardFailsSafe(unittest.TestCase):
         self.assertEqual(self._run_main(FakeEngine(_stale())), 0)
 
     def test_a_failed_fix_exits_nonzero(self):
-        """The one case an operator must see: the loop was stopped and we could not
-        restart it."""
+    # The one case an operator must see: the loop was stopped and we could not
+    #         restart it.
         self.assertEqual(self._run_main(FakeEngine(_stale(), fail_fix=True)), 1)
 
     def test_dry_run_exits_zero(self):

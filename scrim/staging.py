@@ -59,7 +59,6 @@ def stage_author(args):
 
 
 def creds_from_files(comp):
-    """All secrets/logins from the post-deploy artifacts (no terraform output needed)."""
     state = core.read_comp_json(comp, ".deploy_state.json")
     teams = core.read_comp_json(comp, "teams.json")
     engine_ip = core.engine_ip_from(comp)

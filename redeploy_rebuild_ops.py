@@ -8,16 +8,11 @@ import pipeline_api
 from config_ops import write_state
 from constants import SNAP_BASE, SNAP_READY, ownership_tags
 from nakon_ops import build_nakon_bundle
-from range_ops import (
-    clone_marker,
-    terraform_dir,
-    describe_target,
-    destroy_vm_if_exists,
-    proxmox_api,
-    start_vm,
-    take_snapshot,
-    wait_for_proxmox_task,
-)
+from infra.client import proxmox_api, wait_for_proxmox_task
+from infra.lifecycle import start_vm, take_snapshot
+from infra.ownership import clone_marker, destroy_vm_if_exists
+from targets import describe_target
+from terraform_workdir import terraform_dir
 from template_ops import stored_template_hash
 from timing import timed
 from ssh_ops import quote_sshkeys
@@ -28,7 +23,7 @@ from redeploy_plant_ops import rerun_domain_configs
 
 
 def template_vmid_for(box):
-    """Resolve a box's template name to a vmid, the way main.tf's templates data source does."""
+# Resolve a box's template name to a vmid, the way main.tf's templates data source does.
     scoring_template_id = int(os.environ["TF_VAR_template_vm_id"])
     data = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
     for vm in data:
@@ -43,8 +38,9 @@ def template_vmid_for(box):
     )
 
 
-def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_bundle):
-    """Recreate VM from template then configure (clones template, not team1 live box)."""
+def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
+# Recreate VM from template then configure (clones template, not team1 live box).
+    ctx, node, comp_dir, state = rctx.ctx, rctx.node, rctx.comp_dir, rctx.state
     box_password = state.get("box_password")
     if not box_password:
         raise SystemExit(
@@ -109,7 +105,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
             # /clone takes no tags, and the tagging PUT below only lands after the clone
             # task finishes — a kill mid-clone would otherwise leave an unmarked VM
             # squatting our vmid slot. The description exists from the clone's first
-            # instant (range_ops.clone_marker; winad-testrun 2026-09-25).
+            # instant (infra.ownership.clone_marker; winad-testrun 2026-09-25).
             "description": clone_marker(comp_dir.name),
         })["data"]
         wait_for_proxmox_task(tnode, upid)
@@ -215,7 +211,7 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
             ctx, box_creds=state.get("box_creds"))
 
         try:
-            domain_settled = rerun_domain_configs(rebuilt, ctx, comp_dir, state, nakon_config_path)
+            domain_settled = rerun_domain_configs(rebuilt, rctx, nakon_config_path)
         except Exception:
             print("  tz-ready NOT re-taken — the domain chain failed above, so the boxes are "
                   "not in an 'as delivered' state.")
@@ -235,17 +231,18 @@ def mode_rebuild(targets, ctx, node, comp_dir, state, nakon_config_path, nakon_b
     return rebuilt
 
 
-def reconcile_terraform_state(rebuilt, ctx, comp_dir, teams, boxes):
-    """`terraform import` each rebuilt box back into state (opt-in --reconcile-state).
-
-    mode_rebuild recreates boxes through the API, so on a v2+ range every rebuilt box
-    is a live terraform resource the state no longer matches — the next full
-    `terraform apply` sees drift and REPLACES it, destroying the box again (warned
-    about since the tool existed). Import re-pins the state to the recreated VM with
-    its deterministic vmid, after which a plan reports the box clean. Import ID is
-    the vmid; the for_each key lives in the address (slot 0 = team_box, satellites =
-    team_box_sat1..4). A failed import is printed, never fatal — the warning path
-    (accept the replacement, or `terraform state rm`) remains the fallback."""
+def reconcile_terraform_state(rebuilt, rctx):
+# `terraform import` each rebuilt box back into state (opt-in --reconcile-state).
+#
+#     mode_rebuild recreates boxes through the API, so on a v2+ range every rebuilt box
+#     is a live terraform resource the state no longer matches — the next full
+#     `terraform apply` sees drift and REPLACES it, destroying the box again (warned
+#     about since the tool existed). Import re-pins the state to the recreated VM with
+#     its deterministic vmid, after which a plan reports the box clean. Import ID is
+#     the vmid; the for_each key lives in the address (slot 0 = team_box, satellites =
+#     team_box_sat1..4). A failed import is printed, never fatal — the warning path
+#     (accept the replacement, or `terraform state rm`) remains the fallback.
+    comp_dir, teams, boxes = rctx.comp_dir, rctx.teams, rctx.boxes
     env = {**os.environ,
            "TF_VAR_teams": json.dumps(teams),
            "TF_VAR_boxes_per_team": json.dumps(boxes)}

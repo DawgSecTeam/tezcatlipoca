@@ -47,10 +47,10 @@ def _proc(returncode=0, stdout="", stderr=""):
     return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+# The pre-W11 shape: one item at a time, collecting exceptions per slot exactly as
+# utils.run_concurrent would — the control that proves the wall-time threshold
+# actually discriminates a parallel implementation from a re-serialised one.
 def _serial_run_concurrent(items, fn, max_workers=8):
-    """The pre-W11 shape: one item at a time, collecting exceptions per slot exactly as
-    utils.run_concurrent would. Used as the control that proves the wall-time threshold
-    actually discriminates a parallel implementation from a re-serialised one."""
     out = []
     for item in items:
         try:
@@ -61,8 +61,6 @@ def _serial_run_concurrent(items, fn, max_workers=8):
 
 
 class _Events:
-    """Thread-safe op log plus peak-concurrency counters for the patched ops."""
-
     def __init__(self):
         self.lock = threading.Lock()
         self.log = []
@@ -90,10 +88,6 @@ class _Events:
 
 
 class GoldenBuildHarness:
-    """Runs the real build_golden_set with every remote op faked and the interesting
-    ones instrumented. `n` booted box types, all Linux, all already-planted (so the
-    clone loops are skipped) unless `missing=True`."""
-
     def __init__(self, n=8, snapshot_sleep=0.0, template_sleep=0.0, clone_sleep=0.0,
                  missing=False, unbooted=(), smoke_raises=(), template_raises=(),
                  password_fail=(), snapshot_false=(), run_concurrent=None,
@@ -131,7 +125,6 @@ class GoldenBuildHarness:
             {"machines": [{"name": f"box{i}-golden", "configurations": []}
                           for i in range(n)]}))
 
-    # ---------------------------------------------------------------- fakes
     def _ssh(self, ctx, ip, cmd, timeout=60, user=None):
         if ip in self.password_fail and "chpasswd" in cmd:
             return _proc(1, "", "chpasswd: Authentication token manipulation error")
@@ -169,7 +162,6 @@ class GoldenBuildHarness:
                 f"the throwaway clone did not reach multi-user — refusing to convert")
         return True
 
-    # ---------------------------------------------------------------- driver
     @contextlib.contextmanager
     def _patched(self):
         rc = self.run_concurrent or golden_ops.run_concurrent
@@ -211,7 +203,6 @@ class GoldenBuildHarness:
             yield
 
     def run(self):
-        """Returns (result, events, exception)."""
         coverage = (lambda machines, result:
                     self.coverage_calls.append((machines, result)))
         with self._patched(), contextlib.redirect_stdout(io.StringIO()):
@@ -228,9 +219,9 @@ class GoldenBuildHarness:
 
 
 class GoldenParallelism(unittest.TestCase):
+    # a serialised implementation would fail this: 8 x 0.2s in EACH of the two
+    # loops is a 3.2s floor; a 4-worker pool over 8 units is ~0.8s.
     def test_snapshots_and_conversions_overlap(self):
-        """A serialised implementation would fail this: 8 x 0.2s in EACH of the two
-        loops is a 3.2s floor; a 4-worker pool over 8 units is ~0.8s."""
         harness = GoldenBuildHarness(n=8, snapshot_sleep=0.2, template_sleep=0.2)
         started = time.monotonic()
         result, events, exc = harness.run()
@@ -244,11 +235,11 @@ class GoldenParallelism(unittest.TestCase):
         self.assertGreater(events.peak.get("snapshot", 0), 1, "snapshots were not concurrent")
         self.assertGreater(events.peak.get("template", 0), 1, "conversions were not concurrent")
 
+    # The control that gives the threshold teeth: with run_concurrent replaced by a
+    # serial runner (the pre-W11 shape) the same build must blow the 1.8s threshold.
+    # This is the executable form of 'verified to FAIL against a re-serialised
+    # implementation'.
     def test_reserialised_control_exceeds_the_threshold(self):
-        """The control that gives the threshold teeth: with run_concurrent replaced by a
-        serial runner (the pre-W11 shape) the same build must blow the 1.8s threshold.
-        This is the executable form of 'verified to FAIL against a re-serialised
-        implementation'."""
         harness = GoldenBuildHarness(n=8, snapshot_sleep=0.2, template_sleep=0.2,
                                      run_concurrent=_serial_run_concurrent)
         started = time.monotonic()
@@ -262,17 +253,17 @@ class GoldenParallelism(unittest.TestCase):
         self.assertEqual(events.peak.get("snapshot"), 1)
         self.assertEqual(events.peak.get("template"), 1)
 
+    # 8 box types must not open 8 concurrent converting Proxmox tasks
     def test_pool_is_bounded_at_four(self):
-        """8 box types must not open 8 concurrent converting Proxmox tasks."""
         harness = GoldenBuildHarness(n=8, snapshot_sleep=0.02, template_sleep=0.02)
         _, events, exc = harness.run()
         self.assertIsNone(exc)
         self.assertLessEqual(events.peak.get("snapshot"), 4, "snapshot pool exceeded its bound")
         self.assertLessEqual(events.peak.get("template"), 4, "conversion pool exceeded its bound")
 
+    # The gate the 2026-09-24 systemd-system-masked incident exists for: one
+    # unbootable golden must stop the whole conversion pass, not just its own.
     def test_failed_boot_smoke_blocks_every_template_conversion(self):
-        """The gate the 2026-09-24 systemd-system-masked incident exists for: one
-        unbootable golden must stop the whole conversion pass, not just its own."""
         harness = GoldenBuildHarness(n=8, smoke_raises={"box3"})
         result, events, exc = harness.run()
 
@@ -296,9 +287,9 @@ class GoldenParallelism(unittest.TestCase):
         self.assertLess(max(smoked), min(converted),
                         "a conversion ran before all boot smokes finished")
 
+    # SNAP_BASE is the pre-plant rollback guard; the pool joins before the plant
+    # even begins, so no conversion can race a snapshot.
     def test_all_snapshots_exist_before_conversion_starts(self):
-        """SNAP_BASE is the pre-plant rollback guard; the pool joins before the plant
-        even begins, so no conversion can race a snapshot."""
         harness = GoldenBuildHarness(n=8, snapshot_sleep=0.1)
         _, events, exc = harness.run()
         self.assertIsNone(exc)
@@ -308,8 +299,8 @@ class GoldenParallelism(unittest.TestCase):
         self.assertLess(max(snapped), min(converted),
                         "a conversion started before every snapshot existed")
 
+    # qm template refuses a VM holding snapshots — per box, delete must come first.
     def test_snapshot_is_deleted_before_its_template_post(self):
-        """qm template refuses a VM holding snapshots — per box, delete must come first."""
         harness = GoldenBuildHarness(n=8)
         _, events, exc = harness.run()
         self.assertIsNone(exc)
@@ -320,9 +311,9 @@ class GoldenParallelism(unittest.TestCase):
             self.assertLess(deletes[vmid], idx,
                             f"vmid {vmid} was converted before its SNAP_BASE was deleted")
 
+    # An unbooted (DC) golden is generalized and converted in the cold pass — it
+    # must not be snapshotted, started, or smoke-tested.
     def test_cold_dc_golden_short_circuits_before_the_smoke(self):
-        """An unbooted (DC) golden is generalized and converted in the cold pass — it
-        must not be snapshotted, started, or smoke-tested."""
         harness = GoldenBuildHarness(n=4, unbooted={"box0"})
         result, events, exc = harness.run()
         self.assertIsNone(exc)
@@ -334,9 +325,9 @@ class GoldenParallelism(unittest.TestCase):
         self.assertIn(cold_vmid, events.keys("template"))
         self.assertNotIn(cold_vmid, events.keys("snapshot"))
 
+    # Full clones are crash-consistent disk copies onto one datastore — deploy.py
+    # runs terraform at -parallelism=1 for the same reason. Nothing here may fan out.
     def test_full_clone_loop_stays_serial(self):
-        """Full clones are crash-consistent disk copies onto one datastore — deploy.py
-        runs terraform at -parallelism=1 for the same reason. Nothing here may fan out."""
         harness = GoldenBuildHarness(n=8, missing=True, clone_sleep=0.05)
         _, events, exc = harness.run()
         self.assertIsNone(exc)
@@ -349,9 +340,9 @@ class GoldenParallelism(unittest.TestCase):
         self.assertIsInstance(exc, RuntimeError)
         self.assertIn("500 converting", str(exc))
 
+    # take_snapshot never raises (it warns and returns False); the parallel pass
+    # must keep that warn-and-continue behaviour, not turn it into an abort.
     def test_snapshot_warn_path_still_continues(self):
-        """take_snapshot never raises (it warns and returns False); the parallel pass
-        must keep that warn-and-continue behaviour, not turn it into an abort."""
         harness = GoldenBuildHarness(
             n=8, snapshot_false={str(golden_ops.golden_vmid_for(1000, 2))})
         result, events, exc = harness.run()
@@ -367,15 +358,13 @@ class GoldenParallelism(unittest.TestCase):
         self.assertIn("Authentication token manipulation error", str(exc))
 
 
+# A golden that already passed its plant AND its boot smoke is not redone.
+#
+# Measured on cde-2026: `Golden re-entry: rolling golden-<name> back to 'tz-base'`
+# appears 33 times — 11 each for web01, ftp01 and db01 — across 10 runs, while only
+# ftp01 was ever the problem. The checkpoint stops that multiplication; the
+# conversion barrier (a failed smoke blocks EVERY POST /template) must survive it.
 class GoldenCheckpoint(unittest.TestCase):
-    """A golden that already passed its plant AND its boot smoke is not redone.
-
-    Measured on cde-2026: `Golden re-entry: rolling golden-<name> back to 'tz-base'`
-    appears 33 times — 11 each for web01, ftp01 and db01 — across 10 runs, while only
-    ftp01 was ever the problem. The checkpoint stops that multiplication; the
-    conversion barrier (a failed smoke blocks EVERY POST /template) must survive it.
-    """
-
     def _seed(self, harness, mapping):
         (harness.comp_dir / ".template-hashes.json").write_text(
             json.dumps({"golden_planted": mapping}))
@@ -406,9 +395,9 @@ class GoldenCheckpoint(unittest.TestCase):
         self.assertIn("box0", events.keys("smoke"), "stale hash must be re-verified")
         self.assertIn(str(harness.vmids[0]), events.keys("rollback"))
 
+    # A fresh clone has no tz-base snapshot, so a leftover checkpoint entry must
+    # not make it look planted — that is the destroy-and-redeploy path.
     def test_a_golden_with_no_tz_base_is_not_treated_as_checkpointed(self):
-        """A fresh clone has no tz-base snapshot, so a leftover checkpoint entry must
-        not make it look planted — that is the destroy-and-redeploy path."""
         harness = GoldenBuildHarness(n=2, golden_hashes={"box0": "h0", "box1": "h1"},
                                      snapshots_empty=[golden_ops.golden_vmid_for(1000, 0)])
         self._seed(harness, {"box0": "h0"})
@@ -416,9 +405,9 @@ class GoldenCheckpoint(unittest.TestCase):
         self.assertIsNone(exc)
         self.assertIn("box0", events.keys("smoke"))
 
+    # If the NEXT box's smoke fails, the box that already passed must keep its
+    # checkpoint — otherwise the next re-entry pays for it again.
     def test_a_pass_is_recorded_immediately_not_at_the_end_of_the_set(self):
-        """If the NEXT box's smoke fails, the box that already passed must keep its
-        checkpoint — otherwise the next re-entry pays for it again."""
         harness = GoldenBuildHarness(n=2, golden_hashes={"box0": "h0", "box1": "h1"},
                                      smoke_raises=["box1"])
         _result, _events, exc = harness.run()
@@ -426,22 +415,21 @@ class GoldenCheckpoint(unittest.TestCase):
         recorded = json.loads((harness.comp_dir / ".template-hashes.json").read_text())
         self.assertEqual(recorded.get("golden_planted"), {"box0": "h0"})
 
+    # Without golden hashes there is no identity to key on, so nothing is skipped —
+    # the conservative default.
     def test_no_hashes_means_no_checkpointing(self):
-        """Without golden hashes there is no identity to key on, so nothing is skipped —
-        the conservative default."""
         harness = GoldenBuildHarness(n=1)
         harness.run()
         self.assertEqual(len(harness.events.keys("smoke")), 1)
         self.assertFalse((harness.comp_dir / ".template-hashes.json").exists())
 
 
+# Phase 4 emits its plant-coverage verdict through the `coverage` callback on EVERY
+# completion path — keyed for verify's '-golden' mapping, slot-qualified on satellite
+# slots. The alpine_services tolerated-failure path is the load-bearing one: those
+# failures used to vanish (warn-only), so verify's coverage gate could not see a
+# golden disk that provably lacked the failed configs.
 class GoldenCoverageRecords(unittest.TestCase):
-    """Phase 4 emits its plant-coverage verdict through the `coverage` callback on
-    EVERY completion path — keyed for verify's '-golden' mapping, slot-qualified on
-    satellite slots. The alpine_services tolerated-failure path is the load-bearing
-    one: those failures used to vanish (warn-only), so verify's coverage gate could
-    not see a golden disk that provably lacked the failed configs."""
-
     STAGE = [{"name": "box0-golden", "configurations": ["apache", "roundcube"]},
              {"name": "box1-golden", "configurations": ["Enable WinRM"]}]
 
@@ -451,7 +439,6 @@ class GoldenCoverageRecords(unittest.TestCase):
         return harness
 
     def _run_plant(self, harness, result, alpine=False):
-        """Run a harness whose nakon plant is patched to return `result`."""
         (harness.comp_dir / "Compfile").write_text(
             "alpine_services 1\n" if alpine else "")
         with patch.object(golden_ops, "run_nakon", return_value=result) as p_nakon, \
@@ -474,10 +461,10 @@ class GoldenCoverageRecords(unittest.TestCase):
                          ["box0-golden", "box1-golden"])
         self.assertEqual(machines[0]["configurations"], ["apache", "roundcube"])
 
+    # The point of the hook: a non-strict plant whose steps FAILED must reach the
+    # coverage callback with the result carrying the failures — not vanish as a
+    # WARNING — and ensure_alpine_services must run after the record lands.
     def test_an_alpine_tolerated_failure_still_reaches_the_record(self):
-        """The point of the hook: a non-strict plant whose steps FAILED must reach the
-        coverage callback with the result carrying the failures — not vanish as a
-        WARNING — and ensure_alpine_services must run after the record lands."""
         harness = self._harness()
         partial = NakonResult(
             ["box0-golden: apache rc=1 (FAILED)"],
@@ -497,8 +484,6 @@ class GoldenCoverageRecords(unittest.TestCase):
         self.assertEqual(p_nakon.call_args.kwargs["strict"], False)
 
     def test_score_only_lineup_records_a_skip_verdict(self):
-        """The harness default: no plantable configurations — the plant is skipped
-        and the verdict is (stage machines, None)."""
         harness = GoldenBuildHarness(n=2)
         _r, _e, exc = harness.run()
         self.assertIsNone(exc)
@@ -508,11 +493,11 @@ class GoldenCoverageRecords(unittest.TestCase):
         self.assertEqual([m["name"] for m in machines],
                          ["box0-golden", "box1-golden"])
 
+    # Live-found 2026-10-04: an interrupted POST /template left a golden with
+    # template=1 on a plain vm- volume; every linked clone of it then died with
+    # HTTP 500 "Linked clone feature is not supported". _convert must verify the
+    # base- rename landed and fail loudly when it did not.
     def test_a_half_converted_golden_fails_the_conversion_loudly(self):
-        """Live-found 2026-10-04: an interrupted POST /template left a golden with
-        template=1 on a plain vm- volume; every linked clone of it then died with
-        HTTP 500 "Linked clone feature is not supported". _convert must verify the
-        base- rename landed and fail loudly when it did not."""
         harness = self._harness(golden_hashes={"box0": "h0", "box1": "h1"})
         (harness.comp_dir / ".template-hashes.json").write_text(json.dumps(
             {"golden_planted": {"box0": "h0", "box1": "h1"}}))
@@ -530,9 +515,9 @@ class GoldenCoverageRecords(unittest.TestCase):
         self.assertIsNotNone(exc)
         self.assertIn("never became base- volumes", str(exc))
 
+    # The happy path must not regress: base- volumes (and an ide cloudinit drive
+    # on the renamed form) satisfy the check and the build completes.
     def test_a_properly_renamed_golden_passes_the_conversion_check(self):
-        """The happy path must not regress: base- volumes (and an ide cloudinit drive
-        on the renamed form) satisfy the check and the build completes."""
         harness = self._harness(golden_hashes={"box0": "h0", "box1": "h1"})
         (harness.comp_dir / ".template-hashes.json").write_text(json.dumps(
             {"golden_planted": {"box0": "h0", "box1": "h1"}}))
@@ -550,9 +535,9 @@ class GoldenCoverageRecords(unittest.TestCase):
             _r, _e, exc = harness.run()
         self.assertIsNone(exc)
 
+    # The M4 all-templates re-entry returns before the plant section ever reads
+    # the stage config — the coverage verdict must still fire.
     def test_a_fully_converted_resume_records_a_skip_verdict(self):
-        """The M4 all-templates re-entry returns before the plant section ever reads
-        the stage config — the coverage verdict must still fire."""
         harness = self._harness(all_templates=True)
         _r, _e, exc = harness.run()
         self.assertIsNone(exc)
@@ -562,9 +547,9 @@ class GoldenCoverageRecords(unittest.TestCase):
         self.assertEqual([m["name"] for m in machines],
                          ["box0-golden", "box1-golden"])
 
+    # Every golden checkpointed (planted + smoke-passed on this hash): the plant
+    # must not run, and the verdict must be a skip, not an absent record.
     def test_a_fully_checkpointed_plant_records_a_skip_verdict(self):
-        """Every golden checkpointed (planted + smoke-passed on this hash): the plant
-        must not run, and the verdict must be a skip, not an absent record."""
         harness = self._harness(golden_hashes={"box0": "h0", "box1": "h1"})
         (harness.comp_dir / ".template-hashes.json").write_text(json.dumps(
             {"golden_planted": {"box0": "h0", "box1": "h1"}}))
@@ -576,10 +561,10 @@ class GoldenCoverageRecords(unittest.TestCase):
         _machines, seen = harness.coverage_calls[0]
         self.assertIsNone(seen)
 
+    # Every slot's stage config names its golden machine identically, so a
+    # satellite slot's coverage keys must carry the slot suffix — otherwise one
+    # slot's clean replant would pop another slot's recorded failure.
     def test_satellite_slot_keys_are_slot_qualified(self):
-        """Every slot's stage config names its golden machine identically, so a
-        satellite slot's coverage keys must carry the slot suffix — otherwise one
-        slot's clean replant would pop another slot's recorded failure."""
         harness = self._harness(slot=2, anchor="105")
         clean = NakonResult(
             [], [{"name": "box0-golden", "steps": [{"name": "apache", "rc": 0}]}])
@@ -589,9 +574,9 @@ class GoldenCoverageRecords(unittest.TestCase):
         self.assertEqual([m["name"] for m in machines],
                          ["box0-golden-slot2", "box1-golden-slot2"])
 
+    # Strict mode (no alpine shim): a failed step aborts the build — the deploy
+    # dies here, so no coverage verdict fires and verify never runs against it.
     def test_a_strict_failure_raises_before_any_verdict_is_recorded(self):
-        """Strict mode (no alpine shim): a failed step aborts the build — the deploy
-        dies here, so no coverage verdict fires and verify never runs against it."""
         harness = self._harness()
         failed = NakonResult(
             ["box0-golden: apache rc=1 (FAILED)"],

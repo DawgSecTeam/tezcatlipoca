@@ -14,26 +14,17 @@ JAR_DIRNAME = ".jars"
 _JAR_LOCKS = {}
 
 
-def jar_dir(run_dir):
-    """The run's private cookie-jar directory (0700, never shared /tmp)."""
+# /tmp/jar.<team> was a predictable name in shared /tmp, created by `curl -c` at the
+# driver's umask: any local account could read a live session cookie, and a second scrim
+# on the same host clobbered the first one's jar. The name must stay deterministic (the
+# generated qlogin/score.py helpers and this driver agree on one file), so a fixed
+# basename inside a 0700 run-dir subdirectory, seeded via mkstemp+rename so the mode is
+# 0600 by construction instead of by luck with the umask.
+def jar_path(run_dir, account):
     d = Path(run_dir) / JAR_DIRNAME
     d.mkdir(parents=True, exist_ok=True)
     os.chmod(d, 0o700)
-    return d
-
-
-def jar_path(run_dir, account):
-    """Deterministic per-account cookie jar inside the run dir, created 0600.
-
-    `/tmp/jar.<team>` was a predictable name in the shared /tmp, created by `curl -c` at
-    whatever umask the driver had: any local account on the operator host could read a
-    live Quotient session cookie, and a second scrim on the same host clobbered the first
-    one's jar. The name must stay deterministic (the generated qlogin/score.py helpers
-    and this driver have to agree on one file), so it keeps a fixed basename — but inside
-    a 0700 run-dir subdirectory, and seeded via mkstemp+rename so the mode is 0600 by
-    construction instead of by luck with the umask.
-    """
-    path = jar_dir(run_dir) / f"{account}.jar"
+    path = d / f"{account}.jar"
     if not path.exists():
         fd, tmp = tempfile.mkstemp(prefix=f".{account}-", dir=str(path.parent))
         os.close(fd)
@@ -41,26 +32,20 @@ def jar_path(run_dir, account):
     return str(path)
 
 
+# one re-entrant lock per Quotient account: the loops refresh per-team jars concurrently
+# and Quotient allows ONE session per account, so two refreshers invalidate each other's
+# cookie in a loop (the documented "three-round scoreboard mystery"). Re-entrant so a
+# helper refreshing while already holding the account lock (qget -> _qlogin) cannot
+# deadlock against itself.
 def jar_lock(account):
-    """One re-entrant lock per Quotient account.
-
-    monitor_loop, inject_brief and the watchdog refresh the per-team jars concurrently,
-    and Quotient allows ONE session per account: two refreshers invalidate each other's
-    cookie in a loop — the documented cause of the "three-round scoreboard mystery".
-    Re-entrant so a helper that refreshes while already holding the account lock (qget ->
-    _qlogin) cannot deadlock against itself.
-    """
     return _JAR_LOCKS.setdefault(account, threading.RLock())
 
 
+# `'"error"' in body` flipped the verdict on any payload whose DATA contained that text
+# (a service or inject legitimately named "error…") and missed an error object written
+# with different spacing; a non-JSON body is NOT an error — callers json.loads() it and
+# fail loudly on their own
 def json_error(body):
-    """True when a Quotient response is a JSON object carrying an `error` key.
-
-    `'"error"' in body` flipped the verdict on any payload whose DATA contained that text
-    (a service or inject legitimately named "error…") and missed an error object written
-    with different spacing. A non-JSON body is NOT an error here: callers json.loads() it
-    and fail loudly on their own.
-    """
     try:
         data = json.loads(body or "")
     except (TypeError, ValueError):
@@ -68,15 +53,12 @@ def json_error(body):
     return isinstance(data, dict) and "error" in data
 
 
+# curl writes a private temp file renamed over the shared jar: never observed half-written
+# (`curl -c` truncates in place, so a concurrent reader could see a partial file), the
+# 0600 mode survives, and a FAILED refresh leaves the previous jar intact instead of
+# destroying a working session. Callers in the loops hold jar_lock(account); the lock
+# here covers the one-off callers too.
 def _qlogin(creds, user, jar):
-    """Refresh a Quotient cookie jar for one account (shared jar; newest login wins).
-
-    curl writes a private temp file which is renamed over the shared jar: the jar is
-    never observed half-written (`curl -c` truncates in place, so a concurrent reader
-    could see a partial file), the 0600 mode survives, and a FAILED refresh leaves the
-    previous jar intact instead of destroying a working session. Callers in the loops
-    hold jar_lock(account); the lock here covers the one-off callers too.
-    """
     with jar_lock(user):
         fd, tmp = tempfile.mkstemp(prefix=f".{Path(jar).name}.", dir=str(Path(jar).parent))
         os.close(fd)
@@ -99,7 +81,6 @@ def _qlogin(creds, user, jar):
 
 
 def qget(creds, user, jar, path):
-    """GET a Quotient path with the account's shared jar; re-login and retry once on rejection."""
     def _get():
         return subprocess.run(["curl", "-s", "--max-time", "15", "-b", jar,
                                f"http://{creds['ENGINE_IP']}{path}"],
@@ -112,13 +93,9 @@ def qget(creds, user, jar, path):
         return _get()
 
 
+# without the isinstance guard an error body made next(...) raise StopIteration/TypeError
+# from inside the monitor thread, which died silently (audit find D3)
 def _team_tid(creds, user, jar, team):
-    """Map a team name to Quotient's internal team ID via /api/teams.
-
-    Raises ValueError on a payload that is not a team list. Without the isinstance guard
-    an error body made `next(...)` raise StopIteration/TypeError from inside the monitor
-    thread, which used to die silently (audit find D3).
-    """
     r = qget(creds, user, jar, "/api/teams")
     try:
         teams = json.loads(r.stdout)
@@ -139,17 +116,13 @@ def team_down(creds, team):
         return False
 
 
+# Last10Rounds is newest-first and at >=8 teams a poll can land mid-round: rounds[0] is
+# then the round in flight, with an empty Checks array that is not a verdict at all —
+# reading it as "no check passed" reports a phantom DOWN the soak's monitors, fire-tests
+# and scoreboard snapshots would all have believed. Take the newest round that actually
+# HAS checks; only when no round carries any is the service genuinely unmeasured, and
+# unmeasured stays down (fail closed) rather than being quietly promoted to up.
 def services_to_rows(services):
-    """Engine /api/services payload -> [{service, up, error}] (parsed_status + final capture).
-    A team with no registered/scored services is a legitimate `null` body.
-
-    `Last10Rounds` is ordered newest-first, and at >=8 teams a poll can land mid-round:
-    rounds[0] is then the round in flight, with an empty `Checks` array that is not a
-    verdict at all. Reading it as "no check passed" reports a phantom DOWN — which the
-    soak's monitors, fire-tests and scoreboard snapshots would all have believed. So take
-    the newest round that actually HAS checks; only when no round carries any is the
-    service genuinely unmeasured, and unmeasured stays down (fail closed) rather than
-    being quietly promoted to up."""
     rows = []
     for s in services or []:
         rounds = s.get("Last10Rounds") or []
@@ -161,7 +134,6 @@ def services_to_rows(services):
 
 
 def parsed_status(creds, team):
-    """Parsed scoreboard for one team: [{service, up, error}]; raises on failure."""
     jar = jar_path(creds["RUN_DIR"], team)
     r = qget(creds, team, jar, f"/api/services/{_team_tid(creds, team, jar, team)}")
     try:
@@ -179,7 +151,6 @@ def render_status(rows):
 
 
 def status_text(creds, team):
-    """Compact plain-text scoreboard for the cycle prompt."""
     try:
         return render_status(parsed_status(creds, team))
     except Exception as e:

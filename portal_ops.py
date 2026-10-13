@@ -29,7 +29,7 @@ import requests
 
 from config_ops import write_text_atomic
 from engine_cmd_ops import _run_engine_cmd
-from pve_console_ops import (mint_console_tokens, node_targets, revoke_console_tokens,
+from infra.console import (mint_console_tokens, node_targets, revoke_console_tokens,
                              team_node_key)
 from timing import timed
 from utils import compfile_flag, compfile_value, is_in_path_fw, is_unmanaged, record_degradation
@@ -51,17 +51,17 @@ def portal_enabled(comp_dir):
 def build_portal_config(*, comp_name, run_id, event_name, scoreboard_url, teams, boxes,
                         targets, placement, default_node, nodes, tokens,
                         firewall_console=True, public_host=""):
-    """portal.json: what the portal shows and which console token reaches which box.
-
-    teams    {team_key: {identifier, ...}}            (teams.json)
-    boxes    boxes.json entries                       (template, unmanaged/in_path flags)
-    targets  enumerate/load_targets output            (team_key, box_name, vmid, ip)
-    nodes    pve_console_ops.node_targets output      (endpoint, pve_node, fingerprint)
-    tokens   pve_console_ops.mint_console_tokens      (node_key -> token); a node without a
-             token is left out of `nodes`, so its boxes list but cannot open a console
-
-    Unmanaged boxes that are NOT the in-path firewall are left out (nothing a team operates);
-    the in-path firewall is listed (teams own their pfSense) unless firewall_console=False."""
+# portal.json: what the portal shows and which console token reaches which box.
+#
+#     teams    {team_key: {identifier, ...}}            (teams.json)
+#     boxes    boxes.json entries                       (template, unmanaged/in_path flags)
+#     targets  enumerate/load_targets output            (team_key, box_name, vmid, ip)
+#     nodes    console.node_targets output      (endpoint, pve_node, fingerprint)
+#     tokens   console.mint_console_tokens      (node_key -> token); a node without a
+#              token is left out of `nodes`, so its boxes list but cannot open a console
+#
+#     Unmanaged boxes that are NOT the in-path firewall are left out (nothing a team operates);
+#     the in-path firewall is listed (teams own their pfSense) unless firewall_console=False.
     by_name = {b["name"]: b for b in boxes}
     out_teams = {k: {"identifier": str(v["identifier"]), "boxes": []} for k, v in teams.items()}
     for t in targets:
@@ -95,12 +95,12 @@ def build_portal_config(*, comp_name, run_id, event_name, scoreboard_url, teams,
 
 
 def tunnel_decision(hostname, comp_name, run_id, tunnel_token, fetch=None):
-    """("start" | "skip", why) for cloudflared on the stable hostname.
-
-    The tunnel token is one stable name; two connectors on it would split students across two
-    ranges at random. So before starting ours, ask the hostname who answers: nobody (offline,
-    error page, not our JSON) or THIS run -> start; another comp or run -> skip, and the
-    portal stays reachable over ssh -L only."""
+# ("start" | "skip", why) for cloudflared on the stable hostname.
+#
+#     The tunnel token is one stable name; two connectors on it would split students across two
+#     ranges at random. So before starting ours, ask the hostname who answers: nobody (offline,
+#     error page, not our JSON) or THIS run -> start; another comp or run -> skip, and the
+#     portal stays reachable over ssh -L only.
     if not tunnel_token:
         return "skip", "TEZ_PORTAL_TUNNEL_TOKEN not set (LAN/ssh -L only)"
     if not hostname:
@@ -129,7 +129,7 @@ def _env_file(session_secret, open_gate, tunnel_token):
 
 
 def bundle(config, env_text, src=PORTAL_SRC):
-    """The tarball shipped to REMOTE_DIR: portal sources + portal.json + .env (0600)."""
+# The tarball shipped to REMOTE_DIR: portal sources + portal.json + .env (0600).
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         def add_bytes(name, data, mode=0o644):
@@ -148,17 +148,12 @@ def bundle(config, env_text, src=PORTAL_SRC):
     return buf.getvalue()
 
 
-def _scoreboard_url(ctx):
-    return compfile_value(ctx.comp_dir / "Compfile", "portal_scoreboard_url",
-                          f"http://{ctx.scoring_ip}")
-
-
 def deploy_portal(ctx, env=os.environ):
-    """Phase 8 tail: mint console tokens, write portal.json, ship and start the portal.
-
-    Idempotent on resume: tokens and the session secret are carried in .deploy_state.json,
-    the gate state under /opt/tez-portal/state survives a re-push, and compose up only
-    recreates what changed. Never raises — every failure becomes a degradation."""
+# Phase 8 tail: mint console tokens, write portal.json, ship and start the portal.
+#
+#     Idempotent on resume: tokens and the session secret are carried in .deploy_state.json,
+#     the gate state under /opt/tez-portal/state survives a re-push, and compose up only
+#     recreates what changed. Never raises — every failure becomes a degradation.
     if not portal_enabled(ctx.comp_dir):
         return
     print("  Student portal (Compfile `portal 1`)...")
@@ -200,7 +195,8 @@ def _deploy_portal(ctx, env):
 
     config = build_portal_config(
         comp_name=ctx.comp_name, run_id=ctx.run_id, event_name=ctx.name,
-        scoreboard_url=_scoreboard_url(ctx), teams=ctx.teams, boxes=ctx.boxes,
+        scoreboard_url=compfile_value(ctx.comp_dir / "Compfile", "portal_scoreboard_url",
+                                      f"http://{ctx.scoring_ip}"), teams=ctx.teams, boxes=ctx.boxes,
         targets=ctx.all_targets, placement=ctx.placement, default_node=ctx.node,
         nodes=nodes, tokens=tokens,
         firewall_console=bool(compfile_flag(ctx.comp_dir / "Compfile",
@@ -245,7 +241,6 @@ def _deploy_portal(ctx, env):
           f"{'OPEN' if env.get('TEZ_PORTAL_OPEN') == '1' else 'closed until an admin opens it'})")
 
 
-# ---------------------------------------------------------------- operator gate
 
 def _gate_cmd(is_open, who):
     data = json.dumps({"open": bool(is_open), "opened_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -257,7 +252,7 @@ def _gate_cmd(is_open, who):
 
 
 def set_access(tf_ctx, is_open, who="operator-cli"):
-    """Open/close team console access without the UI (the portal re-reads it per request)."""
+# Open/close team console access without the UI (the portal re-reads it per request).
     _run_engine_cmd(tf_ctx, _gate_cmd(is_open, who), timeout=30, step="portal gate")
 
 
@@ -270,7 +265,6 @@ def access_state(tf_ctx):
         return None
 
 
-# ---------------------------------------------------------------- verify probe
 
 # Runs ON the engine (stdlib only — the engine's python3 has no websockets/requests), against
 # the portal's 127.0.0.1 listener. Prints one JSON list of {check, ok, detail}.
@@ -378,8 +372,8 @@ print(json.dumps(out))
 
 
 def check_args(comp_name, teams, admin_password, portal_config):
-    """The probe's input: per-team box names (from portal.json, the portal's own view), the
-    team/admin credentials, and one sample box per console node."""
+# The probe's input: per-team box names (from portal.json, the portal's own view), the
+#     team/admin credentials, and one sample box per console node.
     t_list = []
     samples = {}
     for team_key, data in (portal_config.get("teams") or {}).items():
@@ -394,8 +388,8 @@ def check_args(comp_name, teams, admin_password, portal_config):
 
 
 def check_portal(run_engine, comp_name, teams, admin_password, portal_config):
-    """Run the probe on the engine. `run_engine(cmd) -> (rc, stdout)`. Returns the probe's
-    result list, or raises RuntimeError when the probe could not run at all."""
+# Run the probe on the engine. `run_engine(cmd) -> (rc, stdout)`. Returns the probe's
+#     result list, or raises RuntimeError when the probe could not run at all.
     args = base64.b64encode(json.dumps(
         check_args(comp_name, teams, admin_password, portal_config)).encode()).decode()
     script = base64.b64encode(_CHECK_SCRIPT.encode()).decode()
@@ -410,13 +404,12 @@ def check_portal(run_engine, comp_name, teams, admin_password, portal_config):
     return results
 
 
-# ---------------------------------------------------------------- teardown
 
 def teardown_portal(comp_dir, comp_name, run_id, state, teams, boxes, placement, default_node,
                     tf_ctx=None, env=os.environ):
-    """Destroy-path step: copy access.log into the comp dir (artifact collection picks it up),
-    then delete exactly this run's console user on every node. Warns and proceeds — a dead
-    engine never blocks a teardown; the user deletion is retried by the next destroy run."""
+# Destroy-path step: copy access.log into the comp dir (artifact collection picks it up),
+#     then delete exactly this run's console user on every node. Warns and proceeds — a dead
+#     engine never blocks a teardown; the user deletion is retried by the next destroy run.
     # The Compfile flag counts too: a crash between minting a user and saving the state
     # leaves a user the state does not record — the deterministic name still finds it.
     if not (state.get("portal_console_tokens") or state.get("portal_up")

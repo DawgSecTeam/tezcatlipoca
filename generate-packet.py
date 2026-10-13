@@ -31,7 +31,7 @@ def _service_display(pin):
 
 
 def load_inject_schedule(comp_dir):
-    """Inject titles + timing offsets only (never prompt.md content)."""
+# Inject titles + timing offsets only (never prompt.md content).
     injects_dir = comp_dir / "injects"
     if not injects_dir.is_dir():
         return []

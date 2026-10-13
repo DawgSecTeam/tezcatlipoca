@@ -81,10 +81,9 @@ def record_red_agent(args):
     """Write red01's identity, address and ssh route into test.json (INV5).
 
     Recorded in stage_red, where the values are first known, because nothing later can
-    recover them honestly: bad-auto's config.yaml is a rewritten singleton, so a
-    teardown-time reader of it can point at ANOTHER run's red01. `ssh` comes from the same
-    helper `_red_ssh_ctx` builds its scp/ssh arguments from, so the harness and the
-    collector cannot dial different addresses."""
+    recover them honestly — the manifest is the per-run record the collector dials.
+    `ssh` comes from the same helper `_red_ssh_ctx` builds its scp/ssh arguments
+    from, so the harness and the collector cannot dial different addresses."""
     spec, _common = red_link._red_ssh_spec(args)
     node = os.environ.get("TF_VAR_proxmox_node")
     return record_agent(args, "red", present=True, ip=spec["host"],

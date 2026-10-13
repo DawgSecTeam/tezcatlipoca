@@ -24,8 +24,8 @@ def test_firewall_gets_wan_then_lan_nic():
 
 
 class CompetitionTagSourceTests(unittest.TestCase):
-    """Terraform's ownership tag must come from the competition dir name (what every Python
-    guard expects), not the Compfile event name (live-found 2026-10-05: pfsense-ad)."""
+# Terraform's ownership tag must come from the competition dir name (what every Python
+#     guard expects), not the Compfile event name (live-found 2026-10-05: pfsense-ad).
 
     def test_comp_tag_prefers_the_competition_variable(self):
         src = (Path(__file__).resolve().parents[1] / "terraform" / "main.tf").read_text()

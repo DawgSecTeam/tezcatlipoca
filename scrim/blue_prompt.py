@@ -106,7 +106,6 @@ Keep replies terse."""
 
 
 def scoreboard_delta(run_dir, team):
-    """CHANGES SINCE LAST CYCLE for one team, from scoreboard-state.jsonl."""
     path = Path(run_dir) / SCOREBOARD_STATE
     try:
         recs = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]

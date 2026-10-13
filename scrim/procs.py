@@ -12,14 +12,10 @@ from scrim.core import log
 TREE_STOP_GRACE = 30
 
 
+# subclasses TimeoutExpired so the handlers around the blue cycles and the watchdog keep
+# catching it; __str__ names the recovery path because a timed-out deploy/verify is
+# resumed, not restarted (--skip-deploy/--from-phase, or --resume-event past T0)
 class ScrimTimeout(subprocess.TimeoutExpired):
-    """A supervised command blew its wall-clock budget and its process TREE was killed.
-
-    Subclasses TimeoutExpired so the handlers that already exist around the blue cycles
-    and the watchdog keep catching it. The message names the recovery path because a
-    timed-out deploy/verify is resumed, not restarted: `--skip-deploy`/`--from-phase N`
-    for the pipeline, `--resume-event` for an event that already reached T0.
-    """
 
     def __init__(self, cmd, timeout):
         super().__init__(cmd, timeout)
@@ -35,13 +31,10 @@ class ScrimTimeout(subprocess.TimeoutExpired):
                   "if T0 was already recorded)")
 
 
+# fed from a thread because communicate(input=...) cannot be re-entered after
+# TimeoutExpired (exactly what the kill-and-drain path needs); the pipe is closed
+# immediately — an open stdin pipe keeps a straggler grandchild alive
 def _feed_stdin(proc, text):
-    """Write stdin from a thread so a timeout can still kill and drain the process.
-
-    communicate(input=...) cannot be re-entered after TimeoutExpired, which is exactly
-    what the kill-and-drain path needs, so the pipe is fed out of band and closed
-    immediately (an open stdin pipe keeps a straggler grandchild alive).
-    """
     try:
         proc.stdin.write(text)
         proc.stdin.close()
@@ -49,13 +42,10 @@ def _feed_stdin(proc, text):
         pass
 
 
+# SIGINT first: the graceful stop terraform uses to release its state lock
+# (utils.run_terraform does the same); SIGKILL because the grandchildren this exists to
+# reap may ignore SIGINT. killpg on an already-empty group is a no-op.
 def _kill_tree(proc, grace=TREE_STOP_GRACE):
-    """SIGINT the process group, wait, then SIGKILL it and everything left inside it.
-
-    SIGINT first because it is the graceful stop terraform uses to release its state
-    lock (utils.run_terraform does the same); SIGKILL because the grandchildren this
-    exists to reap may ignore SIGINT. killpg on an already-empty group is a no-op.
-    """
     with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGINT)
     try:
@@ -66,20 +56,14 @@ def _kill_tree(proc, grace=TREE_STOP_GRACE):
         os.killpg(proc.pid, signal.SIGKILL)
 
 
+# own session so a timeout kills the whole tree, not just the direct child: subprocess.run
+# SIGKILLs the DIRECT child only, after which create-competition.py/badauto/their
+# terraform/nakon/ssh grandchildren survive with the deploy lock held and keep mutating
+# infrastructure (one hung opencode cycle held the shared lock ~80 min because a
+# grandchild outlived the kill). Modelled on utils.run_terraform: SIGINT to the group,
+# escalate to SIGKILL after `grace`.
 def run_tree(cmd, cwd=None, env=None, timeout=None, check=True, tail=None,
              stdin_text=None, grace=TREE_STOP_GRACE):
-    """Run cmd in its own session so a timeout kills the whole tree, not just the child.
-
-    subprocess.run(timeout=) sends SIGKILL to the DIRECT child only. Every long-running
-    command here (create-competition.py, badauto, their terraform/nakon/ssh grandchildren)
-    then survives with the deploy lock still held and keeps mutating infrastructure — the
-    failure class the file already fixed once for _opencode_run, where one hung cycle held
-    the shared lock ~80 min because a grandchild outlived the kill. Modelled on
-    utils.run_terraform: SIGINT to the group, escalate to SIGKILL after `grace`.
-
-    Returns CompletedProcess; on timeout raises ScrimTimeout (a TimeoutExpired) whose
-    message names the resume path. `run` below is the thin house wrapper for it.
-    """
     cmd = [str(c) for c in cmd]
     log("$ " + " ".join(cmd[:6]) + (" ..." if len(cmd) > 6 else ""))
     proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True,
@@ -107,18 +91,15 @@ def run_tree(cmd, cwd=None, env=None, timeout=None, check=True, tail=None,
     return r
 
 
+# every long-running call must go through the supervised process tree
 def run(cmd, cwd=None, env=None, timeout=None, check=True, tail=None):
-    """Supervised `subprocess.run`: every long-running call goes through the process tree."""
     return run_tree(cmd, cwd=cwd, env=env, timeout=timeout, check=check, tail=tail)
 
 
+# the password goes on stdin — a running command's argv is world-readable via ps, and
+# interpolating a generated password into the remote shell string is one shell
+# metacharacter from a syntax error aborting the fire test; same pin every other box
+# path uses (beacon_ops._ssh_box). The script follows the password on the same stdin
+# stream, which is what `sudo -S -p '' bash -s` expects.
 def box_sudo_stdin(base, host, box_pw, script):
-    """(ssh argv, stdin text) for a root command on a team box.
-
-    The password goes on stdin — the process argv of a running command is world-readable
-    via ps, and interpolating a generated password into the remote shell string is one
-    shell metacharacter away from a syntax error aborting the fire test. Same pin every
-    other box path uses (beacon_ops._ssh_box). The script follows the password on the
-    same stdin stream, which is what `sudo -S -p '' bash -s` expects.
-    """
     return list(base) + [host, "sudo -S -p '' bash -s"], box_pw + "\n" + script

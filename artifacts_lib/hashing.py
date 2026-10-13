@@ -20,10 +20,10 @@ def file_facts(path):
 
 
 def seal_local_file(src, dest):
-    """Copy `src` to `dest` with 0600 at creation and return its facts.
-
-    0600-at-creation rather than chmod-after: these files quote credentials and flags, and the
-    repo's own atomic writer documents why that window matters (config_ops.write_text_atomic)."""
+# Copy `src` to `dest` with 0600 at creation and return its facts.
+#
+#     0600-at-creation rather than chmod-after: these files quote credentials and flags, and the
+#     repo's own atomic writer documents why that window matters (config_ops.write_text_atomic).
     src, dest = Path(src), Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
@@ -36,7 +36,7 @@ def seal_local_file(src, dest):
 
 
 def write_bytes_atomic(path, data, mode=0o600):
-    """Bytes variant of config_ops.write_text_atomic: mode applied at creation, never torn."""
+# Bytes variant of config_ops.write_text_atomic: mode applied at creation, never torn.
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")

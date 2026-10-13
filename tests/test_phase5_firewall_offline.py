@@ -72,9 +72,9 @@ class Phase5Firewall(unittest.TestCase):
                 firewall.phase5_firewall_bootstrap(ctx)
             self.assertIn("pfsense-config-orig.xml", str(cm.exception))
 
+    # The VyOS config is fully generated — the pfSense seed-missing error must not
+    # fire for a vyos template, and the pass-A/pass-B artifacts both land.
     def test_vyos_lineup_needs_no_seed_and_writes_both_passes(self):
-        """The VyOS config is fully generated — the pfSense seed-missing error must not
-        fire for a vyos template, and the pass-A/pass-B artifacts both land."""
         with tempfile.TemporaryDirectory() as root:
             comp = self._comp(root, with_seed=False)
             ctx = self._ctx(comp)

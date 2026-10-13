@@ -26,7 +26,7 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import deploy  # noqa: E402
 from _deploy_patch import dpatch  # noqa: E402
-from deploy_lib import gates as dl_gates  # noqa: E402
+from infra import gates as dl_gates  # noqa: E402
 from deploy_lib import configs as dl_configs  # noqa: E402
 from deploy_lib import inputs as dl_inputs  # noqa: E402
 from deploy_lib import placement as dl_placement  # noqa: E402
@@ -61,7 +61,7 @@ def _prior(comp_dir, **overrides):
 
 
 class EngineVmidResolution(unittest.TestCase):
-    """The first step: the vmid everything else (the lock, phase-1 destroy) keys on."""
+# The first step: the vmid everything else (the lock, phase-1 destroy) keys on.
 
     def test_fresh_run_takes_the_scoring_vmid_flag(self):
         with tempfile.TemporaryDirectory() as d:
@@ -115,14 +115,14 @@ class EngineVmidResolution(unittest.TestCase):
 
 
 def _load_and_gate(prior, comp_dir, from_phase, force):
-    """What prepare() does with the prior state: load it, then run the resume gates."""
+# What prepare() does with the prior state: load it, then run the resume gates.
     dl_inputs.load_prior_deploy_state(prior, comp_dir, from_phase)
     dl_gates.check_resume_gates(comp_dir, prior.state_path, prior.previous_state,
                                 from_phase, force=force)
 
 
 class PriorStateGuards(unittest.TestCase):
-    """The state read + the two refusals, plus the guard_resume_from_phase wiring."""
+# The state read + the two refusals, plus the guard_resume_from_phase wiring.
 
     def _comp_dir(self, tmp, state=None):
         comp_dir = Path(tmp)
@@ -164,8 +164,8 @@ class PriorStateGuards(unittest.TestCase):
         guard.assert_called_once_with(6, 5, comp_dir / ".deploy_state.json", force=True)
 
     def test_the_resume_budget_guard_is_also_wired_in(self):
-        """The budget is only enforceable if prepare() actually consults it — a guard
-        nobody calls is the prose rule it replaced."""
+    # The budget is only enforceable if prepare() actually consults it — a guard
+    #         nobody calls is the prose rule it replaced.
         with tempfile.TemporaryDirectory() as d:
             comp_dir = self._comp_dir(d, {"pipeline_version": 3, "last_phase": 3})
             prior = _prior(comp_dir)
@@ -189,7 +189,7 @@ class PriorStateGuards(unittest.TestCase):
 
 
 class PlacementAndLock(unittest.TestCase):
-    """Placement precedes the endpoint-keyed lock, and the lock uses the resolved vmid."""
+# Placement precedes the endpoint-keyed lock, and the lock uses the resolved vmid.
 
     def _run(self, identity, resolve_return, record=None):
         order = record if record is not None else []
@@ -228,7 +228,7 @@ class PlacementAndLock(unittest.TestCase):
 
 
 class GoldenGatePosition(unittest.TestCase):
-    """The frozen gate must fire after the hashes and BEFORE phase 1 can destroy."""
+# The frozen gate must fire after the hashes and BEFORE phase 1 can destroy.
 
     def test_hashes_then_frozen_gate_then_frozen_keep(self):
         with tempfile.TemporaryDirectory() as d:
@@ -296,7 +296,7 @@ class GoldenGatePosition(unittest.TestCase):
 
 
 class TerraformInputs(unittest.TestCase):
-    """tfvars assembly, the stale-state guard and the engine mgmt IP/gw defaults."""
+# tfvars assembly, the stale-state guard and the engine mgmt IP/gw defaults.
 
     ENV = {"TF_VAR_ssh_private_key_path": "/tmp/key", "TF_VAR_proxmox_node": "pve",
            "TF_VAR_proxmox_endpoint": "https://new:8006/"}
@@ -352,7 +352,7 @@ class TerraformInputs(unittest.TestCase):
         self.assertEqual(tfvars["satellite_routes"], [{"fake": True}])
 
     def _stale_gate(self, previous_state, engine_vmid=1000):
-        """gates.check_stale_terraform_state against a workdir that holds a tfstate."""
+    # gates.check_stale_terraform_state against a workdir that holds a tfstate.
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             tf_dir = comp_dir / "terraform"
@@ -443,14 +443,13 @@ class TargetSplit(unittest.TestCase):
 
 
 class PrepareSequencer(unittest.TestCase):
-    """prepare()'s step order and its early-None return, with every step stubbed.
-
-    This is the test that says the ordering the comments argue for is the ordering the
-    code runs: engine-vmid first, placement+lock next, preflight before the fresh
-    credential mint (a gate abort must not leave minted credentials no engine ever
-    received), the golden/frozen step before the confirmation (and therefore before
-    phase 1), targets only after the prompt.
-    """
+# prepare()'s step order and its early-None return, with every step stubbed.
+#
+#     This is the test that says the ordering the comments argue for is the ordering the
+#     code runs: engine-vmid first, placement+lock next, preflight before the fresh
+#     credential mint (a gate abort must not leave minted credentials no engine ever
+#     received), the golden/frozen step before the confirmation (and therefore before
+#     phase 1), targets only after the prompt.
 
     def _prepare(self, comp_dir, order, confirm=True, buf=None):
         def rec(name, setter=None):
@@ -524,17 +523,16 @@ class PrepareSequencer(unittest.TestCase):
 
 
 class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):
-    """Regression: a frozen run must not overwrite the competition's event name.
-
-    The loop that runs the per-golden frozen gate used to read
-    `for spec.name in generated.golden_hashes`, which assigned each golden box name
-    onto the spec and left the LAST one there. On a frozen competition that silently
-    replaced the Compfile event name, so `terraform.tfvars.json`'s `event_name` — and
-    with it `local.comp_tag`, the ownership tag stamped on the engine and every team
-    box — became `comp-<lastbox>` while phase 1 compares against `comp-<competition>`.
-    Phase 1's `comp_tags <= tags` ownership check then FAILED and refused to reclaim
-    the range's own VMs; `confirm_deploy` also displayed the wrong name.
-    """
+# Regression: a frozen run must not overwrite the competition's event name.
+#
+#     The loop that runs the per-golden frozen gate used to read
+#     `for spec.name in generated.golden_hashes`, which assigned each golden box name
+#     onto the spec and left the LAST one there. On a frozen competition that silently
+#     replaced the Compfile event name, so `terraform.tfvars.json`'s `event_name` — and
+#     with it `local.comp_tag`, the ownership tag stamped on the engine and every team
+#     box — became `comp-<lastbox>` while phase 1 compares against `comp-<competition>`.
+#     Phase 1's `comp_tags <= tags` ownership check then FAILED and refused to reclaim
+#     the range's own VMs; `confirm_deploy` also displayed the wrong name.
 
     def _run(self, comp_dir, frozen):
         golden = comp_dir / "golden.json"
@@ -564,7 +562,7 @@ class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):
                          "range comp-<lastbox> while phase 1 looks for comp-<competition>")
 
     def test_frozen_gate_still_runs_over_every_box(self):
-        """The fix must not skip the gate it was guarding."""
+    # The fix must not skip the gate it was guarding.
         calls = []
 
         def gate(name, *a, **kw):
@@ -583,9 +581,9 @@ class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):
         self.assertEqual(spec.name, "probe")
 
     def test_gate_mutates_no_spec_field(self):
-        """The general invariant behind the bug: this step READS the spec and writes only
-        into `generated`. Any attribute mutation here is a latent version of the same
-        clobbering bug, so guard the whole dataclass rather than just `name`."""
+    # The general invariant behind the bug: this step READS the spec and writes only
+    #         into `generated`. Any attribute mutation here is a latent version of the same
+    #         clobbering bug, so guard the whole dataclass rather than just `name`.
         with tempfile.TemporaryDirectory() as d:
             golden_dir = Path(d)
             with dpatch("frozen_state",

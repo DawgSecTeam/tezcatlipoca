@@ -3,11 +3,9 @@
 Back-compat facade. The other responsibilities that used to live here are split out and every
 name stays importable from `config_ops`:
 
-  preflight/            ALL pre-Proxmox gates (preflight_gates, preflight_gates_multinode,
-                        check_datastore_headroom, cloudinit/mgmt-IP/catalog/concurrency gates)
   config_prompts.py     interactive prompts (collect_boxes, collect_users_config, confirm_deploy)
   injects_config.py     load_injects / resolve_inject_times / injects_fingerprint
-  pve_api.py            destroy_bridge_if_exists (with the rest of the API client)
+  infra.gates           ALL pre-Proxmox gates — import from infra.gates, not here
 
 Patching a gate/prompt name here no longer changes the moved implementation; patch the owning
 module (docs/internals.md)."""
@@ -25,24 +23,16 @@ from config_prompts import (_prompt_difficulty, collect_boxes, collect_users_con
 from constants import (ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_VMID_OFFSET,
                        MAX_BOXES_PER_TEAM, SCORING_ENGINE_VMID)
 from injects_config import injects_fingerprint, load_injects, resolve_inject_times  # noqa: F401
-from preflight import (check_datastore_headroom, preflight_gates,  # noqa: F401
-                       preflight_gates_multinode, template_cloudinit_missing)
-from preflight.catalog import catalog_check_paths as _catalog_check_paths  # noqa: F401
-from preflight.catalog import catalog_gate as _catalog_gate  # noqa: F401
-from preflight.concurrency import gate_concurrent_deploys as _gate_concurrent_deploys  # noqa: F401
-from preflight.mgmt_ip import engine_mgmt_ip_gate as _engine_mgmt_ip_gate  # noqa: F401
-from preflight.templates import cloudinit_gate as _cloudinit_gate  # noqa: F401
-from pve_api import destroy_bridge_if_exists  # noqa: F401
 
 ENV_PATH = Path(".env")
 
 
 def load_packet_passwords(comp_dir):
-    """Packet-published credentials from passwords.json (compile-packet.py output), or None.
-
-    Present means the deploy uses the packet's default credentials verbatim (that IS the
-    competition: teams get them in the packet and rotate at minute zero) instead of
-    minting random ones. 0600 + gitignored — future profiles may carry private secrets."""
+# Packet-published credentials from passwords.json (compile-packet.py output), or None.
+#
+#     Present means the deploy uses the packet's default credentials verbatim (that IS the
+#     competition: teams get them in the packet and rotate at minute zero) instead of
+#     minting random ones. 0600 + gitignored — future profiles may carry private secrets.
     path = Path(comp_dir) / "passwords.json"
     if not path.exists():
         return None
@@ -64,19 +54,19 @@ def load_previous_competitions():
 
 
 def random_password():
-    """14 chars, guaranteed upper+lower+digit+symbol, cmd/PS- and URL-safe charset.
-
-    Windows guest boxes set this via `net user` and AD enforces complexity:
-    the old letters+digits pool produced digit-free passwords ~13% of runs
-    (scrim-extreme-2026-09-20) and the policy rejection killed every Windows
-    login downstream. Characters are cmd/PS-quoting safe (no &|<>^%$`"' or
-    whitespace) and URL-grammar free (no #/?@): these secrets land in
-    postgres DSNs in /opt/quotient/.env, and `#` silently truncates the DSN
-    at the password (scrim-extreme-cyberfield-2026-09-22 crash loop).
-
-    Single source of truth for every generated secret, including packet_ops' decoy
-    baseline accounts (which used to carry a copy of this generator, audit 2026-10-02).
-    Changing the charset or length changes behaviour everywhere at once — deliberately."""
+# 14 chars, guaranteed upper+lower+digit+symbol, cmd/PS- and URL-safe charset.
+#
+#     Windows guest boxes set this via `net user` and AD enforces complexity:
+#     the old letters+digits pool produced digit-free passwords ~13% of runs
+#     (scrim-extreme-2026-09-20) and the policy rejection killed every Windows
+#     login downstream. Characters are cmd/PS-quoting safe (no &|<>^%$`"' or
+#     whitespace) and URL-grammar free (no #/?@): these secrets land in
+#     postgres DSNs in /opt/quotient/.env, and `#` silently truncates the DSN
+#     at the password (scrim-extreme-cyberfield-2026-09-22 crash loop).
+#
+#     Single source of truth for every generated secret, including packet_ops' decoy
+#     baseline accounts (which used to carry a copy of this generator, audit 2026-10-02).
+#     Changing the charset or length changes behaviour everywhere at once — deliberately.
     pools = [string.ascii_uppercase, string.ascii_lowercase, string.digits, "!*_-+="]
     alphabet = "".join(pools)
     while True:
@@ -153,19 +143,18 @@ def update_env(updates: dict):
 
 
 def write_text_atomic(path, text, mode=0o600):
-    """Write `text` to `path` so a torn write can never be observed, then chmod.
-
-    Both halves matter and both have bitten this repo:
-
-    *Atomicity* — `.deploy_state.json` holds the only copy of the generated box and
-    team passwords; a partial write bricks resume AND redeploy at once (deploy.py
-    documented this after the fact, but three other writers of the same file used a
-    plain write_text, so the guarantee held at exactly one of four call sites).
-
-    *Mode at creation* — creating with the process umask and chmod-ing afterwards
-    leaves a window where the file is world-readable. os.open() applies the mode
-    atomically with creation, so the secret is never briefly public.
-    """
+# Write `text` to `path` so a torn write can never be observed, then chmod.
+#
+#     Both halves matter and both have bitten this repo:
+#
+#     *Atomicity* — `.deploy_state.json` holds the only copy of the generated box and
+#     team passwords; a partial write bricks resume AND redeploy at once (deploy.py
+#     documented this after the fact, but three other writers of the same file used a
+#     plain write_text, so the guarantee held at exactly one of four call sites).
+#
+#     *Mode at creation* — creating with the process umask and chmod-ing afterwards
+#     leaves a window where the file is world-readable. os.open() applies the mode
+#     atomically with creation, so the secret is never briefly public.
     path = Path(path)
     tmp_path = path.with_name(path.name + ".tmp")
     fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
@@ -180,7 +169,7 @@ def write_text_atomic(path, text, mode=0o600):
 
 
 def write_state(path, state):
-    """Persist a JSON state dict atomically, 0600. Single writer for .deploy_state.json."""
+# Persist a JSON state dict atomically, 0600. Single writer for .deploy_state.json.
     write_text_atomic(path, json.dumps(state, indent=2), mode=0o600)
 
 
@@ -190,29 +179,19 @@ def load_boxes(comp_dir):
 
 __all__ = [
     "ENV_PATH",
-    "_catalog_check_paths",
-    "_catalog_gate",
-    "_cloudinit_gate",
-    "_engine_mgmt_ip_gate",
-    "_gate_concurrent_deploys",
     "_prompt_difficulty",
-    "check_datastore_headroom",
     "collect_boxes",
     "collect_teams",
     "collect_users_config",
     "confirm_deploy",
-    "destroy_bridge_if_exists",
     "injects_fingerprint",
     "list_proxmox_templates",
     "load_boxes",
     "load_injects",
     "load_packet_passwords",
     "load_previous_competitions",
-    "preflight_gates",
-    "preflight_gates_multinode",
     "random_password",
     "resolve_inject_times",
-    "template_cloudinit_missing",
     "update_env",
     "write_state",
     "write_text_atomic",

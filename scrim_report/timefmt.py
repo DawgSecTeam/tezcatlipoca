@@ -2,8 +2,8 @@ import calendar
 import time
 
 
+# red01's clock is UTC — timegm, not localtime
 def parse_ts(ts):
-    """ISO ts on red01's clock (UTC, optional fraction) -> epoch."""
     return calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))
 
 

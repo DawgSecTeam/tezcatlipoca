@@ -23,7 +23,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 from deploy_lib import failure as dl_failure  # noqa: E402
-from deploy_lib import gates as dl_gates  # noqa: E402
+from infra import gates as dl_gates  # noqa: E402
 from constants import RESUME_ATTEMPT_LIMIT  # noqa: E402
 
 
@@ -113,10 +113,10 @@ class ResumeBudgetGuard(unittest.TestCase):
 
 
 class LoadGate(unittest.TestCase):
-    """`--min-load-free`: the wait operators were doing by hand."""
+# `--min-load-free`: the wait operators were doing by hand.
 
     def setUp(self):
-        import pve_api as range_ops  # the owning module (range_ops is a facade)
+        import infra.client as range_ops  # the owning module
         self.range_ops = range_ops
 
     def test_waits_until_the_node_falls_below_the_threshold(self):

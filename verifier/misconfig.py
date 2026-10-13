@@ -5,7 +5,8 @@ import os
 import subprocess
 from pathlib import Path
 
-from range_ops import guest_agent_exec_root, vm_id_for
+from infra.guest_exec import guest_agent_exec_root
+from targets import vm_id_for
 from utils import MAX_CONCURRENCY, run_concurrent
 
 from verifier import context
@@ -33,12 +34,12 @@ MISCONFIG_CHECKS = {
 
 
 def _config_name(entry):
-    """Normalize config entry (string or {"name": ...}) to name for dict lookup."""
+# Normalize config entry (string or {"name": ...}) to name for dict lookup.
     return entry if isinstance(entry, str) else entry.get("name")
 
 
 def _target_vmid(comp_dir, box):
-    """VMID for a nakon machine entry: frozen targets.json, falling back to boxes.json order."""
+# VMID for a nakon machine entry: frozen targets.json, falling back to boxes.json order.
     try:
         identifier = box["ip"].split(".")[2]
         base_name = box["name"].rsplit("-team", 1)[0]
@@ -55,11 +56,11 @@ def _target_vmid(comp_dir, box):
 
 
 def misconfig_via_guest_agent(comp_dir, box, verifiable):
-    """SSH-dead fallback: run the same checks via the QEMU guest agent.
-
-    scrim-extreme-cyberfield-2026-09-22 lost its only verifier FAIL to dead
-    Linux SSH while the planted artifacts were independently confirmed fine —
-    the agent (virtio-serial, no network) reaches the box anyway."""
+# SSH-dead fallback: run the same checks via the QEMU guest agent.
+#
+#     scrim-extreme-cyberfield-2026-09-22 lost its only verifier FAIL to dead
+#     Linux SSH while the planted artifacts were independently confirmed fine —
+#     the agent (virtio-serial, no network) reaches the box anyway.
     vmid = _target_vmid(comp_dir, box)
     if vmid is None:
         print("  (guest-agent fallback unavailable: could not resolve the box's vmid)")
@@ -87,9 +88,9 @@ def misconfig_via_guest_agent(comp_dir, box, verifiable):
 
 
 def comp_is_clean(comp_dir, boxes):
-    """True for a deliberately-clean comp: box_vulns.json plants nothing AND no nakon-config
-    machine carries a verifiable misconfig. A comp that pins vulns but whose machines lost them
-    is drift, not clean — that stays a FAIL in check_misconfig."""
+# True for a deliberately-clean comp: box_vulns.json plants nothing AND no nakon-config
+#     machine carries a verifiable misconfig. A comp that pins vulns but whose machines lost them
+#     is drift, not clean — that stays a FAIL in check_misconfig.
     try:
         pinned = json.loads((Path(comp_dir) / "box_vulns.json").read_text())
     except (OSError, ValueError):
@@ -101,10 +102,10 @@ def comp_is_clean(comp_dir, boxes):
 
 
 def misconfigs_unverifiable(comp_dir, boxes):
-    """True when box_vulns.json pins misconfigs, every pin reached a machine's configuration list,
-    and none of them has a probe here (Windows-only pins, catalog rows without a check). The
-    spot-check cannot confirm what it has no probe for; plant_coverage is the gate that proves
-    those pins were planted, so this is a non-gating SKIP, not a FAIL."""
+# True when box_vulns.json pins misconfigs, every pin reached a machine's configuration list,
+#     and none of them has a probe here (Windows-only pins, catalog rows without a check). The
+#     spot-check cannot confirm what it has no probe for; plant_coverage is the gate that proves
+#     those pins were planted, so this is a non-gating SKIP, not a FAIL.
     try:
         pinned = json.loads((Path(comp_dir) / "box_vulns.json").read_text())
     except (OSError, ValueError):
@@ -117,7 +118,7 @@ def misconfigs_unverifiable(comp_dir, boxes):
 
 
 def check_misconfig(ctx, boxes, comp_dir):
-    """SSH via gateway to one box and confirm >=1 planted misconfig. Returns bool."""
+# SSH via gateway to one box and confirm >=1 planted misconfig. Returns bool.
     print("\n[4/5] MISCONFIG SPOT-CHECK")
     target = None
     for box in boxes:
@@ -162,12 +163,12 @@ def check_misconfig(ctx, boxes, comp_dir):
 
 
 def check_misconfig_survival(ctx, boxes):
-    """Confirm every team's copy of each box carries same verifiable misconfigs (clone race guard).
-
-    Returns a GateResult: present-on-all PASSes, present-on-some FAILs, and — the
-    branch the old code was missing — absent-on-every-team FAILs too (the case
-    matched no branch at all, so it printed nothing and left all_ok True). All
-    probes unprovable (SSH dead) is SKIP, never a pass."""
+# Confirm every team's copy of each box carries same verifiable misconfigs (clone race guard).
+#
+#     Returns a GateResult: present-on-all PASSes, present-on-some FAILs, and — the
+#     branch the old code was missing — absent-on-every-team FAILs too (the case
+#     matched no branch at all, so it printed nothing and left all_ok True). All
+#     probes unprovable (SSH dead) is SKIP, never a pass.
     print("\n  (cross-team misconfig survival check)")
     groups = {}
     for box in boxes:

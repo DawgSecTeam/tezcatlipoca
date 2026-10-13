@@ -10,7 +10,6 @@ from nodes_config import (JUMP_MGMT_IP_BASE, JUMP_VMID_OFFSET, MAX_SATELLITES, N
 from pathlib import Path
 
 
-# ---------------------------------------------------------------- placement record
 
 def read_placement(comp_dir):
     path = Path(comp_dir) / "placement.json"
@@ -62,8 +61,8 @@ def teams_on_node(placement, node_name):
 
 
 def anchor_identifier(placement, node_name):
-    """The team subnet this node's golden boxes sit on: the first (lowest-identifier)
-    team placed there. Slot 0 anchors on team1 — today's golden math exactly."""
+# The team subnet this node's golden boxes sit on: the first (lowest-identifier)
+#     team placed there. Slot 0 anchors on team1 — today's golden math exactly.
     teams = teams_on_node(placement, node_name)
     if not teams:
         return None
@@ -72,10 +71,10 @@ def anchor_identifier(placement, node_name):
 
 
 def activate_placement(placement):
-    """Make the whole process multi-node-aware: apply the engine node's env (terraform
-    + every env-sourced read) and register the node->endpoint route table that routes
-    node-scoped proxmox_api calls to the owning host. Returns the env restore dict."""
-    from pve_api import register_node_routes
+# Make the whole process multi-node-aware: apply the engine node's env (terraform
+#     + every env-sourced read) and register the node->endpoint route table that routes
+#     node-scoped proxmox_api calls to the owning host. Returns the env restore dict.
+    from infra.client import register_node_routes
     engine = engine_record(placement)
     restore = apply_node_env(engine)
     # Keyed by PVE host name ("proxmox"/"pve") — every node-scoped API path uses
@@ -87,19 +86,18 @@ def activate_placement(placement):
 
 
 def deactivate_placement(restore):
-    from pve_api import clear_node_routes
+    from infra.client import clear_node_routes
     clear_node_routes()
     restore_node_env(restore)
 
 
-# ---------------------------------------------------------------- vmid slot math
 
 def golden_vmid_for_slot(engine_vmid, slot, box_idx):
-    """Golden blocks per node slot: slot 0 keeps the historical engine_vmid+150+i;
-    each satellite shifts by one box-stride so the same box type can exist as a
-    golden on several hosts (linked clones can't cross nodes on separate storages).
-    vmids only need uniqueness per PVE instance — the stride exists so this also
-    holds on a future single-cluster backend."""
+# Golden blocks per node slot: slot 0 keeps the historical engine_vmid+150+i;
+#     each satellite shifts by one box-stride so the same box type can exist as a
+#     golden on several hosts (linked clones can't cross nodes on separate storages).
+#     vmids only need uniqueness per PVE instance — the stride exists so this also
+#     holds on a future single-cluster backend.
     return int(engine_vmid) + GOLDEN_VMID_OFFSET + slot * MAX_BOXES_PER_TEAM + box_idx
 
 
@@ -108,7 +106,7 @@ def jump_vmid_for(engine_vmid, slot):
 
 
 def default_jump_mgmt_ip(slot):
-    """10.0.0.249 for slot 1, .248 for slot 2, ..."""
+# 10.0.0.249 for slot 1, .248 for slot 2, ...
     octet = int(JUMP_MGMT_IP_BASE.split(".")[-1]) - (slot - 1)
     if octet < 1:
         raise SystemExit(f"  ERROR: jump mgmt IP range exhausted at slot {slot} — "
@@ -120,12 +118,11 @@ def golden_slot_span(engine_vmid, slot):
     return [golden_vmid_for_slot(engine_vmid, slot, i) for i in range(MAX_BOXES_PER_TEAM)]
 
 
-# ---------------------------------------------------------------- tfvars helpers
 
 def satellite_tfvars(placement):
-    """Per-slot provider settings for terraform (tfvars.json): exactly MAX_SATELLITES
-    entries; unused slots get dummies so the aliased providers never configure. Token
-    values resolve from env at write time (tfvars.json is 0600)."""
+# Per-slot provider settings for terraform (tfvars.json): exactly MAX_SATELLITES
+#     entries; unused slots get dummies so the aliased providers never configure. Token
+#     values resolve from env at write time (tfvars.json is 0600).
     out = []
     records = {r.name: r for r in (NodeRecord.from_json(v)
                                    for v in placement["nodes"].values())}
@@ -150,11 +147,11 @@ def satellite_tfvars(placement):
 
 
 def satellite_routes_for(placement):
-    """Engine static routes: one per TEAM SUBNET behind each satellite's jump (not
-    just the golden anchor — every team box on the satellite is reached through the
-    same jump, and the engine's default gw blackholes the un-routed subnets).
-    Written into the engine by the team_nics provisioner (trigger-keyed, so changed
-    routes re-apply on the next apply #1)."""
+# Engine static routes: one per TEAM SUBNET behind each satellite's jump (not
+#     just the golden anchor — every team box on the satellite is reached through the
+#     same jump, and the engine's default gw blackholes the un-routed subnets).
+#     Written into the engine by the team_nics provisioner (trigger-keyed, so changed
+#     routes re-apply on the next apply #1).
     routes = []
     for sat in placement["satellites"]:
         anchor = sat.get("anchor_identifier")

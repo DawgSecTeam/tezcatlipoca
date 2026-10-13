@@ -10,13 +10,13 @@ from timing import print_timing_summary
 
 
 def connect_terraform(ctx):
-    """Read terraform's outputs into the context (the SSH/engine coordinates).
-
-    Deliberately between phase 2 and phase 3, and deliberately outside every
-    phase's from_phase guard: a fresh run only has these outputs after apply #1,
-    and a resume from phase 3+ never runs the apply at all. A failure here must
-    be reported as the phase the operator asked to resume at, which is why the
-    sequencer does not set current_phase for it."""
+# Read terraform's outputs into the context (the SSH/engine coordinates).
+#
+#     Deliberately between phase 2 and phase 3, and deliberately outside every
+#     phase's from_phase guard: a fresh run only has these outputs after apply #1,
+#     and a resume from phase 3+ never runs the apply at all. A failure here must
+#     be reported as the phase the operator asked to resume at, which is why the
+#     sequencer does not set current_phase for it.
     ctx.tf_ctx = read_terraform_ctx(ctx.comp_dir)
     ctx.ssh_key = Path(ctx.tf_ctx["ssh_key_path"])
     ctx.scoring_user = os.environ["TF_VAR_vm_username"]
@@ -24,8 +24,8 @@ def connect_terraform(ctx):
 
 
 def write_credentials_file(ctx):
-    """credentials.txt: the operator/packet-facing credential file, 0600 at creation
-    (the same rule as teams.json and .deploy_state.json)."""
+# credentials.txt: the operator/packet-facing credential file, 0600 at creation
+#     (the same rule as teams.json and .deploy_state.json).
     cred_lines = [
         f"# Credentials for {ctx.name} — generated {time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"Scoreboard:  http://{ctx.scoring_ip}",
@@ -58,7 +58,7 @@ def write_credentials_file(ctx):
 
 
 def print_live_summary(ctx):
-    """The "is live" report: the only place the generated secrets are printed."""
+# The "is live" report: the only place the generated secrets are printed.
     print(f"\n{'='*60}")
     print(f"  {ctx.name} is live")
     print(f"{'='*60}")
@@ -84,9 +84,9 @@ def print_live_summary(ctx):
 
 
 def finish_deploy(ctx):
-    """Write credentials.txt, the timing summary, and the "is live" report.
-
-    The last thing deploy() does."""
+# Write credentials.txt, the timing summary, and the "is live" report.
+#
+#     The last thing deploy() does.
     write_credentials_file(ctx)
     print_timing_summary(ctx.comp_dir)
     print_live_summary(ctx)

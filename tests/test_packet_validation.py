@@ -41,7 +41,6 @@ _BASE = {
 
 
 def _mutated(**changes):
-    """Deep-copied base profile with top-level keys replaced."""
     p = copy.deepcopy(_BASE)
     p.update(copy.deepcopy(changes))
     return p
@@ -52,10 +51,9 @@ class ValidationBase(unittest.TestCase):
         self.assertEqual(validate_profile(copy.deepcopy(_BASE)), [])
 
 
+# domain_ops adds these at phase 6 (acct["username"] / acct["password"]) — a
+# malformed entry was a KeyError/TypeError deep in a live deploy.
 class DomainAccounts(unittest.TestCase):
-    """domain_ops adds these at phase 6 (acct["username"] / acct["password"]) — a
-    malformed entry was a KeyError/TypeError deep in a live deploy."""
-
     def test_missing_password_rejected(self):
         errs = validate_profile(_mutated(credentials={
             **_BASE["credentials"],
@@ -81,11 +79,10 @@ class DomainAccounts(unittest.TestCase):
         self.assertEqual(validate_profile(copy.deepcopy(_BASE)), [])
 
 
+# The Windows 8-char floor was enforced only for baseline credlist users
+# (build_baseline), never for box_password, which bootstrap pushes with net user /
+# the guest agent.
 class BoxPassword(unittest.TestCase):
-    """The Windows 8-char floor was enforced only for baseline credlist users
-    (build_baseline), never for box_password, which bootstrap pushes with net user /
-    the guest agent."""
-
     def test_short_password_on_windows_box_rejected(self):
         errs = validate_profile(_mutated(credentials={
             **_BASE["credentials"], "box_password": "short"}))
@@ -103,10 +100,9 @@ class BoxPassword(unittest.TestCase):
         self.assertEqual(validate_profile(p), [])
 
 
+# These become local-user USERNAME vars on every managed box, but got none of the
+# credlist name rules.
 class OutOfScopeUsernames(unittest.TestCase):
-    """These become local-user USERNAME vars on every managed box, but got none of
-    the credlist name rules."""
-
     def test_invalid_username_rejected(self):
         errs = validate_profile(_mutated(credentials={
             **_BASE["credentials"], "out_of_scope": ["Score Bot"]}))
@@ -123,10 +119,9 @@ class OutOfScopeUsernames(unittest.TestCase):
         self.assertTrue(any("out_of_scope must be a list" in e for e in errs), errs)
 
 
+# The Compfile is line-oriented (utils.load_compfile splits `key value` per line):
+# a newline in an interpolated field truncates it or injects keys.
 class CompfileInjection(unittest.TestCase):
-    """The Compfile is line-oriented (utils.load_compfile splits `key value` per
-    line): a newline in an interpolated field truncates it or injects keys."""
-
     def test_event_name_newline_rejected(self):
         errs = validate_profile(_mutated(event={
             **_BASE["event"], "name": "Real Name\ndifficulty 10"}))
@@ -146,10 +141,9 @@ class CompfileInjection(unittest.TestCase):
                             for e in errs), errs)
 
 
+# render_fidelity defaulted a missing services[].fidelity to "exact", claiming
+# parity the packet may not have (boxes[].fidelity was already required).
 class ServiceFidelity(unittest.TestCase):
-    """render_fidelity defaulted a missing services[].fidelity to "exact", claiming
-    parity the packet may not have (boxes[].fidelity was already required)."""
-
     def test_missing_fidelity_rejected(self):
         svc = {k: v for k, v in _BASE["services"][0].items() if k != "fidelity"}
         errs = validate_profile(_mutated(services=[svc]))
@@ -161,10 +155,9 @@ class ServiceFidelity(unittest.TestCase):
         self.assertTrue(any("fidelity must be one of" in e for e in errs), errs)
 
 
+# REQUIRED_VARS literal vars were only checked at deploy start
+# (nakon_ops._validate_pin_vars), after the golden bundle was already built.
 class ServiceRequiredVars(unittest.TestCase):
-    """REQUIRED_VARS literal vars were only checked at deploy start
-    (nakon_ops._validate_pin_vars), after the golden bundle was already built."""
-
     def test_missing_literal_var_rejected(self):
         svc = {"box": "web01", "name": "hosts redirect", "port": 80,
                "pin": "hosts-redirect-linux", "scored": False, "fidelity": "exact"}
@@ -192,10 +185,9 @@ class ServiceRequiredVars(unittest.TestCase):
         self.assertTrue(any("vars must be a mapping" in e for e in errs), errs)
 
 
+# in_path firewalls (unmanaged, gateway .1) and the legacy packet stand-in shape
+# (unmanaged .1 without in_path — cde-2026/maccdc packets).
 class FirewallBoxes(unittest.TestCase):
-    """in_path firewalls (unmanaged, gateway .1) and the legacy packet stand-in shape
-    (unmanaged .1 without in_path — cde-2026/maccdc packets)."""
-
     def test_in_path_firewall_valid(self):
         p = copy.deepcopy(_BASE)
         p["boxes"].append({"name": "fw01", "template": "pfsense", "last_octet": 1,

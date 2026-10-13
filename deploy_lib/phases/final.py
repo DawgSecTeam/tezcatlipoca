@@ -18,14 +18,13 @@ from deploy_lib.phases._snapshots import snap_ready
 
 
 def _wipe_targets(managed_targets):
-    """clean_trails target rows from managed_targets.
-
-    The box record (name, template) is nested under t["box"] — reading top-level
-    keys silently yielded name="" windows=False for EVERY box, dispatching
-    Windows boxes into the Linux wipe path where they hung out their 180 s
-    budget (live 2026-10-11, dc01 NOT cleaned). fw01 needs no filter here:
-    unmanaged boxes never enter managed_targets.
-    """
+# clean_trails target rows from managed_targets.
+#
+#     The box record (name, template) is nested under t["box"] — reading top-level
+#     keys silently yielded name="" windows=False for EVERY box, dispatching
+#     Windows boxes into the Linux wipe path where they hung out their 180 s
+#     budget (live 2026-10-11, dc01 NOT cleaned). fw01 needs no filter here:
+#     unmanaged boxes never enter managed_targets.
     from windows_ops import is_windows_template
     return [{"ip": t["ip"],
              "name": (t.get("box") or {}).get("name") or "",
@@ -34,13 +33,13 @@ def _wipe_targets(managed_targets):
 
 
 def phase7_domains_and_final(ctx):
-    """[7/8] AD domains, then the final disruption/boot-hostile pass and beacons.
-
-    The final pass runs AFTER domain promotion on purpose: its disruptive configs
-    break the DNS/apt the Linux realmd joins need, and the boot-hostile ones would
-    brick a member box's domain-join reboot. From the final pass on, the boxes are
-    in their as-started competition flavor — nothing downstream reboots them or
-    needs apt/DNS."""
+# [7/8] AD domains, then the final disruption/boot-hostile pass and beacons.
+#
+#     The final pass runs AFTER domain promotion on purpose: its disruptive configs
+#     break the DNS/apt the Linux realmd joins need, and the boot-hostile ones would
+#     brick a member box's domain-join reboot. From the final pass on, the boxes are
+#     in their as-started competition flavor — nothing downstream reboots them or
+#     needs apt/DNS.
     if ctx.from_phase > 7:
         print("[7/8] Skipped (resume).")
         return

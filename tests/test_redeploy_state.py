@@ -35,6 +35,14 @@ import redeploy_engine_ops  # noqa: E402
 import redeploy_light_ops  # noqa: E402
 import redeploy_plant_ops  # noqa: E402
 import redeploy_rebuild_ops  # noqa: E402
+from redeploy_context import RedeployContext  # noqa: E402
+
+
+def _rctx(ctx, comp_dir, state=None, state_path=None, node="pve"):
+    return RedeployContext(comp_dir=comp_dir, name="x", comp_name="x", node=node,
+                           teams=None, boxes=None, difficulty=None,
+                           state={} if state is None else state,
+                           state_path=state_path, ctx=ctx)
 
 _REDEPLOY_SOURCES = [_REPO / "redeploy-competition.py",
                      *sorted(_REPO.glob("redeploy_*_ops.py"))]
@@ -63,13 +71,12 @@ ORIGINAL_STATE = {"box_password": "old-secret", "engine_template_vmid": 9100}
 NEW_STATE = {"box_password": "new-secret", "teams": {"team1": {"password": "t1"}}}
 
 
+# The state file is swapped in whole, is 0600 from the instant it exists, and a
+# failed write can never damage the copy already on disk.
 class AtomicStateWriteTests(unittest.TestCase):
-    """The state file is swapped in whole, is 0600 from the instant it exists, and a
-    failed write can never damage the copy already on disk."""
-
+    # One atomic writer in the tree, not a second local copy: the name redeploy
+    # imported IS config_ops.write_state, so all three sites share its guarantees.
     def test_redeploy_uses_the_shared_config_ops_writer(self):
-        """One atomic writer in the tree, not a second local copy: the name redeploy
-        imported IS config_ops.write_state, so all three sites share its guarantees."""
         for module in (redeploy_engine_ops, redeploy_light_ops, redeploy_plant_ops,
                        redeploy_rebuild_ops):
             self.assertIs(module.write_state, config_ops.write_state, module.__name__)
@@ -85,11 +92,11 @@ class AtomicStateWriteTests(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()),
                              [".deploy_state.json"])
 
+    # The torn-write proof: at the instant of the rename, the destination still
+    # holds the COMPLETE previous state and the temporary holds the COMPLETE new one.
+    # A reader therefore sees old-or-new, never a partial. The old write_text() code
+    # truncated the destination first, which is exactly the state this rules out.
     def test_target_is_only_replaced_after_the_new_content_is_complete(self):
-        """The torn-write proof: at the instant of the rename, the destination still
-        holds the COMPLETE previous state and the temporary holds the COMPLETE new one.
-        A reader therefore sees old-or-new, never a partial. The old write_text() code
-        truncated the destination first, which is exactly the state this rules out."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".deploy_state.json"
             path.write_text(json.dumps(ORIGINAL_STATE))
@@ -112,9 +119,9 @@ class AtomicStateWriteTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), NEW_STATE)
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
+    # Simulated crash right before the rename: the resume state a live range
+    # depends on must still be readable, byte for byte.
     def test_failed_write_leaves_the_original_file_intact(self):
-        """Simulated crash right before the rename: the resume state a live range
-        depends on must still be readable, byte for byte."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".deploy_state.json"
             path.write_text(json.dumps(ORIGINAL_STATE))
@@ -128,9 +135,9 @@ class AtomicStateWriteTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), original_bytes)
             self.assertEqual(json.loads(path.read_text()), ORIGINAL_STATE)
 
+    # Guard against re-introducing one of the old writers: every state write in
+    # redeploy-competition.py must be the shared helper.
     def test_redeploy_has_no_hand_rolled_state_writer_left(self):
-        """Guard against re-introducing one of the old writers: every state write in
-        redeploy-competition.py must be the shared helper."""
         src = "\n".join(f.read_text() for f in _REDEPLOY_SOURCES)
         self.assertNotIn("state_path.write_text", src)
         self.assertNotIn("state_path.with_name", src)
@@ -140,8 +147,6 @@ class AtomicStateWriteTests(unittest.TestCase):
 
 
 class StateWriteCallSiteTests(unittest.TestCase):
-    """Each of the three redeploy writers actually routes through the shared helper."""
-
     def test_run_nakon_and_harden_persists_via_helper(self):
         ctx = {"ssh_key_path": "/tmp/id_ed25519", "scoring_engine_ip": "10.0.0.9"}
         with tempfile.TemporaryDirectory() as tmp:
@@ -160,7 +165,7 @@ class StateWriteCallSiteTests(unittest.TestCase):
                 cfg = comp_dir / "nakon-config.json"
                 cfg.write_text(json.dumps({"machines": [{"name": LINUX["machine"]}]}))
                 redeploy_plant_ops.run_nakon_and_harden(
-                    [LINUX], ctx, comp_dir, state, cfg, comp_dir / "bundle")
+                    [LINUX], _rctx(ctx, comp_dir, state), cfg, comp_dir / "bundle")
         p_write.assert_called_once_with(state_path, state)
 
     def test_mode_resync_persists_via_helper(self):
@@ -173,14 +178,14 @@ class StateWriteCallSiteTests(unittest.TestCase):
                               return_value={"postgres_password": "new"}), \
                  patch.object(redeploy_light_ops, "load_users_config", return_value=("ops", {})), \
                  patch.object(redeploy_light_ops, "write_state") as p_write:
-                redeploy_light_ops.mode_resync([], {"ssh_key_path": "/k"}, "pve", comp_dir, state,
-                                     state_path)
+                redeploy_light_ops.mode_resync(
+                    [], _rctx({"ssh_key_path": "/k"}, comp_dir, state, state_path))
         p_write.assert_called_once_with(state_path, state)
         self.assertEqual(state["postgres_password"], "new")
 
+    # This is the D1 site: the write runs last, after the engine was re-cloned and
+    # the scoring DB wiped. It must also clear the stale phase-7 done-flags.
     def test_engine_recovery_persists_via_helper_after_clearing_phase7_flags(self):
-        """This is the D1 site: the write runs last, after the engine was re-cloned and
-        the scoring DB wiped. It must also clear the stale phase-7 done-flags."""
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             state = {
@@ -218,9 +223,8 @@ class StateWriteCallSiteTests(unittest.TestCase):
             self.assertNotIn(flag, state)
 
 
+# D3: the sudoers grant must land before the DNS fix (docs/architecture.md).
 class HardeningOrderTests(unittest.TestCase):
-    """D3: the sudoers grant must land before the DNS fix (docs/architecture.md)."""
-
     def _run(self, targets):
         ctx = {"ssh_key_path": "/tmp/id_ed25519", "scoring_engine_ip": "10.0.0.9"}
         order = []
@@ -239,7 +243,7 @@ class HardeningOrderTests(unittest.TestCase):
                 cfg.write_text(json.dumps(
                     {"machines": [{"name": t["machine"]} for t in targets]}))
                 redeploy_plant_ops.run_nakon_and_harden(
-                    targets, ctx, comp_dir, {}, cfg, comp_dir / "bundle")
+                    targets, _rctx(ctx, comp_dir), cfg, comp_dir / "bundle")
         return order, p_auth, p_dns
 
     def test_auth_grant_lands_before_the_dns_fix(self):

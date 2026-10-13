@@ -24,15 +24,15 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import config_ops  # noqa: E402
-import preflight.concurrency  # noqa: E402
-import preflight.plan  # noqa: E402
+
+from infra import gates as preflight  # noqa: E402
+from infra import plan as preflight_plan  # noqa: E402
 import nakon_lock_ops  # noqa: E402
 import nakon_ops  # noqa: E402
 
 
 class _FakeLocksDir:
-    """Points Path.home() at a temp dir holding a .tezcatlipoca/locks tree."""
+# Points Path.home() at a temp dir holding a .tezcatlipoca/locks tree.
 
     def __init__(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -61,7 +61,7 @@ class InFlightDetection(unittest.TestCase):
         self.assertEqual(nakon_ops.other_deploys_in_flight(), [])
 
     def test_an_unheld_stale_lock_is_not_a_deploy(self):
-        """The host carries 18 of these; treating them as live would block every deploy."""
+    # The host carries 18 of these; treating them as live would block every deploy.
         self.d.file("engine-10.0.0.150-1080.lock")
         self.d.file("engine-10.0.0.193-1900.lock")
         self.assertEqual(nakon_ops.other_deploys_in_flight(), [])
@@ -90,15 +90,15 @@ class InFlightDetection(unittest.TestCase):
 
 class PreflightGate(unittest.TestCase):
     def test_the_default_is_a_loud_warning_that_proceeds(self):
-        """Concurrency is the supported shape (2026-10-04): the gate warns and gets out
-        of the way; the per-resource collision gates do the refusing."""
+    # Concurrency is the supported shape (2026-10-04): the gate warns and gets out
+    #         of the way; the per-resource collision gates do the refusing.
         with patch("nakon_ops.other_deploys_in_flight",
                    return_value=[("/home/x/.tezcatlipoca/locks/engine-pve-1080.lock", 12.0)]), \
              patch.dict(os.environ, {}, clear=False):
             os.environ.pop("TEZ_ALLOW_CONCURRENT", None)  # a stray env var must not matter
             buf = io.StringIO()
             with redirect_stdout(buf):
-                config_ops._gate_concurrent_deploys()   # no raise
+                preflight.gate_concurrent_deploys()   # no raise
         message = buf.getvalue()
         self.assertIn("WARNING", message)
         self.assertIn("engine-pve-1080.lock", message)       # names the holder
@@ -109,7 +109,7 @@ class PreflightGate(unittest.TestCase):
         with patch("nakon_ops.other_deploys_in_flight", return_value=[]):
             buf = io.StringIO()
             with redirect_stdout(buf):
-                config_ops._gate_concurrent_deploys()   # no raise
+                preflight.gate_concurrent_deploys()   # no raise
         self.assertEqual(buf.getvalue(), "")
 
     def test_a_long_list_is_truncated(self):
@@ -117,18 +117,18 @@ class PreflightGate(unittest.TestCase):
         with patch("nakon_ops.other_deploys_in_flight", return_value=many):
             buf = io.StringIO()
             with redirect_stdout(buf):
-                config_ops._gate_concurrent_deploys()   # no raise
+                preflight.gate_concurrent_deploys()   # no raise
         self.assertIn("+3 more", buf.getvalue())
 
     def test_preflight_gates_calls_the_concurrency_gate_first(self):
-        """It must fire before any per-competition check, because it protects other
-        competitions, not just this one."""
-        with patch.object(preflight.concurrency, "gate_concurrent_deploys") as gate, \
+    # It must fire before any per-competition check, because it protects other
+    #         competitions, not just this one.
+        with patch.object(preflight, "gate_concurrent_deploys") as gate, \
                 patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
-                patch.object(preflight.plan, "proxmox_api",
+                patch.object(preflight_plan, "proxmox_api",
                              side_effect=RuntimeError("stop here — we only need the order")):
             with self.assertRaises(SystemExit):
-                config_ops.preflight_gates(Path("/tmp/nope"), [], 1)
+                preflight.preflight_gates(Path("/tmp/nope"), [], 1)
         gate.assert_called_once()
 
 

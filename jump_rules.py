@@ -9,28 +9,28 @@ APT_CACHER_PORT = 3142
 
 def jump_rules(team_identifiers, engine_mgmt_ip, mgmt_cidr="10.0.0.0/24",
                red_segment=""):
-    """iptables-restore content for the jump. Pure — golden-filed in tests.
-
-    FORWARD defaults to DROP; accepts are exactly: established/related, engine ->
-    team subnets (scoring/nakon/verify), team -> engine (apt/DNAT callbacks), and
-    team -> anything outside 192.168.0.0/16 (internet + mgmt LAN — the same egress
-    the engine's MASQUERADE grants local teams). Team -> team and mgmt -> team fall
-    off the default DROP: structural isolation.
-
-    `red_segment` (a CIDR, or "" for none) adds the routed-red path through the
-    satellite hop: FORWARD accept red -> local teams, and SNAT to the team gateway
-    so the boxes' gateway-IP-only SSH trust still sees 192.168.<id>.1 — the same
-    treatment engine -> box traffic gets. Without it red's source matches nothing
-    and falls off the FORWARD DROP: scale8-soak-2026-10-02 measured 15/15
-    cred_sprays failing "unreachable over SSH" against satellite teams for exactly
-    that reason. Return traffic needs no rule: conntrack de-SNATs it and the
-    established/related accept above carries it. Empty (the default) reproduces the
-    pre-soak ruleset byte for byte, so single-node and red-less comps are unchanged.
-
-    The TCPMSS clamps are not red-specific: this VM is the first routed hop between
-    two /24s, and a path-MTU below 1500 on the inter-node link black-holes large
-    replies unless the hop clamps them. `--clamp-mss-to-pmtu` is a no-op when both
-    sides agree on the MTU."""
+# iptables-restore content for the jump. Pure — golden-filed in tests.
+#
+#     FORWARD defaults to DROP; accepts are exactly: established/related, engine ->
+#     team subnets (scoring/nakon/verify), team -> engine (apt/DNAT callbacks), and
+#     team -> anything outside 192.168.0.0/16 (internet + mgmt LAN — the same egress
+#     the engine's MASQUERADE grants local teams). Team -> team and mgmt -> team fall
+#     off the default DROP: structural isolation.
+#
+#     `red_segment` (a CIDR, or "" for none) adds the routed-red path through the
+#     satellite hop: FORWARD accept red -> local teams, and SNAT to the team gateway
+#     so the boxes' gateway-IP-only SSH trust still sees 192.168.<id>.1 — the same
+#     treatment engine -> box traffic gets. Without it red's source matches nothing
+#     and falls off the FORWARD DROP: scale8-soak-2026-10-02 measured 15/15
+#     cred_sprays failing "unreachable over SSH" against satellite teams for exactly
+#     that reason. Return traffic needs no rule: conntrack de-SNATs it and the
+#     established/related accept above carries it. Empty (the default) reproduces the
+#     pre-soak ruleset byte for byte, so single-node and red-less comps are unchanged.
+#
+#     The TCPMSS clamps are not red-specific: this VM is the first routed hop between
+#     two /24s, and a path-MTU below 1500 on the inter-node link black-holes large
+#     replies unless the hop clamps them. `--clamp-mss-to-pmtu` is a no-op when both
+#     sides agree on the MTU.
     teams = [str(i) for i in team_identifiers]
     engine = f"{engine_mgmt_ip}/32"
     mgmt_prefix = ip_network(mgmt_cidr, strict=False).network_address
@@ -89,12 +89,12 @@ def jump_rules(team_identifiers, engine_mgmt_ip, mgmt_cidr="10.0.0.0/24",
 
 
 def red_segment_from_env():
-    """`TEZ_RED_SEGMENT` as a CIDR, or "" when red has no separate segment.
-
-    Empty is the safe default: no red rules are emitted, so single-node ranges and
-    masq-mode red behave exactly as before. A malformed value is a hard error — a typo
-    that silently produced no rules would put a live range back in the state that lost
-    the whole soak's red coverage."""
+# `TEZ_RED_SEGMENT` as a CIDR, or "" when red has no separate segment.
+#
+#     Empty is the safe default: no red rules are emitted, so single-node ranges and
+#     masq-mode red behave exactly as before. A malformed value is a hard error — a typo
+#     that silently produced no rules would put a live range back in the state that lost
+#     the whole soak's red coverage.
     raw = (os.environ.get("TEZ_RED_SEGMENT") or "").strip()
     if not raw:
         return ""

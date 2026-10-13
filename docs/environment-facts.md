@@ -160,6 +160,18 @@ on .150 vmids 100–124 are all occupied (challenge, workshop, livefire, base an
 .193 vmids 100–118 are largely occupied. The vmid-collision preflight names the conflict; pass
 `TF_VAR_team_identifiers` explicitly for a predictable block.  **[doc + live]**
 
+**red01's slot is per-competition, never 999.** Since 2026-10-12 (see
+[bad-auto-isolation.md](bad-auto-isolation.md)) each comp reserves its own red01: vmid
+Compfile `red01_vmid`, else `<scoring-vmid>+170` (clear of the +140 template / +150 golden /
++130 jump offsets), IP Compfile `red01_ip` (or legacy `assume_breach_red_ip`), else
+`10.0.0.198` — and both are preflight-gated like the engine's: an occupied red01 vmid or an
+IP a live guest answers is a REFUSAL naming the owner (the bad-auto description marker), and
+an unverifiable network refuses the DEFAULT addresses. The old shared defaults (vmid 999,
+`10.0.0.198`/`.199` for every comp) are what let one session's deploy recycle another
+session's red01. Concurrent comps still need separated blocks: scoring vmids +10 apart
+overlap (1300's golden 1450 = 1310's template 1450 — refused live 2026-10-12); leave room
+for engine+140…+170 and the golden box count.  **[code + live]**
+
 **Engine management IPs are shared unless you separate them.** `clean_engine_for_template` delivers
 its cleanup by SSH to the *planned* engine mgmt IP, so two engines (or an engine and a build VM) on
 one node can ARP-flap and the cleanup can land on the wrong, live engine — observed once destroying

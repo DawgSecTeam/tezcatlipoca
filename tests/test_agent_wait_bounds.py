@@ -23,7 +23,7 @@ import windows_ops  # noqa: E402
 
 
 class FakeClock:
-    """`time.time()`/`time.sleep()` that advance instead of waiting."""
+# `time.time()`/`time.sleep()` that advance instead of waiting.
 
     def __init__(self, start=1000.0):
         self.now = start

@@ -2,7 +2,7 @@
 
 import json
 
-from range_ops import cluster_vms_for, proxmox_api
+from infra.client import cluster_vms_for, proxmox_api
 from nodes_ops import golden_vmid_for_slot
 from ssh_ops import quote_sshkeys
 from utils import is_unmanaged
@@ -12,18 +12,17 @@ from utils import is_unmanaged
 _quote_sshkeys = quote_sshkeys
 
 
+# Slot 0 of golden_vmid_for_slot (satellite slots shift by box-stride — nodes_ops).
+# Golden boxes sit just above the engine's slot; preflight gates the span for
+# collisions with team vmid space.
 def golden_vmid_for(engine_vmid, box_idx):
-    """Golden boxes sit just above the engine's slot; preflight gates the span for
-    collisions with team vmid space (engine vmids above ~1060 shift the golden block).
-    Slot 0 of golden_vmid_for_slot — the satellite slots shift by box-stride (nodes_ops)."""
     return golden_vmid_for_slot(engine_vmid, 0, box_idx)
 
 
+# Free because golden boxes are converted to (stopped) templates before any real team
+# box exists. Satellite slots anchor on their first local team (the jump answers .1
+# there and routes to the engine).
 def golden_ip_for(anchor_identifier, box_idx):
-    """Above the .1 gateway, below .255, on the anchor team's subnet — free because
-    golden boxes are converted to (stopped) templates before any real team box
-    exists. Satellite slots anchor on their first local team (the jump answers .1
-    there and routes to the engine)."""
     return f"192.168.{anchor_identifier}.{240 + box_idx}"
 
 
@@ -39,31 +38,26 @@ def _vm_exists(node, vmid):
     return any(v["vmid"] == vmid for v in vms)
 
 
+# Asks the host that owns `node` (infra.client.cluster_vms_for): with a multi-node
+# placement that is the satellite's own endpoint — a primary-side cluster query would
+# never see its templates on independent hosts.
 def _template_vmid_map(node):
-    """name -> vmid for stopped VMs tagged `template`, ON `node` (mirrors main.tf's
-    per-slot template data sources). Asks the host that owns `node`
-    (range_ops.cluster_vms_for): with a multi-node placement that is the satellite's
-    own endpoint — a primary-side cluster query would never see its templates on
-    independent hosts. /cluster/resources joins tags with ';' (config GET uses ','),
-    so split on both."""
     vms = cluster_vms_for(node)
     out = {}
     for vm in vms:
         if vm.get("node") and vm["node"] != node:
             continue
+        # /cluster/resources joins tags with ';' (config GET uses ','), so split on both.
         tags = {t.strip() for t in str(vm.get("tags") or "").replace(";", ",").split(",") if t.strip()}
         if "template" in tags and vm.get("status") == "stopped":
             out[vm["name"]] = vm["vmid"]
     return out
 
 
+# A PRESENT but malformed or invalid domain_roles.json raises: treating it as
+# no-domain would hand the DC a booted shared golden — the exact duplicate-DomainSID
+# failure this split exists to prevent.
 def unbooted_golden_boxes(comp_dir):
-    """Box types whose golden must stay sysprep-generalized (never booted): the
-    domain-controller role in domain_roles.json. See the module identity note.
-
-    An absent file is a no-domain lineup (empty set). A PRESENT but malformed or
-    invalid file raises: treating it as no-domain would hand the DC a booted shared
-    golden — the exact duplicate-DomainSID failure this split exists to prevent."""
     path = comp_dir / "domain_roles.json"
     if not path.exists():
         return set()
@@ -94,13 +88,12 @@ def unbooted_golden_boxes(comp_dir):
     return {name for name, role in roles.items() if role == "dc"}
 
 
+# box_idx stays positional — mirrors enumerate_targets' invariant: build from the full
+# box list, never a filtered one. Slot 0 anchors on team1's subnet (historical
+# behavior exactly); a satellite slot anchors on its first local team's subnet — the
+# satellite's goldens must sit on a bridge that exists on the satellite's host, with
+# the jump answering .1 there.
 def golden_targets(engine_vmid, teams, boxes, slot=0, anchor_identifier=None):
-    """One target per box type: vmid/IP/name pre-derived, box_idx positional (mirrors
-    enumerate_targets' invariant — build from the full box list, never a filtered one).
-
-    slot 0 anchors on team1's subnet (historical behavior exactly); a satellite slot
-    anchors on its first local team's subnet — the satellite's goldens must sit on a
-    bridge that exists on the satellite's host, with the jump answering .1 there."""
     if anchor_identifier is None:
         anchor_identifier = str(teams["team1"]["identifier"])
     return [
@@ -119,8 +112,6 @@ def golden_targets(engine_vmid, teams, boxes, slot=0, anchor_identifier=None):
     ]
 
 
-# ------------------------------------------------------------------ boot smoke gate
-#
 # The invariant "no boot-hostile config rides the golden" was, until now, enforced by a
 # comment and the hand-maintained constants.FINAL_STAGE_CONFIGS set — nothing else. It
 # already failed for real on 2026-09-24: `systemd-system-masked` was planted into the

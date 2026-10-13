@@ -4,7 +4,7 @@ from config_ops import confirm_deploy
 
 from deploy_lib.configs import generate_stage_configs_and_hashes
 from deploy_lib.context import DeployContext
-from deploy_lib.gates import check_resume_gates, run_range_gates
+from infra.gates import check_resume_gates, run_range_gates
 from deploy_lib.inputs import (load_competition_inputs, load_competition_spec,
                                load_prior_deploy_state, resolve_engine_vmid)
 from deploy_lib.placement import apply_engine_placement
@@ -18,26 +18,26 @@ from deploy_lib.tfinputs import build_terraform_inputs, engine_mgmt_ip_from_env
 
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
             team_node=None, engine_node=None, force_from_phase=False):
-    """Everything deploy() must do before phase 1, as one testable step.
-
-    Resolves the engine VMID, loads Compfile/config/state, resolves teams, computes
-    multi-node placement, runs preflight, THEN mints the competition's secrets,
-    generates the nakon + stage configs, computes the golden hashes and assembles
-    terraform.tfvars.json, and enumerates the targets. Returns None when the operator
-    declines the confirmation prompt, so deploy() can return without running any phase
-    (the same early return the inline code had).
-
-    The write lock is deliberately NOT taken here: deploy() holds it across the whole
-    run, phases included. Nothing here destroys anything — the frozen gate runs before
-    phase 1 precisely so a freeze can still say "nothing destroyed".
-
-    Order note: preflight runs BEFORE the fresh credential mint. These gates can abort
-    the deploy (engine mgmt IP collision, missing templates, datastore headroom, catalog
-    errors) — a state file written with minted credentials no engine ever received is a
-    credential-desync corpse: every login 401s against the live range until state is
-    restored by hand (2026-09-30 testcomp-7box: a create-competition re-run against an
-    already-deployed comp rotated state while the engine kept the originals). Resumes
-    keep the gate where it was relative to their carried (not minted) credentials."""
+# Everything deploy() must do before phase 1, as one testable step.
+#
+#     Resolves the engine VMID, loads Compfile/config/state, resolves teams, computes
+#     multi-node placement, runs preflight, THEN mints the competition's secrets,
+#     generates the nakon + stage configs, computes the golden hashes and assembles
+#     terraform.tfvars.json, and enumerates the targets. Returns None when the operator
+#     declines the confirmation prompt, so deploy() can return without running any phase
+#     (the same early return the inline code had).
+#
+#     The write lock is deliberately NOT taken here: deploy() holds it across the whole
+#     run, phases included. Nothing here destroys anything — the frozen gate runs before
+#     phase 1 precisely so a freeze can still say "nothing destroyed".
+#
+#     Order note: preflight runs BEFORE the fresh credential mint. These gates can abort
+#     the deploy (engine mgmt IP collision, missing templates, datastore headroom, catalog
+#     errors) — a state file written with minted credentials no engine ever received is a
+#     credential-desync corpse: every login 401s against the live range until state is
+#     restored by hand (2026-09-30 testcomp-7box: a create-competition re-run against an
+#     already-deployed comp rotated state while the engine kept the originals). Resumes
+#     keep the gate where it was relative to their carried (not minted) credentials.
     identity = RunIdentity()
     resolve_engine_vmid(identity, comp_dir, from_phase, scoring_vmid)
     # (The engine lock itself is taken further down — multi-node placement must point
@@ -89,11 +89,11 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
 
 def assemble_deploy_context(comp_dir, from_phase, assume_yes, identity, spec, prior, inputs,
                              secrets, place, generated, terraform, targets):
-    """Expand the prepared stages onto DeployContext's flat fields.
-
-    Kept out of prepare() so the sequencer reads as the ordered steps it is: this is the
-    one place that maps the stage objects onto DeployContext, whose field order follows
-    the pipeline."""
+# Expand the prepared stages onto DeployContext's flat fields.
+#
+#     Kept out of prepare() so the sequencer reads as the ordered steps it is: this is the
+#     one place that maps the stage objects onto DeployContext, whose field order follows
+#     the pipeline.
     return DeployContext(
         comp_dir=comp_dir,
         comp_name=spec.comp_name,

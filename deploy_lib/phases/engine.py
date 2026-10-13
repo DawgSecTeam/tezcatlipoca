@@ -8,7 +8,7 @@ from engine_ops import (bootstrap_scoring_engine, ensure_nat_forwarding,
                         push_event_conf)
 from golden_ops import _quote_sshkeys
 from jump_ops import build_jump_vms, red_segment_from_env
-from range_ops import destroy_vm_if_exists, retag_ownership
+from infra.ownership import destroy_vm_if_exists, retag_ownership
 from routing_ops import verify_satellite_routing
 from ssh_ops import forget_engine_host_key, read_terraform_ctx, wait_for_ssh
 from template_ops import (build_engine_template, destroy_engine_template,
@@ -23,7 +23,7 @@ from pathlib import Path
 
 
 def engine_build_ctx(ctx):
-    """The ssh/user context the engine-template build VM and the jump VMs are built with."""
+# The ssh/user context the engine-template build VM and the jump VMs are built with.
     return {
         "ssh_key_path": ctx.ssh_key_abs,
         "vm_username": os.environ["TF_VAR_vm_username"],
@@ -32,9 +32,9 @@ def engine_build_ctx(ctx):
 
 
 def ensure_engine_template(ctx):
-    """M4 engine template lifecycle: build once per competition, reuse across its test
-    runs; rebuild only on config drift and never when frozen. Records the template vmid
-    and hash in state and the hash file; returns the template vmid."""
+# M4 engine template lifecycle: build once per competition, reuse across its test
+#     runs; rebuild only on config drift and never when frozen. Records the template vmid
+#     and hash in state and the hash file; returns the template vmid.
     main_tf_text = Path("terraform/main.tf").read_text()
     quotient_ref = compfile_value(ctx.comp_dir / "Compfile", "quotient_ref")
     engine_inputs = engine_hash_inputs(
@@ -73,7 +73,7 @@ def ensure_engine_template(ctx):
     elif tmpl:
         # Kept (hash match or frozen): re-stamp its ownership to THIS run so the
         # next teardown's strict guard and preflight recognize it — a template kept
-        # across runs carries the earlier run's tag (range_ops.retag_ownership).
+        # across runs carries the earlier run's tag (infra.ownership.retag_ownership).
         retag_ownership(ctx.node, tmpl, ctx.comp_tags | {"engine-template"})
     save_template_hashes(ctx.comp_dir, engine={"hash": engine_hash, "inputs": engine_inputs})
     ctx.state["engine_template_vmid"] = tmpl
@@ -83,10 +83,10 @@ def ensure_engine_template(ctx):
 
 
 def apply_engine_terraform(ctx):
-    """terraform init + apply #1: only the engine (a linked clone of the engine template —
-    seconds, no bulk disk copy) and the bridges are built (team_box's for_each is empty:
-    build_team_boxes=false), plus team_nics' netplan for every team bridge and the
-    cold-boot that surfaces the engine's team NICs."""
+# terraform init + apply #1: only the engine (a linked clone of the engine template —
+#     seconds, no bulk disk copy) and the bridges are built (team_box's for_each is empty:
+#     build_team_boxes=false), plus team_nics' netplan for every team bridge and the
+#     cold-boot that surfaces the engine's team NICs.
     tf_env, tf_cwd = terraform_env_and_cwd(ctx)
     run_terraform(["init"], cwd=tf_cwd, env=tf_env, timeout=300)
     with timed(ctx.comp_dir, 2, "terraform_apply"):
@@ -94,9 +94,9 @@ def apply_engine_terraform(ctx):
 
 
 def build_satellite_jumps(ctx, apply_ctx):
-    """Jump/router per satellite, then the fail-loud routing gate: nothing
-    downstream (satellite golden plants, nakon, scoring) works without
-    engine -> jump -> satellite-bridge paths."""
+# Jump/router per satellite, then the fail-loud routing gate: nothing
+#     downstream (satellite golden plants, nakon, scoring) works without
+#     engine -> jump -> satellite-bridge paths.
     with timed(ctx.comp_dir, 2, "jump_vms", f"x{len(ctx.placement['satellites'])}"):
         build_jump_vms(ctx.placement, ctx.engine_vmid, engine_build_ctx(ctx), ctx.comp_name,
                        ctx.engine_mgmt_ip,
@@ -109,15 +109,15 @@ def build_satellite_jumps(ctx, apply_ctx):
 
 
 def phase2_engine_template(ctx):
-    """[2/8] Engine template lifecycle, then terraform apply #1.
-
-    M4: the engine template is built once per competition and reused across its test
-    runs — rebuilt only on config drift, never when frozen. Apply #1 then builds the
-    engine (a linked clone of that template, seconds) and every team bridge, with
-    team_box's for_each deliberately empty; apply #2 in phase 4 flips it on once the
-    goldens exist. The checkpoint and the terraform-context read stay in the caller
-    (deploy), in that order: a phase-2 resume still needs the outputs, and a run that
-    dies between them must leave last_phase at 2 on disk."""
+# [2/8] Engine template lifecycle, then terraform apply #1.
+#
+#     M4: the engine template is built once per competition and reused across its test
+#     runs — rebuilt only on config drift, never when frozen. Apply #1 then builds the
+#     engine (a linked clone of that template, seconds) and every team bridge, with
+#     team_box's for_each deliberately empty; apply #2 in phase 4 flips it on once the
+#     goldens exist. The checkpoint and the terraform-context read stay in the caller
+#     (deploy), in that order: a phase-2 resume still needs the outputs, and a run that
+#     dies between them must leave last_phase at 2 on disk.
     if ctx.from_phase > 2:
         print("[2/8] Skipped (resume) — not re-running terraform apply.")
         return
@@ -143,7 +143,7 @@ def phase2_engine_template(ctx):
 
 
 def phase3_prepare_engine(ctx):
-    """[3/8] Apply this deploy's per-competition state to the engine clone."""
+# [3/8] Apply this deploy's per-competition state to the engine clone.
     if ctx.from_phase > 3:
         print("[3/8] Skipped (resume).")
         return

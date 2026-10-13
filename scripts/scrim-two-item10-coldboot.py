@@ -6,13 +6,13 @@ import json, subprocess, sys, time
 sys.path.insert(0, '/home/hna/dev/dawgsec/tezcatlipoca')
 from dotenv import load_dotenv
 load_dotenv('/home/hna/dev/dawgsec/tezcatlipoca/.env')
-import range_ops
+import infra.client
 
 NODE = 'proxmox'
 VMID = 1000
 
 def qm_api(method, path, **kw):
-    return range_ops.proxmox_api(method, path, **kw)
+    return infra.client.proxmox_api(method, path, **kw)
 
 t0 = time.time()
 def log(msg):
@@ -29,7 +29,6 @@ log('stopped; starting')
 qm_api('POST', f'/nodes/{NODE}/qemu/{VMID}/status/start')
 log('start issued')
 
-# wait for engine API
 ready = False
 for i in range(90):
     time.sleep(5)
@@ -56,7 +55,6 @@ r1 = s.post('http://10.0.0.252/api/competition/start', json={'started': True}, t
 r2 = s.post('http://10.0.0.252/api/engine/pause', json={'pause': False}, timeout=10)
 log(f'unpause: {r1.status_code} {r2.status_code}')
 
-# verify networking WITHOUT repair: route via transit + apt-cacher DNAT presence
 checks = subprocess.run(['ssh', '-i', '/home/hna/dev/dawgsec/tezcatlipoca/proxmox',
                          '-o', 'StrictHostKeyChecking=no', 'sysadmin@10.0.0.252',
                          'ip route get 192.168.120.10 | head -1; ip -4 addr show ens20 | grep -c 172.31.120.1; '
@@ -65,7 +63,6 @@ checks = subprocess.run(['ssh', '-i', '/home/hna/dev/dawgsec/tezcatlipoca/proxmo
                         capture_output=True, text=True)
 log('networking after cold boot:\n' + checks.stdout)
 
-# wait for a fresh round to complete with checks
 seen = eng.get('last_round', {}).get('ID')
 for i in range(40):
     time.sleep(15)

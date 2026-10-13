@@ -29,8 +29,8 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import artifacts_ops as ao  # noqa: E402
 import red_plant_ops  # noqa: E402
-import range_ops  # noqa: E402
-import vm_ownership  # noqa: E402
+import infra.client  # noqa: E402
+from infra import ownership  # noqa: E402
 from artifacts_lib import lifecycle as alifecycle  # noqa: E402
 from artifacts_lib import paths as apaths  # noqa: E402
 from teardown import machinery as tm  # noqa: E402
@@ -56,22 +56,22 @@ BOXES = [{"name": "dc01", "last_octet": 2, "template": "base-windows-server"}]
 
 
 class _OfflinePVE:
-    """Empty estate: every node lists clean, nothing is running."""
+# Empty estate: every node lists clean, nothing is running.
 
     def __call__(self, method, path, **kw):
         return {"data": []}
 
 
 def _offline_api_patches(collect_log=None):
-    """Patch EVERY module that can reach Proxmox at its owning module: the
-    engine's Inventory resolves range_ops.proxmox_api; the delete primitive
-    (vm_ownership) imports pve_api directly. A partial patch sends the other
-    half LIVE — the ownership guard will refuse it, but the test dials the node."""
+# Patch EVERY module that can reach Proxmox at its owning module: the
+#     engine's Inventory resolves infra.client.proxmox_api; the delete primitive
+#     (ownership) imports infra.client directly. A partial patch sends the other
+#     half LIVE — the ownership guard will refuse it, but the test dials the node.
     patches = [
-        patch.object(range_ops, "proxmox_api", _OfflinePVE()),
-        patch.object(vm_ownership, "proxmox_api", _OfflinePVE()),
-        patch.object(vm_ownership, "wait_for_proxmox_task", lambda *a, **k: None),
-        patch.object(range_ops, "live_vmids", lambda: []),
+        patch.object(infra.client, "proxmox_api", _OfflinePVE()),
+        patch.object(ownership, "proxmox_api", _OfflinePVE()),
+        patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None),
+        patch.object(infra.client, "live_vmids", lambda: []),
         patch.object(red_plant_ops, "red_vmid_candidates",
                      lambda *a, **k: [999]),      # known vmid; live_vmids [] proves it gone
     ]
@@ -79,8 +79,8 @@ def _offline_api_patches(collect_log=None):
 
 
 def _collecting_fake(calls):
-    """A collect_for_teardown stand-in that creates the folder it claims to —
-    verify_clean demands the evidence dir exist when the step is journalled."""
+# A collect_for_teardown stand-in that creates the folder it claims to —
+#     verify_clean demands the evidence dir exist when the step is journalled.
     def fake(comp_dir, **kwargs):
         calls.append("collect")
         key, _ = alifecycle.latest_run_key(comp_dir, kwargs.get("run_id"))
@@ -106,7 +106,7 @@ class TeardownArtifactsHook(unittest.TestCase):
         self._cwd = os.getcwd()
 
     def _main(self, argv, *, collect=None, red=None, tf=None, cancel=False):
-        """Run main() with every destructive call replaced by a log entry."""
+    # Run main() with every destructive call replaced by a log entry.
         calls = self.log
         collect = collect or _collecting_fake(calls)
         red = red or (lambda *a, **k: calls.append("red_destroy") or
@@ -191,17 +191,17 @@ class TeardownArtifactsHook(unittest.TestCase):
         self.assertEqual(self.log, [])
 
     def test_exit_zero_requires_a_clean_estate(self):
-        """The exit contract, end to end: with every step green and an empty
-        estate, main() exits 0; the report says so."""
+    # The exit contract, end to end: with every step green and an empty
+    #         estate, main() exits 0; the report says so.
         calls = self._main(["--yes"])
         self.assertIn("estate clean", self.out)
         self.assertIn("terraform_destroy", calls)
 
 
 class CrashedHarnessRecovery(unittest.TestCase):
-    """The headline case: the harness died, so teardown is the only thing left that can save the
-    run's reports. The REAL collector runs here — only the transport is faked, because a unit
-    test must not dial red01."""
+# The headline case: the harness died, so teardown is the only thing left that can save the
+#     run's reports. The REAL collector runs here — only the transport is faked, because a unit
+#     test must not dial red01.
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -241,7 +241,7 @@ class CrashedHarnessRecovery(unittest.TestCase):
         ao.record_phase(path, "stage_red")
 
     def _transport(self):
-        """Only red01's report exists; everything else is reachable-but-empty."""
+    # Only red01's report exists; everything else is reachable-but-empty.
         transport = dict(_REAL_DEFAULT_TRANSPORT())
 
         def scp(ssh, remote, dest, timeout=120):

@@ -47,8 +47,8 @@ TEAMS = {"team2": {"identifier": "121", "password": "x"},
 
 class TeamConfig(unittest.TestCase):
     def test_wan_allows_only_the_engine_to_ssh_the_firewall(self):
-        """The phase-5 success probe is SSH to the firewall's own WAN address; pfSense blocks
-        WAN-inbound to itself unless a rule says otherwise (live-found 2026-10-05)."""
+    # The phase-5 success probe is SSH to the firewall's own WAN address; pfSense blocks
+    #         WAN-inbound to itself unless a rule says otherwise (live-found 2026-10-05).
         out = generate_team_config(SEED, "120")
         at = out.index("Allow engine SSH to the firewall")
         rule = out[out.rindex("<rule>", 0, at):out.index("</rule>", at)]
@@ -77,7 +77,7 @@ class TeamConfig(unittest.TestCase):
         self.assertIn("Allow engine scoring", first_rule)
 
     def test_apt_cacher_is_redirected_to_the_engine_by_default(self):
-        """Boxes' apt proxy is the gateway address; the firewall owns it after cutover."""
+    # Boxes' apt proxy is the gateway address; the firewall owns it after cutover.
         out = generate_team_config(SEED, "123")
         at = out.index("apt-cacher (engine service")
         rule = out[out.rindex("<rule>", 0, at):out.index("</rule>", at)]
@@ -110,11 +110,11 @@ class FirewallKind(unittest.TestCase):
 
 
 class VyosCommands(unittest.TestCase):
-    """The generated pass-A/pass-B CLI scripts (pure functions)."""
+# The generated pass-A/pass-B CLI scripts (pure functions).
 
     def test_wan_side_config_but_no_lan_address_change(self):
-        """Pass A must not touch eth1: a commit that moves it kills the SSH session
-        pushing the config (bootstrap_firewalls flips eth1 as pass B over the WAN)."""
+    # Pass A must not touch eth1: a commit that moves it kills the SSH session
+    #         pushing the config (bootstrap_firewalls flips eth1 as pass B over the WAN).
         out = generate_vyos_commands("120")
         self.assertIn("set interfaces ethernet eth0 address 172.31.120.2/30", out)
         self.assertIn("set protocols static route 0.0.0.0/0 next-hop 172.31.120.1", out)
@@ -123,10 +123,10 @@ class VyosCommands(unittest.TestCase):
         self.assertNotIn("set interfaces ethernet eth1", out.split("commit")[0])
 
     def test_no_filter_rules_circinus_default_accepts_the_path(self):
-        """The 1.5 firewall revamp removed interface-attached rulesets AND the
-        `firewall interface` attachment (live-found 2026-10-08); the pfSense WAN rule
-        set's effect is what circinus's default-accept chains already allow, so the
-        generated script ships none of it."""
+    # The 1.5 firewall revamp removed interface-attached rulesets AND the
+    #         `firewall interface` attachment (live-found 2026-10-08); the pfSense WAN rule
+    #         set's effect is what circinus's default-accept chains already allow, so the
+    #         generated script ships none of it.
         out = generate_vyos_commands("120")
         self.assertNotIn("set firewall", out)
         self.assertNotIn("inbound-interface", out)
@@ -162,7 +162,7 @@ class VyosCommands(unittest.TestCase):
 
 
 class VyosBootstrap(unittest.TestCase):
-    """The two-pass orchestration, with the engine/SSH layer faked."""
+# The two-pass orchestration, with the engine/SSH layer faked.
 
     def _run(self, wan_up):
         import tempfile
@@ -214,8 +214,8 @@ FAKE_SSH_CTX = {"ssh_key_path": "k", "vm_username": "ops",
 
 class PushVyos(unittest.TestCase):
     def test_success_needs_clean_exit_and_the_canary(self):
-        """circinus commits print NOTHING on success — canary + clean exit are the only
-        signals; a non-zero exit or a quiet canary is a failure either way."""
+    # circinus commits print NOTHING on success — canary + clean exit are the only
+    #         signals; a non-zero exit or a quiet canary is a failure either way.
         import firewall_ops as fo
         from unittest.mock import patch
         clock = {"t": 0.0}
@@ -332,7 +332,7 @@ class PushRetry(unittest.TestCase):
 
 
 class BootstrapFirewalls(unittest.TestCase):
-    """The orchestration, with the engine/SSH layer faked."""
+# The orchestration, with the engine/SSH layer faked.
 
     def _run(self, wan_up, push_result="APPLIED", boot_ok=True):
         import tempfile
@@ -387,7 +387,7 @@ class BootstrapFirewalls(unittest.TestCase):
 
 
 class VerifyInPathConvergence(unittest.TestCase):
-    """The cutover moves the gateway MAC; the box probe must retry, not fail on probe #1."""
+# The cutover moves the gateway MAC; the box probe must retry, not fail on probe #1.
 
     def test_box_probe_retries_until_it_answers(self):
         import firewall_ops as fo
@@ -410,11 +410,11 @@ class VerifyInPathConvergence(unittest.TestCase):
 
 
 class GuestAgentShellcmd(unittest.TestCase):
-    """The qemu-guest-agent's boot hook. pfSense never runs /usr/local/etc/rc.d/* (the
-    local-script pass in /etc/rc only globs *.sh), so rc.conf.local alone is inert —
-    the <system><afterbootupshellcmd> tag in config.xml (/etc/rc.bootup mwexec's it)
-    is the only mechanism that survives, and it must ride EVERY config the firewall
-    runs: the template's (sealed 2026-10-08) and the generated per-team ones."""
+# The qemu-guest-agent's boot hook. pfSense never runs /usr/local/etc/rc.d/* (the
+#     local-script pass in /etc/rc only globs *.sh), so rc.conf.local alone is inert —
+#     the <system><afterbootupshellcmd> tag in config.xml (/etc/rc.bootup mwexec's it)
+#     is the only mechanism that survives, and it must ride EVERY config the firewall
+#     runs: the template's (sealed 2026-10-08) and the generated per-team ones.
 
     def test_generated_config_carries_the_agent_boot_hook(self):
         out = generate_team_config(SEED, "120")
@@ -431,9 +431,9 @@ class GuestAgentShellcmd(unittest.TestCase):
 
 
 class AgentDiagnostics(unittest.TestCase):
-    """fw_agent_diagnostic: never raises, never fires on agentless (pre-retrofit)
-    clones, and when the agent answers it reports interfaces + whether the pushed
-    config.xml actually landed."""
+# fw_agent_diagnostic: never raises, never fires on agentless (pre-retrofit)
+#     clones, and when the agent answers it reports interfaces + whether the pushed
+#     config.xml actually landed.
 
     def test_agentless_clone_returns_empty_string(self):
         import firewall_ops as fo
@@ -470,9 +470,9 @@ class AgentDiagnostics(unittest.TestCase):
 
 
 class BootstrapAgentWiring(unittest.TestCase):
-    """node= wires the agent into the bootstrap: success logs the boot confirmation,
-    the failure text carries the diagnostic block, and agentless clones change
-    nothing."""
+# node= wires the agent into the bootstrap: success logs the boot confirmation,
+#     the failure text carries the diagnostic block, and agentless clones change
+#     nothing.
 
     def _run(self, node, agent_answers, boot_ok=True):
         import tempfile

@@ -41,11 +41,10 @@ def _write_crossbox(comp_dir, config_name="hypothetical-crossbox"):
     (comp_dir / "nakon-config.json").write_text(json.dumps({"machines": machines}))
 
 
+# D1: the satellite golden enforced a strictly weaker ban than slot 0, so a
+# cross-box-only ("ip:<box>") config rode the satellite disk with team1's DB IP
+# already baked into the pin.
 class GoldenIdentityBan(unittest.TestCase):
-    """D1: the satellite golden enforced a strictly weaker ban than slot 0, so a
-    cross-box-only ("ip:<box>") config rode the satellite disk with team1's DB IP
-    already baked into the pin."""
-
     def test_slot0_golden_rejects_crossbox_only_identity_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
@@ -94,10 +93,9 @@ class GoldenIdentityBan(unittest.TestCase):
                                  ("db01-golden", [])])
 
 
+# D2: the combined repair ∪ final view deduped by config name only, silently
+# dropping same-named pins that differ by vars.
 class PostCloneMerge(unittest.TestCase):
-    """D2: the combined repair ∪ final view deduped by config name only, silently
-    dropping same-named pins that differ by vars."""
-
     COLD_BOXES = [{"name": "dc01", "template": "windows-server-2022"}]
     COLD_TEAMS = {"team1": {"identifier": 104}}
 
@@ -153,11 +151,10 @@ class PostCloneMerge(unittest.TestCase):
         self.assertEqual(postclone, [("both-stage-x", {"K": "v"})])
 
 
+# D4: three functions took a parameter they never used. Removing them is only
+# safe because every caller reaches the two public ones positionally/keyword-only
+# from files this stream does not own (deploy.py, redeploy-competition.py).
 class DeadParameters(unittest.TestCase):
-    """D4: three functions took a parameter they never used. Removing them is only
-    safe because every caller reaches the two public ones positionally/keyword-only
-    from files this stream does not own (deploy.py, redeploy-competition.py)."""
-
     def test_generate_stage_configs_dropped_box_username(self):
         self.assertNotIn("box_username",
                          inspect.signature(nakon_ops.generate_stage_configs).parameters)

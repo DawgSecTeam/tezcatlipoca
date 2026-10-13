@@ -12,11 +12,11 @@ from verifier.loaders import load_boxes
 
 
 def git_dirty_lines(repo_root=None):
-    """Uncommitted paths in this checkout (`git status --porcelain` at the repo root).
-
-    Returns a list of porcelain lines, or None when git cannot answer (not a repo, git
-    missing, non-zero rc) — an unverifiable tree must never read as clean. Scoped to
-    REPO_ROOT rather than the cwd so the same answer holds wherever verify was invoked."""
+# Uncommitted paths in this checkout (`git status --porcelain` at the repo root).
+#
+#     Returns a list of porcelain lines, or None when git cannot answer (not a repo, git
+#     missing, non-zero rc) — an unverifiable tree must never read as clean. Scoped to
+#     REPO_ROOT rather than the cwd so the same answer holds wherever verify was invoked.
     try:
         out = subprocess.run(["git", "status", "--porcelain"],
                              cwd=str(repo_root or REPO_ROOT),
@@ -29,7 +29,7 @@ def git_dirty_lines(repo_root=None):
 
 
 def freeze_hashes(comp_dir):
-    """The template hashes a freeze would record (None when nothing is recorded yet)."""
+# The template hashes a freeze would record (None when nothing is recorded yet).
     path = comp_dir / ".template-hashes.json"
     if not path.exists():
         return None
@@ -40,10 +40,10 @@ def freeze_hashes(comp_dir):
 
 
 def do_freeze(comp_dir, args, gate, coverage_passed):
-    """M4 freeze: record the template hashes this verify just passed against, plus the
-    code commit, timestamp, and gate results. Preconditions: every gate PASS including
-    plant-coverage and services; Windows/domain lineups additionally require the
-    operator's --windows-domain-validated attestation (that the run exercised them)."""
+# M4 freeze: record the template hashes this verify just passed against, plus the
+#     code commit, timestamp, and gate results. Preconditions: every gate PASS including
+#     plant-coverage and services; Windows/domain lineups additionally require the
+#     operator's --windows-domain-validated attestation (that the run exercised them).
     from template_ops import code_path_dirty, git_commit_info
 
     hashes = freeze_hashes(comp_dir)

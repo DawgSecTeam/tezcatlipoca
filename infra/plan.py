@@ -8,7 +8,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from pve_api import proxmox_api
+from infra.client import proxmox_api
 
 
 @dataclass
@@ -49,6 +49,9 @@ class PreflightPlan:
     our_run_tag: Optional[str] = None
     engine_mgmt_ip: Optional[str] = None
     placement: Optional[dict] = None   # multi-node only (jump-IP sweep)
+    red01_vmid: int = 0                # the comp's reserved red01 (engine+170 unless overridden)
+    red01_ip: str = ""                 # the comp's red01 address (10.0.0.198 unless overridden)
+    resuming: bool = False             # collision gates relax for THIS comp's own leftovers
 
     @property
     def comp_name(self):
@@ -84,6 +87,7 @@ def _fetch_cluster_vms_single():
 
 def single_node_plan(comp_dir, boxes, num_teams, teams, engine_vmid, check_free,
                      engine_mgmt_ip, our_run_tag):
+    import badauto_config_ops
     share = NodeShare(
         name="", node=os.environ["TF_VAR_proxmox_node"], multi=False, slot=0, is_engine=True,
         teams=teams or {}, num_teams=num_teams,
@@ -92,14 +96,18 @@ def single_node_plan(comp_dir, boxes, num_teams, teams, engine_vmid, check_free,
         engine_base=lambda: int(os.environ["TF_VAR_template_vm_id"]),
         check_collisions=bool(check_free and teams))
     return PreflightPlan(comp_dir, boxes, engine_vmid, [share], our_run_tag=our_run_tag,
-                         engine_mgmt_ip=engine_mgmt_ip)
+                         engine_mgmt_ip=engine_mgmt_ip,
+                         red01_vmid=badauto_config_ops.red01_vmid_for(comp_dir, engine_vmid),
+                         red01_ip=badauto_config_ops.red01_ip_for(comp_dir),
+                         resuming=not check_free)
 
 
 def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_ip,
                    check_free, our_run_tag):
     # Lazy: only the multi-node path pulls in the placement machinery.
+    import badauto_config_ops
     import placement_record
-    import pve_api
+    from infra.client import cluster_vms_for
 
     # In-path firewalls are a slot-0 feature for now: the transit bridge + gateway
     # handoff live on the engine node, while each satellite's jump VM impersonates
@@ -123,7 +131,7 @@ def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_i
         shares.append(NodeShare(
             name=node_name, node=rec.node, multi=True, slot=slot, is_engine=is_engine,
             teams=node_teams, num_teams=len(node_teams), datastore=rec.datastore,
-            fetch_vms=(lambda n=rec.node: pve_api.cluster_vms_for(n)), scope_to_node=True,
+            fetch_vms=(lambda n=rec.node: cluster_vms_for(n)), scope_to_node=True,
             engine_base=(lambda r=rec: r.engine_base_vmid) if is_engine else None,
             check_templates=bool(node_teams),
             needs_jump_template=bool(node_teams) and slot > 0,
@@ -133,4 +141,7 @@ def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_i
             check_collisions=bool(check_free and not unused_satellite),
             check_headroom=bool(check_free and not unused_satellite)))
     return PreflightPlan(comp_dir, boxes, engine_vmid, shares, our_run_tag=our_run_tag,
-                         engine_mgmt_ip=engine_mgmt_ip, placement=placement)
+                         engine_mgmt_ip=engine_mgmt_ip, placement=placement,
+                         red01_vmid=badauto_config_ops.red01_vmid_for(comp_dir, engine_vmid),
+                         red01_ip=badauto_config_ops.red01_ip_for(comp_dir),
+                         resuming=not check_free)

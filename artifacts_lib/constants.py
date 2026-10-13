@@ -37,7 +37,8 @@ TODO_MARK = "<!-- TODO(author)"
 
 
 class Unreachable(Exception):
-    """The source exists on paper but cannot be talked to (VM stopped, agent down).
-
-    Distinct from OSError/FileNotFoundError so the collector records `unreachable` instead of
-    blaming the file for a dead box."""
+# The source exists on paper but cannot be talked to (VM stopped, agent down).
+#
+#     Distinct from OSError/FileNotFoundError so the collector records `unreachable` instead of
+#     blaming the file for a dead box.
+    pass

@@ -73,7 +73,7 @@ def build_parser():
 
 
 def print_plan(comp_name, comp_dir):
-    """--plan-only: summarize the competition's boxes and run identity; touch nothing."""
+# --plan-only: summarize the competition's boxes and run identity; touch nothing.
     boxes = json.loads((comp_dir / "boxes.json").read_text())
     print(f"\n  ── PLAN for '{comp_name}' — nothing has been deployed " + "─" * 20)
     for b in boxes:
@@ -98,7 +98,7 @@ def print_plan(comp_name, comp_dir):
 
 def write_new_competition(comp_dir, comp_name, scenario, difficulty,
                           box_username_flag=None, credlist_flag=None):
-    """Write a new competition's Compfile, boxes.json (interactive picker) and users.json."""
+# Write a new competition's Compfile, boxes.json (interactive picker) and users.json.
     (comp_dir / "Compfile").write_text(
         f"name {comp_name}\n"
         f"scenario {scenario}\n"
@@ -122,7 +122,7 @@ def _checked_comp_name(raw):
 
 
 def select_named_competition(args):
-    """--competition NAME: reuse it when it has a Compfile + boxes.json, else scaffold it."""
+# --competition NAME: reuse it when it has a Compfile + boxes.json, else scaffold it.
     comp_name = _checked_comp_name(args.competition)
     comp_dir = Path("competitions") / comp_name
     has_compfile = (comp_dir / "Compfile").exists()
@@ -142,7 +142,7 @@ def select_named_competition(args):
 
 
 def select_interactive_competition():
-    """No --competition: list the previous ones and prompt for new-or-reuse."""
+# No --competition: list the previous ones and prompt for new-or-reuse.
     previous = load_previous_competitions()
     if previous:
         print("\nPrevious competitions:")

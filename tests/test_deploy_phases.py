@@ -19,7 +19,7 @@ import config_ops
 from deploy_lib import context as dl_context
 from deploy_lib import tfinputs as dl_tfinputs
 from deploy_lib import coverage as dl_coverage  # noqa: E402
-from deploy_lib import gates as dl_gates  # noqa: E402
+from infra import gates as dl_gates  # noqa: E402
 from deploy_lib import golden_plan as dl_golden_plan  # noqa: E402
 from nakon_ops import NakonResult
 from template_ops import hash_from_inputs
@@ -33,8 +33,8 @@ BASE_IDS = {"base-windows-server": 9000, "base-ubuntu24.04-fix": 9001, "pfsense-
 
 
 def _bundle(tmp):
-    """A nakon bundle dir whose manifest names no golden machines (golden_payload_hash
-    returns None — the hash still has to be produced and stable)."""
+# A nakon bundle dir whose manifest names no golden machines (golden_payload_hash
+#     returns None — the hash still has to be produced and stable).
     d = Path(tmp) / "bundle"
     d.mkdir()
     (d / "manifest.json").write_text(json.dumps({"inventory": [], "plans": {}}))
@@ -42,8 +42,8 @@ def _bundle(tmp):
 
 
 class GoldenHashEntries(unittest.TestCase):
-    """D1: the loop that feeds phase 1's waves, the phase-4 rebuild gate and
-    .template-hashes.json. It must cover EVERY box name in boxes.json."""
+# D1: the loop that feeds phase 1's waves, the phase-4 rebuild gate and
+#     .template-hashes.json. It must cover EVERY box name in boxes.json.
 
     def _entries(self, boxes, unbooted=(), golden_machines=None):
         with tempfile.TemporaryDirectory() as d:
@@ -81,8 +81,8 @@ class GoldenHashEntries(unittest.TestCase):
 
 
 class GoldenRebuildGate(unittest.TestCase):
-    """D1's second half: the gate must SKIP a slot with no hash entry (the state the old
-    dead-code loop left unmanaged boxes in) instead of raising KeyError."""
+# D1's second half: the gate must SKIP a slot with no hash entry (the state the old
+#     dead-code loop left unmanaged boxes in) instead of raising KeyError.
 
     def setUp(self):
         self.boxes = MANAGED_BOXES + [UNMANAGED]
@@ -142,7 +142,7 @@ class GoldenRebuildGate(unittest.TestCase):
 
 
 class ResumeFromPhaseGuard(unittest.TestCase):
-    """D2: --from-phase must not skip phases .deploy_state.json never saw complete."""
+# D2: --from-phase must not skip phases .deploy_state.json never saw complete.
 
     def test_next_phase_after_last_completed_is_allowed(self):
         dl_gates.guard_resume_from_phase(4, 3, ".deploy_state.json")  # no raise
@@ -175,7 +175,7 @@ class ResumeFromPhaseGuard(unittest.TestCase):
 
 
 class CoveragePersistence(unittest.TestCase):
-    """D3: phase 6's coverage repair must reach disk even when the tally is empty."""
+# D3: phase 6's coverage repair must reach disk even when the tally is empty.
 
     def _machines(self):
         return [{"name": "web01-team101",
@@ -213,14 +213,14 @@ class CoveragePersistence(unittest.TestCase):
 
 
 def _pipeline_source():
-    """deploy.py plus every deploy_lib module, concatenated."""
+# deploy.py plus every deploy_lib module, concatenated.
     files = [_REPO / "deploy.py", *sorted((_REPO / "deploy_lib").rglob("*.py"))]
     return "\n".join(f.read_text() for f in files)
 
 
 class SharedStateWriter(unittest.TestCase):
-    """D4: deploy's .deploy_state.json writer is the shared config_ops helper, not a
-    fourth hand-rolled atomic writer (the guarantee held at 1 of 4 call sites before)."""
+# D4: deploy's .deploy_state.json writer is the shared config_ops helper, not a
+#     fourth hand-rolled atomic writer (the guarantee held at 1 of 4 call sites before).
 
     def test_deploy_writer_is_the_shared_config_ops_helper(self):
         self.assertIs(dl_context.write_state, config_ops.write_state)
@@ -246,10 +246,10 @@ SECRET_WRITES = [
 
 
 class AtomicSecretWrites(unittest.TestCase):
-    """Every secret-bearing write in the deploy pipeline (deploy_lib/) must go through
-    config_ops.write_text_atomic: 0600 is applied at CREATION (os.open), not by a chmod
-    after the process umask already exposed the file, and the content lands via a temp
-    file that never survives the rename. These are the exact shapes deploy writes."""
+# Every secret-bearing write in the deploy pipeline (deploy_lib/) must go through
+#     config_ops.write_text_atomic: 0600 is applied at CREATION (os.open), not by a chmod
+#     after the process umask already exposed the file, and the content lands via a temp
+#     file that never survives the rename. These are the exact shapes deploy writes.
 
     def test_deploy_uses_the_shared_atomic_write_helper(self):
         self.assertIs(dl_tfinputs.write_text_atomic, config_ops.write_text_atomic)

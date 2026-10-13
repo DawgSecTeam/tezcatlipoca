@@ -11,7 +11,7 @@ import os
 import subprocess
 
 from nodes_ops import load_nodes_config
-from range_ops import proxmox_api_for
+from infra.client import proxmox_api_for
 
 SYNC_MARKER_TAG = "template"
 
@@ -25,7 +25,7 @@ def resolve_record(name, records):
 
 
 def find_template_vmid(rec, template_name):
-    """Template by exact name on this node, stopped + tagged `template`."""
+# Template by exact name on this node, stopped + tagged `template`.
     vms = proxmox_api_for(rec.endpoint, os.environ[rec.token_env], "GET",
                           "/cluster/resources", params={"type": "vm"})["data"]
     for vm in vms:
@@ -39,14 +39,14 @@ def find_template_vmid(rec, template_name):
 
 
 def pick_destination_vmid(rec):
-    """The destination's next free VMID (PVE's own allocator)."""
+# The destination's next free VMID (PVE's own allocator).
     data = proxmox_api_for(rec.endpoint, os.environ[rec.token_env], "GET",
                            "/cluster/nextid")["data"]
     return int(data)
 
 
 def check_root_ssh(rec):
-    """Root SSH must work key-only before any stream starts."""
+# Root SSH must work key-only before any stream starts.
     r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
                         f"root@{rec.host()}", "echo ok"],
                        capture_output=True, text=True, timeout=30)
@@ -58,9 +58,9 @@ def check_root_ssh(rec):
 
 
 def plan_sync(src_rec, dst_rec, template_name):
-    """The exact command list (pure — unit-tested). vzdump streams zstd to stdout;
-    qmrestore consumes stdin onto the destination datastore. The restore lands as a
-    plain VM at a fresh vmid; finish_sync converts + tags it via the API."""
+# The exact command list (pure — unit-tested). vzdump streams zstd to stdout;
+#     qmrestore consumes stdin onto the destination datastore. The restore lands as a
+#     plain VM at a fresh vmid; finish_sync converts + tags it via the API.
     vmid = find_template_vmid(src_rec, template_name)
     newid = pick_destination_vmid(dst_rec)
     dump = f"vzdump {vmid} --stdout --compress zstd"
@@ -77,7 +77,7 @@ def plan_sync(src_rec, dst_rec, template_name):
 
 
 def run_sync(plan):
-    """Execute the pipe. Raise on either side's failure with the stream's stderr."""
+# Execute the pipe. Raise on either side's failure with the stream's stderr.
     p1 = subprocess.Popen(plan["commands"][0], stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE)
     p2 = subprocess.Popen(plan["commands"][1], stdin=p1.stdout,
@@ -95,8 +95,8 @@ def run_sync(plan):
 
 
 def finish_sync(dst_rec, newid, template_name):
-    """Restore lands as a plain VM: convert to template, stamp the `template` tag,
-    make sure it is stopped."""
+# Restore lands as a plain VM: convert to template, stamp the `template` tag,
+#     make sure it is stopped.
     token = os.environ[dst_rec.token_env]
     cfg = proxmox_api_for(dst_rec.endpoint, token, "GET",
                           f"/nodes/{dst_rec.node}/qemu/{newid}/config")["data"]

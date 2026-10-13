@@ -19,7 +19,7 @@ _FRESHNESS_ROUNDS = 5
 
 
 def _rfc3339(value):
-    """Parse an RFC3339 timestamp; None when absent/unparseable."""
+# Parse an RFC3339 timestamp; None when absent/unparseable.
     if not isinstance(value, str) or not value:
         return None
     try:
@@ -35,7 +35,7 @@ _ROUND_START_KEYS = ("StartTime", "start_time", "startTime")
 
 
 def _round_start(round_entry):
-    """StartTime of one Last10Rounds entry, however it's cased."""
+# StartTime of one Last10Rounds entry, however it's cased.
     if not isinstance(round_entry, dict):
         return None
     raw = next((round_entry[k] for k in _ROUND_START_KEYS if round_entry.get(k)), None)
@@ -43,7 +43,7 @@ def _round_start(round_entry):
 
 
 def check_logins(base_url, teams, admin_password):
-    """POST /api/login for admin + every team. Returns (all_ok, admin_session)."""
+# POST /api/login for admin + every team. Returns (all_ok, admin_session).
     print("\n[1/5] LOGIN")
     all_ok = True
 
@@ -69,7 +69,7 @@ def check_logins(base_url, teams, admin_password):
 
 
 def _check_passed(check):
-    """Check Result truthiness with string normalization ("false"/"0" -> False)."""
+# Check Result truthiness with string normalization ("false"/"0" -> False).
     result = check.get("Result")
     if isinstance(result, str):
         return result.strip().lower() not in ("", "0", "false")
@@ -77,25 +77,25 @@ def _check_passed(check):
 
 
 def check_services(base_url, admin_session, teams, strict, expected_names=frozenset()):
-    """Report per-team service UP/DOWN from the latest scored round.
-
-    Returns a list of GateResult: the service gate plus (when box_services.json pins
-    exist) a separate `pins_registered` result. Every path returns the same shape —
-    the old code returned a 2-tuple on the /api/teams failure path while main
-    unpacked 3, so a half-deployed or restarting engine (exactly the state this gate
-    exists for) crashed verify with ValueError: not enough values to unpack, dumping
-    a traceback and suppressing the SUMMARY and every other gate result.
-
-    pins_registered gates the scoreboard's actual ServiceName set against the pins'
-    expected set — a pin that never registered (the regression-4x1 same-TYPE collapse:
-    12 pins, 11 checks) scores nothing and silent-tallies as UP-absent, so it fails
-    the exit code regardless of --strict.
-
-    Under --strict-services nothing-scored is a FAIL, not a vacuous pass (live-found
-    2026-10-02: a range where the engine had never scored a round still passed strict
-    mode because every service was skipped as "not yet scored"), and the newest scored
-    round must be within _FRESHNESS_ROUNDS × Delay — otherwise the scoreboard is frozen
-    and an old UP is not a live UP."""
+# Report per-team service UP/DOWN from the latest scored round.
+#
+#     Returns a list of GateResult: the service gate plus (when box_services.json pins
+#     exist) a separate `pins_registered` result. Every path returns the same shape —
+#     the old code returned a 2-tuple on the /api/teams failure path while main
+#     unpacked 3, so a half-deployed or restarting engine (exactly the state this gate
+#     exists for) crashed verify with ValueError: not enough values to unpack, dumping
+#     a traceback and suppressing the SUMMARY and every other gate result.
+#
+#     pins_registered gates the scoreboard's actual ServiceName set against the pins'
+#     expected set — a pin that never registered (the regression-4x1 same-TYPE collapse:
+#     12 pins, 11 checks) scores nothing and silent-tallies as UP-absent, so it fails
+#     the exit code regardless of --strict.
+#
+#     Under --strict-services nothing-scored is a FAIL, not a vacuous pass (live-found
+#     2026-10-02: a range where the engine had never scored a round still passed strict
+#     mode because every service was skipped as "not yet scored"), and the newest scored
+#     round must be within _FRESHNESS_ROUNDS × Delay — otherwise the scoreboard is frozen
+#     and an old UP is not a live UP.
     print("\n[2/5] SERVICES")
     name = "services(strict)" if strict else "services"
 

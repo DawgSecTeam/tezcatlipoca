@@ -20,8 +20,8 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import range_ops  # noqa: E402
-import vm_lifecycle  # noqa: E402
+import infra.lifecycle  # noqa: E402
+from infra import lifecycle  # noqa: E402
 import utils  # noqa: E402
 
 # Directories that are not this repo's source (a stray copy must not be scanned).
@@ -37,7 +37,7 @@ ALLOWED = {
 
 
 def _scan():
-    """[(path, line_number, line, has_ledger_call)] for every flagged site."""
+# [(path, line_number, line, has_ledger_call)] for every flagged site.
     findings = []
     for path in sorted(Path(_REPO).rglob("*.py")):
         rel = str(path.relative_to(_REPO))
@@ -54,7 +54,7 @@ def _scan():
 
 class EveryWarningSiteFeedsTheLedger(unittest.TestCase):
     def test_the_scan_finds_the_sites_it_is_supposed_to(self):
-        """A guard that matches nothing is not a guard — pin that it sees real sites."""
+    # A guard that matches nothing is not a guard — pin that it sees real sites.
         findings = _scan()
         self.assertGreaterEqual(len(findings), 8, "the scan stopped matching anything")
         self.assertTrue(any("apt prep" in line for _, _, line, _ in findings))
@@ -76,7 +76,7 @@ class EveryWarningSiteFeedsTheLedger(unittest.TestCase):
 
 
 class SnapshotFailureIsRecorded(unittest.TestCase):
-    """A failed snapshot is not cosmetic: it is the rollback point."""
+# A failed snapshot is not cosmetic: it is the rollback point.
 
     def setUp(self):
         utils.clear_degradations()
@@ -86,10 +86,10 @@ class SnapshotFailureIsRecorded(unittest.TestCase):
         def failing_api(method, path, **kwargs):
             raise RuntimeError("zfs error: cannot create snapshot 'hdd/vm-1500-disk-0@tz-base': "
                                "out of space")
-        with patch.object(vm_lifecycle, "list_snapshots", return_value=set()), \
-                patch.object(vm_lifecycle, "proxmox_api", side_effect=failing_api), \
+        with patch.object(lifecycle, "list_snapshots", return_value=set()), \
+                patch.object(lifecycle, "proxmox_api", side_effect=failing_api), \
                 patch("builtins.print"):
-            ok = range_ops.take_snapshot("proxmox", 1500, "tz-base")
+            ok = infra.lifecycle.take_snapshot("proxmox", 1500, "tz-base")
         self.assertFalse(ok)                       # still never raises, by design
         entries = utils.degradations()
         self.assertEqual(len(entries), 1)
@@ -98,12 +98,12 @@ class SnapshotFailureIsRecorded(unittest.TestCase):
         self.assertIn("out of space", entries[0]["detail"])
 
     def test_a_successful_snapshot_records_nothing(self):
-        with patch.object(vm_lifecycle, "list_snapshots", return_value=set()), \
-                patch.object(vm_lifecycle, "proxmox_api",
+        with patch.object(lifecycle, "list_snapshots", return_value=set()), \
+                patch.object(lifecycle, "proxmox_api",
                              return_value={"data": "UPID:pve:0001"}), \
-                patch.object(vm_lifecycle, "wait_for_proxmox_task"), \
+                patch.object(lifecycle, "wait_for_proxmox_task"), \
                 patch("builtins.print"):
-            ok = range_ops.take_snapshot("proxmox", 1500, "tz-ready")
+            ok = infra.lifecycle.take_snapshot("proxmox", 1500, "tz-ready")
         self.assertTrue(ok)
         self.assertEqual(utils.degradations(), [])
 

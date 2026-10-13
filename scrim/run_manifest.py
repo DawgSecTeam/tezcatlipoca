@@ -14,12 +14,10 @@ RESUME_MIN_CYCLES = 2
 
 
 def save_manifest(run_dir, fields):
-    """Persist the run's intent (duration, retention, watchdog, phase) atomically, 0600."""
     write_state(Path(run_dir) / RUN_MANIFEST, fields)
 
 
 def load_manifest(run_dir):
-    """The run manifest, or {} when absent/unreadable (older run dirs have none)."""
     try:
         data = json.loads((Path(run_dir) / RUN_MANIFEST).read_text())
     except (OSError, ValueError):
@@ -27,15 +25,11 @@ def load_manifest(run_dir):
     return data if isinstance(data, dict) else {}
 
 
+# doubles as the pre-T0 marker for --resume-event; mirrored into the run's test folder
+# (test.json) so the artifact reader can see how far a run got without cross-referencing
+# run.json; getattr because callers without a test folder (unit tests, legacy run dirs)
+# must keep working
 def record_phase(run_dir, args, phase, t0=None):
-    """Write/refresh the run manifest; doubles as the pre-T0 marker for --resume-event.
-
-    Also mirrors the marker into this run's test folder (test.json) when it has one, so the
-    artifact reader can see how far a run got without cross-referencing run.json. run.json
-    stays the harness's own file (`save_manifest`/`load_manifest` above), written exactly as
-    before; `getattr` because callers without a test folder (unit tests, legacy run dirs)
-    must keep working.
-    """
     save_manifest(run_dir, {
         "competition": getattr(args, "competition", None),
         "teams": getattr(args, "teams", None),
@@ -54,35 +48,25 @@ def record_phase(run_dir, args, phase, t0=None):
         artifacts_ops.record_phase(test_dir, phase, t0=t0)
 
 
+# retention/watchdog intent lived only in the first CLI invocation, so a resume without
+# --keep-range tore down a range the original run was keeping up; OR semantics — a resume
+# cannot silently drop an intent the first run had
 def resume_intent(args, manifest):
-    """Fold the ORIGINAL run's retention/watchdog intent into the resume invocation.
-
-    That intent lived only in the first CLI invocation, so a resume without --keep-range
-    tore down a range the original run was keeping up. OR semantics: a resume cannot
-    silently drop an intent the first run had, and an operator who passes the flag on the
-    resume still gets it.
-    """
     args.keep_range = bool(args.keep_range or manifest.get("keep_range"))
     args.blue_watchdog = bool(args.blue_watchdog or manifest.get("blue_watchdog"))
     return args
 
 
+# the feed loop stops issuing cycles at duration_min - 2, so that margin is required on
+# top of the cycles themselves
 def resume_window_ok(remaining_min, min_cycles=RESUME_MIN_CYCLES):
-    """True when at least `min_cycles` blue cycles still fit inside the window.
-
-    The feed loop stops issuing cycles at duration_min - 2, so that margin is required
-    on top of the cycles themselves.
-    """
     return remaining_min >= min_cycles * (core.CYCLE_TARGET_PERIOD / 60.0) + 2
 
 
+# a driver that died at T+85 of a 90-min event left remaining=5: every loop exits
+# immediately, the log claims "RESUME", nothing runs — and the run marched on to capture
+# and TEAR DOWN a range the original run may have meant to keep
 def resume_refusal(remaining_min, force=False):
-    """None when resuming is worthwhile, otherwise the message that refuses it.
-
-    A driver that died at T+85 of a 90-min event left remaining=5: every loop exits
-    immediately, the log claims "RESUME", nothing runs — and the run then marched on to
-    capture and TEAR DOWN a range the original run may have meant to keep.
-    """
     if force or resume_window_ok(remaining_min):
         return None
     return (f"--resume-event refused: {remaining_min:.0f} min left of the event window "

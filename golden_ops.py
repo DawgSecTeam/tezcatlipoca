@@ -32,21 +32,10 @@ from hardening_ops import (
     setup_ubuntu_auth,
 )
 from nakon_ops import build_nakon_bundle, run_nakon
-from vm_ownership import full_clone_data
-from range_ops import (
-    clone_marker,
-    gc_orphan_volumes,
-    delete_snapshot,
-    destroy_vm_if_exists,
-    list_snapshots,
-    proxmox_api,
-    retag_ownership,
-    rollback_snapshot,
-    start_vm,
-    stop_vm,
-    take_snapshot,
-    wait_for_proxmox_task,
-)
+from infra.ownership import full_clone_data
+from infra.client import proxmox_api, wait_for_proxmox_task
+from infra.lifecycle import (delete_snapshot, list_snapshots, rollback_snapshot, start_vm, stop_vm, take_snapshot,)
+from infra.ownership import (clone_marker, destroy_vm_if_exists, gc_orphan_volumes, retag_ownership,)
 from nodes_ops import golden_vmid_for_slot
 from ssh_ops import ssh_via_gateway, wait_for_boxes_ssh, wait_for_cloud_init
 from template_ops import (
@@ -93,8 +82,6 @@ from golden_disk_ops import (
 
 def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_tag_str,
                            golden_hashes):
-    """Unbooted (DC) goldens: full clone of the sysprepped base converted straight to a
-    template — never booted, so each team clone specializes its own SID."""
     for t in cold:
         # Any plain VM here is a dead attempt that may have booted (and specialized) —
         # never reuse it; the whole point of this slot is a generalized disk.
@@ -134,8 +121,6 @@ def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_
 
 def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password,
                           ownership_tag_str):
-    """Full-clone each missing golden from its base template, adopting/clearing an
-    interrupted clone only on proof of ownership (our clone marker)."""
     print(f"  Cloning {len(missing)} golden box(es) from base templates...")
     existing_vmids = {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
     for t in missing:
@@ -175,23 +160,7 @@ def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password
         print(f"    {t['box']['template']} -> {t['vm_name']} (vmid {t['vmid']})")
 
 
-def _base_volumes_missing(node, vmid):
-    """Disk volumes that still lack the base- prefix. The template conversion renames
-    volumes to base-<vmid>-disk-N; linked clones only work from those (live-found
-    2026-10-04: a golden half-converted by an interrupted POST kept template=1 on its
-    plain vm- volume, and every team clone of it died with HTTP 500 "Linked clone
-    feature is not supported")."""
-    cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
-    # Disk ifaces only (ide carries the cloudinit drive; its name differs) — a volume
-    # string is "<storage>:<name>,<opts>"; the NAME is what the conversion renames.
-    volids = [str(v) for k, v in cfg.items()
-              if k.startswith(("scsi", "sata", "virtio")) and isinstance(v, str) and ":" in v]
-    return [v for v in volids if not v.split(":", 1)[1].split(",")[0].startswith("base-")]
-
-
 def _convert_goldens(node, targets, ownership_tag_str, golden_hashes):
-    """Stop-barrier already passed: convert every target golden to a template (parallel,
-    bound 4). Delete-then-convert stays inside one worker."""
     print("  Converting golden boxes to templates...")
 
     def _convert(t):
@@ -205,8 +174,19 @@ def _convert_goldens(node, targets, ownership_tag_str, golden_hashes):
         # The POST returns no task to wait on and the rename can lag or lose the race
         # against an interrupted session; a half-converted golden passes every hash
         # gate and then breaks apply #2 confusingly. Verify the rename landed.
+        # The conversion renames volumes to base-<vmid>-disk-N; linked clones only work
+        # from those (live-found 2026-10-04: a golden half-converted by an interrupted
+        # POST kept template=1 on its plain vm- volume, and every team clone of it died
+        # with HTTP 500 "Linked clone feature is not supported").
         for _ in range(10):
-            missing = _base_volumes_missing(node, t["vmid"])
+            # Disk ifaces only (ide carries the cloudinit drive; its name differs) — a
+            # volume string is "<storage>:<name>,<opts>"; the NAME is what the
+            # conversion renames.
+            cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"]
+            volids = [str(v) for k, v in cfg.items()
+                      if k.startswith(("scsi", "sata", "virtio")) and isinstance(v, str) and ":" in v]
+            missing = [v for v in volids
+                       if not v.split(":", 1)[1].split(",")[0].startswith("base-")]
             if not missing:
                 break
             time.sleep(2)
@@ -247,20 +227,6 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
                      golden_config_path, key, scoring_user, scoring_ip, jobs=1,
                      golden_hashes=None, unbooted=frozenset(),
                      slot=0, anchor_identifier=None, run_id=None, coverage=None):
-    """Clone, plant (strict), and convert the golden set. Returns {box_name: vmid}.
-
-    Resume routing: every golden vmid already a template -> skip (the build is done);
-    golden vmids exist as plain VMs -> a previous attempt died mid-build, so roll back
-    the ones tz-base marks as planted and re-plant; missing ones are cloned fresh.
-    A PARTIALLY converted set is fine when every converted vmid's description hash
-    matches its expected hash (M4 selective rebuild / added box type); without
-    expected hashes, the historical no-clean-resume refusal stands.
-
-    coverage (optional) — callable(machines, result) recording the plant-coverage
-    verdict: `machines` are {"name", "configurations"} dicts keyed for verify's golden
-    mapping ('{box}-golden', slot-qualified on satellites), `result` the NakonResult
-    when the plant ran (clean OR alpine_services-tolerated failures), None on every
-    skip path (reuse / cold / pristine / checkpointed)."""
     targets = golden_targets(engine_vmid, teams, boxes, slot=slot,
                              anchor_identifier=anchor_identifier)
     # Full ownership set (comp tag + per-deploy run tag): stamped on everything this
@@ -279,11 +245,11 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
                 json.loads(golden_config_path.read_text())["machines"])
         return _golden_cfg_cache[0]
 
+    # Coverage keys are slot-qualified ('{box}-golden-slot{N}' on satellites, plain
+    # '{box}-golden' on slot 0): every slot's stage config names its golden machine
+    # identically, so one slot's clean replant would otherwise pop another slot's
+    # recorded failure.
     def _coverage_machines(box_names):
-        """Coverage keys for the named box types: '{box}-golden' on slot 0,
-        '{box}-golden-slot{N}' on satellite slots — every slot's stage config names
-        its golden machine identically, so the key must be slot-qualified or one
-        slot's clean replant would pop another slot's recorded failure."""
         suffix = f"-slot{slot}" if slot else ""
         by_box = {m["name"][:-len("-golden")]: m for m in _golden_cfg()}
         return [{"name": f"{box}-golden{suffix}",
@@ -558,13 +524,12 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     return {t["box"]["name"]: t["vmid"] for t in targets_all}
 
 
+# Destroy order is AFTER the linked clones (they depend on the template's base disk).
+# A slot held by a FOREIGN VM (ownership guard refusal) is skipped with a loud warning —
+# one squatted vmid must not strand the rest of the teardown (loadtest-2026-09-30: a
+# satellite template squatting golden slot 1333 aborted the whole pass, leaving
+# everything else half-destroyed).
 def destroy_golden_set(node, engine_vmid, num_box_types, expect_tags=None, slot=0):
-    """Tear the golden templates down. Destroy order: AFTER the linked clones (they
-    depend on the template's base disk). Slot-aware: each node's copy of the golden
-    set dies on its own host. A slot held by a FOREIGN VM (ownership guard refusal)
-    is skipped with a loud warning — one squatted vmid must not strand the rest of
-    the teardown (loadtest-2026-09-30: a satellite template squatting golden slot
-    1333 aborted the whole pass, leaving everything else half-destroyed)."""
     skipped = []
     for box_idx in range(num_box_types):
         try:

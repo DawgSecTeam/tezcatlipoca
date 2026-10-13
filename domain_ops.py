@@ -7,13 +7,8 @@ from pathlib import Path
 
 from constants import WINDOWS_ADMIN_USER
 from nakon_ops import _run_single_nakon_config
-from range_ops import (
-    box_index,
-    guest_agent_exec_root,
-    guest_agent_exec_windows,
-    vm_id_for,
-    wait_for_guest_agent,
-)
+from infra.guest_exec import (guest_agent_exec_root, guest_agent_exec_windows, wait_for_guest_agent,)
+from targets import box_index, vm_id_for
 from windows_ops import (
     dns_repoint_windows_box,
     is_windows_template,
@@ -30,16 +25,16 @@ JOIN_RETRY_WAIT = 60
 
 
 def team_domain(comp_dir, identifier):
-    """Per-team AD domain name. Compfile knobs domain_prefix/domain_suffix (packet
-    profiles: `mira-{team}.corp.sus` compiles to prefix 'mira-' + suffix '.corp.sus');
-    default stays the historical team<identifier>.local."""
+# Per-team AD domain name. Compfile knobs domain_prefix/domain_suffix (packet
+#     profiles: `mira-{team}.corp.sus` compiles to prefix 'mira-' + suffix '.corp.sus');
+#     default stays the historical team<identifier>.local.
     prefix = compfile_value(Path(comp_dir) / "Compfile", "domain_prefix", "team")
     suffix = compfile_value(Path(comp_dir) / "Compfile", "domain_suffix", ".local")
     return f"{prefix}{identifier}{suffix}"
 
 
 def _dc_promoted(node, dc_vmid, domain, marker_present):
-    """Ask the DC whether it actually serves the team's domain before trusting a marker."""
+# Ask the DC whether it actually serves the team's domain before trusting a marker.
     try:
         rc, out, _ = guest_agent_exec_windows(
             node, dc_vmid,
@@ -56,7 +51,7 @@ def _dc_promoted(node, dc_vmid, domain, marker_present):
 
 
 def _probe_joined(node, member_box, member_vmid, domain):
-    """Live membership probe via the guest agent; joins are not idempotent, so resumes skip joined members."""
+# Live membership probe via the guest agent; joins are not idempotent, so resumes skip joined members.
     try:
         if is_windows_template(member_box["template"]):
             rc, out, _ = guest_agent_exec_windows(
@@ -77,9 +72,9 @@ def _probe_joined(node, member_box, member_vmid, domain):
 
 
 def password_trips_ad_complexity(username, password, full_name=""):
-    """True when AD's default complexity rule rejects the password: it may not contain the
-    account name or any 3+ char token of the display name (the CDE packet's `Red123!` for
-    `Red` is exactly that — 10 `New-ADUser` failures per team, live-found 2026-10-06)."""
+# True when AD's default complexity rule rejects the password: it may not contain the
+#     account name or any 3+ char token of the display name (the CDE packet's `Red123!` for
+#     `Red` is exactly that — 10 `New-ADUser` failures per team, live-found 2026-10-06).
     low = password.lower()
     tokens = [username] + [t for t in full_name.replace(",", " ").split()]
     return any(len(t) >= 3 and t.lower() in low for t in tokens)
@@ -87,11 +82,11 @@ def password_trips_ad_complexity(username, password, full_name=""):
 
 def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scoring_user,
                           scoring_ip, box_password, promote_dc=True, force_member_join=False):
-    """Per-team AD forest promotion + member joins from domain_roles.json; no-op when absent.
-
-    force_member_join bypasses the members' "already joined" self-report: a reset DC
-    re-promoted a FRESH AD database, so members claiming membership hold trusts the new
-    DC knows nothing about (live-found 2026-10-03 — the member probe cannot see this)."""
+# Per-team AD forest promotion + member joins from domain_roles.json; no-op when absent.
+#
+#     force_member_join bypasses the members' "already joined" self-report: a reset DC
+#     re-promoted a FRESH AD database, so members claiming membership hold trusts the new
+#     DC knows nothing about (live-found 2026-10-03 — the member probe cannot see this).
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
         return

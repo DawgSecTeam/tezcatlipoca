@@ -38,7 +38,6 @@ def _compile(root, name):
 
 class PacketPipelineOffline(unittest.TestCase):
     def _each(self):
-        """[(name, tmp root)] per packet; the caller loops inside self.subTest."""
         out = []
         for name in PACKETS:
             tmp = tempfile.TemporaryDirectory()

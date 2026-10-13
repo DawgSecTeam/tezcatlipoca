@@ -13,7 +13,7 @@ consequence is repeated here. The agent-scrim trio (`run-agent-scrim.py` + the `
 `scrim_report/` package, `beacon_ops.py`) is documented in [scrim-harness.md](scrim-harness.md)
 (module map at the top), not here.
 
-`constants.py` · `utils.py` · `ssh_ops.py` · `range_ops.py` · `config_ops.py` · `nakon_ops.py` ·
+`constants.py` · `utils.py` · `ssh_ops.py` · `infra/` · `config_ops.py` · `nakon_ops.py` ·
 `engine_ops.py` · `windows_ops.py` · `hardening_ops.py` · `golden_ops.py` · `template_ops.py` ·
 `domain_ops.py` · `timing.py` · `deploy.py` · `deploy_lib/` · `pipeline_api.py` ·
 `create-competition.py` · `destroy-competition.py` ·
@@ -24,7 +24,7 @@ consequence is repeated here. The agent-scrim trio (`run-agent-scrim.py` + the `
 ## constants.py
 
 Single source of truth for VM identity math, snapshot names, nakon budgets, and naming; shared by
-`range_ops`, `deploy`, `redeploy`, `verify`.
+`infra`, `deploy`, `redeploy`, `verify`.
 
 | Symbol | Value | Why |
 |---|---|---|
@@ -81,25 +81,29 @@ verify (`verifier/context.py` imports `gateway_proxy`/`engine_ssh_opts` from it)
 | `wait_for_cloud_init()` | cloud-init can revert planted perms (sudoers, sshd_config) after a clone, so it must finish before nakon plants anything. Windows is skipped (no cloud-init; `bootstrap_windows_box()` is its equivalent). Exit code 2 means done with non-fatal warnings — still finished, still success. |
 | `is_windows_template()` | `"win" in template_name.lower()` — **one** definition, in `windows_ops.py`; `deploy`, `golden_ops`, `nakon_ops` and `ssh_ops` all import it (deduplicated 2026-10-02: there used to be three copies with nothing enforcing that they agreed, and a silent divergence builds the wrong range). |
 
-## range_ops.py (facade) and the modules behind it
+## infra/ — everything that touches the Proxmox estate
 
-`range_ops` re-exports every name it used to define; the implementations live in single-purpose
-modules, and **tests patch the owning module** (`patch.object(pve_api, "proxmox_api")`,
-`guest_exec.time`, `vm_ownership.has_clone_marker`, `vm_lifecycle.list_snapshots`) because patching
-the facade name does not reach the moved code:
+One package, one submodule per concern; **tests patch the owning module**
+(`patch.object(infra.client, "proxmox_api")`, `infra.guest_exec.time`,
+`infra.ownership.has_clone_marker`, `infra.lifecycle.list_snapshots`):
 
 | Module | Owns |
 |---|---|
-| `pve_api.py` | `proxmox_api`/`proxmox_api_for`/`proxmox_request` (TLS pinning), node route table (`register_node_routes`), `cluster_vms_for`, `wait_for_proxmox_task`, `live_vmids`, node-load throttle, `destroy_bridge_if_exists` |
-| `guest_exec.py` | `guest_agent_exec_root/windows/detached`, `guest_file_read`, `wait_for_guest_agent`, `diagnose_unreachable_box` |
-| `vm_ownership.py` | the ownership proof + every ownership-guarded mutation (below) |
-| `vm_lifecycle.py` | `vm_status`/`stop_vm`/`start_vm`, snapshot helpers — no ownership decisions |
+| `infra/client.py` | `proxmox_api`/`proxmox_api_for`/`proxmox_request` (TLS pinning, per-record fingerprint override), node route table (`register_node_routes`), `cluster_vms_for`, `wait_for_proxmox_task`, `live_vmids`, node-load throttle, `destroy_bridge_if_exists` |
+| `infra/guest_exec.py` | `guest_agent_exec_root/windows/detached`, `guest_file_read`, `wait_for_guest_agent`, `diagnose_unreachable_box` |
+| `infra/ownership.py` | the ownership proof + every ownership-guarded mutation (below) |
+| `infra/lifecycle.py` | `vm_status`/`stop_vm`/`start_vm`, snapshot helpers — no ownership decisions |
+| `infra/console.py` | vncproxy/vncwebsocket sessions (`vncproxy_mint`, `vnc_screenshot`) + the per-comp portal console tokens |
+| `infra/gates.py` | the deploy refusals (`acquire_deploy_lock`, resume gates, deploy-lock/concurrency) and the preflight (below) |
+| `infra/plan.py` | the preflight plan model and builders |
+| `infra/collisions.py` | live-cluster vmid/bridge/mgmt-IP collision checks |
+| `infra/resources.py` | datastore headroom + template/cloud-init checks |
 | `targets.py` | `vm_id_for`, `box_index`, `enumerate_targets`, `persist_targets`/`load_targets` |
 | `terraform_workdir.py` | per-competition terraform dir, `team_vmids_from_state` |
 
 Reads `TF_VAR_proxmox_*` from the environment; no prompts, no phase logic.
 
-**Ownership lives in `vm_ownership.py`, once.** `ownership_verdict(node, vmid, raw_tags, expect_tags)`
+**Ownership lives in `infra/ownership.py`, once.** `ownership_verdict(node, vmid, raw_tags, expect_tags)`
 returns `owned` (full ownership set present), `marker` (no tags + this competition's clone marker),
 `unproven` (no tags, no marker) or `missing` (tags present, set incomplete). `destroy_vm_if_exists`
 (refuses unless owned/marker) and the preflight collision gate (ours = owned/marker) both call it,
@@ -122,7 +126,7 @@ so teardown and preflight can never disagree about whose VM a vmid holds.
 | `rollback_snapshot()` | Requires a stop/start cycle (snapshots hold no RAM); raises on failure, unlike `take_snapshot`. |
 | `list_snapshots()` | Empty set when the VM is gone or the API refuses: callers treat "no snapshot" and "couldn't ask" the same and fall back to a mode needing none. |
 | `snapshot_support_hint()` | The one-line explanation for missing snapshots (range predates snapshotting, or thick LVM), pointing at `--mode reconfigure`/`rebuild`. |
-| `destroy_vm_if_exists()` | Stop (await) then delete (await). With `expect_tags` set the cleanup sweep **refuses to destroy any VM whose tags do not contain the FULL ownership set** `tezcatlipoca` + `comp-<name>` + the deploy's `run-<id>` tag (constants.ownership_tags) — a stray VM at a computed vmid is never touched, and neither is a same-comp VM from a DIFFERENT run (two worktrees can deploy the same competition ID; the run tag is what tells their lineages apart). **Untagged VMs are refused** unless they carry this competition's clone marker (`vm_ownership.clone_marker` — an interrupted clone whose tagging step never ran); there is no escape hatch. `retag_ownership()` re-stamps adopted templates (M4 hash reuse across runs) so they stay recognizable. |
+| `destroy_vm_if_exists()` | Stop (await) then delete (await). With `expect_tags` set the cleanup sweep **refuses to destroy any VM whose tags do not contain the FULL ownership set** `tezcatlipoca` + `comp-<name>` + the deploy's `run-<id>` tag (constants.ownership_tags) — a stray VM at a computed vmid is never touched, and neither is a same-comp VM from a DIFFERENT run (two worktrees can deploy the same competition ID; the run tag is what tells their lineages apart). **Untagged VMs are refused** unless they carry this competition's clone marker (`infra.ownership.clone_marker` — an interrupted clone whose tagging step never ran); there is no escape hatch. `retag_ownership()` re-stamps adopted templates (M4 hash reuse across runs) so they stay recognizable. |
 | phase-1 cleanup pool | Worker pool of ≤8 over the ownership set: computed team vmids, the engine vmid (deliberately broader than Terraform state — a skipped clone would let phase 5 "resume" onto a stale disk with the previous run's passwords). Every destroy requires the PRIOR run's ownership set (`ctx.reclaim_tags`), so a concurrent same-comp deploy from another worktree is refused, not reclaimed. Deletes are metadata-light on the API; the 596/pvestatd hazard belongs to bulk clone *writes*, which stay serial. Bridges are torn down only when no VM is still attached (`_bridge_in_use` — bridge names collide across same-comp deploys sharing team identifiers). |
 
 **Run ownership (run ids).** Every deploy mints `run-<8 hex>` once per competition directory
@@ -135,10 +139,10 @@ identity is **the full set** — this is the 2026-10-02 near-miss fix (smoke vs 
 Teardown refuses state without a run id, and preflight classifies a comp-tagged VM without the
 run tag as a collision, never as "ours".
 
-## preflight/ — the single pre-Proxmox gate
+## preflight — the single pre-Proxmox gate (infra/gates.py)
 
-`preflight.run_preflight(plan)` (`preflight/gate.py`) is the one entry point deploy calls before it
-mutates Proxmox; `config_ops.preflight_gates` / `preflight_gates_multinode` are thin wrappers that
+`infra.gates.run_preflight(plan)` is the one entry point deploy calls before it
+mutates Proxmox; `infra.gates.preflight_gates` / `preflight_gates_multinode` are thin wrappers that
 build a plan and call it. A `PreflightPlan` is a list of `NodeShare`s: **single-node is one share
 over the whole cluster view, multi-node is one share per hosting node scoped to what that node
 holds** — there is no second implementation. Order: (1) `concurrency.py` flock warning (once, both
@@ -148,9 +152,8 @@ slot math and labels are `expected_slots`/`expected_bridges`), `headroom.py` (da
 factor); (3) `mgmt_ip.py` (engine static IP; satellite jump IPs across all nodes); (4) `catalog.py`
 (`nakon catalog check`); (5) `pins.py` (advisory only: warns when a managed box carries zero pins — it plants a 0-step plan, a clean no-op since nakon 22360ba). Wording/ordering differences between the modes are confined to the
 `NodeShare.multi` flag (message text and report order only). Tests patch the owning module
-(`preflight.clashes.proxmox_api`, `preflight.headroom.proxmox_api`, `preflight.templates.proxmox_api`,
-`preflight.concurrency.gate_concurrent_deploys`, `preflight.catalog.catalog_gate`).
-Redeploy/destroy callers use the same `vm_ownership` proof; call `run_preflight` before any new
+(`infra.collisions.proxmox_api`, `infra.resources.proxmox_api`, `infra.gates.gate_concurrent_deploys`).
+Redeploy/destroy callers use the same `infra.ownership` proof; call `run_preflight` before any new
 Proxmox mutation path.
 
 ## config_ops.py
@@ -159,7 +162,7 @@ Team identity/secrets and persistence (`collect_teams`, `random_password`, `upda
 `write_text_atomic`/`write_state`, `load_packet_passwords`, `load_boxes`). Facade over
 `config_prompts.py` (`collect_boxes`, `collect_users_config`, `confirm_deploy`,
 `list_proxmox_templates`), `injects_config.py` (`load_injects`, `resolve_inject_times`,
-`injects_fingerprint`) and `preflight/`. The symbol notes below keep their old names.
+`injects_fingerprint`) and `infra/`. The symbol notes below keep their old names.
 
 | Symbol | Note |
 |---|---|
@@ -397,6 +400,8 @@ containing `vyos` gets the VyOS path below, anything else is pfSense.
 
 ## deploy.py + deploy_lib/
 
+The refusal layer (`acquire_deploy_lock`, resume gates, `run_range_gates`, checkpoint gates) lives in `infra/gates.py` — see [infra](#infra--everything-that-touches-the-proxmox-estate); called from exactly two spots in `prepare()`, both before the secret mint.
+
 `deploy.py` is a 26-line shim (loads `.env`, re-exports `main`/`deploy`/`prepare`/`DeployContext`);
 the pipeline is the `deploy_lib` package, one responsibility per module, with imports flowing one
 way (`cli` -> `runner` -> `prepare` -> the step modules; `phases/` and `context` depend only on
@@ -407,7 +412,6 @@ leaf helpers, never on `runner`):
 | `cli.py` | `build_parser` (all flags), `select_named_competition` / `select_interactive_competition`, `write_new_competition`, `print_plan` (`--plan-only`), `main` |
 | `runner.py` | `deploy()`: take the lock, `prepare()`, `wait_out_contention` (`--min-load-free`), `run_pipeline` (walk `phases.PHASES`, checkpoint, hook `connect_terraform` after phase 2), `report_failure` |
 | `prepare.py` | `prepare()`: the ordered pre-phase steps, then `assemble_deploy_context` flattens the stage records onto `DeployContext` |
-| `gates.py` | **Every refusal made before anything is built or destroyed**: `acquire_deploy_lock`, `check_resume_gates` (missing state, pipeline version, `guard_resume_from_phase`, `guard_resume_streak`, `guard_resume_existence`), `run_range_gates` = `check_stale_terraform_state` + `run_capacity_preflight`, and the checkpoint gate (`CHECKPOINT_GATES`). Called from exactly two spots in `prepare()`, both before the secret mint |
 | `context.py` | `DeployContext` (what the phases share), `save_state`, `checkpoint` (runs the existence gate before stamping `last_phase`), the ownership-tag properties |
 | `stages.py` | The per-step records (`RunIdentity`, `CompetitionSpec`, `PriorDeployState`, `CompetitionInputs`, `CompetitionSecrets`, `EnginePlacement`, `GeneratedConfigs`, `TerraformInputs`, `DeployTargets`) |
 | `inputs.py` | Disk reads only: `resolve_engine_vmid`, `load_competition_spec`, `load_prior_deploy_state`, `load_competition_inputs` |
@@ -443,7 +447,7 @@ that binds it. The internals-specific notes:
 | [4/8] golden + apply #2 | See `golden_ops` (incl. the phase-barrier boot smoke before conversion) and `template_ops`; then Windows bootstrap for ALL teams (guest agent is the only pre-network channel), concurrent waits, `setup_ubuntu_auth`, DNS fix, apt prep, and `tz-base` for every box. Clones boot with working DNS/apt because the golden disk carries no disruptive configs. |
 | [5/8] firewall bootstrap | Only when the lineup has an `in_path` box (print-and-return otherwise, keeping the phase index stable). Order is load-bearing: the engine still owns the team bridges' addressing while the configs are pushed, and phases 6-7 must not run before the cutover or their engine→box work would target the wrong path. The SSH push (`firewall_ops.bootstrap_firewalls`) is functional end to end — SSH answering on the WAN address is the success signal. The cutover rewrites `/etc/netplan/60-team-ifaces.yaml` — **a later `terraform apply` rewrites that file back to the pre-cutover shape** (trigger-gated, so only on a real trigger change): re-running apply on a live firewall range re-adds `192.168.<id>.1` under the firewall's feet. The phase writes its completion to `state["firewalls_bootstrapped"]` for reporting; resume re-pushes (an unchanged config is not re-applied). Firewall `tz-base` snapshots are taken HERE, after the cutover, not in phase 4 — see architecture.md. |
 | [6/8] repair sweep | `.nakon-repair.json`, lenient (`strict=False`: one flaky plant must not kill the sweep after 98% landed), `--jobs N`, gated by `.postclone-swept`. `fix_services_on_boxes` runs **after** the sweep: the ssh-\* configs restart sshd and can trip the start-limit, so the un-wedge + credlist accounts + service binds belong after the thing that breaks them. (Historical note: through 2026-09-24 the equivalent sweep passed no `only=` at all — the monolith's comment said "team1 already done" but the filter was never implemented, so team1 was re-planted over its finished strict plant on every deploy.) |
-| [7/8] domains → final → beacons → assume-breach | `deploy_domain_configs` runs teams **concurrently** (each team's ADDS→join chain serial within itself); the final pass runs after it (disruptive + boot-hostile); team beacons (if `team_beacons 1`) are planted **before** the `tz-ready` snapshot so restore points carry them. Assume-breach red presence (if `assume_breach 1`, `red_plant_ops.py`) deploys bad-auto's red01 + the realm engine DNAT and runs the day-0 seed — access + prebaked Realm C2 beacons + the persistence/evasion layer — also **before** the snapshot, so the boxes are already compromised at T0. With `realm_c2_local 1` (the default) the C2 itself lives on red01, not the static VM101: `realm_c2_ops.py` derives bad-auto's config *before* the deploy (the engine DNAT bakes `realm.c2_ip` in at deploy time), then builds tavern from source on red01 with every callback transport (`grpc` + the http1/dns/quic/icmp redirectors) and the MCP server (`ENABLE_AI_MCP=1`, `/mcp`), relaying the prebuilt imix implants from `realm_c2_implant_host` into bad-auto's staging paths (`realm_c2_repo`, `realm_c2_go_version` override the upstream URL / toolchain). A provisioning failure degrades rather than aborts; `realm_c2_local 0` keeps the legacy C2-on-VM101 layout. Teardown needs nothing extra — tavern dies with red01. It records red01's identity in `state["assume_breach"]`; **teardown runs `badauto destroy` for red01** (the range's run tags never covered it), and bad-auto now speaks the same refusal contract (`TEARDOWN-REFUSAL {saw,expected,remedy}` + exit 17) and pulls red's evidence before its VM delete. `state["nakon_failed_steps"]` is **merged**, not overwritten: a failure in both passes must keep the repair tally, duplicates dropped, capped at 40. |
+| [7/8] domains → final → beacons → assume-breach | `deploy_domain_configs` runs teams **concurrently** (each team's ADDS→join chain serial within itself); the final pass runs after it (disruptive + boot-hostile); team beacons (if `team_beacons 1`) are planted **before** the `tz-ready` snapshot so restore points carry them. Assume-breach red presence (if `assume_breach 1`, `red_plant_ops.py`) deploys bad-auto's red01 + the realm engine DNAT and runs the day-0 seed — access + prebaked Realm C2 beacons + the persistence/evasion layer — also **before** the snapshot, so the boxes are already compromised at T0. With `realm_c2_local 1` (the default) the C2 itself lives on red01, not the static VM101: `badauto_config_ops.py`/`realm_c2_ops.py` write the comp's own bad-auto config *before* the deploy (reserved red01 vmid/IP + the realm layer; the engine DNAT bakes `realm.c2_ip` in at deploy time), then builds tavern from source on red01 with every callback transport (`grpc` + the http1/dns/quic/icmp redirectors) and the MCP server (`ENABLE_AI_MCP=1`, `/mcp`), relaying the prebuilt imix implants from `realm_c2_implant_host` into bad-auto's staging paths (`realm_c2_repo`, `realm_c2_go_version` override the upstream URL / toolchain). A provisioning failure degrades rather than aborts; `realm_c2_local 0` keeps the legacy C2-on-VM101 layout. Teardown needs nothing extra — tavern dies with red01. It records red01's identity in `state["assume_breach"]`; **teardown runs `badauto destroy` for red01** (the range's run tags never covered it), and bad-auto now speaks the same refusal contract (`TEARDOWN-REFUSAL {saw,expected,remedy}` + exit 17) and pulls red's evidence before its VM delete. `state["nakon_failed_steps"]` is **merged**, not overwritten: a failure in both passes must keep the repair tally, duplicates dropped, capped at 40. |
 | [8/8] seed | Quotient's HTTP is polled (`wait_for_http` on `/api/login`) instead of a blind sleep. Each sub-step is gated on its own state flag (`seeded`, `engine_unpaused`, `injects_created`) because **`unpause_engine` is not idempotent** — a resume in the crash window between POST and flag-save asks the engine first (`engine_paused`) and re-POSTs only when it really is still paused. `resolve_inject_times()` runs here so offsets anchor to the actual competition start. |
 | failure handler | `current_phase` is tracked so the handler names where to resume. An "already exists" error at phase ≥ 2 suggests a Proxmox/Terraform state mismatch, so the recommended resume point is **phase 1** — resuming from the failed phase would hit the same error again. |
 | `credentials.txt` (0600) | The durable, non-log record of every secret this run generated; the console prints them for convenience but the file is authoritative. Includes `box-login` and `box-credlist-*` lines. |
@@ -479,7 +483,7 @@ is no compatibility re-export layer anymore.
 ## The teardown object model
 
 **Layout (teardown-redesign, 2026-10-12).** The sequencings collapsed into one engine:
-`teardown/` holds the model — `vm_ownership.Ownership` (the destruction identity, next to the
+`teardown/` holds the model — `infra.ownership.Ownership` (the destruction identity, next to the
 verdicts), `Refusal` (saw / expected / remedy, with the `TEARDOWN-REFUSAL` machine line
 bad-auto speaks too), `Inventory` (one classified estate view, fail-closed on listing
 errors), steps with DECLARED failure policies (`REFUSE` aborts; `WARN_AND_PROCEED` records),
@@ -491,7 +495,7 @@ scrim harness (in-process, via `teardown/runner.py`) are thin shims over
 `teardown/runner.run_terminal_teardown`; deploy phase 1 is a RECLAIM plan on the same
 engine (journaling off — a resume must re-reclaim). Tests patch the owning modules:
 `teardown.machinery` for the mechanics, `artifacts_ops`/`red_plant_ops` for the collector
-and red01, `vm_ownership` for the delete primitive, `teardown.runner` for placement/frozen
+and red01, `infra.ownership` for the delete primitive, `teardown.runner` for placement/frozen
 inputs. **Exit 0 = verify_clean said clean**: plan completed, nothing of ours running or
 left tagged (teams-only: kept templates reported kept-by-design), red01 gone, no state
 lock, evidence archived, and no node was unlistable (an unverifiable estate is not clean).
@@ -604,7 +608,7 @@ Competitor briefing packet renderer — pure local-file → Markdown, no live in
   credlist/domain cross-requirements, box count/name/octet/template/fidelity/role rules, exactly one DC,
   service pins and display uniqueness, inject offsets. **Template validity is only "non-empty"** — whether
   the named template resolves on the target node is checked by the deploy preflight
-  (`preflight.run_preflight`, via `config_ops.preflight_gates`), not here.
+  (`infra.gates.run_preflight`, via `infra.gates.preflight_gates`), not here.
 - **`packet_ops` emits** `Compfile` (with `domain_prefix`/`domain_suffix`/`packet_source`), `boxes.json`,
   `users.json`, `box_services.json`, `domain_roles.json`, `injects/`, `packet-fidelity.md`, and three
   0600 secret files: `passwords.json`, `domain_accounts.json`, `box_baseline.json`.

@@ -5,13 +5,13 @@ REPO = os.path.expanduser("~/dev/dawgsec/tezcatlipoca")
 sys.path.insert(0, REPO)
 from dotenv import load_dotenv
 load_dotenv(os.path.join(REPO, ".env"))
-import range_ops
+import infra.client
 
 OUT = os.path.join(REPO, "logs", "scrim-two-snapshot-" + time.strftime("%Y%m%dT%H%M%S"))
 os.makedirs(OUT, exist_ok=True)
 node = os.environ.get("TF_VAR_proxmox_node", "proxmox")
 
-resp = range_ops.proxmox_api("GET", f"/nodes/{node}/qemu"); vms = resp["data"] if isinstance(resp, dict) else resp
+resp = infra.client.proxmox_api("GET", f"/nodes/{node}/qemu"); vms = resp["data"] if isinstance(resp, dict) else resp
 with open(os.path.join(OUT, "vms.json"), "w") as f:
     json.dump(vms, f, indent=2)
 interesting = {1000, 1140, *range(1150, 1156), *range(1400, 1406), 1410}

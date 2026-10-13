@@ -33,13 +33,6 @@ QUERY = """query { beacons { edges { node {
   id transport lastSeenAt host { id name } } } } }"""
 
 
-def find_world(run_dir):
-    hits = sorted(Path(run_dir).rglob("world.json"))
-    if not hits:
-        sys.exit(f"no world.json under {run_dir} — teardown did not collect red's state")
-    return hits[-1]
-
-
 def tavern_beacons(url):
     body = json.dumps({"query": QUERY}).encode()
     req = urllib.request.Request(url, data=body,
@@ -61,7 +54,10 @@ def main():
     ap.add_argument("--tavern", default="http://10.0.0.117:8000/graphql")
     a = ap.parse_args()
 
-    wpath = find_world(a.run_dir)
+    hits = sorted(Path(a.run_dir).rglob("world.json"))
+    if not hits:
+        sys.exit(f"no world.json under {a.run_dir} — teardown did not collect red's state")
+    wpath = hits[-1]
     w = json.loads(wpath.read_text())
     meta = w.get("meta") or {}
     arts = w.get("artifacts") or []

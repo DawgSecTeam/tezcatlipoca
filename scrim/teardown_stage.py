@@ -11,18 +11,19 @@ from scrim import procs
 from scrim import red_link
 from scrim import test_folder
 from scrim.core import log
+import badauto_config_ops
 
 
-def _config_red_vmid():
-    """The red vmid bad-auto's destroy will actually act on: config.yaml's deploy.red_vmid.
+def _config_red_vmid(comp_dir):
+    """The red vmid bad-auto's destroy will actually act on: the comp's own
+    bad-auto config, deploy.red_vmid.
 
-    `badauto destroy` follows config.yaml by design (cmd_destroy refuses to be a silent
-    target override), so this is the number to reconcile `--red-vmid` against."""
-    try:
-        cfg = json.loads((core.BAD_AUTO / "config.yaml").read_text())
-        return (cfg.get("deploy") or {}).get("red_vmid")
-    except (OSError, ValueError):
-        return None
+    `badauto destroy` follows its config by design (cmd_destroy refuses to be a
+    silent target override), so this is the number to reconcile `--red-vmid`
+    against. Per-competition since the 2026-10-12 isolation — the sibling
+    checkout's shared config.yaml named whichever session staged last."""
+    return ((badauto_config_ops.load_config(comp_dir).get("deploy") or {})
+            .get("red_vmid"))
 
 
 def _manifest_red_vmid(args):
@@ -74,26 +75,33 @@ def teardown_red(args, env):
         red_link.pull_red_state(args)
     except Exception as e:  # evidence capture must never block teardown
         log(f"WARNING: red state pull failed before teardown: {type(e).__name__}: {e}")
-    configured = _config_red_vmid()
+    comp_path = str((core.REPO / "competitions" / args.competition).resolve())
+    configured = _config_red_vmid(comp_path)
     if args.red_vmid and configured and int(configured) != int(args.red_vmid):
         # Not fatal — badauto's identity guards are the authority on what is safe to
         # delete — but it is exactly the stale-config shape that lost red01, so say it.
-        log(f"WARNING: config.yaml's deploy.red_vmid is {configured} but this run deployed "
-            f"{args.red_vmid}; badauto destroy follows config.yaml")
+        log(f"WARNING: the comp config's deploy.red_vmid is {configured} but this run "
+            f"deployed {args.red_vmid}; badauto destroy follows its config")
     # One retry: the first attempt's rc=1 can be a transient Proxmox task/API hiccup,
     # and the fail-loud raise below aborts the whole teardown mid-sequence (the range
     # destroy never runs, and the harness dies leaving everything up — live-found
     # 2026-10-03: the manual re-run succeeded in seconds). Identity guards live inside
     # badauto, so a retry cannot widen what may be deleted.
     proc = None
-    # The --competition value must be the SAME string stage_red wrote into config.yaml's
-    # competition_dir (the resolved path): bad-auto's destroy cross-checks the two and
-    # refuses a mismatch (both 2026-10-03 teardowns failed on the bare name).
-    comp_path = str((core.REPO / "competitions" / args.competition).resolve())
+    # The --competition value must be the SAME string stage_red wrote into the
+    # config's competition_dir (the resolved path): bad-auto's destroy cross-checks
+    # the two and refuses a mismatch (both 2026-10-03 teardowns failed on the bare
+    # name). --config threads the comp's OWN config so destroy reads the comp's
+    # own deploy stamp (per-competition since 2026-10-12) — only when it exists:
+    # a missing --config silently falls back to built-in defaults (vmid 999).
+    cmd = ["python3", "-m", "badauto"]
+    comp_cfg = badauto_config_ops.config_path(comp_path)
+    if comp_cfg.exists():
+        cmd += ["--config", str(comp_cfg)]
+        env = {k: v for k, v in env.items() if k != "BAuto_CONFIG"}
+    cmd += ["destroy", "--competition", comp_path, "--yes"]
     for attempt in (1, 2):
-        proc = procs.run(["python3", "-m", "badauto", "destroy", "--competition",
-                          comp_path, "--yes"],
-                         cwd=core.BAD_AUTO, env=env, timeout=900, check=False)
+        proc = procs.run(cmd, cwd=core.BAD_AUTO, env=env, timeout=900, check=False)
         if proc.returncode == 0:
             break
         if attempt == 1:
@@ -121,12 +129,19 @@ def teardown_red(args, env):
                 f"destroy-competition.py.")
 
     # Order matters: what this run deployed, then what the run recorded, then what
-    # config.yaml says, then bad-auto's own default — one of them is the number
-    # `badauto destroy` acted on, and an unknown vmid is an unverifiable teardown
-    # (2026-10-08 run 6b logged "vmid None could not be verified gone" because
-    # --red-vmid was not passed and the config omits it).
+    # the comp config says, then the comp's own reservation (Compfile red01_vmid,
+    # else derived from the deploy state's scoring vmid) — one of them is the
+    # number `badauto destroy` acted on, and an unknown vmid is an unverifiable
+    # teardown (2026-10-08 run 6b logged "vmid None could not be verified gone").
+    # No fall-through to bad-auto's built-in 999 — a shared default vmid is the
+    # 2026-10-12 kill.
+    state_vmid = None
+    try:
+        state_vmid = core.read_comp_json(comp_path, ".deploy_state.json").get("scoring_vm_id")
+    except Exception:                                        # noqa: BLE001 - best effort
+        pass
     vmid = (args.red_vmid or _manifest_red_vmid(args) or configured
-            or core.bad_auto_deploy_default("red_vmid"))
+            or badauto_config_ops.red01_vmid_for(comp_path, state_vmid))
     still = _red_vm_still_exists(vmid)
     if still:
         raise RuntimeError(

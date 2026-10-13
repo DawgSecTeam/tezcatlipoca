@@ -81,7 +81,7 @@ def write_json(path: Path, data):
 
 
 def read_compfile(path: Path) -> list:
-    """Compfile is `key value` lines (utils.load_compfile). Keep order + unknown keys."""
+# Compfile is `key value` lines (utils.load_compfile). Keep order + unknown keys.
     items = []
     try:
         for line in path.read_text().splitlines():
@@ -103,10 +103,6 @@ def write_compfile(path: Path, items: list):
         if key and " " not in key:
             lines.append(f"{key} {value}".rstrip())
     path.write_text("\n".join(lines) + "\n")
-
-
-def compfile_dict(items: list) -> dict:
-    return {k: v for k, v in items}
 
 
 def pin_name(pin) -> str:
@@ -133,7 +129,7 @@ def list_injects(d: Path) -> list:
 
 
 def comp_summary(d: Path) -> dict:
-    cf = compfile_dict(read_compfile(d / "Compfile"))
+    cf = dict(read_compfile(d / "Compfile"))
     boxes = read_json(d / "boxes.json", [])
     services = read_json(d / "box_services.json", {})
     vulns = read_json(d / "box_vulns.json", {})
@@ -318,7 +314,7 @@ def delete_box(comp_id: str, name: str):
 
 
 def normalize_pin(pin):
-    """Write back in the file's own idiom: a bare name when there is nothing but a name."""
+# Write back in the file's own idiom: a bare name when there is nothing but a name.
     if isinstance(pin, str):
         return pin
     if not isinstance(pin, dict) or not pin.get("name"):
@@ -430,8 +426,8 @@ CATALOG_TTL = 300
 
 
 def _open_source():
-    """TEZ_WEBUI_CATALOG_FILE (a JSON array of rows) is an offline stand-in for development;
-    otherwise nakon's own `auto` source: vulndb-ui over HTTP if VULNDB_UI_URL, else MySQL."""
+# TEZ_WEBUI_CATALOG_FILE (a JSON array of rows) is an offline stand-in for development;
+#     otherwise nakon's own `auto` source: vulndb-ui over HTTP if VULNDB_UI_URL, else MySQL.
     fixture = os.getenv("TEZ_WEBUI_CATALOG_FILE")
     if fixture:
         from nakon.catalog.source import DictCatalog
@@ -462,7 +458,7 @@ def catalog_rows(refresh=False) -> list:
 @app.get("/api/catalog")
 def get_catalog(platform: Optional[str] = None, kind: Optional[str] = None,
                 search: str = "", refresh: bool = False):
-    """kind=services → category 'service'; kind=misconfigs → everything else."""
+# kind=services → category 'service'; kind=misconfigs → everything else.
     from constants import KNOWN_BROKEN_CONFIGS, REQUIRED_VARS
     needle = search.lower().strip()
     out = []
@@ -505,8 +501,8 @@ def get_catalog_entry(name: str):
 
 @app.get("/api/templates")
 def get_templates():
-    """Live Proxmox templates when the API is reachable, plus every template any comp already
-    uses (so the picker works offline). Deploy preflight is the real resolver either way."""
+# Live Proxmox templates when the API is reachable, plus every template any comp already
+#     uses (so the picker works offline). Deploy preflight is the real resolver either way.
     used = set()
     for f in COMPS.glob("*/boxes.json"):
         try:

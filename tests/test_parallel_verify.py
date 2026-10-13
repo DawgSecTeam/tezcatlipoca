@@ -42,7 +42,7 @@ _SPEC = importlib.util.spec_from_file_location(
     "verify_parallel_test", _REPO / "verify-competition.py")
 verify = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(verify)
-from range_ops import vm_id_for  # noqa: E402
+from targets import vm_id_for  # noqa: E402
 from utils import MAX_CONCURRENCY  # noqa: E402
 import verifier.context as v_context  # noqa: E402
 import verifier.creds as v_creds  # noqa: E402
@@ -69,9 +69,9 @@ def _run(fn, *args, **kwargs):
     return result, out.getvalue()
 
 
+# The pre-W11 shape, used as the control: identical code, one item at a time,
+# exceptions captured per slot exactly as utils.run_concurrent captures them.
 def _serial_run_concurrent(items, fn, max_workers=8):
-    """The pre-W11 shape, used as the control: identical code, one item at a time,
-    exceptions captured per slot exactly as utils.run_concurrent captures them."""
     out = []
     for item in items:
         try:
@@ -80,8 +80,6 @@ def _serial_run_concurrent(items, fn, max_workers=8):
             out.append(exc)
     return out
 
-
-# --------------------------------------------------------------------------- domains
 
 TEAMS = {"team1": {"identifier": 104}, "team2": {"identifier": 105}}
 WIN_BOXES = [{"name": f"win0{i}", "template": "windows-server-2022"} for i in range(1, 5)]
@@ -133,7 +131,6 @@ def _valid_responses(dc1=_dc_out("team104.local", SID_A),
                      dc2=_dc_out("team105.local", SID_B),
                      member1=_member_out("team104.local"),
                      member2=_member_out("team105.local")):
-    """A fully-answering 2-team x 4-box line-up; each case perturbs one probe."""
     out = {vm_id_for(104, 0): dc1, vm_id_for(105, 0): dc2}
     for i in (1, 2, 3):
         out[vm_id_for(104, i)] = member1
@@ -141,12 +138,11 @@ def _valid_responses(dc1=_dc_out("team104.local", SID_A),
     return out
 
 
+# check_domains: same verdict and same stdout as the serial loop, overlapping.
 class DomainsParallelism(unittest.TestCase):
-    """check_domains: same verdict and same stdout as the serial loop, overlapping."""
-
+    # (label, responses, expect_status) — representative inputs, including the
+    # all-probes-failed and duplicate-SID cases the gate exists for.
     def _cases(self):
-        """(label, responses, expect_status) — representative inputs, including the
-        all-probes-failed and duplicate-SID cases the gate exists for."""
         return [
             ("all_valid_distinct", _valid_responses(), verify.Status.PASS),
             ("duplicate_domain_sids",
@@ -181,9 +177,9 @@ class DomainsParallelism(unittest.TestCase):
         self.assertIs(result.status, verify.Status.FAIL)
         self.assertIn(f"DomainSID {SID_A} shared by team1, team2", out)
 
+    # The half-deployed case: every probe times out/errors. Serial semantics were
+    # one FAIL line per box and a FAIL verdict — the parallel pass must match.
     def test_all_probes_failed_is_a_fail_not_a_pass(self):
-        """The half-deployed case: every probe times out/errors. Serial semantics were
-        one FAIL line per box and a FAIL verdict — the parallel pass must match."""
         every = {vm_id_for(t, i) for t in (104, 105) for i in range(4)}
         probe = _windows_probe({}, fail=every)
         result, out = _domains_run(WIN_BOXES, ROLES, probe)
@@ -227,8 +223,8 @@ class DomainsParallelism(unittest.TestCase):
         self.assertIn("realm-joined", out)
         self.assertEqual(vmid, vm_id_for(104, 0))
 
+    # Serial floor: 8 boxes x 0.25s = 2.0s; the 8-worker pool is ~0.25s.
     def test_probes_actually_overlap(self):
-        """Serial floor: 8 boxes x 0.25s = 2.0s; the 8-worker pool is ~0.25s."""
         boxes = [{"name": f"win0{i}", "template": "windows-server-2022"} for i in range(1, 9)]
         roles = {b["name"]: ("dc" if i == 0 else "member") for i, b in enumerate(boxes)}
         state = {"cur": 0, "peak": 0}
@@ -255,9 +251,9 @@ class DomainsParallelism(unittest.TestCase):
         self.assertGreater(state["peak"], 1, "domain probes were not concurrent")
         self.assertLessEqual(state["peak"], MAX_CONCURRENCY, "pool exceeded its cap")
 
+    # Gives the threshold teeth: with run_concurrent replaced by a serial runner
+    # the same 8 probes cannot come in under 1.0s.
     def test_reserialised_control_exceeds_the_threshold(self):
-        """Gives the threshold teeth: with run_concurrent replaced by a serial runner
-        the same 8 probes cannot come in under 1.0s."""
         boxes = [{"name": f"win0{i}", "template": "windows-server-2022"} for i in range(1, 9)]
         roles = {b["name"]: ("dc" if i == 0 else "member") for i, b in enumerate(boxes)}
 
@@ -277,8 +273,6 @@ class DomainsParallelism(unittest.TestCase):
                            f"serial control came in under the parallel threshold "
                            f"({elapsed:.2f}s) — the timing test proves nothing")
 
-
-# ------------------------------------------------------------------ misconfig survival
 
 SURVIVAL_BOXES = [
     {"name": "web01-team104", "ip": "192.168.104.5", "configurations": ["suid-find"]},
@@ -304,9 +298,8 @@ def _survival_run(outputs_by_ip, serial=False):
         return _run(verify.check_misconfig_survival, CTX, SURVIVAL_BOXES)
 
 
+# The D3/D4 verdict table must survive the rewrite, message for message.
 class MisconfigSurvivalParallelism(unittest.TestCase):
-    """The D3/D4 verdict table must survive the rewrite, message for message."""
-
     def _both(self, outputs):
         par, par_out = _survival_run(outputs)
         ser, ser_out = _survival_run(outputs, serial=True)
@@ -337,9 +330,9 @@ class MisconfigSurvivalParallelism(unittest.TestCase):
         _, passed = verify.gate_verdict([result])
         self.assertFalse(passed)
 
+    # The serial loop only caught TimeoutExpired/CheckError; a bug elsewhere must
+    # not be silently recorded as 'unknown' by the pool.
     def test_unexpected_exception_still_escapes(self):
-        """The serial loop only caught TimeoutExpired/CheckError; a bug elsewhere must
-        not be silently recorded as 'unknown' by the pool."""
         def boom(ctx, ip, cmd, timeout=60):
             raise OSError("something unrelated broke")
 
@@ -347,8 +340,6 @@ class MisconfigSurvivalParallelism(unittest.TestCase):
             with self.assertRaises(OSError):
                 _run(verify.check_misconfig_survival, CTX, SURVIVAL_BOXES)
 
-
-# --------------------------------------------------------------------------- beacons
 
 BEACON_BOXES = [
     {"name": "web01-team104", "ip": "192.168.104.5", "os": "ubuntu"},
@@ -396,8 +387,6 @@ class BeaconsParallelism(unittest.TestCase):
                 _run(verify.report_beacons, CTX, BEACON_BOXES)
 
 
-# --------------------------------------------------------------------------- budget
-
 class RunBudgetTests(unittest.TestCase):
     def test_default_is_disabled(self):
         budget = verify.RunBudget(0)
@@ -413,9 +402,8 @@ class RunBudgetTests(unittest.TestCase):
             self.assertTrue(budget.expired())
 
 
+# --timeout is additive: it can only ever ADD non-passing SKIPs.
 class MainBudgetTests(unittest.TestCase):
-    """--timeout is additive: it can only ever ADD non-passing SKIPs."""
-
     def _comp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

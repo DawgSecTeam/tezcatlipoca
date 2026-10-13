@@ -20,12 +20,12 @@ RUN_ID = "run-deadbeef"
 
 
 def _no_stage(*a, **k):
-    '''The offline contract: never touch the network, not even to stage red's files.'''
+# The offline contract: never touch the network, not even to stage red's files.
     return False
 
 
 def _fake_transport():
-    """scp-jump: red01 has the report + events but no world.json; the ssh-cmd channel is dead."""
+# scp-jump: red01 has the report + events but no world.json; the ssh-cmd channel is dead.
     from artifacts_lib.constants import Unreachable
 
     def scp(ssh, remote, dest_dir, timeout=120):

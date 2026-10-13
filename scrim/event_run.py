@@ -40,13 +40,10 @@ def stage_run(args, creds, t0):
             + " — that team's feed/monitoring was not running; treat the evidence as partial")
 
 
+# teardown MUST still run even when a worker died (the range is expensive and a live cycle
+# can otherwise be destroyed under it), but the failure is returned so main() exits
+# non-zero after the evidence is safely on disk
 def run_event_and_finish(args, creds, t0):
-    """stage_run -> capture -> teardown -> finalize, capturing even when a worker died.
-
-    Teardown MUST still run (the range is expensive and a live cycle can be destroyed
-    under it otherwise), but the harness must not exit clean afterwards: the failure is
-    returned so main() can exit non-zero after the evidence is safely on disk.
-    """
     failure = None
     try:
         stage_run(args, creds, t0)

@@ -42,9 +42,9 @@ CREDS = {"ENGINE_IP": "10.0.0.50", "ADMIN_PW": "adminpw", "INJECT_PW": "injpw", 
 
 
 class RedLlmHeadroom(unittest.TestCase):
-    """A local red endpoint gets headroom for a REASONING model: at timeout 120 /
-    max_tokens 4096 every decision timed out or truncated to empty content and the
-    director fell back to scripted tactics without saying so (2026-10-09)."""
+# A local red endpoint gets headroom for a REASONING model: at timeout 120 /
+#     max_tokens 4096 every decision timed out or truncated to empty content and the
+#     director fell back to scripted tactics without saying so (2026-10-09).
 
     def test_local_endpoint_gets_reasoning_model_headroom(self):
         from scrim import red_stage

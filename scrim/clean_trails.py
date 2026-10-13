@@ -25,7 +25,6 @@ is logged and skipped. A wipe is not allowed to fail a deploy — but it is also
 not allowed to be silent.
 """
 
-import base64
 import json
 import os
 import re
@@ -113,14 +112,12 @@ RED01_WORLD = "/var/lib/bad-auto/world.json"
 
 
 def creds_for_deploy(ctx):
-    """The harness-shaped ssh creds dict, built from a deploy context."""
     return {"KEY_PATH": ctx.ssh_key_abs, "VM_USER": core.vm_username(),
             "ENGINE_IP": ctx.engine_mgmt_ip, "BOX_USER": ctx.box_username,
             "BOX_PW": ctx.box_password}
 
 
 def _windows_boxes(comp):
-    """Box names whose template is Windows (password auth as Administrator)."""
     try:
         boxes = core.read_comp_json(comp, "boxes.json")
     except Exception:                                        # noqa: BLE001 - best effort
@@ -128,9 +125,9 @@ def _windows_boxes(comp):
     return {b["name"] for b in boxes if core.is_windows_box(b)}
 
 
+# fw01 skipped: the in-path firewall is an appliance with no shell to clean — skipping
+# it is not an omission
 def box_targets(comp, creds):
-    """[{ip, name, windows}] for the launchable team boxes (the in-path firewall
-    is an appliance with no shell to clean; skipping it is not an omission)."""
     data = json.loads((Path(comp) / "targets.json").read_text())
     win = _windows_boxes(comp)
     out = []
@@ -142,15 +139,10 @@ def box_targets(comp, creds):
     return out
 
 
-# ------------------------------------------------------------------ skip-list
-
+# world.json is what the plant/seed recorded: its artifact paths are the never-touch
+# set, and its per-artifact check_cmd is the integrity probe the post-wipe re-check
+# re-runs. Best-effort: any failure logs and returns empty.
 def red01_world_artifacts(comp, creds):
-    """(artifacts, red_ip) from red01's world.json; ([], None) when unavailable.
-
-    world.json is what the plant/seed recorded — its artifact paths are the
-    never-touch set, and its per-artifact check_cmd is the integrity probe the
-    post-wipe re-check re-runs. Best-effort: any failure logs and returns empty.
-    """
     red_ip = None
     try:
         state = json.loads((Path(comp) / ".deploy_state.json").read_text(encoding="utf-8"))
@@ -180,10 +172,9 @@ def red01_world_artifacts(comp, creds):
     return world.get("artifacts") or [], red_ip
 
 
+# newline-free (the skip blocks are line-oriented); anything else is dropped rather
+# than mangled
 def extract_artifact_paths(artifacts):
-    """Every absolute path a planted artifact claims: `paths` entries plus
-    path-shaped tokens in the detail. Newline-free (the skip blocks are
-    line-oriented); anything else is dropped rather than mangled."""
     out, seen = [], set()
     for a in artifacts or []:
         candidates = [p for p in (a.get("paths") or []) if isinstance(p, str)]
@@ -198,7 +189,6 @@ def extract_artifact_paths(artifacts):
 
 
 def _linux_skip_block(paths):
-    """Script prelude defining SKIP_PATHS + in_skip() for LINUX_SCRIPT."""
     safe = [p for p in paths if "\n" not in p]
     body = "\n".join(safe)
     return ("SKIP_PATHS=\"$(cat <<'TZ_SKIP'\n"
@@ -208,7 +198,6 @@ def _linux_skip_block(paths):
 
 
 def _windows_skip_header(paths):
-    """Script prelude defining $skip + Test-SkipPath for WINDOWS_PS."""
     safe = [p.replace("'", "''") for p in paths if "\n" not in p]
     # commas BETWEEN entries only: PowerShell 5.1 rejects a trailing comma
     # before the closing paren ("Missing expression after ','", live 2026-10-12)
@@ -217,18 +206,13 @@ def _windows_skip_header(paths):
             "function Test-SkipPath($p) { return ($skip -contains $p) }\n")
 
 
-# ------------------------------------------------------------------- runners
-
 def _run_windows_script(creds, ip, script, timeout=WIN_WIPE_TIMEOUT):
-    """Run a PowerShell script on a Windows box: scp it up, run with -File.
-
-    -EncodedCommand dies above the Windows shell's command-line limit (the
-    103-path skip header pushed the UTF-16LE base64 past cmd.exe's 8191 chars:
-    "The command line is too long.", live 2026-10-12), and `-Command -` parses
-    stdin LINE BY LINE so any multi-line construct breaks ("Missing expression
-    after ','"). A staged .ps1 + -File has neither cliff. The script must stay
-    ASCII (the skip-list extraction already filters to a safe charset).
-    """
+    # -EncodedCommand dies above the Windows shell's command-line limit (the 103-path
+    # skip header pushed the UTF-16LE base64 past cmd.exe's 8191 chars: "The command
+    # line is too long.", live 2026-10-12), and `-Command -` parses stdin LINE BY LINE
+    # so any multi-line construct breaks ("Missing expression after ','"). A staged
+    # .ps1 + -File has neither cliff. The script must stay ASCII (the skip-list
+    # extraction already filters to a safe charset).
     base = core.box_ssh_base(creds, connect_timeout=15)
     env = {**os.environ, "SSHPASS": creds.get("BOX_PW") or ""}
     remote_path = "C:/Windows/Temp/.tz-wipe.ps1"
@@ -277,11 +261,9 @@ def _clean_windows(creds, ip, skip_paths=()):
     return ok, detail
 
 
-# --------------------------------------------------------- plant integrity
+# plant integrity
 
 def _linux_integrity_script(arts):
-    """One check per artifact, each followed by an INTEG|<idx>|<rc> marker.
-    check_cmd when the plant recorded one, else the first recorded path."""
     lines = []
     for i, a in enumerate(arts):
         cmd = (a.get("check_cmd") or "").strip().replace("\n", " && ")
@@ -295,9 +277,9 @@ def _linux_integrity_script(arts):
     return "\n".join(lines)
 
 
+# path-existence probes only: PowerShell check_cmds are too shape-diverse to batch
+# safely under one EncodedCommand; uncheckable artifacts report -1
 def _windows_integrity_script(arts):
-    """Path-existence probes (PowerShell check_cmds are too shape-diverse to
-    batch safely under one EncodedCommand); uncheckable artifacts report -1."""
     lines = []
     for i, a in enumerate(arts):
         paths = [p for p in (a.get("paths") or []) if isinstance(p, str) and p]
@@ -312,10 +294,6 @@ def _windows_integrity_script(arts):
 
 
 def plant_integrity(comp, creds, artifacts):
-    """{ip: [(idx, kind, status)]} — status 0 alive / 1 dead / -1 uncheckable.
-
-    Runs each artifact's check (or path probe) ON its box. Never raises; a box
-    that fails simply contributes no rows."""
     win_names = _windows_boxes(comp)
     by_ip, tmap = {}, {t["ip"]: t for t in box_targets(comp, creds)}
     for idx, a in enumerate(artifacts or []):
@@ -351,7 +329,6 @@ def plant_integrity(comp, creds, artifacts):
 
 
 def _integrity_report(pre, post, artifacts, phase):
-    """(alive, checked, casualties) for one integrity pass."""
     checked = sum(len(v) for v in post.values())
     alive = sum(1 for rows in post.values() for _i, _k, st in rows if st == 0)
     if phase != "post":
@@ -367,14 +344,10 @@ def _integrity_report(pre, post, artifacts, phase):
     return alive, checked, casualties
 
 
+# planted paths go on the never-touch skip-list, and the plant is integrity-checked
+# before AND after the wipe so a casualty is named in the log instead of surfacing as a
+# mystery dead beacon at T+30; returns {ip: bool}, never raises
 def clean_trails(comp, creds, targets=None, skip_paths=None, artifacts=None):
-    """Wipe deploy traces on every team box. Returns {ip: bool}; never raises.
-
-    red01's world.json is read first (unless the caller supplied the artifact
-    set): planted paths go on the never-touch skip-list, and the plant is
-    integrity-checked before AND after the wipe so a casualty is named in the
-    log instead of surfacing as a mystery dead beacon at T+30.
-    """
     targets = targets if targets is not None else box_targets(comp, creds)
     if artifacts is None and skip_paths is None:
         artifacts, _red_ip = red01_world_artifacts(comp, creds)

@@ -1,7 +1,7 @@
 # Architecture
 
 > **Pipeline version 3** — golden templates + linked clones, in-path firewall bootstrap.
-> `deploy_lib/gates.py` (the deploy) and `redeploy-competition.py` refuse a `.deploy_state.json` written by another
+> `infra.gates` (the deploy) and `redeploy-competition.py` refuse a `.deploy_state.json` written by another
 > pipeline version (`pipeline_version`), and teardown refuses state without a `run_id`:
 > there is exactly one supported pipeline, and no compatibility path for older ranges.
 
@@ -27,11 +27,10 @@ the agent-scrim harness in
 | `create-competition.py` | Thin CLI entry point: loads `.env`, calls `deploy.main()`. Not importable (the hyphen), so it exposes no library surface |
 | `pipeline_api.py` | The stable import surface the hyphenated entry points cannot be: explicit `__all__` of the symbols `redeploy-competition.py` calls, each imported from the module that owns it (a facade module counts as the owner; the redeploy consumer set spans `redeploy-competition.py` and `redeploy_*_ops.py`) |
 | `deploy.py` | Thin shim: loads `.env`, re-exports `main`/`deploy`/`prepare`/`DeployContext` from `deploy_lib` |
-| `deploy_lib/` | The deploy pipeline, one responsibility per module: `cli.py` (flags, scaffolding, `--plan-only`), `runner.py` (`deploy()` sequencer), `prepare.py` (`prepare()`), **`gates.py` (every pre-flight / ownership / state-version refusal)**, `context.py` (`DeployContext`), `stages.py`, `inputs.py`, `secrets.py`, `placement.py`, `configs.py`, `tfinputs.py`, `targets.py`, `golden_plan.py`, `coverage.py`, `failure.py`; layout in [internals.md](internals.md#deploypy--deploy_lib) |
+| `deploy_lib/` | The deploy pipeline, one responsibility per module: `cli.py` (flags, scaffolding, `--plan-only`), `runner.py` (`deploy()` sequencer), `prepare.py` (`prepare()`); the refusals live in `infra.gates`, `context.py` (`DeployContext`), `stages.py`, `inputs.py`, `secrets.py`, `placement.py`, `configs.py`, `tfinputs.py`, `targets.py`, `golden_plan.py`, `coverage.py`, `failure.py`; layout in [internals.md](internals.md#deploypy--deploy_lib) |
 | `deploy_lib/phases/` | The eight phase functions (`phase1_cleanup` … `phase8_seed`, grouped `cleanup`/`engine`/`golden`/`firewall`/`postclone`/`final`/`seed`) plus `connect_terraform`/`finish_deploy` — all the per-phase work; `PHASES` is exported from the package |
-| `config_ops.py` | Team identity/secrets + `.env`/state writers (`collect_teams`, `random_password`, `update_env`, `write_state`); back-compat facade over `config_prompts.py` (interactive prompts), `injects_config.py` and `preflight/` |
-| `preflight/` | **The one pre-Proxmox gate** — `preflight.run_preflight(plan)`: concurrency, per-node templates/collisions/headroom, mgmt IPs, catalog. Single-node = a one-share plan, multi-node = one share per node. See [internals.md](internals.md#preflight--the-single-pre-proxmox-gate) |
-| `vm_ownership.py` | **The one ownership-tag proof** (`ownership_verdict`) and every ownership-guarded VM mutation: `destroy_vm_if_exists`, `retag_ownership`, `unlock_vm`, `gc_orphan_volumes`, clone marker |
+| `config_ops.py` | Team identity/secrets + `.env`/state writers (`collect_teams`, `random_password`, `update_env`, `write_state`); back-compat facade over `config_prompts.py` (interactive prompts) and `injects_config.py` |
+| `infra/` | **Everything that touches the Proxmox estate**: `client` (the one API client — TLS pinning, node routes, task wait, load throttle), `guest_exec` (agent exec/file pull), `lifecycle` (start/stop/snapshots), `ownership` (the one ownership-tag proof + every ownership-guarded mutation), `console` (VNC sessions + per-comp portal console tokens), `gates` (every pre-flight/ownership/state-version refusal, incl. `run_preflight(plan)` — the one pre-Proxmox gate, with plan builders in `plan`, live-overlap checks in `collisions`, node headroom/template checks in `resources`). See [internals.md](internals.md#infra--proxmox-and-preflight) |
 | `nakon_ops.py` | Facade (`from nakon_ops import …` stays the public path) over `nakon_config_ops.py` (`generate_nakon_config` / `generate_stage_configs`, `os_to_platform`), `nakon_pin_ops.py` (pin/identity-var validation, known-broken + unplantable filters), `nakon_bundle_ops.py` (`build_nakon_bundle` + payload var lint), `nakon_lock_ops.py` (engine flock, `other_deploys_in_flight`), `nakon_run_ops.py` (`run_nakon`, `NakonResult`) |
 | `golden_ops.py` | M3 golden set: API-clone one VM per box type, plant the golden stage (strict), `cloud-init clean`, **boot-smoke** the stopped golden via one throwaway clone (`golden_boot_smoke` knob), `qm template` conversion; resume routing on template state |
 | `golden_target_ops.py` / `golden_smoke_ops.py` / `golden_disk_ops.py` | Pieces of the golden set: slot vmid/IP arithmetic + `golden_targets` / `unbooted_golden_boxes`; the boot-smoke gate; disk sizing + in-guest root expansion. `golden_ops.py` re-exports them (public path unchanged) |
@@ -48,7 +47,7 @@ the agent-scrim harness in
 | `firewall_ops.py` | In-path firewalls: per-team pfSense `config.xml` generation from the comp's seed, SSH config push to `pfsense-provision` clones, the engine netplan cutover, and the post-cutover routing gate |
 | `ssh_ops.py` | Gateway SSH (`ProxyCommand -W`), Terraform context, `wait_for_ssh`/`wait_for_boxes_ssh`/`wait_for_http`, `quote_sshkeys` (the one definition) |
 | `constants.py` | `vmid` math, `MAX_TEAMS`/`MAX_BOXES_PER_TEAM`, `SNAP_BASE`/`SNAP_READY`, budgets, `NAKON_DIR`, Windows user |
-| `range_ops.py` | Back-compat facade over `pve_api.py` (API client, node routes, task wait), `guest_exec.py` (agent exec/file pull), `vm_lifecycle.py` (start/stop/snapshots), `vm_ownership.py`, `targets.py` (`enumerate_targets`, `vm_id_for`), `terraform_workdir.py` |
+| `targets.py` | `enumerate_targets`, `vm_id_for` — one entry per `(team, box)` with vmid/ip/name/node/slot |
 | `utils.py` | `load_compfile`, `load_users_config`, `DNS_FIX_CMD`, `run_concurrent`, competition picking |
 | `quotient/setup.py` | `build_event_conf`, `seed_teams`, `unpause_engine`, `create_injects`; `_SERVICE_TO_CHECK` map |
 | `terraform/main.tf` | Team bridges (`vmbr<id>`), transit bridges (`vmbrW<id>`, firewall lineups only), scoring VM (`var.scoring_vm_id`), every team's boxes as slot-dimensioned resources (two NICs + no cloud-init for the in-path firewall), scoring NIC wiring, cold-boot + netplan |
@@ -211,7 +210,7 @@ Quotient /opt/quotient  (event.conf + linux.credlist + .env from phase 3)
 
 ## Target abstraction
 
-`range_ops.enumerate_targets(teams, boxes)` builds one entry per `(team, box)`:
+`targets.enumerate_targets(teams, boxes)` builds one entry per `(team, box)`:
 
 - `vmid` = `200 + identifier*10 + box_index` (stride 10, mirrored in `terraform/main.tf`; `vm_id_for` is the sole derivation).
 - `ip` = `192.168.<identifier>.<last_octet>`; `vm_name` is `team1-<box>` vs `<identifier>-<box>` for clones; `machine` is `<box>-team<identifier>` (nakon naming).
@@ -381,12 +380,12 @@ box passwords.
 
 ## Operational invariants
 
-- `terraform/main.tf` and `range_ops.vm_id_for` must agree on the `200 + identifier*10 + index`
+- `terraform/main.tf` and `targets.vm_id_for` must agree on the `200 + identifier*10 + index`
   stride; changing one without the other creates collisions. `vm_id_for` is the sole derivation
   point, and targets are built from the full lists then filtered (see Target abstraction).
 - **A resume must reuse the original per-run secrets.** The engine's already-written `.env`, the
   already-seeded admin login, and the boxes' passwords were minted on the first run; regenerating
-  on resume silently desyncs the deployed range from its credentials. `deploy_lib/gates.py` refuses to
+  on resume silently desyncs the deployed range from its credentials. `infra.gates` refuses to
   resume without `.deploy_state.json` rather than risk it.
 - `destroy-competition.py` restores the per-competition `TF_VAR_*` values before destroying:
   `for_each` over `var.teams`/`var.boxes_per_team` must produce the exact resource keys of the

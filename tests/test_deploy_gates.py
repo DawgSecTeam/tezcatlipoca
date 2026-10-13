@@ -1,4 +1,4 @@
-"""The single-gate-point contract: every pre-flight refusal lives in deploy_lib/gates.py and
+"""The single-gate-point contract: every pre-flight refusal lives in infra/gates.py and
 runs inside prepare() BEFORE a credential is minted, a tfvars file written, or a target
 enumerated. Ordering is the property -- a refusal after the mint leaves a credential-desync
 corpse (2026-09-30 testcomp-7box)."""
@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from deploy_lib import gates as dl_gates  # noqa: E402
+from infra import gates as dl_gates  # noqa: E402
 from deploy_lib import prepare as dl_prepare  # noqa: E402
 from deploy_lib import runner as dl_runner  # noqa: E402
 

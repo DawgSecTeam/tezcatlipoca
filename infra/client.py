@@ -6,6 +6,8 @@ import re
 import time
 
 import requests
+
+from utils import retry
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 
@@ -66,14 +68,15 @@ class _FingerprintAdapter(HTTPAdapter):
                                        assert_fingerprint=self._fingerprint, **kw)
 
 
-def proxmox_request(method, url, **kwargs):
+def proxmox_request(method, url, fingerprint=None, **kwargs):
     """requests wrapper honoring optional TLS pinning. PROXMOX_TLS_FINGERPRINT (sha256) pins the
-    cert; PROXMOX_CA_BUNDLE verifies against a CA path; neither set => verify=False (lab default)."""
-    fingerprint = os.environ.get("PROXMOX_TLS_FINGERPRINT")
+    cert; PROXMOX_CA_BUNDLE verifies against a CA path; neither set => verify=False (lab default).
+    An explicit `fingerprint` (per-node record) overrides the env value."""
+    fp = fingerprint or os.environ.get("PROXMOX_TLS_FINGERPRINT")
     ca = os.environ.get("PROXMOX_CA_BUNDLE")
     session = requests.Session()
-    if fingerprint:
-        session.mount("https://", _FingerprintAdapter(fingerprint))
+    if fp:
+        session.mount("https://", _FingerprintAdapter(fp))
         kwargs.setdefault("verify", False)
     else:
         kwargs.setdefault("verify", ca or False)
@@ -85,17 +88,14 @@ def proxmox_api_for(endpoint, token, method, path, **kwargs):
     Used by the multi-node placement probes and by proxmox_api's route overrides."""
     url = f"{endpoint.rstrip('/')}/api2/json{path}"
     headers = {"Authorization": f"PVEAPIToken={token}"}
-    last_exc = None
-    for attempt in range(4):
-        try:
-            r = proxmox_request(method, url, headers=headers, timeout=60, **kwargs)
-            r.raise_for_status()
-            return r.json()
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-            last_exc = e
-            if attempt < 3:
-                time.sleep(2 * (attempt + 1))
-    raise last_exc
+
+    def _call():
+        r = proxmox_request(method, url, headers=headers, timeout=60, **kwargs)
+        r.raise_for_status()
+        return r.json()
+
+    return retry(_call, attempts=4, gap=2, backoff=True,
+                 retry_on=(requests.exceptions.ConnectionError, requests.exceptions.Timeout))
 
 
 def proxmox_api(method, path, **kwargs):

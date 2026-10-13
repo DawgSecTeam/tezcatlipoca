@@ -20,10 +20,10 @@ sys.path.insert(0, str(_REPO))
 import jump_rules  # noqa: E402
 import nodes_config  # noqa: E402
 import nodes_ops  # noqa: E402
-import pve_api  # noqa: E402
+from infra import client  # noqa: E402
 from deploy_lib import stages as dl_stages  # noqa: E402
 from deploy_lib import tfinputs  # noqa: E402
-from preflight import gate  # noqa: E402
+from infra import gates as gate  # noqa: E402
 
 NODES = {
     "nodes": [
@@ -55,8 +55,8 @@ def _templates(node, base=True):
     return out
 
 
+# endpoint -> VM list; answers just the paths the probe/preflight/jump code reads
 class FakeProxmox:
-    """endpoint -> VM list; answers just the paths the probe/preflight/jump code reads."""
 
     def __init__(self, vms_by_endpoint, down=()):
         self.vms = vms_by_endpoint
@@ -101,13 +101,13 @@ class MultinodeOfflineE2E(unittest.TestCase):
         p = patch.dict(os.environ, env)
         p.start()
         self.addCleanup(p.stop)
-        self.addCleanup(pve_api.clear_node_routes)
+        self.addCleanup(client.clear_node_routes)
         vms = {f"https://{n}.lab:8006": _templates(f"pve{i}", base=(n == "n1"))
                for i, n in ((1, "n1"), (2, "n2"), (3, "n3"))}
         self.fake = FakeProxmox(vms)
 
     def _resolve(self, **kw):
-        with patch.object(pve_api, "proxmox_api_for", self.fake):
+        with patch.object(client, "proxmox_api_for", self.fake):
             return nodes_ops.resolve_placement(self.comp, 1000, TEAMS, BOXES, "mn", **kw)
 
     def test_nodes_config_loads_from_cwd(self):
@@ -134,11 +134,11 @@ class MultinodeOfflineE2E(unittest.TestCase):
         # the real multi-node preflight over the same fake estate
         nodes_ops.activate_placement(placement)
         self.addCleanup(nodes_ops.deactivate_placement, {})
-        with patch.object(pve_api, "proxmox_api_for", self.fake), \
-                patch("preflight.concurrency.gate_concurrent_deploys"), \
-                patch("preflight.gate.remote_access_gate"), \
-                patch("preflight.catalog.catalog_gate"), \
-                patch("vm_ownership.has_clone_marker", return_value=False):
+        with patch.object(client, "proxmox_api_for", self.fake), \
+                patch("infra.gates.gate_concurrent_deploys"), \
+                patch("infra.gates.remote_access_gate"), \
+                patch("infra.gates.catalog_gate"), \
+                patch("infra.ownership.has_clone_marker", return_value=False):
             gate.preflight_gates_multinode(self.comp, BOXES, TEAMS, 1000, placement,
                                            engine_mgmt_ip="10.0.0.250", check_free=True)
 

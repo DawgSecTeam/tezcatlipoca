@@ -7,14 +7,14 @@ from .manifest import resolve_recorded
 
 
 def plan_targets(manifest, *, comp_dir=None):
-    """What this run's artifacts are, and where each one comes from.
-
-    Pure: no I/O, no transport. The result is the collector's input, and the CLI can print it to
-    answer "why is RED-TEAM.md missing?" without touching a VM.
-
-    Severity is derived from the manifest rather than from a per-file `required` flag: if the
-    manifest says a red agent was present, a missing red report is worth shouting about; if it
-    does not, the same absence is simply the truth about a run that had no red agent."""
+# What this run's artifacts are, and where each one comes from.
+#
+#     Pure: no I/O, no transport. The result is the collector's input, and the CLI can print it to
+#     answer "why is RED-TEAM.md missing?" without touching a VM.
+#
+#     Severity is derived from the manifest rather than from a per-file `required` flag: if the
+#     manifest says a red agent was present, a missing red report is worth shouting about; if it
+#     does not, the same absence is simply the truth about a run that had no red agent.
     agents = manifest.get("agents") or {}
     paths = manifest.get("paths") or {}
     targets = []
@@ -111,6 +111,6 @@ def plan_targets(manifest, *, comp_dir=None):
 
 
 def want_label(want):
-    """A stable id for a wanted item — the key the second teardown run matches on."""
+# A stable id for a wanted item — the key the second teardown run matches on.
     return (want.get("remote") or want.get("local_name") or want.get("cmd")
             or want.get("pattern"))

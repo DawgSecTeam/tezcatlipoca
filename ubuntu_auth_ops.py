@@ -6,26 +6,23 @@ import shlex
 import subprocess
 import time
 
-from range_ops import guest_agent_exec_detached
-from ssh_ops import gateway_proxy
+from infra.guest_exec import guest_agent_exec_detached
+from ssh_ops import box_ssh_argv
 from utils import PRINT_LOCK, run_concurrent, valid_unix_username
 
 
 def setup_ubuntu_auth(targets, ctx):
-    """Enable password auth + NOPASSWD sudo for box_username (nakon uses password auth + sudo).
+# Enable password auth + NOPASSWD sudo for box_username (nakon uses password auth + sudo).
+#
+#     Raises when a box ends the pass without working auth: nakon authenticates
+#     with these credentials, so marching into the plant against a box that
+#     provably can't SSH just defers the failure into noisy per-config timeouts.
 
-    Raises when a box ends the pass without working auth: nakon authenticates
-    with these credentials, so marching into the plant against a box that
-    provably can't SSH just defers the failure into noisy per-config timeouts."""
-
-    key = ctx["ssh_key_path"]
     box_username = ctx.get("box_username", "ubuntu")
     if not valid_unix_username(box_username):
         raise RuntimeError(
             f"box_username {box_username!r} is not a safe sudoers filename/remote-shell token"
         )
-    proxy = gateway_proxy(ctx)
-
     print(f"  Enabling password auth + NOPASSWD sudo for {box_username} on team boxes...")
     sudoers_line = shlex.quote(f"{box_username} ALL=(ALL) NOPASSWD:ALL")
     # sshd_config.d drop-in: cloud-init ships `PasswordAuthentication no` in
@@ -72,14 +69,7 @@ def setup_ubuntu_auth(targets, ctx):
         for attempt in range(1, 9):
             try:
                 r = subprocess.run(
-                    [
-                        "ssh", "-i", key,
-                        "-o", "StrictHostKeyChecking=no",
-                        "-o", "UserKnownHostsFile=/dev/null",
-                        "-o", "ConnectTimeout=10",
-                        "-o", f"ProxyCommand={proxy}",
-                        f"{box_username}@{ip}", auth_cmd,
-                    ],
+                    box_ssh_argv(ctx, ip, box_username, auth_cmd),
                     capture_output=True, text=True, timeout=40,
                 )
                 if r.returncode == 0:

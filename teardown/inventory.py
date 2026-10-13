@@ -11,12 +11,11 @@ Fail-closed is the contract: a node that will not list contributes nothing and
 says so (`listing_failed`), so verify_clean can never read an API outage as a
 clean estate."""
 
-from vm_ownership import MARKER, UNPROVEN, Ownership, ownership_verdict, parse_vm_tags
+from infra.ownership import MARKER, UNPROVEN, Ownership, ownership_verdict, parse_vm_tags
 
 
+# `error` set = fail-closed.
 class NodeView:
-    """One node's listing plus how the listing went. `error` set = fail-closed."""
-
     def __init__(self, node):
         self.node = node
         self.vms = []
@@ -32,7 +31,7 @@ class Inventory:
 
     def _api_fn(self):
         if self._api is None:
-            from range_ops import proxmox_api
+            from infra.client import proxmox_api
             self._api = proxmox_api
         return self._api
 
@@ -40,7 +39,6 @@ class Inventory:
         return list(self._nodes)
 
     def invalidate(self):
-        """Drop the cached listings — the engine calls this between steps."""
         self._generation += 1
         self._views = {}
 
@@ -60,10 +58,8 @@ class Inventory:
     def views(self):
         return [self.view(n) for n in self._nodes]
 
+    # nodes that would not list are skipped here; clean checks use listing_failed to refuse a clean verdict
     def owned(self, ownership):
-        """Every VM on every node carrying the FULL ownership set (listing tags).
-        [(node, vm), ...]. Nodes that would not list are skipped here; `clean`
-        checks use `listing_failed` to refuse a clean verdict."""
         out = []
         expect = set(ownership.tags)
         for nv in self.views():
@@ -74,9 +70,8 @@ class Inventory:
                     out.append((nv.node, v))
         return out
 
+    # regardless of run tag — the accounting view: ours / different-run / no run tag
     def comp_tagged(self, comp_name):
-        """Every VM carrying this competition's comp tag regardless of run tag —
-        the accounting view: OURS / different-run / no run tag."""
         tag = f"comp-{comp_name}"
         out = []
         for nv in self.views():
@@ -87,9 +82,8 @@ class Inventory:
                     out.append((nv.node, v))
         return out
 
+    # the clone-marker probe is a config read and only happens for a tagless VM (same as ownership_verdict)
     def classify(self, node, vm, ownership):
-        """The shared verdict for one listing entry. The clone-marker probe is a
-        config read and only happens for a tagless VM (same as ownership_verdict)."""
         return ownership_verdict(node, vm["vmid"], vm.get("tags"), set(ownership.tags))
 
     def bridges(self, node):
@@ -99,11 +93,8 @@ class Inventory:
             return None
         return [n["iface"] for n in nets if n.get("type") == "bridge"]
 
+    # bridges carry no tags and names collide across same-comp deploys, so the check is by attachment; unreadable configs count as in use — fail closed, the bridge survives to terraform (live rule since phase 1)
     def bridge_in_use(self, node, bridge):
-        """True when any VM on the node still has a NIC on this bridge. Bridges
-        carry no tags and their names collide across same-comp deploys, so the
-        check is by attachment; unreadable configs count as in use — fail
-        closed, the bridge survives to terraform (live rule since phase 1)."""
         for v in self.view(node).vms:
             try:
                 cfg = self._api_fn()("GET", f"/nodes/{node}/qemu/{v['vmid']}/config")["data"]
@@ -114,7 +105,6 @@ class Inventory:
                 return True
         return False
 
+    # a clean verdict is impossible while this is non-empty
     def listing_failed(self):
-        """Nodes whose listing failed — a clean verdict is impossible while any
-        of these is non-empty."""
         return [(nv.node, nv.error) for nv in self.views() if nv.error]

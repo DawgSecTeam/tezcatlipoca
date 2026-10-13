@@ -40,8 +40,6 @@ class TeardownEngine:
             else Path(ctx.comp_dir) / TEARDOWN_JOURNAL
         self.log = log
 
-    # ── journal ──────────────────────────────────────────────────────────────
-
     def _load_journal(self):
         if not self.journal_enabled:
             return {"run_id": self.ctx.ownership.run_id, "done": {}}
@@ -53,20 +51,7 @@ class TeardownEngine:
             pass
         return {"run_id": self.ctx.ownership.run_id, "done": {}}
 
-    def _save_journal(self, journal):
-        if not self.journal_enabled:
-            return
-        journal["run_id"] = self.ctx.ownership.run_id
-        journal["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        from config_ops import write_text_atomic
-        write_text_atomic(self.journal_path, json.dumps(journal, indent=2), mode=0o600)
-
-    # ── execution ────────────────────────────────────────────────────────────
-
     def execute(self, plan):
-        """Run the gates, then the steps. Returns the list of StepResults; a
-        REFUSE-policy failure stops the plan there (verify_clean still runs and
-        says what is standing)."""
         journal = self._load_journal()
         if journal.get("run_id") not in (None, self.ctx.ownership.run_id):
             self.log(f"  journal belongs to run {journal.get('run_id')} — starting fresh")
@@ -85,13 +70,23 @@ class TeardownEngine:
             try:
                 result = step.run(self.ctx)
             except Exception as e:              # noqa: BLE001 - policy applies here, once
-                result = self._failure_result(step, e)
+                from infra.ownership import Refusal
+                kind = "refused" if isinstance(e, Refusal) else type(e).__name__
+                if step.failure == "refuse":
+                    result = self._result(step, "failed", f"{kind}: {e}")
+                else:
+                    result = self._result(step, "warned", f"{kind}: {e} — continuing")
             results.append(result)
             self.log(f"  [{step.name}] {result.status}"
                      + (f" — {result.detail}" if result.detail else ""))
             if result.status in ("ok", "skipped"):   # warned/failed: a re-run retries it
                 journal["done"][step.name] = step.journal_detail(result)
-                self._save_journal(journal)
+                if self.journal_enabled:
+                    journal["run_id"] = self.ctx.ownership.run_id
+                    journal["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    from config_ops import write_text_atomic
+                    write_text_atomic(self.journal_path, json.dumps(journal, indent=2),
+                                      mode=0o600)
             if result.status == "failed" and step.failure == "refuse":
                 break
         return results
@@ -101,22 +96,11 @@ class TeardownEngine:
         from teardown.steps import StepResult
         return StepResult(step.name, status, detail)
 
-    def _failure_result(self, step, exc):
-        from vm_ownership import Refusal
-        kind = "refused" if isinstance(exc, Refusal) else type(exc).__name__
-        if step.failure == "refuse":
-            return self._result(step, "failed", f"{kind}: {exc}")
-        return self._result(step, "warned", f"{kind}: {exc} — continuing")
+    # the exit contract
 
-    # ── the exit contract ────────────────────────────────────────────────────
-
+    # unverifiable is NOT clean — fail closed on listing errors
     def verify_clean(self, plan, results=None):
-        """A fresh Inventory decides: exit 0 means every step ran, nothing of
-        OURS is left running (teams-only: kept templates are kept-by-design;
-        full: nothing of ours at all), red01 is gone, no terraform state lock,
-        and the evidence was archived. Unverifiable is NOT clean (fail closed
-        on listing errors)."""
-        from vm_ownership import parse_vm_tags
+        from infra.ownership import parse_vm_tags
 
         inv = self.ctx.inventory
         inv.invalidate()
@@ -166,7 +150,22 @@ class TeardownEngine:
 
         # 4. red01 gone (when it existed and we were told to destroy it)
         if not self.ctx.keep_red:
-            still = self._red01_standing(plan)
+            # the vmid: what RedStep actually destroyed (journal), then bad-auto's config, then the deploy default; None when unverifiable
+            done_vmid = (self._journal_done(plan).get("red01") or {}).get("vmid")
+            from red_plant_ops import red_vmid_candidates
+            vmid = None
+            for candidate in [done_vmid] + list(
+                    red_vmid_candidates(self.ctx.comp_dir, self.ctx.deployed_state)):
+                if candidate:
+                    vmid = candidate
+                    break
+            still = None
+            if vmid:
+                try:
+                    from infra.client import live_vmids
+                    still = int(vmid) in live_vmids()
+                except Exception:            # noqa: BLE001 - unverifiable is not clean
+                    still = None
             if still is True:
                 problems.append("red01 is STILL PRESENT — it holds the LLM key and "
                                 "beacon tasking")
@@ -194,25 +193,3 @@ class TeardownEngine:
 
     def _journal_done(self, plan):
         return self._load_journal().get("done") or {}
-
-    def _red01_standing(self, plan):
-        """True/False when the vmid is knowable and checkable, None when
-        unverifiable. The vmid comes from the journal (what RedStep actually
-        destroyed), then bad-auto's config, then the deploy default."""
-        vmid = self._red_vmid(plan)
-        if not vmid:
-            return None
-        try:
-            from range_ops import live_vmids
-            return int(vmid) in live_vmids()
-        except Exception:                    # noqa: BLE001 - unverifiable is not clean
-            return None
-
-    def _red_vmid(self, plan):
-        done = (self._journal_done(plan).get("red01") or {}).get("vmid")
-        from red_plant_ops import red_vmid_candidates
-        for candidate in [done] + list(
-                red_vmid_candidates(self.ctx.comp_dir, self.ctx.deployed_state)):
-            if candidate:
-                return candidate
-        return None

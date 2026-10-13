@@ -32,9 +32,9 @@ def _identifiers(teams):
 
 
 def check_remote_access(comp_dir, teams, ctx):
-    """GateResult. Feature off (or pre-feature comp) skips WITHOUT gating — a range
-    that never enrolled says nothing about the gate either way. A range that DID
-    enroll gets real checks; unreachable headscale is SKIP (never a pass)."""
+# GateResult. Feature off (or pre-feature comp) skips WITHOUT gating — a range
+#     that never enrolled says nothing about the gate either way. A range that DID
+#     enroll gets real checks; unreachable headscale is SKIP (never a pass).
     print("\n  (headscale remote access)")
     state = _read_state(comp_dir)
     ra = state.get("remote_access") or {}

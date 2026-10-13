@@ -240,9 +240,10 @@ into `test.json` — see [automated-test-artifacts.md](automated-test-artifacts.
   rehearsal, not before (see `docs/rehearsal-gates.md`). Red01's cluster
   wiring is flag-driven, not hardcoded: `--red-ip/--red-gw/--red-storage`
   default to the Realm (10.0.0.198 / 10.0.0.1 / hdd) and
-  `--red-vmid/--red-template` exist for clusters where the defaults collide
-  (the cyberfield port needed vmid 999 + `base-ubuntu24.04-fix` +
-  `hdrives-zfs`; hardcoding those briefly broke Realm runs). Against local
+  `--red-vmid/--red-template` override the comp's reservation (a missing
+  `--red-vmid` resolves from the Compfile `red01_vmid` knob, the comp's own
+  bad-auto config, or `<scoring-vmid>+170` — never bad-auto's shared built-in
+  999; preflight REFUSES an occupied red01 slot, 2026-10-12). Against local
   endpoints the generated bad-auto config uses `timeout: 120` and
   `json_retries: 0` (cloud keeps 240/1): one decision that can cost 8–16 min
   turned the cyberfield red into ~2 actions/hour.
@@ -299,9 +300,10 @@ into `test.json` — see [automated-test-artifacts.md](automated-test-artifacts.
   so fall back to the scoring engine as a jump host — the engine and red01
   share a subnet by construction. `pull_red_snapshot` is the same best-effort
   pull in-run (never raises, 75 s timeout, direct then jump).
-- `_red_ssh_ctx` — red01 IP defaults to 10.0.0.198, read from bad-auto's
-  `config.yaml` (`deploy.red_ip`) when present; jump-host ProxyCommand built
-  from `credentials.txt`.
+- `_red_ssh_ctx` — red01 IP defaults to 10.0.0.198, overridden by the
+  COMPETITION's own bad-auto config (`deploy.red_ip`, written by stage_red
+  from the comp's reservation) when present; jump-host ProxyCommand built
+  from `credentials.txt`. Never the sibling checkout's shared config.
 - `stage_capture` — runs after the event window closes, when team sessions
   have been churned all event: `qget` re-logins and retries on
   `{"error":"Forbidden"}`, and falls back to the team account if admin itself

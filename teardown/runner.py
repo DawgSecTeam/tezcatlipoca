@@ -20,8 +20,6 @@ from template_ops import frozen_state
 def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
                           end_of_competition=False, keep_red=False,
                           artifacts_timeout=45, confirm=None, log=print):
-    """Gates, confirmation, plan, engine, verification. Returns the CleanReport,
-    or None when the operator cancelled. Raises Refusal before any mutation."""
     comp_dir = Path(comp_dir)
     competition = comp_dir.name
     frozen = frozen_state(comp_dir)
@@ -70,11 +68,8 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
     return engine.verify_clean(plan, results)
 
 
+# records steps the CALLER already completed (the scrim harness runs the evidence pull/collect/report and its superior red teardown itself) so the standard plan skips them instead of re-running them against dead boxes
 def record_evidence_done(comp_dir, test_dir=None, red_vmid=None):
-    """Record steps the CALLER already completed (the scrim harness runs the
-    evidence pull/collect/report and its superior red teardown itself) so the
-    standard plan skips them instead of re-running them against dead boxes.
-    The journal entry is the proof verify_clean checks."""
     from config_ops import write_text_atomic
     from teardown import Refusal
 

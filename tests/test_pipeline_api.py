@@ -46,8 +46,8 @@ class PipelineApiSurfaceTests(unittest.TestCase):
         self.assertEqual(len(expected), 17)
         self.assertEqual(sorted(pipeline_api.__all__), expected)
 
+    # no name may be routed through another re-export: the surface is the owner
     def test_every_export_resolves_to_its_owning_module(self):
-        """No name may be routed through another re-export: the surface is the owner."""
         for module_name, names in _OWNERS.items():
             owner = importlib.import_module(module_name)
             for name in names:
@@ -55,9 +55,9 @@ class PipelineApiSurfaceTests(unittest.TestCase):
                     getattr(pipeline_api, name), getattr(owner, name),
                     f"pipeline_api.{name} must be {module_name}.{name}")
 
+    # No over-export: the surface is exactly the set redeploy reaches for. A name
+    # added here but unused by any consumer is invisible again — the original bug.
     def test_surface_matches_what_redeploy_actually_calls(self):
-        """No over-export: the surface is exactly the set redeploy reaches for. A name
-        added here but unused by any consumer is invisible again — the original bug."""
         source = "\n".join(f.read_text() for f in _REDEPLOY_SOURCES)
         used = set(re.findall(r"pipeline_api\.([A-Za-z_][A-Za-z0-9_]*)", source))
         self.assertEqual(used, set(pipeline_api.__all__))

@@ -64,11 +64,13 @@ def build_parser():
                              "is the gate the scale8 soak lacked — routed red could not "
                              "reach any satellite team and it went unseen for 40 minutes. "
                              "Needs red01 deployed; pairs with --red-identity.")
-    parser.add_argument("--red-ip", default="10.0.0.198", help="red01 mgmt IP for --red-identity")
+    parser.add_argument("--red-ip", default=None,
+                        help="red01 mgmt IP for --red-identity "
+                             "(default: the comp's bad-auto config, else 10.0.0.198)")
     parser.add_argument("--red-user", default="sysadmin", help="red01 SSH user for --red-identity")
     parser.add_argument("--red-seg-ip", default=None,
                         help="red01's red-segment address for --red-identity "
-                             "(default: ../bad-auto/config.yaml, else 10.200.0.10)")
+                             "(default: the comp's bad-auto config, else 10.200.0.10)")
     parser.add_argument("--timeout", type=int, default=0, metavar="SECONDS",
                         help="overall wall-clock budget for the gate run (default 0 = no "
                              "budget). Checked BETWEEN gates, never mid-flight, so it "
@@ -113,6 +115,14 @@ def main(argv=None):
     base_url = f"http://{engine_ip}"
     print(f"Verifying competition '{comp_dir.name}' against engine {base_url}")
 
+    # red01's address resolves from the comp's own bad-auto config (this
+    # deploy's reservation) unless the operator passed one — the shared
+    # sibling config.yaml is no longer a source (2026-10-12).
+    if args.red_ip is None:
+        import badauto_config_ops
+        args.red_ip = ((badauto_config_ops.load_config(comp_dir).get("deploy") or {})
+                       .get("red_ip")) or "10.0.0.198"
+
     if args.unfreeze:
         return 0 if do_unfreeze(comp_dir, args.confirm_unfreeze) else 1
 
@@ -139,7 +149,7 @@ def main(argv=None):
 
 
 def run():
-    """Script entry: main() with the Ctrl-C contract (exit 130)."""
+# Script entry: main() with the Ctrl-C contract (exit 130).
     try:
         sys.exit(main())
     except KeyboardInterrupt:

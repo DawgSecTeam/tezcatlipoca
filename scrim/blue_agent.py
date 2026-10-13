@@ -22,7 +22,6 @@ LOCAL_BLUE_CTX = 60000
 
 
 def local_endpoint_n_ctx(base_url, timeout=5):
-    """The llama.cpp server's real context size (`/props`), or None when unreadable."""
     import urllib.request
     root = re.sub(r"/v1/?$", "", base_url.rstrip("/"))
     try:
@@ -34,9 +33,9 @@ def local_endpoint_n_ctx(base_url, timeout=5):
         return None
 
 
+# opencode's own prompt is ~20k tokens: advertising more context than the endpoint really
+# has makes opencode self-compact fatally. Unreadable /props only warns.
 def assert_local_ctx(base_url):
-    """opencode's own prompt is ~20k tokens: advertising more context than the endpoint
-    really has makes opencode self-compact fatally. Unreadable /props only warns."""
     n_ctx = local_endpoint_n_ctx(base_url)
     if n_ctx is None:
         log(f"WARNING: could not read n_ctx from {base_url}/props — "
@@ -94,7 +93,6 @@ def stage_blues(args, comp, run_dir, creds, t0):
 
 
 def _opencode_run(args, prompt, wd, env):
-    """One blue cycle in a hardened context; the whole process group dies on timeout."""
     m = re.search(r"team(\d+)$", wd.name)
     n_team = int(m.group(1)) if m else 1
     base_url, blue_model = endpoints.blue_ep(args, n_team)
@@ -123,7 +121,6 @@ def _opencode_run(args, prompt, wd, env):
 
 
 def _opencode_log_tail(wd):
-    """Tail of the newest opencode server log under the team's isolated state."""
     logdir = Path(wd) / ".opencode-home" / "data" / "opencode" / "log"
     try:
         logs = sorted(logdir.glob("*"), key=lambda p: p.stat().st_mtime)
@@ -195,27 +192,21 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
         stop.wait(min(600, max(30, core.CYCLE_TARGET_PERIOD - took)))
 
 
+# the exact header scrim-report.py counts as a timeout, always written from the timeout
+# path — including when the RETRY is the attempt that timed out. The report's
+# `timeouts == 0` rehearsal gate finds this string and nothing else, so a timeout that
+# skips it passes the gate silently.
 def write_cycle_timeout(wd, elapsed):
-    """Record the exact header scrim-report.py counts as a timeout.
-
-    Always written from the timeout path — including when the RETRY is the attempt that
-    timed out. The report's `timeouts == 0` rehearsal gate finds this string and nothing
-    else, so a timeout that skips it passes the gate silently.
-    """
     with (Path(wd) / "feed.log").open("a") as f:
         f.write(f"\n===== cycle T+{elapsed} TIMEOUT =====\n")
 
 
+# one lock acquisition per attempt: the lock used to wrap the attempt AND its retry, so
+# two hung attempts held it for up to 2 x CYCLE_TIMEOUT and starved every other team on
+# the shared endpoint of its whole cycle. Releasing between attempts lets a waiter run
+# while this team is between attempts; the concurrency cap is unchanged. The retry is
+# skipped once stop is set, so teardown is never held up by a doomed second attempt.
 def run_cycle_with_retry(args, prompt, wd, env, llm_lock, stop, team=None):
-    """One blue cycle, at most two attempts, ONE LOCK ACQUISITION PER ATTEMPT.
-
-    The lock exists to cap concurrency on a shared LLM endpoint. It used to wrap the
-    attempt AND its retry, so two hung attempts held it for up to 2 x CYCLE_TIMEOUT
-    (1800s each) and starved every other team on the same endpoint of its whole cycle.
-    Releasing between attempts lets a waiter run while this team is between attempts;
-    the cap on concurrent calls is unchanged. The retry is skipped once the stop event
-    is set, so teardown is never held up by a doomed second attempt.
-    """
     who = team if team is not None else "?"
     with llm_lock:
         r = _opencode_run(args, prompt, wd, env)

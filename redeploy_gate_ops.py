@@ -5,30 +5,15 @@ placement or touches Proxmox (snapshots, clones, destroys). Mirrors destroy_gate
 the teardown side."""
 
 import json
-from pathlib import Path
 
 from constants import PIPELINE_VERSION
-from utils import valid_comp_name
-
-
-def validate_comp_name(comp_name):
-    if comp_name is not None and not valid_comp_name(comp_name):
-        raise SystemExit(f"  ERROR: invalid competition name {comp_name!r} — use [a-z0-9._-], no path separators.")
-
-
-def deployed_candidates():
-    """Competition ids under competitions/ that have a Compfile + teams.json."""
-    return [
-        p.name for p in sorted(Path("competitions").iterdir())
-        if p.is_dir() and (p / "Compfile").exists() and (p / "teams.json").exists()
-    ]
 
 
 def load_deployed_range(comp_dir):
-    """Return (teams, boxes, state, state_path) for a deployed competition, or exit.
-
-    Refuses a range written by an older pipeline (no matching PIPELINE_VERSION or no run
-    id): redeploy's ownership-tagged destroys cannot be proven safe against it."""
+# Return (teams, boxes, state, state_path) for a deployed competition, or exit.
+#
+#     Refuses a range written by an older pipeline (no matching PIPELINE_VERSION or no run
+#     id): redeploy's ownership-tagged destroys cannot be proven safe against it.
     teams_path = comp_dir / "teams.json"
     boxes_path = comp_dir / "boxes.json"
     state_path = comp_dir / ".deploy_state.json"

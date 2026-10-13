@@ -14,11 +14,11 @@ from deploy_lib.coverage import record_clean_coverage, record_stage_coverage
 
 
 def phase6_repair_sweep(ctx):
-    """[6/8] Post-clone repair sweep: sshd/sudoers plants, then fix_services.
-
-    Re-runnable by design: the .postclone-swept marker makes a resume skip the
-    whole sweep, and the nakon pass itself is strict=False (see the comment at the
-    call) because one flaky plant must not kill a sweep that 98% landed."""
+# [6/8] Post-clone repair sweep: sshd/sudoers plants, then fix_services.
+#
+#     Re-runnable by design: the .postclone-swept marker makes a resume skip the
+#     whole sweep, and the nakon pass itself is strict=False (see the comment at the
+#     call) because one flaky plant must not kill a sweep that 98% landed.
     if ctx.from_phase > 6:
         print("[6/8] Skipped (resume).")
         return

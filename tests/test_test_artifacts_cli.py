@@ -28,10 +28,10 @@ BUILD_INFO = '{"ok": true}\n'
 
 
 def _load_cli():
-    """The script is not importable by name (`test-artifacts.py` has a dash), so load it by path.
-
-    Importing it is safe: only `main()` is guarded, and importing reads no state — artifacts_ops
-    resolves its own paths from `__file__`, never from the cwd the tests move."""
+# The script is not importable by name (`test-artifacts.py` has a dash), so load it by path.
+#
+#     Importing it is safe: only `main()` is guarded, and importing reads no state — artifacts_ops
+#     resolves its own paths from `__file__`, never from the cwd the tests move.
     spec = importlib.util.spec_from_file_location("test_artifacts_cli_under_test",
                                                   _REPO / "test-artifacts.py")
     module = importlib.util.module_from_spec(spec)
@@ -43,7 +43,7 @@ cli = _load_cli()
 
 
 class CliTestCase(unittest.TestCase):
-    """A temp `repo root` holding competitions/demo with a Compfile + a run id in deploy state."""
+# A temp `repo root` holding competitions/demo with a Compfile + a run id in deploy state.
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -69,14 +69,14 @@ class CliTestCase(unittest.TestCase):
     # ── helpers ────────────────────────────────────────────────────────────────────────
 
     def run_cli(self, *argv):
-        """(exit code, stdout+stderr) — both streams, so a refusal printed to stderr is visible."""
+    # (exit code, stdout+stderr) — both streams, so a refusal printed to stderr is visible.
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
             code = cli.main(list(argv))
         return code, buffer.getvalue()
 
     def make_folder(self, kind="deploy", *, files=None):
-        """An `ensure_test` folder, optionally with a collectable local harness run dir."""
+    # An `ensure_test` folder, optionally with a collectable local harness run dir.
         path, _ = ao.ensure_test(self.comp, kind=kind, script="tests/test_test_artifacts_cli.py")
         if files is not None:
             run_dir = self.root / "run"
@@ -87,7 +87,7 @@ class CliTestCase(unittest.TestCase):
         return path
 
     def settle(self, path):
-        """Collect (local-only) then stubs/REPORT.md/index — what teardown leaves behind."""
+    # Collect (local-only) then stubs/REPORT.md/index — what teardown leaves behind.
         ao.collect(path, ao.plan_targets(ao.load_manifest(path), comp_dir=self.comp))
         ao.finalize(path, manifest=ao.load_manifest(path))
         return path
@@ -146,7 +146,7 @@ class TestShow(CliTestCase):
         self.assertTrue((path / "REPORT.md").exists())
 
     def test_show_explains_a_missing_canonical_document(self):
-        """The 'why is RED-TEAM.md missing?' case: a red agent that was never reachable."""
+    # The 'why is RED-TEAM.md missing?' case: a red agent that was never reachable.
         path = self.make_folder()
         ao.update_manifest(path, agents={"red": {"present": True}, "blue": {"present": False}})
         # No ssh host recorded, so collect() marks red01 unreachable without touching a network.
@@ -249,7 +249,7 @@ class TestCollect(CliTestCase):
         self.assertIn("RESULT: DRY RUN", out)
 
     def test_dry_run_marks_absence_warnings_as_expected(self):
-        """A present agent whose document is not there still warns — but a dry run did not try."""
+    # A present agent whose document is not there still warns — but a dry run did not try.
         path = self.make_folder()
         ao.update_manifest(path, agents={"red": {"present": True}, "blue": {"present": False}})
         code, out = self.run_cli("collect", "demo", RUN_ID, "--dry-run")
@@ -258,7 +258,7 @@ class TestCollect(CliTestCase):
         self.assertRegex(out, r"RED-TEAM\.md is (MISSING|ABSENT)")
 
     def test_live_collect_announces_the_estate_and_completes_for_a_no_agent_run(self):
-        """No agent is present, so every target is local/skipped — no scp, no guest agent."""
+    # No agent is present, so every target is local/skipped — no scp, no guest agent.
         self.make_folder(kind="deploy")
         code, out = self.run_cli("collect", "demo", RUN_ID)
         self.assertEqual(code, 0, out)

@@ -14,7 +14,13 @@ GATES = {
             ("distinct_tactics", 4, ">="), ("windows_footholds", 1, ">="),
             ("max_simultaneous_down", 4, ">="), ("stalls", 0, "=="),
             ("evictions", 1, ">=")],
-    "blue": [("cycles_rc0", 8, ">="), ("restorations", 2, ">="),
+    # cycles_rc0 tuned 8 -> 6 (2026-10-12) per docs/rehearsal-gates.md's
+    # post-rehearsal protocol: two full rehearsals on the GX10 qwen-flash
+    # measure 8-17 min per meaningful blue cycle even scoped to ONE change
+    # (run3: 2/2 overruns of a 1800 s cap; run4: 1 rc=0 + 5 overruns of 540 s;
+    # run5: 4 rc=0 + 2 timeouts of 600 s), so >= 8 in a 60-min event was
+    # unreachable at zero timeouts. Must stay in sync with the doc's row.
+    "blue": [("cycles_rc0", 6, ">="), ("restorations", 2, ">="),
              ("injects", 2, ">="), ("notebook_entries", 10, ">="),
              ("timeouts", 0, "==")],
 }
@@ -27,11 +33,11 @@ EXPECTED_17C = {
 }
 
 
+# thresholds overrides a gate's static threshold by key where the right threshold is
+# per-run data (max_simultaneous_down judges against red's own max_concurrent_down_end
+# pacing cap, not a hardcoded 4); gates replaces the static GATES table per section
+# (used to drop a structurally inapplicable gate)
 def evaluate(gm, bm, thresholds=None, gates=None):
-    """Gate rows. `thresholds` overrides a gate's static threshold by key — used where the
-    right threshold is per-run data (max_simultaneous_down judges against red's own
-    max_concurrent_down_end pacing cap, not a hardcoded 4). `gates` replaces the static
-    GATES table per section (used to drop a structurally inapplicable gate)."""
     thresholds = thresholds or {}
     gates = gates or GATES
     rows = []
@@ -52,7 +58,6 @@ def op_str(threshold):
 
 
 def compute_components(run_dir):
-    """Score components alone, for the pinned self-test."""
     events, t0 = loaders.load_red_events(run_dir)
     world = loaders.load_world(run_dir)
     snaps = loaders.load_scoreboard(run_dir)

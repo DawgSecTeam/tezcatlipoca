@@ -1,7 +1,7 @@
 """Ownership-guarded Proxmox VM mutations: the ONE place the ownership-tag proof lives.
 
 Everything that destroys, re-tags, unlocks or garbage-collects a VM on the strength of "this is
-ours" goes through here, and both the preflight clash gate (preflight/clashes.py) and the destroy
+ours" goes through here, and both the preflight clash gate (infra/collisions.py) and the destroy
 guard (destroy_vm_if_exists) classify a VM with the same pure function, `ownership_verdict`:
 
   * OWNED     - carries the FULL ownership set (constants.ownership_tags: tezcatlipoca +
@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass, field
 
 from constants import ownership_tags
-from pve_api import proxmox_api, wait_for_proxmox_task
+from infra.client import proxmox_api, wait_for_proxmox_task
 
 OWNED = "owned"
 MARKER = "marker"

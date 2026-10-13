@@ -28,12 +28,6 @@ def takedown_fields(ev):
     return ip, svc, mode or ("firewall" if ev.get("tactic") == "impact_firewall" else "stop")
 
 
-def foothold_list(world):
-    """world.json 'footholds' has been dict-keyed-by-ip or a list across versions."""
-    fh = world.get("footholds") or []
-    return list(fh.values()) if isinstance(fh, dict) else fh
-
-
 def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
     m = {"takedowns": 0, "timeline": [], "distinct_tactics": set(), "initial_access": set(),
          "targets": set(), "stalls": [], "restore_reactions": 0, "blue_restore_events": 0,
@@ -124,7 +118,9 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
     for a, b in zip(ok_stamps, ok_stamps[1:]):
         if b - a >= STALL_SEC / 60.0:
             m["stalls"].append((a, b, b - a))
-    for f in foothold_list(world):
+    # world.json 'footholds' has been dict-keyed-by-ip or a list across versions
+    fh = world.get("footholds") or []
+    for f in (list(fh.values()) if isinstance(fh, dict) else fh):
         if isinstance(f, dict) and f.get("windows"):
             m["windows_footholds"] += 1
     if not m["windows_footholds"]:

@@ -4,7 +4,7 @@ import json
 
 
 def load_injects(comp_dir):
-    """Load per-competition injects (title/description/offsets/attachments); [] when no injects/ dir."""
+# Load per-competition injects (title/description/offsets/attachments); [] when no injects/ dir.
     injects_dir = comp_dir / "injects"
     if not injects_dir.is_dir():
         return []
@@ -37,7 +37,7 @@ def load_injects(comp_dir):
 
 
 def resolve_inject_times(injects):
-    """Resolve inject offsets to RFC3339 timestamps anchored at now (phase 7). Mutates in place."""
+# Resolve inject offsets to RFC3339 timestamps anchored at now (phase 7). Mutates in place.
 
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)
@@ -53,19 +53,18 @@ def resolve_inject_times(injects):
 
 
 def injects_fingerprint(injects):
-    """Stable identity of the inject *definitions*, for phase 7's done-marker.
-
-    Call this BEFORE `resolve_inject_times` — that function pops the offset fields and
-    rewrites them as absolute timestamps, so a fingerprint taken afterwards changes on
-    every run and would re-create the whole set every time.
-
-    `injects_created` used to be a bare boolean, which meant an inject added (or a
-    window edited) after the first phase-7 run was silently skipped forever on resume:
-    `create_injects` dedups on titles precisely so a re-run is safe, but nothing ever
-    re-ran it. Titles are what that dedup keys on, so they lead the fingerprint; the
-    offsets and attachment names are included so a changed window or a swapped
-    attachment is not missed either.
-    """
+# Stable identity of the inject *definitions*, for phase 7's done-marker.
+#
+#     Call this BEFORE `resolve_inject_times` — that function pops the offset fields and
+#     rewrites them as absolute timestamps, so a fingerprint taken afterwards changes on
+#     every run and would re-create the whole set every time.
+#
+#     `injects_created` used to be a bare boolean, which meant an inject added (or a
+#     window edited) after the first phase-7 run was silently skipped forever on resume:
+#     `create_injects` dedups on titles precisely so a re-run is safe, but nothing ever
+#     re-ran it. Titles are what that dedup keys on, so they lead the fingerprint; the
+#     offsets and attachment names are included so a changed window or a swapped
+#     attachment is not missed either.
     import hashlib
 
     items = []

@@ -11,14 +11,14 @@ from deploy_lib.golden_plan import golden_hash_entries
 
 
 def generate_stage_configs_and_hashes(generated, comp_dir, spec, secrets):
-    """Write the nakon/stage configs and compute every golden hash, into `generated`.
-
-    The M4 golden hashes are computed BEFORE phase 1 — cleanup must know which golden
-    templates survive (test-run reuse) and which rebuild — and the frozen gate fires
-    here for the same reason: a config-class freeze must be able to say "nothing
-    destroyed" before phase 1 starts deleting. The golden bundle is built now (content
-    addressed; the phase-4 plant reuses the cache) because each box's hash consumes its
-    plan's payload shas. See the comments on each sub-block for the incident history."""
+# Write the nakon/stage configs and compute every golden hash, into `generated`.
+#
+#     The M4 golden hashes are computed BEFORE phase 1 — cleanup must know which golden
+#     templates survive (test-run reuse) and which rebuild — and the frozen gate fires
+#     here for the same reason: a config-class freeze must be able to say "nothing
+#     destroyed" before phase 1 starts deleting. The golden bundle is built now (content
+#     addressed; the phase-4 plant reuses the cache) because each box's hash consumes its
+#     plan's payload shas. See the comments on each sub-block for the incident history.
     generated.nakon_config_path = generate_nakon_config(secrets.teams, spec.boxes, spec.difficulty, comp_dir, secrets.box_password,
                                                box_username=spec.box_username)
     # M3.2: the full bundle is never deployed as one pass anymore. The golden-stage

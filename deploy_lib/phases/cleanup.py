@@ -9,10 +9,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from config_ops import destroy_bridge_if_exists
+from infra.client import destroy_bridge_if_exists
 from golden_ops import _is_template
 from nodes_ops import record_of
-from range_ops import destroy_vm_if_exists, proxmox_api
+from infra.client import proxmox_api
+from infra.ownership import destroy_vm_if_exists
 from template_ops import load_template_hashes
 from timing import timed
 from utils import is_in_path_fw, record_degradation
@@ -20,30 +21,30 @@ from utils import is_in_path_fw, record_degradation
 from deploy_lib.golden_plan import phase1_destroy_waves
 import teardown
 from teardown import CallStep, Inventory, Ownership, TeardownContext, TeardownEngine
-from teardown.modes import build_reclaim_plan
+from teardown.plan import RECLAIM, TeardownPlan
 
 
 def reset_domain_markers(comp_dir):
-    """The per-deploy domain done-markers (.nakon-domain-<team>-adds.json) describe THIS
-    deploy's DCs — run 2's fresh clones were never promoted, but a surviving run-1 artifact
-    made the domain pass skip promotion (live-found 2026-09-25, matrix run 2). A fresh
-    deploy resets them; resumes keep them (that is the guard's whole point). The
-    per-COMPETITION .template-hashes.json is NOT touched — it drives template reuse."""
+# The per-deploy domain done-markers (.nakon-domain-<team>-adds.json) describe THIS
+#     deploy's DCs — run 2's fresh clones were never promoted, but a surviving run-1 artifact
+#     made the domain pass skip promotion (live-found 2026-09-25, matrix run 2). A fresh
+#     deploy resets them; resumes keep them (that is the guard's whole point). The
+#     per-COMPETITION .template-hashes.json is NOT touched — it drives template reuse.
     for stale in Path(comp_dir).glob(".nakon-domain-*.json"):
         stale.unlink()
 
 
 def destroy_owned(ctx, destroy_node, vmid, vm_name):
-    """Destroy one VM if it is OURS (prior run's ownership, tag-guarded), timed under
-    phase 1. ctx.reclaim_tags carries the PRIOR state's run id — a same-comp VM
-    without it belongs to another worktree's run and is refused (2026-10-02
-    near-miss); untagged VMs are refused unless they carry this comp's clone marker."""
+# Destroy one VM if it is OURS (prior run's ownership, tag-guarded), timed under
+#     phase 1. ctx.reclaim_tags carries the PRIOR state's run id — a same-comp VM
+#     without it belongs to another worktree's run and is refused (2026-10-02
+#     near-miss); untagged VMs are refused unless they carry this comp's clone marker.
     with timed(ctx.comp_dir, 1, "destroy_vm", vm_name):
         destroy_vm_if_exists(destroy_node, vmid, expect_tags=ctx.reclaim_tags)
 
 
 def destroy_pool(ctx, vmid_map, destroy_node):
-    """Destroy one wave in parallel (bounded like every other per-box bulk pass)."""
+# Destroy one wave in parallel (bounded like every other per-box bulk pass).
     workers = min(8, len(vmid_map)) or 1
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [pool.submit(destroy_owned, ctx, destroy_node, vmid, name)
@@ -53,8 +54,8 @@ def destroy_pool(ctx, vmid_map, destroy_node):
 
 
 def destroy_node_waves(ctx, destroy_node, node_targets, slot, extra_destroy=None):
-    """One wave pair per hosting node, that node's VMs and its slot's golden span
-    (multi-node) — the engine node keeps the historical slot-0 behavior."""
+# One wave pair per hosting node, that node's VMs and its slot's golden span
+#     (multi-node) — the engine node keeps the historical slot-0 behavior.
     try:
         node_vms = proxmox_api("GET", f"/nodes/{destroy_node}/qemu")["data"]
     except Exception as e:
@@ -73,12 +74,12 @@ def destroy_node_waves(ctx, destroy_node, node_targets, slot, extra_destroy=None
 
 
 def _bridge_in_use(node, bridge):
-    """True when any VM on the node still has a NIC on this bridge.
-
-    Bridges carry no tags of their own and their names (vmbr<team identifier>)
-    collide across same-comp deploys sharing team identifiers — phase 1 must not
-    rip a bridge out from under another run's VMs. Unreadable configs count as
-    in use: fail closed, the bridge survives to teardown/terraform."""
+# True when any VM on the node still has a NIC on this bridge.
+#
+#     Bridges carry no tags of their own and their names (vmbr<team identifier>)
+#     collide across same-comp deploys sharing team identifiers — phase 1 must not
+#     rip a bridge out from under another run's VMs. Unreadable configs count as
+#     in use: fail closed, the bridge survives to teardown/terraform.
     try:
         vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
     except Exception:
@@ -95,8 +96,8 @@ def _bridge_in_use(node, bridge):
 
 
 def _reclaim_bridge(ctx, node, bridge):
-    """Destroy a team bridge only when nothing is still attached to it (see
-    _bridge_in_use) — a foreign/other-run holder survives with a loud warning."""
+# Destroy a team bridge only when nothing is still attached to it (see
+#     _bridge_in_use) — a foreign/other-run holder survives with a loud warning.
     if _bridge_in_use(node, bridge):
         print(f"  WARNING: {bridge} on {node} still has attached VM(s) — NOT destroying "
               f"it (another run's range may share the team identifier)")
@@ -106,13 +107,13 @@ def _reclaim_bridge(ctx, node, bridge):
 
 
 def phase1_cleanup(ctx):
-    """[1/8] Tear down the previous range: team boxes first, then their templates.
-
-    Wave 1: every team box (the computed set covers ALL teams now that terraform
-    builds them). Linked clones must die BEFORE their templates. Wave 2 (goldens/engine/stale slots)
-    is phase1_destroy_waves' job; the node/bridge walk is composed into a RECLAIM
-    plan here and executed by the teardown engine (journaling off: a resume at
-    phase 1 must re-reclaim, never skip)."""
+# [1/8] Tear down the previous range: team boxes first, then their templates.
+#
+#     Wave 1: every team box (the computed set covers ALL teams now that terraform
+#     builds them). Linked clones must die BEFORE their templates. Wave 2 (goldens/engine/stale slots)
+#     is phase1_destroy_waves' job; the node/bridge walk is composed into a RECLAIM
+#     plan here and executed by the teardown engine (journaling off: a resume at
+#     phase 1 must re-reclaim, never skip).
     if ctx.from_phase > 1:
         print("[1/8] Skipped (resume) — leaving existing VMs/bridges in place.")
         return
@@ -178,7 +179,7 @@ def phase1_cleanup(ctx):
         placement=ctx.placement, nodes=nodes, default_node=ctx.node,
         inventory=Inventory(nodes))
     results = TeardownEngine(engine_ctx, log=print, journal=False).execute(
-        build_reclaim_plan(steps))
+        TeardownPlan(RECLAIM, [], steps))
     failed = [r for r in results if r.status == "failed"]
     if failed:
         raise RuntimeError(f"phase-1 reclaim step '{failed[0].name}' failed: "

@@ -54,7 +54,6 @@ class Tail(unittest.TestCase):
         out.__enter__()
         self.addCleanup(out.__exit__, None, None, None)
 
-    # ------------------------------------------------------------------ phase 7
     def _p7(self, machines, **kw):
         (self.comp / "final.json").write_text(json.dumps({"machines": machines}))
         ctx = _ctx(self.comp, **kw)
@@ -106,7 +105,6 @@ class Tail(unittest.TestCase):
             final.phase7_domains_and_final(ctx)
         d.assert_not_called()
 
-    # ------------------------------------------------------------------ phase 1
     def test_phase1_multinode_reclaims_satellite_bridges_and_jump(self):
         placement = {
             "engine_node": "n1", "team_nodes": {"team1": "n1", "team2": "n2"},
@@ -158,7 +156,6 @@ class Tail(unittest.TestCase):
             cleanup.phase1_cleanup(ctx)
         self.assertEqual(sorted(bridges), ["vmbr101", "vmbr102", "vmbrW101", "vmbrW102"])
 
-    # ------------------------------------------------------------------ finish
     def test_connect_terraform_and_finish(self):
         ctx = _ctx(self.comp)
         tf = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.9"}

@@ -1,8 +1,6 @@
-import json
 import os
 from pathlib import Path
 
-from config_ops import write_text_atomic
 from scrim import compworld
 from scrim import core
 from scrim import endpoints
@@ -11,6 +9,7 @@ from scrim import red_link
 from scrim import red_tunnel
 from scrim import test_folder
 from scrim.core import log
+import badauto_config_ops
 import red_plant_ops
 import realm_c2_ops
 
@@ -46,8 +45,9 @@ def red_pacing_caps():
             "max_concurrent_down_endgame": 6}
 
 
-def _existing_blackbox():
-    """realm/beacon/evasion blocks from the on-disk bad-auto config, if any.
+def _existing_blackbox(comp):
+    """realm/beacon/evasion blocks from the competition's own bad-auto config,
+    if a prior run left one.
 
     These describe the club's C2 infrastructure (tavern on the malware-dev VM,
     the per-transport imix table, the raw-socket channel), NOT the run's pacing
@@ -56,19 +56,36 @@ def _existing_blackbox():
     block at all, which silently dropped every run to the raw-socket beacon
     tier: realm_plant on red01 saw realm.enabled false and the "newly improved"
     multi-transport beacons were never planted on a range.
+
+    Read from the COMP'S config (per-run since the 2026-10-12 isolation), never
+    the sibling checkout's repo-root singleton — on a shared checkout that file
+    names whichever session staged last.
     """
-    path = core.BAD_AUTO / "config.yaml"
-    if not path.exists():
-        return {}
-    text = path.read_text(encoding="utf-8")
+    return badauto_config_ops.existing_blackbox(comp)
+
+
+def _resolve_red_vmid(args, comp):
+    """Fill a missing --red-vmid from the comp's own reservation: Compfile
+    `red01_vmid`, else the comp config's deploy.red_vmid, else derived from the
+    deploy state's scoring vmid (engine+170). Refuses when none resolve — the
+    old fallback regexed bad-auto's SOURCE for its built-in 999, a shared node
+    slot no second session may silently default onto."""
+    if getattr(args, "red_vmid", None):
+        return args.red_vmid
+    engine_vmid = None
     try:
-        return json.loads(text) or {}
-    except ValueError:
-        try:
-            import yaml
-            return yaml.safe_load(text) or {}
-        except Exception:
-            return {}
+        engine_vmid = core.read_comp_json(comp, ".deploy_state.json").get("scoring_vm_id")
+    except Exception:                                        # noqa: BLE001 - best effort
+        pass
+    vmid = badauto_config_ops.red01_vmid_for(comp, engine_vmid)
+    if vmid is None:
+        raise RuntimeError(
+            "cannot resolve red01's vmid: no --red-vmid, no Compfile red01_vmid, no "
+            "comp bad-auto config, and no scoring_vm_id in .deploy_state.json. "
+            "Pass --red-vmid or set red01_vmid in the Compfile — never fall back "
+            "to bad-auto's shared built-in default (vmid 999).")
+    args.red_vmid = vmid
+    return vmid
 
 
 def red_llm_config(args):
@@ -103,6 +120,7 @@ def red_llm_config(args):
 
 def stage_red(args, comp, creds, run_dir):
     llm = red_llm_config(args)
+    _resolve_red_vmid(args, comp)   # before the cfg build: the config carries it
     cfg = {
         "llm": llm,
         "intel": "nakon",
@@ -130,7 +148,7 @@ def stage_red(args, comp, creds, run_dir):
                    "max_retries_per_service": 4, "spray_attempts_per_target": 24,
                    "action_timeout": 120, "scan_timeout": 900},
         "deploy": {"red_ip": args.red_ip, "red_gw": args.red_gw, "red_storage": args.red_storage,
-                   **({"red_vmid": args.red_vmid} if args.red_vmid else {}),
+                   "red_vmid": args.red_vmid,
                    **({"template": args.red_template} if args.red_template else {}),
                    **({"red_mode": args.red_mode} if args.red_mode else {}),
                    **({"red_subnet": args.red_subnet} if args.red_subnet else {}),
@@ -138,7 +156,7 @@ def stage_red(args, comp, creds, run_dir):
     }
     # The operator's C2 blocks survive: stage_red builds llm/pacing/deploy/limits,
     # and `badauto deploy` stages this config onto red01, where realm_plant runs.
-    carried = _existing_blackbox()
+    carried = _existing_blackbox(comp)
     for key in ("realm", "beacon", "evasion", "naming"):
         if carried.get(key):
             cfg[key] = carried[key]
@@ -156,7 +174,7 @@ def stage_red(args, comp, creds, run_dir):
             raise RuntimeError(
                 f"realm.c2_local is on but the staged realm block lacks {missing} — "
                 "this plants dead beacons under a 'tavern live' banner (2026-10-11). "
-                "Fix the bad-auto realm block or the comp's teams.json and re-run.")
+                "Fix the comp's realm block or the teams.json and re-run.")
     # ...and so does the REST of the operator's deploy block. stage_red builds this
     # config from scratch, so anything it does not set is lost: `template` most of
     # all, which then fell back to badauto's built-in default and failed the first
@@ -166,14 +184,22 @@ def stage_red(args, comp, creds, run_dir):
     op_deploy = carried.get("deploy") or {}
     cfg["deploy"] = {**{k: v for k, v in op_deploy.items() if k not in cfg["deploy"]},
                      **cfg["deploy"]}
-    # Atomic: a torn config.yaml would break every subsequent badauto call, and the
-    # file may name an internal endpoint.
-    write_text_atomic(core.BAD_AUTO / "config.yaml", json.dumps(cfg, indent=2), mode=0o600)
+    # The COMPETITION's own config — one file per deploy, threaded to every
+    # badauto call below (and bad-auto stamps .deploy-stamp.json next to it, so
+    # concurrent sessions cannot clobber each other's red01 identity — the
+    # 2026-10-12 vmid-999 kill). Atomic + 0600: a torn config would break every
+    # subsequent badauto call, and the file may name an internal endpoint.
+    config_file = badauto_config_ops.write_config(comp, cfg)
     env = {**os.environ, "BAuto_LLM_API_KEY": endpoints.api_key(local=core.is_local_endpoint(args.llm_base_url)),
            "BAuto_STATE_DIR": str(Path(run_dir) / "bad-auto-state")}
-    procs.run(["python3", "-m", "badauto", "validate-llm"], cwd=core.BAD_AUTO, env=env, timeout=300, tail=3)
-    procs.run(["python3", "-m", "badauto", "run", "--once", "--dry-run",
-               "--competition", str(comp.resolve())], cwd=core.BAD_AUTO, env=env, timeout=600, tail=6)
+    # A stale BAuto_CONFIG in the environment would shadow nothing while --config
+    # is explicit, but scrub it anyway: symmetry with red_plant_ops._deploy_red.
+    env.pop("BAuto_CONFIG", None)
+    procs.run(["python3", "-m", "badauto", "--config", str(config_file), "validate-llm"],
+              cwd=core.BAD_AUTO, env=env, timeout=300, tail=3)
+    procs.run(["python3", "-m", "badauto", "--config", str(config_file), "run", "--once",
+               "--dry-run", "--competition", str(comp.resolve())],
+              cwd=core.BAD_AUTO, env=env, timeout=600, tail=6)
 
     tunnel = red_tunnel.maybe_start_red_tunnel(args)
     if tunnel:
@@ -181,11 +207,13 @@ def stage_red(args, comp, creds, run_dir):
         # red01 itself can only dial the endpoint through the tunnel.
         cfg["llm"]["base_url"] = tunnel.red_base_url()
         # Atomic, same reason as above.
-        write_text_atomic(core.BAD_AUTO / "config.yaml", json.dumps(cfg, indent=2), mode=0o600)
+        badauto_config_ops.write_config(comp, cfg)
         args.red_tunnel = tunnel
     red_mode = args.red_mode or "routed (bad-auto default)"
-    log(f"deploying red01 at {args.red_ip} (storage {args.red_storage}, mode {red_mode})")
-    procs.run(["python3", "-m", "badauto", "deploy", "--competition", str(comp.resolve())],
+    log(f"deploying red01 at {args.red_ip} (vmid {args.red_vmid}, storage "
+        f"{args.red_storage}, mode {red_mode})")
+    procs.run(["python3", "-m", "badauto", "--config", str(config_file), "deploy",
+               "--competition", str(comp.resolve())],
               cwd=core.BAD_AUTO, env=env, timeout=1800)
     # The C2 lives on red01 for this run (operator set realm.c2_local): build
     # tavern there — every callback transport + MCP — and stage the imix
@@ -204,15 +232,11 @@ def stage_red(args, comp, creds, run_dir):
                                f"plant without their tavern")
         log(f"realm C2 live on red01 {args.red_ip} "
             f"(transports: {', '.join(c2['transports'])}; MCP at {c2['mcp']})")
-    # Record red01's identity now, while it is known: bad-auto's config.yaml is a rewritten
-    # singleton, so a later reader of it can name ANOTHER run's red01 — the manifest is the
-    # only per-run source of truth the collector may dial (INV5). Recorded before the LLM
-    # gate below so a run that dies there still lets teardown collect from red01.
-    # The vmid is optional on the command line but never optional to teardown,
-    # which has to assert the VM is gone: fill it from bad-auto's default so the
-    # manifest (and the destroy verification) always knows the number.
-    if not getattr(args, "red_vmid", None):
-        args.red_vmid = core.bad_auto_deploy_default("red_vmid")
+    # Record red01's identity now, while it is known: the manifest is the per-run
+    # source of truth the collector dials (INV5), recorded before the LLM gate
+    # below so a run that dies there still lets teardown collect from red01.
+    # The vmid was resolved up top (_resolve_red_vmid) — the comp's own
+    # reservation, never bad-auto's shared built-in default.
     test_folder.record_red_agent(args)
 
     red_base = cfg["llm"]["base_url"]

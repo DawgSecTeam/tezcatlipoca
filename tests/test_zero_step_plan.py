@@ -28,8 +28,8 @@ class DriverHasNoWorkaround(unittest.TestCase):
         self.assertFalse(hasattr(nakon_run_ops, "_reconcile_zero_step_machines"))
 
     def test_clean_zero_step_outcome_passes_through_untouched(self):
-        """run_nakon returns nakon's per-machine JSON verbatim: an empty-step, error-free
-        machine is a clean outcome the nothing-answered floor accepts alongside a ran one."""
+    # run_nakon returns nakon's per-machine JSON verbatim: an empty-step, error-free
+    #         machine is a clean outcome the nothing-answered floor accepts alongside a ran one.
         machines = [{"name": "db01", "error": None, "steps": []},
                     {"name": "web01", "error": None, "steps": [{"name": "x", "rc": 0}]}]
         self.assertIsNone(nakon_ops._nothing_answered(machines))
@@ -37,8 +37,8 @@ class DriverHasNoWorkaround(unittest.TestCase):
 
 
 def _run(step_count, report_lines=()):
-    """Drive runner.deploy_machine with ssh faked: the remote exits 0 and prints
-    `report_lines` between the report markers (none = silent)."""
+# Drive runner.deploy_machine with ssh faked: the remote exits 0 and prints
+#     `report_lines` between the report markers (none = silent).
     plan_entry = {"steps": [{}] * step_count}
     bundle = MagicMock()
     bundle.plan_for.return_value = ("p" * 64, plan_entry)

@@ -150,23 +150,6 @@ account per team (`team1`…). The only per-student attribution is the optional 
 at login, which is self-asserted and recorded in the access log. Per-student identity would mean
 moving Quotient itself to LDAP/OIDC.
 
-### Hand-run realm deploys need the FULL realm block in bad-auto's config.yaml
-
-**Status: OPEN — operator trap, live-found 2026-10-11 (scrim-one redeploy).** The deploy derives
-red01's config from the operator's `~/dev/dawgsec/bad-auto/config.yaml` through field allowlists;
-a realm block that sets only `enabled`/`c2_ip`/`base_url` (what `realm_c2_ops.apply_local_c2`
-rewrites) silently takes the legacy path server-side too: ONE http1 beacon per box aimed at the
-team gateway address (dead behind an in-path firewall), zero tavern rows, and no DNAT rules for
-any transport — while the provisioner still prints "tavern live … all transports" and the seed
-records `implant: True` per box. Everything looks green but the C2 is dark. The block must carry
-`transports` (all five, with gw_port/c2_port/domain) AND `callback_ip` (the engine transit IP,
-e.g. `172.31.120.1` on this estate) — `config.example.yaml` `realm:` is the canonical shape. Repair
-path used live: fix config → `realm_c2_ops.prepare_local_c2` → merge the `_red01_realm_cfg` subset
-into red01's `/etc/bad-auto/config.yaml` (preserve `realm.pubkey`) → `engine_nat.install` with the
-deploy-stamp args → clear `meta.seed[ip].implant` → re-seed. Same run also found the GX10 chat
-template 500s on `reasoning_effort: "minimal"` ("Unexpected reasoning effort") — every red LLM
-decision then falls back to scripted tactics; leave the key off for local endpoints.
-
 ### bad-auto world.json has no concurrent-writer protection
 
 **Status: OPEN — upstream-worthy (bad-auto).** `World.save()` is a bare atomic write of the

@@ -19,7 +19,7 @@ def load_admin_password(comp_dir, override):
 
 
 def check_no_default_creds(comp_dir):
-    """Confirm credentials.txt doesn't carry default literal passwords (rotation guard)."""
+# Confirm credentials.txt doesn't carry default literal passwords (rotation guard).
     lines = read_credentials_lines(comp_dir)
     if lines is None:
         print("  (no credentials.txt to check for default creds)")

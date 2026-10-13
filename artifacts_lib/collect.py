@@ -20,7 +20,7 @@ def relative_to_test(test_path, path):
 
 
 def _previous_items(collection, target_name, label):
-    """Items from an earlier collection run for this same wanted item."""
+# Items from an earlier collection run for this same wanted item.
     for target in collection.get("targets", []):
         if target.get("name") == target_name:
             return [item for item in target.get("files", []) if item.get("want") == label]
@@ -28,11 +28,11 @@ def _previous_items(collection, target_name, label):
 
 
 def _still_good(test_path, items):
-    """True when every previously collected item still exists and still hashes the same.
-
-    This is what makes a re-run teardown idempotent *and* honest: an already-good artifact is
-    re-verified rather than re-fetched, and one somebody edited by hand is re-collected instead
-    of being silently trusted."""
+# True when every previously collected item still exists and still hashes the same.
+#
+# This is what makes a re-run teardown idempotent *and* honest: an already-good artifact is
+# re-verified rather than re-fetched, and one somebody edited by hand is re-collected instead
+# of being silently trusted.
     if not items:
         return False
     for item in items:
@@ -58,18 +58,18 @@ def _canonical_done(test_path, collection, canonical):
 
 def collect(test_path, targets, *, transport=None, skip_existing=True, dry_run=False,
             timeout=120, stop_on_unreachable=True):
-    """Fetch/seal everything in `targets` into the test folder, then write collection.json.
-
-    `transport` is injected (defaults to the real scp/guest-agent/local trio) so the whole
-    collector is exercised offline by tests/test_artifacts_ops.py.
-
-    `stop_on_unreachable` gives up on a target after its first unreachable transfer instead of
-    burning the per-file timeout four more times: teardown runs this, and a dead red01 must not
-    add ten minutes to a destroy that is already the slowest step.
-
-    Never raises for a single unreachable or missing source: a partial collection recorded as
-    partial is the entire point of the status vocabulary. Only programming errors (an unknown
-    route) are hard failures."""
+# Fetch/seal everything in `targets` into the test folder, then write collection.json.
+#
+# `transport` is injected (defaults to the real scp/guest-agent/local trio) so the whole
+# collector is exercised offline by tests/test_artifacts_ops.py.
+#
+# `stop_on_unreachable` gives up on a target after its first unreachable transfer instead of
+# burning the per-file timeout four more times: teardown runs this, and a dead red01 must not
+# add ten minutes to a destroy that is already the slowest step.
+#
+# Never raises for a single unreachable or missing source: a partial collection recorded as
+# partial is the entire point of the status vocabulary. Only programming errors (an unknown
+# route) are hard failures.
     test_path = Path(test_path)
     transport = transport or default_transport()
     unknown = sorted({t.get("route") for t in targets if t.get("route") and not t.get("status")}
@@ -187,7 +187,7 @@ def collect(test_path, targets, *, transport=None, skip_existing=True, dry_run=F
 
 
 def derive_canonical(test_path, previous, want, records):
-    """Copy the newest fetched file to the canonical document name (e.g. RED-TEAM.md)."""
+# Copy the newest fetched file to the canonical document name (e.g. RED-TEAM.md).
     canonical = want["canonical"]
     if _canonical_done(test_path, previous, canonical):
         for derived in previous.get("derived", []):

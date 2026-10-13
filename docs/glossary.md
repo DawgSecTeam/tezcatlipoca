@@ -9,12 +9,12 @@ because that is the definition that wins when a doc and the code disagree.
 |---|---|---|
 | **competition** ("comp") | One event instance: a `competitions/<id>/` directory holding `Compfile`, `boxes.json`, `teams.json`, secrets, and state. `<id>` matches `[a-z0-9._-]`. | `config_ops` |
 | **team key** | The map key in `teams` / `TF_VAR_teams`: `team1`, `team2`, … Used for ordering, `for_each`, placement, and selection flags (`--teams team3`). | `config_ops.collect_teams` |
-| **team identifier** | The subnet's third octet as a **string**: `"101"`, `"102"`, …. Drives `192.168.<identifier>.<host>`, the bridge name `vmbr<identifier>`, and the vmid stride. `--teams 103` also resolves to a team by identifier. | `config_ops`, `range_ops` |
+| **team identifier** | The subnet's third octet as a **string**: `"101"`, `"102"`, …. Drives `192.168.<identifier>.<host>`, the bridge name `vmbr<identifier>`, and the vmid stride. `--teams 103` also resolves to a team by identifier. | `config_ops`, `targets`, `infra` |
 | **anchor team** | `team1` — the team the pipeline hard-assumes exists (looked up **by name**). On single-node it also hosts the golden set's IPs; on multi-node each node has its own anchor (see *anchor identifier*). | `terraform/main.tf` (`team1_key`) |
 | **anchor identifier** | The **lowest** team identifier placed on a host — the subnet a node's golden boxes sit on (`192.168.<anchor>.<240+i>`). Slot 0 anchors on `team1`'s identifier, which reproduces the original golden math. | `nodes_ops.anchor_identifier` |
 | **slot** | A hosting position in a multi-node placement: slot 0 is the engine node, slots 1–4 are satellites (max 4). Golden vmids and jump vmids are slot-dimensioned. On single-node everything is slot 0, and nothing in `boxes.json`/`Compfile` mentions slots. | `nodes_ops`, `nodes_ops.golden_vmid_for_slot` |
 | **engine vmid** | The scoring engine's VM id: `TF_VAR_scoring_vm_id`, default `1000`. The whole vmid layout hangs off it (engine template `+140`, goldens `+150 + slot*10`, jump `+130 + slot`). Overridable per run with `--scoring-vmid`. | `constants`, `deploy` |
-| **umbrella: `enumerate_targets()`** | One entry per `(team, box)` — the only place a target's `vmid`/`ip`/`vm_name`/`machine` are derived. Build from the full lists, then filter; never re-enumerate a filtered box list. | `range_ops` |
+| **umbrella: `enumerate_targets()`** | One entry per `(team, box)` — the only place a target's `vmid`/`ip`/`vm_name`/`machine` are derived. Build from the full lists, then filter; never re-enumerate a filtered box list. | `targets` (enumerate_targets) — and note the `infra/` package |
 
 ## Boxes and templates
 

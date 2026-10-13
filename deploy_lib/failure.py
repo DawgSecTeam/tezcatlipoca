@@ -6,14 +6,13 @@ from utils import degradation_summary, degradations
 
 
 def record_degradations(ctx):
-    """Persist tolerated-prerequisite failures into the state and print them once.
-
-    Every entry is something that failed while the deploy continued: apt prep that
-    installed nothing, an auth ladder that failed on both transports, a box that never
-    settled, a node scan that never happened. They used to exist only as WARNING lines
-    in the scrollback — which is why "the range came up with every service down" had no
-    named cause. Now they land in .deploy_state.json and verify can read them.
-    """
+# Persist tolerated-prerequisite failures into the state and print them once.
+#
+#     Every entry is something that failed while the deploy continued: apt prep that
+#     installed nothing, an auth ladder that failed on both transports, a box that never
+#     settled, a node scan that never happened. They used to exist only as WARNING lines
+#     in the scrollback — which is why "the range came up with every service down" had no
+#     named cause. Now they land in .deploy_state.json and verify can read them.
     entries = degradations()
     # ALWAYS record the key, even when empty. A gate cannot tell "clean" from "never
     # ran" if the success path writes nothing: verify reported the 2026-10-02 live
@@ -33,13 +32,12 @@ def record_degradations(ctx):
 
 
 def failure_signature(exc):
-    """A stable identity for "the same failure again", for the resume budget.
-
-    Raw messages differ every run (vmids, uuids, temp paths, elapsed seconds), so a
-    naive signature would never match and the guard could never fire. Normalise the
-    volatile parts and keep the shape. Erring toward *matching* is deliberate: the
-    guard only ever refuses a resume, and --force-from-phase overrides it.
-    """
+# A stable identity for "the same failure again", for the resume budget.
+#
+#     Raw messages differ every run (vmids, uuids, temp paths, elapsed seconds), so a
+#     naive signature would never match and the guard could never fire. Normalise the
+#     volatile parts and keep the shape. Erring toward *matching* is deliberate: the
+#     guard only ever refuses a resume, and --force-from-phase overrides it.
     text = f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}"
     text = re.sub(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                   r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", "<uuid>", text)
@@ -49,12 +47,11 @@ def failure_signature(exc):
 
 
 def record_failure(state, phase, exc):
-    """Count consecutive failures of the same phase with the same signature.
-
-    Returns the new count. A different signature at the same phase is a *new*
-    failure, not a repeat, so the budget resets — that is why the streak is keyed on
-    the signature and not just the phase.
-    """
+# Count consecutive failures of the same phase with the same signature.
+#
+#     Returns the new count. A different signature at the same phase is a *new*
+#     failure, not a repeat, so the budget resets — that is why the streak is keyed on
+#     the signature and not just the phase.
     signature = failure_signature(exc)
     previous = state.get("failure_streak") or {}
     repeated = (previous.get("phase") == phase
@@ -65,5 +62,5 @@ def record_failure(state, phase, exc):
 
 
 def clear_failure_streak(state):
-    """Drop the streak after a phase run that made it through."""
+# Drop the streak after a phase run that made it through.
     return state.pop("failure_streak", None)

@@ -20,7 +20,7 @@ from teardown.steps import (EVIDENCE, REFUSE, TEARDOWN, WARN_AND_PROCEED,  # noq
                             ArtifactStep, CallStep, PreStopStep, RedStep,
                             RemoteAccessStep, Step, StepResult, TemplatesStep,
                             TerraformStep, TeardownContext)
-from vm_ownership import OWNED, MARKER, MISSING, UNPROVEN, Ownership  # noqa: F401
+from infra.ownership import OWNED, MARKER, MISSING, UNPROVEN, Ownership  # noqa: F401
 
 __all__ = [
     "CleanReport",

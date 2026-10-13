@@ -8,11 +8,11 @@ from .constants import DIRNAME, MANIFEST_NAME, RUN_ID_RE
 
 
 def artifacts_root(comp_dir):
-    """`<comp_dir>/.automated-tests` — the drop point. Gitignored, deliberately: box-pulled
-    reports quote flags and credentials, and this repo has already leaked secrets twice by
-    tracking a file nobody re-checked (.gitignore's own header says so). There is no publish
-    path on purpose (operator decision, 2026-10-03): harvest a recommendation by writing it into
-    docs/known-issues.md or a fixes plan, never by copying the artifact into git."""
+# `<comp_dir>/.automated-tests` — the drop point. Gitignored, deliberately: box-pulled
+#     reports quote flags and credentials, and this repo has already leaked secrets twice by
+#     tracking a file nobody re-checked (.gitignore's own header says so). There is no publish
+#     path on purpose (operator decision, 2026-10-03): harvest a recommendation by writing it into
+#     docs/known-issues.md or a fixes plan, never by copying the artifact into git.
     return Path(comp_dir) / DIRNAME
 
 
@@ -21,7 +21,7 @@ def test_dir(comp_dir, key):
 
 
 def run_id_from_state(comp_dir):
-    """The deploy's run id, or "" when the comp dir has no (valid) deploy state yet."""
+# The deploy's run id, or "" when the comp dir has no (valid) deploy state yet.
     try:
         state = json.loads((Path(comp_dir) / ".deploy_state.json").read_text())
     except (OSError, ValueError):
@@ -31,11 +31,11 @@ def run_id_from_state(comp_dir):
 
 
 def next_run_key(comp_dir, run_id=None):
-    """The key a FRESH run should use.
-
-    The base key (the deploy's run id) when it has not been used yet, else
-    `<base>-run2`, `-run3`… — so each harness run gets its own folder and one
-    run's evidence can never sit next to another's."""
+# The key a FRESH run should use.
+#
+#     The base key (the deploy's run id) when it has not been used yet, else
+#     `<base>-run2`, `-run3`… — so each harness run gets its own folder and one
+#     run's evidence can never sit next to another's.
     base = test_key(comp_dir, run_id)
     if not (test_dir(comp_dir, base) / MANIFEST_NAME).exists():
         return base
@@ -46,12 +46,12 @@ def next_run_key(comp_dir, run_id=None):
 
 
 def run_folders(comp_dir):
-    """Existing test folders for this competition, newest first.
-
-    Each harness run mints its own folder (see latest_run_key): one run per folder
-    means one run's evidence per folder, so a stale REPORT.md can never sit next to
-    a fresh run's artifacts the way it did when every run reused the deploy-keyed
-    folder (2026-10-08: october-7 reports were still in the folder a new run wrote into)."""
+# Existing test folders for this competition, newest first.
+#
+#     Each harness run mints its own folder (see latest_run_key): one run per folder
+#     means one run's evidence per folder, so a stale REPORT.md can never sit next to
+#     a fresh run's artifacts the way it did when every run reused the deploy-keyed
+#     folder (2026-10-08: october-7 reports were still in the folder a new run wrote into).
     root = Path(comp_dir) / ".automated-tests"
     found = []
     for d in sorted(root.glob("*")):
@@ -64,10 +64,10 @@ def run_folders(comp_dir):
 
 
 def latest_run_key(comp_dir, run_id=None):
-    """(key, run_id) of the newest folder that belongs to `run_id`.
-
-    Teardown's target: it knows the deploy's run id, not which per-run folder the
-    harness minted, so it asks the folders themselves. Falls back to the base key."""
+# (key, run_id) of the newest folder that belongs to `run_id`.
+#
+#     Teardown's target: it knows the deploy's run id, not which per-run folder the
+#     harness minted, so it asks the folders themselves. Falls back to the base key.
     comp_dir = Path(comp_dir)
     want = run_id if run_id is not None else run_id_from_state(comp_dir)
     for d in run_folders(comp_dir):
@@ -81,13 +81,13 @@ def latest_run_key(comp_dir, run_id=None):
 
 
 def test_key(comp_dir, run_id=None, *, now=None):
-    """The test folder name: the run id when there is one, else a *stable* untagged key.
-
-    Stability matters because teardown is expected to be re-run until clean
-    (destroy-competition.py says so): minting a fresh timestamp per invocation would split one
-    run's evidence across several folders. The untagged fallback is therefore derived from
-    `.deploy_state.json`'s mtime — which destroy never writes and deploy/resume does — so it is
-    fixed for the life of a deploy and changes when a new one writes state."""
+# The test folder name: the run id when there is one, else a *stable* untagged key.
+#
+#     Stability matters because teardown is expected to be re-run until clean
+#     (destroy-competition.py says so): minting a fresh timestamp per invocation would split one
+#     run's evidence across several folders. The untagged fallback is therefore derived from
+#     `.deploy_state.json`'s mtime — which destroy never writes and deploy/resume does — so it is
+#     fixed for the life of a deploy and changes when a new one writes state.
     comp_dir = Path(comp_dir)
     run_id = run_id or run_id_from_state(comp_dir)
     if run_id:
@@ -112,7 +112,7 @@ def test_key(comp_dir, run_id=None, *, now=None):
 
 
 def comp_name(comp_dir):
-    """The Compfile's own `<id>` (line 1) when present — it can differ from the dir name."""
+# The Compfile's own `<id>` (line 1) when present — it can differ from the dir name.
     try:
         first = (Path(comp_dir) / "Compfile").read_text().splitlines()[0]
     except (OSError, IndexError):

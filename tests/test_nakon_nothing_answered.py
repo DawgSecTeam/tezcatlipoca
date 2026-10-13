@@ -27,8 +27,6 @@ import nakon_run_ops  # noqa: E402
 
 
 class _FakeProc:
-    """A Popen stand-in whose stdout yields one line, then EOF."""
-
     def __init__(self, line):
         self._line = line
         self.returncode = 0
@@ -42,7 +40,6 @@ class _FakeProc:
 
 
 def _run_with(json_line, strict=False):
-    """Invoke run_nakon with the ssh/scp boundary faked; return the NakonResult or raise."""
     def fake_run(*a, **kw):
         return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
@@ -101,8 +98,6 @@ class NothingAnsweredFloor(unittest.TestCase):
 
 
 class FloorPredicate(unittest.TestCase):
-    """The predicate itself, including the boundary it must NOT cross."""
-
     def test_empty_list_is_nothing_answered(self):
         self.assertIn("no per-machine results", nakon_run_ops._nothing_answered([]))
 

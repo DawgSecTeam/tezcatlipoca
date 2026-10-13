@@ -44,14 +44,13 @@ import verifier.scoreboard as v_scoreboard  # noqa: E402
 import verifier.state_gates as v_state_gates  # noqa: E402
 
 
-# --------------------------------------------------------------------------- helpers
 
 def _proc(returncode=0, stdout="", stderr=""):
     return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 def _run(fn, *args, **kwargs):
-    """Run a check, returning (result, captured stdout)."""
+# Run a check, returning (result, captured stdout).
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         result = fn(*args, **kwargs)
@@ -70,7 +69,7 @@ class _Resp:
 
 
 class _Session:
-    """Fake requests session: /api/teams + per-team /api/services/<id>."""
+# Fake requests session: /api/teams + per-team /api/services/<id>.
 
     def __init__(self, teams, services, teams_error=None):
         self._teams, self._services, self._teams_error = teams, services, teams_error
@@ -87,10 +86,9 @@ def _round(start, passed=True):
     return {"StartTime": start, "Checks": [{"Result": passed}]}
 
 
-# --------------------------------------------------------------------------- D1
 
 class CheckServicesArity(unittest.TestCase):
-    """D1: a failing /api/teams must not crash main's unpacking."""
+# D1: a failing /api/teams must not crash main's unpacking.
 
     def test_api_teams_failure_returns_gate_results(self):
         session = _Session([], {}, teams_error=requests.RequestException("refused"))
@@ -124,10 +122,9 @@ class CheckServicesArity(unittest.TestCase):
         self.assertFalse(passed)
 
 
-# --------------------------------------------------------------------------- D7
 
 class StrictServices(unittest.TestCase):
-    """D7: --strict-services must not pass an unscored or frozen scoreboard."""
+# D7: --strict-services must not pass an unscored or frozen scoreboard.
 
     def _session(self, services):
         return _Session([{"ID": 1, "Name": "team1"}], {"1": services})
@@ -190,7 +187,7 @@ class StrictServices(unittest.TestCase):
 
 
 class RoundLoop(unittest.TestCase):
-    """D7: check_round_loop's tri-state is real and consumed by the gate verdict."""
+# D7: check_round_loop's tri-state is real and consumed by the gate verdict.
 
     def _session(self, payload):
         return _Session(payload, {})
@@ -228,7 +225,6 @@ class RoundLoop(unittest.TestCase):
         self.assertIs(result.status, verify.Status.SKIP_UNAVAILABLE)
 
 
-# --------------------------------------------------------------------------- D2/D8
 
 MACHINES = [
     {"name": "web01-team104", "ip": "192.168.104.5",
@@ -249,7 +245,7 @@ def _state(comp_dir, payload):
 
 
 class PlantCoverage(unittest.TestCase):
-    """D2: the gate must fail CLOSED when coverage was never recorded."""
+# D2: the gate must fail CLOSED when coverage was never recorded.
 
     def test_missing_state_file_fails(self):
         tmp, comp_dir = _comp_dir()
@@ -276,7 +272,7 @@ class PlantCoverage(unittest.TestCase):
         self.assertIs(result.status, verify.Status.FAIL)
 
     def test_empty_coverage_with_failed_tally_fails(self):
-        """No structured record at all: the tally is the only coverage source and gates."""
+    # No structured record at all: the tally is the only coverage source and gates.
         tmp, comp_dir = _comp_dir()
         self.addCleanup(tmp.cleanup)
         _state(comp_dir, {"nakon_failed_steps": ["final: web01-team104 suid-find rc=1"]})
@@ -285,13 +281,13 @@ class PlantCoverage(unittest.TestCase):
         self.assertIn("FAILED plant step", out)
 
     def test_superseded_tally_history_does_not_gate_a_clean_record(self):
-        """A record exists and is clean: the merged tally is history, not state.
-
-        scrim-one 2026-10-03: seven ad-* plants failed in the pre-promotion repair
-        stage, the post-domain final pass replanted them green (clearing the record),
-        and the merged tally still listed the repair failures — the gate stayed red
-        forever on entries a later pass had already fixed. The record side fixed this
-        for records (stale-entry clearing); this is the tally twin."""
+    # A record exists and is clean: the merged tally is history, not state.
+#
+    #         scrim-one 2026-10-03: seven ad-* plants failed in the pre-promotion repair
+    #         stage, the post-domain final pass replanted them green (clearing the record),
+    #         and the merged tally still listed the repair failures — the gate stayed red
+    #         forever on entries a later pass had already fixed. The record side fixed this
+    #         for records (stale-entry clearing); this is the tally twin.
         tmp, comp_dir = _comp_dir()
         self.addCleanup(tmp.cleanup)
         _state(comp_dir, {"plant_coverage_failed": {},
@@ -319,7 +315,7 @@ class PlantCoverage(unittest.TestCase):
         self.assertIn("full config coverage", out)
 
     def test_missing_record_but_clean_tally_passes_via_fallback(self):
-        """deploy_lib/coverage.py promises this fallback: no --json outcome (older nakon)."""
+    # deploy_lib/coverage.py promises this fallback: no --json outcome (older nakon).
         tmp, comp_dir = _comp_dir()
         self.addCleanup(tmp.cleanup)
         _state(comp_dir, {"nakon_failed_steps": []})
@@ -328,7 +324,7 @@ class PlantCoverage(unittest.TestCase):
         self.assertIn("falls back", out)
 
     def test_stale_failure_entry_is_filtered(self):
-        """D8: a failure for a config no longer in `configurations` must not fail."""
+    # D8: a failure for a config no longer in `configurations` must not fail.
         tmp, comp_dir = _comp_dir()
         self.addCleanup(tmp.cleanup)
         _state(comp_dir, {"plant_coverage_failed": {"web01-team104": ["legacy-config"]},
@@ -354,9 +350,9 @@ class PlantCoverage(unittest.TestCase):
         self.assertIs(result.status, verify.Status.PASS)
 
     def test_golden_slot_failure_maps_onto_team_clone(self):
-        """Satellite slot N records '{box}-golden-slot{N}' (every slot's stage config
-        names its golden machine identically); a failure on any slot's golden flags
-        every team copy of the box."""
+    # Satellite slot N records '{box}-golden-slot{N}' (every slot's stage config
+    #         names its golden machine identically); a failure on any slot's golden flags
+    #         every team copy of the box.
         tmp, comp_dir = _comp_dir()
         self.addCleanup(tmp.cleanup)
         _state(comp_dir, {"plant_coverage_failed": {"web01-golden-slot2": ["suid-find"]},
@@ -374,8 +370,8 @@ class PlantCoverage(unittest.TestCase):
         self.assertIs(result.status, verify.Status.PASS)
 
     def test_another_boxs_golden_keys_do_not_map(self):
-        """Entries keyed for other boxes (a different box's golden, or another team's
-        machine key) must not fail this machine."""
+    # Entries keyed for other boxes (a different box's golden, or another team's
+    #         machine key) must not fail this machine.
         tmp, comp_dir = _comp_dir()
         self.addCleanup(tmp.cleanup)
         _state(comp_dir, {"plant_coverage_failed": {"web99-golden": ["suid-find"],
@@ -393,7 +389,6 @@ class PlantCoverage(unittest.TestCase):
         self.assertFalse(result.gating)
 
 
-# --------------------------------------------------------------------------- D3
 
 PACKET_PROFILE = {"credentials": {"out_of_scope": ["scorebot", "blackteam"]}}
 LINUX_BOXES = [{"name": "web01", "ip": "192.168.104.5", "os": "ubuntu"}]
@@ -401,7 +396,7 @@ CTX = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.1", "vm_username": "u"
 
 
 class PacketAccounts(unittest.TestCase):
-    """D3: unprovable out-of-scope accounts are a SKIP, never a pass."""
+# D3: unprovable out-of-scope accounts are a SKIP, never a pass.
 
     def test_ssh_dead_is_skip(self):
         with patch.object(v_context, "ssh_via_gateway",
@@ -439,7 +434,6 @@ class PacketAccounts(unittest.TestCase):
         self.assertIs(result.status, verify.Status.SKIP_UNAVAILABLE)
 
 
-# --------------------------------------------------------------------------- D3/D4
 
 SURVIVAL_BOXES = [
     {"name": "web01-team104", "ip": "192.168.104.5", "configurations": ["suid-find"]},
@@ -450,7 +444,7 @@ ABSENT_OUT = "-rwxr-xr-x 1 root root 12345 /usr/bin/find\n"
 
 
 class MisconfigSurvival(unittest.TestCase):
-    """D3 (all-unknown SKIP) and D4 (absent-everywhere had no branch)."""
+# D3 (all-unknown SKIP) and D4 (absent-everywhere had no branch).
 
     def _run_with_outputs(self, outputs_by_ip):
         def fake(ctx, ip, cmd, timeout=60):
@@ -473,14 +467,14 @@ class MisconfigSurvival(unittest.TestCase):
         self.assertIs(result.status, verify.Status.FAIL)
 
     def test_absent_everywhere_fails(self):
-        """D4: this matched no branch at all before — no output, all_ok stayed True."""
+    # D4: this matched no branch at all before — no output, all_ok stayed True.
         result, out = self._run_with_outputs({
             "192.168.104.5": ABSENT_OUT, "192.168.105.5": ABSENT_OUT})
         self.assertIs(result.status, verify.Status.FAIL)
         self.assertIn("absent on every team", out)
 
     def test_all_unknown_is_skip(self):
-        """D3: a dead SSH on every clone must not read as a PASS."""
+    # D3: a dead SSH on every clone must not read as a PASS.
         result, out = self._run_with_outputs({})
         self.assertIs(result.status, verify.Status.SKIP_UNAVAILABLE)
         self.assertTrue(result.gating)
@@ -489,7 +483,6 @@ class MisconfigSurvival(unittest.TestCase):
         self.assertFalse(passed)
 
 
-# --------------------------------------------------------------------------- D5
 
 FORWARD_OK = "-A FORWARD -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP\n"
 TEAMS = {"team1": {"identifier": 104}, "team2": {"identifier": 105}}
@@ -500,7 +493,7 @@ ISO_BOXES = [
 
 
 class IsolationDecisionTable(unittest.TestCase):
-    """D5: "blocked" must be reachable-but-for-the-rule, not just any RC!=0."""
+# D5: "blocked" must be reachable-but-for-the-rule, not just any RC!=0.
 
     def _run(self, *, rule=FORWARD_OK, forward_rc=0, engine_exc=None,
              cross="blocked", cross_exc=None, internet="ok", liveness="live",
@@ -581,7 +574,7 @@ class IsolationDecisionTable(unittest.TestCase):
         self.assertIn("blocked as expected", out)
 
     def test_team_without_identifier_does_not_crash(self):
-        """The old `t["identifier"]` KeyError took the whole verifier down."""
+    # The old `t["identifier"]` KeyError took the whole verifier down.
         result, _ = self._run(teams={"team1": {}, "team2": {"identifier": 105}})
         self.assertIs(result.status, verify.Status.PASS)
 
@@ -590,8 +583,8 @@ class IsolationDecisionTable(unittest.TestCase):
         self.assertIs(result.status, verify.Status.PASS)
 
     def test_rule_must_cover_derived_subnets(self):
-        """A per-subnet rule doesn't isolate every pair; the old literal check would
-        also have missed a renumbered range entirely."""
+    # A per-subnet rule doesn't isolate every pair; the old literal check would
+    #         also have missed a renumbered range entirely.
         result, _ = self._run(
             rule="-A FORWARD -s 192.168.104.0/24 -d 192.168.105.0/24 -j DROP\n")
         self.assertIs(result.status, verify.Status.FAIL)
@@ -601,10 +594,9 @@ class IsolationDecisionTable(unittest.TestCase):
         self.assertIs(result.status, verify.Status.FAIL)
 
 
-# --------------------------------------------------------------------------- D6
 
 class TriStateVerdict(unittest.TestCase):
-    """D6: GateResult is the single source of truth for SUMMARY + exit code."""
+# D6: GateResult is the single source of truth for SUMMARY + exit code.
 
     def test_status_values(self):
         self.assertEqual(verify.Status.PASS.value, "PASS")
@@ -644,8 +636,8 @@ class TriStateVerdict(unittest.TestCase):
         self.assertNotIn("b", gate)
 
     def test_summary_word_matches_the_exit_effect(self):
-        """The old SUMMARY printed "SKIP — unverified" while the dict held FAIL;
-        now the printed word IS the verdict."""
+    # The old SUMMARY printed "SKIP — unverified" while the dict held FAIL;
+    #         now the printed word IS the verdict.
         results = [verify.gate_pass("logins"), verify.gate_skip("isolation")]
         lines = verify.summary_lines(results)
         self.assertIn("SKIP", lines[1])
@@ -667,23 +659,23 @@ class TriStateVerdict(unittest.TestCase):
 
 
 class RedTeamsReachability(unittest.TestCase):
-    """--red-teams all: red must reach EVERY team, not just one box.
-
-    scale8-soak-2026-10-02: routed red01 could not reach any satellite team box
-    (15/15 cred_sprays "unreachable over SSH", 0 footholds) and half the range was
-    never attacked. `--red-identity` proved red's source address on a single box, so
-    a whole-node routing failure still reported PASS. This gate is the missing one,
-    and it is what must fail BEFORE T0 rather than at T+40."""
+# --red-teams all: red must reach EVERY team, not just one box.
+#
+#     scale8-soak-2026-10-02: routed red01 could not reach any satellite team box
+#     (15/15 cred_sprays "unreachable over SSH", 0 footholds) and half the range was
+#     never attacked. `--red-identity` proved red's source address on a single box, so
+#     a whole-node routing failure still reported PASS. This gate is the missing one,
+#     and it is what must fail BEFORE T0 rather than at T+40.
 
     CTX = {"ssh_key_path": "/tmp/key"}
 
     def _boxes(self, *teams):
-        """One box per (identifier, last-octet) pair, like nakon-config machines."""
+    # One box per (identifier, last-octet) pair, like nakon-config machines.
         return [{"name": f"box-{ident}-{last}", "ip": f"192.168.{ident}.{last}"}
                 for ident, last in teams]
 
     def _run(self, boxes, reachable, calls=None):
-        """`reachable` = set of IPs red01 can dial; every other probe returns rc=1."""
+    # `reachable` = set of IPs red01 can dial; every other probe returns rc=1.
         def fake_run(cmd, **kw):
             target = cmd[-1].split("/dev/tcp/")[1].split("/")[0]
             if calls is not None:
@@ -742,7 +734,7 @@ class RedTeamsReachability(unittest.TestCase):
 
 
 class ConvertedGates(unittest.TestCase):
-    """The D6 conversion itself: these gates return GateResult, not bare bool/None."""
+# The D6 conversion itself: these gates return GateResult, not bare bool/None.
 
     def test_check_isolation_returns_gate_result(self):
         with patch.object(v_context, "ssh_to_engine", return_value=_proc(0, FORWARD_OK, "")):
@@ -773,7 +765,7 @@ class ConvertedGates(unittest.TestCase):
 
 
 class MainSummaryWiring(unittest.TestCase):
-    """D6 end-to-end: main's SUMMARY and exit code are both derived from the results."""
+# D6 end-to-end: main's SUMMARY and exit code are both derived from the results.
 
     def _comp(self):
         tmp = tempfile.TemporaryDirectory()

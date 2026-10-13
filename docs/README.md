@@ -17,6 +17,7 @@ passage written against an older pipeline is a bug — see [AGENTS.md](../AGENTS
 | [glossary.md](glossary.md) | A term is being used precisely and you are not sure which sense: team key vs identifier, slot, anchor, golden vs unbooted golden, stage vs pass vs bundle |
 | [multi-node.md](multi-node.md) | You are running one competition across several Proxmox hosts (`nodes.json`, placement, jump routing, per-slot goldens, `sync-template.py`) |
 | [packet-profiles.md](packet-profiles.md) | You are compiling a competition packet into a range, or authoring a `packet.yaml` |
+| [bad-auto-isolation.md](bad-auto-isolation.md) | You are touching red01's config, stamp, vmid/IP resolution, or bad-auto call sites — the per-competition isolation contract (what is shared, what must never be again) |
 | [rehearsal-gates.md](rehearsal-gates.md) | You need the numeric pass/fail gates for a scrim run |
 | [benchmark-m02.md](benchmark-m02.md) | You are questioning a timeout, a parallelism setting, or a resource assumption — the linked-vs-full-clone measurements |
 | [benchmark-m04.md](benchmark-m04.md) | Same, for the per-competition template lifecycle: validation matrix, rebuild granularity, Windows/domain numbers |

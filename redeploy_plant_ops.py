@@ -10,8 +10,9 @@ from pathlib import Path
 from redeploy_select_ops import box_platform
 
 
-def run_nakon_and_harden(targets, ctx, comp_dir, state, nakon_config_path, nakon_bundle):
-    """Configure half: DNS, auth, scoped nakon (--only), service hardening."""
+def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
+# Configure half: DNS, auth, scoped nakon (--only), service hardening.
+    ctx, comp_dir, state = rctx.ctx, rctx.comp_dir, rctx.state
     key = Path(ctx["ssh_key_path"])
     scoring_user = os.environ["TF_VAR_vm_username"]
     scoring_ip = ctx["scoring_engine_ip"]
@@ -74,13 +75,14 @@ def _domain_config_path(comp_dir, fallback):
     return full_config if full_config.exists() else fallback
 
 
-def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
-    """Re-run AD domain chain for affected teams (promote DC only if reset).
-
-    Returns True when the boxes' domain state may be treated as settled — no
-    domain semantics at all, or the chain re-ran clean — and False when the
-    chain was supposed to run but could not. Callers must NOT re-take tz-ready
-    on False: snapshotting then would bake a broken state in as 'as delivered'."""
+def rerun_domain_configs(targets, rctx, nakon_config_path):
+# Re-run AD domain chain for affected teams (promote DC only if reset).
+#
+#     Returns True when the boxes' domain state may be treated as settled — no
+#     domain semantics at all, or the chain re-ran clean — and False when the
+#     chain was supposed to run but could not. Callers must NOT re-take tz-ready
+#     on False: snapshotting then would bake a broken state in as 'as delivered'.
+    ctx, comp_dir, state = rctx.ctx, rctx.comp_dir, rctx.state
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
         return True
@@ -133,11 +135,11 @@ def rerun_domain_configs(targets, ctx, comp_dir, state, nakon_config_path):
 
 
 def prepare_nakon_assets(comp_dir, boxes):
-    """(nakon_config_path, nakon_bundle) for the replant modes.
-
-    A function rather than main() inline so the reset ladder can build them LAZILY —
-    a reset that settles at the tz-ready rung must not demand stage files it would
-    never have used."""
+# (nakon_config_path, nakon_bundle) for the replant modes.
+#
+#     A function rather than main() inline so the reset ladder can build them LAZILY —
+#     a reset that settles at the tz-ready rung must not demand stage files it would
+#     never have used.
     # Repair re-plants run the POST-CLONE stage only — the golden-stage installs ride the
     # linked clone and re-running them over live boxes mid-event is exactly what the stage
     # split removed.

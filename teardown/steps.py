@@ -19,11 +19,8 @@ REFUSE = "refuse"                # a failure aborts the plan (re-enter by re-run
 WARN_AND_PROCEED = "warn"        # a failure is recorded; the teardown continues
 
 
+# the truthful vmid: config.yaml is a shared checkout whose deploy.red_vmid another session's deploy can rewrite mid-flight; the target line is what the guards verified and what got deleted
 def _red_target_vmid(proc):
-    """The vmid badauto's destroy actually acted on, from its own target line —
-    the truthful record (config.yaml is a shared checkout whose deploy.red_vmid
-    another session's deploy can rewrite mid-flight; the target line is what
-    the guards verified and what got deleted)."""
     m = re.search(r"destroy target: .*\(vmid (\d+)\)", (proc.stdout or "") + "\n"
                   + (proc.stderr or ""))
     return int(m.group(1)) if m else None
@@ -36,10 +33,9 @@ class StepResult:
     detail: str = ""
 
 
+# built once by the CLI shim / caller; steps must not reach into os.environ or argv themselves
 @dataclass
 class TeardownContext:
-    """Everything a step may need. Built once by the CLI shim / caller; steps
-    must not reach into os.environ or argv themselves."""
     comp_dir: Path
     env: dict
     teams: dict
@@ -66,16 +62,11 @@ class Step:
         raise NotImplementedError
 
     def journal_detail(self, result) -> dict:
-        """What the engine records when this step completes."""
         return {"detail": result.detail}
 
 
+# the composition seam for callers whose mechanics live module-side (phase-1 reclaim composes cleanup.py's wave/bridge functions); the policy is declared here, at composition
 class CallStep(Step):
-    """A step built from a callable — the composition seam for callers whose
-    mechanics live module-side (phase-1 reclaim composes cleanup.py's
-    wave/bridge functions). The policy is declared here, at composition, and
-    the executor applies it like any other step's."""
-
     def __init__(self, name, fn, failure=REFUSE, destructive=True):
         self.name = name
         self._fn = fn
@@ -87,13 +78,8 @@ class CallStep(Step):
         return StepResult(self.name, "ok", str(detail) if detail else "")
 
 
-# ── concrete steps (terminal teardown) ──────────────────────────────────────────
-
-
+# bookkeeping that never outranks destroying the range: save the access log and revoke this run's console user before artifact collection (the log rides it) and while the engine still answers
 class PortalStep(Step):
-    """Student portal: save the access log, revoke this run's console user.
-    Before artifact collection (the log rides it) and while the engine still
-    answers. Bookkeeping: never outranks destroying the range."""
     name = "portal"
 
     def run(self, ctx):

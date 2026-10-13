@@ -35,12 +35,12 @@ from nakon_pin_ops import (
 
 
 def os_to_platform(template):
-    """Classify a free-text template name the way nakon does: 'windows' if it has 'win'."""
+# Classify a free-text template name the way nakon does: 'windows' if it has 'win'.
     return "windows" if "win" in template.lower() else "linux"
 
 
 def _nakon_randomize(platform, services_budget, vulns_budget):
-    """Pick services+vulns via `nakon randomize --json` (cwd=NAKON_DIR for catalog access)."""
+# Pick services+vulns via `nakon randomize --json` (cwd=NAKON_DIR for catalog access).
     cmd = [
         sys.executable, "-m", "nakon", "randomize",
         "--platform", platform,
@@ -174,13 +174,13 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
 
 
 def _golden_stage_machines(full, unbooted, anchor_identifier, box_index_by_name):
-    """One machine per box type at the anchor subnet's golden IP. The anchor is
-    team1 for slot 0 (historical math) and the satellite's first local team for
-    satellite slots — the golden must sit on a bridge that exists on the host
-    building it, with that node's jump routing the engine's plant there.
-
-    The identity ban is computed here, not passed in, so slot 0 and every satellite
-    share one definition (_identity_banned_configs) and cannot drift apart."""
+# One machine per box type at the anchor subnet's golden IP. The anchor is
+#     team1 for slot 0 (historical math) and the satellite's first local team for
+#     satellite slots — the golden must sit on a bridge that exists on the host
+#     building it, with that node's jump routing the engine's plant there.
+#
+#     The identity ban is computed here, not passed in, so slot 0 and every satellite
+#     share one definition (_identity_banned_configs) and cannot drift apart.
     identity_banned = _identity_banned_configs()
     seen_types = set()
     golden_machines = []
@@ -214,10 +214,10 @@ def _golden_stage_machines(full, unbooted, anchor_identifier, box_index_by_name)
 
 
 def generate_slot_golden_config(comp_dir, boxes, unbooted, anchor_identifier, slot):
-    """The satellite slot's golden-stage config: identical planted content to slot 0
-    (per-box golden hashes stay identical across slots), different transport IPs —
-    the anchor team's subnet, reachable from the engine via the jump. Returns the
-    path (0600, per-run-secret class)."""
+# The satellite slot's golden-stage config: identical planted content to slot 0
+#     (per-box golden hashes stay identical across slots), different transport IPs —
+#     the anchor team's subnet, reachable from the engine via the jump. Returns the
+#     path (0600, per-run-secret class).
     full = json.loads((comp_dir / "nakon-config.json").read_text())["machines"]
     box_index_by_name = {b["name"]: i for i, b in enumerate(boxes)}
     machines = _golden_stage_machines(full, unbooted, anchor_identifier,
@@ -229,23 +229,23 @@ def generate_slot_golden_config(comp_dir, boxes, unbooted, anchor_identifier, sl
 
 
 def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
-    """Split the full nakon config into golden / repair / final stage configs (M3.2).
-
-    nakon-config.json (all teams, full configuration lists) stays the source of truth.
-    The golden stage takes ONE machine per box type — team1's copy of the full list minus
-    the post-clone subsets, placed at the golden IP on team1's subnet — because the golden
-    set exists so linked clones inherit the heavy work (package installs, services,
-    non-disruptive misconfigs) as bytes on disk. The repair stage (phase 5, before
-    domains) and the final stage (phase 6, after domains — see constants for why the
-    split matters) carry every team machine with their own subsets; machines with an
-    empty subset for a stage are dropped from that stage's file. A combined post-clone
-    view (repair ∪ final) is also written for redeploy's convergence sweeps. Returns
-    (golden_path, repair_path, final_path, postclone_path); all 0600 and gitignored
-    (per-run-secret class — they carry box_password).
-
-    unbooted: box types whose golden stays generalized (domain controllers — see
-    golden_ops' identity note). They get no golden machine; everything that would have
-    ridden their golden plants per team in the repair stage instead (still pre-domain)."""
+# Split the full nakon config into golden / repair / final stage configs (M3.2).
+#
+#     nakon-config.json (all teams, full configuration lists) stays the source of truth.
+#     The golden stage takes ONE machine per box type — team1's copy of the full list minus
+#     the post-clone subsets, placed at the golden IP on team1's subnet — because the golden
+#     set exists so linked clones inherit the heavy work (package installs, services,
+#     non-disruptive misconfigs) as bytes on disk. The repair stage (phase 5, before
+#     domains) and the final stage (phase 6, after domains — see constants for why the
+#     split matters) carry every team machine with their own subsets; machines with an
+#     empty subset for a stage are dropped from that stage's file. A combined post-clone
+#     view (repair ∪ final) is also written for redeploy's convergence sweeps. Returns
+#     (golden_path, repair_path, final_path, postclone_path); all 0600 and gitignored
+#     (per-run-secret class — they carry box_password).
+#
+#     unbooted: box types whose golden stays generalized (domain controllers — see
+#     golden_ops' identity note). They get no golden machine; everything that would have
+#     ridden their golden plants per team in the repair stage instead (still pre-domain).
     full = json.loads((comp_dir / "nakon-config.json").read_text())["machines"]
     team1_identifier = str(teams["team1"]["identifier"])
     box_index_by_name = {b["name"]: i for i, b in enumerate(boxes)}

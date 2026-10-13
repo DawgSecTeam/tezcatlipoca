@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 load_dotenv(".env")
 
 from firewall_ops import generate_vyos_commands, generate_vyos_lan_commands  # noqa: E402
-from pve_api import proxmox_api, wait_for_proxmox_task  # noqa: E402
+from infra.client import proxmox_api, wait_for_proxmox_task  # noqa: E402
 
 VMID = int(os.environ.get("TEZ_VYOS_VMID", "959"))
 NAME = "vyos-provision"
@@ -96,63 +96,10 @@ def type_line(text, inter_key_s=0.04, after_s=0.8):
 
 
 def console_screenshot(out_path):
-    """PNG of the VM's VGA console via the PVE vncwebsocket (raw RFB, 3.3-style handshake).
-    Copied from build-pfsense-provision-template.py (tools stay self-contained)."""
-    import ssl
-    import struct
-    from urllib.parse import quote
-
-    import requests
-    import urllib3
-    import websocket
-    from PIL import Image
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
-    urllib3.disable_warnings()
-    endpoint = os.environ["TF_VAR_proxmox_endpoint"].rstrip("/")
-    host = endpoint.split("//")[1].split(":")[0]
-    auth = {"Authorization": f"PVEAPIToken={os.environ['TF_VAR_proxmox_api_token']}"}
-    sess = requests.Session()
-    sess.headers.update(auth)
-    sess.verify = False
-    d = sess.post(f"{endpoint}/api2/json/nodes/{node()}/qemu/{VMID}/vncproxy",
-                  data={"websocket": 1}, timeout=30).json()["data"]
-    ws = websocket.create_connection(
-        f"wss://{host}:8006/api2/json/nodes/{node()}/qemu/{VMID}/vncwebsocket"
-        f"?port={d['port']}&vncticket={quote(d['ticket'])}",
-        header=auth, sslopt={"cert_reqs": ssl.CERT_NONE}, timeout=60)
-    pending = bytearray()
-
-    def rx(n):
-        while len(pending) < n:
-            pending.extend(ws.recv())
-        out = bytes(pending[:n])
-        del pending[:n]
-        return out
-
-    try:
-        rx(12)
-        ws.send_binary(b"RFB 003.003\n")
-        if struct.unpack(">I", rx(4))[0] == 2:
-            key = d["ticket"].encode()[:8].ljust(8, b"\x00")
-            des = bytes(int(f"{b:08b}"[::-1], 2) for b in key)
-            enc = Cipher(algorithms.TripleDES(des), modes.ECB()).encryptor()
-            ws.send_binary(enc.update(rx(16)) + enc.finalize())
-            if struct.unpack(">I", rx(4))[0] != 0:
-                raise OSError("VNC auth failed")
-        ws.send_binary(b"\x01")
-        init = rx(24)
-        w, h = struct.unpack(">HH", init[:4])
-        rx(struct.unpack(">I", init[20:24])[0])
-        pf = struct.pack(">BBBBHHHBBB3x", 32, 24, 0, 1, 255, 255, 255, 16, 8, 0)
-        ws.send_binary(b"\x00\x00\x00\x00" + pf)
-        ws.send_binary(b"\x02\x00" + struct.pack(">Hi", 1, 0))
-        ws.send_binary(b"\x03\x00" + struct.pack(">HHHH", 0, 0, w, h))
-        rx(16)
-        Image.frombytes("RGBX", (w, h), rx(w * h * 4), "raw", "BGRX").convert("RGB").save(out_path)
-        return out_path
-    finally:
-        ws.close()
+# PNG of the VM's VGA console via the shared infra.console RFB handshake.
+    from infra.console import vnc_screenshot
+    return vnc_screenshot(os.environ["TF_VAR_proxmox_endpoint"].rstrip("/"),
+                          os.environ["TF_VAR_proxmox_api_token"], node(), VMID, out_path)
 
 
 def _node_ssh(cmd, timeout=30):
@@ -164,10 +111,10 @@ def _node_ssh(cmd, timeout=30):
 
 
 def _guest_argv():
-    """SSH argv to the guest through the node (node-side alias on BRIDGE), no remote
-    command: the CLI session arrives on stdin, forced-PTY (-tt — the 2026.03 CLI ignores
-    piped stdin without a tty; one-shot `ssh vyos@host 'show ...'` does NOT reach the
-    CLI on this build)."""
+# SSH argv to the guest through the node (node-side alias on BRIDGE), no remote
+#     command: the CLI session arrives on stdin, forced-PTY (-tt — the 2026.03 CLI ignores
+#     piped stdin without a tty; one-shot `ssh vyos@host 'show ...'` does NOT reach the
+#     CLI on this build).
     proxy = f"ssh -i {Path('proxmox').resolve()} -o BatchMode=yes -W %h:%p root@{node_host()}"
     return ["ssh", "-tt", "-i", str(Path("proxmox").resolve()), "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
@@ -181,11 +128,11 @@ def _strip_ansi(text):
 
 
 def _guest_ssh(script=None, timeout=120):
-    """Run `script` (CLI lines) through the guest over a REAL local PTY sized 24x80,
-    expect-style: the next line goes in only after the transcript shows a prompt.
-    Blind feeding loses twice on this image (live-found 2026-10-08): bulk-written
-    input wedges the CLI inside `save`, and save flushes the tty input queue on
-    return, eating any line still queued behind it. Returns (returncode, transcript)."""
+# Run `script` (CLI lines) through the guest over a REAL local PTY sized 24x80,
+#     expect-style: the next line goes in only after the transcript shows a prompt.
+#     Blind feeding loses twice on this image (live-found 2026-10-08): bulk-written
+#     input wedges the CLI inside `save`, and save flushes the tty input queue on
+#     return, eating any line still queued behind it. Returns (returncode, transcript).
     import fcntl
     import pty
     import select
@@ -291,12 +238,12 @@ def create():
 
 
 def install():
-    """Console-typed `install image`. The live ISO does NOT autologin (2026.03 stream):
-    log in vyos/vyos first. The prompt sequence below matches the 2026.03 stream
-    (verified live 2026-10-08): continue → image name (default) → vyos password ×2 →
-    console (default K) → disk (default /dev/sda) → delete-all-data Yes → free space
-    (default) → boot config file (default 1). VERIFY with `shot` — when a prompt
-    differs, finish the walk with `type`."""
+# Console-typed `install image`. The live ISO does NOT autologin (2026.03 stream):
+#     log in vyos/vyos first. The prompt sequence below matches the 2026.03 stream
+#     (verified live 2026-10-08): continue → image name (default) → vyos password ×2 →
+#     console (default K) → disk (default /dev/sda) → delete-all-data Yes → free space
+#     (default) → boot config file (default 1). VERIFY with `shot` — when a prompt
+#     differs, finish the walk with `type`.
     print("typing the installer walk (assumes the live-boot login prompt, ~90s after start)")
     type_line("vyos", after_s=2)             # login:
     type_line("vyos", after_s=3)             # Password: (live ISO default creds)
@@ -315,9 +262,9 @@ def install():
 
 
 def reboot_into_disk():
-    """The installer left the ISO attached; detach it BEFORE rebooting or the live ISO
-    boots again (boot order is ide2 first). The 2026.03 `reboot` op command asks for a
-    confirmation."""
+# The installer left the ISO attached; detach it BEFORE rebooting or the live ISO
+#     boots again (boot order is ide2 first). The 2026.03 `reboot` op command asks for a
+#     confirmation.
     n = node()
     print("detaching the ISO, then rebooting into the installed disk")
     proxmox_api("PUT", f"/nodes/{n}/qemu/{VMID}/config", data={"delete": "ide2"})
@@ -327,13 +274,13 @@ def reboot_into_disk():
 
 
 def provision():
-    """Console-typed bootstrap contract: eth1 = 192.168.1.1/24, SSH on, serial getty,
-    deploy key in vyos's config (system_login.py regenerates authorized_keys from the
-    config at boot — a file-based key is wiped on the first reboot), and NO hw-id pins:
-    VyOS stamps each configured interface's MAC as `hw-id` and pins the interface NAME
-    to it at boot, so a clone with fresh MACs gets bumped to eth2/eth3 and the config
-    fails to apply. Unpinned names assign in PCI order on every clone (live-found
-    2026-10-08). Assumes the installed system's login prompt."""
+# Console-typed bootstrap contract: eth1 = 192.168.1.1/24, SSH on, serial getty,
+#     deploy key in vyos's config (system_login.py regenerates authorized_keys from the
+#     config at boot — a file-based key is wiped on the first reboot), and NO hw-id pins:
+#     VyOS stamps each configured interface's MAC as `hw-id` and pins the interface NAME
+#     to it at boot, so a clone with fresh MACs gets bumped to eth2/eth3 and the config
+#     fails to apply. Unpinned names assign in PCI order on every clone (live-found
+#     2026-10-08). Assumes the installed system's login prompt.
     print("logging in and typing the provision config")
     type_line("vyos", after_s=2)             # login:
     type_line(PW, after_s=3)                 # Password:
@@ -369,8 +316,8 @@ def alias(add=True):
 
 
 def check_key():
-    """Proof the deploy's SSH path works: alias on the node bridge, then the deploy key
-    answers on the bootstrap address (piped CLI: one-shot commands don't reach it)."""
+# Proof the deploy's SSH path works: alias on the node bridge, then the deploy key
+#     answers on the bootstrap address (piped CLI: one-shot commands don't reach it).
     alias(add=True)
     try:
         rc, out = _guest_ssh("show version | grep Version\nexit\n", timeout=60)
@@ -382,11 +329,11 @@ def check_key():
 
 
 def check():
-    """LIVE-validate the REAL generated phase-5 scripts against this image BEFORE it is
-    sealed: push the pass-A script (throwaway team id, DNAT path exercised), require the
-    commit canary, confirm eth naming, then delete everything pass A created so the
-    sealed template carries only the bootstrap contract. Pass B is NOT run here — it
-    moves eth1 off the bootstrap address; its syntax is a subset of pass A's."""
+# LIVE-validate the REAL generated phase-5 scripts against this image BEFORE it is
+#     sealed: push the pass-A script (throwaway team id, DNAT path exercised), require the
+#     commit canary, confirm eth naming, then delete everything pass A created so the
+#     sealed template carries only the bootstrap contract. Pass B is NOT run here — it
+#     moves eth1 off the bootstrap address; its syntax is a subset of pass A's.
     alias(add=True)
     try:
         rc, eth = _guest_ssh("show interfaces | grep eth\nexit\n", timeout=60)

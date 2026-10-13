@@ -13,9 +13,9 @@ _TF_TEMPLATE_FILES = ("main.tf", "variables.tf", "outputs.tf", ".terraform.lock.
 
 
 def terraform_dir(comp_dir):
-    """Per-competition Terraform working dir (its own state + lock), so two
-    competitions can `terraform apply` concurrently on one node instead of
-    contending on the single shared terraform/terraform.tfstate."""
+# Per-competition Terraform working dir (its own state + lock), so two
+#     competitions can `terraform apply` concurrently on one node instead of
+#     contending on the single shared terraform/terraform.tfstate.
     return Path(comp_dir) / "terraform"
 
 
@@ -28,19 +28,19 @@ _TF_TEAM_BOX_RESOURCE_NAMES = {"team_box", "team_box_sat1", "team_box_sat2",
 
 
 def team_vmids_from_state(comp_dir, run=None):
-    """Every team-box vmid in this competition's terraform state, as a sorted list.
-
-    Pure parse of `terraform state pull` — the one artifact that says which machines a
-    completed phase actually created. Reads only; never plans, applies, or locks.
-
-    The vmid lives in each instance's `vm_id` attribute, NOT in the resource address:
-    team_box keys are box names (`team_box["team1-web01"]`), so an address-shape parser
-    finds nothing and a healthy deploy reads as "no machines" (live-found 2026-10-03 —
-    the phase-4 checkpoint gate hard-failed a fully-built range that way).
-
-    Raises RuntimeError when the state cannot be read at all (terraform missing, a
-    corrupt state, a held lock): "I could not check" must never be reported as "there
-    is nothing there", or a resume gate becomes a resume hazard."""
+# Every team-box vmid in this competition's terraform state, as a sorted list.
+#
+#     Pure parse of `terraform state pull` — the one artifact that says which machines a
+#     completed phase actually created. Reads only; never plans, applies, or locks.
+#
+#     The vmid lives in each instance's `vm_id` attribute, NOT in the resource address:
+#     team_box keys are box names (`team_box["team1-web01"]`), so an address-shape parser
+#     finds nothing and a healthy deploy reads as "no machines" (live-found 2026-10-03 —
+#     the phase-4 checkpoint gate hard-failed a fully-built range that way).
+#
+#     Raises RuntimeError when the state cannot be read at all (terraform missing, a
+#     corrupt state, a held lock): "I could not check" must never be reported as "there
+#     is nothing there", or a resume gate becomes a resume hazard.
     tf_dir = terraform_dir(comp_dir)
     runner = run or subprocess.run
     try:
@@ -73,9 +73,9 @@ def team_vmids_from_state(comp_dir, run=None):
 
 
 def ensure_terraform_workdir(comp_dir):
-    """Materialize competitions/<id>/terraform/ from the canonical terraform/
-    template: (re)copy the .tf sources + provider lock, never touching the local
-    tfstate/.terraform/terraform.tfvars.json. Idempotent."""
+# Materialize competitions/<id>/terraform/ from the canonical terraform/
+#     template: (re)copy the .tf sources + provider lock, never touching the local
+#     tfstate/.terraform/terraform.tfvars.json. Idempotent.
     dst = terraform_dir(comp_dir)
     dst.mkdir(parents=True, exist_ok=True)
     for name in _TF_TEMPLATE_FILES:
@@ -86,8 +86,8 @@ def ensure_terraform_workdir(comp_dir):
 
 
 def terraform_plugin_cache_dir():
-    """Shared provider-plugin cache so each per-comp `terraform init` links the
-    provider from disk instead of re-downloading it."""
+# Shared provider-plugin cache so each per-comp `terraform init` links the
+#     provider from disk instead of re-downloading it.
     cache = _TF_TEMPLATE_DIR / ".terraform-plugin-cache"
     cache.mkdir(parents=True, exist_ok=True)
     return cache

@@ -7,17 +7,17 @@ from pathlib import Path
 from config_ops import update_env, write_text_atomic
 from constants import DEFAULT_ENGINE_MGMT_GW, DEFAULT_ENGINE_MGMT_IP
 from nodes_ops import satellite_routes_for, satellite_tfvars
-from range_ops import ensure_terraform_workdir
+from terraform_workdir import ensure_terraform_workdir
 
 
 def engine_mgmt_ip_from_env():
-    """The engine's static mgmt IP from the env, defaulted and re-exported.
-
-    Engine mgmt IP: static by default. The DHCP engine rebooted onto a different
-    address mid-event while terraform's saved output — which deploy/verify/
-    credentials all consume — stayed stale (shakedown-5x4: .221→.243→.233).
-    An explicit TF_VAR_engine_mgmt_ip="" keeps the old DHCP behavior; the
-    chosen value is also exported for template_ops (build-VM ipconfig0)."""
+# The engine's static mgmt IP from the env, defaulted and re-exported.
+#
+#     Engine mgmt IP: static by default. The DHCP engine rebooted onto a different
+#     address mid-event while terraform's saved output — which deploy/verify/
+#     credentials all consume — stayed stale (shakedown-5x4: .221→.243→.233).
+#     An explicit TF_VAR_engine_mgmt_ip="" keeps the old DHCP behavior; the
+#     chosen value is also exported for template_ops (build-VM ipconfig0).
     ip = os.environ.get("TF_VAR_engine_mgmt_ip")
     if ip is None:
         ip = DEFAULT_ENGINE_MGMT_IP
@@ -34,13 +34,13 @@ def engine_mgmt_ip_from_env():
 
 
 def build_terraform_inputs(terraform, comp_dir, spec, secrets, identity, place):
-    """Assemble terraform.tfvars.json + the workdir/ssh fields, into `terraform`.
-
-    terraform.tfvars.json outranks TF_VAR_* env, so it is the authoritative copy of
-    this competition's teams/boxes/engine-vmid (concurrent comps on one node must not
-    clobber each other through the shared .env). The stale-terraform-state refusal is
-    gates.check_stale_terraform_state; prepare() has already run it by the time this
-    writes anything."""
+# Assemble terraform.tfvars.json + the workdir/ssh fields, into `terraform`.
+#
+#     terraform.tfvars.json outranks TF_VAR_* env, so it is the authoritative copy of
+#     this competition's teams/boxes/engine-vmid (concurrent comps on one node must not
+#     clobber each other through the shared .env). The stale-terraform-state refusal is
+#     gates.check_stale_terraform_state; prepare() has already run it by the time this
+#     writes anything.
     teams_json_src = {
         team_key: {"identifier": team_data["identifier"], "password": team_data["password"]}
         for team_key, team_data in secrets.teams.items()

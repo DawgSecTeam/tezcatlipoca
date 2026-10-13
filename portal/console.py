@@ -10,34 +10,33 @@ Flow (one console open):
 
 The token never leaves the portal: the browser holds only the relay id and the VNC ticket, which
 noVNC uses as the RFB password and which is useless without the relay. The same wire shape is
-already proven live by tools/build-pfsense-provision-template.py console_screenshot (including
+proven live by infra.console.vnc_screenshot (the tools' shared screenshot helper), including
 PVE's quirk that the websocket only completes an RFB 3.3 handshake — the console page caps
-noVNC at 3.3 for that reason).
+noVNC at 3.3 for that reason.
 
 TLS: Proxmox hosts carry self-signed certs. With a recorded sha256 fingerprint the peer cert is
 pinned (both the vncproxy POST and the websocket); without one the lab default applies — the
-same rule pve_api.proxmox_request uses on the deploy side.
+same rule infra.client.proxmox_request uses on the deploy side.
 """
 
 import asyncio
 import hashlib
-import http.client
 import json
 import secrets
 import ssl
 import threading
 import time
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, urlparse
+
+import requests
+
+from infra.console import vncproxy_mint
 
 RELAY_TTL = 30  # seconds between mint and the browser's websocket open
 
 
 class ConsoleError(RuntimeError):
-    """A console could not be opened (Proxmox refused or was unreachable)."""
-
-
-def _norm_fp(fp):
-    return (fp or "").replace(":", "").strip().lower()
+    pass
 
 
 def _ssl_context():
@@ -49,7 +48,7 @@ def _ssl_context():
 
 
 def _check_fingerprint(der_cert, want):
-    want = _norm_fp(want)
+    want = (want or "").replace(":", "").strip().lower()
     if not want:
         return
     got = hashlib.sha256(der_cert or b"").hexdigest()
@@ -58,35 +57,23 @@ def _check_fingerprint(der_cert, want):
 
 
 def node_host(node):
-    """(host, port) of a node record's endpoint."""
     u = urlparse(node["endpoint"])
     return u.hostname, u.port or 8006
 
 
+# blocking — call via to_thread
 def vncproxy(node, vmid, timeout=20):
-    """POST vncproxy on the node; returns {port, ticket}. Blocking — call via to_thread."""
-    host, port = node_host(node)
-    conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=_ssl_context())
     try:
-        conn.connect()
-        _check_fingerprint(conn.sock.getpeercert(binary_form=True), node.get("tls_fingerprint"))
-        path = f"/api2/json/nodes/{node['pve_node']}/qemu/{int(vmid)}/vncproxy"
-        conn.request("POST", path, body=urlencode({"websocket": 1}),
-                     headers={"Authorization": f"PVEAPIToken={node['token']}",
-                              "Content-Type": "application/x-www-form-urlencoded"})
-        resp = conn.getresponse()
-        body = resp.read()
-    except (OSError, http.client.HTTPException) as e:
+        return vncproxy_mint(node["endpoint"], node["token"], node["pve_node"], vmid,
+                             fingerprint=node.get("tls_fingerprint"), timeout=timeout)
+    except requests.HTTPError as e:
+        resp = e.response
+        raise ConsoleError(f"Proxmox refused the console (HTTP {resp.status_code}: "
+                           f"{(resp.text or '')[:120]})") from e
+    except ValueError as e:
+        raise ConsoleError(str(e)) from e
+    except OSError as e:
         raise ConsoleError(f"Proxmox unreachable ({type(e).__name__}: {e})") from e
-    finally:
-        conn.close()
-    if resp.status != 200:
-        raise ConsoleError(f"Proxmox refused the console (HTTP {resp.status}: "
-                           f"{body[:120].decode(errors='replace')})")
-    data = json.loads(body).get("data") or {}
-    if not data.get("port") or not data.get("ticket"):
-        raise ConsoleError("Proxmox returned no console port/ticket")
-    return {"port": int(data["port"]), "ticket": str(data["ticket"])}
 
 
 def upstream_url(node, vmid, port, ticket):
@@ -113,13 +100,9 @@ async def _default_connect(url, headers, node):
     return ws
 
 
+# mints console tickets and holds the one-shot relay table; `proxy`/`connect` are injectable
+# so the whole flow runs offline in tests
 class ConsoleBroker:
-    """Mints console tickets and holds the one-shot relay table.
-
-    `nodes` maps a node key (the box records' `node`) to
-    {endpoint, pve_node, token, tls_fingerprint?}. `proxy` and `connect` are injectable so the
-    whole flow runs offline in tests."""
-
     def __init__(self, nodes, ttl=RELAY_TTL, proxy=vncproxy, connect=_default_connect,
                  clock=time.monotonic):
         self.nodes = dict(nodes or {})
@@ -131,7 +114,6 @@ class ConsoleBroker:
         self._lock = threading.Lock()
 
     def available(self, box=None):
-        """True when a console can be minted (for `box`, or for any box)."""
         if box is None:
             return bool(self.nodes)
         node = self.nodes.get(box.get("node"))
@@ -141,9 +123,8 @@ class ConsoleBroker:
         for rid in [r for r, e in self._pending.items() if e["expires"] <= now]:
             del self._pending[rid]
 
+    # `owner` is bound to the relay id so only the session that minted it can open it
     async def mint(self, box, owner):
-        """Ticket for `box`; returns {relay_id, password}. `owner` is bound to the relay id so
-        only the session that minted it can open it."""
         if not self.available(box):
             raise ConsoleError("console access is not configured for this box")
         node = self.nodes[box["node"]]
@@ -158,11 +139,9 @@ class ConsoleBroker:
                                        "expires": now + self.ttl}
         return {"relay_id": relay_id, "password": got["ticket"]}
 
+    # a wrong-owner attempt still consumes the id: a leaked relay id is burned by the first
+    # try, whoever makes it
     def take(self, relay_id, owner):
-        """Pop a relay entry; None when unknown, expired, already used, or not `owner`'s.
-
-        A wrong-owner attempt still consumes the id: a leaked relay id is burned by the
-        first try, whoever makes it."""
         with self._lock:
             now = self._clock()
             self._sweep(now)
@@ -171,9 +150,8 @@ class ConsoleBroker:
             return None
         return entry
 
+    # `client` must already be accepted
     async def relay(self, client, entry):
-        """Pipe frames between the browser websocket (Starlette) and Proxmox until either
-        side closes. `client` must already be accepted."""
         node = self.nodes[entry["node"]]
         url = upstream_url(node, entry["vmid"], entry["port"], entry["ticket"])
         upstream = await self._connect(url, {"Authorization": f"PVEAPIToken={node['token']}"},

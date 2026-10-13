@@ -53,45 +53,38 @@ class KnobTests(unittest.TestCase):
 class LocalConfigTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="tz-realmc2-cfg-")
-        self.bad_auto_cfg = rc.BAD_AUTO / "config.yaml"
-        self.had_cfg = self.bad_auto_cfg.exists()
-        self.orig = self.bad_auto_cfg.read_text() if self.had_cfg else None
+        # The comp's OWN config is the base (2026-10-12 isolation): no sibling
+        # checkout file is read, backed up, or restored by these tests anymore.
+        self.comp_cfg = Path(self.tmp) / ".badauto-config.yaml"
         # callback_ip derives from teams.json; every prepare_local_c2 test needs one
         self.write_teams(120)
-
-    def tearDown(self):
-        if self.had_cfg:
-            self.bad_auto_cfg.write_text(self.orig)
-        elif self.bad_auto_cfg.exists():
-            self.bad_auto_cfg.unlink()
 
     def write_teams(self, ident):
         (Path(self.tmp) / "teams.json").write_text(
             '{"team1": {"identifier": %d, "name": "Team One"}}' % ident)
 
     def test_build_local_c2_config_retargets_at_red01(self):
-        self.bad_auto_cfg.write_text(
+        self.comp_cfg.write_text(
             "realm:\n  enabled: true\n  c2_ip: 10.0.0.117\n  base_url: http://10.0.0.117:8000\n"
             "deploy:\n  red_ip: 10.0.0.199\n")
-        cfg = rc.build_local_c2_config("10.0.0.198")
+        cfg = rc.build_local_c2_config("10.0.0.198", comp_dir=self.tmp)
         self.assertEqual(cfg["realm"]["c2_ip"], "10.0.0.198")
         self.assertEqual(cfg["realm"]["base_url"], "http://10.0.0.198:8000")
         self.assertEqual(cfg["realm"]["verify_url"], "http://10.0.0.198:8000")
         self.assertEqual(cfg["deploy"]["red_ip"], "10.0.0.198")
 
     def test_realm_disabled_means_no_c2(self):
-        self.bad_auto_cfg.write_text("realm:\n  enabled: false\n")
-        self.assertIsNone(rc.build_local_c2_config("10.0.0.198"))
+        self.comp_cfg.write_text("realm:\n  enabled: false\n")
+        self.assertIsNone(rc.build_local_c2_config("10.0.0.198", comp_dir=self.tmp))
 
     def test_missing_config_returns_none(self):
-        self.bad_auto_cfg.unlink()
-        self.assertIsNone(rc.build_local_c2_config("10.0.0.198"))
+        self.assertIsNone(rc.build_local_c2_config("10.0.0.198", comp_dir=self.tmp))
 
-    def test_prepare_local_c2_writes_derived_config_outside_bad_auto(self):
-        self.bad_auto_cfg.write_text("realm:\n  enabled: true\n")
+    def test_prepare_local_c2_writes_the_comps_own_config(self):
+        self.comp_cfg.write_text("realm:\n  enabled: true\n")
         path, realm = rc.prepare_local_c2(self.tmp, "10.0.0.198")
         self.assertEqual(path.parent, Path(self.tmp))
-        self.assertEqual(path.name, ".realm-c2-config.yaml")
+        self.assertEqual(path.name, ".badauto-config.yaml")
         self.assertEqual(realm["c2_ip"], "10.0.0.198")
 
     def test_derived_block_synthesizes_the_full_realm_table(self):
@@ -99,7 +92,7 @@ class LocalConfigTests(unittest.TestCase):
         without transports/callback_ip planted one dead legacy beacon per box
         while the deploy printed 'tavern live … all transports'."""
         import yaml
-        self.bad_auto_cfg.write_text("realm:\n  enabled: true\n")
+        self.comp_cfg.write_text("realm:\n  enabled: true\n")
         path, realm = rc.prepare_local_c2(self.tmp, "10.0.0.198")
         self.assertEqual(sorted(realm["transports"]),
                          ["dns", "grpc", "http1", "icmp", "quic"])
@@ -122,7 +115,7 @@ class LocalConfigTests(unittest.TestCase):
         self.assertEqual(on_disk, realm)                  # written == returned
 
     def test_operator_transport_overrides_survive_synthesis(self):
-        self.bad_auto_cfg.write_text(
+        self.comp_cfg.write_text(
             "realm:\n  enabled: true\n  transports:\n    http1:\n      c2_port: 9001\n")
         _, realm = rc.prepare_local_c2(self.tmp, "10.0.0.198")
         self.assertEqual(realm["transports"]["http1"],
@@ -133,7 +126,7 @@ class LocalConfigTests(unittest.TestCase):
     def test_prepare_local_c2_refuses_without_a_derivable_callback_ip(self):
         """No teams.json -> no callback_ip -> beacons would aim at nothing. The
         deploy must refuse loudly, not warn-and-continue into a dark C2."""
-        self.bad_auto_cfg.write_text("realm:\n  enabled: true\n")
+        self.comp_cfg.write_text("realm:\n  enabled: true\n")
         (Path(self.tmp) / "teams.json").unlink()
         with self.assertRaises(ValueError) as caught:
             rc.prepare_local_c2(self.tmp, "10.0.0.198")
@@ -163,7 +156,7 @@ class LocalConfigTests(unittest.TestCase):
         """`badauto deploy` needs the engine address for the DNAT; the derived config
         must be self-sufficient (a relative --competition path broke its own lookup)."""
         import yaml
-        self.bad_auto_cfg.write_text("realm:\n  enabled: true\n")
+        self.comp_cfg.write_text("realm:\n  enabled: true\n")
         (Path(self.tmp) / "credentials.txt").write_text("Scoreboard:  http://10.0.0.252\n")
         path, _ = rc.prepare_local_c2(self.tmp, "10.0.0.198")
         cfg = yaml.safe_load(path.read_text())

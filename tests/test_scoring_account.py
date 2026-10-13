@@ -42,13 +42,13 @@ class AdminAccounts(unittest.TestCase):
         self.assertEqual(accounts[1]["pw"], "scoringpw")
 
     def test_a_caller_without_the_key_still_gets_the_single_admin(self):
-        """Older callers and the pin/compile tests build a dict ctx without it."""
+    # Older callers and the pin/compile tests build a dict ctx without it.
         accounts = _admin_accounts(_ctx())
         self.assertEqual([a["name"] for a in accounts], ["admin"])
 
     def test_the_scoring_password_is_not_the_admin_password(self):
-        """If they were ever the same, the separation would be a no-op — and the whole
-        point is that these are two independent accounts."""
+    # If they were ever the same, the separation would be a no-op — and the whole
+    #         point is that these are two independent accounts.
         accounts = _admin_accounts(_ctx(quotient_scoring_password="scoringpw"))
         by_name = {a["name"]: a["pw"] for a in accounts}
         self.assertNotEqual(by_name["admin"], by_name["scoring"])
@@ -63,8 +63,8 @@ class AdminAccounts(unittest.TestCase):
         self.assertEqual([a["name"] for a in conf["admin"]], ["admin"])
 
     def test_no_fixed_literal_leaks_in(self):
-        """The repo removed fixed literals on purpose (`ubuntu/ubuntu`,
-        `admin/changeme123`) — the automation account must follow the same rule."""
+    # The repo removed fixed literals on purpose (`ubuntu/ubuntu`,
+    #         `admin/changeme123`) — the automation account must follow the same rule.
         conf = build_event_conf(_ctx(quotient_scoring_password="generated-if-you-see-this"),
                                 {"web01": []})
         for account in conf["admin"]:

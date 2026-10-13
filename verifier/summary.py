@@ -8,8 +8,8 @@ from verifier.verdict import summary_lines
 
 
 def print_summary(results, allow_unverified, comp_dir):
-    """The SUMMARY block: per-gate lines (from the GateResults), the plant-integrity tally,
-    the recorded template hashes, and the freeze marker."""
+# The SUMMARY block: per-gate lines (from the GateResults), the plant-integrity tally,
+#     the recorded template hashes, and the freeze marker.
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)

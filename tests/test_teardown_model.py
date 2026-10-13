@@ -23,7 +23,7 @@ from teardown.inventory import Inventory  # noqa: E402
 from teardown.plan import PlanError, TeardownPlan  # noqa: E402
 from teardown.steps import (EVIDENCE, ArtifactStep, Step, StepResult,  # noqa: E402
                             TeardownContext, TerraformStep)
-from vm_ownership import Ownership, Refusal  # noqa: E402
+from infra.ownership import Ownership, Refusal  # noqa: E402
 
 RUN = "run-abcdef01"
 OTHER_RUN = "run-12345678"
@@ -307,9 +307,9 @@ if __name__ == "__main__":
 
 
 class RedTargetVmid(unittest.TestCase):
-    """RedStep records the vmid badauto's own target line names — not the
-    shared config.yaml's (another session's deploy rewrites it mid-flight;
-    live-found 2026-10-12: verify_clean then verified the WRONG vmid)."""
+# RedStep records the vmid badauto's own target line names — not the
+#     shared config.yaml's (another session's deploy rewrites it mid-flight;
+#     live-found 2026-10-12: verify_clean then verified the WRONG vmid).
 
     def test_parses_the_target_line(self):
         from teardown.steps import _red_target_vmid
@@ -323,9 +323,9 @@ class RedTargetVmid(unittest.TestCase):
 
 
 class JournalLifecycle(unittest.TestCase):
-    """A FRESH deploy starts a new teardown cycle: phase-1 clears the previous
-    teardown's journal (a reused run id would otherwise skip red01/artifacts of
-    the new range — live-found 2026-10-12). Resumes keep it."""
+# A FRESH deploy starts a new teardown cycle: phase-1 clears the previous
+#     teardown's journal (a reused run id would otherwise skip red01/artifacts of
+#     the new range — live-found 2026-10-12). Resumes keep it.
 
     def test_phase1_clears_a_stale_journal(self):
         import tempfile

@@ -31,7 +31,7 @@ def load_module(name, filename):
 
 destroy = load_module("destroy_competition_for_timeout_test", "destroy-competition.py")
 from teardown import machinery as destroy_sweep_ops  # noqa: E402
-from vm_ownership import Ownership  # noqa: E402
+from infra.ownership import Ownership  # noqa: E402
 
 
 def _timeout():
@@ -57,9 +57,9 @@ class DestroyAttemptTimeoutTests(unittest.TestCase):
         self.assertGreater(destroy_sweep_ops.DESTROY_ATTEMPT_TIMEOUT_S, 0)
 
     def test_timeout_is_retried_instead_of_escaping(self):
-        """A hung attempt must fall through to the next one — the whole point of the
-        4-attempt loop is that recovery runs BETWEEN attempts, and that is unreachable
-        if TimeoutExpired propagates out of main()."""
+    # A hung attempt must fall through to the next one — the whole point of the
+    #         4-attempt loop is that recovery runs BETWEEN attempts, and that is unreachable
+    #         if TimeoutExpired propagates out of main().
         result, p_run, p_lock, p_sweep = self._run(
             [_timeout(), MagicMock(returncode=0)])
         self.assertTrue(result)

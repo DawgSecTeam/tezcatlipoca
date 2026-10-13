@@ -128,7 +128,7 @@ the node's networking.
 - If legs orphan: re-enrol tap<vmid>i<nic> / fwpr<vmid>p<nic> by NAME (pve-host-network-ops
   skill, scripts/recover-vm-legs.py). No VM was ever stopped by this; keep it that way.
 - `qm guest ping` doesn't exist; test QGA with `qm guest exec <vmid> -- true`. This PVE's
-  snapshot API wants `snapname` — use range_ops.take_snapshot. Guest-agent IP discovery
+  snapshot API wants `snapname` — use infra.lifecycle.take_snapshot. Guest-agent IP discovery
   returns null on .150 — never rely on terraform IP discovery there.
 - Do not reboot the physical host. The owner may be out.
 - Service VMs are DHCP — IPs drift; use infra-registry, never VM-number assumptions.

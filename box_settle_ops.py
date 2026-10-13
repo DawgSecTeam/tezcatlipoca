@@ -3,7 +3,7 @@
 import shlex
 import time
 
-from range_ops import guest_agent_exec_root, wait_for_guest_agent
+from infra.guest_exec import guest_agent_exec_root, wait_for_guest_agent
 from ssh_ops import ssh_via_gateway
 from utils import run_concurrent
 
@@ -25,17 +25,17 @@ _SETTLE_CHECK = (
 
 
 def _box_settled(node, vmid):
-    """True once a freshly booted box has settled: guest agent responds, no
-    unattended-upgrades process, dpkg lock free. All via the guest agent (root,
-    virtio-serial) — SSH is exactly the channel the boot storm starves. The lock check
-    is `apt-get check` with a 1s lock timeout rather than `fuser`: same condition, no
-    psmisc dependency on minimal cloud images.
-
-    Returns None (not False) when the agent channel is alive but its data calls are
-    useless — the realm node answers pings and returns NULL for every exec result, so
-    "no SETTLED seen" there means 'cannot verify', not 'busy'. Treating that as False
-    burned the whole 240s settle budget per prep_apt pass on realm (2026-09-25);
-    callers fall back to the SSH probe on None."""
+# True once a freshly booted box has settled: guest agent responds, no
+#     unattended-upgrades process, dpkg lock free. All via the guest agent (root,
+#     virtio-serial) — SSH is exactly the channel the boot storm starves. The lock check
+#     is `apt-get check` with a 1s lock timeout rather than `fuser`: same condition, no
+#     psmisc dependency on minimal cloud images.
+#
+#     Returns None (not False) when the agent channel is alive but its data calls are
+#     useless — the realm node answers pings and returns NULL for every exec result, so
+#     "no SETTLED seen" there means 'cannot verify', not 'busy'. Treating that as False
+#     burned the whole 240s settle budget per prep_apt pass on realm (2026-09-25);
+#     callers fall back to the SSH probe on None.
     try:
         if not wait_for_guest_agent(node, vmid, timeout=20):
             return False
@@ -50,7 +50,7 @@ def _box_settled(node, vmid):
 
 
 def _box_settled_via_ssh(ctx, t):
-    """SSH fallback of the settle check, for nodes whose guest agent won't return data."""
+# SSH fallback of the settle check, for nodes whose guest agent won't return data.
     script = _SETTLE_CHECK
     try:
         r = ssh_via_gateway(ctx, t["ip"], f"sudo bash -c {shlex.quote(script)}",
@@ -61,11 +61,11 @@ def _box_settled_via_ssh(ctx, t):
 
 
 def wait_boxes_settled(targets, node, timeout=240, ssh_fallback=None):
-    """Poll every box until it settles after boot — the real condition the old blind
-    150s sleep waited out (the initial unattended-upgrades run starves both the guest
-    agent and the ssh -W forward). Boxes poll concurrently, each with the full budget.
-    Returns the vmids that never settled; that is not fatal — the caller's per-box
-    retry ladder covers a stubborn box exactly as before."""
+# Poll every box until it settles after boot — the real condition the old blind
+#     150s sleep waited out (the initial unattended-upgrades run starves both the guest
+#     agent and the ssh -W forward). Boxes poll concurrently, each with the full budget.
+#     Returns the vmids that never settled; that is not fatal — the caller's per-box
+#     retry ladder covers a stubborn box exactly as before.
     deadline = time.time() + timeout
 
     def _wait(t):

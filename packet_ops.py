@@ -50,14 +50,14 @@ _BASELINE_LINUX_CONFIG = "local-user"
 # policy on every Windows box, scrim-extreme-2026-09-20; URL-specials broke postgres
 # DSNs, scrim-extreme-cyberfield-2026-09-22), so two copies could silently drift apart
 # on exactly the property that keeps a range deployable. The old local copy claimed to
-# spare packet_ops the config_ops -> range_ops -> requests chain, but that isolation was
+# spare packet_ops the config_ops -> infra.client -> requests chain, but that isolation was
 # already nominal: quotient.setup (imported above) pulls requests regardless.
 _gen_password = random_password
 
 
 def team_domain_parts(name_template):
-    """\"mira-{team}.corp.sus\" -> (\"mira-\", \".corp.sus\"); the Compfile
-    domain_prefix/domain_suffix knobs domain_ops.team_domain consumes."""
+# "mira-{team}.corp.sus" -> ("mira-", ".corp.sus"); the Compfile
+#     domain_prefix/domain_suffix knobs domain_ops.team_domain consumes.
     pieces = str(name_template).split("{team}")
     if len(pieces) != 2:
         raise SystemExit(
@@ -67,11 +67,11 @@ def team_domain_parts(name_template):
 
 
 def _has_control_chars(value):
-    """True for newlines / C0 controls / DEL. The Compfile is line-oriented
-    (utils.load_compfile splits on newlines into `key value`), so a newline in any
-    interpolated field silently truncates the value or injects arbitrary keys —
-    a YAML `|` block scalar with a trailing newline is enough (audit-found 2026-10-02:
-    event.name/event.scenario/domain.name_template reach compile_profile raw)."""
+# True for newlines / C0 controls / DEL. The Compfile is line-oriented
+#     (utils.load_compfile splits on newlines into `key value`), so a newline in any
+#     interpolated field silently truncates the value or injects arbitrary keys —
+#     a YAML `|` block scalar with a trailing newline is enough (audit-found 2026-10-02:
+#     event.name/event.scenario/domain.name_template reach compile_profile raw).
     return any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in str(value))
 
 
@@ -90,7 +90,7 @@ def load_profile(path):
 
 
 def validate_profile(p):
-    """Every problem that would die mid-deploy, surfaced at compile time. Returns [str]."""
+# Every problem that would die mid-deploy, surfaced at compile time. Returns [str].
     errors = []
 
     def err(msg):
@@ -366,12 +366,12 @@ def validate_profile(p):
 
 
 def _service_pins(svc):
-    """box_services.json pin(s) for one profile service. Score-only services become
-    {'name': 'score/<x>', 'score_only': True, ...}; plant-only services ({"scored":
-    false}) become {'name': ..., 'plant_only': True} — a real catalog plant with no
-    scored check (the service is scored by a companion score-only pin). Normal pins
-    carry the display override, and dual_credit adds the domain-credlist twin (2:1
-    full/half emulation: both checks score 5, so local-only scores half of both-up)."""
+# box_services.json pin(s) for one profile service. Score-only services become
+#     {'name': 'score/<x>', 'score_only': True, ...}; plant-only services ({"scored":
+#     false}) become {'name': ..., 'plant_only': True} — a real catalog plant with no
+#     scored check (the service is scored by a companion score-only pin). Normal pins
+#     carry the display override, and dual_credit adds the domain-credlist twin (2:1
+#     full/half emulation: both checks score 5, so local-only scores half of both-up).
     pin = svc["pin"]
     display = svc.get("display")
     out = []
@@ -412,8 +412,8 @@ def _service_pins(svc):
 
 
 def _cred_carrying_services(p, box_name):
-    """True when any service on the box resolves to a check that authenticates with a
-    credlist — Windows boxes then need baseline local-user-win pins for those users."""
+# True when any service on the box resolves to a check that authenticates with a
+#     credlist — Windows boxes then need baseline local-user-win pins for those users.
     from quotient.setup import _SERVICE_TO_CHECK
     for svc in p.get("services") or []:
         if svc.get("box") != box_name:
@@ -431,28 +431,28 @@ def _cred_carrying_services(p, box_name):
 
 
 def _platform_of(template):
-    """Packet-side wrapper over the one template->platform map (nakon_ops.os_to_platform).
-
-    The shared map calls `.lower()` straight on its argument; packet YAML tolerates a box
-    with no `template` key, so coerce first. This wrapper historically read
-    `str(template)`, so an absent key classified as "linux" instead of raising — that
-    coercion is the only intentional difference and it is preserved here (for every str
-    input the two are identical). Nothing else may re-implement the mapping: the packet
-    compiler's Windows/Linux split here and nakon's machine tagging have to agree
-    (audit 2026-10-02)."""
+# Packet-side wrapper over the one template->platform map (nakon_ops.os_to_platform).
+#
+#     The shared map calls `.lower()` straight on its argument; packet YAML tolerates a box
+#     with no `template` key, so coerce first. This wrapper historically read
+#     `str(template)`, so an absent key classified as "linux" instead of raising — that
+#     coercion is the only intentional difference and it is preserved here (for every str
+#     input the two are identical). Nothing else may re-implement the mapping: the packet
+#     compiler's Windows/Linux split here and nakon's machine tagging have to agree
+#     (audit 2026-10-02).
     return os_to_platform(str(template))
 
 
 def build_baseline(p):
-    """box_baseline.json payload: {box: [pins]}.
-
-    Two kinds of packet-promised, non-scored accounts ride here (planted like vulns
-    ride box_vulns.json, but published in the packet, so they are baseline not secret):
-      - out-of-scope decoys (scorebot/blackteam/red_scoring) on every managed box;
-      - credlist local users on WINDOWS boxes (Linux gets them from
-        fix_services_on_boxes; IIS FTP authenticates against local Windows users).
-    Decoy passwords are random (the packet never publishes them) and live only in
-    this 0600, gitignored file."""
+# box_baseline.json payload: {box: [pins]}.
+#
+#     Two kinds of packet-promised, non-scored accounts ride here (planted like vulns
+#     ride box_vulns.json, but published in the packet, so they are baseline not secret):
+#       - out-of-scope decoys (scorebot/blackteam/red_scoring) on every managed box;
+#       - credlist local users on WINDOWS boxes (Linux gets them from
+#         fix_services_on_boxes; IIS FTP authenticates against local Windows users).
+#     Decoy passwords are random (the packet never publishes them) and live only in
+#     this 0600, gitignored file.
     creds = p.get("credentials") or {}
     out_of_scope = list((creds.get("out_of_scope") or []))
     credlist_users = sorted((creds.get("credlists") or {}).get("linux") or {})
@@ -496,10 +496,10 @@ def build_baseline(p):
 
 
 def packet_secret_files(p):
-    """The packet's SECRET layer: {filename: content} for passwords.json,
-    domain_accounts.json, and box_baseline.json. Compile-packet emits these as 0600
-    gitignored files; ensure_packet_secrets re-emits them for a comp dir that arrived
-    without them. One definition so the two paths cannot drift."""
+# The packet's SECRET layer: {filename: content} for passwords.json,
+#     domain_accounts.json, and box_baseline.json. Compile-packet emits these as 0600
+#     gitignored files; ensure_packet_secrets re-emits them for a comp dir that arrived
+#     without them. One definition so the two paths cannot drift.
     creds = p.get("credentials") or {}
     credlists = creds.get("credlists") or {}
     linux_creds = dict(credlists.get("linux") or {})
@@ -524,16 +524,16 @@ def packet_secret_files(p):
 
 
 def ensure_packet_secrets(comp_dir):
-    """Compile the packet's SECRET layer into an existing comp dir when missing.
-
-    compile-packet's outputs are 0600 gitignored files, so a comp dir that arrived by
-    git — a stage_author authoring, a manual copy, a fresh clone — deploys without
-    them: the machine list then lacks the packet-promised decoy/local accounts and
-    the harness's pre-T0 `verify --packet` aborts the run (live-found 2026-10-04,
-    scrim-reset: packet_accounts FAIL killed the run before the event window). The
-    Compfile's packet_source names the profile; this re-emits ONLY the secret files
-    it promises, never the public shape (Compfile/boxes/pins are the comp's own).
-    Returns the list of files written."""
+# Compile the packet's SECRET layer into an existing comp dir when missing.
+#
+#     compile-packet's outputs are 0600 gitignored files, so a comp dir that arrived by
+#     git — a stage_author authoring, a manual copy, a fresh clone — deploys without
+#     them: the machine list then lacks the packet-promised decoy/local accounts and
+#     the harness's pre-T0 `verify --packet` aborts the run (live-found 2026-10-04,
+#     scrim-reset: packet_accounts FAIL killed the run before the event window). The
+#     Compfile's packet_source names the profile; this re-emits ONLY the secret files
+#     it promises, never the public shape (Compfile/boxes/pins are the comp's own).
+#     Returns the list of files written.
     compfile = comp_dir / "Compfile"
     if not compfile.exists():
         return []
@@ -578,7 +578,7 @@ def ensure_packet_secrets(comp_dir):
 
 
 def compile_profile(profile_path, competitions_dir=None, force=False, dry_run=False):
-    """Validate + emit the competition bundle. Returns (comp_dir, fidelity_md, wrote[])."""
+# Validate + emit the competition bundle. Returns (comp_dir, fidelity_md, wrote[]).
     p = load_profile(profile_path)
     errors = validate_profile(p)
     if errors:
@@ -685,8 +685,8 @@ def _display_source(p):
 
 
 def render_fidelity(p):
-    """packet-fidelity.md — the honesty surface. What the packet promised vs what this
-    range delivers, per box / service / credential / schedule fact."""
+# packet-fidelity.md — the honesty surface. What the packet promised vs what this
+#     range delivers, per box / service / credential / schedule fact.
     event = p["event"]
     lines = [
         f"# Packet fidelity — {event['name']}",

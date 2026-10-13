@@ -5,15 +5,15 @@ from engine_bootstrap_ops import push_quotient_env
 
 
 def clean_engine_for_template(ctx, vmid=None):
-    """Strip every per-deploy / per-competition trace before qm template (M4 template
-    point): containers + data volumes (no scoring DB, teams or injects baked), .env and
-    event.conf secrets, machine-id, cloud-init state, SSH host keys. The apt-cacher-ng
-    package cache is deliberately KEPT — a warm cache speeds up every later run.
-
-    `vmid` is the engine-template BUILD VM. Pass it whenever it is known: the command
-    below runs over SSH to a management IP that a second competition's engine can share,
-    and this is the most destructive command in the pipeline. See
-    assert_engine_build_identity()."""
+# Strip every per-deploy / per-competition trace before qm template (M4 template
+#     point): containers + data volumes (no scoring DB, teams or injects baked), .env and
+#     event.conf secrets, machine-id, cloud-init state, SSH host keys. The apt-cacher-ng
+#     package cache is deliberately KEPT — a warm cache speeds up every later run.
+#
+#     `vmid` is the engine-template BUILD VM. Pass it whenever it is known: the command
+#     below runs over SSH to a management IP that a second competition's engine can share,
+#     and this is the most destructive command in the pipeline. See
+#     assert_engine_build_identity().
     if vmid is not None:
         assert_engine_build_identity(ctx, vmid)
     _run_engine_cmd(ctx, (
@@ -44,28 +44,28 @@ ENGINE_BUILD_STAMP = "/etc/tezcatlipoca-build-id"
 
 
 def engine_build_identity(vmid):
-    """The identity string a build VM carries. Keyed on the reserved vmid, which is
-    deterministic (engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET) and unique per slot."""
+# The identity string a build VM carries. Keyed on the reserved vmid, which is
+#     deterministic (engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET) and unique per slot.
     return f"tezcatlipoca-engine-template/{vmid}"
 
 
 def stamp_engine_build(ctx, vmid):
-    """Mark the guest at ctx['scoring_engine_ip'] as this build's VM.
-
-    Called as soon as the freshly cloned build VM accepts SSH, before any other work, so
-    a later SSH that resolves to the wrong machine is detectable."""
+# Mark the guest at ctx['scoring_engine_ip'] as this build's VM.
+#
+#     Called as soon as the freshly cloned build VM accepts SSH, before any other work, so
+#     a later SSH that resolves to the wrong machine is detectable.
     return _run_engine_cmd(
         ctx, f"echo '{engine_build_identity(vmid)}' | sudo tee {ENGINE_BUILD_STAMP} >/dev/null",
         timeout=60, step="stamp engine build")
 
 
 def assert_engine_build_identity(ctx, vmid):
-    """Refuse to touch the engine unless the guest at this address is THIS build's VM.
-
-    A missing stamp is fatal, not a warning: it means either we are pointed at a machine
-    this pipeline never stamped (a foreign engine, or an engine clone made from a
-    template) or the build VM is not the one we think it is. Both are worse than
-    stopping."""
+# Refuse to touch the engine unless the guest at this address is THIS build's VM.
+#
+#     A missing stamp is fatal, not a warning: it means either we are pointed at a machine
+#     this pipeline never stamped (a foreign engine, or an engine clone made from a
+#     template) or the build VM is not the one we think it is. Both are worse than
+#     stopping.
     expected = engine_build_identity(vmid)
     result = _run_engine_cmd(ctx, f"cat {ENGINE_BUILD_STAMP} 2>/dev/null || true",
                              timeout=60, capture=True, step="verify engine build identity")
@@ -103,13 +103,13 @@ _GROW_ROOT_CMD = (
 
 
 def prepare_engine_from_template(ctx, postgres_password, redis_password):
-    """Per-deploy steps on an engine cloned from the engine template (M4).
-
-    The clone boots with a fresh identity and fresh host keys (baked by the template's
-    clean step). .env goes down BEFORE compose up: the fresh postgres volume must
-    initialize with this competition's credentials — up-then-rewrite would leave a
-    volume initialized with an empty password. compose up on a template with no
-    volumes creates exactly that: an empty scoring DB every run."""
+# Per-deploy steps on an engine cloned from the engine template (M4).
+#
+#     The clone boots with a fresh identity and fresh host keys (baked by the template's
+#     clean step). .env goes down BEFORE compose up: the fresh postgres volume must
+#     initialize with this competition's credentials — up-then-rewrite would leave a
+#     volume initialized with an empty password. compose up on a template with no
+#     volumes creates exactly that: an empty scoring DB every run.
     print("  Preparing engine from template (.env + fresh-volume compose up)...")
     _run_engine_cmd(ctx, _GROW_ROOT_CMD, check=False, timeout=120,
                     step="grow engine root filesystem")

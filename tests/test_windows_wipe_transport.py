@@ -23,8 +23,8 @@ CREDS = {"KEY_PATH": "/k", "VM_USER": "jump", "ENGINE_IP": "10.0.0.252",
 
 class WindowsWipeTransport(unittest.TestCase):
     def test_script_travels_as_a_file_not_the_command_line(self):
-        """A 100+ path skip header must not ride argv (cmd.exe 8191-char cliff)
-        nor stdin line-parsing (-Command - REPL semantics)."""
+    # A 100+ path skip header must not ride argv (cmd.exe 8191-char cliff)
+    #         nor stdin line-parsing (-Command - REPL semantics).
         seen = {}
 
         def fake_run(argv, **kwargs):
@@ -53,8 +53,8 @@ class WindowsWipeTransport(unittest.TestCase):
         self.assertEqual(r.returncode, 255)
 
     def test_cleanup_does_not_mask_the_powershell_exit_code(self):
-        """The -File leg's rc must be PowerShell's: the staged file is deleted
-        BEFORE it runs (`del ... &`), never chained after (`; del`)."""
+    # The -File leg's rc must be PowerShell's: the staged file is deleted
+    #         BEFORE it runs (`del ... &`), never chained after (`; del`).
         joined = []
 
         def fake_run(argv, **kwargs):

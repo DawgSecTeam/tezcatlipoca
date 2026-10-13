@@ -11,12 +11,10 @@ from scrim.runfiles import SCOREBOARD_STATE
 
 
 def _cred_team_names(args, creds):
-    """Team names this run has creds for, bounded by --teams."""
     return [f"team{i}" for i in range(1, args.teams + 1) if f"TEAM{i}_PW" in creds]
 
 
 def monitor_loop(args, creds, t0, stop):
-    """Snapshot scoreboard + evidence every MONITOR_INTERVAL starting at T+0."""
     sb_path = Path(args.run_dir) / SCOREBOARD_STATE
     teams = _cred_team_names(args, creds)
     while not stop.is_set() and (time.time() - t0) < args.duration_min * 60:

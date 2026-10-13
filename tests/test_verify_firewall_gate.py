@@ -25,7 +25,7 @@ def _proc(rc=0, out=""):
 
 
 def _engine(held=(), routed=("141", "142"), alive=("141", "142"), exc=None):
-    """Fake ssh_to_engine modelling a cut-over engine, with per-team drift knobs."""
+# Fake ssh_to_engine modelling a cut-over engine, with per-team drift knobs.
     def fake(ctx, cmd, timeout=30):
         if exc:
             raise exc

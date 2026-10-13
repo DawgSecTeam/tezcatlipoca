@@ -8,7 +8,7 @@ def vm_id_for(identifier, box_index):
 
 
 def box_index(boxes, box_name):
-    """Canonical position of a box by name — matches terraform's index(names, name)."""
+# Canonical position of a box by name — matches terraform's index(names, name).
     for i, b in enumerate(boxes):
         if b["name"] == box_name:
             return i
@@ -16,7 +16,7 @@ def box_index(boxes, box_name):
 
 
 def persist_targets(comp_dir, targets, boxes):
-    """Freeze (team,box)->vmid at deploy so later tools don't recompute it from boxes.json order."""
+# Freeze (team,box)->vmid at deploy so later tools don't recompute it from boxes.json order.
     data = {
         "box_order": [b["name"] for b in boxes],
         "targets": {
@@ -35,10 +35,10 @@ def persist_targets(comp_dir, targets, boxes):
 
 
 def load_targets(comp_dir, teams, boxes):
-    """Targets with vmid read from targets.json (frozen at deploy); recompute if absent.
-
-    Refuses when boxes.json was reordered since deploy: vmid is positional, so a
-    reorder would silently retarget a different VM (and terraform would diverge too)."""
+# Targets with vmid read from targets.json (frozen at deploy); recompute if absent.
+#
+#     Refuses when boxes.json was reordered since deploy: vmid is positional, so a
+#     reorder would silently retarget a different VM (and terraform would diverge too).
     path = Path(comp_dir) / "targets.json"
     if not path.exists():
         print("  (targets.json absent — deriving vmids from boxes.json order; "
@@ -68,11 +68,11 @@ def load_targets(comp_dir, teams, boxes):
 
 
 def enumerate_targets(teams, boxes, placement=None, default_node=None):
-    """One target per (team, box); build from full lists then filter — vmid is positional.
-
-    With a multi-node placement, each target carries `node` + `slot` from its team's
-    placement; without one, `default_node` (the env node) is stamped so downstream
-    node-scoped calls have one uniform field."""
+# One target per (team, box); build from full lists then filter — vmid is positional.
+#
+#     With a multi-node placement, each target carries `node` + `slot` from its team's
+#     placement; without one, `default_node` (the env node) is stamped so downstream
+#     node-scoped calls have one uniform field.
     team_node = placement.get("team_nodes") if placement else None
     team_slot = placement.get("team_slots") if placement else None
 

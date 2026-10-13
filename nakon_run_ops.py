@@ -16,12 +16,12 @@ from pathlib import Path
 
 
 class NakonResult:
-    """Structured outcome of one `nakon deploy` (M4 plant-coverage source).
-
-    failed: raw FAILED output lines (the human-facing tally, as before).
-    machines: per-machine step results from nakon deploy --json — name, exit_status,
-    error, and steps[{name, rc, ...}] — so coverage = expected configs minus rc!=0
-    steps, exactly, instead of parsed from interleaved --jobs stdout."""
+# Structured outcome of one `nakon deploy` (M4 plant-coverage source).
+#
+#     failed: raw FAILED output lines (the human-facing tally, as before).
+#     machines: per-machine step results from nakon deploy --json — name, exit_status,
+#     error, and steps[{name, rc, ...}] — so coverage = expected configs minus rc!=0
+#     steps, exactly, instead of parsed from interleaved --jobs stdout.
 
     def __init__(self, failed, machines):
         self.failed = failed
@@ -31,7 +31,7 @@ class NakonResult:
         return not self.failed
 
     def failed_configs(self):
-        """{machine_name: set(config names whose step rc != 0 or never reported)}."""
+    # {machine_name: set(config names whose step rc != 0 or never reported)}.
         out = {}
         for m in self.machines:
             bad = {s["name"] for s in m.get("steps", []) if s.get("rc") != 0}
@@ -43,12 +43,12 @@ class NakonResult:
 
 
 def _deploy_owner_check(ssh_base, action="deploy"):
-    """Cross-host collision guard. Since M2.3 staging is per-run, same-host concurrent
-    runs don't collide — but two operators on two hosts running against the same engine
-    still clobber each other's range mid-plant (scrim-extreme-2026-09-20: a second
-    operator at 10.0.0.159 ran a full deploy against the same engine). The global
-    /opt/nakon/.deploy-owner marker records the last writer; a fresh marker from a
-    DIFFERENT hostname means stand down and escalate."""
+# Cross-host collision guard. Since M2.3 staging is per-run, same-host concurrent
+#     runs don't collide — but two operators on two hosts running against the same engine
+#     still clobber each other's range mid-plant (scrim-extreme-2026-09-20: a second
+#     operator at 10.0.0.159 ran a full deploy against the same engine). The global
+#     /opt/nakon/.deploy-owner marker records the last writer; a fresh marker from a
+#     DIFFERENT hostname means stand down and escalate.
     import getpass
     me = f"{getpass.getuser()}@{socket.gethostname()}"
     try:
@@ -74,17 +74,17 @@ def _deploy_owner_check(ssh_base, action="deploy"):
 
 
 def _nothing_answered(machines):
-    """Why a rc=0 plant applied nothing, or None when the run was real.
-
-    `machines` is nakon deploy --json's per-machine outcome list. A machine that was
-    never reached carries no steps at all (`steps: []`) — nakon records the connection
-    error in `error` and moves on, so an all-unreachable plant is indistinguishable from
-    a clean one by exit code alone.
-
-    Deliberately narrow. It fires only when NO machine produced a single step result:
-    a plant where even one host ran one step is a real (if disappointing) outcome and
-    must not be escalated, or the floor would abort runs that are merely imperfect —
-    exactly the tolerated-failure case the ledger exists for."""
+# Why a rc=0 plant applied nothing, or None when the run was real.
+#
+#     `machines` is nakon deploy --json's per-machine outcome list. A machine that was
+#     never reached carries no steps at all (`steps: []`) — nakon records the connection
+#     error in `error` and moves on, so an all-unreachable plant is indistinguishable from
+#     a clean one by exit code alone.
+#
+#     Deliberately narrow. It fires only when NO machine produced a single step result:
+#     a plant where even one host ran one step is a real (if disappointing) outcome and
+#     must not be escalated, or the floor would abort runs that are merely imperfect —
+#     exactly the tolerated-failure case the ledger exists for.
     if not machines:
         return "no per-machine results were reported"
     ran = [m for m in machines if m.get("steps")]
@@ -96,18 +96,18 @@ def _nothing_answered(machines):
 
 def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, timeout=2400,
               strict=True, jobs=1, run_tag=None):
-    """Push the bundle to the scoring engine and run `nakon deploy` there.
-
-    Returns the FAILED step lines from the deploy output ([] when the plant was
-    clean, or when --strict aborted on the first one). jobs > 1 passes nakon's
-    --jobs through: per-machine work is atomic in nakon's runner, so machines
-    plant in parallel while each machine's steps keep their order.
-
-    Staging is per-run (M2.3): /tmp/nakon-<tag> on the way up, /opt/nakon/<tag> on
-    the engine, created and removed only by the run that owns them. Concurrent
-    nakon runs (M2.4's parallel domain passes) no longer race on a shared staging
-    slot — the global .deploy-owner marker now only arbitrates across HOSTS, since
-    same-host runs identify as the same holder."""
+# Push the bundle to the scoring engine and run `nakon deploy` there.
+#
+#     Returns the FAILED step lines from the deploy output ([] when the plant was
+#     clean, or when --strict aborted on the first one). jobs > 1 passes nakon's
+#     --jobs through: per-machine work is atomic in nakon's runner, so machines
+#     plant in parallel while each machine's steps keep their order.
+#
+#     Staging is per-run (M2.3): /tmp/nakon-<tag> on the way up, /opt/nakon/<tag> on
+#     the engine, created and removed only by the run that owns them. Concurrent
+#     nakon runs (M2.4's parallel domain passes) no longer race on a shared staging
+#     slot — the global .deploy-owner marker now only arbitrates across HOSTS, since
+#     same-host runs identify as the same holder.
     ssh_base = [
         "ssh", "-i", str(key), *_engine_opts(host=scoring_ip),
         f"{scoring_user}@{scoring_ip}",
@@ -260,16 +260,15 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
 
 
 def _preserve_failed_run(ssh_base, opt_dir, failed_steps, runner=None):
-    """Move a failed plant's staging (its run logs included) aside, then print
-    the failed steps' output tails.
-
-    The per-machine .log under <bundle>/runs/<stamp>/ is the ONLY record of WHY
-    a step failed, and run_nakon's finally deletes the whole staging dir — so
-    the first IIS FTP golden failure (2026-10-11) printed a `logs:` path that
-    stopped existing seconds later and was undiagnosable without a re-run.
-    Failed runs keep their evidence at /opt/nakon/failed-<tag>-<ts>; successful
-    runs are still cleaned up normally.
-    """
+# Move a failed plant's staging (its run logs included) aside, then print
+#     the failed steps' output tails.
+#
+#     The per-machine .log under <bundle>/runs/<stamp>/ is the ONLY record of WHY
+#     a step failed, and run_nakon's finally deletes the whole staging dir — so
+#     the first IIS FTP golden failure (2026-10-11) printed a `logs:` path that
+#     stopped existing seconds later and was undiagnosable without a re-run.
+#     Failed runs keep their evidence at /opt/nakon/failed-<tag>-<ts>; successful
+#     runs are still cleaned up normally.
     if not failed_steps:
         return None
     run = runner or (lambda argv, timeout=90:
@@ -300,12 +299,12 @@ def _preserve_failed_run(ssh_base, opt_dir, failed_steps, runner=None):
 
 def _run_single_nakon_config(machine, configurations, key, scoring_user, scoring_ip, comp_dir,
                               tag, timeout=1800, strict=True):
-    """Deploy one machine with overridden configs in isolation (reboot-safe).
-
-    The config file doubles as a done-marker (deploy_domain_configs skips ADDS
-    promotion when .nakon-domain-<team>-adds.json exists), so it is written as
-    .pending and renamed into place only after the run succeeds — a failed
-    promotion must not read as done on the next resume."""
+# Deploy one machine with overridden configs in isolation (reboot-safe).
+#
+#     The config file doubles as a done-marker (deploy_domain_configs skips ADDS
+#     promotion when .nakon-domain-<team>-adds.json exists), so it is written as
+#     .pending and renamed into place only after the run succeeds — a failed
+#     promotion must not read as done on the next resume.
     tmp_machine = {**machine, "configurations": configurations}
     final_path = comp_dir / f".nakon-domain-{tag}.json"
     pending_path = comp_dir / f".nakon-domain-{tag}.pending.json"

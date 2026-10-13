@@ -17,7 +17,8 @@ from verifier.model import CheckError, bool_gate, gate_skip
 
 
 class PacketProfileError(Exception):
-    """--packet named a profile that could not be loaded (message is the operator text)."""
+# --packet named a profile that could not be loaded (message is the operator text).
+    pass
 
 
 @dataclass
@@ -27,16 +28,16 @@ class RunOutcome:
 
 
 class _Run:
-    """Accumulates results and applies the --timeout guard between gates."""
+# Accumulates results and applies the --timeout guard between gates.
 
     def __init__(self, budget):
         self.budget = budget
         self.results = []
 
     def spent(self, name, label=""):
-        """--timeout guard, checked BETWEEN gates (never mid-flight): a gate that never
-        ran is SKIP_UNAVAILABLE — deliberately non-passing — so a budget can bound the
-        run but can never turn an unevaluated range into a PASS. Inert at --timeout 0."""
+    # --timeout guard, checked BETWEEN gates (never mid-flight): a gate that never
+    #         ran is SKIP_UNAVAILABLE — deliberately non-passing — so a budget can bound the
+    #         run but can never turn an unevaluated range into a PASS. Inert at --timeout 0.
         if not self.budget.expired():
             return False
         print(f"  SKIP  — run budget ({self.budget.label}) exhausted: '{name}' not evaluated")
@@ -68,7 +69,7 @@ def _expected_service_names(comp_dir):
 
 
 def _red_gate(run, name, label, fn):
-    """Run a red01 gate; a CheckError (couldn't run at all) is a SKIP, never a pass."""
+# Run a red01 gate; a CheckError (couldn't run at all) is a SKIP, never a pass.
     try:
         run.add(fn())
     except CheckError as e:
@@ -77,7 +78,7 @@ def _red_gate(run, name, label, fn):
 
 
 def run_gates(args, comp_dir, ctx, teams, admin_password, boxes, base_url, budget):
-    """Run every gate in order; returns a RunOutcome. Raises PacketProfileError."""
+# Run every gate in order; returns a RunOutcome. Raises PacketProfileError.
     run = _Run(budget)
     # Only left None when logins itself was budget-skipped; every consumer below is
     # guarded by the same monotonically expiring budget, so it cannot be reached.
@@ -113,7 +114,7 @@ def run_gates(args, comp_dir, ctx, teams, admin_password, boxes, base_url, budge
             print(f"  SKIP  — remote-access check couldn't run: {e}")
             run.add(gate_skip("remote_access", "check couldn't run"))
     if args.red_identity:
-        seg_ip = args.red_seg_ip or red.default_red_seg_ip()
+        seg_ip = args.red_seg_ip or red.default_red_seg_ip(comp_dir)
         if not run.spent("red_identity"):
             _red_gate(run, "red_identity", "red identity",
                       lambda: red.check_red_identity(ctx, boxes, args.red_ip, seg_ip,

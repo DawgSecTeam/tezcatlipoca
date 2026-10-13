@@ -11,7 +11,7 @@ from verifier.model import gate_fail, gate_pass, gate_skip
 
 
 def check_injects(base_url, admin_session, comp_dir):
-    """Compare engine inject count to the competition's injects/ dir. Returns (relevant, ok)."""
+# Compare engine inject count to the competition's injects/ dir. Returns (relevant, ok).
     print("\n[5/5] INJECTS")
     expected = count_local_injects(comp_dir)
     if expected is None:
@@ -45,18 +45,18 @@ _INJECT_CLOSE_KEYS = ("CloseTime", "close_time", "CloseAt", "close_at", "Close",
 
 
 def check_round_loop(base_url, admin_session, fix=False):
-    """Scoring round loop vs an engine reboot. The Docker containers restart after
-    a reboot but the round loop stays stopped (pfsense-ad: frozen scoreboard) —
-    and verify reads the LAST SCORED round, reporting stale UP/DOWN as if live.
-    /api/engine is snake_case (live-confirmed 2026-09-29): `running` (False =
-    paused), `competition_started`, `current_round_time` (RFC3339; the Go zero
-    time "0001-01-01T00:00:00Z" means the loop is NOT cycling), and
-    `last_round.StartTime`.
-
-    Returns a GateResult and main CONSUMES it: a stopped loop used to WARN and
-    return True while main discarded the return value, so a frozen scoreboard
-    never affected the exit code. --fix-round-loop runs the two POSTs, but a
-    stopped loop is still FAIL for this run (re-run to confirm a fresh round)."""
+# Scoring round loop vs an engine reboot. The Docker containers restart after
+#     a reboot but the round loop stays stopped (pfsense-ad: frozen scoreboard) —
+#     and verify reads the LAST SCORED round, reporting stale UP/DOWN as if live.
+#     /api/engine is snake_case (live-confirmed 2026-09-29): `running` (False =
+#     paused), `competition_started`, `current_round_time` (RFC3339; the Go zero
+#     time "0001-01-01T00:00:00Z" means the loop is NOT cycling), and
+#     `last_round.StartTime`.
+#
+#     Returns a GateResult and main CONSUMES it: a stopped loop used to WARN and
+#     return True while main discarded the return value, so a frozen scoreboard
+#     never affected the exit code. --fix-round-loop runs the two POSTs, but a
+#     stopped loop is still FAIL for this run (re-run to confirm a fresh round).
     print("\n  (scoring round loop — stops silently after an engine reboot)")
     if admin_session is None:
         print("  SKIP  — no admin session.")
@@ -107,8 +107,8 @@ def check_round_loop(base_url, admin_session, fix=False):
 
 
 def closed_injects(injects, now=None):
-    """[(title, close_time)] for injects whose close time is already past. Tolerant of the
-    engine's JSON key casing; injects with no parseable close time are ignored."""
+# [(title, close_time)] for injects whose close time is already past. Tolerant of the
+#     engine's JSON key casing; injects with no parseable close time are ignored.
     now = now or datetime.now(timezone.utc)
     out = []
     for inj in injects:

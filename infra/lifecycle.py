@@ -1,6 +1,6 @@
 """VM power state and snapshot helpers (no ownership decisions in here)."""
 
-from pve_api import proxmox_api, wait_for_proxmox_task
+from infra.client import proxmox_api, wait_for_proxmox_task
 from utils import record_degradation
 
 def vm_status(node, vmid):
@@ -82,7 +82,7 @@ def rollback_snapshot(node, vmid, name, timeout=900, restart=True):
     if restart:
         start_vm(node, vmid)
         try:
-            from guest_exec import wait_for_guest_agent
+            from infra.guest_exec import wait_for_guest_agent
             wait_for_guest_agent(node, vmid, timeout=600)
         except Exception as e:
             print(f"    WARNING: guest agent wait after rollback of {vmid}: {e}")

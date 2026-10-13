@@ -5,8 +5,8 @@ import shlex
 import subprocess
 import time
 
-from range_ops import diagnose_unreachable_box, guest_agent_exec_root, wait_for_guest_agent
-from ssh_ops import gateway_proxy
+from infra.guest_exec import (diagnose_unreachable_box, guest_agent_exec_root, wait_for_guest_agent,)
+from ssh_ops import box_ssh_argv
 from utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT, PRINT_LOCK, record_degradation, run_concurrent
 from box_settle_ops import wait_boxes_settled, _box_settled_via_ssh
 
@@ -37,14 +37,14 @@ apt-get -o DPkg::Lock::Timeout=120 update
 
 
 def _apt_prep_script(gateway=None):
-    """The apt-prep script, optionally pointing apt at the engine's apt-cacher-ng cache.
-
-    gateway=None actively REMOVES any proxy file a previous prep wrote, so toggling the
-    Compfile's `apt_cache` flag between deploys can't leave stale proxying behind. The
-    proxy is an IP (the box's own gateway = the engine's team NIC), so apt-through-proxy
-    keeps working when a planted resolv-conf-null-dns breaks the box's DNS — the one
-    approved realism trade-off of the cache (see docs/internals.md); the other disruptive
-    apt configs (empty sources, package holds) break apt through the proxy too."""
+# The apt-prep script, optionally pointing apt at the engine's apt-cacher-ng cache.
+#
+# gateway=None actively REMOVES any proxy file a previous prep wrote, so toggling the
+# Compfile's `apt_cache` flag between deploys can't leave stale proxying behind. The
+# proxy is an IP (the box's own gateway = the engine's team NIC), so apt-through-proxy
+# keeps working when a planted resolv-conf-null-dns breaks the box's DNS — the one
+# approved realism trade-off of the cache (see docs/internals.md); the other disruptive
+# apt configs (empty sources, package holds) break apt through the proxy too.
     if gateway:
         proxy_lines = (
             "mkdir -p /etc/apt/apt.conf.d\n"
@@ -57,16 +57,14 @@ def _apt_prep_script(gateway=None):
 
 
 def prep_apt_on_boxes(targets, ctx, use_proxy=True):
-    """Quiesce apt-daily/unattended-upgrades and refresh the apt index on every Linux
-    target before a Nakon plant. SSH-via-gateway + sudo is the primary channel (the
-    guest agent is unreliable in the minute after a tz-base rollback/reboot, when the
-    box is busy with unattended-upgrades — it timed out on every box in one run); the
-    guest agent (root) is the fallback. Non-fatal per box, but reported clearly.
-    use_proxy writes the engine's apt-cacher-ng proxy (Compfile `apt_cache`)."""
-    key = ctx["ssh_key_path"]
+# Quiesce apt-daily/unattended-upgrades and refresh the apt index on every Linux
+# target before a Nakon plant. SSH-via-gateway + sudo is the primary channel (the
+# guest agent is unreliable in the minute after a tz-base rollback/reboot, when the
+# box is busy with unattended-upgrades — it timed out on every box in one run); the
+# guest agent (root) is the fallback. Non-fatal per box, but reported clearly.
+# use_proxy writes the engine's apt-cacher-ng proxy (Compfile `apt_cache`).
     box_username = ctx.get("box_username", "ubuntu")
     node = os.environ["TF_VAR_proxmox_node"]
-    proxy = gateway_proxy(ctx)
     print("  Prepping apt on Linux boxes (disable apt-daily/unattended-upgrades, refresh index)...")
     # Replaces the old blind 150s sleep: wait for the actual settle condition instead.
     # Runs once; a box that never settles still gets its full retry ladder below.
@@ -88,12 +86,7 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
         for attempt in range(1, 6):
             try:
                 r = subprocess.run(
-                    ["ssh", "-i", key,
-                     "-o", "StrictHostKeyChecking=no",
-                     "-o", "UserKnownHostsFile=/dev/null",
-                     "-o", "ConnectTimeout=10",
-                     "-o", f"ProxyCommand={proxy}",
-                     f"{box_username}@{ip}", remote_cmd],
+                    box_ssh_argv(ctx, ip, box_username, remote_cmd),
                     capture_output=True, text=True, timeout=240,
                 )
                 if r.returncode == 0:
@@ -128,13 +121,11 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
 
 
 def fix_dns_on_boxes(targets, ctx):
-    """Fix DNS on every target box concurrently, each box with its own full retry ladder.
-    All-fail aborts (systemic vs transient)."""
+# Fix DNS on every target box concurrently, each box with its own full retry ladder.
+# All-fail aborts (systemic vs transient).
 
-    key = ctx["ssh_key_path"]
     box_username = ctx.get("box_username", "ubuntu")
     node = os.environ["TF_VAR_proxmox_node"]
-    proxy = gateway_proxy(ctx)
     print("  Fixing DNS on all team boxes...")
 
     def _fix(t):
@@ -142,14 +133,7 @@ def fix_dns_on_boxes(targets, ctx):
         for attempt in range(1, 9):
             try:
                 r = subprocess.run(
-                    [
-                        "ssh", "-i", key,
-                        "-o", "StrictHostKeyChecking=no",
-                        "-o", "UserKnownHostsFile=/dev/null",
-                        "-o", "ConnectTimeout=10",
-                        "-o", f"ProxyCommand={proxy}",
-                        f"{box_username}@{ip}", DNS_FIX_CMD,
-                    ],
+                    box_ssh_argv(ctx, ip, box_username, DNS_FIX_CMD),
                     capture_output=True, text=True, timeout=40,
                 )
                 if r.returncode == 0:

@@ -134,7 +134,7 @@ class LoadRosterTest(unittest.TestCase):
 
 @contextmanager
 def _hs_patch(routes=None, nodes=None, users=None, policy_text=""):
-    """Patch both IO surfaces (hs_json and hs_cli) — offline, no sshpass anywhere."""
+    # patches both IO surfaces (hs_json and hs_cli) — offline, no sshpass anywhere
     def fake_hs_json(args, timeout=90, check=True):
         if args.startswith("nodes list-routes"):
             return routes or []

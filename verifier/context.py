@@ -15,8 +15,8 @@ ENV_PATH = REPO_ROOT / ".env"
 
 
 def read_terraform_ctx(comp_dir):
-    """Read agent_context from `terraform output -json` in the competition's own
-    per-comp state (competitions/<id>/terraform); resolve ssh_key_path absolute."""
+# Read agent_context from `terraform output -json` in the competition's own
+#     per-comp state (competitions/<id>/terraform); resolve ssh_key_path absolute.
     tf_dir = Path(comp_dir) / "terraform"
     try:
         raw = subprocess.run(
@@ -39,7 +39,7 @@ def read_terraform_ctx(comp_dir):
 
 
 def resolve_ssh_key():
-    """Resolve TF_VAR_ssh_private_key_path from .env, trying repo-root and terraform-relative."""
+# Resolve TF_VAR_ssh_private_key_path from .env, trying repo-root and terraform-relative.
     val = os.environ.get("TF_VAR_ssh_private_key_path")
     if not val:
         return None
@@ -51,7 +51,7 @@ def resolve_ssh_key():
 
 
 def build_ctx(args, comp_dir):
-    """Assemble connection context, honoring --engine-ip override."""
+# Assemble connection context, honoring --engine-ip override.
     ctx = {}
     tf_error = None
     if not args.engine_ip:
@@ -83,13 +83,13 @@ _SSH_COMMON_OPTS = ("-o", "StrictHostKeyChecking=no",
 
 
 def red_ssh_argv(ctx, red_user, red_ip, remote_cmd):
-    """argv for an ssh straight to red01 (its mgmt address — no gateway hop)."""
+# argv for an ssh straight to red01 (its mgmt address — no gateway hop).
     return ["ssh", "-i", ctx["ssh_key_path"], *_SSH_COMMON_OPTS,
             f"{red_user}@{red_ip}", remote_cmd]
 
 
 def ssh_via_gateway(ctx, target_ip, cmd, timeout=60):
-    """SSH to a target box via the scoring-engine gateway (mirrors create-competition.py)."""
+# SSH to a target box via the scoring-engine gateway (mirrors create-competition.py).
     key = ctx["ssh_key_path"]
     scoring_user = ctx["vm_username"]
     box_username = ctx.get("box_username", BOX_USERNAME_DEFAULT)
@@ -110,7 +110,7 @@ def ssh_via_gateway(ctx, target_ip, cmd, timeout=60):
 
 
 def ssh_to_engine(ctx, cmd, timeout=30):
-    """SSH directly to the scoring engine itself (no gateway hop — it's the gateway)."""
+# SSH directly to the scoring engine itself (no gateway hop — it's the gateway).
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]

@@ -29,15 +29,11 @@ ENGINE = "10.0.0.252"
 TAVERN = None          # resolved from <comp_dir>/.realm-c2-config.yaml in main()
 
 
+# the legacy C2 VM (10.0.0.117) is dead history for a realm_c2_local range: the base_url
+# lives in the comp's derived .realm-c2-config.yaml, which is what the deploy actually
+# provisioned. Falls back to the legacy address with a warning so an old comp dir still
+# runs — against the right box is the operator's problem there.
 def tavern_url(comp_dir):
-    """The tavern graphql endpoint for this comp's local C2.
-
-    The legacy C2 VM (10.0.0.117) is dead history for a realm_c2_local range:
-    the base_url lives in the comp's derived .realm-c2-config.yaml, which is
-    what the deploy actually provisioned. Falls back to the legacy address with
-    a warning so an old comp dir still runs — against the right box is the
-    operator's problem there.
-    """
     p = Path(comp_dir) / ".realm-c2-config.yaml"
     try:
         import yaml
@@ -70,7 +66,6 @@ def graphql(query):
 
 
 def tavern_beacons():
-    """{identifier: {transport, name, host, last_seen}} — the C2's own truth."""
     q = ("{ beacons { edges { node { identifier name transport lastSeenAt "
          "host { name } } } } }")
     d = graphql(q)

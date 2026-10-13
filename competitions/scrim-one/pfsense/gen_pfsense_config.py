@@ -11,12 +11,9 @@ orig, tid, out = sys.argv[1], sys.argv[2], sys.argv[3]
 red_seg_ip = sys.argv[4] if len(sys.argv) > 4 else "10.200.0.10"
 x = open(orig).read()
 
-# 1) SSH on
 x = x.replace("<ssh></ssh>", "<ssh><enable>enabled</enable></ssh>")
-# 2) hostname
 x = x.replace("<hostname>pfSense</hostname>", f"<hostname>fw-team{tid}</hostname>")
 
-# 3) interfaces: replace whole <interfaces>...</interfaces>
 new_ifaces = f"""<interfaces>
 		<wan>
 			<enable></enable>
@@ -39,7 +36,6 @@ new_ifaces = f"""<interfaces>
 i0 = x.index("<interfaces>"); i1 = x.index("</interfaces>") + len("</interfaces>")
 x = x[:i0] + new_ifaces + x[i1:]
 
-# 4) gateways: define the WAN upstream gateway (engine)
 x = x.replace("<gateways></gateways>", f"""<gateways>
 		<gateway_item>
 			<interface>wan</interface>

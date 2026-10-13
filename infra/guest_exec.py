@@ -5,11 +5,9 @@ import shlex
 import time
 from typing import NamedTuple
 
-from pve_api import proxmox_api
+from infra.client import proxmox_api
 
 def diagnose_unreachable_box(node, vmid):
-    """Diagnose unreachable box via guest agent (virtio-serial, no network needed). Never raises."""
-
     try:
         ifaces = proxmox_api(
             "GET", f"/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"
@@ -46,8 +44,6 @@ def diagnose_unreachable_box(node, vmid):
 
 
 def guest_agent_exec_root(node, vmid, script, timeout=60, shell="bash"):
-    """Run a shell script as root via the QEMU guest agent; returns (exit_code, stdout,
-    stderr). shell="sh" for guests without bash (the alpine jump VM)."""
     pid = proxmox_api(
         "POST", f"/nodes/{node}/qemu/{vmid}/agent/exec",
         data={"command": [shell, "-c", script]},
@@ -66,8 +62,8 @@ def guest_agent_exec_root(node, vmid, script, timeout=60, shell="bash"):
     raise RuntimeError(_exec_timeout_message(vmid, pid, timeout, last))
 
 
+# The only agent channel before Windows bootstrap brings up the SSH path.
 def guest_agent_exec_windows(node, vmid, ps_script, timeout=120):
-    """Run PowerShell as SYSTEM via the guest agent; only channel before Windows bootstrap."""
     import base64
     encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
     pid = proxmox_api(
@@ -104,35 +100,25 @@ _NOT_FOUND_SIGNATURES = (
 )
 
 
+# One predicate for all three channels, because downstream the two outcomes are
+# recorded differently (`absent` vs `failed` in a collection manifest): an absent file
+# is a normal result — a run that never wrote that log — while a read that fails needs
+# an operator. PVE answers a missing file with an HTTP error and the guest agent with
+# rc != 0, so the message text is the only portable signal. The Windows phrasings are
+# here because .NET's "Could not find file" matches neither "no such file" nor "not
+# found"; without them an absent Windows path would be misfiled as a transport failure
+# and re-probed through every channel.
 def _guest_file_missing(detail):
-    """Is this error string "the file is not there", or "the channel broke"?
-
-    One predicate for all three channels, because downstream the two outcomes are
-    recorded differently (`absent` vs `failed` in a collection manifest): an absent
-    file is a normal result — a run that never wrote that log — while a read that
-    fails needs an operator. PVE answers a missing file with an HTTP error and the
-    guest agent with rc != 0, so the message text is the only portable signal. The
-    Windows phrasings are here because .NET's "Could not find file" matches neither
-    "no such file" nor "not found"; without them an absent Windows path would be
-    misfiled as a transport failure and re-probed through every channel.
-    """
     low = str(detail or "").lower()
     return any(sig in low for sig in _NOT_FOUND_SIGNATURES)
 
 
+# The channel is asymmetric: file-read documents base64 back, yet the proxmoxer path
+# the skill CLI uses has returned `content` already decoded (pmx.py:25,591). So decide
+# per response rather than per Proxmox version: valid base64 decodes, anything else is
+# literal text. A short text file of only base64 characters is genuinely
+# indistinguishable — one more reason the scp route stays the byte-exact one.
 def _guest_file_content_bytes(content):
-    """Bytes for the `content` field of a PVE agent/file-read response.
-
-    The channel is asymmetric: file-write wants base64 that the caller produces
-    (pmx.py:21-26), file-read documents base64 back — yet the proxmoxer path the
-    skill CLI uses has returned `content` already decoded (pmx.py:25,591). So decide
-    per response rather than per Proxmox version: a body that is valid base64 (right
-    length, padding, no whitespace) is decoded; anything else — a space, a trailing
-    newline, the wrong length — is literal text, which is what an already-decoded
-    body looks like. A short text file consisting only of base64 characters is
-    genuinely indistinguishable from an encoded one, which is one more reason the scp
-    route stays the byte-exact one for arbitrary evidence.
-    """
     if isinstance(content, (bytes, bytearray)):
         return bytes(content)
     text = str(content)
@@ -145,46 +131,18 @@ def _guest_file_content_bytes(content):
     return text.encode("utf-8", errors="surrogateescape")
 
 
+# This repo's only file-pull primitive. The absent-vs-failed split is the whole
+# point: a missing file raises FileNotFoundError (record `absent` — a run that never
+# wrote its log is normal) and a broken channel raises RuntimeError (record `failed` —
+# a human is needed). Never collapse the two. Channel order: PVE agent/file-read
+# first (no guest-side tooling, identical Linux/Windows), then `base64 <file> |
+# tr -d '\n'` under sh — the one form GNU coreutils and busybox agree on, POSIX so
+# alpine's lack of bash is fine — then the PowerShell ToBase64String fallback. A
+# not-found signature in the primary route's error is final: PVE already answered.
+# max_bytes bounds the DECODED result, not the transfer — a silently truncated
+# evidence file that looks complete is worse than a loud failure; keep multi-MB
+# evidence on the scp route (file-read has no chunk/offset parameter).
 def guest_file_read(node, vmid, path, timeout=60, windows=False, max_bytes=8388608):
-    """Pull one guest file's exact bytes — this repo's only file-pull primitive.
-
-    Why it exists: every other agent helper here runs a command and hands back
-    `(exit_code, stdout, stderr)` (`guest_agent_exec_root` :214,
-    `guest_agent_exec_windows` :235), so an artifact could only be rebuilt by parsing
-    stdout, and the one proven pull in the tree (red01's evidence,
-    run-agent-scrim.py) is scp over an engine jump. Evidence collection needs what a
-    manifest can trust — bytes, or a definite "not there" — and the absent-vs-failed
-    split is the whole point: a missing file raises `FileNotFoundError` (record
-    `absent`; a run that never wrote its log is normal) and a broken channel raises
-    `RuntimeError` (record `failed`; a human is needed). Never collapse the two.
-
-    Channels, in this order:
-
-    1. PVE `GET /nodes/<node>/qemu/<vmid>/agent/file-read` — no guest-side tooling
-       and no shell, identical on Linux and Windows, so it is tried first.
-    2. Linux fallback: `base64 <file> | tr -d '\\n'` through
-       `guest_agent_exec_root`, for PVE/agent versions without file-read. The form
-       matters: `-w0` is GNU-only, while `base64 ... | tr -d '\\n'` is the one GNU
-       coreutils and busybox agree on; the pipeline is POSIX, so it runs under `sh`
-       (alpine guests have no bash).
-    3. `windows=True` fallback:
-       `[Convert]::ToBase64String([IO.File]::ReadAllBytes('<path>'))` through
-       `guest_agent_exec_windows`.
-
-    A not-found signature in the primary route's error is final — PVE already
-    answered, so the exec channel is not spent re-asking. Any *other* primary failure
-    falls through to the exec channel, and only if that fails too does the error
-    surface, as a `RuntimeError` naming both causes.
-
-    `max_bytes` bounds the decoded result, not the transfer: a silently truncated
-    evidence file that looks complete is worse than a loud failure, so an oversize
-    read raises. Use this for config files, unit status, small logs and journals you
-    need byte-exact; keep multi-MB evidence (e.g. `events.jsonl`) on the existing scp
-    route, because file-read ships the whole file base64'd in one JSON body and has
-    no chunk or offset parameter.
-
-    `timeout` is per channel and bounds the exec poll loops, not the HTTP read.
-    """
     data = None
     primary_error = None
     try:
@@ -251,14 +209,11 @@ def guest_file_read(node, vmid, path, timeout=60, windows=False, max_bytes=83886
     return data
 
 
+# A bare "didn't finish within Ns" gives an operator nothing to act on, and five exec
+# logs carry exactly that at the 120s cap (live-found 2026-09-26..10-01). The agent
+# already holds the partial output by the time we give up — include it, and point at
+# the detached path for work that legitimately outlives a poll budget.
 def _exec_timeout_message(vmid, pid, timeout, status):
-    """Explain a guest-exec timeout instead of just naming it.
-
-    A bare "didn't finish within Ns" gives an operator nothing to act on, and five
-    exec logs carry exactly that at the 120s cap (live-found 2026-09-26..10-01). The
-    agent already holds the partial output by the time we give up — include it, and
-    point at the detached path for work that legitimately outlives a poll budget.
-    """
     status = status or {}
     detail = []
     for label, key in (("stdout", "out-data"), ("stderr", "err-data")):

@@ -168,9 +168,9 @@ class RoundLoopCheck(unittest.TestCase):
 
 class WindowsPreStop(unittest.TestCase):
     def test_hard_stops_every_team_clone(self):
-        """Operator call 2026-09-30: forced stop + remove, no clean shutdowns —
-        the pre-stop covers Linux clones too (their ACPI path just burns minutes
-        on a disk that is about to be destroyed)."""
+    # Operator call 2026-09-30: forced stop + remove, no clean shutdowns —
+    #         the pre-stop covers Linux clones too (their ACPI path just burns minutes
+    #         on a disk that is about to be destroyed).
         calls = []
 
         def fake_api(method, path, **kwargs):

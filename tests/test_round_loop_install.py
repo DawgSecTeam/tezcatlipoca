@@ -24,7 +24,7 @@ import engine_guard_ops  # noqa: E402
 
 
 class _Recorder:
-    """Fake _run_engine_cmd that records the shell command it was handed."""
+# Fake _run_engine_cmd that records the shell command it was handed.
 
     def __init__(self):
         self.calls = []
@@ -94,7 +94,7 @@ class InstallPayload(unittest.TestCase):
 
 
 class FlagGating(unittest.TestCase):
-    """Off unless the Compfile asks. It is an unattended actor on a live engine."""
+# Off unless the Compfile asks. It is an unattended actor on a live engine.
 
     def _ctx(self, comp_dir, flag):
         return types.SimpleNamespace(

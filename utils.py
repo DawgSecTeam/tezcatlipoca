@@ -6,6 +6,7 @@ import secrets as _secrets
 import signal
 import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -25,12 +26,11 @@ _DEGRADATION_LOCK = threading.Lock()
 
 
 def record_degradation(what, detail=""):
-    """Note that a prerequisite failed and execution continued anyway.
-
-    The deploy still continues — each site has its own reason for tolerating the
-    failure — but the fact is collected, written into `.deploy_state.json` and printed
-    once in a summary, so it survives the scrollback and can be surfaced by verify.
-    """
+# Note that a prerequisite failed and execution continued anyway.
+#
+#     The deploy still continues — each site has its own reason for tolerating the
+#     failure — but the fact is collected, written into `.deploy_state.json` and printed
+#     once in a summary, so it survives the scrollback and can be surfaced by verify.
     import time
 
     entry = {"what": str(what), "detail": str(detail)[:300],
@@ -41,7 +41,7 @@ def record_degradation(what, detail=""):
 
 
 def degradations():
-    """The degradations recorded so far in this process, oldest first."""
+# The degradations recorded so far in this process, oldest first.
     with _DEGRADATION_LOCK:
         return [dict(entry) for entry in _DEGRADATIONS]
 
@@ -52,7 +52,7 @@ def clear_degradations():
 
 
 def degradation_summary():
-    """One line per distinct degradation, with a count — for the end-of-run print."""
+# One line per distinct degradation, with a count — for the end-of-run print.
     seen = {}
     for entry in degradations():
         key = (entry["what"], entry["detail"])
@@ -62,28 +62,27 @@ def degradation_summary():
 
 
 def mint_run_id():
-    """Per-deploy run identity: `run-` + 8 hex chars, minted once per competition
-    directory and reused by every later deploy/resume from it (constants.ownership_tags).
-
-    The comp dir is per-worktree, so two concurrent deploys of the SAME competition ID
-    mint different ids and can no longer destroy each other's VMs — destruction paths
-    require the full ownership tag set including this tag (2026-10-02 near-miss)."""
+# Per-deploy run identity: `run-` + 8 hex chars, minted once per competition
+#     directory and reused by every later deploy/resume from it (constants.ownership_tags).
+#
+#     The comp dir is per-worktree, so two concurrent deploys of the SAME competition ID
+#     mint different ids and can no longer destroy each other's VMs — destruction paths
+#     require the full ownership tag set including this tag (2026-10-02 near-miss).
     return f"run-{_secrets.token_hex(4)}"
 
 
 def spawn_detached(cmd, log_path, cwd=None):
-    """Start a long command in its own session, logging to `log_path`. Returns (pid, log_path).
-
-    A tool call — and a harness background task — has a wall-clock life far shorter than
-    a deploy, and the observed compensation is worse than the problem: agents wrap the
-    deploy in their own `timeout`, turning a slow success into an abrupt partial-state
-    kill (six exec logs carry a leading `Terminated`). setsid + nohup + a redirected log
-    is the only shape that survives the caller; poll the log.
-
-    The pid returned is the new session/process-group leader, so kill the whole tree with
-    `os.killpg(pid, SIGTERM)`. Never `pkill -f` a pattern that also appears in the
-    invoking command line — that matches the caller and self-kills.
-    """
+# Start a long command in its own session, logging to `log_path`. Returns (pid, log_path).
+#
+#     A tool call — and a harness background task — has a wall-clock life far shorter than
+#     a deploy, and the observed compensation is worse than the problem: agents wrap the
+#     deploy in their own `timeout`, turning a slow success into an abrupt partial-state
+#     kill (six exec logs carry a leading `Terminated`). setsid + nohup + a redirected log
+#     is the only shape that survives the caller; poll the log.
+#
+#     The pid returned is the new session/process-group leader, so kill the whole tree with
+#     `os.killpg(pid, SIGTERM)`. Never `pkill -f` a pattern that also appears in the
+#     invoking command line — that matches the caller and self-kills.
     log = Path(log_path)
     if log.parent and str(log.parent) != ".":
         log.parent.mkdir(parents=True, exist_ok=True)
@@ -97,17 +96,31 @@ def spawn_detached(cmd, log_path, cwd=None):
     return proc.pid, str(log)
 
 
-def run_concurrent(items, fn, max_workers=MAX_CONCURRENCY):
-    """Run fn(item) for every item on a bounded thread pool.
+def retry(fn, *, attempts, gap, backoff=False, retry_on=Exception):
+# Call fn() up to `attempts` times, returning its result on success. On a
+#     `retry_on` exception, sleep `gap` seconds (or gap*attempt with backoff) and try
+#     again; the final attempt's exception propagates. Any other exception propagates
+#     immediately.
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except retry_on:
+            if attempt == attempts:
+                raise
+            time.sleep(gap * attempt if backoff else gap)
 
-    M2.1's shared helper for per-box work. Returns a LIST aligned with `items`: each
-    slot holds fn's return value, or the exception fn raised — never raised here — so
-    each caller keeps its own aggregate semantics (all-fail abort vs warn-and-continue).
-    Items need not be hashable (they're target dicts). max_workers is capped at
-    MAX_CONCURRENCY (8), which stays far under the engine's raised sshd MaxSessions
-    (64), so the ControlMaster channel is never the bottleneck; the ceiling also keeps
-    the Proxmox API poll load bounded. Output interleaving is the caller's problem:
-    wrap prints in PRINT_LOCK."""
+
+def run_concurrent(items, fn, max_workers=MAX_CONCURRENCY):
+# Run fn(item) for every item on a bounded thread pool.
+#
+#     M2.1's shared helper for per-box work. Returns a LIST aligned with `items`: each
+#     slot holds fn's return value, or the exception fn raised — never raised here — so
+#     each caller keeps its own aggregate semantics (all-fail abort vs warn-and-continue).
+#     Items need not be hashable (they're target dicts). max_workers is capped at
+#     MAX_CONCURRENCY (8), which stays far under the engine's raised sshd MaxSessions
+#     (64), so the ControlMaster channel is never the bottleneck; the ceiling also keeps
+#     the Proxmox API poll load bounded. Output interleaving is the caller's problem:
+#     wrap prints in PRINT_LOCK.
     results = [None] * len(items)
     if not items:
         return results
@@ -123,24 +136,24 @@ def run_concurrent(items, fn, max_workers=MAX_CONCURRENCY):
 
 
 def is_unmanaged(box):
-    """True for a box the pipeline must not plant/configure/score/domain-join — e.g. an
-    in-path pfSense firewall (FreeBSD): no nakon plant, no golden, no repair/fix_services,
-    no cloud-init identity, no scored check, no domain role. It is cloned straight from its
-    own template with operator-specified NICs. Kept in boxes.json so per-box-index vmids
-    stay positional; every plant/config/scoring path skips it via this predicate."""
+# True for a box the pipeline must not plant/configure/score/domain-join — e.g. an
+#     in-path pfSense firewall (FreeBSD): no nakon plant, no golden, no repair/fix_services,
+#     no cloud-init identity, no scored check, no domain role. It is cloned straight from its
+#     own template with operator-specified NICs. Kept in boxes.json so per-box-index vmids
+#     stay positional; every plant/config/scoring path skips it via this predicate.
     return bool(box.get("unmanaged"))
 
 
 def is_in_path_fw(box):
-    """True for an in-path firewall: unmanaged + `in_path` — terraform gives it two NICs
-    (WAN on vmbrW<id>, LAN on vmbr<id>), deploy phase 5 bootstraps its pfSense config and
-    cuts the engine over so it routes the team subnet. Every unmanaged skip above applies
-    to it too; this predicate only adds the network plumbing on top."""
+# True for an in-path firewall: unmanaged + `in_path` — terraform gives it two NICs
+#     (WAN on vmbrW<id>, LAN on vmbr<id>), deploy phase 5 bootstraps its pfSense config and
+#     cuts the engine over so it routes the team subnet. Every unmanaged skip above applies
+#     to it too; this predicate only adds the network plumbing on top.
     return is_unmanaged(box) and bool(box.get("in_path"))
 
 
 def valid_unix_username(name):
-    """Safe as a remote-shell token, useradd name, and sudoers filename."""
+# Safe as a remote-shell token, useradd name, and sudoers filename.
     return bool(name) and _USERNAME_RE.fullmatch(name) is not None
 
 
@@ -161,13 +174,13 @@ LEGACY_ACCOUNT_NAMES = frozenset({
 
 
 def is_legacy_account_name(name):
-    """True when the name collides with a legacy distro system account — auth setup
-    bricks on the distros that carry it, so both users.json paths reject the name."""
+# True when the name collides with a legacy distro system account — auth setup
+#     bricks on the distros that carry it, so both users.json paths reject the name.
     return name in LEGACY_ACCOUNT_NAMES
 
 
 def valid_comp_name(name):
-    """Confines the competitions/<name> path — no traversal, no shell metachars."""
+# Confines the competitions/<name> path — no traversal, no shell metachars.
     return bool(name) and ".." not in name and _COMP_NAME_RE.fullmatch(name) is not None
 
 DNS_FIX_CMD = (
@@ -186,7 +199,7 @@ CREDLIST_USERNAMES_DEFAULT = ["admin", "user1", "user2"]
 
 
 def load_users_config(comp_dir):
-    """Load themeable box login + credlist usernames from users.json, or fall back to defaults."""
+# Load themeable box login + credlist usernames from users.json, or fall back to defaults.
 
     path = Path(comp_dir) / "users.json"
     if not path.exists():
@@ -236,7 +249,7 @@ def load_compfile(path):
 
 
 def compfile_flag(path, key, default=0):
-    """Read an integer Compfile knob; default when the key or the file is absent."""
+# Read an integer Compfile knob; default when the key or the file is absent.
     try:
         with open(path) as f:
             for line in f:
@@ -252,8 +265,8 @@ def compfile_flag(path, key, default=0):
 
 
 def compfile_value(path, key, default=""):
-    """Read a string Compfile knob (e.g. `quotient_ref <sha-or-tag>`); default when
-    the key or the file is absent."""
+# Read a string Compfile knob (e.g. `quotient_ref <sha-or-tag>`); default when
+#     the key or the file is absent.
     try:
         with open(path) as f:
             for line in f:
@@ -266,11 +279,11 @@ def compfile_value(path, key, default=""):
 
 
 def env_summary():
-    """One line naming the estate this run targets: endpoint/node/datastore/template/
-    engine mgmt IP. Live-found 2026-10-04: the repo carries several env variants
-    (main .env targets the DOWN .193; .150 lives in .env.cyberrange-20260930) and a
-    wrong-variant copy used to be visible only if someone read the file. Printed in
-    every entry script's banner so the first five lines betray the wrong estate."""
+# One line naming the estate this run targets: endpoint/node/datastore/template/
+#     engine mgmt IP. Live-found 2026-10-04: the repo carries several env variants
+#     (main .env targets the DOWN .193; .150 lives in .env.cyberrange-20260930) and a
+#     wrong-variant copy used to be visible only if someone read the file. Printed in
+#     every entry script's banner so the first five lines betray the wrong estate.
     def get(name, default="?"):
         return (os.environ.get(name) or "").strip() or default
     endpoint = get("TF_VAR_proxmox_endpoint")
@@ -306,14 +319,14 @@ def pick_competition(competitions, label="saved", action="Select a competition")
 
 
 def run_terraform(args, cwd, env=None, timeout=None, check=True, grace=60):
-    """Run terraform in its own process group so a driver interruption can't orphan it.
-
-    A plain subprocess.run leaves `terraform apply` running as a grandchild holding the
-    state lock and still mutating infra if the Python driver is killed (winad-testrun
-    2026-09-25). Here SIGINT/SIGTERM/timeout/Ctrl-C all forward SIGINT to the group
-    (terraform's graceful stop: finishes in-flight ops, releases the lock), escalating to
-    SIGKILL after `grace` seconds. SIGKILL of the driver itself is not catchable.
-    Returns CompletedProcess (returncode only); raises CalledProcessError when check."""
+# Run terraform in its own process group so a driver interruption can't orphan it.
+#
+#     A plain subprocess.run leaves `terraform apply` running as a grandchild holding the
+#     state lock and still mutating infra if the Python driver is killed (winad-testrun
+#     2026-09-25). Here SIGINT/SIGTERM/timeout/Ctrl-C all forward SIGINT to the group
+#     (terraform's graceful stop: finishes in-flight ops, releases the lock), escalating to
+#     SIGKILL after `grace` seconds. SIGKILL of the driver itself is not catchable.
+#     Returns CompletedProcess (returncode only); raises CalledProcessError when check.
     cmd = ["terraform", *args]
     proc = subprocess.Popen(cmd, cwd=cwd, env=env, start_new_session=True)
 

@@ -24,7 +24,7 @@ import os
 
 import requests
 
-from pve_api import proxmox_api_for
+from infra.client import proxmox_api_for, proxmox_request
 
 ROLE_ID = "TezConsole"
 ROLE_PRIVS = "VM.Console"
@@ -46,6 +46,78 @@ def _http_detail(e):
     if resp is None:
         return str(e)
     return f"HTTP {resp.status_code}: {(resp.text or '')[:200]}"
+
+
+def vncproxy_mint(endpoint, token, pve_node, vmid, fingerprint=None, timeout=30):
+    """Mint a PVE noVNC ticket: POST /nodes/<pve_node>/qemu/<vmid>/vncproxy {websocket: 1}.
+
+    Returns {port: int, ticket: str}. The one handshake every console consumer shares
+    (portal broker, the two build-*-provision-template tools). `fingerprint` pins the TLS
+    peer for a per-node record; None leaves the env rules of proxmox_request in force."""
+    url = (f"{endpoint.rstrip('/')}/api2/json/nodes/{pve_node}/qemu/{int(vmid)}/vncproxy")
+    r = proxmox_request("POST", url, data={"websocket": 1},
+                        headers={"Authorization": f"PVEAPIToken={token}"},
+                        fingerprint=fingerprint, timeout=timeout)
+    r.raise_for_status()
+    data = r.json().get("data") or {}
+    if not data.get("port") or not data.get("ticket"):
+        raise ValueError("Proxmox returned no console port/ticket")
+    return {"port": int(data["port"]), "ticket": str(data["ticket"])}
+
+
+def vnc_screenshot(endpoint, token, pve_node, vmid, out_path, fingerprint=None):
+    """PNG of a VM's VGA console via the PVE vncwebsocket (raw RFB, 3.3-style handshake).
+
+    PVE rejects the 3.8 type-list path over vncwebsocket, and packs several RFB messages
+    into one websocket frame, so reads are buffered. Heavy imports (websocket-client, PIL,
+    cryptography) stay inside: the tools are the only callers, and they shell out."""
+    import ssl
+    import struct
+    from urllib.parse import quote
+
+    import websocket
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from PIL import Image
+
+    d = vncproxy_mint(endpoint, token, pve_node, vmid, fingerprint=fingerprint)
+    host = endpoint.split("//")[1].split(":")[0]
+    ws = websocket.create_connection(
+        f"wss://{host}:8006/api2/json/nodes/{pve_node}/qemu/{int(vmid)}/vncwebsocket"
+        f"?port={d['port']}&vncticket={quote(d['ticket'], safe='')}",
+        header={"Authorization": f"PVEAPIToken={token}"},
+        sslopt={"cert_reqs": ssl.CERT_NONE}, timeout=60)
+    pending = bytearray()
+
+    def rx(n):
+        while len(pending) < n:
+            pending.extend(ws.recv())
+        out = bytes(pending[:n])
+        del pending[:n]
+        return out
+
+    try:
+        rx(12)
+        ws.send_binary(b"RFB 003.003\n")
+        if struct.unpack(">I", rx(4))[0] == 2:
+            key = d["ticket"].encode()[:8].ljust(8, b"\x00")
+            des = bytes(int(f"{b:08b}"[::-1], 2) for b in key)
+            enc = Cipher(algorithms.TripleDES(des), modes.ECB()).encryptor()
+            ws.send_binary(enc.update(rx(16)) + enc.finalize())
+            if struct.unpack(">I", rx(4))[0] != 0:
+                raise OSError("VNC auth failed")
+        ws.send_binary(b"\x01")
+        init = rx(24)
+        w, h = struct.unpack(">HH", init[:4])
+        rx(struct.unpack(">I", init[20:24])[0])
+        pf = struct.pack(">BBBBHHHBBB3x", 32, 24, 0, 1, 255, 255, 255, 16, 8, 0)
+        ws.send_binary(b"\x00\x00\x00\x00" + pf)
+        ws.send_binary(b"\x02\x00" + struct.pack(">Hi", 1, 0))
+        ws.send_binary(b"\x03\x00" + struct.pack(">HHHH", 0, 0, w, h))
+        rx(16)
+        Image.frombytes("RGBX", (w, h), rx(w * h * 4), "raw", "BGRX").convert("RGB").save(out_path)
+        return out_path
+    finally:
+        ws.close()
 
 
 def _is_absent(e):

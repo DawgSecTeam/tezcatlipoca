@@ -50,7 +50,7 @@ def _check(result, error=""):
 
 
 class PhantomRound(unittest.TestCase):
-    """E3: an in-flight round must not read as a down service."""
+# E3: an in-flight round must not read as a down service.
 
     def test_in_flight_empty_round_falls_back_to_the_last_completed_one(self):
         payload = [{"ServiceName": "web01-nginx", "Last10Rounds": [
@@ -92,7 +92,7 @@ class PhantomRound(unittest.TestCase):
 
 
 class InjectCounting(unittest.TestCase):
-    """E4: count the deliverables where the agents actually write them."""
+# E4: count the deliverables where the agents actually write them.
 
     def _team(self, *files, subdir=()):
         d = Path(tempfile.mkdtemp())
@@ -159,9 +159,9 @@ class InjectCounting(unittest.TestCase):
 
 
 class GateCalibration(unittest.TestCase):
-    """Per-run gate calibration (2026-10-04 hardening): the max_simultaneous_down gate
-    judges against red's own pacing cap, and the injects gate gets out of the way when
-    the comp publishes none."""
+# Per-run gate calibration (2026-10-04 hardening): the max_simultaneous_down gate
+#     judges against red's own pacing cap, and the injects gate gets out of the way when
+#     the comp publishes none.
 
     def _run_dir(self, pacing=None, injects_published=0, injects_submitted=0):
         d = Path(tempfile.mkdtemp())

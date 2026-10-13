@@ -58,11 +58,11 @@ def cmd_list(args):
 
 
 def _document_rows(test_path, collection):
-    """The three canonical documents: presence, sha256 from collection.json, and its provenance.
-
-    A document with no collection entry was written locally — REPORT.md by its author, the two
-    side documents by `write_stub` when collection could not obtain them — so the line says that
-    rather than implying a provenance that does not exist."""
+# The three canonical documents: presence, sha256 from collection.json, and its provenance.
+#
+# A document with no collection entry was written locally — REPORT.md by its author, the two
+# side documents by `write_stub` when collection could not obtain them — so the line says that
+# rather than implying a provenance that does not exist.
     derived = {entry.get("path"): entry for entry in collection.get("derived", [])}
     rows = []
     for name in (*ao.SIDES.values(), ao.REPORT_NAME):
@@ -89,10 +89,10 @@ def _document_rows(test_path, collection):
 
 
 def _local_note(name, path):
-    """What a document with no collection entry is: a stub (with its own status) or authored.
-
-    Only the frontmatter `status:` line is read here — contents are evidence, and this command
-    prints hashes and paths, never what a report says."""
+# What a document with no collection entry is: a stub (with its own status) or authored.
+#
+# Only the frontmatter `status:` line is read here — contents are evidence, and this command
+# prints hashes and paths, never what a report says.
     match = STUB_STATUS_RE.search(path.read_text(errors="ignore"))
     if match:
         return f"locally written stub: {match.group(1)}"
@@ -100,7 +100,7 @@ def _local_note(name, path):
 
 
 def _print_collection(collection, indent="  "):
-    """Per-target and per-file statuses in full: this is the 'why is it missing?' answer."""
+# Per-target and per-file statuses in full: this is the 'why is it missing?' answer.
     if not collection:
         print(f"{indent}no {ao.COLLECTION_NAME} — nothing was collected for this run "
               "(`collect` or teardown writes it)")

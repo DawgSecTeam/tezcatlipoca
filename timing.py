@@ -23,7 +23,7 @@ def timings_path(comp_dir):
 
 @contextmanager
 def timed(comp_dir, phase, op, target=""):
-    """Time a block and append {ts, phase, op, target, seconds} on exit. Never raises."""
+# Time a block and append {ts, phase, op, target, seconds} on exit. Never raises.
     start = time.monotonic()
     try:
         yield
@@ -45,7 +45,7 @@ def timed(comp_dir, phase, op, target=""):
 
 
 def print_timing_summary(comp_dir, top=12):
-    """Print total seconds per (phase, op), largest first. Never raises."""
+# Print total seconds per (phase, op), largest first. Never raises.
     totals = {}
     try:
         with open(timings_path(comp_dir)) as f:

@@ -27,7 +27,6 @@ import red_plant_ops  # noqa: E402  (needs the repo root on sys.path)
 
 
 class Ctx:
-    """The fields plant_assume_breach touches."""
 
     def __init__(self, comp_dir, ssh_key):
         self.comp_dir = comp_dir
@@ -39,7 +38,6 @@ class Ctx:
 
 
 def world_census(key, red_ip):
-    """red01's own world.json: total artifacts, kinds, and any Windows realm artifacts."""
     r = subprocess.run(
         ["ssh", "-i", key, "-o", "StrictHostKeyChecking=no",
          "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",

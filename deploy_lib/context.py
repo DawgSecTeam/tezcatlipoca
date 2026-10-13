@@ -6,23 +6,23 @@ from typing import Optional
 
 from config_ops import write_state
 from constants import ownership_tags
-from deploy_lib.gates import CHECKPOINT_GATES, guard_resume_existence
+from infra.gates import CHECKPOINT_GATES, guard_resume_existence
 
 
 @dataclass
 class DeployContext:
-    """Everything the eight deploy phases share, built once by prepare().
-
-    Before this existed the phases were `if` blocks inside a 940-line deploy() reading
-    ~160 locals, which made every phase boundary invisible and every phase untestable.
-    The context is deliberately a data holder: its only behaviour is the state-file pair
-    every phase needs (save_state/checkpoint) plus comp_tags, so a phase function is
-    ordinary code that takes this object.
-
-    Field order follows the pipeline: identity/config -> secrets/state -> placement and
-    environment -> generated configs and paths -> targets -> the terraform/SSH fields
-    phase 2 fills in (a fresh run only has terraform outputs after apply #1; a resume
-    finds them already there)."""
+# Everything the eight deploy phases share, built once by prepare().
+#
+#     Before this existed the phases were `if` blocks inside a 940-line deploy() reading
+#     ~160 locals, which made every phase boundary invisible and every phase untestable.
+#     The context is deliberately a data holder: its only behaviour is the state-file pair
+#     every phase needs (save_state/checkpoint) plus comp_tags, so a phase function is
+#     ordinary code that takes this object.
+#
+#     Field order follows the pipeline: identity/config -> secrets/state -> placement and
+#     environment -> generated configs and paths -> targets -> the terraform/SSH fields
+#     phase 2 fills in (a fresh run only has terraform outputs after apply #1; a resume
+#     finds them already there).
 
     # --- run identity + inputs ---
     comp_dir: Path
@@ -91,7 +91,7 @@ class DeployContext:
     reclaim_run_id: str = ""
 
     def save_state(self):
-        """Persist .deploy_state.json through the shared config_ops writer."""
+    # Persist .deploy_state.json through the shared config_ops writer.
         # .deploy_state.json holds the only copy of the generated box and team
         # passwords: a torn write here bricks both resume and redeploy, and the old
         # write_text-then-chmod idiom also left the secret briefly world-readable.
@@ -101,29 +101,29 @@ class DeployContext:
         write_state(self.state_path, self.state)
 
     def checkpoint(self, n):
-        """Record phase n as completed — the resume guard's only source of truth.
-
-        Which is exactly why a checkpoint must not be written on the strength of a phase
-        merely finishing. In the scale8 soak a strict=False repair sweep "completed"
-        against 32 nonexistent machines and stamped last_phase=5; the next resume then
-        read that stamp as proof the machines existed. So the phases that produce
-        infrastructure verify their own output before claiming it — the same checks a
-        resume would run (guard_resume_existence), which is defense in depth for the run
-        after this one rather than a substitute for the gate."""
+    # Record phase n as completed — the resume guard's only source of truth.
+#
+    #         Which is exactly why a checkpoint must not be written on the strength of a phase
+    #         merely finishing. In the scale8 soak a strict=False repair sweep "completed"
+    #         against 32 nonexistent machines and stamped last_phase=5; the next resume then
+    #         read that stamp as proof the machines existed. So the phases that produce
+    #         infrastructure verify their own output before claiming it — the same checks a
+    #         resume would run (guard_resume_existence), which is defense in depth for the run
+    #         after this one rather than a substitute for the gate.
         self._verify_phase_artifacts(n)
         self.state["last_phase"] = n
         self.save_state()
 
     def _verify_phase_artifacts(self, n):
-        """Phase n's own existence gate: refuse to stamp a claim the range cannot back.
-
-        Only the phases that build infrastructure are gated, using the same checks a
-        resume would run — "if I resume from n+1, is that resume honest?". A phase with
-        nothing independently checkable (cleanup, template build, sweeps, seeding) is
-        not gated, because inventing a proxy check for it would refuse good deploys.
-
-        --force-from-phase deliberately does NOT bypass this: that flag is a statement
-        about skipping work, not a licence to record work that never happened."""
+    # Phase n's own existence gate: refuse to stamp a claim the range cannot back.
+#
+    #         Only the phases that build infrastructure are gated, using the same checks a
+    #         resume would run — "if I resume from n+1, is that resume honest?". A phase with
+    #         nothing independently checkable (cleanup, template build, sweeps, seeding) is
+    #         not gated, because inventing a proxy check for it would refuse good deploys.
+#
+    #         --force-from-phase deliberately does NOT bypass this: that flag is a statement
+    #         about skipping work, not a licence to record work that never happened.
         if n not in CHECKPOINT_GATES:
             return
         comp_dir = self.comp_dir
@@ -139,19 +139,19 @@ class DeployContext:
 
     @property
     def comp_tags(self):
-        """The tags every VM CREATED THIS RUN carries (constants.ownership_tags):
-        comp tag + this run's run-id tag."""
+    # The tags every VM CREATED THIS RUN carries (constants.ownership_tags):
+    #         comp tag + this run's run-id tag.
         return ownership_tags(self.comp_name, self.run_id)
 
     @property
     def reclaim_tags(self):
-        """The tags that authorize destroying a PRE-EXISTING VM (phase 1, rebuild
-        gates): the prior run's full ownership set. A same-comp VM without this tag
-        belongs to a DIFFERENT worktree's run and is refused, not reclaimed
-        (2026-10-02 near-miss)."""
+    # The tags that authorize destroying a PRE-EXISTING VM (phase 1, rebuild
+    #         gates): the prior run's full ownership set. A same-comp VM without this tag
+    #         belongs to a DIFFERENT worktree's run and is refused, not reclaimed
+    #         (2026-10-02 near-miss).
         return ownership_tags(self.comp_name, self.reclaim_run_id or self.run_id)
 
     @property
     def reclaim_tag(self):
-        """The run-id tag alone that phase-1-style reclamation requires."""
+    # The run-id tag alone that phase-1-style reclamation requires.
         return self.reclaim_run_id or self.run_id

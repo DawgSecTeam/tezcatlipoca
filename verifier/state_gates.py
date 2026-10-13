@@ -7,16 +7,15 @@ from verifier.model import gate_fail, gate_pass, gate_skip
 
 
 def check_degradations(comp_dir):
-    """Surface the prerequisites that failed while the deploy continued anyway.
-
-    The deploy tolerates some failures on purpose (each site has its own reason), but
-    it records every one of them in `.deploy_state.json["degradations"]` — apt prep that
-    installed nothing, an auth ladder that failed on both transports, a box that never
-    settled, a node scan that never happened. Without this line those exist only as
-    WARNING text in a scrollback nobody reads, which is how a range can come up "green"
-    with every service down. Warning-level, not gating: the deploy did survive them, and
-    the plant-coverage/service gates are what decide whether the range actually works.
-    """
+# Surface the prerequisites that failed while the deploy continued anyway.
+#
+#     The deploy tolerates some failures on purpose (each site has its own reason), but
+#     it records every one of them in `.deploy_state.json["degradations"]` — apt prep that
+#     installed nothing, an auth ladder that failed on both transports, a box that never
+#     settled, a node scan that never happened. Without this line those exist only as
+#     WARNING text in a scrollback nobody reads, which is how a range can come up "green"
+#     with every service down. Warning-level, not gating: the deploy did survive them, and
+#     the plant-coverage/service gates are what decide whether the range actually works.
     state = read_deploy_state(comp_dir)
     if state is None:
         return gate_skip("degradations", "no readable .deploy_state.json", gating=False)
@@ -41,33 +40,33 @@ def check_degradations(comp_dir):
 
 
 def check_plant_coverage(comp_dir):
-    """M4 plant-coverage gate: every machine's FULL expected configuration list
-    (nakon-config.json) must have actually planted.
-
-    Deploy records failures per machine in .deploy_state.json["plant_coverage_failed"]
-    (machine -> [config names whose nakon step reported rc != 0], or every config when
-    a machine died before reporting any step). Golden-stage entries map onto every team
-    copy of that box (a golden failure means the clones inherited the gap): the golden
-    plant records under '{box}-golden' (phase 4, via build_golden_set's coverage
-    callback — including alpine_services-tolerated failures), and satellite slots
-    record '{box}-golden-slot{N}' since every slot's stage config names its machine
-    identically; any slot's failure flags every team copy. This is the backstop that
-    catches a broken/undeclared-var config the moment it fails to plant, instead of a
-    mid-competition discovery.
-
-    D2 (live-found 2026-10-02): this gate used to read ONLY plant_coverage_failed and
-    fail OPEN when it was absent — missing/unparseable state, an older state, or a
-    nakon that produced no --json outcome left `failed = {}`, so it printed
-    "PASS all N machine(s) report full config coverage" and exited 0 while its own
-    SUMMARY said "plant integrity: WARNING — last nakon plant recorded N FAILED
-    step(s)". The whole premise of verify (docs/known-issues.md: nakon failures are
-    silent by design) was vacuous in exactly that case. It now fails CLOSED: the
-    nakon tally `deploy_lib/coverage.py` promises as the fallback is consulted, a non-empty tally
-    can never PASS, and when neither source exists the gate FAILs with "coverage was
-    never recorded".
-
-    Returns a GateResult (never a bare tuple — the old (checked, ok) arity was part of
-    the D1 unpacking crash family)."""
+# M4 plant-coverage gate: every machine's FULL expected configuration list
+#     (nakon-config.json) must have actually planted.
+#
+#     Deploy records failures per machine in .deploy_state.json["plant_coverage_failed"]
+#     (machine -> [config names whose nakon step reported rc != 0], or every config when
+#     a machine died before reporting any step). Golden-stage entries map onto every team
+#     copy of that box (a golden failure means the clones inherited the gap): the golden
+#     plant records under '{box}-golden' (phase 4, via build_golden_set's coverage
+#     callback — including alpine_services-tolerated failures), and satellite slots
+#     record '{box}-golden-slot{N}' since every slot's stage config names its machine
+#     identically; any slot's failure flags every team copy. This is the backstop that
+#     catches a broken/undeclared-var config the moment it fails to plant, instead of a
+#     mid-competition discovery.
+#
+#     D2 (live-found 2026-10-02): this gate used to read ONLY plant_coverage_failed and
+#     fail OPEN when it was absent — missing/unparseable state, an older state, or a
+#     nakon that produced no --json outcome left `failed = {}`, so it printed
+#     "PASS all N machine(s) report full config coverage" and exited 0 while its own
+#     SUMMARY said "plant integrity: WARNING — last nakon plant recorded N FAILED
+#     step(s)". The whole premise of verify (docs/known-issues.md: nakon failures are
+#     silent by design) was vacuous in exactly that case. It now fails CLOSED: the
+#     nakon tally `deploy_lib/coverage.py` promises as the fallback is consulted, a non-empty tally
+#     can never PASS, and when neither source exists the gate FAILs with "coverage was
+#     never recorded".
+#
+#     Returns a GateResult (never a bare tuple — the old (checked, ok) arity was part of
+#     the D1 unpacking crash family).
     state = read_deploy_state(comp_dir) or {}
     # `None` distinguishes "never recorded" from "recorded and clean ({})" — the two
     # must not be conflated, which is what made the old gate fail open.
@@ -83,14 +82,11 @@ def check_plant_coverage(comp_dir):
         print(f"  FAIL  — cannot read nakon-config.json: {e}")
         return gate_fail("plant_coverage", f"cannot read nakon-config.json ({str(e)[:60]})")
 
-    def cfg_name(c):
-        return c if isinstance(c, str) else c["name"]
-
     recorded = failed if isinstance(failed, dict) else None
     unplanted = {}
     for m in machines:
         name = m.get("name", "?")
-        expected = {cfg_name(c) for c in m.get("configurations", [])}
+        expected = {(c if isinstance(c, str) else c["name"]) for c in m.get("configurations", [])}
         machine_bad = [c for c in (recorded or {}).get(name) or []]
         # Golden-stage keys: slot 0 records '{box}-golden', satellite slot N records
         # '{box}-golden-slot{N}' (every slot's stage config names its golden machine

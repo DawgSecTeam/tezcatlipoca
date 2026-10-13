@@ -8,7 +8,7 @@ from nodes_ops import activate_placement, resolve_placement
 
 
 def parse_team_node(team_node):
-    """--team-node '103=zfs-193,team4=hdd-150' -> dict; team keys or subnet identifiers."""
+# --team-node '103=zfs-193,team4=hdd-150' -> dict; team keys or subnet identifiers.
     if not team_node:
         return None
     if isinstance(team_node, dict):
@@ -26,12 +26,12 @@ def parse_team_node(team_node):
 
 
 def apply_engine_placement(place, prior, secrets, spec, identity, comp_dir, team_node, engine_node):
-    """Resolve multi-node placement, point the env at the engine's host, take the lock.
-
-    Resolution happens now because teams and boxes are known and the Proxmox env must
-    point at the engine's host BEFORE the endpoint-keyed lock and any node-scoped call.
-    The lock is taken last, on the identity prepare() resolved first; it stays held for
-    the whole process (deploy() relies on that)."""
+# Resolve multi-node placement, point the env at the engine's host, take the lock.
+#
+#     Resolution happens now because teams and boxes are known and the Proxmox env must
+#     point at the engine's host BEFORE the endpoint-keyed lock and any node-scoped call.
+#     The lock is taken last, on the identity prepare() resolved first; it stays held for
+#     the whole process (deploy() relies on that).
     # Multi-node placement (no-op without nodes.json/placement.json): resolved now —
     # teams and boxes are known, and the env must point at the engine's host BEFORE
     # the endpoint-keyed engine lock and anything node-scoped. An existing

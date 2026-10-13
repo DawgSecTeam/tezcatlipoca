@@ -6,24 +6,24 @@ import os
 import re
 
 from typing import Callable, NamedTuple
-from range_ops import guest_agent_exec_detached, guest_agent_exec_root
+from infra.guest_exec import guest_agent_exec_detached, guest_agent_exec_root
 from ssh_ops import ssh_via_gateway
 from utils import PRINT_LOCK, run_concurrent
 
 
 class _ServiceFixup(NamedTuple):
-    """One conditional block of the service-hardening script.
-
-    `triggers` are the catalog config names that select the block — the aliasing is
-    data here, not the `or` chain the pre-refactor if-chain spelled out by hand. Those
-    hand-written chains had drifted apart, and the drift is real and deliberate:
-    the apache gap-filler fires on apache|httpd, the fedora named.conf block fires on
-    bind ALONE, and the bind9 options block fires on bind|named|dns. Nothing here
-    normalises that; it reproduces it.
-
-    Exactly one of `lines` (a literal fragment) or `build` (a fragment that
-    interpolates the credlist accounts) is set. Preserve every byte: this script runs
-    on live boxes and has been debugged through several incidents."""
+# One conditional block of the service-hardening script.
+#
+#     `triggers` are the catalog config names that select the block — the aliasing is
+#     data here, not the `or` chain the pre-refactor if-chain spelled out by hand. Those
+#     hand-written chains had drifted apart, and the drift is real and deliberate:
+#     the apache gap-filler fires on apache|httpd, the fedora named.conf block fires on
+#     bind ALONE, and the bind9 options block fires on bind|named|dns. Nothing here
+#     normalises that; it reproduces it.
+#
+#     Exactly one of `lines` (a literal fragment) or `build` (a fragment that
+#     interpolates the credlist accounts) is set. Preserve every byte: this script runs
+#     on live boxes and has been debugged through several incidents.
 
     name: str
     triggers: tuple[str, ...]
@@ -32,14 +32,14 @@ class _ServiceFixup(NamedTuple):
 
 
 def _credlist_account_lines(creds):
-    """The `useradd ... || true` + `chpasswd` pair for every credlist account, in
-    credlist order.
-
-    ONE generator, TWO call sites: the script prologue and the postfix fragment. The
-    postfix branch used to carry its own copy-pasted pair, so credlist accounts were
-    asserted twice on a mail box (harmless — useradd is idempotent, chpasswd
-    re-asserts the same password). That duplicate is IN the captured golden, so only
-    the generator was deduplicated here; the emitted lines are unchanged."""
+# The `useradd ... || true` + `chpasswd` pair for every credlist account, in
+#     credlist order.
+#
+#     ONE generator, TWO call sites: the script prologue and the postfix fragment. The
+#     postfix branch used to carry its own copy-pasted pair, so credlist accounts were
+#     asserted twice on a mail box (harmless — useradd is idempotent, chpasswd
+#     re-asserts the same password). That duplicate is IN the captured golden, so only
+#     the generator was deduplicated here; the emitted lines are unchanged.
     lines = []
     for username, password in creds.items():
         lines.append(f"sudo useradd -m -s /bin/bash {username} 2>/dev/null || true")
@@ -48,9 +48,9 @@ def _credlist_account_lines(creds):
 
 
 def _mysql_fixup(creds):
-    """MySQL/MariaDB: bind 0.0.0.0, restart, then replay the credlist as DB users.
-    Credlist order matters twice: the account lines, and which account gets
-    WITH GRANT OPTION (the first one, as before)."""
+# MySQL/MariaDB: bind 0.0.0.0, restart, then replay the credlist as DB users.
+#     Credlist order matters twice: the account lines, and which account gets
+#     WITH GRANT OPTION (the first one, as before).
     lines = [
         "# MySQL/MariaDB: bind to 0.0.0.0",
         "# Try all possible config file locations",
@@ -81,7 +81,7 @@ def _mysql_fixup(creds):
 
 
 def _postfix_fixup(creds):
-    """Postfix: listen on all interfaces + re-assert the credlist mail accounts."""
+# Postfix: listen on all interfaces + re-assert the credlist mail accounts.
     lines = [
         "# Postfix: ensure it listens on all interfaces",
         "sudo postconf -e 'inet_interfaces = all' 2>/dev/null || true",
@@ -98,7 +98,7 @@ def _postfix_fixup(creds):
 
 
 def _dovecot_fixup(creds):
-    """Dovecot: plaintext auth + a per-account maildir."""
+# Dovecot: plaintext auth + a per-account maildir.
     lines = [
         "# Dovecot: enable plaintext auth, create mail dirs",
         "sudo sed -i 's/^#*disable_plaintext_auth.*/disable_plaintext_auth = no/' /etc/dovecot/conf.d/10-auth.conf 2>/dev/null || true",
@@ -254,19 +254,19 @@ SERVICE_FIXUP_ORDER: tuple[str, ...] = (
 
 
 def service_fixup_script(services, creds):
-    """Build the per-box service-hardening bash script.
-
-    PURE by design — no I/O, no env, no printing — so tests/test_service_fixups.py
-    can compare it byte for byte against a golden captured from the pre-refactor
-    code (the script runs on live boxes; a subtle change is a live incident).
-
-    `services` is the box's pin list from box_services.json: catalog config names, or
-    per-pin override dicts that ride the file for scoring only (fixups key on the
-    catalog name). `creds` is the per-run credlist {username: password} in credlist
-    order.
-
-    Block order comes from SERVICE_FIXUP_ORDER, NOT from the pin order: a box pinned
-    ["splunk", "nginx"] gets nginx first, exactly as the old if-chain did."""
+# Build the per-box service-hardening bash script.
+#
+#     PURE by design — no I/O, no env, no printing — so tests/test_service_fixups.py
+#     can compare it byte for byte against a golden captured from the pre-refactor
+#     code (the script runs on live boxes; a subtle change is a live incident).
+#
+#     `services` is the box's pin list from box_services.json: catalog config names, or
+#     per-pin override dicts that ride the file for scoring only (fixups key on the
+#     catalog name). `creds` is the per-run credlist {username: password} in credlist
+#     order.
+#
+#     Block order comes from SERVICE_FIXUP_ORDER, NOT from the pin order: a box pinned
+#     ["splunk", "nginx"] gets nginx first, exactly as the old if-chain did.
     names = [s if isinstance(s, str) else s.get("name") for s in services]
 
     lines = ["#!/bin/bash", "set -e", ""]
@@ -301,7 +301,7 @@ def service_fixup_script(services, creds):
 
 
 def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
-    """Post-nakon service hardening (bind address, mail, ftp, dns, etc.) using the per-run credlist secrets."""
+# Post-nakon service hardening (bind address, mail, ftp, dns, etc.) using the per-run credlist secrets.
 
     node = os.environ["TF_VAR_proxmox_node"]
     print("  Hardening services on all team boxes...")
@@ -360,9 +360,9 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
 
 
 def mysql_credlist_reensure_script(cred_items):
-    """Bash that re-creates the credlist SQL accounts, tolerating the post-plant client/server
-    TLS mismatch (final-stage mysql flags disable server TLS while the stock client insists
-    on it — hence the --skip-ssl fallbacks). Idempotent."""
+# Bash that re-creates the credlist SQL accounts, tolerating the post-plant client/server
+#     TLS mismatch (final-stage mysql flags disable server TLS while the stock client insists
+#     on it — hence the --skip-ssl fallbacks). Idempotent.
     lines = ["#!/bin/bash", "set -e", ""]
     lines.append("cat > /tmp/tz-credlist.sql << 'SQLEOF'")
     for username, password in cred_items:
@@ -380,13 +380,13 @@ def mysql_credlist_reensure_script(cred_items):
 
 
 def reensure_mysql_credlist_users(comp_dir, targets, ctx, box_creds):
-    """Re-create the credlist SQL accounts AFTER the phase-6 final-stage pass.
-
-    fix_services creates them pre-plant, but the mysql final-stage plants rebuild the
-    auth tables (2026-09-30 testcomp-7box: db01 ended with only the install + plant
-    accounts, so the auth-based sql check failed until the users were re-added by
-    hand). Idempotent; touches only boxes whose box_services pins include
-    mysql/mariadb."""
+# Re-create the credlist SQL accounts AFTER the phase-6 final-stage pass.
+#
+#     fix_services creates them pre-plant, but the mysql final-stage plants rebuild the
+#     auth tables (2026-09-30 testcomp-7box: db01 ended with only the install + plant
+#     accounts, so the auth-based sql check failed until the users were re-added by
+#     hand). Idempotent; touches only boxes whose box_services pins include
+#     mysql/mariadb.
     cred_items = list(box_creds.items())
     box_services = json.loads((comp_dir / "box_services.json").read_text())
 

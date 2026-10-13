@@ -1,4 +1,4 @@
-"""Per-comp console-only PVE tokens (pve_console_ops): scope, reuse, exact-name teardown."""
+"""Per-comp console-only PVE tokens (console): scope, reuse, exact-name teardown."""
 
 import sys
 import unittest
@@ -9,7 +9,7 @@ sys.path.insert(0, str(ROOT))
 
 import requests  # noqa: E402
 
-import pve_console_ops as pco  # noqa: E402
+from infra import console as pco  # noqa: E402
 
 
 class _Resp:
@@ -23,10 +23,9 @@ def _err(status, text):
     return e
 
 
+# Just enough of /access to model what console does (PVE answers 500 for
+# missing objects and for duplicates, distinguished only by the message).
 class FakePVE:
-    """Just enough of /access to model what pve_console_ops does (PVE answers 500 for
-    missing objects and for duplicates, distinguished only by the message)."""
-
     def __init__(self, privs=None, roles=None, users=None):
         self.privs = privs if privs is not None else {p: 1 for p in pco.REQUIRED_PRIVS}
         self.roles = set(roles or [])

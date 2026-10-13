@@ -15,10 +15,10 @@ from .manifest import load_manifest, save_manifest
 
 
 def verify_test(test_path):
-    """Re-hash everything the collection claims, and report drift.
-
-    Reports are evidence, so they get the same treatment as any other artifact: a hash that is
-    checked, not a filename that is trusted."""
+# Re-hash everything the collection claims, and report drift.
+#
+#     Reports are evidence, so they get the same treatment as any other artifact: a hash that is
+#     checked, not a filename that is trusted.
     test_path = Path(test_path)
     manifest = load_manifest(test_path)
     collection = load_collection(test_path)
@@ -54,11 +54,11 @@ def verify_test(test_path):
 
 
 def seal_test(test_path, *, author=None, force=False):
-    """Flip the write-up to done: refuse while judgement markers remain, then re-hash.
-
-    The seal is what makes `writeup.status` mean something. Without it, "done" is a claim nobody
-    checked — and the recommendations section is the part of this feature most likely to be
-    skipped."""
+# Flip the write-up to done: refuse while judgement markers remain, then re-hash.
+#
+#     The seal is what makes `writeup.status` mean something. Without it, "done" is a claim nobody
+#     checked — and the recommendations section is the part of this feature most likely to be
+#     skipped.
     test_path = Path(test_path)
     manifest = load_manifest(test_path)
     report = test_path / REPORT_NAME

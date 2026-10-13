@@ -34,8 +34,8 @@ sys.path.insert(0, str(_REPO))
 
 import deploy  # noqa: E402
 from _deploy_patch import dpatch  # noqa: E402
-from deploy_lib import gates as dl_gates  # noqa: E402
-import range_ops  # noqa: E402
+from infra import gates as dl_gates  # noqa: E402
+import terraform_workdir  # noqa: E402
 
 STATE_RESOURCES = [
     {"type": "proxmox_virtual_environment_vm", "name": "scoring_engine",
@@ -58,7 +58,7 @@ STATE_JSON = json.dumps({"version": 4, "serial": 14, "resources": STATE_RESOURCE
 
 
 def _fake_terraform(tmp, stdout=STATE_JSON, returncode=0, stderr=""):
-    """A `terraform` shim on PATH that answers `state pull` and nothing else."""
+# A `terraform` shim on PATH that answers `state pull` and nothing else.
     bindir = Path(tmp) / "bin"
     bindir.mkdir(exist_ok=True)
     script = bindir / "terraform"
@@ -73,7 +73,7 @@ def _fake_terraform(tmp, stdout=STATE_JSON, returncode=0, stderr=""):
 
 
 class TerraformStateReading(unittest.TestCase):
-    """`terraform state pull` -> the vmids a completed phase actually created."""
+# `terraform state pull` -> the vmids a completed phase actually created.
 
     def _comp(self, tmp):
         comp = Path(tmp) / "competitions" / "c1"
@@ -85,7 +85,7 @@ class TerraformStateReading(unittest.TestCase):
             comp = self._comp(d)
             bindir = _fake_terraform(d)
             with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
-                vmids = range_ops.team_vmids_from_state(comp)
+                vmids = terraform_workdir.team_vmids_from_state(comp)
         # The engine is read through state["scoring_vm_id"], not this parser, and the
         # null_resource/bridge entries must not be mistaken for machines.
         self.assertEqual(vmids, [221, 222, 225])
@@ -97,7 +97,7 @@ class TerraformStateReading(unittest.TestCase):
             resources[-3]["instances"][0]["attributes"] = {}  # sat1 lost its vm_id
             bindir = _fake_terraform(d, stdout=json.dumps({"resources": resources}))
             with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
-                self.assertEqual(range_ops.team_vmids_from_state(comp), [221, 222])
+                self.assertEqual(terraform_workdir.team_vmids_from_state(comp), [221, 222])
 
     def test_unreadable_state_raises_instead_of_reporting_nothing(self):
         # The distinction the whole gate rests on: "no machines" and "could not ask"
@@ -107,7 +107,7 @@ class TerraformStateReading(unittest.TestCase):
             bindir = _fake_terraform(d, returncode=1, stderr="Error: no state file")
             with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
                 with self.assertRaises(RuntimeError) as raised:
-                    range_ops.team_vmids_from_state(comp)
+                    terraform_workdir.team_vmids_from_state(comp)
         self.assertIn("state pull", str(raised.exception))
 
     def test_unparsable_state_raises_instead_of_reporting_nothing(self):
@@ -116,7 +116,7 @@ class TerraformStateReading(unittest.TestCase):
             bindir = _fake_terraform(d, stdout="not json at all")
             with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
                 with self.assertRaises(RuntimeError) as raised:
-                    range_ops.team_vmids_from_state(comp)
+                    terraform_workdir.team_vmids_from_state(comp)
         self.assertIn("unparsable", str(raised.exception))
 
     def test_missing_terraform_binary_raises(self):
@@ -124,18 +124,18 @@ class TerraformStateReading(unittest.TestCase):
             comp = self._comp(d)
             with patch.dict(os.environ, {"PATH": str(Path(d) / "empty")}):
                 with self.assertRaises(RuntimeError):
-                    range_ops.team_vmids_from_state(comp)
+                    terraform_workdir.team_vmids_from_state(comp)
 
     def test_empty_state_is_an_empty_list_not_an_error(self):
         with tempfile.TemporaryDirectory() as d:
             comp = self._comp(d)
             bindir = _fake_terraform(d, stdout="{}")
             with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
-                self.assertEqual(range_ops.team_vmids_from_state(comp), [])
+                self.assertEqual(terraform_workdir.team_vmids_from_state(comp), [])
 
 
 class ResumeExistenceGuard(unittest.TestCase):
-    """The gate itself, with every probe injected (no Proxmox)."""
+# The gate itself, with every probe injected (no Proxmox).
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -230,7 +230,7 @@ class ResumeExistenceGuard(unittest.TestCase):
 
 
 class SweepMarkerAndBoxProbe(unittest.TestCase):
-    """`_any_box_reachable`: the marker proves the sweep ran, SSH proves boxes are real."""
+# `_any_box_reachable`: the marker proves the sweep ran, SSH proves boxes are real.
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -274,10 +274,10 @@ class SweepMarkerAndBoxProbe(unittest.TestCase):
 
 
 class CheckpointTruth(unittest.TestCase):
-    """`checkpoint(n)` must not record a phase whose output is not there.
-
-    This is the defense-in-depth half: even with the resume gate in place, a run must
-    never write a checkpoint that sends the NEXT resume chasing ghosts."""
+# `checkpoint(n)` must not record a phase whose output is not there.
+#
+#     This is the defense-in-depth half: even with the resume gate in place, a run must
+#     never write a checkpoint that sends the NEXT resume chasing ghosts.
 
     def _ctx(self, comp_dir, state):
         return deploy.DeployContext(

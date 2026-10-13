@@ -25,6 +25,7 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 from deploy_lib import failure as dl_failure  # noqa: E402
 import apt_dns_ops  # noqa: E402
+import ssh_ops  # noqa: E402
 import utils  # noqa: E402
 
 # verify-competition.py has a hyphen, so it is loaded by path (same as test_verify_gates).
@@ -70,8 +71,8 @@ class DeployPersists(unittest.TestCase):
         return types.SimpleNamespace(state={}, comp_name="probe", comp_dir=comp_dir)
 
     def test_a_clean_run_records_an_empty_ledger(self):
-        """Verify must be able to tell "clean" from "never ran". The 2026-10-02 live
-        run left the key absent and verify reported it as a pre-ledger state file."""
+    # Verify must be able to tell "clean" from "never ran". The 2026-10-02 live
+    #         run left the key absent and verify reported it as a pre-ledger state file.
         with tempfile.TemporaryDirectory() as d:
             ctx = self._ctx(Path(d))
             with contextlib.redirect_stdout(io.StringIO()) as out:
@@ -137,7 +138,7 @@ class VerifySurfaces(unittest.TestCase):
 
 
 class TheSiteActuallyRecords(unittest.TestCase):
-    """The wiring is the point: the ledger is worthless if no site feeds it."""
+# The wiring is the point: the ledger is worthless if no site feeds it.
 
     def setUp(self):
         utils.clear_degradations()
@@ -151,7 +152,7 @@ class TheSiteActuallyRecords(unittest.TestCase):
                 patch.object(apt_dns_ops.time, "sleep"), \
                 patch.object(apt_dns_ops, "guest_agent_exec_root",
                              return_value=(100, "", "no space left")), \
-                patch.object(apt_dns_ops, "gateway_proxy", return_value=None), \
+                patch.object(ssh_ops, "gateway_proxy", return_value=None), \
                 patch.object(apt_dns_ops, "wait_for_guest_agent", return_value=False), \
                 patch.object(apt_dns_ops, "wait_boxes_settled", return_value=[]), \
                 contextlib.redirect_stdout(io.StringIO()):

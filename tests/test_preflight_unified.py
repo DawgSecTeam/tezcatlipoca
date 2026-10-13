@@ -1,5 +1,5 @@
 """One preflight implementation: single-node is a one-share plan, multi-node is N shares, and
-both classify "ours" through vm_ownership.ownership_verdict (the same proof destroy uses)."""
+both classify "ours" through ownership.ownership_verdict (the same proof destroy uses)."""
 
 import os
 import sys
@@ -10,9 +10,9 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import vm_ownership  # noqa: E402
-from preflight.clashes import check_collisions, expected_bridges, expected_slots  # noqa: E402
-from preflight.plan import NodeShare, PreflightPlan  # noqa: E402
+from infra import ownership  # noqa: E402
+from infra.collisions import check_collisions, expected_bridges, expected_slots  # noqa: E402
+from infra.plan import NodeShare, PreflightPlan  # noqa: E402
 
 RUN = "run-abc123"
 BOXES = [{"name": "web01", "template": "t"}, {"name": "db01", "template": "t"}]
@@ -37,17 +37,17 @@ class OwnershipVerdict(unittest.TestCase):
     EXPECT = {"tezcatlipoca", "comp-c1", RUN}
 
     def test_verdicts(self):
-        with patch.object(vm_ownership, "has_clone_marker", return_value=True):
-            self.assertEqual(vm_ownership.ownership_verdict(
-                "n", 1, f"tezcatlipoca;comp-c1;{RUN}", self.EXPECT)[0], vm_ownership.OWNED)
-            self.assertEqual(vm_ownership.ownership_verdict(
-                "n", 1, "", self.EXPECT)[0], vm_ownership.MARKER)
-        with patch.object(vm_ownership, "has_clone_marker", return_value=False):
-            self.assertEqual(vm_ownership.ownership_verdict(
-                "n", 1, None, self.EXPECT)[0], vm_ownership.UNPROVEN)
-        verdict, missing = vm_ownership.ownership_verdict(
+        with patch.object(ownership, "has_clone_marker", return_value=True):
+            self.assertEqual(ownership.ownership_verdict(
+                "n", 1, f"tezcatlipoca;comp-c1;{RUN}", self.EXPECT)[0], ownership.OWNED)
+            self.assertEqual(ownership.ownership_verdict(
+                "n", 1, "", self.EXPECT)[0], ownership.MARKER)
+        with patch.object(ownership, "has_clone_marker", return_value=False):
+            self.assertEqual(ownership.ownership_verdict(
+                "n", 1, None, self.EXPECT)[0], ownership.UNPROVEN)
+        verdict, missing = ownership.ownership_verdict(
             "n", 1, "tezcatlipoca,comp-c1", self.EXPECT)
-        self.assertEqual((verdict, missing), (vm_ownership.MISSING, {RUN}))
+        self.assertEqual((verdict, missing), (ownership.MISSING, {RUN}))
 
 
 class SlotMath(unittest.TestCase):
@@ -75,8 +75,8 @@ class SlotMath(unittest.TestCase):
 class Collisions(unittest.TestCase):
     def _run(self, share, vms, bridges=()):
         nets = {"data": [{"iface": b} for b in bridges]}
-        with patch("preflight.clashes.proxmox_api", return_value=nets), \
-                patch.object(vm_ownership, "has_clone_marker", return_value=False):
+        with patch("infra.collisions.proxmox_api", return_value=nets), \
+                patch.object(ownership, "has_clone_marker", return_value=False):
             check_collisions(share, _plan(share), vms)
 
     def test_foreign_vm_refused_both_modes(self):
@@ -104,9 +104,8 @@ class Collisions(unittest.TestCase):
             self._run(_share(), [_vm(1140, f"tezcatlipoca;comp-c1;{RUN}")], bridges=["vmbr101"])
 
 
+# A managed box with zero pins is advisory (printed), never a refusal.
 class UnpinnedBoxWarning(unittest.TestCase):
-    """A managed box with zero pins is advisory (printed), never a refusal."""
-
     def _comp(self, services, vulns, baseline=None):
         import json
         import tempfile
@@ -118,13 +117,13 @@ class UnpinnedBoxWarning(unittest.TestCase):
         return d
 
     def test_unpinned_managed_box_is_named_and_unmanaged_is_skipped(self):
-        from preflight import pins
+        from infra import gates as pins
         boxes = BOXES + [{"name": "fw01", "unmanaged": True}]
         d = self._comp({"web01": [{"name": "nginx"}], "db01": []}, {"web01": [], "db01": []})
         self.assertEqual(pins.unpinned_managed_boxes(d, boxes), ["db01"])
 
     def test_any_pin_source_counts(self):
-        from preflight import pins
+        from infra import gates as pins
         d = self._comp({"web01": [], "db01": []}, {"web01": [], "db01": [{"name": "v"}]},
                        baseline={"web01": [{"name": "b"}]})
         self.assertEqual(pins.unpinned_managed_boxes(d, BOXES), [])
@@ -132,7 +131,7 @@ class UnpinnedBoxWarning(unittest.TestCase):
     def test_gate_warns_without_refusing(self):
         import io
         from contextlib import redirect_stdout
-        from preflight import pins
+        from infra import gates as pins
         d = self._comp({"web01": [], "db01": []}, {"web01": [], "db01": []})
         buf = io.StringIO()
         with redirect_stdout(buf):
@@ -142,7 +141,7 @@ class UnpinnedBoxWarning(unittest.TestCase):
 
     def test_missing_pin_files_do_not_raise(self):
         import tempfile
-        from preflight import pins
+        from infra import gates as pins
         self.assertEqual(pins.unpinned_managed_boxes(Path(tempfile.mkdtemp()), BOXES), [])
 
 

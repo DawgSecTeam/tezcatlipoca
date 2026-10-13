@@ -41,7 +41,7 @@ import artifacts_ops as ao
 
 
 def _load(name, filename):
-    """tests/test_destroy_teardown.py's pattern: the harness filename has hyphens."""
+# tests/test_destroy_teardown.py's pattern: the harness filename has hyphens.
     spec = importlib.util.spec_from_file_location(name, _REPO / filename)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -56,7 +56,7 @@ BOXES = [{"name": "dc01", "last_octet": 2, "template": "base-windows-server"},
 
 
 def make_comp(root, *, name="demo", run_id=RUN_ID):
-    """A competition dir with just the files the harness reads at start."""
+# A competition dir with just the files the harness reads at start.
     comp = Path(root) / "competitions" / name
     comp.mkdir(parents=True)
     (comp / "Compfile").write_text(f"name {name}-2026-10-03\nscenario x\n")
@@ -76,7 +76,7 @@ def make_args(comp, **over):
 
 class TmpCase(unittest.TestCase):
     def setUp(self):
-        # `_red_vm_still_exists` asks the real cluster (range_ops.live_vmids): with a
+        # `_red_vm_still_exists` asks the real cluster (infra.client.live_vmids): with a
         # resolvable vmid a live red01 made teardown assert "STILL PRESENT" and fail
         # tests that are about ordering. Pin it for every test in this file.
         self.addCleanup(mock.patch.object(teardown_stage, "_red_vm_still_exists",
@@ -93,14 +93,14 @@ class TmpCase(unittest.TestCase):
         self.comp = make_comp(self.root)
 
     def resolve(self, args, comp=None):
-        """resolve_run_dir with the node/endpoint env a deploy would have set."""
+    # resolve_run_dir with the node/endpoint env a deploy would have set.
         with mock.patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve",
                                           "TF_VAR_proxmox_endpoint": "https://10.0.0.193:8006"}):
             return test_folder.resolve_run_dir(comp or self.comp, args)
 
 
 class RunDirResolution(TmpCase):
-    """INV1-INV3: where the run writes, and where its test folder lives."""
+# INV1-INV3: where the run writes, and where its test folder lives.
 
     def test_default_run_dir_is_the_test_folder(self):
         args = make_args(self.comp)
@@ -134,11 +134,11 @@ class RunDirResolution(TmpCase):
         self.assertEqual(man["paths"]["run_dir"], str(test_dir))
 
     def test_untagged_comp_gets_one_stable_key(self):
-        """The untagged fallback is stable per deploy AND per run.
-
-        Stable: a resume returns to the folder its first attempt made. Per run: a
-        second fresh run gets its own folder, so one run's REPORT.md can never sit
-        next to another's (the 2026-10-08 evidence-mixing bug)."""
+    # The untagged fallback is stable per deploy AND per run.
+#
+    #         Stable: a resume returns to the folder its first attempt made. Per run: a
+    #         second fresh run gets its own folder, so one run's REPORT.md can never sit
+    #         next to another's (the 2026-10-08 evidence-mixing bug).
         comp = make_comp(self.root, name="legacy", run_id=None)
         first_run, first_test = self.resolve(make_args(comp), comp=comp)
         self.assertTrue(first_test.name.startswith("untagged-"))
@@ -197,7 +197,7 @@ class RunDirResolution(TmpCase):
 
 
 class PhaseMirror(TmpCase):
-    """INV4: test.json mirrors the phase markers; run.json stays the harness's own file."""
+# INV4: test.json mirrors the phase markers; run.json stays the harness's own file.
 
     def test_record_phase_mirrors_into_test_json_and_keeps_run_json(self):
         args = make_args(self.comp, keep_range=True)
@@ -221,7 +221,7 @@ class PhaseMirror(TmpCase):
         self.assertEqual(ao.load_manifest(test_dir)["phases"][1]["t0"], 1234.5)
 
     def test_record_phase_without_a_test_dir_still_writes_run_json(self):
-        """tests/test_scrim_defects.py passes a SimpleNamespace with no test_dir."""
+    # tests/test_scrim_defects.py passes a SimpleNamespace with no test_dir.
         run_dir = self.root / "legacy-run"
         run_dir.mkdir()
         args = SimpleNamespace(competition="demo", teams=2, duration_min=90,
@@ -231,17 +231,19 @@ class PhaseMirror(TmpCase):
 
 
 class AgentIdentity(TmpCase):
-    """INV5/INV9: identity is recorded from the one ssh helper, and merged, never replaced."""
+# INV5/INV9: identity is recorded from the one ssh helper, and merged, never replaced.
 
     def setUp(self):
         super().setUp()
-        # A fake repo root + bad-auto tree, so the ssh helper reads THIS run's files without
-        # ever touching the real ../bad-auto or the network.
+        # A fake repo root, so the ssh helper reads THIS run's files without
+        # ever touching the real repo, the sibling bad-auto, or the network.
+        # red01's address lives in the COMP's own bad-auto config now (the
+        # sibling checkout's singleton is no longer a source, 2026-10-12).
         self.repo = self.root
         self.bad = self.root / "bad-auto"
         self.bad.mkdir()
-        (self.bad / "config.yaml").write_text(
-            json.dumps({"deploy": {"red_ip": "10.0.0.199"}}))
+        (self.comp / ".badauto-config.yaml").write_text(
+            "deploy:\n  red_ip: 10.0.0.199\n  red_vmid: 999\n")
         (self.comp / "credentials.txt").write_text("engine http://10.0.0.193:8006/\n")
         for patch in (mock.patch.object(core, "REPO", self.repo),
                       mock.patch.object(core, "BAD_AUTO", self.bad),
@@ -251,7 +253,7 @@ class AgentIdentity(TmpCase):
             self.addCleanup(patch.stop)
 
     def test_red_ssh_spec_is_the_one_helper_red_ssh_ctx_uses(self):
-        args = make_args(self.comp, red_ip="10.0.0.198")  # config.yaml disagrees on purpose
+        args = make_args(self.comp, red_ip="10.0.0.198")  # the comp config disagrees on purpose
         target, common, jump = red_link._red_ssh_ctx(args)
         spec, spec_common = red_link._red_ssh_spec(args)
         self.assertEqual(spec["host"], "10.0.0.199")
@@ -275,7 +277,7 @@ class AgentIdentity(TmpCase):
                                lambda *a, **k: subprocess.CompletedProcess(a[0], 0, "", "")), \
                 mock.patch.object(red_link, "check_red_llm", lambda *a, **k: True), \
                 mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"), \
-                mock.patch.object(red_stage.red_plant_ops, "seed_via_red01",
+                mock.patch.object(red_stage.red_plant_ops, "_seed_red",
                                   lambda *a, **k: subprocess.CompletedProcess(
                                       ["seed"], 0, "seeded", "")), \
                 mock.patch.object(red_link, "start_red_director", lambda *a, **k: None):
@@ -325,7 +327,7 @@ class AgentIdentity(TmpCase):
 
 
 class TeardownCollection(TmpCase):
-    """INV6/INV9: collect -> scrim-report -> ingest_verdict, all before `badauto destroy`."""
+# INV6/INV9: collect -> scrim-report -> ingest_verdict, all before `badauto destroy`.
 
     def setUp(self):
         super().setUp()
@@ -420,8 +422,8 @@ class TeardownCollection(TmpCase):
                         self.warnings)
 
     def test_interaction_md_reaches_the_verdict_ingest_reads(self):
-        """The bridge that makes the ordering useful: scrim-report writes <run_dir>/, ingest
-        reads <test_dir>/evidence/harness/ — the same place the collector would have put it."""
+    # The bridge that makes the ordering useful: scrim-report writes <run_dir>/, ingest
+    #         reads <test_dir>/evidence/harness/ — the same place the collector would have put it.
         (self.run_dir / "INTERACTION.md").write_text(
             "# INTERACTION — demo\n\n## Verdict\n\n"
             "**GREEN** — interaction score 11; gates 9 pass / 1 fail / 3 n/a\n")
@@ -443,7 +445,7 @@ class TeardownCollection(TmpCase):
 
 
 class Finalize(TmpCase):
-    """INV6: finalize is the last step and runs even when --keep-range skipped the destroy."""
+# INV6: finalize is the last step and runs even when --keep-range skipped the destroy.
 
     def setUp(self):
         super().setUp()
@@ -493,7 +495,7 @@ class Finalize(TmpCase):
 
 
 class CaptureRegressions(TmpCase):
-    """INV7/INV8: what stage_capture actually copies."""
+# INV7/INV8: what stage_capture actually copies.
 
     def test_blue_sub_md_is_captured(self):
         run_dir = self.root / "run"
@@ -542,7 +544,7 @@ class CaptureRegressions(TmpCase):
 
 
 class BluePrompt(TmpCase):
-    """INV10: blue is told to write the REPORT.md the collector looks for."""
+# INV10: blue is told to write the REPORT.md the collector looks for.
 
     def setUp(self):
         super().setUp()
@@ -587,12 +589,12 @@ class BluePrompt(TmpCase):
 
 
 class FireTest(TmpCase):
-    """The fire test, with the box and the scoreboard scripted (no SSH, no engine).
-
-    Pins three behaviors the 2026-10-03 scrims bought the hard way: the residue guard
-    (an aborted earlier run can leave the unit down — restore BEFORE testing), the
-    watched row (web01-<display>, not "first web01*"), and agreement polling (probe and
-    scoreboard must agree within the deadline, not one stale sample)."""
+# The fire test, with the box and the scoreboard scripted (no SSH, no engine).
+#
+#     Pins three behaviors the 2026-10-03 scrims bought the hard way: the residue guard
+#     (an aborted earlier run can leave the unit down — restore BEFORE testing), the
+#     watched row (web01-<display>, not "first web01*"), and agreement polling (probe and
+#     scoreboard must agree within the deadline, not one stale sample).
 
     def setUp(self):
         super().setUp()
@@ -607,7 +609,7 @@ class FireTest(TmpCase):
         self.logs = []
 
     def _ssh(self, states):
-        """ssh_web01 scripted by command content; `states` is the is-active answer queue."""
+    # ssh_web01 scripted by command content; `states` is the is-active answer queue.
         def runner(cmd, timeout=60):
             if "is-active" in cmd:
                 return SimpleNamespace(returncode=0,
@@ -625,8 +627,8 @@ class FireTest(TmpCase):
         return runner
 
     def _scoreboard(self, downs):
-        """parsed_status handing out one row-set per poll: `downs` says whether
-        web01-http is down on each successive poll; exhausted -> all green."""
+    # parsed_status handing out one row-set per poll: `downs` says whether
+    #         web01-http is down on each successive poll; exhausted -> all green.
         seq = [[{"service": "web01-ssh", "up": True},
                 {"service": "web01-http", "up": not d}] for d in downs]
 
@@ -636,8 +638,8 @@ class FireTest(TmpCase):
         return parsed
 
     def _run(self, states, downs, codes):
-        """Run the fire test on a FAKE clock: sleep is a no-op and each time.time()
-        call advances 30s, so the deadline loops terminate after a few polls."""
+    # Run the fire test on a FAKE clock: sleep is a no-op and each time.time()
+    #         call advances 30s, so the deadline loops terminate after a few polls.
         clock = {"t": 0.0}
 
         def fake_time():

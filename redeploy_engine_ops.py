@@ -15,10 +15,10 @@ from utils import run_terraform
 
 
 def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
-    """M4 engine recovery: re-clone the engine VM from the competition's engine
-    template and apply per-deploy state fresh. Team boxes, golden templates, and the
-    engine template are untouched. The scoring DB starts EMPTY (fresh volumes) —
-    re-seed with create-competition.py --from-phase 7 afterwards."""
+# M4 engine recovery: re-clone the engine VM from the competition's engine
+#     template and apply per-deploy state fresh. Team boxes, golden templates, and the
+#     engine template are untouched. The scoring DB starts EMPTY (fresh volumes) —
+#     re-seed with create-competition.py --from-phase 7 afterwards.
     if not state.get("engine_template_vmid"):
         raise SystemExit(
             "  ERROR: .deploy_state.json has no engine_template_vmid — this competition "
@@ -104,10 +104,10 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
 
 
 def reseed_event(comp_dir):
-    """Phase 7 against the freshly recovered engine: seed, unpause, and create injects with
-    offsets anchored at NOW. This is how a reset-and-rerun gets a live inject window —
-    offsets resolve at phase-7 time, so a rollback-ready alone left every inject closed
-    (winad-scrim2 2026-09-26: all 12 closed ~1.5h before T0)."""
+# Phase 7 against the freshly recovered engine: seed, unpause, and create injects with
+#     offsets anchored at NOW. This is how a reset-and-rerun gets a live inject window —
+#     offsets resolve at phase-7 time, so a rollback-ready alone left every inject closed
+#     (winad-scrim2 2026-09-26: all 12 closed ~1.5h before T0).
     import subprocess
     subprocess.run([sys.executable, "create-competition.py", "--competition", comp_dir.name,
                     "--from-phase", "7", "--yes"], check=True)

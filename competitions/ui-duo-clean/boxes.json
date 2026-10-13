@@ -1,0 +1,19 @@
+[
+  {
+    "name": "lnx01",
+    "last_octet": 2,
+    "cpu": 1,
+    "memory_mb": 2048,
+    "disk_gb": 20,
+    "template": "base-ubuntu24.04-fix"
+  },
+  {
+    "name": "win01",
+    "last_octet": 3,
+    "cpu": 2,
+    "memory_mb": 4096,
+    "disk_gb": 60,
+    "disk_iface": "sata0",
+    "template": "base-windows-server"
+  }
+]

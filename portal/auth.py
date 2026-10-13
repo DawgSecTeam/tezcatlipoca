@@ -24,8 +24,6 @@ _DUMMY = "x" * 32
 
 
 class EventConfAuth:
-    """Credential checks against a Quotient event.conf, reloaded on mtime change."""
-
     def __init__(self, path):
         self.path = str(path)
         self._lock = threading.Lock()
@@ -56,13 +54,12 @@ class EventConfAuth:
         self._mtime, self._accounts = mtime, accounts
 
     def teams(self):
-        """Team names Quotient knows, in event.conf order."""
         with self._lock:
             self._load()
             return [n for n, (role, _pw) in self._accounts.items() if role == "team"]
 
+    # constant-time per attempt
     def check(self, username, password):
-        """(role, name) for valid credentials, else None. Constant-time per attempt."""
         with self._lock:
             self._load()
             role, want = self._accounts.get(str(username), (None, _DUMMY))

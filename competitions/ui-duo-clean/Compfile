@@ -1,0 +1,4 @@
+name ui-duo-clean
+scenario Meridian Components runs exactly two public-facing systems: lnx01, a Linux build-artifacts server publishing through nginx, and win01, a standalone Windows reporting host serving IIS. There is no Active Directory — each host stands alone with local accounts only. Nothing on either host is deliberately broken or backdoored. As the blue team, keep both scored services available for the whole event; every outage you cause is on you.
+difficulty 2
+portal 1

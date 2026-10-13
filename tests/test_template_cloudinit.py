@@ -14,7 +14,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import config_ops
-import preflight.templates as preflight_templates
+import infra.resources as preflight_templates
 
 
 def _vm(name, vmid=920, node="proxmox"):
@@ -32,21 +32,21 @@ def _api(config, fail=False):
 
 class TemplateCloudinitMissing(unittest.TestCase):
     def test_linux_with_cloudinit_drive_is_fine(self):
-        self.assertFalse(config_ops.template_cloudinit_missing(
+        self.assertFalse(preflight_templates.template_cloudinit_missing(
             {"ostype": "l26", "ide2": "local-lvm:vm-920-cloudinit,media=cdrom"}))
-        self.assertFalse(config_ops.template_cloudinit_missing(
+        self.assertFalse(preflight_templates.template_cloudinit_missing(
             {"ostype": "l26", "scsi0": "local-lvm:vm-920-cloudinit"}))
-        self.assertFalse(config_ops.template_cloudinit_missing(
+        self.assertFalse(preflight_templates.template_cloudinit_missing(
             {"ostype": "l26", "sata1": "local:vm-920-cloudinit"}))
 
     def test_linux_without_cloudinit_is_missing(self):
-        self.assertTrue(config_ops.template_cloudinit_missing(
+        self.assertTrue(preflight_templates.template_cloudinit_missing(
             {"ostype": "l26", "ide2": "local:iso/debian.iso"}))
-        self.assertTrue(config_ops.template_cloudinit_missing({"ostype": "l26"}))
+        self.assertTrue(preflight_templates.template_cloudinit_missing({"ostype": "l26"}))
 
     def test_windows_and_other_ostypes_are_exempt(self):
         for ostype in ("win11", "win2k22", "other", "solaris", ""):
-            self.assertFalse(config_ops.template_cloudinit_missing({"ostype": ostype}))
+            self.assertFalse(preflight_templates.template_cloudinit_missing({"ostype": ostype}))
 
 
 class CloudinitGate(unittest.TestCase):
@@ -55,7 +55,7 @@ class CloudinitGate(unittest.TestCase):
         out = io.StringIO()
         with patch.object(preflight_templates, "proxmox_api", _api(config, fail=fail)), \
              contextlib.redirect_stdout(out):
-            n = config_ops._cloudinit_gate({name: _vm(name)}, boxes)
+            n = preflight_templates.cloudinit_gate({name: _vm(name)}, boxes)
         return n, out.getvalue()
 
     def test_linux_with_ci_passes(self):

@@ -23,7 +23,7 @@ def load_module(name, filename):
 
 destroy = load_module("destroy_competition_under_test", "destroy-competition.py")
 from teardown import machinery as destroy_sweep_ops  # noqa: E402
-from vm_ownership import Ownership  # noqa: E402
+from infra.ownership import Ownership  # noqa: E402
 
 
 def _ownership():

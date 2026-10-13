@@ -10,7 +10,7 @@ from constants import GOLDEN_TAG, MAX_BOXES_PER_TEAM, ownership_tags
 from golden_ops import _is_template, build_golden_set
 from hardening_ops import _APT_PREP_BODY, _apt_prep_script
 from nodes_ops import golden_vmid_for_slot
-from range_ops import destroy_vm_if_exists
+from infra.ownership import destroy_vm_if_exists
 from template_ops import (code_hash, engine_template_vmid, frozen_gate,
                           golden_hash_inputs, golden_payload_hash,
                           hash_from_inputs, stored_template_hash)
@@ -19,20 +19,20 @@ from utils import is_unmanaged
 
 def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden_bundle,
                         box_password, box_username, ssh_public_key, apt_cache, unbooted=()):
-    """golden_inputs/golden_hashes for every box in boxes.json — unmanaged included.
-
-    Extracted from deploy() (the pure part of the M4 hash loop) so the all-boxes
-    invariant is testable offline: phase 1's wave logic, the phase-4 rebuild gate and
-    `.template-hashes.json` all key off these dicts, and all three iterate the FULL
-    lineup, not just the planted boxes.
-
-    Every box MUST get an entry. The unmanaged (pfSense/appliance) case is the one that
-    used to be unreachable: 8cb755c3 (2026-09-30) added an early `continue` ABOVE
-    e91a5039's compensating unmanaged-inputs block, so the block went dead and the slot
-    carried no hash. The merge-order accident did not fix the KeyError, it moved it into
-    the phase-4 gate (live-found 2026-09-29, cyberfield hdrives-zfs: the first
-    pfsense-carried bundle through the M4 hash path). Unmanaged is checked FIRST now so
-    the entry exists no matter where a later branch continues from."""
+# golden_inputs/golden_hashes for every box in boxes.json — unmanaged included.
+#
+#     Extracted from deploy() (the pure part of the M4 hash loop) so the all-boxes
+#     invariant is testable offline: phase 1's wave logic, the phase-4 rebuild gate and
+#     `.template-hashes.json` all key off these dicts, and all three iterate the FULL
+#     lineup, not just the planted boxes.
+#
+#     Every box MUST get an entry. The unmanaged (pfSense/appliance) case is the one that
+#     used to be unreachable: 8cb755c3 (2026-09-30) added an early `continue` ABOVE
+#     e91a5039's compensating unmanaged-inputs block, so the block went dead and the slot
+#     carried no hash. The merge-order accident did not fix the KeyError, it moved it into
+#     the phase-4 gate (live-found 2026-09-29, cyberfield hdrives-zfs: the first
+#     pfsense-carried bundle through the M4 hash path). Unmanaged is checked FIRST now so
+#     the entry exists no matter where a later branch continues from.
     golden_inputs, golden_hashes = {}, {}
     for b in boxes:
         if is_unmanaged(b):
@@ -66,16 +66,16 @@ def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden
 
 def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored,
                         golden_hashes, golden_inputs, comp_name, run_tag=None):
-    """Destroy each golden template in `slot` whose stored M4 hash no longer matches.
-
-    A slot with no hash/inputs entry is SKIPPED, not subscripted. The unconditional
-    `golden_hashes[b["name"]]` here raised KeyError out of phase 4 for an
-    unmanaged-carried lineup (whose box had no entry — see golden_hash_entries) on a
-    --from-phase 4 resume or a box flipped to `unmanaged: true` under a live golden,
-    the exact case deploy() anticipates when it maps an unmanaged slot to its base
-    template (live-found 2026-09-29, cyberfield hdrives-zfs). With no computed hash
-    there is nothing to compare the stored one against, so skipping is correct; the
-    old code moved the KeyError here instead of fixing it."""
+# Destroy each golden template in `slot` whose stored M4 hash no longer matches.
+#
+#     A slot with no hash/inputs entry is SKIPPED, not subscripted. The unconditional
+#     `golden_hashes[b["name"]]` here raised KeyError out of phase 4 for an
+#     unmanaged-carried lineup (whose box had no entry — see golden_hash_entries) on a
+#     --from-phase 4 resume or a box flipped to `unmanaged: true` under a live golden,
+#     the exact case deploy() anticipates when it maps an unmanaged slot to its base
+#     template (live-found 2026-09-29, cyberfield hdrives-zfs). With no computed hash
+#     there is nothing to compare the stored one against, so skipping is correct; the
+#     old code moved the KeyError here instead of fixing it.
     for i, b in enumerate(boxes):
         vid = golden_vmid_for_slot(engine_vmid, slot, i)
         if not _is_template(destroy_node, vid):
@@ -97,26 +97,26 @@ def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored
 def phase1_destroy_waves(node_vms, all_targets, engine_vmid, boxes, comp_tags,
                          is_template, stored_hashes, golden_hashes, frozen_keep=(), slot=0,
                          extra_destroy=None):
-    """Phase 1's teardown decision, pure so the teardown→redeploy loop is testable offline.
-
-    Wave 1: every team box (the computed set covers ALL teams now that terraform builds
-    them) and stranded clones from a PREVIOUS
-    run with more teams — comp-tagged team boxes the current (smaller) team set no longer
-    enumerates. Left behind they keep a linked-clone hold on the goldens, so wave 2 can't
-    rebuild them (winad-testrun 2026-09-25: 3-team run then 2-team redeploy). Linked
-    clones must die BEFORE their templates.
-    Wave 2: the engine (a linked clone of the engine template — it dies and re-clones
-    cheaply every run; slot 0 only), then every golden template that is missing,
-    hash-mismatched, or a stale slot beyond the current lineup. MATCHING golden templates
-    survive — that is the whole test-run reuse (build once per competition, reuse across
-    its test runs). A frozen competition's code-only-drifted goldens (names in
-    frozen_keep, as classified by the pre-phase-1 golden_freeze_gate) also survive: the
-    gate already said "proceeding on the frozen template", so destroying the golden here
-    would rebuild it and silently break freeze semantics (internals "frozen-gate golden
-    keep").
-    slot>0 (multi-node satellite): this node's golden span (slot-shifted vmids), no
-    engine, plus extra_destroy (the satellite's jump VM) — the caller runs one wave
-    pair per hosting node with that node's own targets."""
+# Phase 1's teardown decision, pure so the teardown→redeploy loop is testable offline.
+#
+#     Wave 1: every team box (the computed set covers ALL teams now that terraform builds
+#     them) and stranded clones from a PREVIOUS
+#     run with more teams — comp-tagged team boxes the current (smaller) team set no longer
+#     enumerates. Left behind they keep a linked-clone hold on the goldens, so wave 2 can't
+#     rebuild them (winad-testrun 2026-09-25: 3-team run then 2-team redeploy). Linked
+#     clones must die BEFORE their templates.
+#     Wave 2: the engine (a linked clone of the engine template — it dies and re-clones
+#     cheaply every run; slot 0 only), then every golden template that is missing,
+#     hash-mismatched, or a stale slot beyond the current lineup. MATCHING golden templates
+#     survive — that is the whole test-run reuse (build once per competition, reuse across
+#     its test runs). A frozen competition's code-only-drifted goldens (names in
+#     frozen_keep, as classified by the pre-phase-1 golden_freeze_gate) also survive: the
+#     gate already said "proceeding on the frozen template", so destroying the golden here
+#     would rebuild it and silently break freeze semantics (internals "frozen-gate golden
+#     keep").
+#     slot>0 (multi-node satellite): this node's golden span (slot-shifted vmids), no
+#     engine, plus extra_destroy (the satellite's jump VM) — the caller runs one wave
+#     pair per hosting node with that node's own targets.
     wave1 = {t["vmid"]: t["vm_name"] for t in all_targets}
     n_slots = max(len(boxes), MAX_BOXES_PER_TEAM)
     keep_vmids = {golden_vmid_for_slot(engine_vmid, slot, i) for i in range(n_slots)}

@@ -40,7 +40,7 @@ def log(message):
 
 
 class EngineClient:
-    """Minimal cookie-session JSON client for the engine's own API."""
+# Minimal cookie-session JSON client for the engine's own API.
 
     def __init__(self, base_url, timeout=10):
         self.base_url = base_url.rstrip("/")
@@ -70,12 +70,11 @@ class EngineClient:
 
 
 def guard_once(client, username, password, now=None, dry_run=False):
-    """One check-and-maybe-fix cycle. Returns a dict describing what happened.
-
-    Never raises for an ordinary engine hiccup: a timer that dies loudly every 60s is
-    worse than one that reports and waits. The caller decides what to do with the
-    outcome; the exit code stays 0 unless something is genuinely wrong.
-    """
+# One check-and-maybe-fix cycle. Returns a dict describing what happened.
+#
+#     Never raises for an ordinary engine hiccup: a timer that dies loudly every 60s is
+#     worse than one that reports and waits. The caller decides what to do with the
+#     outcome; the exit code stays 0 unless something is genuinely wrong.
     outcome = {"state": None, "action": "none", "detail": ""}
     try:
         client.login(username, password)

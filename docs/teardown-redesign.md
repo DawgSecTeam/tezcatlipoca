@@ -31,7 +31,7 @@ Teardown survives on operator memory, not on its design. Reading all of it:
   the redesign deletes their doc ghosts too. `--skip-artifacts` dies with this
   redesign (the journal makes it pointless).
 
-What is already RIGHT and stays: `vm_ownership.ownership_verdict` is the single
+What is already RIGHT and stays: `infra.ownership.ownership_verdict` is the single
 ownership proof shared by preflight and every destroy path (internals.md's
 "one definition everywhere"); terraform is the right executor for
 terraform-managed state; the bounded-retry destroy loop with recovery between
@@ -71,7 +71,7 @@ run id.
 
 ## 3. Object model
 
-New package `teardown/`. `vm_ownership.py` stays top-level (preflight and the
+New package `teardown/`. `infra/ownership.py` (the package holds the whole Proxmox estate) is the ownership owner (preflight and the
 deploy pipeline import it; moving it would invert the dependency) and gains
 `Ownership`, the type that replaces loose `expect_tags` sets at every call site.
 
@@ -102,7 +102,7 @@ machine-parseable line (§6). Every existing refusal (UNTAGGED, MISSING, no
 run id, endpoint mismatch, frozen-without-intent, missing tfstate) migrates to
 it with its current prose as the template — nothing loses information.
 
-### 3.2 Ownership (`vm_ownership.py`)
+### 3.2 Ownership (`infra/ownership.py`)
 
 ```python
 @dataclass(frozen=True)
@@ -243,9 +243,10 @@ with its own tests. The boundary becomes a CONTRACT:
    currently deletes world.json/events.jsonl with the VM (the tezca wrapper's
    `/tmp/ba` staging is the only net, only on that path). badauto gains the
    stage+pull before its VM delete — the same guarantee at both call surfaces.
-3. **Identity cross-check unchanged** (config.yaml / deploy stamp / VM marker);
-   the redesign touches only its OUTPUT shape (the refusal line) and adds the
-   evidence step before its delete.
+3. **Identity cross-check unchanged** (the comp's bad-auto config / the stamp
+   next to it / VM marker — per-competition since 2026-10-12, see
+   docs/bad-auto-isolation.md; the redesign touches only its OUTPUT shape (the
+   refusal line) and adds the evidence step before its delete.
 
 ## 7. Validation plan (live, from the worktree)
 
@@ -276,7 +277,7 @@ with its own tests. The boundary becomes a CONTRACT:
       usage-people.md, environment-facts.md; `test-run-loop.md` untouched — its reset command
       works verbatim)
 - [x] Live validation V1–V3 — transcript in §9
-- [x] Suite 1430 green (49 teardown-model/characterization tests; hermetic, 50s full suite)
+- [x] Suite 1433 green (49 teardown-model/characterization tests; hermetic, ~50s full suite)
 
 Net: deleted `destroy_gate_ops.py` + `destroy_sweep_ops.py` +
 `destroy_templates_ops.py` (357 lines) and the flag `--skip-artifacts`;

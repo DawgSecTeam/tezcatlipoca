@@ -19,6 +19,13 @@ sys.path.insert(0, str(_REPO))
 import pipeline_api  # noqa: E402
 import redeploy_plant_ops  # noqa: E402
 import redeploy_rebuild_ops  # noqa: E402
+from redeploy_context import RedeployContext  # noqa: E402
+
+
+def _rctx(ctx, comp_dir, state=None, node="node"):
+    return RedeployContext(comp_dir=comp_dir, name="x", comp_name="x", node=node,
+                           teams=None, boxes=None, difficulty=None,
+                           state={} if state is None else state, state_path=None, ctx=ctx)
 
 LINUX_BOX = {"name": "web01", "template": "ubuntu-2204-web", "cpu": 2, "memory_mb": 2048}
 WIN_BOX = {"name": "win01", "template": "windows-server-2022", "cpu": 2, "memory_mb": 4096}
@@ -57,7 +64,7 @@ class RunNakonAndHardenTests(unittest.TestCase):
                 cfg.write_text(json.dumps(
                     {"machines": [{"name": t["machine"]} for t in targets]}))
                 redeploy_plant_ops.run_nakon_and_harden(
-                    targets, ctx, comp_dir, {}, cfg, comp_dir / "bundle")
+                    targets, _rctx(ctx, comp_dir), cfg, comp_dir / "bundle")
         return p_dns, p_auth, p_nakon, p_fix
 
     def test_mixed_input_hardens_linux_only(self):
@@ -112,7 +119,7 @@ class ModeRebuildTests(unittest.TestCase):
                               return_value=MagicMock(failed=[])) as p_nakon, \
                  patch.object(pipeline_api, "fix_services_on_boxes") as p_fix:
                 redeploy_rebuild_ops.mode_rebuild(
-                    targets, ctx, "node", comp_dir, state,
+                    targets, _rctx(ctx, comp_dir, state),
                     comp_dir / "nakon-config.json", comp_dir / "bundle")
         return p_boot, p_start, p_snap, p_nakon, p_fix, p_api
 

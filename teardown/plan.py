@@ -28,9 +28,6 @@ class TeardownPlan:
         self.kind = kind
         self.gates = list(gates)          # callables(ctx) -> None, raise Refusal
         self.steps = list(steps)
-        self._validate()
-
-    def _validate(self):
         if self.kind == RECLAIM:
             return
         evidence_idx = [i for i, s in enumerate(self.steps) if s.kind == EVIDENCE]

@@ -133,7 +133,9 @@ python3 -m badauto deploy --competition ../tezcatlipoca-testcomp/competitions/sc
 the constants are: red01 vmid 999, storage hdrives-zfs.) No `--start`. Then ssh
 to red01 and run the deterministic coverage pass for team1 — every scored pin
 must flip DOWN and back UP on the scoreboard. Then
-`python3 -m badauto destroy --competition ... --yes` (must match config.yaml).
+`python3 -m badauto destroy --competition ... --yes` — pass `--config <worktree>/
+competitions/scrim-one/.badauto-config.yaml` when the comp has one (per-comp identity,
+2026-10-12); the destroy cross-checks --competition against that config.
 Any pin that won't flip both ways = fix or re-pin before the event; a dead pin
 means dead scoring for 3 hours.
 

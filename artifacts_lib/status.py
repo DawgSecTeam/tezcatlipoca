@@ -3,15 +3,15 @@
 import re
 from pathlib import Path
 
-from .constants import ABSENT, DIRNAME, LOST, NOT_COLLECTED, SIDES
+from .constants import ABSENT, LOST, NOT_COLLECTED, SIDES
 
 
 def document_state(test_path, filename, collection):
-    """What state a canonical document is actually in: `present`, or the stub's own status.
-
-    The distinction matters because a stub is a file that exists and says "not available" —
-    warning only on a missing *file* would either miss every real gap (the stub exists) or
-    ignore the document on disk entirely."""
+# What state a canonical document is actually in: `present`, or the stub's own status.
+#
+#     The distinction matters because a stub is a file that exists and says "not available" —
+#     warning only on a missing *file* would either miss every real gap (the stub exists) or
+#     ignore the document on disk entirely.
     test_path = Path(test_path)
     path = test_path / filename
     for derived in collection.get("derived", []):
@@ -23,20 +23,12 @@ def document_state(test_path, filename, collection):
     return (match.group(1) if match else "present")
 
 
-def test_path_for(manifest, test_path=None):
-    """The test folder for a manifest, when the caller did not already have it in hand."""
-    if test_path:
-        return Path(test_path)
-    comp_dir, key = manifest.get("comp_dir"), manifest.get("key")
-    return Path(comp_dir) / DIRNAME / key if comp_dir and key else None
-
-
 def warn_summary(collection, manifest, test_path=None):
-    """The lines teardown prints loudly when something that should be there is not.
-
-    Severity comes from the manifest, not the collection: a run with no red agent is not missing
-    anything when there is no red report. Nothing here blocks — the operator chose warn-and-
-    proceed (2026-10-03) because a dead guest box must never wedge a teardown."""
+# The lines teardown prints loudly when something that should be there is not.
+#
+#     Severity comes from the manifest, not the collection: a run with no red agent is not missing
+#     anything when there is no red report. Nothing here blocks — the operator chose warn-and-
+#     proceed (2026-10-03) because a dead guest box must never wedge a teardown.
     warnings = []
     for target in collection.get("targets", []):
         for item in target.get("files", []):
@@ -47,7 +39,11 @@ def warn_summary(collection, manifest, test_path=None):
             warnings.append(f"{target['name']}: {target['status']}"
                             + (f" ({target.get('reason')})" if target.get("reason") else ""))
     agents = manifest.get("agents") or {}
-    folder = test_path_for(manifest, test_path)
+    if test_path:
+        folder = Path(test_path)
+    else:
+        comp_dir, key = manifest.get("comp_dir"), manifest.get("key")
+        folder = Path(comp_dir) / ".automated-tests" / key if comp_dir and key else None
     for side, filename in SIDES.items():
         if not (agents.get(side) or {}).get("present"):
             continue
@@ -71,13 +67,13 @@ def side_status(collection, side):
 
 
 def why_missing(collection, side):
-    """(status, reason) for a canonical document we wanted and did not get.
-
-    Three genuinely different situations, and conflating them is how an artifact folder starts
-    lying: nothing was attempted (recoverable — the sources are still out there), an attempt was
-    made and the source was empty, unreachable, or already destroyed, or the run never had that
-    side at all. A target that failed wholesale records no per-file status, so its own status is
-    the honest answer for the document it was meant to carry."""
+# (status, reason) for a canonical document we wanted and did not get.
+#
+#     Three genuinely different situations, and conflating them is how an artifact folder starts
+#     lying: nothing was attempted (recoverable — the sources are still out there), an attempt was
+#     made and the source was empty, unreachable, or already destroyed, or the run never had that
+#     side at all. A target that failed wholesale records no per-file status, so its own status is
+#     the honest answer for the document it was meant to carry.
     filename = SIDES[side]
     attempted = False
     for target in collection.get("targets", []):

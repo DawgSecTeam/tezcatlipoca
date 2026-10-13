@@ -22,8 +22,8 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import range_ops  # noqa: E402
-import vm_ownership  # noqa: E402
+import infra.ownership  # noqa: E402
+from infra import ownership  # noqa: E402
 
 RUN = "run-abcdef01"
 OTHER_RUN = "run-12345678"
@@ -49,7 +49,7 @@ def _terminal_plan(ctx):
     return build_terminal_plan(Path("competitions/x"), frozen={}, full=True,
                                end_of_competition=False)
 from teardown import machinery as destroy_sweep_ops  # noqa: E402
-from vm_ownership import Ownership  # noqa: E402
+from infra.ownership import Ownership  # noqa: E402
 import deploy  # noqa: E402
 from _deploy_patch import dpatch  # noqa: E402
 from deploy_lib import secrets as dl_secrets  # noqa: E402
@@ -57,11 +57,13 @@ from deploy_lib import stages as dl_stages  # noqa: E402
 from deploy_lib import tfinputs as dl_tfinputs  # noqa: E402
 import config_ops  # noqa: E402
 import placement_record  # noqa: E402
-import pve_api  # noqa: E402
+from infra import client  # noqa: E402
+from infra.gates import preflight_gates_multinode  # noqa: E402
+from infra.gates import preflight_gates_multinode  # noqa: E402
 
 
 class FakePVE:
-    """Minimal PVE: node VM listings, per-VM configs, DELETE/PUT capture."""
+# Minimal PVE: node VM listings, per-VM configs, DELETE/PUT capture.
 
     def __init__(self, nodes=None, cfgs=None, listing_fails=()):
         self.nodes = nodes or {}          # node -> [vm dicts]
@@ -96,54 +98,54 @@ def vm(vmid, name, tags, status="stopped"):
     return {"vmid": vmid, "name": name, "tags": tags, "status": status}
 
 
-@patch.object(vm_ownership, "wait_for_proxmox_task", lambda *a, **k: None)
+@patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None)
 class DestroyVmOwnership(unittest.TestCase):
-    """The shared delete primitive: only proven ownership is touchable."""
+# The shared delete primitive: only proven ownership is touchable.
 
     def test_untagged_vm_is_refused(self):
         fake = FakePVE(nodes={"n": [vm(4150, "mystery-box", "")]},
                        cfgs={4150: {}})
-        with patch.object(vm_ownership, "proxmox_api", fake):
+        with patch.object(ownership, "proxmox_api", fake):
             with self.assertRaisesRegex(RuntimeError, "UNTAGGED vmid 4150"):
-                range_ops.destroy_vm_if_exists("n", 4150, expect_tags={RUN, "tezcatlipoca"})
+                infra.ownership.destroy_vm_if_exists("n", 4150, expect_tags={RUN, "tezcatlipoca"})
         self.assertEqual(fake.deleted, [])
 
     def test_untagged_vm_with_this_comps_clone_marker_is_destroyed(self):
         fake = FakePVE(nodes={"n": [vm(4150, "half-clone", "")]},
-                       cfgs={4150: {"description": range_ops.clone_marker(COMP)}})
-        with patch.object(vm_ownership, "proxmox_api", fake):
-            range_ops.destroy_vm_if_exists(
+                       cfgs={4150: {"description": infra.ownership.clone_marker(COMP)}})
+        with patch.object(ownership, "proxmox_api", fake):
+            infra.ownership.destroy_vm_if_exists(
                 "n", 4150, expect_tags={"tezcatlipoca", f"comp-{COMP}", RUN})
         self.assertEqual(fake.deleted, [4150])
 
     def test_untagged_vm_with_another_comps_clone_marker_is_refused(self):
         fake = FakePVE(nodes={"n": [vm(4150, "half-clone", "")]},
-                       cfgs={4150: {"description": range_ops.clone_marker("other")}})
-        with patch.object(vm_ownership, "proxmox_api", fake):
+                       cfgs={4150: {"description": infra.ownership.clone_marker("other")}})
+        with patch.object(ownership, "proxmox_api", fake):
             with self.assertRaisesRegex(RuntimeError, "UNTAGGED vmid 4150"):
-                range_ops.destroy_vm_if_exists(
+                infra.ownership.destroy_vm_if_exists(
                     "n", 4150, expect_tags={"tezcatlipoca", f"comp-{COMP}", RUN})
         self.assertEqual(fake.deleted, [])
 
     def test_same_comp_different_run_is_refused(self):
         fake = FakePVE(nodes={"n": [vm(4150, "someone-elses-box", OTHER)]},
                        cfgs={4150: {"tags": OTHER}})
-        with patch.object(vm_ownership, "proxmox_api", fake):
+        with patch.object(ownership, "proxmox_api", fake):
             with self.assertRaisesRegex(RuntimeError, "outside this deploy's ownership set"):
-                range_ops.destroy_vm_if_exists("n", 4150, expect_tags={RUN, "tezcatlipoca"})
+                infra.ownership.destroy_vm_if_exists("n", 4150, expect_tags={RUN, "tezcatlipoca"})
         self.assertEqual(fake.deleted, [])
 
     def test_full_ownership_set_passes(self):
         fake = FakePVE(nodes={"n": [vm(4150, "ours", OURS)]},
                        cfgs={4150: {"tags": OURS}})
-        with patch.object(vm_ownership, "proxmox_api", fake):
-            range_ops.destroy_vm_if_exists(
+        with patch.object(ownership, "proxmox_api", fake):
+            infra.ownership.destroy_vm_if_exists(
                 "n", 4150, expect_tags={"tezcatlipoca", f"comp-{COMP}", RUN})
         self.assertEqual(fake.deleted, [4150])
 
 
 class LeftoverSweep(unittest.TestCase):
-    """sweep_tagged_leftovers: only the full run-id-scoped ownership set is swept."""
+# sweep_tagged_leftovers: only the full run-id-scoped ownership set is swept.
 
     def test_run_scoped_sweep_leaves_other_runs_alone(self):
         fake = FakePVE(nodes={"n": [vm(2300, "ours", OURS),
@@ -164,7 +166,7 @@ class LeftoverSweep(unittest.TestCase):
 
 
 class PreStopOwnership(unittest.TestCase):
-    """pre_stop_windows_boxes: a name match alone must not hard-stop another run."""
+# pre_stop_windows_boxes: a name match alone must not hard-stop another run.
 
     TEAMS = {"team1": {"identifier": "101", "password": "x"}}
     BOXES = [{"name": "web01"}]
@@ -194,10 +196,10 @@ class PreStopOwnership(unittest.TestCase):
         self.assertEqual(len(stopped), 2)  # team1-web01 and 102-web01, not 101-web01
 
 class ReportRemainingClassification(unittest.TestCase):
-    """verify_clean (the engine's exit contract) is the successor of
-    report_remaining: every competition-tagged survivor is classified —
-    OURS (a problem: the teardown failed on it), same comp DIFFERENT run
-    (a note: another worktree's), or competition-tagged with no run tag."""
+# verify_clean (the engine's exit contract) is the successor of
+#     report_remaining: every competition-tagged survivor is classified —
+#     OURS (a problem: the teardown failed on it), same comp DIFFERENT run
+#     (a note: another worktree's), or competition-tagged with no run tag.
 
     def test_ours_other_run_and_untagged_run_are_distinguished(self):
         from teardown import TeardownContext, TeardownEngine, Inventory
@@ -222,24 +224,24 @@ class ReportRemainingClassification(unittest.TestCase):
 class RetagOwnership(unittest.TestCase):
     def test_missing_run_tag_is_added(self):
         fake = FakePVE(cfgs={4150: {"tags": f"tezcatlipoca,comp-{COMP}"}})
-        with patch.object(vm_ownership, "proxmox_api", fake):
-            range_ops.retag_ownership("n", 4150,
+        with patch.object(ownership, "proxmox_api", fake):
+            infra.ownership.retag_ownership("n", 4150,
                                       {"tezcatlipoca", f"comp-{COMP}", RUN})
         self.assertEqual(fake.puts[0][1]["tags"], f"comp-{COMP};run-abcdef01;tezcatlipoca")
 
     def test_current_tags_are_a_noop(self):
         fake = FakePVE(cfgs={4150: {"tags": OURS}})
-        with patch.object(vm_ownership, "proxmox_api", fake):
-            range_ops.retag_ownership("n", 4150,
+        with patch.object(ownership, "proxmox_api", fake):
+            infra.ownership.retag_ownership("n", 4150,
                                       {"tezcatlipoca", f"comp-{COMP}", RUN})
         self.assertEqual(fake.puts, [])
 
     def test_foreign_vm_is_never_retagged(self):
         fake = FakePVE(cfgs={4150: {"tags": "tezcatlipoca;comp-something-else"}})
         out = io.StringIO()
-        with patch.object(vm_ownership, "proxmox_api", fake), \
+        with patch.object(ownership, "proxmox_api", fake), \
                 contextlib.redirect_stdout(out):
-            range_ops.retag_ownership("n", 4150,
+            infra.ownership.retag_ownership("n", 4150,
                                       {"tezcatlipoca", f"comp-{COMP}", RUN})
         self.assertEqual(fake.puts, [])
         self.assertIn("not provably this competition's", out.getvalue())
@@ -279,8 +281,8 @@ class DeployContextTags(unittest.TestCase):
 
 
 class RunIdMinting(unittest.TestCase):
-    """resolve_competition_teams + mint_competition_secrets: the run id is minted
-    once per comp dir and reused forever after."""
+# resolve_competition_teams + mint_competition_secrets: the run id is minted
+#     once per comp dir and reused forever after.
 
     def _spec(self):
         return dl_stages.CompetitionSpec(comp_name=COMP, credlist_usernames=[])
@@ -390,7 +392,7 @@ class TfvarsCarryRunTag(unittest.TestCase):
 
 
 class MultinodePreflightRunAware(unittest.TestCase):
-    """A same-comp VM without the run tag is a COLLISION, not 'ours'."""
+# A same-comp VM without the run tag is a COLLISION, not 'ours'.
 
     PLACEMENT = {
         "engine_node": "n1", "team_nodes": {"team1": "n1"},
@@ -413,18 +415,18 @@ class MultinodePreflightRunAware(unittest.TestCase):
                 patch.object(placement_record, "teams_on_node",
                              side_effect=lambda pl, n: [k for k, v in
                                                         pl["team_nodes"].items() if v == n]), \
-                patch.object(pve_api, "cluster_vms_for",
+                patch.object(client, "cluster_vms_for",
                              return_value=[colliding, base_template]), \
-                patch.object(vm_ownership, "has_clone_marker", return_value=False), \
-                patch("preflight.templates.proxmox_api",
+                patch.object(ownership, "has_clone_marker", return_value=False), \
+                patch("infra.resources.proxmox_api",
                       return_value={"data": {"ostype": "l26",
                                              "ide2": "local:vm-900-cloudinit"}}), \
-                patch("preflight.clashes.proxmox_api", return_value={"data": []}), \
-                patch("preflight.headroom.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
-                patch("preflight.concurrency.gate_concurrent_deploys"), \
-                patch("preflight.gate.remote_access_gate"), \
-                patch("preflight.catalog.catalog_gate"):
-            config_ops.preflight_gates_multinode(
+                patch("infra.collisions.proxmox_api", return_value={"data": []}), \
+                patch("infra.resources.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
+                patch("infra.gates.gate_concurrent_deploys"), \
+                patch("infra.gates.remote_access_gate"), \
+                patch("infra.gates.catalog_gate"):
+            preflight_gates_multinode(
                 Path("competitions/example"), boxes, self.TEAMS, 1000, self.PLACEMENT,
                 engine_mgmt_ip=None, check_free=True, our_run_tag=RUN)
 

@@ -240,7 +240,7 @@ should be expected to iterate; don't author it the night the range needs to be g
 1. **Per-phase snapshot checkpoints.** `DeployContext.checkpoint(n)` in `deploy_lib/context.py` is the single choke
    point called exactly once per completed phase — the natural hook. Spec: after saving state,
    take `tz-phase<N>` snapshots (disk-only, replace-existing, non-fatal WARNING — same
-   semantics as `range_ops.take_snapshot`) on the boxes that exist at that point (the engine from
+   semantics as `infra.lifecycle.take_snapshot`) on the boxes that exist at that point (the engine from
    phase 2, every team box from phase 4). Payoff: a phase-6/7 failure could roll boxes back to
    a known-good state instead of re-running the sweep into a possibly-dirty one. Rollback path:
    extend the redeploy `rollback-*` modes with a snapshot-name override (they're currently
@@ -366,9 +366,11 @@ pure router, outbound NAT off. The two traps, both fixed/known:
 
 ### 8.3 bad-auto red teamer against an in-path firewall range (pfSense or VyOS)
 
-`../bad-auto`, OpenRouter LLM, `python3 -m badauto {deploy,run,status,destroy}`, `config.yaml`
-(`competition_dir`, `event.duration_min`, `deploy.red_*`). Point it at the comp dir and set the
-duration before `deploy`.
+`../bad-auto`, OpenRouter LLM, `python3 -m badauto {deploy,run,status,destroy}`. The comp's
+own config (`competitions/<id>/.badauto-config.yaml`, written by the deploy/scrim stages)
+carries `competition_dir`, the reserved `deploy.red_*` identity and the event knobs — pass it
+with `--config` (bad-auto's repo-root `config.yaml` is standalone-operator state; two
+sessions sharing it is the 2026-10-12 kill).
 
 - The engine-side firewall (`badauto/deploy/engine_nat.py`) has two modes (`deploy.red_mode`):
   **routed** (default) keeps red's source address from a dedicated segment (`red_subnet`,

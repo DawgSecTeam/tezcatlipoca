@@ -40,7 +40,7 @@ _BASH_VAR_RE = re.compile(r"\$(?:\{([A-Z_][A-Z0-9_]*)|([A-Z_][A-Z0-9_]*))")
 
 
 def build_nakon_bundle(config_path):
-    """Build (or reuse) the content-addressed Nakon bundle for this competition."""
+# Build (or reuse) the content-addressed Nakon bundle for this competition.
     with _BUNDLE_BUILD_LOCK:
         result = subprocess.run(
             [sys.executable, "-m", "nakon", "build",
@@ -67,15 +67,15 @@ def build_nakon_bundle(config_path):
 
 
 def _lint_bundle_vars(bundle_path):
-    """Drift guard for the curated REQUIRED_VARS table (M4).
-
-    The catalog DB exposes no required-vars metadata, so the table can silently go
-    stale as the catalog grows. The bundle manifest knows exactly which vars each
-    step receives and which sha256-addressed script blob it runs — scanning those
-    blobs for uppercase `$VAR` references not declared by the step (and not a shell
-    builtin) fails the deploy at bundle-build time, before any plant time is spent.
-    Remediations: pin the var ({name, vars}), declare it identity-derived in
-    REQUIRED_VARS, or (shell builtins only) extend the lint whitelist."""
+# Drift guard for the curated REQUIRED_VARS table (M4).
+#
+#     The catalog DB exposes no required-vars metadata, so the table can silently go
+#     stale as the catalog grows. The bundle manifest knows exactly which vars each
+#     step receives and which sha256-addressed script blob it runs — scanning those
+#     blobs for uppercase `$VAR` references not declared by the step (and not a shell
+#     builtin) fails the deploy at bundle-build time, before any plant time is spent.
+#     Remediations: pin the var ({name, vars}), declare it identity-derived in
+#     REQUIRED_VARS, or (shell builtins only) extend the lint whitelist.
 
     def _undeclared(text, provided):
         # Single-quoted spans never expand ('$TTL 604800' is a DNS zone directive, not

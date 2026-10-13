@@ -10,12 +10,10 @@ from scrim.core import log
 from scrim.runfiles import SCOREBOARD_STATE, FINAL_SCOREBOARD
 
 
+# a copy, never a move: scrim_report/loaders.py reads evidence/final-scoreboard.json at
+# that exact path, so relocating the engine dump would silently zero the report's
+# scoreboard section
 def capture_engine_evidence(ev):
-    """Copy the engine-side capture into `ev/engine/` (created here); return what was written.
-
-    A copy, never a move: scrim-report.py reads `evidence/final-scoreboard.json` at that
-    exact path (scrim_report/loaders.py), so relocating the engine dump would silently zero
-    the report's scoreboard section."""
     ev = Path(ev)
     engine_dir = ev / "engine"
     engine_dir.mkdir(parents=True, exist_ok=True)
@@ -25,13 +23,11 @@ def capture_engine_evidence(ev):
     return [core.secure_evidence(core.shutil_copy(src, engine_dir / src.name)) for src in srcs]
 
 
+# the submission globs are sub*.md/sub*.txt, NOT sub-*.md: blue is told to write sub.md,
+# so the hyphenated pattern matched nothing and observed runs counted 0 inject submissions
+# with an empty submissions/ (plan §3.2); REPORT.md is blue's after-action report, copied
+# for the same reason it is asked for
 def capture_blue_evidence(run_dir, ev, teams):
-    """Seal each blue workdir's deliverables under `ev/blue-team<n>/`; return what was written.
-
-    The submission globs are `sub*.md`/`sub*.txt`, NOT `sub-*.md`: the cycle prompt tells
-    blue to write `sub.md`, so the hyphenated pattern matched nothing and observed runs
-    counted 0 inject submissions with an empty `submissions/` (plan §3.2). `REPORT.md` is
-    blue's after-action report and is copied for the same reason it is asked for."""
     run_dir, ev = Path(run_dir), Path(ev)
     written = []
     for n in range(1, teams + 1):
@@ -83,13 +79,10 @@ def stage_capture(args, creds):
     core.write_evidence(ev / FINAL_SCOREBOARD, json.dumps(final, indent=1))
     log("final scoreboard dumped to evidence")
 
+    # rc + body both checked: a version that logged "engine paused (best-effort)"
+    # unconditionally left a 500 mid-round scoring while the operator read a line saying
+    # it had stopped (audit find D7)
     def _pause():
-        """POST engine/pause. Returns (ok, detail) — the caller must not claim success.
-
-        The old version ignored both the return code and the body and logged "engine
-        paused (best-effort)" unconditionally: a 500 mid-round left scoring running while
-        the operator read a line saying it had stopped (audit find D7).
-        """
         r = procs.run_tree(["curl", "-s", "--max-time", "15", "-b", admin_jar, "-X", "POST",
                             f"http://{creds['ENGINE_IP']}/api/engine/pause",
                             "-H", "Content-Type: application/json", "-d", '{"pause": true}'],

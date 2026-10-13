@@ -1,0 +1,7 @@
+name iso-a-20261012
+scenario bad-auto isolation live validation A: minimal one-box range, red01 on the derived vmid (scoring 1300 + 170 = 1470) at the default 10.0.0.198. Deployed concurrently with iso-b to prove per-competition bad-auto config/stamp isolation.
+difficulty 1
+assume_breach 1
+assume_breach_depth 1
+remote_access 0
+red01_ip 10.0.0.198

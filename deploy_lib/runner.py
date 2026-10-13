@@ -1,25 +1,25 @@
 """deploy(): the sequencer. Takes the lock, prepares, walks PHASES, checkpoints, reports."""
 
 from constants import MIN_LOAD_FREE_TIMEOUT, RESUME_ATTEMPT_LIMIT
-from range_ops import wait_for_node_load
+from infra.client import wait_for_node_load
 
 from deploy_lib import phases
 from deploy_lib.failure import clear_failure_streak, record_degradations, record_failure
-from deploy_lib.gates import acquire_deploy_lock
+from infra.gates import acquire_deploy_lock
 from deploy_lib.prepare import prepare
 
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
            team_node=None, engine_node=None, force_from_phase=False, min_load_free=None):
-    """Run the eight-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
-
-    scoring_vmid overrides the scoring-engine VMID (default 1000) so several
-    competitions can run concurrently on one node; it is persisted to
-    .deploy_state.json and reused on resume.
-    team_node (--team-node id=NODE,...) and engine_node (--engine-node NAME) pin the
-    multi-node placement when nodes.json exists; without them teams are placed by
-    capacity-fill. force_from_phase (--force-from-phase) bypasses the guard that refuses
-    to skip phases .deploy_state.json never recorded as completed."""
+# Run the eight-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
+#
+#     scoring_vmid overrides the scoring-engine VMID (default 1000) so several
+#     competitions can run concurrently on one node; it is persisted to
+#     .deploy_state.json and reused on resume.
+#     team_node (--team-node id=NODE,...) and engine_node (--engine-node NAME) pin the
+#     multi-node placement when nodes.json exists; without them teams are placed by
+#     capacity-fill. force_from_phase (--force-from-phase) bypasses the guard that refuses
+#     to skip phases .deploy_state.json never recorded as completed.
     acquire_deploy_lock(comp_dir)
 
     ctx = prepare(comp_dir, num_teams=num_teams, assume_yes=assume_yes, from_phase=from_phase,
@@ -38,9 +38,9 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 
 
 def wait_out_contention(ctx, min_load_free):
-    """`--min-load-free N` on a resume into a phase that previously failed: wait for the
-    node to come down before starting. The retries that produced the eleven-attempt
-    cde-2026 storm were pure contention, and an operator was doing this by hand."""
+# `--min-load-free N` on a resume into a phase that previously failed: wait for the
+#     node to come down before starting. The retries that produced the eleven-attempt
+#     cde-2026 storm were pure contention, and an operator was doing this by hand.
     if min_load_free is not None and ctx.from_phase > 1:
         streak_phase = (ctx.state.get("failure_streak") or {}).get("phase")
         if streak_phase == ctx.from_phase:
@@ -50,9 +50,9 @@ def wait_out_contention(ctx, min_load_free):
 
 
 def run_pipeline(ctx):
-    """Walk PHASES: call each, checkpoint the ones that ran, hook the terraform read.
-
-    Any failure is recorded (streak + degradations) and re-raised with a resume hint."""
+# Walk PHASES: call each, checkpoint the ones that ran, hook the terraform read.
+#
+#     Any failure is recorded (streak + degradations) and re-raised with a resume hint.
     current_phase = max(ctx.from_phase, 1)
     try:
         for n, phase in enumerate(phases.PHASES, 1):
@@ -80,7 +80,7 @@ def run_pipeline(ctx):
 
 
 def report_failure(ctx, current_phase, exc):
-    """Record the tolerated-failure ledger and the failure streak, print the resume hint."""
+# Record the tolerated-failure ledger and the failure streak, print the resume hint.
     record_degradations(ctx)
     print(f"\n  [!] Deploy failed during phase {current_phase} of '{ctx.comp_name}'.")
     try:

@@ -35,8 +35,8 @@ class WipeTargets(unittest.TestCase):
                          {"192.168.120.2", "192.168.120.4"})
 
     def test_unmanaged_firewall_never_appears(self):
-        """fw01 is unmanaged, so it never enters managed_targets; the shaping
-        must not resurface it either way."""
+    # fw01 is unmanaged, so it never enters managed_targets; the shaping
+    #         must not resurface it either way.
         rows = _wipe_targets([_target("fw01", "pfsense-provision", "192.168.120.8",
                                       octet=8)])
         self.assertEqual(len(rows), 1)                    # pass-through shaping only

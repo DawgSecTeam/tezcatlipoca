@@ -5,7 +5,7 @@ import os
 import shlex
 import time
 
-from range_ops import guest_agent_exec_root, wait_for_guest_agent
+from infra.guest_exec import guest_agent_exec_root, wait_for_guest_agent
 from ssh_ops import ssh_via_gateway
 from utils import PRINT_LOCK, run_concurrent
 
@@ -33,15 +33,15 @@ _ALPINE_NGINX_200_VHOST_B64 = ("c2VydmVyIHsKICAgIGxpc3RlbiA4MCBkZWZhdWx0X3NlcnZl
 
 
 def ensure_alpine_services(comp_dir, targets, ctx):
-    """Install + enable pinned scored services on Alpine boxes via apk + OpenRC.
-
-    The vulndb service configs only speak apt/dnf/yum (and systemd), so on Alpine every
-    catalog service step exits 1 in 0 seconds (distro-matrix-2026-09-27). With the
-    Compfile `alpine_services` knob set, the golden plant runs non-strict and this shim
-    owns Alpine services instead: apk add, rc-update add default, rc-service start, and
-    a status probe as the pass condition. Idempotent — clones inherit the golden disk,
-    so phase 5's pass usually confirms rather than installs. Unknown pinned services
-    are reported, not silently skipped."""
+# Install + enable pinned scored services on Alpine boxes via apk + OpenRC.
+#
+# The vulndb service configs only speak apt/dnf/yum (and systemd), so on Alpine every
+# catalog service step exits 1 in 0 seconds (distro-matrix-2026-09-27). With the
+# Compfile `alpine_services` knob set, the golden plant runs non-strict and this shim
+# owns Alpine services instead: apk add, rc-update add default, rc-service start, and
+# a status probe as the pass condition. Idempotent — clones inherit the golden disk,
+# so phase 5's pass usually confirms rather than installs. Unknown pinned services
+# are reported, not silently skipped.
     box_username = ctx.get("box_username", "ubuntu")
     pins = json.loads((comp_dir / "box_services.json").read_text())
     alpine = [t for t in targets

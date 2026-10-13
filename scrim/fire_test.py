@@ -25,16 +25,11 @@ def stage_verify(args, comp, creds):
         return procs.run_tree(base + [f"{creds['BOX_USER']}@{web_ip}", cmd],
                               timeout=timeout, check=False)
 
+    # password on stdin, not an `echo` into the remote shell string: the old form put the
+    # password in the local process argv (readable from ps) and a single quote in a
+    # generated password would have been a shell syntax error aborting the fire test;
+    # same house pattern as beacon_ops._ssh_box
     def sudo_web01(script, timeout=120):
-        """Run `script` as root on web01 with the box password on STDIN.
-
-        The old call piped the box password through an `echo` into `sudo -S` inside a
-        remote shell string built with %-interpolation: the password landed in the local
-        process argv (readable from ps on the operator host) and a single quote in a
-        generated password would have been a shell syntax error that aborted the fire
-        test. beacon_ops._ssh_box already established the house pattern — `sudo -S` reads
-        the password from stdin and the script follows it on the same stream — so reuse it.
-        """
         argv, stdin_text = procs.box_sudo_stdin(base, f"{creds['BOX_USER']}@{web_ip}",
                                                 creds["BOX_PW"], script)
         return procs.run_tree(argv, timeout=timeout, check=False, stdin_text=stdin_text)
@@ -44,16 +39,13 @@ def stage_verify(args, comp, creds):
     run_fire_test(args, comp, creds, ssh_web01, sudo_web01)
 
 
+# a paused engine cannot register a service going down: the harness PAUSES the scoring
+# loop at teardown (correct — the event is over) and the loop does not self-resume, so
+# the NEXT run's pre-T0 fire test watched a healthy web01 for its whole deadline and
+# aborted before T0 (2026-10-08, run 6) — it only appeared to work because red01/loop
+# state happened to survive from the run before. Prove the scoring path against a live
+# loop: unpause first, with the same two POSTs verify's --fix-round-loop issues.
 def _ensure_round_loop(comp, creds):
-    """A paused engine cannot register a service going down.
-
-    The harness PAUSES the scoring loop at teardown (correct — the event is over)
-    and the loop does not self-resume, so the NEXT run's pre-T0 fire test watched a
-    healthy web01 for its whole deadline, saw no transition, and aborted before T0
-    (2026-10-08, run 6). It only appeared to work before because red01/loop state
-    happened to survive from the run before. Prove the scoring path against a live
-    loop: unpause first, with the same two POSTs verify's --fix-round-loop issues.
-    """
     base = f"http://{creds['ENGINE_IP']}"
     try:
         import requests
@@ -83,15 +75,10 @@ def _ensure_round_loop(comp, creds):
         log(f"fire test: unpause failed ({e}) — the fire test will likely fail")
 
 
+# raises (aborting before T0) rather than warning: firing blue into an unproven scoring
+# path is how a whole event goes unscored (run-12)
 def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
 
-    """Prove the scoring path end to end: stop web01's scored unit, watch the scoreboard
-    register it down, restore it, watch the scoreboard heal. Raises (aborting before T0)
-    rather than warning: firing blue into an unproven scoring path is how a whole event
-    goes unscored (run-12).
-
-    `ssh_web01(cmd)` runs a shell command as the box user, `sudo_web01(script)` as root —
-    injected so tests can script the box without SSH."""
     _ensure_round_loop(comp, creds)
     units, svc_port, svc_display = compworld._web01_units(comp)
     web_ip = (json.loads((comp / "targets.json").read_text()).get("targets", {})
@@ -133,7 +120,6 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
         log(f"fire test: pre-existing outage on {unit} restored — proceeding")
 
     def web01_http():
-        """HTTP code for web01 over the engine's network path ('' / 000 = no answer)."""
         r = procs.run_tree(["ssh", "-i", creds["KEY_PATH"], *core.SSH_NOCHECK,
                             f"{creds['VM_USER']}@{creds['ENGINE_IP']}",
                             f"curl -sm 10 -o /dev/null -w '%{{http_code}}' "
@@ -141,14 +127,13 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
                            timeout=45, check=False)
         return (r.stdout or "").strip()
 
+    # watches the FIRED service's row (<box>-<display>): other scored services may
+    # legitimately start down (planted broken services blue must restore), and even a
+    # sibling web01 row can be down (scrim-one 2026-10-03: the stale web01-ssh row from
+    # an aborted attempt answered "down" for a nginx stop and then refused every nginx
+    # restore). Falls back to the first web01 row only when the expected name is not
+    # registered at all.
     def scoreboard_down():
-        """(down, err): down=True/False; err set when the scoreboard itself is unreadable.
-        Watches the FIRED service's row (<box>-<display>) — other scored services may
-        legitimately start down (planted broken services blue must restore), and even a
-        sibling web01 row can be down (scrim-one 2026-10-03: the stale web01-ssh row
-        from an aborted attempt answered "down" for a nginx stop and then refused every
-        nginx restore). Falls back to the first web01 row only when the expected name
-        is not registered at all."""
         try:
             rows = quotient_api.parsed_status(creds, "team1")
             wanted = f"web01-{svc_display}"

@@ -2,19 +2,19 @@
 
 import os
 
-from range_ops import enumerate_targets, persist_targets
+from targets import enumerate_targets, persist_targets
 from utils import is_unmanaged
 from windows_ops import is_windows_template
 
 
 def enumerate_deploy_targets(targets, comp_dir, spec, secrets, place):
-    """Enumerate every VM this deploy will touch, into `targets`.
-
-    node is read from the env here (the engine's host, already selected by placement);
-    all_targets keeps every positional vmid, while the Linux/Windows work lists drop
-    unmanaged boxes — pfSense/appliances have no plant/repair/fix_services/cloud-init,
-    they clone from their own template and self-configure (but must stay in all_targets
-    for vmid arithmetic)."""
+# Enumerate every VM this deploy will touch, into `targets`.
+#
+#     node is read from the env here (the engine's host, already selected by placement);
+#     all_targets keeps every positional vmid, while the Linux/Windows work lists drop
+#     unmanaged boxes — pfSense/appliances have no plant/repair/fix_services/cloud-init,
+#     they clone from their own template and self-configure (but must stay in all_targets
+#     for vmid arithmetic).
     targets.node = os.environ["TF_VAR_proxmox_node"]
     targets.all_targets = enumerate_targets(secrets.teams, spec.boxes,
                                            placement=place.placement, default_node=targets.node)

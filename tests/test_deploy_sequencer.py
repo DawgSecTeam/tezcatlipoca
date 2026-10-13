@@ -25,7 +25,7 @@ sys.path.insert(0, str(_REPO))
 import deploy  # noqa: E402
 from deploy_lib import phases  # noqa: E402
 from _deploy_patch import dpatch  # noqa: E402
-from deploy_lib import gates as dl_gates  # noqa: E402
+from infra import gates as dl_gates  # noqa: E402
 
 
 SKIP_BANNERS = [
@@ -84,18 +84,18 @@ RUN_BANNERS = {
 
 
 def _no_artifact_gates():
-    """Neutralize the checkpoint's existence gate for sequencing tests.
-
-    `checkpoint(3|4)` now verifies the phase's output exists before recording it (C1),
-    which needs a live Proxmox. These tests exercise ORDER and checkpoint gating, not
-    artifact verification, so the gate is stubbed here and tested for real in
-    tests/test_resume_existence.py."""
+# Neutralize the checkpoint's existence gate for sequencing tests.
+#
+#     `checkpoint(3|4)` now verifies the phase's output exists before recording it (C1),
+#     which needs a live Proxmox. These tests exercise ORDER and checkpoint gating, not
+#     artifact verification, so the gate is stubbed here and tested for real in
+#     tests/test_resume_existence.py.
     return patch.object(deploy.DeployContext, "_verify_phase_artifacts",
                         lambda self, n: None)
 
 
 def _ctx(comp_dir, from_phase, state=None):
-    """A DeployContext carrying only what the sequencer and finish path touch."""
+# A DeployContext carrying only what the sequencer and finish path touch.
     return deploy.DeployContext(
         comp_dir=comp_dir, comp_name=comp_dir.name,
         state_path=comp_dir / ".deploy_state.json", from_phase=from_phase,
@@ -119,7 +119,7 @@ def _ctx(comp_dir, from_phase, state=None):
 
 
 def _stub_phases(calls):
-    """Eight stub phases recording their number; PHASES order is what is under test."""
+# Eight stub phases recording their number; PHASES order is what is under test.
     def make(n):
         def phase(ctx):
             calls.append(("phase", n))
@@ -128,7 +128,7 @@ def _stub_phases(calls):
 
 
 class BannerSet(unittest.TestCase):
-    """The [N/8] banners operators and incident logs key on. Byte-identical, once each."""
+# The [N/8] banners operators and incident logs key on. Byte-identical, once each.
 
     def _run_resume_from_9(self, comp_dir):
         ctx = _ctx(comp_dir, 9)
@@ -173,7 +173,7 @@ class BannerSet(unittest.TestCase):
 
 
 def _phase_functions():
-    """{phase name: its ast FunctionDef}, parsed from each phase function's own source."""
+# {phase name: its ast FunctionDef}, parsed from each phase function's own source.
     out = {}
     for phase in phases.PHASES:
         tree = ast.parse(textwrap.dedent(inspect.getsource(phase)))
@@ -182,7 +182,7 @@ def _phase_functions():
 
 
 def _print_literals(fn):
-    """Every string literal printed by fn, in SOURCE order (ast.walk is not ordered)."""
+# Every string literal printed by fn, in SOURCE order (ast.walk is not ordered).
     found = []
     for node in ast.walk(fn):
         if (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "print"
@@ -197,7 +197,7 @@ def _print_literals(fn):
 
 
 class Sequencer(unittest.TestCase):
-    """deploy() walks PHASES, gates checkpointing, and hooks the terraform read."""
+# deploy() walks PHASES, gates checkpointing, and hooks the terraform read.
 
     def _run(self, comp_dir, from_phase, phases, calls):
         ctx = _ctx(comp_dir, from_phase)
@@ -247,7 +247,7 @@ class Sequencer(unittest.TestCase):
 
 
 class FailureHandling(unittest.TestCase):
-    """The failure banner + resume hint, with current_phase set by the sequencer."""
+# The failure banner + resume hint, with current_phase set by the sequencer.
 
     def _fail(self, comp_dir, from_phase, exc, phases):
         ctx = _ctx(comp_dir, from_phase)

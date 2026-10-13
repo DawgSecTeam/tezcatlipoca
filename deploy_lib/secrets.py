@@ -9,7 +9,7 @@ from utils import mint_run_id
 
 
 def _tracked_team_identifier_defaults(comp_dir):
-    """Read a packet's non-secret team identifier suggestions for fresh-worktree defaults."""
+# Read a packet's non-secret team identifier suggestions for fresh-worktree defaults.
     compfile = Path(comp_dir) / "Compfile"
     source = None
     if compfile.is_file():
@@ -33,7 +33,7 @@ def _tracked_team_identifier_defaults(comp_dir):
 
 
 def _fresh_identifier_defaults(comp_dir, previous_state):
-    """Prefer identifiers from local history, then tracked packet metadata."""
+# Prefer identifiers from local history, then tracked packet metadata.
     saved = (previous_state or {}).get("teams") or {}
     identifiers = ([team.get("identifier") for team in saved.values()
                     if isinstance(team, dict) and team.get("identifier") is not None]
@@ -58,21 +58,21 @@ def _fresh_identifier_defaults(comp_dir, previous_state):
 
 
 def carry_box_password(previous_state):
-    """box_password is a golden-hash INPUT (baked into /etc/shadow + cloud-init on the
-    golden disk): re-minting it on a fresh deploy rebuilds every golden. Reuse the
-    competition's existing one; mint only for a truly new competition."""
+# box_password is a golden-hash INPUT (baked into /etc/shadow + cloud-init on the
+#     golden disk): re-minting it on a fresh deploy rebuilds every golden. Reuse the
+#     competition's existing one; mint only for a truly new competition.
     return (previous_state or {}).get("box_password") or random_password()
 
 
 def resolve_competition_teams(secrets, prior, spec, num_teams, identity, from_phase):
-    """Resolve the run id and the team roster (carried on a resume), into `secrets`.
-
-    Deliberately split from the credential mint: preflight must be able to abort a
-    fresh deploy before any secret exists to desync (see prepare()'s order note). The
-    run id comes first so BOTH paths persist the same id (utils.mint_run_id): reused
-    from prior state when the competition directory has one — a resume, a crash-loop
-    re-run and a redeploy must reclaim and re-tag the SAME lineage, and a fresh mint
-    would orphan every kept template's ownership."""
+# Resolve the run id and the team roster (carried on a resume), into `secrets`.
+#
+#     Deliberately split from the credential mint: preflight must be able to abort a
+#     fresh deploy before any secret exists to desync (see prepare()'s order note). The
+#     run id comes first so BOTH paths persist the same id (utils.mint_run_id): reused
+#     from prior state when the competition directory has one — a resume, a crash-loop
+#     re-run and a redeploy must reclaim and re-tag the SAME lineage, and a fresh mint
+#     would orphan every kept template's ownership.
     secrets.run_id = prior.previous_state.get("run_id") or mint_run_id()
     if prior.resuming:
         secrets.state = json.loads(prior.state_path.read_text())
@@ -143,8 +143,8 @@ def resolve_competition_teams(secrets, prior, spec, num_teams, identity, from_ph
 
 
 def mint_competition_secrets(secrets, prior, spec, inputs, identity):
-    """Mint the fresh deploy's secrets into `secrets` and persist them (preflight has
-    already passed — see prepare()'s order note)."""
+# Mint the fresh deploy's secrets into `secrets` and persist them (preflight has
+#     already passed — see prepare()'s order note).
     secrets.admin_password = random_password()
     secrets.scoring_password = random_password()
     secrets.postgres_password = random_password()

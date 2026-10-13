@@ -1,23 +1,23 @@
 """Red-team vantage gates (--red-identity, --red-teams all): routed source address and per-team reachability."""
 
-import json
 import subprocess
 import time
 
 from verifier import context
 from verifier.boxes import boxes_by_team, is_linux_box
-from verifier.context import REPO_ROOT, red_ssh_argv
+from verifier.context import red_ssh_argv
 from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
 
 
-def default_red_seg_ip():
-    """--red-seg-ip fallback: bad-auto's config.yaml, else the routed default."""
-    cfg_path = REPO_ROOT.parent / "bad-auto" / "config.yaml"
-    try:
-        deploy = json.loads(cfg_path.read_text()).get("deploy") or {}
+def default_red_seg_ip(comp_dir=None):
+    """--red-seg-ip fallback: the competition's own bad-auto config, else the
+    routed default. (The sibling checkout's shared config.yaml is no longer a
+    source — on concurrent sessions it names whichever red01 staged last.)"""
+    if comp_dir is not None:
+        import badauto_config_ops
+        deploy = badauto_config_ops.load_config(comp_dir).get("deploy") or {}
         return deploy.get("red_seg_ip") or "10.200.0.10"
-    except (OSError, ValueError):
-        return "10.200.0.10"
+    return "10.200.0.10"
 
 
 def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):

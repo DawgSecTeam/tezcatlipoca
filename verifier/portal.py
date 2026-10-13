@@ -17,8 +17,8 @@ from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
 
 
 def check_portal_gate(ctx, comp_dir, teams, admin_password):
-    """GateResult: SKIP when the comp runs no portal; FAIL on any failed probe row; SKIP when
-    the engine can't be reached (an unrun check is not a pass)."""
+# GateResult: SKIP when the comp runs no portal; FAIL on any failed probe row; SKIP when
+#     the engine can't be reached (an unrun check is not a pass).
     if not portal_enabled(comp_dir):
         return gate_skip("portal", "competition runs no student portal (Compfile `portal`)",
                          gating=False)

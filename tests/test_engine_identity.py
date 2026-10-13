@@ -30,7 +30,7 @@ def _ctx(ip="10.0.0.250"):
 
 
 class _CmdRecorder:
-    """Stands in for _run_engine_cmd: records calls, answers the identity probe."""
+# Stands in for _run_engine_cmd: records calls, answers the identity probe.
 
     def __init__(self, stamp=""):
         self.stamp = stamp
@@ -57,8 +57,8 @@ class IdentityProbe(unittest.TestCase):
             engine_identity_ops.assert_engine_build_identity(_ctx(), 1240)   # no raise
 
     def test_a_foreign_engine_is_refused(self):
-        """No stamp = a machine this pipeline never stamped: a foreign engine, or a clone
-        made from a template. Both are worse than stopping."""
+    # No stamp = a machine this pipeline never stamped: a foreign engine, or a clone
+    #         made from a template. Both are worse than stopping.
         rec = _CmdRecorder(stamp="")
         with patch.object(engine_identity_ops, "_run_engine_cmd", rec):
             with self.assertRaises(RuntimeError) as ctx:
@@ -108,7 +108,7 @@ class CleanVerifiesBeforeDestroying(unittest.TestCase):
         self.assertIn(f"rm -f {engine_identity_ops.ENGINE_BUILD_STAMP}", destroy_cmd)
 
     def test_a_clean_without_a_vmid_stays_backward_compatible(self):
-        """The shim at template_ops._clean_func() and any older caller pass only ctx."""
+    # The shim at template_ops._clean_func() and any older caller pass only ctx.
         rec = _CmdRecorder()
         with patch.object(engine_identity_ops, "_run_engine_cmd", rec):
             engine_identity_ops.clean_engine_for_template(_ctx())

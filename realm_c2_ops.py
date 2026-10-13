@@ -145,9 +145,12 @@ def engine_ip_for(comp_dir):
     return os.environ.get("TF_VAR_engine_mgmt_ip") or None
 
 
-def load_bad_auto_config(config_path=None):
-    """bad-auto's standing config (YAML or JSON — stage_red rewrites it as JSON)."""
-    path = Path(config_path) if config_path else (BAD_AUTO / "config.yaml")
+def load_bad_auto_config(config_path):
+    """A bad-auto config file from disk (YAML or JSON — the harness writes YAML,
+    hand edits have been JSON). Explicit path only: the sibling checkout's
+    repo-root config.yaml is standalone-bad-auto state tezcatlipoca no longer
+    reads (2026-10-12 cross-session clobber)."""
+    path = Path(config_path)
     if not path.exists():
         return {}
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -269,13 +272,16 @@ def apply_local_c2(realm, red_ip, callback_ip=None):
 def build_local_c2_config(red_ip, config_path=None, comp_dir=None):
     """The bad-auto config for a deploy whose tavern lives on red01.
 
-    Returns None when the sibling config is missing or realm is disabled
-    outright (provisioning a tavern nothing would use). Also pins
+    Base is the COMPETITION's own config (config_path defaults to it) — the
+    sibling checkout's repo-root singleton is no longer a source (2026-10-12
+    cross-session clobber). Returns None when that base is missing or realm is
+    disabled outright (provisioning a tavern nothing would use). Also pins
     deploy.red_ip to `red_ip` so the Compfile's `assume_breach_red_ip`
     override is authoritative for BOTH the clone and the DNAT target —
     previously the override only moved the seed's ssh target.
     """
-    path = Path(config_path) if config_path else (BAD_AUTO / "config.yaml")
+    import badauto_config_ops
+    path = Path(config_path) if config_path else badauto_config_ops.config_path(comp_dir)
     if not path.exists():
         return None
     cfg = load_bad_auto_config(path)
@@ -289,43 +295,38 @@ def build_local_c2_config(red_ip, config_path=None, comp_dir=None):
 
 
 def write_local_c2_config(comp_dir, cfg):
-    """Derived config next to the comp's own state; never inside bad-auto's tree.
+    """The competition's bad-auto config — one file for the deploy AND the realm
+    layer (the old separate .realm-c2-config.yaml is folded into it).
 
     Returns an ABSOLUTE path: bad-auto runs with cwd=bad-auto, so a relative
     `--config` resolves inside its own tree, `load_config` finds no file and
     silently falls back to its built-in defaults (red01 then comes up on the
-    default red_ip 10.0.0.199 while everything else targets the comp's 10.0.0.198 —
-    caught live 2026-10-09, after a 95-minute deploy whose entire red presence died
-    with `No route to host`).
+    default red_ip while everything else targets the comp's address — caught
+    live 2026-10-09, after a 95-minute deploy whose entire red presence died
+    with "No route to host").
     """
-    path = (Path(comp_dir) / ".realm-c2-config.yaml").resolve()
-    path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
-    return path
+    import badauto_config_ops
+    return badauto_config_ops.write_config(comp_dir, cfg)
 
 
-def prepare_local_c2(comp_dir, red_ip):
+def prepare_local_c2(comp_dir, red_ip, red_vmid=None):
     """(config_path, realm_block) for a local-C2 deploy, or (None, None).
 
-    Called from plant_assume_breach BEFORE `badauto deploy`, because the engine
-    DNAT bakes in `realm.c2_ip` at deploy time.
-
-    The derived config also carries `deploy.engine_ip`: `badauto deploy` needs the
-    scoring engine's address to install the DNAT, and its own fallback reads
-    `<comp_dir>/credentials.txt` — which only works when that path is absolute
-    (see red_plant_ops._deploy_red). Setting it here makes the deployed config
-    self-sufficient.
+    Called from plant_assume_breach AFTER it has written the comp's base config
+    and BEFORE `badauto deploy`, because the engine DNAT bakes in
+    `realm.c2_ip` at deploy time. The layer is applied to the comp's own file,
+    so the base identity (competition_dir, red_vmid, engine_ip) survives.
 
     Raises ValueError when the synthesized block is STILL incomplete (no
     teams.json to derive callback_ip from): deploying it would plant dead
     beacons under a "tavern live" banner, so the caller refuses loudly instead.
     """
-    if not (BAD_AUTO / "config.yaml").exists():
-        print("  realm-c2: no bad-auto config.yaml — C2 stays on its configured host")
-        return None, None
     cfg = build_local_c2_config(red_ip, comp_dir=comp_dir)
     if cfg is None:
-        print("  realm-c2: realm disabled in bad-auto config — no tavern to provision")
+        print("  realm-c2: no comp config or realm disabled — no tavern to provision")
         return None, None
+    if red_vmid is not None:
+        cfg.setdefault("deploy", {})["red_vmid"] = red_vmid
     engine_ip = engine_ip_for(comp_dir)
     if engine_ip and not (cfg.get("deploy") or {}).get("engine_ip"):
         cfg.setdefault("deploy", {})["engine_ip"] = engine_ip

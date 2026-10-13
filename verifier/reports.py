@@ -10,7 +10,7 @@ from verifier.model import CheckError
 
 
 def report_healthcheck_status(ctx):
-    """Report range-healthcheck.timer status (informational, not gate)."""
+# Report range-healthcheck.timer status (informational, not gate).
     try:
         proc = context.ssh_to_engine(
             ctx,
@@ -36,16 +36,15 @@ def report_healthcheck_status(ctx):
 
 
 def report_beacons(ctx, machines):
-    """Report planted raw-socket beacons (informational, not a gate).
-
-    One SSH per Linux box, 30s timeout each; a 4-team x 5-box range is ~20 boxes, i.e.
-    up to 10 minutes of sequential waiting for an informational line. The boxes are
-    independent and the hop is the engine's ControlMaster-multiplexed channel
-    (MaxSessions raised to 64 — utils.run_concurrent's docstring), so it runs on the
-    full MAX_CONCURRENCY pool: pure SSH, no Proxmox task, no datastore write. Prints
-    stay in the workers under PRINT_LOCK (house pattern: domain_ops/hardening_ops);
-    only the informational line order can vary, never a verdict.
-    """
+# Report planted raw-socket beacons (informational, not a gate).
+#
+#     One SSH per Linux box, 30s timeout each; a 4-team x 5-box range is ~20 boxes, i.e.
+#     up to 10 minutes of sequential waiting for an informational line. The boxes are
+#     independent and the hop is the engine's ControlMaster-multiplexed channel
+#     (MaxSessions raised to 64 — utils.run_concurrent's docstring), so it runs on the
+#     full MAX_CONCURRENCY pool: pure SSH, no Proxmox task, no datastore write. Prints
+#     stay in the workers under PRINT_LOCK (house pattern: domain_ops/hardening_ops);
+#     only the informational line order can vary, never a verdict.
     print("\n  (team beacons — informational)")
     linux = [m for m in machines or [] if is_linux_box(m)]
     expected = len(linux)

@@ -3,7 +3,7 @@
 import os
 
 from constants import MAX_BOXES_PER_TEAM
-from pve_api import proxmox_request
+from infra.client import proxmox_api_for
 from utils import (BOX_USERNAME_DEFAULT, CREDLIST_USERNAMES_DEFAULT, is_legacy_account_name,
                    valid_unix_username)
 
@@ -12,14 +12,9 @@ def list_proxmox_templates():
     endpoint = os.environ["TF_VAR_proxmox_endpoint"].rstrip("/")
     scoring_template_id = int(os.environ["TF_VAR_template_vm_id"])
     try:
-        r = proxmox_request(
-            "GET", f"{endpoint}/api2/json/cluster/resources",
-            params={"type": "vm"},
-            headers={"Authorization": f"PVEAPIToken={os.environ['TF_VAR_proxmox_api_token']}"},
-            timeout=10,
-        )
-        r.raise_for_status()
-        vms = r.json()["data"]
+        vms = proxmox_api_for(endpoint, os.environ["TF_VAR_proxmox_api_token"],
+                              "GET", "/cluster/resources", params={"type": "vm"},
+                              timeout=10)["data"]
     except Exception as e:
         print(f"  (couldn't list Proxmox templates: {e})")
         return []
@@ -32,7 +27,7 @@ def list_proxmox_templates():
 
 
 def _prompt_int(prompt, default):
-    """int(input()) with a default on blank and a re-prompt (not a crash) on non-numeric input."""
+# int(input()) with a default on blank and a re-prompt (not a crash) on non-numeric input.
     while True:
         raw = input(prompt).strip()
         if not raw:
@@ -44,7 +39,7 @@ def _prompt_int(prompt, default):
 
 
 def _prompt_difficulty():
-    """Difficulty prompt that re-asks on non-numeric/out-of-range input instead of crashing."""
+# Difficulty prompt that re-asks on non-numeric/out-of-range input instead of crashing.
     while True:
         raw = input("Difficulty (1-10): ").strip()
         try:
@@ -58,7 +53,7 @@ def _prompt_difficulty():
 
 
 def _prompt_optional_int(prompt):
-    """Like _prompt_int, but blank means None (no default) instead of a fallback value."""
+# Like _prompt_int, but blank means None (no default) instead of a fallback value.
     while True:
         raw = input(prompt).strip()
         if not raw:
@@ -135,7 +130,7 @@ def collect_boxes():
 
 
 def collect_users_config(box_username_flag=None, credlist_flag=None):
-    """Collect themeable box login + 3 credlist usernames; defaults when blank, always writes users.json."""
+# Collect themeable box login + 3 credlist usernames; defaults when blank, always writes users.json.
 
     if box_username_flag is not None:
         box_username = box_username_flag.strip() or BOX_USERNAME_DEFAULT

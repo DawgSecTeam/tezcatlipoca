@@ -4,7 +4,7 @@ import re
 import shlex
 import time
 
-from range_ops import proxmox_api
+from infra.client import proxmox_api
 from ssh_ops import ssh_via_gateway
 from utils import record_degradation
 
@@ -12,14 +12,10 @@ from utils import record_degradation
 _SIZE_TO_GB = {"": 1 / 1024 ** 3, "K": 1 / 1024 ** 2, "M": 1 / 1024, "G": 1, "T": 1024}
 
 
+# Parsed from the config because the clone inherits the template's size verbatim —
+# there is no other record of it (svc-matrix: the 15 GB ubuntu template disk filled
+# mid-plant on splunk's .deb unpack while team clones got their terraform disk_gb).
 def _root_disk_gb(cfg, vmid):
-    """(config key, size in GB) of the clone's root disk, or (None, 0).
-
-    The bus varies per base template (scsi0 on the -fix images); cdrom and
-    cloud-init entries are not disks. Parsed from the config because the
-    clone inherits the template's size verbatim — there is no other record
-    of it (svc-matrix: the 15 GB ubuntu template disk filled mid-plant on
-    splunk's .deb unpack while team clones got their terraform disk_gb)."""
     for key in sorted(k for k in cfg
                       if k.startswith(("scsi", "virtio", "sata", "ide"))):
         val = cfg[key]
@@ -31,15 +27,13 @@ def _root_disk_gb(cfg, vmid):
     return None, 0
 
 
+# Golden clones inherit the base template's disk verbatim (terraform only sizes the
+# team clones), so a big plant payload (splunk) can fill the template-sized disk
+# mid-golden-build. Grow-only — a shrink would destroy data — and before start_vm.
+# Guest-side expansion is a separate post-boot step (expand_guest_root_disks):
+# cloud-init only grows a plain partition+fs, so LVM layouts need
+# growpart + pvresize + lvextend + resize2fs.
 def ensure_golden_disk_size(node, vmid, disk_gb):
-    """Grow the golden clone's root disk to the box's disk_gb BEFORE first boot.
-
-    Golden clones inherit the base template's disk verbatim (terraform only
-    sizes the team clones), so a big plant payload (splunk) can fill the
-    template-sized disk mid-golden-build. Grow-only — a shrink would destroy
-    data — and before start_vm. Guest-side expansion is a separate post-boot
-    step (expand_guest_root_disks): cloud-init only grows a plain partition+fs,
-    so LVM layouts need growpart + pvresize + lvextend + resize2fs."""
     if not disk_gb:
         return
     cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
@@ -54,16 +48,14 @@ def ensure_golden_disk_size(node, vmid, disk_gb):
     print(f"    golden {vmid}: {key} grown {cur_gb}G -> {disk_gb}G")
 
 
+# Guest-side companion to ensure_golden_disk_size: cloud-init only expands a PLAIN
+# partition+fs on first boot — LVM layouts (ubuntu cloud images) keep their original
+# root LV, and btrfs layouts (default on Fedora cloud images — live-found 2026-09-29:
+# findmnt reports '/dev/sda3[/root]', whose bracketed subvolume suffix broke the
+# partition-digit parse AND resize2fs can't grow btrfs) need their own grow. Boxes
+# without growpart (Alpine) are skipped. Windows goldens are out of scope (they boot
+# at their template's own size).
 def expand_guest_root_disks(targets, ctx):
-    """Guest-side companion to ensure_golden_disk_size: cloud-init only expands a
-    PLAIN partition+fs on first boot — LVM layouts (ubuntu cloud images) keep their
-    original root LV, and btrfs layouts (default on Fedora cloud images — live-found
-    2026-09-29: findmnt reports '/dev/sda3[/root]', whose bracketed subvolume suffix
-    broke the partition-digit parse AND resize2fs can't grow btrfs) need their own
-    grow. growpart + pvresize + lvextend / btrfs resize / xfs_growfs / resize2fs
-    after first boot; every step no-ops when there is nothing to grow, and boxes
-    without growpart (Alpine) are skipped. Windows goldens are out of scope (they
-    boot at their template's own size)."""
     script = (
         "command -v growpart >/dev/null || { echo 'growpart unavailable - skipping'; exit 0; }; "
         "set -e; "

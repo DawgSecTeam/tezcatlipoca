@@ -140,9 +140,8 @@ class CheckArgs(unittest.TestCase):
             portal_ops.check_portal(lambda cmd: (1, "Traceback"), "probe", TEAMS, "pw", _config())
 
 
+# deploy_portal is opt-in and must never fail the deploy
 class DeployHook(unittest.TestCase):
-    """deploy_portal is opt-in and must never fail the deploy."""
-
     def _ctx(self, d, compfile):
         (d / "Compfile").write_text(compfile)
         saved = []

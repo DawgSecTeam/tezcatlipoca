@@ -9,12 +9,12 @@ from timing import timed
 
 
 def phase8_seed(ctx):
-    """[8/8] Seed teams, unpause the engine, create injects — each once.
-
-    None of the three POSTs is idempotent, so each is guarded by its own state
-    flag: a resume in the crash window between a POST and the flag-save must not
-    repeat it. The unpause window is the one that asks the engine first
-    (engine_paused) because a re-POST there is the visible failure mode."""
+# [8/8] Seed teams, unpause the engine, create injects — each once.
+#
+#     None of the three POSTs is idempotent, so each is guarded by its own state
+#     flag: a resume in the crash window between a POST and the flag-save must not
+#     repeat it. The unpause window is the one that asks the engine first
+#     (engine_paused) because a re-POST there is the visible failure mode.
     if ctx.from_phase > 8:
         print("[8/8] Skipped (resume).")
         return

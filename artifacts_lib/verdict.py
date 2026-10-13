@@ -13,12 +13,12 @@ _VERDICT_SECTION = re.compile(r"^## Verdict\s*$(.*?)(?=^## |\Z)", re.M | re.S)
 
 
 def ingest_verdict(test_path, *, source="evidence/harness/INTERACTION.md"):
-    """Fold scrim-report.py's verdict into test.json's machine verdict.
-
-    Parsed rather than recomputed on purpose: scrim-report.py owns the interaction score and the
-    docs/rehearsal-gates.md gate table, and a second implementation here would drift from it.
-    Tolerant of a missing/partial file (returns {} and leaves the manifest alone) because
-    INTERACTION.md is produced by a best-effort step."""
+# Fold scrim-report.py's verdict into test.json's machine verdict.
+#
+#     Parsed rather than recomputed on purpose: scrim-report.py owns the interaction score and the
+#     docs/rehearsal-gates.md gate table, and a second implementation here would drift from it.
+#     Tolerant of a missing/partial file (returns {} and leaves the manifest alone) because
+#     INTERACTION.md is produced by a best-effort step.
     test_path = Path(test_path)
     path = test_path / source
     if not path.exists():
@@ -48,7 +48,7 @@ def ingest_verdict(test_path, *, source="evidence/harness/INTERACTION.md"):
 
 
 def verdict_block(test_path):
-    """The machine verdict, lifted verbatim from INTERACTION.md's `## Verdict` section."""
+# The machine verdict, lifted verbatim from INTERACTION.md's `## Verdict` section.
     interaction = Path(test_path) / "evidence" / "harness" / "INTERACTION.md"
     if not interaction.exists():
         return None
@@ -58,10 +58,10 @@ def verdict_block(test_path):
 
 
 def ensure_verdict(test_path, *, echo=print, dry_run=False):
-    """Run scrim-report.py when it has not run, then fold its verdict into the manifest.
-
-    Best-effort throughout: a missing verdict downgrades REPORT.md to "no machine verdict was
-    captured", which is honest, while a raise here would cost the operator a teardown."""
+# Run scrim-report.py when it has not run, then fold its verdict into the manifest.
+#
+#     Best-effort throughout: a missing verdict downgrades REPORT.md to "no machine verdict was
+#     captured", which is honest, while a raise here would cost the operator a teardown.
     test_path = Path(test_path)
     interaction = test_path / "evidence" / "harness" / "INTERACTION.md"
     run_dir = resolve_recorded((load_manifest(test_path).get("paths") or {}).get("run_dir"),

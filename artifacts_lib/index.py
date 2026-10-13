@@ -14,10 +14,10 @@ from .status import warn_summary
 
 
 def update_index(comp_dir):
-    """Rewrite `<comp>/.automated-tests/index.json` from the test folders on disk.
-
-    Derived, never authoritative: it can always be rebuilt, so a stale index is a cosmetic
-    problem rather than a data-loss one."""
+# Rewrite `<comp>/.automated-tests/index.json` from the test folders on disk.
+#
+#     Derived, never authoritative: it can always be rebuilt, so a stale index is a cosmetic
+#     problem rather than a data-loss one.
     root = artifacts_root(comp_dir)
     rows = []
     if root.is_dir():
@@ -48,7 +48,7 @@ def update_index(comp_dir):
 
 
 def list_tests(comp_dir):
-    """Index rows, rebuilding the index when it is missing or unreadable."""
+# Index rows, rebuilding the index when it is missing or unreadable.
     index = artifacts_root(comp_dir) / INDEX_NAME
     if not index.exists():
         update_index(comp_dir)

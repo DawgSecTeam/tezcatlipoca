@@ -19,6 +19,8 @@ import time
 import requests
 import urllib3
 
+from infra import client as infra
+
 urllib3.disable_warnings()
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -116,11 +118,10 @@ def sample_node150(stop, interval):
 
 
 def api(path, token, params=None):
-    h = {"Authorization": "PVEAPIToken=" + token}
-    r = requests.get(f"https://10.0.0.193:8006/api2/json{path}", headers=h,
-                     params=params, verify=False, timeout=10)
-    r.raise_for_status()
-    return r.json()["data"]
+# Best-effort sampling: a single attempt (no retry) so a failed probe is recorded
+# as an error line, not a stall in the sampler loop.
+    return infra.proxmox_api_for("https://10.0.0.193:8006", token, "GET", path,
+                                 params=params, timeout=10)["data"]
 
 
 def sample_node193(stop, interval):
@@ -158,10 +159,8 @@ def census(stop, interval):
         for name, ep, tok in (("hdd-150", "https://10.0.0.150:8006", tok150),
                               ("zfs-193", "https://10.0.0.193:8006", tok193)):
             try:
-                h = {"Authorization": "PVEAPIToken=" + tok}
-                d = requests.get(f"{ep}/api2/json/cluster/resources",
-                                 headers=h, params={"type": "vm"}, verify=False,
-                                 timeout=10).json()["data"]
+                d = infra.proxmox_api_for(ep, tok, "GET", "/cluster/resources",
+                                          params={"type": "vm"}, timeout=10)["data"]
                 rec["nodes"][name] = [
                     {"vmid": v["vmid"], "name": v.get("name"), "status": v["status"],
                      "template": bool(v.get("template"))}

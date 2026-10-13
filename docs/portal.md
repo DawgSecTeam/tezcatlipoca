@@ -47,10 +47,10 @@ student ─HTTPS─► Cloudflare (stable hostname) ─tunnel─► cloudflared 
 | Service (auth, broker, routes) | `portal/` (`app.py`, `auth.py`, `console.py`, `Dockerfile`, `compose.yaml`) |
 | UI | `portal/frontend/`: React + Vite + Tailwind, the management UI's stack and design (see [Frontend](#frontend)) |
 | Deploy side (config, push, compose, probe, teardown) | `portal_ops.py` |
-| Per-comp console token | `pve_console_ops.py` |
+| Per-comp console token | `infra/console.py` |
 | Phase hook | end of `deploy_lib/phases/seed.py` (phase 8) |
 | Verify gate | `verifier/portal.py` (gate name `portal`) |
-| Preflight (advisory) | `preflight/portal.py` |
+| Preflight (advisory) | `infra/gates.py` (portal checks) |
 | Operator CLI | `portal-access.py` |
 
 ### Logins never touch Quotient
@@ -93,7 +93,7 @@ Tests pin all of this, including the cross-team refusals (`tests/test_portal_app
 
 ### The console token (per competition, console-only)
 
-`pve_console_ops` mints one set per node the teams live on:
+`infra.console` mints one set per node the teams live on:
 
 | Object | Value |
 |---|---|
@@ -251,7 +251,7 @@ fails when either side drifts, and also when the shared dependency versions drif
   - an admin login;
   - per node, one console relayed far enough to read the `RFB 003.` greeting;
   - that relay id refused on reuse.
-- Offline: `tests/test_portal_*.py` and `tests/test_pve_console_ops.py`.
+- Offline: `tests/test_portal_*.py` and `tests/test_infra_console.py`.
 - On 2026-10-08 the probe script was also run against a real uvicorn portal (with a fake PVE
   upstream). The image was built from the exact shipped bundle and smoke-run under podman, and
   every view was rendered in headless Chromium in both themes. None of that touched a Proxmox

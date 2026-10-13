@@ -3,17 +3,17 @@
 import time
 
 from constants import WINDOWS_ADMIN_USER
-from range_ops import guest_agent_exec_windows, wait_for_guest_agent
+from infra.guest_exec import guest_agent_exec_windows, wait_for_guest_agent
 
 
 def is_windows_template(template_name):
-    """The single definition of the "win" rule (audit 2026-10-02).
-
-    nakon's machine routing, ssh_ops' gateway auth choice, golden_ops/deploy's target
-    split and redeploy's box_platform all classify the same free-text template name, and
-    a divergence builds the wrong OS path for a box. There used to be three copies
-    (here, ssh_ops, nakon_ops) plus nakon's private alias, with nothing enforcing that
-    they agreed; callers import this one instead."""
+# The single definition of the "win" rule (audit 2026-10-02).
+#
+#     nakon's machine routing, ssh_ops' gateway auth choice, golden_ops/deploy's target
+#     split and redeploy's box_platform all classify the same free-text template name, and
+#     a divergence builds the wrong OS path for a box. There used to be three copies
+#     (here, ssh_ops, nakon_ops) plus nakon's private alias, with nothing enforcing that
+#     they agreed; callers import this one instead.
     return "win" in template_name.lower()
 
 
@@ -40,21 +40,21 @@ AGENT_PROBE_CAP = 60
 
 
 def _bounded(timeout, remaining):
-    """Min(desired timeout, deadline remainder, poll cap), never below 1 s.
-
-    The point is that no single agent call may outlive the loop that is waiting on it:
-    whichever of the three is smallest wins."""
+# Min(desired timeout, deadline remainder, poll cap), never below 1 s.
+#
+#     The point is that no single agent call may outlive the loop that is waiting on it:
+#     whichever of the three is smallest wins.
     return max(1, min(timeout, AGENT_POLL_CAP, int(remaining)))
 
 
 def _wait_for_windows_setup_complete(node, vmid, deadline):
-    """Wait out a sysprepped image's first boot (specialize -> reboot -> OOBE).
-
-    The agent answers during specialize, but the box reboots (and renames itself)
-    minutes later — anything applied before that races the reboot. Live-found on the
-    golden path (winad-testrun 2026-09-25: exec timed out ~370s in, reboot at ~470s,
-    settled ~520s). A longer exec timeout alone still races the reboot; wait for the
-    image to actually report complete."""
+# Wait out a sysprepped image's first boot (specialize -> reboot -> OOBE).
+#
+#     The agent answers during specialize, but the box reboots (and renames itself)
+#     minutes later — anything applied before that races the reboot. Live-found on the
+#     golden path (winad-testrun 2026-09-25: exec timed out ~370s in, reboot at ~470s,
+#     settled ~520s). A longer exec timeout alone still races the reboot; wait for the
+#     image to actually report complete.
     while time.time() < deadline:
         remaining = deadline - time.time()
         if wait_for_guest_agent(node, vmid, timeout=_bounded(AGENT_POLL_CAP, remaining)):
@@ -71,16 +71,16 @@ def _wait_for_windows_setup_complete(node, vmid, deadline):
 
 
 def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, timeout=1800):
-    """Post-clone Windows setup (IP/gateway/DNS, admin password, sshd) via the QEMU guest agent.
-
-    `timeout` is the budget for the image's first boot (see
-    `_wait_for_windows_setup_complete`), and 1800 s is the value the golden-build path
-    (`golden_ops`) has always passed. The post-clone path used to take the 900 s default:
-    on a loaded range node a fresh DC clone — its golden is deliberately unbooted, so the
-    clone runs the whole specialize+OOBE itself — is IO-bound for far longer than that
-    (live 2026-10-08: ~1.5 MB/s disk reads, ~0% CPU, still incomplete at 900 s), and the
-    hard-cycle that follows throws the partial progress away and starts over. Give it the
-    same window the golden path gets."""
+# Post-clone Windows setup (IP/gateway/DNS, admin password, sshd) via the QEMU guest agent.
+#
+#     `timeout` is the budget for the image's first boot (see
+#     `_wait_for_windows_setup_complete`), and 1800 s is the value the golden-build path
+#     (`golden_ops`) has always passed. The post-clone path used to take the 900 s default:
+#     on a loaded range node a fresh DC clone — its golden is deliberately unbooted, so the
+#     clone runs the whole specialize+OOBE itself — is IO-bound for far longer than that
+#     (live 2026-10-08: ~1.5 MB/s disk reads, ~0% CPU, still incomplete at 900 s), and the
+#     hard-cycle that follows throws the partial progress away and starts over. Give it the
+#     same window the golden path gets.
     deadline = time.time() + timeout
     if not _wait_for_windows_setup_complete(node, vmid, deadline):
         # A clone's first boot can deadlock pre-specialize at IDLE cpu with no agent
@@ -88,7 +88,7 @@ def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, t
         # snapshot-rollback re-boot; a forced stop/start cleared it and specialize
         # then completed). Hard-cycle once and re-wait within the same budget —
         # the physical-power-cycle remedy from environment-facts, automated.
-        from range_ops import stop_vm, start_vm
+        from infra.lifecycle import start_vm, stop_vm
         print(f"    vmid {vmid}: setup wait expired with no agent — hard-cycling once")
         stop_vm(node, vmid)
         time.sleep(3)
@@ -150,7 +150,7 @@ Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMod
 
 
 def dns_repoint_windows_box(node, vmid, dns_server, timeout=60):
-    """Point Windows DNS at the team's DC before domain join."""
+# Point Windows DNS at the team's DC before domain join.
     ps_script = f"""
 $ErrorActionPreference = 'Stop'
 $adapter = Get-NetAdapter | Where-Object {{ $_.Status -eq 'Up' }} | Select-Object -First 1
@@ -163,13 +163,13 @@ Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses '{d
 
 
 def wait_for_adws(node, vmid, timeout=900):
-    """Wait until the AD cmdlets work on a freshly promoted DC (ADWS up), returning the
-    DomainSID string, or None on timeout. Never raises.
-
-    sshd comes back well before Active Directory Web Services after the promotion
-    reboot; AD-flavored plants run in that window died with ADServerDownException
-    (winad-testrun 2026-09-25: svc-support never created, silently — the AD misconfig
-    pass is non-strict and outside nakon-config.json's coverage)."""
+# Wait until the AD cmdlets work on a freshly promoted DC (ADWS up), returning the
+#     DomainSID string, or None on timeout. Never raises.
+#
+#     sshd comes back well before Active Directory Web Services after the promotion
+#     reboot; AD-flavored plants run in that window died with ADServerDownException
+#     (winad-testrun 2026-09-25: svc-support never created, silently — the AD misconfig
+#     pass is non-strict and outside nakon-config.json's coverage).
     deadline = time.time() + timeout
     errors = 0
     while time.time() < deadline:
@@ -193,7 +193,7 @@ def wait_for_adws(node, vmid, timeout=900):
 
 
 def wait_for_windows_sshd(node, vmid, timeout=180):
-    """Wait for sshd Running via guest agent (agent up doesn't guarantee sshd up after ADDS reboot). Never raises."""
+# Wait for sshd Running via guest agent (agent up doesn't guarantee sshd up after ADDS reboot). Never raises.
 
     deadline = time.time() + timeout
     errors = 0
@@ -214,11 +214,11 @@ def wait_for_windows_sshd(node, vmid, timeout=180):
 
 
 def wait_for_dc_dns(node, dc_vmid, domain, dc_ip, timeout=300):
-    """Poll DC DNS until it serves domain SRV records (DNS may lag guest-agent). Never raises.
-
-    Agent errors don't consume the budget alongside real probes — a DC whose
-    agent never answers at all gets its own diagnosis, so 'DNS not up yet'
-    isn't confused with 'DC unreachable'."""
+# Poll DC DNS until it serves domain SRV records (DNS may lag guest-agent). Never raises.
+#
+#     Agent errors don't consume the budget alongside real probes — a DC whose
+#     agent never answers at all gets its own diagnosis, so 'DNS not up yet'
+#     isn't confused with 'DC unreachable'.
     record = f"_ldap._tcp.dc._msdcs.{domain}"
     deadline = time.time() + timeout
     probes = 0

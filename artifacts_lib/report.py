@@ -14,10 +14,10 @@ from .verdict import verdict_block
 
 
 def write_stub(test_path, side, status, reason, *, manifest=None):
-    """Write the honest placeholder for a canonical document we could not obtain.
-
-    An absent file is indistinguishable from a wiring bug; a stub naming the status and the
-    reason is not. That is the whole reason the three documents have fixed filenames."""
+# Write the honest placeholder for a canonical document we could not obtain.
+#
+#     An absent file is indistinguishable from a wiring bug; a stub naming the status and the
+#     reason is not. That is the whole reason the three documents have fixed filenames.
     manifest = manifest or load_manifest(test_path)
     filename = SIDES[side]
     run = manifest.get("run_id") or manifest.get("key") or "unknown-run"
@@ -48,7 +48,7 @@ def write_stub(test_path, side, status, reason, *, manifest=None):
 
 
 def timing_rows(test_path):
-    """(per-phase totals, slowest ops) from the timing sidecar, when it was captured."""
+# (per-phase totals, slowest ops) from the timing sidecar, when it was captured.
     path = Path(test_path) / "evidence" / "harness" / ".deploy-timings.jsonl"
     if not path.exists():
         path = Path(test_path) / "evidence" / "harness" / "deploy-timings.jsonl"
@@ -69,11 +69,11 @@ def timing_rows(test_path):
 
 
 def render_report_skeleton(test_path):
-    """The synthesis document, with every machine section filled and judgement marked.
-
-    Deliberately does NOT invent a success metric: the interaction score and the
-    docs/rehearsal-gates.md table are the definition (scrim-report.py evaluates them), and a
-    second opinion computed here would drift from them."""
+# The synthesis document, with every machine section filled and judgement marked.
+#
+#     Deliberately does NOT invent a success metric: the interaction score and the
+#     docs/rehearsal-gates.md table are the definition (scrim-report.py evaluates them), and a
+#     second opinion computed here would drift from them.
     test_path = Path(test_path)
     manifest = load_manifest(test_path)
     collection = load_collection(test_path)
@@ -216,11 +216,11 @@ def render_report_skeleton(test_path):
 
 
 def write_report_skeleton(test_path, *, force=False):
-    """Write REPORT.md, never clobbering an authored one.
-
-    A second teardown run must not destroy the write-up somebody did after the first: that would
-    teach people to avoid re-running teardown, which is the one thing they must be willing to do
-    (destroy-competition.py's own failure path says "re-run this command")."""
+# Write REPORT.md, never clobbering an authored one.
+#
+#     A second teardown run must not destroy the write-up somebody did after the first: that would
+#     teach people to avoid re-running teardown, which is the one thing they must be willing to do
+#     (destroy-competition.py's own failure path says "re-run this command").
     test_path = Path(test_path)
     path = test_path / REPORT_NAME
     manifest = load_manifest(test_path)

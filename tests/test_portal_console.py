@@ -77,9 +77,8 @@ class MintAndTake(unittest.TestCase):
                               "vncwebsocket?port=5901&vncticket=PVEVNC%3Aabc%2B%2F%3D")
 
 
+# Starlette-WebSocket-shaped browser side
 class FakeClient:
-    """Starlette-WebSocket-shaped browser side."""
-
     def __init__(self, incoming):
         self.incoming = list(incoming)
         self.sent = []

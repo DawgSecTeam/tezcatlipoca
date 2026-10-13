@@ -3,7 +3,6 @@ from pathlib import Path
 
 
 def down_windows(snaps):
-    """Per team: restorations, ttrs (min), down-minutes, max simultaneous down."""
     if not snaps:
         return None
     teams = sorted({t for _, teams in snaps for t in teams})
@@ -99,17 +98,13 @@ def blue_metrics(run_dir):
 _SUB_FILE_RE = re.compile(r"^sub(?:-?\d+|-[\w.-]+)?\.(?:md|txt)$", re.IGNORECASE)
 
 
+# scale8-soak-2026-10-02 reported "injects submitted: 0" and scored the blue inject gate
+# FAIL while the run had really submitted them: the teams wrote `sub.md`, `sub7.md` …
+# `sub12.md` at the team directory root, and the counter only matched `sub-*.md` or files
+# inside `submissions/` — a gate that reports zero because of a filename fails a team for
+# something it did. Both shapes count, and `submissions/` still counts whatever is in it
+# (agents that follow the documented path must not be penalised either).
 def count_inject_submissions(team_dir):
-    """How many inject deliverables this team produced.
-
-    scale8-soak-2026-10-02 reported "injects submitted: 0" and scored the blue inject gate
-    FAIL while the run had really submitted them: the teams wrote `sub.md`, `sub7.md` …
-    `sub12.md` at the team directory root, and the counter only matched `sub-*.md` or files
-    inside `submissions/`. A gate that reports zero because of a filename is worse than no
-    gate — it fails a team for something it did.
-
-    Both shapes count, and the `submissions/` directory still counts whatever is in it
-    (agents that follow the documented path must not be penalised either)."""
     found = {p for p in team_dir.glob("sub*") if p.is_file() and _SUB_FILE_RE.match(p.name)}
     subs = team_dir / "submissions"
     if subs.is_dir():

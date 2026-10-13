@@ -10,14 +10,14 @@ from ssh_ops import engine_ssh_opts
 
 
 def read_event_conf(ctx):
-    """Pull the engine-authoritative secrets: /opt/quotient/config/event.conf
-    (TOML), the linux credlist, and /opt/quotient/.env.
-
-    The engine is the source of truth after any re-bootstrap or partially
-    applied seed — .deploy_state.json can drift, these files cannot (the
-    scrim-dress-2026-09-20 credential-drift incident). box_password itself is
-    baked into the boxes at bootstrap and lives nowhere on the engine, so it
-    is NOT recoverable here."""
+# Pull the engine-authoritative secrets: /opt/quotient/config/event.conf
+#     (TOML), the linux credlist, and /opt/quotient/.env.
+#
+#     The engine is the source of truth after any re-bootstrap or partially
+#     applied seed — .deploy_state.json can drift, these files cannot (the
+#     scrim-dress-2026-09-20 credential-drift incident). box_password itself is
+#     baked into the boxes at bootstrap and lives nowhere on the engine, so it
+#     is NOT recoverable here.
     import tomllib
 
     key = ctx["ssh_key_path"]
@@ -85,12 +85,12 @@ def read_event_conf(ctx):
 def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
                     postgres_password, redis_password, box_creds, inject_password=None,
                     extra_credlists=None, scoring_password=None):
-    """Build event.conf and push it to the scoring engine with the per-run secrets.
-
-    extra_credlists maps additional credlist names to {user: pw} (packet dual-credit's
-    domain.credlist); each is pushed as <name>.credlist next to linux.credlist and must
-    be referenced by some check's credlist override so build_event_conf declares it in
-    CredlistSettings."""
+# Build event.conf and push it to the scoring engine with the per-run secrets.
+#
+#     extra_credlists maps additional credlist names to {user: pw} (packet dual-credit's
+#     domain.credlist); each is pushed as <name>.credlist next to linux.credlist and must
+#     be referenced by some check's credlist override so build_event_conf declares it in
+#     CredlistSettings.
 
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]

@@ -22,17 +22,13 @@ _llm_watch = {}
 
 
 def alerts_path(run_dir):
-    """Run-dir alert journal (jsonl) that scrim-report.py surfaces."""
     return Path(run_dir) / "evidence" / ALERTS_FILENAME
 
 
+# durable because a lone log() line was the entire record of red spending an event
+# LLM-less (dress rehearsal): stdout scrolls away and the post-hoc report never reads
+# it; alerts land in the run dir where the report can count and print them
 def write_alert(run_dir, kind, detail, **fields):
-    """Append one durable, 0600 alert line; returns the record.
-
-    A lone log() line was the entire record that red spent an event LLM-less (the
-    dress rehearsal), because stdout scrolls away and the post-hoc report never reads
-    it. Alerts land in the run dir, where the report can count and print them.
-    """
     path = alerts_path(run_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     rec = {"ts": core.now_iso(), "kind": kind, "detail": detail,
@@ -43,13 +39,10 @@ def write_alert(run_dir, kind, detail, **fields):
     return rec
 
 
+# only a run with a managed reverse tunnel is rescuable here: with a direct (openrouter)
+# endpoint the path is red01's own egress, there is nothing local to respawn — say so
+# instead of pretending to have acted
 def restart_red_llm_tunnel(args):
-    """Make ONE rescue attempt on the red-side LLM path; returns a detail string.
-
-    Only a run with a managed reverse tunnel can be rescued from here: with a direct
-    (openrouter) endpoint the path is red01's own egress and there is nothing local to
-    respawn — say so instead of pretending to have acted.
-    """
     tunnel = getattr(args, "red_tunnel", None)
     if not hasattr(tunnel, "restart"):
         return ("no managed reverse tunnel for this endpoint (red egresses directly) — "
@@ -61,17 +54,10 @@ def restart_red_llm_tunnel(args):
     return f"reverse tunnel respawned (red01 localhost:{tunnel.remote_port})"
 
 
+# per-endpoint hysteresis: a single blip only logs, RED_LLM_FAIL_THRESHOLD consecutive
+# failures trigger ONE tunnel restart + a durable alert, and recovery clears the episode
+# so a later outage can be rescued again
 def red_llm_watch(args, t_plus):
-    """In-event from-red01 LLM probe: per-endpoint hysteresis plus one rescue per episode.
-
-    The old watcher tracked a single module-global timestamp with no endpoint key and no
-    failure count, so it printed one line and never acted — red continued blind for the
-    rest of the event (the exact failure the RedTunnel docstring records as having cost a
-    dress rehearsal). Here each endpoint carries (first_failure, consecutive_failures,
-    restarted): a single blip only logs, RED_LLM_FAIL_THRESHOLD consecutive failures
-    trigger ONE tunnel restart and a durable alert, and recovery clears the episode so a
-    later outage can be rescued again.
-    """
     url = red_link.red_llm_url(args)
     st = _llm_watch.setdefault(url, {"since": None, "failures": 0, "restarted": False})
     if red_link.check_red_llm(args, url):
