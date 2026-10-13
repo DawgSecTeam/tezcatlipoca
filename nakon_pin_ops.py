@@ -1,6 +1,7 @@
 """Pin/var validation and identity-var filling for nakon machine configs."""
 
 import json
+import re
 
 from constants import KNOWN_BROKEN_CONFIGS, REQUIRED_VARS
 
@@ -79,6 +80,34 @@ def _fill_identity_vars(machine, machines):
             else:
                 vars_[var] = _cross_box_ip(machines, machine["name"],
                                            str(kind).split(":", 1)[1])
+
+
+def _windows_password_error(username, password, fullname=""):
+    if not password:
+        return None
+    if len(password) < 8:
+        return "password must be at least 8 characters"
+    if sum(bool(re.search(pattern, password)) for pattern in (r"[A-Z]", r"[a-z]", r"\d", r"[^A-Za-z0-9]")) < 3:
+        return "password must contain at least three of uppercase, lowercase, digit, and symbol"
+    lowered = password.casefold()
+    if username and username.casefold() in lowered:
+        return "password must not contain the username"
+    for token in re.findall(r"[A-Za-z0-9]+", fullname or ""):
+        for i in range(len(token) - 2):
+            if token[i:i + 3].casefold() in lowered:
+                return "password must not contain three consecutive characters from the full name"
+    return None
+
+
+def _validate_windows_local_user_pins(configurations, where):
+    for c in configurations:
+        if not isinstance(c, dict) or c.get("name") != "local-user-win":
+            continue
+        vars_ = c.get("vars") or {}
+        reason = _windows_password_error(vars_.get("USERNAME", ""), vars_.get("PASSWORD", ""), vars_.get("FULLNAME", ""))
+        if reason:
+            raise SystemExit(
+                f"  ERROR: local-user-win on {where} for {vars_.get('USERNAME', '<unknown>')!r}: {reason}")
 
 
 def _validate_pin_vars(configurations, where):

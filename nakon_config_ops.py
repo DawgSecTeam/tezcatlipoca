@@ -29,6 +29,7 @@ from nakon_pin_ops import (
     _identity_banned_configs,
     _fill_identity_vars,
     _validate_pin_vars,
+    _validate_windows_local_user_pins,
     _validate_known_broken_pins,
     _drop_unplantable_bare,
 )
@@ -121,6 +122,7 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
         configs = list(services) + list(vulns) + list(baseline.get(box_name, []))
         where = f"pins for '{box_name}'"
         _validate_pin_vars(configs, where)
+        _validate_windows_local_user_pins(configs, where)
         reused_names = {_config_name(c) for c in configs} if reused else frozenset()
         _validate_known_broken_pins(configs, where, exempt=reused_names)
 

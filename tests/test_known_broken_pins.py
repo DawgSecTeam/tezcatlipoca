@@ -89,6 +89,22 @@ def _comp(tmp, vulns=None):
     return comp
 
 
+class WindowsLocalUserPasswordGate(unittest.TestCase):
+    def test_invalid_password_refused_before_machine_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = _comp(tmp, {"web01": [{"name": "local-user-win", "vars": {
+                "USERNAME": "svc_imaging", "PASSWORD": "Imaging2026!",
+                "FULLNAME": "Imaging Sync Service"}}]})
+            with self.assertRaisesRegex(SystemExit, "full name"):
+                nakon_ops.generate_nakon_config(TEAMS, BOXES, 1, comp, "pw")
+
+    def test_passwordless_pin_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = _comp(tmp, {"web01": [{"name": "local-user-win", "vars": {
+                "USERNAME": "audit_svc"}}]})
+            nakon_ops.generate_nakon_config(TEAMS, BOXES, 1, comp, "pw")
+
+
 class GenerateNakonConfigGate(unittest.TestCase):
     def test_recorded_pin_keeps_existing_competition_deployable(self):
         with tempfile.TemporaryDirectory() as tmp:

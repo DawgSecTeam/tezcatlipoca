@@ -17,6 +17,7 @@ from packet_ops import (build_baseline, compile_profile, load_profile, team_doma
 from quotient.setup import build_event_conf, expected_service_names
 import nakon_ops
 from domain_ops import team_domain
+from nakon_pin_ops import _windows_password_error
 
 PROFILE = """
 packet:
@@ -303,6 +304,15 @@ class BaselineAccounts(unittest.TestCase):
         self.assertNotEqual(pw(b1, "web01", "scorebot"), pw(b2, "web01", "scorebot"))
         # credlist users carry the PACKET password verbatim, not a decoy random
         self.assertEqual(pw(b1, "ftp01", "blueteam"), "n0t_sus1")
+
+    def test_generated_windows_decoys_pass_local_policy(self):
+        profile = load_profile(Path(_REPO) / "packets/cde-2026/packet.yaml")
+        for pins in build_baseline(profile).values():
+            for pin in pins:
+                if pin["name"] == "local-user-win":
+                    vars_ = pin["vars"]
+                    self.assertIsNone(_windows_password_error(
+                        vars_["USERNAME"], vars_["PASSWORD"], vars_.get("FULLNAME", "")))
 
 
 class DomainKnob(unittest.TestCase):

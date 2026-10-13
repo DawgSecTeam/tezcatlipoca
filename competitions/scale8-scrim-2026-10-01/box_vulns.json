@@ -12,7 +12,7 @@
       "name": "local-user-win",
       "vars": {
         "USERNAME": "svc_imaging",
-        "PASSWORD": "Imaging2026!",
+        "PASSWORD": "Xray!Ops2026",
         "FULLNAME": "Imaging Sync Service",
         "DESCRIPTION": "DICOM imaging sync agent",
         "ADMIN_ADD": "1",
@@ -165,7 +165,7 @@
       "name": "sensitive-file-win",
       "vars": {
         "FILE_PATH": "C:\\Users\\Public\\pharmacy-codes.txt",
-        "FILE_CONTENT": "narcotics cabinet master code 9902 -- audit log rotation paused -- pharmacy@meridian.local / Pharm2026!"
+        "FILE_CONTENT": "narcotics cabinet master code 9902 -- audit log rotation paused -- pharmacy@meridian.local / Counter#Ops2026"
       }
     },
     {
@@ -181,7 +181,7 @@
       "name": "local-user-win",
       "vars": {
         "USERNAME": "pharmacy",
-        "PASSWORD": "Pharm2026!",
+        "PASSWORD": "Counter#Ops2026",
         "FULLNAME": "Pharmacy Front Desk"
       }
     },
@@ -189,7 +189,7 @@
       "name": "local-user-win",
       "vars": {
         "USERNAME": "transit",
-        "PASSWORD": "Transit2026!",
+        "PASSWORD": "RouteDesk#2026",
         "FULLNAME": "Patient Transit Coordinator",
         "ADMIN_ADD": "1",
         "PASSWORD_NEVER_EXPIRES": "1"
@@ -244,7 +244,7 @@
       "name": "autologin-win",
       "vars": {
         "USERNAME": "pharmacy",
-        "PASSWORD": "Pharm2026!"
+        "PASSWORD": "Counter#Ops2026"
       }
     }
   ],
@@ -609,7 +609,7 @@
       "name": "local-user",
       "vars": {
         "USERNAME": "imaging-ops",
-        "PASSWORD": "Imaging2026!"
+        "PASSWORD": "Xray!Ops2026"
       }
     },
     {
@@ -713,7 +713,7 @@
       "name": "local-user",
       "vars": {
         "USERNAME": "imaging-ops",
-        "PASSWORD": "Imaging2026!",
+        "PASSWORD": "Xray!Ops2026",
         "GROUPS_ADD": "sudo"
       }
     },
@@ -898,7 +898,7 @@
       "name": "local-user",
       "vars": {
         "USERNAME": "imaging-ops",
-        "PASSWORD": "Imaging2026!"
+        "PASSWORD": "Xray!Ops2026"
       }
     },
     {

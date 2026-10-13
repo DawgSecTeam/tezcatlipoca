@@ -13,8 +13,8 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-from preflight import red01  # noqa: E402
-from preflight.plan import NodeShare, PreflightPlan, single_node_plan  # noqa: E402
+from infra import red01  # noqa: E402
+from infra.plan import NodeShare, PreflightPlan, single_node_plan  # noqa: E402
 
 BOXES = [{"name": "web01", "template": "t"}]
 TEAMS = {"team1": {"identifier": "130"}}
@@ -53,7 +53,7 @@ class VmidGate(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             comp = _comp(td, "assume_breach 1\n")
-            with patch("preflight.red01.proxmox_api",
+            with patch("infra.red01.proxmox_api",
                        return_value=self._marker_desc("other-comp")):
                 with self.assertRaises(SystemExit) as cm:
                     red01.red01_vmid_gate(_plan(comp, vms=[_vm(1470)]))
@@ -65,7 +65,7 @@ class VmidGate(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             comp = _comp(td, "assume_breach 1\n")
-            with patch("preflight.red01.proxmox_api", return_value={"data": {}}):
+            with patch("infra.red01.proxmox_api", return_value={"data": {}}):
                 with self.assertRaises(SystemExit) as cm:
                     red01.red01_vmid_gate(_plan(comp, vms=[_vm(1470)]))
             self.assertIn("NO bad-auto marker", str(cm.exception))
@@ -74,7 +74,7 @@ class VmidGate(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             comp = _comp(td, "assume_breach 1\n")
-            with patch("preflight.red01.proxmox_api",
+            with patch("infra.red01.proxmox_api",
                        return_value=self._marker_desc(comp.name)):
                 red01.red01_vmid_gate(_plan(comp, vms=[_vm(1470)], resuming=True))
 
@@ -84,7 +84,7 @@ class VmidGate(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             comp = _comp(td, "assume_breach 1\n")
-            with patch("preflight.red01.proxmox_api",
+            with patch("infra.red01.proxmox_api",
                        return_value=self._marker_desc(comp.name)):
                 with self.assertRaises(SystemExit):
                     red01.red01_vmid_gate(_plan(comp, vms=[_vm(1470)], resuming=False))
@@ -93,7 +93,7 @@ class VmidGate(unittest.TestCase):
 class IpGate(unittest.TestCase):
     def _scan(self, comp, addrs_by_vmid, resuming=False):
         vms = [_vm(v) for v in addrs_by_vmid]
-        with patch("preflight.red01.guest_ipv4s",
+        with patch("infra.red01.guest_ipv4s",
                    side_effect=lambda vm: addrs_by_vmid[vm["vmid"]]):
             red01.red01_ip_gate(_plan(comp, vms=vms, resuming=resuming))
 
@@ -120,8 +120,8 @@ class IpGate(unittest.TestCase):
     def test_unverifiable_default_ip_refused(self):
         import tempfile
         with tempfile.TemporaryDirectory() as td:
-            with patch("preflight.red01.guest_ipv4s", return_value=None), \
-                    patch("preflight.red01.proxmox_api", return_value={"data": {}}):
+            with patch("infra.red01.guest_ipv4s", return_value=None), \
+                    patch("infra.red01.proxmox_api", return_value={"data": {}}):
                 with self.assertRaises(SystemExit) as cm:
                     red01.red01_ip_gate(
                         _plan(_comp(td, "assume_breach 1\n"), vms=[_vm(100)]))
@@ -130,8 +130,8 @@ class IpGate(unittest.TestCase):
     def test_unverifiable_explicit_ip_warns_and_proceeds(self):
         import tempfile
         with tempfile.TemporaryDirectory() as td:
-            with patch("preflight.red01.guest_ipv4s", return_value=None), \
-                    patch("preflight.red01.proxmox_api", return_value={"data": {}}):
+            with patch("infra.red01.guest_ipv4s", return_value=None), \
+                    patch("infra.red01.proxmox_api", return_value={"data": {}}):
                 red01.red01_ip_gate(
                     _plan(_comp(td, "assume_breach 1\nred01_ip 10.9.9.9\n"),
                           vms=[_vm(100)], red01_ip="10.9.9.9"))

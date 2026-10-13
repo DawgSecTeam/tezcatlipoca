@@ -636,6 +636,8 @@ def run_preflight(plan):
                             plan.engine_mgmt_ip, ours_tags=plan.our_tags)
     if plan.placement:
         jump_mgmt_ip_gate(plan)
+    from infra.red01 import red01_gate
+    red01_gate(plan)
     catalog_gate(plan.comp_dir)
     warn_unpinned_boxes(plan.comp_dir, plan.boxes)
     portal_gate(plan.comp_dir, plan.placement)

@@ -12,7 +12,7 @@
       "name": "local-user-win",
       "vars": {
         "USERNAME": "svc_imaging",
-        "PASSWORD": "Imaging2026!",
+        "PASSWORD": "Xray!Ops2026",
         "FULLNAME": "Imaging Sync Service",
         "DESCRIPTION": "DICOM imaging sync agent",
         "ADMIN_ADD": "1",
@@ -31,7 +31,7 @@
       "name": "local-user-win",
       "vars": {
         "USERNAME": "wardclerk",
-        "PASSWORD": "Wardclerk2026!",
+        "PASSWORD": "NightDesk!2026",
         "FULLNAME": "Ward Clerk Station"
       }
     },
@@ -50,7 +50,7 @@
       "name": "autologin-win",
       "vars": {
         "USERNAME": "wardclerk",
-        "PASSWORD": "Wardclerk2026!"
+        "PASSWORD": "NightDesk!2026"
       }
     },
     {
@@ -126,7 +126,7 @@
       "name": "local-user-win",
       "vars": {
         "USERNAME": "svc_sterile",
-        "PASSWORD": "Sterile2026!",
+        "PASSWORD": "Biomed!Svc#2026",
         "FULLNAME": "Sterile Supply Service",
         "DESCRIPTION": "sterile supply monitor service",
         "PASSWORD_NEVER_EXPIRES": "1"
@@ -182,7 +182,7 @@
       "name": "local-user-win",
       "vars": {
         "USERNAME": "wardvol",
-        "PASSWORD": "Volunteer2026!",
+        "PASSWORD": "WardDesk!2026",
         "FULLNAME": "Volunteer Kiosk"
       }
     },
@@ -198,7 +198,7 @@
       "name": "local-user-win",
       "vars": {
         "USERNAME": "svc_biomed",
-        "PASSWORD": "Sterile2026!",
+        "PASSWORD": "Biomed!Svc#2026",
         "FULLNAME": "Sterile Supply Service",
         "DESCRIPTION": "sterile supply monitor service",
         "PASSWORD_NEVER_EXPIRES": "1"
@@ -216,7 +216,7 @@
       "name": "autologin-win",
       "vars": {
         "USERNAME": "wardvol",
-        "PASSWORD": "Volunteer2026!"
+        "PASSWORD": "WardDesk!2026"
       }
     },
     {
@@ -502,7 +502,7 @@
       "name": "local-user",
       "vars": {
         "USERNAME": "imaging-ops",
-        "PASSWORD": "Imaging2026!",
+        "PASSWORD": "Xray!Ops2026",
         "GROUPS_ADD": "sudo"
       }
     },

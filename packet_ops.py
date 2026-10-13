@@ -23,7 +23,7 @@ import yaml
 
 from config_ops import random_password
 from constants import KNOWN_BROKEN_CONFIGS, MAX_BOXES_PER_TEAM, REQUIRED_VARS
-from nakon_ops import os_to_platform
+from nakon_ops import os_to_platform, _windows_password_error
 from quotient.setup import _SERVICE_TO_CHECK
 from utils import is_legacy_account_name, valid_comp_name, valid_unix_username
 
@@ -346,6 +346,20 @@ def validate_profile(p):
                     "Quotient requires unique <box>-<Display> per box")
             displays.append(d)
 
+    linux_creds = credlists.get("linux") or {}
+    for box in boxes:
+        if box.get("unmanaged") or _platform_of(box.get("template")) != "windows":
+            continue
+        if not _cred_carrying_services(p, box.get("name")):
+            continue
+        for user, password in linux_creds.items():
+            if len(str(password)) < 8:
+                continue
+            reason = _windows_password_error(str(user), str(password), "Service account")
+            if reason:
+                err(f"credentials.credlists.linux[{user!r}] cannot become a Windows local-user-win "
+                    f"pin on {box['name']!r}: {reason}")
+
     injects = p.get("injects") or []
     slugs = set()
     for inj in injects:
@@ -468,8 +482,11 @@ def build_baseline(p):
             if platform == "windows":
                 # New-LocalUser caps -Description at 48 chars (Windows API) — live-found
                 # 2026-09-30: 54-char descriptions died in ParameterBindingValidation.
+                password = _gen_password()
+                while _windows_password_error(user, password, "Scoring infrastructure"):
+                    password = _gen_password()
                 pins.append({"name": win_cfg, "vars": {
-                    "USERNAME": user, "PASSWORD": _gen_password(),
+                    "USERNAME": user, "PASSWORD": password,
                     "FULLNAME": "Scoring infrastructure",
                     "DESCRIPTION": f"{user} - out of scope, do not touch"}})
             else:

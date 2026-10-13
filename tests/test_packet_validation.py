@@ -102,6 +102,26 @@ class BoxPassword(unittest.TestCase):
 
 # These become local-user USERNAME vars on every managed box, but got none of the
 # credlist name rules.
+class WindowsCredlistPasswords(unittest.TestCase):
+    def _profile(self, password):
+        p = copy.deepcopy(_BASE)
+        p["credentials"]["credlists"]["linux"] = {"svc_imaging": password}
+        p["services"] = [{"box": "ad01", "name": "FTP", "port": 21,
+                          "pin": "IIS FTP", "display": "ftp", "fidelity": "exact"}]
+        return p
+
+    def test_username_in_password_rejected(self):
+        errs = validate_profile(self._profile("Svc_imaging9!"))
+        self.assertTrue(any("must not contain the username" in e for e in errs), errs)
+
+    def test_fullname_policy_is_checked(self):
+        errs = validate_profile(self._profile("Service9!"))
+        self.assertTrue(any("full name" in e for e in errs), errs)
+
+    def test_three_categories_passes(self):
+        self.assertEqual(validate_profile(self._profile("n0t_sus1")), [])
+
+
 class OutOfScopeUsernames(unittest.TestCase):
     def test_invalid_username_rejected(self):
         errs = validate_profile(_mutated(credentials={
