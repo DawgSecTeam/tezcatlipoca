@@ -1,8 +1,8 @@
 """The two restore-point snapshots (tz-base before the sweep, tz-ready as delivered)."""
 
-from constants import SNAP_BASE, SNAP_READY
+from common.constants import SNAP_BASE, SNAP_READY
 from infra.lifecycle import take_snapshot
-from timing import timed
+from common.timing import timed
 
 
 def snap_base(ctx, t, phase=4):

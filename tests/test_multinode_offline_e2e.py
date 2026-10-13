@@ -16,10 +16,10 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import jump_rules  # noqa: E402
-import nodes_config  # noqa: E402
-import placement_planner  # noqa: E402
-import placement_record  # noqa: E402
+from net import jump_rules  # noqa: E402
+from multinode import nodes_config  # noqa: E402
+from multinode import placement_planner  # noqa: E402
+from multinode import placement_record  # noqa: E402
 from infra import client  # noqa: E402
 from deploy_lib.context import DeployContext  # noqa: E402
 from deploy_lib import tfinputs  # noqa: E402

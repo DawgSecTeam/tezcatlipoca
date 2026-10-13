@@ -1,6 +1,6 @@
 import threading
 
-import artifacts_ops
+from artifacts_lib import artifacts_ops
 from scrim import blue_agent
 from scrim import blue_watchdog
 from scrim import endpoints

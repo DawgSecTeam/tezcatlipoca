@@ -84,7 +84,7 @@ class TeardownEngine:
                 if self.journal_enabled:
                     journal["run_id"] = self.ctx.ownership.run_id
                     journal["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    from config_ops import write_text_atomic
+                    from config.config_ops import write_text_atomic
                     write_text_atomic(self.journal_path, json.dumps(journal, indent=2),
                                       mode=0o600)
             if result.status == "failed" and step.failure == "refuse":
@@ -152,7 +152,7 @@ class TeardownEngine:
         if not self.ctx.keep_red:
             # the vmid: what RedStep actually destroyed (journal), then bad-auto's config, then the deploy default; None when unverifiable
             done_vmid = (self._journal_done(plan).get("red01") or {}).get("vmid")
-            from red_plant_ops import red_vmid_candidates
+            from red.red_plant_ops import red_vmid_candidates
             vmid = None
             for candidate in [done_vmid] + list(
                     red_vmid_candidates(self.ctx.comp_dir, self.ctx.deployed_state)):

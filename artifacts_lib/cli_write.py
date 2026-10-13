@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 
-import artifacts_ops as ao
+from artifacts_lib import artifacts_ops as ao
 from .cli_common import (EXIT_FINDINGS, EXIT_OK, EXIT_USAGE, error, existing_keys, locate_test,
                          resolve_comp, resolve_test, show, summary_line, unknown_comp, wants)
 

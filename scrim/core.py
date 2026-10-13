@@ -5,7 +5,7 @@ import re
 import time
 from pathlib import Path
 
-from config_ops import write_text_atomic
+from config.config_ops import write_text_atomic
 REPO = Path(__file__).resolve().parent.parent
 BAD_AUTO = REPO.parent / "bad-auto"
 SSH_OPTS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"

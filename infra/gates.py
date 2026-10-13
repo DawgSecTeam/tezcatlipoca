@@ -35,11 +35,11 @@ import os
 import subprocess
 import sys
 
-from constants import NAKON_DIR, PIPELINE_VERSION, SCORING_ENGINE_VMID
+from common.constants import NAKON_DIR, PIPELINE_VERSION, SCORING_ENGINE_VMID
 from infra.collisions import (check_collisions, engine_mgmt_ip_gate,  # noqa: F401
                               jump_mgmt_ip_gate)
 from infra.resources import check_datastore_headroom, check_share_templates
-from utils import compfile_flag
+from common.utils import compfile_flag
 
 _DEPLOY_LOCKS = {}  # path -> open fh (keep referenced so flock survives)
 
@@ -110,7 +110,7 @@ def check_stale_terraform_state(comp_dir, comp_name, previous_state, engine_vmid
     attempt left 1090 in this comp's state). Refuse unless the recorded host and vmid agree.
     Runs before the tfvars are written and before any secret is minted, so a refusal
     leaves no half-written state behind."""
-    from terraform_workdir import terraform_dir
+    from common.terraform_workdir import terraform_dir
     tf_dir = terraform_dir(comp_dir)
     if from_phase <= 2 and (tf_dir / "terraform.tfstate").exists() and previous_state:
         cur_endpoint = os.environ.get("TF_VAR_proxmox_endpoint", "").rstrip("/")
@@ -198,7 +198,7 @@ def _artifact_probes(comp_dir):
     offline, and the single place a caller could inject a cheaper probe. Resolved at
     call time so a patch lands."""
     from infra.client import live_vmids
-    from terraform_workdir import team_vmids_from_state
+    from common.terraform_workdir import team_vmids_from_state
     return {"vmids_from_state": lambda: team_vmids_from_state(comp_dir),
             "vm_exists": live_vmids}
 
@@ -344,7 +344,7 @@ def remote_access_gate(plan):
     Raise SystemExit on the two refusal conditions; silent pass otherwise. Runs before
     any Proxmox mutation (remote access ships with every deploy, so a dead headscale host
     should stop a deploy at the gate, not mid-phase-3)."""
-    import remote_access_ops
+    from net import remote_access_ops
 
     identifiers = sorted({str(t["identifier"])
                           for share in plan.shares

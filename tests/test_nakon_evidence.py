@@ -15,7 +15,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import nakon_run_ops as nro  # noqa: E402
+from nakonops import nakon_run_ops as nro  # noqa: E402
 
 
 class PreserveFailedRun(unittest.TestCase):

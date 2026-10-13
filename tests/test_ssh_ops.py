@@ -10,7 +10,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import ssh_ops  # noqa: E402
+from common import ssh_ops  # noqa: E402
 
 CTX = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.9", "vm_username": "ubuntu"}
 PROXY = "ssh -i /k -W %h:%p ubuntu@10.0.0.9"

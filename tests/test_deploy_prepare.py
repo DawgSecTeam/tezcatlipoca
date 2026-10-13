@@ -32,7 +32,7 @@ from deploy_lib import placement as dl_placement  # noqa: E402
 from deploy_lib import targets as dl_targets  # noqa: E402
 from deploy_lib import tfinputs as dl_tfinputs  # noqa: E402
 from deploy_lib.context import DeployContext  # noqa: E402
-from constants import (DEFAULT_ENGINE_MGMT_GW, DEFAULT_ENGINE_MGMT_IP,  # noqa: E402
+from common.constants import (DEFAULT_ENGINE_MGMT_GW, DEFAULT_ENGINE_MGMT_IP,  # noqa: E402
                        SCORING_ENGINE_VMID)
 
 

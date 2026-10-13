@@ -13,7 +13,7 @@ import os
 import subprocess
 from pathlib import Path
 
-import remote_access_ops
+from net import remote_access_ops
 from verifier import context
 from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
 

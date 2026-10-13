@@ -26,8 +26,8 @@ from unittest import mock
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from engine_bootstrap_ops import push_quotient_env
-from engine_cmd_ops import _run_engine_cmd
+from engine.engine_bootstrap_ops import push_quotient_env
+from engine.engine_cmd_ops import _run_engine_cmd
 
 _CTX = {
     "ssh_key_path": "/tmp/w8-fake-key",

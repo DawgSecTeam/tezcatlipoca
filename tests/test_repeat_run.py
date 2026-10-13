@@ -15,9 +15,9 @@ sys.path.insert(0, str(_REPO))
 from deploy_lib import golden_plan as dl_golden_plan  # noqa: E402
 from deploy_lib.phases import cleanup as dl_cleanup  # noqa: E402
 from deploy_lib import secrets as dl_secrets  # noqa: E402
-from golden_target_ops import golden_vmid_for
-from targets import vm_id_for
-from template_freeze import engine_template_vmid
+from golden.golden_target_ops import golden_vmid_for
+from common.targets import vm_id_for
+from engine.template_freeze import engine_template_vmid
 
 ENGINE = 1000
 BOXES = [{"name": "dc01"}, {"name": "web01"}]

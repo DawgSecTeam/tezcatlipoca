@@ -33,7 +33,7 @@ sys.path.insert(0, str(_REPO))
 
 from _deploy_patch import dpatch  # noqa: E402
 from infra import gates as dl_gates  # noqa: E402
-import terraform_workdir  # noqa: E402
+from common import terraform_workdir  # noqa: E402
 
 STATE_RESOURCES = [
     {"type": "proxmox_virtual_environment_vm", "name": "scoring_engine",

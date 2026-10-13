@@ -98,7 +98,7 @@ def collect_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=
     if transport is None:
         # Resolved through the public facade at call time so callers (and tests) that patch
         # `artifacts_ops.default_transport` keep steering the teardown collector.
-        import artifacts_ops
+        from artifacts_lib import artifacts_ops
         transport = artifacts_ops.default_transport()
     # The harness mints a per-run folder now, so the folder to collect is the
     # newest one belonging to this deploy run id — not the base key.

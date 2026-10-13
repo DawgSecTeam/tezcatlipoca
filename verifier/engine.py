@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import requests
 
-import round_loop
+from engine import round_loop
 from verifier.loaders import count_local_injects
 from verifier.model import gate_fail, gate_pass, gate_skip
 

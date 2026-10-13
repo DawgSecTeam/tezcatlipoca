@@ -16,8 +16,8 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import golden_ops
-import nakon_config_ops
+from golden import golden_ops
+from nakonops import nakon_config_ops
 
 TEAMS = {"team1": {"identifier": 104}, "team2": {"identifier": 105}}
 BOXES = [{"name": "dc01", "template": "windows-server-2022"},

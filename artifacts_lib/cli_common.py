@@ -6,7 +6,7 @@ import re
 import sys
 from pathlib import Path
 
-import artifacts_ops as ao
+from artifacts_lib import artifacts_ops as ao
 
 COMPETITIONS_DIR = Path("competitions")
 EXIT_OK, EXIT_FINDINGS, EXIT_USAGE = 0, 1, 2

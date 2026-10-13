@@ -7,7 +7,7 @@ import time
 
 import requests
 
-from utils import retry
+from common.utils import retry
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 

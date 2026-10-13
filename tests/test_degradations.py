@@ -22,9 +22,9 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 from deploy_lib import failure as dl_failure  # noqa: E402
-import apt_dns_ops  # noqa: E402
-import ssh_ops  # noqa: E402
-import utils  # noqa: E402
+from guests import apt_dns_ops  # noqa: E402
+from common import ssh_ops  # noqa: E402
+from common import utils  # noqa: E402
 
 
 class Ledger(unittest.TestCase):

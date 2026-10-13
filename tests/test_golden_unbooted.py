@@ -9,7 +9,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import golden_target_ops
+from golden import golden_target_ops
 
 BOXES = [{"name": "dc01", "template": "windows-server-2022"},
          {"name": "web01", "template": "ubuntu-2204-web"}]

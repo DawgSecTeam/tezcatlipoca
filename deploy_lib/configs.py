@@ -3,10 +3,10 @@
 import json
 import os
 
-from golden_target_ops import _template_vmid_map, unbooted_golden_boxes
-from nakon_bundle_ops import build_nakon_bundle
-from nakon_config_ops import generate_nakon_config, generate_stage_configs
-from template_freeze import frozen_code_drift, frozen_state, golden_freeze_gate
+from golden.golden_target_ops import _template_vmid_map, unbooted_golden_boxes
+from nakonops.nakon_bundle_ops import build_nakon_bundle
+from nakonops.nakon_config_ops import generate_nakon_config, generate_stage_configs
+from engine.template_freeze import frozen_code_drift, frozen_state, golden_freeze_gate
 
 from deploy_lib.golden_plan import golden_hash_entries
 

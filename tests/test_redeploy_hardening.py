@@ -17,9 +17,9 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 import pipeline_api  # noqa: E402
-import redeploy_plant_ops  # noqa: E402
-import redeploy_rebuild_ops  # noqa: E402
-from redeploy_context import RedeployContext  # noqa: E402
+from redeploy import redeploy_plant_ops  # noqa: E402
+from redeploy import redeploy_rebuild_ops  # noqa: E402
+from redeploy.redeploy_context import RedeployContext  # noqa: E402
 
 
 def _rctx(ctx, comp_dir, state=None, node="node"):

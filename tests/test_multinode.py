@@ -16,14 +16,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from deploy_lib import golden_plan as dl_golden_plan  # noqa: E402
 from deploy_lib import placement as dl_placement  # noqa: E402
-import jump_ops  # noqa: E402
-import nodes_config  # noqa: E402
-import placement_planner  # noqa: E402
-import placement_record  # noqa: E402
+from net import jump_ops  # noqa: E402
+from multinode import nodes_config  # noqa: E402
+from multinode import placement_planner  # noqa: E402
+from multinode import placement_record  # noqa: E402
 from infra import client  # noqa: E402
 from infra.gates import run_preflight  # noqa: E402
 from infra.plan import multinode_plan  # noqa: E402
-from targets import enumerate_targets  # noqa: E402
+from common.targets import enumerate_targets  # noqa: E402
 
 
 def _rec(name, node=None, **kw):
@@ -515,10 +515,10 @@ class ActivatePlacementTest(unittest.TestCase):
 
 class SyncPlannerTest(unittest.TestCase):
     def test_plan_commands_and_vmid_pick(self):
-        from template_sync_ops import plan_sync
+        from multinode.template_sync_ops import plan_sync
         src, dst = _rec("src"), _rec("dst")
-        with patch("template_sync_ops.find_template_vmid", return_value=955), \
-                patch("template_sync_ops.pick_destination_vmid", return_value=1120):
+        with patch("multinode.template_sync_ops.find_template_vmid", return_value=955), \
+                patch("multinode.template_sync_ops.pick_destination_vmid", return_value=1120):
             plan = plan_sync(src, dst, "base-ubuntu24.04-fix")
         self.assertEqual(plan["src_vmid"], 955)
         self.assertEqual(plan["dst_vmid"], 1120)
@@ -533,7 +533,7 @@ class MultinodePreflightResumeTest(unittest.TestCase):
         # The jump VM impersonates 192.168.<id>.1 on each satellite; an in-path
         # firewall there would fight it for the gateway address. Refusal fires before
         # any API call, so no stubbing is needed.
-        from nodes_config import PLACEMENT_VERSION
+        from multinode.nodes_config import PLACEMENT_VERSION
         placement = {
             "version": PLACEMENT_VERSION, "engine_node": "n1", "engine_vmid": 1000,
             "nodes": {"n1": _rec("n1").to_json()},
@@ -552,7 +552,7 @@ class MultinodePreflightResumeTest(unittest.TestCase):
         self.assertIn("in_path firewalls are only supported on engine-node", str(cm.exception))
 
     def test_check_free_false_skips_collisions(self):
-        from nodes_config import PLACEMENT_VERSION
+        from multinode.nodes_config import PLACEMENT_VERSION
         placement = {
             "version": PLACEMENT_VERSION, "engine_node": "n1", "engine_vmid": 1000,
             "nodes": {"n1": _rec("n1").to_json(), "n2": _rec("n2").to_json()},
@@ -588,7 +588,7 @@ class MultinodePreflightResumeTest(unittest.TestCase):
                 patch("infra.resources.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
                 patch("infra.gates.remote_access_gate"), \
                 patch("infra.gates.catalog_gate"), \
-                patch("jump_ops.find_jump_template", return_value={"alpine": 900}):
+                patch("net.jump_ops.find_jump_template", return_value={"alpine": 900}):
             run_preflight(multinode_plan(
                 Path("competitions/example"), boxes, teams, 1000, placement,
                 engine_mgmt_ip=None, check_free=False, our_run_tag=None))

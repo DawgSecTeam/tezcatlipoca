@@ -42,7 +42,7 @@ def _load(name, filename):
 from scrim import blue_agent, blue_prompt, compworld, core, endpoints, event_run, evidence, inject_sync, llm_probe, procs, quotient_api, red_link, red_stage, run_manifest, staging, supervisor, teardown_stage
 from scrim_report import blue_side, host_labels, loaders, red_side, render, timefmt
 sched = _load("run_schedule_defects", "run-schedule.py")
-beacon = _load("beacon_ops_defects", "beacon_ops.py")
+beacon = _load("beacon_ops_defects", "red/beacon_ops.py")
 
 
 def _pid_alive(pid):
@@ -894,7 +894,7 @@ class RedTeardownAssertion(unittest.TestCase):
 
 # D12 --------------------------------------------------------------------------
 class PyflakesClean(unittest.TestCase):
-    FILES = ("run-agent-scrim.py", "scrim", "scrim-report.py", "beacon_ops.py", "run-schedule.py")
+    FILES = ("run-agent-scrim.py", "scrim", "scrim-report.py", "red/beacon_ops.py", "run-schedule.py")
 
     def test_owned_files_are_pyflakes_clean(self):
         if importlib.util.find_spec("pyflakes") is None:

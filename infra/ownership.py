@@ -17,7 +17,7 @@ worktree's run (2026-10-02 near-miss) and is MISSING, never reclaimed."""
 import os
 from dataclasses import dataclass, field
 
-from constants import ownership_tags
+from common.constants import ownership_tags
 from infra.client import proxmox_api, wait_for_proxmox_task
 
 OWNED = "owned"

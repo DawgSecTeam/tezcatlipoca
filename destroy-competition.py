@@ -21,8 +21,8 @@ import urllib3
 from dotenv import load_dotenv
 
 from teardown import Refusal
-from template_freeze import frozen_state
-from utils import load_compfile, pick_competition
+from engine.template_freeze import frozen_state
+from common.utils import load_compfile, pick_competition
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -106,7 +106,7 @@ def main():
     mode = ("FULL (templates destroyed)" if full
             else "teams-only (templates kept)")
     print("─── About to destroy " + "─" * 42)
-    from utils import env_summary
+    from common.utils import env_summary
     print(f"  Targeting   : {env_summary()}")
     print(f"  Competition : {name} ({competition})")
     print(f"  Teams       : {len(teams)}")

@@ -36,10 +36,10 @@ _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-import golden_ops  # noqa: E402
-import golden_target_ops
-from constants import SNAP_BASE  # noqa: E402
-from nakon_run_ops import NakonResult  # noqa: E402
+from golden import golden_ops  # noqa: E402
+from golden import golden_target_ops
+from common.constants import SNAP_BASE  # noqa: E402
+from nakonops.nakon_run_ops import NakonResult  # noqa: E402
 
 
 def _proc(returncode=0, stdout="", stderr=""):

@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import engine_identity_ops  # noqa: E402
+from engine import engine_identity_ops  # noqa: E402
 
 
 def _ctx(ip="10.0.0.250"):

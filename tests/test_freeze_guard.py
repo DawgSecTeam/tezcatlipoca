@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import template_freeze
+from engine import template_freeze
 
 import verifier.context as v_context  # noqa: E402
 import subprocess  # noqa: E402

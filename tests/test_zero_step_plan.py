@@ -17,7 +17,7 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "vendor" / "nakon"))
 
-import nakon_run_ops  # noqa: E402
+from nakonops import nakon_run_ops  # noqa: E402
 from nakon.deploy import runner  # noqa: E402
 
 

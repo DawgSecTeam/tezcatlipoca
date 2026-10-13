@@ -17,7 +17,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import domain_ops  # noqa: E402
+from guests import domain_ops  # noqa: E402
 
 
 def _load(name, filename):

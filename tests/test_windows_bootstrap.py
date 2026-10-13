@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import windows_ops
+from common import windows_ops
 
 
 def _capture_bootstrap_script():

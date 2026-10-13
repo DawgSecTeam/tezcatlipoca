@@ -4,7 +4,7 @@ import os
 import shutil
 from pathlib import Path
 
-from utils import record_degradation
+from common.utils import record_degradation
 
 from .hashing import sha256_file
 from .paths import test_dir

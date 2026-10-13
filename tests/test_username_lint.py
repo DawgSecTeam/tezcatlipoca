@@ -13,8 +13,8 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import config_prompts
-import utils
+from config import config_prompts
+from common import utils
 
 
 class LegacyAccountNames(unittest.TestCase):

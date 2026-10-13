@@ -1,4 +1,4 @@
-"""Per-run test artifacts (artifacts_ops.py): the collector that runs at teardown.
+"""Per-run test artifacts (artifacts_lib/artifacts_ops.py): the collector that runs at teardown.
 
 Why this suite exists: the collector's whole job is to be *honest about absence*. An empty
 artifact folder that could mean "the agent wrote nothing", "the pull failed", or "the VM was
@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import artifacts_ops as ao
+from artifacts_lib import artifacts_ops as ao
 
 # the red artifacts are pulled from the sudo-staged copies (/tmp/ba): the originals
 # are 0600 root, and one unreadable file used to mark the whole target unreachable

@@ -1,6 +1,6 @@
 import unittest
 
-from domain_ops import password_trips_ad_complexity as trips
+from guests.domain_ops import password_trips_ad_complexity as trips
 
 
 class ComplexityTrip(unittest.TestCase):

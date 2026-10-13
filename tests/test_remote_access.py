@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import remote_access_ops as ra  # noqa: E402
+from net import remote_access_ops as ra  # noqa: E402
 
 
 COMPS_ONE = [{"comp_id": "cde-2026", "engine_ip": "10.0.0.252",

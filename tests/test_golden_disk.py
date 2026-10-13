@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import golden_disk_ops
+from golden import golden_disk_ops
 
 UBUNTU_CFG = {
     "scsi0": "ssd:vm-1204-disk-0,iothread=1,size=15G",

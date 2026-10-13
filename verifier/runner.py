@@ -38,7 +38,7 @@ class _Run:
 
 def _load_packet_profile(path):
     try:
-        from packet_ops import load_profile
+        from config.packet_ops import load_profile
         return load_profile(path)
     except SystemExit as e:
         raise PacketProfileError(str(e))

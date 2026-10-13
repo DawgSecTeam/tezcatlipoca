@@ -6,8 +6,8 @@ import subprocess
 from pathlib import Path
 
 from infra.guest_exec import guest_agent_exec_root
-from targets import vm_id_for
-from utils import MAX_CONCURRENCY, run_concurrent
+from common.targets import vm_id_for
+from common.utils import MAX_CONCURRENCY, run_concurrent
 
 from verifier import context
 from verifier.model import CheckError, gate_fail, gate_pass, gate_skip

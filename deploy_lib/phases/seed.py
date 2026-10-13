@@ -1,11 +1,11 @@
 """Phase 8: seed teams, unpause the engine, create injects — each once; then the
 student portal (opt-in, non-fatal)."""
 
-from injects_config import injects_fingerprint, resolve_inject_times
-from portal_ops import deploy_portal
+from config.injects_config import injects_fingerprint, resolve_inject_times
+from portal.portal_ops import deploy_portal
 from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
-from ssh_ops import wait_for_http
-from timing import timed
+from common.ssh_ops import wait_for_http
+from common.timing import timed
 
 
 def phase8_seed(ctx):

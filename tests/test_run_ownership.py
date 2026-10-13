@@ -54,8 +54,8 @@ from _deploy_patch import dpatch  # noqa: E402
 from deploy_lib import secrets as dl_secrets  # noqa: E402
 from deploy_lib.context import DeployContext  # noqa: E402
 from deploy_lib import tfinputs as dl_tfinputs  # noqa: E402
-import config_ops  # noqa: E402
-import placement_record  # noqa: E402
+from config import config_ops  # noqa: E402
+from multinode import placement_record  # noqa: E402
 from infra import client  # noqa: E402
 from infra.gates import run_preflight  # noqa: E402
 from infra.plan import multinode_plan  # noqa: E402

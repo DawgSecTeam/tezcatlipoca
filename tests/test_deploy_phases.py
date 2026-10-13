@@ -19,9 +19,9 @@ from deploy_lib import tfinputs as dl_tfinputs
 from deploy_lib import coverage as dl_coverage  # noqa: E402
 from infra import gates as dl_gates  # noqa: E402
 from deploy_lib import golden_plan as dl_golden_plan  # noqa: E402
-from nakon_run_ops import NakonResult
-from template_freeze import hash_from_inputs
-from placement_record import golden_vmid_for_slot
+from nakonops.nakon_run_ops import NakonResult
+from engine.template_freeze import hash_from_inputs
+from multinode.placement_record import golden_vmid_for_slot
 
 ENGINE = 1000
 MANAGED_BOXES = [{"name": "dc01", "template": "base-windows-server"},

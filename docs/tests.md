@@ -35,7 +35,7 @@ Grouped by what they protect. Several exist because of a specific incident — t
 name in the docstring, which is the fastest way to find the "why". File set and test count both
 drift, so read them from `git ls-files tests/` and the pytest run above rather than from this table.
 
-**Test artifacts** (`artifacts_ops.py` facade over the `artifacts_lib/` package; see
+**Test artifacts** (`artifacts_lib/artifacts_ops.py` facade over the `artifacts_lib/` package; see
 [internals.md](internals.md#artifacts_lib--per-run-test-artifacts))
 
 | File | Guards |

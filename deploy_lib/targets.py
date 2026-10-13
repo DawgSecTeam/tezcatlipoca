@@ -2,9 +2,9 @@
 
 import os
 
-from targets import enumerate_targets, persist_targets
-from utils import is_unmanaged
-from windows_ops import is_windows_template
+from common.targets import enumerate_targets, persist_targets
+from common.utils import is_unmanaged
+from common.windows_ops import is_windows_template
 
 
 def enumerate_deploy_targets(ctx, comp_dir):

@@ -10,7 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from packet_ops import PACKETS_DIR, compile_profile, load_profile, validate_profile
+from config.packet_ops import PACKETS_DIR, compile_profile, load_profile, validate_profile
 
 
 def main():

@@ -21,7 +21,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import artifacts_ops as ao
+from artifacts_lib import artifacts_ops as ao
 
 RUN_ID = "run-1a2b3c4d"
 BUILD_INFO = '{"ok": true}\n'

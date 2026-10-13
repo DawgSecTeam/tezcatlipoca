@@ -8,8 +8,8 @@ netplan and puts the team gateway address back on the engine (docs/known-issues.
 import json
 import subprocess
 
-from firewall_ops import firewall_wan_ip, tcp_probe_cmd, team_gateway_ip
-from utils import is_in_path_fw
+from net.firewall_ops import firewall_wan_ip, tcp_probe_cmd, team_gateway_ip
+from common.utils import is_in_path_fw
 
 from verifier import context
 from verifier.isolation import _team_identifiers

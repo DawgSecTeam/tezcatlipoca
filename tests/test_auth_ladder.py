@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import ssh_ops
-import ubuntu_auth_ops
+from common import ssh_ops
+from guests import ubuntu_auth_ops
 from infra.guest_exec import DetachedExecResult
 
 ENV = {"TF_VAR_proxmox_node": "proxmox", "TF_VAR_ssh_public_key": "ssh-ed25519 AAAAtest"}

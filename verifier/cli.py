@@ -80,7 +80,7 @@ def main(argv=None):
 
     # Multi-node: activate the recorded placement (env -> engine host, node routes
     # for any node-scoped API call) before anything talks to Proxmox.
-    from placement_record import activate_placement, read_placement
+    from multinode.placement_record import activate_placement, read_placement
     placement = read_placement(comp_dir)
     if placement:
         activate_placement(placement)
@@ -102,7 +102,7 @@ def main(argv=None):
     # deploy's reservation) unless the operator passed one — the shared
     # sibling config.yaml is no longer a source (2026-10-12).
     if args.red_ip is None:
-        import badauto_config_ops
+        from red import badauto_config_ops
         args.red_ip = ((badauto_config_ops.load_config(comp_dir).get("deploy") or {})
                        .get("red_ip")) or "10.0.0.198"
 

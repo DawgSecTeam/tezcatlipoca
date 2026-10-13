@@ -11,14 +11,14 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from constants import GOLDEN_TAG, SCORING_ENGINE_VMID
-from golden_ops import destroy_golden_set
-from jump_ops import destroy_jump_vms
-from placement_record import record_of
+from common.constants import GOLDEN_TAG, SCORING_ENGINE_VMID
+from golden.golden_ops import destroy_golden_set
+from net.jump_ops import destroy_jump_vms
+from multinode.placement_record import record_of
 from infra.client import proxmox_api, wait_for_proxmox_task
 from infra.ownership import parse_vm_tags
-from engine_template_ops import destroy_engine_template
-from utils import run_terraform
+from engine.engine_template_ops import destroy_engine_template
+from common.utils import run_terraform
 from infra.ownership import Ownership, Refusal
 
 # Concurrent stop/delete worker count for teardown sweeps. Deletes are

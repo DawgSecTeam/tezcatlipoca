@@ -4,7 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from config_ops import write_state
+from config.config_ops import write_state
 
 from .constants import (ABSENT, COLLECTION_NAME, FAILED, LOST, OK, SCHEMA, SEALED, SKIPPED,
                         STATUSES, UNREACHABLE, Unreachable)

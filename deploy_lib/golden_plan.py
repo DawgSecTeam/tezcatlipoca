@@ -6,17 +6,17 @@ them. Both destroy decisions live here so the tag-ownership + frozen-gate rules 
 a destroy safe are read in one file.
 """
 
-from constants import GOLDEN_TAG, MAX_BOXES_PER_TEAM, ownership_tags
-from golden_target_ops import _is_template
-from golden_ops import build_golden_set
-from apt_dns_ops import _APT_PREP_BODY, _apt_prep_script
-from placement_record import golden_vmid_for_slot
+from common.constants import GOLDEN_TAG, MAX_BOXES_PER_TEAM, ownership_tags
+from golden.golden_target_ops import _is_template
+from golden.golden_ops import build_golden_set
+from guests.apt_dns_ops import _APT_PREP_BODY, _apt_prep_script
+from multinode.placement_record import golden_vmid_for_slot
 from infra.ownership import destroy_vm_if_exists
-from template_freeze import (
+from engine.template_freeze import (
     code_hash, engine_template_vmid, frozen_gate, golden_hash_inputs, golden_payload_hash,
     hash_from_inputs, stored_template_hash,
 )
-from utils import is_unmanaged
+from common.utils import is_unmanaged
 
 
 def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden_bundle,

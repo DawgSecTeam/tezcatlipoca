@@ -20,10 +20,10 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import nakon_config_ops
-import nakon_pin_ops
-from constants import KNOWN_BROKEN_CONFIGS
-from packet_ops import validate_profile
+from nakonops import nakon_config_ops
+from nakonops import nakon_pin_ops
+from common.constants import KNOWN_BROKEN_CONFIGS
+from config.packet_ops import validate_profile
 
 REMAINING = {
     "mailenable-cleartext-mail-win",

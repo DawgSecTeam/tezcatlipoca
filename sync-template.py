@@ -10,7 +10,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(Path(".env"))
 
-import template_sync_ops  # noqa: E402
+from multinode import template_sync_ops  # noqa: E402
 
 if __name__ == "__main__":
     template_sync_ops.main()

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import requests
 
-from constants import PIN_CHECK_OVERRIDES
-from utils import record_degradation
+from common.constants import PIN_CHECK_OVERRIDES
+from common.utils import record_degradation
 
 # The event.conf box slices Quotient understands — also the valid `check` values for
 # score-only pins (upstream has only these; docs/internals.md).

@@ -10,7 +10,7 @@ whether or not access is open yet."""
 import json
 import subprocess
 
-from portal_ops import check_portal, portal_enabled
+from portal.portal_ops import check_portal, portal_enabled
 
 from verifier import context
 from verifier.model import CheckError, gate_fail, gate_pass, gate_skip

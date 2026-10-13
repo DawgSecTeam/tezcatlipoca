@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from config_ops import write_state
-from constants import SCORING_ENGINE_VMID, ownership_tags
+from config.config_ops import write_state
+from common.constants import SCORING_ENGINE_VMID, ownership_tags
 
 
 @dataclass

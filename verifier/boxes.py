@@ -1,6 +1,6 @@
 """Machine-list helpers shared by every gate that picks boxes out of nakon-config.json."""
 
-from windows_ops import is_windows_template
+from common.windows_ops import is_windows_template
 
 
 def is_linux_box(box):

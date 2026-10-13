@@ -5,8 +5,8 @@ import os
 import subprocess
 from pathlib import Path
 
-from ssh_ops import engine_ssh_opts, gateway_proxy
-from utils import BOX_USERNAME_DEFAULT, load_users_config
+from common.ssh_ops import engine_ssh_opts, gateway_proxy
+from common.utils import BOX_USERNAME_DEFAULT, load_users_config
 
 from verifier.model import CheckError
 

@@ -2,11 +2,11 @@
 
 from functools import partial
 
-from constants import SNAP_BASE
-from firewall_ops import (bootstrap_firewalls, cut_over_engine, firewall_kind,
+from common.constants import SNAP_BASE
+from net.firewall_ops import (bootstrap_firewalls, cut_over_engine, firewall_kind,
                           verify_in_path, write_team_configs)
-from timing import timed
-from utils import compfile_value, is_in_path_fw, run_concurrent
+from common.timing import timed
+from common.utils import compfile_value, is_in_path_fw, run_concurrent
 
 from deploy_lib.phases._snapshots import snap_base
 

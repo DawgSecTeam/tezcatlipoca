@@ -2,10 +2,10 @@
 
 import os
 
-from config_ops import write_state
-from nakon_lock_ops import acquire_engine_lock
-from placement_record import activate_placement
-from placement_planner import resolve_placement
+from config.config_ops import write_state
+from nakonops.nakon_lock_ops import acquire_engine_lock
+from multinode.placement_record import activate_placement
+from multinode.placement_planner import resolve_placement
 
 
 def parse_team_node(team_node):

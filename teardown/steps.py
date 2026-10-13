@@ -83,8 +83,8 @@ class PortalStep(Step):
     name = "portal"
 
     def run(self, ctx):
-        from portal_ops import portal_enabled, teardown_portal
-        from ssh_ops import read_terraform_ctx
+        from portal.portal_ops import portal_enabled, teardown_portal
+        from common.ssh_ops import read_terraform_ctx
         if not (ctx.deployed_state.get("portal_console_tokens")
                 or ctx.deployed_state.get("portal_up") or portal_enabled(ctx.comp_dir)):
             return StepResult(self.name, "ok", "portal not deployed")
@@ -113,7 +113,7 @@ class ArtifactStep(Step):
     resumable = True
 
     def run(self, ctx):
-        import artifacts_ops
+        from artifacts_lib import artifacts_ops
         from artifacts_lib.lifecycle import latest_run_key
         from artifacts_lib.paths import test_dir
         artifacts_ops.collect_for_teardown(
@@ -138,7 +138,7 @@ class RedStep(Step):
     resumable = True
 
     def run(self, ctx):
-        import red_plant_ops
+        from red import red_plant_ops
         if ctx.keep_red:
             return StepResult(self.name, "skipped", "--keep-red")
         print("  red01      : badauto destroy (not terraform-managed — this script cannot "
@@ -223,6 +223,6 @@ class RemoteAccessStep(Step):
     name = "remote_access"
 
     def run(self, ctx):
-        from remote_access_ops import teardown_remote_access
+        from net.remote_access_ops import teardown_remote_access
         teardown_remote_access(ctx.comp_dir, state=ctx.deployed_state)
         return StepResult(self.name, "ok")

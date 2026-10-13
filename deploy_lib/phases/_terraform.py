@@ -3,8 +3,8 @@
 import json
 import os
 
-from config_ops import write_text_atomic
-from terraform_workdir import terraform_dir, terraform_plugin_cache_dir
+from config.config_ops import write_text_atomic
+from common.terraform_workdir import terraform_dir, terraform_plugin_cache_dir
 
 
 def write_tfvars(ctx):

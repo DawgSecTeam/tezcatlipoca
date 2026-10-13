@@ -15,7 +15,7 @@ sys.path.insert(0, str(_REPO))
 from teardown import machinery as destroy_sweep_ops  # noqa: E402
 
 
-import golden_ops  # noqa: E402
+from golden import golden_ops  # noqa: E402
 
 
 class StaleStateLock(unittest.TestCase):
@@ -61,7 +61,7 @@ class GoldenDestroySkipsForeign(unittest.TestCase):
         def fake_destroy(node, vmid, expect_tags=None):
             raise RuntimeError("refusing to destroy vmid 1320: foreign tags")
 
-        import engine_template_ops
+        from engine import engine_template_ops
         with patch.object(engine_template_ops, "destroy_vm_if_exists", fake_destroy), \
              patch("builtins.print"):
             engine_template_ops.destroy_engine_template("proxmox", 1180,

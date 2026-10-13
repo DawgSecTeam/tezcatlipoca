@@ -11,13 +11,13 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import packet_ops
-from packet_ops import (build_baseline, compile_profile, load_profile, team_domain_parts,
+from config import packet_ops
+from config.packet_ops import (build_baseline, compile_profile, load_profile, team_domain_parts,
                         validate_profile)
 from quotient.setup import build_event_conf, expected_service_names
-import nakon_config_ops
-from domain_ops import team_domain
-from nakon_pin_ops import _windows_password_error
+from nakonops import nakon_config_ops
+from guests.domain_ops import team_domain
+from nakonops.nakon_pin_ops import _windows_password_error
 
 PROFILE = """
 packet:

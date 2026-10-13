@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from config_ops import write_state
+from config.config_ops import write_state
 
 from .archive import archive_test
 from .collect import load_collection

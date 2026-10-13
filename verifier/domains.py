@@ -3,11 +3,11 @@
 import json
 import os
 
-from domain_ops import team_domain
+from guests.domain_ops import team_domain
 from infra.guest_exec import guest_agent_exec_root, guest_agent_exec_windows
-from targets import vm_id_for
-from utils import MAX_CONCURRENCY, run_concurrent
-from windows_ops import is_windows_template
+from common.targets import vm_id_for
+from common.utils import MAX_CONCURRENCY, run_concurrent
+from common.windows_ops import is_windows_template
 
 from verifier import context
 from verifier.model import CheckError, gate_fail, gate_pass, gate_skip

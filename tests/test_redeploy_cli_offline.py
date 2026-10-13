@@ -18,7 +18,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-from constants import PIPELINE_VERSION, SNAP_BASE, SNAP_READY  # noqa: E402
+from common.constants import PIPELINE_VERSION, SNAP_BASE, SNAP_READY  # noqa: E402
 
 
 def _load_script():

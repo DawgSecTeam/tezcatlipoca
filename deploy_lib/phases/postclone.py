@@ -3,11 +3,11 @@
 import json
 import time
 
-from constants import PER_MACHINE_NAKON_BUDGET
-from service_fixup_ops import fix_services_on_boxes
-from nakon_bundle_ops import build_nakon_bundle
-from nakon_run_ops import run_nakon
-from timing import timed
+from common.constants import PER_MACHINE_NAKON_BUDGET
+from guests.service_fixup_ops import fix_services_on_boxes
+from nakonops.nakon_bundle_ops import build_nakon_bundle
+from nakonops.nakon_run_ops import run_nakon
+from common.timing import timed
 
 from deploy_lib.coverage import record_clean_coverage, record_stage_coverage
 

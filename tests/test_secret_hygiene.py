@@ -50,7 +50,7 @@ INTERNAL_ENV = {
     "MY_TEAM": "scrim.env handoff written by run-agent-scrim.py",
     "JAR": "scrim.env handoff written by run-agent-scrim.py",
     "SCRIM_WEB01_PORT": "scrim harness test hook (fresh opencode port per blue cycle)",
-    # artifacts_ops.py seal step: default author attribution from the OS user, not
+    # artifacts_lib/artifacts_ops.py seal step: default author attribution from the OS user, not
     # operator configuration.
     "USER": "OS username, recorded as the default write-up author on seal",
     # Student portal container env: written by portal_ops into /opt/tez-portal/.env (or set

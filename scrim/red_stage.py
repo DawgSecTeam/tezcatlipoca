@@ -9,9 +9,9 @@ from scrim import red_link
 from scrim import red_tunnel
 from scrim import test_folder
 from scrim.core import log
-import badauto_config_ops
-import red_plant_ops
-import realm_c2_ops
+from red import badauto_config_ops
+from red import red_plant_ops
+from red import realm_c2_ops
 
 
 def verify_red_reaches_teams(args, comp, creds):

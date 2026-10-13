@@ -21,14 +21,14 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import deploy  # noqa: E402
-import injects_config  # noqa: E402
+from config import injects_config  # noqa: E402
 from _deploy_patch import dpatch  # noqa: E402
 from deploy_lib.phases import cleanup as dl_cleanup  # noqa: E402
 from deploy_lib.phases import engine as dl_engine  # noqa: E402
 from deploy_lib.phases import golden as dl_golden  # noqa: E402
 from deploy_lib.phases import postclone as dl_postclone  # noqa: E402
 from deploy_lib.phases import seed as dl_seed  # noqa: E402
-from nakon_run_ops import NakonResult  # noqa: E402
+from nakonops.nakon_run_ops import NakonResult  # noqa: E402
 
 
 def _ctx(comp_dir, **overrides):
@@ -155,7 +155,7 @@ class Phase3Order(unittest.TestCase):
                                  side_effect=lambda *a, **k: order.append("event_conf")), \
                     dpatch("ensure_nat_forwarding",
                                  side_effect=lambda *a: order.append("nat")), \
-                    patch("remote_access_ops.setup_remote_access",
+                    patch("net.remote_access_ops.setup_remote_access",
                           side_effect=lambda *a: order.append("remote_access")), \
                     contextlib.redirect_stdout(io.StringIO()):
                 dl_engine.phase3_prepare_engine(ctx)
@@ -169,7 +169,7 @@ class Phase3Order(unittest.TestCase):
             with dpatch("prepare_engine_from_template"), \
                     dpatch("push_event_conf"), \
                     dpatch("ensure_nat_forwarding"), \
-                    patch("remote_access_ops.setup_remote_access") as p_ra, \
+                    patch("net.remote_access_ops.setup_remote_access") as p_ra, \
                     contextlib.redirect_stdout(io.StringIO()) as out:
                 dl_engine.phase3_prepare_engine(ctx)
             p_ra.assert_not_called()

@@ -6,7 +6,7 @@ import json
 import sys
 from pathlib import Path
 
-from utils import compfile_flag, compfile_value, load_compfile, load_users_config
+from common.utils import compfile_flag, compfile_value, load_compfile, load_users_config
 
 REPO_ROOT = Path(__file__).resolve().parent
 

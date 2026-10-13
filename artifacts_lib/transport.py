@@ -6,7 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from config_ops import write_text_atomic
+from config.config_ops import write_text_atomic
 
 from .constants import Unreachable
 from .hashing import seal_local_file

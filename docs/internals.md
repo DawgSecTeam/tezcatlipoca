@@ -10,18 +10,18 @@ component map, data flow, network/isolation, the snapshot table, the nakon contr
 inventory, the stage-split rationale, and the state-file schemas); this doc deliberately does not
 repeat it. Only the design
 consequence is repeated here. The agent-scrim trio (`run-agent-scrim.py` + the `scrim/` package, `scrim-report.py` + the
-`scrim_report/` package, `beacon_ops.py`) is documented in [scrim-harness.md](scrim-harness.md)
+`scrim_report/` package, `red/beacon_ops.py`) is documented in [scrim-harness.md](scrim-harness.md)
 (module map at the top), not here.
 
-`constants.py` · `utils.py` · `ssh_ops.py` · `infra/` · `config_ops.py` · `nakon_*_ops.py` ·
-`engine_*_ops.py` · `windows_ops.py` · `box_settle_ops.py` · `apt_dns_ops.py` · `service_fixup_ops.py` · `golden_ops.py` · `template_freeze.py` ·
-`domain_ops.py` · `timing.py` · `deploy.py` · `deploy_lib/` · `pipeline_api.py` ·
+`common/constants.py` · `common/utils.py` · `common/ssh_ops.py` · `infra/` · `config/config_ops.py` · `nakonops/nakon_*_ops.py` ·
+`engine/engine_*_ops.py` · `common/windows_ops.py` · `guests/box_settle_ops.py` · `guests/apt_dns_ops.py` · `guests/service_fixup_ops.py` · `golden/golden_ops.py` · `engine/template_freeze.py` ·
+`guests/domain_ops.py` · `common/timing.py` · `deploy.py` · `deploy_lib/` · `pipeline_api.py` ·
 `create-competition.py` · `destroy-competition.py` ·
 `redeploy-competition.py` · `verify-competition.py` · `generate-packet.py` ·
-`packet_ops`/`compile-packet`/`run-schedule` · multinode & sync · `quotient/setup.py` ·
+`config/packet_ops.py`/`compile-packet`/`run-schedule` · multinode & sync · `quotient/setup.py` ·
 `terraform/main.tf` · `terraform/variables.tf` · Conventions
 
-## constants.py
+## common/constants.py
 
 Single source of truth for VM identity math, snapshot names, nakon budgets, and naming; shared by
 `infra`, `deploy`, `redeploy`, `verify`.
@@ -46,7 +46,7 @@ Single source of truth for VM identity math, snapshot names, nakon budgets, and 
 | `WINDOWS_ADMIN_USER` | `Administrator` | The sysprepped local admin nakon authenticates as. |
 | `NAKON_DIR` | `vendor/nakon` | nakon subprocesses run with this as cwd so nakon can read its gitignored `.env`. |
 
-## utils.py
+## common/utils.py
 
 Compfile/`users.json` loading, DNS-fix command strings, the concurrency helper. No Proxmox access.
 
@@ -58,11 +58,11 @@ Compfile/`users.json` loading, DNS-fix command strings, the concurrency helper. 
 | `load_users_config()` | Box login + 3 credlist usernames from `competitions/<id>/users.json`, falling back per field. |
 | `load_compfile()` | key=value parser; skips blank lines and valueless keys; non-numeric `difficulty` degrades to 0 rather than raising. |
 | `compfile_flag()` | Integer Compfile knob reader (e.g. `team_beacons 1`); returns the default when the key or file is absent, so old Compfiles keep their behavior. |
-| `round_loop.py` | The ONE definition of "the scoring loop is stopped" (`round_loop_state`/`is_stale`), used by verify's round-loop gate (`verifier/engine.py`). |
+| `engine/round_loop.py` | The ONE definition of "the scoring loop is stopped" (`round_loop_state`/`is_stale`), used by verify's round-loop gate (`verifier/engine.py`). |
 | `run_concurrent(items, fn, max_workers=8)` | The one thread-pool helper. Returns an **index-aligned list** (each slot holds fn's value or the exception — never raised here); an earlier dict-keyed version broke on unhashable items and was live-fixed 2026-09-24. Per-box budgets are independent; prints go through `PRINT_LOCK`. Aggregate semantics: `wait_for_boxes_ssh`/`fix_dns_on_boxes` abort only when **all** boxes fail; `prep_apt_on_boxes`/`fix_services_on_boxes` warn per box; `setup_ubuntu_auth` raises if any box ends without working auth (all boxes still attempted, for diagnostics). Pool cap 8 sits well under the engine's raised sshd `MaxSessions` 64. `fix_services_on_boxes` keeps per-box script *construction* serial, parallelizing only execution. |
 | `pick_competition()` | Shared interactive picker used by destroy/redeploy. |
 
-## ssh_ops.py
+## common/ssh_ops.py
 
 `quote_sshkeys()` (URL-encodes the key for Proxmox's `sshkeys` param) is defined here once; `golden_target_ops._quote_sshkeys` is an alias and redeploy rebuild imports it.
 
@@ -78,7 +78,7 @@ verify (`verifier/context.py` imports `gateway_proxy`/`engine_ssh_opts` from it)
 | `wait_for_ssh()` / `wait_for_http()` | Poll-based, never raise: warn and continue on timeout. Deploy aborts only when *every* target of a phase is unreachable. |
 | `wait_for_boxes_ssh()` | Polls each target through the gateway; Windows is probed via guest agent (no key auth exists). Raises only if **all** boxes fail — that looks systemic, and aborting beats burning through the DNS/auth/nakon retry loops for boxes already known unreachable. |
 | `wait_for_cloud_init()` | cloud-init can revert planted perms (sudoers, sshd_config) after a clone, so it must finish before nakon plants anything. Windows is skipped (no cloud-init; `bootstrap_windows_box()` is its equivalent). Exit code 2 means done with non-fatal warnings — still finished, still success. |
-| `is_windows_template()` | `"win" in template_name.lower()` — **one** definition, in `windows_ops.py`, imported by every caller that classifies a template (deduplicated 2026-10-02: there used to be three copies with nothing enforcing that they agreed, and a silent divergence builds the wrong range). |
+| `is_windows_template()` | `"win" in template_name.lower()` — **one** definition, in `common/windows_ops.py`, imported by every caller that classifies a template (deduplicated 2026-10-02: there used to be three copies with nothing enforcing that they agreed, and a silent divergence builds the wrong range). |
 
 ## infra/ — everything that touches the Proxmox estate
 
@@ -97,8 +97,8 @@ One package, one submodule per concern; **tests patch the owning module**
 | `infra/plan.py` | the preflight plan model and builders |
 | `infra/collisions.py` | live-cluster vmid/bridge/mgmt-IP collision checks |
 | `infra/resources.py` | datastore headroom + template/cloud-init checks |
-| `targets.py` | `vm_id_for`, `box_index`, `enumerate_targets`, `persist_targets`/`load_targets` |
-| `terraform_workdir.py` | per-competition terraform dir, `team_vmids_from_state` |
+| `common/targets.py` | `vm_id_for`, `box_index`, `enumerate_targets`, `persist_targets`/`load_targets` |
+| `common/terraform_workdir.py` | per-competition terraform dir, `team_vmids_from_state` |
 
 Reads `TF_VAR_proxmox_*` from the environment; no prompts, no phase logic.
 
@@ -149,17 +149,17 @@ checks (`infra/resources.check_share_templates`), vmid and bridge collisions
 (`infra/resources.check_datastore_headroom`); then the engine and jump management-IP gates
 (`infra/collisions`), the red01 gate (`infra/red01.py`), and the nakon catalog check (`catalog_gate`).
 Concurrent deploys are not warned about here: the per-resource gates refuse real collisions, and the
-engine flock (`acquire_engine_lock`, `nakon_lock_ops.py`) serializes the deploys that share one
+engine flock (`acquire_engine_lock`, `nakonops/nakon_lock_ops.py`) serializes the deploys that share one
 scoring engine. Tests patch the owning module (`infra.collisions.proxmox_api`,
 `infra.resources.proxmox_api`). Redeploy/destroy callers use the same `infra.ownership` proof; call
 `run_preflight` before any new Proxmox mutation path.
 
-## config_ops.py
+## config/config_ops.py
 
 Team identity/secrets and persistence (`collect_teams`, `random_password`, `write_text_atomic`/`write_state`,
-`load_packet_passwords`, `load_boxes`). The prompts live in `config_prompts.py` (`collect_boxes`,
+`load_packet_passwords`, `load_boxes`). The prompts live in `config/config_prompts.py` (`collect_boxes`,
 `collect_users_config`, `confirm_deploy`, `list_proxmox_templates`) and the injects loader in
-`injects_config.py`.
+`config/injects_config.py`.
 
 | Symbol | Note |
 |---|---|
@@ -182,7 +182,7 @@ listed). The heavy `--reset-event` re-clone is no longer required for a rerun.
 
 ## nakon configs, bundles and runs (nakon_*_ops.py)
 
-**Layout.** The code is split across `nakon_config_ops.py` (config generation, `os_to_platform`), `nakon_pin_ops.py` (pin/var validation), `nakon_bundle_ops.py` (bundle build), `nakon_lock_ops.py` (engine flock) and `nakon_run_ops.py` (`run_nakon`). Patch a name on the module whose function *uses* it.
+**Layout.** The code is split across `nakonops/nakon_config_ops.py` (config generation, `os_to_platform`), `nakonops/nakon_pin_ops.py` (pin/var validation), `nakonops/nakon_bundle_ops.py` (bundle build), `nakonops/nakon_lock_ops.py` (engine flock) and `nakonops/nakon_run_ops.py` (`run_nakon`). Patch a name on the module whose function *uses* it.
 
 Nakon CLI invocation: config generation, bundle building, and deploy over SSH to the engine. nakon is
 a subprocess with `cwd = NAKON_DIR`, never an import.
@@ -217,7 +217,7 @@ deliberately keeps `jobs=1` — a mid-event repair sweep stays maximally gentle 
 
 ## engine_*_ops.py (scoring engine)
 
-**Layout.** `engine_cmd_ops.py` holds the one `_run_engine_cmd` every remote step uses (`step=` is a required argument); the rest is in `engine_bootstrap_ops.py`, `engine_identity_ops.py`, `engine_health_ops.py` and `engine_event_ops.py`.
+**Layout.** `engine/engine_cmd_ops.py` holds the one `_run_engine_cmd` every remote step uses (`step=` is a required argument); the rest is in `engine/engine_bootstrap_ops.py`, `engine/engine_identity_ops.py`, `engine/engine_health_ops.py` and `engine/engine_event_ops.py`.
 
 Scoring-engine bootstrap (Docker, Quotient), NAT/firewall durability, and the `event.conf` push.
 
@@ -233,7 +233,7 @@ Scoring-engine bootstrap (Docker, Quotient), NAT/firewall durability, and the `e
 | `push_event_conf()` | Takes the same per-run secrets `deploy()` generated: the passwords passed to `bootstrap_scoring_engine()` (so the `.env` rewritten here matches) and the `box_creds` passed to `fix_services_on_boxes()` (which creates those OS accounts). **`box_creds` is what Quotient's Ssh/Smtp/Imap/Sql/Ftp credlist checks authenticate with — the names must equal `fix_services_on_boxes()`' accounts, and there are deliberately no defaults**: any mismatch or stale fallback literal silently scores healthy boxes as down. The credlist lands at `/opt/quotient/config/credlists/linux.credlist`; Quotient is restarted afterward. |
 | team bridge NICs | ens19/ens20/… need nothing here — Terraform's `null_resource.team_nics` + `null_resource.reboot_scoring_engine` have fully addressed them by the time this phase runs. |
 
-## windows_ops.py
+## common/windows_ops.py
 
 Windows provisioning over the QEMU guest agent — the only channel before networking or credentials
 exist.
@@ -280,9 +280,9 @@ Post-nakon hardening and DNS/auth fixes over the gateway, with guest-agent fallb
   retried via the guest agent as root, with `sudo ` stripped by `re.sub(r"\bsudo ", …)`: `\b`, not
   `^\s*`, so mid-pipeline uses like `echo … | sudo chpasswd` are caught too.
 
-## golden_ops.py
+## golden/golden_ops.py
 
-**Layout.** `golden_target_ops.py` (slot arithmetic, `golden_targets`, `unbooted_golden_boxes`) and `golden_disk_ops.py` (disk sizing, root expansion) are separate modules. `build_golden_set` in `golden_ops.py` is the sequencer, with `_build_unbooted_goldens`, `_clone_missing_goldens` and `_convert_goldens` as its steps.
+**Layout.** `golden/golden_target_ops.py` (slot arithmetic, `golden_targets`, `unbooted_golden_boxes`) and `golden/golden_disk_ops.py` (disk sizing, root expansion) are separate modules. `build_golden_set` in `golden/golden_ops.py` is the sequencer, with `_build_unbooted_goldens`, `_clone_missing_goldens` and `_convert_goldens` as its steps.
 
 Golden-set build and template conversion (M3.1). One VM per box type is full-cloned from the base
 templates to `engine_vmid + 150 + box_idx`, planted with the **golden stage** (strict, tz-base
@@ -299,7 +299,7 @@ rollback guard on re-entry), cloud-init-cleaned, stopped, and converted with
 | per-box passes run on a bounded pool (4) | The snapshot, password, cloud-init-clean and convert loops were serial; each unit is independent per-box Proxmox work, so they run through `utils.run_concurrent(max_workers=4)` — the same bound `deploy.py` uses for Windows bootstrap and the `tz-base`/`tz-ready` snapshots. Bound 4, not 8: each unit drives a Proxmox task. The full-clone loops stay serial (crash-consistent copies saturate the datastore). |
 | root-disk expansion | The golden's root fs is expanded guest-side before the plant. A Fedora btrfs root reports `/dev/sda3[/root]`; the bracketed suffix breaks the partition-digit parse and resize2fs cannot grow btrfs, so expansion strips the suffix, grows btrfs natively, and tolerates a late `/dev/dm-N` (`dmsetup mknodes`). Failures retry, then fail hard only when the root fs is measurably too small (regression-4x1 shape — the 15 GB ubuntu template disk filled mid-plant); unmeasurable warns and continues. |
 
-## template_freeze.py and engine_template_ops.py (M4)
+## engine/template_freeze.py and engine/engine_template_ops.py (M4)
 
 Per-competition template lifecycle: `build → test runs (reuse; rebuild on config change) → freeze →
 competition → destroy`. NOT a cross-competition cache — every template belongs to exactly one
@@ -342,7 +342,7 @@ the gate warned "proceeding on the frozen template" — live-found 2026-09-26, s
 drift still hard-refuses before anything is destroyed. Mid-event rebuilds and recoveries warn (not block)
 when the node's template hash differs from the verified record.
 
-## domain_ops.py
+## guests/domain_ops.py
 
 Per-team AD forests: DC promotion and member joins. Driven by `domain_roles.json`; no-op when absent.
 The **sequencing** (why the ADDS reboot needs its own single-machine pass, why the domain chain runs
@@ -357,18 +357,18 @@ before the final stage, DSRM/SRV waits) is canonical in
 | swallowed chain failures | `deploy_domain_configs` aggregates `run_concurrent` results and fails the phase rather than discarding them; a team chain that raised right after promotion used to leave the AD misconfig pass, packet accounts, and member joins silently unplantable (only an hour-later verify FAIL revealed it). `--from-phase 6` re-enters safely (promotion probes + markers). |
 | Linux member joins | Join failures are scenario flavor, not infrastructure — the box keeps local auth and every scored service. The realmd apt install can blow past nakon's per-step timeout on small VMs: log loudly and keep deploying (hence `strict=False` + catch). |
 
-## timing.py
+## common/timing.py
 
 Deploy timing instrumentation (M0.1). `timed(comp_dir, phase, op, target)` appends one JSONL line per
 operation to `competitions/<id>/.deploy-timings.jsonl` (gitignored, no secrets — op names and
 durations only). Phases wrap their big-ticket ops (terraform apply, engine prep, per-VM clone/start/
 destroy/snapshot, waits, apt prep, nakon passes with machine counts, ADDS/joins, seed) in `deploy_lib/phases/`
-and `domain_ops.py`. Appends are lock-serialized, so M2's concurrent workers can write the same file
+and `guests/domain_ops.py`. Appends are lock-serialized, so M2's concurrent workers can write the same file
 safely. `print_timing_summary` totals seconds per (phase, op) at deploy end. Baselines come from real
 deploys (see [benchmark-m02.md](benchmark-m02.md), [benchmark-m04.md](benchmark-m04.md)), not
 synthetic ones.
 
-## firewall_ops.py
+## net/firewall_ops.py
 
 The in-path firewall path (pipeline v3). A box with `"unmanaged": true, "in_path": true` in
 `boxes.json` is the team's gateway; everything here keys off `utils.is_in_path_fw()`. The
@@ -406,7 +406,7 @@ leaf helpers, never on `runner`):
 | `placement.py` | `parse_team_node`, `apply_engine_placement` (resolve placement, activate it, take the endpoint-keyed engine lock) |
 | `configs.py` | `generate_stage_configs_and_hashes`: nakon/stage configs, golden hashes, the pre-phase-1 frozen gate |
 | `tfinputs.py` | `engine_mgmt_ip_from_env`, `build_terraform_inputs` (`terraform.tfvars.json`, `teams.json`, env copies) |
-| `targets.py` | `enumerate_deploy_targets` (managed/linux/windows work lists) |
+| `common/targets.py` | `enumerate_deploy_targets` (managed/linux/windows work lists) |
 | `golden_plan.py` | `golden_hash_entries`, `phase1_destroy_waves` (phase 1's teardown decision), `golden_rebuild_gate` (phase 4's per-slot rebuild gate) — both destroy decisions in one file |
 | `coverage.py` | `record_coverage` / `record_stage_coverage` / `record_clean_coverage` (plant-coverage bookkeeping) |
 | `failure.py` | `record_degradations` |
@@ -433,7 +433,7 @@ that binds it. The internals-specific notes:
 | [4/8] golden + apply #2 | See `golden_ops` and `template_freeze`; then Windows bootstrap for ALL teams (guest agent is the only pre-network channel), concurrent waits, `setup_ubuntu_auth`, DNS fix, apt prep, and `tz-base` for every box. Clones boot with working DNS/apt because the golden disk carries no disruptive configs. |
 | [5/8] firewall bootstrap | Only when the lineup has an `in_path` box (print-and-return otherwise, keeping the phase index stable). Order is load-bearing: the engine still owns the team bridges' addressing while the configs are pushed, and phases 6-7 must not run before the cutover or their engine→box work would target the wrong path. The SSH push (`firewall_ops.bootstrap_firewalls`) is functional end to end — SSH answering on the WAN address is the success signal. The cutover rewrites `/etc/netplan/60-team-ifaces.yaml` — **a later `terraform apply` rewrites that file back to the pre-cutover shape** (trigger-gated, so only on a real trigger change): re-running apply on a live firewall range re-adds `192.168.<id>.1` under the firewall's feet. The phase writes its completion to `state["firewalls_bootstrapped"]` for reporting; resume re-pushes (an unchanged config is not re-applied). Firewall `tz-base` snapshots are taken HERE, after the cutover, not in phase 4 — see architecture.md. |
 | [6/8] repair sweep | `.nakon-repair.json`, lenient (`strict=False`: one flaky plant must not kill the sweep after 98% landed), `--jobs N`, gated by `.postclone-swept`. `fix_services_on_boxes` runs **after** the sweep: the ssh-\* configs restart sshd and can trip the start-limit, so the un-wedge + credlist accounts + service binds belong after the thing that breaks them. (Historical note: through 2026-09-24 the equivalent sweep passed no `only=` at all — the monolith's comment said "team1 already done" but the filter was never implemented, so team1 was re-planted over its finished strict plant on every deploy.) |
-| [7/8] domains → final → beacons → assume-breach | `deploy_domain_configs` runs teams **concurrently** (each team's ADDS→join chain serial within itself); the final pass runs after it (disruptive + boot-hostile); team beacons (if `team_beacons 1`) are planted **before** the `tz-ready` snapshot so restore points carry them. Assume-breach red presence (if `assume_breach 1`, `red_plant_ops.py`) deploys bad-auto's red01 + the realm engine DNAT and runs the day-0 seed — access + prebaked Realm C2 beacons + the persistence/evasion layer — also **before** the snapshot, so the boxes are already compromised at T0. With `realm_c2_local 1` (the default) the C2 itself lives on red01, not the static VM101: `badauto_config_ops.py`/`realm_c2_ops.py` write the comp's own bad-auto config *before* the deploy (reserved red01 vmid/IP + the realm layer; the engine DNAT bakes `realm.c2_ip` in at deploy time), then builds tavern from source on red01 with every callback transport (`grpc` + the http1/dns/quic/icmp redirectors) and the MCP server (`ENABLE_AI_MCP=1`, `/mcp`), relaying the prebuilt imix implants from `realm_c2_implant_host` into bad-auto's staging paths (`realm_c2_repo`, `realm_c2_go_version` override the upstream URL / toolchain). A provisioning failure degrades rather than aborts; `realm_c2_local 0` keeps the legacy C2-on-VM101 layout. Teardown needs nothing extra — tavern dies with red01. It records red01's identity in `state["assume_breach"]`; **teardown runs `badauto destroy` for red01** (the range's run tags never covered it), and bad-auto now speaks the same refusal contract (`TEARDOWN-REFUSAL {saw,expected,remedy}` + exit 17) and pulls red's evidence before its VM delete. `state["nakon_failed_steps"]` is **merged**, not overwritten: a failure in both passes must keep the repair tally, duplicates dropped, capped at 40. |
+| [7/8] domains → final → beacons → assume-breach | `deploy_domain_configs` runs teams **concurrently** (each team's ADDS→join chain serial within itself); the final pass runs after it (disruptive + boot-hostile); team beacons (if `team_beacons 1`) are planted **before** the `tz-ready` snapshot so restore points carry them. Assume-breach red presence (if `assume_breach 1`, `red/red_plant_ops.py`) deploys bad-auto's red01 + the realm engine DNAT and runs the day-0 seed — access + prebaked Realm C2 beacons + the persistence/evasion layer — also **before** the snapshot, so the boxes are already compromised at T0. With `realm_c2_local 1` (the default) the C2 itself lives on red01, not the static VM101: `red/badauto_config_ops.py`/`red/realm_c2_ops.py` write the comp's own bad-auto config *before* the deploy (reserved red01 vmid/IP + the realm layer; the engine DNAT bakes `realm.c2_ip` in at deploy time), then builds tavern from source on red01 with every callback transport (`grpc` + the http1/dns/quic/icmp redirectors) and the MCP server (`ENABLE_AI_MCP=1`, `/mcp`), relaying the prebuilt imix implants from `realm_c2_implant_host` into bad-auto's staging paths (`realm_c2_repo`, `realm_c2_go_version` override the upstream URL / toolchain). A provisioning failure degrades rather than aborts; `realm_c2_local 0` keeps the legacy C2-on-VM101 layout. Teardown needs nothing extra — tavern dies with red01. It records red01's identity in `state["assume_breach"]`; **teardown runs `badauto destroy` for red01** (the range's run tags never covered it), and bad-auto now speaks the same refusal contract (`TEARDOWN-REFUSAL {saw,expected,remedy}` + exit 17) and pulls red's evidence before its VM delete. `state["nakon_failed_steps"]` is **merged**, not overwritten: a failure in both passes must keep the repair tally, duplicates dropped, capped at 40. |
 | [8/8] seed | Quotient's HTTP is polled (`wait_for_http` on `/api/login`) instead of a blind sleep. Each sub-step is gated on its own state flag (`seeded`, `engine_unpaused`, `injects_created`) because **`unpause_engine` is not idempotent** — a resume in the crash window between POST and flag-save asks the engine first (`engine_paused`) and re-POSTs only when it really is still paused. `resolve_inject_times()` runs here so offsets anchor to the actual competition start. |
 | failure handler | `current_phase` is tracked so the handler names where to resume. An "already exists" error at phase ≥ 2 suggests a Proxmox/Terraform state mismatch, so the recommended resume point is **phase 1** — resuming from the failed phase would hit the same error again. |
 | `credentials.txt` (0600) | The durable, non-log record of every secret this run generated; the console prints them for convenience but the file is authoritative. Includes `box-login` and `box-credlist-*` lines. |
@@ -499,7 +499,7 @@ Teardown: evidence -> portal -> red01 -> pre-stop -> `terraform destroy` -> temp
 
 ## redeploy-competition.py
 
-**Layout (0.2.0 split).** The script is the CLI + dispatch. `redeploy_gate_ops.py` loads the range and enforces the `pipeline_version`/`run_id` gate before any Proxmox call; `redeploy_select_ops.py` (selectors, `box_platform`), `redeploy_plant_ops.py` (`run_nakon_and_harden`, `rerun_domain_configs`, `prepare_nakon_assets`), `redeploy_light_ops.py` (`mode_resync`/`mode_rollback`/`mode_reconfigure`), `redeploy_rebuild_ops.py` (`mode_rebuild`), `redeploy_reset_ops.py` (ladder + health probe) and `redeploy_engine_ops.py` (`engine_recovery`, `reseed_event`). Patch a collaborator on the module whose function calls it. `quote_sshkeys` lives in `ssh_ops`.
+**Layout (0.2.0 split).** The script is the CLI + dispatch. `redeploy/redeploy_gate_ops.py` loads the range and enforces the `pipeline_version`/`run_id` gate before any Proxmox call; `redeploy/redeploy_select_ops.py` (selectors, `box_platform`), `redeploy/redeploy_plant_ops.py` (`run_nakon_and_harden`, `rerun_domain_configs`, `prepare_nakon_assets`), `redeploy/redeploy_light_ops.py` (`mode_resync`/`mode_rollback`/`mode_reconfigure`), `redeploy/redeploy_rebuild_ops.py` (`mode_rebuild`), `redeploy/redeploy_reset_ops.py` (ladder + health probe) and `redeploy/redeploy_engine_ops.py` (`engine_recovery`, `reseed_event`). Patch a collaborator on the module whose function calls it. `quote_sshkeys` lives in `ssh_ops`.
 
 Filtered per-team/box rollback/reconfigure/rebuild against a live range, using snapshots. The mode
 table (incl. `resync` and `engine-recovery`) is in
@@ -608,10 +608,10 @@ Multi-node is documented end-to-end in [multi-node.md](multi-node.md); these are
 
 | Module | Note |
 |---|---|
-| `nodes_config.py` / `placement_record.py` / `placement_planner.py` | One competition spans up to `MAX_SATELLITES`+1 hosts. Placement is capacity-fill; per-host API tokens are referenced by **env-var name** (`nodes.json` records `token_env`); `activate_placement()` swaps the `TF_VAR_proxmox_*` env for the engine's host before anything node-scoped, restoring the originals afterward. An existing `placement.json` is authoritative; a resume without one adopts its deployed endpoint rather than re-balancing a live range. `golden_vmid_for_slot()` shifts the golden block by one box-stride per satellite (`engine_vmid + 150 + slot*10 + box_idx`) because linked clones cannot cross hosts on separate storages; `jump_vmid_for()` is `engine_vmid + 130 + slot`. |
-| `jump_ops.py` | Per-satellite alpine jump/router VM. It impersonates the engine at L3 on that satellite's team bridges (holds `192.168.<id>.1`, the address every box knows as its gateway), DNATs the gateway IP's apt-cacher port to the engine, and SNATs engine→box traffic so the boxes' gateway-IP-only SSH trust still sees their gateway. Forwarding is default-DROP with explicit accepts, preserving team-to-team isolation. NIC hotplug past the first NIC is unreliable — reboot, do not hotplug. |
-| `routing_ops.py` | `verify_satellite_routing()` is the fail-loud convergence gate after apply #1: nothing downstream (satellite golden plants, nakon, scoring) works without engine → jump → satellite-bridge paths. The static routes themselves are written into the engine's netplan by `team_nics` from `placement["satellite_routes"]` (plus a oneshot systemd unit so an operator engine reboot mid-event re-asserts them instead of silently stranding satellite scoring); this module only proves them. |
-| `template_sync_ops.py` / `sync-template.py` | Cross-node template copy over root SSH (`vzdump --stdout \| ssh qmrestore`). Satellites need their own copies of every box template plus an alpine base for the jump VM clone before they can host teams; the per-node template gates and placement probes point here on failure. |
+| `multinode/nodes_config.py` / `multinode/placement_record.py` / `multinode/placement_planner.py` | One competition spans up to `MAX_SATELLITES`+1 hosts. Placement is capacity-fill; per-host API tokens are referenced by **env-var name** (`nodes.json` records `token_env`); `activate_placement()` swaps the `TF_VAR_proxmox_*` env for the engine's host before anything node-scoped, restoring the originals afterward. An existing `placement.json` is authoritative; a resume without one adopts its deployed endpoint rather than re-balancing a live range. `golden_vmid_for_slot()` shifts the golden block by one box-stride per satellite (`engine_vmid + 150 + slot*10 + box_idx`) because linked clones cannot cross hosts on separate storages; `jump_vmid_for()` is `engine_vmid + 130 + slot`. |
+| `net/jump_ops.py` | Per-satellite alpine jump/router VM. It impersonates the engine at L3 on that satellite's team bridges (holds `192.168.<id>.1`, the address every box knows as its gateway), DNATs the gateway IP's apt-cacher port to the engine, and SNATs engine→box traffic so the boxes' gateway-IP-only SSH trust still sees their gateway. Forwarding is default-DROP with explicit accepts, preserving team-to-team isolation. NIC hotplug past the first NIC is unreliable — reboot, do not hotplug. |
+| `multinode/routing_ops.py` | `verify_satellite_routing()` is the fail-loud convergence gate after apply #1: nothing downstream (satellite golden plants, nakon, scoring) works without engine → jump → satellite-bridge paths. The static routes themselves are written into the engine's netplan by `team_nics` from `placement["satellite_routes"]` (plus a oneshot systemd unit so an operator engine reboot mid-event re-asserts them instead of silently stranding satellite scoring); this module only proves them. |
+| `multinode/template_sync_ops.py` / `sync-template.py` | Cross-node template copy over root SSH (`vzdump --stdout \| ssh qmrestore`). Satellites need their own copies of every box template plus an alpine base for the jump VM clone before they can host teams; the per-node template gates and placement probes point here on failure. |
 
 ## quotient/setup.py
 
@@ -730,7 +730,7 @@ them.
 
 ## artifacts_lib — per-run test artifacts
 
-`artifacts_ops.py` is only a facade re-exporting the public names of `artifacts_lib/` (plus
+`artifacts_lib/artifacts_ops.py` is only a facade re-exporting the public names of `artifacts_lib/` (plus
 `shutil`/`subprocess`, which tests patch through it). One concern per module, shared logic defined
 once:
 

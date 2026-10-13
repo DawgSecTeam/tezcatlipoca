@@ -113,7 +113,7 @@ satellite: its slot's goldens, jump VM, its teams, and a jump clone source) and 
 template / collision / headroom checks the single-node deploy runs as a one-share plan, then the
 engine and jump mgmt-IP sweeps and the catalog check. `in_path` firewalls on satellite teams are
 refused while the plan is built. See [internals.md](internals.md#preflight--the-single-pre-proxmox-gate).
-The placement code is `nodes_config.py` / `placement_record.py` / `placement_planner.py`
+The placement code is `multinode/nodes_config.py` / `multinode/placement_record.py` / `multinode/placement_planner.py`
 (there is no facade; import from the owning module).
 
 Absent `nodes.json` → every deploy/op behaves exactly as the single-node design.

@@ -4,10 +4,10 @@ import json
 import os
 from pathlib import Path
 
-from config_ops import write_text_atomic
-from constants import DEFAULT_ENGINE_MGMT_GW, DEFAULT_ENGINE_MGMT_IP
-from placement_record import satellite_routes_for, satellite_tfvars
-from terraform_workdir import ensure_terraform_workdir
+from config.config_ops import write_text_atomic
+from common.constants import DEFAULT_ENGINE_MGMT_GW, DEFAULT_ENGINE_MGMT_IP
+from multinode.placement_record import satellite_routes_for, satellite_tfvars
+from common.terraform_workdir import ensure_terraform_workdir
 
 
 def engine_mgmt_ip_from_env():

@@ -1,6 +1,6 @@
 """Failure bookkeeping: the tolerated-failure ledger."""
 
-from utils import degradation_summary, degradations
+from common.utils import degradation_summary, degradations
 
 
 def record_degradations(ctx):

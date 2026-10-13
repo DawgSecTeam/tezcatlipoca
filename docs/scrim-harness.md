@@ -2,7 +2,7 @@
 
 Design notes, rationale, and hard-won lessons for the agent-scrim harness
 scripts: `run-agent-scrim.py` (whole-lifecycle orchestrator),
-`scrim-report.py` (interaction scoring), and `beacon_ops.py` (hunt-artifact
+`scrim-report.py` (interaction scoring), and `red/beacon_ops.py` (hunt-artifact
 planting). This content used to live only in comments and docstrings inside
 those files; it was extracted here on 2026-09-21. **An earlier commit (`af7468c`) stripped the
 docstrings and comments those notes came from, so for most of the symbols below this file is now
@@ -14,7 +14,7 @@ record (what changed, where it landed, what's left), and
 `docs/reports/dress-rehearsal-prompt.md` owns the rehearsal runbook.
 
 **Contents:** [run-agent-scrim.py](#run-agent-scrimpy) · [scrim-report.py](#scrim-reportpy) ·
-[beacon_ops.py](#beacon_opspy)
+[red/beacon_ops.py](#beacon_opspy)
 
 ## Module map (release 0.2.0 split)
 
@@ -61,7 +61,7 @@ test.
 `blue_side.py` (blue metrics, down windows, inject counting), `gate_table.py` (rehearsal gates,
 components), `render.py` (`build_report`).
 
-`beacon_ops.py`, `run-schedule.py` and `generate-packet.py` are single-purpose
+`red/beacon_ops.py`, `run-schedule.py` and `generate-packet.py` are single-purpose
 scripts and were not split.
 
 ## run-agent-scrim.py
@@ -422,7 +422,7 @@ folder by `REPORT.md`).
   removal verb (removed/deleted/disabled/uninstalled/locked/changed-back/
   reset); injects = `sub-*.md`/`sub-*.txt` plus everything in `submissions/`.
 
-## beacon_ops.py
+## red/beacon_ops.py
 
 Plants raw-socket beacons on team Linux boxes as blue-team hunt artifacts,
 during deploy phase 6 of a competition that enables Compfile

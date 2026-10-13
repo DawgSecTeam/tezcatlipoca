@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 
-import artifacts_ops as ao
+from artifacts_lib import artifacts_ops as ao
 from .cli_common import (COMPETITIONS_DIR, EXIT_FINDINGS, EXIT_OK, LIST_HEADERS, STUB_STATUS_RE,
                          agents_line, display_label, error, index_rows, list_row, locate_test,
                          print_table, resolve_comp, show, summary_line, unknown_comp, wants)

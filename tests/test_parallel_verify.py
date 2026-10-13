@@ -35,7 +35,7 @@ sys.path.insert(0, str(_REPO))
 import verifier.cli as v_cli  # noqa: E402
 import verifier.model as v_model  # noqa: E402
 import verifier.verdict as v_verdict  # noqa: E402
-from targets import vm_id_for  # noqa: E402
+from common.targets import vm_id_for  # noqa: E402
 import verifier.context as v_context  # noqa: E402
 import verifier.domains as v_domains  # noqa: E402
 import verifier.engine as v_engine  # noqa: E402

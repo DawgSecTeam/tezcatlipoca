@@ -27,11 +27,11 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import packet_ops  # noqa: E402
-from utils import env_summary  # noqa: E402
+from config import packet_ops  # noqa: E402
+from common.utils import env_summary  # noqa: E402
 
-import redeploy_rebuild_ops as redeploy  # noqa: E402  (owns reconcile_terraform_state)
-from redeploy_context import RedeployContext  # noqa: E402
+from redeploy import redeploy_rebuild_ops as redeploy  # noqa: E402  (owns reconcile_terraform_state)
+from redeploy.redeploy_context import RedeployContext  # noqa: E402
 
 
 def _rctx(comp_dir, teams, boxes, ctx=None, node="pve"):

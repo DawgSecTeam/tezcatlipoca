@@ -1,6 +1,6 @@
 """prepare(): everything deploy() must do before phase 1, as one ordered, testable step."""
 
-from config_prompts import confirm_deploy
+from config.config_prompts import confirm_deploy
 
 from deploy_lib.configs import generate_stage_configs_and_hashes
 from deploy_lib.context import DeployContext

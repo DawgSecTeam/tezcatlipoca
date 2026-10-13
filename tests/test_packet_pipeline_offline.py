@@ -17,7 +17,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import packet_ops  # noqa: E402
+from config import packet_ops  # noqa: E402
 from deploy_lib import inputs as dl_inputs  # noqa: E402
 from deploy_lib import secrets as dl_secrets  # noqa: E402
 from deploy_lib.context import DeployContext  # noqa: E402
@@ -126,7 +126,7 @@ class PacketPipelineOffline(unittest.TestCase):
                              Status.SKIP_UNAVAILABLE)
 
     def test_machine_lists_and_event_conf_from_compiled_bundle(self):
-        import nakon_config_ops
+        from nakonops import nakon_config_ops
         from quotient.setup import build_event_conf, expected_service_names
         for name, root in self._each():
           with self.subTest(packet=name):

@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from config_ops import write_state
+from config.config_ops import write_state
 
 from .constants import EVIDENCE_DIRS, MANIFEST_NAME, REPO, SCHEMA
 from .env import git_facts, iso

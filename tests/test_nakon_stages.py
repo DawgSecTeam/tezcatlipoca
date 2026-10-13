@@ -14,9 +14,9 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import constants
-import nakon_config_ops
-import nakon_pin_ops
+from common import constants
+from nakonops import nakon_config_ops
+from nakonops import nakon_pin_ops
 
 BOXES = [
     {"name": "web01", "last_octet": 4, "template": "base-fedora44-fix"},

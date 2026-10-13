@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import config_ops  # noqa: E402
+from config import config_ops  # noqa: E402
 
 
 class RandomPasswordTests(unittest.TestCase):

@@ -17,7 +17,7 @@ def _red_ssh_spec(args):
     carries one, else the CLI arg — never the sibling checkout's shared
     config.yaml, which on concurrent sessions names whichever red01 staged last
     (that read used to overwrite --red-ip outright; 2026-10-12)."""
-    import badauto_config_ops
+    from red import badauto_config_ops
     red_ip = getattr(args, "red_ip", None) or badauto_config_ops.DEFAULT_RED01_IP
     comp = core.REPO / "competitions" / args.competition
     configured = ((badauto_config_ops.load_config(comp).get("deploy") or {})

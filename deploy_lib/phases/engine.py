@@ -2,23 +2,23 @@
 
 import os
 
-from constants import DEFAULT_ENGINE_MGMT_GW
-from engine_bootstrap_ops import bootstrap_scoring_engine
-from engine_event_ops import push_event_conf
-from engine_health_ops import ensure_nat_forwarding
-from engine_identity_ops import prepare_engine_from_template
-from golden_target_ops import _quote_sshkeys
-from jump_ops import build_jump_vms, red_segment_from_env
+from common.constants import DEFAULT_ENGINE_MGMT_GW
+from engine.engine_bootstrap_ops import bootstrap_scoring_engine
+from engine.engine_event_ops import push_event_conf
+from engine.engine_health_ops import ensure_nat_forwarding
+from engine.engine_identity_ops import prepare_engine_from_template
+from golden.golden_target_ops import _quote_sshkeys
+from net.jump_ops import build_jump_vms, red_segment_from_env
 from infra.ownership import destroy_vm_if_exists, retag_ownership
-from routing_ops import verify_satellite_routing
-from ssh_ops import forget_engine_host_key, read_terraform_ctx, wait_for_ssh
-from engine_template_ops import build_engine_template, destroy_engine_template, find_engine_template
-from template_freeze import (
+from multinode.routing_ops import verify_satellite_routing
+from common.ssh_ops import forget_engine_host_key, read_terraform_ctx, wait_for_ssh
+from engine.engine_template_ops import build_engine_template, destroy_engine_template, find_engine_template
+from engine.template_freeze import (
     engine_hash_inputs, frozen_gate, hash_from_inputs, load_template_hashes, save_template_hashes,
     stored_template_hash,
 )
-from timing import timed
-from utils import compfile_flag, compfile_value, run_terraform
+from common.timing import timed
+from common.utils import compfile_flag, compfile_value, run_terraform
 
 from deploy_lib.phases._terraform import terraform_env_and_cwd, write_tfvars
 from pathlib import Path
@@ -177,7 +177,7 @@ def phase3_prepare_engine(ctx):
     # yield a range nobody can reach.
     if compfile_flag(ctx.comp_dir / "Compfile", "remote_access", 1):
         with timed(ctx.comp_dir, 3, "remote_access"):
-            import remote_access_ops
+            from net import remote_access_ops
             remote_access_ops.setup_remote_access(ctx)
     else:
         print("  Remote access: skipped (Compfile remote_access 0).")

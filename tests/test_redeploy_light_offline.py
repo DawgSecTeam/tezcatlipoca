@@ -17,9 +17,9 @@ sys.path.insert(0, str(_REPO))
 
 from teardown import machinery as dto  # noqa: E402
 from infra.ownership import Ownership  # noqa: E402
-import redeploy_light_ops as light  # noqa: E402
-from redeploy_context import RedeployContext  # noqa: E402
-from constants import SNAP_BASE, SNAP_READY  # noqa: E402
+from redeploy import redeploy_light_ops as light  # noqa: E402
+from redeploy.redeploy_context import RedeployContext  # noqa: E402
+from common.constants import SNAP_BASE, SNAP_READY  # noqa: E402
 
 LIN = {"name": "web01", "template": "base-ubuntu24.04-fix"}
 WIN = {"name": "dc01", "template": "base-windows-server"}
@@ -180,7 +180,7 @@ class TeardownTemplates(unittest.TestCase):
         j.assert_called_once()
 
     def test_bad_state_vmid_falls_back_to_default(self):
-        from constants import SCORING_ENGINE_VMID
+        from common.constants import SCORING_ENGINE_VMID
         self.assertEqual(dto.engine_vmid_from_state({"scoring_vm_id": "x"}), SCORING_ENGINE_VMID)
         self.assertEqual(dto.engine_vmid_from_state({}), SCORING_ENGINE_VMID)
 

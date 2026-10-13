@@ -18,7 +18,7 @@ import re
 
 from infra.client import proxmox_api
 from infra.collisions import guest_ipv4s
-from utils import compfile_flag, compfile_value
+from common.utils import compfile_flag, compfile_value
 
 _MARKER_RE = re.compile(r"bad-auto red01 comp=(\S+) id=([0-9a-f]{8,64})")
 

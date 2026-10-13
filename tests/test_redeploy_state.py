@@ -29,13 +29,13 @@ from unittest.mock import MagicMock, patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import config_ops  # noqa: E402  (the one atomic writer; also the torn-write test's patch target)
+from config import config_ops  # noqa: E402  (the one atomic writer; also the torn-write test's patch target)
 import pipeline_api  # noqa: E402
-import redeploy_engine_ops  # noqa: E402
-import redeploy_light_ops  # noqa: E402
-import redeploy_plant_ops  # noqa: E402
-import redeploy_rebuild_ops  # noqa: E402
-from redeploy_context import RedeployContext  # noqa: E402
+from redeploy import redeploy_engine_ops  # noqa: E402
+from redeploy import redeploy_light_ops  # noqa: E402
+from redeploy import redeploy_plant_ops  # noqa: E402
+from redeploy import redeploy_rebuild_ops  # noqa: E402
+from redeploy.redeploy_context import RedeployContext  # noqa: E402
 
 
 def _rctx(ctx, comp_dir, state=None, state_path=None, node="pve"):

@@ -8,10 +8,10 @@ import json
 import os
 import sys
 
-from config_ops import load_boxes, load_packet_passwords
-from injects_config import load_injects
-from constants import SCORING_ENGINE_VMID
-from utils import compfile_flag, env_summary, load_compfile, load_users_config
+from config.config_ops import load_boxes, load_packet_passwords
+from config.injects_config import load_injects
+from common.constants import SCORING_ENGINE_VMID
+from common.utils import compfile_flag, env_summary, load_compfile, load_users_config
 
 
 def resolve_engine_vmid(ctx, comp_dir, from_phase, scoring_vmid):
@@ -57,7 +57,7 @@ def load_competition_spec(ctx, comp_dir):
     # lacks compile-packet's gitignored secret layer; without it the machine list has
     # no packet-promised decoy/local accounts and the harness's pre-T0 verify --packet
     # aborts the run (live-found 2026-10-04, scrim-reset). Compile-on-demand here.
-    from packet_ops import ensure_packet_secrets
+    from config.packet_ops import ensure_packet_secrets
     ensure_packet_secrets(comp_dir)
     ctx.box_username, ctx.credlist_usernames = load_users_config(comp_dir)
     # nakon --jobs pass-through (M1.2): per-machine work is atomic in nakon's runner, so N

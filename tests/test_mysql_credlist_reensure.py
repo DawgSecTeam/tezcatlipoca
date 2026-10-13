@@ -10,8 +10,8 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import service_fixup_ops
-from service_fixup_ops import mysql_credlist_reensure_script, reensure_mysql_credlist_users
+from guests import service_fixup_ops
+from guests.service_fixup_ops import mysql_credlist_reensure_script, reensure_mysql_credlist_users
 
 
 CREDS = {"lead": "pw-lead", "records": "pw-records"}

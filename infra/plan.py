@@ -87,7 +87,7 @@ def _fetch_cluster_vms_single():
 
 def single_node_plan(comp_dir, boxes, num_teams, teams, engine_vmid, check_free,
                      engine_mgmt_ip, our_run_tag):
-    import badauto_config_ops
+    from red import badauto_config_ops
     share = NodeShare(
         name="", node=os.environ["TF_VAR_proxmox_node"], multi=False, slot=0, is_engine=True,
         teams=teams or {}, num_teams=num_teams,
@@ -105,8 +105,8 @@ def single_node_plan(comp_dir, boxes, num_teams, teams, engine_vmid, check_free,
 def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_ip,
                    check_free, our_run_tag):
     # Lazy: only the multi-node path pulls in the placement machinery.
-    import badauto_config_ops
-    import placement_record
+    from red import badauto_config_ops
+    from multinode import placement_record
     from infra.client import cluster_vms_for
 
     # In-path firewalls are a slot-0 feature for now: the transit bridge + gateway

@@ -15,35 +15,35 @@ unused re-export here is invisible again by construction, which is the bug we re
 """
 
 # Owned by constants.
-from constants import PER_MACHINE_NAKON_BUDGET
+from common.constants import PER_MACHINE_NAKON_BUDGET
 
 # Owned by domain_ops.
-from domain_ops import deploy_domain_configs
+from guests.domain_ops import deploy_domain_configs
 
 # Owned by engine_health_ops.
-from engine_health_ops import ensure_nat_forwarding
+from engine.engine_health_ops import ensure_nat_forwarding
 
 # Owned by golden_target_ops.
-from golden_target_ops import unbooted_golden_boxes
+from golden.golden_target_ops import unbooted_golden_boxes
 
 # Owned by apt_dns_ops, service_fixup_ops and ubuntu_auth_ops.
-from apt_dns_ops import fix_dns_on_boxes
-from service_fixup_ops import fix_services_on_boxes
-from ubuntu_auth_ops import setup_ubuntu_auth
+from guests.apt_dns_ops import fix_dns_on_boxes
+from guests.service_fixup_ops import fix_services_on_boxes
+from guests.ubuntu_auth_ops import setup_ubuntu_auth
 
 # Owned by nakon_config_ops, nakon_bundle_ops and nakon_run_ops.
-from nakon_bundle_ops import build_nakon_bundle
-from nakon_config_ops import generate_stage_configs, os_to_platform
-from nakon_run_ops import run_nakon
+from nakonops.nakon_bundle_ops import build_nakon_bundle
+from nakonops.nakon_config_ops import generate_stage_configs, os_to_platform
+from nakonops.nakon_run_ops import run_nakon
 
 # Owned by ssh_ops.
-from ssh_ops import read_terraform_ctx, wait_for_boxes_ssh, wait_for_cloud_init
+from common.ssh_ops import read_terraform_ctx, wait_for_boxes_ssh, wait_for_cloud_init
 
 # Owned by utils.
-from utils import env_summary
+from common.utils import env_summary
 
 # Owned by windows_ops.
-from windows_ops import bootstrap_windows_box
+from common.windows_ops import bootstrap_windows_box
 
 # The names above are re-exports, not private imports: pyflakes otherwise reports every
 # one of them as unused, which is exactly the noise that made the old shim's real

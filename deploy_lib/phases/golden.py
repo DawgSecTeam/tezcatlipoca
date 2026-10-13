@@ -2,17 +2,17 @@
 
 from functools import partial
 
-from constants import SNAP_BASE
-from golden_target_ops import _template_vmid_map
-from golden_ops import build_golden_set
-from apt_dns_ops import fix_dns_on_boxes, prep_apt_on_boxes
-from nakon_config_ops import generate_slot_golden_config
-from placement_record import record_of
-from ssh_ops import wait_for_boxes_ssh, wait_for_cloud_init
-from template_freeze import load_template_hashes, save_template_hashes
-from timing import timed
-from utils import is_unmanaged, run_concurrent, run_terraform
-from windows_ops import bootstrap_windows_box
+from common.constants import SNAP_BASE
+from golden.golden_target_ops import _template_vmid_map
+from golden.golden_ops import build_golden_set
+from guests.apt_dns_ops import fix_dns_on_boxes, prep_apt_on_boxes
+from nakonops.nakon_config_ops import generate_slot_golden_config
+from multinode.placement_record import record_of
+from common.ssh_ops import wait_for_boxes_ssh, wait_for_cloud_init
+from engine.template_freeze import load_template_hashes, save_template_hashes
+from common.timing import timed
+from common.utils import is_unmanaged, run_concurrent, run_terraform
+from common.windows_ops import bootstrap_windows_box
 
 from deploy_lib.coverage import record_coverage
 from deploy_lib.golden_plan import golden_rebuild_gate

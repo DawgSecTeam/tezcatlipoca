@@ -9,12 +9,12 @@ import json
 import os
 from pathlib import Path
 
-from placement_record import activate_placement, read_placement, record_of
+from multinode.placement_record import activate_placement, read_placement, record_of
 from teardown import (Inventory, TeardownContext, TeardownEngine, load_ownership,
                       refuse_frozen_full_teardown, require_terraform_state)
 from teardown.engine import TEARDOWN_JOURNAL
 from teardown.modes import build_terminal_plan
-from template_freeze import frozen_state
+from engine.template_freeze import frozen_state
 
 
 def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
@@ -69,7 +69,7 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
 
 # records steps the CALLER already completed (the scrim harness runs the evidence pull/collect/report and its superior red teardown itself) so the standard plan skips them instead of re-running them against dead boxes
 def record_evidence_done(comp_dir, test_dir=None, red_vmid=None):
-    from config_ops import write_text_atomic
+    from config.config_ops import write_text_atomic
     from teardown import Refusal
 
     comp_dir = Path(comp_dir)

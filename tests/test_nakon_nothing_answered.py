@@ -23,7 +23,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import nakon_run_ops  # noqa: E402
+from nakonops import nakon_run_ops  # noqa: E402
 
 
 class _FakeProc:

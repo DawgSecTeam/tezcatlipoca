@@ -20,7 +20,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import round_loop  # noqa: E402
+from engine import round_loop  # noqa: E402
 
 ZERO = "0001-01-01T00:00:00Z"
 NOW = datetime(2026, 10, 2, 12, 0, 0, tzinfo=timezone.utc)

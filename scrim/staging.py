@@ -4,7 +4,7 @@ from pathlib import Path
 from scrim import core
 from scrim import procs
 from scrim.core import log
-from utils import load_users_config
+from common.utils import load_users_config
 
 
 DEFAULT_TEMPLATE = core.REPO / "competitions" / "agent-scrim"

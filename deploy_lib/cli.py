@@ -5,9 +5,9 @@ import json
 import sys
 from pathlib import Path
 
-from config_prompts import _prompt_difficulty, collect_boxes, collect_users_config
-from config_ops import load_previous_competitions
-from utils import valid_comp_name
+from config.config_prompts import _prompt_difficulty, collect_boxes, collect_users_config
+from config.config_ops import load_previous_competitions
+from common.utils import valid_comp_name
 
 from deploy_lib.runner import deploy
 

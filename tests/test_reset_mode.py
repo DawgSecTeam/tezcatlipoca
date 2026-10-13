@@ -31,13 +31,13 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 import pipeline_api  # noqa: E402
-import redeploy_light_ops  # noqa: E402
-import redeploy_plant_ops  # noqa: E402
-import redeploy_rebuild_ops  # noqa: E402
-import redeploy_reset_ops  # noqa: E402
-from redeploy_context import RedeployContext  # noqa: E402
+from redeploy import redeploy_light_ops  # noqa: E402
+from redeploy import redeploy_plant_ops  # noqa: E402
+from redeploy import redeploy_rebuild_ops  # noqa: E402
+from redeploy import redeploy_reset_ops  # noqa: E402
+from redeploy.redeploy_context import RedeployContext  # noqa: E402
 
-from constants import ownership_tags  # noqa: E402
+from common.constants import ownership_tags  # noqa: E402
 from infra.ownership import clone_marker  # noqa: E402
 
 LINUX_BOX = {"name": "web01", "template": "ubuntu-2204-web", "cpu": 2, "memory_mb": 2048}

@@ -3,15 +3,15 @@
 import json
 from functools import partial
 
-from beacon_ops import plant_team_beacons
-from constants import PER_MACHINE_NAKON_BUDGET, SNAP_READY
-from domain_ops import deploy_domain_configs
-from service_fixup_ops import reensure_mysql_credlist_users
-from nakon_bundle_ops import build_nakon_bundle
-from nakon_run_ops import run_nakon
-from red_plant_ops import plant_assume_breach
-from timing import timed
-from utils import compfile_flag, run_concurrent
+from red.beacon_ops import plant_team_beacons
+from common.constants import PER_MACHINE_NAKON_BUDGET, SNAP_READY
+from guests.domain_ops import deploy_domain_configs
+from guests.service_fixup_ops import reensure_mysql_credlist_users
+from nakonops.nakon_bundle_ops import build_nakon_bundle
+from nakonops.nakon_run_ops import run_nakon
+from red.red_plant_ops import plant_assume_breach
+from common.timing import timed
+from common.utils import compfile_flag, run_concurrent
 
 from deploy_lib.coverage import record_clean_coverage, record_stage_coverage
 from deploy_lib.phases._snapshots import snap_ready
@@ -25,7 +25,7 @@ def _wipe_targets(managed_targets):
 #     Windows boxes into the Linux wipe path where they hung out their 180 s
 #     budget (live 2026-10-11, dc01 NOT cleaned). fw01 needs no filter here:
 #     unmanaged boxes never enter managed_targets.
-    from windows_ops import is_windows_template
+    from common.windows_ops import is_windows_template
     return [{"ip": t["ip"],
              "name": (t.get("box") or {}).get("name") or "",
              "windows": is_windows_template((t.get("box") or {}).get("template", ""))}

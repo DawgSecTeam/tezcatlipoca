@@ -1,7 +1,7 @@
 """VM power state and snapshot helpers (no ownership decisions in here)."""
 
 from infra.client import proxmox_api, wait_for_proxmox_task
-from utils import record_degradation
+from common.utils import record_degradation
 
 def vm_status(node, vmid):
     """Current status string ('running'/'stopped'/...) or None if the VM doesn't exist."""

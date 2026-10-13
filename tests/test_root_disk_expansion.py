@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import golden_disk_ops
+from golden import golden_disk_ops
 
 CTX = {"box_username": "medic"}
 TARGETS = [{"ip": "192.168.125.242", "vmid": 1242}, {"ip": "192.168.125.243", "vmid": 1243}]

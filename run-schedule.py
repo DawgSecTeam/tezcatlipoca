@@ -25,7 +25,7 @@ import requests
 import urllib3
 from dotenv import load_dotenv
 
-from config_ops import write_text_atomic
+from config.config_ops import write_text_atomic
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -34,7 +34,7 @@ ACTIONS = ("start", "freeze", "resume", "end")
 
 
 def load_profile(profile_arg):
-    from packet_ops import PACKETS_DIR, load_profile
+    from config.packet_ops import PACKETS_DIR, load_profile
     path = Path(profile_arg)
     if not path.exists():
         candidate = PACKETS_DIR / profile_arg / "packet.yaml"

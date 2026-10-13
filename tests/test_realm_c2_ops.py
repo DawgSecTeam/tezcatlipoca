@@ -18,7 +18,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import realm_c2_ops as rc  # noqa: E402
+from red import realm_c2_ops as rc  # noqa: E402
 
 
 def _comp(d, extra=""):

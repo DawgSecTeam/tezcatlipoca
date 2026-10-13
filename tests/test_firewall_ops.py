@@ -8,7 +8,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from firewall_ops import (cutover_netplan_yaml, firewall_kind, generate_team_config,
+from net.firewall_ops import (cutover_netplan_yaml, firewall_kind, generate_team_config,
                           generate_vyos_commands, generate_vyos_lan_commands,
                           vyos_lan_config_path)
 
@@ -166,7 +166,7 @@ class VyosBootstrap(unittest.TestCase):
 
     def _run(self, wan_up):
         import tempfile
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         from unittest.mock import MagicMock, patch
         calls = []
         with tempfile.TemporaryDirectory() as d:
@@ -216,7 +216,7 @@ class PushVyos(unittest.TestCase):
     def test_success_needs_clean_exit_and_the_canary(self):
     # circinus commits print NOTHING on success — canary + clean exit are the only
     #         signals; a non-zero exit or a quiet canary is a failure either way.
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         from unittest.mock import patch
         clock = {"t": 0.0}
         for rc, out in ((1, "set system host-name 'fw-team120'\n"),
@@ -234,7 +234,7 @@ class PushVyos(unittest.TestCase):
             fo._push_vyos(FAKE_SSH_CTX, "192.168.1.1", "script", "fw-team120", "team1")
 
     def test_retries_a_booting_appliance_then_gives_up_naming_the_failure(self):
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         from unittest.mock import patch
         clock = {"t": 0.0}
         with patch.object(fo, "_pty_session", return_value=(255, "")), \
@@ -247,7 +247,7 @@ class PushVyos(unittest.TestCase):
         self.assertIn("rc=255", str(cm.exception))
 
     def test_session_targets_the_vyos_cli_with_no_remote_command(self):
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         from unittest.mock import patch
         seen = {}
 
@@ -290,7 +290,7 @@ class AuthorizedKey(unittest.TestCase):
 
 class PushCommand(unittest.TestCase):
     def test_push_installs_only_when_different_and_reboots_detached(self):
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         cmd = fo._push_command("<pfsense/>")
         self.assertIn("openssl base64 -d -A", cmd)
         self.assertIn("cmp -s /tmp/tez-new.xml /cf/conf/config.xml", cmd)
@@ -312,7 +312,7 @@ class PushRetry(unittest.TestCase):
         return run
 
     def test_retries_a_booting_appliance_then_applies(self):
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         from unittest.mock import patch
         res = ["timeout", (255, ""), (0, "APPLIED\n")]
         with patch.object(fo, "ssh_via_gateway", side_effect=self._fake(res)), \
@@ -320,7 +320,7 @@ class PushRetry(unittest.TestCase):
             self.assertEqual(fo._push_config(None, "192.168.1.1", "<x/>", "team1"), "APPLIED")
 
     def test_gives_up_after_the_budget_naming_the_last_failure(self):
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         from unittest.mock import patch
         clock = {"t": 0.0}
         with patch.object(fo, "ssh_via_gateway", side_effect=lambda *a, **k: self._fake(["timeout"])()), \
@@ -336,7 +336,7 @@ class BootstrapFirewalls(unittest.TestCase):
 
     def _run(self, wan_up, push_result="APPLIED", boot_ok=True):
         import tempfile
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         from unittest.mock import MagicMock, patch
         calls = []
         with tempfile.TemporaryDirectory() as d:
@@ -390,7 +390,7 @@ class VerifyInPathConvergence(unittest.TestCase):
 # The cutover moves the gateway MAC; the box probe must retry, not fail on probe #1.
 
     def test_box_probe_retries_until_it_answers(self):
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         from unittest.mock import patch
         answers = iter([False, False, True])
         clock = {"t": 0.0}
@@ -400,7 +400,7 @@ class VerifyInPathConvergence(unittest.TestCase):
             self.assertTrue(fo._wait_tcp(None, "192.168.1.2", 22))
 
     def test_box_probe_gives_up_after_the_budget(self):
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         from unittest.mock import patch
         clock = {"t": 0.0}
         with patch.object(fo, "_probe_tcp", return_value=False), \
@@ -436,7 +436,7 @@ class AgentDiagnostics(unittest.TestCase):
 #     config.xml actually landed.
 
     def test_agentless_clone_returns_empty_string(self):
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         from unittest.mock import patch
         clock = {"t": 0.0}
         with patch.object(fo, "proxmox_api", side_effect=RuntimeError("agent not running")), \
@@ -445,7 +445,7 @@ class AgentDiagnostics(unittest.TestCase):
             self.assertEqual(fo.fw_agent_diagnostic("pve", 9), "")
 
     def test_answering_agent_reports_interfaces_and_config_state(self):
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         from unittest.mock import patch
         with patch.object(fo, "_agent_answers", return_value=True), \
                 patch.object(fo, "guest_agent_exec_root",
@@ -455,7 +455,7 @@ class AgentDiagnostics(unittest.TestCase):
         self.assertIn("inet 192.168.120.1", d)
 
     def test_agent_error_still_returns_not_raises(self):
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         from unittest.mock import patch
         with patch.object(fo, "_agent_answers", return_value=True), \
                 patch.object(fo, "guest_agent_exec_root", side_effect=RuntimeError("channel dead")):
@@ -468,7 +468,7 @@ class BootstrapAgentWiring(unittest.TestCase):
 
     def _run(self, node, agent_answers, boot_ok=True):
         import tempfile
-        import firewall_ops as fo
+        from net import firewall_ops as fo
         from unittest.mock import MagicMock, patch
         logs = []
         cm = None

@@ -14,21 +14,21 @@ import urllib3
 from dotenv import load_dotenv
 
 import pipeline_api
-from constants import SNAP_BASE, SNAP_READY
-from nakon_lock_ops import acquire_engine_lock, release_engine_lock
+from common.constants import SNAP_BASE, SNAP_READY
+from nakonops.nakon_lock_ops import acquire_engine_lock, release_engine_lock
 from infra.client import proxmox_api
 from infra.lifecycle import list_snapshots, snapshot_support_hint
 from infra.ownership import parse_vm_tags
-from targets import describe_target
-from redeploy_engine_ops import engine_recovery, reseed_event
-from redeploy_gate_ops import load_deployed_range
-from redeploy_context import RedeployContext
-from redeploy_light_ops import mode_reconfigure, mode_resync, mode_rollback
-from redeploy_plant_ops import prepare_nakon_assets
-from redeploy_rebuild_ops import mode_rebuild, reconcile_terraform_state
-from redeploy_reset_ops import mode_reset
-from redeploy_select_ops import select_targets
-from utils import load_compfile, pick_competition, valid_comp_name
+from common.targets import describe_target
+from redeploy.redeploy_engine_ops import engine_recovery, reseed_event
+from redeploy.redeploy_gate_ops import load_deployed_range
+from redeploy.redeploy_context import RedeployContext
+from redeploy.redeploy_light_ops import mode_reconfigure, mode_resync, mode_rollback
+from redeploy.redeploy_plant_ops import prepare_nakon_assets
+from redeploy.redeploy_rebuild_ops import mode_rebuild, reconcile_terraform_state
+from redeploy.redeploy_reset_ops import mode_reset
+from redeploy.redeploy_select_ops import select_targets
+from common.utils import load_compfile, pick_competition, valid_comp_name
 
 ENV_PATH = Path(".env")
 load_dotenv(ENV_PATH)
@@ -133,7 +133,7 @@ def main():
 
     # Multi-node: the placement record is authoritative — env -> engine host and
     # node routes registered before anything node-scoped (snapshots, clones).
-    from placement_record import activate_placement, read_placement
+    from multinode.placement_record import activate_placement, read_placement
     placement = read_placement(comp_dir)
     if placement:
         activate_placement(placement)

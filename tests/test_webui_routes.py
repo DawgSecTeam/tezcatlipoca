@@ -81,7 +81,7 @@ class WebUIRoutesTest(unittest.TestCase):
         self.assertIn("base-ubuntu24.04-fix", [t["name"] for t in r])
         with patch.dict(os.environ, {"TF_VAR_proxmox_endpoint": "https://x",
                                      "TF_VAR_proxmox_api_token": "t"}), \
-                patch("config_prompts.list_proxmox_templates", return_value=["live-tpl"]):
+                patch("config.config_prompts.list_proxmox_templates", return_value=["live-tpl"]):
             r = self.client.get("/api/templates").json()
         self.assertTrue([t for t in r if t["name"] == "live-tpl" and t["live"]])
 

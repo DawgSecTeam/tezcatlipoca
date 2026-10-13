@@ -10,9 +10,9 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from alpine_ops import ALPINE_SERVICES
-from apt_dns_ops import _APT_PREP_BODY
-from box_settle_ops import _SETTLE_CHECK
+from guests.alpine_ops import ALPINE_SERVICES
+from guests.apt_dns_ops import _APT_PREP_BODY
+from guests.box_settle_ops import _SETTLE_CHECK
 
 
 class AlpineShim(unittest.TestCase):

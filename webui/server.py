@@ -459,7 +459,7 @@ def catalog_rows(refresh=False) -> list:
 def get_catalog(platform: Optional[str] = None, kind: Optional[str] = None,
                 search: str = "", refresh: bool = False):
 # kind=services → category 'service'; kind=misconfigs → everything else.
-    from constants import KNOWN_BROKEN_CONFIGS, REQUIRED_VARS
+    from common.constants import KNOWN_BROKEN_CONFIGS, REQUIRED_VARS
     needle = search.lower().strip()
     out = []
     for row in catalog_rows(refresh):
@@ -488,7 +488,7 @@ def get_catalog_entry(name: str):
     row = next((r for r in catalog_rows() if r["name"] == name), None)
     if row is None:
         raise HTTPException(404, f"{name!r} is not in the catalog")
-    from constants import KNOWN_BROKEN_CONFIGS, REQUIRED_VARS
+    from common.constants import KNOWN_BROKEN_CONFIGS, REQUIRED_VARS
     return {**row,
             "required_vars": sorted(set(row.get("required_vars") or [])
                                     | set(REQUIRED_VARS.get(name, {}))),
@@ -512,7 +512,7 @@ def get_templates():
     live = []
     if os.getenv("TF_VAR_proxmox_endpoint") and os.getenv("TF_VAR_proxmox_api_token"):
         try:
-            from config_prompts import list_proxmox_templates
+            from config.config_prompts import list_proxmox_templates
             live = list_proxmox_templates()
         except Exception:
             live = []

@@ -9,9 +9,9 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import utils
-import nakon_config_ops
-from golden_target_ops import golden_targets, golden_vmid_for
+from common import utils
+from nakonops import nakon_config_ops
+from golden.golden_target_ops import golden_targets, golden_vmid_for
 
 BOXES = [
     {"name": "fw01", "last_octet": 1, "template": "pfsense-fix", "unmanaged": True},

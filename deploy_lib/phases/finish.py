@@ -4,9 +4,9 @@ import os
 import time
 from pathlib import Path
 
-from config_ops import write_text_atomic
-from ssh_ops import read_terraform_ctx
-from timing import print_timing_summary
+from config.config_ops import write_text_atomic
+from common.ssh_ops import read_terraform_ctx
+from common.timing import print_timing_summary
 
 
 def connect_terraform(ctx):

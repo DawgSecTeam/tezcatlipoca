@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-import artifacts_ops
-from config_ops import write_state
+from artifacts_lib import artifacts_ops
+from config.config_ops import write_state
 from scrim import core
 from scrim.red_stage import red_pacing_caps
 from scrim.runfiles import RUN_MANIFEST

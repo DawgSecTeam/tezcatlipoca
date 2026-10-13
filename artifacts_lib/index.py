@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from config_ops import write_state
+from config.config_ops import write_state
 
 from .collect import load_collection
 from .constants import INDEX_NAME, MANIFEST_NAME, REPORT_NAME, SCHEMA

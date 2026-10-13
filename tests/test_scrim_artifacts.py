@@ -1,4 +1,4 @@
-"""The scrim harness writes into its run's per-run test folder (artifacts_ops.py).
+"""The scrim harness writes into its run's per-run test folder (artifacts_lib/artifacts_ops.py).
 
 Each test here pins one invariant of the harness half of the artifact contract:
 
@@ -37,7 +37,7 @@ _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-import artifacts_ops as ao
+from artifacts_lib import artifacts_ops as ao
 
 
 def _load(name, filename):

@@ -27,8 +27,8 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import artifacts_ops as ao  # noqa: E402
-import red_plant_ops  # noqa: E402
+from artifacts_lib import artifacts_ops as ao  # noqa: E402
+from red import red_plant_ops  # noqa: E402
 import infra.client  # noqa: E402
 from infra import ownership  # noqa: E402
 from artifacts_lib import lifecycle as alifecycle  # noqa: E402

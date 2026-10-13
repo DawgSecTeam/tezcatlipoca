@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-from config_ops import write_state
+from config.config_ops import write_state
 from scrim import blue_agent
 from scrim import blue_watchdog
 from scrim import core
@@ -20,7 +20,7 @@ from scrim import run_manifest
 from scrim import staging
 from scrim import test_folder
 from scrim.core import log
-from utils import valid_comp_name
+from common.utils import valid_comp_name
 
 
 def main():

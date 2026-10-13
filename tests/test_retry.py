@@ -8,7 +8,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import utils  # noqa: E402
+from common import utils  # noqa: E402
 
 
 class Retry(unittest.TestCase):

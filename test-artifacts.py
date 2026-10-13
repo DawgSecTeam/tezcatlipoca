@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """test-artifacts.py — read, inspect and repair per-run test artifact folders.
 
-`artifacts_ops.py` owns the contract: a run leaves `competitions/<comp>/.automated-tests/<key>/`
+`artifacts_lib/artifacts_ops.py` owns the contract: a run leaves `competitions/<comp>/.automated-tests/<key>/`
 holding `test.json` (identity, phases, verdict, write-up status), `collection.json` (what was
 obtained, from where, with sha256), the three canonical documents (`RED-TEAM.md`,
 `BLUE-TEAM.md`, `REPORT.md`) and `evidence/`. This script is the operator's surface over that
@@ -31,7 +31,7 @@ printed; `verify` is the command whose exit code answers "is this folder finishe
 import argparse
 import sys
 
-import artifacts_ops as ao
+from artifacts_lib import artifacts_ops as ao
 from artifacts_lib.cli_common import EXIT_USAGE
 from artifacts_lib.cli_read import cmd_list, cmd_plan, cmd_show
 from artifacts_lib.cli_write import cmd_archive, cmd_collect, cmd_verify
@@ -43,7 +43,7 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Read, inspect and repair per-run test artifacts\n"
-            f"(competitions/<comp>/{ao.DIRNAME}/<key>/, written by artifacts_ops.py).\n"
+            f"(competitions/<comp>/{ao.DIRNAME}/<key>/, written by artifacts_lib/artifacts_ops.py).\n"
             "Comps resolve as competitions/<id>, or as a path holding a Compfile."),
         epilog=(
             "artifact statuses used by the collector: " + ", ".join(ao.STATUSES) + "\n"

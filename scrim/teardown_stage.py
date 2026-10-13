@@ -2,8 +2,8 @@ import json
 import os
 from pathlib import Path
 
-from config_ops import write_text_atomic
-from utils import load_compfile
+from config.config_ops import write_text_atomic
+from common.utils import load_compfile
 
 from scrim import core
 from scrim import endpoints
@@ -11,7 +11,7 @@ from scrim import procs
 from scrim import red_link
 from scrim import test_folder
 from scrim.core import log
-import badauto_config_ops
+from red import badauto_config_ops
 
 
 def _config_red_vmid(comp_dir):
@@ -32,7 +32,7 @@ def _manifest_red_vmid(args):
     if not test_dir:
         return None
     try:
-        import artifacts_ops
+        from artifacts_lib import artifacts_ops
         red = ((artifacts_ops.load_manifest(test_dir).get("agents") or {})
                .get("red") or {})
         return red.get("vmid") or None
@@ -199,7 +199,7 @@ def stage_teardown(args, creds=None):
         except Exception as e:  # evidence capture must never block teardown
             log(f"WARNING: red state pull failed before the report: {type(e).__name__}: {e}")
         # The collector owns the red01 pull now — one implementation shared with
-        # destroy-competition.py (artifacts_ops.py's docstring: two callers must agree) —
+        # destroy-competition.py (artifacts_lib/artifacts_ops.py's docstring: two callers must agree) —
         # and it MUST run before `badauto destroy` below, which erases red01. It never
         # raises: an unreachable red01 is recorded as `unreachable` in collection.json.
         test_folder.collect_run_artifacts(args)

@@ -3,9 +3,9 @@
 import json
 from pathlib import Path
 
-from config_ops import collect_teams, random_password, write_state
-from constants import MAX_TEAMS, PIPELINE_VERSION
-from utils import mint_run_id
+from config.config_ops import collect_teams, random_password, write_state
+from common.constants import MAX_TEAMS, PIPELINE_VERSION
+from common.utils import mint_run_id
 
 
 def _tracked_team_identifier_defaults(comp_dir):
@@ -25,7 +25,7 @@ def _tracked_team_identifier_defaults(comp_dir):
         profile_path = Path(__file__).resolve().parents[1] / profile_path
     if not profile_path.is_file():
         return []
-    from packet_ops import load_profile
+    from config.packet_ops import load_profile
     profile = load_profile(profile_path)
     return (profile.get("event") or {}).get("team_identifiers") or []
 

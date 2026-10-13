@@ -8,8 +8,8 @@ the live-validation transcript.
 ## The hazard, pinned before the fix
 
 Every tezcatlipoca worktree resolves the SAME sibling bad-auto checkout
-(`REPO.parent/"bad-auto"` — `red_plant_ops.py`, `scrim/core.py`,
-`realm_c2_ops.py`), and bad-auto keeps its deploy identity in TWO repo-root
+(`REPO.parent/"bad-auto"` — `red/red_plant_ops.py`, `scrim/core.py`,
+`red/realm_c2_ops.py`), and bad-auto keeps its deploy identity in TWO repo-root
 files of that one checkout:
 
 - `config.yaml` — `deploy.red_vmid` (default **999**, a shared node slot),
@@ -88,7 +88,7 @@ a layer applied by the same builder (`realm_c2_ops.apply_local_c2`), not a
 second file. bad-auto's own repo-root `config.yaml` remains for standalone
 bad-auto use; tez never reads or writes it again.
 
-- Written by ONE preparer (new `badauto_config_ops.py`) used by both red-touching
+- Written by ONE preparer (new `red/badauto_config_ops.py`) used by both red-touching
   paths: deploy phase 7 (`red_plant_ops.plant_assume_breach` — previously only
   prepared a config when local-C2 was on) and the scrim harness
   (`scrim/red_stage.stage_red`, which owns the llm/pacing/event blocks and calls

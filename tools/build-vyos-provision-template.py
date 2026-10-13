@@ -43,7 +43,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 load_dotenv(".env")
 
-from firewall_ops import generate_vyos_commands, generate_vyos_lan_commands  # noqa: E402
+from net.firewall_ops import generate_vyos_commands, generate_vyos_lan_commands  # noqa: E402
 from infra.client import proxmox_api, wait_for_proxmox_task  # noqa: E402
 
 VMID = int(os.environ.get("TEZ_VYOS_VMID", "959"))

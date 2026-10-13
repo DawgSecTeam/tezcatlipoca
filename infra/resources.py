@@ -154,7 +154,7 @@ def check_share_templates(share, boxes, vms):
             f"does not exist on this cluster — the engine-template build and the scoring "
             f"engine clone would fail mid-apply.")
     if share.needs_jump_template:
-        from jump_ops import find_jump_template
+        from net.jump_ops import find_jump_template
         find_jump_template(share.node, share.jump_template)  # raises with remedy
         print(f"  Preflight{share.label}: box templates + jump clone source present")
     elif not share.multi:

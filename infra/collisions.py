@@ -14,9 +14,9 @@ Two families, one module:
 import os
 from dataclasses import dataclass
 
-from constants import ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_VMID_OFFSET, MAX_BOXES_PER_TEAM
+from common.constants import ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_VMID_OFFSET, MAX_BOXES_PER_TEAM
 from infra.client import proxmox_api
-from targets import vm_id_for
+from common.targets import vm_id_for
 from infra.ownership import MARKER, OWNED, ownership_verdict, parse_vm_tags
 
 

@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import domain_ops
-import windows_ops
-from redeploy_plant_ops import _domain_config_path
+from guests import domain_ops
+from common import windows_ops
+from redeploy.redeploy_plant_ops import _domain_config_path
 
 
 class DomainOrderingTests(unittest.TestCase):

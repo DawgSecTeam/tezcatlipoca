@@ -9,13 +9,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from infra.client import destroy_bridge_if_exists
-from golden_target_ops import _is_template
-from placement_record import record_of
+from golden.golden_target_ops import _is_template
+from multinode.placement_record import record_of
 from infra.client import proxmox_api
 from infra.ownership import destroy_vm_if_exists
-from template_freeze import load_template_hashes
-from timing import timed
-from utils import is_in_path_fw, record_degradation
+from engine.template_freeze import load_template_hashes
+from common.timing import timed
+from common.utils import is_in_path_fw, record_degradation
 
 from deploy_lib.golden_plan import phase1_destroy_waves
 import teardown

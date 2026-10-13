@@ -31,7 +31,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from service_fixup_ops import SERVICE_FIXUPS, SERVICE_FIXUP_ORDER, service_fixup_script
+from guests.service_fixup_ops import SERVICE_FIXUPS, SERVICE_FIXUP_ORDER, service_fixup_script
 
 CREDS1 = {"medic": "p1"}
 CREDS2 = {"medic": "p1", "ubuntu": "p2"}

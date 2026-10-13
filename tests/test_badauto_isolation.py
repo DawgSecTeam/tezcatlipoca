@@ -17,8 +17,8 @@ from unittest import mock
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-import badauto_config_ops as bco  # noqa: E402
-import red_plant_ops as rp  # noqa: E402
+from red import badauto_config_ops as bco  # noqa: E402
+from red import red_plant_ops as rp  # noqa: E402
 
 
 def _comp(d, extra=""):

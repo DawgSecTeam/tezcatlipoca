@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 
-import artifacts_ops
+from artifacts_lib import artifacts_ops
 from scrim import core
 from scrim import procs
 from scrim import red_link

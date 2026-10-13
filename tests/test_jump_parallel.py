@@ -22,8 +22,8 @@ _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-import jump_ops  # noqa: E402
-from nodes_config import NodeRecord  # noqa: E402
+from net import jump_ops  # noqa: E402
+from multinode.nodes_config import NodeRecord  # noqa: E402
 
 
 def _placement(n_sats, teams_per_sat=2):

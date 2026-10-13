@@ -14,7 +14,7 @@ def default_red_seg_ip(comp_dir=None):
     routed default. (The sibling checkout's shared config.yaml is no longer a
     source — on concurrent sessions it names whichever red01 staged last.)"""
     if comp_dir is not None:
-        import badauto_config_ops
+        from red import badauto_config_ops
         deploy = badauto_config_ops.load_config(comp_dir).get("deploy") or {}
         return deploy.get("red_seg_ip") or "10.200.0.10"
     return "10.200.0.10"

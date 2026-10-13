@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from config_ops import write_text_atomic
+from config.config_ops import write_text_atomic
 
 from .collect import load_collection
 from .constants import LOST, NOT_COLLECTED, REPORT_NAME, SIDES, SKIPPED, TODO_MARK, UNRECOVERABLE
@@ -21,7 +21,7 @@ def write_stub(test_path, side, status, reason, *, manifest=None):
     manifest = manifest or load_manifest(test_path)
     filename = SIDES[side]
     run = manifest.get("run_id") or manifest.get("key") or "unknown-run"
-    body = ["---", f"id: {run}", f"side: {side}", "generated_by: artifacts_ops.py",
+    body = ["---", f"id: {run}", f"side: {side}", "generated_by: artifacts_lib/artifacts_ops.py",
             f"status: {status}", f"generated: {iso()}", "---", "",
             f"# {filename} — not available ({status})", ""]
     if status == SKIPPED:
@@ -81,7 +81,7 @@ def render_report_skeleton(test_path):
     verdict = manifest.get("verdict") or {}
     lines = ["---", f"id: {run}", f"kind: {manifest.get('kind')}",
              f"comp: {manifest.get('comp')}", f"generated: {iso()}",
-             "generated_by: artifacts_ops.py",
+             "generated_by: artifacts_lib/artifacts_ops.py",
              "author: null   # fill the judgement sections, then: test-artifacts.py verify --seal", "---",
              "", f"# {manifest.get('kind', 'run')} report — {manifest.get('comp')} — {run}", "",
              "## Verdict", ""]

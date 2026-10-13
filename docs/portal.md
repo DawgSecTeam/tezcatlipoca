@@ -46,7 +46,7 @@ student ─HTTPS─► Cloudflare (stable hostname) ─tunnel─► cloudflared 
 |---|---|
 | Service (auth, broker, routes) | `portal/` (`app.py`, `auth.py`, `console.py`, `Dockerfile`, `compose.yaml`) |
 | UI | `portal/frontend/`: React + Vite + Tailwind, the management UI's stack and design (see [Frontend](#frontend)) |
-| Deploy side (config, push, compose, probe, teardown) | `portal_ops.py` |
+| Deploy side (config, push, compose, probe, teardown) | `portal/portal_ops.py` |
 | Per-comp console token | `infra/console.py` |
 | Phase hook | end of `deploy_lib/phases/seed.py` (phase 8) |
 | Verify gate | `verifier/portal.py` (gate name `portal`) |

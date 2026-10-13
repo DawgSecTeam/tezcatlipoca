@@ -40,7 +40,7 @@ def do_freeze(comp_dir, args, gate, coverage_passed):
 # M4 freeze: record the template hashes this verify just passed against, plus the
 #     code commit, timestamp, and gate results. Preconditions: every gate PASS including
 #     plant-coverage and services.
-    from template_freeze import code_path_dirty, git_commit_info
+    from engine.template_freeze import code_path_dirty, git_commit_info
 
     hashes = freeze_hashes(comp_dir)
     if not hashes or not (hashes.get("engine") or {}).get("hash") or not hashes.get("golden"):

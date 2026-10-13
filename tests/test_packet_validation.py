@@ -9,7 +9,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from packet_ops import validate_profile
+from config.packet_ops import validate_profile
 
 # A minimal profile that validates cleanly (checked by test_base_profile_is_valid);
 # each test deep-copies it and introduces exactly one defect.

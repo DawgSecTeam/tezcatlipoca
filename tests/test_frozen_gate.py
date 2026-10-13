@@ -12,7 +12,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-import template_freeze
+from engine import template_freeze
 
 MANIFEST = {
     "bundle_id": "bundle-v1",
