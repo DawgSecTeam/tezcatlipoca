@@ -93,6 +93,19 @@ class PerCompConfig(unittest.TestCase):
             self.assertEqual(cfg["beacon"]["port"], 4470)                        # carried
             self.assertEqual(cfg["deploy"]["red_vmid"], 1470)                    # reserved
 
+    def test_prepare_pins_the_deploys_own_ssh_key(self):
+        """bad-auto defaults deploy.ssh_key to a SIBLING tezcatlipoca checkout's `proxmox`
+        and reads `<key>.pub` beside it — absent under the dashboard, where the assume-breach
+        red01 deploy died on FileNotFoundError after the range itself was built (2026-10-14)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            d = _comp(td)
+            key = Path(td) / "keys" / "proxmox"
+            key.parent.mkdir()
+            key.write_text("PRIVATE")
+            bco.prepare_deploy_config(d, 1300, ssh_key=str(key))
+            self.assertEqual(bco.load_config(d)["deploy"]["ssh_key"], str(key.resolve()))
+
     def test_destroy_threads_the_comp_config_and_scrubs_stale_env(self):
         import tempfile
         with tempfile.TemporaryDirectory() as td:

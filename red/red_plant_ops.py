@@ -245,7 +245,8 @@ def plant_assume_breach(ctx):
         engine_vmid = (ctx.state or {}).get("scoring_vm_id")
     try:
         base_path, red_vmid, red_ip = badauto_config_ops.prepare_deploy_config(
-            comp_dir, engine_vmid, engine_ip=realm_c2_ops.engine_ip_for(comp_dir))
+            comp_dir, engine_vmid, engine_ip=realm_c2_ops.engine_ip_for(comp_dir),
+            ssh_key=ssh_key)
         config_path = base_path
     except (TypeError, ValueError) as e:
         record_degradation("assume_breach_config", f"cannot reserve red01 identity: {e}")

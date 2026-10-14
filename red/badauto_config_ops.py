@@ -127,7 +127,7 @@ def red01_target(comp_dir, engine_vmid):
     return red01_vmid_for(comp_dir, engine_vmid), red01_ip_for(comp_dir)
 
 
-def prepare_deploy_config(comp_dir, engine_vmid, engine_ip=None):
+def prepare_deploy_config(comp_dir, engine_vmid, engine_ip=None, ssh_key=None):
     """Write the comp's bad-auto config for a red01 deploy and return its path.
 
     Layers: carried blackbox blocks (comp's own prior config) under a fresh
@@ -149,5 +149,11 @@ def prepare_deploy_config(comp_dir, engine_vmid, engine_ip=None):
     deploy["red_ip"] = ip
     if engine_ip and not deploy.get("engine_ip"):
         deploy["engine_ip"] = engine_ip
+    if ssh_key:
+        # bad-auto defaults deploy.ssh_key to a SIBLING tezcatlipoca checkout's `proxmox`
+        # and reads `<key>.pub` beside it; under the dashboard that sibling does not exist,
+        # so the assume-breach deploy died on FileNotFoundError after the range was built
+        # (2026-10-14). The deploy's resolved absolute key is the only correct source.
+        deploy["ssh_key"] = str(Path(ssh_key).expanduser().resolve())
     cfg["deploy"] = deploy
     return write_config(comp_dir, cfg), vmid, ip
