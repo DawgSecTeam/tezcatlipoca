@@ -16,11 +16,21 @@ All guidance lives in `docs/` — start with:
 - [docs/packet-profiles.md](docs/packet-profiles.md) — competition packets → ranges
 - [docs/remote-access.md](docs/remote-access.md) — headscale participant access
 - [docs/known-issues.md](docs/known-issues.md) — open/pending issues only; drained every run cycle
-- [docs/environment-facts.md](docs/environment-facts.md) — node/storage/template/vmid ground truth
+- [docs/environment-facts.md](docs/environment-facts.md) — host-agnostic template/vmid/runtime behavior
+
+## Estate ground truth is gitignored
+
+Which hosts exist, how to reach them, their node names, datastores, API-token names and
+sources, template vmids, live vmid ownership, and shared-service addresses live in
+**`infrastructure-status.md`** (repo root, gitignored, local only). **Read it before any
+deploy, destroy, or env edit.** That is the only place those facts belong: a tracked doc,
+prompt, commit message, or test fixture may name the file, never the values. If a doc and
+that file disagree, the file wins — fix the doc.
 
 ## Range runs go through the dashboard
 
-The central run queue (tezcatlipoca-dashboard, `http://10.0.0.143:8787`, MCP at `/mcp`) is where
+The central run queue (tezcatlipoca-dashboard; address and token in `infrastructure-status.md`,
+MCP at `/mcp`) is where
 range runs — deploy/verify/destroy/scrim — are submitted and observed. It owns per-run engine
 worktrees at pinned refs, pushes stage events to subscribed sessions (`watch_run` — wait for the
 push, don't poll logs), and refuses a second concurrent run of one competition. Competition
@@ -90,13 +100,13 @@ cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxm
 - Pick the env file matching the target node, and check it for stale values before trusting it:
   every banner prints the resolved endpoint/node/datastore, so a wrong copy shows immediately.
   Known traps to check for in any env variant: a dead `TF_VAR_template_vm_id` (hard-fails the
-  engine-base preflight — correct values by node are in
-  [docs/environment-facts.md § templates](docs/environment-facts.md#templates)); a default
+  engine-base preflight — correct per-node values are in `infrastructure-status.md`); a default
   `TF_VAR_engine_mgmt_ip` that collides with a live engine on a shared node (set it explicitly —
-  see [docs/environment-facts.md](docs/environment-facts.md)); and no `TF_VAR_team_identifiers`
+  see `infrastructure-status.md`); and no `TF_VAR_team_identifiers`
   on a shared node, where the default 101+ block is commonly already occupied — set it explicitly.
-- All competition ops on Proxmox run on the `terraform@pam!comp-automation` token — never the
-  workshop portal's `root@pam!guac-provisioner` token. When copying an env variant across nodes,
+- All competition ops on Proxmox run on the range automation token, never the workshop portal's
+  provisioner token (token names and per-host token sources: `infrastructure-status.md`). When
+  copying an env variant across nodes,
   re-export `TF_VAR_proxmox_api_token` explicitly instead of inheriting the source file's value;
   check it before any deploy/destroy.
 - `TF_VAR_teams` / `TF_VAR_boxes_per_team` in an old env are overridden by the comp dir at terraform

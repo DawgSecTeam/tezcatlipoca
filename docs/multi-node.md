@@ -52,19 +52,20 @@ The node list is a per-run input: `--nodes <path>` points at it (the dashboard w
 per run from its node catalog). Without `--nodes` the cwd `nodes.json` is used; with
 neither, the run is single-node from `.env`, and an explicit `--engine-node`/`--team-node`
 is refused rather than silently dropped. The file itself carries no secrets — `token_env`
-names the env var holding that host's token.
+names the env var holding that host's token. Real per-host values (endpoint, PVE node,
+datastore, engine base vmid, ssh host): `infrastructure-status.md`.
 
 ```json
 {
-  "balancing": {"strategy": "capacity-fill", "prefer": ["hdd-150"]},
+  "balancing": {"strategy": "capacity-fill", "prefer": ["<record-name>"]},
   "nodes": [
-    {"name": "hdd-150",
-     "endpoint": "https://10.0.0.150:8006",
+    {"name": "<record-name>",
+     "endpoint": "https://<host>:8006",
      "token_env": "TF_VAR_proxmox_api_token",
-     "node": "proxmox", "datastore": "hdd",
-     "engine_base_vmid": 955,
+     "node": "<pve-node>", "datastore": "<datastore>",
+     "engine_base_vmid": 0,
      "engine_mgmt_ip": "", "jump_mgmt_ip": "",
-     "ssh_host": "10.0.0.150", "jump_template": "alpine",
+     "ssh_host": "<host>", "jump_template": "alpine",
      "weight": 1.0, "max_teams": 8}
   ]
 }

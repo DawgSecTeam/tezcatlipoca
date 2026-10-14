@@ -96,15 +96,10 @@ After: `verify-competition.py` (no deploy is green without it); new failure clas
 
 ## 5. Multi-host, pfSense and red runs
 
-**Hosts.** Two non-clustered Proxmox hosts, each with its own `.env`, node, template vmids, datastore; never assume a vmid across them.
+**Hosts.** Multiple non-clustered Proxmox hosts (plus at least one cluster), each with its own endpoint, node name, API token, template vmids, and datastore; never assume a vmid across them. Per-host values, token sources, and live occupancy: `infrastructure-status.md` (gitignored, repo root).
 
-| | endpoint | node | datastore | Windows / Ubuntu / Fedora template |
-|---|---|---|---|---|
-| cyberfield | `10.0.0.193` | `pve` | `hdrives-zfs` | 1008 / 1007 / 1015 |
-| cyberrange | `10.0.0.150` | `proxmox` | `hdd` | 953 / 955 / 1016 |
-
-- Env files hold unquoted JSON/pubkeys that break `source`; parse them (`shlex.quote` per `TF_VAR_*` line) and `unset TF_VAR_teams TF_VAR_boxes_per_team TF_VAR_scoring_vm_id` so stale range values don't override generated ones. Set `TF_VAR_template_vm_id` to a real engine base on that host (cyberrange: the ubuntu base, 955) and a `--scoring-vmid` other than 1000 (cyberrange's live `quotient-engine`).
-- The cyberrange is a busy production host (~70 VMs): choose free vmid blocks (`200 + id*10 + box_index`) and identifiers deliberately.
+- Env files hold unquoted JSON/pubkeys that break `source`; parse them (`shlex.quote` per `TF_VAR_*` line) and `unset TF_VAR_teams TF_VAR_boxes_per_team TF_VAR_scoring_vm_id` so stale range values don't override generated ones. Set `TF_VAR_template_vm_id` to a real engine base on the target host and a `--scoring-vmid` the host's live engine does not already hold.
+- A shared host is usually busy with co-tenant VMs: choose free vmid blocks (`200 + id*10 + box_index`) and identifiers deliberately against the live occupancy.
 - Cross-host template move: `vzdump` → transfer → `qmrestore`, keeping the vzdump filename pattern.
 - Before a host reboot: boot is ext4/LVM (a suspended ZFS data pool can't block it); confirm the bad pool isn't in `zdb -C`; snapshot the running set (`/root/running-before-reboot.txt`) since only `onboot=1` VMs auto-start.
 

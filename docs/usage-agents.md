@@ -1,6 +1,6 @@
 # Usage — agents
 
-Non-interactive driving: flags, pre-authored configs, machine-readable validation. One-time Proxmox/template setup is in [usage-people.md](usage-people.md#prerequisites-one-time-per-proxmox-host). Central runs + MCP: [tezcatlipoca-dashboard](https://github.com/DawgSecTeam/tezcatlipoca-dashboard) (runs at `http://10.0.0.143:8787`).
+Non-interactive driving: flags, pre-authored configs, machine-readable validation. One-time Proxmox/template setup is in [usage-people.md](usage-people.md#prerequisites-one-time-per-proxmox-host). Central runs + MCP: [tezcatlipoca-dashboard](https://github.com/DawgSecTeam/tezcatlipoca-dashboard) (address/token: `infrastructure-status.md`, gitignored).
 
 ## `create-competition.py`
 
@@ -161,8 +161,8 @@ Red's network mode (`routed`/`masq`) is owned by `../bad-auto`; see [architectur
 ## Central runs (the dashboard)
 
 Range runs are submitted to the central dashboard
-([tezcatlipoca-dashboard](https://github.com/DawgSecTeam/tezcatlipoca-dashboard),
-`http://10.0.0.143:8787`) through its web UI or its MCP tools (`submit_run`, `watch_run`,
+([tezcatlipoca-dashboard](https://github.com/DawgSecTeam/tezcatlipoca-dashboard); address and
+token: `infrastructure-status.md`) through its web UI or its MCP tools (`submit_run`, `watch_run`,
 `get_run_events`, `cancel_run`, `get_run_log`, `get_artifacts`). The dashboard cuts a
 per-run engine worktree at the pinned ref and runs the same drivers against a per-run
 workspace (`--comp-dir`), so sessions never contend over a checkout and never eat each

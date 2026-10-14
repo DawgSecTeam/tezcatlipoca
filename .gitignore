@@ -6,6 +6,10 @@
 .env
 .env.*
 !.env.example
+# Estate ground truth (endpoints, node names, tokens-by-reference, vmid maps, live state):
+# local only, never published. Tracked docs and prompts point here instead of carrying
+# infrastructure specifics. Enforced by tests/test_secret_hygiene.py.
+infrastructure-status.md
 .tez-backups/
 # Per-stream git worktrees used for parallel development/merges
 .worktrees/

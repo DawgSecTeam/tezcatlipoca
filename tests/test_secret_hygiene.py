@@ -131,6 +131,23 @@ class NoTrackedSecrets(unittest.TestCase):
         )
         self.assertNotEqual(r.returncode, 0, ".env.example must stay tracked")
 
+    def test_infrastructure_status_is_gitignored_and_untracked(self):
+    # The estate's ground truth (endpoints, node names, tokens-by-reference, vmid maps,
+    # live state) lives in infrastructure-status.md, which every tracked doc points at
+    # instead of copying. Asserting the ignore rule alone is not enough: a force-add has
+    # defeated a .gitignore line in this repo before, so check the tracked set too.
+        r = subprocess.run(
+            ["git", "check-ignore", "-q", "infrastructure-status.md"],
+            cwd=_REPO, capture_output=True,
+        )
+        self.assertEqual(r.returncode, 0, "infrastructure-status.md is not gitignored")
+        offenders = [f for f in _tracked_files() if Path(f).name == "infrastructure-status.md"]
+        self.assertEqual(
+            offenders, [],
+            "estate ground truth tracked — it names endpoints, tokens-by-reference and live "
+            "vmid ownership:\n  " + "\n  ".join(offenders),
+        )
+
     def test_no_tracked_file_contains_a_secret(self):
         hits = []
         for f in _tracked_files():

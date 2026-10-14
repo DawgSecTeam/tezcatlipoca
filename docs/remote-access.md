@@ -5,9 +5,10 @@ participant a key that can reach **only their own team's `192.168.<identifier>.0
 scoreboard. Pre-existing tailnet users (the LDAP-backed accounts) keep the full access they had
 when the tailnet ran with no policy at all; limiting them by groups is deliberately deferred.
 
-Control plane: **`https://headscale.hnasheralneam.dev`** (headscale v0.29 in Docker behind
-Caddy on a VPS; embedded DERP on the same host relays participant traffic). See
-[environment-facts.md](environment-facts.md#headscale) for the ground truth.
+Control plane: the estate's headscale instance (URL, host, and credentials:
+`infrastructure-status.md`) — headscale v0.29 in Docker behind Caddy on a VPS, with
+embedded DERP on the same host relaying participant traffic. Version/behavior ground truth:
+[environment-facts.md](environment-facts.md#headscale).
 
 ## The mapping
 

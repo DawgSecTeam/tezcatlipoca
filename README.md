@@ -12,7 +12,7 @@ The phases and components are described in
 
 Competition authoring and range runs are centralized in
 [DawgSecTeam/tezcatlipoca-dashboard](https://github.com/DawgSecTeam/tezcatlipoca-dashboard)
-(the run queue + MCP server + web UI, deployed at `http://10.0.0.143:8787`) with definitions in
+(the run queue + MCP server + web UI; address and credentials in the gitignored `infrastructure-status.md`) with definitions in
 [DawgSecTeam/tezcatlipoca-competitions](https://github.com/DawgSecTeam/tezcatlipoca-competitions).
 The dashboard runs every job against an engine worktree at a pinned ref via `--comp-dir`; this
 repo stays the engine. Manual driver runs still work (see below) and are the recovery path.
@@ -31,7 +31,7 @@ Operations, or Reports, with one line on when to read it. The most-used entry po
 | [docs/packet-profiles.md](docs/packet-profiles.md) | Competition packets to ranges: profile schema, `compile-packet.py`, packet verify gates |
 | [docs/multi-node.md](docs/multi-node.md) | One competition across several Proxmox hosts: `nodes.json`, placement, jump routing |
 | [docs/known-issues.md](docs/known-issues.md) | Open and pending issues only. Fixed issues are deleted, not archived |
-| [docs/environment-facts.md](docs/environment-facts.md) | Node, storage, template, and vmid ground truth |
+| [docs/environment-facts.md](docs/environment-facts.md) | Host-agnostic template/vmid/runtime behavior; estate ground truth (hosts, tokens, live state) is in the gitignored `infrastructure-status.md` |
 | [docs/tests.md](docs/tests.md) | The offline test suite: how to run it, what it covers |
 | [tezcatlipoca-dashboard README](https://github.com/DawgSecTeam/tezcatlipoca-dashboard) | The central run queue: web UI, run API, MCP tools |
 | [docs/portal.md](docs/portal.md) | The student portal: Quotient team login → Proxmox web console per box (Compfile `portal 1`) |

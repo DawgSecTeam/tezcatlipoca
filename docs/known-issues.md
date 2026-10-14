@@ -8,9 +8,14 @@ Temporary writepad, not a ledger: every entry has a concrete next action and is 
 
 Accepted caveat. `null_resource.team_nics` writes the pre-cutover netplan (`192.168.<id>.1/24` on team NICs); phase 5's cutover moves the gateway to the firewalls. Trigger-gated, but a re-apply on a live firewall range whose triggers changed re-adds `.1` under the firewalls' feet. Fix: `create-competition.py --competition <id> --from-phase 5 --yes` afterward (idempotent). `verify-competition.py`'s `firewall_in_path` gate detects the drift. Owning the cutover inside terraform needs the firewall config state round-tripped into tfvars — deferred until needed.
 
-### `pfsense-provision` exists only on .150
+### `pfsense-provision` exists on only one host
 
-.150: vmid 958 (agent retrofitted; 957 kept as `-agentless-bak`). .193 has none, and node shell access from the dev host is closed (no SSH key/password for root@.193, the API token can't take file uploads, `termproxy` lands on the raw getty). **Next action**: when shell access exists, `vzdump 958 --stdout | ssh root@10.0.0.193 "qmrestore - 958 --storage hdrives-zfs"`, convert and tag.
+Only one estate host carries the `pfsense-provision` template (its vmid, and the
+`-agentless-bak` predecessor, are in `infrastructure-status.md`). The other host(s) have
+none, and node shell access there is closed (no SSH key/password for root, the API token
+can't take file uploads, `termproxy` lands on the raw getty). **Next action**: when shell
+access exists, `vzdump <vmid> --stdout | ssh root@<host> "qmrestore - <vmid> --storage
+<datastore>"`, convert and tag.
 
 ### Planted Linux boxes deny all SSH at the PAM account stage after a restart
 
