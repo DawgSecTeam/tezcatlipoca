@@ -14,6 +14,17 @@ from nakonops.nakon_bundle_ops import build_nakon_bundle
 from pathlib import Path
 
 
+# nakon stdout announces each step as "<machine> step <i>/<n> ...". Seeing one
+# proves the plant started executing — after that, a dead ssh session leaves
+# the outcome unknown.
+_STEP_LINE_RE = re.compile(r"\bstep \d+/\d+\b")
+
+# A transport death in the first seconds is a cold ssh (auth, engine handshake,
+# bundle staging) — nothing ran, and the 20s retry is safe. Past this window
+# steps were in flight and the outcome must be treated as unknown.
+COLD_DEATH_WINDOW = 120
+
+
 class NakonResult:
 # Structured outcome of one `nakon deploy` (M4 plant-coverage source).
 #
@@ -142,19 +153,21 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
         subprocess.run(ssh_base + [setup_cmd], check=True, timeout=300)
         failed_steps = []
         machines_json = None
-        # Long plants (minutes, over the operator's LAN) sometimes lose the outer
-        # ssh session outright — rc=255 with no FAILED step is a transport death,
-        # not a plant verdict. Re-run the bundle: steps are idempotent re-plants.
+        step_line_seen = False
+        attempt_started = time.monotonic()
+        outcome_unknown = False
         for attempt in range(1, 4):
             proc = subprocess.Popen(ssh_base + [deploy_cmd], stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, bufsize=1)
 
             def _pump():
-                nonlocal machines_json
+                nonlocal machines_json, step_line_seen
                 for line in proc.stdout:
                     print(line, end="")
                     if "FAILED" in line:
                         failed_steps.append(line.strip())
+                    if _STEP_LINE_RE.search(line):
+                        step_line_seen = True
                     # nakon deploy --json prints the structured outcomes as one JSON
                     # object with a "machines" key. It is USUALLY the final line, but
                     # nakon's status line can land without a trailing newline, gluing the
@@ -195,10 +208,28 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
                 return NakonResult(failed_steps, machines_json)
             if failed_steps or attempt == 3:
                 break
-            print(f"\n  nakon ssh session died (rc=255, no FAILED steps) — "
+            # A transport death is only recoverable by re-running the bundle when
+            # NOTHING executed. full-scrim-20261013d phase 7: both DC promotions
+            # completed on the boxes (674 s) while the reporting ssh died rc=255;
+            # the blind retry re-promoted already-promoted DCs and failed the
+            # phase with DCPromo General.77 'InstallDNS' not recognized. So retry
+            # only a death that looks cold — near-instant and before any step
+            # line streamed. Past that the outcome is unknown: fail the phase and
+            # let the resume path probe the real state and skip completed work.
+            if step_line_seen or time.monotonic() - attempt_started > COLD_DEATH_WINDOW:
+                outcome_unknown = True
+                print(f"\n  nakon ssh session died (rc={proc.returncode}) after "
+                      f"the plant started — outcome unknown, NOT re-running "
+                      f"(a blind re-run replants non-idempotent steps). Resume "
+                      f"the phase: the resume probes real state and skips "
+                      f"completed work.")
+                break
+            print(f"\n  nakon ssh session died rc=255 before any step ran — "
                   f"retry {attempt}/3 in 20s...")
             failed_steps = []
             machines_json = None
+            step_line_seen = False
+            attempt_started = time.monotonic()
             time.sleep(20)
         if failed_steps:
             print(f"\n  Nakon plant FAILED steps: {len(failed_steps)}")
@@ -207,7 +238,10 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
         _preserve_failed_run(ssh_base, opt_dir, failed_steps)
         raise RuntimeError(
             f"nakon deploy failed rc={proc.returncode}"
-            + (f" ({len(failed_steps)} FAILED steps above)" if failed_steps else ""))
+            + (f" ({len(failed_steps)} FAILED steps above)" if failed_steps else "")
+            + (f" — the reporting ssh died after the plant started, so the boxes' "
+               f"real state is unknown: resume the phase instead of re-running "
+               f"(the resume probes what actually planted)" if outcome_unknown else ""))
     except subprocess.TimeoutExpired:
         try:
             # Scoped to THIS run's staging path: the remote cmdline carries

@@ -67,3 +67,49 @@ class PreserveFailedRun(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SessionDeathRetry(unittest.TestCase):
+# A dead ssh session must only trigger the bundle re-run when NOTHING executed.
+#
+#     full-scrim-20261013d phase 7: both DC promotions completed on the boxes
+#     (674 s of dcpromo) while the reporting ssh died rc=255; the blind retry
+#     re-promoted already-promoted DCs and failed the phase with DCPromo
+#     General.77 'InstallDNS' not recognized. Re-running a bundle is only safe
+#     when the death looks cold: fast and before any step line streamed.
+
+    def _run(self, popen_results):
+        made = []
+        def fake_popen(cmd, **kw):
+            made.append(cmd)
+            return popen_results[min(len(made), len(popen_results)) - 1]
+        with mock.patch.object(nro.subprocess, "run",
+                               side_effect=lambda *a, **kw: mock.Mock(returncode=0)), \
+                mock.patch.object(nro.subprocess, "Popen", side_effect=fake_popen), \
+                mock.patch.object(nro.time, "sleep"):
+            try:
+                nro.run_nakon("key", "sysadmin", "10.0.0.249",
+                              Path("/tmp/b.tar.gz"), Path("/tmp/cfg.json"))
+            except RuntimeError as e:
+                self.last_error = e
+            else:
+                self.last_error = None
+        return made
+
+    def _proc(self, lines, rc):
+        proc = mock.Mock()
+        proc.stdout = iter(lines)
+        proc.wait = mock.Mock()
+        proc.returncode = rc
+        return proc
+
+    def test_midrun_death_is_not_retried(self):
+        made = self._run([self._proc(
+            ["[dc01-team130] step 000/1 config: ADDS\n"], 255)])
+        self.assertEqual(len(made), 1, "a death after steps ran must not re-run the bundle")
+        self.assertIn("resume the phase", str(self.last_error))
+
+    def test_cold_death_retries_then_reports(self):
+        made = self._run([self._proc([], 255)] * 3)
+        self.assertEqual(len(made), 3, "a cold death keeps the 3-attempt retry")
+        self.assertIn("rc=255", str(self.last_error))
