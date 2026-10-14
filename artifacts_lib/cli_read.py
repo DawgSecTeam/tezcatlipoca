@@ -5,7 +5,8 @@ import sys
 from pathlib import Path
 
 from artifacts_lib import artifacts_ops as ao
-from .cli_common import (COMPETITIONS_DIR, EXIT_FINDINGS, EXIT_OK, LIST_HEADERS, STUB_STATUS_RE,
+from common.comp_paths import comps_root
+from .cli_common import (EXIT_FINDINGS, EXIT_OK, LIST_HEADERS, STUB_STATUS_RE,
                          agents_line, display_label, error, index_rows, list_row, locate_test,
                          print_table, resolve_comp, show, summary_line, unknown_comp, wants)
 
@@ -33,8 +34,8 @@ def cmd_list(args):
         return EXIT_OK
 
     scan = {}
-    if COMPETITIONS_DIR.is_dir():
-        for comp_dir in sorted(path for path in COMPETITIONS_DIR.iterdir() if path.is_dir()):
+    if comps_root().is_dir():
+        for comp_dir in sorted(path for path in comps_root().iterdir() if path.is_dir()):
             if not ao.artifacts_root(comp_dir).is_dir():
                 continue
             try:
@@ -46,7 +47,7 @@ def cmd_list(args):
         print(json.dumps({"competitions": scan}, indent=2))
         return EXIT_OK
     if not scan:
-        print(f"No competition under {COMPETITIONS_DIR}/ has a {ao.DIRNAME}/ folder yet.")
+        print(f"No competition under {comps_root()}/ has a {ao.DIRNAME}/ folder yet.")
         return EXIT_OK
     for name, rows in scan.items():
         print(f"\n{name} — {len(rows)} test folder(s)")

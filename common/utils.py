@@ -10,6 +10,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from common.comp_paths import comps_root
+
 _USERNAME_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 _COMP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
 
@@ -273,7 +275,7 @@ def env_summary():
 def pick_competition(competitions, label="saved", action="Select a competition"):
     print(f"Found {len(competitions)} {label} competition(s):\n")
     for i, comp in enumerate(competitions, 1):
-        name, scenario, difficulty = load_compfile(f"competitions/{comp}/Compfile")
+        name, scenario, difficulty = load_compfile(comps_root() / comp / "Compfile")
         short_scenario = scenario[:80] + ("..." if len(scenario) > 80 else "")
         print(f"  [{i}] {comp}  (difficulty: {difficulty}/10)")
         print(f"       {name}")

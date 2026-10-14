@@ -1,15 +1,15 @@
 import json
 from pathlib import Path
 
+from common.comp_paths import resolve_comp_dir
 from scrim import compworld
-from scrim import core
 from scrim import quotient_api
 from scrim.runfiles import SCOREBOARD_STATE
 
 
 def blue_cycle_prompt(n, creds, args, elapsed, remain, delta_text, inject_text, notebook_text, log_tail):
     tid = creds[f"TEAM{n}_ID"]
-    world = compworld.comp_world(core.REPO / "competitions" / args.competition)
+    world = compworld.comp_world(resolve_comp_dir(args.competition, getattr(args, "comp_dir", None)))
     lin, win = world["linux"], world["windows"]
     unit = getattr(args, "web_unit", None) or world["web_unit"]
     title = world["name"] or "the company network"

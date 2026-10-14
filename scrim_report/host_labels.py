@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from common.comp_paths import comps_root
+
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -13,7 +15,7 @@ REPO = Path(__file__).resolve().parent.parent
 # a name from the wrong lineup.
 def box_labels(run_dir):
     name = Path(run_dir).resolve().name
-    comps = REPO / "competitions"
+    comps = comps_root()
     cands = [comps / name / "boxes.json"]
     # Run dirs live INSIDE their competition now (competitions/<comp>/.automated-tests/
     # <run-id>/): the competition's own boxes.json is three levels up. Miss this and a
@@ -51,7 +53,7 @@ def windows_octets(run_dir):
     if ".automated-tests" in p.parts:
         i = p.parts.index(".automated-tests")
         cands.append(Path(*p.parts[:i]) / "boxes.json")
-    cands.append(REPO / "competitions" / p.name / "boxes.json")
+    cands.append(comps_root() / p.name / "boxes.json")
     for cand in cands:
         try:
             boxes = json.loads(cand.read_text())

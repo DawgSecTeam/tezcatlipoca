@@ -122,7 +122,7 @@ class GeneratedScripts(Base):
         self.assertIn("RESTORED", s)
 
     def test_cycle_prompt_renders_for_every_team(self):
-        args = _args(self.run_dir)
+        args = _args(self.run_dir, comp_dir=self.comp)
         for n in (1, 2):
             p = blue_prompt.blue_cycle_prompt(n, CREDS, args, 5, 85, "delta", "inj", "nb", "tail")
             self.assertIn(f"Blue Team {n}", p)

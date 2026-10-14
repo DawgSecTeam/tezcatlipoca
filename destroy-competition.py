@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 
 from teardown import Refusal
 from engine.template_freeze import frozen_state
+from common.comp_paths import comps_root, resolve_comp_dir
 from common.utils import load_compfile, pick_competition
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -33,7 +34,7 @@ load_dotenv(ENV_PATH)
 def load_destroyable_competitions():
     return [
         p.name
-        for p in sorted(Path("competitions").iterdir())
+        for p in sorted(comps_root().iterdir())
         if p.is_dir()
         and (p / "Compfile").exists()
         and (p / "teams.json").exists()
@@ -53,6 +54,9 @@ def main():
                     "--end-of-competition.")
     parser.add_argument("--competition", metavar="NAME",
                         help="competition directory under competitions/ (skips the picker)")
+    parser.add_argument("--comp-dir", dest="comp_dir", default=None,
+                        help="path to the competition's dir (wins over --competition "
+                             "resolution under the comps root)")
     parser.add_argument("--yes", action="store_true",
                         help="skip the type-the-ID confirmation (for scripted teardown)")
     parser.add_argument("--teams-only", action="store_true", dest="teams_only",
@@ -78,25 +82,28 @@ def main():
     print("Evidence is collected first; then every VM carrying this deploy's")
     print("full ownership set is force-stopped and destroyed.\n")
 
-    competitions = load_destroyable_competitions()
-    if not competitions:
-        print("No destroyable competitions found.")
-        print("(Competitions must have been deployed with create-competition.py")
-        print("after teams.json support was added to qualify.)")
-        sys.exit()
-
-    if args.competition:
-        if args.competition not in competitions:
-            print(f"'{args.competition}' is not a destroyable competition. Found: {', '.join(competitions)}")
-            sys.exit(1)
-        competition = args.competition
+    if args.comp_dir:
+        comp_dir = resolve_comp_dir(comp_dir=args.comp_dir)
     else:
-        competition = pick_competition(competitions, label="destroyable", action="Select a competition to destroy")
-    if competition is None:
-        print("Quitting.")
-        sys.exit()
+        competitions = load_destroyable_competitions()
+        if not competitions:
+            print("No destroyable competitions found.")
+            print("(Competitions must have been deployed with create-competition.py")
+            print("after teams.json support was added to qualify.)")
+            sys.exit()
 
-    comp_dir = Path("competitions") / competition
+        if args.competition:
+            if args.competition not in competitions:
+                print(f"'{args.competition}' is not a destroyable competition. Found: {', '.join(competitions)}")
+                sys.exit(1)
+            competition = args.competition
+        else:
+            competition = pick_competition(competitions, label="destroyable", action="Select a competition to destroy")
+        if competition is None:
+            print("Quitting.")
+            sys.exit()
+
+        comp_dir = resolve_comp_dir(competition)
     name, scenario, difficulty = load_compfile(comp_dir / "Compfile")
     teams = json.loads((comp_dir / "teams.json").read_text())
     boxes = json.loads((comp_dir / "boxes.json").read_text())

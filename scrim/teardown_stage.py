@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from config.config_ops import write_text_atomic
+from common.comp_paths import resolve_comp_dir
 from common.utils import load_compfile
 
 from scrim import core
@@ -75,7 +76,7 @@ def teardown_red(args, env):
         red_link.pull_red_state(args)
     except Exception as e:  # evidence capture must never block teardown
         log(f"WARNING: red state pull failed before teardown: {type(e).__name__}: {e}")
-    comp_path = str((core.REPO / "competitions" / args.competition).resolve())
+    comp_path = str(resolve_comp_dir(args.competition, getattr(args, "comp_dir", None)).resolve())
     configured = _config_red_vmid(comp_path)
     if args.red_vmid and configured and int(configured) != int(args.red_vmid):
         # Not fatal — badauto's identity guards are the authority on what is safe to
@@ -165,7 +166,7 @@ def run_range_teardown(args, *, evidence_done=False, red_vmid=None):
     from teardown import Refusal
     from teardown.runner import record_evidence_done, run_terminal_teardown
 
-    comp_dir = (core.REPO / "competitions" / args.competition).resolve()
+    comp_dir = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None)).resolve()
     teams = json.loads((comp_dir / "teams.json").read_text())
     boxes = json.loads((comp_dir / "boxes.json").read_text())
     name, _, _ = load_compfile(comp_dir / "Compfile")

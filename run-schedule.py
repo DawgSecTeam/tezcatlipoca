@@ -26,6 +26,7 @@ import urllib3
 from dotenv import load_dotenv
 
 from config.config_ops import write_text_atomic
+from common.comp_paths import resolve_comp_dir
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -187,7 +188,7 @@ def main():
     load_dotenv(REPO_ROOT / ".env")
     profile = load_profile(args.profile)
     comp_id = (profile.get("event") or {}).get("comp_id")
-    comp_dir = REPO_ROOT / "competitions" / (args.competition or comp_id)
+    comp_dir = resolve_comp_dir(args.competition or comp_id)
     if not comp_dir.is_dir():
         sys.exit(f"ERROR: competition dir not found: {comp_dir}")
 

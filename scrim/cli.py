@@ -20,6 +20,7 @@ from scrim import run_manifest
 from scrim import staging
 from scrim import test_folder
 from scrim.core import log
+from common.comp_paths import resolve_comp_dir
 from common.utils import valid_comp_name
 
 
@@ -35,7 +36,11 @@ def main():
     from dotenv import load_dotenv
     load_dotenv(core.REPO / ".env")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--competition", required=True, help="competition dir under competitions/")
+    p.add_argument("--competition", required=True, help="competition name (resolved under the "
+                   "comps root: TEZ_COMPETITIONS_ROOT, else ../tezcatlipoca-competitions, "
+                   "else competitions/)")
+    p.add_argument("--comp-dir", dest="comp_dir", default=None,
+                   help="path to the competition's dir (wins over --competition resolution)")
     p.add_argument("--new", help="author competitions/<NAME> from --from-template first")
     p.add_argument("--from-template", default=None)
     p.add_argument("--teams", type=int, default=2)
@@ -105,7 +110,7 @@ def main():
         if nm and not valid_comp_name(nm):
             sys.exit(f"invalid competition name {nm!r} — use [a-z0-9._-], no path separators.")
 
-    comp = core.REPO / "competitions" / args.competition
+    comp = resolve_comp_dir(args.competition, args.comp_dir)
     if args.resume_event:
         if not comp.is_dir():
             # resolve_run_dir opens/creates the test folder under comp, so a typo must not
@@ -154,7 +159,7 @@ def main():
         return
     if args.new:
         args.competition = args.new
-        comp = core.REPO / "competitions" / args.new
+        comp = resolve_comp_dir(args.new, args.comp_dir)
         staging.stage_author(args)
     if not (comp / "Compfile").exists():
         sys.exit(f"no such competition: {comp}")

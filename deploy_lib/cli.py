@@ -7,6 +7,7 @@ from pathlib import Path
 
 from config.config_prompts import _prompt_difficulty, collect_boxes, collect_users_config
 from config.config_ops import load_previous_competitions
+from common.comp_paths import resolve_comp_dir
 from common.utils import valid_comp_name
 
 from deploy_lib.runner import deploy
@@ -20,7 +21,12 @@ def build_parser():
     parser.add_argument("--competition", help="Competition name. If it already has a Compfile + "
                                               "boxes.json, deploy it straight away; otherwise it "
                                               "is created (needs --scenario/--difficulty or falls "
-                                              "back to prompting).")
+                                              "back to prompting). Resolved under the comps root "
+                                              "(TEZ_COMPETITIONS_ROOT, else ../tezcatlipoca-competitions, "
+                                              "else competitions/).")
+    parser.add_argument("--comp-dir", dest="comp_dir", default=None,
+                        help="Path to the competition's dir (a comps-repo checkout, or a per-run "
+                             "workspace copy). Wins over --competition resolution.")
     parser.add_argument("--teams", type=int, help="Number of teams (skips the 'How many teams?' prompt).")
     parser.add_argument("--yes", action="store_true", help="Skip the confirm-deploy prompt.")
     parser.add_argument("--scenario", help="Scenario description (only when creating a new competition).")
@@ -117,9 +123,9 @@ def _checked_comp_name(raw):
 
 
 def select_named_competition(args):
-# --competition NAME: reuse it when it has a Compfile + boxes.json, else scaffold it.
-    comp_name = _checked_comp_name(args.competition)
-    comp_dir = Path("competitions") / comp_name
+# --competition NAME / --comp-dir PATH: reuse it when it has a Compfile + boxes.json, else scaffold it.
+    comp_name = _checked_comp_name(args.competition or Path(args.comp_dir).name)
+    comp_dir = resolve_comp_dir(comp_name, args.comp_dir)
     has_compfile = (comp_dir / "Compfile").exists()
     has_boxes = (comp_dir / "boxes.json").exists()
 
@@ -149,7 +155,7 @@ def select_interactive_competition():
 
     if choice.lower() == "n":
         comp_name = _checked_comp_name(input("Competition name: "))
-        comp_dir = Path("competitions") / comp_name
+        comp_dir = resolve_comp_dir(comp_name)
         comp_dir.mkdir(parents=True, exist_ok=True)
 
         scenario = input("Scenario description: ").strip()
@@ -166,7 +172,7 @@ def select_interactive_competition():
         else:
             print("Invalid choice.")
             sys.exit(1)
-        comp_dir = Path("competitions") / comp_name
+        comp_dir = resolve_comp_dir(comp_name)
     return comp_name, comp_dir
 
 
@@ -176,7 +182,7 @@ def main():
     print("Tezcatlipoca - CTF Range Deployment")
     print("=" * 40)
 
-    if args.competition:
+    if args.competition or args.comp_dir:
         comp_name, comp_dir = select_named_competition(args)
     else:
         comp_name, comp_dir = select_interactive_competition()

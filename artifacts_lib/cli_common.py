@@ -7,8 +7,7 @@ import sys
 from pathlib import Path
 
 from artifacts_lib import artifacts_ops as ao
-
-COMPETITIONS_DIR = Path("competitions")
+from common.comp_paths import comps_root
 EXIT_OK, EXIT_FINDINGS, EXIT_USAGE = 0, 1, 2
 # write_stub's frontmatter line: the stub's own status is the most precise answer to "why is this
 # document not the real one?", so `show` reports it instead of paraphrasing it.
@@ -25,7 +24,7 @@ def resolve_comp(name):
 # destroy-competition.py (`competitions/<id>`), and a path to a comp dir anywhere on disk (a
 # practice run's worktree is a different checkout, so a path is sometimes all you have).
 # A Compfile is required either way — it is what makes a directory a competition.
-    for candidate in (Path(name), COMPETITIONS_DIR / name):
+    for candidate in (Path(name), comps_root() / name):
         if (candidate / "Compfile").is_file():
             return candidate
     return None
@@ -114,10 +113,11 @@ def error(message, code=EXIT_USAGE):
 
 
 def unknown_comp(name):
-    found = sorted(path.name for path in COMPETITIONS_DIR.iterdir() if path.is_dir()) \
-        if COMPETITIONS_DIR.is_dir() else []
+    root = comps_root()
+    found = sorted(path.name for path in root.iterdir() if path.is_dir()) \
+        if root.is_dir() else []
     return error(
-        f"unknown competition {name!r} — looked for {COMPETITIONS_DIR / name} and {Path(name)}, "
+        f"unknown competition {name!r} — looked for {root / name} and {Path(name)}, "
         f"both needing a Compfile. Competitions present: {', '.join(found) or 'none'}", EXIT_USAGE)
 
 

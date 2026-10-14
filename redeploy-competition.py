@@ -14,6 +14,7 @@ import urllib3
 from dotenv import load_dotenv
 
 import pipeline_api
+from common.comp_paths import comps_root, resolve_comp_dir
 from common.constants import SNAP_BASE, SNAP_READY
 from nakonops.nakon_lock_ops import acquire_engine_lock, release_engine_lock
 from infra.client import proxmox_api
@@ -74,6 +75,9 @@ def main():
     )
     parser.add_argument("--competition", help="Competition ID (competitions/<id>). Omit for a "
                                               "menu of deployed competitions.")
+    parser.add_argument("--comp-dir", dest="comp_dir", default=None,
+                        help="path to the competition's dir (wins over --competition "
+                             "resolution under the comps root)")
     parser.add_argument("--teams", help="Comma-separated teams: 'team2', '2' or the subnet "
                                         "identifier '102' all select the same team.")
     parser.add_argument("--boxes", help="Comma-separated box names from boxes.json, e.g. "
@@ -112,9 +116,9 @@ def main():
     if comp_name is not None and not valid_comp_name(comp_name):
         raise SystemExit(f"  ERROR: invalid competition name {comp_name!r} — use "
                          "[a-z0-9._-], no path separators.")
-    if not comp_name:
+    if not comp_name and not args.comp_dir:
         candidates = [
-            p.name for p in sorted(Path("competitions").iterdir())
+            p.name for p in sorted(comps_root().iterdir())
             if p.is_dir() and (p / "Compfile").exists() and (p / "teams.json").exists()
         ]
         if not candidates:
@@ -124,7 +128,8 @@ def main():
         if comp_name is None:
             raise SystemExit("Quitting.")
 
-    comp_dir = Path("competitions") / comp_name
+    comp_dir = resolve_comp_dir(comp_name, args.comp_dir)
+    comp_name = comp_name or comp_dir.name
     if not comp_dir.is_dir():
         raise SystemExit(f"  ERROR: no such competition: {comp_dir}")
 

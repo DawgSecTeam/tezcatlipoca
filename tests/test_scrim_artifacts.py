@@ -66,8 +66,8 @@ def make_comp(root, *, name="demo", run_id=RUN_ID):
 
 
 def make_args(comp, **over):
-    args = SimpleNamespace(competition=Path(comp).name, teams=2, duration_min=90,
-                           keep_range=False, blue_watchdog=False, run_dir=None,
+    args = SimpleNamespace(competition=Path(comp).name, comp_dir=str(comp), teams=2,
+                           duration_min=90, keep_range=False, blue_watchdog=False, run_dir=None,
                            red_ip="10.0.0.198", red_vmid=None)
     for key, value in over.items():
         setattr(args, key, value)
@@ -565,7 +565,8 @@ class BluePrompt(TmpCase):
                       "VM_USER": "u", "BOX_USER": "airship"}
 
     def test_the_cycle_prompt_asks_for_report_md(self):
-        args = SimpleNamespace(competition="demo", run_dir=str(self.run_dir), teams=1,
+        args = SimpleNamespace(competition="demo", comp_dir=str(self.root / "competitions" / "demo"),
+                               run_dir=str(self.run_dir), teams=1,
                                duration_min=90, reasoning_effort="minimal")
         with mock.patch.object(core, "REPO", self.root):
             prompt = blue_prompt.blue_cycle_prompt(1, self.creds, args, 600, 30, "", "", "", "")

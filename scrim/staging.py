@@ -4,10 +4,11 @@ from pathlib import Path
 from scrim import core
 from scrim import procs
 from scrim.core import log
+from common.comp_paths import comps_root, resolve_comp_dir
 from common.utils import load_users_config
 
 
-DEFAULT_TEMPLATE = core.REPO / "competitions" / "agent-scrim"
+DEFAULT_TEMPLATE = "agent-scrim"  # a competition name under the comps root
 
 
 RUNTIME_FILES = {
@@ -18,22 +19,22 @@ RUNTIME_FILES = {
 
 def stage_author(args):
     src = Path(args.from_template or DEFAULT_TEMPLATE)
-    # A bare --from-template NAME names a competition under competitions/, not a
+    # A bare --from-template NAME names a competition under the comps root, not a
     # cwd-relative path: full-scrim-20261013d died in authoring because Path(NAME)
     # resolved against the driver's cwd and missed the worktree's competitions dir.
     if not src.is_absolute() and not src.is_dir():
-        src = core.REPO / "competitions" / src
+        src = comps_root() / src
     if not src.is_dir():
-        valid = sorted(p.name for p in (core.REPO / "competitions").iterdir() if p.is_dir())
+        valid = sorted(p.name for p in comps_root().iterdir() if p.is_dir())
         raise RuntimeError(
             f"template {src} does not exist. Pass --from-template with one of "
             f"{valid} (the default template itself is gone — competitions/ dirs are "
             f"curated; point DEFAULT_TEMPLATE at one that ships Compfile + boxes.json).")
-    dst = core.REPO / "competitions" / args.new
+    dst = resolve_comp_dir(args.new, getattr(args, "comp_dir", None))
     if dst.exists():
         raise RuntimeError(f"{dst} already exists")
     log(f"authoring {dst} from template {src}")
-    (core.REPO / "competitions" / args.new).mkdir(parents=True)
+    dst.mkdir(parents=True)
     for item in src.iterdir():
         if item.name in RUNTIME_FILES or item.name in ("injects", "LOG.md") \
                 or item.name.startswith("sub-") or item.name.startswith(".nakon-domain-"):

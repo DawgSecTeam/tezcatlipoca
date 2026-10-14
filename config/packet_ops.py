@@ -22,6 +22,7 @@ from pathlib import Path
 import yaml
 
 from config.config_ops import random_password
+from common.comp_paths import comps_root as default_comps_root
 from common.constants import KNOWN_BROKEN_CONFIGS, MAX_BOXES_PER_TEAM, REQUIRED_VARS
 from nakonops.nakon_config_ops import os_to_platform
 from nakonops.nakon_pin_ops import _windows_password_error
@@ -601,8 +602,8 @@ def compile_profile(profile_path, competitions_dir=None, force=False, dry_run=Fa
 
     event = p["event"]
     comp_id = event["comp_id"]
-    comps_root = Path(competitions_dir) if competitions_dir else REPO_ROOT / "competitions"
-    comp_dir = comps_root / comp_id
+    comps_dir = Path(competitions_dir) if competitions_dir else default_comps_root()
+    comp_dir = comps_dir / comp_id
     authored = (comp_dir / "Compfile").exists() and (comp_dir / "boxes.json").exists()
     if authored and not force and not dry_run:
         raise SystemExit(

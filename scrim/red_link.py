@@ -1,6 +1,7 @@
 import subprocess
 from pathlib import Path
 
+from common.comp_paths import resolve_comp_dir
 from scrim import core
 from scrim import procs
 from scrim.core import log
@@ -19,7 +20,7 @@ def _red_ssh_spec(args):
     (that read used to overwrite --red-ip outright; 2026-10-12)."""
     from red import badauto_config_ops
     red_ip = getattr(args, "red_ip", None) or badauto_config_ops.DEFAULT_RED01_IP
-    comp = core.REPO / "competitions" / args.competition
+    comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
     configured = ((badauto_config_ops.load_config(comp).get("deploy") or {})
                   .get("red_ip"))
     if configured:

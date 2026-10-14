@@ -9,6 +9,7 @@ from pathlib import Path
 
 from common.constants import (ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_VMID_OFFSET,
                        MAX_BOXES_PER_TEAM, SCORING_ENGINE_VMID)
+from common.comp_paths import comps_root
 
 
 def load_packet_passwords(comp_dir):
@@ -32,7 +33,7 @@ def load_packet_passwords(comp_dir):
 def load_previous_competitions():
    return [
       p.name
-      for p in Path("competitions").iterdir()
+      for p in comps_root().iterdir()
       if p.is_dir() and (p / "Compfile").exists()
    ]
 

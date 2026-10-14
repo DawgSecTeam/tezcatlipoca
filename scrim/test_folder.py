@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from artifacts_lib import artifacts_ops
+from common.comp_paths import resolve_comp_dir
 from scrim import core
 from scrim import procs
 from scrim import red_link
@@ -120,7 +121,7 @@ def collect_run_artifacts(args):
     if not test_dir:
         log("WARNING: no test folder on this run — artifact collection skipped")
         return None
-    comp = core.REPO / "competitions" / args.competition
+    comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
     try:
         collection = artifacts_ops.collect(
             test_dir,

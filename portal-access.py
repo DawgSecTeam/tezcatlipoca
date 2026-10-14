@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(".env"))
 
 from config.config_ops import write_state  # noqa: E402
+from common.comp_paths import resolve_comp_dir  # noqa: E402
 from multinode.placement_record import activate_placement, read_placement  # noqa: E402
 from portal.portal_ops import access_state, portal_enabled, set_access  # noqa: E402
 from infra.console import mint_console_tokens, node_targets  # noqa: E402
@@ -67,7 +68,7 @@ def main():
     parser.add_argument("competition")
     parser.add_argument("action", choices=["status", "open", "close", "resync"])
     args = parser.parse_args()
-    comp_dir = Path("competitions") / args.competition
+    comp_dir = resolve_comp_dir(args.competition)
     if not comp_dir.is_dir():
         sys.exit(f"no such competition: {comp_dir}")
     if not portal_enabled(comp_dir):

@@ -706,12 +706,15 @@ class AuthoredCompSweepMarker(unittest.TestCase):
         (src / "Compfile").write_text("name tmpl\nscenario x\n")
         (src / ".postclone-swept").write_text("")   # the marker deploy.py actually writes
         (src / ".phase6-swept").write_text("")      # the stale name this file used to skip
-        old_repo = core.REPO
-        core.REPO = tmp
+        old_root = os.environ.get("TEZ_COMPETITIONS_ROOT")
+        os.environ["TEZ_COMPETITIONS_ROOT"] = str(tmp / "competitions")
         try:
             staging.stage_author(SimpleNamespace(new="demo", from_template=str(src)))
         finally:
-            core.REPO = old_repo
+            if old_root is None:
+                os.environ.pop("TEZ_COMPETITIONS_ROOT", None)
+            else:
+                os.environ["TEZ_COMPETITIONS_ROOT"] = old_root
         dst = tmp / "competitions" / "demo"
         self.assertTrue((dst / "Compfile").exists())
         # pre-fix the REAL marker was copied, so the new competition claimed to be
@@ -725,12 +728,15 @@ class AuthoredCompSweepMarker(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         (tmp / "competitions" / "tmpl").mkdir(parents=True)
         (tmp / "competitions" / "tmpl" / "Compfile").write_text("name tmpl\n")
-        old_repo = core.REPO
-        core.REPO = tmp
+        old_root = os.environ.get("TEZ_COMPETITIONS_ROOT")
+        os.environ["TEZ_COMPETITIONS_ROOT"] = str(tmp / "competitions")
         try:
             staging.stage_author(SimpleNamespace(new="demo", from_template="tmpl"))
         finally:
-            core.REPO = old_repo
+            if old_root is None:
+                os.environ.pop("TEZ_COMPETITIONS_ROOT", None)
+            else:
+                os.environ["TEZ_COMPETITIONS_ROOT"] = old_root
         self.assertTrue((tmp / "competitions" / "demo" / "Compfile").exists())
 
 class RedReachabilityGate(unittest.TestCase):

@@ -4,6 +4,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from common.comp_paths import resolve_comp_dir
 from scrim import compworld
 from scrim import core
 from scrim import procs
@@ -37,7 +38,7 @@ def watchdog_script(services, box_pw):
 # blue agents at once and web01 sat ~2h unwatched; keeps availability up only — it does
 # not hunt or close the entry vector
 def blue_watchdog_loop(args, creds, t0, stop):
-    comp = core.REPO / "competitions" / args.competition
+    comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
     boxes = core.read_comp_json(comp, "boxes.json")
     box_services = core.read_comp_json(comp, "box_services.json")
     linux = [b for b in boxes if any((s.get("name") if isinstance(s, dict) else s)
