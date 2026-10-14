@@ -18,7 +18,11 @@ SSH_NOCHECK = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/
 # cadence honest: measured on the GX10 qwen-flash (run4 2026-10-12), a cycle
 # with real incident work needs 8-10 min — 540 killed 5 of 6 — so the cap gives
 # the one-action scope headroom while the target period keeps ~6 starts/hour.
-CYCLE_TIMEOUT = 600
+# TEZ_CYCLE_TIMEOUT overrides it for a slower LLM endpoint: on the only reachable
+# server at the 20261013d run (qwen3.8-flash-next, ~3 min per 10-token reply) every
+# 600 s cycle timed out and blue never engaged at all. Raising the budget trades
+# cycle count for cycles that can actually finish.
+CYCLE_TIMEOUT = int(os.environ.get("TEZ_CYCLE_TIMEOUT") or 600)
 CYCLE_TARGET_PERIOD = 480
 # Board samples every minute: at 300 s a blue restoring in 2-5 min (live run3)
 # left every DOWN->UP transition between samples — the scoreboard never showed a

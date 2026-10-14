@@ -952,3 +952,16 @@ class PyflakesClean(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CycleTimeoutKnob(unittest.TestCase):
+# run-e9d17d65: the only reachable LLM needed ~3 min per 10-token reply; blue's
+#     every 600 s cycle timed out and blue never engaged. The cap is calibrated
+#     for the GX10 qwen-flash, so a slower endpoint needs an override.
+    def test_tez_cycle_timeout_overrides(self):
+        import importlib
+        from scrim import core
+        with mock.patch.dict(os.environ, {"TEZ_CYCLE_TIMEOUT": "1500"}):
+            self.assertEqual(importlib.reload(core).CYCLE_TIMEOUT, 1500)
+        self.assertEqual(importlib.reload(core).CYCLE_TIMEOUT, 600,
+                         "the 600 s default must come back after the override is unset")

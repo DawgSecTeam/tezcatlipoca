@@ -28,6 +28,12 @@ def main():
     # a call site explicitly widens it. Several evidence writes used to rely on the
     # operator's umask (audit find D5).
     os.umask(0o077)
+    # The deploy child reads .env itself, but the harness's IN-PROCESS paths (the
+    # end-of-event teardown runner, compworld) read TF_VAR_* straight from this
+    # process's environment: run-e9d17d65's teardown died with KeyError
+    # TF_VAR_proxmox_endpoint because only the child had loaded .env.
+    from dotenv import load_dotenv
+    load_dotenv(core.REPO / ".env")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--competition", required=True, help="competition dir under competitions/")
     p.add_argument("--new", help="author competitions/<NAME> from --from-template first")
