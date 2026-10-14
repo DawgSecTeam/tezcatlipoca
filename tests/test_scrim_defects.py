@@ -22,6 +22,8 @@ import threading
 import time
 import unittest
 from pathlib import Path
+
+from common.comp_paths import comps_root
 from types import SimpleNamespace
 from unittest import mock
 
@@ -547,11 +549,11 @@ class ScheduleEndAlwaysPauses(unittest.TestCase):
 
 # D8 ---------------------------------------------------------------------------
 class LineupDerivation(unittest.TestCase):
-    AMONGUS = _REPO / "competitions" / "amongus-cde"
+    AMONGUS = comps_root() / "amongus-cde"
     LEGACY_17B = {"web01": 45, "app01": 60, "db01": 90}
 
     def _boxes(self, comp):
-        return json.loads((_REPO / "competitions" / comp / "boxes.json").read_text())
+        return json.loads((comps_root() / comp / "boxes.json").read_text())
 
     def test_box_labels_come_from_the_competition_boxes_json(self):
         labels = host_labels.box_labels(self.AMONGUS)

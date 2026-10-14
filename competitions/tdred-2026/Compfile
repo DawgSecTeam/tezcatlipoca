@@ -1,6 +1,0 @@
-name tdred-2026
-scenario Teardown-redesign live validation: a minimal two-box Linux range deployed solely to prove the new teardown engine end to end (clean cycle, kill/resume, foreign decoys). No event runs on this competition.
-difficulty 1
-assume_breach 1
-assume_breach_depth 1
-remote_access 0

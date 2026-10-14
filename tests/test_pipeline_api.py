@@ -5,13 +5,15 @@ import sys
 import unittest
 from pathlib import Path
 
+from common.comp_paths import comps_root
+
 _REPO = Path(__file__).resolve().parents[1]
 
 
 class PipelineApiSurfaceTests(unittest.TestCase):
     def test_create_competition_plan_only_still_runs(self):
-        if not (_REPO / "competitions" / "example" / "boxes.json").exists():
-            self.skipTest("competitions/example missing")
+        if not (comps_root() / "example" / "boxes.json").exists():
+            self.skipTest("example comp missing (comps root)")
         out = subprocess.run(
             [sys.executable, "create-competition.py", "--competition", "example", "--plan-only"],
             capture_output=True, text=True, cwd=_REPO, timeout=60)

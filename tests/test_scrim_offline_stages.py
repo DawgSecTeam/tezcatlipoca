@@ -15,6 +15,8 @@ import time
 import unittest
 from argparse import Namespace
 from pathlib import Path
+
+from common.comp_paths import comps_root
 from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
@@ -78,7 +80,7 @@ class Base(unittest.TestCase):
         self.addCleanup(home.stop)
         self.root = self.tmp / "repo"
         self.comp = self.root / "competitions" / "c1"
-        shutil.copytree(REPO / "competitions" / "agent-scrim", self.comp)
+        shutil.copytree(comps_root() / "agent-scrim", self.comp)
         (self.comp / ".deploy_state.json").write_text(json.dumps(
             {"admin_password": "adminpw", "box_password": "boxpw", "inject_password": "injpw",
              "box_creds": {"obsadmin": "boxpw"}}))
@@ -177,7 +179,7 @@ class RunFolderAndResume(Base):
         self.assertIn("invalid competition name", run("--competition", "a/b").stderr)
         self.assertIn("no such competition", run("--competition", "zz-nope").stderr)
         self.assertIn("no such competition", run("--competition", "zz-nope", "--resume-event").stderr)
-        self.assertFalse((REPO / "competitions" / "zz-nope").exists())
+        self.assertFalse((comps_root() / "zz-nope").exists())
         self.assertNotEqual(run("--competition", "x", "--red-mode", "bad").returncode, 0)
 
 

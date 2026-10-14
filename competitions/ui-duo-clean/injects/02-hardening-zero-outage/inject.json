@@ -1,7 +1,0 @@
-{
-  "title": "Hardening Pass — Zero Outage",
-  "description_file": "briefing.md",
-  "open_offset_min": 0,
-  "due_offset_min": 10080,
-  "close_offset_min": 20160
-}

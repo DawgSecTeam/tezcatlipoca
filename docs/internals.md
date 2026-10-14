@@ -37,6 +37,18 @@ Single source for vmid math, snapshot names, nakon budgets, naming.
 - `wait_for_ssh`/`wait_for_http` poll and never raise. `wait_for_boxes_ssh` probes Windows via guest agent and raises only if all fail. `wait_for_cloud_init` must finish before planting (cloud-init can revert perms); Windows skipped; exit 2 = done with warnings.
 - `is_windows_template()` (`"win" in name.lower()`) has one definition in `common/windows_ops.py`; every classifier imports it, because divergent copies build the wrong range.
 
+## common/comp_paths.py
+
+Competition definitions moved to their own repo (`tezcatlipoca-competitions`), so "the comp
+dir" stopped being a literal `competitions/<id>`. `comps_root()` resolves
+`TEZ_COMPETITIONS_ROOT` → `./competitions` (the old CWD-relative idiom, run from a worktree
+root) or the checkout's own `competitions/` → the sibling `../tezcatlipoca-competitions`.
+`resolve_comp_dir` puts `--comp-dir` ahead of name resolution everywhere: the dashboard runs
+drivers against per-run workspace copies (definitions seeded in, run state accumulated
+there), and the drivers never learn about the dashboard. Per-run state lives inside whatever
+comp dir the driver is given, so a workspace IS a comp dir — that is what keeps manual runs
+and dashboard runs on one code path.
+
 ## infra/
 
 One submodule per concern; **tests patch the owning module** (`infra.client.proxmox_api`, `infra.guest_exec.time`, `infra.ownership.has_clone_marker`, `infra.lifecycle.list_snapshots`).

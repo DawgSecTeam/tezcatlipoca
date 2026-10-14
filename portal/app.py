@@ -136,8 +136,8 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
         return s
 
     def err(status, msg):
-        # `detail`, like FastAPI's own errors and webui/server.py — the frontend's api.js
-        # (shared shape with webui/frontend/src/api.js) reads exactly that key.
+        # `detail`, like FastAPI's own errors and the dashboard service — the frontend's
+        # api.js (shared shape with tezcatlipoca-dashboard/web/src/api.js) reads exactly that key.
         return JSONResponse({"detail": msg}, status_code=status)
 
     def same_origin(request):
@@ -337,7 +337,7 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
             lines = []
         return {"entries": [json.loads(x) for x in lines if x.strip()]}
 
-    # The SPA, served the way webui/server.py serves its build: /assets from dist, every other
+    # The SPA, served the way the dashboard service serves its build: /assets from dist, every other
     # GET that is not an API route falls through to index.html (react-router owns / and
     # /console/<team>/<box>). Registered last so it can never shadow a route above.
     dist = Path(dist_dir) if dist_dir else None

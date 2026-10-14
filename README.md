@@ -8,14 +8,14 @@ golden templates and linked clones). Companion scripts: `verify-competition.py`,
 The phases and components are described in
 [docs/architecture.md](docs/architecture.md).
 
-## Web UI
+## Dashboard
 
-. You can author and edit competitions, pick catalog pins for services and misconfigs, and launch
-plan, deploy, and verify jobs. It edits the `competitions/<id>/` files and runs the CLI scripts an
-operator would type.
-
-Run it with `python3 webui/server.py` and open http://127.0.0.1:8765. Setup, the screen guide,
-and the keyboard map are in [webui/README.md](webui/README.md).
+Competition authoring and range runs are centralized in
+[DawgSecTeam/tezcatlipoca-dashboard](https://github.com/DawgSecTeam/tezcatlipoca-dashboard)
+(the run queue + MCP server + web UI, deployed at `http://10.0.0.143:8787`) with definitions in
+[DawgSecTeam/tezcatlipoca-competitions](https://github.com/DawgSecTeam/tezcatlipoca-competitions).
+The dashboard runs every job against an engine worktree at a pinned ref via `--comp-dir`; this
+repo stays the engine. Manual driver runs still work (see below) and are the recovery path.
 
 ## Documentation
 
@@ -32,9 +32,8 @@ Operations, or Reports, with one line on when to read it. The most-used entry po
 | [docs/multi-node.md](docs/multi-node.md) | One competition across several Proxmox hosts: `nodes.json`, placement, jump routing |
 | [docs/known-issues.md](docs/known-issues.md) | Open and pending issues only. Fixed issues are deleted, not archived |
 | [docs/environment-facts.md](docs/environment-facts.md) | Node, storage, template, and vmid ground truth |
-| [docs/security-disclosures.md](docs/security-disclosures.md) | Credential-exposure history and the current open rotation |
 | [docs/tests.md](docs/tests.md) | The offline test suite: how to run it, what it covers |
-| [webui/README.md](webui/README.md) | The web UI: what each screen edits, the catalog source, the deploy panel |
+| [tezcatlipoca-dashboard README](https://github.com/DawgSecTeam/tezcatlipoca-dashboard) | The central run queue: web UI, run API, MCP tools |
 | [docs/portal.md](docs/portal.md) | The student portal: Quotient team login → Proxmox web console per box (Compfile `portal 1`) |
 | [AGENTS.md](AGENTS.md) | Repo rules for coding agents, including the practice-run worktree rule |
 
@@ -42,6 +41,7 @@ Operations, or Reports, with one line on when to read it. The most-used entry po
 
 ```bash
 git clone --recurse-submodules <url>    # or: git submodule update --init --recursive
+git clone ../tezcatlipoca-competitions  # competition definitions (sibling checkout)
 cp .env.example .env                    # fill in real values; .env stays out of git
 python3 create-competition.py           # interactive
 python3 create-competition.py --help    # flags documented in docs/usage-agents.md

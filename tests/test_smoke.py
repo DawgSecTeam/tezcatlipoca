@@ -11,6 +11,8 @@ import sys
 import unittest
 from pathlib import Path
 
+from common.comp_paths import comps_root
+
 _REPO = Path(__file__).resolve().parents[1]
 _FATAL = ("undefined name", "may be undefined", "syntax error", "invalid syntax",
           "unable to detect undefined names", "redefinition of unused")
@@ -28,8 +30,8 @@ class SmokeGate(unittest.TestCase):
         self.assertEqual(bad, [], "pyflakes found fatal issues:\n" + "\n".join(bad))
 
     def test_plan_only_example(self):
-        if not (_REPO / "competitions" / "example" / "boxes.json").exists():
-            self.skipTest("competitions/example missing")
+        if not (comps_root() / "example" / "boxes.json").exists():
+            self.skipTest("example comp missing (comps root)")
         out = subprocess.run(
             [sys.executable, "create-competition.py", "--competition", "example", "--plan-only"],
             capture_output=True, text=True, cwd=_REPO, timeout=60)

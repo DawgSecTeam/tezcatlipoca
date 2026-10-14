@@ -170,13 +170,13 @@ picks up the new secret.
 
 `portal/frontend/` shares the management UI's stack (React 19, Vite, Tailwind 4) and design.
 `src/components/ui.jsx`/`kit.jsx` and `src/index.css` are verbatim copies of
-`webui/frontend/src/components/` (plus portal-only rules) rather than cross-tree imports, because
+`tezcatlipoca-dashboard/web/src/components/` (the shared kit's original home; plus portal-only rules) rather than cross-tree imports, because
 the image builds on the engine from `portal/` alone. `tests/test_portal_frontend.py` pins the
 noVNC release tarball's integrity hash; it doesn't check the copies for drift.
 
 - **Views**: `/` is sign-in, then the team's boxes or the white-team view (gate, every team,
   access log); `/console/<team>/<box>` is one console per tab. The FastAPI app serves the build as
-  an SPA, same as `webui/server.py`.
+  an SPA, same as the dashboard service.
 - **noVNC** comes from the v1.6.0 GitHub release tarball (pinned integrity hash), not the npm
   package: its `lib/` build is CommonJS with a top-level `await`, which Vite rejects; the release
   source's ES modules build cleanly.

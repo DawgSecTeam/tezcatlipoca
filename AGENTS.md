@@ -18,12 +18,23 @@ All guidance lives in `docs/` — start with:
 - [docs/known-issues.md](docs/known-issues.md) — open/pending issues only; drained every run cycle
 - [docs/environment-facts.md](docs/environment-facts.md) — node/storage/template/vmid ground truth
 
+## Range runs go through the dashboard
+
+The central run queue (tezcatlipoca-dashboard, `http://10.0.0.143:8787`, MCP at `/mcp`) is where
+range runs — deploy/verify/destroy/scrim — are submitted and observed. It owns per-run engine
+worktrees at pinned refs, pushes stage events to subscribed sessions (`watch_run` — wait for the
+push, don't poll logs), and refuses a second concurrent run of one competition. Competition
+definitions live in `tezcatlipoca-competitions`; the drivers resolve them via `--comp-dir` or the
+comps root (`TEZ_COMPETITIONS_ROOT`, else `./competitions`, else the sibling
+`../tezcatlipoca-competitions`). Direct driver runs are the recovery path only.
+
 ## Practice runs must run from a new worktree
 
 **Any practice run (capacity test, canary, shakedown — any deploy testing the pipeline rather than
 hosting an event) MUST run from a NEW worktree cut off `main`**, never from the main tree or
 another run's worktree. Practice deploys crash and leave half-built state; isolating them keeps
-main's tree and node view clean and stops two sessions driving the same checkout.
+main's tree and node view clean and stops two sessions driving the same checkout. The dashboard's
+per-run worktrees satisfy this mechanically; the rule binds manual runs.
 
 Each deploy stamps a per-comp-dir `run-<id>` tag on everything it creates; every destroy path
 requires the full ownership set, so two worktrees may deploy the SAME competition ID without
@@ -129,10 +140,10 @@ real `--teams N --yes`, verify, destroy — all from the worktree root.
 - **Never re-dispatch an identical subagent task** after it fails. A failed delegation is not a
   reason to send the same prompt again. Prompts should name the artifact the subagent must
   produce, so a retry can see what already exists.
-- **Long operations are detached** — see
-  [usage-agents.md § running a deploy that outlives your shell](docs/usage-agents.md#long-running-deploys).
-  Never wrap a deploy in `timeout` to make it fit a tool call, and never carry an hour-scale run in
-  a background tool task — `setsid nohup` plus log polling instead.
+- **Range runs go to the dashboard, long manual operations are detached** — see
+  [usage-agents.md § central runs](docs/usage-agents.md#central-runs-the-dashboard). Never wrap a
+  deploy in `timeout` to make it fit a tool call, and never carry an hour-scale run in a background
+  tool task — submit it to the dashboard; for manual recovery use `setsid nohup` plus log polling.
 - **Push after changes**: committing is not finishing — push to origin as part of the task. Fetch
   and check divergence first; rebase rather than force-push (force-push is for sanctioned history
   rewrites only, never casually). Never push anything carrying live secrets.

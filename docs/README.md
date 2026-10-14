@@ -22,7 +22,7 @@ Grouped by what each doc is for. New here: [README.md](../README.md) → [archit
 | [e2e-testing.md](e2e-testing.md) | Triaging a failed deploy or planning a full pipeline test |
 | [known-issues.md](known-issues.md) | Something is broken, or a decision is needed. Open/pending only — fixed issues are deleted |
 | [environment-facts.md](environment-facts.md) | Picking a template, pool, vmid block, or node |
-| [../webui/README.md](../webui/README.md) | Authoring or deploying from the browser |
+| [tezcatlipoca-dashboard](https://github.com/DawgSecTeam/tezcatlipoca-dashboard) | Central run queue: authoring, deploying, MCP for agents |
 | [portal.md](portal.md) | Browser console access for blue teams |
 | [scrim-harness.md](scrim-harness.md) | Running or modifying the red-vs-blue agent scrim |
 | [automated-test-artifacts.md](automated-test-artifacts.md) | Finding a run's reports/evidence, or changing what teardown collects |

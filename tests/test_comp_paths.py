@@ -20,10 +20,13 @@ def test_cwd_competitions_wins_over_checkout(monkeypatch, tmp_path):
     assert comps_root() == Path("competitions")
 
 
-def test_checkout_competitions_when_cwd_has_none(monkeypatch, tmp_path):
+def test_checkout_competitions_last_resort(monkeypatch, tmp_path):
+    repo = tmp_path / "tezcatlipoca"
+    repo.mkdir()
     monkeypatch.delenv("TEZ_COMPETITIONS_ROOT", raising=False)
-    monkeypatch.chdir(tmp_path)  # no competitions/ here
-    assert comps_root() == comp_paths.REPO_ROOT / "competitions"
+    monkeypatch.chdir(tmp_path)  # no competitions/ here, no sibling either
+    monkeypatch.setattr(comp_paths, "REPO_ROOT", repo)
+    assert comps_root() == repo / "competitions"
 
 
 def test_sibling_repo_fallback(monkeypatch, tmp_path):

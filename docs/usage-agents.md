@@ -1,6 +1,6 @@
 # Usage — agents
 
-Non-interactive driving: flags, pre-authored configs, machine-readable validation. One-time Proxmox/template setup is in [usage-people.md](usage-people.md#prerequisites-one-time-per-proxmox-host). Browser front end: [../webui/README.md](../webui/README.md).
+Non-interactive driving: flags, pre-authored configs, machine-readable validation. One-time Proxmox/template setup is in [usage-people.md](usage-people.md#prerequisites-one-time-per-proxmox-host). Central runs + MCP: [tezcatlipoca-dashboard](https://github.com/DawgSecTeam/tezcatlipoca-dashboard) (runs at `http://10.0.0.143:8787`).
 
 ## `create-competition.py`
 
@@ -158,9 +158,24 @@ Each deploy mints a `run-<hex>` id (in `.deploy_state.json`) and tags everything
 
 Red's network mode (`routed`/`masq`) is owned by `../bad-auto`; see [architecture.md](architecture.md#network-and-isolation).
 
+## Central runs (the dashboard)
+
+Range runs are submitted to the central dashboard
+([tezcatlipoca-dashboard](https://github.com/DawgSecTeam/tezcatlipoca-dashboard),
+`http://10.0.0.143:8787`) through its web UI or its MCP tools (`submit_run`, `watch_run`,
+`get_run_events`, `cancel_run`, `get_run_log`, `get_artifacts`). The dashboard cuts a
+per-run engine worktree at the pinned ref and runs the same drivers against a per-run
+workspace (`--comp-dir`), so sessions never contend over a checkout and never eat each
+other's state. `watch_run` subscribes the session: stage events (deploy `[N/8]` phases,
+scrim stages) are pushed as they complete — wait for the push instead of polling logs,
+and use `get_run_events(since=N)` to recover anything missed across a reconnect. A second
+run of the same competition is refused at submit (parallel elsewhere, fail-fast on real
+collisions).
+
 ## Long-running deploys
 
-A deploy outlasts tool calls, terminals, and harness task records. Don't wrap it in `timeout`. Detach it and poll the log, not the process:
+Manual/recovery only — range runs go through the dashboard above. A deploy outlasts tool
+calls, terminals, and harness task records. Don't wrap it in `timeout`. Detach it and poll the log, not the process:
 
 ```bash
 cd <worktree-root>
@@ -172,4 +187,4 @@ setsid nohup python3 -u create-competition.py \
 
 Kill with `kill -TERM -<pid>` (process group). Never `pkill -f` a pattern that appears in the invoking command line. Kill, confirm gone, then relaunch.
 
-Practice runs must use a new worktree: [AGENTS.md](../AGENTS.md#practice-runs-must-run-from-a-new-worktree).
+Manual practice runs must use a new worktree: [AGENTS.md](../AGENTS.md#practice-runs-must-run-from-a-new-worktree).

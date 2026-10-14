@@ -9,6 +9,10 @@ Hardware/environment ground truth for the Proxmox hosts. Re-verify anything vmid
 | cyberrange | `https://10.0.0.150:8006` | `.env.cyberrange-20260930` | node `proxmox`; shared with challenge/workshop/livefire VMs — the busy node |
 | cyberfield | `https://10.0.0.193:8006` | `.env` | node `pve`; unstable hardware — can lose ping/SSH/API with no self-recovery and needs a physical power cycle. VMs survive; the scoring loop needs `verify --fix-round-loop` afterward |
 
+Not a Proxmox host: **`10.0.0.143`** (user `hna`) runs the central dashboard
+(`tezcatlipoca-dashboard` on :8787 — run queue + MCP + web UI, systemd user unit) and the
+qwen LLM endpoint (:8080) that bad-auto's red agent uses.
+
 Only the API port (:8006) and the guest-agent channel are reachable from the dev host; other VM ports TCP-RST. **Ping is not a liveness signal** (a tailnet bridge can answer ICMP while forwarding nothing) — probe `curl -k https://<node>:8006/` for any HTTP code, not `000`. State, snapshots, and disks survive a node outage; resume with `--from-phase`.
 
 ## Templates

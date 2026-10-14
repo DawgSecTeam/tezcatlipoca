@@ -1,6 +1,6 @@
 # Usage — people
 
-Interactive operation: one-time setup, templates, env vars, running a deploy. Scripted use: [usage-agents.md](usage-agents.md). Browser front end: [../webui/README.md](../webui/README.md).
+Interactive operation: one-time setup, templates, env vars, running a deploy. Scripted use: [usage-agents.md](usage-agents.md). Browser front end + run queue: [tezcatlipoca-dashboard](https://github.com/DawgSecTeam/tezcatlipoca-dashboard) (runs at `http://10.0.0.143:8787`).
 
 ## Prerequisites (per Proxmox host)
 
