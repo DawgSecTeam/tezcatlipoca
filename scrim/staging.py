@@ -83,8 +83,14 @@ def creds_from_files(comp):
 
 
 def stage_deploy(args, comp):
-    cmd = [core.local_python(), "-u", "create-competition.py", "--competition", comp.name,
-           "--teams", str(args.teams), "--yes"]
+    # --comp-dir is the whole point of the dashboard's per-run workspace: the comp lives OUTSIDE
+    # the engine tree there, so a bare `--competition <dir name>` resolved under the comps root,
+    # found nothing, and scaffolded a NEW competition called "comp" instead of reusing this one
+    # (2026-10-14, run-9c45d48c: interactive prompt → EOFError). `--competition` carries the
+    # run's real comp id when the caller gave one (the workspace dir is just "comp").
+    name = getattr(args, "competition", None) or comp.name
+    cmd = [core.local_python(), "-u", "create-competition.py", "--competition", name,
+           "--comp-dir", str(comp), "--teams", str(args.teams), "--yes"]
     if comp.joinpath(".deploy_state.json").exists() and args.resume:
         cmd += ["--from-phase", str(args.resume)]
         # --force-resume must reach create-competition: it is the operator's answer to

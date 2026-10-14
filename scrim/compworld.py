@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from scrim import core
 
 
@@ -101,7 +103,21 @@ _WATCHDOG_DISPLAY = {
 }
 
 
+def comp_arg(comp):
+    """The competition argument for a driver process.
+
+    Relative when the competition lives inside the engine tree (short, readable paths in logs
+    and state), absolute when it does not — the dashboard's per-run workspace sits outside the
+    repo, where `relative_to()` raises ValueError and a bare name would resolve under the
+    comps root instead of the workspace (2026-10-14).
+    """
+    try:
+        return str(Path(comp).relative_to(core.REPO))
+    except ValueError:
+        return str(Path(comp))
+
+
 def verify_cmd(comp, creds, *extra):
-    return [core.local_python(), "verify-competition.py", str(comp.relative_to(core.REPO)),
+    return [core.local_python(), "verify-competition.py", comp_arg(comp),
             "--engine-ip", creds["ENGINE_IP"], "--admin-password", creds["ADMIN_PW"],
             *extra, *_verify_flags(comp)]

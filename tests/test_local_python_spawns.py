@@ -92,3 +92,45 @@ class RedSpawns(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeployTargetsTheWorkspaceTests(unittest.TestCase):
+    """`create-competition.py` must be pointed at the workspace, not told to scaffold a new one."""
+
+    def test_deploy_child_gets_comp_dir_and_the_real_comp_name(self):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return SimpleNamespace(returncode=0, stdout="last_phase: 8\n", stderr="")
+
+        with mock.patch.object(staging.procs, "run", side_effect=fake_run), \
+                mock.patch.object(core, "read_comp_json", return_value={"last_phase": 8}):
+            args = SimpleNamespace(competition="scrim-one", teams=2, resume=None,
+                                   force_resume=False, run_dir=None)
+            staging.stage_deploy(args, Path("/data/runs/run-x/comp"))
+        cmd = calls[0]
+        self.assertEqual(cmd[cmd.index("--comp-dir") + 1], "/data/runs/run-x/comp")
+        self.assertEqual(cmd[cmd.index("--competition") + 1], "scrim-one")
+
+    def test_deploy_falls_back_to_the_dir_name_without_a_comp_id(self):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return SimpleNamespace(returncode=0, stdout="last_phase: 8\n", stderr="")
+
+        with mock.patch.object(staging.procs, "run", side_effect=fake_run), \
+                mock.patch.object(core, "read_comp_json", return_value={"last_phase": 8}):
+            args = SimpleNamespace(competition=None, teams=2, resume=None,
+                                   force_resume=False, run_dir=None)
+            staging.stage_deploy(args, Path("/data/runs/run-x/comp"))
+        cmd = calls[0]
+        self.assertEqual(cmd[cmd.index("--competition") + 1], "comp")
+
+    def test_verify_argument_is_absolute_outside_the_engine_tree(self):
+        from scrim import compworld
+        inside = core.REPO / "competitions" / "demo"
+        outside = Path("/data/runs/run-x/comp")
+        self.assertEqual(compworld.comp_arg(inside), "competitions/demo")
+        self.assertEqual(compworld.comp_arg(outside), "/data/runs/run-x/comp")
