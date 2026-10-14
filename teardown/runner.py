@@ -57,6 +57,16 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
         return None
 
     env = dict(env if env is not None else os.environ)
+    if placement:
+        # Callers snapshot os.environ BEFORE activate_placement runs, so their dict still named
+        # the .env host while the state lives on the placement's host: terraform then destroyed
+        # against the wrong PVE (500 "hostname lookup '<node>' failed") and every
+        # terraform-managed resource — the team bridges — survived the teardown (2026-10-14).
+        # Activation has resolved the identity into os.environ by now; re-apply it.
+        for key in ("TF_VAR_proxmox_endpoint", "TF_VAR_proxmox_api_token", "TF_VAR_proxmox_node",
+                    "TF_VAR_datastore", "TF_VAR_template_vm_id"):
+            if os.environ.get(key):
+                env[key] = os.environ[key]
     env["TF_VAR_teams"] = json.dumps(teams)
     env["TF_VAR_boxes_per_team"] = json.dumps(boxes)
     env["TF_VAR_event_name"] = name
