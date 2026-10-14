@@ -84,6 +84,10 @@ def main():
 
     if args.comp_dir:
         comp_dir = resolve_comp_dir(comp_dir=args.comp_dir)
+        # `competition` is only bound by the comps-root branch below, and the banner prints it —
+        # `--comp-dir` alone (the dashboard's shape: a per-run workspace with no name of its own)
+        # died with UnboundLocalError before any teardown ran (2026-10-14, run-eab53563).
+        competition = args.competition or comp_dir.name
     else:
         competitions = load_destroyable_competitions()
         if not competitions:
