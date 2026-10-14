@@ -58,40 +58,17 @@ def _red_vm_still_exists(vmid):
 
 
 def _reclaim_unstamped_red(vmid, comp_path):
-    """Destroy a red01 that `badauto destroy` could not touch, because it has no deploy stamp.
+    """Delegate to the one reclaim implementation (infra/red01.reclaim_unstamped_red).
 
-    A deploy that dies before stamping leaves red01 alive in the comp's reserved slot with no
-    record for bad-auto's identity guard to act on: `badauto destroy` exits 0 having removed
-    NOTHING, and the teardown then aborts with "STILL PRESENT" — leaving a red box holding the
-    LLM key and its beacon tasking up on the range (2026-10-14, run-df29374d; the same leak class
-    the scale8 soak hit with 998). The comp's own reservation names this vmid, so reclaim it here.
-
-    Deliberately narrow: the VM must still be named like a bad-auto red01, and only the vmid the
-    caller already proved is this range's red01 is ever destroyed. Returns True when the destroy
-    was issued (the caller re-verifies; its proof, not this return, is the authority).
+    Kept as a shim so the harness path states its own intent: whatever badauto could not remove
+    because it is unstamped is reclaimed here, before the teardown fails.
     """
-    try:
-        from infra.client import proxmox_api
-        from infra.ownership import destroy_vm_if_exists
-        placement = read_placement(comp_path)
-        if placement:
-            activate_placement(placement)
-        vms = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
-        vm = next((v for v in vms if int(v.get("vmid") or -1) == int(vmid)), None)
-        if vm is None:
-            return False
-        name = str(vm.get("name") or "")
-        node = str(vm.get("node") or "")
-        if not name.startswith("bad-auto"):
-            log(f"WARNING: vmid {vmid} is {name!r}, not a bad-auto red01 — refusing to reclaim it")
-            return False
-        log(f"  red01 vmid {vmid} ({name}) survived badauto destroy (no deploy stamp) — "
-            f"reclaiming it on node {node}")
-        destroy_vm_if_exists(node, int(vmid))
-        return True
-    except Exception as e:                                     # noqa: BLE001 - reclaim is best effort
-        log(f"WARNING: could not reclaim red01 vmid {vmid}: {type(e).__name__}: {e}")
-        return False
+    from infra import red01
+    name = Path(comp_path).name
+    placement = read_placement(comp_path)
+    if placement:
+        activate_placement(placement)
+    return red01.reclaim_unstamped_red(vmid, comp_name=name or None, log=log)
 
 
 def teardown_red(args, env):

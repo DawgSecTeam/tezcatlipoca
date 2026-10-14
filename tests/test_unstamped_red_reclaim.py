@@ -22,38 +22,8 @@ def _vm(vmid=999, name="bad-auto-red01", node="proxmox"):
     return {"vmid": vmid, "name": name, "node": node}
 
 
-class ReclaimUnstampedRed(unittest.TestCase):
-    def _run(self, vms, vmid=999, placement=None):
-        calls = []
-        with patch("infra.client.proxmox_api", return_value={"data": vms}), \
-                patch("infra.ownership.destroy_vm_if_exists",
-                      side_effect=lambda node, v: calls.append((node, v))), \
-                patch.object(ts, "read_placement", return_value=placement), \
-                patch.object(ts, "activate_placement", lambda p: None), \
-                patch.object(ts, "log"):
-            result = ts._reclaim_unstamped_red(vmid, "/comp")
-        return result, calls
-
-    def test_reclaims_a_bad_auto_red01_in_the_reserved_slot(self):
-        ok, calls = self._run([_vm()])
-        self.assertTrue(ok)
-        self.assertEqual(calls, [("proxmox", 999)])
-
-    def test_refuses_a_vmid_that_is_not_a_red01(self):
-        ok, calls = self._run([_vm(name="team1-web01")])
-        self.assertFalse(ok)
-        self.assertEqual(calls, [], "a non-red01 VM must never be destroyed here")
-
-    def test_vmid_absent_is_not_an_error(self):
-        ok, calls = self._run([_vm(vmid=1000)])
-        self.assertFalse(ok)
-        self.assertEqual(calls, [])
-
-    def test_a_failing_api_call_never_raises(self):
-        with patch("infra.client.proxmox_api", side_effect=RuntimeError("api down")), \
-                patch.object(ts, "read_placement", return_value=None), \
-                patch.object(ts, "log"):
-            self.assertFalse(ts._reclaim_unstamped_red(999, "/comp"))
+# The narrow-reclaim cases live in SharedReclaimHelper below: one implementation
+# (infra/red01.reclaim_unstamped_red) now serves both teardown paths.
 
 
 class TeardownRedUsesTheReclaim(unittest.TestCase):
@@ -63,6 +33,51 @@ class TeardownRedUsesTheReclaim(unittest.TestCase):
         src = (_REPO / "scrim" / "teardown_stage.py").read_text()
         self.assertIn("_reclaim_unstamped_red(vmid, comp_path)", src)
         self.assertIn("EVEN AFTER the unstamped-red01 reclaim", src)
+
+
+class SharedReclaimHelper(unittest.TestCase):
+    """One implementation (infra/red01.reclaim_unstamped_red) serves both teardown paths."""
+
+    def _helper(self, vm, marker=None, comp_name="scrim-one"):
+        from infra import red01
+        killed = []
+        with patch("infra.red01.vm_at", side_effect=[vm, None] if vm else [None]), \
+                patch("infra.red01._marker_of", return_value=marker), \
+                patch("infra.ownership.destroy_vm_if_exists",
+                      side_effect=lambda node, v: killed.append((node, v))), \
+                patch("infra.red01.print", create=True):
+            ok = red01.reclaim_unstamped_red(999, comp_name=comp_name, log=lambda *a, **k: None)
+        return ok, killed
+
+    def test_unstamped_bad_auto_vm_is_reclaimed_and_verified_gone(self):
+        ok, killed = self._helper({"vmid": 999, "node": "proxmox", "name": "bad-auto-red01"})
+        self.assertTrue(ok)
+        self.assertEqual(killed, [("proxmox", 999)])
+
+    def test_another_competitions_red01_is_never_touched(self):
+        ok, killed = self._helper({"vmid": 999, "node": "proxmox", "name": "bad-auto-red01"},
+                                  marker="other-comp")
+        self.assertFalse(ok)
+        self.assertEqual(killed, [])
+
+    def test_its_own_marked_red01_is_reclaimed(self):
+        ok, killed = self._helper({"vmid": 999, "node": "proxmox", "name": "bad-auto-red01"},
+                                  marker="scrim-one")
+        self.assertTrue(ok)
+        self.assertEqual(killed, [("proxmox", 999)])
+
+    def test_a_non_red01_name_is_refused(self):
+        ok, killed = self._helper({"vmid": 999, "node": "proxmox", "name": "team1-web01"})
+        self.assertFalse(ok)
+        self.assertEqual(killed, [])
+
+
+class StandaloneTeardownFailsOnALeak(unittest.TestCase):
+    def test_a_refused_refusal_reclaim_that_fails_is_now_a_FAILED_step(self):
+        """'warned' hid the leak until the verification; it must be a failure."""
+        src = (Path(__file__).resolve().parents[1] / "teardown" / "steps.py").read_text()
+        self.assertIn("reclaim_unstamped_red(vmid", src)
+        self.assertIn('StepResult(self.name, "failed"', src)
 
 
 if __name__ == "__main__":

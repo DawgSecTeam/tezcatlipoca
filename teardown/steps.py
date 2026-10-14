@@ -127,6 +127,10 @@ class ArtifactStep(Step):
         return {"detail": result.detail, "test_dir": result.detail}
 
 
+def _log(msg):
+    print(msg)
+
+
 class RedStep(Step):
     """red01 is bad-auto's VM: nothing else in this plan touches it. A normal
     harness run destroys red01 in its own teardown, so reaching the standalone
@@ -151,10 +155,21 @@ class RedStep(Step):
             return StepResult(self.name, "ok", tail or "no output")
         refusal = red_plant_ops.parse_teardown_refusal(r)
         if refusal:
-            return StepResult(self.name, "warned",
+            # bad-auto refuses without ITS marker, and a deploy that died before stamping leaves
+            # exactly that — a red01 no destroy will claim. Reclaim it narrowly, then FAIL if it
+            # is still there: reporting "warned" left the LLM key and beacon tasking up and only
+            # surfaced at the verification (2026-10-14, run-df29374d).
+            from infra import red01
+            vmid = self.last_vmid
+            if vmid and red01.reclaim_unstamped_red(vmid, log=_log):
+                return StepResult(self.name, "ok",
+                                  f"reclaimed unstamped red01 vmid {vmid} (badauto refused: "
+                                  f"{refusal.get('saw')})")
+            return StepResult(self.name, "failed",
                               f"badauto destroy REFUSED (rc {r.returncode}) — saw: "
                               f"{refusal.get('saw')}; expected: {refusal.get('expected')}; "
-                              f"remedy: {refusal.get('remedy')}")
+                              f"remedy: {refusal.get('remedy')} — a red box with the LLM key "
+                              f"is still up")
         return StepResult(self.name, "warned",
                           f"red01 destroy exited {r.returncode} ({tail}) — check for a "
                           f"surviving red VM by hand (it holds the LLM key)")

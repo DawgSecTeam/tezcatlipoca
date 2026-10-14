@@ -125,3 +125,51 @@ def red01_gate(plan):
         return
     red01_vmid_gate(plan)
     red01_ip_gate(plan)
+
+def vm_at(vmid):
+    """The cluster-view record for a live vmid: {vmid, node, name, status} or None."""
+    try:
+        vms = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
+    except Exception:                                       # noqa: BLE001 - reported by caller
+        return None
+    return next((v for v in vms if int(v.get("vmid") or -1) == int(vmid)), None)
+
+
+def reclaim_unstamped_red(vmid, comp_name=None, log=print):
+    """Destroy a red01 that `badauto destroy` refuses to touch because it is UNSTAMPED.
+
+    A deploy that dies before bad-auto stamps its description marker leaves a red01 no destroy
+    will claim (its identity guard refuses: rc 17, "VM <vmid> with no bad-auto identity marker").
+    The standalone teardown then reported "warned" and the range was left with a red box holding
+    the LLM key and its beacon tasking (2026-10-14, run-df29374d; the leak class the scale8 soak
+    hit with red01 998).
+
+    Deliberately narrow, on top of `ownership.destroy_vm_if_exists`:
+      * only the vmid the caller already resolved as THIS range's red01 slot,
+      * only a VM still named like a bad-auto red01,
+      * never one whose marker names ANOTHER competition (a recycled vmid is someone else's),
+      * a missing marker is exactly the case this exists for, and is only accepted together with
+        the two checks above.
+    Returns True when the VM is gone afterwards (verified), False otherwise. Never raises.
+    """
+    try:
+        from infra.ownership import destroy_vm_if_exists
+        vm = vm_at(vmid)
+        if vm is None:
+            return False
+        name = str(vm.get("name") or "")
+        if not name.startswith("bad-auto"):
+            log(f"WARNING: vmid {vmid} is {name!r}, not a bad-auto red01 — not reclaiming it")
+            return False
+        owner = _marker_of(vm)
+        if owner and comp_name and owner != comp_name:
+            log(f"WARNING: vmid {vmid} is marked for competition {owner!r}, not {comp_name!r} — "
+                f"not reclaiming another competition's red01")
+            return False
+        log(f"  red01 vmid {vmid} ({name}) is unstamped (badauto cannot destroy it) — "
+            f"reclaiming it on node {vm.get('node')}")
+        destroy_vm_if_exists(str(vm["node"]), int(vmid))
+        return vm_at(vmid) is None
+    except Exception as e:                                  # noqa: BLE001 - reclaim is best effort
+        log(f"WARNING: could not reclaim red01 vmid {vmid}: {type(e).__name__}: {e}")
+        return False
