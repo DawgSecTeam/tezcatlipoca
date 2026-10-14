@@ -33,7 +33,8 @@ The central run queue (tezcatlipoca-dashboard; address and token in `infrastruct
 MCP at `/mcp`) is where
 range runs — deploy/verify/destroy/scrim — are submitted and observed. It owns per-run engine
 worktrees at pinned refs, pushes stage events to subscribed sessions (`watch_run` — wait for the
-push, don't poll logs), and refuses a second concurrent run of one competition. Competition
+push, don't poll logs); concurrent runs — even of one competition — are allowed, with the
+engine's preflight/locks refusing provable resource collisions. Competition
 definitions live in `tezcatlipoca-competitions`; the drivers resolve them via `--comp-dir` or the
 comps root (`TEZ_COMPETITIONS_ROOT`, else `./competitions`, else the sibling
 `../tezcatlipoca-competitions`). Direct driver runs are the recovery path only.
