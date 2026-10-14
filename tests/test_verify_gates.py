@@ -780,5 +780,16 @@ class MainSummaryWiring(unittest.TestCase):
         self.assertIn("RESULT: PASS", out)
 
 
+class TerraformWorkdirMissing(unittest.TestCase):
+    def test_missing_workdir_is_not_reported_as_a_missing_binary(self):
+        """A workspace with no terraform/ dir (a freshly seeded queue workspace) raised
+        FileNotFoundError from subprocess and was reported as "terraform not found on PATH" —
+        which sent a queue verify hunting a PATH bug instead of the real cause (2026-10-14)."""
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(v_model.CheckError) as raised:
+                v_context.read_terraform_ctx(Path(td))
+        self.assertIn("no terraform workdir", str(raised.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

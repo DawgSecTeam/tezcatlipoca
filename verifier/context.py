@@ -18,6 +18,14 @@ def read_terraform_ctx(comp_dir):
 # Read agent_context from `terraform output -json` in the competition's own
 #     per-comp state (competitions/<id>/terraform); resolve ssh_key_path absolute.
     tf_dir = Path(comp_dir) / "terraform"
+    if not tf_dir.is_dir():
+        # A missing workdir makes subprocess raise FileNotFoundError too, and reporting that
+        # as "terraform not found on PATH" sent a queue verify hunting a PATH bug when the
+        # real answer was "this workspace holds no deploy state" (2026-10-14).
+        raise CheckError(
+            f"no terraform workdir at {tf_dir} — this workspace holds no deploy state; "
+            "verify the range's own workspace (the one its deploy ran in), or pass "
+            "--engine-ip to skip Terraform.")
     try:
         raw = subprocess.run(
             ["terraform", "output", "-json"],
