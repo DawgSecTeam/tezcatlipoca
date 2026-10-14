@@ -41,6 +41,14 @@ Several modules assume a second login evicts the first cookie (the `scoring` sec
 
 Upstream-worthy (bad-auto). `World.save()` is last-writer-wins; the director's periodic save can clobber an operator-side `badauto seed` that ran in between (live-found 2026-10-11: a 24+ artifact re-seed vanished under the director's next health-check save, though the planted units stayed live). **Next action**: hand off to bad-auto — needs a save-side reload-merge, not just a lock.
 
+### bad-auto clones red01 before it validates its SSH key
+
+Upstream-worthy (bad-auto). `badauto deploy` clones the VM and only then reads `<deploy.ssh_key>.pub`, so an unresolvable key leaves a cloned, unstamped, unstarted red01 holding the LLM key — the shape live-found 2026-10-14, when a red-staging run whose bad-auto config carried no `deploy.ssh_key` fell back to bad-auto's built-in default (a sibling checkout's `proxmox` that no run host has). The engine side is closed: `core.ssh_key_path()` pins the resolved absolute key on every bad-auto config both writers produce, and an unstamped red01 is reclaimed on both teardown paths (`red: pin the RANGE's ssh key on every bad-auto config it writes`, `red01: one narrow reclaim for an unstamped red01`). **Next action**: hand off to bad-auto — read and validate the public half before the clone, so no caller can leave a VM behind.
+
+### `verify_clean` proves red01 gone by bare vmid membership
+
+`teardown/engine.py` and `scrim/teardown_stage.py` both answer "is red01 gone?" with `int(vmid) in live_vmids()` — every vmid the endpoint's cluster view knows, with no tag, comp or node filter — so an occupant at that vmid cannot be attributed to this range or to another. The verdict stays fail-closed (an unaccounted-for vmid is never clean), so this is attribution robustness, not a false refusal: the 2026-10-14 refusals were correct. The marker reader the deploy preflight already uses (`infra/red01.py`, bad-auto's `bad-auto red01 comp=<name> id=<uuid>` description) is the pattern to follow. **Next action**: attribute the occupant and keep failing closed when it carries no marker; validating it needs a live vmid collision.
+
 ## Pending upstream — catalog / nakon
 
 - **`IIS FTP` golden plant is timing-fragile and non-idempotent** (catalog DB step body). `Start-Service FTPSVC`/`New-WebFtpSite` can race the just-installed config store; the step's `$Error.Count -gt 0` footer turns a transient into a hard failure, and the body doesn't re-run cleanly without the phase-4 `tz-base` rollback. Recovery: `--from-phase 4 --yes`. Failed-run logs are preserved on the engine (`/opt/nakon/failed-<tag>-<ts>`) since 2026-10-11.
