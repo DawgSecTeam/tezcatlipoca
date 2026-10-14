@@ -188,9 +188,13 @@ class TerraformStep(Step):
 
     def run(self, ctx):
         from teardown.machinery import destroy_with_recovery
+        from common.terraform_workdir import terraform_plugin_cache_dir
         tf_cwd = str(ctx.comp_dir / "terraform")
         print(f"\nRunning terraform destroy (state: {tf_cwd})...")
-        if destroy_with_recovery(ctx.env, tf_cwd, ctx.nodes, ctx.ownership):
+        # Same provider cache the deploy inits with: without it, destroy cannot resolve the
+        # providers the per-comp .terraform links point at (2026-10-14).
+        env = {**ctx.env, "TF_PLUGIN_CACHE_DIR": str(terraform_plugin_cache_dir())}
+        if destroy_with_recovery(env, tf_cwd, ctx.nodes, ctx.ownership):
             return StepResult(self.name, "ok")
         return StepResult(self.name, "failed",
                           "terraform destroy did not complete after recovery attempts — "

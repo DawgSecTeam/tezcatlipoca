@@ -34,8 +34,9 @@ class DestroyAttemptTimeoutTests(unittest.TestCase):
         with patch.object(destroy_sweep_ops, "run_terraform", side_effect=side_effect) as p_run, \
              patch.object(destroy_sweep_ops, "clear_stale_state_lock") as p_lock, \
              patch.object(destroy_sweep_ops, "sweep_tagged_leftovers") as p_sweep:
-            result = destroy_sweep_ops.destroy_with_recovery(
-                {}, "terraform", ["pve"], Ownership("cde-2026", "run-aaaa0001"))
+            with patch.object(destroy_sweep_ops, "terraform_init", return_value=True):
+                result = destroy_sweep_ops.destroy_with_recovery(
+                    {}, "terraform", ["pve"], Ownership("cde-2026", "run-aaaa0001"))
         return result, p_run, p_lock, p_sweep
 
     def test_every_attempt_passes_the_bounded_timeout(self):

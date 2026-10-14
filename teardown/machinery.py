@@ -201,7 +201,28 @@ def sweep_tagged_leftovers(nodes, ownership):
 
 
 # resumable by construction: each failure gets stale-lock recovery plus a run-id-scoped sweep, then a retry; a per-attempt timeout is just another failed attempt so control reaches the recovery steps (utils.run_terraform raises TimeoutExpired even with check=False)
+def terraform_init(env, tf_cwd, timeout=600):
+    """`terraform init` before destroy.
+
+    Provider links in `<comp>/terraform/.terraform/providers` point into the shared plugin cache
+    (and used to point into a per-run engine worktree that no longer exists), and destroy fails
+    hard when they are stale — four attempts against the same broken links is just four failures.
+    Init repairs them; with a warm cache it is seconds. Never fatal here: a genuinely unusable
+    provider set must still surface as destroy's own error.
+    """
+    try:
+        proc = run_terraform(["init", "-input=false", "-no-color"], cwd=tf_cwd, env=env,
+                             timeout=timeout, check=False)
+    except Exception as e:                                   # noqa: BLE001 - reported
+        print(f"  WARNING: terraform init raised ({type(e).__name__}: {e}); continuing")
+        return False
+    if proc.returncode != 0:
+        print("  WARNING: terraform init failed; destroy will report if the providers are unusable")
+    return proc.returncode == 0
+
+
 def destroy_with_recovery(env, tf_cwd, nodes, ownership):
+    terraform_init(env, tf_cwd)
     for attempt in (1, 2, 3, 4):
         if attempt > 1:
             clear_stale_state_lock(tf_cwd)

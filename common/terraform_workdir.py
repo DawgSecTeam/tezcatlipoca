@@ -1,6 +1,7 @@
 """Per-competition Terraform working dir and terraform-state vmid readers."""
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -88,6 +89,17 @@ def ensure_terraform_workdir(comp_dir):
 def terraform_plugin_cache_dir():
 # Shared provider-plugin cache so each per-comp `terraform init` links the
 #     provider from disk instead of re-downloading it.
-    cache = _TF_TEMPLATE_DIR / ".terraform-plugin-cache"
+#
+#     It must live OUTSIDE the checkout: `terraform init` under TF_PLUGIN_CACHE_DIR writes
+#     links in `<comp>/terraform/.terraform/providers` that point INTO this directory, so a
+#     cache inside the engine tree dies with the tree. For a dashboard run that tree is a
+#     throwaway per-run worktree — deleted when the run ends — which left every workspace with
+#     dangling provider links and made the TEARDOWN unable to run `terraform destroy` at all
+#     (2026-10-14, run-3aaf37f1: "no package for registry.terraform.io/bpg/proxmox ... cached in
+#     .terraform/providers", four attempts, estate left unverified).
+#     `TEZ_TF_PLUGIN_CACHE` overrides the location.
+    override = os.environ.get("TEZ_TF_PLUGIN_CACHE")
+    cache = (Path(override) if override
+             else Path.home() / ".cache" / "tezcatlipoca" / "terraform-plugins")
     cache.mkdir(parents=True, exist_ok=True)
     return cache
