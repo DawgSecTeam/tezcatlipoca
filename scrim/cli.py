@@ -44,6 +44,15 @@ def main():
     p.add_argument("--nodes", default=None,
                    help="path to this run's node list (the nodes.json schema); forwarded to the "
                         "deploy stage so the range lands on the listed hosts, not the .env's")
+    p.add_argument("--scoring-vmid", dest="scoring_vmid", type=int, default=None,
+                   help="this run's scoring-engine VMID, forwarded to the deploy stage; give "
+                        "each concurrent range on a shared node its own so the engines differ")
+    p.add_argument("--team-identifiers", dest="team_identifiers", default=None,
+                   help="this run's team identifier block (subnet ids), forwarded to the deploy "
+                        "stage; a concurrent range on the same node needs a non-overlapping one")
+    p.add_argument("--engine-mgmt-ip", dest="engine_mgmt_ip", default=None,
+                   help="this run's engine management IP, forwarded to the deploy stage; a "
+                        "concurrent range on the same node cannot share one")
     p.add_argument("--new", help="author competitions/<NAME> from --from-template first")
     p.add_argument("--from-template", default=None)
     p.add_argument("--teams", type=int, default=2)

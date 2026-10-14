@@ -150,3 +150,40 @@ class DeployTargetsTheWorkspaceTests(unittest.TestCase):
         outside = Path("/data/runs/run-x/comp")
         self.assertEqual(compworld.comp_arg(inside), "competitions/demo")
         self.assertEqual(compworld.comp_arg(outside), "/data/runs/run-x/comp")
+
+    def test_deploy_child_carries_this_runs_placement(self):
+        # A scrim's deploy stage can run while another range holds the env's engine vmid,
+        # team block and management IP — one value each for the whole run host
+        # (2026-10-14: scrim-one held 1000/120/10.0.0.252 on the realm).
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return SimpleNamespace(returncode=0, stdout="last_phase: 8\n", stderr="")
+
+        with mock.patch.object(staging.procs, "run", side_effect=fake_run), \
+                mock.patch.object(core, "read_comp_json", return_value={"last_phase": 8}):
+            args = SimpleNamespace(competition="scrim-one-light", teams=1, resume=None,
+                                   force_resume=False, run_dir=None, scoring_vmid=1300,
+                                   team_identifiers="130", engine_mgmt_ip="10.0.0.248")
+            staging.stage_deploy(args, Path("/data/runs/run-x/comp"))
+        cmd = calls[0]
+        self.assertEqual(cmd[cmd.index("--scoring-vmid") + 1], "1300")
+        self.assertEqual(cmd[cmd.index("--team-identifiers") + 1], "130")
+        self.assertEqual(cmd[cmd.index("--engine-mgmt-ip") + 1], "10.0.0.248")
+
+    def test_deploy_child_omits_placement_it_was_not_given(self):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return SimpleNamespace(returncode=0, stdout="last_phase: 8\n", stderr="")
+
+        with mock.patch.object(staging.procs, "run", side_effect=fake_run), \
+                mock.patch.object(core, "read_comp_json", return_value={"last_phase": 8}):
+            args = SimpleNamespace(competition="scrim-one-light", teams=1, resume=None,
+                                   force_resume=False, run_dir=None)
+            staging.stage_deploy(args, Path("/data/runs/run-x/comp"))
+        cmd = calls[0]
+        for flag in ("--scoring-vmid", "--team-identifiers", "--engine-mgmt-ip"):
+            self.assertNotIn(flag, cmd)

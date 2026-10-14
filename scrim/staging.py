@@ -95,6 +95,14 @@ def stage_deploy(args, comp):
         # The dashboard hands every action the run's node list; without this the deploy
         # stage silently targeted whatever TEZ_ENGINE_ENV_FILE points at (2026-10-14).
         cmd += ["--nodes", str(args.nodes)]
+    # Placement inputs travel with the scrim, not just the env: a scrim that deploys while
+    # another range holds the env's engine vmid / team block / management IP would collide.
+    for flag, key in (("--scoring-vmid", "scoring_vmid"),
+                      ("--team-identifiers", "team_identifiers"),
+                      ("--engine-mgmt-ip", "engine_mgmt_ip")):
+        value = getattr(args, key, None)
+        if value:
+            cmd += [flag, str(value)]
     if comp.joinpath(".deploy_state.json").exists() and args.resume:
         cmd += ["--from-phase", str(args.resume)]
         # --force-resume must reach create-competition: it is the operator's answer to
