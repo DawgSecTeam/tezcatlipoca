@@ -128,6 +128,22 @@ class DeployTargetsTheWorkspaceTests(unittest.TestCase):
         cmd = calls[0]
         self.assertEqual(cmd[cmd.index("--competition") + 1], "comp")
 
+    def test_deploy_child_carries_the_runs_node_list(self):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return SimpleNamespace(returncode=0, stdout="last_phase: 8\n", stderr="")
+
+        with mock.patch.object(staging.procs, "run", side_effect=fake_run), \
+                mock.patch.object(core, "read_comp_json", return_value={"last_phase": 8}):
+            args = SimpleNamespace(competition="scrim-one", teams=1, resume=None,
+                                   force_resume=False, run_dir=None,
+                                   nodes="/data/runs/run-x/nodes.json")
+            staging.stage_deploy(args, Path("/data/runs/run-x/comp"))
+        cmd = calls[0]
+        self.assertEqual(cmd[cmd.index("--nodes") + 1], "/data/runs/run-x/nodes.json")
+
     def test_verify_argument_is_absolute_outside_the_engine_tree(self):
         from scrim import compworld
         inside = core.REPO / "competitions" / "demo"

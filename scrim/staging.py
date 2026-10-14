@@ -91,6 +91,10 @@ def stage_deploy(args, comp):
     name = getattr(args, "competition", None) or comp.name
     cmd = [core.local_python(), "-u", "create-competition.py", "--competition", name,
            "--comp-dir", str(comp), "--teams", str(args.teams), "--yes"]
+    if getattr(args, "nodes", None):
+        # The dashboard hands every action the run's node list; without this the deploy
+        # stage silently targeted whatever TEZ_ENGINE_ENV_FILE points at (2026-10-14).
+        cmd += ["--nodes", str(args.nodes)]
     if comp.joinpath(".deploy_state.json").exists() and args.resume:
         cmd += ["--from-phase", str(args.resume)]
         # --force-resume must reach create-competition: it is the operator's answer to

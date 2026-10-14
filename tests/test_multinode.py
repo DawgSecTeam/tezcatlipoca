@@ -273,7 +273,7 @@ class PlacementRecordTest(unittest.TestCase):
                 patch.object(placement_planner, "load_nodes_config", return_value=(None, None)):
             with self.assertRaises(SystemExit) as raised:
                 placement_planner.resolve_placement(Path(td), 1000, TEAMS, BOXES, "c",
-                                                    engine_override="zfs-193")
+                                                    engine_override="node-x")
         self.assertIn("--nodes", str(raised.exception))
 
     def test_resume_adopts_deployed_endpoint(self):
