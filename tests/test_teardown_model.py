@@ -98,6 +98,15 @@ class InventoryClassified(unittest.TestCase):
         inv.invalidate()
         self.assertEqual(len(inv.view("n1").vms), 2)      # fresh after invalidate
 
+    def test_bridge_in_use_matches_the_field_not_a_substring(self):
+        # vmbr1016 carries our name as a SUBSTRING; only the exact bridge= field counts
+        fake = FakePVE(nodes={"n1": [vm(1, "holder", "")]},
+                       cfgs={1: {"net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr1016,firewall=1"}})
+        inv = Inventory(["n1"], api=fake)
+        self.assertFalse(inv.bridge_in_use("n1", "vmbr101"))
+        fake.cfgs[1] = {"net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr101,firewall=1"}
+        self.assertTrue(inv.bridge_in_use("n1", "vmbr101"))
+
 
 class NoopStep(Step):
     name = "noop"

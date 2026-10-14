@@ -363,6 +363,13 @@ class BridgeReclaim(unittest.TestCase):
         in_use, _ = self._run([{"net0": "virtio,bridge=vmbr101"}])
         self.assertTrue(in_use)
 
+    def test_higher_numbered_foreign_bridge_is_not_our_bridge(self):
+    # The estate owns vmbr1000..1016; "bridge=vmbr101" is a substring of
+    #         "bridge=vmbr1016", so a substring test stranded vmbr101 forever (ids 1, 10,
+    #         100, 101 all hit this). The field must match exactly.
+        in_use, _ = self._run([{"net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr1016,firewall=1"}])
+        self.assertFalse(in_use)
+
     def test_unreadable_config_fails_closed(self):
     # A VM whose config cannot be read counts as attached — the bridge
     #         survives to teardown/terraform rather than being ripped out.

@@ -14,6 +14,16 @@ clean estate."""
 from infra.ownership import MARKER, UNPROVEN, Ownership, ownership_verdict, parse_vm_tags
 
 
+def net_on_bridge(value, bridge):
+    """True when a net device config value names this bridge in its `bridge=` field.
+
+    Field equality, not substring: the target estate can own vmbr1016 while this
+    range owns vmbr101, and `"bridge=vmbr101" in "...,bridge=vmbr1016,..."` would
+    strand our bridge as "still in use"."""
+    # PVE writes these as comma-separated fields; a fieldless value has nothing to match
+    return f"bridge={bridge}" in str(value or "").split(",")
+
+
 # `error` set = fail-closed.
 class NodeView:
     def __init__(self, node):
@@ -100,7 +110,7 @@ class Inventory:
                 cfg = self._api_fn()("GET", f"/nodes/{node}/qemu/{v['vmid']}/config")["data"]
             except Exception:                                        # noqa: BLE001
                 return True
-            if any(f"bridge={bridge}" in str(cfg.get(k) or "")
+            if any(net_on_bridge(cfg.get(k), bridge)
                    for k in cfg if str(k).startswith("net")):
                 return True
         return False

@@ -20,6 +20,7 @@ from common.utils import is_in_path_fw, record_degradation
 from deploy_lib.golden_plan import phase1_destroy_waves
 import teardown
 from teardown import CallStep, Inventory, Ownership, TeardownContext, TeardownEngine
+from teardown.inventory import net_on_bridge
 from teardown.plan import RECLAIM, TeardownPlan
 
 
@@ -88,7 +89,7 @@ def _bridge_in_use(node, bridge):
             cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{v['vmid']}/config")["data"]
         except Exception:
             return True
-        if any(f"bridge={bridge}" in str(cfg.get(k) or "")
+        if any(net_on_bridge(cfg.get(k), bridge)
                for k in cfg if str(k).startswith("net")):
             return True
     return False
