@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+from common.utils import compfile_flag
 from scrim import compworld
 from scrim import core
 from scrim import endpoints
@@ -177,6 +178,15 @@ def stage_red(args, comp, creds, run_dir):
     for key in ("realm", "beacon", "evasion", "naming"):
         if carried.get(key):
             cfg[key] = carried[key]
+    # A freshly authored comp carries no realm block (the club singleton the
+    # per-comp isolation stopped reading) — run-e9d17d65's realm_plant refused
+    # 'realm.enabled' every attempt and red dropped to the raw-socket beacon
+    # tier for the whole event. realm_c2_local defaults ON in the Compfile, so
+    # seed the block here; apply_local_c2 below synthesizes the rest and the
+    # completeness check refuses pre-T0 rather than stage a dark C2.
+    realm = cfg.get("realm") or {}
+    if not realm.get("enabled") and compfile_flag(comp / "Compfile", "realm_c2_local", 1):
+        cfg["realm"] = {**realm, "c2_local": True}
     # `realm.c2_local: true` moves the C2 ONTO this run's red01: retarget the
     # carried realm block before the deploy (the engine DNAT bakes c2_ip in at
     # deploy time) and provision tavern on red01 after the clone (below).

@@ -245,6 +245,10 @@ class AgentIdentity(TmpCase):
         (self.comp / ".badauto-config.yaml").write_text(
             "deploy:\n  red_ip: 10.0.0.199\n  red_vmid: 999\n")
         (self.comp / "credentials.txt").write_text("engine http://10.0.0.193:8006/\n")
+        # teams.json feeds realm_c2's callback_ip (172.31.<id>.1); without it the
+        # staged realm block is refused as a dark C2 (the completeness check).
+        (self.comp / "teams.json").write_text(
+            json.dumps({"team1": {"identifier": "130", "password": "pw"}}))
         for patch in (mock.patch.object(core, "REPO", self.repo),
                       mock.patch.object(core, "BAD_AUTO", self.bad),
                       mock.patch.dict(os.environ, {"TF_VAR_vm_username": "sysadmin",
@@ -283,6 +287,9 @@ class AgentIdentity(TmpCase):
                 mock.patch.object(red_stage.red_plant_ops, "_seed_red",
                                   lambda *a, **k: subprocess.CompletedProcess(
                                       ["seed"], 0, "seeded", "")), \
+                mock.patch.object(red_stage.realm_c2_ops, "provision_realm_c2",
+                                  lambda *a, **k: {"ok": True, "transports": ["http1"],
+                                                   "mcp": "http://10.0.0.199:8000/mcp"}), \
                 mock.patch.object(red_link, "start_red_director", lambda *a, **k: None):
             # creds must be real-shaped: routed red runs the pre-T0 reachability gate,
             # which reads ENGINE_IP/ADMIN_PW (mocked run answers with PASS lines)
