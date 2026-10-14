@@ -623,16 +623,54 @@ def cut_over_engine(ssh_ctx, teams, log=print):
 FW_INSPECT_CMD = {"pfsense": "pfctl -sr", "vyos": "show firewall"}
 
 
-def verify_in_path(ssh_ctx, teams, managed_first_ip, log=print, kind="pfsense"):
+def _route_probe(ssh_ctx, tid):
+    """One engine route probe: (ok, what the engine said)."""
+    r = ssh_on_gateway(ssh_ctx, f"ip route get 192.168.{tid}.1", timeout=15)
+    out = (r.stdout or "").strip()
+    if f"via 172.31.{tid}.2" in out:
+        return True, out
+    # An empty answer is usually ssh landing while the cutover's `netplan apply` is bouncing the
+    # engine's networking; keep rc/stderr so a post-mortem can tell that from a real route gap.
+    detail = out[:80] or f"no output (ssh rc={r.returncode} {(r.stderr or '').strip()[:60]})"
+    return False, detail
+
+
+def verify_in_path(ssh_ctx, teams, managed_first_ip, log=print, kind="pfsense",
+                   route_wait_s=120, poll_s=6):
+    """Prove the range now scores through each team's firewall.
+
+    The route check retries over a bounded window: the cutover that installs these routes ends
+    with `netplan apply`, which restarts the engine's networking, and a single immediate probe
+    read an EMPTY answer one second after the write although the routes were in place moments
+    later — aborting a range that was routing correctly (2026-10-14, phase 5 of run-4495b079:
+    "engine does not route 192.168.120.0/24 via 172.31.120.2 (got: )"). The box-reachability
+    probe below always had such a window; the route probe did not.
+    """
     inspect = FW_INSPECT_CMD.get(kind, FW_INSPECT_CMD["pfsense"])
+    deadline = time.time() + route_wait_s
+    while True:
+        failures = []
+        for k in sorted(teams):
+            tid = teams[k]["identifier"]
+            ok, detail = _route_probe(ssh_ctx, tid)
+            if not ok:
+                failures.append(f"{k}: engine does not route 192.168.{tid}.0/24 via "
+                                f"172.31.{tid}.2 (got: {detail})")
+        if not failures or time.time() >= deadline:
+            break
+        left = int(deadline - time.time())
+        log(f"  In-path verification: engine routes not converged yet ({left}s left) — retrying")
+        time.sleep(poll_s)
+    if failures:
+        raise SystemExit(
+            "  ERROR: in-path firewall verification failed:\n    - " + "\n    - ".join(failures)
+            + f"\n  The range's scoring path runs through each team's firewall, so nothing "
+              f"downstream can plant or score until this converges. Inspect with "
+              f"`{inspect}` on the firewall (SSH, config enables it) and re-run "
+              f"--from-phase 5.")
     failures = []
     for k in sorted(teams):
         tid = teams[k]["identifier"]
-        r = ssh_on_gateway(ssh_ctx, f"ip route get 192.168.{tid}.1", timeout=15)
-        if f"via 172.31.{tid}.2" not in (r.stdout or ""):
-            failures.append(f"{k}: engine does not route 192.168.{tid}.0/24 via "
-                            f"172.31.{tid}.2 (got: {(r.stdout or '').strip()[:80]})")
-            continue
         box_ip = managed_first_ip.get(k)
         # The cutover just moved the gateway MAC: give ARP/routing a bounded window to
         # converge instead of failing on the first probe (live-found 2026-10-05).

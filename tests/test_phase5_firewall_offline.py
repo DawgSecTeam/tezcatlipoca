@@ -17,6 +17,7 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 from deploy_lib.phases import firewall  # noqa: E402
+from net import firewall_ops  # noqa: E402
 
 SEED = (Path(__file__).parent / "test_firewall_ops.py").read_text().split('SEED = """')[1].split('"""')[0]
 TEAMS = {"team1": {"identifier": "120", "password": "x"},
@@ -112,3 +113,34 @@ class Phase5Firewall(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RouteProbeConvergence(unittest.TestCase):
+    """The cutover's `netplan apply` bounces the engine's networking: the route probe must have a
+    bounded retry window, exactly like the box-reachability probe beside it. It aborted a range
+    that was routing correctly seconds later (2026-10-14, phase 5 of run-4495b079, "(got: )")."""
+
+    def _ctx(self):
+        return {"ssh_key_path": "k", "vm_username": "sysadmin", "scoring_engine_ip": "10.0.0.252"}
+
+    def test_empty_answer_is_retried_then_succeeds(self):
+        answers = [type("R", (), {"returncode": 255, "stdout": "", "stderr": "Connection closed"})(),
+                   type("R", (), {"returncode": 0, "stdout": "192.168.120.1 via 172.31.120.2 dev ens21",
+                                  "stderr": ""})()]
+        with patch.object(firewall_ops, "ssh_on_gateway", side_effect=answers), \
+                patch.object(firewall_ops, "_wait_tcp", return_value=True), \
+                patch.object(firewall_ops.time, "sleep") as slept:
+            firewall_ops.verify_in_path(self._ctx(), {"team1": {"identifier": "120"}},
+                                        {"team1": "192.168.120.4"},
+                                        log=lambda *a, **k: None)
+        self.assertEqual(slept.call_count, 1, "the empty answer must be retried, not fatal")
+
+    def test_a_real_route_gap_still_fails(self):
+        r = type("R", (), {"returncode": 0, "stdout": "192.168.120.1 dev ens19", "stderr": ""})()
+        with patch.object(firewall_ops, "ssh_on_gateway", return_value=r), \
+                patch.object(firewall_ops.time, "sleep"):
+            with self.assertRaises(SystemExit) as raised:
+                firewall_ops.verify_in_path(self._ctx(), {"team1": {"identifier": "120"}},
+                                            {"team1": "192.168.120.4"}, route_wait_s=0,
+                                            log=lambda *a, **k: None)
+        self.assertIn("does not route 192.168.120.0/24", str(raised.exception))
