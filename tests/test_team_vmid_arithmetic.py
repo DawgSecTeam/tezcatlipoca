@@ -65,6 +65,18 @@ class TeamVmidArithmetic(unittest.TestCase):
         finally:
             os.environ.pop("TF_VAR_team_identifiers", None)
 
+    def test_explicit_per_run_identifiers_beat_the_environment_override(self):
+        # Two ranges of one competition on one node need different blocks, but the env is
+        # one value for the whole run host (2026-10-14: scrim-one held 120 while
+        # scrim-one-light had no way to ask for another).
+        import os
+        os.environ["TF_VAR_team_identifiers"] = "120,121"
+        try:
+            teams = collect_teams(1, engine_vmid=1300, team_identifiers="130")
+            self.assertEqual([t["identifier"] for t in teams.values()], ["130"])
+        finally:
+            os.environ.pop("TF_VAR_team_identifiers", None)
+
 
 if __name__ == "__main__":
     unittest.main()

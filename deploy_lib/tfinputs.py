@@ -10,7 +10,7 @@ from multinode.placement_record import satellite_routes_for, satellite_tfvars
 from common.terraform_workdir import ensure_terraform_workdir
 
 
-def engine_mgmt_ip_from_env():
+def engine_mgmt_ip_from_env(override=None):
 # The engine's static mgmt IP from the env, defaulted and re-exported.
 #
 #     Engine mgmt IP: static by default. The DHCP engine rebooted onto a different
@@ -18,6 +18,12 @@ def engine_mgmt_ip_from_env():
 #     credentials all consume — stayed stale (shakedown-5x4: .221→.243→.233).
 #     An explicit TF_VAR_engine_mgmt_ip="" keeps the old DHCP behavior; the
 #     chosen value is also exported for engine_template_ops (build-VM ipconfig0).
+#     `override` is this run's own --engine-mgmt-ip: it must beat both the ambient env
+#     and the node catalog, because two concurrent ranges on one node cannot share a
+#     management address (the catalog holds one value per NODE, not per run).
+    if override:
+        os.environ["TF_VAR_engine_mgmt_ip"] = override
+        return override
     ip = os.environ.get("TF_VAR_engine_mgmt_ip")
     if ip is None:
         ip = DEFAULT_ENGINE_MGMT_IP

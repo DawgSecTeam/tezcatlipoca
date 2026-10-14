@@ -52,6 +52,15 @@ def build_parser():
                              "concurrent competition on a shared node a distinct free VMID so their "
                              "engines don't collide. Persisted to .deploy_state.json and reused on "
                              "resume (ignored on --from-phase, which reads it back from state).")
+    parser.add_argument("--team-identifiers", dest="team_identifiers", default=None,
+                        help="Comma list of team identifiers (subnet ids) for THIS run, outranking "
+                             "TF_VAR_team_identifiers and the saved/packet defaults. Each "
+                             "concurrent range on a shared node needs its own non-overlapping "
+                             "block (identifier 130 maps to team vmids 1500..1509).")
+    parser.add_argument("--engine-mgmt-ip", dest="engine_mgmt_ip", default=None,
+                        help="Static management IP for THIS run's scoring engine, outranking "
+                             "TF_VAR_engine_mgmt_ip and the node catalog's per-node value. Each "
+                             "concurrent range on one node needs its own management address.")
     parser.add_argument("--team-node", dest="team_node", default=None,
                         help="Multi-node pin: comma list of team=NODE, e.g. '103=zfs-193,104=zfs-193' "
                              "(team key or subnet identifier = nodes.json node name). Unpinned teams "
@@ -198,4 +207,5 @@ def main():
 
     deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase,
            scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node,
-           force_from_phase=args.force_from_phase, nodes_path=args.nodes)
+           force_from_phase=args.force_from_phase, nodes_path=args.nodes,
+           team_identifiers=args.team_identifiers, engine_mgmt_ip=args.engine_mgmt_ip)

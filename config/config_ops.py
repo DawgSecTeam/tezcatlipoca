@@ -61,10 +61,13 @@ def random_password():
 
 
 def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
-                  identifier_defaults=None):
+                  identifier_defaults=None, team_identifiers=None):
     teams = {}
     import os as _os
-    override = (_os.environ.get("TF_VAR_team_identifiers") or "").strip()
+    # An explicit per-run list (--team-identifiers) outranks the ambient env: two ranges of
+    # one competition on a shared node need different blocks, and the env is one value for
+    # the whole run host.
+    override = (team_identifiers or _os.environ.get("TF_VAR_team_identifiers") or "").strip()
     if override:
         ids = [s.strip() for s in override.split(",")]
         if len(ids) < number_of_teams:

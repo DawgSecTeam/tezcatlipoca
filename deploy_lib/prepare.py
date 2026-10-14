@@ -14,7 +14,8 @@ from deploy_lib.tfinputs import build_terraform_inputs, engine_mgmt_ip_from_env
 
 
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
-            team_node=None, engine_node=None, force_from_phase=False, nodes_path=None):
+            team_node=None, engine_node=None, force_from_phase=False, nodes_path=None,
+            team_identifiers=None, engine_mgmt_ip=None):
 # Everything deploy() must do before phase 1, as one testable step.
 #
 #     Resolves the engine VMID, loads Compfile/config/state, resolves teams, computes
@@ -49,11 +50,11 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
 
     load_competition_inputs(ctx, comp_dir)
 
-    resolve_competition_teams(ctx, num_teams, from_phase)
+    resolve_competition_teams(ctx, num_teams, from_phase, team_identifiers)
 
     apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path)
 
-    ctx.engine_mgmt_ip = engine_mgmt_ip_from_env()
+    ctx.engine_mgmt_ip = engine_mgmt_ip_from_env(engine_mgmt_ip)
 
     # Gate 2 (gates.py): stale-terraform-state refusal + capacity/collision preflight.
     run_range_gates(ctx, comp_dir, from_phase)

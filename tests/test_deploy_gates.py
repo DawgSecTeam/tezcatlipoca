@@ -39,7 +39,7 @@ class PrepareGateOrder(unittest.TestCase):
             "load_competition_inputs": step("inputs"),
             "resolve_competition_teams": step("teams"),
             "apply_engine_placement": step("placement"),
-            "engine_mgmt_ip_from_env": lambda: calls.append("mgmt_ip") or "10.0.0.2",
+            "engine_mgmt_ip_from_env": lambda *a, **k: calls.append("mgmt_ip") or "10.0.0.2",
             "run_range_gates": step("GATE:range"),
             "mint_competition_secrets": step("MINT"),
             "generate_stage_configs_and_hashes": step("configs"),

@@ -308,7 +308,7 @@ class RunIdMinting(unittest.TestCase):
                 "teams": {"team1": {"identifier": "120", "password": "old-secret"}}})
             calls = {}
 
-            def collect(count, engine_vmid, identifier_defaults=None):
+            def collect(count, engine_vmid, identifier_defaults=None, **kw):
                 calls["defaults"] = identifier_defaults
                 calls["password"] = config_ops.random_password()
                 return {"team1": {"identifier": identifier_defaults[0],
@@ -328,7 +328,7 @@ class RunIdMinting(unittest.TestCase):
             ctx = self._ctx(comp_dir / ".deploy_state.json", engine_vmid=1080)
             with dpatch("write_state"), dpatch(
                     "collect_teams",
-                    side_effect=lambda count, engine_vmid, identifier_defaults=None: {
+                    side_effect=lambda count, engine_vmid, identifier_defaults=None, **kw: {
                         "team1": {"identifier": str(identifier_defaults[0]), "password": "fresh"},
                         "team2": {"identifier": str(identifier_defaults[1]), "password": "fresh"}}):
                 dl_secrets.resolve_competition_teams(ctx, 2, 1)

@@ -387,6 +387,17 @@ class TerraformInputs(unittest.TestCase):
         self.assertEqual(ctx.engine_mgmt_ip, "10.0.0.5")
         self.assertEqual(env_view["TF_VAR_engine_mgmt_gw"], "10.9.9.9")
 
+    def test_per_run_mgmt_ip_override_beats_the_env_and_is_reexported(self):
+        env = dict(self.ENV, TF_VAR_engine_mgmt_ip="10.0.0.5")
+        with patch.dict(os.environ, env, clear=True):
+            ip = dl_tfinputs.engine_mgmt_ip_from_env("10.0.0.77")
+            # downstream (engine_template_ops build-VM ipconfig0) reads the env, not the return
+            exported = os.environ["TF_VAR_engine_mgmt_ip"]
+            marked_default = "TEZ_ENGINE_MGMT_IP_IS_DEFAULT" in os.environ
+        self.assertEqual(ip, "10.0.0.77")
+        self.assertEqual(exported, "10.0.0.77")
+        self.assertFalse(marked_default)
+
 
 class TargetSplit(unittest.TestCase):
     def test_unmanaged_boxes_stay_in_all_targets_but_leave_the_work_lists(self):

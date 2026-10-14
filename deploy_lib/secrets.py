@@ -62,7 +62,7 @@ def carry_box_password(previous_state):
     return (previous_state or {}).get("box_password") or random_password()
 
 
-def resolve_competition_teams(ctx, num_teams, from_phase):
+def resolve_competition_teams(ctx, num_teams, from_phase, team_identifiers=None):
 # Resolve the run id and the team roster (carried on a resume), into `ctx`.
 #
 #     Deliberately split from the credential mint: preflight must be able to abort a
@@ -128,7 +128,8 @@ def resolve_competition_teams(ctx, num_teams, from_phase):
         ctx.teams = collect_teams(
             ctx.number_of_teams, ctx.engine_vmid,
             identifier_defaults=_fresh_identifier_defaults(
-                ctx.state_path.parent, ctx.previous_state))
+                ctx.state_path.parent, ctx.previous_state),
+            team_identifiers=team_identifiers)
         # Skeleton only — the mint step adds the secrets after preflight. An abort at
         # the gates leaves a state with the lineage (run id) but no credentials.
         ctx.state = {
