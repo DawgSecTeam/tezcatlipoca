@@ -27,6 +27,7 @@ class NodeShare:
     check_templates: bool = True
     needs_jump_template: bool = False
     jump_template: str = ""
+    mgmt_bridge: str = ""          # this share's management bridge; "" = the env/global value
     check_collisions: bool = True
     check_headroom: bool = True
     raw_vms: list = field(default_factory=list)   # filled by the runner
@@ -94,6 +95,7 @@ def single_node_plan(comp_dir, boxes, num_teams, teams, engine_vmid, check_free,
         datastore=os.environ.get("TF_VAR_datastore", "local-lvm"),
         fetch_vms=_fetch_cluster_vms_single,
         engine_base=lambda: int(os.environ["TF_VAR_template_vm_id"]),
+        mgmt_bridge=os.environ.get("TF_VAR_mgmt_bridge", ""),
         check_collisions=bool(check_free and teams))
     return PreflightPlan(comp_dir, boxes, engine_vmid, [share], our_run_tag=our_run_tag,
                          engine_mgmt_ip=engine_mgmt_ip,
@@ -136,6 +138,7 @@ def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_i
             check_templates=bool(node_teams),
             needs_jump_template=bool(node_teams) and slot > 0,
             jump_template=getattr(rec, "jump_template", ""),
+            mgmt_bridge=rec.mgmt_bridge,
             # resume (check_free off): this competition's own leftovers are
             # phase-1/terraform's to reconcile
             check_collisions=bool(check_free and not unused_satellite),

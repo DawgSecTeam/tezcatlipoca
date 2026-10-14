@@ -215,7 +215,7 @@ resource "proxmox_virtual_environment_vm" "scoring_engine" {
   }
 
   network_device {
-    bridge = "vmbr0"
+    bridge = var.mgmt_bridge
     model  = "virtio"
   }
 

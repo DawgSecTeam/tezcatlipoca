@@ -64,7 +64,7 @@ datastore, engine base vmid, ssh host): `infrastructure-status.md`.
      "token_env": "TF_VAR_proxmox_api_token",
      "node": "<pve-node>", "datastore": "<datastore>",
      "engine_base_vmid": 0,
-     "engine_mgmt_ip": "", "jump_mgmt_ip": "",
+     "engine_mgmt_ip": "", "jump_mgmt_ip": "", "mgmt_bridge": "",
      "ssh_host": "<host>", "jump_template": "alpine",
      "weight": 1.0, "max_teams": 8}
   ]

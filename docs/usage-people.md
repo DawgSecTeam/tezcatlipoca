@@ -73,6 +73,7 @@ No cloud-init: `main.tf` skips `initialization` for templates whose name contain
 | Variable | Meaning |
 |---|---|
 | `TF_VAR_engine_mgmt_ip` / `_gw` | Static engine management IP (default `10.0.0.250` / `10.0.0.1`); empty IP = DHCP |
+| `TF_VAR_mgmt_bridge` | Management bridge the engine's and each jump VM's mgmt NIC attach to (default `vmbr0`); a `nodes.json` record's `mgmt_bridge` overrides it ([multi-node.md](multi-node.md)) |
 | `TF_VAR_scoring_vm_id` | Engine vmid (default 1000); also `--scoring-vmid` |
 | `TF_VAR_team_identifiers` | Pin team subnets, e.g. `120,121,122`. Set when node vmids collide with the default 101+ blocks |
 | `TEZ_THIN_HEADROOM` | Fraction `(0, 1]` of provisioned disk the headroom preflight counts on thin pools. Unset = strict ([environment-facts.md](environment-facts.md#storage)) |

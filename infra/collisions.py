@@ -60,6 +60,34 @@ def expected_slots(share, boxes, engine_vmid):
     return slots
 
 
+def check_mgmt_bridge(node, bridge, label=""):
+    """Refuse when the node's network listing cannot show the configured mgmt bridge.
+
+    PVE filters bridge entries out of GET /nodes/{node}/network for a token without
+    SDN.Audit/SDN.Use on /sdn/zones/localnetwork/<iface>, so an absent bridge alone
+    proves nothing: when the listing shows no bridge AT ALL the bridge is unverifiable
+    and this warns instead of refusing (a false refusal would block every such estate).
+    When the listing does show bridges and ours is not among them, it is a typo or the
+    wrong estate, and the deploy would die at the engine's tap attach minutes in."""
+    nets = proxmox_api("GET", f"/nodes/{node}/network")["data"]
+    if bridge in {n.get("iface") for n in nets}:
+        print(f"  Preflight{label}: management bridge '{bridge}' present on node '{node}'")
+        return
+    visible = sorted({n.get("iface") for n in nets
+                      if n.get("type") == "bridge"
+                      or str(n.get("iface") or "").startswith("vmbr")})
+    if visible:
+        raise SystemExit(
+            f"  ERROR: management bridge '{bridge}' does not exist on node '{node}' "
+            f"(PVE lists {visible}). The engine's and every jump VM's mgmt NIC attach to "
+            f"it, so the deploy would die at the engine's tap attach. Set the node's "
+            f"mgmt_bridge in nodes.json (or TF_VAR_mgmt_bridge) to a bridge it has.")
+    print(f"  WARNING: management bridge '{bridge}' is not in node '{node}'s network "
+          f"listing, which shows no bridges at all — PVE hides bridge entries from a token "
+          f"without SDN.Audit/SDN.Use on /sdn/zones/localnetwork/<iface>, so it cannot be "
+          f"verified here. Proceeding; a wrong bridge still fails at the tap attach.")
+
+
 def expected_bridges(share, boxes):
     """Team bridges (and, for in-path firewalls, the per-team transit bridge vmbrW<id>) this
     share creates. Transit bridges are engine-node resources (slot-0 teams)."""

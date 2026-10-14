@@ -20,6 +20,11 @@ SCORING_ENGINE_VMID = 1000
 DEFAULT_ENGINE_MGMT_IP = "10.0.0.250"
 DEFAULT_ENGINE_MGMT_GW = "10.0.0.1"
 
+# Management/user bridge every mgmt NIC (engine, engine-template build VM, each jump)
+# attaches to. Overridable per nodes.json record, else TF_VAR_mgmt_bridge; estates whose
+# management bridge is not vmbr0 (the cyber range's is vmbr100) set one of those.
+DEFAULT_MGMT_BRIDGE = "vmbr0"
+
 SNAP_BASE = "tz-base"
 SNAP_READY = "tz-ready"
 

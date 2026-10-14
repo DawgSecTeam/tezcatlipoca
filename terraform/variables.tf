@@ -22,6 +22,12 @@ variable "engine_mgmt_gw" {
   default     = ""
 }
 
+variable "mgmt_bridge" {
+  description = "Management/user bridge the engine's mgmt NIC attaches to. Default vmbr0; an estate whose management bridge differs (the cyber range's vmbr100) sets it via the nodes.json record's mgmt_bridge, else TF_VAR_mgmt_bridge."
+  type        = string
+  default     = "vmbr0"
+}
+
 variable "ssh_public_key" { type = string }
 
 variable "ssh_private_key_path" { type = string }

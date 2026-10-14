@@ -8,6 +8,7 @@ import requests
 
 from common.constants import (
     ENGINE_TEMPLATE_NAME,
+    DEFAULT_MGMT_BRIDGE,
     ownership_tags,
 )
 from infra.client import proxmox_api, wait_for_proxmox_task
@@ -80,7 +81,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 
     mgmt_ip = os.environ.get("TF_VAR_engine_mgmt_ip", "")
     cfg = {
-        "net0": "virtio,bridge=vmbr0",
+        "net0": f"virtio,bridge={os.environ.get('TF_VAR_mgmt_bridge') or DEFAULT_MGMT_BRIDGE}",
         "tags": tags,
         # cloud-init identity for the build VM's first boot (the base image bakes none;
         # terraform's user_account normally supplies it for the deployed engine).
@@ -178,7 +179,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 
 def _discover_vm_ipv4(node, vmid):
 # First non-loopback IPv4 the guest agent reports (primary-mode build VMs DHCP on
-#     vmbr0, exactly as the terraform engine does). Never raises.
+#     the management bridge, exactly as the terraform engine does). Never raises.
     try:
         ifaces = proxmox_api(
             "GET", f"/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"

@@ -35,8 +35,8 @@ import os
 import subprocess
 import sys
 
-from common.constants import NAKON_DIR, PIPELINE_VERSION, SCORING_ENGINE_VMID
-from infra.collisions import (check_collisions, engine_mgmt_ip_gate,  # noqa: F401
+from common.constants import DEFAULT_MGMT_BRIDGE, NAKON_DIR, PIPELINE_VERSION, SCORING_ENGINE_VMID
+from infra.collisions import (check_collisions, check_mgmt_bridge, engine_mgmt_ip_gate,  # noqa: F401
                               jump_mgmt_ip_gate)
 from infra.resources import check_datastore_headroom, check_share_templates
 from common.utils import compfile_flag
@@ -382,9 +382,14 @@ def remote_access_gate(plan):
 
 def run_preflight(plan):
     """The single pre-Proxmox-mutation entry point."""
+    mgmt_bridge = os.environ.get("TF_VAR_mgmt_bridge") or DEFAULT_MGMT_BRIDGE
     if compfile_flag(plan.comp_dir / "Compfile", "remote_access", 1):
         remote_access_gate(plan)
     for share in plan.shares:
+        # Every share that creates a mgmt-attached NIC: the engine node's engine (and its
+        # engine-template build VM) and each satellite's jump VM.
+        if share.is_engine or share.needs_jump_template:
+            check_mgmt_bridge(share.node, share.mgmt_bridge or mgmt_bridge, label=share.label)
         share.raw_vms = share.fetch_vms()
         vms = ([vm for vm in share.raw_vms if vm.get("node") == share.node]
                if share.scope_to_node else share.raw_vms)

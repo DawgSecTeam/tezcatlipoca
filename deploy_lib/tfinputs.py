@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 from config.config_ops import write_text_atomic
-from common.constants import DEFAULT_ENGINE_MGMT_GW, DEFAULT_ENGINE_MGMT_IP
+from common.constants import DEFAULT_ENGINE_MGMT_GW, DEFAULT_ENGINE_MGMT_IP, DEFAULT_MGMT_BRIDGE
 from multinode.placement_record import satellite_routes_for, satellite_tfvars
 from common.terraform_workdir import ensure_terraform_workdir
 
@@ -31,6 +31,20 @@ def engine_mgmt_ip_from_env():
               f"TF_VAR_engine_mgmt_ip, set '' for DHCP)")
         os.environ["TF_VAR_engine_mgmt_ip"] = ip
     return ip
+
+
+def mgmt_bridge_from_env():
+# The management bridge every mgmt NIC attaches to, re-exported with its default.
+#
+#     Resolution is one value for the whole deploy: a nodes.json record's mgmt_bridge
+#     (apply_node_env already put it in the env), else the operator's TF_VAR_mgmt_bridge,
+#     else vmbr0. Terraform reads TF_VAR_mgmt_bridge natively and the env-sourced Python
+#     paths (engine_template_ops, jump_ops) read the same value, so nothing is exported
+#     by hand. An estate whose management bridge is not vmbr0 (the cyber range's vmbr100)
+#     needs one of the two sources set or its engine's tap cannot attach.
+    bridge = os.environ.get("TF_VAR_mgmt_bridge") or DEFAULT_MGMT_BRIDGE
+    os.environ["TF_VAR_mgmt_bridge"] = bridge
+    return bridge
 
 
 def build_terraform_inputs(ctx, comp_dir):
@@ -97,6 +111,9 @@ def build_terraform_inputs(ctx, comp_dir):
         # Persisted via tfvars so resumes don't depend on the env var being re-exported.
         "engine_mgmt_ip": ctx.engine_mgmt_ip,
         "engine_mgmt_gw": os.environ.get("TF_VAR_engine_mgmt_gw", ""),
+        # Persisted alongside engine_mgmt_ip so a resume's apply #2 keeps the estate's
+        # bridge even if the env is rebuilt from an older .env.
+        "mgmt_bridge": mgmt_bridge_from_env(),
         # Per-deploy identity: terraform stamps it onto the engine and every team box
         # (main.tf tags), making them reclaimable by THIS run's teardown only.
         "run_tag": ctx.run_id,

@@ -10,7 +10,8 @@ from deploy_lib.inputs import (load_competition_inputs, load_competition_spec,
 from deploy_lib.placement import apply_engine_placement
 from deploy_lib.secrets import mint_competition_secrets, resolve_competition_teams
 from deploy_lib.targets import enumerate_deploy_targets
-from deploy_lib.tfinputs import build_terraform_inputs, engine_mgmt_ip_from_env
+from deploy_lib.tfinputs import (build_terraform_inputs, engine_mgmt_ip_from_env,
+                                 mgmt_bridge_from_env)
 
 
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
@@ -54,6 +55,9 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path)
 
     ctx.engine_mgmt_ip = engine_mgmt_ip_from_env()
+    # Resolved + exported before the preflight, which checks the bridge against each
+    # node's network listing.
+    mgmt_bridge_from_env()
 
     # Gate 2 (gates.py): stale-terraform-state refusal + capacity/collision preflight.
     run_range_gates(ctx, comp_dir, from_phase)

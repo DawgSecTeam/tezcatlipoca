@@ -73,6 +73,22 @@ class LoadNodesConfigTest(unittest.TestCase):
         self.assertEqual(records[1].jump_mgmt_ip, "10.0.0.240")
         self.assertEqual(balancing, {"prefer": ["b"]})
 
+    def test_mgmt_bridge_present_absent_and_default(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "nodes.json"
+            path.write_text(json.dumps({"nodes": [
+                {"name": "a", "endpoint": "https://a:8006", "node": "pveA",
+                 "datastore": "ds", "token_env": "TOK_A", "mgmt_bridge": "vmbr100"},
+                {"name": "b", "endpoint": "https://b:8006", "node": "pveB",
+                 "datastore": "ds", "token_env": "TOK_B"},
+                {"name": "c", "endpoint": "https://c:8006", "node": "pveC",
+                 "datastore": "ds", "token_env": "TOK_C", "mgmt_bridge": ""}]}))
+            records, _ = nodes_config.load_nodes_config(path)
+        self.assertEqual([r.mgmt_bridge for r in records], ["vmbr100", "", ""])
+        # Absent/empty must keep today's behavior: the resolver falls back to
+        # TF_VAR_mgmt_bridge / vmbr0 (tests/test_mgmt_bridge.py).
+        self.assertEqual(_rec("d").mgmt_bridge, "")
+
     def test_missing_required_field_rejected(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "nodes.json"

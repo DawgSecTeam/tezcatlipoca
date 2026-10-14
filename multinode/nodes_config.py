@@ -28,7 +28,7 @@ JUMP_RESERVE_MB = 512  # capacity reservation per satellite (tiny router VM)
 _MISSING = object()
 
 _ENV_KEYS = ("TF_VAR_proxmox_endpoint", "TF_VAR_proxmox_api_token", "TF_VAR_proxmox_node",
-             "TF_VAR_datastore", "TF_VAR_template_vm_id")
+             "TF_VAR_datastore", "TF_VAR_template_vm_id", "TF_VAR_mgmt_bridge")
 
 
 @dataclass
@@ -42,6 +42,7 @@ class NodeRecord:
     engine_mgmt_ip: str = ""   # static engine mgmt IP when this node hosts the engine
     engine_mgmt_gw: str = ""
     jump_mgmt_ip: str = ""     # static jump mgmt IP when this node is a satellite
+    mgmt_bridge: str = ""      # this node's management bridge; empty = TF_VAR_mgmt_bridge/vmbr0
     ssh_host: str = ""         # for root SSH (template sync); defaults to endpoint host
     jump_template: str = ""    # name substring for the jump clone source (default "alpine")
     weight: float = 1.0
@@ -93,6 +94,7 @@ def load_nodes_config(path=None):
             engine_mgmt_ip=str(raw.get("engine_mgmt_ip") or ""),
             engine_mgmt_gw=str(raw.get("engine_mgmt_gw") or ""),
             jump_mgmt_ip=str(raw.get("jump_mgmt_ip") or ""),
+            mgmt_bridge=str(raw.get("mgmt_bridge") or ""),
             ssh_host=str(raw.get("ssh_host") or ""),
             jump_template=str(raw.get("jump_template") or ""),
             weight=float(raw.get("weight") or 1.0),
@@ -145,6 +147,10 @@ def apply_node_env(record):
     os.environ["TF_VAR_proxmox_node"] = record.node
     os.environ["TF_VAR_datastore"] = record.datastore
     os.environ["TF_VAR_template_vm_id"] = str(record.engine_base_vmid)
+    # Set only when the record names one: an empty record field must leave the operator's
+    # TF_VAR_mgmt_bridge (or terraform's vmbr0 default) in place.
+    if record.mgmt_bridge:
+        os.environ["TF_VAR_mgmt_bridge"] = record.mgmt_bridge
     if record.tls_fingerprint:
         restore.setdefault("PROXMOX_TLS_FINGERPRINT",
                            os.environ.get("PROXMOX_TLS_FINGERPRINT", _MISSING))

@@ -19,7 +19,7 @@ import secrets
 import subprocess
 import time
 
-from common.constants import DEFAULT_ENGINE_MGMT_GW, ownership_tags
+from common.constants import DEFAULT_ENGINE_MGMT_GW, DEFAULT_MGMT_BRIDGE, ownership_tags
 from net.jump_rules import (APT_CACHER_PORT, JUMP_TAGS_EXTRA, jump_rules, jump_sysctl_script,  # noqa: F401
                         red_segment_from_env)
 from infra.guest_exec import wait_for_guest_agent
@@ -249,7 +249,7 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
             "description": clone_marker(comp_name)})["data"]
         wait_for_proxmox_task(node, upid)
 
-        nics = {"net0": "virtio,bridge=vmbr0"}
+        nics = {"net0": f"virtio,bridge={rec.mgmt_bridge or os.environ.get('TF_VAR_mgmt_bridge') or DEFAULT_MGMT_BRIDGE}"}
         for i, t in enumerate(team_ids):
             nics[f"net{i + 1}"] = f"virtio,bridge=vmbr{t}"
         cfg = {
