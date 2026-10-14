@@ -42,7 +42,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from common.utils import compfile_flag, compfile_value, record_degradation
+from common.utils import compfile_flag, compfile_value, local_python, record_degradation
 from red import badauto_config_ops
 from red import realm_c2_ops
 
@@ -119,7 +119,7 @@ def _deploy_red(comp_dir, env, config_path=None, timeout=1800):
     die with "engine IP unknown" (caught live 2026-10-08).
     """
     comp_abs = Path(comp_dir).resolve()
-    cmd = ["python3", "-m", "badauto"]
+    cmd = [local_python(), "-m", "badauto"]
     if config_path:
         # Resolve: badauto runs with cwd=BAD_AUTO, so a relative --config resolves
         # inside ITS tree. And never hand it a path that isn't there: load_config
@@ -162,7 +162,7 @@ def destroy_red(comp_dir, env=None, timeout=900):
     # and red01 the only thing left standing.
     comp_dir = Path(comp_dir).resolve()
     env = {**(env if env is not None else os.environ), "BAuto_COMPETITION_DIR": str(comp_dir)}
-    cmd = ["python3", "-m", "badauto"]
+    cmd = [local_python(), "-m", "badauto"]
     # The comp's own config (with its own deploy stamp next to it) when there is
     # one — never a missing path: load_config falls back to built-in DEFAULTS
     # (red_vmid 999) without a word, and destroy would aim at the wrong target.

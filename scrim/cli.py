@@ -178,7 +178,7 @@ def main():
 
     if not (comp / "packet.md").exists():
         log("packet.md missing — generating")
-        procs.run(["python3", "generate-packet.py", str(comp)], cwd=core.REPO, timeout=120)
+        procs.run([core.local_python(), "generate-packet.py", str(comp)], cwd=core.REPO, timeout=120)
 
     fire_test.stage_verify(args, comp, creds)
     blue_agent.stage_blues(args, comp, run_dir, creds, time.time())

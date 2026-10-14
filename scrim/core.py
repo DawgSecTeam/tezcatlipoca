@@ -5,6 +5,7 @@ import re
 import time
 from pathlib import Path
 
+from common.utils import local_python  # noqa: F401  (re-exported for scrim/*)
 from config.config_ops import write_text_atomic
 REPO = Path(__file__).resolve().parent.parent
 BAD_AUTO = REPO.parent / "bad-auto"

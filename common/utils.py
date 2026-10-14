@@ -5,12 +5,30 @@ import re
 import secrets as _secrets
 import signal
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from common.comp_paths import comps_root
+
+
+def local_python():
+    """Interpreter for OPERATOR-SIDE child processes (the harness's own children).
+
+    A bare `python3` on PATH is a different environment from the one the harness runs under.
+    The dashboard launches the harness with its service venv (which carries toml/paramiko);
+    a distro `python3` may carry neither, and the child then dies at import — deep inside the
+    deploy, after the run record, workspace and worktree exist. 2026-10-14: two scrim runs
+    through the dashboard died at `ModuleNotFoundError: No module named 'toml'` inside the
+    deploy child, and the same trap waits for verify-competition.py, scrim-report.py and every
+    `python3 -m badauto` spawn. Remote commands (ssh to a box) must NOT use this — there the
+    remote interpreter is the right one.
+
+    `TEZ_PYTHON` overrides for a host where the dependencies live somewhere else.
+    """
+    return os.environ.get("TEZ_PYTHON") or sys.executable
 
 _USERNAME_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 _COMP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")

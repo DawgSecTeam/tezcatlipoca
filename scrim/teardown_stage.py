@@ -95,7 +95,7 @@ def teardown_red(args, env):
     # name). --config threads the comp's OWN config so destroy reads the comp's
     # own deploy stamp (per-competition since 2026-10-12) — only when it exists:
     # a missing --config silently falls back to built-in defaults (vmid 999).
-    cmd = ["python3", "-m", "badauto"]
+    cmd = [core.local_python(), "-m", "badauto"]
     comp_cfg = badauto_config_ops.config_path(comp_path)
     if comp_cfg.exists():
         cmd += ["--config", str(comp_cfg)]

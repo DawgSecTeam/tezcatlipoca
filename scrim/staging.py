@@ -83,7 +83,7 @@ def creds_from_files(comp):
 
 
 def stage_deploy(args, comp):
-    cmd = ["python3", "-u", "create-competition.py", "--competition", comp.name,
+    cmd = [core.local_python(), "-u", "create-competition.py", "--competition", comp.name,
            "--teams", str(args.teams), "--yes"]
     if comp.joinpath(".deploy_state.json").exists() and args.resume:
         cmd += ["--from-phase", str(args.resume)]

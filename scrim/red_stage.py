@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from common.utils import compfile_flag
+from common.utils import compfile_flag, local_python
 from scrim import compworld
 from scrim import core
 from scrim import endpoints
@@ -222,9 +222,9 @@ def stage_red(args, comp, creds, run_dir):
     # A stale BAuto_CONFIG in the environment would shadow nothing while --config
     # is explicit, but scrub it anyway: symmetry with red_plant_ops._deploy_red.
     env.pop("BAuto_CONFIG", None)
-    procs.run(["python3", "-m", "badauto", "--config", str(config_file), "validate-llm"],
+    procs.run([local_python(), "-m", "badauto", "--config", str(config_file), "validate-llm"],
               cwd=core.BAD_AUTO, env=env, timeout=300, tail=3)
-    procs.run(["python3", "-m", "badauto", "--config", str(config_file), "run", "--once",
+    procs.run([local_python(), "-m", "badauto", "--config", str(config_file), "run", "--once",
                "--dry-run", "--competition", str(comp.resolve())],
               cwd=core.BAD_AUTO, env=env, timeout=1500, tail=6)
 
@@ -239,7 +239,7 @@ def stage_red(args, comp, creds, run_dir):
     red_mode = args.red_mode or "routed (bad-auto default)"
     log(f"deploying red01 at {args.red_ip} (vmid {args.red_vmid}, storage "
         f"{args.red_storage}, mode {red_mode})")
-    procs.run(["python3", "-m", "badauto", "--config", str(config_file), "deploy",
+    procs.run([local_python(), "-m", "badauto", "--config", str(config_file), "deploy",
                "--competition", str(comp.resolve())],
               cwd=core.BAD_AUTO, env=env, timeout=1800)
     # The C2 lives on red01 for this run (operator set realm.c2_local): build

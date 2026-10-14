@@ -144,7 +144,7 @@ def write_interaction_report(args):
     # folder) working for any caller that only knows args.test_dir.
     run_dir = Path(getattr(args, "run_dir", None) or getattr(args, "test_dir", None) or ".")
     try:
-        r = procs.run(["python3", "scrim-report.py", str(run_dir)], cwd=core.REPO, timeout=300,
+        r = procs.run([core.local_python(), "scrim-report.py", str(run_dir)], cwd=core.REPO, timeout=300,
                       check=False)
         if r.returncode != 0:
             log(f"WARNING: scrim-report.py exited {r.returncode} — "

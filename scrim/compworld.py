@@ -102,6 +102,6 @@ _WATCHDOG_DISPLAY = {
 
 
 def verify_cmd(comp, creds, *extra):
-    return ["python3", "verify-competition.py", str(comp.relative_to(core.REPO)),
+    return [core.local_python(), "verify-competition.py", str(comp.relative_to(core.REPO)),
             "--engine-ip", creds["ENGINE_IP"], "--admin-password", creds["ADMIN_PW"],
             *extra, *_verify_flags(comp)]

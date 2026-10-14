@@ -111,5 +111,10 @@ competitions/*/.prev-run-*/
 # partial comp set). Never commit it; relocate it out of the checkout instead.
 competitions/
 
+# The pre-cutover browser UI moved to tezcatlipoca-dashboard (2026-10-14). A `webui/` directory
+# here is a stale checkout's leftovers (146 MB of node_modules/dist in this tree) and it is not
+# tracked — never commit it.
+webui/
+
 # vim swap files (a twin session's live editor buffer must never be commit-swallowed)
 *.swp

@@ -7,6 +7,7 @@ from pathlib import Path
 from .constants import REPO
 from .env import iso
 from .hashing import seal_local_file
+from common.utils import local_python
 from .manifest import load_manifest, resolve_recorded, update_manifest
 
 _VERDICT_SECTION = re.compile(r"^## Verdict\s*$(.*?)(?=^## |\Z)", re.M | re.S)
@@ -68,7 +69,7 @@ def ensure_verdict(test_path, *, echo=print, dry_run=False):
                                 test_path.parent.parent)
     if not interaction.exists() and run_dir and Path(run_dir).is_dir() and not dry_run:
         try:
-            proc = subprocess.run(["python3", "scrim-report.py", str(run_dir)], cwd=REPO,
+            proc = subprocess.run([local_python(), "scrim-report.py", str(run_dir)], cwd=REPO,
                                   capture_output=True, text=True, timeout=300)
             produced = Path(run_dir) / "INTERACTION.md"
             if proc.returncode == 0 and produced.exists():
