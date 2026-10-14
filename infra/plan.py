@@ -86,6 +86,18 @@ def _fetch_cluster_vms_single():
             f"resume with --from-phase rather than restarting.")
 
 
+def _template_vm_id():
+    # A fresh estate's env variant ships TF_VAR_template_vm_id empty, and the raw
+    # int() gave the operator "ValueError: invalid literal for int() with base 10: ''"
+    # from inside the preflight instead of naming the variable.
+    try:
+        return int(os.environ["TF_VAR_template_vm_id"])
+    except (KeyError, ValueError) as e:
+        raise SystemExit(
+            f"  ERROR: TF_VAR_template_vm_id is not a usable vmid ({e}) — set it for "
+            f"the target node before deploying.")
+
+
 def single_node_plan(comp_dir, boxes, num_teams, teams, engine_vmid, check_free,
                      engine_mgmt_ip, our_run_tag):
     from red import badauto_config_ops
@@ -94,7 +106,7 @@ def single_node_plan(comp_dir, boxes, num_teams, teams, engine_vmid, check_free,
         teams=teams or {}, num_teams=num_teams,
         datastore=os.environ.get("TF_VAR_datastore", "local-lvm"),
         fetch_vms=_fetch_cluster_vms_single,
-        engine_base=lambda: int(os.environ["TF_VAR_template_vm_id"]),
+        engine_base=_template_vm_id,
         mgmt_bridge=os.environ.get("TF_VAR_mgmt_bridge", ""),
         check_collisions=bool(check_free and teams))
     return PreflightPlan(comp_dir, boxes, engine_vmid, [share], our_run_tag=our_run_tag,
@@ -138,7 +150,7 @@ def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_i
             check_templates=bool(node_teams),
             needs_jump_template=bool(node_teams) and slot > 0,
             jump_template=getattr(rec, "jump_template", ""),
-            mgmt_bridge=rec.mgmt_bridge,
+            mgmt_bridge=getattr(rec, "mgmt_bridge", ""),
             # resume (check_free off): this competition's own leftovers are
             # phase-1/terraform's to reconcile
             check_collisions=bool(check_free and not unused_satellite),

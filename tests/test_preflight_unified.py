@@ -1,6 +1,7 @@
 """One preflight implementation: single-node is a one-share plan, multi-node is N shares, and
 both classify "ours" through ownership.ownership_verdict (the same proof destroy uses)."""
 
+import contextlib
 import os
 import sys
 import unittest
@@ -12,7 +13,8 @@ sys.path.insert(0, str(_REPO))
 
 from infra import ownership  # noqa: E402
 from infra.collisions import check_collisions, expected_bridges, expected_slots  # noqa: E402
-from infra.plan import NodeShare, PreflightPlan  # noqa: E402
+from infra.plan import NodeShare, PreflightPlan, single_node_plan  # noqa: E402
+from infra.resources import check_share_templates  # noqa: E402
 
 RUN = "run-abc123"
 BOXES = [{"name": "web01", "template": "t"}, {"name": "db01", "template": "t"}]
@@ -108,6 +110,41 @@ class Collisions(unittest.TestCase):
         # ours ET alone must not license a pre-existing bridge (single-node semantics)
         with self.assertRaises(SystemExit):
             self._run(_share(), [_vm(1140, f"tezcatlipoca;comp-c1;{RUN}")], bridges=["vmbr101"])
+
+
+class EngineBaseImage(unittest.TestCase):
+    @contextlib.contextmanager
+    def _env(self, template_vm_id=None):
+        # clear=True: the ambient env must not answer for a variable this test drops
+        env = {"TF_VAR_proxmox_node": "pve"}
+        if template_vm_id is not None:
+            env["TF_VAR_template_vm_id"] = template_vm_id
+        with patch.dict(os.environ, env, clear=True):
+            yield
+
+    def _gate(self, comp, template_vm_id=None):
+        with self._env(template_vm_id):
+            plan = single_node_plan(comp, BOXES, 1, TEAMS, 1000, True, None, RUN)
+            plan.shares[0].check_templates = False   # this case is the engine base, not box templates
+            check_share_templates(plan.shares[0], BOXES, [])
+
+    def test_blank_vmid_refuses_naming_the_variable(self):
+        # a fresh estate's env ships it empty; the raw int() was "ValueError: invalid
+        # literal for int() with base 10: ''" from inside the preflight
+        with self.assertRaises(SystemExit) as cm:
+            self._gate(Path("competitions/c1"), "")
+        self.assertIn("TF_VAR_template_vm_id", str(cm.exception))
+
+    def test_unset_vmid_refuses_naming_the_variable(self):
+        with self.assertRaises(SystemExit) as cm:
+            self._gate(Path("competitions/c1"))
+        self.assertIn("TF_VAR_template_vm_id", str(cm.exception))
+
+    def test_valid_vmid_still_resolves_to_that_int(self):
+        with self._env("955"):
+            plan = single_node_plan(Path("competitions/c1"), BOXES, 1, TEAMS, 1000, True,
+                                    None, RUN)
+            self.assertEqual(plan.shares[0].engine_base(), 955)
 
 
 if __name__ == "__main__":
