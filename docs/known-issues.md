@@ -49,6 +49,47 @@ Upstream-worthy (bad-auto). `badauto deploy` clones the VM and only then reads `
 
 `teardown/engine.py` and `scrim/teardown_stage.py` both answer "is red01 gone?" with `int(vmid) in live_vmids()` — every vmid the endpoint's cluster view knows, with no tag, comp or node filter — so an occupant at that vmid cannot be attributed to this range or to another. The verdict stays fail-closed (an unaccounted-for vmid is never clean), so this is attribution robustness, not a false refusal: the 2026-10-14 refusals were correct. The marker reader the deploy preflight already uses (`infra/red01.py`, bad-auto's `bad-auto red01 comp=<name> id=<uuid>` description) is the pattern to follow. **Next action**: attribute the occupant and keep failing closed when it carries no marker; validating it needs a live vmid collision.
 
+### scrim-one's verify gate is red on two checks in every deploy
+
+`pins_registered` ("12 pinned checks") and `misconfig` ("misconfig did not survive cloning
+everywhere") FAIL while the other ten gates PASS, identically on two independent deploys
+(2026-10-14: run-df29374d and run-e7e12115 — `run.log` verify block, `RESULT: FAIL — see failing
+checks above`). The range deploys, scores and heals, so this is content drift, not plumbing: either
+the golden-set/seed order drops the pins and the misconfigs before the clones are taken, or both
+checks look somewhere the clones do not have. **Next action**: run the two checks by hand against
+one clone and against its golden, then fix whichever of planting order / check path is wrong; both
+gates must be green before scrim-one is used for scoring.
+
+### A blue agent never produces its narrative
+
+`BLUE-TEAM.md` is a 524-byte stub, and the harness logged `BLUE-TEAM.md is ABSENT although this run
+had a blue agent` at finalize (2026-10-14, run-e7e12115; same shape as the run15 finding "Blue never
+writes REPORT.md when its cycles time out → BLUE-TEAM.md is a stub every run"). Blue's side of the
+report therefore has to be reconstructed from `INTERACTION.md` and the cycle logs every time.
+**Next action**: make the blue side write its narrative at the end of the event whatever its cycles
+did (including the timeout path), and keep the collector's "present agent, missing canonical
+document" warning as the guard.
+
+### red's pre-T0 validation cycle addresses a box in the wrong subnet
+
+The pre-T0 `validate-llm`/dry-run cycle asks for `web01` at `192.168.101.2`
+(2026-10-14, run-e7e12115 and run-df29374d: `PASS: decision={..."box": "web01", "target_ip":
+"192.168.101.2"...}`) while the team subnets are `192.168.120.0/24` and `192.168.121.0/24`. The
+event's own live cycles address `192.168.120.x`/`192.168.121.x` correctly, so the wrong address is
+synthesised by the validation/dry-run path (or by a carried config block), not by red's live loop.
+**Next action**: find where `192.168.101.*` is synthesised and make the validation path read the
+placement like the live path does; a pre-T0 check that cannot reach a real box validates nothing.
+
+### A 45-minute event holds two blue cycles at current endpoint latency
+
+Measured 2026-10-14 (run-e7e12115): a blue cycle costs 20–30 min wall clock (LLM decision ~220 s at
+`qwen3.8-27b` on `10.0.0.143:8080`), the two teams serialise on a shared LLM lock, and the event
+therefore produced 4 cycles total — below the rehearsal gates that require `>= 6` cycles and
+`>= 2` restorations, so "NOT READY" is partly an artefact of the clock rather than of the teams'
+behaviour. **Next action**: decide deliberately — recalibrate the blue gates to the endpoint the
+club actually has, or change the budget (longer event, faster model, or per-team endpoints instead
+of one lock) — and record the decision next to the gate table in `docs/rehearsal-gates.md`.
+
 ## Pending upstream — catalog / nakon
 
 - **`IIS FTP` golden plant is timing-fragile and non-idempotent** (catalog DB step body). `Start-Service FTPSVC`/`New-WebFtpSite` can race the just-installed config store; the step's `$Error.Count -gt 0` footer turns a transient into a hard failure, and the body doesn't re-run cleanly without the phase-4 `tz-base` rollback. Recovery: `--from-phase 4 --yes`. Failed-run logs are preserved on the engine (`/opt/nakon/failed-<tag>-<ts>`) since 2026-10-11.
