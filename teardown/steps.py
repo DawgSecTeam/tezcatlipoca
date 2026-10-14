@@ -172,7 +172,12 @@ class PreStopStep(Step):
 
     def run(self, ctx):
         from teardown.machinery import pre_stop_windows_boxes
-        team_nodes = (ctx.placement or {}).get("team_nodes") if ctx.placement else None
+        from multinode.placement_record import record_of
+        # A placement's team_nodes maps teams to RECORD names; the API path needs the PVE node
+        # name (the route table is keyed by it). Unmapped, the pre-stop listed
+        # /nodes/<record>/qemu and silently skipped every hard-stop (2026-10-14).
+        team_nodes = {k: record_of(ctx.placement, v).node
+                      for k, v in (ctx.placement or {}).get("team_nodes", {}).items()} or None
         pre_stop_windows_boxes(ctx.teams, ctx.boxes, ctx.default_node,
                                team_nodes=team_nodes, ownership=ctx.ownership)
         return StepResult(self.name, "ok")

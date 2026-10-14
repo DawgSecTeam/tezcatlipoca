@@ -9,7 +9,8 @@ import json
 import os
 from pathlib import Path
 
-from multinode.placement_record import activate_placement, read_placement, record_of
+from multinode.placement_record import (activate_placement, engine_record, read_placement,
+                                        record_of)
 from teardown import (Inventory, TeardownContext, TeardownEngine, load_ownership,
                       refuse_frozen_full_teardown, require_terraform_state)
 from teardown.engine import TEARDOWN_JOURNAL
@@ -30,7 +31,12 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
     default_node = os.environ.get("TF_VAR_proxmox_node", "pve")
     placement_nodes = [default_node]
     if placement:
-        placement_nodes = [placement["engine_node"]] + [
+        # Every node-scoped API path needs the PVE node NAME, not the nodes-list record name
+        # (activate_placement keys the route table by PVE name): the engine entry used the
+        # record name, so the inventory, the pre-stop and the leftover sweep all listed
+        # /nodes/<record>/qemu and 500'd, and a finished teardown reported NOT CLEAN
+        # (2026-10-14; the satellite entries were already mapped).
+        placement_nodes = [engine_record(placement).node] + [
             record_of(placement, s["name"]).node for s in placement["satellites"]]
         activate_placement(placement)
         sats = ", ".join(f"{s['name']} (slot {s['slot']}, teams {','.join(s['teams'])})"
