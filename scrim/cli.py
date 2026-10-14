@@ -41,6 +41,9 @@ def main():
                    "else competitions/)")
     p.add_argument("--comp-dir", dest="comp_dir", default=None,
                    help="path to the competition's dir (wins over --competition resolution)")
+    p.add_argument("--nodes", default=None,
+                   help="path to this run's node list (the nodes.json schema); forwarded to the "
+                        "deploy stage so the range lands on the listed hosts, not the .env's")
     p.add_argument("--new", help="author competitions/<NAME> from --from-template first")
     p.add_argument("--from-template", default=None)
     p.add_argument("--teams", type=int, default=2)

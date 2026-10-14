@@ -47,6 +47,10 @@ def apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path=Non
         # Stays active for the whole deploy: every later node-scoped call and the
         # terraform env point at the placement's hosts.
         activate_placement(ctx.placement)
+        # The entry banner printed the pre-placement env, which reads as the wrong host on
+        # a --nodes/multi-node run; restate the target now that it is the real one.
+        from common.utils import env_summary
+        print(f"  Effective target: {env_summary()}")
         if _resolved_engine_record is not None and _resolved_engine_record.engine_mgmt_ip:
             os.environ["TF_VAR_engine_mgmt_ip"] = _resolved_engine_record.engine_mgmt_ip
             if _resolved_engine_record.engine_mgmt_gw:
