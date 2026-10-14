@@ -6,8 +6,10 @@ per-run worktree at the end of every run), those links dangled and the teardown 
 `terraform destroy` at all — four attempts, estate left unverified (2026-10-14, run-3aaf37f1).
 """
 
+import json
 import os
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from common import terraform_workdir
@@ -47,3 +49,42 @@ class DestroyInitsFirst(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RepairRecordedKeyPath(unittest.TestCase):
+    def _tfvars(self, tmp_path, recorded):
+        p = tmp_path / "terraform.tfvars.json"
+        p.write_text(json.dumps({"ssh_private_key_path": recorded, "engine_mgmt_ip": "10.0.0.252"}))
+        return p
+
+    def test_dead_recorded_path_is_replaced_from_the_env(self):
+        import json
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            live = tmp / "tez-proxmox"
+            live.write_text("KEY")
+            p = self._tfvars(tmp, str(tmp / "runs" / "gone-engine" / "proxmox"))
+            changed = machinery.repair_ssh_key_path(p, {"TF_VAR_ssh_private_key_path": str(live)})
+            self.assertTrue(changed)
+            self.assertEqual(json.loads(p.read_text())["ssh_private_key_path"], str(live))
+            # everything else is preserved
+            self.assertEqual(json.loads(p.read_text())["engine_mgmt_ip"], "10.0.0.252")
+
+    def test_live_recorded_path_is_left_alone(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            live = tmp / "key"
+            live.write_text("KEY")
+            p = self._tfvars(tmp, str(live))
+            self.assertFalse(machinery.repair_ssh_key_path(
+                p, {"TF_VAR_ssh_private_key_path": str(tmp / "other")}))
+
+    def test_no_live_replacement_never_invents_one(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            p = self._tfvars(tmp, str(tmp / "gone" / "proxmox"))
+            self.assertFalse(machinery.repair_ssh_key_path(
+                p, {"TF_VAR_ssh_private_key_path": str(tmp / "also-missing")}))

@@ -201,6 +201,32 @@ def sweep_tagged_leftovers(nodes, ownership):
 
 
 # resumable by construction: each failure gets stale-lock recovery plus a run-id-scoped sweep, then a retry; a per-attempt timeout is just another failed attempt so control reaches the recovery steps (utils.run_terraform raises TimeoutExpired even with check=False)
+def repair_ssh_key_path(tfvars_path, env):
+    """Point a recorded `ssh_private_key_path` at a key file that still exists.
+
+    terraform.tfvars.json outranks TF_VAR_* in the environment, so a deploy that ran with a
+    RELATIVE TF_VAR_ssh_private_key_path left a path resolved inside its own worktree recorded in
+    the state — and once that worktree is gone (dashboard runs delete it) `terraform destroy`
+    cannot even parse the config: "no file exists at <worktree>/proxmox" (2026-10-14,
+    run-3aaf37f1, four attempts, estate left unverified). The teardown runs with the same key the
+    deploy used, so rewrite the recorded path when the recorded one is dead and the env supplies
+    a live one. Never invents a path: no live replacement leaves the file untouched.
+    """
+    path = Path(tfvars_path)
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    recorded = str(data.get("ssh_private_key_path") or "")
+    replacement = str(env.get("TF_VAR_ssh_private_key_path") or "")
+    if not recorded or Path(recorded).exists() or not replacement or not Path(replacement).exists():
+        return False
+    data["ssh_private_key_path"] = replacement
+    path.write_text(json.dumps(data, indent=2) + "\n")
+    print(f"  repaired ssh_private_key_path in {path.name}: {recorded} -> {replacement}")
+    return True
+
+
 def terraform_init(env, tf_cwd, timeout=600):
     """`terraform init` before destroy.
 
