@@ -6,7 +6,8 @@ import time
 from pathlib import Path
 
 from common.constants import MAX_BOXES_PER_TEAM
-from multinode.nodes_config import MAX_SATELLITES, PLACEMENT_VERSION, load_nodes_config
+from multinode.nodes_config import (MAX_SATELLITES, NODES_CONFIG_PATH, PLACEMENT_VERSION,
+                                    load_nodes_config)
 from multinode.placement_record import (anchor_identifier, default_jump_mgmt_ip, engine_record,
                               golden_slot_span, jump_vmid_for, read_placement, teams_on_node,
                               write_placement)
@@ -239,7 +240,8 @@ def placement_decision_table(placement, probes=None):
 
 
 def resolve_placement(comp_dir, engine_vmid, teams, boxes, comp_name,
-                      team_overrides=None, engine_override=None, resume_endpoint=None):
+                      team_overrides=None, engine_override=None, resume_endpoint=None,
+                      nodes_path=None):
 # (placement, engine_record) or (None, None).
 #
 #     Order: an existing placement.json always wins (authoritative for resume/redeploy
@@ -260,8 +262,15 @@ def resolve_placement(comp_dir, engine_vmid, teams, boxes, comp_name,
             print("  placement.json exists — ignoring --team-node/--engine-node "
                   "(destroy and redeploy to re-place)")
         return placement, engine_record(placement)
-    records, balancing = load_nodes_config()
+    records, balancing = load_nodes_config(nodes_path)
     if records is None:
+        if team_overrides or engine_override:
+            # A pin with nothing to resolve it against used to fall through to the
+            # ambient single-node env, silently deploying to the wrong host.
+            raise SystemExit(
+                f"  ERROR: --engine-node/--team-node given but no nodes list resolved "
+                f"({nodes_path or NODES_CONFIG_PATH} does not exist) — refusing to "
+                "deploy single-node from .env. Pass --nodes <file> or drop the pins.")
         return None, None
     zero_base = [r.name for r in records if r.engine_base_vmid == 0]
     if zero_base:

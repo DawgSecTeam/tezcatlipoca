@@ -26,7 +26,7 @@ def parse_team_node(team_node):
     return out
 
 
-def apply_engine_placement(ctx, comp_dir, team_node, engine_node):
+def apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path=None):
 # Resolve multi-node placement, point the env at the engine's host, take the lock.
 #
 #     Resolution happens now because teams and boxes are known and the Proxmox env must
@@ -41,7 +41,8 @@ def apply_engine_placement(ctx, comp_dir, team_node, engine_node):
     ctx.placement, _resolved_engine_record = resolve_placement(
         comp_dir, ctx.engine_vmid, ctx.teams, ctx.boxes, ctx.comp_name,
         team_overrides=parse_team_node(team_node), engine_override=engine_node,
-        resume_endpoint=(ctx.previous_state.get("deployed_endpoint") if ctx.resuming else None))
+        resume_endpoint=(ctx.previous_state.get("deployed_endpoint") if ctx.resuming else None),
+        nodes_path=nodes_path)
     if ctx.placement:
         # Stays active for the whole deploy: every later node-scoped call and the
         # terraform env point at the placement's hosts.

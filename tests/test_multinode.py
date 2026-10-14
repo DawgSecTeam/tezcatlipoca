@@ -257,6 +257,25 @@ class PlacementRecordTest(unittest.TestCase):
         self.assertIsNone(placement)
         self.assertIsNone(rec)
 
+    def test_resolve_reads_the_explicit_nodes_path(self):
+        probes = {"n1": _probe("n1", templates=["ubuntu-fix", "alpine-fix"])}
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "run-nodes.json"
+            path.write_text(json.dumps({"nodes": [_rec("n1").to_json()]}))
+            with patch.object(placement_planner, "probe_node",
+                              side_effect=lambda r, *a, **k: probes[r.name]):
+                placement, _engine_rec = placement_planner.resolve_placement(
+                    Path(td), 1000, TEAMS, BOXES, "c", engine_override="n1", nodes_path=path)
+        self.assertEqual(placement["engine_node"], "n1")
+
+    def test_pin_without_a_nodes_list_is_refused(self):
+        with tempfile.TemporaryDirectory() as td, \
+                patch.object(placement_planner, "load_nodes_config", return_value=(None, None)):
+            with self.assertRaises(SystemExit) as raised:
+                placement_planner.resolve_placement(Path(td), 1000, TEAMS, BOXES, "c",
+                                                    engine_override="zfs-193")
+        self.assertIn("--nodes", str(raised.exception))
+
     def test_resume_adopts_deployed_endpoint(self):
         records = [_rec("n1"), _rec("n2")]
         probes = {"n1": _probe("n1", templates=["ubuntu-fix", "alpine-fix"]),

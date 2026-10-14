@@ -14,7 +14,7 @@ from deploy_lib.tfinputs import build_terraform_inputs, engine_mgmt_ip_from_env
 
 
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
-            team_node=None, engine_node=None, force_from_phase=False):
+            team_node=None, engine_node=None, force_from_phase=False, nodes_path=None):
 # Everything deploy() must do before phase 1, as one testable step.
 #
 #     Resolves the engine VMID, loads Compfile/config/state, resolves teams, computes
@@ -51,7 +51,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
 
     resolve_competition_teams(ctx, num_teams, from_phase)
 
-    apply_engine_placement(ctx, comp_dir, team_node, engine_node)
+    apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path)
 
     ctx.engine_mgmt_ip = engine_mgmt_ip_from_env()
 

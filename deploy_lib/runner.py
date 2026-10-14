@@ -7,7 +7,7 @@ from deploy_lib.prepare import prepare
 
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
-           team_node=None, engine_node=None, force_from_phase=False):
+           team_node=None, engine_node=None, force_from_phase=False, nodes_path=None):
 # Run the eight-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
 #
 #     scoring_vmid overrides the scoring-engine VMID (default 1000) so several
@@ -21,7 +21,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 
     ctx = prepare(comp_dir, num_teams=num_teams, assume_yes=assume_yes, from_phase=from_phase,
                   scoring_vmid=scoring_vmid, team_node=team_node, engine_node=engine_node,
-                  force_from_phase=force_from_phase)
+                  force_from_phase=force_from_phase, nodes_path=nodes_path)
     if ctx is None:
         return
 
