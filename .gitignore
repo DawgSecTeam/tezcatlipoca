@@ -104,5 +104,12 @@ competitions/*/persistence-evidence-*/
 # same class — credentials by design.
 competitions/*/.prev-run-*/
 
+# Competition DEFINITIONS live in tezcatlipoca-competitions since the 2026-10-14 cutover, so a
+# `competitions/` directory here is a leftover run workspace — it carries credentials.txt,
+# teams.json, .deploy_state.json (box/admin/inject passwords), it is not tracked, and it also
+# shadows the sibling repo in common/comp_paths.comps_root() (the suite then reads a stale
+# partial comp set). Never commit it; relocate it out of the checkout instead.
+competitions/
+
 # vim swap files (a twin session's live editor buffer must never be commit-swallowed)
 *.swp

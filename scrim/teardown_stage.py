@@ -49,7 +49,7 @@ def _red_vm_still_exists(vmid):
     if not vmid:
         return None
     try:
-        from range_ops import live_vmids
+        from infra.client import live_vmids
         return int(vmid) in live_vmids()
     except Exception as e:                                  # noqa: BLE001 - reported
         log(f"WARNING: could not verify red01 vmid {vmid} is gone: {e}")

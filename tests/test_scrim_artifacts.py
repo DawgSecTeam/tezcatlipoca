@@ -79,14 +79,19 @@ class TmpCase(unittest.TestCase):
         # `_red_vm_still_exists` asks the real cluster (infra.client.live_vmids): with a
         # resolvable vmid a live red01 made teardown assert "STILL PRESENT" and fail
         # tests that are about ordering. Pin it for every test in this file.
-        self.addCleanup(mock.patch.object(teardown_stage, "_red_vm_still_exists",
-                                          lambda *a, **k: False).start)
+        #
+        # enterContext(), not addCleanup(patcher.start): the latter registered `patcher.start`
+        # as the cleanup callable, so each setUp applied a patch that was never stopped — the
+        # real `_red_vm_still_exists` stayed replaced for the whole rest of the process, which
+        # is both a masked-coverage hole and why an unrelated module's assertions on the real
+        # behavior failed only in a full-suite run (found 2026-10-14).
+        self.enterContext(mock.patch.object(teardown_stage, "_red_vm_still_exists",
+                                            lambda *a, **k: False))
         # These tests assert teardown ORDERING and collection; they must not dial
         # red01 (a real ssh attempt per case turned a 1s file into 170s).
-        self.addCleanup(mock.patch.object(red_link, "pull_red_state",
-                                          lambda *a, **k: []).start)
-        self.addCleanup(mock.patch.object(red_link, "start_red_director",
-                                          lambda *a, **k: True).start)
+        self.enterContext(mock.patch.object(red_link, "pull_red_state", lambda *a, **k: []))
+        self.enterContext(mock.patch.object(red_link, "start_red_director",
+                                            lambda *a, **k: True))
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)

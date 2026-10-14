@@ -260,6 +260,27 @@ class TestCollect(unittest.TestCase):
         self.assertEqual(collection["targets"][0]["status"], ao.OK)
         self.assertIn(RED_REPORT, calls)
 
+    def test_same_mtime_tie_goes_to_the_newer_report_name(self):
+        """Two reports in one mtime tick must not hand the canonical document the older one.
+
+        This estate's filesystems report identical st_mtime for files written in the same tick
+        (ns-equal), so a plain `max(mtime)` picked whichever candidate came first — RED-TEAM.md
+        got the older report. Recency is broken on the name (`report-YYYYMMDD-HHMM.md`).
+        """
+        old = self.path / "report-20261003-0100.md"
+        new = self.path / "report-20261003-0200.md"
+        old.write_text("old")
+        new.write_text("new")
+        stamp = 1791000000.0
+        os.utime(old, (stamp, stamp))
+        os.utime(new, (stamp, stamp))
+        records = [{"local": old.name, "status": ao.OK}, {"local": new.name, "status": ao.OK}]
+        from artifacts_lib import collect
+        _, derived = collect.derive_canonical(self.path, {}, {"canonical": "RED-TEAM.md"},
+                                              records)
+        self.assertEqual((self.path / "RED-TEAM.md").read_text().strip(), "new")
+        self.assertEqual(derived["from"], new.name)
+
     def test_missing_source_file_is_absent_not_failed(self):
         collection = ao.collect(self.path, self.targets, transport=fake_transport({}))
         statuses = {i["want"]: i["status"] for i in collection["targets"][0]["files"]}

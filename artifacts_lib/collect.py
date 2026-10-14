@@ -191,7 +191,11 @@ def derive_canonical(test_path, previous, want, records):
                   if r.get("status") == OK and r.get("local")]
     if not candidates:
         return records, None
-    newest = max(candidates, key=lambda p: p.stat().st_mtime)
+    # Ties are real, not theoretical: two files written in the same tick report IDENTICAL
+    # st_mtime on this estate's filesystems (verified ns-equal on ext4 here), and `max` then
+    # returns the first candidate — an older report silently became the canonical document.
+    # Break the tie on the name, where red's `report-YYYYMMDD-HHMM.md` encodes recency.
+    newest = max(candidates, key=lambda p: (p.stat().st_mtime, p.name))
     facts = seal_local_file(newest, Path(test_path) / canonical)
     return records, {"path": canonical, "from": relative_to_test(test_path, newest),
                      "method": "pulled", "sha256": facts["sha256"]}
