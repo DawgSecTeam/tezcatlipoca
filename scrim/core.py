@@ -101,3 +101,23 @@ def box_ssh_base(creds, connect_timeout=None):
         base += ["-o", f"ConnectTimeout={connect_timeout}"]
     proxy = engine_proxy(creds["KEY_PATH"], creds["VM_USER"], creds["ENGINE_IP"])
     return base + ["-o", f"ProxyCommand={proxy}"]
+
+
+def ssh_key_path():
+    """The ssh key this RANGE was built with: the configured absolute path when there is one.
+
+    `TF_VAR_ssh_private_key_path` is what the deploy itself resolved (deploy_lib/tfinputs.py) and
+    what a run host configures (e.g. /home/hna/tez-proxmox). The `<engine>/proxmox` fallback is
+    only right for a manual checkout, where the key really sits in the tree: under a central run
+    the engine is a per-run WORKTREE with no key in it, so anything that hardcodes a checkout path
+    reads a file that is not there (2026-10-14: red staging resolved a key against a sibling
+    checkout and died AFTER the range was already built).
+    """
+    raw = (os.environ.get("TF_VAR_ssh_private_key_path") or "").strip()
+    if raw:
+        candidate = Path(raw).expanduser()
+        if candidate.is_absolute():
+            return str(candidate)
+        # Same shape the deploy uses for a relative value: relative to the terraform workdir.
+        return str((REPO / "terraform" / candidate).resolve())
+    return str((REPO / "proxmox").resolve())

@@ -127,6 +127,23 @@ def red01_target(comp_dir, engine_vmid):
     return red01_vmid_for(comp_dir, engine_vmid), red01_ip_for(comp_dir)
 
 
+def pin_deploy_key(cfg, ssh_key):
+    """Pin the deploy's ssh_key to the RUN's resolved key.
+
+    bad-auto reads `<key>.pub` beside the key, and its built-in default is a SIBLING
+    tezcatlipoca checkout's `proxmox` — a path that does not exist on a run host (the engine
+    there is a per-run worktree). Every path that writes a bad-auto config for this range must
+    pin the key, or `badauto deploy` dies with FileNotFoundError after the range is built
+    (2026-10-14: the assume-breach path, then red staging). No key → leave the config alone.
+    """
+    if not ssh_key:
+        return cfg
+    deploy = dict(cfg.get("deploy") or {})
+    deploy["ssh_key"] = str(Path(ssh_key).expanduser().resolve())
+    cfg["deploy"] = deploy
+    return cfg
+
+
 def prepare_deploy_config(comp_dir, engine_vmid, engine_ip=None, ssh_key=None):
     """Write the comp's bad-auto config for a red01 deploy and return its path.
 
@@ -149,11 +166,8 @@ def prepare_deploy_config(comp_dir, engine_vmid, engine_ip=None, ssh_key=None):
     deploy["red_ip"] = ip
     if engine_ip and not deploy.get("engine_ip"):
         deploy["engine_ip"] = engine_ip
-    if ssh_key:
-        # bad-auto defaults deploy.ssh_key to a SIBLING tezcatlipoca checkout's `proxmox`
-        # and reads `<key>.pub` beside it; under the dashboard that sibling does not exist,
-        # so the assume-breach deploy died on FileNotFoundError after the range was built
-        # (2026-10-14). The deploy's resolved absolute key is the only correct source.
-        deploy["ssh_key"] = str(Path(ssh_key).expanduser().resolve())
     cfg["deploy"] = deploy
+    # After the assignment: pin_deploy_key reads cfg["deploy"] back, so pinning before this line
+    # would be overwritten by the local dict (caught by the peer's key-pinning test).
+    pin_deploy_key(cfg, ssh_key)
     return write_config(comp_dir, cfg), vmid, ip

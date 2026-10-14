@@ -75,7 +75,7 @@ def creds_from_files(comp):
         "INJECT_PW": state.get("inject_password") or "",
         "BOX_PW": state["box_password"],
         "BOX_USER": box_username,
-        "KEY_PATH": str((core.REPO / "proxmox").resolve()),
+        "KEY_PATH": core.ssh_key_path(),
         "VM_USER": core.vm_username(),
         **{f"{k.upper()}_PW": v["password"] for k, v in teams.items()},
         **{f"{k.upper()}_ID": v["identifier"] for k, v in teams.items()},

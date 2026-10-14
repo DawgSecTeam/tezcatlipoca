@@ -211,6 +211,11 @@ def stage_red(args, comp, creds, run_dir):
     op_deploy = carried.get("deploy") or {}
     cfg["deploy"] = {**{k: v for k, v in op_deploy.items() if k not in cfg["deploy"]},
                      **cfg["deploy"]}
+    # bad-auto reads `<deploy.ssh_key>.pub` beside the key and its built-in default is a SIBLING
+    # tezcatlipoca checkout, which no run host has. This config is built from scratch, so the key
+    # is set here from the range's own resolved key — without it `badauto deploy` dies on
+    # FileNotFoundError after the range is already built (2026-10-14, run-df29374d).
+    badauto_config_ops.pin_deploy_key(cfg, (creds or {}).get("KEY_PATH") or core.ssh_key_path())
     # The COMPETITION's own config — one file per deploy, threaded to every
     # badauto call below (and bad-auto stamps .deploy-stamp.json next to it, so
     # concurrent sessions cannot clobber each other's red01 identity — the
