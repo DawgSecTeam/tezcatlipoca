@@ -48,6 +48,12 @@ python3 verify-competition.py competitions/<id> --red-ip <red mgmt IP> \
 
 ## `nodes.json`
 
+The node list is a per-run input: `--nodes <path>` points at it (the dashboard writes one
+per run from its node catalog). Without `--nodes` the cwd `nodes.json` is used; with
+neither, the run is single-node from `.env`, and an explicit `--engine-node`/`--team-node`
+is refused rather than silently dropped. The file itself carries no secrets — `token_env`
+names the env var holding that host's token.
+
 ```json
 {
   "balancing": {"strategy": "capacity-fill", "prefer": ["hdd-150"]},

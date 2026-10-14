@@ -61,6 +61,11 @@ def build_parser():
                         help="Multi-node pin: which nodes.json node hosts the scoring engine "
                              "(default: the node holding the most teams). Needs nodes.json; ignored "
                              "when this competition already has a placement.json.")
+    parser.add_argument("--nodes", dest="nodes", default=None,
+                        help="Path to this run's node list (the nodes.json schema: name, endpoint, "
+                             "node, datastore, engine_base_vmid, token_env, …). Replaces the "
+                             "ambient ./nodes.json; the node endpoints/tokens/datastore come from "
+                             "this list, not from .env. Passed per run by the dashboard.")
     parser.add_argument("--plan-only", action="store_true", dest="plan_only",
                         help="Collect/generate the competition's config (Compfile, boxes.json) "
                              "and print a summary, then exit WITHOUT touching any infrastructure "
@@ -193,4 +198,4 @@ def main():
 
     deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase,
            scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node,
-           force_from_phase=args.force_from_phase)
+           force_from_phase=args.force_from_phase, nodes_path=args.nodes)
