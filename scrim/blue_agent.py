@@ -116,8 +116,38 @@ def _opencode_run(args, prompt, wd, env):
         with contextlib.suppress(ProcessLookupError):
             os.killpg(proc.pid, signal.SIGKILL)
         out, err = proc.communicate()
+        # ...but opencode's managed `serve --service` grandchild starts its OWN session,
+        # so killpg leaves it holding the cycle's port and the NEXT cycle dies on
+        # "port already in use" (run15 2026-10-13: a 4 h orphan squatted 49374 and
+        # every later cycle failed). HOME is per-cycle and unique, so it identifies it.
+        _reap_managed_servers(child_env.get("HOME", ""))
+        try:
+            (wd / "cycles").mkdir(exist_ok=True)
+            (wd / "cycles" / "last-timeout.partial.log").write_text(
+                re.sub(r"\x1b\[[0-9;]*m", "", (out or "") + (err or ""))[-4000:])
+        except OSError:
+            pass
         raise
     return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+
+
+def _reap_managed_servers(home):
+    """SIGKILL leftover `opencode serve --service` processes started under `home`."""
+    if not home:
+        return
+    for p in Path("/proc").iterdir():
+        if not p.name.isdigit():
+            continue
+        try:
+            cmd = (p / "cmdline").read_bytes()
+            if b"--service" not in cmd or b"opencode" not in cmd:
+                continue
+            envb = (p / "environ").read_bytes().decode("utf-8", "replace")
+        except OSError:
+            continue
+        if f"HOME={home}" in envb.split("\0"):
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(int(p.name), signal.SIGKILL)
 
 
 def _opencode_log_tail(wd):

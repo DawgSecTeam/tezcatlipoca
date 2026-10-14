@@ -226,7 +226,7 @@ def stage_red(args, comp, creds, run_dir):
               cwd=core.BAD_AUTO, env=env, timeout=300, tail=3)
     procs.run(["python3", "-m", "badauto", "--config", str(config_file), "run", "--once",
                "--dry-run", "--competition", str(comp.resolve())],
-              cwd=core.BAD_AUTO, env=env, timeout=600, tail=6)
+              cwd=core.BAD_AUTO, env=env, timeout=1500, tail=6)
 
     tunnel = red_tunnel.maybe_start_red_tunnel(args)
     if tunnel:
