@@ -21,8 +21,8 @@ import teardown  # noqa: E402
 from teardown.engine import TeardownEngine  # noqa: E402
 from teardown.inventory import Inventory  # noqa: E402
 from teardown.plan import PlanError, TeardownPlan  # noqa: E402
-from teardown.steps import (EVIDENCE, ArtifactStep, Step, StepResult,  # noqa: E402
-                            TeardownContext, TerraformStep)
+from teardown.steps import (EVIDENCE, ArtifactStep, EstateStep, Step,  # noqa: E402
+                            StepResult, TeardownContext)
 from infra.ownership import Ownership, Refusal  # noqa: E402
 
 RUN = "run-abcdef01"
@@ -113,7 +113,7 @@ class PlanConstruction(unittest.TestCase):
 
     def test_evidence_after_destruction_cannot_be_built(self):
         with self.assertRaises(PlanError) as ctx:
-            self._terminal([TerraformStep(), ArtifactStep()])
+            self._terminal([EstateStep(), ArtifactStep()])
         self.assertIn("evidence-before-destruction", str(ctx.exception))
 
     def test_the_shipped_order_builds(self):
@@ -121,7 +121,7 @@ class PlanConstruction(unittest.TestCase):
         plan = build_terminal_plan()
         names = [s.name for s in plan.steps]
         self.assertEqual(names, ["portal", "artifacts", "red01", "pre_stop",
-                                 "terraform", "templates", "remote_access"])
+                                 "estate", "remote_access"])
 
 
 class EnginePoliciesAndJournal(unittest.TestCase):
@@ -269,11 +269,6 @@ class VerifyClean(unittest.TestCase):
         self.assertFalse(report.clean)
         self.assertTrue(any("unverifiable" in p for p in report.problems))
 
-    def test_stale_state_lock_is_a_problem(self):
-        (self.comp / "terraform" / ".terraform.tfstate.lock.info").write_text("{}")
-        report = self._engine().verify_clean(self._plan())
-        self.assertFalse(report.clean)
-
     def test_teams_only_keeps_stopped_templates_by_design(self):
         self.ctx.full = False
         self.fake.nodes["n"].append(
@@ -287,25 +282,25 @@ class VerifyClean(unittest.TestCase):
         # The scrim harness's --keep-templates sets exactly this (ctx.full=False), which is
         # what makes the templates survive with their hash record for the next run.
         from engine.template_freeze import HASHES_FILE
-        from teardown.steps import TemplatesStep
         (self.comp / HASHES_FILE).write_text(json.dumps({"golden": {"web01": {"hash": "h"}}}))
         ctx = TeardownContext(comp_dir=self.comp, env={}, teams={}, boxes=[], deployed_state={},
                               ownership=OURS, placement=None, nodes=["n"], default_node="n",
                               inventory=None, full=False)
-        with patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
-            result = TemplatesStep().run(ctx)
-        self.assertFalse(destroy.call_args.kwargs["full"])
+        with patch("teardown.machinery.sweep_tagged_leftovers"), \
+                patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
+            result = EstateStep().run(ctx)
+        destroy.assert_not_called()
         self.assertEqual(result.status, "ok")
         self.assertTrue((self.comp / HASHES_FILE).exists())   # reuse record kept with them
 
     def test_full_teardown_does_reach_the_template_destroy(self):
         # The other half of the pair: a default teardown still removes the templates.
-        from teardown.steps import TemplatesStep
         ctx = TeardownContext(comp_dir=self.comp, env={}, teams={}, boxes=[], deployed_state={},
                               ownership=OURS, placement=None, nodes=["n"], default_node="n",
                               inventory=None, full=True)
-        with patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
-            result = TemplatesStep().run(ctx)
+        with patch("teardown.machinery.sweep_tagged_leftovers"), \
+                patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
+            result = EstateStep().run(ctx)
         self.assertTrue(destroy.call_args.kwargs["full"])
         self.assertEqual(result.status, "ok")
 

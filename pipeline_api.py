@@ -37,7 +37,8 @@ from nakonops.nakon_config_ops import generate_stage_configs, os_to_platform
 from nakonops.nakon_run_ops import run_nakon
 
 # Owned by ssh_ops.
-from common.ssh_ops import read_terraform_ctx, wait_for_boxes_ssh, wait_for_cloud_init
+from common.ssh_ops import wait_for_boxes_ssh, wait_for_cloud_init
+from estate.engine_setup import engine_ctx
 
 # Owned by utils.
 from common.utils import env_summary
@@ -59,7 +60,7 @@ __all__ = [
     "fix_services_on_boxes",
     "generate_stage_configs",
     "os_to_platform",
-    "read_terraform_ctx",
+    "engine_ctx",
     "run_nakon",
     "setup_ubuntu_auth",
     "unbooted_golden_boxes",

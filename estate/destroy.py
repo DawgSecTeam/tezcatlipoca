@@ -25,8 +25,12 @@ def _entry(row):
             "vmid": row["vmid"], "bridge": row["bridge"]}
 
 
-def destroy_tier(state, kind, *, nodes=None, log=print):
-    """Destroy every recorded resource of one kind; returns (destroyed, refused, skipped)."""
+def destroy_tier(state, kind, *, nodes=None, only=None, log=print):
+    """Destroy every recorded resource of one kind; returns (destroyed, refused, skipped).
+
+    `only` narrows to a set of vmids (for VMs) or bridge names — the per-team teardown
+    destroys one team's resources without touching the others.
+    """
     identity = state.data.get("identity") or {}
     ownership = Ownership(identity.get("comp_name") or state.comp_dir.name,
                           identity.get("run_id") or "")
@@ -35,6 +39,11 @@ def destroy_tier(state, kind, *, nodes=None, log=print):
         if nodes is not None and row["node"] not in nodes:
             skipped.append(_entry(row))
             continue
+        if only is not None:
+            identifier = row["vmid"] if row["vmid"] is not None \
+                else (row["bridge"] or row["name"])
+            if identifier not in only:
+                continue
         try:
             if row["vmid"] is not None:
                 expect = ownership.with_role(*_ROLE.get(kind, ())).tags

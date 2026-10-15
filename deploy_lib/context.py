@@ -89,9 +89,6 @@ class DeployContext:
     final_config_path: Optional[Path] = None
     golden_inputs: dict = field(default_factory=dict)
     golden_hashes: dict = field(default_factory=dict)
-    tf_dir: Optional[Path] = None
-    tfvars_path: Optional[Path] = None
-    tfvars: dict = field(default_factory=dict)
     ssh_key_abs: str = ""
     # --- enumerated targets ---
     all_targets: list = field(default_factory=list)

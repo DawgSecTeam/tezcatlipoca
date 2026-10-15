@@ -29,14 +29,18 @@ def discover_engine_ip(node, vmid, timeout=300):
 
 
 def engine_context(ctx):
-    """The dict the SSH helpers expect (ssh_key_path / vm_username / scoring_engine_ip)."""
-    return {
-        "scoring_engine_ip": ctx.engine_mgmt_ip or discover_engine_ip(ctx.node, ctx.engine_vmid),
-        "ssh_key_path": ctx.ssh_key_abs,
-        "vm_username": config.active().engine.username,
-        "box_username": ctx.box_username,
-        "event_name": ctx.name,
-    }
+    """The dict the SSH helpers expect (ssh_key_path / vm_username / scoring_engine_ip).
+
+    On a DHCP engine the planned address is empty, so the running VM's is discovered
+    through the guest agent; a static one is taken from the state document.
+    """
+    from estate import engine_setup
+    engine_ctx = engine_setup.engine_ctx(ctx.comp_dir)
+    if ctx.engine_mgmt_ip:
+        engine_ctx["scoring_engine_ip"] = ctx.engine_mgmt_ip
+    if not engine_ctx["scoring_engine_ip"]:
+        engine_ctx["scoring_engine_ip"] = discover_engine_ip(ctx.node, ctx.engine_vmid)
+    return {**engine_ctx, "box_username": ctx.box_username, "event_name": ctx.name}
 
 
 def slot_team_identifiers(ctx):

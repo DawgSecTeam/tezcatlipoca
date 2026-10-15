@@ -48,8 +48,8 @@ def _ctx(comp_dir, **overrides):
         golden_config_path=comp_dir / "golden.json",
         predomain_config_path=comp_dir / "predomain.json",
         final_config_path=comp_dir / "final.json",
-        golden_inputs={}, golden_hashes={}, tf_dir=comp_dir,
-        tfvars_path=comp_dir / "terraform.tfvars.json", tfvars={}, ssh_key_abs="/k",
+        golden_inputs={}, golden_hashes={},
+ ssh_key_abs="/k",
         all_targets=[], managed_targets=[], linux_targets=[], windows_targets=[],
         tf_ctx={"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.99",
                 "vm_username": "ubuntu"},
@@ -580,7 +580,7 @@ class Phase2EngineTemplate(unittest.TestCase):
 
     def test_matching_hash_reuses_the_template_without_destroying_anything(self):
         with tempfile.TemporaryDirectory() as d:
-            ctx = _ctx(Path(d), tfvars={})
+            ctx = _ctx(Path(d))
             record, _out = self._run(ctx, stored_node_hash="HASH")
         self.assertEqual(record.destroyed, [])
         self.assertEqual(record.built, 0)
@@ -593,7 +593,7 @@ class Phase2EngineTemplate(unittest.TestCase):
 
     def test_drifted_hash_rebuilds_and_destroys_the_old_template(self):
         with tempfile.TemporaryDirectory() as d:
-            ctx = _ctx(Path(d), tfvars={})
+            ctx = _ctx(Path(d))
             record, out = self._run(ctx, stored_node_hash="DIFFERENT")
         self.assertIn("hash differs — rebuilding", out)
         self.assertEqual(record.destroyed, [1000, 1000])   # engine clone, then its template

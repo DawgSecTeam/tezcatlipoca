@@ -1,12 +1,13 @@
-"""Connection context: terraform agent_context, ssh key resolution, and the two SSH hops (gateway, engine)."""
+"""Connection context: the engine's coordinates from the state document, ssh key
+resolution, and the two SSH hops (gateway, engine)."""
 
-import json
 import os
 import subprocess
 from pathlib import Path
 
 from common.ssh_ops import engine_ssh_opts, gateway_proxy
 from common.utils import BOX_USERNAME_DEFAULT, load_users_config
+from estate import config as estate_config, state as estate_state
 
 from verifier.model import CheckError
 
@@ -14,73 +15,48 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = REPO_ROOT / ".env"
 
 
-def read_terraform_ctx(comp_dir):
-# Read agent_context from `terraform output -json` in the competition's own
-#     per-comp state (competitions/<id>/terraform); resolve ssh_key_path absolute.
-    tf_dir = Path(comp_dir) / "terraform"
-    if not tf_dir.is_dir():
-        # A missing workdir makes subprocess raise FileNotFoundError too, and reporting that
-        # as "terraform not found on PATH" sent a queue verify hunting a PATH bug when the
-        # real answer was "this workspace holds no deploy state" (2026-10-14).
+def read_estate_ctx(comp_dir):
+# The engine's coordinates from the competition's own state document.
+    state = estate_state.read_flat(comp_dir)
+    if state is None:
         raise CheckError(
-            f"no terraform workdir at {tf_dir} — this workspace holds no deploy state; "
-            "verify the range's own workspace (the one its deploy ran in), or pass "
-            "--engine-ip to skip Terraform.")
-    try:
-        raw = subprocess.run(
-            ["terraform", "output", "-json"],
-            cwd=str(tf_dir),
-            capture_output=True, text=True, check=True,
-        ).stdout
-    except FileNotFoundError:
-        raise CheckError("terraform not found on PATH — pass --engine-ip to skip Terraform.")
-    except subprocess.CalledProcessError as e:
-        raise CheckError(f"`terraform output -json` failed: {e.stderr.strip() or e}")
-    try:
-        ctx = json.loads(json.loads(raw)["agent_context"]["value"])
-    except (json.JSONDecodeError, KeyError) as e:
-        raise CheckError(f"could not parse agent_context from terraform output: {e}")
-    key_path = ctx.get("ssh_key_path")
-    if key_path and not os.path.isabs(key_path):
-        ctx["ssh_key_path"] = str((tf_dir / key_path).resolve())
-    return ctx
+            f"no state document at {estate_state.state_path(comp_dir)} — this workspace "
+            "holds no deploy state; verify the range's own workspace (the one its deploy "
+            "ran in), or pass --engine-ip to skip it.")
+    return {"scoring_engine_ip": state.get("engine_mgmt_ip") or "",
+            "ssh_key_path": str(estate_config.ssh_key_path()),
+            "vm_username": estate_config.active().engine.username}
 
 
 def resolve_ssh_key():
-# Resolve TF_VAR_ssh_private_key_path from .env, trying repo-root and terraform-relative.
+# Resolve the configured SSH private key, falling back to the legacy env name.
     val = os.environ.get("TF_VAR_ssh_private_key_path")
     if not val:
-        return None
-    for base in (REPO_ROOT, REPO_ROOT / "terraform"):
-        cand = (base / val).resolve()
-        if cand.exists():
-            return str(cand)
-    return str((REPO_ROOT / val).resolve())
+        return str(estate_config.ssh_key_path())
+    return str((REPO_ROOT / val).resolve() if not os.path.isabs(val) else Path(val))
 
 
 def build_ctx(args, comp_dir):
 # Assemble connection context, honoring --engine-ip override.
     ctx = {}
-    tf_error = None
-    if not args.engine_ip:
-        ctx = read_terraform_ctx(comp_dir)
-    else:
-        try:
-            ctx = read_terraform_ctx(comp_dir)
-        except CheckError as e:
-            tf_error = e
+    estate_error = None
+    try:
+        ctx = read_estate_ctx(comp_dir)
+    except CheckError as e:
+        estate_error = e
     if args.engine_ip:
         ctx["scoring_engine_ip"] = args.engine_ip
     if not ctx.get("scoring_engine_ip"):
-        raise CheckError("no scoring_engine_ip (Terraform gave none and no --engine-ip).")
+        raise CheckError("no scoring_engine_ip (the state document gave none and no "
+                         "--engine-ip was passed).")
     if not ctx.get("ssh_key_path"):
         ctx["ssh_key_path"] = resolve_ssh_key()
     if not ctx.get("vm_username"):
-        ctx["vm_username"] = os.environ.get("TF_VAR_vm_username")
+        ctx["vm_username"] = estate_config.active().engine.username
     if not ctx.get("box_username"):
         ctx["box_username"] = load_users_config(comp_dir)[0] or BOX_USERNAME_DEFAULT
-    if tf_error:
-        print(f"  (note: Terraform context unavailable, using .env: {tf_error})")
+    if estate_error:
+        print(f"  (note: state document unavailable, using .env: {estate_error})")
     return ctx
 
 

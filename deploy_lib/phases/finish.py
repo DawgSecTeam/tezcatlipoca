@@ -1,27 +1,26 @@
-"""Between-phase terraform context read, and the end-of-deploy credentials/summary output."""
+"""Between-phase engine-context read, and the end-of-deploy credentials/summary output."""
 
-import os
 import time
 from pathlib import Path
 
 from config.config_ops import write_text_atomic
-from common.ssh_ops import read_terraform_ctx
 from common.timing import print_timing_summary
+from deploy_lib.phases._estate import engine_context
 
 
-def connect_terraform(ctx):
-# Read terraform's outputs into the context (the SSH/engine coordinates).
+def connect_estate(ctx):
+# Read the engine's SSH coordinates into the context.
 #
 #     Deliberately between phase 2 and phase 3, and deliberately outside every
-#     phase's from_phase guard: a fresh run only has these outputs after apply #1,
-#     and a resume from phase 3+ never runs the apply at all. A failure here must
-#     be reported as the phase the operator asked to resume at, which is why the
-#     sequencer does not set current_phase for it.
+#     phase's from_phase guard: a fresh run only has these after the engine exists,
+#     and a resume from phase 3+ never creates it. A failure here must be reported
+#     as the phase the operator asked to resume at, which is why the sequencer does
+#     not set current_phase for it.
     # Phase 2 fills tf_ctx on a fresh run; only a --from-phase 3+ resume still needs the read.
     if not ctx.tf_ctx:
-        ctx.tf_ctx = read_terraform_ctx(ctx.comp_dir)
+        ctx.tf_ctx = engine_context(ctx)
     ctx.ssh_key = Path(ctx.tf_ctx["ssh_key_path"])
-    ctx.scoring_user = os.environ["TF_VAR_vm_username"]
+    ctx.scoring_user = ctx.tf_ctx["vm_username"]
     ctx.scoring_ip = ctx.tf_ctx["scoring_engine_ip"]
 
 

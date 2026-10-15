@@ -1,9 +1,8 @@
 """Teardown continuation (loadtest-2026-09-30): a failed/interrupted destroy must be
-completable by re-running the pipeline — foreign VMs skip-and-continue, stale state
-locks clear when no terraform is alive. Offline; fake Proxmox API."""
+completable by re-running the pipeline — a foreign template slot skips and the remaining
+slots continue. Offline; fake Proxmox API."""
 
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -12,34 +11,7 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 
-from teardown import machinery as destroy_sweep_ops  # noqa: E402
-
-
 from golden import golden_ops  # noqa: E402
-
-
-class StaleStateLock(unittest.TestCase):
-    def test_stale_lock_cleared_when_no_terraform_runs(self):
-        with tempfile.TemporaryDirectory() as d:
-            lock = Path(d) / ".terraform.tfstate.lock.info"
-            lock.write_text("{}")
-            with patch.object(destroy_sweep_ops.subprocess, "run") as pgrep:
-                pgrep.return_value.returncode = 1  # pgrep finds no terraform
-                self.assertTrue(destroy_sweep_ops.clear_stale_state_lock(d))
-            self.assertFalse(lock.exists())
-
-    def test_lock_kept_while_terraform_process_alive(self):
-        with tempfile.TemporaryDirectory() as d:
-            lock = Path(d) / ".terraform.tfstate.lock.info"
-            lock.write_text("{}")
-            with patch.object(destroy_sweep_ops.subprocess, "run") as pgrep:
-                pgrep.return_value.returncode = 0  # pgrep finds a live terraform
-                self.assertFalse(destroy_sweep_ops.clear_stale_state_lock(d))
-            self.assertTrue(lock.exists())
-
-    def test_no_lock_is_a_noop(self):
-        with tempfile.TemporaryDirectory() as d:
-            self.assertFalse(destroy_sweep_ops.clear_stale_state_lock(d))
 
 
 class GoldenDestroySkipsForeign(unittest.TestCase):

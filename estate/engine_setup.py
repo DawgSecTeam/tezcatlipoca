@@ -10,6 +10,15 @@ import time
 from common.ssh_ops import ssh_on_gateway, wait_for_ssh
 from infra.client import proxmox_api, wait_for_proxmox_task
 
+
+def engine_ctx(comp_dir):
+    """The engine's SSH coordinates for a live range, from its state document."""
+    from estate import config, state
+    flat = state.load_flat(comp_dir)
+    return {"scoring_engine_ip": flat.get("engine_mgmt_ip") or "",
+            "ssh_key_path": str(config.ssh_key_path()),
+            "vm_username": config.active().engine.username}
+
 # The hard-stop settle terraform used between stop and start: long enough for the VM to be
 # fully down, short enough not to matter (main.tf slept 15).
 COLD_BOOT_SETTLE_S = 15

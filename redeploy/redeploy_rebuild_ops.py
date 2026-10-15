@@ -5,18 +5,18 @@ import os
 import re
 import pipeline_api
 
-from config.config_ops import write_state
+from estate import state as estate_state
+
 from common.constants import SNAP_BASE, SNAP_READY, ownership_tags
 from nakonops.nakon_bundle_ops import build_nakon_bundle
 from infra.client import proxmox_api, wait_for_proxmox_task
 from infra.lifecycle import start_vm, take_snapshot
 from infra.ownership import clone_marker, destroy_vm_if_exists
 from common.targets import describe_target
-from common.terraform_workdir import terraform_dir
 from engine.template_freeze import stored_template_hash
 from common.timing import timed
 from common.ssh_ops import quote_sshkeys
-from common.utils import compfile_flag, run_terraform
+from common.utils import compfile_flag
 from pathlib import Path
 from redeploy.redeploy_select_ops import box_platform
 from redeploy.redeploy_plant_ops import rerun_domain_configs
@@ -183,10 +183,10 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
                 )
             if result.failed:
                 print(f"  WARNING: {stage}-stage replant had {len(result.failed)} "
-                      f"FAILED step(s) (recorded in .deploy_state.json)")
+                      f"FAILED step(s) (recorded in the state document)")
                 state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
                     f"redeploy {stage}-stage: {line}" for line in result.failed[:20]]
-                write_state(comp_dir / ".deploy_state.json", state)
+                estate_state.write_flat(comp_dir, state)
 
         print("  Pre-domain pass (sshd/sudoers) on rebuilt boxes...")
         _stage_pass(predomain_path, "predomain")
@@ -215,44 +215,18 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
     return rebuilt
 
 
-def reconcile_terraform_state(rebuilt, rctx):
-# `terraform import` each rebuilt box back into state (opt-in --reconcile-state).
+def reconcile_estate_state(rebuilt, rctx):
+# Re-point each rebuilt box's inventory record at the VM that now holds its vmid.
 #
-#     mode_rebuild recreates boxes through the API, so on a v2+ range every rebuilt box
-#     is a live terraform resource the state no longer matches — the next full
-#     `terraform apply` sees drift and REPLACES it, destroying the box again (warned
-#     about since the tool existed). Import re-pins the state to the recreated VM with
-#     its deterministic vmid, after which a plan reports the box clean. Import ID is
-#     the vmid; the for_each key lives in the address (slot 0 = team_box, satellites =
-#     team_box_sat1..4). A failed import is printed, never fatal — the warning path
-#     (accept the replacement, or `terraform state rm`) remains the fallback.
-    comp_dir, teams, boxes = rctx.comp_dir, rctx.teams, rctx.boxes
-    env = {**os.environ,
-           "TF_VAR_teams": json.dumps(teams),
-           "TF_VAR_boxes_per_team": json.dumps(boxes)}
-    tf_cwd = str(terraform_dir(comp_dir))
-    node = os.environ["TF_VAR_proxmox_node"]
+#     mode_rebuild recreates boxes through the API, so the recorded entry still names the
+#     destroyed VM. Re-recording by deterministic vmid re-pins the inventory to the live
+#     box, which is what the teardown destroys and the preflight checks. Idempotent: an
+#     entry already naming this vmid is upserted in place.
+    from estate import state as estate_state
+    document = estate_state.open(rctx.comp_dir)
     for t in rebuilt:
-        slot = t.get("slot") or 0
-        resource = "proxmox_virtual_environment_vm.team_box" if slot == 0 else \
-            f"proxmox_virtual_environment_vm.team_box_sat{slot}"
-        addr = f'{resource}["{t["vm_name"]}"]'
-        print(f"  Importing {t['vm_name']} (vmid {t['vmid']}) into terraform state...")
-        try:
-            # The address is usually ALREADY in state (the deploy's apply #2 created
-            # it; the rebuild replaced the VM out-of-band) and `terraform import`
-            # refuses managed addresses — live-found 2026-10-04: "Resource already
-            # managed by Terraform". Forget the stale entry first, then adopt the
-            # live VM. A rm of an absent address is fine.
-            run_terraform(["state", "rm", addr], cwd=tf_cwd, env=env, timeout=60,
-                          check=False)
-            # The bpg provider's import ID for VM resources is "node/vmid", not a
-            # bare vmid (live-found 2026-10-04: "unexpected format of ID ()").
-            run_terraform(["import", addr, f"{node}/{t['vmid']}"], cwd=tf_cwd, env=env,
-                          timeout=300)
-        except Exception as e:
-            print(f"    WARNING: import failed for {addr}: {str(e)[:160]} — the box stays "
-                  f"drifted from state; accept the next apply's replacement or "
-                  f"`terraform state rm` + import by hand.")
-    print("  Confirm with: terraform plan  (run in " + tf_cwd + " — the rebuilt box(es) "
-          "should show no changes)")
+        node = t.get("node") or estate_state.load_flat(rctx.comp_dir).get("node") \
+            or os.environ.get("TF_VAR_proxmox_node", "pve")
+        print(f"  Recording {t['vm_name']} (vmid {t['vmid']}) in the inventory...")
+        document.record("team_box", node, t["vm_name"], vmid=t["vmid"])
+    document.save()

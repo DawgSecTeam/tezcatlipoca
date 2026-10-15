@@ -1,6 +1,5 @@
 """SSH helpers via the scoring-engine gateway and Terraform context."""
 
-import json
 import os
 import subprocess
 import time
@@ -9,7 +8,6 @@ from pathlib import Path
 import requests
 
 from infra.guest_exec import diagnose_unreachable_box, wait_for_guest_agent
-from common.terraform_workdir import terraform_dir
 from common.utils import PRINT_LOCK, record_degradation, run_concurrent
 # Re-export, not a second definition: ssh_ops' gateway auth and deploy/golden_ops' target
 # split must classify a template identically (windows_ops.is_windows_template owns the rule).
@@ -117,20 +115,6 @@ def forget_engine_host_key(ip, known_hosts=None):
             sock.unlink()
         except OSError:
             pass
-
-
-def read_terraform_ctx(comp_dir):
-# Read agent_context from `terraform output -json` in the competition's own
-#     per-comp state dir (competitions/<id>/terraform).
-    tf_dir = str(terraform_dir(comp_dir))
-    raw = subprocess.run(
-        ["terraform", "output", "-json"], cwd=tf_dir, capture_output=True, text=True, check=True
-    ).stdout
-    ctx = json.loads(json.loads(raw)["agent_context"]["value"])
-    key_path = ctx["ssh_key_path"]
-    if not os.path.isabs(key_path):
-        ctx = {**ctx, "ssh_key_path": str((Path(tf_dir) / key_path).resolve())}
-    return ctx
 
 
 def ssh_via_gateway(ctx, target_ip, cmd, timeout=60, user="ubuntu"):

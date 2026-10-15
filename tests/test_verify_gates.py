@@ -778,7 +778,7 @@ class MainSummaryWiring(unittest.TestCase):
 
     def _run_main(self, comp_dir, extra=()):
         patches = [
-            patch.object(v_context, "read_terraform_ctx",
+            patch.object(v_context, "read_estate_ctx",
                          side_effect=v_model.CheckError("terraform unavailable")),
             patch.object(v_scoreboard, "check_logins", return_value=(True, object())),
             patch.object(v_scoreboard, "check_services",
@@ -824,15 +824,14 @@ class MainSummaryWiring(unittest.TestCase):
         self.assertIn("RESULT: PASS", out)
 
 
-class TerraformWorkdirMissing(unittest.TestCase):
-    def test_missing_workdir_is_not_reported_as_a_missing_binary(self):
-        """A workspace with no terraform/ dir (a freshly seeded queue workspace) raised
-        FileNotFoundError from subprocess and was reported as "terraform not found on PATH" —
-        which sent a queue verify hunting a PATH bug instead of the real cause (2026-10-14)."""
+class StateDocumentMissing(unittest.TestCase):
+    def test_missing_document_names_the_workspace_not_a_binary(self):
+        """A workspace with no deploy state must say so: naming a missing binary sent a queue
+        verify hunting a PATH bug instead of the real cause (2026-10-14)."""
         with tempfile.TemporaryDirectory() as td:
             with self.assertRaises(v_model.CheckError) as raised:
-                v_context.read_terraform_ctx(Path(td))
-        self.assertIn("no terraform workdir", str(raised.exception))
+                v_context.read_estate_ctx(Path(td))
+        self.assertIn("no state document", str(raised.exception))
 
 
 if __name__ == "__main__":

@@ -262,6 +262,19 @@ def load_flat(comp_dir):
     return read_flat(comp_dir) or {}
 
 
+def team_vmids(comp_dir):
+    """Every recorded team-box vmid, sorted — the resume gate's "is the work there" probe."""
+    return sorted(row["vmid"] for row in EstateState.load(comp_dir).resources("team_box")
+                  if row["vmid"])
+
+
+def write_flat(comp_dir, flat):
+    """Persist a flat state dict into the competition's document, atomically."""
+    document = open(comp_dir)
+    document.absorb(flat)
+    document.save()
+
+
 def open(comp_dir):
     """The competition's document, folding legacy files in on first contact."""
     comp_dir = Path(comp_dir)

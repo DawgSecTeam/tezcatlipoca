@@ -1,19 +1,61 @@
 """Engine recovery from the engine template and phase-7 reseed."""
 
-import json
 import os
 import sys
 import pipeline_api
 
-from config.config_ops import write_state
+from common.constants import DEFAULT_ENGINE_MGMT_GW
 from engine.engine_event_ops import push_event_conf
 from engine.engine_health_ops import ensure_nat_forwarding
 from engine.engine_identity_ops import prepare_engine_from_template
+from estate import state as estate_state
 from nakonops.nakon_lock_ops import acquire_engine_lock
 from engine.template_freeze import stored_template_hash
 from common.timing import timed
 from common.ssh_ops import forget_engine_host_key, wait_for_ssh
-from common.utils import run_terraform
+
+
+def _identifiers(comp_dir, teams, boxes):
+# Slot 0's identifiers, and whether an in-path firewall needs the transit NICs.
+    placement = estate_state.open(comp_dir).data.get("placement")
+    slots = (placement or {}).get("team_slots") or {}
+    teams_on_engine = [teams[k]["identifier"] for k in sorted(teams) if slots.get(k, 0) == 0]
+    return placement, teams_on_engine, any(b.get("in_path") for b in boxes)
+
+
+def _replace_engine(comp_dir, state, teams, boxes):
+# Destroy ONLY the engine and re-clone it from the engine template.
+#
+#     Scoped by construction: the destroy names the engine's vmid and the create builds one
+#     VM, so a team box rebuilt out-of-band cannot be wiped mid-event — which is what the
+#     old `-target` scoping existed for (winad-testrun 2026-09-25).
+    from estate import apply as estate_apply, config as estate_config, engine_setup
+    from infra.ownership import Ownership, destroy_vm_if_exists
+    _, identifiers, in_path = _identifiers(comp_dir, teams, boxes)
+    cfg = estate_config.active()
+    node = cfg.proxmox.node
+    vmid = int(state["scoring_vmid"])
+    ownership = Ownership(comp_dir.name, state["run_id"])
+    destroy_vm_if_exists(node, vmid, expect_tags=ownership.tags)
+    estate_apply.create_engine(
+        estate_state.open(comp_dir), ownership, node, vmid=vmid,
+        template_vmid=int(state["engine_template_vmid"]),
+        team_identifiers=identifiers, transit_identifiers=identifiers if in_path else [],
+        mgmt_ip=os.environ.get("TF_VAR_engine_mgmt_ip", ""),
+        mgmt_gw=os.environ.get("TF_VAR_engine_mgmt_gw", DEFAULT_ENGINE_MGMT_GW),
+        datastore=cfg.proxmox.datastore, username=cfg.engine.username,
+        ssh_public_key=cfg.ssh.public_key)
+    engine_setup.cold_boot(node, vmid)
+
+
+def _address_engine(comp_dir, state, teams, boxes, ctx):
+# Re-address the fresh engine's team bridges (and re-assert the satellite routes).
+    from estate import engine_setup
+    from multinode.placement_record import satellite_routes_for
+    placement, identifiers, in_path = _identifiers(comp_dir, teams, boxes)
+    engine_setup.configure_engine_network(
+        ctx, identifiers, identifiers if in_path else [],
+        satellite_routes_for(placement) if placement else [])
 
 
 def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
@@ -47,29 +89,14 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
                              f"engine state. Redeploy the range instead.")
 
     with timed(comp_dir, "recovery", "engine_recovery_total"):
-        env = {**os.environ}
-        env["TF_VAR_teams"] = json.dumps(teams)
-        env["TF_VAR_boxes_per_team"] = json.dumps(boxes)
-        env["TF_VAR_event_name"] = name
-        tf_cwd = str(comp_dir / "terraform") if (comp_dir / "terraform" / "terraform.tfstate").exists() else "terraform"
-        # -target scopes the plan to the engine + its post-boot null_resources so
-        # terraform CANNOT touch team_box. Without it, any team box that drifted from
-        # state — which a `--mode rebuild` does by design (API re-clone, not terraform) —
-        # gets destroyed/recreated during 'engine recovery', wiping defenders' boxes
-        # mid-event (winad-testrun 2026-09-25). -replace forces the engine rebuild.
-        with timed(comp_dir, "recovery", "terraform_replace_engine"):
-            run_terraform(
-                ["apply", "-auto-approve", "-parallelism=1",
-                 "-replace=proxmox_virtual_environment_vm.scoring_engine",
-                 "-target=proxmox_virtual_environment_vm.scoring_engine",
-                 "-target=null_resource.team_nics",
-                 "-target=null_resource.reboot_scoring_engine",
-                 "-target=null_resource.orchestrate"],
-                cwd=tf_cwd, env=env, timeout=2400)
-        ctx = pipeline_api.read_terraform_ctx(comp_dir)
+        with timed(comp_dir, "recovery", "replace_engine"):
+            _replace_engine(comp_dir, state, teams, boxes)
+        ctx = pipeline_api.engine_ctx(comp_dir)
         forget_engine_host_key(ctx["scoring_engine_ip"])
         wait_for_ssh(ctx["ssh_key_path"], ctx["vm_username"],
                      ctx["scoring_engine_ip"], timeout=300)
+        with timed(comp_dir, "recovery", "engine_network"):
+            _address_engine(comp_dir, state, teams, boxes, ctx)
         with timed(comp_dir, "recovery", "engine_from_template"):
             prepare_engine_from_template(ctx, state["postgres_password"],
                                          state["redis_password"])
@@ -86,17 +113,16 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
 
     # The scoring DB is empty now, so phase 7's per-step done-flags are stale: without
     # clearing them the advertised --from-phase 7 re-seed skipped every step.
-    state_path = comp_dir / ".deploy_state.json"
     # portal_up goes too: the new engine has no portal until that re-seed's phase 8 re-ships
     # it (portal_ops.deploy_portal reuses the recorded console tokens).
     for flag in ("seeded", "engine_unpaused", "injects_created", "injects_fingerprint",
                  "portal_up"):
         state.pop(flag, None)
-    # This write lands LAST in engine-recovery, after terraform already re-cloned the
-    # engine and the scoring DB was wiped. A torn or short-lived-0644 write here leaves a
-    # live engine with unreadable/eavesdroppable resume state and no second chance
-    # (winad-testrun 2026-09-25) — always go through the shared atomic writer.
-    write_state(state_path, state)
+    # This write lands LAST in engine-recovery, after the engine was re-cloned and the
+    # scoring DB wiped. A torn write here leaves a live engine with unreadable resume state
+    # and no second chance (winad-testrun 2026-09-25) — always through the document's
+    # atomic writer.
+    estate_state.write_flat(comp_dir, state)
 
     print(f"\n  Engine recovered from template (vmid {state['engine_template_vmid']}).")
     print("  The scoring DB is EMPTY — re-seed with:")
