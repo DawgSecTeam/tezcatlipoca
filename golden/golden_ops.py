@@ -20,7 +20,6 @@ per-team pre-domain stage (nakon_config_ops.generate_stage_configs), which still
 """
 
 import json
-import os
 import time
 
 from common.constants import GOLDEN_CLONE_TIMEOUT, GOLDEN_TAG, SNAP_BASE, ownership_tags
@@ -48,6 +47,7 @@ from golden.golden_target_ops import (
     golden_targets,
 )
 from golden.golden_disk_ops import ensure_golden_disk_size, expand_guest_root_disks
+from estate import config
 
 
 def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_tag_str,
@@ -124,7 +124,7 @@ def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password
             # bakes no password — terraform's user_account normally supplies it):
             "ciuser": ctx.get("box_username", "ubuntu"),
             "cipassword": box_password,
-            "sshkeys": _quote_sshkeys(os.environ["TF_VAR_ssh_public_key"]),
+            "sshkeys": _quote_sshkeys(config.active().ssh.public_key),
         })
         ensure_golden_disk_size(node, t["vmid"], t["box"].get("disk_gb"))
         print(f"    {t['box']['template']} -> {t['vm_name']} (vmid {t['vmid']})")

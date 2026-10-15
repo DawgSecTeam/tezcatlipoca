@@ -6,12 +6,11 @@ same way it stubbed the terraform runner (tests/_deploy_patch.dpatch patches eve
 deploy_lib module binding a name).
 """
 
-import os
 
 from common.constants import DEFAULT_ENGINE_MGMT_GW
-from estate import config
 from engine.engine_template_ops import _discover_vm_ipv4
 from infra.guest_exec import wait_for_guest_agent
+from estate import config
 
 ENGINE_NAME = "quotient-engine"
 
@@ -76,7 +75,7 @@ def create_engine_and_bridges(ctx):
         template_vmid=int(ctx.state["engine_template_vmid"]),
         team_identifiers=teams, transit_identifiers=transit,
         mgmt_ip=ctx.engine_mgmt_ip or "",
-        mgmt_gw=os.environ.get("TF_VAR_engine_mgmt_gw", DEFAULT_ENGINE_MGMT_GW),
+        mgmt_gw=(config.active().engine.mgmt_gw or DEFAULT_ENGINE_MGMT_GW),
         datastore=cfg.proxmox.datastore, username=cfg.engine.username,
         ssh_public_key=cfg.ssh.public_key)
     engine_setup.cold_boot(ctx.node, ctx.engine_vmid)

@@ -33,7 +33,6 @@ guest half:
 """
 
 import json
-import os
 import shlex
 import subprocess
 import sys
@@ -46,9 +45,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 load_dotenv(".env")
 
 from infra.client import proxmox_api, wait_for_proxmox_task  # noqa: E402
+from estate import config
 
 SOURCE_VMID = 956
-NEWID = int(os.environ.get("TEZ_PFSENSE_PROVISION_VMID", "957"))
+NEWID = int((config.active().knobs.pfsense_provision_vmid or 957))
 NAME = "pfsense-provision"
 BOOTSTRAP_LAN = "192.168.1.1"
 PUBKEY_FILE = Path("proxmox.pub")
@@ -66,12 +66,12 @@ def _monitor(vmid, command):
 def console_screenshot(vmid, out_path):
     """PNG of the VM's VGA console via the shared infra.console RFB handshake."""
     from infra.console import vnc_screenshot
-    return vnc_screenshot(os.environ["TF_VAR_proxmox_endpoint"].rstrip("/"),
-                          os.environ["TF_VAR_proxmox_api_token"], node(), vmid, out_path)
+    return vnc_screenshot(config.require("proxmox.endpoint").rstrip("/"),
+                          config.require("proxmox.api_token"), node(), vmid, out_path)
 
 
 def node():
-    return os.environ["TF_VAR_proxmox_node"]
+    return config.active().proxmox.node
 
 
 def type_line(text, inter_key_s=0.04):
@@ -137,20 +137,20 @@ def seal():
 
 
 FW_ADMIN = "admin"          # uid 0 on pfSense; the deploy key (proxmox.pub) is in its authorizedkeys
-QGA_VMID = int(os.environ.get("TEZ_PFSENSE_QGA_VMID", "958"))
+QGA_VMID = int((config.active().knobs.pfsense_qga_vmid or 958))
 QGA_WORK_NAME = "pfsense-provision-qga"
 QGA_BACKUP_NAME = "pfsense-provision-agentless-bak"
-QGA_BRIDGE = os.environ.get("TEZ_QGA_BRIDGE", "vmbr0")
+QGA_BRIDGE = config.active().knobs.qga_bridge
 QGA_ALIAS_IP = "192.168.1.2"                    # aliased on QGA_BRIDGE for the node->guest SSH hop
 QGA_GUEST_STAGE = "/root/qga-stage"
 QGA_BOOT_BUDGET_S = 420
-QGA_PKG_BRANCH = os.environ.get("TEZ_QGA_PKG_BRANCH", "")   # default: the guest's own ABI
-QGA_STAGE_DIR = Path(os.environ.get("TEZ_QGA_STAGE_DIR", "/tmp/pfsense-qga-pkgs"))
+QGA_PKG_BRANCH = config.active().knobs.qga_pkg_branch   # default: the guest's own ABI
+QGA_STAGE_DIR = Path(config.active().knobs.qga_stage_dir)
 FREEBSD_PKG_BASE = "https://pkg.freebsd.org"
 
 
 def node_host():
-    return os.environ["TF_VAR_proxmox_endpoint"].split("//")[1].split(":")[0]
+    return config.require("proxmox.endpoint").split("//")[1].split(":")[0]
 
 
 def _node_ssh(cmd, timeout=30):

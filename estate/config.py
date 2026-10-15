@@ -41,16 +41,16 @@ _SPEC = {
     "headscale.ssh_user": ("", ()),
     "headscale.ssh_password": ("", ()),
     "headscale.infra_user": ("cyberrange-infra", ()),
-    "headscale.key_ttl": ("72h", ()),
-    "portal.hostname": ("", ("PORTAL_HOSTNAME",)),
-    "portal.tunnel_token": ("", ("PORTAL_TUNNEL_TOKEN",)),
-    "portal.open": (False, ("PORTAL_OPEN",)),
+    "headscale.key_ttl": ("72h", ("TEZ_REMOTE_KEY_TTL",)),
+    "portal.hostname": ("", ()),
+    "portal.tunnel_token": ("", ()),
+    "portal.open": (False, ()),
     "knobs.thin_headroom": (1.0, ()),
     "knobs.cycle_timeout": (600, ()),
     "knobs.python": ("", ()),
     "knobs.red_segment": ("", ()),
     "knobs.red_template": ("", ()),
-    "knobs.comps_root": ("", ()),
+    "knobs.comps_root": ("", ("TEZ_COMPETITIONS_ROOT",)),
     "knobs.artifacts_archive": ("", ()),
     "knobs.pause_file": ("", ()),
     "knobs.nakon_path": ("", ()),
@@ -67,7 +67,7 @@ _SPEC = {
     "knobs.engine_repo_url": ("", ()),
     "knobs.competitions_repo_url": ("", ()),
     "knobs.webui_catalog_file": ("", ()),
-    "knobs.scrim_web01_port": (0, ()),
+    "knobs.scrim_web01_port": (0, ("SCRIM_WEB01_PORT",)),
     "knobs.qga_bridge": ("vmbr0", ()),
     "knobs.qga_pkg_branch": ("", ()),
     "knobs.qga_stage_dir": ("/tmp/pfsense-qga-pkgs", ()),
@@ -175,6 +175,20 @@ class Config:
                 f"(or export {env_name(key)}).")
         return value
 
+    def is_set(self, key):
+        """True when the key is present at all — an explicitly empty value counts.
+
+        `get` cannot express the difference between unset and deliberately empty (both
+        read as the default), and one caller needs it: an empty engine mgmt IP means
+        "DHCP", which must not be re-defaulted to a static address.
+        """
+        if key in self._overrides:
+            return True
+        _, legacy = _SPEC[key]
+        if any(os.environ.get(name) is not None for name in (env_name(key), *legacy)):
+            return True
+        return _dig(self._file, key) is not None
+
     def activate(self, values):
         """Apply in-process overrides; returns a token for `deactivate`."""
         previous = {k: self._overrides.get(k) for k in values}
@@ -208,3 +222,8 @@ def configure(path=None):
 def reset():
     global _ACTIVE
     _ACTIVE = None
+
+
+def require(key):
+    """`active().require(key)` — the module-level form call sites use."""
+    return active().require(key)

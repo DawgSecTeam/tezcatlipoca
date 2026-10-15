@@ -1,10 +1,10 @@
 """Enumerate every VM the deploy touches and split them into the phases' work lists."""
 
-import os
 
 from common.targets import enumerate_targets, persist_targets
 from common.utils import is_unmanaged
 from common.windows_ops import is_windows_template
+from estate import config
 
 
 def enumerate_deploy_targets(ctx, comp_dir):
@@ -15,7 +15,7 @@ def enumerate_deploy_targets(ctx, comp_dir):
 #     unmanaged boxes — pfSense/appliances have no plant/pre-domain/fix_services/cloud-init,
 #     they clone from their own template and self-configure (but must stay in all_targets
 #     for vmid arithmetic).
-    ctx.node = os.environ["TF_VAR_proxmox_node"]
+    ctx.node = config.active().proxmox.node
     ctx.all_targets = enumerate_targets(ctx.teams, ctx.boxes,
                                            placement=ctx.placement, default_node=ctx.node)
     persist_targets(comp_dir, ctx.all_targets, ctx.boxes)

@@ -46,6 +46,7 @@ import time
 from infra.guest_exec import guest_agent_exec_root
 from infra.client import proxmox_api
 from common.ssh_ops import gateway_proxy, ssh_on_gateway, ssh_via_gateway
+from estate import config
 
 # (port, label) of engine services boxes reach at the team gateway address. apt-cacher-ng
 # is the one every box needs (prep_apt's apt proxy points at 192.168.<id>.1:3142).
@@ -304,7 +305,7 @@ def write_team_configs(comp_dir, teams, red_dnat_spec=None, kind="pfsense"):
             "pfSense 2.7.x: Diagnostics > Backup & Restore) into competitions/"
             f"{comp_dir.name}/pfsense/.")
     seed = seed_path.read_text()
-    key = os.environ.get("TF_VAR_ssh_public_key", "").strip()
+    key = config.active().ssh.public_key.strip()
     out_dir = comp_dir / "pfsense"
     out = {}
     for team_key, team in teams.items():

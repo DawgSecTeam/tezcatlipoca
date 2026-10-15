@@ -9,13 +9,13 @@ for. The run queue sets TEZ_PAUSE_FILE to a per-run control file: the file exist
 Unset — a manual deploy — is a no-op.
 """
 
-import os
 import time
 from pathlib import Path
+from estate import config
 
 
 def pause_at_boundary(ctx, phase):
-    value = os.environ.get("TEZ_PAUSE_FILE")
+    value = config.active().knobs.pause_file
     path = Path(value) if value else None
     if path is None or not path.exists():
         return

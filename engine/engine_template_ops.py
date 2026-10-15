@@ -1,6 +1,5 @@
 """The per-competition engine template: find / build / destroy (API-driven, mirrors golden_ops)."""
 
-import os
 import time
 from pathlib import Path
 
@@ -15,6 +14,7 @@ from infra.lifecycle import start_vm, stop_vm
 from infra.ownership import destroy_vm_if_exists
 from engine.template_freeze import engine_template_vmid, write_template_hash
 from common.utils import record_degradation
+from estate import config
 
 
 def find_engine_template(node, engine_vmid):
@@ -78,7 +78,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     })["data"]
     wait_for_proxmox_task(node, upid)
 
-    mgmt_ip = os.environ.get("TF_VAR_engine_mgmt_ip", "")
+    mgmt_ip = config.active().engine.mgmt_ip
     cfg = {
         "net0": "virtio,bridge=vmbr0",
         "tags": tags,
@@ -93,7 +93,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
         # Portable-node mode (realm): boot the build VM on the PLANNED engine mgmt IP —
         # no leftover engine holds it (a fresh deploy refuses one), so it is free,
         # and the converted template's config then matches what apply #1 sets on clones.
-        gw = os.environ.get("TF_VAR_engine_mgmt_gw", "")
+        gw = config.active().engine.mgmt_gw
         cfg["ipconfig0"] = f"ip={mgmt_ip}/24" + (f",gw={gw}" if gw else "")
     # A PUT landing immediately after the clone task commits can 400 with a bare
     # "Parameter verification failed" while pvefs finishes publishing the new VM's

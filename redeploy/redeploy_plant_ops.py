@@ -1,7 +1,6 @@
 """The configure half shared by every redeploy mode: scoped nakon plant, hardening, domain re-run."""
 
 import json
-import os
 import pipeline_api
 
 from estate import state as estate_state
@@ -9,13 +8,14 @@ from estate import state as estate_state
 from common.utils import compfile_flag
 from pathlib import Path
 from redeploy.redeploy_select_ops import box_platform
+from estate import config
 
 
 def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
 # Configure half: DNS, auth, scoped nakon (--only), service hardening.
     ctx, comp_dir, state = rctx.ctx, rctx.comp_dir, rctx.state
     key = Path(ctx["ssh_key_path"])
-    scoring_user = os.environ["TF_VAR_vm_username"]
+    scoring_user = config.active().engine.username
     scoring_ip = ctx["scoring_engine_ip"]
 
     linux_targets = [t for t in targets if box_platform(t["box"]) == "linux"]
@@ -125,7 +125,7 @@ def rerun_domain_configs(targets, rctx, nakon_config_path):
                 marker.unlink()
         pipeline_api.deploy_domain_configs(
             {team_key: teams[team_key]}, boxes, comp_dir, domain_config_path,
-            Path(ctx["ssh_key_path"]), os.environ["TF_VAR_vm_username"],
+            Path(ctx["ssh_key_path"]), config.active().engine.username,
             ctx["scoring_engine_ip"], box_password, promote_dc=dc_reset,
             force_member_join=dc_reset,
         )

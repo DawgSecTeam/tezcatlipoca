@@ -30,6 +30,7 @@ import subprocess
 from pathlib import Path
 
 from estate import state as estate_state
+from estate import config
 
 TAILSCALE_INSTALL = "curl -fsSL https://tailscale.com/install.sh | sh"
 TAILNET_SRC = "100.64.0.0/10"
@@ -209,17 +210,19 @@ def enrollment_markdown(comp_id, server_url, entries):
 
 
 def _headscale_env():
-# The TEZ_HEADSCALE_* env contract; a missing var is a deploy-stage failure.
-    missing = [v for v in ("TEZ_HEADSCALE_URL", "TEZ_HEADSCALE_SSH_HOST",
-                           "TEZ_HEADSCALE_SSH_USER", "TEZ_HEADSCALE_SSH_PASSWORD")
-               if not os.environ.get(v)]
+# The headscale contract; a missing value is a deploy-stage failure.
+    cfg = config.active()
+    values = {"TEZ_HEADSCALE_URL": cfg.headscale.url,
+              "TEZ_HEADSCALE_SSH_HOST": cfg.headscale.ssh_host,
+              "TEZ_HEADSCALE_SSH_USER": cfg.headscale.ssh_user,
+              "TEZ_HEADSCALE_SSH_PASSWORD": cfg.headscale.ssh_password}
+    missing = [name for name, value in values.items() if not value]
     if missing:
         raise SystemExit(
             f"  ERROR: remote access is enabled but {', '.join(missing)} not set. "
-            f"Add the TEZ_HEADSCALE_* block to .env (see .env.example and "
-            f"docs/remote-access.md).")
-    return {v: os.environ[v] for v in ("TEZ_HEADSCALE_URL", "TEZ_HEADSCALE_SSH_HOST",
-                                       "TEZ_HEADSCALE_SSH_USER", "TEZ_HEADSCALE_SSH_PASSWORD")}
+            f"Add the headscale block to the config profile (tezcatlipoca.example.toml "
+            f"and docs/remote-access.md).")
+    return values
 
 
 def _hs_ssh(cmd, password, input_text="", timeout=90, check=True, capture=True):
@@ -251,7 +254,7 @@ def hs_json(args, timeout=90, check=True):
 def _infra_user_id():
 # The router nodes' owning service user (TEZ_HEADSCALE_INFRA_USER, default
 #     cyberrange-infra — the account that already owns the tailnet's infra nodes).
-    name = os.environ.get("TEZ_HEADSCALE_INFRA_USER", INFRA_USER_DEFAULT)
+    name = (config.active().headscale.infra_user or INFRA_USER_DEFAULT)
     for u in hs_json("users list"):
         if u.get("name") == name:
             return u["id"]
@@ -400,7 +403,7 @@ def enroll_engine_router(ctx, comp_id, all_identifiers):
 # Install (once) + enroll/update the engine as tag:range-router advertising
 #     every team subnet. Minting a fresh key on each run is deliberate: the key is
 #     single-use, short-lived, and an unused one costs nothing.
-    server_url = os.environ["TEZ_HEADSCALE_URL"].rstrip("/")
+    server_url = config.require("headscale.url").rstrip("/")
     routes = ",".join(team_subnet(i) for i in all_identifiers)
     hostname = router_node_name(comp_id)
     if not engine_tailscale_enrolled(ctx, server_url):
@@ -510,7 +513,7 @@ def setup_remote_access(ctx):
         for person in team["participants"]:
             user = f"comp-{comp_id}-{person}"
             uid = _ensure_user(user)
-            ttl = os.environ.get("TEZ_REMOTE_KEY_TTL", "72h")
+            ttl = config.active().headscale.key_ttl
             # Deliberately UNTAGGED: a tagged node's identity is its tag, and
             # headscale v0.29 does not expand tag sources into routers' packet
             # filters (live-proven 2026-10-08) — the username is the grant key.

@@ -1,6 +1,5 @@
 """Durable copies of test folders (outside the repo, hash-verified)."""
 
-import os
 import shutil
 from pathlib import Path
 
@@ -8,6 +7,7 @@ from common.utils import record_degradation
 
 from .hashing import sha256_file
 from .paths import test_dir
+from estate import config
 
 
 def default_archive_root():
@@ -15,7 +15,7 @@ def default_archive_root():
 #
 # Same convention as the deploy locks (~/.tezcatlipoca/): outside the repo, so discarding a
 # practice-run worktree cannot take a month of test history with it.
-    return Path(os.environ.get("TEZ_ARTIFACTS_ARCHIVE")
+    return Path(config.active().knobs.artifacts_archive
                 or Path.home() / ".tezcatlipoca" / "automated-tests")
 
 

@@ -1,12 +1,12 @@
 """The competition's single estate state document (schema v1)."""
 
 import json
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from config.config_ops import write_text_atomic
+from estate import config
 
 SCHEMA_VERSION = 1
 STATE_NAME = "estate-state.json"
@@ -107,7 +107,7 @@ class EstateState:
         targets = (_read_json(comp_dir / "targets.json") or {}).get("targets") or {}
         journal = _read_json(comp_dir / ".teardown-journal.json") or {}
         teams = legacy.get("teams") or _read_json(comp_dir / "teams.json") or {}
-        node = os.environ.get("TF_VAR_proxmox_node") or ""
+        node = config.active().proxmox.node or ""
         slots = (placement or {}).get("team_slots") or {}
         golden_vmids = legacy.get("golden_template_ids") or {}
         engine_hashes = hashes.get("engine")
@@ -120,14 +120,14 @@ class EstateState:
             "run_id": legacy.get("run_id") or "",
             "scoring_vm_id": legacy.get("scoring_vm_id"),
             # Neither is in .deploy_state.json; only the env this migration runs with has them.
-            "engine_mgmt_ip": os.environ.get("TF_VAR_engine_mgmt_ip") or "",
-            "engine_mgmt_gw": os.environ.get("TF_VAR_engine_mgmt_gw") or "",
+            "engine_mgmt_ip": config.active().engine.mgmt_ip or "",
+            "engine_mgmt_gw": config.active().engine.mgmt_gw or "",
             # The deploy's own record outranks the ambient env: teardown's ownership
             # refusal compares the loaded env against the host the deploy actually used.
             "endpoint": legacy.get("deployed_endpoint")
-                        or os.environ.get("TF_VAR_proxmox_endpoint") or "",
+                        or config.active().proxmox.endpoint or "",
             "node": node,
-            "datastore": os.environ.get("TF_VAR_datastore") or "",
+            "datastore": config.active().proxmox.datastore or "",
         }
         data["secrets"] = {
             **{key: legacy[key] for key in ("admin_password", "scoring_password",

@@ -14,7 +14,6 @@ cloned from the node's alpine base template. Addressing rides PVE cloud-init
 (ipconfig0 mgmt + ipconfig1..n team gateways); forwarding/NAT rules are pushed over
 SSH after first boot and made persistent with Alpine's iptables init service."""
 
-import os
 import secrets
 import subprocess
 import time
@@ -28,6 +27,7 @@ from infra.lifecycle import start_vm, vm_status
 from infra.ownership import clone_marker, destroy_vm_if_exists, gc_orphan_volumes
 from common.ssh_ops import DEFAULT_KNOWN_HOSTS, forget_engine_host_key
 from common.utils import PRINT_LOCK, run_concurrent
+from estate import config
 
 
 
@@ -293,7 +293,7 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
     # with /dev/null known_hosts worked minutes into the same boot.
     forget_engine_host_key(sat["jump_mgmt_ip"])
     if not wait_jump_ready(node, vmid, sat["jump_mgmt_ip"], user, ctx["ssh_key_path"],
-                           os.environ["TF_VAR_ssh_public_key"]):
+                           config.active().ssh.public_key):
         raise RuntimeError(f"jump {vm_name} on '{node}' never came up on SSH at "
                            f"{sat['jump_mgmt_ip']} — check its console")
     configure_jump(sat["jump_mgmt_ip"], user, ctx["ssh_key_path"], team_ids, engine_mgmt_ip,

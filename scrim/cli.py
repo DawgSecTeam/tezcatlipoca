@@ -22,6 +22,7 @@ from scrim import test_folder
 from scrim.core import log
 from common.comp_paths import resolve_comp_dir
 from common.utils import valid_comp_name
+from estate import config
 
 
 def main():
@@ -81,7 +82,7 @@ def main():
     p.add_argument("--red-storage", default="hdd", help="storage pool red01 clones from")
     p.add_argument("--red-vmid", type=int, default=None,
                    help="red01 vmid when the cluster default collides (cyberfield used 999)")
-    p.add_argument("--red-template", default=os.environ.get("TEZ_RED_TEMPLATE") or None,
+    p.add_argument("--red-template", default=config.active().knobs.red_template or None,
                    help="red01 template name when it differs from the cluster default "
                         "(default: $TEZ_RED_TEMPLATE — bad-auto's built-in default is a "
                         ".193 name; .150 wants base-ubuntu24.04-fix)")

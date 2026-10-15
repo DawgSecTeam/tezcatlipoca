@@ -45,17 +45,18 @@ load_dotenv(".env")
 
 from net.firewall_ops import generate_vyos_commands, generate_vyos_lan_commands  # noqa: E402
 from infra.client import proxmox_api, wait_for_proxmox_task  # noqa: E402
+from estate import config
 
-VMID = int(os.environ.get("TEZ_VYOS_VMID", "959"))
+VMID = int((config.active().knobs.vyos_vmid or 959))
 NAME = "vyos-provision"
 ISO_URL = os.environ.get(
     "TEZ_VYOS_ISO_URL",
     "https://community-downloads.vyos.dev/stream/2026.03/vyos-2026.03-generic-amd64.iso")
 ISO_NAME = ISO_URL.rsplit("/", 1)[-1]
-ISO_STORAGE = os.environ.get("TEZ_VYOS_ISO_STORAGE", "local")
-STORAGE = os.environ.get("TEZ_VYOS_STORAGE", "hdd")
-BRIDGE = os.environ.get("TEZ_VYOS_BRIDGE", "vmbr0")
-PW = os.environ.get("TEZ_VYOS_PW", "tez-vyos-build")
+ISO_STORAGE = config.active().knobs.vyos_iso_storage
+STORAGE = (config.active().knobs.vyos_storage or "hdd")
+BRIDGE = config.active().knobs.vyos_bridge
+PW = (config.active().knobs.vyos_pw or "tez-vyos-build")
 BOOTSTRAP_LAN = "192.168.1.1"
 PUBKEY_FILE = Path("proxmox.pub")
 # A throwaway team id for `check` (no collision with anything real; undone before seal)
@@ -71,7 +72,7 @@ _KEYS = {".": "dot", "/": "slash", "-": "minus", "_": "shift-minus", ",": "comma
 
 
 def node():
-    return os.environ["TF_VAR_proxmox_node"]
+    return config.active().proxmox.node
 
 
 def _monitor(command):
@@ -98,12 +99,12 @@ def type_line(text, inter_key_s=0.04, after_s=0.8):
 def console_screenshot(out_path):
 # PNG of the VM's VGA console via the shared infra.console RFB handshake.
     from infra.console import vnc_screenshot
-    return vnc_screenshot(os.environ["TF_VAR_proxmox_endpoint"].rstrip("/"),
-                          os.environ["TF_VAR_proxmox_api_token"], node(), VMID, out_path)
+    return vnc_screenshot(config.require("proxmox.endpoint").rstrip("/"),
+                          config.require("proxmox.api_token"), node(), VMID, out_path)
 
 
 def _node_ssh(cmd, timeout=30):
-    node_host = os.environ["TF_VAR_proxmox_endpoint"].split("//")[1].split(":")[0]
+    node_host = config.require("proxmox.endpoint").split("//")[1].split(":")[0]
     return subprocess.run(
         ["ssh", "-i", str(Path("proxmox").resolve()), "-o", "BatchMode=yes",
          "-o", "ConnectTimeout=10", f"root@{node_host}", cmd],
@@ -191,7 +192,7 @@ def _guest_ssh(script=None, timeout=120):
 
 
 def node_host():
-    return os.environ["TF_VAR_proxmox_endpoint"].split("//")[1].split(":")[0]
+    return config.require("proxmox.endpoint").split("//")[1].split(":")[0]
 
 
 def wait_status(want, budget_s, what):

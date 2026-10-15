@@ -1,12 +1,12 @@
 """Password auth + NOPASSWD sudo setup so nakon can authenticate to Ubuntu boxes."""
 
-import os
 import re
 import shlex
 
 from infra.guest_exec import guest_agent_exec_detached
 from common.ssh_ops import box_ssh_retry
 from common.utils import PRINT_LOCK, run_concurrent, valid_unix_username
+from estate import config
 
 
 def setup_ubuntu_auth(targets, ctx):
@@ -48,7 +48,7 @@ def setup_ubuntu_auth(targets, ctx):
             root_script = re.sub(r"\bsudo ", "", auth_cmd)
             try:
                 res = guest_agent_exec_detached(
-                    os.environ["TF_VAR_proxmox_node"], vmid, root_script,
+                    config.active().proxmox.node, vmid, root_script,
                     f"/tmp/tz-auth-{vmid}.log", timeout=900)
                 if res.rc == 0:
                     with PRINT_LOCK:

@@ -1,13 +1,11 @@
 """Phases 2 and 3: the engine template + the engine and its bridges, then per-deploy engine prep."""
 
-import os
 
 from common.constants import DEFAULT_ENGINE_MGMT_GW, ENGINE_TEMPLATE_NAME
 from engine.engine_bootstrap_ops import bootstrap_scoring_engine
 from engine.engine_event_ops import push_event_conf
 from engine.engine_health_ops import ensure_nat_forwarding
 from engine.engine_identity_ops import prepare_engine_from_template
-from estate import config
 from golden.golden_target_ops import _quote_sshkeys
 from net.jump_ops import build_jump_vms, red_segment_from_env
 from infra.ownership import destroy_vm_if_exists, retag_ownership
@@ -24,14 +22,15 @@ from common.utils import compfile_flag, compfile_value
 
 from deploy_lib.phases._estate import (configure_engine_network, create_engine_and_bridges,
                                        engine_context)
+from estate import config
 
 
 def engine_build_ctx(ctx):
 # The ssh/user context the engine-template build VM and the jump VMs are built with.
     return {
         "ssh_key_path": ctx.ssh_key_abs,
-        "vm_username": os.environ["TF_VAR_vm_username"],
-        "ssh_public_key_quoted": _quote_sshkeys(os.environ["TF_VAR_ssh_public_key"]),
+        "vm_username": config.active().engine.username,
+        "ssh_public_key_quoted": _quote_sshkeys(config.active().ssh.public_key),
     }
 
 
@@ -78,7 +77,7 @@ def ensure_engine_template(ctx):
         with timed(ctx.comp_dir, 2, "engine_template_build"):
             tmpl, build_info = build_engine_template(
                 ctx.node, ctx.comp_dir, ctx.engine_vmid,
-                int(os.environ["TF_VAR_template_vm_id"]),
+                int(config.require("proxmox.template_vm_id")),
                 engine_build_ctx(ctx), ctx.postgres_password, ctx.redis_password, quotient_ref,
                 engine_hash, engine_inputs, run_id=ctx.run_id)
         ctx.state["engine_build_info"] = build_info
@@ -106,8 +105,8 @@ def build_satellite_jumps(ctx, apply_ctx):
     with timed(ctx.comp_dir, 2, "jump_vms", f"x{len(ctx.placement['satellites'])}"):
         build_jump_vms(ctx.placement, ctx.engine_vmid, engine_build_ctx(ctx), ctx.comp_name,
                        ctx.engine_mgmt_ip,
-                       engine_mgmt_gw=os.environ.get("TF_VAR_engine_mgmt_gw",
-                                                     DEFAULT_ENGINE_MGMT_GW),
+                       engine_mgmt_gw=(config.active().engine.mgmt_gw
+                                       or DEFAULT_ENGINE_MGMT_GW),
                        run_id=ctx.run_id,
                        red_segment=red_segment_from_env())
     with timed(ctx.comp_dir, 2, "routing_converge"):

@@ -1,7 +1,6 @@
 """AD domain gate: DC serving the team domain, valid unique DomainSIDs, every member joined."""
 
 import json
-import os
 
 from guests.domain_ops import team_domain
 from infra.guest_exec import guest_agent_exec_root, guest_agent_exec_windows
@@ -11,6 +10,7 @@ from common.windows_ops import is_windows_template
 
 from verifier import context
 from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
+from estate import config
 
 
 _WIN_DOMAIN_PS = (
@@ -89,7 +89,7 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
               + ", ".join(f"{name}={role!r}" for name, role in sorted(bad.items()))
               + " (expected 'dc' or 'member')")
         return gate_fail("domains", "domain_roles.json has invalid role values")
-    node = os.environ.get("TF_VAR_proxmox_node")
+    node = config.active().proxmox.node
     # Box TYPES (boxes.json order = vmid order), not verify's per-team nakon machines.
     try:
         boxes = json.loads((comp_dir / "boxes.json").read_text())

@@ -1,12 +1,12 @@
 """Per-box apt quiesce/index refresh and DNS fix, run before a nakon plant."""
 
-import os
 import shlex
 
 from infra.guest_exec import (diagnose_unreachable_box, guest_agent_exec_root, wait_for_guest_agent,)
 from common.ssh_ops import box_ssh_retry
 from common.utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT, PRINT_LOCK, record_degradation, run_concurrent
 from guests.box_settle_ops import wait_boxes_settled, _box_settled_via_ssh
+from estate import config
 
 
 _APT_PREP_BODY = r"""
@@ -62,7 +62,7 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
 # guest agent (root) is the fallback. Non-fatal per box, but reported clearly.
 # use_proxy writes the engine's apt-cacher-ng proxy (Compfile `apt_cache`).
     box_username = ctx.get("box_username", "ubuntu")
-    node = os.environ["TF_VAR_proxmox_node"]
+    node = config.active().proxmox.node
     print("  Prepping apt on Linux boxes (disable apt-daily/unattended-upgrades, refresh index)...")
     # Replaces the old blind 150s sleep: wait for the actual settle condition instead.
     # Runs once; a box that never settles still gets its full retry ladder below.
@@ -111,7 +111,7 @@ def fix_dns_on_boxes(targets, ctx):
 # All-fail aborts (systemic vs transient).
 
     box_username = ctx.get("box_username", "ubuntu")
-    node = os.environ["TF_VAR_proxmox_node"]
+    node = config.active().proxmox.node
     print("  Fixing DNS on all team boxes...")
 
     def _fix(t):

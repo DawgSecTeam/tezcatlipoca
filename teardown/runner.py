@@ -16,6 +16,7 @@ from teardown import (Inventory, TeardownContext, TeardownEngine, load_ownership
 from teardown.engine import TEARDOWN_JOURNAL
 from teardown.modes import build_terminal_plan
 from engine.template_freeze import frozen_state
+from estate import config
 
 
 def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
@@ -28,7 +29,7 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
     # Multi-node: the placement record is authoritative — point the env at the
     # engine's host and register the node routes before anything node-scoped runs.
     placement = read_placement(comp_dir)
-    default_node = os.environ.get("TF_VAR_proxmox_node", "pve")
+    default_node = config.active().proxmox.node
     placement_nodes = [default_node]
     if placement:
         # Every node-scoped API path needs the PVE node NAME, not the nodes-list record name

@@ -1,7 +1,6 @@
 """AD forest promotion and domain-join orchestration."""
 
 import json
-import os
 import time
 from pathlib import Path
 
@@ -18,6 +17,7 @@ from common.windows_ops import (
 )
 from common.timing import timed
 from common.utils import PRINT_LOCK, compfile_value, run_concurrent
+from estate import config
 
 
 JOIN_ATTEMPTS = 3
@@ -94,7 +94,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
     if not roles:
         return
 
-    node = os.environ["TF_VAR_proxmox_node"]
+    node = config.active().proxmox.node
     all_machines = {m["name"]: m for m in json.loads(nakon_config_path.read_text())["machines"]}
     dc_box = next((b for b in boxes if roles.get(b["name"]) == "dc"), None)
     member_boxes = [b for b in boxes if roles.get(b["name"]) == "member"]
