@@ -110,7 +110,11 @@ class Bridges(Base):
         created = estate_apply.create_bridge(self.state, NODE, "vmbr120", comment="team 120")
         self.assertTrue(created)
         post = [c for c in self.fake.calls if c[0] == "POST" and c[1].endswith("/network")]
-        self.assertEqual(post[0][2]["bridge_ports"], "none")
+        # No bridge_ports: PVE's parameter is the port LIST and it resolves every entry as
+        # an existing interface, so "none" (the file spelling) 500s with "unable to find
+        # bridge port 'none'" on real hardware (live 2026-10-15, run-ea77ef6c). An empty
+        # list is expressed by omitting the key.
+        self.assertNotIn("bridge_ports", post[0][2])
         self.assertEqual(post[0][2]["iface"], "vmbr120")
         # POST stages, PUT applies — a VM must not be attached to a staged bridge.
         self.assertIn(("PUT", f"/nodes/{NODE}/network", None), self.fake.calls)

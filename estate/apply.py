@@ -151,9 +151,14 @@ def create_bridge(state, node, name, comment=""):
     nets = {n.get("iface") for n in proxmox_api("GET", f"/nodes/{node}/network")["data"]}
     if name in nets:
         return False
+    # No `bridge_ports`: the parameter is the port LIST and PVE resolves every entry as an
+    # existing interface, so the /etc/network/interfaces spelling for "no ports" ("none")
+    # is rejected with `bridge '<name>' - unable to find bridge port 'none'` (HTTP 500,
+    # live 2026-10-15 run-ea77ef6c). Omitting it is how the API expresses an empty list —
+    # PVE stores bridge_ports='' and writes the isolated bridge itself.
     proxmox_api("POST", f"/nodes/{node}/network",
                 data={"iface": name, "type": "bridge", "autostart": 1,
-                      "bridge_ports": "none", "comments": comment or name})
+                      "comments": comment or name})
     # POST stages the change; PUT applies the pending network config (the GUI's "Apply
     # Configuration"), and a VM cannot be attached to a bridge that is only staged.
     proxmox_api("PUT", f"/nodes/{node}/network")
