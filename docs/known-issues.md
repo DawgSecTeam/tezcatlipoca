@@ -4,6 +4,21 @@ Temporary writepad, not a ledger: every entry has a concrete next action and is 
 
 ## Open
 
+### The state document mirrors, but does not yet own, five per-competition records
+
+`estate-state.json` is the deploy pipeline's runtime state (`identity`, `secrets`, `roster`,
+`templates`, `run`), but five files still have live writers and readers beside it:
+`placement.json` (`multinode/placement_record.py`), `targets.json` (`common/targets.py`),
+`.template-hashes.json` (`engine/template_freeze.py`), `.frozen.json`
+(`verifier/freeze.py`), `.teardown-journal.json` (`teardown/engine.py`) — plus `teams.json`,
+which `deploy_lib/estate_inputs.py` writes for the driver and bad-auto to read.
+`EstateState.migrate()` copies all of them into the document on first contact, and `flatten()`
+emits only five sections, so a consumer of the flat view cannot see `placement`, `external` or
+`teardown`, and the copying is one-way (the document is a mirror, not the writer). The estate
+rewrite's "one monolithic state file" is therefore not yet true. **Next action**: decide per
+file — fold the reader and writer into the document and delete the file, or record here why it
+must stay outside — so the fold is a decision rather than an omission.
+
 ### The comp ownership tag is the workspace directory name, so every dashboard range is `comp-comp`
 
 `teardown/machinery.py` builds `Ownership(Path(comp_dir).name, run_id)` and the deploy stamps
