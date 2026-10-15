@@ -10,10 +10,12 @@ anything (live: run-0a59b188, 2026-10-14).
 
 import os
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
 from common.constants import ENGINE_TEMPLATE_VMID_OFFSET
+from deploy_lib import golden_plan
 from multinode import placement_planner
 
 ENGINE = 1000
@@ -77,6 +79,60 @@ class ProbeKeptTemplates(unittest.TestCase):
     def test_a_running_vm_in_a_template_slot_is_still_a_collision(self):
         probe = self._probe([_vm(GOLDENS[0], template=0, status="running")])
         self.assertEqual(probe["collisions"], [GOLDENS[0]])
+
+
+class GoldenRebuildAdoption(unittest.TestCase):
+    """A drifted golden kept from an EARLIER run must still be rebuildable.
+
+    run-27b0d9e4 (2026-10-14) died in phase 4: golden-win02's node stamp no longer matched, the
+    gate went to rebuild it, and the ownership proof refused — the kept template carries the
+    PREVIOUS run's tag while the reclaim tag falls back to this run's id. Adoption (the path a
+    REUSED engine template already takes) makes the destroy legitimate.
+    """
+
+    def test_adoption_requires_our_comp_tag_and_the_golden_marker(self):
+        def api(cfg):
+            return lambda *a, **k: {"data": cfg}
+        own = {"template": 1, "tags": "comp-c1;tezcatlipoca;tezcatlipoca-golden;run-old"}
+        with mock.patch("infra.client.proxmox_api", api(own)):
+            self.assertTrue(golden_plan._is_own_golden_template("pve", 1151, "c1"))
+        foreign = {"template": 1, "tags": "comp-other;tezcatlipoca;tezcatlipoca-golden"}
+        with mock.patch("infra.client.proxmox_api", api(foreign)):
+            self.assertFalse(golden_plan._is_own_golden_template("pve", 1151, "c1"))
+        running = {"template": 0, "tags": own["tags"]}
+        with mock.patch("infra.client.proxmox_api", api(running)):
+            self.assertFalse(golden_plan._is_own_golden_template("pve", 1151, "c1"))
+
+    def test_a_drifted_golden_is_adopted_before_it_is_destroyed(self):
+        calls = []
+        with mock.patch.object(golden_plan, "_is_template", lambda n, v: True), \
+             mock.patch.object(golden_plan, "template_stamp_current", lambda n, v, h: False), \
+             mock.patch.object(golden_plan, "frozen_gate", lambda *a, **k: True), \
+             mock.patch.object(golden_plan, "_is_own_golden_template", lambda n, v, c: True), \
+             mock.patch.object(golden_plan, "retag_ownership",
+                               lambda n, v, o: calls.append(("retag", v, sorted(o)))), \
+             mock.patch.object(golden_plan, "destroy_vm_if_exists",
+                               lambda n, v, expect_tags=None: calls.append(("destroy", v))):
+            golden_plan.golden_rebuild_gate(
+                Path("comp"), "pve", 0, [{"name": "web01", "template": "t"}], 1000, {},
+                {"web01": "hash"}, {"web01": {"config": {}, "code": {}}}, "c1", run_tag="run-new")
+        self.assertEqual([c[0] for c in calls], ["retag", "destroy"])
+        self.assertIn("run-new", calls[0][2])
+
+    def test_a_foreign_template_is_not_adopted(self):
+        calls = []
+        with mock.patch.object(golden_plan, "_is_template", lambda n, v: True), \
+             mock.patch.object(golden_plan, "template_stamp_current", lambda n, v, h: False), \
+             mock.patch.object(golden_plan, "frozen_gate", lambda *a, **k: True), \
+             mock.patch.object(golden_plan, "_is_own_golden_template", lambda n, v, c: False), \
+             mock.patch.object(golden_plan, "retag_ownership",
+                               lambda n, v, o: calls.append("retag")), \
+             mock.patch.object(golden_plan, "destroy_vm_if_exists",
+                               lambda n, v, expect_tags=None: calls.append("destroy")):
+            golden_plan.golden_rebuild_gate(
+                Path("comp"), "pve", 0, [{"name": "web01", "template": "t"}], 1000, {},
+                {"web01": "hash"}, {"web01": {"config": {}, "code": {}}}, "c1", run_tag="run-new")
+        self.assertEqual(calls, ["destroy"])       # destroy still refuses it, loudly
 
 
 if __name__ == "__main__":

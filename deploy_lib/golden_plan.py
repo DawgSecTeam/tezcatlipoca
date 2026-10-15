@@ -12,7 +12,7 @@ from golden.golden_target_ops import _is_template
 from golden.golden_ops import build_golden_set
 from guests.apt_dns_ops import _APT_PREP_BODY, _apt_prep_script
 from multinode.placement_record import golden_vmid_for_slot
-from infra.ownership import destroy_vm_if_exists
+from infra.ownership import destroy_vm_if_exists, retag_ownership
 from engine.template_freeze import (
     code_hash, frozen_gate, golden_hash_inputs, golden_payload_hash, hash_from_inputs,
     template_stamp_current,
@@ -67,6 +67,21 @@ def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden
     return golden_inputs, golden_hashes
 
 
+def _is_own_golden_template(node, vmid, comp_name):
+    """True when `vmid` holds a stopped template that is THIS competition's own golden.
+
+    The proof is the same one infra.collisions makes for a template slot: template=1 + our comp
+    tag + the golden marker tag. Anything else (a foreign template, a running VM) is not ours to
+    adopt and stays refused.
+    """
+    from infra.client import proxmox_api
+    cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+    if cfg.get("template") != 1:
+        return False
+    tags = {t.strip() for t in str(cfg.get("tags") or "").replace(";", ",").split(",") if t.strip()}
+    return f"comp-{comp_name}" in tags and GOLDEN_TAG in tags
+
+
 def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored,
                         golden_hashes, golden_inputs, comp_name, run_tag=None):
 # Destroy each golden template in `slot` whose stored M4 hash no longer matches.
@@ -81,5 +96,14 @@ def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored
         if frozen_gate(comp_dir, entry.get("inputs"), golden_inputs[b["name"]],
                        f"golden template for '{b['name']}'"):
             print(f"  golden-{b['name']} hash differs — rebuilding...")
-            destroy_vm_if_exists(destroy_node, vid, expect_tags=ownership_tags(
-                comp_name, run_tag, GOLDEN_TAG))
+            ownership = ownership_tags(comp_name, run_tag, GOLDEN_TAG)
+            # A golden kept by an EARLIER run of this competition carries THAT run's tag, and a
+            # fresh (dashboard-seeded) workspace has no prior state to reclaim it by: the reclaim
+            # tag falls back to this run's id, which no existing VM has — so the rebuild's own
+            # ownership proof refused our own cached template and killed phase 4
+            # (run-27b0d9e4, 2026-10-14: "refusing to destroy vmid 1151 (golden-win02) ... missing
+            # ['run-a48d4f5b']"). Adopt it first, under the template-slot proof the preflight
+            # already makes, exactly as phase 2 re-stamps a REUSED engine template.
+            if _is_own_golden_template(destroy_node, vid, comp_name):
+                retag_ownership(destroy_node, vid, ownership)
+            destroy_vm_if_exists(destroy_node, vid, expect_tags=ownership)
