@@ -1,5 +1,6 @@
 import contextlib
 import json
+import shlex
 import os
 import re
 import socket
@@ -46,6 +47,17 @@ def assert_local_ctx(base_url):
                          f"advertised {LOCAL_BLUE_CTX} — restart llama.cpp with a larger -c")
 
 
+def credlist_literal(box_creds):
+    """`CREDLIST=(...)` for scrim.env: a bash array of quoted "user:password" pairs.
+
+    A bash ARRAY — the helpers iterate "${CREDLIST[@]}". ";"-separated entries inside `( )`
+    are a syntax error, so `source ./scrim.env` failed for EVERY helper and each blue cycle
+    spent its first minutes repairing the harness by hand (live 2026-10-15, run-ce88e7b6
+    blue-team1's notebook). Each pair is quoted for the password's punctuation.
+    """
+    return "(" + " ".join(shlex.quote(f"{u}:{pw}") for u, pw in box_creds.items()) + ")"
+
+
 def stage_blues(args, comp, run_dir, creds, t0):
     log(f"blue endpoint: {llm_endpoints.describe(args.blue_base_url)}")
     endpoints.api_key(args.blue_base_url)     # public entries raise when their key is missing
@@ -59,13 +71,17 @@ def stage_blues(args, comp, run_dir, creds, t0):
         (wd / "submissions").mkdir(exist_ok=True)
         tid = creds[f"TEAM{n}_ID"]
         state = core.read_state(comp)
-        credlist = ";".join(f"{u}:{pw}" for u, pw in (state.get("box_creds") or {}).items())
+        # A bash ARRAY (the helpers iterate "${CREDLIST[@]}"): ";"-separated entries inside
+        # `( )` are a syntax error, so `source ./scrim.env` failed for EVERY helper and each
+        # blue cycle spent its first minutes repairing the harness by hand (live 2026-10-15,
+        # run-ce88e7b6 blue-team1's notebook). Quote each pair for the password's punctuation.
+        credlist = credlist_literal(state.get("box_creds") or {})
         (wd / "scrim.env").write_text(
             f"ENGINE_IP={creds['ENGINE_IP']}\nMY_TEAM=team{n}\nMY_PW={creds[f'TEAM{n}_PW']}\n"
             f"MY_TID={tid}\nBOX_PW={creds['BOX_PW']}\nINJECT_PW={creds['INJECT_PW']}\n"
             f"KEY_PATH={creds['KEY_PATH']}\nVM_USER={creds['VM_USER']}\nBOX_USER={creds['BOX_USER']}\n"
             f"JAR={quotient_api.jar_path(run_dir, f'team{n}')}\n"
-            f"CREDLIST=({credlist})\n")
+            f"CREDLIST={credlist}\n")
         os.chmod(wd / "scrim.env", 0o600)
         for helper, body in (("mybox", blue_helpers.mybox_script(comp)), ("scorch", blue_helpers.scorch_script(comp)),
                              ("qlogin", blue_helpers.QLOGIN), ("score.py", blue_helpers.SCORE_PY), ("myscore", blue_helpers.MYSCORE),

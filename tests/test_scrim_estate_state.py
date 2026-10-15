@@ -73,3 +73,31 @@ class RedIpResolution(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GeneratedHelpers(unittest.TestCase):
+    def test_scrim_envs_credlist_is_a_valid_bash_array(self):
+        """`;`-separated entries inside `( )` are a bash syntax error, so `source scrim.env`
+        failed for every helper (live 2026-10-15, run-ce88e7b6: blue's first cycle repaired
+        the harness by hand before it could defend)."""
+        import os
+        import subprocess as sp
+        import tempfile
+        from scrim import blue_agent
+        line = "CREDLIST=" + blue_agent.credlist_literal(
+            {"airship": "pw-1", "blueteam": "pw 2';x"})
+        with tempfile.TemporaryDirectory() as td:
+            env = Path(td) / "scrim.env"
+            env.write_text("set -a\n" + line + "\n")
+            proc = sp.run(["bash", "-c", f'. "{env}"; echo "${{#CREDLIST[@]}}"'],
+                          capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "2")
+
+    def test_score_py_imports_every_module_it_uses(self):
+        import re
+        from scrim import blue_helpers
+        body = blue_helpers.SCORE_PY
+        compile(body, "score.py", "exec")          # a syntax error would break ./myscore outright
+        for mod in re.findall(r"^[ \t]*([a-z_]+)\.", body, re.M):
+            self.assertIn(f"import {mod}", body, f"score.py uses {mod} without importing it")
