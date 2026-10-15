@@ -157,5 +157,25 @@ class GitCommitInfoScope(unittest.TestCase):
             self.assertTrue(template_freeze.git_commit_info()["dirty"])
 
 
+class TemplateStampAuthority(unittest.TestCase):
+# The reuse decision reads the template's OWN node stamp, not .template-hashes.json —
+# the dashboard's workspace seeder strips that file, so a decision keyed on it rebuilt
+# every template a --teams-only teardown had deliberately kept.
+
+    def test_stamp_matching_the_current_hash_is_reuse(self):
+        with patch.object(template_freeze, "stored_template_hash", lambda node, vmid: "h1"):
+            self.assertTrue(template_freeze.template_stamp_current("node", 7, "h1"))
+
+    def test_stamp_from_other_inputs_is_not_reuse(self):
+        with patch.object(template_freeze, "stored_template_hash", lambda node, vmid: "old"):
+            self.assertFalse(template_freeze.template_stamp_current("node", 7, "h1"))
+
+    def test_unstamped_template_is_not_reuse(self):
+        # No `tezcatlipoca-m4 hash=` description reads as None: never reuse what we
+        # cannot attribute to these exact inputs.
+        with patch.object(template_freeze, "stored_template_hash", lambda node, vmid: None):
+            self.assertFalse(template_freeze.template_stamp_current("node", 7, "h1"))
+
+
 if __name__ == "__main__":
     unittest.main()

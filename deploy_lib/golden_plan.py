@@ -14,7 +14,7 @@ from multinode.placement_record import golden_vmid_for_slot
 from infra.ownership import destroy_vm_if_exists
 from engine.template_freeze import (
     code_hash, engine_template_vmid, frozen_gate, golden_hash_inputs, golden_payload_hash,
-    hash_from_inputs, stored_template_hash,
+    hash_from_inputs, template_stamp_current,
 )
 from common.utils import is_unmanaged
 
@@ -66,6 +66,14 @@ def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden
     return golden_inputs, golden_hashes
 
 
+def golden_stamp_current(stamp, box_hash):
+# phase1_destroy_waves is pure (offline-tested), so it takes the node's hash stamp as data
+#     (`stamp_of`) rather than reading the node; golden_rebuild_gate calls
+#     template_stamp_current, which reads it off the node — both apply the one rule, "the
+#     node stamp decides reuse, the file only corroborates" (see engine.template_freeze).
+    return bool(stamp) and stamp == box_hash
+
+
 def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored,
                         golden_hashes, golden_inputs, comp_name, run_tag=None):
 # Destroy each golden template in `slot` whose stored M4 hash no longer matches.
@@ -74,7 +82,7 @@ def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored
         if not _is_template(destroy_node, vid):
             continue
         box_hash = golden_hashes[b["name"]]
-        if stored_template_hash(destroy_node, vid) == box_hash:
+        if template_stamp_current(destroy_node, vid, box_hash):
             continue
         entry = stored.get("golden", {}).get(b["name"]) or {}
         if frozen_gate(comp_dir, entry.get("inputs"), golden_inputs[b["name"]],
@@ -85,8 +93,8 @@ def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored
 
 
 def phase1_destroy_waves(node_vms, all_targets, engine_vmid, boxes, comp_tags,
-                         is_template, stored_hashes, golden_hashes, frozen_keep=(), slot=0,
-                         extra_destroy=None):
+                         is_template, golden_hashes, frozen_keep=(), slot=0,
+                         extra_destroy=None, stamp_of=None):
 # Phase 1's teardown decision, pure so the teardown→redeploy loop is testable offline.
 #
 #     Wave 1: every team box (the computed set covers ALL teams now that terraform builds
@@ -97,9 +105,13 @@ def phase1_destroy_waves(node_vms, all_targets, engine_vmid, boxes, comp_tags,
 #     clones must die BEFORE their templates.
 #     Wave 2: the engine (a linked clone of the engine template — it dies and re-clones
 #     cheaply every run; slot 0 only), then every golden template that is missing,
-#     hash-mismatched, or a stale slot beyond the current lineup. MATCHING golden templates
-#     survive — that is the whole test-run reuse (build once per competition, reuse across
-#     its test runs). A frozen competition's code-only-drifted goldens (names in
+#     hash-mismatched, or a stale slot beyond the current lineup. A golden whose node stamp
+#     matches the current inputs survives — that is the whole test-run reuse (build once per
+#     competition, reuse across its test runs), and the stamp is what makes it survive a
+#     workspace change too: `stamp_of(vmid)` is the node's own `tezcatlipoca-m4 hash=`
+#     description, so a deploy in a fresh worktree (the dashboard strips .template-hashes.json
+#     when it seeds one) reuses the templates a --teams-only teardown kept instead of
+#     rebuilding them. A frozen competition's code-only-drifted goldens (names in
 #     frozen_keep, as classified by the pre-phase-1 golden_freeze_gate) also survive: the
 #     gate already said "proceeding on the frozen template", so destroying the golden here
 #     would rebuild it and silently break freeze semantics (internals "frozen-gate golden
@@ -132,9 +144,8 @@ def phase1_destroy_waves(node_vms, all_targets, engine_vmid, boxes, comp_tags,
             # stale leftover from an earlier lineup and nothing references it.
             wave2[vid] = f"golden-slot-{i} (stale, unmanaged box)"
             continue
-        if (is_template(vid)
-                and stored_hashes.get("golden", {}).get(b["name"], {}).get("hash")
-                == golden_hashes[b["name"]]):
+        if is_template(vid) and golden_stamp_current(
+                (stamp_of or (lambda _vid: None))(vid), golden_hashes[b["name"]]):
             print(f"  golden-{b['name']} hash matches — keeping template (test-run reuse)")
             continue
         if b["name"] in frozen_keep and is_template(vid):

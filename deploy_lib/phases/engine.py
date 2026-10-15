@@ -15,7 +15,7 @@ from common.ssh_ops import forget_engine_host_key, read_terraform_ctx, wait_for_
 from engine.engine_template_ops import build_engine_template, destroy_engine_template, find_engine_template
 from engine.template_freeze import (
     engine_hash_inputs, frozen_gate, hash_from_inputs, load_template_hashes, save_template_hashes,
-    stored_template_hash,
+    template_stamp_current,
 )
 from common.timing import timed
 from common.utils import compfile_flag, compfile_value, run_terraform
@@ -48,8 +48,16 @@ def ensure_engine_template(ctx):
     rebuild = True
     if tmpl:
         entry = stored.get("engine") or {}
-        if stored_template_hash(ctx.node, tmpl) == engine_hash and entry.get("hash") == engine_hash:
-            print(f"  Engine template hash matches — reusing (vmid {tmpl})")
+        # The node's own hash stamp decides reuse, so a deploy from a fresh workspace
+        # (whose .template-hashes.json the dashboard's seeder stripped) still adopts the
+        # engine template a --teams-only teardown kept. The file entry is the corroborating
+        # record, not the authority — see engine.template_freeze.template_stamp_current.
+        if template_stamp_current(ctx.node, tmpl, engine_hash):
+            if entry.get("hash") != engine_hash:
+                print("  Engine template reuses on the node's hash stamp (no local hash "
+                      f"record in this worktree) — keeping (vmid {tmpl})")
+            else:
+                print(f"  Engine template hash matches — reusing (vmid {tmpl})")
             rebuild = False
         elif not frozen_gate(ctx.comp_dir, entry.get("inputs"), engine_inputs,
                              "engine template"):

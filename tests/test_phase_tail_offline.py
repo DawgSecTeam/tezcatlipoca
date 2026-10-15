@@ -115,7 +115,7 @@ class Tail(unittest.TestCase):
                 patch.object(cleanup, "destroy_bridge_if_exists",
                              side_effect=lambda n, b: bridges.append(b)), \
                 patch.object(cleanup, "_is_template", return_value=False), \
-                patch.object(cleanup, "load_template_hashes", return_value={}):
+                patch.object(cleanup, "stored_template_hash", return_value=None):
             cleanup.phase1_cleanup(ctx)
         self.assertEqual(sorted(bridges), ["vmbr101", "vmbr102", "vmbrW101", "vmbrW102"])
 

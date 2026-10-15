@@ -19,7 +19,7 @@ The two scripts are thin CLIs over the `scrim/` and `scrim_report/` packages. Cr
 
 ## run-agent-scrim.py
 
-Stages: author (optional) → deploy → verify + fire test → blue agents (opencode, fresh session per cycle) → red (bad-auto at `../bad-auto`) → feeds and monitoring to the deadline → evidence capture → teardown (red01 + range, unless `--keep-range`). The run dir defaults to `competitions/<comp>/.automated-tests/<run-id>/` (`--run-dir` overrides; recorded in `test.json.paths.run_dir`). Before red01 is destroyed the harness collects `RED-TEAM.md`, `BLUE-TEAM.md`, `REPORT.md`, `evidence/**` and folds scrim-report's verdict into `test.json` ([automated-test-artifacts.md](automated-test-artifacts.md)).
+Stages: author (optional) → deploy → verify + fire test → blue agents (opencode, fresh session per cycle) → red (bad-auto at `../bad-auto`) → feeds and monitoring to the deadline → evidence capture → teardown (red01 + range, unless `--keep-range`; templates kept with `--keep-templates`). The run dir defaults to `competitions/<comp>/.automated-tests/<run-id>/` (`--run-dir` overrides; recorded in `test.json.paths.run_dir`). Before red01 is destroyed the harness collects `RED-TEAM.md`, `BLUE-TEAM.md`, `REPORT.md`, `evidence/**` and folds scrim-report's verdict into `test.json` ([automated-test-artifacts.md](automated-test-artifacts.md)).
 
 Design rules:
 
@@ -76,7 +76,7 @@ Design rules:
 ### Capture and teardown
 
 - `stage_capture`: re-logins on `Forbidden`, falls back to the team account if admin is locked out, best-effort pauses scoring, freezes `scoreboard-state.jsonl` into evidence, archives blue LOG/NOTEBOOK/feed.log, `sub-*` deliverables, `submissions/`, `cycles/`. It dumps `evidence/final-scoreboard.json` (teams, injects, per-team service states) **before** pausing, because teardown destroys the scoring DB and the report's "Final scores" reads that dump.
-- `stage_teardown`: red evidence first, then `badauto destroy` (red01 + engine firewall rules of both modes, best-effort), then `destroy-competition.py` unless `--keep-range`.
+- `stage_teardown`: red evidence first, then `badauto destroy` (red01 + engine firewall rules of both modes, best-effort), then `destroy-competition.py` unless `--keep-range`. `--keep-templates` runs that teardown in teams-only mode: team boxes, engine, bridges and red01 all go, the golden + engine templates stay for this competition's next run, which reuses them by the hash stamped on the template itself. A practice cycle that keeps its templates therefore hands the event the exact artifacts it verified — see [internals.md](internals.md#template-lifecycle-engine-template_freeze-py-engine_template_ops-py).
 
 ### Mid-run box resets
 

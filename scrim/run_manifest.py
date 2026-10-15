@@ -36,6 +36,7 @@ def record_phase(run_dir, args, phase, t0=None):
         "duration_min": getattr(args, "duration_min", None),
         "t0": t0,
         "keep_range": bool(getattr(args, "keep_range", False)),
+        "keep_templates": bool(getattr(args, "keep_templates", False)),
         "blue_watchdog": bool(getattr(args, "blue_watchdog", False)),
         # red's concurrent-down caps: the scrim report's max_simultaneous_down gate
         # judges against max_concurrent_down_end from here, not a hardcoded 4
@@ -50,10 +51,14 @@ def record_phase(run_dir, args, phase, t0=None):
 
 # retention/watchdog intent lived only in the first CLI invocation, so a resume without
 # --keep-range tore down a range the original run was keeping up; OR semantics — a resume
-# cannot silently drop an intent the first run had
+# cannot silently drop an intent the first run had. Same for --keep-templates: the practice
+# run that asked to keep its artifacts must not lose them because a resume omitted the flag.
 def resume_intent(args, manifest):
-    args.keep_range = bool(args.keep_range or manifest.get("keep_range"))
-    args.blue_watchdog = bool(args.blue_watchdog or manifest.get("blue_watchdog"))
+    args.keep_range = bool(getattr(args, "keep_range", False) or manifest.get("keep_range"))
+    args.keep_templates = bool(getattr(args, "keep_templates", False)
+                               or manifest.get("keep_templates"))
+    args.blue_watchdog = bool(getattr(args, "blue_watchdog", False)
+                              or manifest.get("blue_watchdog"))
     return args
 
 

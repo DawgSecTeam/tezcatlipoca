@@ -174,6 +174,17 @@ def _clean_func():
     return clean_engine_for_template
 
 
+def template_stamp_current(node, vmid, expected_hash):
+# True when the template ON THE NODE was built from exactly these inputs.
+#
+#     The node's `tezcatlipoca-m4 hash=` description is the durable record — it travels with
+#     the template. .template-hashes.json is per-comp-dir state, and the dashboard's workspace
+#     seeder strips it when it seeds a fresh run workspace, so keying reuse on that file alone
+#     made every later run rebuild templates a --teams-only teardown had deliberately kept.
+#     Both the engine gate and the golden gates decide reuse through here.
+    return bool(expected_hash) and stored_template_hash(node, vmid) == expected_hash
+
+
 def engine_hash_inputs(base_engine_vm_id, quotient_ref, main_tf_text, bootstrap_func):
 # Engine hash fields. config: base image vmid + the pinned Quotient ref (the hash
 #     must be computable BEFORE building, so the ref is config, not a post-boot capture —

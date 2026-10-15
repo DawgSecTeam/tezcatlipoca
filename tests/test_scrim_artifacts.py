@@ -67,7 +67,8 @@ def make_comp(root, *, name="demo", run_id=RUN_ID):
 
 def make_args(comp, **over):
     args = SimpleNamespace(competition=Path(comp).name, comp_dir=str(comp), teams=2,
-                           duration_min=90, keep_range=False, blue_watchdog=False, run_dir=None,
+                           duration_min=90, keep_range=False, keep_templates=False,
+                           blue_watchdog=False, run_dir=None,
                            red_ip="10.0.0.198", red_vmid=None)
     for key, value in over.items():
         setattr(args, key, value)
@@ -230,9 +231,44 @@ class PhaseMirror(TmpCase):
         run_dir = self.root / "legacy-run"
         run_dir.mkdir()
         args = SimpleNamespace(competition="demo", teams=2, duration_min=90,
-                               keep_range=True, blue_watchdog=False)
+                               keep_range=True, keep_templates=False, blue_watchdog=False)
         run_manifest.record_phase(run_dir, args, "stage_red")
         self.assertEqual(run_manifest.load_manifest(run_dir)["phase"], "stage_red")
+
+
+class KeepTemplates(TmpCase):
+# INV11: --keep-templates reaches run_terminal_teardown as full=False, and the intent
+# survives a resume. Without the first, a practice run's templates die and the next run
+# silently rebuilds them; without the second, a resume drops the intent and the exact
+# artifacts the practice verified are destroyed by the run that was asked to keep them.
+
+    def _comp_with_lineup(self):
+        (self.comp / "teams.json").write_text(json.dumps({"team1": {"identifier": 1}}))
+        return self.comp
+
+    def _range_teardown(self, args):
+        from teardown import runner as teardown_runner
+        with mock.patch.object(teardown_runner, "run_terminal_teardown",
+                               return_value=mock.Mock(clean=True)) as destroy:
+            teardown_stage.run_range_teardown(args, evidence_done=False)
+        return destroy.call_args
+
+    def test_keep_templates_tears_down_the_range_without_the_templates(self):
+        comp = self._comp_with_lineup()
+        call = self._range_teardown(make_args(comp, keep_templates=True))
+        self.assertEqual(call.args[0], comp)          # the comp dir it resolved to
+        self.assertFalse(call.kwargs["full"])
+
+    def test_default_teardown_is_still_full(self):
+        comp = self._comp_with_lineup()
+        self.assertTrue(self._range_teardown(make_args(comp)).kwargs["full"])
+    def test_resume_keeps_the_intent_the_first_run_had(self):
+        args = make_args(self.comp)
+        run_manifest.resume_intent(args, {"keep_templates": True})
+        self.assertTrue(args.keep_templates)
+        # and the recorded intent is what a resume reads back
+        run_manifest.record_phase(self.root, args, "teardown")
+        self.assertTrue(run_manifest.load_manifest(self.root)["keep_templates"])
 
 
 class AgentIdentity(TmpCase):

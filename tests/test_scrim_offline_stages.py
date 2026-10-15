@@ -31,7 +31,8 @@ def _args(run_dir, **kw):
     base = dict(competition="c1", teams=2, duration_min=90, blue_model="m", red_model="m",
                 reasoning_effort="minimal", llm_base_url="https://openrouter.ai/api/v1",
                 blue_base_url="https://openrouter.ai/api/v1", red_ip="10.0.0.198",
-                run_dir=None if run_dir is None else str(run_dir), keep_range=False, blue_watchdog=False, resume_event=False,
+                run_dir=None if run_dir is None else str(run_dir), keep_range=False,
+                keep_templates=False, blue_watchdog=False, resume_event=False,
                 blue2_base_url=None,
                 red_tunnel="auto", red_vmid=None)
     base.update(kw)

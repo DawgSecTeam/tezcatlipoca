@@ -195,8 +195,11 @@ def run_range_teardown(args, *, evidence_done=False, red_vmid=None):
         record_evidence_done(comp_dir, test_dir=getattr(args, "test_dir", None),
                              red_vmid=red_vmid)
     try:
-        report = run_terminal_teardown(comp_dir, teams, boxes, name,
-                                       env={**os.environ}, log=log)
+        report = run_terminal_teardown(
+            comp_dir, teams, boxes, name, env={**os.environ}, log=log,
+            # --keep-templates keeps the golden + engine templates (the mid-event mode), so
+            # a practice run's next cycle reuses the exact artifacts it tested.
+            full=not getattr(args, "keep_templates", False))
     except Refusal as r:
         raise RuntimeError(f"range teardown refused: {r}") from r
     if not report.clean:
@@ -232,5 +235,8 @@ def stage_teardown(args, creds=None):
     if args.keep_range:
         log("--keep-range: leaving the competition range up")
         return
+    if getattr(args, "keep_templates", False):
+        log("--keep-templates: templates kept for this competition's next run "
+            "(team boxes, engine and bridges still torn down)")
     log("teardown: competition range")
     run_range_teardown(args, evidence_done=bool(creds), red_vmid=red_vmid)

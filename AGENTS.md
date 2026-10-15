@@ -77,6 +77,18 @@ path force-stops the VMs it owns before deleting — never graceful ACPI shutdow
 doomed VM nothing and hangs on agent-less boxes (graceful shutdown is only for VMs that survive
 the operation).
 
+**Templates are the thing a practice run exists to validate, and they SHOULD be kept.** A full
+teardown destroys them, so a practice range built to host an event is torn down with
+`destroy-competition.py --teams-only` (or, for a scrim, `run-agent-scrim.py --keep-templates`) —
+team boxes, engine, bridges and red01 go; the golden + engine templates stay, and the next deploy
+of the SAME competition **reuses the exact artifacts that were tested instead of rebuilding them**.
+That reuse keys on the `tezcatlipoca-m4 hash=` stamp on the template itself, not on the
+per-comp-dir `.template-hashes.json` (a fresh worktree and every dashboard workspace lack it), so
+it survives the move from the practice worktree to the event's. Config drift still rebuilds;
+goldens never carry across competitions, so a full teardown is still how a competition's templates
+are finally reclaimed once its run's goal is met. Details:
+[docs/internals.md § template lifecycle](docs/internals.md#template-lifecycle-engine-template_freeze-py-engine_template_ops-py).
+
 Teardown collects this run's reports and evidence into
 `competitions/<id>/.automated-tests/<run-id>/` **before** it destroys anything (red report, blue
 logs, engine capture, then `REPORT.md` with machine sections filled and judgement sections marked

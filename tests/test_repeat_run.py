@@ -42,16 +42,24 @@ def node_after_run(idents):
 
 
 class RepeatRun(unittest.TestCase):
-    def waves(self, node_vms, idents, stored, frozen_keep=()):
+    def stamps(self, box_hashes):
+        # The node's own `tezcatlipoca-m4 hash=` description per golden vmid — the durable
+        # artifact record. These tests pass it instead of .template-hashes.json because that
+        # file is per-worktree state (the dashboard's workspace seeder strips it), and a
+        # reuse decision keyed on it alone rebuilt templates a --teams-only teardown kept.
+        return {golden_vmid_for(ENGINE, i): h for i, h in enumerate(box_hashes)}
+
+    def waves(self, node_vms, idents, stamps, frozen_keep=()):
         goldens = {golden_vmid_for(ENGINE, i) for i in range(len(BOXES))}
         with contextlib.redirect_stdout(io.StringIO()):
             return dl_golden_plan.phase1_destroy_waves(
                 node_vms, targets(idents), ENGINE, BOXES, COMP_TAGS,
-                lambda vid: vid in goldens, stored, HASHES, frozen_keep=frozen_keep)
+                lambda vid: vid in goldens, HASHES, frozen_keep=frozen_keep,
+                stamp_of=stamps.get)
 
     def test_second_run_with_fewer_teams(self):
-        stored = {"golden": {n: {"hash": h} for n, h in HASHES.items()}}
-        wave1, wave2 = self.waves(node_after_run([101, 102, 103]), [101, 102], stored)
+        wave1, wave2 = self.waves(node_after_run([101, 102, 103]), [101, 102],
+                                  self.stamps(["h-dc", "h-web"]))
         # team3's boxes are stranded clones of the goldens: they must die in wave 1
         for t in targets([103]):
             self.assertIn(t["vmid"], wave1)
@@ -62,9 +70,19 @@ class RepeatRun(unittest.TestCase):
             self.assertNotIn(golden_vmid_for(ENGINE, i), wave2)
         self.assertIn(ENGINE, wave2)
 
+    def test_fresh_worktree_reuses_templates_by_node_stamp(self):
+        # The whole point of --teams-only: a later run in a NEW workspace (no
+        # .template-hashes.json — the dashboard's seeder strips it) must adopt the kept
+        # templates, not rebuild them. phase1_destroy_waves is no longer told anything
+        # about that file, so the node stamp is the only thing keeping them alive.
+        stamps = self.stamps(["h-dc", "h-web"])
+        wave1, wave2 = self.waves(node_after_run([101, 102]), [101, 102], stamps)
+        for i in range(len(BOXES)):
+            self.assertNotIn(golden_vmid_for(ENGINE, i), wave2)
+
     def test_changed_golden_hash_rebuilds_only_that_golden(self):
-        stored = {"golden": {"dc01": {"hash": "h-dc"}, "web01": {"hash": "OLD"}}}
-        _w1, wave2 = self.waves(node_after_run([101, 102]), [101, 102], stored)
+        _w1, wave2 = self.waves(node_after_run([101, 102]), [101, 102],
+                                self.stamps(["h-dc", "OLD"]))
         self.assertNotIn(golden_vmid_for(ENGINE, 0), wave2)
         self.assertIn(golden_vmid_for(ENGINE, 1), wave2)
 
@@ -72,9 +90,8 @@ class RepeatRun(unittest.TestCase):
         # Frozen comp, code-only drift: the pre-phase-1 gate said "proceeding on the
         # frozen template", so phase 1 must not destroy+rebuild the golden out from
         # under that decision (internals "frozen-gate golden keep").
-        stored = {"golden": {"dc01": {"hash": "h-dc"}, "web01": {"hash": "OLD"}}}
-        _w1, wave2 = self.waves(node_after_run([101, 102]), [101, 102], stored,
-                                frozen_keep={"web01"})
+        _w1, wave2 = self.waves(node_after_run([101, 102]), [101, 102],
+                                self.stamps(["h-dc", "OLD"]), frozen_keep={"web01"})
         self.assertNotIn(golden_vmid_for(ENGINE, 1), wave2)
         self.assertNotIn(golden_vmid_for(ENGINE, 0), wave2)  # hash still matches
         self.assertIn(ENGINE, wave2)                          # engine still re-clones
@@ -82,13 +99,12 @@ class RepeatRun(unittest.TestCase):
     def test_frozen_keep_ignores_a_missing_template(self):
         # frozen_keep only protects an existing template; a deleted golden slot is
         # still rebuilt (there is nothing frozen to proceed on).
-        stored = {"golden": {"dc01": {"hash": "h-dc"}, "web01": {"hash": "OLD"}}}
         goldens = {golden_vmid_for(ENGINE, 0)}  # web01's golden template is gone
         with contextlib.redirect_stdout(io.StringIO()):
             _w1, wave2 = dl_golden_plan.phase1_destroy_waves(
                 node_after_run([101, 102]), targets([101, 102]), ENGINE, BOXES,
-                COMP_TAGS, lambda vid: vid in goldens, stored, HASHES,
-                frozen_keep={"web01"})
+                COMP_TAGS, lambda vid: vid in goldens, HASHES,
+                frozen_keep={"web01"}, stamp_of=self.stamps(["h-dc", "OLD"]).get)
         self.assertIn(golden_vmid_for(ENGINE, 1), wave2)
 
     def test_unmanaged_box_slot_needs_no_hash_and_cleans_stale_golden(self):
@@ -102,8 +118,8 @@ class RepeatRun(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             _w1, wave2 = dl_golden_plan.phase1_destroy_waves(
                 vms, targets([101]), ENGINE, boxes, COMP_TAGS,
-                lambda vid: vid in goldens,
-                {"golden": {n: {"hash": h} for n, h in HASHES.items()}}, HASHES)
+                lambda vid: vid in goldens, HASHES,
+                stamp_of=self.stamps(HASHES.values()).get)
         self.assertIn(fw_slot, wave2)
         self.assertNotIn(golden_vmid_for(ENGINE, 0), wave2)
         self.assertNotIn(golden_vmid_for(ENGINE, 1), wave2)

@@ -13,7 +13,7 @@ from golden.golden_target_ops import _is_template
 from multinode.placement_record import record_of
 from infra.client import proxmox_api
 from infra.ownership import destroy_vm_if_exists
-from engine.template_freeze import load_template_hashes
+from engine.template_freeze import stored_template_hash
 from common.timing import timed
 from common.utils import is_in_path_fw, record_degradation
 
@@ -66,8 +66,9 @@ def destroy_node_waves(ctx, destroy_node, node_targets, slot, extra_destroy=None
         node_vms, node_targets,
         ctx.engine_vmid, ctx.boxes, ctx.reclaim_tags,
         lambda vid: _is_template(destroy_node, vid),
-        load_template_hashes(ctx.comp_dir), ctx.golden_hashes,
-        frozen_keep=ctx.frozen_keep, slot=slot, extra_destroy=extra_destroy)
+        ctx.golden_hashes,
+        frozen_keep=ctx.frozen_keep, slot=slot, extra_destroy=extra_destroy,
+        stamp_of=lambda vid: stored_template_hash(destroy_node, vid))
     destroy_pool(ctx, wave1, destroy_node)
     destroy_pool(ctx, wave2, destroy_node)
 

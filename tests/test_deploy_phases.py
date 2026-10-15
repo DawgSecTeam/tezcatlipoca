@@ -11,7 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
@@ -85,11 +85,11 @@ class GoldenRebuildGate(unittest.TestCase):
     def setUp(self):
         self.boxes = MANAGED_BOXES + [UNMANAGED]
         self.destroyed = []
+        self.stamp = Mock(return_value=False)            # node stamp does not match by default
         self._patches = [
             patch.object(dl_golden_plan, "_is_template",
                          lambda node, vid: True),       # every slot holds a template
-            patch.object(dl_golden_plan, "stored_template_hash",
-                         lambda node, vid: "stale-on-node"),
+            patch.object(dl_golden_plan, "template_stamp_current", self.stamp),
             patch.object(dl_golden_plan, "frozen_gate",
                          lambda *a, **k: True),         # rebuild permitted
             patch.object(dl_golden_plan, "destroy_vm_if_exists",
@@ -120,13 +120,25 @@ class GoldenRebuildGate(unittest.TestCase):
     def test_matching_stored_hash_is_left_alone(self):
         hashes = {"dc01": "h-dc", "web01": "h-web", "fw01": "h-fw"}
         inputs = {"dc01": {"config": {}}, "web01": {"config": {}}, "fw01": {"config": {}}}
-        dl_golden_plan.stored_template_hash = lambda node, vid: (
-            "h-dc" if vid == self._slot(0) else "other")
+        # the node's own stamp, compared against the CURRENT inputs — dc01 matches, the rest
+        # do not. This is the whole reuse decision: .template-hashes.json is not consulted.
+        self.stamp.side_effect = lambda node, vid, expected: vid == self._slot(0)
         with contextlib.redirect_stdout(io.StringIO()):
             dl_golden_plan.golden_rebuild_gate(".", "node1", 0, self.boxes, ENGINE, {}, hashes,
                                        inputs, "c1")
-        self.assertNotIn(self._slot(0), self.destroyed)   # hash matches -> kept
+        self.assertNotIn(self._slot(0), self.destroyed)   # node stamp matches -> kept
         self.assertIn(self._slot(1), self.destroyed)
+
+    def test_node_stamp_outranks_a_missing_hash_record(self):
+        # The cross-worktree case: a fresh workspace has no .template-hashes.json, so the
+        # gate gets an empty `stored`. The node stamp alone must still keep the template —
+        # dict.get on the missing record used to be what decided reuse, and it rebuilt.
+        self.stamp.side_effect = lambda node, vid, expected: expected == "h-dc"
+        with contextlib.redirect_stdout(io.StringIO()):
+            dl_golden_plan.golden_rebuild_gate(".", "node1", 0, [MANAGED_BOXES[0]], ENGINE,
+                                               {}, {"dc01": "h-dc"},
+                                               {"dc01": {"config": {}}}, "c1")
+        self.assertEqual(self.destroyed, [])
 
 
 class ResumeFromPhaseGuard(unittest.TestCase):

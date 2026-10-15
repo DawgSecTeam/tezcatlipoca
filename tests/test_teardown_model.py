@@ -287,6 +287,32 @@ class VerifyClean(unittest.TestCase):
         self.assertTrue(report.clean, report.problems)
         self.assertTrue(any("kept" in n for n in report.notes))
 
+    def test_teams_only_never_reaches_the_template_destroy(self):
+        # The scrim harness's --keep-templates sets exactly this (ctx.full=False), which is
+        # what makes the templates survive with their hash record for the next run.
+        from engine.template_freeze import HASHES_FILE
+        from teardown.steps import TemplatesStep
+        (self.comp / HASHES_FILE).write_text(json.dumps({"golden": {"web01": {"hash": "h"}}}))
+        ctx = TeardownContext(comp_dir=self.comp, env={}, teams={}, boxes=[], deployed_state={},
+                              ownership=OURS, placement=None, nodes=["n"], default_node="n",
+                              inventory=None, full=False)
+        with patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
+            result = TemplatesStep().run(ctx)
+        self.assertFalse(destroy.call_args.kwargs["full"])
+        self.assertEqual(result.status, "ok")
+        self.assertTrue((self.comp / HASHES_FILE).exists())   # reuse record kept with them
+
+    def test_full_teardown_does_reach_the_template_destroy(self):
+        # The other half of the pair: a default teardown still removes the templates.
+        from teardown.steps import TemplatesStep
+        ctx = TeardownContext(comp_dir=self.comp, env={}, teams={}, boxes=[], deployed_state={},
+                              ownership=OURS, placement=None, nodes=["n"], default_node="n",
+                              inventory=None, full=True)
+        with patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
+            result = TemplatesStep().run(ctx)
+        self.assertTrue(destroy.call_args.kwargs["full"])
+        self.assertEqual(result.status, "ok")
+
 
 if __name__ == "__main__":
     unittest.main()

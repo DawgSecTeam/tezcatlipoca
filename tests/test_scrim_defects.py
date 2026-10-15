@@ -673,13 +673,16 @@ class ResumeGuardAndManifest(unittest.TestCase):
 
     def test_resume_intent_is_inherited_from_the_manifest(self):
         args = SimpleNamespace(keep_range=False, blue_watchdog=False)
-        run_manifest.resume_intent(args, {"keep_range": True, "blue_watchdog": True})
+        run_manifest.resume_intent(args, {"keep_range": True, "keep_templates": True,
+                                          "blue_watchdog": True})
         self.assertTrue(args.keep_range)
+        self.assertTrue(args.keep_templates)      # a resume must not drop kept templates
         self.assertTrue(args.blue_watchdog)
         # an explicit flag on the resume is still honoured
-        args = SimpleNamespace(keep_range=True, blue_watchdog=False)
+        args = SimpleNamespace(keep_range=True, keep_templates=False, blue_watchdog=False)
         run_manifest.resume_intent(args, {})
         self.assertTrue(args.keep_range)
+        self.assertFalse(args.keep_templates)
         self.assertFalse(args.blue_watchdog)
 
     def test_manifest_round_trips_with_the_phase_marker(self):

@@ -111,6 +111,10 @@ def main():
                    help="with --resume-event: proceed even when too little of the event "
                         "window is left for a single useful cycle (capture + teardown only)")
     p.add_argument("--keep-range", action="store_true", help="skip destroy-competition at teardown")
+    p.add_argument("--keep-templates", action="store_true", dest="keep_templates",
+                   help="teardown normally (team boxes, engine, bridges, red01) but KEEP the "
+                        "golden + engine templates, so the next run of this competition reuses "
+                        "the exact artifacts this practice run tested instead of rebuilding them")
     p.add_argument("--run-dir", default=None)
     p.add_argument("--blue-watchdog", action="store_true", dest="blue_watchdog",
                    help="run a non-LLM loop that re-unmasks/starts stopped scored Linux units every "
@@ -160,6 +164,7 @@ def main():
             sys.exit(refusal)
         log(f"RESUME: re-entering stage_run at T+{int((time.time() - t0) / 60)}min "
             f"({remaining:.0f}min left; keep_range={args.keep_range}, "
+            f"keep_templates={args.keep_templates}, "
             f"watchdog={args.blue_watchdog} from the manifest)")
         creds = staging.creds_from_files(comp)
         creds["RUN_DIR"] = args.run_dir

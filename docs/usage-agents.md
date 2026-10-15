@@ -132,6 +132,8 @@ python3 destroy-competition.py --competition <id> --artifacts-timeout 20
 
 Full teardown removes team boxes, engine, bridges, golden and engine templates (clones first; `.template-hashes.json` goes too). **Exit 0 = estate verified clean** for this deploy's ownership set: nothing of ours running or tagged, red01 gone, no terraform state lock, evidence archived. Frozen competitions refuse without `--end-of-competition`. `--teams-only` is for this competition's next run only; once the run's goal is met, run the full teardown, since goldens can't serve another competition (hash inputs and `comp-<id>` tags are per-competition) and otherwise squat on its golden vmids.
 
+Reuse keys on the `tezcatlipoca-m4 hash=` description on the template itself, so the next deploy adopts kept templates even from a **fresh worktree or dashboard workspace** — where `.template-hashes.json` does not exist, because the dashboard's workspace seeder deliberately strips it. So `--teams-only` (or the harness's `--keep-templates`) followed by a deploy of the same competition gives the event the exact templates the practice run tested, provided the hash inputs are unchanged; a config change rebuilds, and a frozen competition still refuses config drift. The `--teams-only` teardown must run from the worktree that holds the deploy's state, but the reuse it enables does not.
+
 Requires `run_id` in `.deploy_state.json` plus `teams.json` and `boxes.json`; restores the per-competition `TF_VAR_*` first so Terraform addresses match.
 
 Before the first destructive call it collects the run's artifacts into `competitions/<id>/.automated-tests/<run-id>/` (red report from red01, blue logs, engine capture, harness evidence, `REPORT.md`). Collection warns and proceeds, bounded per file by `--artifacts-timeout` (default 45 s). There is no skip flag; on resume the journal skips it. See [automated-test-artifacts.md](automated-test-artifacts.md).
@@ -152,6 +154,8 @@ Each deploy mints a `run-<hex>` id (in `.deploy_state.json`) and tags everything
 | Flag | Script | Effect |
 |---|---|---|
 | `--end-of-competition` | destroy | Full teardown of a frozen competition |
+| `--teams-only` | destroy | Keep this competition's golden + engine templates for its next run |
+| `--keep-templates` | scrim | Same, from the harness: tear down the range but keep the templates |
 | `--freeze` / `--unfreeze --confirm-unfreeze` | verify | Write/remove `.frozen.json` |
 | `--fix-round-loop` | verify | Start/unpause POSTs when the round loop didn't resume after an engine reboot |
 | `--expect-no-vulns` | verify | Force misconfig gates to SKIP |
