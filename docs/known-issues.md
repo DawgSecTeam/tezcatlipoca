@@ -102,6 +102,55 @@ behaviour. **Next action**: decide deliberately — recalibrate the blue gates t
 club actually has, or change the budget (longer event, faster model, or per-team endpoints instead
 of one lock) — and record the decision next to the gate table in `docs/rehearsal-gates.md`.
 
+### `misconfig` is red in every verify, deploy-time and pre-T0 (scoring integrity)
+
+Live 2026-10-15 (run-1c44733b, scrim-one, 2 teams): `misconfig : FAIL  misconfig did not survive
+cloning everywhere` at the deploy-time verify AND at the pre-T0 re-verify, while `plant_coverage`
+PASSed all 12 machines and every other gate came back green. Two independent runs have now shown
+the same shape, so this is not flake. **Next action**: root-cause it in the gate, with a regression
+test — a comp whose pins are provably planted on the goldens and confirmed on the clones must pass.
+This is the one deploy gate whose failure means the scored range is not what the packet promises.
+
+### The deploy-time `verify` reports `pins_registered` FAIL for a range whose pre-T0 verify PASSes it
+
+Same run: at deploy `pins_registered : FAIL  12 pinned checks`; 3 minutes later, after the red/blue
+staging, the identical verify command reported `pins_registered : PASS  12 pinned checks` with
+everything else unchanged. The deploy-time result is therefore an INTERIM reading, and it is being
+read as a scoring verdict by anyone (or any gate) that looks at the deploy stage. **Next action**:
+either run that check only after the staging it depends on, or label the deploy-time verify
+`interim` in the run log and in the report's verify line — do not leave two contradictory results
+for the same gate in one run's evidence.
+
+### red01's liveness is probed on the same path its traffic uses, so a node network bounce loses red silently
+
+Live 2026-10-15 (run-1c44733b): red01 (10.0.0.198) went unreachable at T+13 — every 60 s probe
+returned `No route to host` for the remaining 30 minutes, the in-run snapshots stopped at
+`events-T+013.jsonl`, and the teardown could not collect `RED-TEAM.md`. Red had 13 minutes of the
+45-minute event; six red gates failed as a direct consequence. The harness did everything right
+(the alert fired at the third miss, and the absence was recorded rather than stubbed), but nothing
+can distinguish "red is dead" from "the path to red is dead" — both are the same probe. A second
+session's range churn on the same node (repeat deploy/destroy, each creating and destroying bridges
+and running `ifreload -a`) brackets the exact minute, and is the leading explanation.
+**Next action**: give a live event's red01 an out-of-band liveness signal (a second address family,
+a guest-agent ping, or a heartbeat the box itself pushes to the operator) and make the run log say
+which one answered; run at most one range per node while an event is live.
+
+### Fixed in this cycle (kept for the next reader's context)
+
+- Concurrent `terraform init` into the shared `TF_PLUGIN_CACHE_DIR` raced two runs into
+  `text file busy`, killing phase 2 (`0adfc1b` lock, `fb7a995` retry): an exclusive flock on `<cache>/.init.lock` for the
+  whole install, plus a bounded retry for a foreign writer).
+- A kept template (engine/golden, from an earlier run of the same competition) could not be adopted:
+  the placement probe counted it as a vmid collision, `check_collisions` did not treat the
+  engine-template slot as a template slot in multi-node, and the golden rebuild gate refused to
+  destroy its own cached artifact. All three now follow one rule — a stopped, comp-tagged template
+  in THIS competition's slot is an artifact to adopt, not a leftover.
+- Two blue workdirs both claimed the canonical `BLUE-TEAM.md`, so a later collection could flip
+  which team's narrative held the name (`canonical document changed after collection`). Only the
+  first workdir claims it now; every team's `REPORT.md` is still collected under `evidence/blue/<team>/`.
+- A successful deploy wrote no `deploy.log` at all, so the template-reuse evidence vanished with the
+  worktree. The log is now written on success too.
+
 ## Pending upstream — catalog / nakon
 
 - **`IIS FTP` golden plant is timing-fragile and non-idempotent** (catalog DB step body). `Start-Service FTPSVC`/`New-WebFtpSite` can race the just-installed config store; the step's `$Error.Count -gt 0` footer turns a transient into a hard failure, and the body doesn't re-run cleanly without the phase-4 `tz-base` rollback. Recovery: `--from-phase 4 --yes`. Failed-run logs are preserved on the engine (`/opt/nakon/failed-<tag>-<ts>`) since 2026-10-11.

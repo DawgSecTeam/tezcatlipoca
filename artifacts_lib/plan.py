@@ -66,14 +66,23 @@ def plan_targets(manifest, *, comp_dir=None):
                             for w in (paths.get("blue_workdirs") or []))
                 if d and d.is_dir()]
     if blue.get("present") and workdirs:
-        for workdir in workdirs:
+        for index, workdir in enumerate(workdirs):
             name = Path(workdir).name
+            # Exactly ONE blue workdir claims the canonical BLUE-TEAM.md. With a workdir per
+            # team, two targets claiming one canonical name give the derivation two candidates
+            # for a single document, and a later collection can flip which team's narrative is
+            # the canonical one (live 2026-10-15, run-1c44733b: "canonical document changed
+            # after collection: BLUE-TEAM.md"). Every team's REPORT.md is still collected, under
+            # its own evidence/blue/<team>/.
+            report_want = {"local_name": "REPORT.md"}
+            if index == 0:
+                report_want["canonical"] = SIDES["blue"]
             targets.append({
                 "name": f"blue:{name}", "route": "local", "kind": "local",
                 "root": str(workdir), "to": f"evidence/blue/{name}/",
                 "note": "blue agent workdir (operator host, not a guest box)",
                 "want": [
-                    {"local_name": "REPORT.md", "canonical": SIDES["blue"]},
+                    report_want,
                     {"local_name": "FINDINGS.md"},
                     {"local_name": "LOG.md"}, {"local_name": "NOTEBOOK.md"},
                     {"local_name": "feed.log"},
