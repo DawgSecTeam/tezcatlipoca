@@ -111,7 +111,8 @@ class Bundle(unittest.TestCase):
         tar = portal_ops.bundle({"comp": "c"}, "PORTAL_SECRET_KEY=x\n")
         with tarfile.open(fileobj=io.BytesIO(tar)) as t:
             members = {m.name: m for m in t.getmembers()}
-        for name in ("app.py", "auth.py", "console.py", "Dockerfile", "compose.yaml",
+        for name in ("app.py", "auth.py", "console.py", "ops_sync.py",
+                     "Dockerfile", "compose.yaml",
                      "frontend/package.json", "frontend/package-lock.json",
                      "frontend/src/pages/Console.jsx", "frontend/src/components/kit.jsx",
                      "portal.json", ".env"):

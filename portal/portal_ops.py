@@ -40,7 +40,7 @@ REMOTE_DIR = "/opt/tez-portal"
 LOCAL_PORT = 8443
 # What ships to the engine: the backend files, plus the frontend SOURCE (the image builds it
 # with `npm ci` against package-lock.json — node_modules/ and dist/ never ship).
-_SHIP = ("Dockerfile", "compose.yaml", "requirements.txt", "auth.py", "console.py", "app.py")
+_SHIP = ("Dockerfile", "compose.yaml", "requirements.txt", "auth.py", "console.py", "app.py", "ops_sync.py")
 _FRONTEND_SKIP = {"node_modules", "dist"}
 
 

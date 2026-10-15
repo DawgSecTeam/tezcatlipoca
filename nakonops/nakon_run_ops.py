@@ -107,6 +107,19 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
         f"{scoring_user}@{scoring_ip}",
     ]
 
+    # paramiko is baked into the engine template (engine_bootstrap_ops installs
+    # python3-paramiko), so this probes instead of installing. It used to
+    # `pip3 install --break-system-packages paramiko` on demand, which mutated the scoring
+    # engine's system python mid-deploy and raced concurrent runs on the engine's pip; an
+    # engine cloned from a pre-bake template is a template problem, and refusing names it.
+    # Probed before the scp so a pre-bake engine never gets the bundle in the first place.
+    probe = subprocess.run(ssh_base + ["sudo python3 -c 'import paramiko'"],
+                           capture_output=True, timeout=60)
+    if probe.returncode != 0:
+        raise RuntimeError(
+            f"engine {scoring_ip} cannot import paramiko for the remote nakon deploy: its "
+            "template predates the bake — rebuild the engine template (phase 2)")
+
     if run_tag is None:
         run_tag = f"{Path(config_path).stem}-{time.strftime('%Y%m%d-%H%M%S')}"
     run_tag = re.sub(r"[^A-Za-z0-9._-]", "_", run_tag)
@@ -137,11 +150,7 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
 
     setup_cmd = (
         f"sudo mkdir -p {opt_dir} && "
-        f"sudo cp -r {tmp_dir}/. {opt_dir}/ && "
-        # paramiko is needed by the remote nakon (root's python3). Check before install:
-        # a blind install on every deploy races concurrent runs on the engine's pip.
-        "{ sudo python3 -c 'import paramiko' 2>/dev/null || "
-        "sudo pip3 install --break-system-packages paramiko; }"
+        f"sudo cp -r {tmp_dir}/. {opt_dir}/"
     )
     deploy_cmd = (
         f"cd {opt_dir} && sudo python3 -m nakon deploy "

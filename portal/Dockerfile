@@ -14,7 +14,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --root-user-action=ignore -r requirements.txt
-COPY auth.py console.py app.py ./
+COPY auth.py console.py app.py ops_sync.py ./
 COPY --from=web /web/dist ./frontend/dist
 
 EXPOSE 8000

@@ -5,6 +5,7 @@ from common.utils import compfile_flag, local_python
 from scrim import compworld
 from scrim import core
 from scrim import endpoints
+from scrim import fire_test
 from scrim import procs
 from scrim import red_link
 from scrim import red_tunnel
@@ -35,10 +36,14 @@ def verify_red_reaches_teams(args, comp, creds):
     if (args.red_mode or "routed") == "masq":
         log("--red-mode masq: red shares the team gateways, skipping the reachability gate")
         return
-    log("pre-T0: red01 -> every team reachability gate")
+    log("pre-T0: red01 -> every team reachability gate [authoritative verify]")
     r = procs.run(compworld.verify_cmd(comp, creds, "--red-ip", args.red_ip,
                                        "--red-identity", "--red-teams", "all"),
                   cwd=core.REPO, timeout=900, check=False, tail=25)
+    # this is the AUTHORITATIVE verify of the run (it runs after staging, so the pins the
+    # deploy-time one cannot see are registered); keep its whole output, including the
+    # per-config detail behind every FAIL
+    fire_test.write_verify_log(args, "pre-T0 (authoritative)", r)
     summary = {}
     for line in (r.stdout or "").splitlines():
         parts = line.split()
