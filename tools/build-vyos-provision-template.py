@@ -24,7 +24,7 @@ version-specific. Each typed line is deliberate; when a prompt differs, take a `
 then drive the rest with `type`. Env knobs:
   TEZ_VYOS_VMID       scratch/template vmid (default 959)
   TEZ_VYOS_ISO_URL    stream ISO URL   (default 2026.03 generic amd64)
-  TEZ_VYOS_ISO_DIR    node ISO dir     (default /var/lib/vz/template/iso)
+  TEZ_VYOS_ISO_STORAGE  ISO storage     (default local)
   TEZ_VYOS_STORAGE    disk storage     (default hdd)
   TEZ_VYOS_BRIDGE     NIC bridge       (default vmbr0)
   TEZ_VYOS_PW         the vyos admin password set at install and typed at login
@@ -52,7 +52,7 @@ ISO_URL = os.environ.get(
     "TEZ_VYOS_ISO_URL",
     "https://community-downloads.vyos.dev/stream/2026.03/vyos-2026.03-generic-amd64.iso")
 ISO_NAME = ISO_URL.rsplit("/", 1)[-1]
-ISO_DIR = os.environ.get("TEZ_VYOS_ISO_DIR", "/var/lib/vz/template/iso")
+ISO_STORAGE = os.environ.get("TEZ_VYOS_ISO_STORAGE", "local")
 STORAGE = os.environ.get("TEZ_VYOS_STORAGE", "hdd")
 BRIDGE = os.environ.get("TEZ_VYOS_BRIDGE", "vmbr0")
 PW = os.environ.get("TEZ_VYOS_PW", "tez-vyos-build")
@@ -205,29 +205,30 @@ def wait_status(want, budget_s, what):
         time.sleep(5)
 
 
+def iso_present():
+    content = proxmox_api("GET", f"/nodes/{node()}/storage/{ISO_STORAGE}/content",
+                          params={"content": "iso"})["data"]
+    return any(v.get("volid") == f"{ISO_STORAGE}:iso/{ISO_NAME}" for v in content)
+
+
 def download():
-    iso_path = f"{ISO_DIR}/{ISO_NAME}"
-    r = _node_ssh(f"test -s {iso_path} && echo PRESENT || echo MISSING", timeout=15)
-    if "PRESENT" in r.stdout:
-        print(f"{iso_path} already on the node")
+    if iso_present():
+        print(f"{ISO_STORAGE}:iso/{ISO_NAME} already on the node")
         return
-    print(f"downloading {ISO_URL} → {node_host()}:{iso_path} (node-side curl)")
-    r = _node_ssh(f"curl -fL --retry 3 -o {iso_path}.part {ISO_URL} "
-                  f"&& mv {iso_path}.part {iso_path} && ls -la {iso_path}", timeout=900)
-    print(r.stdout.strip() or r.stderr.strip())
-    if r.returncode != 0:
-        raise SystemExit(f"download failed: {r.stderr.strip()[:300]}")
+    print(f"downloading {ISO_URL} → {ISO_STORAGE}:iso/{ISO_NAME} (PVE download-url)")
+    up = proxmox_api("POST", f"/nodes/{node()}/storage/{ISO_STORAGE}/download-url",
+                     data={"content": "iso", "filename": ISO_NAME, "url": ISO_URL})
+    wait_for_proxmox_task(node(), up["data"])
 
 
 def create():
     n = node()
-    iso_path = f"{ISO_DIR}/{ISO_NAME}"
-    if _node_ssh(f"test -s {iso_path} && echo PRESENT", timeout=15).returncode != 0:
-        raise SystemExit(f"{iso_path} missing on the node — run `download` first")
+    if not iso_present():
+        raise SystemExit(f"{ISO_STORAGE}:iso/{ISO_NAME} missing on the node — run `download` first")
     proxmox_api("POST", f"/nodes/{n}/qemu", data={
         "vmid": VMID, "name": NAME, "cores": 1, "memory": 1024, "ostype": "l26",
         "scsi0": f"{STORAGE}:8", "scsihw": "virtio-scsi-pci",
-        "ide2": f"local:iso/{ISO_NAME},media=cdrom",
+        "ide2": f"{ISO_STORAGE}:iso/{ISO_NAME},media=cdrom",
         "net0": f"virtio,bridge={BRIDGE}", "net1": f"virtio,bridge={BRIDGE}",
         "boot": "order=ide2;scsi0", "serial0": "socket",
         "agent": 0,

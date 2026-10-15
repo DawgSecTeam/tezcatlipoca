@@ -393,9 +393,7 @@ def agent_seal():
     # old provisioning template as a stopgap rollback. NEWID (957), NOT SOURCE_VMID —
     # the rollback must keep SSH + the deploy key.
     for vmid, name in ((NEWID, QGA_BACKUP_NAME), (QGA_VMID, NAME)):
-        r = _node_ssh(f"qm set {vmid} --name {name}", timeout=30)
-        if r.returncode != 0:
-            raise SystemExit(f"qm set {vmid} --name {name} failed: {r.stderr.strip()[:200]}")
+        proxmox_api("PUT", f"/nodes/{n}/qemu/{vmid}/config", data={"name": name})
     proxmox_api("PUT", f"/nodes/{n}/qemu/{QGA_VMID}/config", data={"tags": "template"})
     up = proxmox_api("POST", f"/nodes/{n}/qemu/{QGA_VMID}/template")
     wait_for_proxmox_task(n, up["data"])

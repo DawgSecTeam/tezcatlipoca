@@ -158,6 +158,13 @@ python3 sync-template.py --template base-ubuntu24.04-fix --from hdd-150 --to zfs
 (`vzdump`→`qmrestore` over root SSH; nodes must accept root SSH keys — the API-only deploy path
 itself never needs node SSH.)
 
+This is the one operation with no API-only form: the API refuses `vzdump`'s `stdout` (`option is
+only allowed on the command line interface`) and exposes no streamed export or import, so the dump
+cannot leave the source node through it. The restore half *is* API-capable (`POST
+/nodes/{node}/qemu` takes `archive=<path|volume>`), so a datastore both nodes see would make a
+sync possible — dump to that storage, restore from its volume id. Until one exists, a host without
+root SSH gets a template by building it on that host, not by syncing it.
+
 ## Invariants
 
 - A competition's teams may span nodes, but the engine, engine template, and routing pivot are
