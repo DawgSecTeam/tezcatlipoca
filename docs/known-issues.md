@@ -28,6 +28,27 @@ the identity claim is false and another competition's validated template was des
 tag for already-deployed VMs — changing the derivation alone makes every existing and live range's
 teardown refuse.
 
+### `proxmox.mgmt_bridge` is declared and never read, so only a `vmbr0` estate can host a range
+
+The estate profile carries the knob (`estate/config.py`'s spec, and `mgmt_bridge = "vmbr0"` in
+`tezcatlipoca.example.toml`) and nothing resolves it: `estate/apply.py:create_engine` builds
+`bridges = ["vmbr0"] + …`, `engine/engine_template_ops.py` sets `"net0": "virtio,bridge=vmbr0"`, and
+`net/jump_ops.py` its own `{"net0": "virtio,bridge=vmbr0"}`. An estate whose management bridge is
+not `vmbr0` (the cyber range's is `vmbr100`) therefore still cannot host a range, and the failure is
+a VM attached to a bridge the node may not have rather than a refusal. The per-node half — a
+`mgmt_bridge` field on a `nodes.json` record, preferred over the profile, with a preflight that
+refuses a bridge the node does not own — lived only on `range-shakedown` (`cce55bf`), which was
+built against the deleted terraform layer and could not be merged: it resurrects `terraform/` (927
+lines) and `deploy_lib/tfinputs.py`, and 8 of its 16 files conflict. Its other two commits are not
+missing (`c8607b8` patched a substring bridge match the estate rewrite removed; `0d58b89` is
+satisfied by `estate/config.py`'s `require`).
+**Next action**: port `cce55bf` onto the estate layer — thread the resolved bridge through
+`create_engine` (`estate/apply.py`), `engine/engine_template_ops.py` and `net/jump_ops.py`, read it
+in the plan, and add `infra/collisions.check_mgmt_bridge` to the preflight; the branch's own
+`tests/test_mgmt_bridge.py` is the starting point. Needs the user's call first: `create_engine` is
+hashed as code-class drift, so the port makes every existing engine template report stale and
+rebuild on its next deploy.
+
 ### The template builders reach their scratch VM through node shell
 
 `tools/build-{pfsense,vyos}-provision-template.py` alias `192.168.1.2` on the node's bridge and `ssh -W` through `root@<node>` to drive the scratch VM's bootstrap LAN (`192.168.1.0/24`); their ISO fetch (`download-url`) and template rename (`PUT .../config`) are API-only, leaving this hop and template sync ([multi-node.md](multi-node.md#template-copies)) as the repo's only node-shell uses. The pfSense agent retrofit cannot simply switch to the agent channel instead: installing that agent is what the hop is for. **Next action**: on a host whose shell is closed, either alias `192.168.1.2` on the *operator's* NIC where the operator shares the scratch VM's bridge L2, or console-type an operator-routable bootstrap address (`/monitor sendkey`, which these tools already drive the console with).
