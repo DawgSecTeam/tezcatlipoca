@@ -1,7 +1,7 @@
 """Resume existence gates (C1) — scale8 soak 2026-10-02.
 
 Attempts 9-11 of that soak resumed at `--from-phase 5/6` after a phase-4 death. Apply
-#2 had never run, so no team box existed; the phase-5 repair sweep is `strict=False`,
+#2 had never run, so no team box existed; the phase-6 pre-domain pass is `strict=False`,
 so it "succeeded" against 32 nonexistent machines and wrote `last_phase=5`. The next
 resume read that stamp as proof the machines were there, every downstream wait raced a
 ghost, and the run spent ~40 minutes in `wait_for_windows_sshd` before anyone worked out

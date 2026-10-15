@@ -48,7 +48,7 @@ DOMAIN_INFRA_CONFIGS = {"ADDS", "Domain Join", "domain-join"}
 #
 #   golden   — everything identity-free and non-disruptive/non-boot-hostile: planted once
 #              on the golden set, rides the linked clone.
-#   repair   — sshd/sudoers touchers, re-asserted post-clone in phase 5 BEFORE the domain
+#   pre-domain — sshd/sudoers touchers, re-asserted post-clone in phase 6 BEFORE the domain
 #              pass: nakon's member joins authenticate over SSH, so a clone whose
 #              sshd/sudoers state drifted through the clone's fresh cloud-init pass must
 #              be repaired while the box is still joinable. fix_services_on_boxes runs
@@ -62,7 +62,7 @@ DOMAIN_INFRA_CONFIGS = {"ADDS", "Domain Join", "domain-join"}
 #              as-started competition flavor, so it lands right before beacons/tz-ready.
 #
 # Within each pass, DISRUPTIVE_CONFIGS still sort last per machine.
-REPAIR_STAGE_CONFIGS = {
+PREDOMAIN_STAGE_CONFIGS = {
     "ssh-empty-passwords", "ssh-max-auth-retries-high", "ssh-password-auth",
     "ssh-root-login", "ssh-x11-forwarding", "sshd-config-weak",
     "sshd-force-sftp-broken-chroot", "ssh-backdoor-listener-2222",
@@ -85,7 +85,7 @@ FINAL_STAGE_CONFIGS = DISRUPTIVE_CONFIGS | {
     # AD-dependent / domain-identity Windows configs (amongus-cde-2026): each only does
     # the right thing on a PROMOTED DC (AD module present, policy now domain-scoped,
     # zone DNSRoot resolvable). The DC's per-team pass for its otherwise golden-stage
-    # configs still runs pre-promotion (repair stage), so these plant per team after
+    # configs still runs pre-promotion (pre-domain stage), so these plant per team after
     # the domain pass in phase 6 instead. Members never pin them.
     "ad-color-fleet-win",
     "ad-dns-localhost",
@@ -96,7 +96,7 @@ FINAL_STAGE_CONFIGS = DISRUPTIVE_CONFIGS | {
 # AD-dependent catalog configs by SHAPE, not enumeration: the cde-2026-era catalog
 # grew a whole family of `ad-*` Windows misconfigs plus GPO/GPP ones that only do the
 # right thing on a PROMOTED DC (scrim-one 2026-10-03: seven of them rode a DC's
-# repair-stage plant pre-promotion, failed rc=1, and the range silently lost its AD
+# pre-domain plant pre-promotion, failed rc=1, and the range silently lost its AD
 # attack surface — invisible until the plant_coverage gate existed). Everything
 # `ad-*` and these GPO/GPP names plants per team in the final stage, post-domains.
 DOMAIN_DEPENDENT_CONFIG_PREFIXES = ("ad-",)
@@ -104,7 +104,7 @@ DOMAIN_DEPENDENT_CONFIGS = {
     "gpo-persistence-win",
     "gpp-cpassword-win",
     # ldap-signing-off-win seeds the DC's NTDS LDAP-signing parameters, which only exist
-    # once a DC is promoted — run in the phase-6 repair sweep it dies rc=1 with
+    # once a DC is promoted — run in the phase-6 pre-domain pass it dies rc=1 with
     # "NTDS Parameters key not found -- this seed only applies to a domain controller"
     # (live-found 2026-10-13 on crimson-relay dc01; the name has no `ad-` prefix so the
     # prefix rule missed it).
@@ -119,7 +119,7 @@ def is_domain_dependent(name):
 
 
 # Combined view: what a convergence sweep (redeploy rollback-base/rebuild) must plant.
-POST_CLONE_CONFIGS = REPAIR_STAGE_CONFIGS | FINAL_STAGE_CONFIGS
+POST_CLONE_CONFIGS = PREDOMAIN_STAGE_CONFIGS | FINAL_STAGE_CONFIGS
 
 # Pin-var requirements (M4 pin fix). The catalog DB carries no required-vars metadata
 # (only depends_on), so this curated table is the operator-level source of truth:
@@ -127,11 +127,11 @@ POST_CLONE_CONFIGS = REPAIR_STAGE_CONFIGS | FINAL_STAGE_CONFIGS
 # of failing mid-plant (live-found 2026-09-24: sudoers-rule rc=2, hosts-redirect-linux
 # rc=2, unrealircd rc=127). Var kinds:
 #   "ip"      — machine-identity: auto-filled with that machine's own IP at stage-file
-#               generation, and ONLY in the repair/final stages. A golden-stage plant
+#               generation, and ONLY in the pre-domain/final stages. A golden-stage plant
 #               would bake the golden box's IP into every linked clone (generate
 #               enforces this hard).
 #   "ip:<box>"— cross-box identity: auto-filled with the SAME TEAM's copy of <box>'s
-#               IP (e.g. a web box pointed at its team's database box). Same repair/
+#               IP (e.g. a web box pointed at its team's database box). Same pre-domain/
 #               final-stage-only rule as "ip"; the target box name must exist in
 #               boxes.json or generate fails loudly.
 #   "literal" — operator-supplied: pin as {"name": ..., "vars": {...}} in

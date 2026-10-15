@@ -64,7 +64,7 @@ Phases 1–2 are the expensive, dice-rolling part; 3–8 are mostly idempotent. 
 | 3 | apt/compose timeout | `--from-phase 3` (idempotent) | Rebuild boxes for an engine timeout |
 | 4 | Strict abort on a bad row; golden build/convert; apply #2 race | Trim → `--from-phase 4` | `--from-phase 1`. A partially *converted* golden set is fatal (destroy and redeploy) |
 | 5 | Firewall bootstrap/cutover (no-op without `in_path`) | `--from-phase 5` | Skip it on a firewall lineup |
-| 6 | Repair sweep (lenient: usually a tally); DNS/auth; fix_services | Trim → `--from-phase 6`; rerun once for transients | Assume it re-clones (cloning is phase 4) |
+| 6 | Pre-domain pass (lenient: usually a tally); DNS/auth; fix_services | Trim → `--from-phase 6`; rerun once for transients | Assume it re-clones (cloning is phase 4) |
 | 7 | Domains, final pass, beacons, `tz-ready` | Trim → `--from-phase 7`; check `.nakon-domain-*-adds.json` exist | Expect re-clone |
 | 8 | Seed/inject/unpause | `--from-phase 8` | Rerun past an unpaused engine |
 

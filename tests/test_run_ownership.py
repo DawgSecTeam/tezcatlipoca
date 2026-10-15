@@ -258,7 +258,7 @@ class DeployContextTags(unittest.TestCase):
             inject_password=None, placement=None, node="pve", engine_vmid=1000,
             engine_mgmt_ip="10.0.0.1", boxes=[], boxes_by_name={}, unbooted=set(),
             nakon_config_path=Path("n.json"), golden_config_path=Path("g.json"),
-            repair_config_path=Path("r.json"), final_config_path=Path("f.json"),
+            predomain_config_path=Path("r.json"), final_config_path=Path("f.json"),
             golden_inputs={}, golden_hashes={}, frozen_keep=set(), tf_dir=Path("."),
             tfvars_path=Path("."), tfvars={}, ssh_key_abs="/k", all_targets=[],
             managed_targets=[], linux_targets=[], windows_targets=[])

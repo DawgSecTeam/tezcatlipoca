@@ -134,7 +134,7 @@ def golden_hash_inputs(box, golden_machine, payload_hash, box_password, box_user
 #     the operator SSH pubkey (cloud-init sshkeys), and the apt-proxy flag (95tz-proxy
 #     file). IN (code): golden_ops.build_golden_set and the apt-prep script. OUT,
 #     with reasons: team count/identifiers/IPs (per-team, applied after cloning),
-#     event.conf (engine-side), repair/final-stage configs (planted post-clone, never
+#     event.conf (engine-side), pre-domain/final-stage configs (planted post-clone, never
 #     on the golden), snapshot names, node endpoint.
     return _split_inputs(
         {

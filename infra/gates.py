@@ -210,7 +210,7 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
     `guard_resume_from_phase` reads the checkpoint, which is a claim about work done —
     and a claim can be written by a run that did nothing. scale8 soak 2026-10-02 attempts
     9-11 resumed at --from-phase 5/6 after a phase-4 death: apply #2 never ran, the
-    phase-5 repair sweep is strict=False so it "succeeded" against 32 nonexistent
+    phase-6 pre-domain pass is strict=False so it "succeeded" against 32 nonexistent
     machines, and it checkpointed phase 5. Every later wait then raced a ghost, and the
     run spent ~40 minutes in wait_for_windows_sshd before anyone understood why.
 
@@ -279,7 +279,7 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
             f"  ERROR: --from-phase {from_phase} skips the phases that create the team boxes, "
             f"but {found}.\n"
             f"        The later phases would target machines that do not exist (this is the "
-            f"scale8 soak's poisoned resume: the repair sweep reported success against 32 "
+            f"scale8 soak's poisoned resume: the pre-domain pass reported success against 32 "
             f"ghosts and checkpointed it).\n"
             f"        Re-run with --from-phase 4 to recreate them."
         )

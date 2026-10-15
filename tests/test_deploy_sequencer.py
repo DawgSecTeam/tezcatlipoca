@@ -50,7 +50,7 @@ def _ctx(comp_dir, from_phase, state=None):
         engine_mgmt_ip="10.0.0.1", boxes=[], boxes_by_name={}, unbooted=set(),
         nakon_config_path=comp_dir / "nakon.json",
         golden_config_path=comp_dir / "golden.json",
-        repair_config_path=comp_dir / "repair.json",
+        predomain_config_path=comp_dir / "predomain.json",
         final_config_path=comp_dir / "final.json",
         golden_inputs={}, golden_hashes={}, frozen_keep=set(), tf_dir=comp_dir,
         tfvars_path=comp_dir / "terraform.tfvars.json", tfvars={}, ssh_key_abs="/k",

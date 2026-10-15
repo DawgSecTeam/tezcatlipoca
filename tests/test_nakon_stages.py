@@ -26,7 +26,7 @@ TEAMS = {"team1": {"identifier": 104}, "team2": {"identifier": 105}}
 
 # A fabricated config that requires ONLY a cross-box identity var and is NOT in
 # POST_CLONE_CONFIGS. This is the shape the old satellite path let through: every real
-# "ip:<box>" config currently also rides REPAIR_STAGE_CONFIGS, which masked the bug.
+# "ip:<box>" config currently also rides PREDOMAIN_STAGE_CONFIGS, which masked the bug.
 CROSSBOX_ONLY = {"hypothetical-crossbox": {"DB_HOST": "ip:db01"}}
 
 
@@ -93,7 +93,7 @@ class GoldenIdentityBan(unittest.TestCase):
                                  ("db01-golden", [])])
 
 
-# D2: the combined repair ∪ final view deduped by config name only, silently
+# D2: the combined pre-domain ∪ final view deduped by config name only, silently
 # dropping same-named pins that differ by vars.
 class PostCloneMerge(unittest.TestCase):
     COLD_BOXES = [{"name": "dc01", "template": "windows-server-2022"}]
@@ -114,7 +114,7 @@ class PostCloneMerge(unittest.TestCase):
 
     def test_postclone_keeps_same_named_decoys_on_cold_box(self):
         # A DC's golden is unbooted, so its otherwise golden-stage configs enter the
-        # repair stage. box_baseline.json ships several same-named local-user decoys;
+        # pre-domain stage. box_baseline.json ships several same-named local-user decoys;
         # the name-only merge kept only the first (postclone: 2 pins of 4).
         decoys = [
             {"name": "local-user", "vars": {"USERNAME": "scorebot", "PASSWORD": "a"}},
@@ -125,24 +125,24 @@ class PostCloneMerge(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             self._write(comp_dir, copy.deepcopy(decoys))
-            _, repair_p, _, postclone_p = nakon_config_ops.generate_stage_configs(
+            _, predomain_p, _, postclone_p = nakon_config_ops.generate_stage_configs(
                 comp_dir, self.COLD_TEAMS, self.COLD_BOXES, unbooted={"dc01"})
-            repair = self._pins(repair_p)
+            predomain = self._pins(predomain_p)
             postclone = self._pins(postclone_p)
         self.assertEqual([n for n, _ in postclone],
                          ["local-user", "local-user", "local-user", "install-smb-v1"])
         self.assertEqual([v.get("USERNAME") for n, v in postclone if n == "local-user"],
                          ["scorebot", "blackteam", "red_scoring"])
-        self.assertEqual(postclone, repair, "the merge must not lose repair pins")
+        self.assertEqual(postclone, predomain, "the merge must not lose pre-domain pins")
 
     def test_postclone_still_dedups_identical_pin_across_stages(self):
-        # The merge exists so a pin in BOTH the repair and final subsets plants once;
+        # The merge exists so a pin in BOTH the pre-domain and final subsets plants once;
         # the vars-aware key must preserve that.
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             self._write(comp_dir, [{"name": "both-stage-x", "vars": {"K": "v"}}])
-            with patch.object(nakon_config_ops, "REPAIR_STAGE_CONFIGS",
-                              nakon_config_ops.REPAIR_STAGE_CONFIGS | {"both-stage-x"}), \
+            with patch.object(nakon_config_ops, "PREDOMAIN_STAGE_CONFIGS",
+                              nakon_config_ops.PREDOMAIN_STAGE_CONFIGS | {"both-stage-x"}), \
                  patch.object(nakon_config_ops, "FINAL_STAGE_CONFIGS",
                               nakon_config_ops.FINAL_STAGE_CONFIGS | {"both-stage-x"}):
                 _, _, _, postclone_p = nakon_config_ops.generate_stage_configs(

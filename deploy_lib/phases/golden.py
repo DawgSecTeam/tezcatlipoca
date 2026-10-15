@@ -166,7 +166,7 @@ def bootstrap_clones(ctx):
 # Bring the fresh clones to a plantable state and take the pre-sweep restore point.
     # Apply #2 (re-)created the team boxes: any surviving .postclone-swept
     # marker describes the OLD clones, and a phase-5 resume would skip the
-    # repair sweep/credlist/shim on the fresh ones (hit twice on
+    # pre-domain pass/credlist/shim on the fresh ones (hit twice on
     # shakedown-5x4; the workaround was deleting the marker by hand).
     (ctx.comp_dir / ".postclone-swept").unlink(missing_ok=True)
 

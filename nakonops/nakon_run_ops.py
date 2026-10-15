@@ -190,8 +190,8 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
                 # rc=0 is not the same as "the plant did something". A strict=False run
                 # whose every machine was unreachable finishes rc=0 with zero FAILED
                 # steps, because a host that never answered cannot report a failing
-                # step. That is how the scale8 soak's repair sweep "succeeded" against
-                # 32 machines that did not exist (2026-10-02) and checkpointed phase 5.
+                # step. That is how the scale8 soak's pre-domain pass "succeeded" against
+                # 32 machines that did not exist (2026-10-02) and checkpointed phase 6.
                 # 2 flaky steps of 41 is a tolerated failure; 41 of 41 is a broken
                 # sweep, and only the latter must stop the run.
                 nothing = _nothing_answered(machines_json)
@@ -201,7 +201,7 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
                         f"{nothing}. rc=0 with no per-machine step results means the "
                         f"hosts never answered (or --only selected no machine) — "
                         f"treating that as a completed plant is what let the scale8 "
-                        f"soak's repair sweep 'succeed' against machines that did not "
+                        f"soak's pre-domain pass 'succeed' against machines that did not "
                         f"exist. Refusing to continue; check that the boxes are up and "
                         f"reachable, then re-run."
                     )

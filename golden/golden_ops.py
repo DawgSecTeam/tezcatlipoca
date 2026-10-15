@@ -16,7 +16,7 @@ machine SID, so DCs cloned from one booted golden gave every team the same Domai
 (winad-testrun 2026-09-25). Domain-controller box types therefore get an UNBOOTED
 golden: a full clone of the sysprepped base converted straight to a template, so each
 team's clone runs specialize itself (fresh SID). Their planted configs move to the
-per-team repair stage (nakon_config_ops.generate_stage_configs), which still runs pre-domain.
+per-team pre-domain stage (nakon_config_ops.generate_stage_configs), which still runs pre-domain.
 """
 
 import json

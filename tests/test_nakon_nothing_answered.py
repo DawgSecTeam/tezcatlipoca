@@ -1,6 +1,6 @@
 """strict=False still fails when nothing answered (C2) — scale8 soak 2026-10-02.
 
-The phase-5 repair sweep runs `nakon deploy` with strict=False so a couple of flaky pins
+The phase-6 pre-domain pass runs `nakon deploy` with strict=False so a couple of flaky pins
 of 41 cannot abort a deploy. But a host that never answered cannot report a failing step,
 so an all-unreachable sweep finishes rc=0 with no FAILED lines — and that is exactly what
 happened: the sweep "succeeded" against 32 machines that did not exist, the caller

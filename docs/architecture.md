@@ -60,7 +60,7 @@ the earlier phases complete (`--force-from-phase` overrides).
    over: drop `192.168.<id>.1`, add `192.168.<id>.0/24 via 172.31.<id>.2`. A gate proves every team
    subnet routes through its firewall. A later `terraform apply` rewrites the pre-cutover netplan
    ([known-issues.md](known-issues.md)).
-6. **Repair-stage sweep** — plant the repair stage (sshd/sudoers touchers) on every team box
+6. **Pre-domain pass** — plant the pre-domain stage (sshd/sudoers touchers) on every team box
    (lenient, `--jobs`), then `fix_services_on_boxes` on Linux boxes only. Failures are recorded per
    machine. `.postclone-swept` lets a resume skip it.
 7. **Domains → final pass → beacons → `tz-ready`** — per-team AD forests concurrently (serial within a
@@ -78,16 +78,16 @@ Compfile + boxes.json
   → nakon-config.json                    (per machine: ip/user/password/configurations)
   → generate_stage_configs:
       .nakon-golden.json     one machine per box type, golden stage     pass 1, strict, phase 4
-      .nakon-repair.json     every team machine, sshd/sudoers touchers  pass 2, lenient, phase 6
+      .nakon-predomain.json  every team machine, sshd/sudoers touchers  pass 2, lenient, phase 6
       .nakon-final.json      every team machine, disruptive/boot-hostile pass 3, lenient, phase 7
-      .nakon-postclone.json  repair ∪ final; replayed by redeploy rollback/reconfigure
+      .nakon-postclone.json  pre-domain ∪ final; replayed by redeploy rollback/reconfigure
   → content-addressed bundles (vendor/nakon/bundles/, cached by config hash)
   → engine /opt/nakon/<run-tag>/  (`nakon deploy --bundle --config [--only] [--strict] [--jobs N]` over SSH)
 ```
 
 - `Compfile` (`name`/`scenario`/`difficulty`) and `boxes.json` (`name`/`template`/`cpu`/`memory_mb`/`disk_gb`/`last_octet`) are the only required inputs; `users.json` and `domain_roles.json` are optional.
 - `box_services.json`/`box_vulns.json` are per box type, so every team defends the identical set and Quotient wildcard checks (`192.168._.<octet>`) hold.
-- Stage split: linked clones inherit the golden disk, so identity-free, non-disruptive configs plant once per box type. The rest splits by ordering: **repair** must precede the domain pass (member joins authenticate over SSH, which a clone's fresh cloud-init can disturb); **final** must follow it (joins reboot members and need working DNS/apt). Membership: `constants.REPAIR_STAGE_CONFIGS` / `FINAL_STAGE_CONFIGS`; `POST_CLONE_CONFIGS` is the union.
+- Stage split: linked clones inherit the golden disk, so identity-free, non-disruptive configs plant once per box type. The rest splits by ordering: **pre-domain** must precede the domain pass (member joins authenticate over SSH, which a clone's fresh cloud-init can disturb); **final** must follow it (joins reboot members and need working DNS/apt). Membership: `constants.PREDOMAIN_STAGE_CONFIGS` / `FINAL_STAGE_CONFIGS`; `POST_CLONE_CONFIGS` is the union.
 - Bundles are built operator-side; the engine never sees vulndb credentials. `--only` scopes a deploy without changing bundle content.
 
 ## Targets

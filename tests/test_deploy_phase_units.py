@@ -44,7 +44,7 @@ def _ctx(comp_dir, **overrides):
         engine_vmid=1000, engine_mgmt_ip="10.0.0.1", boxes=[], boxes_by_name={},
         unbooted=set(), nakon_config_path=comp_dir / "nakon.json",
         golden_config_path=comp_dir / "golden.json",
-        repair_config_path=comp_dir / "repair.json",
+        predomain_config_path=comp_dir / "predomain.json",
         final_config_path=comp_dir / "final.json",
         golden_inputs={}, golden_hashes={}, frozen_keep=set(), tf_dir=comp_dir,
         tfvars_path=comp_dir / "terraform.tfvars.json", tfvars={}, ssh_key_abs="/k",
@@ -176,7 +176,7 @@ class Phase3Order(unittest.TestCase):
             self.assertIn("remote_access 0", out.getvalue())
 
 
-class Phase5RepairSweep(unittest.TestCase):
+class Phase6PredomainPass(unittest.TestCase):
     def test_resume_marker_skips_the_whole_sweep(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
@@ -187,25 +187,25 @@ class Phase5RepairSweep(unittest.TestCase):
                     dpatch("fix_services_on_boxes") as p_fix, \
                     dpatch("ensure_nat_forwarding") as p_nat, \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                dl_postclone.phase6_repair_sweep(ctx)
+                dl_postclone.phase6_predomain_pass(ctx)
             self.assertIn("[6/8] Resume marker present", out.getvalue())
             p_nakon.assert_not_called()
             p_fix.assert_not_called()
             p_nat.assert_not_called()
             self.assertEqual(marker.read_text(), "done")
 
-    def test_no_repair_machines_still_runs_fix_services_and_writes_marker(self):
+    def test_no_predomain_machines_still_runs_fix_services_and_writes_marker(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             ctx = _ctx(comp_dir)
-            ctx.repair_config_path.write_text(json.dumps({"machines": []}))
+            ctx.predomain_config_path.write_text(json.dumps({"machines": []}))
             with dpatch("run_nakon") as p_nakon, \
                     dpatch("fix_services_on_boxes") as p_fix, \
                     dpatch("ensure_nat_forwarding"), \
                     dpatch("compfile_flag", return_value=0), \
                     contextlib.redirect_stdout(io.StringIO()) as out:
-                dl_postclone.phase6_repair_sweep(ctx)
-            self.assertIn("No repair-stage configurations in this lineup", out.getvalue())
+                dl_postclone.phase6_predomain_pass(ctx)
+            self.assertIn("No pre-domain configurations in this lineup", out.getvalue())
             p_nakon.assert_not_called()
             p_fix.assert_called_once()
             self.assertTrue((comp_dir / ".postclone-swept").exists())
@@ -219,23 +219,23 @@ class Phase5RepairSweep(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             ctx = _ctx(comp_dir)
-            ctx.repair_config_path.write_text(json.dumps({"machines": []}))
+            ctx.predomain_config_path.write_text(json.dumps({"machines": []}))
             with dpatch("run_nakon"), \
                     dpatch("fix_services_on_boxes"), \
                     dpatch("ensure_nat_forwarding"), \
                     dpatch("compfile_flag", return_value=0), \
                     contextlib.redirect_stdout(io.StringIO()):
-                dl_postclone.phase6_repair_sweep(ctx)
+                dl_postclone.phase6_predomain_pass(ctx)
         self.assertIn("plant_coverage_failed", ctx.state)
         self.assertEqual(ctx.state["plant_coverage_failed"], {})
         self.assertEqual(ctx.state["nakon_failed_steps"], [])
 
-    def test_repair_pass_records_the_stage_tally_and_persists_coverage(self):
+    def test_predomain_pass_records_the_stage_tally_and_persists_coverage(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             machines = [{"name": "web01-team101", "configurations": []}]
             ctx = _ctx(comp_dir)
-            ctx.repair_config_path.write_text(json.dumps({"machines": machines}))
+            ctx.predomain_config_path.write_text(json.dumps({"machines": machines}))
             result = NakonResult(["sshd-hardening"],
                                  [{"name": "web01-team101", "steps": []}])
             with dpatch("run_nakon", return_value=result) as p_nakon, \
@@ -245,8 +245,8 @@ class Phase5RepairSweep(unittest.TestCase):
                     dpatch("compfile_flag", return_value=0), \
                     dpatch("record_stage_coverage"), \
                     contextlib.redirect_stdout(io.StringIO()):
-                dl_postclone.phase6_repair_sweep(ctx)
-            self.assertEqual(ctx.state["nakon_failed_steps"], ["repair: sshd-hardening"])
+                dl_postclone.phase6_predomain_pass(ctx)
+            self.assertEqual(ctx.state["nakon_failed_steps"], ["predomain: sshd-hardening"])
             _args = p_nakon.call_args
             self.assertIs(_args.kwargs["strict"], False)
             self.assertEqual(_args.kwargs["jobs"], 4)

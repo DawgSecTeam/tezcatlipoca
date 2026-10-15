@@ -40,9 +40,9 @@ def record_stage_coverage(state, stage_machines, result, save_state):
 #     final pass that was fully green yet popped a stale entry lost the pop at process
 #     exit and verify's coverage gate stayed red — re-creating exactly the bug ff9b19f
 #     fixed (amongus-cde-2026 2026-09-30: "SMB v1 stayed 'failed' across three green
-#     replants"). The window is narrow but real: phase-5 tally empty, final pass fully
+#     replants"). The window is narrow but real: phase-6 tally empty, final pass fully
 #     green, and the stale entry belongs to a final-only machine (one carrying just
-#     systemd-system-masked / hosts-redirect-linux, so repair_machines never names it).
+#     systemd-system-masked / hosts-redirect-linux, so predomain_machines never names it).
 #     save_state is injected so the always-persist invariant is testable without a real
 #     state file.
     record_coverage(state, stage_machines, result)
@@ -54,7 +54,7 @@ def record_clean_coverage(ctx):
 #
 #     A stage with no configurations is a clean result, not an absent one: without the
 #     keys verify's coverage gate fails closed with "coverage was never recorded"
-#     (live-found 2026-10-02). Shared by phase 6 (no repair-stage configs) and phase 7
+#     (live-found 2026-10-02). Shared by phase 6 (no pre-domain configs) and phase 7
 #     (no final-stage configs).
     ctx.state.setdefault("plant_coverage_failed", {})
     ctx.state.setdefault("nakon_failed_steps", [])

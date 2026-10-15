@@ -264,16 +264,16 @@ class PlantCoverage(unittest.TestCase):
     def test_superseded_tally_history_does_not_gate_a_clean_record(self):
     # A record exists and is clean: the merged tally is history, not state.
 #
-    #         scrim-one 2026-10-03: seven ad-* plants failed in the pre-promotion repair
+    #         scrim-one 2026-10-03: seven ad-* plants failed in the pre-promotion pre-domain
     #         stage, the post-domain final pass replanted them green (clearing the record),
-    #         and the merged tally still listed the repair failures — the gate stayed red
+    #         and the merged tally still listed the pre-domain failures — the gate stayed red
     #         forever on entries a later pass had already fixed. The record side fixed this
     #         for records (stale-entry clearing); this is the tally twin.
         tmp, comp_dir = _comp_dir()
         self.addCleanup(tmp.cleanup)
         _state(comp_dir, {"plant_coverage_failed": {},
                           "nakon_failed_steps": [
-                              "repair: [dc01-team130] ad-acl-dcsync-win: FAILED rc=1"]})
+                              "predomain: [dc01-team130] ad-acl-dcsync-win: FAILED rc=1"]})
         result, out = _run(v_state_gates.check_plant_coverage, comp_dir)
         self.assertIs(result.status, v_model.Status.PASS)
         self.assertIn("informational", out)

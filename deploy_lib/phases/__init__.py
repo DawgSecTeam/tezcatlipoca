@@ -4,7 +4,7 @@
   engine.py     phases 2-3  engine template + terraform apply #1, per-deploy engine prep
   golden.py     phase 4  golden set + terraform apply #2 + clone bootstrap
   firewall.py   phase 5  in-path firewall bootstrap + engine cutover
-  postclone.py  phase 6  repair sweep
+  postclone.py  phase 6  pre-domain pass
   final.py      phase 7  AD domains, final pass, beacons, tz-ready snapshots
   seed.py       phase 8  seed teams / unpause / injects
   finish.py     connect_terraform (between 2 and 3) and finish_deploy (after 8)
@@ -21,7 +21,7 @@ from deploy_lib.phases.final import phase7_domains_and_final
 from deploy_lib.phases.finish import connect_terraform, finish_deploy
 from deploy_lib.phases.firewall import phase5_firewall_bootstrap
 from deploy_lib.phases.golden import phase4_golden_set
-from deploy_lib.phases.postclone import phase6_repair_sweep
+from deploy_lib.phases.postclone import phase6_predomain_pass
 from deploy_lib.phases.seed import phase8_seed
 
 __all__ = ["PHASES", "connect_terraform", "finish_deploy"]
@@ -33,7 +33,7 @@ PHASES = (
     phase3_prepare_engine,
     phase4_golden_set,
     phase5_firewall_bootstrap,
-    phase6_repair_sweep,
+    phase6_predomain_pass,
     phase7_domains_and_final,
     phase8_seed,
 )

@@ -1,7 +1,7 @@
 """Unbooted-DC golden contract: stage configs and golden build/convert for DC roles.
 
 A DC-role box gets NO golden machine (its otherwise golden-stage configs ride the
-per-team repair stage, still pre-domain), and its golden is a FULL clone of the
+per-team pre-domain stage, still pre-domain), and its golden is a FULL clone of the
 generalized base converted without ever booting — a dead prior attempt is destroyed
 and recloned, never reused, and a selective rebuild touches only unconverted slots.
 All Proxmox/Nakon boundaries are mocked; no API calls."""
@@ -32,7 +32,7 @@ def _config_names(machine):
 
 
 class GenerateStageConfigsTests(unittest.TestCase):
-    def test_dc_golden_stage_moves_to_repair_per_team(self):
+    def test_dc_golden_stage_moves_to_predomain_per_team(self):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             machines = [
@@ -49,21 +49,21 @@ class GenerateStageConfigsTests(unittest.TestCase):
             ]
             (comp_dir / "nakon-config.json").write_text(
                 json.dumps({"machines": machines}))
-            golden_p, repair_p, final_p, _ = nakon_config_ops.generate_stage_configs(
+            golden_p, predomain_p, final_p, _ = nakon_config_ops.generate_stage_configs(
                 comp_dir, TEAMS, BOXES, unbooted={"dc01"})
             golden = json.loads(golden_p.read_text())["machines"]
-            repair = json.loads(repair_p.read_text())["machines"]
+            predomain = json.loads(predomain_p.read_text())["machines"]
             final = json.loads(final_p.read_text())["machines"]
 
             self.assertEqual([m["name"] for m in golden], ["web01-golden"])
             self.assertEqual(golden[0]["ip"], "192.168.104.241")
             self.assertEqual(_config_names(golden[0]), ["install-nginx"])
 
-            repair_by_name = {m["name"]: _config_names(m) for m in repair}
-            self.assertEqual(repair_by_name["dc01-team1"], ["install-ad-misconfig"])
-            self.assertEqual(repair_by_name["dc01-team2"], ["install-ad-misconfig"])
-            self.assertEqual(repair_by_name["web01-team1"], ["writable-sudoers"])
-            self.assertEqual(repair_by_name["web01-team2"], ["writable-sudoers"])
+            predomain_by_name = {m["name"]: _config_names(m) for m in predomain}
+            self.assertEqual(predomain_by_name["dc01-team1"], ["install-ad-misconfig"])
+            self.assertEqual(predomain_by_name["dc01-team2"], ["install-ad-misconfig"])
+            self.assertEqual(predomain_by_name["web01-team1"], ["writable-sudoers"])
+            self.assertEqual(predomain_by_name["web01-team2"], ["writable-sudoers"])
 
             self.assertEqual({m["name"] for m in final},
                              {"web01-team1", "web01-team2"})

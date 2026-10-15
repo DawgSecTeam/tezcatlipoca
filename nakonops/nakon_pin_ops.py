@@ -17,7 +17,7 @@ def _pin_key(c):
 #
 #     Same-named pins with different vars are DIFFERENT plants — box_baseline.json
 #     emits 3+ same-named local-user/local-user-win decoy accounts per box, and a cold
-#     box's otherwise golden-stage configs ride the repair stage into the same combined
+#     box's otherwise golden-stage configs ride the pre-domain stage into the same combined
 #     list. Keying on the name alone silently collapsed them (audit-found 2026-10-02:
 #     .nakon-postclone.json — what redeploy's convergence sweep deploys and verify
 #     --packet probes — kept 2 of the 4 decoy/plant pins, so a rollback-base sweep
@@ -56,7 +56,7 @@ def _identity_banned_configs():
 #     while _fill_identity_vars had already baked team1's database IP into the pin —
 #     every clone on that satellite would have pointed at team1's database. It was
 #     masked only because every current "ip:<box>" config also happens to be in
-#     REPAIR_STAGE_CONFIGS.
+#     PREDOMAIN_STAGE_CONFIGS.
     return {name for name, kinds in REQUIRED_VARS.items()
             if any(_is_identity_kind(kind) for kind in kinds.values())}
 

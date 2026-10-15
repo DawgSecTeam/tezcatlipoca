@@ -108,20 +108,20 @@ class CrossBoxIdentityVars(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             _write_machines(tmp, pins)
-            golden_p, repair_p, final_p, _ = nakon_config_ops.generate_stage_configs(
+            golden_p, predomain_p, final_p, _ = nakon_config_ops.generate_stage_configs(
                 Path(tmp), TEAMS, BOXES)
             golden_configs = [c for cfgs in _stage_names(golden_p).values()
                               for c in cfgs]
             self.assertNotIn("airship-webapp", golden_configs,
                              "airship-webapp is identity-dependent and must not ride "
                              "the golden disk")
-            repair = {m["name"]: m["configurations"]
-                      for m in json.loads(Path(repair_p).read_text())["machines"]}
-            self.assertIn("airship-team1", repair)
+            predomain = {m["name"]: m["configurations"]
+                      for m in json.loads(Path(predomain_p).read_text())["machines"]}
+            self.assertIn("airship-team1", predomain)
             self.assertEqual(
-                repair["airship-team1"][0]["vars"]["DB_HOST"], "192.168.1400.5")
+                predomain["airship-team1"][0]["vars"]["DB_HOST"], "192.168.1400.5")
             self.assertEqual(
-                repair["airship-team2"][0]["vars"]["DB_HOST"], "192.168.1401.5")
+                predomain["airship-team2"][0]["vars"]["DB_HOST"], "192.168.1401.5")
 
     def test_missing_cross_box_target_fails_loudly(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -146,7 +146,7 @@ class PostDomainStageRouting(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             _write_machines(tmp, pins)
-            golden_p, repair_p, final_p, _ = nakon_config_ops.generate_stage_configs(
+            golden_p, predomain_p, final_p, _ = nakon_config_ops.generate_stage_configs(
                 Path(tmp), TEAMS, BOXES, unbooted={"mira"})
             self.assertNotIn("mira-golden", _stage_names(golden_p),
                              "the DC's golden stays generalized: no golden machine")
@@ -157,9 +157,9 @@ class PostDomainStageRouting(unittest.TestCase):
                          "ad-dns-localhost"):
                 self.assertIn(name, mira_configs)
             # SMB v1 is not AD-dependent: as a cold box's otherwise golden-stage
-            # config it plants per team pre-domain (repair stage) instead.
-            repair = _stage_names(repair_p)
-            self.assertEqual(repair["mira-team1"], ["SMB v1"])
+            # config it plants per team pre-domain (pre-domain stage) instead.
+            predomain = _stage_names(predomain_p)
+            self.assertEqual(predomain["mira-team1"], ["SMB v1"])
 
 
 if __name__ == "__main__":

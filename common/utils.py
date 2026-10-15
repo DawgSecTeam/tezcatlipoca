@@ -132,7 +132,7 @@ def run_concurrent(items, fn, max_workers=MAX_CONCURRENCY):
 
 def is_unmanaged(box):
 # True for a box the pipeline must not plant/configure/score/domain-join — e.g. an
-#     in-path pfSense firewall (FreeBSD): no nakon plant, no golden, no repair/fix_services,
+#     in-path pfSense firewall (FreeBSD): no nakon plant, no golden, no pre-domain/fix_services,
 #     no cloud-init identity, no scored check, no domain role. It is cloned straight from its
 #     own template with operator-specified NICs. Kept in boxes.json so per-box-index vmids
 #     stay positional; every plant/config/scoring path skips it via this predicate.

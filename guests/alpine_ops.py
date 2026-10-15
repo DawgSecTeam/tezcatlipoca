@@ -82,7 +82,7 @@ def ensure_alpine_services(comp_dir, targets, ctx):
             missing = [m for m in markers.split() if m not in (stdout or "")]
             return missing
 
-        # Primary channel: guest agent as root. The repair sweep's writable-sudoers
+        # Primary channel: guest agent as root. The pre-domain pass's writable-sudoers
         # pin makes sudoers.d world-writable post-clone, sudo then ignores the whole
         # dir and `sudo sh -c` as medic demands a password it can't answer
         # (live-found 2026-09-28). The -fix alpine template ships the agent.

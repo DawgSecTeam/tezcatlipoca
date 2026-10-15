@@ -84,7 +84,7 @@ def check_plant_coverage(comp_dir):
             print(f"  FAIL  {name}: not planted: {', '.join(cfgs)}")
         problems.append(f"{sum(len(c) for c in unplanted.values())} unplanted config(s)")
     if tally:
-        # The tally is merged history, never the authority: "repair: X FAILED" stays listed
+        # The tally is merged history, never the authority: "predomain: X FAILED" stays listed
         # even after a later stage replanted X green (scrim-one 2026-10-03).
         print(f"  (informational) nakon history: {len(tally)} FAILED plant step(s) on "
               f"record — superseded failures stay listed; the coverage record above is "

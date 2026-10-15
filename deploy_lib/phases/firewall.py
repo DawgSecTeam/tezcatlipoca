@@ -19,7 +19,7 @@ def phase5_firewall_bootstrap(ctx):
 #     config.xml pushed over SSH through the engine and reboot into it; VyOS clones get
 #     generated set-command passes applied live. Either way the engine cutover then moves
 #     the gateway address onto the firewalls and points the engine's routes through the
-#     transit /30s. From here on every engine→box path (repair sweep, final pass, beacons,
+#     transit /30s. From here on every engine→box path (pre-domain pass, final pass, beacons,
 #     scoring) is verified to run THROUGH the firewall.
 #
 #     No firewalls in the lineup: print-and-return — the phase index stays stable, so

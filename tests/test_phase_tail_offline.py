@@ -82,7 +82,7 @@ class Tail(unittest.TestCase):
 
     def test_phase7_merges_prior_failures_without_duplicates(self):
         (self.comp / "final.json").write_text(json.dumps({"machines": [{"n": 1}]}))
-        ctx = _ctx(self.comp, state={"nakon_failed_steps": ["repair: a", "final: x: boom"]})
+        ctx = _ctx(self.comp, state={"nakon_failed_steps": ["predomain: a", "final: x: boom"]})
         with patch.object(final, "deploy_domain_configs"), \
                 patch.object(final, "build_nakon_bundle"), \
                 patch.object(final, "run_nakon", return_value=SimpleNamespace(failed=["x: boom"])), \
@@ -90,7 +90,7 @@ class Tail(unittest.TestCase):
                 patch.object(final, "plant_team_beacons"), patch.object(final, "run_concurrent"), \
                 patch.object(final, "record_stage_coverage"):
             final.phase7_domains_and_final(ctx)
-        self.assertEqual(ctx.state["nakon_failed_steps"], ["repair: a", "final: x: boom"])
+        self.assertEqual(ctx.state["nakon_failed_steps"], ["predomain: a", "final: x: boom"])
 
     def test_phase7_empty_final_stage_records_clean_coverage(self):
         ctx, m = self._p7([])

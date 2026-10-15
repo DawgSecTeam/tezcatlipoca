@@ -68,7 +68,7 @@ class DeployContext:
     unbooted: set = field(default_factory=set)
     nakon_config_path: Optional[Path] = None
     golden_config_path: Optional[Path] = None
-    repair_config_path: Optional[Path] = None
+    predomain_config_path: Optional[Path] = None
     final_config_path: Optional[Path] = None
     golden_inputs: dict = field(default_factory=dict)
     golden_hashes: dict = field(default_factory=dict)

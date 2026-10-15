@@ -156,7 +156,7 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
         # disruptive/boot-hostile final stage before the domain joins is exactly the
         # brick hazard the three-pass split exists to prevent.
         rebuilt_names = [t["machine"] for t in rebuilt]
-        repair_path = comp_dir / ".nakon-repair.json"
+        predomain_path = comp_dir / ".nakon-predomain.json"
         final_path = comp_dir / ".nakon-final.json"
 
         def _stage_pass(path, stage):
@@ -188,8 +188,8 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
                     f"redeploy {stage}-stage: {line}" for line in result.failed[:20]]
                 write_state(comp_dir / ".deploy_state.json", state)
 
-        print("  Repair-stage sweep (sshd/sudoers) on rebuilt boxes...")
-        _stage_pass(repair_path, "repair")
+        print("  Pre-domain pass (sshd/sudoers) on rebuilt boxes...")
+        _stage_pass(predomain_path, "predomain")
         pipeline_api.fix_services_on_boxes(
             comp_dir, [t for t in rebuilt if box_platform(t["box"]) == "linux"],
             ctx, box_creds=state.get("box_creds"))

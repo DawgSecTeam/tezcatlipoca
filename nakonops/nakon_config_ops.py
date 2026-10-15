@@ -14,7 +14,7 @@ from common.constants import (
     NAKON_DIR,
     PIN_CHECK_OVERRIDES,
     POST_CLONE_CONFIGS,
-    REPAIR_STAGE_CONFIGS,
+    PREDOMAIN_STAGE_CONFIGS,
     REQUIRED_VARS,
     SLOW_SERVICES,
     is_domain_dependent,
@@ -210,7 +210,7 @@ def _golden_stage_machines(full, unbooted, anchor_identifier, box_index_by_name)
             raise SystemExit(
                 f"  ERROR: identity-dependent config(s) {banned} would ride the golden "
                 f"disk of '{box_name}' and clone the golden box's address into every "
-                f"team. Add them to REPAIR_STAGE_CONFIGS or FINAL_STAGE_CONFIGS "
+                f"team. Add them to PREDOMAIN_STAGE_CONFIGS or FINAL_STAGE_CONFIGS "
                 f"(constants.py) so they plant per machine post-clone.")
         golden_machines.append({
             **m,
@@ -238,23 +238,23 @@ def generate_slot_golden_config(comp_dir, boxes, unbooted, anchor_identifier, sl
 
 
 def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
-# Split the full nakon config into golden / repair / final stage configs (M3.2).
+# Split the full nakon config into golden / pre-domain / final stage configs (M3.2).
 #
 #     nakon-config.json (all teams, full configuration lists) stays the source of truth.
 #     The golden stage takes ONE machine per box type — team1's copy of the full list minus
 #     the post-clone subsets, placed at the golden IP on team1's subnet — because the golden
 #     set exists so linked clones inherit the heavy work (package installs, services,
-#     non-disruptive misconfigs) as bytes on disk. The repair stage (phase 5, before
-#     domains) and the final stage (phase 6, after domains — see constants for why the
+#     non-disruptive misconfigs) as bytes on disk. The pre-domain stage (phase 6, before
+#     domains) and the final stage (phase 7, after domains — see constants for why the
 #     split matters) carry every team machine with their own subsets; machines with an
 #     empty subset for a stage are dropped from that stage's file. A combined post-clone
-#     view (repair ∪ final) is also written for redeploy's convergence sweeps. Returns
-#     (golden_path, repair_path, final_path, postclone_path); all 0600 and gitignored
+#     view (pre-domain ∪ final) is also written for redeploy's convergence sweeps. Returns
+#     (golden_path, predomain_path, final_path, postclone_path); all 0600 and gitignored
 #     (per-run-secret class — they carry box_password).
 #
 #     unbooted: box types whose golden stays generalized (domain controllers — see
 #     golden_ops' identity note). They get no golden machine; everything that would have
-#     ridden their golden plants per team in the repair stage instead (still pre-domain).
+#     ridden their golden plants per team in the pre-domain stage instead (still pre-domain).
     full = json.loads((comp_dir / "nakon-config.json").read_text())["machines"]
     team1_identifier = str(teams["team1"]["identifier"])
     box_index_by_name = {b["name"]: i for i, b in enumerate(boxes)}
@@ -265,15 +265,15 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
     # Identity-dependent configs (REQUIRED_VARS "ip"/"ip:<box>" kinds) write an
     # address into the disk. Planted on the golden they would bake the golden's IP
     # into every linked clone, so _golden_stage_machines refuses them there and the
-    # repair/final stages fill them per machine instead (see
+    # pre-domain/final stages fill them per machine instead (see
     # _identity_banned_configs for why this is one shared definition).
 
     golden_machines = _golden_stage_machines(full, unbooted, team1_identifier,
                                              box_index_by_name)
     # Domain-dependent configs (ad-* / GPO / the explicit final-stage set) plant per
-    # team AFTER the domain pass; they are never golden- or repair-stage, whatever a
+    # team AFTER the domain pass; they are never golden- or pre-domain-stage, whatever a
     # pin said (a DC box type is unbooted, so absent this rule its whole plan would
-    # ride the pre-promotion repair sweep and every domain-dependent step would fail).
+    # ride the pre-promotion pre-domain pass and every domain-dependent step would fail).
     domain_dependent = {config_name(c) for m in full for c in m["configurations"]
                         if is_domain_dependent(config_name(c))}
     post_clone = POST_CLONE_CONFIGS | domain_dependent
@@ -307,13 +307,13 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
             out.append({**m, "configurations": kept})
         return out
 
-    repair_machines = stage_machines(REPAIR_STAGE_CONFIGS, include_golden_stage=True)
+    predomain_machines = stage_machines(PREDOMAIN_STAGE_CONFIGS, include_golden_stage=True)
     final_machines = stage_machines(FINAL_STAGE_CONFIGS | domain_dependent)
-    # Merge repair ∪ final per machine, deduping on the pin's full identity
+    # Merge pre-domain ∪ final per machine, deduping on the pin's full identity
     # (_pin_key: name + vars) rather than its name alone — a name-only collapse drops
     # packet-promised same-named decoy accounts (audit-found 2026-10-02).
     combined = {}
-    for m in repair_machines + final_machines:
+    for m in predomain_machines + final_machines:
         entry = combined.setdefault(m["name"], {**m, "configurations": []})
         seen = {_pin_key(c) for c in entry["configurations"]}
         for c in m["configurations"]:
@@ -326,7 +326,7 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
 
     written = []
     for suffix, machines in ((".nakon-golden.json", golden_machines),
-                             (".nakon-repair.json", repair_machines),
+                             (".nakon-predomain.json", predomain_machines),
                              (".nakon-final.json", final_machines),
                              (".nakon-postclone.json", postclone_machines)):
         path = comp_dir / suffix

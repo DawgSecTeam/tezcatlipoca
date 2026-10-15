@@ -96,7 +96,7 @@ class ModeRebuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             stage = {"machines": [{"name": t["machine"]} for t in targets]}
-            (comp_dir / ".nakon-repair.json").write_text(
+            (comp_dir / ".nakon-predomain.json").write_text(
                 json.dumps({**stage, "steps": []}))
             (comp_dir / ".nakon-final.json").write_text(
                 json.dumps({**stage, "steps": []}))

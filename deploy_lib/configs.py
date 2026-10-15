@@ -23,12 +23,12 @@ def generate_stage_configs_and_hashes(ctx, comp_dir):
     ctx.nakon_config_path = generate_nakon_config(ctx.teams, ctx.boxes, ctx.difficulty, comp_dir, ctx.box_password,
                                                box_username=ctx.box_username)
     # M3.2: the full bundle is never deployed as one pass anymore. The golden-stage
-    # bundle is built inside golden_ops at plant time; the repair bundle in phase 5 and
-    # the final bundle in phase 6 (all content-addressed, so resumes hit the cache).
+    # bundle is built inside golden_ops at plant time; the pre-domain bundle in phase 6 and
+    # the final bundle in phase 7 (all content-addressed, so resumes hit the cache).
     # Domain controllers keep an unbooted golden so each team's forest specializes its
-    # own machine SID before promotion; their configs move to the repair stage.
+    # own machine SID before promotion; their configs move to the pre-domain stage.
     ctx.unbooted = unbooted_golden_boxes(comp_dir)
-    ctx.golden_config_path, ctx.repair_config_path, ctx.final_config_path, _postclone_path = generate_stage_configs(
+    ctx.golden_config_path, ctx.predomain_config_path, ctx.final_config_path, _postclone_path = generate_stage_configs(
         comp_dir, ctx.teams, ctx.boxes, unbooted=ctx.unbooted)
 
     # M4: template hashes are computed BEFORE phase 1 — cleanup must know which golden

@@ -40,7 +40,7 @@ competitions/*/nakon-config.json
 competitions/*/.nakon-domain-*.json
 competitions/*/.nakon-golden.json
 competitions/*/.nakon-postclone.json
-competitions/*/.nakon-repair.json
+competitions/*/.nakon-predomain.json
 competitions/*/.nakon-final.json
 # The competition's bad-auto config (deploy identity incl. the realm layer):
 # per-deploy state, regenerated on every deploy — never shared, never committed.

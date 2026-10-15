@@ -46,7 +46,7 @@ def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
     else:
         print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
         # strict=False, mirroring deploy.py's phase-6 stance: these re-plants hit live
-        # boxes mid-event, and one flaky/broken pin must not abort a repair sweep.
+        # boxes mid-event, and one flaky/broken pin must not abort a pre-domain pass.
         nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
         result = pipeline_api.run_nakon(
             key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
@@ -140,7 +140,7 @@ def prepare_nakon_assets(comp_dir, boxes):
 #     A function rather than main() inline so the reset ladder can build them LAZILY —
 #     a reset that settles at the tz-ready rung must not demand stage files it would
 #     never have used.
-    # Repair re-plants run the POST-CLONE stage only — the golden-stage installs ride the
+    # Pre-domain re-plants run the POST-CLONE stage only — the golden-stage installs ride the
     # linked clone and re-running them over live boxes mid-event is exactly what the stage
     # split removed.
     postclone = comp_dir / ".nakon-postclone.json"

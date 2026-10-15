@@ -63,7 +63,7 @@ def phase7_domains_and_final(ctx):
                                ctx.final_config_path,
                                timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(final_machines)),
                                strict=False, jobs=ctx.nakon_jobs)
-        # Merge, not overwrite: a failure in BOTH passes must keep the repair
+        # Merge, not overwrite: a failure in BOTH passes must keep the pre-domain
         # tally (phase 6 used to erase it by writing only on failure).
         merged = list(ctx.state.get("nakon_failed_steps") or [])
         merged += [f"final: {line}" for line in result.failed[:20]]

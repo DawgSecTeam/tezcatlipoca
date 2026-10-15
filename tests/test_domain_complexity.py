@@ -12,7 +12,7 @@ class DomainDependentClassification(unittest.TestCase):
 
     def test_ldap_signing_off_is_dc_only(self):
         # Regression 2026-10-13: seeds the DC's NTDS LDAP-signing params, so it fails rc=1
-        # in the pre-promotion repair sweep ("NTDS Parameters key not found") unless
+        # in the pre-promotion pre-domain pass ("NTDS Parameters key not found") unless
         # classified domain-dependent and planted in the final stage.
         self.assertTrue(is_domain_dependent("ldap-signing-off-win"))
 
