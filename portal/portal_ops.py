@@ -172,7 +172,7 @@ def bundle(config, env_text, src=PORTAL_SRC):
 def deploy_portal(ctx, env=os.environ):
 # Phase 8 tail: mint console tokens, write portal.json, ship and start the portal.
 #
-#     Idempotent on resume: tokens and the session secret are carried in .deploy_state.json,
+#     Idempotent on resume: tokens and the session secret are carried in the state document,
 #     the gate state under /opt/tez-portal/state survives a re-push, and compose up only
 #     recreates what changed. Never raises — every failure becomes a degradation.
     if not portal_enabled(ctx.comp_dir):

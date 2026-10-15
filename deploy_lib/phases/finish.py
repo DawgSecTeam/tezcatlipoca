@@ -26,7 +26,7 @@ def connect_estate(ctx):
 
 def write_credentials_file(ctx):
 # credentials.txt: the operator/packet-facing credential file, 0600 at creation
-#     (the same rule as teams.json and .deploy_state.json).
+#     (the same rule as teams.json and the state document).
     cred_lines = [
         f"# Credentials for {ctx.name} — generated {time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"Scoreboard:  http://{ctx.scoring_ip}",

@@ -7,6 +7,7 @@ the state bookkeeping (teams.json and the state document's roster lose the team)
 """
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -91,15 +92,17 @@ def _comp_dir(d):
 
 
 def _run(comp, team_key, *, survivors=(), config_tags=None, env=None):
-    env = env or {"TF_VAR_proxmox_node": "pve"}
-    doc = estate_state.open(comp)
+    env = env or {"TEZ_PROXMOX_NODE": "pve"}
+    doc = estate_state.EstateState.load(comp)
     fake = FakePVE(
         [{"vmid": r["vmid"], "name": r["name"], "status": "running", "tags": r["tags"]}
          for r in doc.resources("team_box")],
         bridges=[r["bridge"] for r in doc.resources("bridge")],
         survivors=survivors, config_tags=config_tags)
-    with mock.patch.object(team_ops, "load_ownership",
-                           return_value=(estate_state.load_flat(comp), OURS)), \
+    # The default node comes from the config, not the env dict handed to the teardown.
+    with mock.patch.dict(os.environ, env), \
+            mock.patch.object(team_ops, "load_ownership",
+                              return_value=(estate_state.load_flat(comp), OURS)), \
             mock.patch.object(team_ops, "pre_stop_windows_boxes") as p_stop, \
             mock.patch.object(team_ops, "_engine_ctx",
                               return_value={"scoring_engine_ip": "10.0.0.9"}), \
@@ -129,7 +132,7 @@ class RunTeamTeardown(unittest.TestCase):
     def test_a_team_the_state_does_not_own_is_refused(self):
         with tempfile.TemporaryDirectory() as d:
             comp = _comp_dir(d)
-            doc = estate_state.open(comp)
+            doc = estate_state.EstateState.load(comp)
             doc.section("secrets")["teams"] = {"team1": {"identifier": 101}}
             doc.save()
             with self.assertRaises(Refusal):

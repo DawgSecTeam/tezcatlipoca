@@ -49,7 +49,7 @@ def do_freeze(comp_dir, args, gate, coverage_passed):
         return False
     # A freeze taken while deploy-path CODE is uncommitted pins a commit that does not
     # contain the verified code (the deploy-time check is a warning, not a gate trip — see
-    # template_freeze.frozen_code_drift). Generated/run state (comp JSON, a legacy placement.json,
+    # template_freeze.frozen_code_drift). Generated/run state (comp JSON,
     # nodes.json, the state document, config backups) is expected to be dirty after a run and
     # must not block; it is noted, not refused.
     dirty = git_dirty_lines()
@@ -75,7 +75,7 @@ def do_freeze(comp_dir, args, gate, coverage_passed):
         "verify_report": {"gates": gate, "plant_coverage": coverage_passed},
     }
     from estate import state
-    document = state.open(comp_dir)
+    document = state.EstateState.load(comp_dir)
     document.section("templates")["frozen"] = record
     document.save()
     print(f"  FROZEN — {state.state_path(comp_dir)} written. Engine + "
@@ -90,7 +90,7 @@ def do_unfreeze(comp_dir, confirm):
               "defeats the freeze; it is meant for use BEFORE the competition starts.")
         return False
     from estate import state
-    document = state.open(comp_dir)
+    document = state.EstateState.load(comp_dir)
     if not document.section("templates").pop("frozen", None):
         print("  Nothing to unfreeze.")
         return True

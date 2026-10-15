@@ -20,6 +20,7 @@ if str(_REPO) not in sys.path:
 
 from infra.ownership import Refusal  # noqa: E402
 from teardown import orphan_ops  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 
 
 class FakeNode:
@@ -42,7 +43,7 @@ def vm(vmid, name, tags, description=""):
 def _comp_dir(root, name, run_id):
     comp = Path(root) / name
     comp.mkdir(parents=True)
-    (comp / ".deploy_state.json").write_text(json.dumps({"run_id": run_id}))
+    estate_state.write_flat(comp, {"run_id": run_id})
     return comp
 
 

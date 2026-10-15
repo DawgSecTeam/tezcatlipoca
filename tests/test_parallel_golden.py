@@ -37,6 +37,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from engine.template_freeze import load_template_hashes, save_template_hashes  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 from golden import golden_ops  # noqa: E402
 from golden import golden_target_ops
 from common.constants import SNAP_BASE  # noqa: E402
@@ -170,7 +171,7 @@ class GoldenBuildHarness:
             P("delete_snapshot",
               side_effect=lambda node, vmid, name, **kw: self.events.record("delete", str(vmid)))
             stack.enter_context(patch.dict(os.environ, {
-                "TF_VAR_ssh_public_key": "ssh-rsa AAAA test", "TF_VAR_proxmox_node": "pve"}))
+                "TEZ_SSH_PUBLIC_KEY": "ssh-rsa AAAA test", "TEZ_PROXMOX_NODE": "pve"}))
             yield
 
     def run(self):
@@ -234,8 +235,8 @@ class GoldenParallelism(unittest.TestCase):
         self.assertIn(cold_vmid, events.keys("template"))
         self.assertNotIn(cold_vmid, events.keys("snapshot"))
 
-    # Full clones are crash-consistent disk copies onto one datastore — deploy.py
-    # runs terraform at -parallelism=1 for the same reason. Nothing here may fan out.
+    # Full clones are crash-consistent disk copies onto one datastore, so the loop
+    # stays serial. Nothing here may fan out.
     def test_full_clone_loop_stays_serial(self):
         harness = GoldenBuildHarness(n=8, missing=True, clone_sleep=0.05)
         _, events, exc = harness.run()
@@ -333,8 +334,8 @@ class GoldenCheckpoint(unittest.TestCase):
 # Phase 4 emits its plant-coverage verdict through the `coverage` callback on EVERY
 # completion path — keyed for verify's '-golden' mapping, slot-qualified on satellite
 # slots. The alpine_services tolerated-failure path is the load-bearing one: those
-# failures used to vanish (warn-only), so verify's coverage gate could not see a
-# golden disk that provably lacked the failed configs.
+# failures must reach the record (not vanish as a warning), so verify's coverage gate
+# can see a golden disk that provably lacked the failed configs.
 class GoldenCoverageRecords(unittest.TestCase):
     STAGE = [{"name": "box0-golden", "configurations": ["apache", "roundcube"]},
              {"name": "box1-golden", "configurations": ["Enable WinRM"]}]
@@ -405,8 +406,9 @@ class GoldenCoverageRecords(unittest.TestCase):
     # base- rename landed and fail loudly when it did not.
     def test_a_half_converted_golden_fails_the_conversion_loudly(self):
         harness = self._harness(golden_hashes={"box0": "h0", "box1": "h1"})
-        (harness.comp_dir / ".template-hashes.json").write_text(json.dumps(
-            {"golden_planted": {"box0": "h0", "box1": "h1"}}))
+        doc = estate_state.EstateState.load(harness.comp_dir)
+        doc.section("templates").update({"golden_planted": {"box0": "h0", "box1": "h1"}})
+        doc.save()
         real = harness._proxmox
 
         def half_converted(method, path, **kw):
@@ -425,8 +427,9 @@ class GoldenCoverageRecords(unittest.TestCase):
     # on the renamed form) satisfy the check and the build completes.
     def test_a_properly_renamed_golden_passes_the_conversion_check(self):
         harness = self._harness(golden_hashes={"box0": "h0", "box1": "h1"})
-        (harness.comp_dir / ".template-hashes.json").write_text(json.dumps(
-            {"golden_planted": {"box0": "h0", "box1": "h1"}}))
+        doc = estate_state.EstateState.load(harness.comp_dir)
+        doc.section("templates").update({"golden_planted": {"box0": "h0", "box1": "h1"}})
+        doc.save()
         real = harness._proxmox
 
         def renamed(method, path, **kw):
@@ -457,8 +460,9 @@ class GoldenCoverageRecords(unittest.TestCase):
     # must not run, and the verdict must be a skip, not an absent record.
     def test_a_fully_checkpointed_plant_records_a_skip_verdict(self):
         harness = self._harness(golden_hashes={"box0": "h0", "box1": "h1"})
-        (harness.comp_dir / ".template-hashes.json").write_text(json.dumps(
-            {"golden_planted": {"box0": "h0", "box1": "h1"}}))
+        doc = estate_state.EstateState.load(harness.comp_dir)
+        doc.section("templates").update({"golden_planted": {"box0": "h0", "box1": "h1"}})
+        doc.save()
         with patch.object(golden_ops, "run_nakon") as p_nakon:
             _r, _e, exc = harness.run()
         self.assertIsNone(exc)

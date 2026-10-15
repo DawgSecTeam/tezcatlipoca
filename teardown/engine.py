@@ -20,7 +20,7 @@ def load_teardown_journal(comp_dir):
 
 def save_teardown_journal(comp_dir, journal):
     from estate import state
-    document = state.open(comp_dir)
+    document = state.EstateState.load(comp_dir)
     document.section("teardown").update(journal)
     document.save()
 

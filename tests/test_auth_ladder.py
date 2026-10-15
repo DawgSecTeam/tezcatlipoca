@@ -15,7 +15,7 @@ from common import ssh_ops
 from guests import ubuntu_auth_ops
 from infra.guest_exec import DetachedExecResult
 
-ENV = {"TF_VAR_proxmox_node": "proxmox", "TF_VAR_ssh_public_key": "ssh-ed25519 AAAAtest"}
+ENV = {"TEZ_PROXMOX_NODE": "proxmox", "TEZ_SSH_PUBLIC_KEY": "ssh-ed25519 AAAAtest"}
 CTX = {"ssh_key_path": "/tmp/fake-key", "vm_username": "sysadmin",
        "scoring_engine_ip": "10.0.0.250", "box_username": "ubuntu"}
 TARGETS = [{"ip": "192.168.210.242", "vmid": 1152, "identifier": 210}]

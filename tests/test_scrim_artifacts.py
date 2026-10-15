@@ -38,6 +38,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from artifacts_lib import artifacts_ops as ao
+from estate import state as estate_state
 
 
 def _load(name, filename):
@@ -61,7 +62,7 @@ def make_comp(root, *, name="demo", run_id=RUN_ID):
     comp.mkdir(parents=True)
     (comp / "Compfile").write_text(f"name {name}-2026-10-03\nscenario x\n")
     (comp / "boxes.json").write_text(json.dumps(BOXES))
-    (comp / ".deploy_state.json").write_text(json.dumps({"run_id": run_id} if run_id else {}))
+    estate_state.write_flat(comp, {"run_id": run_id} if run_id else {})
     return comp
 
 
@@ -100,8 +101,8 @@ class TmpCase(unittest.TestCase):
 
     def resolve(self, args, comp=None):
     # resolve_run_dir with the node/endpoint env a deploy would have set.
-        with mock.patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve",
-                                          "TF_VAR_proxmox_endpoint": "https://10.0.0.193:8006"}):
+        with mock.patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve",
+                                          "TEZ_PROXMOX_ENDPOINT": "https://10.0.0.193:8006"}):
             return test_folder.resolve_run_dir(comp or self.comp, args)
 
 
@@ -327,8 +328,8 @@ class AgentIdentity(TmpCase):
             json.dumps({"team1": {"identifier": "130", "password": "pw"}}))
         for patch in (mock.patch.object(core, "REPO", self.repo),
                       mock.patch.object(core, "BAD_AUTO", self.bad),
-                      mock.patch.dict(os.environ, {"TF_VAR_vm_username": "sysadmin",
-                                                   "TF_VAR_proxmox_node": "pve"})):
+                      mock.patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "sysadmin",
+                                                   "TEZ_PROXMOX_NODE": "pve"})):
             patch.start()
             self.addCleanup(patch.stop)
 
@@ -694,8 +695,9 @@ class FireTest(TmpCase):
     def setUp(self):
         super().setUp()
         (self.comp / "box_services.json").write_text(json.dumps({"web01": ["ssh", "nginx"]}))
-        (self.comp / "targets.json").write_text(json.dumps(
-            {"targets": {"team1-web01": {"ip": "192.168.130.4"}}}))
+        doc = estate_state.EstateState.load(self.comp)
+        doc.section("roster").update({"targets": {"team1-web01": {"ip": "192.168.130.4"}}})
+        doc.save()
         self.creds = {"ENGINE_IP": "10.0.0.250", "TEAM1_ID": "130", "TEAM1_PW": "p",
                       "BOX_PW": "p", "INJECT_PW": "p", "KEY_PATH": "/tmp/k",
                       "VM_USER": "u", "BOX_USER": "medic"}

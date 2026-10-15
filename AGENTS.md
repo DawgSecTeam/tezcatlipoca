@@ -58,7 +58,7 @@ Details: [docs/usage-agents.md § run ownership](docs/usage-agents.md#run-owners
 is live against the same estate — the preflight refuses real collisions (vmid clashes, engine
 mgmt-IP conflicts) wherever provable, and `acquire_engine_lock` refuses a second deploy against
 the same scoring engine. Safe coexistence is otherwise on you: distinct `--scoring-vmid` and
-`TF_VAR_team_identifiers` blocks per range, relying on run-id tags to scope teardown.
+`--team-identifiers` blocks per range, relying on run-id tags to scope teardown.
 
 **bad-auto state is per-competition.** red01's config, deploy stamp, and identity live in
 `competitions/<id>/` (`.badauto-config.yaml` + the stamp bad-auto writes next to it); its vmid is
@@ -106,7 +106,7 @@ git worktree add -b <branch> ../tezcatlipoca-<branch> main
 cd ../tezcatlipoca-<branch>
 git submodule update --init                          # vendor/nakon — every nakon call needs it
 cp /path/to/main-tree/tezcatlipoca.toml .            # the NODE-PROPER profile (see below)
-cp /path/to/main-tree/.env .env                      # legacy env overrides, still loaded
+cp /path/to/main-tree/.env .env                      # TEZ_* env overrides, still loaded
 cp /path/to/main-tree/vendor/nakon/.env vendor/nakon/.env
 cp /path/to/main-tree/proxmox . && chmod 600 proxmox # the SSH key the config points at
 ```
@@ -116,25 +116,22 @@ cp /path/to/main-tree/proxmox . && chmod 600 proxmox # the SSH key the config po
   Known traps to check for in any config variant: a dead `proxmox.template_vm_id` (hard-fails the
   engine-base preflight — correct per-node values are in `infrastructure-status.md`); a default
   `engine.mgmt_ip` that collides with a live engine on a shared node (set it explicitly —
-  see `infrastructure-status.md`); and no `TF_VAR_team_identifiers`
+  see `infrastructure-status.md`); and no `knobs.team_identifiers`
   on a shared node, where the default 101+ block is commonly already occupied — set it explicitly.
 - All competition ops on Proxmox run on the range automation token, never the workshop portal's
   provisioner token (token names and per-host token sources: `infrastructure-status.md`). When
   copying a config across nodes,
-  re-export the token as `TEZ_PROXMOX_API_TOKEN` (or legacy `TF_VAR_proxmox_api_token`) explicitly
+  re-export the token as `TEZ_PROXMOX_API_TOKEN` explicitly
   instead of inheriting the source profile's value; check it before any deploy/destroy.
-- `TF_VAR_teams` / `TF_VAR_boxes_per_team` in an old env are no longer read — the comp dir supplies
-  the roster and box creds, so stale values there are inert.
 - `TEZ_THIN_HEADROOM=<0..1>` relaxes the datastore headroom gate on thin-provisioned pools (ZFS,
   lvmthin): it counts that fraction of the provisioned team-disk math, since linked clones only
   allocate written blocks. Unset keeps the strict provisioned-bytes gate. Size the factor to the
   pool, not to hope.
 - The sibling-repo tools have one read-only shared fallback: `bad-auto/deploy` loads
   `../tezcatlipoca/.env` (the MAIN tree's) via `setdefault`, so export the worktree's
-  `TEZ_PROXMOX_ENDPOINT`/`TEZ_PROXMOX_API_TOKEN`/`TEZ_PROXMOX_NODE` (or the legacy
-  `TF_VAR_proxmox_*` trio) before calling bad-auto by hand if the main tree points at a different
-  node. Deploy identity is NOT shared — it lives in each comp's own
-  `competitions/<id>/.badauto-config.yaml`.
+  `TEZ_PROXMOX_ENDPOINT`/`TEZ_PROXMOX_API_TOKEN`/`TEZ_PROXMOX_NODE` before calling bad-auto by hand
+  if the main tree points at a different node. Deploy identity is NOT shared — it lives in each
+  comp's own `competitions/<id>/.badauto-config.yaml`.
 
 Then the normal flow: `create-competition.py --competition <id> --scoring-vmid <free> --plan-only`,
 real `--teams N --yes`, verify, destroy — all from the worktree root.

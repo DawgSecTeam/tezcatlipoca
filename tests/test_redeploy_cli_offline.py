@@ -19,6 +19,7 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 from common.constants import PIPELINE_VERSION, SNAP_BASE, SNAP_READY  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 
 
 def _load_script():
@@ -48,11 +49,13 @@ class RedeployCliOffline(unittest.TestCase):
         (self.comp / "boxes.json").write_text(json.dumps(BOXES))
         self.state = {"pipeline_version": PIPELINE_VERSION, "run_id": "run-0badf00d",
                       "scoring_vm_id": 1234}
-        (self.comp / ".deploy_state.json").write_text(json.dumps(self.state))
+        document = estate_state.EstateState.load(self.comp)
+        document.absorb(self.state)
+        document.save()
         cwd = os.getcwd()
         os.chdir(self.root)
         self.addCleanup(os.chdir, cwd)
-        p = patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve1"})
+        p = patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve1"})
         p.start()
         self.addCleanup(p.stop)
         self.mod = _load_script()
@@ -102,12 +105,17 @@ class RedeployCliOffline(unittest.TestCase):
         self.assertIn("nothing to do", str(code))
 
     def test_old_pipeline_state_refused_before_any_proxmox_call(self):
-        (self.comp / ".deploy_state.json").write_text(json.dumps({"pipeline_version": 1}))
+        document = estate_state.EstateState.load(self.comp)
+        document.absorb({"pipeline_version": 1})
+        document.save()
         code, _ = self.run_main("--competition", "rd", "--dry-run")
         self.assertIn("older pipeline", str(code))
         state = dict(self.state)
         state.pop("run_id")
-        (self.comp / ".deploy_state.json").write_text(json.dumps(state))
+        document = estate_state.EstateState.load(self.comp)
+        document.absorb(state)
+        document.data["identity"].pop("run_id", None)
+        document.save()
         code, _ = self.run_main("--competition", "rd", "--dry-run")
         self.assertIn("older pipeline", str(code))
 

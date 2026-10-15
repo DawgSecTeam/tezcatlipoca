@@ -13,7 +13,7 @@ from multinode.placement_record import (anchor_identifier, default_jump_mgmt_ip,
 
 
 
-def probe_node(record, need_templates, engine_vmid, team_identifiers):
+def probe_node(record, need_templates, engine_vmid, team_identifiers, comp_name=""):
 # Read-only eligibility probe of one node. Returns a dict; ok=False carries the
 #     reason. need_templates: template names this node might have to host (per-team
 #     eligibility checks them; a node missing some is still usable for other teams).
@@ -67,17 +67,30 @@ def probe_node(record, need_templates, engine_vmid, team_identifiers):
     # collisions made the node ineligible for the very run they were kept for — the
     # template-reuse path could never be reached (2026-10-14, run-0a59b188: "vmid
     # collisions: [1140, 1150, ...]" → no eligible node for team1, team2).
+    # The slot belongs to this run's engine vmid, so a VM sitting on it is THIS competition's
+    # build attempt whatever its tags say — phase 2 adopts it or reclaims it. A dead attempt
+    # that never reached the tag PUT (a clone whose task failed) wears the base image's own
+    # `cloud-init;template` tags, and counting those as collisions left the deploy with no way
+    # to clean up after itself (live-found 2026-10-15: run-f5d7db99 and run-6b5610d1 refused
+    # with "vmid collisions: [2340]"/"[2540]" over the partial clones of their own failed
+    # engine-template build). Only a CONVERTED template belonging to ANOTHER competition
+    # still collides — our slot is not a license to build over a foreign golden.
     template_slots = {engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET}
     for slot in range(MAX_SATELLITES + 1):
         template_slots.update(golden_slot_span(engine_vmid, slot))
 
-    def _is_kept_template(vmid):
+    def _not_a_collision(vmid):
         vm = vm_by_vmid.get(vmid) or {}
+        if vmid not in template_slots:
+            return False
         tags = {t.strip() for t in str(vm.get("tags") or "").replace(";", ",").split(",") if t.strip()}
-        return (vmid in template_slots and vm.get("template") == 1
-                and vm.get("status") == "stopped" and "tezcatlipoca" in tags)
+        if vm.get("template") == 1 and vm.get("status") == "stopped":
+            return "tezcatlipoca" in tags                  # keep the engine/golden template
+        if any(t.startswith("comp-") and t != f"comp-{comp_name}" for t in tags):
+            return False                                   # another competition's VM — never ours
+        return True                                        # our own build attempt/leftover
 
-    probe["collisions"] = sorted(v for v in wanted & existing if not _is_kept_template(v))
+    probe["collisions"] = sorted(v for v in wanted & existing if not _not_a_collision(v))
     if probe["collisions"]:
         probe["ok"] = False
         probe["reasons"].append(f"vmid collisions: {probe['collisions'][:6]}"
@@ -126,7 +139,8 @@ def compute_placement(records, balancing, teams, boxes, engine_vmid, comp_name,
 
     need_templates = sorted({b["template"] for b in boxes})
     team_ids = sorted(set(identifiers.values()), key=int)
-    probes = probes or {r.name: probe_node(r, need_templates, engine_vmid, team_ids)
+    probes = probes or {r.name: probe_node(r, need_templates, engine_vmid, team_ids,
+                                            comp_name)
                         for r in records}
 
     team_nodes = dict(team_overrides)
@@ -307,7 +321,7 @@ def resolve_placement(comp_dir, engine_vmid, teams, boxes, comp_name,
         probes = {r.name: probe_node(r, sorted({b["template"] for b in boxes}),
                                      engine_vmid,
                                      sorted({str(t["identifier"]) for t in teams.values()},
-                                            key=int))
+                                            key=int), comp_name)
                   for r in records}
         placement = compute_placement(
             records, balancing, teams, boxes, engine_vmid, comp_name,
@@ -319,7 +333,7 @@ def resolve_placement(comp_dir, engine_vmid, teams, boxes, comp_name,
     print("  Multi-node config found (nodes.json) — probing nodes and placing teams...")
     probes = {r.name: probe_node(
         r, sorted({b["template"] for b in boxes}), engine_vmid,
-        sorted({str(t["identifier"]) for t in teams.values()}, key=int))
+        sorted({str(t["identifier"]) for t in teams.values()}, key=int), comp_name)
         for r in records}
     placement = compute_placement(records, balancing, teams, boxes, engine_vmid,
                                   comp_name, team_overrides=team_overrides,

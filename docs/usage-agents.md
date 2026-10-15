@@ -86,7 +86,7 @@ Use `--admin-password=PW` (equals form) so a leading `-` isn't parsed as an opti
 
 Other flags: `--expect-no-vulns` (skip misconfig gates for a packet comp without `box_vulns.json`); `--fix-round-loop` (POST `/api/competition/start` and `/api/engine/pause {pause:false}`; still FAILs, rerun to confirm); `--freeze` (records the freeze in the state document; needs all gates PASS; do it last, since later commits trip the drift gate); `--unfreeze --confirm-unfreeze`.
 
-Inputs: engine IP from the state document (`estate-state.json`; `--engine-ip` overrides), team creds from `teams.json`, admin password from `credentials.txt`, SSH from the config (`estate/config.py`), planted configs from `nakon-config.json`. On a fresh deploy, team identifiers come from `TF_VAR_team_identifiers`, then saved local identifiers, then packet-profile suggestions, then the 101+ defaults; that fallback is not an availability check.
+Inputs: engine IP from the state document (`estate-state.json`; `--engine-ip` overrides), team creds from `teams.json`, admin password from `credentials.txt`, SSH from the config (`estate/config.py`), planted configs from `nakon-config.json`. On a fresh deploy, team identifiers come from `--team-identifiers`, then `TEZ_TEAM_IDENTIFIERS` (`knobs.team_identifiers`), then saved local identifiers, then packet-profile suggestions, then the 101+ defaults; that fallback is not an availability check.
 
 ## `redeploy-competition.py`
 
@@ -136,7 +136,7 @@ Full teardown removes team boxes, engine, bridges, golden and engine templates (
 
 Reuse keys on the `tezcatlipoca-m4 hash=` description on the template itself, so the next deploy adopts kept templates even from a **fresh worktree or dashboard workspace** — where the state document does not exist, because the dashboard's workspace seeder deliberately strips it. So `--teams-only` (or the harness's `--keep-templates`) followed by a deploy of the same competition gives the event the exact templates the practice run tested, provided the hash inputs are unchanged; a config change rebuilds, and a frozen competition still refuses config drift. The `--teams-only` teardown must run from the worktree that holds the deploy's state, but the reuse it enables does not.
 
-Requires a `run_id` in the state document (`estate-state.json`, or a legacy `.deploy_state.json`) plus `teams.json` and `boxes.json`; it activates the recorded placement/host first so every node-scoped call addresses the right PVE.
+Requires a `run_id` in the state document (`estate-state.json`) plus `teams.json` and `boxes.json`; it activates the recorded placement/host first so every node-scoped call addresses the right PVE.
 
 Before the first destructive call it captures the engine's final scoreboard when the harness never did (the scoring DB does not survive the estate step) and collects the run's artifacts into `competitions/<id>/.automated-tests/<run-id>/` (red report from red01, blue logs, engine capture, harness evidence, `REPORT.md`). Collection warns and proceeds, bounded per file by `--artifacts-timeout` (default 45 s); a `failed` transfer gets one retry, and whatever is still lost is printed as a note under the verification section rather than failing the destroy. There is no skip flag; on resume the journal skips it. See [automated-test-artifacts.md](automated-test-artifacts.md).
 

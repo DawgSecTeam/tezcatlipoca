@@ -1,14 +1,12 @@
 """Offline unit tests for prepare()'s extracted steps (each step fills the DeployContext it is given).
 
-prepare() used to be a 435-line, CC-72 function; it is now a short sequencer over
-_load/_resolve/_apply/_build/_run/_enumerate helpers, all filling one DeployContext. These
-tests are the call-boundary half of that split: the decidable logic of each step (the
-resume guards, the golden gate's position, the stale-state guard, the engine mgmt IP/gw
-defaults, the target split) and — most importantly — the ORDER the sequencer must keep,
-because several of those orderings are load-bearing and commented.
+prepare() is a short sequencer over _load/_resolve/_apply/_build/_run/_enumerate helpers,
+all filling one DeployContext. These tests are the call-boundary half of that split: the
+decidable logic of each step (the resume guards, the golden gate's position, the stale-state
+guard, the engine mgmt IP/gw defaults, the target split) and — most importantly — the ORDER
+the sequencer must keep, because several of those orderings are load-bearing and commented.
 
-Every infrastructure call is patched: none of this touches Proxmox, terraform, SSH or
-the network.
+Every infrastructure call is patched: none of this touches Proxmox, SSH or the network.
 """
 
 import contextlib
@@ -31,6 +29,7 @@ from deploy_lib import inputs as dl_inputs  # noqa: E402
 from deploy_lib import placement as dl_placement  # noqa: E402
 from deploy_lib import targets as dl_targets  # noqa: E402
 from estate import config
+from estate import state as estate_state
 from deploy_lib import estate_inputs as dl_estate_inputs  # noqa: E402
 from deploy_lib.context import DeployContext  # noqa: E402
 from common.constants import (DEFAULT_ENGINE_MGMT_GW, DEFAULT_ENGINE_MGMT_IP,  # noqa: E402
@@ -50,7 +49,8 @@ def _ctx(**overrides):
 
 
 def _prior(comp_dir, **overrides):
-    fields = dict(state_path=comp_dir / ".deploy_state.json", previous_state={}, resuming=False)
+    fields = dict(state_path=estate_state.state_path(comp_dir), previous_state={},
+                  resuming=False)
     fields.update(overrides)
     return DeployContext(**fields)
 
@@ -66,47 +66,43 @@ class EngineVmidResolution(unittest.TestCase):
 
     def test_fresh_run_without_a_flag_takes_the_default(self):
         # isolated: importing deploy load_dotenvs the worktree's .env, whose
-        # TF_VAR_scoring_vm_id would otherwise masquerade as the default here
+        # TEZ_SCORING_VMID would otherwise masquerade as the default here
         with tempfile.TemporaryDirectory() as d:
             with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("TF_VAR_scoring_vm_id", None)
+                os.environ.pop("TEZ_SCORING_VMID", None)
                 ctx = DeployContext()
                 dl_inputs.resolve_engine_vmid(ctx, Path(d), 1, None)
         self.assertEqual(ctx.engine_vmid, SCORING_ENGINE_VMID)
 
     def test_fresh_run_without_a_flag_takes_the_env_vmid(self):
-        # TF_VAR_scoring_vm_id ships in every env variant; live-found 2026-10-03 it was
+        # TEZ_SCORING_VMID ships in every env variant; live-found 2026-10-03 it was
         # silently ignored (the default 1000 was taken) until a second range collided.
         with tempfile.TemporaryDirectory() as d:
-            with patch.dict(os.environ, {"TF_VAR_scoring_vm_id": "777"}):
+            with patch.dict(os.environ, {"TEZ_SCORING_VMID": "777"}):
                 ctx = DeployContext()
                 dl_inputs.resolve_engine_vmid(ctx, Path(d), 1, None)
         self.assertEqual(ctx.engine_vmid, 777)
 
-    def test_a_junk_env_vmid_falls_back_to_the_default(self):
+    def test_a_non_numeric_env_vmid_refuses_by_name(self):
+        # Silently taking the default is what made a wrong scoring vmid invisible; a bad
+        # value must name the key instead.
         with tempfile.TemporaryDirectory() as d:
-            with patch.dict(os.environ, {"TF_VAR_scoring_vm_id": "not-a-number"}):
+            with patch.dict(os.environ, {"TEZ_SCORING_VMID": "not-a-number"}):
                 ctx = DeployContext()
-                dl_inputs.resolve_engine_vmid(ctx, Path(d), 1, None)
-        self.assertEqual(ctx.engine_vmid, SCORING_ENGINE_VMID)
+                with self.assertRaises(config.ConfigError) as raised:
+                    dl_inputs.resolve_engine_vmid(ctx, Path(d), 1, None)
+        self.assertIn("knobs.scoring_vmid", str(raised.exception))
+        self.assertIn("must be a number", str(raised.exception))
 
     def test_resume_reads_the_vmid_from_state_not_the_flag(self):
-        # On resume state is authoritative: the engine that exists at that vmid is the
-        # one the lock and phase-1 destroy must address, whatever the flag says.
+        # On resume the document is authoritative: the engine that exists at that vmid is
+        # the one the lock and phase-1 destroy must address, whatever the flag says.
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
-            (comp_dir / ".deploy_state.json").write_text(json.dumps({"scoring_vm_id": 4321}))
+            estate_state.write_flat(comp_dir, {"scoring_vm_id": 4321})
             ctx = DeployContext()
             dl_inputs.resolve_engine_vmid(ctx, comp_dir, 3, 9999)
         self.assertEqual(ctx.engine_vmid, 4321)
-
-    def test_unreadable_state_on_resume_falls_back_to_the_default(self):
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            (comp_dir / ".deploy_state.json").write_text("{not json")
-            ctx = DeployContext()
-            dl_inputs.resolve_engine_vmid(ctx, comp_dir, 2, None)
-        self.assertEqual(ctx.engine_vmid, SCORING_ENGINE_VMID)
 
 
 def _load_and_gate(ctx, comp_dir, from_phase, force):
@@ -122,7 +118,7 @@ class PriorStateGuards(unittest.TestCase):
     def _comp_dir(self, tmp, state=None):
         comp_dir = Path(tmp)
         if state is not None:
-            (comp_dir / ".deploy_state.json").write_text(json.dumps(state))
+            estate_state.write_flat(comp_dir, state)
         return comp_dir
 
     def test_resume_without_state_is_refused(self):
@@ -219,8 +215,8 @@ class GoldenGatePosition(unittest.TestCase):
             golden.write_text(json.dumps({"machines": []}))
             ctx = _ctx()
             calls = []
-            with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve",
-                                         "TF_VAR_ssh_public_key": "ssh-rsa AAAA"}), \
+            with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve",
+                                         "TEZ_SSH_PUBLIC_KEY": "ssh-rsa AAAA"}), \
                     dpatch("generate_nakon_config", return_value=golden), \
                     dpatch("unbooted_golden_boxes", return_value=set()), \
                     dpatch("generate_stage_configs",
@@ -256,7 +252,7 @@ class GoldenGatePosition(unittest.TestCase):
                 seen[name] = (stored, current, frozen_at)
                 return {"code": name == "keepme", "config": name == "keepme"}
 
-            with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
+            with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve"}), \
                     dpatch("generate_nakon_config", return_value=golden), \
                     dpatch("unbooted_golden_boxes", return_value=set()), \
                     dpatch("generate_stage_configs",
@@ -279,8 +275,8 @@ class GoldenGatePosition(unittest.TestCase):
 class EstateInputs(unittest.TestCase):
 # The document build, the stale-state guard and the engine mgmt IP/gw defaults.
 
-    ENV = {"TF_VAR_ssh_private_key_path": "/tmp/key", "TF_VAR_proxmox_node": "pve",
-           "TF_VAR_proxmox_endpoint": "https://new:8006/"}
+    ENV = {"TEZ_SSH_PRIVATE_KEY_PATH": "/tmp/key", "TEZ_PROXMOX_NODE": "pve",
+           "TEZ_PROXMOX_ENDPOINT": "https://new:8006/"}
 
     def _run(self, comp_dir, env=None, placement=None):
         config.reset()
@@ -349,21 +345,21 @@ class EstateInputs(unittest.TestCase):
 
     def test_explicit_empty_mgmt_ip_keeps_dhcp_but_still_defaults_the_gateway(self):
         env = dict(self.ENV)
-        env["TF_VAR_engine_mgmt_ip"] = ""
+        env["TEZ_ENGINE_MGMT_IP"] = ""
         with tempfile.TemporaryDirectory() as d:
             ctx, _document, env_view = self._run(Path(d), env=env)
         self.assertEqual(ctx.engine_mgmt_ip, "")
         self.assertEqual(env_view["engine_mgmt_gw"], DEFAULT_ENGINE_MGMT_GW)
 
     def test_explicit_gateway_is_not_overwritten(self):
-        env = dict(self.ENV, TF_VAR_engine_mgmt_ip="10.0.0.5", TF_VAR_engine_mgmt_gw="10.9.9.9")
+        env = dict(self.ENV, TEZ_ENGINE_MGMT_IP="10.0.0.5", TEZ_ENGINE_MGMT_GW="10.9.9.9")
         with tempfile.TemporaryDirectory() as d:
             ctx, _document, env_view = self._run(Path(d), env=env)
         self.assertEqual(ctx.engine_mgmt_ip, "10.0.0.5")
         self.assertEqual(env_view["engine_mgmt_gw"], "10.9.9.9")
 
     def test_per_run_mgmt_ip_override_beats_the_env_and_is_reexported(self):
-        env = dict(self.ENV, TF_VAR_engine_mgmt_ip="10.0.0.5")
+        env = dict(self.ENV, TEZ_ENGINE_MGMT_IP="10.0.0.5")
         with patch.dict(os.environ, env, clear=True):
             ip = dl_estate_inputs.engine_mgmt_ip_from_env("10.0.0.77")
             # downstream (the engine-template build VM's ipconfig0) reads the config
@@ -390,7 +386,7 @@ class TargetSplit(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx()
-            with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
+            with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve"}), \
                     dpatch("enumerate_targets", return_value=targets), \
                     dpatch("persist_targets") as p_persist, \
                     dpatch("is_unmanaged",
@@ -425,7 +421,7 @@ class PrepareSequencer(unittest.TestCase):
 
         def load_prior(ctx, *a, **k):
             order.append("prior")
-            ctx.state_path = comp_dir / ".deploy_state.json"
+            ctx.state_path = estate_state.state_path(comp_dir)
             ctx.previous_state = {}
             ctx.resuming = False
 
@@ -452,7 +448,7 @@ class PrepareSequencer(unittest.TestCase):
                              side_effect=lambda v: order.append(("lock", v))), \
                 dpatch("generate_stage_configs_and_hashes",
                              side_effect=rec("generated")), \
-                dpatch("build_estate_inputs", side_effect=rec("terraform")), \
+                dpatch("build_estate_inputs", side_effect=rec("estate-inputs")), \
                 dpatch("run_capacity_preflight", side_effect=rec("preflight")), \
                 dpatch("confirm_deploy",
                              side_effect=lambda *a, **k: order.append("confirm") or confirm), \
@@ -468,7 +464,7 @@ class PrepareSequencer(unittest.TestCase):
             result = self._prepare(Path(d), order)
         self.assertEqual(order, ["spec", "prior", "inputs", "teams", "resolve", "activate",
                                  ("lock", 1234), "preflight", "mint", "generated",
-                                 "terraform", "confirm", "targets"])
+                                 "estate-inputs", "confirm", "targets"])
         # prepare() hands back the one context the phases share, carrying what the steps set
         self.assertIsInstance(result, DeployContext)
         self.assertEqual(result.engine_vmid, 1234)
@@ -486,26 +482,24 @@ class PrepareSequencer(unittest.TestCase):
         # no target enumeration, no context: deploy() sees None and runs no phase
         self.assertEqual(order, ["spec", "prior", "inputs", "teams", "resolve", "activate",
                                  ("lock", 1234), "preflight", "mint", "generated",
-                                 "terraform", "confirm"])
+                                 "estate-inputs", "confirm"])
 
 
 class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):
-# Regression: a frozen run must not overwrite the competition's event name.
-#
-#     The loop that runs the per-golden frozen gate used to read
-#     `for spec.name in generated.golden_hashes`, which assigned each golden box name
-#     onto the spec and left the LAST one there. On a frozen competition that silently
-#     replaced the Compfile event name, so `terraform.tfvars.json`'s `event_name` — and
-#     with it `local.comp_tag`, the ownership tag stamped on the engine and every team
-#     box — became `comp-<lastbox>` while phase 1 compares against `comp-<competition>`.
-#     Phase 1's `comp_tags <= tags` ownership check then FAILED and refused to reclaim
-#     the range's own VMs; `confirm_deploy` also displayed the wrong name.
+# Regression guard: this step READS the spec and writes only the generated fields, so the
+#     competition's event name survives. Reading the spec's `name` as the loop variable
+#     would assign each golden box name onto the spec and leave the LAST one there,
+#     replacing the Compfile event name. The generated `event_name` — and with it the
+#     ownership tag stamped on the engine and every team box — would become
+#     `comp-<lastbox>` while phase 1 compares against `comp-<competition>`, so phase 1's
+#     `comp_tags <= tags` ownership check would refuse to reclaim the range's own VMs;
+#     `confirm_deploy` would also display the wrong name.
 
     def _run(self, comp_dir, frozen):
         golden = comp_dir / "golden.json"
         golden.write_text(json.dumps({"machines": []}))
         ctx = _ctx()
-        with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
+        with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve"}), \
                 dpatch("generate_nakon_config", return_value=golden), \
                 dpatch("unbooted_golden_boxes", return_value=set()), \
                 dpatch("generate_stage_configs",

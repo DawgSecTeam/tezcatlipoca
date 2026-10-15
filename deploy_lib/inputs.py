@@ -4,13 +4,13 @@ Loading only — every refusal (missing state, version, resume guards) lives in 
 invoked from prepare().
 """
 
-import os
 import sys
 
 from config.config_ops import load_boxes, load_packet_passwords
 from config.injects_config import load_injects
 from common.constants import SCORING_ENGINE_VMID
 from common.utils import compfile_flag, env_summary, load_compfile, load_users_config
+from estate import config
 from estate import state as estate_state
 
 
@@ -31,18 +31,14 @@ def resolve_engine_vmid(ctx, comp_dir, from_phase, scoring_vmid):
         except (TypeError, ValueError):
             ctx.engine_vmid = SCORING_ENGINE_VMID
     else:
-        # flag wins, then TF_VAR_scoring_vm_id from the environment (env variants ship
-        # it; live-found 2026-10-03 it was silently ignored and the default 1000 was
-        # taken instead — invisible until a second range on the node collided),
-        # then the built-in default.
+        # flag wins, then the configured scoring vmid (per-run profiles carry it; live-found
+        # 2026-10-03 it was silently ignored and the default 1000 was taken instead —
+        # invisible until a second range on the node collided), then the built-in default.
         if scoring_vmid is not None:
             ctx.engine_vmid = int(scoring_vmid)
         else:
-            try:
-                ctx.engine_vmid = int(os.environ.get("TF_VAR_scoring_vm_id")
-                                           or SCORING_ENGINE_VMID)
-            except ValueError:
-                ctx.engine_vmid = SCORING_ENGINE_VMID
+            ctx.engine_vmid = int(config.active().knobs.scoring_vmid
+                                  or SCORING_ENGINE_VMID)
 
 
 def load_competition_spec(ctx, comp_dir):
@@ -90,7 +86,7 @@ def load_prior_deploy_state(ctx, comp_dir, from_phase):
 #     ownership, so it is never silently reset); the refusals that depend on state content
 #     are gates.check_resume_gates, which prepare() runs right after this.
     ctx.state_path = estate_state.state_path(comp_dir)
-    ctx.estate = estate_state.open(comp_dir)
+    ctx.estate = estate_state.EstateState.load(comp_dir)
     ctx.previous_state = ctx.estate.flatten()
     ctx.resuming = from_phase > 1
 

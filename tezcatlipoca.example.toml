@@ -6,10 +6,9 @@
 # dashboard injects per-run values into the process env. Point TEZ_CONFIG at another file
 # to use a per-node profile.
 #
-# Secrets are NEVER written here. The API token is read from the environment under its
-# canonical name (TEZ_PROXMOX_API_TOKEN) or the legacy one the repo has always used
-# (TF_VAR_proxmox_api_token); multi-node host tokens are referenced by name from
-# nodes.json's token_env, exactly as before.
+# Secrets are NEVER written here. The API token is read from the environment as
+# TEZ_PROXMOX_API_TOKEN; multi-node host tokens are referenced by name from nodes.json's
+# token_env.
 
 [proxmox]
 endpoint = "https://PROXMOX-HOST:8006"
@@ -17,7 +16,7 @@ node = "CHANGEME"
 datastore = "CHANGEME"
 # The base image the per-competition engine template is built from.
 template_vm_id = 0
-# api_token is read from $TEZ_PROXMOX_API_TOKEN (or the legacy TF_VAR_proxmox_api_token).
+# api_token is read from $TEZ_PROXMOX_API_TOKEN.
 mgmt_bridge = "vmbr0"
 # Pin the pveproxy certificate instead of accepting a self-signed one (set one):
 # tls_fingerprint = "AA:BB:CC:DD:..."
@@ -25,8 +24,7 @@ mgmt_bridge = "vmbr0"
 
 [ssh]
 public_key = "ssh-ed25519 CHANGEME range-automation"
-# Relative paths resolve against this checkout (the legacy "../proxmox" form,
-# which was terraform-relative, still resolves to the same file).
+# Relative paths resolve against the checkout root.
 private_key_path = "proxmox"
 
 [engine]
@@ -67,7 +65,7 @@ username = "sysadmin"
 # red01's Proxmox template name when it differs from bad-auto's built-in default.
 # red_template = ""
 # Competition definitions live outside the engine (tezcatlipoca-competitions).
-# comps_root = ""
+# competitions_root = ""
 # Where test-run folders are archived outside the repo.
 # artifacts_archive = ""
 # Set by the run-queue dashboard, never by hand:

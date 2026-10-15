@@ -7,8 +7,8 @@ services, non-disruptive misconfigs) lands once and rides the clone as bytes on 
 Why the API and not a declared resource: `qm template` conversion happens outside any
 resource lifecycle, so a managed golden box would drift the moment it converts. This
 module mirrors clone_ops' API path (clone, config, start, wait); the deploy only consumes
-the finished templates as `clone { full = false }` sources via the golden_template_ids
-tfvars map that deploy() persists.
+the finished templates as `clone { full = false }` sources via the document's
+golden_template_ids record that deploy() persists.
 
 Identity note: linked clones of a BOOTED golden share its machine SID across teams.
 Harmless for members, but a new forest takes its domain SID from the promoted DC's

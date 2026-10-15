@@ -5,10 +5,10 @@ Interactive operation: one-time setup, templates, env vars, running a deploy. Sc
 ## Prerequisites (per Proxmox host)
 
 - **API token**: user + token with `PVEAdmin` at `/`, or at minimum `VM.Allocate`, `VM.Clone`, `VM.Config.All`, `VM.PowerMgmt`, `Datastore.AllocateSpace`, `Datastore.Audit`, `Sys.Modify`, `SDN.Use`.
-- **Templates**: see below. An in-path firewall lineup (`in_path: true`) also needs a `pfsense` template on every node hosting teams ([environment-facts.md](environment-facts.md#templates)) and the seed `competitions/<id>/pfsense/pfsense-config-orig.xml` (copy from `competitions/pfsense-ad/pfsense/`). Preflight refuses without the template; phase 5 refuses without the seed.
+- **Templates**: see below. An in-path firewall lineup (`in_path: true`) also needs a `pfsense` template on every node hosting teams ([environment-facts.md](environment-facts.md#templates)) and the seed `competitions/<id>/pfsense/pfsense-config-orig.xml` (copy one from the `pfsense-ad` competition under the comps root — `knobs.competitions_root`/`TEZ_COMPETITIONS_ROOT`, else `./competitions`, else the sibling `../tezcatlipoca-competitions`). Preflight refuses without the template; phase 5 refuses without the seed.
 - **SSH keypair**: `ssh-keygen -t ed25519 -f ~/.ssh/range_key -C range-automation -N ""`
 - **Tooling**: `pip install toml requests python-dotenv pyyaml urllib3` (`tools/` VNC screenshots also need `websocket-client Pillow cryptography`).
-- **Config**: `cp tezcatlipoca.example.toml tezcatlipoca.toml`, both gitignored (secrets stay in the environment; see [Configure the event](#configure-the-event)). `.env.example` remains the legacy env-override reference.
+- **Config**: `cp tezcatlipoca.example.toml tezcatlipoca.toml`; `tezcatlipoca.toml` is gitignored (secrets stay in the environment; see [Configure the event](#configure-the-event)).
 - **vulndb**: nakon's build/randomize run on your workstation, so vulndb must be reachable from it; the engine needs none. Connection details go in `vendor/nakon/.env` (`host`, `user`, `password`, `database`).
 
 ## Templates
@@ -26,7 +26,7 @@ Every VM is a clone of a hand-built Proxmox template. The two roles differ:
 `/tmp` is a tmpfs at 50% of RAM, and nakon stages attachments there. A 512 MB box has ~256 MB, and a large attachment or leftovers from a failed deploy fill it (`No space left on device`, `size mismatch in put!`). Raise `memory_mb` for that box type.
 
 1. **Base VM** from a cloud-init image (or install `cloud-init` yourself). Install `qemu-guest-agent` (required on the engine template: the deploy reads its IP back through the agent). Boot once; `cloud-init status --long` must say `done`.
-2. **Seed credentials (engine template only)**: an account named exactly `var.vm_username`, with `var.ssh_public_key` in `authorized_keys` and passwordless sudo (`/etc/sudoers.d/90-range-automation`). Confirm both survive a reboot.
+2. **Seed credentials (engine template only)**: an account named exactly `engine.username` (default `sysadmin`), with `ssh.public_key` in `authorized_keys` and passwordless sudo (`/etc/sudoers.d/90-range-automation`). Confirm both survive a reboot.
 3. **Reset cloud-init immediately before shutdown**: `sudo cloud-init clean --logs --seed`. Skipping it is silent: clones look like the same instance rebooting, cloud-init skips network config, and `status` still says `done`.
 4. **Convert and tag**: `qm template <vmid>; qm set <vmid> --tags template`. The deploy finds box templates by exact name among tagged VMs (`infra/resources.py`), and the box picker lists only tagged ones.
 5. **Verify** with a scratch full clone. Engine: key SSH works and `sudo -n true` passes. Box: `cloud-init status` is `done` **and** `ip -br addr` shows the `ipconfig0` address. Destroy the clone.
@@ -34,7 +34,7 @@ Every VM is a clone of a hand-built Proxmox template. The two roles differ:
 
 ### Non-Ubuntu Linux
 
-- **Alpine**: the official cloudinit qcow2 lacks `bash`, `shadow`, `sudo`, `qemu-guest-agent`, and Alpine cloud-init never creates `/etc/resolv.conf`, so the bootstrap must install those and set `manage_resolv_conf: true` (else `apk` times out on DNS and `packages:` silently no-ops, once per instance). Builder: `competitions/distro-matrix-2026-09-27/build_alpine_ci_template.sh`.
+- **Alpine**: the official cloudinit qcow2 lacks `bash`, `shadow`, `sudo`, `qemu-guest-agent`, and Alpine cloud-init never creates `/etc/resolv.conf`, so the template build must install those and set `manage_resolv_conf: true` (else `apk` times out on DNS and `packages:` silently no-ops, once per instance).
 - **Fedora**: the official Cloud Base qcow2 already has cloud-init and the agent. Set `SELINUX=permissive` in `/etc/selinux/config` before sealing: the agent domain is confined, so an enforcing guest can't be golden-built when SSH isn't available (`setenforce 0` and `/etc/ssh` writes are denied). Verify `getenforce` → `Permissive` on a clone.
 - Pick `box_username` before building. `setup_ubuntu_auth` assumes it isn't a legacy system account (`operator` is a nologin uid-11 account on Fedora and classic Debian; `medic` is safe).
 
@@ -65,13 +65,14 @@ run-queue dashboard injects per-run values (node tokens, the engine mgmt IP) int
 and those must win over a committed profile. `TEZ_CONFIG` points the whole read at another file.
 
 A token is **named, not stored**: put its value in the environment and reference the variable name
-(the same indirection `nodes.json` uses for per-host tokens). `.env` is still loaded by `deploy.py`
-(python-dotenv) and its values reach the config as env overrides, so an existing `.env` keeps
-working; every legacy name the config accepts per key is listed in `estate/config.py`'s `_SPEC`
-(`TF_VAR_*`, `PROXMOX_TLS_FINGERPRINT`, `TEZ_REMOTE_KEY_TTL`, …). `.env.example` is the
-legacy-override reference; `NAKON_*`/`VULNDB_*` are vendored-tool config. Any other env var the
-code reads must be in `tests/test_secret_hygiene.py`'s `INTERNAL_ENV` with a reason; that test keeps
-this table honest.
+(the same indirection `nodes.json` uses for per-host tokens). `.env` is still loaded by the
+entrypoints (python-dotenv: `deploy.py`, `destroy-competition.py`, `redeploy-competition.py`,
+`verify-competition.py`, `run-agent-scrim.py`, `competition-ops.py`) as a plain dotenv layer of
+canonical `TEZ_*` names, so it is one more source for a key's value and it beats the profile. Every
+accepted env name is derived from `estate/config.py`'s `_SPEC` (`TEZ_` + the key upper-cased, dots as
+underscores); `NAKON_*`/`VULNDB_*` are vendored-tool config. Any other env var the code reads must
+be in `tests/test_secret_hygiene.py`'s `INTERNAL_ENV` with a reason; that test keeps this table
+honest.
 
 **Required** (the first five have no usable default; `node`/`datastore` default only to placeholders):
 
@@ -80,7 +81,7 @@ this table honest.
 | `proxmox.endpoint` | `TEZ_PROXMOX_ENDPOINT` | API URL, e.g. `https://10.0.0.10:8006/` |
 | `proxmox.api_token` | `TEZ_PROXMOX_API_TOKEN` | `user@realm!tokenid=uuid`; set it in the environment, never in the profile |
 | `proxmox.template_vm_id` | `TEZ_PROXMOX_TEMPLATE_VM_ID` | Engine template vmid |
-| `ssh.public_key`, `ssh.private_key_path` | `TEZ_SSH_PUBLIC_KEY`, `TEZ_SSH_PRIVATE_KEY_PATH` | Keypair. A relative path is checkout-relative; the legacy `../proxmox` form still resolves to the checkout root |
+| `ssh.public_key`, `ssh.private_key_path` | `TEZ_SSH_PUBLIC_KEY`, `TEZ_SSH_PRIVATE_KEY_PATH` | Keypair. A relative path resolves against the checkout root |
 | `proxmox.node` | `TEZ_PROXMOX_NODE` | Node name (default `pve` — set it per host) |
 | `proxmox.datastore` | `TEZ_PROXMOX_DATASTORE` | Datastore for engine and clones (default `local-lvm`). Must support snapshots (ZFS, LVM-thin, Ceph, qcow2); thick LVM can't, and rollback modes need them |
 
@@ -90,17 +91,19 @@ this table honest.
 |---|---|---|
 | `engine.username` | `TEZ_ENGINE_USERNAME` | Account baked into the engine template (default `sysadmin`); unrelated to box logins |
 | `engine.mgmt_ip` / `engine.mgmt_gw` | `TEZ_ENGINE_MGMT_IP` / `TEZ_ENGINE_MGMT_GW` | Static engine management IP (default `10.0.0.250` / `10.0.0.1`); empty IP = DHCP |
-| `proxmox.tls_fingerprint` / `proxmox.ca_bundle` | `TEZ_PROXMOX_TLS_FINGERPRINT` / `TEZ_PROXMOX_CA_BUNDLE` | Pin API TLS; at most one (legacy `PROXMOX_TLS_FINGERPRINT` / `PROXMOX_CA_BUNDLE`) |
-| `headscale.url`, `.ssh_host`, `.ssh_user`, `.ssh_password`, `.infra_user`, `.key_ttl` | `TEZ_HEADSCALE_*` | Participant access: required unless the Compfile opts out with `remote_access 0`; `key_ttl` defaults `72h` (legacy `TEZ_REMOTE_KEY_TTL`) ([remote-access.md](remote-access.md)) |
+| `proxmox.tls_fingerprint` / `proxmox.ca_bundle` | `TEZ_PROXMOX_TLS_FINGERPRINT` / `TEZ_PROXMOX_CA_BUNDLE` | Pin API TLS; at most one |
+| `headscale.url`, `.ssh_host`, `.ssh_user`, `.ssh_password`, `.infra_user`, `.key_ttl` | `TEZ_HEADSCALE_*` | Participant access: required unless the Compfile opts out with `remote_access 0`; `key_ttl` (`TEZ_HEADSCALE_KEY_TTL`) defaults `72h` ([remote-access.md](remote-access.md)) |
 | `portal.hostname`, `.tunnel_token`, `.open` | `TEZ_PORTAL_HOSTNAME`, `TEZ_PORTAL_TUNNEL_TOKEN`, `TEZ_PORTAL_OPEN` | Student portal. **Event profile only**: one carrying the tunnel pair claims the public name ([portal.md](portal.md)) |
 | `knobs.thin_headroom` | `TEZ_THIN_HEADROOM` | Fraction `(0, 1]` of provisioned disk the headroom preflight counts on thin pools. Unset = strict |
 | `knobs.red_segment` | `TEZ_RED_SEGMENT` | Routed-red segment matching bad-auto's `deploy.red_subnet` (default `10.200.0.0/24`). Set → satellite jump VMs accept red and SNAT to `192.168.<id>.1`; malformed is a hard error ([multi-node.md](multi-node.md#routed-red)) |
-| `knobs.cycle_timeout`, `knobs.python`, `knobs.comps_root`, `knobs.artifacts_archive`, … | `TEZ_*` | The rest of the tuning knobs, spelled out in `tezcatlipoca.example.toml` and `.env.example` |
+| `knobs.cycle_timeout`, `knobs.python`, `knobs.competitions_root`, `knobs.artifacts_archive`, … | `TEZ_*` | The rest of the tuning knobs; the full key set is `estate/config.py`'s `_SPEC`, the common ones are commented in `tezcatlipoca.example.toml` |
 | `nodes.json` `token_env` | that host's own variable | Per-host API token referenced by name ([multi-node.md](multi-node.md)) |
 
-**Read straight from the environment, not the profile:** `TF_VAR_scoring_vm_id` (engine vmid,
-default 1000; `--scoring-vmid` wins) and `TF_VAR_team_identifiers` (pin team subnets, e.g.
-`120,121,122`). Set the latter when the host's live vmids collide with the default 101+ blocks.
+**Per-run identity:** `knobs.scoring_vmid` (engine vmid, default 1000) and
+`knobs.team_identifiers` (pin team subnets, e.g. `120,121,122`). The matching flags
+(`--scoring-vmid`, `--team-identifiers`) win over both, and their env forms (`TEZ_SCORING_VMID`,
+`TEZ_TEAM_IDENTIFIERS`) beat the profile. Set the latter when the host's live vmids collide with the
+default 101+ blocks.
 
 **Not config, generated per competition:** the team roster with its passwords, the box list, the
 box login, and the event name are read or minted from the competition dir (`collect_teams()`,

@@ -31,7 +31,7 @@ BASE = "http://10.0.0.9"
 
 
 class EngineBaseFromTheDocument(unittest.TestCase):
-    """The engine IP comes from the state document; a range has no terraform state at all."""
+    """The engine IP comes from the state document unless --engine-ip overrides it."""
 
     def test_the_recorded_engine_ip_wins_over_the_flag(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -86,8 +86,7 @@ class FakeSession:
 
 def _comp_dir(d, state=None, injects=None):
     comp = Path(d)
-    (comp / ".deploy_state.json").write_text(json.dumps(
-        state or {"scoring_password": "sp", "teams": {}}))
+    estate_state.write_flat(comp, state or {"scoring_password": "sp", "teams": {}})
     for i, title in enumerate(injects or []):
         sub = comp / "injects" / f"i{i}"
         sub.mkdir(parents=True)

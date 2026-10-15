@@ -16,15 +16,18 @@ from types import SimpleNamespace
 from unittest import mock
 
 from scrim import clean_trails
+from estate import state as estate_state
 
 
 def _comp(root, windows=("dc01",), boxes=("dc01", "web01", "fw01")):
     comp = Path(root) / "demo"
     comp.mkdir(parents=True)
-    (comp / "targets.json").write_text(json.dumps({"targets": {
+    doc = estate_state.EstateState.load(comp)
+    doc.section("roster").update({"targets": {
         f"team1-{b}": {"team_key": "team1", "identifier": "120", "box_name": b,
                        "vmid": 1400 + i, "ip": f"192.168.120.{2 + i}"}
-        for i, b in enumerate(boxes)}}))
+        for i, b in enumerate(boxes)}})
+    doc.save()
     (comp / "boxes.json").write_text(json.dumps([
         {"name": b, "last_octet": 2 + i,
          "template": "base-windows-server" if b in windows else
@@ -88,8 +91,7 @@ class TestSkipList(unittest.TestCase):
 
     def test_red01_world_artifacts_reads_the_deploy_state_record(self):
         comp = Path(tempfile.mkdtemp())
-        (comp / ".deploy_state.json").write_text(json.dumps(
-            {"assume_breach": {"red_ip": "10.0.0.198"}}))
+        estate_state.write_flat(comp, {"assume_breach": {"red_ip": "10.0.0.198"}})
         creds = {"KEY_PATH": "/k"}
         world = {"artifacts": [{"ip": "192.168.120.2", "kind": "realm-imix",
                                 "detail": "imix[grpc] /usr/local/lib/.x-cache",
@@ -109,7 +111,7 @@ class TestSkipList(unittest.TestCase):
         self.assertIn("world.json", seen["argv"][-1])
 
     def test_red01_unavailable_is_empty_not_fatal(self):
-        comp = Path(tempfile.mkdtemp())                   # no deploy state at all
+        comp = Path(tempfile.mkdtemp())                   # no state document at all
         arts, red_ip = clean_trails.red01_world_artifacts(comp, {"KEY_PATH": "/k"})
         self.assertEqual((arts, red_ip), ([], None))
 

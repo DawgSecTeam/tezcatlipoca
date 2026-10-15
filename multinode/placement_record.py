@@ -1,30 +1,20 @@
 """The authoritative per-competition placement record (the document's `placement` section):
 read/write, accessors, process-wide activation, and the vmid slot math derived from it."""
 
-import json
 import os
 
 from common.constants import GOLDEN_VMID_OFFSET, MAX_BOXES_PER_TEAM
 from multinode.nodes_config import (JUMP_MGMT_IP_BASE, JUMP_VMID_OFFSET, NodeRecord,
                           PLACEMENT_VERSION, apply_node_env, restore_node_env)
-from pathlib import Path
 
 
 
 def read_placement(comp_dir):
-# The placement record: the document's section, or a legacy placement.json.
+# The placement record from the document's `placement` section, or None when unplaced.
     from estate import state
     placement = state.EstateState.load(comp_dir).data.get("placement")
     if not placement:
-        path = Path(comp_dir) / "placement.json"
-        if not path.exists():
-            return None
-        try:
-            placement = json.loads(path.read_text())
-        except (OSError, ValueError) as e:
-            raise SystemExit(f"  ERROR: {path} is unreadable/malformed ({str(e)[:120]}) — "
-                             "this competition was placed multi-node; the placement record "
-                             "is authoritative for every op against it")
+        return None
     if placement.get("version") != PLACEMENT_VERSION:
         raise SystemExit(f"  ERROR: the placement record was written by schema v"
                          f"{placement.get('version')}; this code understands "
@@ -34,7 +24,7 @@ def read_placement(comp_dir):
 
 def write_placement(comp_dir, placement):
     from estate import state
-    document = state.open(comp_dir)
+    document = state.EstateState.load(comp_dir)
     document.data["placement"] = placement
     document.save()
     return state.state_path(comp_dir)

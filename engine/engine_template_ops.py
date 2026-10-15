@@ -71,12 +71,33 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
             destroy_vm_if_exists(node, vmid, expect_tags=None)
     destroy_vm_if_exists(node, vmid, expect_tags=expect_tags)
 
-    upid =proxmox_api("POST", f"/nodes/{node}/qemu/{base_engine_vm_id}/clone", data={
-        "newid": vmid,
-        "name": vm_name,
-        "full": 1,
-    })["data"]
-    wait_for_proxmox_task(node, upid)
+    # The full clone of the base image is the deploy's first storage-heavy call, and three
+    # concurrent ranges issue it within seconds of each other: PVE serializes them on one
+    # datastore lock and reports `clone failed: can't lock file
+    # '/var/lock/pve-manager/pve-storage-ssd' - got timeout` to the loser (live-found
+    # 2026-10-15, all three campaign deploys). The lock is held only for the duration of a
+    # volume allocation, so the loss is transient and the operation idempotent — retry it,
+    # reclaiming the locked partial clone (whose name proves it ours) in between.
+    for attempt in range(3):
+        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{base_engine_vm_id}/clone", data={
+            "newid": vmid,
+            "name": vm_name,
+            "full": 1,
+        })["data"]
+        try:
+            wait_for_proxmox_task(node, upid)
+            break
+        except RuntimeError as e:
+            if "lock file" not in str(e) or attempt == 2:
+                raise
+            print(f"    clone of base image {base_engine_vm_id} hit datastore lock "
+                  f"contention — reclaiming the partial clone and retrying "
+                  f"(attempt {attempt + 2}/3)")
+            leftover = next((v for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
+                             if v["vmid"] == vmid and (v.get("name") or "") == vm_name), None)
+            if leftover:
+                destroy_vm_if_exists(node, vmid, expect_tags=None)
+            time.sleep(20)
 
     mgmt_ip = config.active().engine.mgmt_ip
     cfg = {
@@ -126,7 +147,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
         build_ip = _discover_vm_ipv4(node, vmid)
         if not build_ip:
             raise RuntimeError("could not discover the engine-template build VM's IP — "
-                               "set TF_VAR_engine_mgmt_ip (portable-node mode) or fix "
+                               "set TEZ_ENGINE_MGMT_IP (portable-node mode) or fix "
                                "the agent channel")
     forget_engine_host_key(build_ip)
     # 300s lost twice to first-boot-under-load (parallel deploy saturating the node

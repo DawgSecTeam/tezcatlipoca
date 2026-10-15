@@ -51,8 +51,8 @@ the pytest run above rather than this table.
 
 | File | Guards |
 |---|---|
-| `test_estate_state.py` | The monolithic document: schema, atomic 0600 write, resource record/forget/filter, checkpoints, migration from the seven legacy files, `load_all` |
-| `test_estate_config.py` | The config object: file/env/override precedence, the legacy-name table, `require`/`is_set`, per-node activation, SSH key resolution |
+| `test_estate_state.py` | The monolithic document: schema version, resource record/forget/filter, checkpoints, the flat-dict round trip, `load_all` |
+| `test_estate_config.py` | The config object: file/env/override precedence, canonical `TEZ_` env-name derivation (`knobs.` prefix dropped), `require`/`is_set`, per-node activation, SSH key resolution |
 | `test_estate_apply.py` | The create path against a fake API: bridge create, engine NIC order and cloud-init, per-box NIC/cloud-init rules (Windows and unmanaged skip it), adopt-ours/refuse-foreign, grow-only disk sizing |
 | `test_estate_engine_setup.py` | The engine's guest-side setup: netplan ens numbering, the sysctls, the persisted satellite-route unit, cold boot, readiness |
 | `test_estate_destroy.py` | Teardown tier order (clones before goldens — the base-volume constraint), a refusal that never aborts a tier, `full=False` keeping templates |
@@ -133,7 +133,7 @@ defining `verifier.*` module — the entrypoint only re-exports.
 | `test_blue_watchdog.py` | The blue watchdog script shape (pure string build, no SSH) |
 | `test_amongus_cde.py` | Windows service mappings and post-domain AD configs |
 | `test_multinode.py` | Multi-node placement, jump rules, slot vmid math, the sync planner — offline (the largest file) |
-| `test_secret_hygiene.py` | No secret-bearing file is tracked, and no env var drifts — fails the suite if code reads a variable neither in `.env.example` nor allowlisted in `INTERNAL_ENV` |
+| `test_secret_hygiene.py` | No secret-bearing file is tracked, and no env var drifts — fails the suite if code reads a variable `estate/config.py`'s `_SPEC` does not declare and `INTERNAL_ENV` does not allowlist |
 | `test_packet_validation.py` | Compile-boundary packet shapes that would otherwise die later in a live deploy |
 | `test_service_fixups.py` | `fix_services_on_boxes`'s generated hardening script is byte-identical to the pre-refactor output across the full service case matrix |
 | `test_scrim_defects.py` | Red-vs-blue scrim defect audit: process-tree timeouts, worker supervision, lineup, secret hygiene. Imports `scrim/`/`scrim_report/` directly and patches where a function is defined (module map: [scrim-harness.md](scrim-harness.md)) |
@@ -146,10 +146,12 @@ defining `verifier.*` module — the entrypoint only re-exports.
    via `importlib.util.spec_from_file_location`, as `test_smoke.py` shows). Set env vars inside the
    test and restore in `tearDown`.
 3. Put the invariant being protected in the module docstring's first line.
-4. A new env var your code reads: declare it in `.env.example` (`TF_VAR_<name>` / `TEZ_<NAME>` /
-   `NAKON_*`/`VULNDB_*`) and document it in [usage-people.md](usage-people.md#configure-the-event),
-   or list it in `INTERNAL_ENV` in `tests/test_secret_hygiene.py` with a reason — that test fails
-   the suite otherwise, by design.
+4. A new env var your code reads: add its key to `estate/config.py`'s `_SPEC` (the default lives
+   there; the canonical `TEZ_` env name is derived from the key) and document it in
+   [usage-people.md](usage-people.md#configure-the-event), or list it in `INTERNAL_ENV` in
+   `tests/test_secret_hygiene.py` with a reason — the drift test fails the suite otherwise, by
+   design. `NAKON_*`/`VULNDB_*` names are vendored-tool config read by `vendor/nakon`, not this
+   repo.
 5. `python3 -m pytest tests/ -q` and confirm the count went up.
 
 ## What the suite deliberately does not do

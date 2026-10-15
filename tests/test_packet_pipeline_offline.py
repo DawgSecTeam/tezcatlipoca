@@ -67,7 +67,7 @@ class PacketPipelineOffline(unittest.TestCase):
         for name, root in self._each():
           with self.subTest(packet=name):
             profile, comp = _compile(root, name)
-            dctx = DeployContext(state_path=comp / ".deploy_state.json", previous_state={},
+            dctx = DeployContext(state_path=comp / "estate-state.json", previous_state={},
                                  resuming=False, state={"last_phase": 0},
                                  teams={"team1": {"identifier": "101", "password": "tp"}},
                                  number_of_teams=1, run_id="run-0badf00d", engine_vmid=1000)

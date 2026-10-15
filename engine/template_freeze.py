@@ -24,29 +24,16 @@ from pathlib import Path
 from common.constants import ENGINE_TEMPLATE_VMID_OFFSET
 from infra.client import proxmox_api
 
-FROZEN_FILE = ".frozen.json"
-HASHES_FILE = ".template-hashes.json"
-
 
 def load_template_hashes(comp_dir):
 # The durable per-competition hash record, from the document's templates section.
 #
-#     A fresh deploy rewrites the deploy state but must NOT clear this: it is what template
-#     REUSE keys on, so a redeploy of a validated range clones the same artifacts. A range
-#     deployed before the record moved into the document still reads its legacy file.
+#     A fresh deploy rewrites the rest of the state but must NOT clear this: it is what
+#     template REUSE keys on, so a redeploy of a validated range clones the same artifacts.
     from estate import state
     templates = state.EstateState.load(comp_dir).section("templates")
-    record = {key: templates[key] for key in ("engine", "golden", "golden_planted", "updated")
-              if templates.get(key)}
-    if record:
-        return record
-    path = Path(comp_dir) / HASHES_FILE
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except (ValueError, OSError):
-        return {}
+    return {key: templates[key] for key in ("engine", "golden", "golden_planted", "updated")
+            if templates.get(key)}
 
 
 def golden_plant_checkpoints(comp_dir):
@@ -67,7 +54,7 @@ def golden_plant_checkpoints(comp_dir):
 def save_template_hashes(comp_dir, **entries):
 # Merge entries (engine={hash, inputs}, golden={box: {hash, inputs}}) into the record.
     from estate import state
-    document = state.open(comp_dir)
+    document = state.EstateState.load(comp_dir)
     templates = document.section("templates")
     for key, value in entries.items():
         if key in ("golden", "golden_planted"):
@@ -82,7 +69,7 @@ def forget_template_hashes(comp_dir):
 # Drop the hash record: a destroyed template must not be reused by the next deploy.
 #     The freeze flag is not part of the record and stays.
     from estate import state
-    document = state.open(comp_dir)
+    document = state.EstateState.load(comp_dir)
     templates = document.section("templates")
     for key in ("engine", "golden", "golden_planted", "updated"):
         templates.pop(key, None)
@@ -229,19 +216,9 @@ def write_template_hash(node, vmid, hash_value, extra=""):
 # ---- frozen state ----
 
 def frozen_state(comp_dir):
-# The frozen record, or None. A range frozen before the record moved into the document
-#     still reads its legacy file.
+# The frozen record, or None when the competition is not frozen.
     from estate import state
-    frozen = state.EstateState.load(comp_dir).section("templates").get("frozen")
-    if frozen:
-        return frozen
-    path = Path(comp_dir) / FROZEN_FILE
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text())
-    except (ValueError, OSError):
-        return None
+    return state.EstateState.load(comp_dir).section("templates").get("frozen") or None
 
 
 def classify_drift(stored_inputs, current_inputs):
@@ -339,7 +316,7 @@ def frozen_code_drift(frozen):
     return None
 
 
-_CODE_SUFFIXES = (".py", ".tf", ".sh", ".j2", ".ps1")
+_CODE_SUFFIXES = (".py", ".sh", ".j2", ".ps1")
 
 
 def code_path_dirty(porcelain_lines):
@@ -350,7 +327,7 @@ def code_path_dirty(porcelain_lines):
 #     the state document, .env backups) is written by the run itself and is never committed as
 #     part of the workflow. Treating every porcelain line as dirt made `--freeze` refuse in
 #     any post-deploy worktree (verified 2026-10-02 on the scale8 worktree: a modified
-#     a recorded placement, an untracked nodes.json and a .env backup), so the gate is scoped here.
+#     placement record, an untracked nodes.json and a .env backup), so the gate is scoped here.
 #     Pure function of the porcelain lines — see verify-competition.do_freeze.
     for line in porcelain_lines or []:
         path = line[3:] if len(line) > 3 else line

@@ -58,7 +58,7 @@ class CheckDomainsTests(unittest.TestCase):
         for vmid, out in responses.items():
             outs[vmid] = out
         stdout = io.StringIO()
-        with patch.dict(os.environ, {"TF_VAR_proxmox_node": "node"}), \
+        with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "node"}), \
              patch.object(v_domains, "guest_agent_exec_windows", side_effect=probe), \
              patch.object(v_domains, "guest_agent_exec_root", side_effect=probe), \
              contextlib.redirect_stdout(stdout):

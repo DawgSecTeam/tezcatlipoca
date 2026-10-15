@@ -44,7 +44,7 @@ def build_parser():
                              "apply). See the resume hint printed on a failed deploy. Refused when "
                              "it skips phases the state file doesn't record as completed.")
     parser.add_argument("--force-from-phase", action="store_true", dest="force_from_phase",
-                        help="Proceed even when --from-phase skips phases .deploy_state.json does "
+                        help="Proceed even when --from-phase skips phases the state document does "
                              "not record as completed. Only for a known-stale checkpoint (e.g. the "
                              "process died after a phase finished but before it was checkpointed); "
                              "the skipped phases build the machines the later ones target.")
@@ -55,12 +55,12 @@ def build_parser():
                              "resume (ignored on --from-phase, which reads it back from state).")
     parser.add_argument("--team-identifiers", dest="team_identifiers", default=None,
                         help="Comma list of team identifiers (subnet ids) for THIS run, outranking "
-                             "TF_VAR_team_identifiers and the saved/packet defaults. Each "
+                             "TEZ_TEAM_IDENTIFIERS and the saved/packet defaults. Each "
                              "concurrent range on a shared node needs its own non-overlapping "
                              "block (identifier 130 maps to team vmids 1500..1509).")
     parser.add_argument("--engine-mgmt-ip", dest="engine_mgmt_ip", default=None,
                         help="Static management IP for THIS run's scoring engine, outranking "
-                             "TF_VAR_engine_mgmt_ip and the node catalog's per-node value. Each "
+                             "TEZ_ENGINE_MGMT_IP and the node catalog's per-node value. Each "
                              "concurrent range on one node needs its own management address.")
     parser.add_argument("--team-node", dest="team_node", default=None,
                         help="Multi-node pin: comma list of team=NODE, e.g. '103=zfs-193,104=zfs-193' "

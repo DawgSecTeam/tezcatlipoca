@@ -2,7 +2,7 @@
 
 No live Proxmox: probes are stubbed, placement is computed from fake probe dicts,
 and the sync planner's API reads are patched. The single-node invariant (no
-nodes.json -> legacy path) is asserted alongside."""
+nodes.json -> single-node fallback) is asserted alongside."""
 
 import json
 import os
@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from deploy_lib import placement as dl_placement  # noqa: E402
 from estate import config  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 from net import jump_ops  # noqa: E402
 from multinode import nodes_config  # noqa: E402
 from multinode import placement_planner  # noqa: E402
@@ -101,9 +102,9 @@ class LoadNodesConfigTest(unittest.TestCase):
             path = Path(td) / "nodes.json"
             path.write_text(json.dumps({"nodes": [
                 {"name": "eng", "endpoint": "https://a:8006", "node": "n1",
-                 "datastore": "d", "token_env": "TF_VAR_proxmox_api_token"},
+                 "datastore": "d", "token_env": "TEZ_PROXMOX_API_TOKEN"},
                 {"name": "sat", "endpoint": "https://b:8006", "node": "n2",
-                 "datastore": "d", "token_env": "TF_VAR_proxmox_api_token"}]}))
+                 "datastore": "d", "token_env": "TEZ_PROXMOX_API_TOKEN"}]}))
             with self.assertRaises(SystemExit) as raised:
                 nodes_config.load_nodes_config(path)
         msg = str(raised.exception)
@@ -116,12 +117,12 @@ class LoadNodesConfigTest(unittest.TestCase):
             path = Path(td) / "nodes.json"
             path.write_text(json.dumps({"nodes": [
                 {"name": "eng", "endpoint": "https://a:8006", "node": "n1",
-                 "datastore": "d", "token_env": "TF_VAR_proxmox_api_token"},
+                 "datastore": "d", "token_env": "TEZ_PROXMOX_API_TOKEN"},
                 {"name": "sat", "endpoint": "https://b:8006", "node": "n2",
-                 "datastore": "d", "token_env": "TF_VAR_proxmox_api_token_150"}]}))
+                 "datastore": "d", "token_env": "TEZ_PROXMOX_API_TOKEN_150"}]}))
             records, _ = nodes_config.load_nodes_config(path)
         self.assertEqual([r.token_env for r in records],
-                         ["TF_VAR_proxmox_api_token", "TF_VAR_proxmox_api_token_150"])
+                         ["TEZ_PROXMOX_API_TOKEN", "TEZ_PROXMOX_API_TOKEN_150"])
 
 
 class NodeEnvTest(unittest.TestCase):
@@ -129,7 +130,7 @@ class NodeEnvTest(unittest.TestCase):
         rec = _rec("x")
         # Activation is an in-process config override, not an os.environ mutation.
         cfg = config.configure(Path("/nonexistent/tezcatlipoca.toml"))
-        env = {"TOK_X": "tokval", "TF_VAR_proxmox_node": "", "TEZ_PROXMOX_NODE": ""}
+        env = {"TOK_X": "tokval", "TEZ_PROXMOX_NODE": ""}
         with patch.dict(os.environ, env, clear=False):
             restore = nodes_config.apply_node_env(rec)
             self.assertEqual(cfg.proxmox.endpoint, rec.endpoint)
@@ -248,9 +249,12 @@ class PlacementRecordTest(unittest.TestCase):
 
     def test_bad_version_refused(self):
         with tempfile.TemporaryDirectory() as td:
-            (Path(td) / "placement.json").write_text(json.dumps({"version": 99}))
+            comp = Path(td)
+            document = estate_state.EstateState.load(comp)
+            document.data["placement"] = {"version": 99}
+            document.save()
             with self.assertRaises(SystemExit):
-                placement_record.read_placement(Path(td))
+                placement_record.read_placement(comp)
 
     def test_resolve_legacy_when_nothing_configured(self):
         with tempfile.TemporaryDirectory() as td, \
@@ -513,7 +517,7 @@ class ActivationProjectsBackToEnv(unittest.TestCase):
                                       token_env="TOK_HDD150").to_json()},
         }
         with patch.dict(os.environ,
-                        {"TOK_HDD150": "t1", "TF_VAR_proxmox_node": "profile-host"},
+                        {"TOK_HDD150": "t1", "TEZ_PROXMOX_NODE": "profile-host"},
                         clear=False):
             restore = placement_record.activate_placement(placement)
             try:
@@ -521,8 +525,8 @@ class ActivationProjectsBackToEnv(unittest.TestCase):
             finally:
                 placement_record.deactivate_placement(restore)
         # The placement's node, not the profile's: this is what a stale os.environ copy got wrong.
-        self.assertEqual(env["TF_VAR_proxmox_node"], "proxmox")
-        self.assertEqual(env["TF_VAR_proxmox_api_token"], "t1")
+        self.assertEqual(env["TEZ_PROXMOX_NODE"], "proxmox")
+        self.assertEqual(env["TEZ_PROXMOX_API_TOKEN"], "t1")
 
 
 class SyncPlannerTest(unittest.TestCase):

@@ -61,7 +61,7 @@ class DomainOrderingTests(unittest.TestCase):
                 events.append(("dns",))
                 return True
 
-            with patch.dict(os.environ, {"TF_VAR_proxmox_node": "node"}), \
+            with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "node"}), \
                  patch.object(domain_ops, "guest_agent_exec_windows",
                              return_value=(0, "0|WORKGROUP", "")), \
                  patch.object(domain_ops, "_run_single_nakon_config", side_effect=run_config), \

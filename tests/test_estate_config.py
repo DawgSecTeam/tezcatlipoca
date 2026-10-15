@@ -1,4 +1,4 @@
-"""estate.config: the native config surface that replaces TF_VAR_*/.env."""
+"""estate.config: the native config surface (tezcatlipoca.toml plus TEZ_* env overrides)."""
 
 import os
 import tempfile
@@ -10,12 +10,9 @@ from estate import config
 
 
 def _isolated_env():
-    """Blank every key's env names: another test's leaked TF_VAR_*/TEZ_* must not reach a
-    default assertion. Empty (not removed) reads as unset — see Config.get."""
-    names = []
-    for key, (_, legacy) in config._SPEC.items():
-        names.append(config.env_name(key))
-        names.extend(legacy)
+    """Blank every key's env name: another test's leaked TEZ_* must not reach a default
+    assertion. Empty (not removed) reads as unset — see Config.get."""
+    names = [config.env_name(key) for key in config._SPEC]
     return mock.patch.dict(os.environ, {name: "" for name in names})
 
 
@@ -89,16 +86,8 @@ class Resolution(unittest.TestCase):
         with mock.patch.dict(os.environ, {"TEZ_THIN_HEADROOM": "0.5"}):
             self.assertEqual(self.cfg.knobs.thin_headroom, 0.5)
 
-    def test_legacy_tf_var_name_still_resolves(self):
-        with mock.patch.dict(os.environ, {"TF_VAR_datastore": "legacy-store"}):
-            self.assertEqual(self.cfg.proxmox.datastore, "legacy-store")
-
-    def test_legacy_portal_name_still_resolves(self):
-        with mock.patch.dict(os.environ, {"PORTAL_OPEN": "1"}):
-            self.assertTrue(self.cfg.portal.open)
-
     def test_empty_env_falls_through_to_the_file(self):
-        with mock.patch.dict(os.environ, {"TF_VAR_datastore": ""}):
+        with mock.patch.dict(os.environ, {"TEZ_PROXMOX_DATASTORE": ""}):
             self.assertEqual(self.cfg.proxmox.datastore, "file-store")
 
     def test_a_missing_key_is_catchable_by_except_exception(self):
@@ -120,24 +109,24 @@ class Resolution(unittest.TestCase):
             self.assertIn("TEZ_PROXMOX_ENDPOINT", message)
 
     def test_require_returns_a_set_value(self):
-        with mock.patch.dict(os.environ, {"TF_VAR_proxmox_api_token": "root@pam!x=secret"}):
+        with mock.patch.dict(os.environ, {"TEZ_PROXMOX_API_TOKEN": "root@pam!x=secret"}):
             self.assertEqual(self.cfg.require("proxmox.api_token"), "root@pam!x=secret")
 
     def test_is_set_distinguishes_unset_from_deliberately_empty(self):
         # `get` cannot: both read as the default. One caller needs the difference — an empty
         # engine mgmt IP means "DHCP" and must not be re-defaulted to a static address.
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("TF_VAR_engine_mgmt_ip", None)
+            os.environ.pop("TEZ_ENGINE_MGMT_IP", None)
             os.environ.pop("TEZ_ENGINE_MGMT_IP", None)
             self.assertFalse(self.cfg.is_set("engine.mgmt_ip"))
-            with mock.patch.dict(os.environ, {"TF_VAR_engine_mgmt_ip": ""}):
+            with mock.patch.dict(os.environ, {"TEZ_ENGINE_MGMT_IP": ""}):
                 self.assertTrue(self.cfg.is_set("engine.mgmt_ip"))
 
     def test_is_set_sees_a_file_value(self):
         self.assertTrue(self.cfg.is_set("proxmox.datastore"))
 
     def test_require_is_also_a_module_level_function(self):
-        with mock.patch.dict(os.environ, {"TF_VAR_proxmox_api_token": "root@pam!x=secret"}):
+        with mock.patch.dict(os.environ, {"TEZ_PROXMOX_API_TOKEN": "root@pam!x=secret"}):
             config.reset()
             self.addCleanup(config.reset)
             self.assertEqual(config.require("proxmox.api_token"), "root@pam!x=secret")
@@ -180,15 +169,13 @@ class Singleton(unittest.TestCase):
 
 
 class SshKeyPath(unittest.TestCase):
-    """A relative profile path is repo-root-relative; the legacy env value was
-    terraform-relative, and both must land on the same file."""
+    """A relative profile path resolves against the checkout root."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         (self.root / "proxmox").write_text("key")
-        (self.root / "terraform").mkdir()
         patch = mock.patch.object(config, "REPO_ROOT", self.root)
         patch.start()
         self.addCleanup(patch.stop)
@@ -204,9 +191,6 @@ class SshKeyPath(unittest.TestCase):
 
     def test_a_repo_relative_path_resolves_against_the_checkout(self):
         self.assertEqual(self._resolve("proxmox"), self.root / "proxmox")
-
-    def test_the_legacy_terraform_relative_value_still_resolves(self):
-        self.assertEqual(self._resolve("../proxmox"), self.root / "proxmox")
 
 
 if __name__ == "__main__":

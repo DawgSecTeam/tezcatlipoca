@@ -1,10 +1,10 @@
 """Per-phase unit tests for the extracted deploy phases (deploy_lib/phases/).
 
-Only the decidable parts are tested — the branching, ordering and state writes that
-used to be buried in deploy(). Every infrastructure call is patched: none of these
-tests touches Proxmox, terraform, SSH or the network. They are the offline half of
-"the phase boundary is a call boundary"; the byte-identity of the shell/config these
-phases generate is covered by the modules that own that generation.
+Only the decidable parts are tested — the branching, ordering and state writes each phase
+owns. Every infrastructure call is patched: none of these tests touches Proxmox, SSH or
+the network. They are the offline half of "the phase boundary is a call boundary"; the
+byte-identity of the shell/config these phases generate is covered by the modules that own
+that generation.
 """
 
 import contextlib
@@ -37,7 +37,7 @@ def _ctx(comp_dir, **overrides):
 # A DeployContext with harmless defaults; override what a test exercises.
     fields = dict(
         comp_dir=comp_dir, comp_name=comp_dir.name,
-        state_path=comp_dir / ".deploy_state.json", from_phase=1, resuming=False,
+        state_path=comp_dir / "estate-state.json", from_phase=1, resuming=False,
         assume_yes=True, name="probe", scenario="probe", box_username="ubuntu",
         credlist_usernames=["admin"], nakon_jobs=4, apt_cache=True, injects=[],
         packet_pw=None, state={}, teams={}, number_of_teams=0, admin_password="a",
@@ -335,7 +335,7 @@ class Phase4GoldenCoverage(unittest.TestCase):
 
     def test_a_skip_verdict_never_erases_a_recorded_failure(self):
     # result=None (reuse / checkpoint / pristine / cold): the record must come
-    #         into existence if absent, but a previously recorded failure survives — the
+    #         into existence if absent, but an already-recorded failure survives — the
     #         disk is proven by hash, not by a fresh plant.
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
@@ -528,9 +528,9 @@ class Phase7Seed(unittest.TestCase):
 class Phase2EngineTemplate(unittest.TestCase):
 # The reuse-vs-rebuild decision, which is the whole point of the M4 hash gate.
 
-    ENV = {"TF_VAR_template_vm_id": "9000", "TF_VAR_vm_username": "ubuntu",
-           "TF_VAR_ssh_public_key": "ssh-rsa AAAA", "TF_VAR_proxmox_endpoint": "https://pve:8006/",
-           "TF_VAR_engine_mgmt_gw": "10.0.0.1"}
+    ENV = {"TEZ_PROXMOX_TEMPLATE_VM_ID": "9000", "TEZ_ENGINE_USERNAME": "ubuntu",
+           "TEZ_SSH_PUBLIC_KEY": "ssh-rsa AAAA", "TEZ_PROXMOX_ENDPOINT": "https://pve:8006/",
+           "TEZ_ENGINE_MGMT_GW": "10.0.0.1"}
 
     def _run(self, ctx, stored_node_hash):
         record = types.SimpleNamespace(destroyed=[], built=0, tf=[], retagged=[])

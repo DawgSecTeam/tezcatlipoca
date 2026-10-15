@@ -47,6 +47,7 @@ from artifacts_lib import paths as apaths  # noqa: E402
 from teardown import machinery  # noqa: E402
 from teardown import runner as trunner  # noqa: E402
 from infra.ownership import Ownership, Refusal  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 
 RUN = "run-abcdef01"
 OTHER_RUN = "run-12345678"
@@ -134,7 +135,9 @@ class OwnershipTotality(unittest.TestCase):
     def test_state_without_run_id_refuses_to_destroy_anything(self):
         with tempfile.TemporaryDirectory() as tmp:
             comp = Path(tmp)
-            (comp / ".deploy_state.json").write_text(json.dumps({"scoring_vm_id": 1000}))
+            document = estate_state.EstateState.load(comp)
+            document.absorb({"scoring_vm_id": 1000})
+            document.save()
             with self.assertRaises(Refusal) as ctx:
                 machinery.load_ownership(comp)
             msg = str(ctx.exception)
@@ -146,15 +149,16 @@ class OwnershipTotality(unittest.TestCase):
     def test_endpoint_mismatch_is_refused_with_both_endpoints(self):
         with tempfile.TemporaryDirectory() as tmp:
             comp = Path(tmp)
-            (comp / ".deploy_state.json").write_text(json.dumps(
-                {"run_id": RUN, "deployed_endpoint": "https://old:8006/"}))
-            with patch.dict(os.environ, {"TF_VAR_proxmox_endpoint": "https://new:8006"}):
+            document = estate_state.EstateState.load(comp)
+            document.absorb({"run_id": RUN, "deployed_endpoint": "https://old:8006/"})
+            document.save()
+            with patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://new:8006"}):
                 with self.assertRaises(Refusal) as ctx:
                     machinery.load_ownership(comp)
             msg = str(ctx.exception)
             self.assertIn("https://old:8006", msg)     # saw
             self.assertIn("https://new:8006", msg)     # expected
-            self.assertIn("TF_VAR_", msg)              # remedy
+            self.assertTrue(ctx.exception.remedy)      # remedy names the next step
 
     def test_sweep_ignores_a_clone_marker_only_vm(self):
     # The leftover sweep matches TAGS only; an interrupted clone (marker, no
@@ -218,8 +222,9 @@ class MainSequence(unittest.TestCase):
         (comp / "Compfile").write_text("name demo\nscenario x\ndifficulty 3\n")
         (comp / "teams.json").write_text(json.dumps(TEAMS))
         (comp / "boxes.json").write_text(json.dumps(BOXES))
-        (comp / ".deploy_state.json").write_text(json.dumps(
-            {"run_id": "run-1a2b3c4d", "scoring_vm_id": 1000}))
+        document = estate_state.EstateState.load(comp)
+        document.absorb({"run_id": "run-1a2b3c4d", "scoring_vm_id": 1000})
+        document.save()
         self.comp = comp
         self.log = []
         self._cwd = os.getcwd()

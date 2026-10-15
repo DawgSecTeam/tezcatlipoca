@@ -54,7 +54,7 @@ class LocalConfigTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="tz-realmc2-cfg-")
         # The comp's OWN config is the base (2026-10-12 isolation): no sibling
-        # checkout file is read, backed up, or restored by these tests anymore.
+        # checkout file is read, backed up, or restored by these tests.
         self.comp_cfg = Path(self.tmp) / ".badauto-config.yaml"
         # callback_ip derives from teams.json; every prepare_local_c2 test needs one
         self.write_teams(120)
@@ -146,10 +146,10 @@ class LocalConfigTests(unittest.TestCase):
         self.assertEqual(rc.engine_ip_for(self.tmp), "10.0.0.252")
 
     def test_engine_ip_falls_back_to_the_deploy_env(self):
-        with mock.patch.dict(os.environ, {"TF_VAR_engine_mgmt_ip": "10.0.0.251"}):
+        with mock.patch.dict(os.environ, {"TEZ_ENGINE_MGMT_IP": "10.0.0.251"}):
             self.assertEqual(rc.engine_ip_for(self.tmp), "10.0.0.251")
-        with mock.patch.dict(os.environ, {"TF_VAR_engine_mgmt_ip": ""}, clear=False):
-            os.environ.pop("TF_VAR_engine_mgmt_ip", None)
+        with mock.patch.dict(os.environ, {"TEZ_ENGINE_MGMT_IP": ""}, clear=False):
+            os.environ.pop("TEZ_ENGINE_MGMT_IP", None)
             self.assertIsNone(rc.engine_ip_for(self.tmp))
 
     def test_derived_config_carries_the_engine_ip(self):

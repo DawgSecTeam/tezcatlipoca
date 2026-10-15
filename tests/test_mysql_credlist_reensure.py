@@ -30,7 +30,7 @@ class ScriptTest(unittest.TestCase):
 class ReensureTest(unittest.TestCase):
     def setUp(self):
         # setdefault leaked this into every later test in the process; scope it.
-        env = mock.patch.dict(os.environ, {"TF_VAR_proxmox_node": "test-pve"})
+        env = mock.patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "test-pve"})
         env.start()
         self.addCleanup(env.stop)
         self.calls = []

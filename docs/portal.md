@@ -164,7 +164,7 @@ picks up the new secret.
 7` re-seed re-runs phase 8, which re-ships the portal with the recorded tokens.
 
 **No console token on a node**: re-run phase 8 with a privileged token, e.g.
-`TF_VAR_proxmox_api_token=<privileged token> python3 create-competition.py --competition <comp>
+`TEZ_PROXMOX_API_TOKEN=<privileged token> python3 create-competition.py --competition <comp>
 --from-phase 8 --yes`. Phase 8's other steps are flag-guarded and skip.
 
 ## Limits
@@ -205,4 +205,4 @@ noVNC release tarball's integrity hash; it doesn't check the copies for drift.
 `127.0.0.1` listener the way cloudflared reaches it: health; a team login sees exactly its own
 boxes; the gate (423 while closed); a cross-team console request refused (403); an admin login;
 per node, one console relayed far enough to read the `RFB 003.` greeting; that relay id refused on
-reuse. Offline coverage: `tests/test_portal_*.py`, `tests/test_infra_console.py`.
+reuse. Offline coverage: `tests/test_portal_*.py`, `tests/test_pve_console_ops.py`.

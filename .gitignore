@@ -1,13 +1,10 @@
-# Blanket rule, deliberately: every .env variant is secret-bearing (Proxmox API
-# token, box + per-team passwords). The old rule listed ".env" and
-# ".env.realm-backup*" by name, so a hand-made backup called
-# ".env.pre-cde-20260929" stayed tracked for weeks and reached the public remote.
-# Only the placeholder template ships. Enforced by tests/test_secret_hygiene.py.
+# Every .env variant is secret-bearing (the Proxmox API token, box + team passwords). The
+# blanket rule exists because a hand-named backup (".env.pre-...") once stayed tracked and
+# reached the public remote; tezcatlipoca.example.toml is the configuration reference and
+# no env template ships. Enforced by tests/test_secret_hygiene.py.
 .env
 .env.*
-!.env.example
 # The native config profile (estate.config): per-node, secret-bearing by reference.
-# tezcatlipoca.example.toml is the shipped placeholder, same rule as .env.example.
 tezcatlipoca.toml
 tezcatlipoca.*.toml
 !tezcatlipoca.example.toml
@@ -26,99 +23,22 @@ proxmox
 deploy.log
 deploy-*.log
 logs/
-competitions/*/teams.json
-competitions/*/event.conf
-competitions/*/linux.credlist
-competitions/*/credentials.txt
-# Student portal: portal.json carries this run's Proxmox console token; the access log
-# carries team logins/IPs. Both 0600, never committed.
-competitions/*/portal.json
-competitions/*/portal-access.log
-# The monolithic per-competition estate document: it carries the box, team, admin and
-# inject passwords, so it is never published (same rule as teams.json/.deploy_state.json).
-competitions/*/estate-state.json
-competitions/*/.deploy_state.json
-competitions/*/.deploy-timings.jsonl
-competitions/*/nakon-config.json
-competitions/*/.nakon-domain-*.json
-competitions/*/.nakon-golden.json
-competitions/*/.nakon-postclone.json
-competitions/*/.nakon-predomain.json
-competitions/*/.nakon-final.json
-# The competition's bad-auto config (deploy identity incl. the realm layer):
-# per-deploy state, regenerated on every deploy — never shared, never committed.
-competitions/*/.badauto-config.yaml
-competitions/*/.realm-c2-config.yaml
-competitions/*/.frozen.json
-competitions/*/.template-hashes.json
-competitions/*/.phase6-swept
 .deploy.lock
-competitions/*/box_vulns.json.pre-cyberfield-prune1
-competitions/*/targets.json
-competitions/*/known_hosts
-competitions/distro-matrix-2026-09-27/terraform/
 .zcode/
 artifacts/rawsockets-beacon/build/
-competitions/*/terraform/
-competitions/*/.postclone-swept
-# Per-run test artifacts (competitions/<id>/.automated-tests/<run-id>/): box-pulled red/blue
-# reports, raw evidence under evidence/, the synthesis REPORT.md, and the machine manifests.
-# Ignored deliberately and with NO publish path — these quote flags, credentials and inject
-# answers, and "quote a password in prose" is exactly what tests/test_secret_hygiene.py's
-# pattern net cannot catch. A tool recommendation leaves this folder by being written into
-# docs/known-issues.md or a fixes plan, never by copying the artifact into git. Enforced by
-# test_no_test_artifact_is_tracked (the tracked set is asserted, not the rule: a force-add has
-# defeated a .gitignore line in this repo before).
-competitions/*/.automated-tests/
-
-# competition terraform artifacts carry dead per-comp passwords — three
-# reference comps keep theirs tracked on purpose (force-add to refresh a
-# snapshot); these close the layouts that slipped through: comp-dir
-# top-level tfstate/tfvars (how scrim-dress-2026-09-20/terraform.tfstate got
-# committed), per-comp logs (m4-resume-current.log carried deploy-state
-# passwords), and root terraform/ tfvars variants
-competitions/*/*.tfstate*
-competitions/*/terraform.tfvars*
-competitions/*/*.log
-# packet-compiled secrets (compile-packet.py): packet-published creds, decoy
-# account passwords, AD account passwords
-competitions/*/passwords.json
-competitions/*/box_baseline.json
-competitions/*/domain_accounts.json
 nodes.json
 coverage-run1.json
 
-# Local run snapshot: a point-in-time copy of a competition run — bad-auto world
-# state (cred pool), blue-team tool caches (.opencode/npm, ~180 MB), jars and
-# team reports. Quotes credentials and is a snapshot, not a source artifact.
-competitions/*/run*-archive-*/
-# Terraform state ARCHIVE: carries compiled team passwords
-# (outputs.team_passwords + per-box user_account passwords). Unlike the three
-# reference comps kept tracked on purpose, this is a working archive — never
-# publish it; force-add deliberately if that ever changes.
-# Throwaway per-incident scratch scripts (embed live credentials by nature).
-.build-tmp/
-# Headscale remote-access artifacts carry per-person enrollment KEYS (single-use
-# preauth secrets) — same class as .env: never tracked.
-competitions/*/remote-access/
-# Run evidence (samples, box snapshots, transcripts) never enters git:
-# it quotes credentials and flags by design.
-competitions/*/persistence-evidence-*/
-# A pre-wipe run dir kept for the record (world.json + report-secrets.md):
-# same class — credentials by design.
-competitions/*/.prev-run-*/
-
-# Competition DEFINITIONS live in tezcatlipoca-competitions since the 2026-10-14 cutover, so a
-# `competitions/` directory here is a leftover run workspace — it carries credentials.txt,
-# teams.json, .deploy_state.json (box/admin/inject passwords), it is not tracked, and it also
-# shadows the sibling repo in common/comp_paths.comps_root() (the suite then reads a stale
-# partial comp set). Never commit it; relocate it out of the checkout instead.
+# Competition DEFINITIONS live in tezcatlipoca-competitions, so a `competitions/` directory
+# here is a leftover run workspace: it carries credentials.txt, teams.json and
+# estate-state.json (box/admin/inject passwords, the run identity), the per-run
+# .automated-tests/ evidence, and the template/placement records. It also shadows the
+# sibling repo in common/comp_paths.comps_root() (the suite then reads a stale partial comp
+# set). Nothing under it is tracked. Enforced by tests/test_secret_hygiene.py — the tracked
+# set is asserted, not the rule: a force-add has defeated a .gitignore line in this repo
+# before.
 competitions/
 
-# The pre-cutover browser UI moved to tezcatlipoca-dashboard (2026-10-14). A `webui/` directory
-# here is a stale checkout's leftovers (146 MB of node_modules/dist in this tree) and it is not
-# tracked — never commit it.
-webui/
 
 # vim swap files (a twin session's live editor buffer must never be commit-swallowed)
 *.swp

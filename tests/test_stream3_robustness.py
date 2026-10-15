@@ -1,7 +1,7 @@
 """Stream-3 deploy-robustness fixes from the shakedown-5x4 closeout: AD-misconfig
 replay on resume (plants keyed on their own marker, not first promotion), the
 stale scoring-round-loop WARN (+ --fix-round-loop), and the Windows pre-stop
-that keeps a dead-agent DC from hanging terraform destroy."""
+that keeps a dead-agent DC from hanging the teardown."""
 
 import contextlib
 import importlib.util
@@ -55,7 +55,7 @@ class AdMisconfigReplay(unittest.TestCase):
 
         # DC probe answer "role|domain": role 0 = WORKGROUP member, 4 = promoted
         dc_probe = "0|WORKGROUP" if not promoted else "4|team105.local"
-        with patch.dict(os.environ, {"TF_VAR_proxmox_node": "node"}), \
+        with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "node"}), \
              patch.object(domain_ops, "guest_agent_exec_windows",
                           return_value=(0, dc_probe, "")), \
              patch.object(domain_ops, "_run_single_nakon_config", side_effect=run_config), \
@@ -105,7 +105,7 @@ class WindowsPreStop(unittest.TestCase):
         out = io.StringIO()
         with patch.object(destroy_sweep_ops, "proxmox_api", side_effect=fake_api), \
              patch.object(destroy_sweep_ops, "wait_for_proxmox_task"), \
-             patch.dict(os.environ, {"TF_VAR_proxmox_node": "node"}), \
+             patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "node"}), \
              contextlib.redirect_stdout(out):
             destroy_sweep_ops.pre_stop_windows_boxes(
                 {"team1": {"identifier": "120"}},

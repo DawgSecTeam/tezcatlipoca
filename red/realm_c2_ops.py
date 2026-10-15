@@ -133,7 +133,7 @@ def engine_ip_for(comp_dir):
     Source order matches the consumer: the competition's `credentials.txt` is where
     tezcatlipoca publishes the scoreboard URL (`Scoreboard: http://<engine>`) and is
     what `badauto deploy` reads for its DNAT, with the deploy environment's
-    `TF_VAR_engine_mgmt_ip` as the fallback.
+    `TEZ_ENGINE_MGMT_IP` as the fallback.
     """
     try:
         text = (Path(comp_dir) / "credentials.txt").read_text(encoding="utf-8")

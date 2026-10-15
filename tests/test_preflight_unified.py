@@ -116,7 +116,21 @@ class Collisions(unittest.TestCase):
                      template=1)]
         self._run(_share(), kept)          # must not raise
 
+    def test_our_own_dead_template_build_is_reclaimed_by_phase_2(self):
+        # A template build whose clone task failed leaves an untagged, unconverted clone on
+        # the reserved template vmid wearing the base image's own tags. It is this run's
+        # wreckage, not a leftover range: phase 2 adopts and rebuilds it. Refusing here left
+        # the deploy no way to clean up after itself (live 2026-10-15, run-bc3452dd:
+        # 'collides with VMs already on node: engine template vmid 2340').
+        self._run(_share(), [dict(_vm(1140, "cloud-init;template"), name="engine-template")])
+
+    def test_another_competitions_range_in_a_template_slot_is_a_leftover(self):
+        with self.assertRaises(SystemExit):
+            self._run(_share(), [_vm(1150, "tezcatlipoca;comp-other;run-zzz")])
+
     def test_an_untemplated_vm_in_a_template_slot_is_a_leftover(self):
+        # Tagged into THIS competition and this run, so it is a running range's box, not a
+        # dead build attempt the deploy may help itself to.
         with self.assertRaises(SystemExit):
             self._run(_share(), [_vm(1140, f"tezcatlipoca;comp-c1;{RUN}")], bridges=["vmbr101"])
 
@@ -140,5 +154,5 @@ class Collisions(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    os.environ.setdefault("TF_VAR_proxmox_node", "pve")
+    os.environ.setdefault("TEZ_PROXMOX_NODE", "pve")
     unittest.main()

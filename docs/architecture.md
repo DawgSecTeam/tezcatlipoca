@@ -9,8 +9,8 @@ iptables on the engine, not bridge separation.
 
 There is one pipeline version. The deploy refuses a state document written by a different
 `pipeline_version`; teardown and redeploy both refuse a document without a `run_id`
-(`redeploy/redeploy_gate_ops.py` reads the document, and still serves a legacy range through the
-same read-only fallback every other reader uses).
+(`redeploy/redeploy_gate_ops.py` reads it through `estate.state.read_flat`, the same reader every
+other tool uses).
 
 Per-symbol rationale: [internals.md](internals.md). Open problems: [known-issues.md](known-issues.md).
 
@@ -102,7 +102,7 @@ Compfile + boxes.json
 
 `targets.enumerate_targets(teams, boxes)` yields one entry per `(team, box)`:
 
-- `vmid = 200 + identifier*10 + box_index`; `common.targets.vm_id_for` is the sole derivation, frozen into `targets.json` at deploy.
+- `vmid = 200 + identifier*10 + box_index`; `common.targets.vm_id_for` is the sole derivation, frozen into the document's `roster` section at deploy (`persist_targets`).
 - `ip = 192.168.<identifier>.<last_octet>`; `vm_name` is `team1-<box>` or `<identifier>-<box>`; nakon machine name is `<box>-team<identifier>`.
 - Limits: `MAX_BOXES_PER_TEAM=10`, `MAX_TEAMS=154` (identifiers 101–254).
 
@@ -167,9 +167,12 @@ Per-run secrets are generated in `deploy()` and written to `competitions/<id>/cr
 - `box_creds` — `admin`/`user1`/`user2`; must match `linux.credlist` on the engine.
 - `admin`/`inject`/`postgres`/`redis` — Quotient and internal DB logins, written consistently to `/opt/quotient/.env`.
 
-`estate/config.py` resolves the deploy's process config from `tezcatlipoca.toml` with env overrides
-(its `_SPEC` still accepts the legacy `TF_VAR_*` names); `.env` is loaded by `deploy.py`. Neither file
-is ever rewritten. `vendor/nakon/.env` holds vulndb credentials. Everything per-run is gitignored:
+`estate/config.py` resolves the deploy's process config from `tezcatlipoca.toml` with `TEZ_*` env
+overrides — the env name for a key is `TEZ_` + the key upper-cased with dots as underscores, the
+`knobs.` prefix dropped (`knobs.thin_headroom` → `TEZ_THIN_HEADROOM`, `headscale.key_ttl` →
+`TEZ_HEADSCALE_KEY_TTL`); env beats the file. The entrypoints load `.env` as a plain dotenv layer
+carrying those same names. Neither file is ever rewritten. `vendor/nakon/.env` holds vulndb
+credentials. Everything per-run is gitignored:
 `estate-state.json`, `teams.json`, `event.conf`, `linux.credlist`, `credentials.txt`,
 `nakon-config.json`, `.nakon-*.json`, `.deploy-timings.jsonl`, `.postclone-swept`, `logs/`,
 `deploy-*.log`. `boxes.json`, `box_services.json`, `Compfile` are not secret.
@@ -180,11 +183,7 @@ is ever rewritten. `vendor/nakon/.env` holds vulndb credentials. Everything per-
 | `teams.json` | Generated credentials handoff for the tools that read files rather than the document (verifier, scrim, bad-auto) | `{<team>: {identifier, password}}` |
 | `credentials.txt` | The human-readable secret sheet | same secrets, for an operator |
 
-A range deployed before a record moved into the document still reads its legacy file
-(`targets.json`, `placement.json`, `.template-hashes.json`, `.frozen.json`,
-`.teardown-journal.json`), so every old range stays readable and destroyable.
-
-`deployed_endpoint` + `scoring_vm_id` (the document's `identity`/`run` sections) are the stale-state
+`deployed_endpoint` + `scoring_vm_id` (the document's `run`/`identity` sections) are the stale-state
 guard. Marker files: `.postclone-swept` (removed by phase 1 and phase 4, written only after a clean
 sweep; `run-agent-scrim.py` skips it), `.nakon-domain-<team>-*.json` (AD chain progress),
 `.nakon-golden-slot<N>.json`.
@@ -193,12 +192,12 @@ sweep; `run-agent-scrim.py` skips it), `.nakon-domain-<team>-*.json` (AD chain p
 
 - `common.targets.vm_id_for` is the sole vmid derivation; the deploy freezes it into the document's `roster` section, and a reordered `boxes.json` refuses.
 - A resume reuses the original per-run secrets; `infra.gates` refuses to resume without the state document.
-- Teardown destroys the document's recorded inventory (`estate/destroy.py`); a range deployed before the inventory existed has no template records and falls back to vmid math.
+- Teardown destroys the document's recorded inventory (`estate/destroy.py`); a full teardown that finds no recorded `golden`/`engine_template` resources still reclaims them by vmid math (`teardown_templates`).
 - `config_ops.collect_teams` builds the roster keys `team1`..`teamN`, and `enumerate_targets` special-cases `team1` (its boxes carry the golden-anchor `team1-<box>` names); the pipeline assumes a team literally named `team1`.
 - `event.conf` reaches the engine before nakon runs. Phase 8 sub-steps are flag-gated because `unpause_engine` is not idempotent.
 - On fresh clones the NOPASSWD sudoers grant lands before the DNS fix.
 - The golden plant is the only strict pass and `qm template` is the checkpoint. A non-green plant must not convert; a partially converted set has no resume (destroy and redeploy). Clones inherit golden mistakes.
-- A deploy never tears down a range: a leftover team box/engine/bridge is a preflight refusal and `destroy-competition.py` reclaims it. Linked clones still die before their golden templates — `estate/destroy.py`'s `TIERS` (team boxes and jumps, goldens, engine template, engine, bridges) is the only thing that decides it, because a clone shares its golden's base volume.
+- A deploy never tears down a range: a leftover team box/engine/bridge is a preflight refusal and `destroy-competition.py` reclaims it. Linked clones still die before their golden templates — `estate/destroy.py`'s `TIERS` (team boxes and jumps, goldens, engine, engine template, bridges) is the only thing that decides it, because a clone shares its golden's base volume.
 - Golden sets are per-competition; tear them down when the run's goal is met. Teams-only teardown is a mid-run mode.
 - Never point a competition's state document at another host or engine vmid: its recorded VMs are not there, so nothing here could own or reclaim them. `gates.check_stale_estate_state` refuses.
 - The competitor packet omits `box_vulns.json` (it would spoil the exercise).

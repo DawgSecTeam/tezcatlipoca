@@ -14,6 +14,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from net import remote_access_ops as ra  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 
 
 COMPS_ONE = [{"comp_id": "cde-2026", "engine_ip": "10.0.0.252",
@@ -217,12 +218,11 @@ class VerifyRemoteAccessTest(unittest.TestCase):
 class TeardownTest(unittest.TestCase):
     def test_absent_record_is_noop(self):
         with tempfile.TemporaryDirectory() as td:
-            ra.teardown_remote_access(Path(td))  # no state file at all: returns silently
+            ra.teardown_remote_access(Path(td))  # no state document at all: returns silently
 
     def test_disabled_record_is_noop(self):
         with tempfile.TemporaryDirectory() as td:
-            (Path(td) / ".deploy_state.json").write_text(
-                json.dumps({"remote_access": {"enabled": False}}))
+            estate_state.write_flat(Path(td), {"remote_access": {"enabled": False}})
             ra.teardown_remote_access(Path(td))
 
 

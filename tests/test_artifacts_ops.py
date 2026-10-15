@@ -21,9 +21,10 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 from artifacts_lib import artifacts_ops as ao
+from estate import state as estate_state
 
 # the red artifacts are pulled from the sudo-staged copies (/tmp/ba): the originals
-# are 0600 root, and one unreadable file used to mark the whole target unreachable
+# are 0600 root, and one unreadable file must not mark the whole target unreachable
 RED_REPORT = "/tmp/ba/report-*.md"
 
 
@@ -34,7 +35,7 @@ def make_comp(root, *, run_id="run-1a2b3c4d", comp="demo"):
     state = {"teams": {"team1": {"identifier": "101"}}}
     if run_id:
         state["run_id"] = run_id
-    (comp / ".deploy_state.json").write_text(json.dumps(state))
+    estate_state.write_flat(comp, state)
     return comp
 
 
@@ -87,8 +88,8 @@ class TestKey(unittest.TestCase):
             self.assertEqual(ao.test_key(comp), "run-1a2b3c4d")
 
     def test_missing_run_id_falls_back_to_a_stable_untagged_key(self):
-    # Every on-disk .deploy_state.json today predates run ids, and teardown is re-run
-    #         until clean — a fresh timestamp per invocation would split one run's evidence.
+    # A state document without a run id, and teardown is re-run until clean — a fresh
+    #         timestamp per invocation would split one run's evidence.
         with tempfile.TemporaryDirectory() as tmp:
             comp = make_comp(tmp, run_id=None)
             first = ao.test_key(comp)
@@ -100,7 +101,7 @@ class TestKey(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp = make_comp(tmp, run_id=None)
             first = ao.test_key(comp)
-            os.utime(comp / ".deploy_state.json", (time.time() + 120, time.time() + 120))
+            os.utime(estate_state.state_path(comp), (time.time() + 120, time.time() + 120))
             self.assertNotEqual(first, ao.test_key(comp))
 
     def test_invalid_run_id_is_ignored(self):

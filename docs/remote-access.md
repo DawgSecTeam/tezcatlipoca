@@ -2,8 +2,8 @@
 
 Every deploy enrolls the scoring engine as a **headscale subnet router** and hands each
 participant a key that can reach **only their own team's `192.168.<identifier>.0/24`** plus the
-scoreboard. Pre-existing tailnet users (the LDAP-backed accounts) keep the full access they had
-when the tailnet ran with no policy at all; limiting them by groups is deliberately deferred.
+scoreboard. Pre-existing tailnet users (the LDAP-backed accounts) keep tailnet-wide access through
+`group:full-access` → `*`; limiting them by groups is deliberately deferred.
 
 Control plane: the estate's headscale instance (URL, host, and credentials:
 `infrastructure-status.md`) — headscale v0.29 in Docker behind Caddy on a VPS, with
@@ -15,10 +15,10 @@ embedded DERP on the same host relaying participant traffic. Version/behavior gr
 | Range object | Headscale object |
 |---|---|
 | Engine (per deploy) | tailscale node `eng-<comp-id>`, tag `tag:range-router`, advertising every team `/24` |
-| Participant person | user `comp-<id>-<person>` + single-use UNTAGGED preauth key (TTL `TEZ_REMOTE_KEY_TTL`, default 72h) |
+| Participant person | user `comp-<id>-<person>` + single-use UNTAGGED preauth key (TTL `TEZ_HEADSCALE_KEY_TTL`, default 72h) |
 | Person → team | `people.json` roster in the comp dir: `{"team1": ["alice"], ...}` |
 | Team `<id>` grant | grants keyed on the usernames: `comp-<id>-<person>@` → `192.168.<id>.0/24` (all ports) + `10.0.0.<engine>` (port 80) |
-| Pre-existing users | `group:full-access` → `*` (the policy-less allow-all they had before 2026-10-08) |
+| Pre-existing users | `group:full-access` → `*` |
 
 One router advertises ALL team subnets — per-team router VMs are not needed: tailscaled on the
 engine enforces the ACL per destination subnet before a packet ever reaches a team bridge.
@@ -56,7 +56,7 @@ engine's `192.168/16 → 192.168/16` FORWARD DROP, and the portless team bridges
 1. Preflight (already done): `TEZ_HEADSCALE_*` present, headscale reachable, **no other live
    router advertising an overlapping `/24`** (concurrent comps with colliding identifiers would
    cross-route each other's participants — that is a hard refusal; use disjoint
-   `TF_VAR_team_identifiers`).
+   `TEZ_TEAM_IDENTIFIERS`).
 2. Install tailscale on the engine (first run), enroll/update it as `eng-<comp-id>` advertising
    every team subnet (routes auto-approve via `autoApprovers` + `tag:range-router`).
 3. Push `range-remote-access.sh` + timer (local teams → SNAT `.1`; satellite teams → SNAT

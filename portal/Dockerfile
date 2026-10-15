@@ -1,7 +1,6 @@
 # Student portal image, built on the scoring engine by portal_ops.deploy_portal.
 #
-# Stage 1 builds the frontend (portal/frontend: React + Vite + Tailwind, the same stack as
-# webui/frontend) with `npm ci`, so every dependency — noVNC included, pinned to its v1.6.0
+# Stage 1 builds the frontend (portal/frontend: React + Vite + Tailwind) with `npm ci`, so every dependency — noVNC included, pinned to its v1.6.0
 # release tarball — is checked against package-lock.json's integrity hashes.
 FROM node:22.21.0-alpine AS web
 WORKDIR /web

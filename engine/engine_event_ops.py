@@ -14,7 +14,7 @@ def read_event_conf(ctx):
 #     (TOML), the linux credlist, and /opt/quotient/.env.
 #
 #     The engine is the source of truth after any re-bootstrap or partially
-#     applied seed — .deploy_state.json can drift, these files cannot (the
+#     applied seed — the state document can drift, these files cannot (the
 #     scrim-dress-2026-09-20 credential-drift incident). box_password itself is
 #     baked into the boxes at bootstrap and lives nowhere on the engine, so it
 #     is NOT recoverable here.

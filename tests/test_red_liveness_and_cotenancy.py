@@ -5,7 +5,6 @@ a red01 outage that could not be attributed to the box or the route, a verify FA
 record was a one-line summary, and a co-tenanted node nobody mentioned in the run log.
 """
 
-import json
 import os
 import tempfile
 import unittest
@@ -14,6 +13,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from artifacts_lib import plan
+from estate import state as estate_state
 from scrim import fire_test, red_link, staging
 
 
@@ -21,19 +21,19 @@ class RedBoxPowerState(unittest.TestCase):
 
     def test_reports_the_hypervisor_state_not_a_guest_probe(self):
         args = SimpleNamespace(red_vmid=999)
-        with mock.patch.dict(os.environ, {"TF_VAR_proxmox_node": "proxmox"}), \
+        with mock.patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "proxmox"}), \
              mock.patch("infra.client.proxmox_api", return_value={"data": {"status": "running"}}):
             self.assertEqual(red_link.red_box_power_state(args), "vmid 999 is running (Proxmox)")
 
     def test_a_destroyed_vm_says_so(self):
         args = SimpleNamespace(red_vmid=999)
-        with mock.patch.dict(os.environ, {"TF_VAR_proxmox_node": "proxmox"}), \
+        with mock.patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "proxmox"}), \
              mock.patch("infra.client.proxmox_api", return_value={"data": {}}):
             self.assertIn("unknown", red_link.red_box_power_state(args))
 
     def test_an_unreadable_api_is_reported_not_raised(self):
         args = SimpleNamespace(red_vmid=999)
-        with mock.patch.dict(os.environ, {"TF_VAR_proxmox_node": "proxmox"}), \
+        with mock.patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "proxmox"}), \
              mock.patch("infra.client.proxmox_api", side_effect=RuntimeError("no route")):
             self.assertIn("unreadable from Proxmox (RuntimeError)",
                           red_link.red_box_power_state(args))
@@ -74,7 +74,7 @@ class CoTenancy(unittest.TestCase):
     def _comp(self, tmp, run_id="run-ours"):
         comp = Path(tmp) / "comp"
         comp.mkdir(exist_ok=True)
-        (comp / ".deploy_state.json").write_text(json.dumps({"run_id": run_id}))
+        estate_state.write_flat(comp, {"run_id": run_id})
         return comp
 
     def test_another_range_on_the_same_node_is_reported(self):
@@ -86,7 +86,7 @@ class CoTenancy(unittest.TestCase):
             {"node": "elsewhere", "status": "running", "tags": "tezcatlipoca;comp-comp;run-fourth"},
         ]
         with tempfile.TemporaryDirectory() as tmp, \
-             mock.patch.dict(os.environ, {"TF_VAR_proxmox_node": "proxmox"}), \
+             mock.patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "proxmox"}), \
              mock.patch("infra.client.proxmox_api", return_value={"data": vms}):
             others = staging.warn_co_tenancy(SimpleNamespace(), self._comp(tmp))
         self.assertEqual(others, {"run-other": 2})
@@ -94,13 +94,13 @@ class CoTenancy(unittest.TestCase):
     def test_an_idle_node_reports_none(self):
         vms = [{"node": "proxmox", "status": "running", "tags": "tezcatlipoca;comp-comp;run-ours"}]
         with tempfile.TemporaryDirectory() as tmp, \
-             mock.patch.dict(os.environ, {"TF_VAR_proxmox_node": "proxmox"}), \
+             mock.patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "proxmox"}), \
              mock.patch("infra.client.proxmox_api", return_value={"data": vms}):
             self.assertEqual(staging.warn_co_tenancy(SimpleNamespace(), self._comp(tmp)), {})
 
     def test_an_unreadable_api_does_not_break_the_deploy(self):
         with tempfile.TemporaryDirectory() as tmp, \
-             mock.patch.dict(os.environ, {"TF_VAR_proxmox_node": "proxmox"}), \
+             mock.patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "proxmox"}), \
              mock.patch("infra.client.proxmox_api", side_effect=RuntimeError("nope")):
             self.assertIsNone(staging.warn_co_tenancy(SimpleNamespace(), self._comp(tmp)))
 

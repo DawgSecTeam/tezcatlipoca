@@ -16,6 +16,7 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 from deploy_lib.phases import cleanup as dl_cleanup  # noqa: E402
 from deploy_lib import secrets as dl_secrets  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 
 
 class RepeatRun(unittest.TestCase):
@@ -23,10 +24,13 @@ class RepeatRun(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             (d / ".nakon-domain-team1-adds.json").write_text("{}")
-            (d / ".template-hashes.json").write_text("{}")
+            doc = estate_state.EstateState.load(d)
+            doc.section("templates")["golden_planted"] = {"web01": "abc"}
+            doc.save()
             dl_cleanup.reset_domain_markers(d)
             self.assertFalse((d / ".nakon-domain-team1-adds.json").exists())
-            self.assertTrue((d / ".template-hashes.json").exists())
+            kept = estate_state.EstateState.load(d).section("templates")
+            self.assertEqual(kept.get("golden_planted"), {"web01": "abc"})
 
     def test_box_password_stable_across_runs(self):
         first = dl_secrets.carry_box_password({})

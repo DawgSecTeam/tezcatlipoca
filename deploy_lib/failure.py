@@ -8,9 +8,9 @@ def record_degradations(ctx):
 #
 #     Every entry is something that failed while the deploy continued: apt prep that
 #     installed nothing, an auth ladder that failed on both transports, a box that never
-#     settled, a node scan that never happened. They used to exist only as WARNING lines
-#     in the scrollback — which is why "the range came up with every service down" had no
-#     named cause. Now they land in .deploy_state.json and verify can read them.
+#     settled, a node scan that never happened. A WARNING line in the scrollback gave
+#     "the range came up with every service down" no named cause. They land in the state
+#     document and verify can read them.
     entries = degradations()
     # ALWAYS record the key, even when empty. A gate cannot tell "clean" from "never
     # ran" if the success path writes nothing: verify reported the 2026-10-02 live

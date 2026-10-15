@@ -15,7 +15,7 @@ def generate_stage_configs_and_hashes(ctx, comp_dir):
 # Write the nakon/stage configs and compute every golden hash, onto `ctx`.
 #
 #     The M4 golden hashes are computed BEFORE phase 1 — phase 4's rebuild gate and the
-#     tfvars both consume them — and the frozen gate fires here so a config-class freeze
+#     estate apply both consume them — and the frozen gate fires here so a config-class freeze
 #     refuses before any Proxmox mutation. The golden bundle is built now (content
 #     addressed; the phase-4 plant reuses the cache) because each box's hash consumes its
 #     plan's payload shas. See the comments on each sub-block for the incident history.
@@ -31,7 +31,7 @@ def generate_stage_configs_and_hashes(ctx, comp_dir):
         comp_dir, ctx.teams, ctx.boxes, unbooted=ctx.unbooted)
 
     # M4: template hashes are computed BEFORE phase 1 — phase 4's rebuild gate and the
-    # tfvars both consume them. The golden bundle is built now (content-addressed; the
+    # estate apply both consume them. The golden bundle is built now (content-addressed; the
     # phase-4 plant reuses the cache) because each box's hash consumes its plan's payload
     # shas. The frozen gate also fires HERE, before any Proxmox mutation ("nothing
     # destroyed" is the whole point of the freeze; the phase-4 per-box gate alone was too

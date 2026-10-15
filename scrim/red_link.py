@@ -1,4 +1,3 @@
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -268,7 +267,8 @@ def red_box_power_state(args):
         return None
     try:
         from infra.client import proxmox_api
-        node = os.environ.get("TF_VAR_proxmox_node") or ""
+        from estate import config
+        node = config.active().proxmox.node if config.active().is_set("proxmox.node") else ""
         if node:
             data = (proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/status/current") or {}).get("data") or {}
             return f"vmid {vmid} is {data.get('status') or 'unknown'} (Proxmox)"

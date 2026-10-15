@@ -123,7 +123,7 @@ def check_share_templates(share, boxes, vms):
     """Template resolution for one NodeShare (a clone can only use its own node's templates).
 
     Single-node: every box template on the cluster + the engine base image
-    (TF_VAR_template_vm_id). Multi-node: engine base on the engine node, every box template on a
+    (TEZ_PROXMOX_TEMPLATE_VM_ID). Multi-node: engine base on the engine node, every box template on a
     node hosting teams, and a jump clone source on satellites. `vms` is the share's VM view."""
     where = f"node '{share.name}' ({share.node})" if share.multi else "the cluster"
     if share.check_templates:
@@ -150,7 +150,7 @@ def check_share_templates(share, boxes, vms):
                 f"engine node '{share.name}' ({share.node}) — the engine-template build would "
                 f"fail.")
         raise SystemExit(
-            f"  ERROR: engine base image vmid {base} (TF_VAR_template_vm_id) "
+            f"  ERROR: engine base image vmid {base} (TEZ_PROXMOX_TEMPLATE_VM_ID) "
             f"does not exist on this cluster — the engine-template build and the scoring "
             f"engine clone would fail mid-apply.")
     if share.needs_jump_template:

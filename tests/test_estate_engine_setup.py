@@ -1,5 +1,4 @@
-"""estate.engine_setup: the guest-side engine configuration that replaced terraform's
-null_resources (team_nics, reboot_scoring_engine, orchestrate)."""
+"""estate.engine_setup: the engine's guest-side network and boot configuration."""
 
 import sys
 import unittest

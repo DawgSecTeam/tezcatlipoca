@@ -38,7 +38,7 @@ class ContextNodes(unittest.TestCase):
         engine = SimpleNamespace(execute=lambda plan: [],
                                  verify_clean=lambda plan, results: "ok")
         ownership = SimpleNamespace(run_id="run-x", tags=["comp-c", "run-x"])
-        with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve1"}), \
+        with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve1"}), \
                 patch.object(trunner, "read_placement", return_value=PLACEMENT), \
                 patch.object(trunner, "activate_placement", lambda p: {}), \
                 patch.object(trunner, "frozen_state", return_value={}), \
@@ -60,16 +60,16 @@ class PlacementIdentityReachesTheContext(unittest.TestCase):
         engine = SimpleNamespace(execute=lambda plan: [],
                                  verify_clean=lambda plan, results: "ok")
         ownership = SimpleNamespace(run_id="run-x", tags=["comp-c", "run-x"])
-        stale = {"TF_VAR_proxmox_endpoint": "https://realm.invalid:8006",
-                 "TF_VAR_proxmox_api_token": "realm-token",
-                 "TF_VAR_proxmox_node": "realmhost",
-                 "TF_VAR_datastore": "hdd"}
+        stale = {"TEZ_PROXMOX_ENDPOINT": "https://realm.invalid:8006",
+                 "TEZ_PROXMOX_API_TOKEN": "realm-token",
+                 "TEZ_PROXMOX_NODE": "realmhost",
+                 "TEZ_PROXMOX_DATASTORE": "hdd"}
 
         def fake_activate(_placement):
-            os.environ.update({"TF_VAR_proxmox_endpoint": "https://field.invalid:8006",
-                               "TF_VAR_proxmox_api_token": "field-token",
-                               "TF_VAR_proxmox_node": "pve1",
-                               "TF_VAR_datastore": "hdrives-zfs"})
+            os.environ.update({"TEZ_PROXMOX_ENDPOINT": "https://field.invalid:8006",
+                               "TEZ_PROXMOX_API_TOKEN": "field-token",
+                               "TEZ_PROXMOX_NODE": "pve1",
+                               "TEZ_PROXMOX_DATASTORE": "hdrives-zfs"})
 
         with patch.dict(os.environ, stale), \
                 patch.object(trunner, "read_placement", return_value=PLACEMENT), \
@@ -85,9 +85,9 @@ class PlacementIdentityReachesTheContext(unittest.TestCase):
                                            "team2": {"identifier": "102"}},
                                           [{"name": "web01"}], "demo", env=dict(stale))
 
-        self.assertEqual(captured["env"]["TF_VAR_proxmox_endpoint"], "https://field.invalid:8006")
-        self.assertEqual(captured["env"]["TF_VAR_proxmox_api_token"], "field-token")
-        self.assertEqual(captured["env"]["TF_VAR_proxmox_node"], "pve1")
+        self.assertEqual(captured["env"]["TEZ_PROXMOX_ENDPOINT"], "https://field.invalid:8006")
+        self.assertEqual(captured["env"]["TEZ_PROXMOX_API_TOKEN"], "field-token")
+        self.assertEqual(captured["env"]["TEZ_PROXMOX_NODE"], "pve1")
 
 
 class PreStopNodes(unittest.TestCase):

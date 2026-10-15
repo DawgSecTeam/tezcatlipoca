@@ -1,8 +1,5 @@
 """(team, box) target abstraction: vmid arithmetic, enumeration, the frozen roster."""
 
-import json
-from pathlib import Path
-
 def vm_id_for(identifier, box_index):
     return 200 + int(identifier) * 10 + box_index
 
@@ -18,7 +15,7 @@ def box_index(boxes, box_name):
 def persist_targets(comp_dir, targets, boxes):
 # Freeze (team,box)->vmid at deploy so later tools don't recompute it from boxes.json order.
     from estate import state
-    document = state.open(comp_dir)
+    document = state.EstateState.load(comp_dir)
     document.section("roster").update({
         "box_order": [b["name"] for b in boxes],
         "targets": {
@@ -37,15 +34,12 @@ def persist_targets(comp_dir, targets, boxes):
 
 
 def frozen_roster(comp_dir):
-# The {box_order, targets} record a deploy froze, from the document or a legacy file.
+# The {box_order, targets} record a deploy froze, or None when none was written.
     from estate import state
     roster = state.EstateState.load(comp_dir).section("roster")
-    if roster.get("targets"):
-        return {"box_order": roster.get("box_order") or [], "targets": roster["targets"]}
-    path = Path(comp_dir) / "targets.json"
-    if path.exists():
-        return json.loads(path.read_text())
-    return None
+    if not roster.get("targets"):
+        return None
+    return {"box_order": roster.get("box_order") or [], "targets": roster["targets"]}
 
 
 def load_targets(comp_dir, teams, boxes):
@@ -55,8 +49,7 @@ def load_targets(comp_dir, teams, boxes):
 #     reorder would silently retarget a different VM.
     data = frozen_roster(comp_dir)
     if data is None:
-        print("  (no frozen roster — deriving vmids from boxes.json order; "
-              "reorder-unsafe for ranges deployed before this was added)")
+        print("  (no frozen roster yet — deriving vmids from boxes.json order)")
         return enumerate_targets(teams, boxes)
     current = [b["name"] for b in boxes]
     frozen_order = data.get("box_order") or []

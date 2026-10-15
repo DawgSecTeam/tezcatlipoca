@@ -3,18 +3,18 @@
 Two independent incidents motivate this file, both recorded here because they are its
 reason to exist:
 
-  1. 2026-09-29 — 21 tracked terraform artifacts carried real per-competition
-     passwords. Closed by gitignore curation.
+  1. 2026-09-29 — 21 tracked per-competition artifacts carried real passwords.
+     Closed by gitignore curation.
   2. 2026-10-01 — `.env.pre-cde-20260929` (a hand-named env backup) stayed tracked
      for weeks and reached the public remote because .gitignore listed ".env" and
      ".env.realm-backup*" by name and missed the variant. It carried a live Proxmox
      API token plus box and per-team passwords. Closed by the blanket `.env.*` rule
      AND by this test, so a future rule edit cannot silently reopen it.
 
-The env-var half exists because the variable reference had drifted: four variables
-the code reads (TF_VAR_engine_mgmt_ip, TF_VAR_engine_mgmt_gw, TF_VAR_scoring_vm_id,
-TEZ_THIN_HEADROOM, TF_VAR_team_identifiers) were absent from .env.example. Anything
-read but undocumented now fails here instead of surprising an operator mid-event.
+The env-var half exists because the variable reference had drifted: variables the code
+reads were absent from the operator-facing reference. `estate/config.py`'s `_SPEC` is now
+that reference — the one place a config key and its env name are declared — so anything
+read outside it must be an allowlisted internal handoff.
 
 Offline and fast: reads tracked paths via `git ls-files` and scans them as text.
 """
@@ -27,13 +27,11 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 
-# Every env name is one of three kinds (see the header of .env.example):
-#   TF_VAR_*  Terraform input      TEZ_*  tezcatlipoca knob      NAKON_*/VULNDB_*  vendored
-# PROXMOX_* is the TLS-pin namespace (PROXMOX_CA_BUNDLE / PROXMOX_TLS_FINGERPRINT),
-# set by the operator and documented in .env.example.
-_ENV_NAME_RE = re.compile(
-    r"^(TF_VAR_[a-z0-9_]+|TEZ_[A-Z0-9_]+|NAKON_[A-Z0-9_]+|VULNDB_[A-Z0-9_]+|PROXMOX_[A-Z0-9_]+)$"
-)
+# Every env name is one of three kinds:
+#   TEZ_*  tezcatlipoca config (declared in estate/config.py's _SPEC)
+#   NAKON_*/VULNDB_*  vendored-tool config, read by vendor/nakon, not by this repo
+# An internal handoff key is exempt via INTERNAL_ENV below.
+_ENV_NAME_RE = re.compile(r"^(TEZ_[A-Z0-9_]+|NAKON_[A-Z0-9_]+|VULNDB_[A-Z0-9_]+)$")
 
 # Read by code but deliberately NOT user-facing config, with the reason. Keep this
 # list short and justified — it is the escape hatch, not the dumping ground. Entries
@@ -44,29 +42,28 @@ INTERNAL_ENV = {
     # into scrim.env. Never set by an operator by hand. (MY_PW is also written there
     # but is only ever consumed by the generated shell, never read by Python, so it
     # is deliberately absent here — the staleness check below would flag it.)
-    # Internal handoff within one process: deploy._engine_mgmt_ip_from_env marks its
+    # Internal handoff within one process: deploy_lib/estate_inputs.py marks its
     # own DEFAULT export so the preflight cannot read it as an operator-set address
-    # (F5, 2026-10-04). Never set in .env.
-    "TEZ_ENGINE_MGMT_IP_IS_DEFAULT": "deploy.py -> config_ops default marker (same process)",
+    # (F5, 2026-10-04).
+    "TEZ_ENGINE_MGMT_IP_IS_DEFAULT": "deploy_lib/estate_inputs.py default marker (same process)",
     "ENGINE_IP": "scrim.env handoff written by run-agent-scrim.py",
     "MY_TEAM": "scrim.env handoff written by run-agent-scrim.py",
     "JAR": "scrim.env handoff written by run-agent-scrim.py",
-    "SCRIM_WEB01_PORT": "scrim harness test hook (fresh opencode port per blue cycle)",
     # tezcatlipoca-dashboard writes the path of a per-run control file into the driver's
     # environment; the file's existence is the "hold at the next phase boundary" request.
     # Internal run-queue handoff, never operator configuration.
     "TEZ_PAUSE_FILE": "tezcatlipoca-dashboard -> deploy_lib/pause.py boundary hold",
-    # artifacts_lib/artifacts_ops.py seal step: default author attribution from the OS user, not
+    # artifacts_lib/seal.py seal step: default author attribution from the OS user, not
     # operator configuration.
     "USER": "OS username, recorded as the default write-up author on seal",
     # Student portal container env: written by portal_ops into /opt/tez-portal/.env (or set
     # by portal/compose.yaml defaults) and read only inside the container by portal/app.py.
-    # Operators configure the portal through TEZ_PORTAL_* (.env.example), never these.
+    # Operators configure the portal through the [portal] profile, never these.
     "PORTAL_SECRET_KEY": "portal container env (portal_ops -> /opt/tez-portal/.env)",
     "PORTAL_CONFIG": "portal container env (path default /config/portal.json)",
     "PORTAL_EVENT_CONF": "portal container env (path default /config/event.conf)",
     "PORTAL_STATE_DIR": "portal container env (path default /state)",
-    "PORTAL_OPEN": "portal container env (portal_ops from TEZ_PORTAL_OPEN)",
+    "PORTAL_OPEN": "portal container env (portal_ops from portal.open)",
     "PORTAL_COOKIE_SECURE": "portal container env (portal_ops writes 1)",
     "PORTAL_DIST": "portal container env (built frontend path, default next to app.py)",
 }
@@ -83,8 +80,8 @@ _SECRET_PATTERNS = {
     "AWS access key id": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     "GitHub token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"),
     "Slack token": re.compile(r"\bxox[abpsr]-[A-Za-z0-9-]{10,}"),
-    "assigned .env secret with a real value": re.compile(
-        r"^(?:TF_VAR_[a-z0-9_]*?(?:password|token)|[A-Z_]*(?:PASSWORD|SECRET|TOKEN))="
+    "assigned env secret with a real value": re.compile(
+        r"^[A-Z_]*(?:PASSWORD|SECRET|TOKEN)="
         r"(?!CHANGEME|$)(?!#)(?:[\"']?)(?![<{])[A-Za-z0-9!@#$%^&*_+=-]{16,}\s*$",
         re.MULTILINE,
     ),
@@ -111,12 +108,11 @@ def _read(path):
 
 
 class NoTrackedSecrets(unittest.TestCase):
-    def test_no_env_variant_is_tracked_except_the_template(self):
+    def test_no_env_variant_is_tracked(self):
     # The 2026-10-01 leak: a hand-named .env backup reached the public remote.
         offenders = [
             f for f in _tracked_files()
-            if (Path(f).name == ".env" or Path(f).name.startswith(".env."))
-            and Path(f).name != ".env.example"
+            if Path(f).name == ".env" or Path(f).name.startswith(".env.")
         ]
         self.assertEqual(
             offenders, [],
@@ -132,10 +128,6 @@ class NoTrackedSecrets(unittest.TestCase):
                 ["git", "check-ignore", "-q", probe], cwd=_REPO, capture_output=True
             )
             self.assertEqual(r.returncode, 0, f"{probe} is not gitignored")
-        r = subprocess.run(
-            ["git", "check-ignore", "-q", ".env.example"], cwd=_REPO, capture_output=True
-        )
-        self.assertNotEqual(r.returncode, 0, ".env.example must stay tracked")
 
     def test_infrastructure_status_is_gitignored_and_untracked(self):
     # The estate's ground truth (endpoints, node names, tokens-by-reference, vmid maps,
@@ -184,16 +176,15 @@ class NoTrackedSecrets(unittest.TestCase):
     def test_no_test_artifact_is_tracked(self):
     # `competitions/*/.automated-tests/` holds box-pulled evidence, and it stays untracked.
 #
-    #         These reports quote flags, credentials and inject answers by construction (the red report
-    #         even ships a separate 0600 credlist table), and a `KEY=<16+ chars>` line in one of them
-    #         would be caught by the pattern net above while a password quoted in prose would not —
-    #         the net is a shape matcher, not a safety guarantee. The decision is therefore "ignored,
-    #         with no publish path": a recommendation leaves this folder by being written into
-    #         docs/known-issues.md or a fixes plan, never by copying the artifact into git.
+#         These reports quote flags, credentials and inject answers by construction (the red report
+#         even ships a separate 0600 credlist table), and a `KEY=<16+ chars>` line in one of them
+#         would be caught by the pattern net above while a password quoted in prose would not —
+#         the net is a shape matcher, not a safety guarantee. The decision is therefore "ignored,
+#         with no publish path": a recommendation leaves this folder by being written into
+#         docs/known-issues.md or a fixes plan, never by copying the artifact into git.
 #
-    #         A .gitignore line alone is not enough here: competitions/pfsense-ad/terraform/terraform.tfstate
-    #         is tracked today despite `competitions/*/terraform/` being ignored, so this asserts the
-    #         tracked set directly rather than trusting the rule.
+#         A .gitignore line alone is not enough here — a force-add has defeated one before —
+#         so this asserts the tracked set directly rather than trusting the rule.
         offenders = [f for f in _tracked_files() if "/.automated-tests/" in f]
         self.assertEqual(
             offenders, [],
@@ -209,19 +200,17 @@ class NoTrackedSecrets(unittest.TestCase):
     def test_no_runtime_state_is_tracked_in_comp_dirs(self):
     # A competition directory ships its AUTHORING inputs, never its runtime state.
 #
-    #         Runtime files carry this deploy's secrets (teams.json/credentials.txt are the
-    #         generated passwords, .deploy_state.json holds every one of them plus the run
-    #         identity) — and a comp dir that ships them invites a later deploy on another
-    #         host to adopt them as its own (wrong run id, wrong credentials, preflight
-    #         refusing on a phantom identity). Same reason as the artifacts rule above,
-    #         checked against the tracked set rather than the ignore rules.
+#         Runtime files carry this deploy's secrets (teams.json/credentials.txt are the
+#         generated passwords, estate-state.json holds every one of them plus the run
+#         identity) — and a comp dir that ships them invites a later deploy on another
+#         host to adopt them as its own (wrong run id, wrong credentials, preflight
+#         refusing on a phantom identity). Same reason as the artifacts rule above,
+#         checked against the tracked set rather than the ignore rules.
 #
-    #         Tracked on purpose (and NOT matched here): Compfile, boxes.json,
-    #         box_services.json, box_vulns.json, domain_roles.json, users.json, packet
-    #         inputs, injects/, pfsense seed configs.
-        runtime = (".deploy_state.json", "estate-state.json", "teams.json",
-                   "credentials.txt", "targets.json", "nakon-config.json",
-                   ".frozen.json", ".template-hashes.json")
+#         Tracked on purpose (and NOT matched here): Compfile, boxes.json,
+#         box_services.json, box_vulns.json, domain_roles.json, users.json, packet
+#         inputs, injects/, pfsense seed configs.
+        runtime = ("estate-state.json", "teams.json", "credentials.txt", "nakon-config.json")
         offenders = []
         for f in _tracked_files():
             if not f.startswith("competitions/"):
@@ -236,27 +225,20 @@ class NoTrackedSecrets(unittest.TestCase):
 
 
 def _config_env_names():
-# Every env name estate/config.py can resolve: canonical + legacy, from its _SPEC.
+# Every env name estate/config.py can resolve, from its _SPEC.
     sys.path.insert(0, str(_REPO))
     from estate import config as estate_config
-    names = set()
-    for key, (_, legacy) in estate_config._SPEC.items():
-        names.add(estate_config.env_name(key))
-        names.update(legacy)
-    return names
+    return {estate_config.env_name(key) for key in estate_config._SPEC}
 
 
 class EnvVarStandard(unittest.TestCase):
     def setUp(self):
-        self.example = _read(".env.example") or ""
-        self.declared = set(re.findall(r"^#?([A-Za-z_][A-Za-z0-9_]*)=", self.example, re.MULTILINE))
         self.used = {}
         # estate/config.py resolves its env names from a table, so the literal-read scan
         # cannot see them. It is the single reader AND the declaration point for the
-        # config surface: every name it can resolve counts as both used and declared.
-        self.config_env = _config_env_names()
-        self.declared |= self.config_env
-        for name in self.config_env:
+        # config surface: every name it can resolve counts as declared.
+        self.declared = _config_env_names()
+        for name in self.declared:
             self.used.setdefault(name, set()).add("estate/config.py")
         for f in _tracked_files():
             # tests/ are excluded from the env-var standard: they read OS variables
@@ -270,7 +252,7 @@ class EnvVarStandard(unittest.TestCase):
                 self.used.setdefault(m.group(1), set()).add(f)
 
     def test_every_env_var_read_is_declared_or_allowlisted(self):
-    # Drift guard: four real variables were undocumented before this test existed.
+    # Drift guard: real variables were undocumented before this test existed.
         undeclared = {
             name: sorted(files)
             for name, files in self.used.items()
@@ -278,25 +260,24 @@ class EnvVarStandard(unittest.TestCase):
         }
         self.assertEqual(
             undeclared, {},
-            "code reads env var(s) that are neither in .env.example nor in the "
-            "INTERNAL_ENV allowlist. Declare them in .env.example (with a comment) or "
-            "add them to INTERNAL_ENV in this file with a reason:\n  "
+            "code reads env var(s) that estate/config.py's _SPEC does not declare and "
+            "INTERNAL_ENV does not allowlist. Declare the key in _SPEC (its TEZ_* env name "
+            "follows) or add the handoff key to INTERNAL_ENV in this file with a reason:\n  "
             + "\n  ".join(f"{n}  <- {', '.join(fs)}" for n, fs in sorted(undeclared.items())),
         )
 
     def test_env_names_follow_the_naming_standard(self):
-    # New variables must be TF_VAR_* (terraform), TEZ_* (our knobs), or vendored.
+    # New variables must be TEZ_* (our config) or vendored.
 #
-    #         INTERNAL_ENV members are exempt: they are handoff keys between this repo's own
-    #         processes, not operator-facing configuration.
+#         INTERNAL_ENV members are exempt: they are handoff keys between this repo's own
+#         processes, not operator-facing configuration.
         bad = sorted(
             n for n in self.used
             if n not in INTERNAL_ENV and not _ENV_NAME_RE.match(n)
         )
         self.assertEqual(
             bad, [],
-            "env var name(s) break the naming standard (TF_VAR_*/TEZ_*/NAKON_*/VULNDB_*/"
-            "PROXMOX_*): " + ", ".join(bad),
+            "env var name(s) break the naming standard (TEZ_*/NAKON_*/VULNDB_*): " + ", ".join(bad),
         )
 
     def test_internal_allowlist_has_no_dead_entries(self):

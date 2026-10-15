@@ -120,6 +120,20 @@ def check_collisions(share, plan, vms):
                   f"this competition (lock={vm.get('lock') or 'none'}) — phase 1 reclaims it")
             reclaim += 1
             continue
+        if slot.template_slot and not vm.get("template") and not any(
+                t.startswith("comp-") and t != comp_tag for t in tags):
+            # This run's own build slot holding an unconverted VM: a template build whose
+            # clone task failed before the tag PUT, so it wears the base image's tags and
+            # carries neither ours nor a marker. Phase 2 adopts and rebuilds exactly this
+            # (`build_engine_template`'s dead-attempt branch, by reserved vmid + name).
+            # Without the exemption the deploy cannot clean up its own wreckage: the clone
+            # that failed is both the debris and the reason no later attempt can start
+            # (live-found 2026-10-15: run-bc3452dd/run-70b9197f refused on their own
+            # partial engine-template clones at vmids 2340/2540). Anything tagged into
+            # another run stays a refusal: only UNPROVEN ownership is adopted.
+            print(f"  Preflight{share.label}: {slot.label} holds an unconverted leftover of "
+                  f"this competition's own build (vmid {slot.vmid}) — phase 2 reclaims it")
+            continue
         if comp_tag in tags:
             leftovers.append(slot.label)
         else:
@@ -142,7 +156,7 @@ def check_collisions(share, plan, vms):
         if share.multi:
             advice = "Pick a free --scoring-vmid and/or non-overlapping team identifiers."
         else:
-            advice = ("Pick a free --scoring-vmid and/or non-overlapping TF_VAR_team_identifiers. "
+            advice = ("Pick a free --scoring-vmid and/or non-overlapping TEZ_TEAM_IDENTIFIERS. "
                       "Note the golden block sits at <scoring-vmid>+150 — a colliding golden "
                       "vmid also means picking a different engine vmid.")
         remedy = ""
@@ -234,7 +248,7 @@ def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
         raise SystemExit(
             f"  ERROR: static engine mgmt IP {engine_mgmt_ip} is already answered by a "
             f"running guest ({takers[engine_mgmt_ip]}). Pick another "
-            f"TF_VAR_engine_mgmt_ip (or set it to '' for DHCP). The management network is "
+            f"TEZ_ENGINE_MGMT_IP (or set it to '' for DHCP). The management network is "
             f"shared across nodes, so a guest on ANY node counts.")
     # "Explicitly set" means the OPERATOR set it — not that the code exported the
     # default into the same variable seconds ago (deploy_lib.inputs). A default IP the
@@ -251,13 +265,13 @@ def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
                 f"{len(unchecked)} running guest(s) have no working agent to ask "
                 f"({listing}). This is the DEFAULT address, and on this estate the "
                 f"default has already been a live foreign engine's address once "
-                f"(2026-10-02). Set TF_VAR_engine_mgmt_ip to an address you have checked "
+                f"(2026-10-02). Set TEZ_ENGINE_MGMT_IP to an address you have checked "
                 f"yourself (or '' for DHCP). On this estate the default (.250) also "
                 f"drops SSH mid-build on the .150 tailnet path (2026-10-03) — the "
                 f"cyberrange env variants pin 10.0.0.252 instead.")
         print(f"  Preflight: engine mgmt IP {engine_mgmt_ip} — UNVERIFIED "
               f"({len(unchecked)} running guest(s) have no agent: {listing}); proceeding "
-              f"because TF_VAR_engine_mgmt_ip is set explicitly")
+              f"because TEZ_ENGINE_MGMT_IP is set explicitly")
         return
     print(f"  Preflight: engine mgmt IP {engine_mgmt_ip} is free")
 

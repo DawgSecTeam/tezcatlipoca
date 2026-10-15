@@ -7,7 +7,7 @@ Two layers, one module:
     the stale-estate refusal — collected here and called from exactly two spots in
     deploy_lib/prepare.py, in a fixed order:
       1. check_resume_gates   — right after the prior state is read.
-      2. run_range_gates      — after placement, BEFORE any secret is minted or tfvars written:
+      2. run_range_gates      — after placement, BEFORE any secret is minted or estate applied:
                                 the stale-estate refusal, then the capacity /
                                 collision / template preflight (infra.collisions / .resources).
   - the pre-Proxmox-mutation preflight (formerly the preflight/ package): run_preflight(plan)
@@ -163,7 +163,7 @@ def run_range_gates(ctx, comp_dir, from_phase):
 
 
 def guard_resume_from_phase(from_phase, last_phase, state_path, force=False):
-    """Refuse a --from-phase that skips phases .deploy_state.json never saw complete.
+    """Refuse a --from-phase that skips phases the state document never saw complete.
 
     checkpoint() writes `last_phase` after each phase, so the only safe resume target is
     last_phase + 1 (re-run the phase that died) or earlier. `last_phase` was written but

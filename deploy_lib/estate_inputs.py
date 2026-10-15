@@ -1,10 +1,8 @@
 """Written per-competition inputs: the team roster with its passwords, and the absolute
 SSH key path the phases dial with.
 
-Replaces the generated-inputs assembly. That file existed to outrank the ambient
-TF_VAR_* env for concurrent competitions on one node; the state document now carries the
-authoritative roster and secrets, so all that remains here is the on-disk teams.json the
-teardown and identifier defaults read, plus the resolved key path.
+The state document carries the authoritative roster and secrets; what remains here is the
+on-disk teams.json the teardown and identifier defaults read, plus the resolved key path.
 """
 
 import json
@@ -33,7 +31,7 @@ def engine_mgmt_ip_from_env(override=None):
         config.active().activate({"engine.mgmt_ip": DEFAULT_ENGINE_MGMT_IP})
         os.environ["TEZ_ENGINE_MGMT_IP_IS_DEFAULT"] = "1"
         print(f"  Engine mgmt IP: static {DEFAULT_ENGINE_MGMT_IP} (default — override "
-              f"TF_VAR_engine_mgmt_ip, set '' for DHCP)")
+              f"TEZ_ENGINE_MGMT_IP, set '' for DHCP)")
     return config.active().engine.mgmt_ip
 
 

@@ -10,16 +10,16 @@ from deploy_lib.prepare import prepare
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
            team_node=None, engine_node=None, force_from_phase=False, nodes_path=None,
            team_identifiers=None, engine_mgmt_ip=None, hold_start=False):
-# Run the eight-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
+# Run the eight-phase deploy for one competition; from_phase > 1 resumes from the state document.
 #
 #     scoring_vmid overrides the scoring-engine VMID (default 1000) so several
-#     competitions can run concurrently on one node; it is persisted to
-#     .deploy_state.json and reused on resume.
+#     competitions can run concurrently on one node; it is persisted to the state document
+#     and reused on resume.
 #     team_node (--team-node id=NODE,...) and engine_node (--engine-node NAME) pin the
 #     multi-node placement when nodes.json exists; without them teams are placed by
 #     capacity-fill. force_from_phase (--force-from-phase) bypasses the guard that refuses
-#     to skip phases .deploy_state.json never recorded as completed.
-#     hold_start (--hold-start) records a hold in .deploy_state.json that phase 8 obeys:
+#     to skip phases the state document never recorded as completed.
+#     hold_start (--hold-start) records a hold in the state document that phase 8 obeys:
 #     everything is deployed (teams seeded, portal up) but the competition is not started
 #     and the engine stays paused — competition-ops.py start begins it. A resume of a held
 #     deploy stays held (the flag lives in the state file; the argument is only the mint).

@@ -53,7 +53,7 @@ class RunNakonAndHardenTests(unittest.TestCase):
         ctx = {"ssh_key_path": "/tmp/id_ed25519", "scoring_engine_ip": "10.0.0.9"}
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
-            with patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
+            with patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops"}), \
                  patch.object(pipeline_api, "fix_dns_on_boxes") as p_dns, \
                  patch.object(pipeline_api, "setup_ubuntu_auth") as p_auth, \
                  patch.object(pipeline_api, "ensure_nat_forwarding"), \
@@ -100,8 +100,8 @@ class ModeRebuildTests(unittest.TestCase):
                 json.dumps({**stage, "steps": []}))
             (comp_dir / ".nakon-final.json").write_text(
                 json.dumps({**stage, "steps": []}))
-            with patch.dict(os.environ, {"TF_VAR_vm_username": "ops",
-                                         "TF_VAR_ssh_public_key": "ssh-ed25519 AAAA test"}), \
+            with patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops",
+                                         "TEZ_SSH_PUBLIC_KEY": "ssh-ed25519 AAAA test"}), \
                  patch.object(redeploy_rebuild_ops, "proxmox_api",
                               return_value={"data": "upid"}) as p_api, \
                  patch.object(redeploy_rebuild_ops, "destroy_vm_if_exists"), \

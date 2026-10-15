@@ -85,15 +85,13 @@ def test_key(comp_dir, run_id=None, *, now=None):
 #     (destroy-competition.py says so): minting a fresh timestamp per invocation would split one
 #     run's evidence across several folders. The untagged fallback is therefore derived from
 #     the state document's mtime — which destroy never writes and deploy/resume does — so it is
-#     fixed for the life of a deploy and changes when a new one writes state (a range deployed
-#     before the document existed still resolves through its legacy `.deploy_state.json`).
+#     fixed for the life of a deploy and changes when a new one writes state.
     comp_dir = Path(comp_dir)
     run_id = run_id or run_id_from_state(comp_dir)
     if run_id:
         return run_id
     stamp = None
-    for candidate in (estate_state.state_path(comp_dir), comp_dir / ".deploy_state.json",
-                      comp_dir / ".deploy-timings.jsonl"):
+    for candidate in (estate_state.state_path(comp_dir), comp_dir / ".deploy-timings.jsonl"):
         try:
             stamp = candidate.stat().st_mtime
             break

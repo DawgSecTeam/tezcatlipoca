@@ -1,20 +1,20 @@
-"""`.deploy_state.json` writers and the Linux hardening order in redeploy.
+"""The state document's atomic writer and the Linux hardening order in redeploy.
 
 Two incidents drive this file:
 
-* D1 (winad-testrun 2026-09-25) — `.deploy_state.json` holds the only copy of the box
-  passwords. deploy.py documents the atomic-rename requirement, but three of the four
-  writers (two in redeploy-competition.py, plus the one at the END of engine-recovery,
-  which runs after the scoring DB was already wiped) used a plain `write_text` +
-  `chmod`. A torn write there leaves a live engine with unreadable resume state and no
-  second chance. All three now go through `config_ops.write_state`.
+* D1 (winad-testrun 2026-09-25) — the state document holds the only copy of the box
+  passwords. Three of the four writers (two in redeploy-competition.py, plus the one at
+  the END of engine-recovery, which runs after the scoring DB was already wiped) used a
+  plain `write_text` + `chmod`. A torn write there leaves a live engine with unreadable
+  resume state and no second chance. Every redeploy persistence now goes through the
+  document's atomic writer.
 
 * D3 — docs/architecture.md pins the invariant that the NOPASSWD sudoers grant lands
   BEFORE the DNS fix, whose `sudo` calls soft-fail until the grant exists. redeploy had
   them inverted; it "worked" only via fix_dns_on_boxes' root guest-agent fallback, after
   burning an 8x15s retry ladder per box.
 
-Offline; no Proxmox, no terraform, no SSH."""
+Offline; no Proxmox, no SSH."""
 
 import json
 import os
@@ -31,6 +31,7 @@ sys.path.insert(0, str(_REPO))
 
 from config import config_ops  # noqa: E402  (the one atomic writer; also the torn-write test's patch target)
 import pipeline_api  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 from redeploy import redeploy_engine_ops  # noqa: E402
 from redeploy import redeploy_light_ops  # noqa: E402
 from redeploy import redeploy_plant_ops  # noqa: E402
@@ -71,7 +72,6 @@ NEW_STATE = {"box_password": "new-secret", "teams": {"team1": {"password": "t1"}
 # The state file is swapped in whole, is 0600 from the instant it exists, and a
 # failed write can never damage the copy already on disk.
 class AtomicStateWriteTests(unittest.TestCase):
-    # One atomic writer in the tree, not a second local copy: the name redeploy
     # One writer in the tree, not a local copy per call site: every redeploy persistence
     # goes through the document's atomic writer.
     def test_every_redeploy_call_site_writes_through_the_document(self):
@@ -83,14 +83,14 @@ class AtomicStateWriteTests(unittest.TestCase):
 
     def test_round_trips_is_0600_and_leaves_no_tmp(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / ".deploy_state.json"
+            path = Path(tmp) / "estate-state.json"
             config_ops.write_state(path, NEW_STATE)
 
             self.assertEqual(json.loads(path.read_text()), NEW_STATE)
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
             # A leftover temp file is the signature of a torn/aborted write.
             self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()),
-                             [".deploy_state.json"])
+                             ["estate-state.json"])
 
     # The torn-write proof: at the instant of the rename, the destination still
     # holds the COMPLETE previous state and the temporary holds the COMPLETE new one.
@@ -98,7 +98,7 @@ class AtomicStateWriteTests(unittest.TestCase):
     # truncated the destination first, which is exactly the state this rules out.
     def test_target_is_only_replaced_after_the_new_content_is_complete(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / ".deploy_state.json"
+            path = Path(tmp) / "estate-state.json"
             path.write_text(json.dumps(ORIGINAL_STATE))
             os.chmod(path, 0o600)
             original_bytes = path.read_bytes()
@@ -123,7 +123,7 @@ class AtomicStateWriteTests(unittest.TestCase):
     # depends on must still be readable, byte for byte.
     def test_failed_write_leaves_the_original_file_intact(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / ".deploy_state.json"
+            path = Path(tmp) / "estate-state.json"
             path.write_text(json.dumps(ORIGINAL_STATE))
             os.chmod(path, 0o600)
             original_bytes = path.read_bytes()
@@ -136,13 +136,12 @@ class AtomicStateWriteTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), ORIGINAL_STATE)
 
 class GateReadsTheDocument(unittest.TestCase):
-    def test_a_new_range_is_drivable_without_a_legacy_state_file(self):
+    def test_a_new_range_is_drivable_from_the_document(self):
         from redeploy import redeploy_gate_ops
         with tempfile.TemporaryDirectory() as tmp:
             comp = Path(tmp)
             (comp / "teams.json").write_text(json.dumps({"team1": {"identifier": "101"}}))
             (comp / "boxes.json").write_text(json.dumps([{"name": "web01"}]))
-            from estate import state as estate_state
             document = estate_state.EstateState.load(comp)
             document.absorb({"run_id": "run-abc12345", "pipeline_version": 3,
                              "teams": {"team1": {"identifier": "101", "password": "x"}}})
@@ -158,10 +157,11 @@ class StateWriteCallSiteTests(unittest.TestCase):
         ctx = {"ssh_key_path": "/tmp/id_ed25519", "scoring_engine_ip": "10.0.0.9"}
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
-            state_path = comp_dir / ".deploy_state.json"
-            state_path.write_text(json.dumps({"box_password": "pw"}))
+            document = estate_state.EstateState.load(comp_dir)
+            document.absorb({"box_password": "pw"})
+            document.save()
             state = {"box_password": "pw"}
-            with patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
+            with patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops"}), \
                  patch.object(pipeline_api, "setup_ubuntu_auth"), \
                  patch.object(pipeline_api, "fix_dns_on_boxes"), \
                  patch.object(pipeline_api, "ensure_nat_forwarding"), \
@@ -178,8 +178,10 @@ class StateWriteCallSiteTests(unittest.TestCase):
     def test_mode_resync_persists_via_helper(self):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
-            state_path = comp_dir / ".deploy_state.json"
-            state_path.write_text(json.dumps({"box_password": "pw"}))
+            state_path = estate_state.state_path(comp_dir)
+            document = estate_state.EstateState.load(comp_dir)
+            document.absorb({"box_password": "pw"})
+            document.save()
             state = {"box_password": "pw"}
             with patch.object(redeploy_light_ops, "read_event_conf",
                               return_value={"postgres_password": "new"}), \
@@ -206,7 +208,7 @@ class StateWriteCallSiteTests(unittest.TestCase):
                 "engine_unpaused": True,
                 "injects_created": True,
             }
-            with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
+            with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve"}), \
                  patch.object(redeploy_engine_ops, "acquire_engine_lock"), \
                  patch.object(redeploy_engine_ops, "stored_template_hash", return_value="abc"), \
                  patch.object(redeploy_engine_ops, "args_yes_engine_recovery", return_value=True), \
@@ -237,7 +239,7 @@ class HardeningOrderTests(unittest.TestCase):
         order = []
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
-            with patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
+            with patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops"}), \
                  patch.object(pipeline_api, "setup_ubuntu_auth") as p_auth, \
                  patch.object(pipeline_api, "fix_dns_on_boxes") as p_dns, \
                  patch.object(pipeline_api, "ensure_nat_forwarding"), \

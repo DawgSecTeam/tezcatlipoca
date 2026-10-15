@@ -22,6 +22,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 from artifacts_lib import artifacts_ops as ao
+from estate import state as estate_state
 
 RUN_ID = "run-1a2b3c4d"
 BUILD_INFO = '{"ok": true}\n'
@@ -52,8 +53,8 @@ class CliTestCase(unittest.TestCase):
         self.comp = self.root / "competitions" / "demo"
         self.comp.mkdir(parents=True)
         (self.comp / "Compfile").write_text("name demo-2026-10-03\nscenario demo\n")
-        (self.comp / ".deploy_state.json").write_text(
-            json.dumps({"run_id": RUN_ID, "teams": {"team1": {"identifier": "101"}}}))
+        estate_state.write_flat(self.comp,
+                                {"run_id": RUN_ID, "teams": {"team1": {"identifier": "101"}}})
         self._cwd = os.getcwd()
         os.chdir(self.root)
         self.addCleanup(os.chdir, self._cwd)

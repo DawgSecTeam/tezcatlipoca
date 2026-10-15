@@ -75,8 +75,7 @@ def resolve_competition_teams(ctx, num_teams, from_phase, team_identifiers=None)
     ctx.run_id = ctx.previous_state.get("run_id") or mint_run_id()
     if ctx.resuming:
         # Re-read from disk rather than trusting the snapshot prepare() took: the document
-        # holds the only copy of the team passwords. load_flat falls back to the legacy
-        # file, so a range deployed before the document existed still resumes.
+        # holds the only copy of the team passwords.
         ctx.state = estate_state.load_flat(ctx.state_path.parent if ctx.state_path
                                            else ctx.comp_dir)
         ctx.teams = {

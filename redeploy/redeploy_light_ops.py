@@ -20,7 +20,7 @@ def mode_resync(targets, rctx):
 # Engine-authoritative credential alignment — no rollback, no re-plant.
 #
 #     1. Pull the secrets the engine actually holds (event.conf, credlist,
-#        /opt/quotient/.env) and align .deploy_state.json where they differ.
+#        /opt/quotient/.env) and align the state document where they differ.
 #     2. Re-set the selected boxes' passwords to the state values via the guest
 #        agent, so drifted boxes come back in line without needing SSH.
 #     box_password (the box login) exists nowhere on the engine — it is baked

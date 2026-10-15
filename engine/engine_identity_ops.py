@@ -75,7 +75,7 @@ def assert_engine_build_identity(ctx, vmid):
             f"{expected!r}. This is the shared-management-IP hazard — the IP is answering "
             f"for a different machine (a foreign competition's live engine, or a clone of "
             f"a template). Nothing was changed. Give this competition its own "
-            f"TF_VAR_engine_mgmt_ip, or stop the other range, then retry.")
+            f"TEZ_ENGINE_MGMT_IP, or stop the other range, then retry.")
 
 
 # Grow / to the whole disk. The create path sizes the engine's virtual disk (40 GB)

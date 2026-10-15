@@ -47,7 +47,7 @@ def record_degradation(what, detail=""):
 # Note that a prerequisite failed and execution continued anyway.
 #
 #     The deploy still continues — each site has its own reason for tolerating the
-#     failure — but the fact is collected, written into `.deploy_state.json` and printed
+#     failure — but the fact is collected, written into the state document and printed
 #     once in a summary, so it survives the scrollback and can be surfaced by verify.
     import time
 

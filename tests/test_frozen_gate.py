@@ -1,6 +1,6 @@
 """Frozen-gate machinery: per-box payload_hash selectivity, golden_freeze_gate
-(config drift refuses naming fields; code drift warns), and engine hash input classes (incl. the narrowed
-scoring_engine terraform block). Pure functions; no API calls."""
+(config drift refuses naming fields; code drift warns), and engine hash input classes. Pure
+functions; no API calls."""
 
 import contextlib
 import io

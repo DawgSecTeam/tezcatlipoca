@@ -64,7 +64,7 @@ datastore, engine base vmid, ssh host): `infrastructure-status.md`.
   "nodes": [
     {"name": "<record-name>",
      "endpoint": "https://<host>:8006",
-     "token_env": "TF_VAR_proxmox_api_token",
+     "token_env": "TEZ_PROXMOX_API_TOKEN",
      "node": "<pve-node>", "datastore": "<datastore>",
      "engine_base_vmid": 0,
      "engine_mgmt_ip": "", "jump_mgmt_ip": "",
@@ -75,8 +75,9 @@ datastore, engine base vmid, ssh host): `infrastructure-status.md`.
 ```
 
 - `token_env` names the env var holding that host's API token (tokens never live in this
-  file) and **must be unique per record** — placement writes one record's token into the env var
-  that record names, so two records sharing a name make the last-written one win for both.
+  file) and **must be unique per record**: `activate_placement` reads each record's named variable
+  and registers that host's endpoint/token route (the engine record's also becomes the in-process
+  config override), so two records sharing one name route every call with the same token.
   `load_nodes_config` refuses duplicates.
 - `node` is the PVE host name; the API route table keys on it.
 - `engine_base_vmid` is that host's engine base template (hosts differ).
@@ -110,8 +111,8 @@ from the owning module). Absent `nodes.json` → every op behaves exactly as sin
    authoritative: resume, redeploy, verify, destroy all read it back, so a re-run balancer or an
    ambient config swap can never move ops onto the wrong host. `--team-node`/`--engine-node` are ignored
    once a placement is recorded (destroy first to re-place).
-5. A resume without a recorded placement (a range deployed before it existed) adopts its recorded
-   `deployed_endpoint` as a single-slot placement instead of re-balancing a live range.
+5. A resume with no recorded placement adopts its recorded `deployed_endpoint` as a single-slot
+   placement instead of re-balancing a live range.
 
 ## vmid / identity scheme (slot-dimensioned)
 

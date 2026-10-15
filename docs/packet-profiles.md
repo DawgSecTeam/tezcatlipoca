@@ -31,7 +31,7 @@ until misconfigs are authored).
 | Section | Fields | Notes |
 |---|---|---|
 | `packet` | `source` | Provenance line for the fidelity report |
-| `event` | `comp_id`, `name`, `scenario`, `difficulty`, `teams_suggested`, `team_identifiers` | `comp_id` must be free (or pass `--force`). `team_identifiers` are fallback defaults for a fresh deploy when neither `TF_VAR_team_identifiers` nor saved local identifiers exist; an explicit environment override wins |
+| `event` | `comp_id`, `name`, `scenario`, `difficulty`, `teams_suggested`, `team_identifiers` | `comp_id` must be free (or pass `--force`). `team_identifiers` are fallback defaults for a fresh deploy when neither `TEZ_TEAM_IDENTIFIERS` nor saved local identifiers exist; an explicit environment override wins |
 | `domain` | `name_template` | e.g. `"mira-{team}.corp.sus"`; omit for the `team<id>.local` default |
 | `credentials` | `box_username`, `box_password`, `credlists.{linux,domain}`, `domain_accounts[]`, `out_of_scope[]`, `note` | Verbatim packet credentials — see below |
 | `boxes[]` | `name`, `packet_os`, `template`, `last_octet`, `cpu`, `memory_mb`, `disk_gb`, `disk_iface`, `unmanaged`, `in_path`, `domain_role`, `fidelity`, `note` | `fidelity` ∈ exact/substituted/unsupported is required per box; `in_path` (with `unmanaged`) makes the box the team's in-path gateway at `.1` |
@@ -152,4 +152,4 @@ report before briefing anyone on "we replicated X".
   `--strict-services` and (pre-vulns) `--expect-no-vulns`.
 - Freeze before committing — code drift after `--freeze` trips the frozen gate.
 - `--scoring-vmid` must dodge existing VMs.
-- The in-path pfSense at `.1` is a manual runbook step ([internals.md](internals.md#net-firewall_opspy)), not automated — for validation deploys the box can sit idle while the engine holds `.1`.
+- The in-path firewall at `.1` is automated, not a runbook step: phase 5 generates the per-team config, pushes it, waits for SSH on the WAN, cuts the engine's gateway over, and `verify_in_path` refuses the range when a team subnet does not route through its firewall ([internals.md](internals.md#net-firewall_opspy)). A lineup that declares `in_path` and cannot bring that firewall up fails the phase rather than deploying a range that does not score through it.

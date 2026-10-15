@@ -156,7 +156,7 @@ def node_targets(comp_dir_targets, placement, default_node):
     else:
         entry = {"pve_node": default_node,
                  "endpoint": config.active().proxmox.endpoint,
-                 "token_env": "TF_VAR_proxmox_api_token",
+                 "token_env": "TEZ_PROXMOX_API_TOKEN",
                  "tls_fingerprint": config.active().proxmox.tls_fingerprint,
                  "vmids": [int(t["vmid"]) for t in comp_dir_targets]}
         out[default_node] = entry

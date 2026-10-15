@@ -509,7 +509,7 @@ def setup_remote_access(ctx):
             "cross-route each other's participants:\n    "
             + "\n    ".join(conflicts)
             + "\n  Tear down the other range first, or move this competition to "
-              "disjoint team identifiers (TF_VAR_team_identifiers).")
+              "disjoint team identifiers (TEZ_TEAM_IDENTIFIERS).")
 
     enroll_engine_router(ctx.tf_ctx, comp_id, all_ids)
     print("  Pushing range-remote-access unit (tailnet->team SNAT, re-asserted 30s)...")
@@ -553,9 +553,8 @@ def setup_remote_access(ctx):
 
 
 def teardown_remote_access(comp_dir, state=None):
-# Destroy-path cleanup: warn-and-proceed, like the rest of teardown. Reads the
-#     deploy state's remote_access record; absent (pre-feature comp, or the flag off)
-#     means nothing to do.
+# Destroy-path cleanup: warn-and-proceed, like the rest of teardown. Reads the state
+#     document's `remote_access` record; absent (the flag off) means nothing to do.
     if state is None:
         state = estate_state.load_flat(comp_dir)
     ra = (state or {}).get("remote_access")

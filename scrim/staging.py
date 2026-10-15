@@ -1,6 +1,7 @@
 import subprocess
 from pathlib import Path
 
+from estate import config
 from estate import state as estate_state
 from scrim import core
 from scrim import procs
@@ -13,7 +14,7 @@ DEFAULT_TEMPLATE = "agent-scrim"  # a competition name under the comps root
 
 
 RUNTIME_FILES = {
-    "teams.json", ".deploy_state.json", "estate-state.json", "credentials.txt",
+    "teams.json", "estate-state.json", "credentials.txt",
     "nakon-config.json", "packet.md", "event.conf",
 }
 
@@ -29,8 +30,7 @@ def warn_co_tenancy(args, comp):
     said a word about the co-tenancy. Nothing here REFUSES — concurrent runs are deliberate — but
     the run has to record what it shared the node with.
     """
-    import os
-    node = os.environ.get("TF_VAR_proxmox_node") or ""
+    node = config.active().proxmox.node
     if not node:
         return None
     try:
@@ -86,9 +86,8 @@ def stage_author(args):
         if item.name in RUNTIME_FILES or item.name in ("injects", "LOG.md") \
                 or item.name.startswith("sub-") or item.name.startswith(".nakon-domain-"):
             continue
-        # deploy.py writes `.postclone-swept`; this listed the long-dead `.phase6-swept`
-        # name, so the real marker was copied into every competition authored from a
-        # swept template and the new range skipped its post-clone sweep (audit find 12).
+        # A swept template must not carry the marker into a competition authored from it:
+        # the new range would skip its own post-clone sweep (audit find 12).
         if item.name == ".postclone-swept":
             continue
         if item.is_dir():

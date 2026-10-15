@@ -24,9 +24,9 @@ retagged and reclaimed it before rebuilding the box it actually needed (run-a87e
 The hash gate kept the RANGE correct, so this is still attribution rather than a wrong build — but
 the identity claim is false and another competition's validated template was destroyed by it.
 **Next action**: derive the comp tag from the competition identity the Compfile already carries
-(`name`), not from the directory, landed with a migration that still accepts the legacy `comp-comp`
-tag for already-deployed VMs — changing the derivation alone makes every existing and live range's
-teardown refuse.
+(`name`), not from the directory. Changing the derivation alone makes every already-deployed range's
+teardown refuse, so it lands as a pre-release identity break — a range still carrying the old tag is
+torn down by the code version that wrote it — not behind a compatibility shim.
 
 ### `proxmox.mgmt_bridge` is declared and never read, so only a `vmbr0` estate can host a range
 
@@ -37,17 +37,12 @@ The estate profile carries the knob (`estate/config.py`'s spec, and `mgmt_bridge
 not `vmbr0` (the cyber range's is `vmbr100`) therefore still cannot host a range, and the failure is
 a VM attached to a bridge the node may not have rather than a refusal. The per-node half — a
 `mgmt_bridge` field on a `nodes.json` record, preferred over the profile, with a preflight that
-refuses a bridge the node does not own — lived only on `range-shakedown` (`cce55bf`), which was
-built against the deleted terraform layer and could not be merged: it resurrects `terraform/` (927
-lines) and `deploy_lib/tfinputs.py`, and 8 of its 16 files conflict. Its other two commits are not
-missing (`c8607b8` patched a substring bridge match the estate rewrite removed; `0d58b89` is
-satisfied by `estate/config.py`'s `require`).
-**Next action**: port `cce55bf` onto the estate layer — thread the resolved bridge through
-`create_engine` (`estate/apply.py`), `engine/engine_template_ops.py` and `net/jump_ops.py`, read it
-in the plan, and add `infra/collisions.check_mgmt_bridge` to the preflight; the branch's own
-`tests/test_mgmt_bridge.py` is the starting point. Needs the user's call first: `create_engine` is
-hashed as code-class drift, so the port makes every existing engine template report stale and
-rebuild on its next deploy.
+refuses a bridge the node does not own — is unimplemented.
+**Next action**: thread the resolved bridge through `create_engine` (`estate/apply.py`),
+`engine/engine_template_ops.py` and `net/jump_ops.py`, read it in the plan, and add
+`infra/collisions.check_mgmt_bridge` to the preflight. Needs the user's call first: `create_engine`
+is hashed as code-class drift (`estate.apply:create_engine`), so the port makes every existing engine
+template report stale and rebuild on its next deploy.
 
 ### The template builders reach their scratch VM through node shell
 
@@ -231,19 +226,6 @@ machine-readable per-step result the harness can gate on), then have `seed_assum
 T0 on a seed that achieved nothing instead of announcing success; the current guard is faithful to
 its intent but blind to the only signal that matters. Needs bad-auto's owner — it is a sibling
 repo's exit-code contract, not a tezcatlipoca change.
-
-### Fixed in this cycle (kept for the next reader's context)
-
-- A kept template (engine/golden, from an earlier run of the same competition) could not be adopted:
-  the placement probe counted it as a vmid collision, `check_collisions` did not treat the
-  engine-template slot as a template slot in multi-node, and the golden rebuild gate refused to
-  destroy its own cached artifact. All three now follow one rule — a stopped, comp-tagged template
-  in THIS competition's slot is an artifact to adopt, not a leftover.
-- Two blue workdirs both claimed the canonical `BLUE-TEAM.md`, so a later collection could flip
-  which team's narrative held the name (`canonical document changed after collection`). Only the
-  first workdir claims it now; every team's `REPORT.md` is still collected under `evidence/blue/<team>/`.
-- A successful deploy wrote no `deploy.log` at all, so the template-reuse evidence vanished with the
-  worktree. The log is now written on success too.
 
 ## Pending upstream — catalog / nakon
 

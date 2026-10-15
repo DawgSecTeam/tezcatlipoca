@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-# Stamped into .deploy_state.json by deploy.py; deploy resume and redeploy refuse state
+# Stamped into the state document by the deploy; resume and redeploy refuse state
 # written by any other value (the phase numbering is part of what the number means).
 PIPELINE_VERSION = 3
 
@@ -209,7 +209,7 @@ def ownership_tags(comp_name, run_id=None, *extra):
 #     requires ALL of it on a VM before touching it.
 #
 #     `run_id` is the per-deploy identity (utils.mint_run_id, persisted in
-#     .deploy_state.json): the comp tag alone is shared by every worktree running the
+#     the state document): the comp tag alone is shared by every worktree running the
 #     same competition ID, so two concurrent deploys were indistinguishable to every
 #     sweep (2026-10-02 near-miss — smoke vs live-2box). A VM tagged comp-<name> but
 #     missing the expected run tag belongs to a DIFFERENT run and must be refused.

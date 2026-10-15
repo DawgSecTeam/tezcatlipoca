@@ -67,7 +67,7 @@ class IdentityProbe(unittest.TestCase):
         self.assertIn("refusing", message)
         self.assertIn("10.0.0.250", message)                  # names the address
         self.assertIn("Nothing was changed", message)         # reassures the operator
-        self.assertIn("TF_VAR_engine_mgmt_ip", message)       # names the real remedy
+        self.assertIn("TEZ_ENGINE_MGMT_IP", message)       # names the real remedy
 
     def test_another_slots_build_is_refused(self):
         rec = _CmdRecorder(stamp=engine_identity_ops.engine_build_identity(1140) + "\n")

@@ -1,4 +1,4 @@
-"""Competition configuration: packet passwords, team identity/secrets, .env + state writers."""
+"""Competition configuration: packet passwords, team identity/secrets, state writers."""
 
 import contextlib
 import json
@@ -10,6 +10,7 @@ from pathlib import Path
 from common.constants import (ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_VMID_OFFSET,
                        MAX_BOXES_PER_TEAM, SCORING_ENGINE_VMID)
 from common.comp_paths import comps_root
+from estate import config
 
 
 def load_packet_passwords(comp_dir):
@@ -63,11 +64,10 @@ def random_password():
 def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
                   identifier_defaults=None, team_identifiers=None):
     teams = {}
-    import os as _os
-    # An explicit per-run list (--team-identifiers) outranks the ambient env: two ranges of
-    # one competition on a shared node need different blocks, and the env is one value for
-    # the whole run host.
-    override = (team_identifiers or _os.environ.get("TF_VAR_team_identifiers") or "").strip()
+    # An explicit per-run list (--team-identifiers) outranks the ambient value: two ranges of
+    # one competition on a shared node need different blocks, and the config carries one value
+    # for the whole run host.
+    override = (team_identifiers or config.active().knobs.team_identifiers or "").strip()
     if override:
         ids = [s.strip() for s in override.split(",")]
         if len(ids) < number_of_teams:
@@ -114,7 +114,7 @@ def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
                 f"{engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET}, goldens "
                 f"{engine_vmid + GOLDEN_VMID_OFFSET}+) — the team-box clone pass "
                 f"would put one of them on that slot. Pick different "
-                f"TF_VAR_team_identifiers or --scoring-vmid.")
+                f"team identifiers or --scoring-vmid.")
         password = random_password()
         teams[key] = {"identifier": identifier, "password": password}
     return teams
@@ -126,10 +126,9 @@ def write_text_atomic(path, text, mode=0o600):
 #
 #     Both halves matter and both have bitten this repo:
 #
-#     *Atomicity* — `.deploy_state.json` holds the only copy of the generated box and
-#     team passwords; a partial write bricks resume AND redeploy at once (deploy.py
-#     documented this after the fact, but three other writers of the same file used a
-#     plain write_text, so the guarantee held at exactly one of four call sites).
+#     *Atomicity* — the competition's state document holds the only copy of the generated
+#     box and team passwords; a partial write bricks resume AND redeploy at once. The
+#     artefacts and scrim manifests written here carry the same kind of secret.
 #
 #     *Mode at creation* — creating with the process umask and chmod-ing afterwards
 #     leaves a window where the file is world-readable. os.open() applies the mode
@@ -148,7 +147,7 @@ def write_text_atomic(path, text, mode=0o600):
 
 
 def write_state(path, state):
-# Persist a JSON state dict atomically, 0600. Single writer for .deploy_state.json.
+# Persist a JSON state dict atomically, 0600.
     write_text_atomic(path, json.dumps(state, indent=2), mode=0o600)
 
 

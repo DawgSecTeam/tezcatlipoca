@@ -33,6 +33,7 @@ import infra.client  # noqa: E402
 from infra import ownership  # noqa: E402
 from artifacts_lib import lifecycle as alifecycle  # noqa: E402
 from artifacts_lib import paths as apaths  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 from teardown import machinery as tm  # noqa: E402
 
 
@@ -98,8 +99,9 @@ class TeardownArtifactsHook(unittest.TestCase):
         (comp / "Compfile").write_text("name demo-2026-10-03\nscenario x\ndifficulty 3\n")
         (comp / "teams.json").write_text(json.dumps(TEAMS))
         (comp / "boxes.json").write_text(json.dumps(BOXES))
-        (comp / ".deploy_state.json").write_text(json.dumps(
-            {"run_id": "run-1a2b3c4d", "scoring_vm_id": 1000}))
+        document = estate_state.EstateState.load(comp)
+        document.absorb({"run_id": "run-1a2b3c4d", "scoring_vm_id": 1000})
+        document.save()
         self.comp = comp
         self.log = []
         self._cwd = os.getcwd()
@@ -207,7 +209,10 @@ class TeardownArtifactsHook(unittest.TestCase):
         self.assertEqual(Path(seen["comp_dir"]), Path("competitions/demo"))
 
     def test_state_without_a_run_id_refuses_before_collecting_or_destroying(self):
-        (self.comp / ".deploy_state.json").write_text(json.dumps({"scoring_vm_id": 1000}))
+        document = estate_state.EstateState.load(self.comp)
+        document.absorb({"scoring_vm_id": 1000})
+        document.data["identity"].pop("run_id", None)
+        document.save()
         with self.assertRaises(SystemExit) as ctx:
             self._main(["--yes"])
         self.assertNotEqual(ctx.exception.code, 0)
@@ -236,8 +241,9 @@ class CrashedHarnessRecovery(unittest.TestCase):
         (comp / "Compfile").write_text("name demo-2026-10-03\nscenario x\ndifficulty 3\n")
         (comp / "teams.json").write_text(json.dumps(TEAMS))
         (comp / "boxes.json").write_text(json.dumps(BOXES))
-        (comp / ".deploy_state.json").write_text(json.dumps(
-            {"run_id": "run-1a2b3c4d", "scoring_vm_id": 1000}))
+        document = estate_state.EstateState.load(comp)
+        document.absorb({"run_id": "run-1a2b3c4d", "scoring_vm_id": 1000})
+        document.save()
         self.comp, self.log = comp, []
         self._cwd = os.getcwd()
 

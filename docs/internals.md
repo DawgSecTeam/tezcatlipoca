@@ -8,7 +8,7 @@ Single source for vmid math, snapshot names, nakon budgets, naming.
 
 | Symbol | Value | Why |
 |---|---|---|
-| `SCORING_ENGINE_VMID` | 1000 | Default only; `--scoring-vmid` / `TF_VAR_scoring_vm_id` overrides. 100 collides with an unrelated VM on the primary node |
+| `SCORING_ENGINE_VMID` | 1000 | Default only; `--scoring-vmid` / `TEZ_SCORING_VMID` overrides. 100 collides with an unrelated VM on the primary node |
 | `DEFAULT_ENGINE_MGMT_IP` / `_GW` | `10.0.0.250` / `10.0.0.1` | Static: a DHCP engine can reboot onto a new address while the recorded one goes stale (shakedown-5x4: .221→.243→.233) |
 | `MAX_BOXES_PER_TEAM`, `MAX_TEAMS` | 10, 154 | Stride-10 vmid block per team; identifiers 101–254 |
 | `SNAP_BASE` / `SNAP_READY` | `tz-base` / `tz-ready` | |
@@ -62,7 +62,7 @@ One submodule per concern; **tests patch the owning module** (`infra.client.prox
 | `console` | vncproxy sessions and per-comp portal console tokens |
 | `gates` | Deploy refusals (`acquire_deploy_lock`, resume gates, range gates) and `run_preflight` |
 | `plan`, `collisions`, `resources` | Preflight plan model; vmid/bridge/mgmt-IP collisions; datastore headroom and template checks |
-| `common/targets.py` | `vm_id_for`, `enumerate_targets`, the frozen roster (`frozen_roster`) |
+| `common/targets.py` | `vm_id_for`, `enumerate_targets`, and the frozen roster (`persist_targets`/`frozen_roster`/`load_targets`) in the document's `roster` section |
 
 - **Ownership** (`ownership_verdict(node, vmid, raw_tags, expect_tags)`): `owned` (full set), `marker` (no tags + this competition's clone marker), `unproven` (no tags, no marker), `missing` (tags present, set incomplete). `destroy_vm_if_exists` (refuses unless owned/marker) and the preflight collision gate (ours = owned/marker) share it, so teardown and preflight can't disagree.
 - **Run ids**: `utils.mint_run_id` mints `run-<8 hex>` once per competition dir (persisted in the document, reused by resume/redeploy). `estate.apply` stamps the full ownership set on every VM it creates; the golden/jump/engine-template creators build it themselves, and an adopted template is re-stamped for the current run. The comp tag is shared by every worktree running that competition ID, so destruction identity is the full set. Preflight treats a comp-tagged VM without the run tag as a collision.
@@ -117,7 +117,7 @@ Nakon is a subprocess with `cwd = NAKON_DIR`. Patch a name on the module whose f
 
 ## Box hardening (`guests/`)
 
-- `wait_boxes_settled()`: gates on cloud-init first — `wait_boxes_cloud_init()` polls `cloud-init status` (formerly `unattended-upgrades` alone) up to 600 s, so a freshly cloned box whose boot-time `package_upgrade` would bounce sshd mid-build is finished before the shared apt/build session opens; `error` warns and proceeds, still-running at the bound fails the step. It then polls the apt condition (agent ping, no `unattended-upgr` process, dpkg lock free via `apt-get check` with a 1 s lock timeout) instead of sleeping out the post-boot upgrade storm; ceiling 240 s, then falls through to prep's retry ladder. Once per `prep_apt_on_boxes` call and once in the engine-template build.
+- `wait_boxes_settled()`: gates on cloud-init first — `wait_boxes_cloud_init()` polls `cloud-init status` up to 600 s, so a freshly cloned box whose boot-time `package_upgrade` would bounce sshd mid-build is finished before the shared apt/build session opens; `error` warns and proceeds, still-running at the bound fails the step. It then polls the apt condition (agent ping, no `unattended-upgr` process, dpkg lock free via `apt-get check` with a 1 s lock timeout) instead of sleeping out the post-boot upgrade storm; ceiling 240 s, then falls through to prep's retry ladder. Once per `prep_apt_on_boxes` call and once in the engine-template build.
 - `prep_apt_on_boxes()`: 5 attempts, 15 s apart; `command -v apt-get || exit 0` makes Fedora/Alpine an honest no-op.
 - `fix_dns_on_boxes()`: 8 attempts, 15 s apart, then guest-agent root with `DNS_FIX_CMD_ROOT`. All-fail aborts.
 - `setup_ubuntu_auth()`: sshd password auth + NOPASSWD sudo for `box_username`; 8 attempts, then guest-agent root.
@@ -185,7 +185,7 @@ A box with `"unmanaged": true, "in_path": true` is the team gateway (`utils.is_i
 
 ## deploy.py + deploy_lib/
 
-`deploy.py` is a shim (loads `.env`, silences urllib3, re-exports `main`/`deploy`/`prepare`/`DeployContext`); `create-competition.py` imports it, so `.env` lands in the process environment before any config read. Imports flow one way: `cli` → `runner` → `prepare` → step modules; `phases/` and `context` depend only on leaf helpers. Tests patch via `tests/_deploy_patch.dpatch(name)`, which replaces a name in every `deploy_lib` module that binds it.
+`deploy.py` is a shim (loads `.env` as a plain dotenv layer of `TEZ_*` config overrides, silences urllib3, re-exports `main`/`deploy`/`prepare`/`DeployContext`); `create-competition.py` imports it, so those overrides land in the process environment before any config read. Imports flow one way: `cli` → `runner` → `prepare` → step modules; `phases/` and `context` depend only on leaf helpers. Tests patch via `tests/_deploy_patch.dpatch(name)`, which replaces a name in every `deploy_lib` module that binds it.
 
 | Module | Responsibility |
 |---|---|
@@ -198,7 +198,7 @@ A box with `"unmanaged": true, "in_path": true` is the team gateway (`utils.is_i
 | `golden_plan` | `golden_hash_entries`, `golden_rebuild_gate`: the per-box hashes and phase 4's rebuild decision |
 | `coverage`, `failure` | Plant-coverage bookkeeping; `record_degradations` (the ledger verify's `degradations` gate reads) |
 
-- **`prepare()`** order: resolve engine vmid; load Compfile/config/state (folding any legacy files into the document once); resume gates; load inputs; resolve teams; compute placement (taking the endpoint-keyed engine lock); resolve the engine mgmt IP; range gates; mint secrets; stage configs + golden hashes + frozen gate; write the estate inputs; confirm; enumerate targets. `gates.check_resume_gates` runs right after prior state is read and `gates.run_range_gates` (stale estate state, then capacity/collision preflight) after placement, both **before the secrets mint**, so a refusal never leaves a credential-desync corpse. `.deploy.lock` is taken by `deploy()`; nothing in `prepare()` destroys anything.
+- **`prepare()`** order: resolve engine vmid; load Compfile/config/state; resume gates; load inputs; resolve teams; compute placement (taking the endpoint-keyed engine lock); resolve the engine mgmt IP; range gates; mint secrets; stage configs + golden hashes + frozen gate; write the estate inputs; confirm; enumerate targets. `gates.check_resume_gates` runs right after prior state is read and `gates.run_range_gates` (stale estate state, then capacity/collision preflight) after placement, both **before the secrets mint**, so a refusal never leaves a credential-desync corpse. `.deploy.lock` is taken by `deploy()`; nothing in `prepare()` destroys anything.
 - **State writes**: `save_state` → `persist_state` → the document's `absorb` + `save` (atomic `os.replace`, 0600 at creation, through `config_ops.write_text_atomic`). `checkpoint(n)` sets `last_phase` in the `run` section, the resume guard's only source.
 - **Pause at a boundary** (`TEZ_PAUSE_FILE`, set per run by tezcatlipoca-dashboard): the boundary is the only consistent place to stop a deploy — a phase can have a VM build or clone in flight, and cutting one open mid-call leaves a created VM unrecorded (the phase-1 clone-marker reclaim and the resume guards exist for exactly that). The hook runs at the end of each *executed* phase (a skipped phase is no boundary: its checkpoint never moved), writes `paused_after_phase` so an observer sees the hold without parsing stdout, and blocks until the request file is deleted — same process, same lock, resumed in place. `run_pipeline` clears a marker left by a run that died parked, so a resume cannot read as paused. Unset is a no-op, which is what keeps manual deploys unchanged.
 - **Resume** (`from_phase > 1`): skips phases 1–2, reloads teams and secrets from state. Only *executed* phases checkpoint. `--from-phase N` with no state file is a hard `SystemExit` (else a fresh branch would mint new passwords and overwrite `teams.json` while skipping phases 1–2). Different `pipeline_version` refuses. `guard_resume_from_phase()` refuses `N > last_phase + 1`. A secret field missing from an older state is regenerated once and written back so a second resume reuses it.
@@ -223,13 +223,13 @@ The import surface for the hyphenated entry points. Explicit `__all__`, each nam
 
 ## Teardown (`teardown/`)
 
-One engine: `infra.ownership.Ownership` (destruction identity), `Refusal` (saw/expected/remedy, with the `TEARDOWN-REFUSAL` line bad-auto also speaks), `Inventory` (classified estate view, fail-closed on listing errors), steps with declared failure policies (`REFUSE` aborts; `WARN_AND_PROCEED` records), `TeardownPlan` (evidence-before-destruction validated at construction), `TeardownEngine` (gates → completion journal → steps → `verify_clean`, the only exit-0 path). Mechanics are in `teardown/machinery.py` (pre-stop, the run-id-scoped leftover sweep, the pre-inventory template fallback, gates); the recorded estate itself is destroyed by `estate/destroy.py`. `destroy-competition.py` and the scrim harness (via `teardown/runner.run_terminal_teardown`) are shims, and the terminal plan is the only kind: deploy phase 1 composes no plan at all (a deploy destroys nothing a run owns) and uses `ownership_verdict` directly for its interrupted-clone reclaim. Tests patch `teardown.machinery`, `artifacts_ops`/`red_plant_ops`, `infra.ownership`, `teardown.runner`.
+One engine: `infra.ownership.Ownership` (destruction identity), `Refusal` (saw/expected/remedy, with the `TEARDOWN-REFUSAL` line bad-auto also speaks), `Inventory` (classified estate view, fail-closed on listing errors), steps with declared failure policies (`REFUSE` aborts; `WARN_AND_PROCEED` records), `TeardownPlan` (evidence-before-destruction validated at construction), `TeardownEngine` (gates → completion journal → steps → `verify_clean`, the only exit-0 path). Mechanics are in `teardown/machinery.py` (pre-stop, the run-id-scoped leftover sweep, the vmid-math template fallback, gates); the recorded estate itself is destroyed by `estate/destroy.py`. `destroy-competition.py` and the scrim harness (via `teardown/runner.run_terminal_teardown`) are shims, and the terminal plan is the only kind: deploy phase 1 composes no plan at all (a deploy destroys nothing a run owns) and uses `ownership_verdict` directly for its interrupted-clone reclaim. Tests patch `teardown.machinery`, `artifacts_ops`/`red_plant_ops`, `infra.ownership`, `teardown.runner`.
 
 Exit 0 = `verify_clean`: plan completed, nothing of ours running or tagged (teams-only reports kept templates as kept-by-design), red01 gone, evidence archived, no node unlistable. Order: portal → engine capture → evidence → red01 → pre-stop → estate (the recorded inventory, in `estate/destroy.py`'s `TIERS` order) → remote access. `EngineCaptureStep` records the engine's final scoreboard into `<comp_dir>/evidence/` when the harness never captured one (that directory becomes the collector's engine source); the scoring DB does not survive `EstateStep`, and a harness capture already present is never overwritten. A lost evidence item is a `verify_clean` NOTE, never a problem: exit 0 still means "the estate is clean", but a lossy teardown says so where the operator reads it. The template step is `full`-gated: `destroy-competition.py --teams-only` and the harness's `run-agent-scrim.py --keep-templates` both reach it with `full=False` (the harness keeps `keep_templates` in the run manifest, OR-semantics, so a resume cannot drop the intent the first run had).
 
 - **Ownership**: `run_id` anchors everything; `load_ownership` refuses without it. Pre-stop stops only name-matching VMs that also carry the ownership tags; `sweep_tagged_leftovers` needs the full set; golden/engine/jump destroys pass the role-narrowed set.
 - **Orphan reclaim** (`teardown/orphan_ops.py`): for a run whose comp dir is gone, the caller names the comp + run tags and the VMs' own tag set is the proof — the only path that needs no state. It refuses the clone-marker adoption every other path allows (`destroy_vm_if_exists(..., require_owned=True)`: the marker names the competition, not the run), requires `--allow-templates` for golden/engine-template VMs (no freeze record survives to consult), refuses when a comp dir still holds the run id, and never touches a bridge (a bridge carries no tags, so it can never be attributed).
-- **Golden wave**: `EstateStep` destroys the recorded golden tier right after the team-box/jump tier. A range deployed before the inventory existed has no template records, so it falls back to `teardown_templates`, which API-destroys goldens by vmid math (`engine_vmid + 150 + slot*10 + i`) with the ownership check.
+- **Golden wave**: `EstateStep` destroys the recorded golden tier right after the team-box/jump tier. A full teardown whose document records no `golden`/`engine_template` resources falls back to `teardown_templates`, which API-destroys goldens by vmid math (`engine_vmid + 150 + slot*10 + i`) with the ownership check.
 - The recorded-estate destroy walks `TIERS` serially; the run-id-scoped leftover sweep behind it uses `TEARDOWN_WORKERS = 4` (deletes are metadata-light; bulk clone writes stay serial).
 - `load_destroyable_competitions()` requires `Compfile` + `teams.json` + `boxes.json`.
 
@@ -283,7 +283,7 @@ Local-files → Markdown. The packet is the same for every team (real credential
 
 [multi-node.md](multi-node.md) is the full treatment.
 
-- Placement is capacity-fill. Per-host tokens are referenced by env-var name (`token_env`). `activate_placement()` points the process config at the engine host (in-process `config.active().activate(...)` overrides, not an `os.environ` mutation) and registers each node's endpoint/token route; `deactivate_placement()` restores both. An existing `placement.json` is authoritative; a resume without one adopts its deployed endpoint. `golden_vmid_for_slot()` shifts the golden block one box-stride per satellite (`engine_vmid + 150 + slot*10 + box_idx`) because linked clones can't cross hosts; `jump_vmid_for()` is `engine_vmid + 130 + slot`.
+- Placement is capacity-fill. Per-host tokens are referenced by env-var name (`token_env`). `activate_placement()` points the process config at the engine host (in-process `config.active().activate(...)` overrides, not an `os.environ` mutation) and registers each node's endpoint/token route; `deactivate_placement()` restores both. The document's `placement` section is authoritative; a resume without one adopts its recorded `deployed_endpoint` as a single-slot placement. `golden_vmid_for_slot()` shifts the golden block one box-stride per satellite (`engine_vmid + 150 + slot*10 + box_idx`) because linked clones can't cross hosts; `jump_vmid_for()` is `engine_vmid + 130 + slot`.
 - `net/jump_ops.py`: per-satellite Alpine VM impersonating the engine at L3 on the satellite's bridges (holds `192.168.<id>.1`), DNATing the gateway IP's apt-cacher port to the engine and SNATing engine→box traffic so boxes' gateway-only SSH trust holds. Forwarding is default-DROP with explicit accepts. NIC hotplug past the first is unreliable: reboot instead.
 - `routing_ops.verify_satellite_routing()` is the fail-loud gate after the engine create. The routes come from `estate.engine_setup.satellite_route_commands` (`satellite_routes_for(placement)`, plus a oneshot unit so an engine reboot re-asserts them); this module only proves them.
 - `template_sync_ops`/`sync-template.py`: `vzdump --stdout | ssh qmrestore` over root SSH. Satellites need every box template plus an Alpine base for the jump VM.
@@ -304,16 +304,15 @@ Local-files → Markdown. The packet is the same for every team (real credential
 
 ## estate/
 
-The one component that mutates real infrastructure. There is no provider, plan/apply cycle or state
-file to reconcile: each creator is an ordinary function that calls the Proxmox API and records what
-it made, and the recorded inventory is what the destroy path walks. The shell escape hatch is gone
-with it — there is nothing to run by hand and no flag that reaches one resource: a create is a call
-in the phase that needs it, and a re-entry adopts an already-created resource instead of re-planning.
+The one component that mutates real infrastructure. Each creator is an ordinary function that calls
+the Proxmox API and records what it made in the document's `resources` inventory, which is what the
+destroy path walks. Creating is a call in the phase that needs it, and a re-entry adopts an
+already-created resource instead of re-planning; nothing runs a resource out of band.
 
 | Module | Owns |
 |---|---|
 | `state` | The `estate-state.json` document and its API; the `resources` inventory |
-| `config` | Native process config (`tezcatlipoca.toml` + env) and the `_SPEC` key/legacy-name table |
+| `config` | Native process config (`tezcatlipoca.toml` + env) and the `_SPEC` `key -> default` table |
 | `apply` | Bridge, engine and team-box creates; disk sizing; discard |
 | `engine_setup` | The engine's cold boot, guest netplan/forwarding/satellite routes, SSH coordinates |
 | `destroy` | `TIERS`, `destroy_estate`, `destroy_tier` |
@@ -321,14 +320,14 @@ in the phase that needs it, and a re-entry adopts an already-created resource in
 **state.py** — `competitions/<id>/estate-state.json`, `schema_version` 1, written atomically at 0600.
 
 - Sections: `identity`, `secrets`, `roster`, `placement`, `templates`, `resources` (the inventory), `run`, `external`, `teardown`, plus `updated_at`. `_FLAT_SECTION` maps the deploy's flat state keys onto those sections, so `absorb`/`flatten` round-trip the dict the phases already pass around; `run` is the catch-all. The document holds the only copy of the box and team passwords, so a corrupt file raises rather than resetting, and a `schema_version` above this code's refuses with the upgrade path.
-- API: `state_path`, `open` (folds legacy files in on first contact), `EstateState.load/migrate/flatten/absorb/save/section/record/resources/forget/checkpoint`, `load_flat`/`read_flat` (`{}`/`None` when absent), `write_flat`, `load_all`, `team_vmids`. `read_flat`'s fallback to a legacy `.deploy_state.json` is read-only, so a reader never migrates as a side effect.
+- API: `state_path`, `EstateState.load/flatten/absorb/save/section/record/resources/forget/checkpoint`, `load_flat`/`read_flat` (`{}`/`None` when absent), `write_flat`, `load_all`, `team_vmids`. `read_flat` reads only `estate-state.json`, so a competition with no document reads as no state.
 - `record(kind, node, name, vmid=, bridge=, tags=)` upserts one inventory entry, keyed by vmid, else bridge, else name; `resources(kind, node)` is the filtered read; `forget` drops what a destroy removed. Teardown walks this list, and `team_vmids` is the resume gate's "is the work there" probe (`infra.gates.guard_resume_existence`).
-- `migrate` folds the seven legacy files (`.deploy_state.json`, `placement.json`, `targets.json`, `teams.json`, `.template-hashes.json`, `.frozen.json`, `.teardown-journal.json`) into the document. Every one of them is now READ-only: the document is the only writer, and each owning module (`multinode/placement_record`, `common/targets`, `engine/template_freeze`, `teardown/engine`) reads its section with the legacy file as a fallback for ranges deployed before the fold.
+- The document is the only source and the only writer: each owning module reads its own section — `multinode/placement_record` the `placement` section, `common/targets` the `roster` section, `engine/template_freeze` the `templates` section, `teardown/engine` the `teardown` journal.
 
-**config.py** — the native config surface for the deploy's process settings (the former direct `TF_VAR_*`/`.env` reads).
+**config.py** — the native config surface for the deploy's process settings (`tezcatlipoca.toml` and its `TEZ_*` env overrides).
 
-- A `Config` over `tezcatlipoca.toml` (`TEZ_CONFIG` overrides the path), resolved per key as override → env → file → default (env beats file because the dashboard injects per-run node tokens and the engine mgmt IP into the process environment). `_SPEC` is the one place the key set and its legacy env names live, so old `TF_VAR_*` call sites keep working while they move to `config.active()`. `config.require(key)` raises on an unset key; `Config.is_set` distinguishes unset from deliberately empty (an empty engine mgmt IP means DHCP, not "re-default me").
-- `Config.activate`/`deactivate` are in-process overrides, which is what lets multi-node placement point the process at one host (`multinode/nodes_config.apply_node_env`) without the `os.environ` mutation that used to leak into every later read.
+- A `Config` over `tezcatlipoca.toml` (`TEZ_CONFIG` overrides the path), resolved per key as override → env → file → default (env beats file because the dashboard injects per-run node tokens and the engine mgmt IP into the process environment). `_SPEC` is the one place the key set lives, as `key -> default`; `config.env_name(key)` is `TEZ_` + the key upper-cased with dots as underscores and the `knobs.` prefix dropped, and the default's type drives parsing. `config.require(key)` raises on an unset key; `Config.is_set` distinguishes unset from deliberately empty (an empty engine mgmt IP means DHCP, not "re-default me").
+- `Config.activate`/`deactivate` are in-process overrides, which is what lets multi-node placement point the process at one host (`multinode/nodes_config.apply_node_env`) without mutating `os.environ`.
 - `ssh_key_path()` resolves a relative private key against the checkout root.
 
 **apply.py** — the creators (the bridge/engine/team-box resources as API calls).
@@ -339,7 +338,7 @@ in the phase that needs it, and a re-entry adopts an already-created resource in
 - `ensure_disk_size` grows the root disk only when `disk_gb` is set (a shrink destroys data); `_root_disk` finds the key by scanning `scsi*`/`virtio*`/`sata*`/`ide*` and skipping cdrom/cloud-init, so a SATA-booting Windows template resizes the same way. `set_discard` adds `discard=on` to the inherited clone disk.
 - Every create is idempotent through `_adopt`: a VM carrying this run's full tag set is adopted, one carrying only this competition's clone marker is an interrupted clone and is rebuilt, anything else is a `Refusal` naming the remedy. The clone POST writes the clone marker into `description` because `/clone` takes no tags and the tagging PUT only lands after the task finishes. `_configure` retries the brief post-clone 400 window (amongus-cde-2026: three deploys died on it). There is no per-VM readiness cap here: the phases' `wait_*` helpers own waiting.
 
-**engine_setup.py** — the guest-side engine setup and the cold boot (what the old provisioner chain did, as ordinary calls the phase makes in the same order).
+**engine_setup.py** — the guest-side engine setup and the cold boot, as ordinary calls the phase makes in order.
 
 - `cold_boot`: hard-stop, settle, start. A guest reboot does not trigger the PCI rescan that reveals newly added VirtIO NICs, so this must run after the NICs are in the VM config and before the netplan that addresses them.
 - `configure_engine_network`: write `/etc/netplan/60-team-ifaces.yaml` (`ens19+`, `192.168.<id>.1/24`; transit NICs `172.31.<id>.1/30` appended after every team NIC), `chmod 600` (netplan refuses a world-readable file), `netplan apply`, set `ip_forward=1` + `rp_filter=2`, then install the satellite-route oneshot unit so an engine reboot re-asserts its routes. The netplan block is omitted when the engine hosts no slot-0 teams — an empty `ethernets` map is a netplan error.
@@ -347,7 +346,7 @@ in the phase that needs it, and a re-entry adopts an already-created resource in
 
 **destroy.py** — the one order linked clones survive.
 
-- `TIERS = (("team_box", "jump"), ("golden",), ("engine_template",), ("engine",), ("bridge",))`. A linked clone shares its golden's base volume, so destroying a golden first fails with `base volume ... is still in use by linked clone`, and a bridge cannot go while a VM NIC still references it. `TIERS` is the only thing that decides the order.
+- `TIERS = (("team_box", "jump"), ("golden",), ("engine",), ("engine_template",), ("bridge",))`. A linked clone shares its base volume, so destroying a golden or the engine template first fails with `base volume ... is still in use by linked clone`, and a bridge cannot go while a VM NIC still references it. `TIERS` is the only thing that decides the order.
 - `destroy_estate(state, full=, nodes=)` walks the tiers; `destroy_tier(state, kind, only=)` narrows to a set of vmids (or bridge names) for a per-team teardown. Each entry goes through `destroy_vm_if_exists`/`destroy_bridge_if_exists` under the role-narrowed ownership set (`golden`/`engine_template` add their tag; the deployed engine is an ordinary clone proven by the full ownership set alone). A `Refusal` leaves the entry in the inventory and carries on with the tier — a refusal is a verdict, not a step failure.
 - `full=False` skips the `golden` and `engine_template` tiers, which is the teams-only mode.
 

@@ -17,7 +17,7 @@ from estate import config
 
 def _identifiers(comp_dir, teams, boxes):
 # Slot 0's identifiers, and whether an in-path firewall needs the transit NICs.
-    placement = estate_state.open(comp_dir).data.get("placement")
+    placement = estate_state.EstateState.load(comp_dir).data.get("placement")
     slots = (placement or {}).get("team_slots") or {}
     teams_on_engine = [teams[k]["identifier"] for k in sorted(teams) if slots.get(k, 0) == 0]
     return placement, teams_on_engine, any(b.get("in_path") for b in boxes)
@@ -38,7 +38,7 @@ def _replace_engine(comp_dir, state, teams, boxes):
     ownership = Ownership(comp_dir.name, state["run_id"])
     destroy_vm_if_exists(node, vmid, expect_tags=ownership.tags)
     estate_apply.create_engine(
-        estate_state.open(comp_dir), ownership, node, vmid=vmid,
+        estate_state.EstateState.load(comp_dir), ownership, node, vmid=vmid,
         template_vmid=int(state["engine_template_vmid"]),
         team_identifiers=identifiers, transit_identifiers=identifiers if in_path else [],
         mgmt_ip=config.active().engine.mgmt_ip,

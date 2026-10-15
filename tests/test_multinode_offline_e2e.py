@@ -1,6 +1,6 @@
 """Multi-node pipeline, offline and integrated: a synthetic 3-node nodes.json through
 resolve_placement (real probes against a fake Proxmox), the REAL multinode preflight over the
-same fake, build_terraform_inputs' satellite tfvars, and the jump ruleset for every satellite.
+same fake, build_estate_inputs' satellite inputs, and the jump ruleset for every satellite.
 
 The unit tests in test_multinode.py stub each layer separately; this one wires them together
 the way a deploy does, so a facade/module-qualification slip between layers shows up here."""
@@ -93,11 +93,11 @@ class MultinodeOfflineE2E(unittest.TestCase):
         os.chdir(self.root)
         self.addCleanup(os.chdir, self.cwd)
         env = {"TOK_N1": "u@pam!a=1", "TOK_N2": "u@pam!b=2", "TOK_N3": "u@pam!c=3",
-               "TF_VAR_proxmox_endpoint": "https://n1.lab:8006",
-               "TF_VAR_proxmox_api_token": "u@pam!a=1", "TF_VAR_proxmox_node": "pve1",
-               "TF_VAR_datastore": "ds1", "TF_VAR_template_vm_id": "955",
-               "TF_VAR_engine_mgmt_ip": "10.0.0.250",  # hermetic against a .env-loaded value
-               "TF_VAR_ssh_private_key_path": str(self.root / "key")}
+               "TEZ_PROXMOX_ENDPOINT": "https://n1.lab:8006",
+               "TEZ_PROXMOX_API_TOKEN": "u@pam!a=1", "TEZ_PROXMOX_NODE": "pve1",
+               "TEZ_PROXMOX_DATASTORE": "ds1", "TEZ_PROXMOX_TEMPLATE_VM_ID": "955",
+               "TEZ_ENGINE_MGMT_IP": "10.0.0.250",  # hermetic against a .env-loaded value
+               "TEZ_SSH_PRIVATE_KEY_PATH": str(self.root / "key")}
         p = patch.dict(os.environ, env)
         p.start()
         self.addCleanup(p.stop)
@@ -110,7 +110,7 @@ class MultinodeOfflineE2E(unittest.TestCase):
         with patch.object(client, "proxmox_api_for", self.fake):
             return placement_planner.resolve_placement(self.comp, 1000, TEAMS, BOXES, "mn", **kw)
 
-    def test_placement_preflight_tfvars_and_jump_rules(self):
+    def test_placement_preflight_estate_inputs_and_jump_rules(self):
         placement, engine = self._resolve()
         self.assertEqual(set(placement["team_nodes"]), set(TEAMS))
         self.assertTrue(placement_record.read_placement(self.comp),
@@ -122,7 +122,7 @@ class MultinodeOfflineE2E(unittest.TestCase):
         sat_slots = sorted(s for s in placement["slots"].values() if s)
         self.assertEqual(sat_slots, [1, 2])
 
-        # resolve again: placement.json is authoritative, no new probe traffic
+        # resolve again: the document's placement is authoritative, no new probe traffic
         n_calls = len(self.fake.calls)
         again, _ = self._resolve()
         self.assertEqual(again["team_nodes"], placement["team_nodes"])

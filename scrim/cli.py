@@ -31,9 +31,9 @@ def main():
     # operator's umask (audit find D5).
     os.umask(0o077)
     # The deploy child reads .env itself, but the harness's IN-PROCESS paths (the
-    # end-of-event teardown runner, compworld) read TF_VAR_* straight from this
-    # process's environment: run-e9d17d65's teardown died with KeyError
-    # TF_VAR_proxmox_endpoint because only the child had loaded .env.
+    # end-of-event teardown runner, compworld) resolve their config from this process's
+    # environment: run-e9d17d65's teardown died with a missing TEZ_PROXMOX_ENDPOINT because
+    # only the child had loaded .env.
     from dotenv import load_dotenv
     load_dotenv(core.REPO / ".env")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -44,7 +44,7 @@ def main():
                    help="path to the competition's dir (wins over --competition resolution)")
     p.add_argument("--nodes", default=None,
                    help="path to this run's node list (the nodes.json schema); forwarded to the "
-                        "deploy stage so the range lands on the listed hosts, not the .env's")
+                        "deploy stage so the range lands on the listed hosts, not the profile's")
     p.add_argument("--scoring-vmid", dest="scoring_vmid", type=int, default=None,
                    help="this run's scoring-engine VMID, forwarded to the deploy stage; give "
                         "each concurrent range on a shared node its own so the engines differ")

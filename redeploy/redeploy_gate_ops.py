@@ -24,8 +24,7 @@ def load_deployed_range(comp_dir):
 
     teams = json.loads(teams_path.read_text())
     boxes = json.loads(boxes_path.read_text())
-    # The document is the state; load_flat also reads a legacy .deploy_state.json, so a
-    # range deployed before it existed is still drivable.
+    # The document is the state; a competition with no document was never deployed.
     state = estate_state.read_flat(comp_dir)
     if state is None:
         raise SystemExit(f"  ERROR: {state_path} is missing — this competition was never "

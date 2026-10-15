@@ -137,16 +137,25 @@ def wait_for_proxmox_task(node, upid, timeout=1800):
         if time.time() > deadline:
             raise RuntimeError(f"Proxmox task {upid} timed out after {timeout}s")
         data = proxmox_api("GET", f"/nodes/{node}/tasks/{upid}/status")["data"]
-        if data["status"] == "stopped":
-            exitstatus = data.get("exitstatus") or ""
-            # "WARNINGS: n" is PVE's completed-with-warnings exit — the task's work
-            # is done (live-found 2026-09-26: qmdestroy of a team clone whose
-            # cloud-init volume was already gone exits WARNINGS, VM verifiably
-            # destroyed). Only anything else is a failure.
-            if exitstatus != "OK" and not exitstatus.startswith("WARNINGS"):
-                raise RuntimeError(f"Proxmox task {upid} failed: {exitstatus}")
+        status, exitstatus = data.get("status") or "", data.get("exitstatus") or ""
+        # A task whose worker died carries the failure IN `status` ("clone failed: can't
+        # lock file … - got timeout") and has no `exitstatus` at all, so a `== "stopped"`
+        # test never fires and the caller polls a corpse to its 1800 s timeout
+        # (live-found 2026-10-15: two concurrent deploys sat 30 min on a dead qmclone
+        # while the third died on the same task in 7 s). Only "running" is not-terminal.
+        if status == "running":
+            time.sleep(3)
+            continue
+        # "WARNINGS: n" is PVE's completed-with-warnings exit — the task's work
+        # is done (live-found 2026-09-26: qmdestroy of a team clone whose
+        # cloud-init volume was already gone exits WARNINGS, VM verifiably
+        # destroyed). An empty exit is "still being written", not a failure.
+        if status == "stopped" and exitstatus in ("", "OK"):
             return
-        time.sleep(3)
+        if exitstatus.startswith("WARNINGS"):
+            return
+        raise RuntimeError(
+            f"Proxmox task {upid} failed: {exitstatus or status or 'unknown status'}")
 
 
 def destroy_bridge_if_exists(node, bridge_name):

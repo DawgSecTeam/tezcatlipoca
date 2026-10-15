@@ -21,7 +21,7 @@ def discover_engine_ip(node, vmid, timeout=300):
     if not ip:
         raise RuntimeError(
             f"could not discover the engine's management IP on vmid {vmid} — the guest "
-            f"agent answered no usable address. Set TF_VAR_engine_mgmt_ip (portable-node "
+            f"agent answered no usable address. Set TEZ_ENGINE_MGMT_IP (portable-node "
             f"mode) or fix the agent channel.")
     return ip
 

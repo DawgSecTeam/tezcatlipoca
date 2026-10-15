@@ -4,7 +4,7 @@ The deploy deliberately continues past some failed prerequisites — each site h
 reason. The problem was that the fact existed only as a WARNING line in a scrollback:
 "apt prep failed", "DNS fix failed", "box never settled". That is how a range comes up
 looking green with every service down, and why nakon's silent install failures had no
-named cause. Now each one lands in `.deploy_state.json["degradations"]`, gets one summary
+named cause. Each one lands in the state document as `degradations`, gets one summary
 at the end of the deploy, and verify reads it back.
 
 Offline throughout.
@@ -96,7 +96,7 @@ class TheSiteActuallyRecords(unittest.TestCase):
     def test_a_failed_apt_prep_records_a_degradation(self):
         target = {"ip": "192.168.1.5", "vmid": 1150, "identifier": 210}
         failed = types.SimpleNamespace(returncode=1, stdout="", stderr="E: lock held")
-        with patch.dict("os.environ", {"TF_VAR_proxmox_node": "pve"}), \
+        with patch.dict("os.environ", {"TEZ_PROXMOX_NODE": "pve"}), \
                 patch.object(ssh_ops.subprocess, "run", return_value=failed), \
                 patch.object(ssh_ops.time, "sleep"), \
                 patch.object(apt_dns_ops, "guest_agent_exec_root",

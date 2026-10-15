@@ -94,7 +94,7 @@ def _domains_run(boxes, roles, probe, teams=None, ctx=None):
     (comp_dir / "boxes.json").write_text(json.dumps(boxes))
     (comp_dir / "domain_roles.json").write_text(json.dumps(roles))
     patches = [
-        patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}),
+        patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve"}),
         patch.object(v_domains, "guest_agent_exec_windows", side_effect=probe),
         patch.object(v_domains, "guest_agent_exec_root", side_effect=probe),
     ]
@@ -298,7 +298,7 @@ class MainRunTests(unittest.TestCase):
     def _run_main(self, comp_dir, extra=()):
         patches = [
             patch.object(v_context, "read_estate_ctx",
-                         side_effect=v_model.CheckError("terraform unavailable")),
+                         side_effect=v_model.CheckError("verification unavailable")),
             patch.object(v_scoreboard, "check_logins", return_value=(True, object())),
             patch.object(v_scoreboard, "check_services",
                          return_value=[v_model.gate_pass("services", gating=False)]),

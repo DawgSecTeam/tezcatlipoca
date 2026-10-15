@@ -4,7 +4,7 @@ SUMMARY/exit-code single source of truth.
 
 Each test corresponds to a reproduced defect:
   D1 check_services 2-tuple vs main's 3-tuple unpack (half-deployed engine crash)
-  D2 plant_coverage fails OPEN when .deploy_state.json has no coverage record
+  D2 plant_coverage fails OPEN when the state document has no coverage record
   D3 packet_accounts / misconfig turn a SKIP into a PASS
   D4 misconfig had no branch for "absent on every team"
   D5 isolation called a dead target "blocked as expected"
@@ -29,6 +29,7 @@ from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
+from estate import state as estate_state  # noqa: E402
 import verifier.cli as v_cli  # noqa: E402
 import verifier.model as v_model  # noqa: E402
 import verifier.packet as v_packet  # noqa: E402
@@ -225,7 +226,7 @@ def _comp_dir(machines=None):
 
 
 def _state(comp_dir, payload):
-    (comp_dir / ".deploy_state.json").write_text(json.dumps(payload))
+    estate_state.write_flat(comp_dir, payload)
 
 
 class PlantCoverage(unittest.TestCase):
@@ -248,12 +249,15 @@ class PlantCoverage(unittest.TestCase):
         self.assertIs(result.status, v_model.Status.FAIL)
         self.assertIn("never recorded", out)
 
-    def test_unparseable_state_fails(self):
+    def test_a_corrupt_document_refuses(self):
+        # The document holds this competition's secrets and VM ownership: an unreadable one
+        # is a hard refusal, not "no state recorded".
         tmp, comp_dir = _comp_dir()
         self.addCleanup(tmp.cleanup)
-        (comp_dir / ".deploy_state.json").write_text("{not json")
-        result, _ = _run(v_state_gates.check_plant_coverage, comp_dir)
-        self.assertIs(result.status, v_model.Status.FAIL)
+        estate_state.state_path(comp_dir).write_text("{not json")
+        with self.assertRaises(SystemExit) as raised:
+            _run(v_state_gates.check_plant_coverage, comp_dir)
+        self.assertIn("corrupt", str(raised.exception))
 
     def test_empty_coverage_with_failed_tally_fails(self):
     # No structured record at all: the tally is never a substitute, so the gate fails.
@@ -779,7 +783,7 @@ class MainSummaryWiring(unittest.TestCase):
     def _run_main(self, comp_dir, extra=()):
         patches = [
             patch.object(v_context, "read_estate_ctx",
-                         side_effect=v_model.CheckError("terraform unavailable")),
+                         side_effect=v_model.CheckError("verification unavailable")),
             patch.object(v_scoreboard, "check_logins", return_value=(True, object())),
             patch.object(v_scoreboard, "check_services",
                          return_value=[v_model.gate_pass("services", gating=False)]),

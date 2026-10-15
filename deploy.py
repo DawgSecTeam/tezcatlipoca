@@ -1,9 +1,8 @@
 """Deploy entry module: loads .env, then hands off to the `deploy_lib` package.
 
-The pipeline lives in deploy_lib/ (layout: deploy_lib/__init__.py). This module keeps the
-import-time environment bootstrap the pipeline relies on (TF_VAR_* and the Proxmox
-credentials are read from the environment) and re-exports the three names callers use:
-`main` (create-competition.py), `deploy` and `prepare`/`DeployContext`.
+The pipeline lives in deploy_lib/ (layout: deploy_lib/__init__.py). This module performs the
+import-time `.env` load every config read depends on and re-exports the three names callers
+use: `main` (create-competition.py), `deploy` and `prepare`/`DeployContext`.
 """
 
 from pathlib import Path

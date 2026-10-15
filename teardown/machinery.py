@@ -57,10 +57,10 @@ def load_ownership(comp_dir):
     if deployed and current and deployed != current:
         raise Refusal(
             saw=f"deploy ran against {deployed}, the loaded env targets {current}",
-            expected="TF_VAR_* pointed at the deployment's host",
+            expected="the loaded profile pointed at the deployment's host",
             remedy="load the same env the deploy ran with and re-run",
             detail=f"this competition was deployed against {deployed}, but the "
-                   f"loaded env targets {current}. Point TF_VAR_* at the deployment's host "
+                   f"loaded env targets {current}. Point the profile at the deployment's host "
                    f"(same overrides create-competition ran with) and re-run.")
     return deployed_state, Ownership(Path(comp_dir).name, run_id)
 

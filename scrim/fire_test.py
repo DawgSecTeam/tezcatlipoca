@@ -1,9 +1,9 @@
-import os
 import shlex
 import time
 from pathlib import Path
 
 from common.targets import frozen_roster
+from estate import config
 from scrim import compworld
 from scrim import core
 from scrim import procs
@@ -121,7 +121,7 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
     unit = (r.stdout or "").strip().splitlines()[-1] if (r.stdout or "").strip() else units[0]
     args.web_unit = unit
     log(f"fire test unit: {unit} on {web_ip} (port {svc_port})")
-    port = os.environ.get("SCRIM_WEB01_PORT", str(svc_port))
+    port = config.active().knobs.scrim_web01_port or svc_port
 
     # Residue guard: an aborted earlier fire test can leave the unit stopped (scrim-one
     # 2026-10-03: web01's sshd died with the harness and the next attempt inherited the

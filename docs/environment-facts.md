@@ -44,8 +44,8 @@ base image on which host: `infrastructure-status.md`.
 ## vmid occupancy
 
 - **Default team identifiers (101+) collide on shared hosts.** Pass
-  `TF_VAR_team_identifiers` explicitly on any host that is not empty; the occupied blocks
-  per host are in `infrastructure-status.md`.
+  `TEZ_TEAM_IDENTIFIERS` (or `--team-identifiers`) explicitly on any host that is not empty; the
+  occupied blocks per host are in `infrastructure-status.md`.
 - **red01's slot is per-competition, never 999** (see [AGENTS.md § bad-auto
   isolation](../AGENTS.md)): vmid from Compfile `red01_vmid`, else `<scoring-vmid>+170`;
   IP from Compfile `red01_ip`, else `10.0.0.198`. Both are preflight-gated — an occupied
@@ -55,7 +55,7 @@ base image on which host: `infrastructure-status.md`.
 - **Engine management IPs are shared across concurrent deploys unless separated.**
   `clean_engine_for_template` SSHes to the *planned* mgmt IP, so a collision can land
   cleanup on a live foreign engine's `.env`/`event.conf`/host keys. Give each concurrent
-  comp its own `TF_VAR_engine_mgmt_ip`; the preflight scans cluster-wide and refuses the
+  comp its own `TEZ_ENGINE_MGMT_IP`; the preflight scans cluster-wide and refuses the
   default address when any guest on it is unverifiable.
 - **Reclaim orphaned ranges with `destroy-competition.py` from the matching comp dir**,
   never an ad-hoc sweep. Occupancy is not tracked in docs — check the Proxmox API on the
@@ -90,13 +90,13 @@ the deploy env; host and credentials: `infrastructure-status.md`;
 
 - **A shared host's RAM is the binding constraint for satellite-heavy Windows ranges.**
   Check the live margin in `infrastructure-status.md` (or the API) before placing several
-  Windows-heavy teams. Deploy time budget: [multi-node.md § Phase
-  budget](multi-node.md#phase-budget-8-teams--5-boxes-two-nodes).
-- **The management network is one flat L2 across hosts.** `TF_VAR_engine_mgmt_ip`/
-  `jump_mgmt_ip` are contested cluster-wide, not per host — the default `10.0.0.250` is
-  whatever every competition gets unless set otherwise. **Always set an explicit, checked
-  `TF_VAR_engine_mgmt_ip`** when anything else is running on the estate; the preflight
-  scans cluster-wide and refuses the default when it's unverifiable.
+  Windows-heavy teams.
+- **The management network is one flat L2 across hosts.** `TEZ_ENGINE_MGMT_IP` and the
+  satellites' `nodes.json` `jump_mgmt_ip` are contested cluster-wide, not per host — the default
+  `10.0.0.250` (engine) / `.249`, `.248`, … (satellite jumps) is whatever every competition gets
+  unless set otherwise. **Always set an explicit, checked `TEZ_ENGINE_MGMT_IP`** when anything else
+  is running on the estate; the preflight scans cluster-wide and refuses the default when it's
+  unverifiable.
 - **netplan refuses world-readable configs** — the engine's team-NIC netplan files are
   mode `0600`.
 - **Docker re-syncs iptables on every container start/restart** (`FORWARD` → DROP, team

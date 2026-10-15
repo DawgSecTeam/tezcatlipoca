@@ -92,7 +92,7 @@ def snapshot_support_hint(node, vmid):
     """One-line explanation for why snapshots may be unavailable, for error messages."""
     return (
         f"vmid {vmid} on node {node} has no tezcatlipoca snapshots. Either this range was "
-        f"deployed before snapshotting was added, or TF_VAR_datastore doesn't support "
+        f"deployed before snapshotting was added, or TEZ_PROXMOX_DATASTORE doesn't support "
         f"snapshots (thick LVM can't; qcow2 on file storage, ZFS, LVM-thin and Ceph can). "
         f"Use --mode reconfigure (re-runs configuration on the live box) or --mode rebuild "
         f"(recreates the VM from its template)."

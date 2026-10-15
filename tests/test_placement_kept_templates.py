@@ -55,7 +55,7 @@ class ProbeKeptTemplates(unittest.TestCase):
         vms = list(vms) + [_vm(955, template=1, tags="cloud-init;template",
                                name="base-debian13-lite-fix")]
         with mock.patch("infra.client.proxmox_api_for", _api(vms)):
-            return placement_planner.probe_node(self.record, self.need, ENGINE, [120, 121])
+            return placement_planner.probe_node(self.record, self.need, ENGINE, [120, 121], "comp")
 
     def test_our_kept_engine_template_and_goldens_are_not_collisions(self):
         probe = self._probe([_vm(ET, template=1, tags="comp-comp;engine-template;tezcatlipoca")]
@@ -76,9 +76,31 @@ class ProbeKeptTemplates(unittest.TestCase):
         self.assertEqual(probe["collisions"], [ET])
         self.assertFalse(probe["ok"])
 
-    def test_a_running_vm_in_a_template_slot_is_still_a_collision(self):
-        probe = self._probe([_vm(GOLDENS[0], template=0, status="running")])
+    def test_another_competitions_range_still_collides(self):
+        # The template-slot exemption is not a licence to build over a foreign range: a VM
+        # carrying another competition's tag on our slot refuses, even mid-build.
+        probe = self._probe([_vm(GOLDENS[0], template=0, status="running",
+                                 tags="tezcatlipoca;comp-someone-else;run-abc123")])
         self.assertEqual(probe["collisions"], [GOLDENS[0]])
+
+    def test_our_own_untagged_running_vm_in_a_template_slot_is_adopted(self):
+        probe = self._probe([_vm(GOLDENS[0], template=0, status="running")])
+        self.assertEqual(probe["collisions"], [])
+
+    def test_our_own_dead_template_attempt_is_not_a_collision(self):
+        # A clone whose task failed before the tag PUT wears the base image's own
+        # `cloud-init;template` tags. Phase 2 adopts and rebuilds it, but the probe refused
+        # the node over it, so the deploy could never clean up its own wreckage
+        # (live 2026-10-15: run-f5d7db99 "vmid collisions: [2340]").
+        probe = self._probe([_vm(ET, template=0, tags="cloud-init;template",
+                                 name="engine-template")])
+        self.assertEqual(probe["collisions"], [])
+        self.assertTrue(probe["ok"], probe["reasons"])
+
+    def test_a_dead_attempt_in_a_golden_slot_is_not_a_collision(self):
+        probe = self._probe([_vm(GOLDENS[0], template=0, tags="cloud-init;template",
+                                 name="golden-web01")])
+        self.assertEqual(probe["collisions"], [])
 
 
 class GoldenRebuildAdoption(unittest.TestCase):

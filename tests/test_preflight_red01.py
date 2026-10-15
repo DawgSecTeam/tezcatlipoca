@@ -1,6 +1,6 @@
 """red01's preflight gates — the 2026-10-12 vmid-999 kill was this exact gap.
 
-red01 is bad-auto's VM (no terraform, no tez ownership tags), so it cannot ride
+red01 is bad-auto's VM (no tezcatlipoca ownership tags), so it cannot ride
 the clash gate's slot math. These gates refuse a deploy whose reserved red01
 vmid/IP is occupied by anything live — a second session defaulting onto a
 shared slot is a REFUSAL naming the owner, not a warning."""
@@ -152,16 +152,16 @@ class GateWiring(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             comp = _comp(td, "assume_breach 1\nred01_vmid 777\nred01_ip 10.9.9.9\n")
-            with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve",
-                                         "TF_VAR_datastore": "ds"}):
+            with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve",
+                                         "TEZ_PROXMOX_DATASTORE": "ds"}):
                 plan = single_node_plan(comp, BOXES, 1, TEAMS, 1300, True,
                                         "10.0.0.252", None)
             self.assertEqual(plan.red01_vmid, 777)
             self.assertEqual(plan.red01_ip, "10.9.9.9")
             self.assertFalse(plan.resuming)
             # the derived default: engine+170, clear of the +140/+150/+130 slots
-            with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve",
-                                         "TF_VAR_datastore": "ds"}):
+            with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve",
+                                         "TEZ_PROXMOX_DATASTORE": "ds"}):
                 plan2 = single_node_plan(_comp(td, "assume_breach 1\n"), BOXES, 1,
                                          TEAMS, 1300, False, "10.0.0.252", None)
             self.assertEqual(plan2.red01_vmid, 1470)

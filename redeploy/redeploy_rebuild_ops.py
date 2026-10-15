@@ -220,7 +220,7 @@ def reconcile_estate_state(rebuilt, rctx):
 #     box, which is what the teardown destroys and the preflight checks. Idempotent: an
 #     entry already naming this vmid is upserted in place.
     from estate import state as estate_state
-    document = estate_state.open(rctx.comp_dir)
+    document = estate_state.EstateState.load(rctx.comp_dir)
     for t in rebuilt:
         node = t.get("node") or estate_state.load_flat(rctx.comp_dir).get("node") \
             or estate_config.active().proxmox.node

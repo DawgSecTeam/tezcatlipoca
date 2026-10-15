@@ -66,7 +66,7 @@ def misconfig_via_guest_agent(comp_dir, box, verifiable):
         return False
     node = estate_config.active().proxmox.node
     if not node:
-        print("  (guest-agent fallback unavailable: TF_VAR_proxmox_node not set)")
+        print("  (guest-agent fallback unavailable: TEZ_PROXMOX_NODE not set)")
         return False
     print(f"  SSH unavailable — falling back to guest-agent exec on vmid {vmid}...")
     for config in verifiable:

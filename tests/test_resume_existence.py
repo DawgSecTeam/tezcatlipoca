@@ -152,7 +152,7 @@ class ResumeExistenceGuard(unittest.TestCase):
 
     def test_unreadable_state_refuses_rather_than_resuming_blind(self):
         def boom():
-            raise RuntimeError("could not run `terraform state list`")
+            raise RuntimeError("could not read the estate inventory")
         with self.assertRaises(SystemExit) as raised:
             dl_gates.guard_resume_existence(
                 5, self.comp, self._state(), vmids_from_state=boom,

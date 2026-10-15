@@ -9,14 +9,14 @@ Rules: triage before touching anything; never redo phases 1–2 for a failure in
 Each has burned a real deploy. Per AGENTS.md, each is also a defect to fix in code, not a permanent checklist item.
 
 - **Template has a cloud-init drive**: a tagged template with no `ide*/scsi*/sata*` entry containing `cloudinit` clones into an unreachable box. Use the `-fix` variants ([environment-facts.md](environment-facts.md#templates)).
-- **Config profile matches the node and has no dead vmid** (`proxmox.template_vm_id`). Set `TF_VAR_team_identifiers` explicitly: packet-profile identifiers and the 101+ default are not availability checks.
+- **Config profile matches the node and has no dead vmid** (`proxmox.template_vm_id`). Set `TEZ_TEAM_IDENTIFIERS` (or `--team-identifiers`) explicitly: packet-profile identifiers and the 101+ default are not availability checks.
 - **Free golden/engine slots**: another session may have squatted an ad-hoc template vmid in the same block.
 - **Distinct `engine.mgmt_ip` per concurrent comp**: `clean_engine_for_template` SSHes to the planned mgmt IP, so a shared IP can wipe a live foreign engine's `.env`, `event.conf`, and host keys.
 - **Reclaim orphaned ranges** with `destroy-competition.py` from the matching comp dir, never an ad-hoc sweep.
 - **Probe the API port, not ping**: `curl -k https://<node>:8006/` must return an HTTP code, not `000`. If a node went down, resume with `--from-phase`; state, snapshots and disks survive.
 - **Pool headroom and snapshot capability**: only ZFS, LVM-thin, Ceph, qcow2-on-file snapshot. `TEZ_THIN_HEADROOM` relaxes the gate on thin pools.
 - **Tear bridges down with `ifdown`, never `ip link del`.** If API network changes fail on a missing `vmbrNNN/brif/`, clear `/run/network/ifstatenew` and `ifreload -a`.
-- **Commit deploy-path code before `--freeze`**: it refuses uncommitted `.py/.tf/.sh/.j2/.ps1` (run state like `placement.json`, comp JSON, `.env` backups is ignored). A later commit warns at deploy. `--unfreeze --confirm-unfreeze` is the only way back, so freeze last.
+- **Commit deploy-path code before `--freeze`**: it refuses uncommitted `.py/.sh/.j2/.ps1`/`Makefile`/`Dockerfile` (run state like comp JSON, the state document, `.env` backups is ignored). A later commit warns at deploy. `--unfreeze --confirm-unfreeze` is the only way back, so freeze last.
 - **Don't pin a known-broken catalog config** (`constants.KNOWN_BROKEN_CONFIGS`).
 - **Don't point boxes at their team's `dns*` box at clone time**: its bind9 is installed by nakon via apt, which needs working DNS.
 - **Distinct scoreboard Display per pin per box**: duplicates are refused at generate time; `pins_registered` catches unregistered pins.
@@ -48,7 +48,7 @@ Dominant time sinks historically: environmental saturation and unvetted pin dens
 
 ## 2. Recovery toolbox
 
-- **Resume**: `estate-state.json` (or a legacy `.deploy_state.json`) holds `last_phase`, teams, secrets. `--from-phase N` reloads it and reuses credentials; without state it's a hard error. `N > last_phase + 1` is refused; `--force-from-phase` overrides for a known-stale checkpoint. Phase 8 sub-steps are flag-gated, and `unpause_engine` isn't idempotent, so don't resume "to be safe" past a completed phase 8.
+- **Resume**: `estate-state.json` holds `last_phase`, teams, secrets. `--from-phase N` reloads it and reuses credentials; without state it's a hard error. `N > last_phase + 1` is refused; `--force-from-phase` overrides for a known-stale checkpoint. Phase 8 sub-steps are flag-gated, and `unpause_engine` isn't idempotent, so don't resume "to be safe" past a completed phase 8.
 - **Markers**: `.postclone-swept`, `.nakon-domain-<team>-adds.json` (+ live join probes).
 - **Snapshots**: `tz-base` (end of phase 4; goldens pre-plant), `tz-ready` (end of phase 7). A failed snapshot is only a WARNING; check `list_snapshots` before relying on one. Modes: [usage-agents.md](usage-agents.md#redeploy-modes).
 - **Verify** is the pass/fail gate for any deploy claim. An unwaived SKIP fails the run; triage a gate that never ran before assuming the range is broken. `pytest tests/` covers helpers, not the pipeline ([tests.md](tests.md)).
@@ -98,7 +98,7 @@ After: `verify-competition.py` (no deploy is green without it); new failure clas
 
 **Hosts.** Multiple non-clustered Proxmox hosts (plus at least one cluster), each with its own endpoint, node name, API token, template vmids, and datastore; never assume a vmid across them. Per-host values, token sources, and live occupancy: `infrastructure-status.md` (gitignored, repo root).
 
-- Env files hold unquoted JSON/pubkeys that break `source`; parse them (`shlex.quote` per assignment) and `unset TF_VAR_scoring_vm_id` so a stale range value doesn't override the generated one — the environment beats `tezcatlipoca.toml`. Set `proxmox.template_vm_id` to a real engine base on the target host and a `--scoring-vmid` the host's live engine does not already hold.
+- Env files hold unquoted JSON/pubkeys that break `source`; parse them (`shlex.quote` per assignment) and `unset TEZ_SCORING_VMID` so a stale range value doesn't override the generated one — the environment beats `tezcatlipoca.toml`. Set `proxmox.template_vm_id` to a real engine base on the target host and a `--scoring-vmid` the host's live engine does not already hold.
 - A shared host is usually busy with co-tenant VMs: choose free vmid blocks (`200 + id*10 + box_index`) and identifiers deliberately against the live occupancy.
 - Cross-host template move: `vzdump` → transfer → `qmrestore`, keeping the vzdump filename pattern.
 - Before a host reboot: boot is ext4/LVM (a suspended ZFS data pool can't block it); confirm the bad pool isn't in `zdb -C`; snapshot the running set (`/root/running-before-reboot.txt`) since only `onboot=1` VMs auto-start.

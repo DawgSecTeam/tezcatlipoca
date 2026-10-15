@@ -1,5 +1,5 @@
 """The single-gate-point contract: every pre-flight refusal lives in infra/gates.py and
-runs inside prepare() BEFORE a credential is minted, a tfvars file written, or a target
+runs inside prepare() BEFORE a credential is minted, a competition input written, or a target
 enumerated. Ordering is the property -- a refusal after the mint leaves a credential-desync
 corpse (2026-09-30 testcomp-7box)."""
 
@@ -27,7 +27,7 @@ class PrepareGateOrder(unittest.TestCase):
             return _fn
 
         def set_prior(ctx, *a, **k):
-            ctx.state_path = Path("/nonexistent/.deploy_state.json")
+            ctx.state_path = Path("/nonexistent/estate-state.json")
             ctx.previous_state = {}
             ctx.resuming = from_phase > 1
 

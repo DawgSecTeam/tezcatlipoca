@@ -14,7 +14,7 @@ Covers:
 * nakon_failed_steps is appended to, never clobbered — the deploy-time record belongs
   to verify's plant-integrity line.
 
-Offline; no Proxmox, no terraform, no SSH."""
+Offline; no Proxmox, no SSH."""
 
 import io
 import json
@@ -44,7 +44,7 @@ LINUX_BOX = {"name": "web01", "template": "ubuntu-2204-web", "cpu": 2, "memory_m
 WIN_BOX = {"name": "win01", "template": "windows-server-2022", "cpu": 2, "memory_mb": 4096}
 
 
-# one (team, box) target with main.tf's naming: team1-<box>, <identifier>-<box>
+# one (team, box) target: team1-<box> for team1, <identifier>-<box> otherwise
 def _target(box, vmid, team="team1", identifier=104):
     vm_name = f"team1-{box['name']}" if team == "team1" else f"{identifier}-{box['name']}"
     return {
@@ -345,8 +345,8 @@ class RebuildStampingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp) / comp_name
             comp_dir.mkdir()
-            env = {"TF_VAR_proxmox_node": "pve", "TF_VAR_ssh_public_key": "ssh-ed25519 AAA",
-                   "TF_VAR_template_vm_id": "1000", "TF_VAR_vm_username": "ops"}
+            env = {"TEZ_PROXMOX_NODE": "pve", "TEZ_SSH_PUBLIC_KEY": "ssh-ed25519 AAA",
+                   "TEZ_PROXMOX_TEMPLATE_VM_ID": "1000", "TEZ_ENGINE_USERNAME": "ops"}
             with patch.dict(os.environ, env), \
                  patch.object(redeploy_rebuild_ops, "proxmox_api", side_effect=fake_pve), \
                  patch.object(redeploy_rebuild_ops, "destroy_vm_if_exists"), \
@@ -409,7 +409,7 @@ class PrepareAssetsTests(unittest.TestCase):
     def test_run_nakon_and_harden_skips_the_plant_pass_but_still_hardens(self):
         ctx = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.9"}
         with tempfile.TemporaryDirectory() as tmp, \
-             patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
+             patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops"}), \
              patch.object(pipeline_api, "setup_ubuntu_auth") as p_auth, \
              patch.object(pipeline_api, "fix_dns_on_boxes"), \
              patch.object(pipeline_api, "ensure_nat_forwarding"), \
@@ -423,7 +423,7 @@ class PrepareAssetsTests(unittest.TestCase):
     def _run_with_stage(self, stage_machines):
         ctx = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.9"}
         with tempfile.TemporaryDirectory() as tmp, \
-             patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
+             patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops"}), \
              patch.object(pipeline_api, "setup_ubuntu_auth"), \
              patch.object(pipeline_api, "fix_dns_on_boxes"), \
              patch.object(pipeline_api, "ensure_nat_forwarding"), \
@@ -473,7 +473,7 @@ class DomainMarkerCascadeTests(unittest.TestCase):
                 [{"name": "ad01", "template": "base-windows-server"},
                  {"name": "ftp01", "template": "base-windows-server"}]))
             with patch.object(pipeline_api, "deploy_domain_configs") as p_dom, \
-                 patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}):
+                 patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops"}):
                 settled = redeploy_plant_ops.rerun_domain_configs(
                     [_target({"name": "ad01", "template": "base-windows-server"}, 1500)],
                     _rctx(ctx=CTX, comp_dir=Path(tmp), state={"box_password": "pw"}),
@@ -499,7 +499,7 @@ class DomainMarkerCascadeTests(unittest.TestCase):
             targets = [_target({"name": "ftp01", "template": "base-windows-server"}, 1501,
                                team="team2", identifier=102)]
             with patch.object(pipeline_api, "deploy_domain_configs") as p_dom, \
-                 patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}):
+                 patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops"}):
                 redeploy_plant_ops.rerun_domain_configs(targets,
                                               _rctx(ctx=CTX, comp_dir=Path(tmp),
                                                     state={"box_password": "pw"}),
@@ -514,7 +514,7 @@ class FailedStepsTests(unittest.TestCase):
     def _replant(self, state, failed):
         ctx = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.9"}
         with tempfile.TemporaryDirectory() as tmp, \
-             patch.dict(os.environ, {"TF_VAR_vm_username": "ops"}), \
+             patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops"}), \
              patch.object(pipeline_api, "setup_ubuntu_auth"), \
              patch.object(pipeline_api, "fix_dns_on_boxes"), \
              patch.object(pipeline_api, "ensure_nat_forwarding"), \
@@ -533,8 +533,8 @@ class FailedStepsTests(unittest.TestCase):
         self.assertEqual(state["nakon_failed_steps"],
                          ["deploy: mysql FAILED", "redeploy: nginx FAILED"])
 
-    # The old code wrote an empty list here, retroactively declaring the deploy's
-    # failed steps resolved.
+    # A clean replant preserves the deploy-time record: writing an empty list here
+    # would retroactively declare the deploy's failed steps resolved.
     def test_clean_replant_keeps_the_deploy_time_record(self):
         state = {"box_password": "pw", "nakon_failed_steps": ["deploy: mysql FAILED"]}
         state = self._replant(state, [])

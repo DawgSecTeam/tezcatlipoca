@@ -261,7 +261,7 @@ class EstateStep(Step):
         from estate import destroy as estate_destroy, state as estate_state
         from teardown.machinery import sweep_tagged_leftovers, teardown_templates
         print("\nDestroying this deploy's recorded estate...")
-        document = estate_state.open(ctx.comp_dir)
+        document = estate_state.EstateState.load(ctx.comp_dir)
         summary = estate_destroy.destroy_estate(document, full=ctx.full, nodes=ctx.nodes)
         if summary["refused"]:
             return StepResult(self.name, "failed", "; ".join(

@@ -133,7 +133,7 @@ def cmd_start(args, comp_dir):
 
     state["started"] = True
     state["engine_unpaused"] = True
-    document = estate_state.open(comp_dir)
+    document = estate_state.EstateState.load(comp_dir)
     document.absorb(state)
     document.save()
     print(f"  Competition live at {base_url} — admin pages: /admin, /announcements, /injects")
@@ -167,7 +167,7 @@ def cmd_end(args, comp_dir):
         # Only a clean capture AND pause may record the event as over; a failed one
         # leaves the panel showing a still-live engine (run rc tells the operator).
         state["ended"] = True
-        document = estate_state.open(comp_dir)
+        document = estate_state.EstateState.load(comp_dir)
         document.absorb(state)
         document.save()
         print("  The competition is over — scoring is frozen at the last round. "

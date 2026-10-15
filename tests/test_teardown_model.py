@@ -131,7 +131,6 @@ class EnginePoliciesAndJournal(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.comp = Path(self.tmp.name) / "competitions" / "c1"
         self.comp.mkdir(parents=True)
-        (self.comp / "terraform").mkdir()
         self.inv = Inventory(["n"], api=FakePVE(nodes={"n": []}))
         self.ctx = TeardownContext(
             comp_dir=self.comp, env={}, teams={}, boxes=[],
@@ -225,7 +224,6 @@ class VerifyClean(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.comp = Path(self.tmp.name) / "c1"
         self.comp.mkdir(parents=True)
-        (self.comp / "terraform").mkdir()
         self.fake = FakePVE(nodes={"n": []})
         self.inv = Inventory(["n"], api=self.fake)
         self.ctx = TeardownContext(

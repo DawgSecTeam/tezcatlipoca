@@ -15,7 +15,7 @@ event:
     on MIRA's systems while defending them and upholding business operations.
   difficulty: 5
   teams_suggested: 4
-  team_identifiers: [120, 121, 122, 123]   # deploy-time TF_VAR_team_identifiers suggestion
+  team_identifiers: [120, 121, 122, 123]   # deploy-time TEZ_TEAM_IDENTIFIERS suggestion
 
 domain:
   # Packet: domain-joined everything, accounts look like mira-XX\blueteam,
@@ -63,10 +63,9 @@ boxes:
     memory_mb: 2048
     fidelity: substituted
     note: >-
-      In-path pfSense owns .1 as teams' gateway (matches the packet) but the wiring is
-      the manual runbook (docs/pfsense-inpath-2026-09-28.md), not terraform. For a
-      validation deploy the box can sit idle while the engine holds .1; wire it in-path
-      before the real event.
+      In-path pfSense owns .1 as teams' gateway (matches the packet). Phase 5 pushes the
+      generated config, waits for the box to answer and cuts the engine's gateway over to
+      it, and verify refuses unless every team subnet routes through its firewall.
   - name: ad01
     packet_os: "Windows Server 2019 — ADDS, LDAP 389 / DNS 53 / SMB 445"
     template: base-windows-server

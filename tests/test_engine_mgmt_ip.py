@@ -58,9 +58,9 @@ def _gate(vms, api, ip, engine_vmid=2400, node="proxmox", ours_tags=None, explic
     from estate import config
     config.reset()
     env = dict(os.environ)
-    env.pop("TF_VAR_engine_mgmt_ip", None)
+    env.pop("TEZ_ENGINE_MGMT_IP", None)
     if explicit is not None:
-        env["TF_VAR_engine_mgmt_ip"] = explicit
+        env["TEZ_ENGINE_MGMT_IP"] = explicit
     with patch.object(preflight_mgmt_ip, "proxmox_api", api), patch.dict(os.environ, env, clear=True):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             preflight_mgmt_ip.engine_mgmt_ip_gate(node, vms, engine_vmid, ip, ours_tags=ours_tags)
@@ -96,7 +96,7 @@ class UnverifiableIsNotFree(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn("cannot verify", message)
         self.assertIn("1100", message)                       # names what could not be asked
-        self.assertIn("TF_VAR_engine_mgmt_ip", message)      # names the remedy
+        self.assertIn("TEZ_ENGINE_MGMT_IP", message)      # names the remedy
 
     def test_an_explicit_ip_warns_and_proceeds(self):
         vms = [_vm(1100, "pve", "quotient-engine")]

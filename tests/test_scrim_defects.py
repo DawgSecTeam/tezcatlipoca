@@ -71,8 +71,8 @@ class ProcessTreeSupervision(unittest.TestCase):
 # run_tree must reap the whole process group; subprocess.run(timeout=) does not.
 
     # A grandchild that IGNORES SIGINT/SIGTERM: only the SIGKILL escalation can reap it,
-    # which is exactly the terraform/nakon/badauto case (they keep mutating infra and
-    # holding the deploy lock after the direct child is killed).
+    # which is exactly the nakon/badauto case (they keep mutating infra and holding the
+    # deploy lock after the direct child is killed).
     @staticmethod
     def _orphan_script(pidfile):
         return (f"bash -c 'trap \"\" INT TERM; exec sleep 300' & "

@@ -64,9 +64,6 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
         # it owned — the team bridges — survived (2026-10-14). Activation has moved the whole
         # process by now, so project the resolved identity back onto this dict.
         env.update(config.proxmox_env())
-    env["TF_VAR_teams"] = json.dumps(teams)
-    env["TF_VAR_boxes_per_team"] = json.dumps(boxes)
-    env["TF_VAR_event_name"] = name
 
     ctx = TeardownContext(
         comp_dir=comp_dir, env=env, teams=teams, boxes=boxes,

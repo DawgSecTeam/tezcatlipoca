@@ -10,7 +10,6 @@ touchable. Offline; fake Proxmox API."""
 
 import contextlib
 import io
-import json
 import os
 import sys
 import tempfile
@@ -55,6 +54,7 @@ from deploy_lib import secrets as dl_secrets  # noqa: E402
 from deploy_lib.context import DeployContext  # noqa: E402
 from deploy_lib import estate_inputs as dl_estate_inputs  # noqa: E402
 from config import config_ops  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 from multinode import placement_record  # noqa: E402
 from infra import client  # noqa: E402
 from infra.gates import run_preflight  # noqa: E402
@@ -338,7 +338,7 @@ class RunIdMinting(unittest.TestCase):
 
     def test_fresh_deploy_uses_saved_identifiers_but_not_saved_passwords(self):
         with tempfile.TemporaryDirectory() as d:
-            state_path = Path(d) / ".deploy_state.json"
+            state_path = estate_state.state_path(Path(d))
             ctx = self._ctx(state_path, previous_state={
                 "teams": {"team1": {"identifier": "120", "password": "old-secret"}}})
             calls = {}
@@ -360,7 +360,7 @@ class RunIdMinting(unittest.TestCase):
             comp_dir.mkdir()
             (comp_dir / "Compfile").write_text(
                 "packet_source packets/cde-2026/packet.yaml\n")
-            ctx = self._ctx(comp_dir / ".deploy_state.json", engine_vmid=1080)
+            ctx = self._ctx(estate_state.state_path(comp_dir), engine_vmid=1080)
             with dpatch("persist_state"), dpatch(
                     "collect_teams",
                     side_effect=lambda count, engine_vmid, identifier_defaults=None, **kw: {
@@ -371,10 +371,11 @@ class RunIdMinting(unittest.TestCase):
 
     def test_resume_reuses_the_prior_run_id(self):
         with tempfile.TemporaryDirectory() as d:
-            state_path = Path(d) / ".deploy_state.json"
-            state_path.write_text(json.dumps({
-                "run_id": RUN, "last_phase": 3,
-                "teams": {"team1": {"identifier": "101", "password": "x"}}}))
+            state_path = estate_state.state_path(Path(d))
+            document = estate_state.EstateState.load(Path(d))
+            document.absorb({"run_id": RUN, "last_phase": 3,
+                             "teams": {"team1": {"identifier": "101", "password": "x"}}})
+            document.save()
             ctx = self._ctx(state_path, previous_state={"run_id": RUN}, resuming=True)
             with dpatch("persist_state"):
                 dl_secrets.resolve_competition_teams(ctx, None, 4)

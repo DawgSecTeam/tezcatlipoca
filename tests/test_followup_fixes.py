@@ -9,12 +9,12 @@ matrix + scrim authoring, see docs/reports/reset-live-test-2026-10-03-report.md)
   `verify --packet` cannot abort the run.
 * F6 — a member that self-reports joined but has no machine account on the team's DC
   is a dead trust and must not read as a pass (verify's _member_trusted).
-* F9 — reconcile_terraform_state imports rebuilt boxes by their deterministic vmid;
+* F9 — reconcile_estate_state imports rebuilt boxes by their deterministic vmid;
   a failed import warns instead of dying.
 * F8 — env_summary names the estate (endpoint/node/datastore/tpl/mgmt) so a
   wrong-variant env copy shows in the banner.
 
-Offline; no Proxmox, no terraform, no network."""
+Offline; no Proxmox, no network."""
 
 import json
 import os
@@ -49,7 +49,7 @@ class EngineMgmtGateTests(unittest.TestCase):
               "tags": "", "template": 0}]
 
     def _gate(self):
-        with patch.dict(os.environ, {"TF_VAR_proxmox_node": "n1"}, clear=False):
+        with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "n1"}, clear=False):
             mgmt_ip_mod.engine_mgmt_ip_gate("n1", self.GUEST, 1000, "10.0.0.250")
 
     def test_unverifiable_default_is_refused(self):
@@ -60,7 +60,7 @@ class EngineMgmtGateTests(unittest.TestCase):
 
     def test_unverifiable_operator_set_ip_warns_and_proceeds(self):
         env = {k: v for k, v in os.environ.items() if k != "TEZ_ENGINE_MGMT_IP_IS_DEFAULT"}
-        env["TF_VAR_engine_mgmt_ip"] = "10.0.0.250"  # operator-set, hermetic to ambient env
+        env["TEZ_ENGINE_MGMT_IP"] = "10.0.0.250"  # operator-set, hermetic to ambient env
         with patch.dict(os.environ, env, clear=True), \
              patch.object(mgmt_ip_mod, "proxmox_api", side_effect=RuntimeError("no agent")):
             self._gate()  # must not raise
@@ -146,7 +146,7 @@ class ReconcileStateTests(unittest.TestCase):
     def test_records_every_rebuilt_box_against_its_new_vmid(self):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
-            with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}):
+            with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve"}):
                 redeploy.reconcile_estate_state(
                     [self._target("team1-db01", 1503), self._target("130-web01", 1504, slot=2)],
                     _rctx(comp_dir, {}, []))
@@ -157,7 +157,7 @@ class ReconcileStateTests(unittest.TestCase):
     def test_reconciling_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
-            with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}):
+            with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve"}):
                 for _ in range(2):
                     redeploy.reconcile_estate_state([self._target("team1-db01", 1503)],
                                                     _rctx(comp_dir, {}, []))
@@ -169,17 +169,17 @@ class EnvSummaryTests(unittest.TestCase):
 # F8: the banner line names the estate.
 
     def test_summary_carries_all_five_facts(self):
-        env = {"TF_VAR_proxmox_endpoint": "https://10.0.0.150:8006",
-               "TF_VAR_proxmox_node": "proxmox", "TF_VAR_datastore": "wkshp-pool",
-               "TF_VAR_template_vm_id": "955", "TF_VAR_engine_mgmt_ip": "10.0.0.252"}
+        env = {"TEZ_PROXMOX_ENDPOINT": "https://10.0.0.150:8006",
+               "TEZ_PROXMOX_NODE": "proxmox", "TEZ_PROXMOX_DATASTORE": "wkshp-pool",
+               "TEZ_PROXMOX_TEMPLATE_VM_ID": "955", "TEZ_ENGINE_MGMT_IP": "10.0.0.252"}
         with patch.dict(os.environ, env, clear=True):
             s = env_summary()
         for fact in ("10.0.0.150", "proxmox", "wkshp-pool", "955", "10.0.0.252"):
             self.assertIn(fact, s)
 
     def test_unset_mgmt_ip_reads_as_default(self):
-        env = {"TF_VAR_proxmox_endpoint": "https://x", "TF_VAR_proxmox_node": "n",
-               "TF_VAR_datastore": "d", "TF_VAR_template_vm_id": "1"}
+        env = {"TEZ_PROXMOX_ENDPOINT": "https://x", "TEZ_PROXMOX_NODE": "n",
+               "TEZ_PROXMOX_DATASTORE": "d", "TEZ_PROXMOX_TEMPLATE_VM_ID": "1"}
         with patch.dict(os.environ, env, clear=True):
             self.assertIn("engine-mgmt=default", env_summary())
 
@@ -188,9 +188,9 @@ class EnvSummaryTests(unittest.TestCase):
         environment. The banner must name what the run DIALS: live 2026-10-15 the canary
         deployed --engine-mgmt-ip 10.0.0.244 while every line printed 10.0.0.252."""
         from estate import config
-        env = {"TF_VAR_proxmox_endpoint": "https://10.0.0.150:8006",
-               "TF_VAR_proxmox_node": "proxmox", "TF_VAR_datastore": "hdd",
-               "TF_VAR_template_vm_id": "955", "TF_VAR_engine_mgmt_ip": "10.0.0.252"}
+        env = {"TEZ_PROXMOX_ENDPOINT": "https://10.0.0.150:8006",
+               "TEZ_PROXMOX_NODE": "proxmox", "TEZ_PROXMOX_DATASTORE": "hdd",
+               "TEZ_PROXMOX_TEMPLATE_VM_ID": "955", "TEZ_ENGINE_MGMT_IP": "10.0.0.252"}
         with patch.dict(os.environ, env, clear=True):
             config.reset()
             config.active().activate({"engine.mgmt_ip": "10.0.0.244",

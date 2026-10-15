@@ -40,8 +40,8 @@ def _bundle(tmp):
 
 
 class GoldenHashEntries(unittest.TestCase):
-# D1: the loop that feeds phase 1's waves, the phase-4 rebuild gate and
-#     .template-hashes.json. It must cover EVERY box name in boxes.json.
+# D1: the loop that feeds phase 1's waves, the phase-4 rebuild gate and the
+#     document's template record. It must cover EVERY box name in boxes.json.
 
     def _entries(self, boxes, unbooted=(), golden_machines=None):
         with tempfile.TemporaryDirectory() as d:
@@ -56,15 +56,16 @@ class GoldenHashEntries(unittest.TestCase):
         inputs, hashes = self._entries(
             boxes, golden_machines={"dc01": {"configurations": []},
                                     "web01": {"configurations": []}})
-        # The pre-fix loop `continue`d on unmanaged before building its entry, so fw01
-        # was missing here and the phase-4 gate KeyError'd on golden_hashes["fw01"].
+        # An unmanaged box gets an entry too: skipping it would leave fw01 out of
+        # `hashes` and the phase-4 gate would KeyError on golden_hashes["fw01"].
         self.assertEqual(set(hashes), {"dc01", "web01", "fw01"})
         self.assertEqual(set(inputs), {"dc01", "web01", "fw01"})
         self.assertEqual(inputs["fw01"]["config"]["golden"], "unmanaged")
         self.assertEqual(hashes["fw01"], hash_from_inputs(inputs["fw01"]))
 
     def test_unmanaged_entry_is_stable_across_calls(self):
-        # .template-hashes.json reuse depends on the value not drifting run to run.
+        # The document's stored hashes only work as a reuse key if the value does not
+        # drift run to run.
         _i1, h1 = self._entries([UNMANAGED])
         _i2, h2 = self._entries([UNMANAGED])
         self.assertEqual(h1["fw01"], h2["fw01"])
@@ -121,7 +122,7 @@ class GoldenRebuildGate(unittest.TestCase):
         hashes = {"dc01": "h-dc", "web01": "h-web", "fw01": "h-fw"}
         inputs = {"dc01": {"config": {}}, "web01": {"config": {}}, "fw01": {"config": {}}}
         # the node's own stamp, compared against the CURRENT inputs — dc01 matches, the rest
-        # do not. This is the whole reuse decision: .template-hashes.json is not consulted.
+        # do not. This is the whole reuse decision: the stored hash record is not consulted.
         self.stamp.side_effect = lambda node, vid, expected: vid == self._slot(0)
         with contextlib.redirect_stdout(io.StringIO()):
             dl_golden_plan.golden_rebuild_gate(".", "node1", 0, self.boxes, ENGINE, {}, hashes,
@@ -130,9 +131,8 @@ class GoldenRebuildGate(unittest.TestCase):
         self.assertIn(self._slot(1), self.destroyed)
 
     def test_node_stamp_outranks_a_missing_hash_record(self):
-        # The cross-worktree case: a fresh workspace has no .template-hashes.json, so the
-        # gate gets an empty `stored`. The node stamp alone must still keep the template —
-        # dict.get on the missing record used to be what decided reuse, and it rebuilt.
+        # A fresh workspace has no stored template record, so the gate gets an empty
+        # `stored`. The node stamp alone must still keep the template.
         self.stamp.side_effect = lambda node, vid, expected: expected == "h-dc"
         with contextlib.redirect_stdout(io.StringIO()):
             dl_golden_plan.golden_rebuild_gate(".", "node1", 0, [MANAGED_BOXES[0]], ENGINE,
@@ -142,17 +142,17 @@ class GoldenRebuildGate(unittest.TestCase):
 
 
 class ResumeFromPhaseGuard(unittest.TestCase):
-# D2: --from-phase must not skip phases .deploy_state.json never saw complete.
+# D2: --from-phase must not skip phases the state document never saw complete.
 
     def test_next_phase_after_last_completed_is_allowed(self):
-        dl_gates.guard_resume_from_phase(4, 3, ".deploy_state.json")  # no raise
+        dl_gates.guard_resume_from_phase(4, 3, "estate-state.json")  # no raise
 
     def test_resuming_earlier_than_last_completed_is_allowed(self):
-        dl_gates.guard_resume_from_phase(2, 6, ".deploy_state.json")
+        dl_gates.guard_resume_from_phase(2, 6, "estate-state.json")
 
     def test_far_beyond_last_completed_is_refused(self):
         with self.assertRaises(SystemExit) as ctx:
-            dl_gates.guard_resume_from_phase(6, 3, ".deploy_state.json")
+            dl_gates.guard_resume_from_phase(6, 3, "estate-state.json")
         msg = str(ctx.exception)
         self.assertIn("--from-phase 6", msg)          # names the requested phase
         self.assertIn("records phase 3", msg)         # and what actually completed
@@ -163,15 +163,15 @@ class ResumeFromPhaseGuard(unittest.TestCase):
         # Missing last_phase reads as 0 — nothing is recorded complete, so even
         # --from-phase 2 would skip phase 1. Refuse rather than assume.
         with self.assertRaises(SystemExit) as ctx:
-            dl_gates.guard_resume_from_phase(2, None, ".deploy_state.json")
+            dl_gates.guard_resume_from_phase(2, None, "estate-state.json")
         self.assertIn("records phase 0", str(ctx.exception))
 
     def test_non_integer_last_phase_is_treated_as_zero(self):
         with self.assertRaises(SystemExit):
-            dl_gates.guard_resume_from_phase(2, "three", ".deploy_state.json")
+            dl_gates.guard_resume_from_phase(2, "three", "estate-state.json")
 
     def test_force_overrides_the_refusal(self):
-        dl_gates.guard_resume_from_phase(6, 3, ".deploy_state.json", force=True)
+        dl_gates.guard_resume_from_phase(6, 3, "estate-state.json", force=True)
 
 
 class CoveragePersistence(unittest.TestCase):
@@ -188,7 +188,7 @@ class CoveragePersistence(unittest.TestCase):
         state = {"nakon_failed_steps": [],
                  "plant_coverage_failed": {"web01-team101": ["smb-v1"]}}
         with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / ".deploy_state.json"
+            path = Path(d) / "estate-state.json"
             dl_coverage.record_stage_coverage(
                 state, self._machines(), self._green_result(),
                 lambda: path.write_text(json.dumps(state)))
@@ -214,7 +214,8 @@ class CoveragePersistence(unittest.TestCase):
 
 SECRET_WRITES = [
     ("teams.json", '{"team1": {"identifier": "120", "password": "hunter2"}}'),
-    ("terraform.tfvars.json", '{"box_password": "hunter2", "teams": {}}'),
+    ("estate-state.json",
+     '{"secrets": {"box_password": "hunter2", "teams": {}}, "identity": {}}'),
     ("credentials.txt", "team1 / hunter2\nbox-credlist-linux-admin  hunter2\n"),
 ]
 

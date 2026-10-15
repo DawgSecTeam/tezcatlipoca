@@ -1,5 +1,5 @@
 """The deploy() sequencer after the phase split: phase order, checkpoint gating,
-the banner set (exactly one per phase, byte-identical), the terraform-context hook
+the banner set (exactly one per phase, byte-identical), the estate-context hook
 between phases 2 and 3, and the mid-phase failure/resume hint.
 
 All offline: prepare() and the phase functions are stubbed, or the REAL phases are
@@ -38,7 +38,7 @@ def _ctx(comp_dir, from_phase, state=None):
 # A DeployContext carrying only what the sequencer and finish path touch.
     return deploy.DeployContext(
         comp_dir=comp_dir, comp_name=comp_dir.name,
-        state_path=comp_dir / ".deploy_state.json", from_phase=from_phase,
+        state_path=comp_dir / "estate-state.json", from_phase=from_phase,
         resuming=from_phase > 1, assume_yes=True, name="probe", scenario="probe",
         box_username="ubuntu", credlist_usernames=["admin"], nakon_jobs=4,
         apt_cache=True, injects=[], packet_pw=None,
@@ -88,7 +88,7 @@ class BannerSet(unittest.TestCase):
         self.assertEqual(emitted, SKIP_BANNERS)
 
 class Sequencer(unittest.TestCase):
-# deploy() walks PHASES, gates checkpointing, and hooks the terraform read.
+# deploy() walks PHASES, gates checkpointing, and hooks the estate-context read.
 
     def _run(self, comp_dir, from_phase, phases, calls, hold_start=False):
         ctx = _ctx(comp_dir, from_phase)
@@ -207,8 +207,8 @@ class CancelledPrepare(unittest.TestCase):
                 result = deploy.deploy(comp_dir, assume_yes=False)
             self.assertIsNone(result)
             self.assertEqual(calls, [])
-            # Same as the old inline early return: the lock stays held (it is the
-            # process-lifetime flock), so a second deploy in this process refuses.
+            # The lock stays held (it is the process-lifetime flock), so a second
+            # deploy in this process refuses.
             self.assertIn(str(comp_dir), dl_gates._DEPLOY_LOCKS)
 
 

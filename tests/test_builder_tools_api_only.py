@@ -61,7 +61,7 @@ class _Api:
 
 class VyosIsoViaApi(unittest.TestCase):
     def setUp(self):
-        patcher = patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"})
+        patcher = patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve"})
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -108,7 +108,7 @@ class PfsenseRenameViaApi(unittest.TestCase):
     def test_seal_renames_by_config_and_only_touches_the_node_for_the_alias(self):
         api = _Api(config={"scsi0": "base-958-disk-0"})
         shell_calls = []
-        with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
+        with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve"}), \
                 patch.object(pfsense, "proxmox_api", api), \
                 patch.object(pfsense, "wait_for_proxmox_task") as task, \
                 patch.object(pfsense, "_halt_and_wait", lambda n: None), \

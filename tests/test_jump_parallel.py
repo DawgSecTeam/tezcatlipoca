@@ -32,7 +32,7 @@ def _placement(n_sats, teams_per_sat=2):
         name = f"sat{i + 1}"
         nodes[name] = NodeRecord(
             name=name, endpoint=f"https://10.0.0.{160 + i}:8006", node=f"n{i + 1}",
-            datastore="hdd", token_env="TF_VAR_proxmox_api_token",
+            datastore="hdd", token_env="TEZ_PROXMOX_API_TOKEN",
             jump_mgmt_ip=f"10.0.0.{249 - i}",
         ).to_json()
         teams = [f"team{i * teams_per_sat + j + 1}" for j in range(teams_per_sat)]

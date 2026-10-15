@@ -1,8 +1,8 @@
-"""The scrim package reads the competition's ONE state document.
+"""The scrim package reads the competition's ONE state document, `estate-state.json`.
 
-v0.3.0 replaced `.deploy_state.json` with `estate-state.json`, and the scrim side kept
-reading the old file directly: `blue_agent.stage_blues` raised FileNotFoundError on the
-first estate range (live 2026-10-15, run-75347fca) and the scrim never reached T0.
+Nothing in scrim/ may reach for a second state file: reading one directly is what broke
+blue staging on the first estate range (live 2026-10-15, run-75347fca) and the scrim never
+reached T0.
 """
 
 import re
@@ -17,8 +17,7 @@ sys.path.insert(0, str(_REPO))
 
 from scrim import core, red_stage  # noqa: E402
 
-_LEGACY_READ = re.compile(r"read_comp_json\([^)]*\.deploy_state\.json"
-                          r"|\.deploy_state\.json\"\)\.read_text")
+_DELETED_STATE_FILE = re.compile(r"\.deploy_state\.json")
 
 
 class ReadState(unittest.TestCase):
@@ -34,20 +33,12 @@ class ReadState(unittest.TestCase):
         self.assertEqual(state["box_creds"], {"a": "b"})
         self.assertEqual(state["last_phase"], 8)
 
-    def test_a_pre_v03_range_still_reads_its_legacy_file(self):
-        with tempfile.TemporaryDirectory() as td:
-            comp = Path(td)
-            (comp / ".deploy_state.json").write_text('{"run_id": "run-old"}')
-            self.assertEqual(core.read_state(comp)["run_id"], "run-old")
-            # read-only: rendering a legacy range never migrates it as a side effect
-            self.assertFalse((comp / "estate-state.json").exists())
-
-    def test_no_scrim_module_reads_the_legacy_file_directly(self):
+    def test_no_scrim_module_names_the_deleted_state_file(self):
         offenders = [f"{path.name}:{i}"
                      for path in Path(core.__file__).parent.glob("*.py")
                      for i, line in enumerate(path.read_text().splitlines(), 1)
-                     if _LEGACY_READ.search(line)]
-        self.assertEqual(offenders, [], "route these through core.read_state")
+                     if _DELETED_STATE_FILE.search(line)]
+        self.assertEqual(offenders, [], "route state reads through core.read_state")
 
 
 class RedIpResolution(unittest.TestCase):

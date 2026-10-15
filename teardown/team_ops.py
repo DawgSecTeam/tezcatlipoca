@@ -145,7 +145,7 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
         name = load_compfile(comp_dir / "Compfile")[0]
 
     placement = read_placement(comp_dir)
-    default_node = env.get("TF_VAR_proxmox_node", "pve")
+    default_node = config.active().proxmox.node
     nodes = [default_node]
     team_nodes = None
     if placement:
@@ -156,7 +156,7 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
         if team_key in (placement.get("team_nodes") or {}):
             team_nodes = {team_key: record_of(placement, placement["team_nodes"][team_key]).node}
 
-    document = estate_state.open(comp_dir)
+    document = estate_state.EstateState.load(comp_dir)
     vmids, bridges = team_resources(document, team_key, team)
     if not vmids:
         raise Refusal(saw="no team_box instances for this team in the recorded inventory",

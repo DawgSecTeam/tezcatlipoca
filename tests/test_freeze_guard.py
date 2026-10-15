@@ -1,8 +1,7 @@
 """Freeze guard: `verify --freeze` refuses a dirty worktree, and the commit it records
-is read at deploy time. The archived claim was wrong — `.frozen.json`'s `code` was
-written but never read, and the drift gate keys on per-template input hashes, so a
-commit taken after --freeze used to run silently on code the freeze never verified.
-Offline; git state is patched."""
+is read at deploy time. The frozen record's `code` must actually be consulted: the drift
+gate keys on per-template input hashes, so without it a commit taken after --freeze would
+run silently on code the freeze never verified. Offline; git state is patched."""
 
 import contextlib
 import io
@@ -69,18 +68,18 @@ class FreezeRefusesDirtyTree(unittest.TestCase):
     def test_dirty_code_refuses_and_writes_nothing(self):
         tmp, comp = _comp_dir()
         self.addCleanup(tmp.cleanup)
-        ok, out = self._freeze(comp, [" M deploy.py", "?? comp/placement.json"])
+        ok, out = self._freeze(comp, [" M deploy.py", "?? comp/estate-state.json"])
         self.assertFalse(ok)
         self.assertNotIn("FROZEN", out)
         self.assertIn("--unfreeze --confirm-unfreeze", out)
         self.assertIsNone(frozen_state(comp))
 
     def test_dirty_non_code_freezes_with_note(self):
-        # A post-run worktree is always dirty from generated state (placement.json,
+        # A post-run worktree is always dirty from generated state (estate-state.json,
         # nodes.json, .env backups, comp JSON) — that must not block a freeze.
         tmp, comp = _comp_dir()
         self.addCleanup(tmp.cleanup)
-        ok, out = self._freeze(comp, [" M comp/placement.json", "?? nodes.json",
+        ok, out = self._freeze(comp, [" M comp/estate-state.json", "?? nodes.json",
                                       "?? .env.pre-cde-20260929"])
         self.assertTrue(ok)
         self.assertIn("FROZEN", out)
@@ -133,12 +132,12 @@ class FrozenCodeDrift(unittest.TestCase):
 
 class CodePathDirty(unittest.TestCase):
     def test_code_suffixes_dirty(self):
-        for line in [" M deploy.py", "?? newmod.py", " M terraform/main.tf", "A  x.sh",
+        for line in [" M deploy.py", "?? newmod.py", "A  x.sh",
                      "R  old.py -> new.py", ' M "weird name.py"']:
             self.assertTrue(template_freeze.code_path_dirty([line]), line)
 
     def test_generated_state_not_dirty(self):
-        for line in [" M competitions/x/placement.json", "?? nodes.json",
+        for line in [" M competitions/x/estate-state.json", "?? nodes.json",
                      "?? .env.pre-cde-20260929", " M docs/known-issues.md",
                      "?? competitions/x/.nakon-golden-slot1.json"]:
             self.assertFalse(template_freeze.code_path_dirty([line]), line)
@@ -148,7 +147,7 @@ class GitCommitInfoScope(unittest.TestCase):
     def test_dirty_ignores_generated_state(self):
         with patch.object(template_freeze.subprocess, "run",
                           side_effect=[_Popen(stdout="a" * 40),
-                                       _Popen(stdout=" M comp/placement.json\n?? nodes.json\n")]):
+                                       _Popen(stdout=" M comp/estate-state.json\n?? nodes.json\n")]):
             self.assertFalse(template_freeze.git_commit_info()["dirty"])
 
     def test_dirty_sees_code(self):
@@ -158,9 +157,10 @@ class GitCommitInfoScope(unittest.TestCase):
 
 
 class TemplateStampAuthority(unittest.TestCase):
-# The reuse decision reads the template's OWN node stamp, not .template-hashes.json —
-# the dashboard's workspace seeder strips that file, so a decision keyed on it rebuilt
-# every template a --teams-only teardown had deliberately kept.
+# The reuse decision reads the template's OWN node stamp, not the per-comp-dir
+# estate-state.json — a fresh worktree and every dashboard workspace lack it, so a
+# decision keyed on the document would rebuild every template a --teams-only teardown had
+# deliberately kept.
 
     def test_stamp_matching_the_current_hash_is_reuse(self):
         with patch.object(template_freeze, "stored_template_hash", lambda node, vmid: "h1"):

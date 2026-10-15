@@ -1,4 +1,4 @@
-// Thin fetch wrapper, same contract as webui/frontend/src/api.js: every call throws an Error
+// Thin fetch wrapper: every call throws an Error
 // carrying the server's `detail` message, plus the HTTP status (the portal's 401/403/423 mean
 // different things to the UI).
 async function request(method, path, body) {
@@ -30,7 +30,7 @@ export const api = {
   requestReset: (box) => request('POST', '/api/requests', { box }),
 }
 
-// What a box IS for rendering — the same three kinds webui's kindOf draws (firewall wins).
+// What a box IS for rendering — three kinds, firewall first.
 export const kindOf = (box) => (box?.firewall ? 'firewall' : box?.os === 'windows' ? 'windows' : 'linux')
 
 export const consolePath = (team, box) => `/console/${encodeURIComponent(team)}/${encodeURIComponent(box)}`

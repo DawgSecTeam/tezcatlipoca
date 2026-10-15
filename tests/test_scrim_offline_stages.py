@@ -25,6 +25,7 @@ sys.path.insert(0, str(REPO))
 from scrim import (blue_agent, blue_helpers, blue_prompt, blue_watchdog, core, evidence,  # noqa: E402
                    quotient_api, red_tunnel, run_manifest, scoreboard_monitor, test_folder)
 from scrim.runfiles import FINAL_SCOREBOARD, SCOREBOARD_STATE  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 
 
 def _args(run_dir, **kw):
@@ -82,9 +83,9 @@ class Base(unittest.TestCase):
         self.root = self.tmp / "repo"
         self.comp = self.root / "competitions" / "c1"
         shutil.copytree(comps_root() / "agent-scrim", self.comp)
-        (self.comp / ".deploy_state.json").write_text(json.dumps(
-            {"admin_password": "adminpw", "box_password": "boxpw", "inject_password": "injpw",
-             "box_creds": {"obsadmin": "boxpw"}}))
+        estate_state.write_flat(self.comp, {
+            "admin_password": "adminpw", "box_password": "boxpw", "inject_password": "injpw",
+            "box_creds": {"obsadmin": "boxpw"}})
         (self.comp / "teams.json").write_text(json.dumps(
             {"team1": {"password": "t1pw", "identifier": 101},
              "team2": {"password": "t2pw", "identifier": 102}}))
@@ -294,9 +295,10 @@ class StageManifest(Base):
             cli.main()
 
     def test_a_restage_leaves_red01s_address_to_the_compfile(self):
-        # The CLI default used to be bad-auto's own 10.0.0.198, so `_resolve_red_ip`'s
-        # Compfile lookup never ran and a re-stage moved red01 off the address the deploy
-        # recorded and the realm C2 still pointed at (live 2026-10-15, scrim-one-light).
+        # A re-stage must leave red01's address to the Compfile: the CLI leaves red_ip
+        # unset so `_resolve_red_ip`'s Compfile lookup runs, or a re-stage would move
+        # red01 off the address the deploy recorded and the realm C2 still points at
+        # (live 2026-10-15, scrim-one-light).
         seen = {}
         self._run_main(["--competition", "c1", "--teams", "1", "--duration-min", "30"],
                        on_red=lambda args, *a, **k: seen.update(args=args))

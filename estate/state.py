@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from config.config_ops import write_text_atomic
-from estate import config
 
 SCHEMA_VERSION = 1
 STATE_NAME = "estate-state.json"
@@ -39,10 +38,6 @@ def state_path(comp_dir):
 
 def _now():
     return time.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _read_json(path):
-    return json.loads(path.read_text()) if path.exists() else None
 
 
 def _resource_key(entry):
@@ -96,89 +91,6 @@ class EstateState:
                              f"understands v{SCHEMA_VERSION}. Upgrade tezcatlipoca, or "
                              f"remove the range with the version that wrote it.")
         return cls(comp_dir, data)
-
-    @classmethod
-    def migrate(cls, comp_dir):
-        """Build and persist this competition's state from its legacy files."""
-        comp_dir = Path(comp_dir)
-        legacy = _read_json(comp_dir / ".deploy_state.json") or {}
-        hashes = _read_json(comp_dir / ".template-hashes.json") or {}
-        placement = _read_json(comp_dir / "placement.json")
-        targets = (_read_json(comp_dir / "targets.json") or {}).get("targets") or {}
-        journal = _read_json(comp_dir / ".teardown-journal.json") or {}
-        teams = legacy.get("teams") or _read_json(comp_dir / "teams.json") or {}
-        node = config.active().proxmox.node or ""
-        slots = (placement or {}).get("team_slots") or {}
-        golden_vmids = legacy.get("golden_template_ids") or {}
-        engine_hashes = hashes.get("engine")
-
-        data = _skeleton(comp_dir)
-        data["identity"] = {
-            "comp_name": comp_dir.name,
-            # The Compfile's display name was never copied into .deploy_state.json.
-            "name": "",
-            "run_id": legacy.get("run_id") or "",
-            "scoring_vm_id": legacy.get("scoring_vm_id"),
-            # Neither is in .deploy_state.json; only the env this migration runs with has them.
-            "engine_mgmt_ip": config.active().engine.mgmt_ip or "",
-            "engine_mgmt_gw": config.active().engine.mgmt_gw or "",
-            # The deploy's own record outranks the ambient env: teardown's ownership
-            # refusal compares the loaded env against the host the deploy actually used.
-            "endpoint": legacy.get("deployed_endpoint")
-                        or config.active().proxmox.endpoint or "",
-            "node": node,
-            "datastore": config.active().proxmox.datastore or "",
-        }
-        data["secrets"] = {
-            **{key: legacy[key] for key in ("admin_password", "scoring_password",
-                                            "postgres_password", "redis_password",
-                                            "box_password", "box_creds", "domain_creds",
-                                            "inject_password") if key in legacy},
-            "teams": {key: {"identifier": team.get("identifier"),
-                            "password": team.get("password")}
-                      for key, team in teams.items()},
-        }
-        data["roster"] = {
-            "boxes": _read_json(comp_dir / "boxes.json") or [],
-            # targets.json froze vmid/ip per vm_name but carries no slot.
-            "targets": {vm: {"vmid": t.get("vmid"), "ip": t.get("ip"),
-                             "node": t.get("node") or node,
-                             "slot": slots.get(t.get("team_key")),
-                             "box_name": t.get("box_name"), "team_key": t.get("team_key")}
-                        for vm, t in targets.items()},
-        }
-        data["placement"] = placement
-        data["templates"] = {
-            "engine": {**engine_hashes, "vmid": legacy.get("engine_template_vmid")}
-                      if engine_hashes else None,
-            "golden": {box: {**entry, "vmid": golden_vmids.get(box)}
-                       for box, entry in (hashes.get("golden") or {}).items()},
-            "golden_by_slot": legacy.get("golden_ids_by_slot") or {},
-            "golden_planted": hashes.get("golden_planted") or {},
-            "frozen": _read_json(comp_dir / ".frozen.json"),
-        }
-        # `run` is the deploy's bookkeeping section and holds every flat key the phases
-        # write that is not identity/secret/roster/template (see _FLAT_SECTION).
-        data["run"] = {key: legacy[key] for key in (
-            "last_phase", "pipeline_version", "hold_start", "paused_after_phase",
-            "deployed_endpoint", "engine_build_info", "portal_up", "portal_url",
-            "portal_console_tokens", "portal_session_secret", "nakon_failed_steps",
-            "degradations", "remote_access", "assume_breach", "multi_node",
-            "started", "ended", "seeded", "engine_unpaused", "firewalls_bootstrapped",
-            "injects_created", "injects_fingerprint", "deleted_teams") if key in legacy}
-        data["run"]["plant_coverage_failed"] = legacy.get("plant_coverage_failed") or {}
-        data["external"] = {
-            "headscale": legacy.get("remote_access") or {},
-            "portal": {"up": bool(legacy.get("portal_up")),
-                       "url": legacy.get("portal_url") or ""},
-            "red01": {"vmid": (legacy.get("assume_breach") or {}).get("vmid")},
-        }
-        data["teardown"] = {"run_id": journal.get("run_id") or "",
-                            "done": journal.get("done") or {},
-                            "updated_at": journal.get("updated_at") or ""}
-        state = cls(comp_dir, data)
-        state.save()
-        return state
 
     def save(self):
         """Persist the state file atomically, 0600."""
@@ -242,32 +154,14 @@ def load_all(comps_root):
 def read_flat(comp_dir):
     """The competition's flat state view, or None when it has no state at all.
 
-    A range deployed before the estate file existed falls back to its legacy
-    .deploy_state.json — read-only, so a reader never migrates as a side effect. The same
-    fallback covers a document that exists WITHOUT an identity: a folded record (the teardown
-    journal, a template hash) can be written before the deploy records its state, and letting
-    that partial document win would lose the run id every destroy path requires.
+    A document that exists WITHOUT an identity reads as state: `run_id` is the ownership
+    key every destroy path requires, and a caller that finds none must refuse rather than
+    fall back to a second source.
     """
     comp_dir = Path(comp_dir)
-    legacy = comp_dir / ".deploy_state.json"
-    if state_path(comp_dir).exists():
-        flat = EstateState.load(comp_dir).flatten()
-        if flat.get("run_id") or not legacy.exists():
-            return flat
-        # The document's own keys win; the legacy file only supplies what a partial document
-        # has not recorded yet (its identity, above all).
-        try:
-            merged = json.loads(legacy.read_text())
-        except ValueError:
-            return flat
-        merged.update(flat)
-        return merged
-    if legacy.exists():
-        try:
-            return json.loads(legacy.read_text())
-        except ValueError:
-            return None
-    return None
+    if not state_path(comp_dir).exists():
+        return None
+    return EstateState.load(comp_dir).flatten()
 
 
 def load_flat(comp_dir):
@@ -283,14 +177,6 @@ def team_vmids(comp_dir):
 
 def write_flat(comp_dir, flat):
     """Persist a flat state dict into the competition's document, atomically."""
-    document = open(comp_dir)
+    document = EstateState.load(comp_dir)
     document.absorb(flat)
     document.save()
-
-
-def open(comp_dir):
-    """The competition's document, folding legacy files in on first contact."""
-    comp_dir = Path(comp_dir)
-    if not state_path(comp_dir).exists() and (comp_dir / ".deploy_state.json").exists():
-        return EstateState.migrate(comp_dir)
-    return EstateState.load(comp_dir)

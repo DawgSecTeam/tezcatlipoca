@@ -84,7 +84,7 @@ def clone_marker(comp_name):
 
 
 def full_clone_data(newid, name, comp_name):
-    """POST body for a full clone: ownership marker + TF_VAR_datastore.
+    """POST body for a full clone: ownership marker + TEZ_PROXMOX_DATASTORE.
 
     A full clone with no `storage` inherits the SOURCE's pool, so a golden cloned from a
     base template on one pool silently landed there instead of on the pool the comp was

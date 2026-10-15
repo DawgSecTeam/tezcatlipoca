@@ -104,12 +104,11 @@ def load_nodes_config(path=None):
     _require(len(set(names)) == len(names), f"duplicate node names: {names}")
     _require(len(set(r.node for r in records)) == len(records),
              "duplicate 'node' (PVE host) names — the route table keys on them")
-    # token_env must be unique per record. activate_placement installs each node's token
-    # into the env var NAMED by its record before snapshotting the route table, so two
-    # records sharing one name means whichever is applied last wins for both: the scale8
-    # soak's satellite 401'd mid-preflight against a token belonging to the other node
-    # (2026-10-02). The workaround was hand-unique names; this rejects the collision
-    # instead of letting it surface as an authentication failure on the far node.
+    # token_env must be unique per record: activate_placement reads each record's named var
+    # to build that host's route, so two records sharing one name give both hosts the same
+    # credential — the scale8 soak's satellite 401'd mid-preflight against a token belonging
+    # to the other node (2026-10-02). This rejects the collision instead of letting it
+    # surface as an authentication failure on the far node.
     dupes = sorted({r.token_env for r in records if
                     sum(1 for o in records if o.token_env == r.token_env) > 1})
     if dupes:
@@ -117,9 +116,8 @@ def load_nodes_config(path=None):
         raise SystemExit(
             f"  ERROR: nodes.json gives {len(dupes)} token_env name(s) to more than one "
             f"node: " + "; ".join(f"{d} -> {', '.join(n)}" for d, n in holders.items())
-            + ". Each node needs its OWN env var (e.g. TF_VAR_proxmox_api_token_150 / "
-              "_193), because the placement applies one record's token at a time into the "
-              "shared name and the last write would otherwise be used for every node. "
+            + ". Each node needs its OWN env var (e.g. TEZ_PROXMOX_API_TOKEN_150 / "
+              "_193), so every host's route carries its own token. "
               "See docs/multi-node.md.")
     return records, dict(data.get("balancing") or {})
 

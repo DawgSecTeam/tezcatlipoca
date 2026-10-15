@@ -65,7 +65,7 @@ class Resync(unittest.TestCase):
                     quiet() as out:
                 done = light.mode_resync([_t(LIN, node="pve2"), _t(WIN)],
                                          _rctx(comp_dir=comp, state=state,
-                                               state_path=comp / ".deploy_state.json"))
+                                               state_path=estate_state.state_path(comp)))
             self.assertEqual(len(done), 2)
             self.assertEqual(state["admin_password"], "new")
             self.assertEqual(state["box_creds"], {"a": "y"})
@@ -152,7 +152,7 @@ class TeardownTemplates(unittest.TestCase):
             with patch.object(dto, "destroy_golden_set") as g, patch.object(dto, "destroy_jump_vms") as j, \
                     patch.object(dto, "destroy_engine_template") as e, \
                     patch.object(dto, "record_of", return_value=SimpleNamespace(node="pve2")), \
-                    patch.dict("os.environ", {"TF_VAR_proxmox_node": "pve1"}), quiet():
+                    patch.dict("os.environ", {"TEZ_PROXMOX_NODE": "pve1"}), quiet():
                 dto.teardown_templates(comp, {"scoring_vm_id": "1234"},
                                        Ownership("c", "run-0badf00d"), [LIN, WIN],
                                        placement, full)

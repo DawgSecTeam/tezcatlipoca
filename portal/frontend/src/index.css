@@ -120,7 +120,6 @@ body { transition: background-color .2s, color .2s; }
 /* Scrollbars that don't fight the soft look. */
 * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 
-/* ── portal-only additions (everything above is webui/frontend/src/index.css verbatim, minus the
-   typography plugin; tests/test_portal_frontend.py keeps the two in step) ─────────────────── */
+/* ── portal-only additions ─────────────────────────────────────────────────────────────────── */
 /* noVNC paints into a canvas inside this well; black so letterboxing reads as "screen edge". */
 .screen-well { @apply overflow-hidden rounded-[22px] bg-black shadow-inset; }

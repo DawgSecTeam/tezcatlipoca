@@ -24,7 +24,7 @@ class StubCtx:
         self.comp_name = comp_dir.name
         self.from_phase = from_phase
         self.state = dict(state or {})
-        self.state_path = comp_dir / ".deploy_state.json"
+        self.state_path = comp_dir / "estate-state.json"
 
     def save_state(self):
         self.state_path.write_text(json.dumps(self.state))
