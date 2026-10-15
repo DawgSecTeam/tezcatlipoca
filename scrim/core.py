@@ -117,7 +117,7 @@ def box_ssh_base(creds, connect_timeout=None):
 def ssh_key_path():
     """The ssh key this RANGE was built with: the configured absolute path when there is one.
 
-    `TF_VAR_ssh_private_key_path` is what the deploy itself resolved (deploy_lib/tfinputs.py) and
+    The configured key path is what the deploy itself resolved (estate/config.py) and
     what a run host configures (e.g. /home/hna/tez-proxmox). The `<engine>/proxmox` fallback is
     only right for a manual checkout, where the key really sits in the tree: under a central run
     the engine is a per-run WORKTREE with no key in it, so anything that hardcodes a checkout path

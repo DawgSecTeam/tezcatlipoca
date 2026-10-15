@@ -76,7 +76,7 @@ def create_engine_and_bridges(ctx):
         team_identifiers=teams, transit_identifiers=transit,
         mgmt_ip=ctx.engine_mgmt_ip or "",
         mgmt_gw=(config.active().engine.mgmt_gw or DEFAULT_ENGINE_MGMT_GW),
-        datastore=cfg.proxmox.datastore, username=cfg.engine.username,
+        username=cfg.engine.username,
         ssh_public_key=cfg.ssh.public_key)
     engine_setup.cold_boot(ctx.node, ctx.engine_vmid)
 
@@ -89,7 +89,7 @@ def create_team_boxes(ctx, sources):
     estate_apply.create_team_boxes(
         ctx.document(), Ownership(ctx.comp_name, ctx.run_id), ctx.all_targets,
         sources=sources, box_username=ctx.box_username, box_password=ctx.box_password,
-        ssh_public_key=cfg.ssh.public_key, datastore=cfg.proxmox.datastore)
+        ssh_public_key=cfg.ssh.public_key)
 
 
 def configure_engine_network(ctx, engine_ctx):

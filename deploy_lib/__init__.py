@@ -9,7 +9,7 @@
   secrets.py      carry or mint the competition's credentials
   placement.py    multi-node placement + the engine lock
   configs.py      generated nakon/stage configs + golden hashes + frozen gate
-  tfinputs.py     terraform.tfvars.json + engine mgmt IP env
+  estate_inputs.py  teams.json + the SSH key path + engine mgmt IP default
   targets.py      enumerate the VMs the deploy touches
   golden_plan.py  golden hash entries + the destroy/keep decisions they drive
   coverage.py     plant-coverage bookkeeping
