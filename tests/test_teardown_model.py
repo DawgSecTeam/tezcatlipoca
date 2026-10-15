@@ -18,7 +18,8 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 import teardown  # noqa: E402
-from teardown.engine import TeardownEngine  # noqa: E402
+from estate import state as estate_state  # noqa: E402
+from teardown.engine import TeardownEngine, load_teardown_journal  # noqa: E402
 from teardown.inventory import Inventory  # noqa: E402
 from teardown.plan import PlanError, TeardownPlan  # noqa: E402
 from teardown.steps import (EVIDENCE, ArtifactStep, EstateStep, Step,  # noqa: E402
@@ -139,8 +140,7 @@ class EnginePoliciesAndJournal(unittest.TestCase):
         self.lines = []
 
     def _engine(self):
-        return TeardownEngine(self.ctx, journal_path=self.comp / ".teardown-journal.json",
-                              log=lambda s: self.lines.append(s))
+        return TeardownEngine(self.ctx, log=lambda s: self.lines.append(s))
 
     def _plan(self, steps):
         return TeardownPlan([], steps or [NoopStep()])
@@ -155,10 +155,7 @@ class EnginePoliciesAndJournal(unittest.TestCase):
 
         results = self._engine().execute(self._plan([Boom()]))
         self.assertEqual(results[0].status, "warned")
-        try:
-            journal = json.loads((self.comp / ".teardown-journal.json").read_text())
-        except FileNotFoundError:
-            journal = {"done": {}}
+        journal = load_teardown_journal(self.comp)
         self.assertNotIn("boom", journal.get("done") or {},
                          "a warned step failed — a re-run must retry it")
 
@@ -237,8 +234,7 @@ class VerifyClean(unittest.TestCase):
             nodes=["n"], default_node="n", inventory=self.inv, full=True)
 
     def _engine(self):
-        return TeardownEngine(self.ctx, journal_path=self.comp / ".teardown-journal.json",
-                              log=lambda s: None)
+        return TeardownEngine(self.ctx, log=lambda s: None)
 
     def _plan(self):
         from teardown.modes import build_terminal_plan
@@ -336,7 +332,10 @@ class JournalLifecycle(unittest.TestCase):
         from deploy_lib.phases import cleanup
         with tempfile.TemporaryDirectory() as d:
             comp = Path(d)
-            (comp / teardown.TEARDOWN_JOURNAL).write_text('{"done": {"red01": {}}}')
+            document = estate_state.EstateState.load(comp)
+            document.section("teardown")["journal"] = {"run_id": "run-x",
+                                                       "done": {"red01": {}}}
+            document.save()
             ctx = SimpleNamespace(
                 from_phase=1, comp_dir=comp, node="n", all_targets=[], engine_vmid=1000,
                 boxes=[], reclaim_tags=set(), placement=None, teams={"team1": {"identifier": "101"}},
@@ -344,7 +343,9 @@ class JournalLifecycle(unittest.TestCase):
                 run_id="run-x")
             with patch.object(cleanup, "proxmox_api", return_value={"data": []}):
                 cleanup.phase1_cleanup(ctx)
-            self.assertFalse((comp / teardown.TEARDOWN_JOURNAL).exists())
+            self.assertEqual(
+                estate_state.EstateState.load(comp).section("teardown"), {},
+                "a fresh deploy must drop the previous teardown's journal")
 
     def test_phase1_skip_on_resume_keeps_the_journal(self):
         import tempfile
@@ -352,7 +353,11 @@ class JournalLifecycle(unittest.TestCase):
         from deploy_lib.phases import cleanup
         with tempfile.TemporaryDirectory() as d:
             comp = Path(d)
-            (comp / teardown.TEARDOWN_JOURNAL).write_text('{"done": {"red01": {}}}')
+            document = estate_state.EstateState.load(comp)
+            document.section("teardown")["journal"] = {"run_id": "run-x",
+                                                       "done": {"red01": {}}}
+            document.save()
             ctx = SimpleNamespace(from_phase=2, comp_dir=comp)
             cleanup.phase1_cleanup(ctx)   # early return, nothing touched
-            self.assertTrue((comp / teardown.TEARDOWN_JOURNAL).exists())
+            self.assertTrue(
+                estate_state.EstateState.load(comp).section("teardown").get("journal"))

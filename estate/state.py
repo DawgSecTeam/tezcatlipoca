@@ -243,12 +243,25 @@ def read_flat(comp_dir):
     """The competition's flat state view, or None when it has no state at all.
 
     A range deployed before the estate file existed falls back to its legacy
-    .deploy_state.json — read-only, so a reader never migrates as a side effect.
+    .deploy_state.json — read-only, so a reader never migrates as a side effect. The same
+    fallback covers a document that exists WITHOUT an identity: a folded record (the teardown
+    journal, a template hash) can be written before the deploy records its state, and letting
+    that partial document win would lose the run id every destroy path requires.
     """
     comp_dir = Path(comp_dir)
-    if state_path(comp_dir).exists():
-        return EstateState.load(comp_dir).flatten()
     legacy = comp_dir / ".deploy_state.json"
+    if state_path(comp_dir).exists():
+        flat = EstateState.load(comp_dir).flatten()
+        if flat.get("run_id") or not legacy.exists():
+            return flat
+        # The document's own keys win; the legacy file only supplies what a partial document
+        # has not recorded yet (its identity, above all).
+        try:
+            merged = json.loads(legacy.read_text())
+        except ValueError:
+            return flat
+        merged.update(flat)
+        return merged
     if legacy.exists():
         try:
             return json.loads(legacy.read_text())
