@@ -91,7 +91,12 @@ def proxmox_api_for(endpoint, token, method, path, **kwargs):
     headers = {"Authorization": f"PVEAPIToken={token}"}
 
     def _call():
-        r = proxmox_request(method, url, headers=headers, timeout=60, **kwargs)
+        # A caller's own timeout wins. Passing both it and a default raised "got multiple
+        # values for keyword argument 'timeout'" — which list_proxmox_templates swallowed
+        # into an empty list, so the templates picker read "0 of 17 live" on every call
+        # (2026-10-15).
+        kwargs.setdefault("timeout", 60)
+        r = proxmox_request(method, url, headers=headers, **kwargs)
         r.raise_for_status()
         return r.json()
 
