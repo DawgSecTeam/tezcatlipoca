@@ -93,6 +93,49 @@ class PortalStep(Step):
                               f"re-run the destroy to retry the console-user removal")
 
 
+# The engine's final scoreboard lives only in its database, and EstateStep deletes that
+# database: capture it here, before anything destructive, for the run whose harness died
+# before its own capture. A harness capture, when one exists, is the better artifact — skip.
+class EngineCaptureStep(Step):
+    name = "engine_capture"
+    kind = EVIDENCE
+    resumable = True
+
+    def run(self, ctx):
+        from artifacts_lib.lifecycle import test_folder_for_teardown
+        from artifacts_lib.manifest import record_paths
+        from quotient.event_capture import dump_scoreboard, login_scoring
+        ip = ctx.deployed_state.get("engine_mgmt_ip") or ""
+        if not ip:
+            return StepResult(self.name, "ok", "no engine management IP recorded")
+        password = ctx.deployed_state.get("scoring_password")
+        if not password:
+            return StepResult(self.name, "warned",
+                              "no scoring password in the state — the engine's final "
+                              "scoreboard was not captured before the destroy")
+        base_url = ip if ip.startswith("http") else f"http://{ip}"
+        path, manifest = test_folder_for_teardown(
+            ctx.comp_dir, run_id=ctx.ownership.run_id, teams=ctx.teams, boxes=ctx.boxes,
+            node=ctx.default_node, nodes=ctx.nodes)
+        recorded = (manifest.get("paths") or {}).get("engine_evidence")
+        if recorded and Path(recorded).is_dir() and any(Path(recorded).iterdir()):
+            return StepResult(self.name, "skipped", f"harness capture present at {recorded}")
+        # Never the directory the collector swaps into: a local seal unlinks its destination
+        # first, so capturing into the collector's own target would delete the file just written
+        # and record it absent. `<comp_dir>/evidence/` is a source the collector only reads.
+        ev = ctx.comp_dir / "evidence"
+        ev.mkdir(parents=True, exist_ok=True)
+        try:
+            errors = dump_scoreboard(base_url, login_scoring(base_url, password),
+                                     ctx.comp_dir, out_dir=ev)
+        except Exception as e:           # noqa: BLE001 - warn-and-proceed by policy
+            return StepResult(self.name, "warned",
+                              f"engine capture failed ({type(e).__name__}: {e})")
+        record_paths(path, engine_evidence=ev)
+        return StepResult(self.name, "ok", str(ev)
+                          + (f" ({len(errors)} capture error(s))" if errors else ""))
+
+
 class ArtifactStep(Step):
     """Collect this run's test artifacts BEFORE anything is stopped or deleted.
     The red report and the blue logs only exist while the boxes do; this is also

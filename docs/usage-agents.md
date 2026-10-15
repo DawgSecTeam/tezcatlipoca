@@ -137,7 +137,7 @@ Reuse keys on the `tezcatlipoca-m4 hash=` description on the template itself, so
 
 Requires a `run_id` in the state document (`estate-state.json`, or a legacy `.deploy_state.json`) plus `teams.json` and `boxes.json`; it activates the recorded placement/host first so every node-scoped call addresses the right PVE.
 
-Before the first destructive call it collects the run's artifacts into `competitions/<id>/.automated-tests/<run-id>/` (red report from red01, blue logs, engine capture, harness evidence, `REPORT.md`). Collection warns and proceeds, bounded per file by `--artifacts-timeout` (default 45 s). There is no skip flag; on resume the journal skips it. See [automated-test-artifacts.md](automated-test-artifacts.md).
+Before the first destructive call it captures the engine's final scoreboard when the harness never did (the scoring DB does not survive the estate step) and collects the run's artifacts into `competitions/<id>/.automated-tests/<run-id>/` (red report from red01, blue logs, engine capture, harness evidence, `REPORT.md`). Collection warns and proceeds, bounded per file by `--artifacts-timeout` (default 45 s); a `failed` transfer gets one retry, and whatever is still lost is printed as a note under the verification section rather than failing the destroy. There is no skip flag; on resume the journal skips it. See [automated-test-artifacts.md](automated-test-artifacts.md).
 
 ### Run ownership
 

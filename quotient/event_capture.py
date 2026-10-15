@@ -1,4 +1,5 @@
-"""Quotient event capture + pause, shared by run-schedule.py and competition-ops.py.
+"""Quotient event capture + pause, shared by run-schedule.py, competition-ops.py and the
+teardown engine-capture step.
 
 `end` semantics (the stage_capture lesson): capture the final scoreboard FIRST —
 the pause is what freezes the loop's last round, but a paused engine still answers
@@ -20,9 +21,20 @@ import requests
 from config.config_ops import write_text_atomic
 
 
-def dump_scoreboard(base_url, session, comp_dir):
+# Quotient allows ONE session per account, so the shared login uses the `scoring` automation
+# account: a lifecycle or capture login on `admin` would evict the operator's browser session.
+def login_scoring(base_url, password):
+    session = requests.Session()
+    r = session.post(f"{base_url}/api/login",
+                     json={"username": "scoring", "password": password}, timeout=10)
+    if r.status_code >= 400:
+        raise RuntimeError(f"scoring login failed ({base_url}) → HTTP {r.status_code}")
+    return session
+
+
+def dump_scoreboard(base_url, session, comp_dir, *, out_dir=None):
 # Capture the final scoreboard; returns the list of capture errors ([] = clean).
-    out_dir = Path(comp_dir) / "evidence"
+    out_dir = Path(out_dir) if out_dir else Path(comp_dir) / "evidence"
     out_dir.mkdir(parents=True, exist_ok=True)
     dump = {"captured_at": datetime.now().astimezone().isoformat(timespec="seconds")}
     errors = []

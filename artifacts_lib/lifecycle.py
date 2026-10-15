@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .archive import archive_test
 from .collect import collect, load_collection
-from .constants import REPO, SIDES, SKIPPED
+from .constants import FAILED, REPO, SIDES, SKIPPED
 from .env import in_worktree, iso
 from .index import update_index
 from .manifest import ensure_test, load_manifest, record_paths, update_manifest
@@ -78,6 +78,21 @@ def stage_red_artifacts(manifest, timeout=75):
     return True
 
 
+# The harness mints a per-run folder now, so the folder to collect is the newest one
+# belonging to this deploy run id — not the base key. Shared with the teardown steps that
+# must write into the same folder before the collector seals it.
+def test_folder_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=None,
+                             nodes=None, script="destroy-competition.py"):
+    comp_dir = Path(comp_dir)
+    key, run_id = latest_run_key(comp_dir, run_id)
+    prior = load_manifest(test_dir(comp_dir, key))
+    return ensure_test(comp_dir, kind=prior.get("kind") or "deploy", run_id=run_id, key=key,
+                       script=script,
+                       teams=len(teams) if hasattr(teams, "__len__") else teams,
+                       boxes=[b.get("name") for b in boxes] if boxes else None,
+                       node=node, nodes=nodes)
+
+
 def collect_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=None,
                          nodes=None, script="destroy-competition.py", transport=None,
                          dry_run=False, timeout=45, echo=print, stage_red=None):
@@ -100,15 +115,8 @@ def collect_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=
         # `artifacts_ops.default_transport` keep steering the teardown collector.
         from artifacts_lib import artifacts_ops
         transport = artifacts_ops.default_transport()
-    # The harness mints a per-run folder now, so the folder to collect is the
-    # newest one belonging to this deploy run id — not the base key.
-    key, run_id = latest_run_key(comp_dir, run_id)
-    prior = load_manifest(test_dir(comp_dir, key))
-    path, manifest = ensure_test(
-        comp_dir, kind=prior.get("kind") or "deploy", run_id=run_id, key=key, script=script,
-        teams=len(teams) if hasattr(teams, "__len__") else teams,
-        boxes=[b.get("name") for b in boxes] if boxes else None,
-        node=node, nodes=nodes)
+    path, manifest = test_folder_for_teardown(
+        comp_dir, run_id=run_id, teams=teams, boxes=boxes, node=node, nodes=nodes, script=script)
     if not (manifest.get("paths") or {}).get("run_dir"):
         # The harness's run dir, for a harness that died before recording it: the test
         # folder itself, which is where run-agent-scrim.py writes by default.
@@ -123,6 +131,14 @@ def collect_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=
     (stage_red or stage_red_artifacts)(manifest)
     collection = collect(path, plan_targets(manifest, comp_dir=comp_dir), transport=transport,
                          dry_run=dry_run, timeout=timeout)
+    if not dry_run and any(f.get("status") == FAILED
+                           for t in collection.get("targets", []) for f in t.get("files", [])):
+        # A failed transfer is transient by definition (the source answered): one retry,
+        # before the destroy makes a second attempt impossible. `unreachable` is deliberately
+        # not retried — the source is down, and each retry only re-pays its timeout.
+        echo("  Retrying the transfers that failed...")
+        collection = collect(path, plan_targets(manifest, comp_dir=comp_dir),
+                             transport=transport, timeout=timeout)
     # The verdict and gate table come from scrim-report.py, which reads only the run dir (no
     # network, no API). The harness normally runs it; teardown runs it for the run whose harness
     # died — otherwise a collected INTERACTION.md nobody parsed leaves REPORT.md verdict-less,

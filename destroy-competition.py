@@ -86,8 +86,6 @@ def main():
     print("=" * 64)
     print("  COMPETITION TEARDOWN")
     print("=" * 64)
-    print("Evidence is collected first; then every VM carrying this deploy's")
-    print("full ownership set is force-stopped and destroyed.\n")
 
     if args.comp_dir:
         comp_dir = resolve_comp_dir(comp_dir=args.comp_dir)
@@ -155,6 +153,8 @@ def main():
     full = not args.teams_only
     mode = ("FULL (templates destroyed)" if full
             else "teams-only (templates kept)")
+    print("Evidence is collected first; then every VM carrying this deploy's")
+    print("full ownership set is force-stopped and destroyed.\n")
     print("─── About to destroy " + "─" * 42)
     from common.utils import env_summary
     print(f"  Targeting   : {env_summary()}")

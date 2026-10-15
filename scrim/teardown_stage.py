@@ -198,7 +198,9 @@ def run_range_teardown(args, *, evidence_done=False, red_vmid=None):
     """The range half of the harness teardown: the SAME terminal teardown the
     standalone CLI runs, in-process (teardown-redesign: one engine, no
     subprocess re-entry). The harness's own evidence work and red destroy are
-    journalled as done so the plan skips them instead of re-running them."""
+    journalled as done when they produced a record, so the plan skips them instead
+    of re-running them against dead boxes; a collection that failed leaves the plan's
+    artifact step to retry it before the destroy."""
     from teardown import Refusal
     from teardown.runner import record_evidence_done, run_terminal_teardown
 
@@ -206,9 +208,11 @@ def run_range_teardown(args, *, evidence_done=False, red_vmid=None):
     teams = json.loads((comp_dir / "teams.json").read_text())
     boxes = json.loads((comp_dir / "boxes.json").read_text())
     name, _, _ = load_compfile(comp_dir / "Compfile")
-    if evidence_done:
-        record_evidence_done(comp_dir, test_dir=getattr(args, "test_dir", None),
-                             red_vmid=red_vmid)
+    # red01's absence proof is independent of the artifact outcome, so it is journalled either
+    # way; only a collection that produced a record may let the plan skip its own artifact step
+    record_evidence_done(comp_dir,
+                         test_dir=getattr(args, "test_dir", None) if evidence_done else None,
+                         red_vmid=red_vmid)
     try:
         report = run_terminal_teardown(
             comp_dir, teams, boxes, name, env={**os.environ}, log=log,
@@ -227,6 +231,7 @@ def stage_teardown(args, creds=None):
     if hasattr(tunnel, "shutdown"):
         tunnel.shutdown()
         log("teardown: red LLM tunnel stopped")
+    collected = None
     if creds:
         # The final red pull MUST land BEFORE the report is generated. The report grades
         # red's own world.json (footholds, artifact set, beacon score), but that pull used
@@ -242,7 +247,7 @@ def stage_teardown(args, creds=None):
         # destroy-competition.py (artifacts_lib/artifacts_ops.py's docstring: two callers must agree) —
         # and it MUST run before `badauto destroy` below, which erases red01. It never
         # raises: an unreachable red01 is recorded as `unreachable` in collection.json.
-        test_folder.collect_run_artifacts(args)
+        collected = test_folder.collect_run_artifacts(args)
         test_folder.write_interaction_report(args)
     log("teardown: red01 + NAT")
     env = {**os.environ, "BAuto_LLM_API_KEY": endpoints.api_key(local=True)}
@@ -254,4 +259,4 @@ def stage_teardown(args, creds=None):
         log("--keep-templates: templates kept for this competition's next run "
             "(team boxes, engine and bridges still torn down)")
     log("teardown: competition range")
-    run_range_teardown(args, evidence_done=bool(creds), red_vmid=red_vmid)
+    run_range_teardown(args, evidence_done=bool(collected), red_vmid=red_vmid)
