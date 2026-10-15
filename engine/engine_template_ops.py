@@ -32,7 +32,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                           postgres_password, redis_password, quotient_ref,
                           hash_value, inputs, run_id=None):
 # Build the per-competition engine template (API-driven, mirroring golden_ops —
-#     terraform only consumes the finished template as apply #1's clone source).
+#     the deploy only consumes the finished template as the phase-4 clone source).
 #
 #     Template point: after bootstrap (packages, Docker, Quotient images, apt-cacher-ng)
 #     and BEFORE any competition state exists. Before conversion: containers stopped and
@@ -83,7 +83,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
         "net0": "virtio,bridge=vmbr0",
         "tags": tags,
         # cloud-init identity for the build VM's first boot (the base image bakes none;
-        # terraform's user_account normally supplies it for the deployed engine).
+        # the create path's cloud-init normally supplies it for the deployed engine).
         "ciuser": ctx.get("vm_username", "ubuntu"),
         "sshkeys": ctx.get("ssh_public_key_quoted", ""),
         "cores": 4,
@@ -119,7 +119,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     start_vm(node, vmid)
     build_ip = mgmt_ip
     if not build_ip:
-        # Primary-mode: the base image networks itself (as the terraform engine does
+        # Primary-mode: the base image networks itself (as the deployed engine does
         # today); discover the address via the guest agent once the agent is up.
         from infra.guest_exec import wait_for_guest_agent
         wait_for_guest_agent(node, vmid, timeout=300)
@@ -182,7 +182,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 
 def _discover_vm_ipv4(node, vmid):
 # First non-loopback IPv4 the guest agent reports (primary-mode build VMs DHCP on
-#     vmbr0, exactly as the terraform engine does). Never raises.
+#     vmbr0, exactly as the deployed engine does). Never raises.
     try:
         ifaces = proxmox_api(
             "GET", f"/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"

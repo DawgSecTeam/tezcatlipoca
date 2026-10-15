@@ -332,3 +332,50 @@ class PartialDocumentDoesNotShadowLegacyState(unittest.TestCase):
         flat = state.read_flat(self.comp)
         self.assertIsNotNone(flat)
         self.assertNotIn("run_id", flat)
+
+
+class TheDocumentIsTheOnlyWriter(unittest.TestCase):
+    """Every folded record must land in the document and create no legacy file.
+
+    The files stay READABLE (that is how a pre-fold range survives), but nothing may write
+    them again — otherwise the two copies drift and the document stops being the state.
+    """
+
+    LEGACY = ("placement.json", "targets.json", ".template-hashes.json",
+              ".frozen.json", ".teardown-journal.json")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.comp = Path(self.tmp.name)
+
+    def test_every_folded_writer_stays_in_the_document(self):
+        from common.targets import persist_targets
+        from engine.template_freeze import save_template_hashes
+        from multinode.placement_record import write_placement
+        from teardown.engine import save_teardown_journal
+
+        targets = [{"vm_name": "team1-web01", "team_key": "team1", "identifier": "101",
+                    "box_name": "web01", "vmid": 1210, "ip": "192.168.101.4",
+                    "node": "pve"}]
+        persist_targets(self.comp, targets, [{"name": "web01"}])
+        save_template_hashes(self.comp, engine={"hash": "e" * 64})
+        write_placement(self.comp, {"version": 1, "engine_node": "n1"})
+        save_teardown_journal(self.comp, {"run_id": "run-abc12345", "done": {"red01": {}}})
+
+        for name in self.LEGACY:
+            self.assertFalse((self.comp / name).exists(), f"{name} was written again")
+        document = state.EstateState.load(self.comp)
+        self.assertEqual(document.section("roster")["targets"]["team1-web01"]["vmid"], 1210)
+        self.assertEqual(document.section("templates")["engine"]["hash"], "e" * 64)
+        self.assertEqual(document.data["placement"]["engine_node"], "n1")
+        self.assertEqual(document.section("teardown")["done"], {"red01": {}})
+
+    def test_a_frozen_record_lands_in_the_document(self):
+        from engine.template_freeze import frozen_state
+        from estate import state as estate_state
+        document = estate_state.EstateState.load(self.comp)
+        document.section("templates")["frozen"] = {"frozen_at": "now"}
+        document.save()
+        self.assertEqual(frozen_state(self.comp), {"frozen_at": "now"})
+        self.assertFalse((self.comp / ".frozen.json").exists())

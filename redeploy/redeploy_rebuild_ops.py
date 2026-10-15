@@ -133,8 +133,6 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
 
         rebuilt.append(t)
 
-        # Every team is a Terraform resource (`team_box` for_each covers all teams;
-        # satellites get team_box_sat1..4), so EVERY rebuilt box drifts from state. Fine
         # The rebuilt box carries the current run's tags, so the next deploy adopts it
         # rather than cloning a second one into the same slot.
         print(f"    NOTE: {t['vm_name']} was recreated outside the deploy. It carries this "

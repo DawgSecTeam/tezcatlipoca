@@ -4,7 +4,7 @@ A competition can span up to 5 hosts (`MAX_SATELLITES + 1`): the **engine node**
 scoring engine, the engine template, and its local teams; each **satellite** hosts some teams,
 that slot's copies of the golden templates, and a small Alpine **jump/router VM** that
 impersonates the engine's gateway IP there. Config lives in `nodes.json` (committed, no
-secrets); the resolved choice lives in `competitions/<id>/placement.json` (authoritative for
+secrets); the resolved choice lives in the state document's `placement` section (authoritative for
 every later op). Each host is reached through a per-node route table
 (`infra/client.py:register_node_routes`, keyed by PVE node name);
 `multinode/placement_record.activate_placement` points the process config at the engine's host
@@ -106,11 +106,11 @@ from the owning module). Absent `nodes.json` → every op behaves exactly as sin
    node is eligible only if every box template exists on it. Overrides win outright.
 3. **Engine node** = override, else the node holding the most teams (tie: `prefer` order, then
    free RAM). Must have `engine_base_vmid`.
-4. The result prints as a decision table and is written to `placement.json`. From then on it is
+4. The result prints as a decision table and is written into the state document. From then on it is
    authoritative: resume, redeploy, verify, destroy all read it back, so a re-run balancer or an
    ambient config swap can never move ops onto the wrong host. `--team-node`/`--engine-node` are ignored
-   once `placement.json` exists (destroy first to re-place).
-5. A resume without `placement.json` (a range deployed before it existed) adopts its recorded
+   once a placement is recorded (destroy first to re-place).
+5. A resume without a recorded placement (a range deployed before it existed) adopts its recorded
    `deployed_endpoint` as a single-slot placement instead of re-balancing a live range.
 
 ## vmid / identity scheme (slot-dimensioned)
@@ -174,7 +174,7 @@ root SSH gets a template by building it on that host, not by syncing it.
   singular and always co-located with slot 0.
 - vmids only need uniqueness per PVE instance; the slot stride keeps the scheme collision-safe
   even on a future single-cluster backend.
-- `placement.json` beats the ambient config, `nodes.json`, and CLI pins for every op against an
+- The recorded placement beats the ambient config, `nodes.json`, and CLI pins for every op against an
   already-placed competition.
 - Engine and jump mgmt IPs are swept against running guests on all hosting nodes — assign
   explicitly on a shared mgmt LAN when other engines hold the defaults.

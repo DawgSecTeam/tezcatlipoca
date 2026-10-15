@@ -1,12 +1,12 @@
 """Golden-set build and template conversion (M3.1).
 
-Plant once per box type on a "golden" VM, convert it to a template, then let Terraform
+Plant once per box type on a "golden" VM, convert it to a template, then let the deploy
 apply #2 link-clone every team from those templates. The heavy work (package installs,
 services, non-disruptive misconfigs) lands once and rides the clone as bytes on disk.
 
-Why the API and not Terraform: `qm template` conversion happens outside the VM resource's
-lifecycle, so a Terraform-managed golden box would drift the moment it converts. This
-module mirrors clone_ops' API path (clone, config, start, wait); Terraform only consumes
+Why the API and not a declared resource: `qm template` conversion happens outside any
+resource lifecycle, so a managed golden box would drift the moment it converts. This
+module mirrors clone_ops' API path (clone, config, start, wait); the deploy only consumes
 the finished templates as `clone { full = false }` sources via the golden_template_ids
 tfvars map that deploy() persists.
 
@@ -121,7 +121,7 @@ def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password
             "net0": f"virtio,bridge={t['bridge']}",
             "tags": ownership_tag_str,
             # cloud-init identity for the golden box's first boot (the base template
-            # bakes no password — terraform's user_account normally supplies it):
+            # bakes no password — the create path's cloud-init normally supplies it):
             "ciuser": ctx.get("box_username", "ubuntu"),
             "cipassword": box_password,
             "sshkeys": _quote_sshkeys(config.active().ssh.public_key),
@@ -340,7 +340,7 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
         expand_guest_root_disks(linux_targets, ctx)
 
     # Nakon authenticates to the golden boxes by PASSWORD, and an API clone of a base
-    # template has no password set (terraform's user_account normally supplies it at
+    # template has no password set (the create path's cloud-init normally supplies it at
     # team-box creation). Reset it over the key-auth SSH channel before the plant.
     box_username = ctx.get("box_username", "ubuntu")
     print(f"  Setting box passwords on golden Linux boxes (nakon authenticates as {box_username})...")

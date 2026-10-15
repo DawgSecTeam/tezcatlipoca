@@ -8,7 +8,7 @@ gateway. Forwarding is default-DROP with explicit accepts — team-to-team isola
 is structural, matching the engine's own FORWARD rule. From every box's perspective
 nothing changes (docs/multi-node.md).
 
-Built via the direct API path (golden_ops precedent — outside terraform's lifecycle,
+Built via the direct API path (golden_ops precedent — outside any resource lifecycle,
 destroyed by computed vmid in destroy-competition), one per satellite,
 cloned from the node's alpine base template. Addressing rides PVE cloud-init
 (ipconfig0 mgmt + ipconfig1..n team gateways); forwarding/NAT rules are pushed over

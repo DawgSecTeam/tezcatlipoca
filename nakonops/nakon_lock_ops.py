@@ -17,7 +17,7 @@ def acquire_engine_lock(engine_vmid=SCORING_ENGINE_VMID):
 #     per-run, but the engine lock still guards the wider shared surface: one engine's
 #     boxes/engine are being actively reconfigured by whoever holds it.
 #
-#     Keyed on (proxmox endpoint host, engine vmid) — both known before terraform
+#     Keyed on (proxmox endpoint host, engine vmid) — both known before the engine
 #     apply — so two different competitions on the same host can't race the same
 #     engine. Because the key includes the per-competition
 #     engine vmid, two competitions with DIFFERENT engines (multi-tenant node) take

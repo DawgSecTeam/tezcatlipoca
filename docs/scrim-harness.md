@@ -29,8 +29,8 @@ Design rules:
 
 ### Staging
 
-- `RUNTIME_FILES` (`teams.json`, `.deploy_state.json`, `credentials.txt`, `nakon-config.json`, `packet.md`, `event.conf`) are regenerated per deploy and never copied into a new competition. `stage_author` also skips `.postclone-swept`, `LOG.md`, `sub-*`, `.nakon-domain-*`; re-copies `injects/`; rewrites the template's `Compfile` first line.
-- `creds_from_files`: all secrets come from `.deploy_state.json`, `teams.json`, `credentials.txt`.
+- `RUNTIME_FILES` (`teams.json`, `estate-state.json`, `credentials.txt`, `nakon-config.json`, `packet.md`, `event.conf`) are regenerated per deploy and never copied into a new competition. `stage_author` also skips `.postclone-swept`, `LOG.md`, `sub-*`, `.nakon-domain-*`; re-copies `injects/`; rewrites the template's `Compfile` first line.
+- `creds_from_files`: all secrets come from the state document (`estate-state.json`), `teams.json`, `credentials.txt`.
 - `stage_deploy` writes full stdout to `deploy.log` on failure (the console tail is too short). Success requires `last_phase: 8`/`Deploy complete` in stdout or state.
 - `stage_verify` fire test: stop nginx on team1 web01, wait 150 s, expect team1 DOWN on the scoreboard **and** a dead HTTP probe from the engine's path (the scoreboard alone can lie). Restore with unmask + start, up to 3 attempts, then require scoreboard-up and a live probe. Any miss aborts with the manual fix; failing closed before T0 is cheap. Other verify failures stay warnings.
 

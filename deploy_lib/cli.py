@@ -66,11 +66,11 @@ def build_parser():
                         help="Multi-node pin: comma list of team=NODE, e.g. '103=zfs-193,104=zfs-193' "
                              "(team key or subnet identifier = nodes.json node name). Unpinned teams "
                              "are placed by capacity-fill. Needs nodes.json; ignored when this "
-                             "competition already has a placement.json.")
+                             "competition already has a recorded placement.")
     parser.add_argument("--engine-node", dest="engine_node", default=None,
                         help="Multi-node pin: which nodes.json node hosts the scoring engine "
                              "(default: the node holding the most teams). Needs nodes.json; ignored "
-                             "when this competition already has a placement.json.")
+                             "when this competition already has a recorded placement.")
     parser.add_argument("--nodes", dest="nodes", default=None,
                         help="Path to this run's node list (the nodes.json schema: name, endpoint, "
                              "node, datastore, engine_base_vmid, token_env, …). Replaces the "

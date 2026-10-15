@@ -1,7 +1,7 @@
 """Routing convergence checks: after apply #1, prove the engine can actually reach
 each satellite before anything downstream depends on it (golden plants, nakon,
 scoring). The static routes themselves are written into the engine's netplan by the
-team_nics provisioner (terraform/main.tf) from the placement's satellite_routes; this
+team-NIC netplan step from the placement's satellite_routes; this
 module is the fail-loud gate, not the writer."""
 
 import time

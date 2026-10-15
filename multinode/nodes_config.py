@@ -128,7 +128,7 @@ def load_nodes_config(path=None):
 def apply_node_env(record):
 # Point the process configuration at `record` — the engine-node record for a deploy, or
 #     the recorded engine node for companion ops. An in-process config override, not an
-#     os.environ mutation: Terraform is gone, and env writes leaked into every later read.
+#     os.environ mutation: env writes leaked into every later read.
 #     Returns a token for restore_node_env().
     token = os.environ.get(record.token_env)
     if not token:

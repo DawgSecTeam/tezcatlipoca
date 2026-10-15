@@ -290,7 +290,8 @@ class PlacementRecordTest(unittest.TestCase):
                 resume_endpoint="https://n2.lab:8006")
             self.assertEqual(placement["engine_node"], "n2")
             self.assertEqual(set(placement["team_nodes"].values()), {"n2"})
-            self.assertTrue((Path(td) / "placement.json").exists())
+            self.assertTrue(placement_record.read_placement(Path(td)),
+                        "the placement record is in the document")
 
     def test_resume_refuses_unknown_endpoint(self):
         records = [_rec("n1")]

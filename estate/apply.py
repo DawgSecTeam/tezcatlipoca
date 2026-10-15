@@ -1,7 +1,7 @@
 """The estate component's creators: bridges, the engine, team boxes.
 
-Replaces terraform's VM and bridge resources (terraform/main.tf) and the clone POSTs
-scattered across golden/engine/redeploy. Every create is idempotent — an absent VM is
+Every clone POST the estate needs, in one place instead of scattered across
+golden/engine/redeploy. Every create is idempotent — an absent VM is
 built, one of OURS is adopted (a resumed apply re-enters a create), and anything else is a
 Refusal — and every create is recorded in the competition's state document, which is the
 destroy path's inventory.

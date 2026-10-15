@@ -438,7 +438,7 @@ def enroll_engine_router(ctx, comp_id, all_identifiers):
 def push_remote_access_firewall(tf_ctx, engine_mgmt_ip, local_ids, satellite_ids):
 # The per-deploy SNAT/forward unit — separate from the template's
 #     range-firewall.sh so the engine template hash never moves. `tf_ctx` is the
-#     terraform connection dict every engine SSH hop takes.
+#     engine connection dict every engine SSH hop takes.
     script = remote_access_firewall_script(local_ids, satellite_ids, engine_mgmt_ip)
     service, timer = remote_access_systemd_units()
     s_b64 = base64.b64encode(script.encode()).decode()

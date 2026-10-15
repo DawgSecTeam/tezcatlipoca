@@ -28,7 +28,7 @@ because that is the definition that wins when a doc and the code disagree.
 | **golden (golden set)** | One VM per box type, full-cloned from the base template, planted with the **golden stage** in strict mode, cloud-init-cleaned, stopped, and converted with `qm template`. Phase 4's clone pass (`estate.apply.create_team_boxes`) creates every team's box as a **linked clone** of it. Lives at `engine_vmid + 150 + slot*10 + box_idx`. |
 | **unbooted golden** | A golden that is deliberately **never booted** — the DC box type. Sysprep leaves the machine generalized, so each linked clone specializes its own SID before ADDS promotion and the team gets a unique DomainSID. Owned by `golden_ops.unbooted_golden_boxes()`; only a valid `domain_roles.json` can produce one. |
 | **engine template** | The per-competition Quotient template (`engine_vmid + 140`): base image → bootstrap → clean → `qm template`. The deployed engine is a linked clone of it, so every run starts from a known-clean disk with an empty scoring DB. |
-| **freeze / frozen** | A verified competition's template set is locked: config-class drift hard-fails, code-class drift warns and proceeds on the frozen template, and a full teardown of a frozen competition needs `--end-of-competition`. Recorded in `.frozen.json` by `verify-competition.py --freeze`. |
+| **freeze / frozen** | A verified competition's template set is locked: config-class drift hard-fails, code-class drift warns and proceeds on the frozen template, and a full teardown of a frozen competition needs `--end-of-competition`. Recorded in the state document's `templates` section by `verify-competition.py --freeze`. |
 
 ## Nakon: configs, stages, passes, bundles
 
