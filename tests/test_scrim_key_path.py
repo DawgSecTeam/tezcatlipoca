@@ -26,8 +26,24 @@ class SshKeyPath(unittest.TestCase):
             self.assertEqual(core.ssh_key_path(), "/home/hna/tez-proxmox")
 
     def test_relative_env_value_resolves_against_the_checkout(self):
-        with patch.dict(os.environ, {"TF_VAR_ssh_private_key_path": "../proxmox"}):
-            self.assertEqual(core.ssh_key_path(), str((_REPO / "proxmox").resolve()))
+        """A legacy terraform-relative value (`../proxmox`) resolves to the checkout root.
+
+        Hermetic: `estate.config.ssh_key_path` picks a base by EXISTENCE, so this builds its
+        own checkout instead of relying on the gitignored `proxmox` key a developer's tree
+        happens to carry — a fresh worktree has none, and this read as a failure in every
+        clean-worktree suite run (2026-10-15).
+        """
+        import tempfile
+        from estate import config as estate_config
+        with tempfile.TemporaryDirectory() as td:
+            checkout = Path(td) / "checkout"
+            checkout.mkdir()
+            (checkout / "proxmox").write_text("key")
+            with patch.dict(os.environ, {"TF_VAR_ssh_private_key_path": "../proxmox"}), \
+                 patch.object(estate_config, "REPO_ROOT", checkout):
+                estate_config.reset()
+                self.assertEqual(core.ssh_key_path(), str((checkout / "proxmox").resolve()))
+                estate_config.reset()
 
     def test_no_env_value_falls_back_to_the_checkout(self):
         env = {k: v for k, v in os.environ.items() if k != "TF_VAR_ssh_private_key_path"}
