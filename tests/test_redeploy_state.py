@@ -135,6 +135,24 @@ class AtomicStateWriteTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), original_bytes)
             self.assertEqual(json.loads(path.read_text()), ORIGINAL_STATE)
 
+class GateReadsTheDocument(unittest.TestCase):
+    def test_a_new_range_is_drivable_without_a_legacy_state_file(self):
+        from redeploy import redeploy_gate_ops
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = Path(tmp)
+            (comp / "teams.json").write_text(json.dumps({"team1": {"identifier": "101"}}))
+            (comp / "boxes.json").write_text(json.dumps([{"name": "web01"}]))
+            from estate import state as estate_state
+            document = estate_state.EstateState.load(comp)
+            document.absorb({"run_id": "run-abc12345", "pipeline_version": 3,
+                             "teams": {"team1": {"identifier": "101", "password": "x"}}})
+            document.save()
+            teams, boxes, state, state_path = redeploy_gate_ops.load_deployed_range(comp)
+        self.assertEqual(state["run_id"], "run-abc12345")
+        self.assertEqual(list(teams), ["team1"])
+        self.assertEqual(state_path.name, "estate-state.json")
+
+
 class StateWriteCallSiteTests(unittest.TestCase):
     def test_run_nakon_and_harden_persists_via_helper(self):
         ctx = {"ssh_key_path": "/tmp/id_ed25519", "scoring_engine_ip": "10.0.0.9"}

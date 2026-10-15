@@ -91,6 +91,16 @@ _REQUIRED = frozenset((
 _TRUE = ("1", "true", "yes", "on")
 
 
+class ConfigError(SystemExit, RuntimeError):
+    """A mandatory config key is missing.
+
+    Dual-derived on purpose: a caller deep in a tolerant path wraps this in
+    `except Exception` (the shape the old `os.environ[...]` KeyError had), while at the top
+    level it must still exit with a one-line message and no traceback like every other
+    operator refusal in this repo.
+    """
+
+
 def env_name(key):
     return "TEZ_" + key.removeprefix("knobs.").upper().replace(".", "_")
 
@@ -178,7 +188,7 @@ class Config:
     def require(self, key):
         value = self.get(key)
         if value in ("", 0, None):
-            raise SystemExit(
+            raise ConfigError(
                 f"  ERROR: config '{key}' is not set. Set it in {self.path} "
                 f"(or export {env_name(key)}).")
         return value
