@@ -272,10 +272,7 @@ class Phase4GoldenCoverage(unittest.TestCase):
                                  (captured.append(k["coverage"]) or {"web01": 1250})), \
                 dpatch("_template_vmid_map", return_value={}), \
                 dpatch("write_text_atomic"), \
-                dpatch("terraform_plugin_cache_dir",
-                             return_value=comp_dir), \
-                dpatch("terraform_dir", return_value=comp_dir), \
-                dpatch("run_terraform"), \
+                dpatch("create_team_boxes"), \
                 dpatch("run_concurrent", return_value=[]), \
                 dpatch("wait_for_boxes_ssh"), \
                 dpatch("wait_for_cloud_init"), \

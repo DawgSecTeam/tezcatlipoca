@@ -1,4 +1,4 @@
-"""Phase 4: plant the golden set, then terraform apply #2 (every team a linked clone)."""
+"""Phase 4: plant the golden set, then clone every team box from it."""
 
 from functools import partial
 
@@ -11,13 +11,12 @@ from multinode.placement_record import record_of
 from common.ssh_ops import wait_for_boxes_ssh, wait_for_cloud_init
 from engine.template_freeze import load_template_hashes, save_template_hashes
 from common.timing import timed
-from common.utils import is_unmanaged, run_concurrent, run_terraform
+from common.utils import is_unmanaged, run_concurrent
 from common.windows_ops import bootstrap_windows_box
 
 from deploy_lib.coverage import record_coverage
 from deploy_lib.golden_plan import golden_rebuild_gate
 from deploy_lib.phases._snapshots import snap_base
-from deploy_lib.phases._terraform import terraform_env_and_cwd, write_tfvars
 
 
 def boot_win(ctx, t):
@@ -118,48 +117,40 @@ def record_golden_set(ctx, golden_ids, golden_ids_by_slot):
         name: {"hash": ctx.golden_hashes[name], "inputs": ctx.golden_inputs[name]}
         for name in ctx.golden_hashes})
     ctx.save_state()
+    # Inventory them: the teardown must die goldens AFTER every clone, so the recorded
+    # node matters (satellite goldens live on their own host).
+    document = ctx.document()
+    for name, vmid in golden_ids.items():
+        document.record("golden", ctx.node, f"golden-{name}", vmid=vmid)
+    if ctx.placement:
+        for sat in ctx.placement["satellites"]:
+            node = record_of(ctx.placement, sat["name"]).node
+            for name, vmid in (golden_ids_by_slot.get(sat["slot"]) or {}).items():
+                document.record("golden", node, f"golden-{name}", vmid=vmid)
+    document.save()
 
 
 def apply_team_boxes(ctx, golden_ids, golden_ids_by_slot):
-# Flip build_team_boxes on and run terraform apply #2: every team box, linked-cloned.
+# Build every team box as a linked clone of its golden.
 #
-#     Positional per box: two box types may share one base template, so a name-keyed
-#     map would silently cross-wire golden disks (live-found 2026-09-24: web01
-#     clones came from golden-db01's disk).
-#     Length must equal boxes_per_team (positional). Unmanaged boxes (pfSense) have
-#     no golden — terraform's team_box unmanaged branch clones them from their own
-#     base template instead, so their slot here carries that base template's vmid
-#     — ON THE TEAM'S OWN NODE for satellite slots (their clone must resolve
-#     locally).
-    _tmap = _template_vmid_map(ctx.node)
-    ctx.tfvars["golden_template_ids"] = [
-        int(_tmap[b["template"]]) if is_unmanaged(b)
-        # 0 placeholder when the engine hosts no teams (all-satellite spread):
-        # the slot-0 team_box for_each is empty then, so nothing reads it.
-        else int(golden_ids.get(b["name"]) or 0)
-        for b in ctx.boxes
-    ]
-    if ctx.placement and ctx.placement["satellites"]:
-        by_slot_ids = {str(k): v for k, v in golden_ids_by_slot.items()}
-        ctx.tfvars["golden_template_ids_by_slot"] = {}
-        for sat in ctx.placement["satellites"]:
-            slot = sat["slot"]
-            sat_node = record_of(ctx.placement, sat["name"]).node
-            stmap = _template_vmid_map(sat_node)
-            slot_ids = by_slot_ids.get(str(slot)) or {}
-            ctx.tfvars["golden_template_ids_by_slot"][str(slot)] = [
-                int(stmap[b["template"]]) if is_unmanaged(b) else int(slot_ids[b["name"]])
-                for b in ctx.boxes
-            ]
-    ctx.tfvars["build_team_boxes"] = True
-    write_tfvars(ctx)
-    tf_env, tf_cwd = terraform_env_and_cwd(ctx)
-    # Linked clones are seconds each (no bulk disk copy); the budget is for the
-    # cloud-init-adjacent API waits bpg does per box, not for storage.
-    apply_timeout = 600 + 300 * len(ctx.all_targets)
-    with timed(ctx.comp_dir, 4, "terraform_apply_teams"):
-        run_terraform(["apply", "-auto-approve", "-parallelism=1"],
-                      cwd=tf_cwd, env=tf_env, timeout=apply_timeout)
+#     Keyed by vm_name, not by box type: two box types may share one base template, so a
+#     name-keyed lookup is the only one that cannot cross-wire golden disks (live-found
+#     2026-09-24: web01 clones came from golden-db01's disk). Unmanaged boxes (pfSense)
+#     have no golden — they clone from their own base template, ON THE TEAM'S OWN NODE for
+#     satellite slots (a linked clone cannot cross hosts on separate storages).
+    from deploy_lib.phases._estate import create_team_boxes
+    by_slot = {int(key): value for key, value in golden_ids_by_slot.items()}
+    templates_by_node = {}
+    sources = {}
+    for target in ctx.all_targets:
+        box, node = target["box"], target["node"]
+        if is_unmanaged(box):
+            templates_by_node.setdefault(node, _template_vmid_map(node))
+            sources[target["vm_name"]] = int(templates_by_node[node][box["template"]])
+        else:
+            sources[target["vm_name"]] = int(by_slot[target["slot"] or 0][box["name"]])
+    with timed(ctx.comp_dir, 4, "apply_team_boxes"):
+        create_team_boxes(ctx, sources)
 
 
 def bootstrap_clones(ctx):
