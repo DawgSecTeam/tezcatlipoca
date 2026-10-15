@@ -16,6 +16,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 from engine import template_freeze
+from engine.template_freeze import frozen_state, save_template_hashes
 
 import verifier.context as v_context  # noqa: E402
 import subprocess  # noqa: E402
@@ -29,8 +30,7 @@ class _Args:
 def _comp_dir():
     tmp = tempfile.TemporaryDirectory()
     comp = Path(tmp.name)
-    (comp / ".template-hashes.json").write_text(json.dumps(
-        {"engine": {"hash": "e1"}, "golden": {"web01": {"hash": "g1"}}}))
+    save_template_hashes(comp, engine={"hash": "e1"}, golden={"web01": {"hash": "g1"}})
     (comp / "nakon-config.json").write_text(json.dumps(
         {"machines": [{"name": "web01-team101", "os": "base-ubuntu24.04-fix"}]}))
     return tmp, comp
@@ -73,7 +73,7 @@ class FreezeRefusesDirtyTree(unittest.TestCase):
         self.assertFalse(ok)
         self.assertNotIn("FROZEN", out)
         self.assertIn("--unfreeze --confirm-unfreeze", out)
-        self.assertFalse((comp / ".frozen.json").exists())
+        self.assertIsNone(frozen_state(comp))
 
     def test_dirty_non_code_freezes_with_note(self):
         # A post-run worktree is always dirty from generated state (placement.json,
@@ -85,7 +85,7 @@ class FreezeRefusesDirtyTree(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("FROZEN", out)
         self.assertIn("non-code", out)
-        self.assertTrue((comp / ".frozen.json").exists())
+        self.assertIsNotNone(frozen_state(comp))
 
     def test_clean_tree_freezes(self):
         tmp, comp = _comp_dir()
@@ -93,7 +93,7 @@ class FreezeRefusesDirtyTree(unittest.TestCase):
         ok, out = self._freeze(comp, [])
         self.assertTrue(ok)
         self.assertIn("FROZEN", out)
-        self.assertTrue((comp / ".frozen.json").exists())
+        self.assertIsNotNone(frozen_state(comp))
 
 
 class FrozenCodeDrift(unittest.TestCase):

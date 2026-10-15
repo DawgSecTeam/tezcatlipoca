@@ -39,7 +39,7 @@ def _config_name(entry):
 
 
 def _target_vmid(comp_dir, box):
-# VMID for a nakon machine entry: frozen targets.json, falling back to boxes.json order.
+# VMID for a nakon machine entry: the frozen roster, falling back to boxes.json order.
     try:
         identifier = box["ip"].split(".")[2]
         base_name = box["name"].rsplit("-team", 1)[0]

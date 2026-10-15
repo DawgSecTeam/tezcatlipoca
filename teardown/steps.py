@@ -12,6 +12,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from engine.template_freeze import forget_template_hashes
+
 EVIDENCE = "evidence"
 TEARDOWN = "teardown"
 
@@ -234,7 +236,7 @@ class EstateStep(Step):
             if skipped:
                 return StepResult(self.name, "warned", "; ".join(skipped))
         if ctx.full:
-            (Path(ctx.comp_dir) / ".template-hashes.json").unlink(missing_ok=True)
+            forget_template_hashes(ctx.comp_dir)
         return StepResult(self.name, "ok", f"destroyed {len(summary['destroyed'])}")
 
 
