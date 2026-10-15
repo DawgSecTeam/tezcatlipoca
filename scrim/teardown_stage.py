@@ -112,11 +112,26 @@ def teardown_red(args, env):
     # a missing --config silently falls back to built-in defaults (vmid 999).
     cmd = [core.local_python(), "-m", "badauto"]
     comp_cfg = badauto_config_ops.config_path(comp_path)
+    # A run that never staged red has no per-comp bad-auto config and no recorded red vmid.
+    # Running `badauto destroy` then means running it against the HOST's default config — which
+    # on a shared ops host belongs to whichever session touched bad-auto last. Live 2026-10-14:
+    # tearing down a workspace whose run died at phase 4 read the other session's tdred-2026
+    # checkout (`stamp competition_dir .../tezcatlipoca-teardown-redesign/competitions/tdred-2026
+    # != .../run-27b0d9e4/comp`) and refused with rc 17, failing the whole teardown of a run that
+    # had no red01 at all; had the stamps agreed it would have destroyed another session's box.
+    # Skip the step outright; the vmid proof below still runs, so a red01 that DOES exist is
+    # caught and the teardown still fails loudly if it survives.
     if comp_cfg.exists():
         cmd += ["--config", str(comp_cfg)]
         env = {k: v for k, v in env.items() if k != "BAuto_CONFIG"}
-    cmd += ["destroy", "--competition", comp_path, "--yes"]
-    for attempt in (1, 2):
+    elif not _manifest_red_vmid(args):
+        log("teardown: red01 — this run staged no red agent (no per-comp bad-auto config, no "
+            "recorded red vmid); skipping `badauto destroy` rather than falling back to the "
+            "host's default bad-auto config")
+        cmd = None
+    if cmd:
+        cmd += ["destroy", "--competition", comp_path, "--yes"]
+    for attempt in ((1, 2) if cmd else ()):
         proc = procs.run(cmd, cwd=core.BAD_AUTO, env=env, timeout=900, check=False)
         if proc.returncode == 0:
             break
