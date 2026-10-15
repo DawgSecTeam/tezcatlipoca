@@ -11,7 +11,7 @@ All guidance lives in `docs/` — start with:
 - [docs/architecture.md](docs/architecture.md) — architecture, nakon contract, operational invariants
 - [docs/internals.md](docs/internals.md) — per-module design notes
 - [docs/usage-agents.md](docs/usage-agents.md) — driving the pipeline non-interactively
-- [docs/usage-people.md](docs/usage-people.md) — setup/operation by hand, env-var reference, troubleshooting
+- [docs/usage-people.md](docs/usage-people.md) — setup/operation by hand, config reference, troubleshooting
 - [docs/multi-node.md](docs/multi-node.md) — multi-host competitions
 - [docs/packet-profiles.md](docs/packet-profiles.md) — competition packets → ranges
 - [docs/remote-access.md](docs/remote-access.md) — headscale participant access
@@ -83,7 +83,7 @@ teardown destroys them, so a practice range built to host an event is torn down 
 team boxes, engine, bridges and red01 go; the golden + engine templates stay, and the next deploy
 of the SAME competition **reuses the exact artifacts that were tested instead of rebuilding them**.
 That reuse keys on the `tezcatlipoca-m4 hash=` stamp on the template itself, not on the
-per-comp-dir `.template-hashes.json` (a fresh worktree and every dashboard workspace lack it), so
+per-comp-dir `estate-state.json` (a fresh worktree and every dashboard workspace lack it), so
 it survives the move from the practice worktree to the event's. Config drift still rebuilds;
 goldens never carry across competitions, so a full teardown is still how a competition's templates
 are finally reclaimed once its run's goal is met. Details:
@@ -105,32 +105,34 @@ from the worktree root — run all commands from there. Pre-flight:
 git worktree add -b <branch> ../tezcatlipoca-<branch> main
 cd ../tezcatlipoca-<branch>
 git submodule update --init                          # vendor/nakon — every nakon call needs it
-cp /path/to/main-tree/.env .env                      # the NODE-PROPER env variant (see below)
+cp /path/to/main-tree/tezcatlipoca.toml .            # the NODE-PROPER profile (see below)
+cp /path/to/main-tree/.env .env                      # legacy env overrides, still loaded
 cp /path/to/main-tree/vendor/nakon/.env vendor/nakon/.env
-cp /path/to/main-tree/proxmox . && chmod 600 proxmox # deploy resolves `../proxmox` against terraform/
+cp /path/to/main-tree/proxmox . && chmod 600 proxmox # the SSH key the config points at
 ```
 
-- Pick the env file matching the target node, and check it for stale values before trusting it:
+- Pick the config matching the target node, and check it for stale values before trusting it:
   every banner prints the resolved endpoint/node/datastore, so a wrong copy shows immediately.
-  Known traps to check for in any env variant: a dead `TF_VAR_template_vm_id` (hard-fails the
+  Known traps to check for in any config variant: a dead `proxmox.template_vm_id` (hard-fails the
   engine-base preflight — correct per-node values are in `infrastructure-status.md`); a default
-  `TF_VAR_engine_mgmt_ip` that collides with a live engine on a shared node (set it explicitly —
+  `engine.mgmt_ip` that collides with a live engine on a shared node (set it explicitly —
   see `infrastructure-status.md`); and no `TF_VAR_team_identifiers`
   on a shared node, where the default 101+ block is commonly already occupied — set it explicitly.
 - All competition ops on Proxmox run on the range automation token, never the workshop portal's
   provisioner token (token names and per-host token sources: `infrastructure-status.md`). When
-  copying an env variant across nodes,
-  re-export `TF_VAR_proxmox_api_token` explicitly instead of inheriting the source file's value;
-  check it before any deploy/destroy.
-- `TF_VAR_teams` / `TF_VAR_boxes_per_team` in an old env are overridden by the comp dir at terraform
-  time — stale values there are cosmetic, not fatal.
+  copying a config across nodes,
+  re-export the token as `TEZ_PROXMOX_API_TOKEN` (or legacy `TF_VAR_proxmox_api_token`) explicitly
+  instead of inheriting the source profile's value; check it before any deploy/destroy.
+- `TF_VAR_teams` / `TF_VAR_boxes_per_team` in an old env are no longer read — the comp dir supplies
+  the roster and box creds, so stale values there are inert.
 - `TEZ_THIN_HEADROOM=<0..1>` relaxes the datastore headroom gate on thin-provisioned pools (ZFS,
   lvmthin): it counts that fraction of the provisioned team-disk math, since linked clones only
   allocate written blocks. Unset keeps the strict provisioned-bytes gate. Size the factor to the
   pool, not to hope.
 - The sibling-repo tools have one read-only shared fallback: `bad-auto/deploy` loads
   `../tezcatlipoca/.env` (the MAIN tree's) via `setdefault`, so export the worktree's
-  `TF_VAR_proxmox_*` trio before calling bad-auto by hand if the main tree points at a different
+  `TEZ_PROXMOX_ENDPOINT`/`TEZ_PROXMOX_API_TOKEN`/`TEZ_PROXMOX_NODE` (or the legacy
+  `TF_VAR_proxmox_*` trio) before calling bad-auto by hand if the main tree points at a different
   node. Deploy identity is NOT shared — it lives in each comp's own
   `competitions/<id>/.badauto-config.yaml`.
 

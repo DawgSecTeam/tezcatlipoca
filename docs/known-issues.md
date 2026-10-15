@@ -21,10 +21,6 @@ the competition identity the Compfile already carries (`name`), not from the dir
 a migration that still accepts the legacy `comp-comp` tag for already-deployed VMs — changing the
 derivation alone makes every existing and live range's teardown refuse.
 
-### `terraform apply` on a live firewall range rewrites the pre-cutover engine netplan
-
-Accepted caveat. `null_resource.team_nics` writes the pre-cutover netplan (`192.168.<id>.1/24` on team NICs); phase 5's cutover moves the gateway to the firewalls. Trigger-gated, but a re-apply on a live firewall range whose triggers changed re-adds `.1` under the firewalls' feet. Fix: `create-competition.py --competition <id> --from-phase 5 --yes` afterward (idempotent). `verify-competition.py`'s `firewall_in_path` gate detects the drift. Owning the cutover inside terraform needs the firewall config state round-tripped into tfvars — deferred until needed.
-
 ### The template builders reach their scratch VM through node shell
 
 `tools/build-{pfsense,vyos}-provision-template.py` alias `192.168.1.2` on the node's bridge and `ssh -W` through `root@<node>` to drive the scratch VM's bootstrap LAN (`192.168.1.0/24`); their ISO fetch (`download-url`) and template rename (`PUT .../config`) are API-only, leaving this hop and template sync ([multi-node.md](multi-node.md#template-copies)) as the repo's only node-shell uses. The pfSense agent retrofit cannot simply switch to the agent channel instead: installing that agent is what the hop is for. **Next action**: on a host whose shell is closed, either alias `192.168.1.2` on the *operator's* NIC where the operator shares the scratch VM's bridge L2, or console-type an operator-routable bootstrap address (`/monitor sendkey`, which these tools already drive the console with).

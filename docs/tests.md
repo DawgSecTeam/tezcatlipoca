@@ -102,7 +102,7 @@ the pytest run above rather than this table.
 
 | File | Guards |
 |---|---|
-| `test_deploy_sequencer.py` | Phase order, checkpoint gating (only a phase that ran may write `last_phase`), one-banner-per-phase, the terraform-context hook between phases 2 and 3, the mid-phase failure/resume hint |
+| `test_deploy_sequencer.py` | Phase order, checkpoint gating (only a phase that ran may write `last_phase`), one-banner-per-phase, the engine-context hook between phases 2 and 3, the mid-phase failure/resume hint |
 | `test_deploy_pause.py` | A pause request holds the pipeline at the end of the phase in progress (a skipped phase is no boundary), the hold is on disk as `paused_after_phase`, deleting the request resumes in-process, and an unset `TEZ_PAUSE_FILE` leaves manual deploys alone |
 | `test_deploy_gates.py` | The single-gate-point contract: `prepare()` runs `gates.check_resume_gates`/`run_range_gates` before any secret is minted; `deploy()` takes the lock first; a held lock refuses |
 | `tests/_deploy_patch.py` | Not a test: `dpatch(name)` patches one name in every `deploy_lib` module that binds it |
