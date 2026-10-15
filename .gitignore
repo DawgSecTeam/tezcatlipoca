@@ -6,6 +6,11 @@
 .env
 .env.*
 !.env.example
+# The native config profile (estate.config): per-node, secret-bearing by reference.
+# tezcatlipoca.example.toml is the shipped placeholder, same rule as .env.example.
+tezcatlipoca.toml
+tezcatlipoca.*.toml
+!tezcatlipoca.example.toml
 # Estate ground truth (endpoints, node names, tokens-by-reference, vmid maps, live state):
 # local only, never published. Tracked docs and prompts point here instead of carrying
 # infrastructure specifics. Enforced by tests/test_secret_hygiene.py.

@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
@@ -28,7 +29,10 @@ class ScriptTest(unittest.TestCase):
 
 class ReensureTest(unittest.TestCase):
     def setUp(self):
-        os.environ.setdefault("TF_VAR_proxmox_node", "test-pve")
+        # setdefault leaked this into every later test in the process; scope it.
+        env = mock.patch.dict(os.environ, {"TF_VAR_proxmox_node": "test-pve"})
+        env.start()
+        self.addCleanup(env.stop)
         self.calls = []
 
         def fake_ssh(ctx, ip, cmd, timeout=60, user=None):
