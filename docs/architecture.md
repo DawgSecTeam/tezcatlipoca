@@ -8,9 +8,9 @@ a NIC on every team bridge: SSH jump host, nakon execution host, NAT gateway. Te
 iptables on the engine, not bridge separation.
 
 There is one pipeline version. The deploy refuses a state document written by a different
-`pipeline_version`; teardown refuses a document without a `run_id`. `redeploy-competition.py`'s gate
-checks the same two facts but still reads `.deploy_state.json` (`redeploy/redeploy_gate_ops.py`), a
-reader the document otherwise supersedes.
+`pipeline_version`; teardown and redeploy both refuse a document without a `run_id`
+(`redeploy/redeploy_gate_ops.py` reads the document, and still serves a legacy range through the
+same read-only fallback every other reader uses).
 
 Per-symbol rationale: [internals.md](internals.md). Open problems: [known-issues.md](known-issues.md).
 

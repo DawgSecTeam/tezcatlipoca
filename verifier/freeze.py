@@ -1,4 +1,4 @@
-"""M4 freeze/unfreeze: record (or remove) .frozen.json after a passing verify."""
+"""M4 freeze/unfreeze: record (or remove) the freeze record after a passing verify."""
 
 import subprocess
 import time

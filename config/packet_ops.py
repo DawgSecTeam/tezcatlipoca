@@ -609,7 +609,7 @@ def compile_profile(profile_path, competitions_dir=None, force=False, dry_run=Fa
         raise SystemExit(
             f"  ERROR: competitions/{comp_id} already holds an authored bundle — "
             f"pass --force to overwrite the authored files (deploy artifacts and "
-            f".deploy_state.json are left alone), or pick another event.comp_id.")
+            f"the state document are left alone), or pick another event.comp_id.")
 
     creds = p.get("credentials") or {}
     credlists = creds.get("credlists") or {}

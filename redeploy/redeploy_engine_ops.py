@@ -65,7 +65,7 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
 #     re-seed with create-competition.py --from-phase 7 afterwards.
     if not state.get("engine_template_vmid"):
         raise SystemExit(
-            "  ERROR: .deploy_state.json has no engine_template_vmid — this competition "
+            "  ERROR: the state document has no engine_template_vmid — this competition "
             "predates the M4 engine template; redeploy the range instead.")
     engine_vmid = int(state.get("scoring_vm_id") or 1000)
     acquire_engine_lock(engine_vmid)

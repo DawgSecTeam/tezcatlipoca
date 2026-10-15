@@ -5,7 +5,7 @@ or a VM build in flight, and cutting one open mid-call leaves the recorded estat
 behind reality — the mismatch the resume guards and the "already exists" resume hint exist
 for. The run queue sets TEZ_PAUSE_FILE to a per-run control file: the file existing means
 "hold at the next boundary", deleting it means "carry on", and the held phase goes into
-.deploy_state.json so an observer (the dashboard) sees the hold without parsing stdout.
+the state document so an observer (the dashboard) sees the hold without parsing stdout.
 Unset — a manual deploy — is a no-op.
 """
 

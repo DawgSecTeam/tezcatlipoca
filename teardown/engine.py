@@ -2,7 +2,7 @@
 
 The engine is the one place that applies step policies (REFUSE vs
 WARN_AND_PROCEED), the one place that journals completion
-(competitions/<id>/.teardown-journal.json — resume skips journalled, resumable
+(the document's `teardown` section — resume skips journalled, resumable
 steps, which is what makes re-running until clean both safe and cheap), and
 the only source of a clean verdict. Exit 0 means verify_clean said clean;
 there is no other exit-0 path."""

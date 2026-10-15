@@ -28,7 +28,7 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
     box_password = state.get("box_password")
     if not box_password:
         raise SystemExit(
-            "  ERROR: .deploy_state.json has no box_password — can't recreate a box with the "
+            "  ERROR: the state document has no box_password — can't recreate a box with the "
             "login the rest of the range uses. Rebuild is unavailable for this competition."
         )
     ssh_public_key = estate_config.active().ssh.public_key

@@ -86,7 +86,7 @@ def is_local_endpoint(base_url):
 
 
 def read_comp_json(comp, name):
-    """Parse `<comp>/<name>` (boxes.json, box_services.json, .deploy_state.json, ...)."""
+    """Parse `<comp>/<name>` (boxes.json, box_services.json, estate-state.json, ...)."""
     return json.loads((Path(comp) / name).read_text())
 
 

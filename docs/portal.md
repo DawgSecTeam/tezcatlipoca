@@ -100,7 +100,7 @@ Pinned by `tests/test_portal_app.py`.
 The token can only open a console on this comp's team VMs — no power-cycle, no config read, no
 other VM.
 
-- **Storage**: the secret lives in `.deploy_state.json` (`portal_console_tokens`); PVE only reveals
+- **Storage**: the secret lives in the state document (`run.portal_console_tokens`); PVE only reveals
   it at creation, so a vanished token is re-created.
 - **Permissions**: minting needs `User.Modify`, `Permissions.Modify`, `Realm.AllocateUser`, and
   (for the first `TezConsole` creation on a node) `Sys.Modify`. Preflight warns when a node's
