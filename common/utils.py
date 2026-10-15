@@ -93,11 +93,17 @@ def retry(fn, *, attempts, gap, backoff=False, retry_on=Exception):
 # Call fn() up to `attempts` times, returning its result on success. On a
 #     `retry_on` exception, sleep `gap` seconds (or gap*attempt with backoff) and try
 #     again; the final attempt's exception propagates. Any other exception propagates
-#     immediately.
+#     immediately. `retry_on` may also be a predicate, which then sees every exception and
+#     decides — used where the retryable condition lives in the response body rather than
+#     its type (PVE's "can't lock file" 500).
+    predicate = callable(retry_on) and not (isinstance(retry_on, type)
+                                            and issubclass(retry_on, BaseException))
     for attempt in range(1, attempts + 1):
         try:
             return fn()
-        except retry_on:
+        except Exception as exc:
+            if not (retry_on(exc) if predicate else isinstance(exc, retry_on)):
+                raise
             if attempt == attempts:
                 raise
             time.sleep(gap * attempt if backoff else gap)

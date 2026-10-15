@@ -14,6 +14,8 @@ no network.
 
 import sys
 import unittest
+
+import requests
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
@@ -141,3 +143,79 @@ class EngineTemplateCloneRetry(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LockContentionRetry(unittest.TestCase):
+    """PVE answers the loser of a lock race with 500 'can't lock file ... - got timeout'.
+
+    Live-found 2026-10-15, run-6cd31cc3: three parallel deploys, the phase-4 golden config
+    PUT died on `/var/lock/qemu-server/lock-2350.conf`. The request is idempotent and the
+    lock is held only while the winner's operation runs, so `proxmox_api_for` retries it —
+    but only it: a real 500 must still surface.
+    """
+
+    def _response(self, text, status=500):
+        class R:
+            pass
+        r = R()
+        r.text, r.status_code = text, status
+        r.json = lambda: {"data": {"ok": True}}
+
+        def raise_for_status():
+            if status >= 400:
+                raise requests.exceptions.HTTPError(f"{status} Server Error: {text}", response=r)
+        r.raise_for_status = raise_for_status
+        return r
+
+    def test_lock_500_is_retried_then_succeeds(self):
+        seen = []
+
+        def request(method, url, **kw):
+            seen.append(url)
+            if len(seen) == 1:
+                return self._response("can't lock file '/var/lock/qemu-server/lock-2350.conf'"
+                                      " - got timeout")
+            return self._response("", status=200)
+
+        with patch.object(client, "proxmox_request", request), \
+                patch.object(client.time, "sleep", lambda *_: None):
+            out = client.proxmox_api_for("https://h:8006", "tok", "PUT",
+                                         "/nodes/p/qemu/2350/config", data={})
+        self.assertEqual(out, {"data": {"ok": True}})
+        self.assertEqual(len(seen), 2)
+
+    def test_other_500_is_not_retried(self):
+        calls = []
+
+        def request(method, url, **kw):
+            calls.append(url)
+            return self._response("storage 'hdd' does not exist")
+
+        with patch.object(client, "proxmox_request", request), \
+                patch.object(client.time, "sleep", lambda *_: None):
+            with self.assertRaises(requests.exceptions.HTTPError):
+                client.proxmox_api_for("https://h:8006", "tok", "PUT",
+                                       "/nodes/p/qemu/2350/config", data={})
+        self.assertEqual(len(calls), 1)
+
+    def test_retry_predicate_leaves_other_callers_alone(self):
+        from common.utils import retry
+        calls = []
+
+        def boom():
+            calls.append(1)
+            raise RuntimeError("not retryable")
+        with self.assertRaises(RuntimeError):
+            retry(boom, attempts=3, gap=0, retry_on=ValueError)
+        self.assertEqual(len(calls), 1)
+
+        calls.clear()
+
+        def flaky():
+            calls.append(1)
+            if len(calls) < 2:
+                raise ValueError("retryable")
+            return "ok"
+        self.assertEqual(retry(flaky, attempts=3, gap=0,
+                               retry_on=lambda e: isinstance(e, ValueError)), "ok")
+        self.assertEqual(len(calls), 2)

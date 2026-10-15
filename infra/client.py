@@ -100,8 +100,24 @@ def proxmox_api_for(endpoint, token, method, path, **kwargs):
         r.raise_for_status()
         return r.json()
 
+    def _retry_on(exc):
+        # PVE serializes API writes against its per-VM (`/var/lock/qemu-server/lock-N.conf`)
+        # and per-datastore (`pve-storage-*`) lock files, and answers the loser of a race
+        # with a 500 "can't lock file ... - got timeout" while the winner's operation is
+        # still running. With concurrent ranges that is routine, not exceptional — three
+        # parallel deploys hit it on a config PUT in phase 4 (live 2026-10-15,
+        # run-6cd31cc3: golden vmid 2350). The request is idempotent and the lock is held
+        # only for the duration of one operation, so the same bounded retry that already
+        # covers connection errors applies.
+        if not isinstance(exc, (requests.exceptions.ConnectionError,
+                                requests.exceptions.Timeout,
+                                requests.exceptions.HTTPError)):
+            return False
+        response = getattr(exc, "response", None)
+        return response is not None and "can't lock file" in (response.text or "")
+
     return retry(_call, attempts=4, gap=2, backoff=True,
-                 retry_on=(requests.exceptions.ConnectionError, requests.exceptions.Timeout))
+                 retry_on=_retry_on)
 
 
 def proxmox_api(method, path, **kwargs):
