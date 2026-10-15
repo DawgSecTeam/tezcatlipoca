@@ -159,7 +159,7 @@ Per-run secrets are generated in `deploy()` and written to `competitions/<id>/cr
 
 | File | Owns | Key fields |
 |---|---|---|
-| `.deploy_state.json` | Resume contract + secrets | `last_phase`, `pipeline_version`, `run_id`, `scoring_vm_id`, `deployed_endpoint`, `multi_node`, `teams`, the password fields, `box_creds`, `domain_creds`, `engine_template_{vmid,hash}`, `engine_build_info`, `golden_template_ids`, `golden_ids_by_slot`, `golden_hashes`, `plant_coverage_failed`, `nakon_failed_steps`, `seeded`, `engine_unpaused`, `injects_created`, `portal_*` |
+| `.deploy_state.json` | Resume contract + secrets | `last_phase`, `paused_after_phase` (present only while a run is held at a boundary), `pipeline_version`, `run_id`, `scoring_vm_id`, `deployed_endpoint`, `multi_node`, `teams`, the password fields, `box_creds`, `domain_creds`, `engine_template_{vmid,hash}`, `engine_build_info`, `golden_template_ids`, `golden_ids_by_slot`, `golden_hashes`, `plant_coverage_failed`, `nakon_failed_steps`, `seeded`, `engine_unpaused`, `injects_created`, `portal_*` |
 | `.template-hashes.json` | Reuse gate | `engine` = `{hash, inputs}`, `golden` = `{<box>: {hash, inputs}}`, `updated` |
 | `.frozen.json` | Freeze record | `frozen_at`, `code` (git), `hashes`, `verify_report` |
 | `placement.json` | Multi-node placement (absent = single node) | See [multi-node.md](multi-node.md) |
