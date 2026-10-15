@@ -5,7 +5,7 @@ import os
 import time
 from pathlib import Path
 
-from common.constants import MAX_BOXES_PER_TEAM
+from common.constants import ENGINE_TEMPLATE_VMID_OFFSET, MAX_BOXES_PER_TEAM
 from multinode.nodes_config import (MAX_SATELLITES, NODES_CONFIG_PATH, PLACEMENT_VERSION,
                                     load_nodes_config)
 from multinode.placement_record import (anchor_identifier, default_jump_mgmt_ip, engine_record,
@@ -52,14 +52,33 @@ def probe_node(record, need_templates, engine_vmid, team_identifiers):
 
     # Quick collision veto (the authoritative per-node check is preflight): engine +
     # engine template + every slot's golden span + every candidate team block + jumps.
-    existing = {vm.get("vmid") for vm in vms if vm.get("node") == record.node}
-    wanted = {engine_vmid, engine_vmid + 140}
+    vm_by_vmid = {vm.get("vmid"): vm for vm in vms if vm.get("node") == record.node}
+    existing = set(vm_by_vmid)
+    wanted = {engine_vmid, engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET}
     for slot in range(MAX_SATELLITES + 1):
         wanted.update(golden_slot_span(engine_vmid, slot))
         wanted.add(jump_vmid_for(engine_vmid, slot))
     for ident in team_identifiers:
         wanted.update(range(200 + int(ident) * 10, 200 + int(ident) * 10 + MAX_BOXES_PER_TEAM))
-    probe["collisions"] = sorted(wanted & existing)
+    # This competition's own TEMPLATE slots (the engine template + the goldens) hold cached
+    # build artifacts a `--keep-templates` / `--teams-only` teardown keeps ON PURPOSE: the
+    # next deploy adopts them, or rebuilds them when the node's `tezcatlipoca-m4 hash=` stamp
+    # no longer matches (engine.template_freeze.template_stamp_current;
+    # infra.collisions.check_collisions makes the same exception). Counting them as
+    # collisions made the node ineligible for the very run they were kept for — the
+    # template-reuse path could never be reached (2026-10-14, run-0a59b188: "vmid
+    # collisions: [1140, 1150, ...]" → no eligible node for team1, team2).
+    template_slots = {engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET}
+    for slot in range(MAX_SATELLITES + 1):
+        template_slots.update(golden_slot_span(engine_vmid, slot))
+
+    def _is_kept_template(vmid):
+        vm = vm_by_vmid.get(vmid) or {}
+        tags = {t.strip() for t in str(vm.get("tags") or "").replace(";", ",").split(",") if t.strip()}
+        return (vmid in template_slots and vm.get("template") == 1
+                and vm.get("status") == "stopped" and "tezcatlipoca" in tags)
+
+    probe["collisions"] = sorted(v for v in wanted & existing if not _is_kept_template(v))
     if probe["collisions"]:
         probe["ok"] = False
         probe["reasons"].append(f"vmid collisions: {probe['collisions'][:6]}"
