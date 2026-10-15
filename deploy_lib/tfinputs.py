@@ -6,6 +6,7 @@ from pathlib import Path
 
 from config.config_ops import write_text_atomic
 from common.constants import DEFAULT_ENGINE_MGMT_GW, DEFAULT_ENGINE_MGMT_IP
+from engine.template_freeze import engine_template_vmid
 from multinode.placement_record import satellite_routes_for, satellite_tfvars
 from common.terraform_workdir import ensure_terraform_workdir
 
@@ -97,8 +98,11 @@ def build_terraform_inputs(ctx, comp_dir):
         "golden_template_ids": [],
         # M4: apply #2 rewrites tfvars with this intact — a resume that skips phase 2
         # must not let the engine clone source fall back to the base image (which would
-        # replace the engine with an unbootstrapped full clone mid-pipeline).
-        "engine_clone_id": int(ctx.state.get("engine_template_vmid") or 0),
+        # replace the engine with an unbootstrapped full clone mid-pipeline). The state
+        # key can be missing (phase-1 state reset + --force-from-phase resume): the
+        # template vmid is deterministic (engine +140), so derive it, never apply 0.
+        "engine_clone_id": int(ctx.state.get("engine_template_vmid")
+                               or engine_template_vmid(ctx.engine_vmid)),
         # Portable-node mode (realm): static engine mgmt IP instead of agent discovery.
         # Persisted via tfvars so resumes don't depend on the env var being re-exported.
         "engine_mgmt_ip": ctx.engine_mgmt_ip,

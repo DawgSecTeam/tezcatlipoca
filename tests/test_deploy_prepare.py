@@ -307,8 +307,31 @@ class TerraformInputs(unittest.TestCase):
         self.assertEqual(tfvars["boxes_per_team"], [{"name": "web01", "template": "ubuntu-fix"}])
         self.assertIs(tfvars["build_team_boxes"], False)
         self.assertEqual(tfvars["golden_template_ids"], [])
-        self.assertEqual(tfvars["engine_clone_id"], 0)
+        # no state key -> derived from the engine vmid (engine +140), never 0: a
+        # --force-from-phase resume after a phase-1 state reset must still clone the
+        # engine template, not an unbootstrapped base image
+        self.assertEqual(tfvars["engine_clone_id"], 1140)
         self.assertNotIn("satellites", tfvars)              # single-node: no satellite keys
+
+    def test_state_recorded_engine_template_wins_over_the_derived_vmid(self):
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = Path(d)
+            tf_dir = comp_dir / "terraform"
+            tf_dir.mkdir()
+            ctx, captured, _view = self._run(comp_dir, tf_dir)
+        ctx.state["engine_template_vmid"] = 1234
+        with tempfile.TemporaryDirectory() as d2:
+            tf_dir2 = Path(d2) / "terraform"
+            tf_dir2.mkdir()
+            with patch.dict(os.environ, self.ENV, clear=True), \
+                    dpatch("ensure_terraform_workdir", return_value=tf_dir2), \
+                    dpatch("write_text_atomic",
+                                 side_effect=lambda p, t: captured.__setitem__(str(p), t)), \
+                    dpatch("satellite_tfvars", return_value=[{"name": "sat1"}]), \
+                    dpatch("satellite_routes_for", return_value=[{"fake": True}]):
+                dl_tfinputs.build_terraform_inputs(ctx, Path(d2))
+        self.assertEqual(json.loads(captured[str(tf_dir2 / "terraform.tfvars.json")])
+                         ["engine_clone_id"], 1234)
 
     def test_placement_adds_slots_and_satellite_keys(self):
         with tempfile.TemporaryDirectory() as d:
