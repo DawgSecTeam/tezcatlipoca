@@ -263,7 +263,8 @@ class WorkerSupervision(unittest.TestCase):
                                side_effect=supervisor.WorkerDiedError("blue-feed-1 died")), \
                 mock.patch.object(evidence, "stage_capture", lambda *a: calls.append("capture")), \
                 mock.patch.object(teardown_stage, "stage_teardown", lambda *a: calls.append("teardown")):
-            failure = event_run.run_event_and_finish(SimpleNamespace(), {}, 0.0)
+            failure = event_run.run_event_and_finish(
+                SimpleNamespace(run_dir=self.enterContext(tempfile.TemporaryDirectory())), {}, 0.0)
         self.assertEqual(calls, ["capture", "teardown"])
         self.assertIn("blue-feed-1", failure)
 

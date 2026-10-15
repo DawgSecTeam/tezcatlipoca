@@ -265,5 +265,57 @@ class MonitorAndEvidence(Base):
         self.assertIsNone(red_tunnel.maybe_start_red_tunnel(_args(self.run_dir)))
 
 
+class StageManifest(Base):
+# The dashboard emits one stage event per entry in run.json `phases` (runner._scrim_phases),
+    # in the order the harness lists them — so every stage the harness runs must record itself.
+    # Before this the run manifest only ever held the latest `phase`, so every scrim run showed
+    # zero stages on the run page no matter how far it got.
+
+    def _recorded(self):
+        manifests = sorted((self.comp / ".automated-tests").glob("*/run.json"))
+        self.assertTrue(manifests, "the run manifest was never written")
+        return [p["phase"] for p in
+                run_manifest.load_manifest(manifests[0].parent).get("phases") or []]
+
+    def _run_main(self, argv):
+        from scrim import cli, event_run, fire_test, inject_sync, red_stage, staging
+        noop = lambda *a, **k: None  # noqa: E731
+        with mock.patch.object(sys, "argv", ["run-agent-scrim.py", *argv]), \
+                mock.patch.object(cli, "resolve_comp_dir", return_value=self.comp), \
+                mock.patch.object(cli.procs, "run", noop), \
+                mock.patch.object(staging, "stage_author", noop), \
+                mock.patch.object(staging, "stage_deploy", noop), \
+                mock.patch.object(staging, "creds_from_files", return_value=dict(CREDS)), \
+                mock.patch.object(fire_test, "stage_verify", noop), \
+                mock.patch.object(blue_agent, "stage_blues", noop), \
+                mock.patch.object(red_stage, "stage_red", noop), \
+                mock.patch.object(inject_sync, "reanchor_injects", noop), \
+                mock.patch.object(event_run, "run_event_and_finish", noop):
+            cli.main()
+
+    def test_each_stage_records_itself_in_harness_order(self):
+        self._run_main(["--competition", "c1", "--teams", "1", "--duration-min", "30"])
+        self.assertEqual(self._recorded(), ["deploy", "verify", "blues", "red", "event"])
+
+    def test_author_is_recorded_only_when_the_run_authors(self):
+        self._run_main(["--new", "c1", "--competition", "c1", "--teams", "1",
+                        "--duration-min", "30"])
+        self.assertEqual(self._recorded()[0], "author")
+
+    def test_event_finish_records_capture_then_teardown(self):
+        from scrim import event_run
+        args = _args(self.run_dir)
+        with mock.patch.object(event_run, "stage_run"), \
+                mock.patch.object(event_run.evidence, "stage_capture"), \
+                mock.patch.object(event_run.teardown_stage, "stage_teardown"):
+            event_run.run_event_and_finish(args, dict(CREDS), 0.0)
+        self.assertEqual(self._recorded_at(self.run_dir), ["capture", "teardown"])
+
+    @staticmethod
+    def _recorded_at(run_dir):
+        return [p["phase"] for p in
+                run_manifest.load_manifest(run_dir).get("phases") or []]
+
+
 if __name__ == "__main__":
     unittest.main()

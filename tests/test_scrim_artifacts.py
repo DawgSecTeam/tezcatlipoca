@@ -502,6 +502,8 @@ class Finalize(TmpCase):
         super().setUp()
         self.args = make_args(self.comp, run_dir=None, competition="demo")
         self.run_dir, self.test_dir = self.resolve(self.args)
+        # main() sets run_dir before run_event_and_finish; the harness records its stages there
+        self.args.run_dir = str(self.run_dir)
         self.calls = []
 
     def _fake_run(self, cmd, **kwargs):

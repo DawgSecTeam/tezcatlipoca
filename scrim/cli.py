@@ -186,8 +186,13 @@ def main():
     args.run_dir = str(run_dir)
     log(f"run dir: {run_dir}")
     log(f"test folder: {test_dir}")
+    # stage_author ran before the run dir existed, so its marker lands here — the
+    # dashboard's stage list must still open with `author`.
+    if args.new:
+        run_manifest.record_phase(run_dir, args, "author")
 
     if not args.skip_deploy:
+        run_manifest.record_phase(run_dir, args, "deploy")
         staging.stage_deploy(args, comp)
     creds = staging.creds_from_files(comp)
     creds["RUN_DIR"] = args.run_dir
@@ -197,13 +202,15 @@ def main():
         log("packet.md missing — generating")
         procs.run([core.local_python(), "generate-packet.py", str(comp)], cwd=core.REPO, timeout=120)
 
+    run_manifest.record_phase(run_dir, args, "verify")
     fire_test.stage_verify(args, comp, creds)
+    run_manifest.record_phase(run_dir, args, "blues")
     blue_agent.stage_blues(args, comp, run_dir, creds, time.time())
 
     red_setup_started = time.time()
     # Marker BEFORE stage_red: red01 deployment takes tens of minutes, and a driver that
     # dies in there used to leave nothing but a missing T0.txt for --resume-event (D3).
-    run_manifest.record_phase(run_dir, args, "stage_red")
+    run_manifest.record_phase(run_dir, args, "red")
     red_stage.stage_red(args, comp, creds, run_dir)
     t0 = time.time()
     write_state(run_dir / "T0.txt", {"t0": t0, "duration_min": args.duration_min})

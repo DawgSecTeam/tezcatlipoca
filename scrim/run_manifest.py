@@ -30,7 +30,11 @@ def load_manifest(run_dir):
 # run.json; getattr because callers without a test folder (unit tests, legacy run dirs)
 # must keep working
 def record_phase(run_dir, args, phase, t0=None):
-    save_manifest(run_dir, {
+    # `phases` is the ordered stage list the dashboard turns into one stage event per stage
+    # as the run progresses (dashboard/runner.py `_scrim_phases`); `phase` stays the latest
+    # marker for the resume path, which keys on its mere presence.
+    manifest = load_manifest(run_dir)
+    manifest.update({
         "competition": getattr(args, "competition", None),
         "teams": getattr(args, "teams", None),
         "duration_min": getattr(args, "duration_min", None),
@@ -43,7 +47,10 @@ def record_phase(run_dir, args, phase, t0=None):
         "pacing": red_pacing_caps(),
         "phase": phase,
         "updated_at": core.now_iso(),
-                  })
+    })
+    manifest.setdefault("phases", []).append(
+        {"phase": phase, "at": core.now_iso(), "t0": t0})
+    save_manifest(run_dir, manifest)
     test_dir = getattr(args, "test_dir", None)
     if test_dir:
         artifacts_ops.record_phase(test_dir, phase, t0=t0)
