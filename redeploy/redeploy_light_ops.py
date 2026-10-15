@@ -56,7 +56,7 @@ def mode_resync(targets, rctx):
     box_password = state.get("box_password")
     if not box_password:
         raise SystemExit(
-            "  ERROR: .deploy_state.json has no box_password — cannot re-set box logins. "
+            "  ERROR: the state document has no box_password — cannot re-set box logins. "
             "Only the state alignment above was applied.")
     box_username, _credlist = load_users_config(comp_dir)
     for t in targets:

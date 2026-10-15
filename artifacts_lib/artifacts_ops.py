@@ -19,7 +19,7 @@ when the harness never got there (crash, kill, session death). A second copy of 
 is how those two drift apart.
 
 Why the folder is keyed on the run id: it already exists (utils.mint_run_id), it is persisted in
-.deploy_state.json, it is stamped on every VM as an ownership tag, it is reused across
+the state document, it is stamped on every VM as an ownership tag, it is reused across
 resume/redeploy, and every destruction path already requires it (constants.ownership_tags). Two
 worktrees running the same competition ID therefore cannot collide, and the artifact folder
 correlates with VM identity for free. Older comp dirs have no run id — hence the stable

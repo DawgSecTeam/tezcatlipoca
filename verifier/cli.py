@@ -43,9 +43,9 @@ def build_parser():
                              "accounts must exist on the boxes")
     parser.add_argument("--freeze", action="store_true",
                         help="M4: after a PASSING verify (all gates + plant-coverage), "
-                             "record the template hashes + code commit in .frozen.json.")
+                             "record the template hashes + code commit in the state document.")
     parser.add_argument("--unfreeze", action="store_true",
-                        help="M4: remove .frozen.json (needs --confirm-unfreeze; for use "
+                        help="M4: remove the freeze record (needs --confirm-unfreeze; for use "
                              "BEFORE the competition starts).")
     parser.add_argument("--confirm-unfreeze", action="store_true", dest="confirm_unfreeze")
     parser.add_argument("--red-identity", action="store_true", dest="red_identity",

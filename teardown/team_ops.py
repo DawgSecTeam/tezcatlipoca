@@ -134,7 +134,7 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
                                f"{', '.join(sorted(teams))})",
                       remedy="delete with the exact team key shown on the run page")
     if team_key not in (deployed_state.get("teams") or {}):
-        raise Refusal(saw=f"'{team_key}' missing from .deploy_state.json teams",
+        raise Refusal(saw=f"'{team_key}' missing from the state document's teams",
                       expected="a team this deploy owns",
                       remedy="nothing to do — the team was already deleted")
     team = teams[team_key]

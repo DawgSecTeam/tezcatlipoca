@@ -91,7 +91,7 @@ def rerun_domain_configs(targets, rctx, nakon_config_path):
 
     box_password = state.get("box_password")
     if not box_password:
-        print("  WARNING: .deploy_state.json has no box_password — cannot re-run domain "
+        print("  WARNING: the state document has no box_password — cannot re-run domain "
               "configuration for the reset domain-role box(es). Rejoin by hand, or re-run "
               "create-competition.py --from-phase 6.")
         return False

@@ -30,11 +30,11 @@ competitions/<comp>/.automated-tests/
 ```
 
 **The key is the run id, and that is the point.** `run-<8hex>` is minted once per competition
-directory, persisted in `.deploy_state.json`, stamped on every VM as an ownership tag, reused
+directory, persisted in the state document, stamped on every VM as an ownership tag, reused
 across resume/redeploy, and required by every destruction path. So the artifact folder and the
 VMs it describes are keyed on the same identity, and two worktrees running the same competition ID
 cannot collide. State that predates run ids gets `untagged-<deploy timestamp>` — derived from
-`.deploy_state.json`'s mtime, so re-running teardown does **not** create a second folder.
+the state document's mtime, so re-running teardown does **not** create a second folder.
 
 The whole tree is **gitignored, with no publish path** (`.gitignore` +
 `test_no_test_artifact_is_tracked`). These files quote flags, credentials and inject answers by

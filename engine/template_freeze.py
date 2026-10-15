@@ -304,7 +304,7 @@ def frozen_gate(comp_dir, stored_inputs, current_inputs, what):
 def frozen_code_drift(frozen):
 # Warn when the checkout no longer matches the code the freeze recorded.
 #
-#     `.frozen.json`'s `code` ({commit, dirty} — git_commit_info) was recorded by
+#     The freeze record's `code` ({commit, dirty} — git_commit_info) was written by
 #     verify --freeze but nothing read it: the drift gate keys on per-template input
 #     hashes and code-class input drift is warn-only, so a commit taken after --freeze
 #     ran the event on code the freeze never verified (known-issues "Freeze is not
@@ -312,7 +312,7 @@ def frozen_code_drift(frozen):
 #
 #     Deliberately NOT fatal: resuming a range after a docs/test commit is a normal
 #     flow, and the operator unfreezes explicitly when a change must invalidate the
-#     freeze. `frozen` is the parsed .frozen.json (template_freeze.frozen_state).
+#     freeze. `frozen` is the parsed freeze record (template_freeze.frozen_state).
     stored = (frozen or {}).get("code") or {}
     stored_commit = str(stored.get("commit") or "").strip()
     if not stored_commit or stored_commit == "unknown":
@@ -346,11 +346,11 @@ def code_path_dirty(porcelain_lines):
 # True when any `git status --porcelain` entry touches deploy-path code.
 #
 #     Only uncommitted *code* invalidates a freeze: the frozen record pins the commit the
-#     run was verified on, while generated/run state (comp JSON, placement.json, nodes.json,
+#     run was verified on, while generated/run state (comp JSON, the placement record, nodes.json,
 #     the state document, .env backups) is written by the run itself and is never committed as
 #     part of the workflow. Treating every porcelain line as dirt made `--freeze` refuse in
 #     any post-deploy worktree (verified 2026-10-02 on the scale8 worktree: a modified
-#     placement.json, an untracked nodes.json and a .env backup), so the gate is scoped here.
+#     a recorded placement, an untracked nodes.json and a .env backup), so the gate is scoped here.
 #     Pure function of the porcelain lines — see verify-competition.do_freeze.
     for line in porcelain_lines or []:
         path = line[3:] if len(line) > 3 else line
@@ -363,7 +363,7 @@ def code_path_dirty(porcelain_lines):
 
 
 def git_commit_info():
-# The code frozen alongside the hashes, recorded in .frozen.json.
+# The code frozen alongside the hashes, recorded in the document's freeze record.
 #
 #     `dirty` means uncommitted *deploy-path code* (see code_path_dirty) — deliberately the
 #     same definition verify --freeze refuses on, so the recorded flag and the gate agree and

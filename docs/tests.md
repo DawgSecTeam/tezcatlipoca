@@ -110,7 +110,7 @@ the pytest run above rather than this table.
 | `test_deploy_phase_units.py` | Per-phase units for `deploy_lib/phases/` with every infra call patched |
 | `test_pipeline_api.py` | `create-competition.py --plan-only` runs through `pipeline_api` |
 | `test_engine_steps.py` | `engine_cmd_ops`: every remote step names itself on failure, and Quotient `.env` secrets never appear in argv |
-| `test_redeploy_state.py` | `.deploy_state.json` writers all go through `config_ops.write_state`; redeploy's Linux hardening order holds (sudoers grant before DNS fix) |
+| `test_redeploy_state.py` | Redeploy's state writes go through the document API; its Linux hardening order holds (sudoers grant before DNS fix) |
 | `test_jump_parallel.py` | `build_jump_vms` runs satellites concurrently (bound 4) without dropping one or turning a hard abort into a partial build |
 
 **verify's gate model**

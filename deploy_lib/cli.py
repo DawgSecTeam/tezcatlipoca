@@ -51,7 +51,7 @@ def build_parser():
     parser.add_argument("--scoring-vmid", type=int, default=None, dest="scoring_vmid",
                         help="VMID for this competition's scoring engine (default 1000). Give each "
                              "concurrent competition on a shared node a distinct free VMID so their "
-                             "engines don't collide. Persisted to .deploy_state.json and reused on "
+                             "engines don't collide. Persisted to the state document and reused on "
                              "resume (ignored on --from-phase, which reads it back from state).")
     parser.add_argument("--team-identifiers", dest="team_identifiers", default=None,
                         help="Comma list of team identifiers (subnet ids) for THIS run, outranking "
@@ -81,7 +81,7 @@ def build_parser():
                              "seeded, the engine stays paused, and injects are deferred to the "
                              "start so their open/due/close windows anchor at T0. Start later "
                              "with: python3 competition-ops.py start --comp-dir <dir>. The flag "
-                             "is recorded in .deploy_state.json, so resumes stay held.")
+                             "is recorded in the state document, so resumes stay held.")
     parser.add_argument("--plan-only", action="store_true", dest="plan_only",
                         help="Collect/generate the competition's config (Compfile, boxes.json) "
                              "and print a summary, then exit WITHOUT touching any infrastructure "

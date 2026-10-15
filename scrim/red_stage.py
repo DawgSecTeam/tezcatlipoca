@@ -104,7 +104,7 @@ def _resolve_red_vmid(args, comp):
     if vmid is None:
         raise RuntimeError(
             "cannot resolve red01's vmid: no --red-vmid, no Compfile red01_vmid, no "
-            "comp bad-auto config, and no scoring_vm_id in .deploy_state.json. "
+            "comp bad-auto config, and no scoring_vm_id in the state document. "
             "Pass --red-vmid or set red01_vmid in the Compfile — never fall back "
             "to bad-auto's shared built-in default (vmid 999).")
     args.red_vmid = vmid
