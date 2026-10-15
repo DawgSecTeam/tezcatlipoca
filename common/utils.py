@@ -277,15 +277,19 @@ def env_summary():
 #     (main .env targets the DOWN .193; .150 lives in .env.cyberrange-20260930) and a
 #     wrong-variant copy used to be visible only if someone read the file. Printed in
 #     every entry script's banner so the first five lines betray the wrong estate.
-    def get(name, default="?"):
-        return (os.environ.get(name) or "").strip() or default
-    endpoint = get("TF_VAR_proxmox_endpoint")
-    node = get("TF_VAR_proxmox_node")
-    datastore = get("TF_VAR_datastore")
-    template = get("TF_VAR_template_vm_id")
-    mgmt = get("TF_VAR_engine_mgmt_ip", "default")
-    return (f"endpoint={endpoint} node={node} datastore={datastore} "
-            f"tpl={template} engine-mgmt={mgmt}")
+#
+#     The values are the RESOLVED config, not the ambient environment: multi-node
+#     placement and --engine-mgmt-ip move the process onto another host/address by
+#     activating the config (not os.environ), and the "Effective target" restate read
+#     the stale env — so an operator checking the banner saw the pre-placement host and
+#     the pre-flag mgmt IP (live 2026-10-15: --engine-mgmt-ip 10.0.0.244 ran while the
+#     banner said 10.0.0.252).
+    from estate import config
+    cfg = config.active()
+    mgmt = cfg.engine.mgmt_ip if cfg.is_set("engine.mgmt_ip") else ""
+    return (f"endpoint={cfg.proxmox.endpoint or '?'} node={cfg.proxmox.node or '?'} "
+            f"datastore={cfg.proxmox.datastore or '?'} "
+            f"tpl={cfg.proxmox.template_vm_id or '?'} engine-mgmt={mgmt or 'default'}")
 
 
 def pick_competition(competitions, label="saved", action="Select a competition"):

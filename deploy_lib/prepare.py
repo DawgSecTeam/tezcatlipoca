@@ -56,6 +56,12 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path)
 
     ctx.engine_mgmt_ip = engine_mgmt_ip_from_env(engine_mgmt_ip)
+    # The banner above printed the pre-placement, pre-flag target. --engine-mgmt-ip is the
+    # last thing to move it, so the effective line belongs here — an operator checking the
+    # banner must see the address this run will actually dial (the 2026-10-15 canary ran
+    # .244 while the banner said .252).
+    from common.utils import env_summary
+    print(f"  Effective target: {env_summary()}")
 
     # Gate 2 (gates.py): stale-estate refusal + capacity/collision preflight.
     run_range_gates(ctx, comp_dir, from_phase)

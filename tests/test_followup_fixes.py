@@ -183,6 +183,22 @@ class EnvSummaryTests(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             self.assertIn("engine-mgmt=default", env_summary())
 
+    def test_summary_reads_the_resolved_target_not_the_ambient_env(self):
+        """Placement and --engine-mgmt-ip move the run by activating the config, not the
+        environment. The banner must name what the run DIALS: live 2026-10-15 the canary
+        deployed --engine-mgmt-ip 10.0.0.244 while every line printed 10.0.0.252."""
+        from estate import config
+        env = {"TF_VAR_proxmox_endpoint": "https://10.0.0.150:8006",
+               "TF_VAR_proxmox_node": "proxmox", "TF_VAR_datastore": "hdd",
+               "TF_VAR_template_vm_id": "955", "TF_VAR_engine_mgmt_ip": "10.0.0.252"}
+        with patch.dict(os.environ, env, clear=True):
+            config.reset()
+            config.active().activate({"engine.mgmt_ip": "10.0.0.244",
+                                      "proxmox.endpoint": "https://10.0.0.193:8006"})
+            s = env_summary()
+        self.assertIn("engine-mgmt=10.0.0.244", s)
+        self.assertIn("endpoint=https://10.0.0.193:8006", s)
+
 
 if __name__ == "__main__":
     unittest.main()
