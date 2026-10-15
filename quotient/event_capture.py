@@ -40,15 +40,25 @@ def dump_scoreboard(base_url, session, comp_dir, *, out_dir=None):
     errors = []
 
     def _get(path, label):
+        # Returns (payload, error). A 200 whose body is literally `null` is a failed read
+        # too: it used to return None without touching `errors`, and the callers then read
+        # `errors[-1]` off an empty list — IndexError, caught by the teardown's step wrapper
+        # and downgraded to a warning, so every dashboard teardown lost the engine's final
+        # scoreboard (live 2026-10-15, three destroys; proved by the crimson-relay and
+        # pfsense-rvb teardown subagents with a stub session).
         try:
             r = session.get(f"{base_url}{path}", timeout=10)
             r.raise_for_status()
-            return r.json()
+            payload = r.json()
         except (requests.RequestException, ValueError) as e:
-            errors.append(f"{label}: {type(e).__name__}: {e}")
-            return None
+            return None, f"{label}: {type(e).__name__}: {e}"
+        if payload is None:
+            return None, f"{label}: empty response body (null)"
+        return payload, ""
 
-    teams = _get("/api/teams", "teams")
+    teams, err = _get("/api/teams", "teams")
+    if err:
+        errors.append(err)
     if not isinstance(teams, list):
         if teams is not None:
             errors.append("teams: unexpected payload (not a list)")
@@ -57,15 +67,19 @@ def dump_scoreboard(base_url, session, comp_dir, *, out_dir=None):
     for t in teams:
         if not isinstance(t, dict):
             continue
-        services = _get(f"/api/services/{t.get('ID')}", f"services/{t.get('ID')}")
+        services, err = _get(f"/api/services/{t.get('ID')}", f"services/{t.get('ID')}")
         if services is None:
-            t["services_error"] = errors[-1]
+            if err:
+                errors.append(err)
+            t["services_error"] = err or "unreadable"
         else:
             t["services"] = services
     dump["teams"] = teams
-    injects = _get("/api/injects", "injects")
+    injects, err = _get("/api/injects", "injects")
     if injects is None:
-        dump["injects_error"] = errors[-1]
+        if err:
+            errors.append(err)
+        dump["injects_error"] = err or "unreadable"
     else:
         dump["injects"] = injects
     out = out_dir / f"event-final-{time.strftime('%Y%m%d-%H%M%S')}.json"

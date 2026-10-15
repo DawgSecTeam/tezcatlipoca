@@ -4,6 +4,56 @@ Temporary writepad, not a ledger: every entry has a concrete next action and is 
 
 ## Open
 
+### Two concurrent runs of one competition cannot be given distinct red01 slots
+
+`red01_vmid`/`red01_ip` resolve from the **competition** directory
+(`red/badauto_config_ops.red01_vmid_for`/`red01_ip_for`, called at `infra/plan.py:100-101`
+and again at phase 7 `red/red_plant_ops.py:247`), while everything else about placement is
+per run, and `create-competition.py` has no `--red-vmid`/`--red-ip` (`deploy_lib/cli.py`).
+So two concurrent runs of ONE competition read the same reservation: the second is refused
+by `infra/red01.py`'s gates, or — if both pass the point-in-time check in the same window —
+its bad-auto deploy reconfigures the first run's live red01 (bad-auto's deploy is
+clone-or-reuse; that is the 2026-10-12 kill shape the gates were added for). `AGENTS.md`'s
+"Concurrent ranges" recipe names only `--scoring-vmid` and team identifiers, so it does not
+cover this, and the only lock in play is keyed on the engine vmid
+(`nakonops/nakon_lock_ops.py`) — nothing reserves red01.
+Measured cost this cycle: the three-parallel-range campaign hand-derived a red01 vmid/IP per
+competition and committed a checked-free pair into two Compfiles (competitions repo
+`cf68857`) — exactly the "operator must remember it" class this project files as a bug.
+**Next action**: carry red01 in the per-run placement object (derived vmid from the slot
+count rather than the fixed `+170` offset, address selected from a declared management band)
+and write it before preflight, keeping the Compfile keys readable for already-deployed
+ranges. Design, blast radius and migration cost: `logs/campaign/placement-simplification.md`.
+
+### The drivers' config contract moved to `TEZ_*` but the deployed env files did not
+
+`estate/config.py` resolves only `TEZ_*` (its `_SPEC` + `env_name`) and no module maps the
+legacy `TF_VAR_*` names any more, but the ops host's engine env still defined **only**
+`TF_VAR_*`. A deploy survives that — nodes.json supplies the endpoint — so the gap stays
+invisible until teardown, whose `verify_clean` needs the ambient config: two teardowns
+`destroyed 0` and exited non-zero with `config 'proxmox.endpoint' is not set`, while the
+line immediately before said `[estate] ok — destroyed 0`. Same class: bad-auto's
+`badauto.deploy.proxmox.load_proxmox_env()` still demands `TF_VAR_proxmox_{endpoint,
+api_token,node}`, so a scrim dies deploying red01 over names the pipeline no longer sets;
+`dashboard/config.py:engine_config_file`'s docstring still promises the legacy resolution.
+**Next action**: have each driver refuse at startup — before any phase, naming the key and
+the file that should carry it — when neither `TEZ_PROXMOX_ENDPOINT` nor
+`TEZ_PROXMOX_API_TOKEN` resolves, and give bad-auto a `TEZ_PROXMOX_*` read with a `TF_VAR_*`
+fallback instead of keeping both name sets alive in an ops-host file by hand.
+
+### A blue cycle can overrun the orchestrator's own event deadline
+
+`run-59a685c0` (2026-10-15, scrim-one-light): a 30-minute `--duration-min` event was still in
+`stage=event` at 56 minutes elapsed. `monitor_loop` stopped writing snapshots at T+30 while
+the harness waited on a blue cycle that had already exceeded its 1800 s budget, so the event
+did not end at its deadline and the clock-bounded deliverables (interaction report, teardown)
+were deferred with it. The cycle contract is 6 wall-clock minutes; a model that spends 20+ in
+one cycle (one trivial completion took 11.5 min on the local endpoint) turns that into an
+unbounded event.
+**Next action**: make the deadline authoritative for the feed loop — stop starting cycles past
+`duration_min`, and cap the join on an in-flight cycle by the remaining window — so the
+harness always reaches capture and teardown on time.
+
 ### The comp ownership tag is the workspace directory name, so every dashboard range is `comp-comp`
 
 `teardown/machinery.py` builds `Ownership(Path(comp_dir).name, run_id)` and the deploy stamps
