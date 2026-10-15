@@ -114,7 +114,7 @@ class VerifyCleanSkippedRed(unittest.TestCase):
             full=True)
         plan = build_terminal_plan()
         done = {"red01": journal_red01} if journal_red01 else {}
-        eng = TeardownEngine(ctx, journal_path=Path("_unused-journal.json"))
+        eng = TeardownEngine(ctx)
         with patch.object(engine_mod.TeardownEngine, "_load_journal",
                           return_value={"run_id": "run-x", "done": done}), \
                 patch("red.red_plant_ops.red_vmid_candidates", return_value=[]), \

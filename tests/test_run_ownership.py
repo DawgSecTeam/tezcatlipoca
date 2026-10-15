@@ -210,7 +210,7 @@ class ReportRemainingClassification(unittest.TestCase):
             boxes=[], deployed_state={"run_id": RUN}, ownership=Ownership(COMP, RUN),
             placement=None, nodes=["n"], default_node="n", inventory=Inventory(["n"], api=fake),
             full=True)
-        report = TeardownEngine(ctx, journal_path=Path("_unused-journal.json")).verify_clean(
+        report = TeardownEngine(ctx).verify_clean(
             _terminal_plan(ctx))
         self.assertTrue(any("ours" in p and "2300" in p for p in report.problems),
                         report.problems)

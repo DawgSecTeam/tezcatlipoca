@@ -285,3 +285,50 @@ class FlatBridgeTest(unittest.TestCase):
         self.state.data["templates"]["engine"] = {"hash": "e" * 64}
         self.state.absorb({"last_phase": 3})
         self.assertEqual(self.state.data["templates"]["engine"], {"hash": "e" * 64})
+
+
+class PartialDocumentDoesNotShadowLegacyState(unittest.TestCase):
+    """A folded record can create the document before the deploy records its identity.
+
+    The teardown journal is the live case: a teardown of a pre-estate range wrote the
+    document, and the next pass then read it as authoritative, found no run id and refused
+    with "estate-state.json carries no run id, so ownership cannot be proven".
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.comp = Path(self.tmp.name)
+
+    def _legacy(self, run_id="run-abc12345"):
+        (self.comp / ".deploy_state.json").write_text(json.dumps(
+            {"run_id": run_id, "pipeline_version": 3, "last_phase": 8}))
+
+    def _partial_document(self):
+        document = state.EstateState.load(self.comp)
+        document.section("teardown")["done"] = {"red01": {"detail": "gone"}}
+        document.save()
+
+    def test_read_flat_prefers_the_legacy_file_over_an_identity_less_document(self):
+        self._legacy()
+        self._partial_document()
+        self.assertEqual(state.read_flat(self.comp)["run_id"], "run-abc12345")
+
+    def test_the_documents_own_keys_win_over_the_legacy_file(self):
+        self._legacy()
+        document = state.EstateState.load(self.comp)
+        document.section("run")["started"] = True
+        document.save()
+        flat = state.read_flat(self.comp)
+        self.assertTrue(flat["started"], "the document's own record must not be shadowed")
+        self.assertEqual(flat["run_id"], "run-abc12345", "the legacy file fills the gap")
+
+    def test_open_migrates_when_the_document_is_absent(self):
+        self._legacy()
+        self.assertEqual(state.open(self.comp).flatten()["run_id"], "run-abc12345")
+
+    def test_an_identity_less_document_with_no_legacy_file_reads_as_itself(self):
+        state.EstateState.load(self.comp).save()
+        flat = state.read_flat(self.comp)
+        self.assertIsNotNone(flat)
+        self.assertNotIn("run_id", flat)

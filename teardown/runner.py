@@ -13,7 +13,7 @@ from multinode.placement_record import (activate_placement, engine_record, read_
                                         record_of)
 from teardown import (Inventory, TeardownContext, TeardownEngine, load_ownership,
                       refuse_frozen_full_teardown)
-from teardown.engine import TEARDOWN_JOURNAL
+from teardown.engine import save_teardown_journal
 from teardown.modes import build_terminal_plan
 from engine.template_freeze import frozen_state
 from estate import config
@@ -82,7 +82,6 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
 
 # records steps the CALLER already completed (the scrim harness runs the evidence pull/collect/report and its superior red teardown itself) so the standard plan skips them instead of re-running them against dead boxes
 def record_evidence_done(comp_dir, test_dir=None, red_vmid=None):
-    from config.config_ops import write_text_atomic
 
     comp_dir = Path(comp_dir)
     done = {}
@@ -95,6 +94,4 @@ def record_evidence_done(comp_dir, test_dir=None, red_vmid=None):
     if not done:
         return
     _, ownership = load_ownership(comp_dir)     # Refusal: same verdict the runner would give
-    write_text_atomic(comp_dir / TEARDOWN_JOURNAL,
-                      json.dumps({"run_id": ownership.run_id, "done": done}, indent=2),
-                      mode=0o600)
+    save_teardown_journal(comp_dir, {"run_id": ownership.run_id, "done": done})

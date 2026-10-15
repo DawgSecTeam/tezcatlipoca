@@ -6,7 +6,7 @@ validated at construction, and one engine that applies policies, journals
 completion, and owns the exit contract (exit 0 == verify_clean said clean).
 The CLI scripts are thin shims over this package."""
 
-from teardown.engine import TEARDOWN_JOURNAL, CleanReport, TeardownEngine  # noqa: F401
+from teardown.engine import CleanReport, TeardownEngine  # noqa: F401
 from teardown.inventory import Inventory  # noqa: F401
 from teardown.machinery import (TEARDOWN_WORKERS, load_ownership,  # noqa: F401
                                 pre_stop_windows_boxes, refuse_frozen_full_teardown,
@@ -20,7 +20,6 @@ from infra.ownership import OWNED, MARKER, MISSING, UNPROVEN, Ownership  # noqa:
 
 __all__ = [
     "CleanReport",
-    "TEARDOWN_JOURNAL",
     "TeardownEngine",
     "Inventory",
     "Ownership",
