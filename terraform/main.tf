@@ -5,23 +5,10 @@ terraform {
   backend "local" {}
 }
 
-locals {
-  proxmox_host = regex("^https?://([^/:]+)", var.proxmox_endpoint)[0]
-}
-
 provider "proxmox" {
   endpoint  = var.proxmox_endpoint
   api_token = var.proxmox_api_token
   insecure  = true
-  ssh {
-    agent       = false
-    username    = "root"
-    private_key = file(var.ssh_private_key_path)
-    node {
-      name    = var.proxmox_node
-      address = local.proxmox_host
-    }
-  }
 }
 
 # Satellite providers (multi-node). Exactly MAX_SATELLITES=4 aliases; unused slots
@@ -32,15 +19,6 @@ provider "proxmox" {
   endpoint  = try(var.satellites[0].endpoint, "https://sat1.invalid")
   api_token = try(var.satellites[0].api_token, "root@pam!dummy=00000000-0000-0000-0000-000000000000")
   insecure  = true
-  ssh {
-    agent       = false
-    username    = "root"
-    private_key = file(var.ssh_private_key_path)
-    node {
-      name    = try(var.satellites[0].node, "unused")
-      address = try(regex("^https?://([^/:]+)", var.satellites[0].endpoint)[0], "sat1.invalid")
-    }
-  }
 }
 
 provider "proxmox" {
@@ -48,15 +26,6 @@ provider "proxmox" {
   endpoint  = try(var.satellites[1].endpoint, "https://sat2.invalid")
   api_token = try(var.satellites[1].api_token, "root@pam!dummy=00000000-0000-0000-0000-000000000000")
   insecure  = true
-  ssh {
-    agent       = false
-    username    = "root"
-    private_key = file(var.ssh_private_key_path)
-    node {
-      name    = try(var.satellites[1].node, "unused")
-      address = try(regex("^https?://([^/:]+)", var.satellites[1].endpoint)[0], "sat2.invalid")
-    }
-  }
 }
 
 provider "proxmox" {
@@ -64,15 +33,6 @@ provider "proxmox" {
   endpoint  = try(var.satellites[2].endpoint, "https://sat3.invalid")
   api_token = try(var.satellites[2].api_token, "root@pam!dummy=00000000-0000-0000-0000-000000000000")
   insecure  = true
-  ssh {
-    agent       = false
-    username    = "root"
-    private_key = file(var.ssh_private_key_path)
-    node {
-      name    = try(var.satellites[2].node, "unused")
-      address = try(regex("^https?://([^/:]+)", var.satellites[2].endpoint)[0], "sat3.invalid")
-    }
-  }
 }
 
 provider "proxmox" {
@@ -80,15 +40,6 @@ provider "proxmox" {
   endpoint  = try(var.satellites[3].endpoint, "https://sat4.invalid")
   api_token = try(var.satellites[3].api_token, "root@pam!dummy=00000000-0000-0000-0000-000000000000")
   insecure  = true
-  ssh {
-    agent       = false
-    username    = "root"
-    private_key = file(var.ssh_private_key_path)
-    node {
-      name    = try(var.satellites[3].node, "unused")
-      address = try(regex("^https?://([^/:]+)", var.satellites[3].endpoint)[0], "sat4.invalid")
-    }
-  }
 }
 
 locals {

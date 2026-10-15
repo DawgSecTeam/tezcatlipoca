@@ -307,7 +307,7 @@ Local-files → Markdown. The packet is the same for every team (real credential
 
 **main.tf**
 
-- `local.proxmox_host`: use the endpoint host, since bpg otherwise asks the API for node addresses that may be unreachable from the operator (LAN IP vs Tailscale). Provider `ssh` block is for operations the REST API can't do; `insecure = true`.
+- Providers: API token, `insecure = true`, **no `ssh` block** — bpg needs SSH only for file/snippet uploads, `source_file.path` imports and container `idmap`, and this config has none of those (VM, network and storage management are API-only).
 - `team_bridge` (+ `_sat1..4`): **no `ports`**, so an empty bridge has no uplink. Slot 0 is the engine node; `_satN` carry the satellite alias. Exactly `MAX_SATELLITES=4` aliases exist; unused slots carry dummy settings.
 - `transit_bridge`: `vmbrW<id>` per slot-0 team only when a box is `in_path` (`local.has_in_path_fw`); otherwise `for_each` is empty and plans match the no-firewall pipeline. Engine transit NICs append after team NICs so netplan names never shift.
 - `scoring_engine`: `vm_id = var.scoring_vm_id`; `agent { enabled = true }` to read the real mgmt IP. No cloud-init block: the template's netplan and baked key/sudo suffice. The mgmt IP is static by default (`TF_VAR_engine_mgmt_ip=''` restores DHCP); `engine_template_ops` uses it for the build VM's `ipconfig0`.

@@ -1,4 +1,4 @@
-"""Guest-agent channels: exec as root/SYSTEM, detached exec, agent waits."""
+"""Guest-agent channels: exec as root/SYSTEM, detached exec, file transfer, agent waits."""
 
 import shlex
 import time
@@ -59,6 +59,56 @@ def guest_agent_exec_root(node, vmid, script, timeout=60, shell="bash"):
         last = s
         time.sleep(1)
     raise RuntimeError(_exec_timeout_message(vmid, pid, timeout, last))
+
+
+def guest_agent_write_file(node, vmid, path, content):
+    """Write a local file's bytes to a path in the guest, chunked past the API's content cap."""
+    if isinstance(content, (bytes, bytearray, memoryview)):
+        data = bytes(content)
+    else:
+        with open(content, "rb") as f:
+            data = f.read()
+    parts = []
+    for start in range(0, len(data), _FILE_WRITE_CHUNK):
+        part = f"{path}.part{len(parts)}"
+        _guest_agent_write_chunk(
+            node, vmid, part, data[start:start + _FILE_WRITE_CHUNK])
+        parts.append(part)
+    # file-write is one-shot (no append/offset), so the parts are concatenated guest-side.
+    rc, _out, err = guest_agent_exec_root(
+        node, vmid,
+        f"cat {' '.join(parts)} > {path} && rm -f {' '.join(parts)}", timeout=300)
+    if rc != 0:
+        raise RuntimeError(f"could not reassemble {path} in vmid {vmid} from "
+                           f"{len(parts)} chunks: rc={rc} {err.strip()[:200]}")
+
+
+def guest_agent_read_file(node, vmid, path, local_path=None):
+    """Read a guest file to bytes, or write it to a local path when one is given."""
+    # file-read decodes the base64 the agent sends (decode defaults to 1); content is a
+    # str, so surrogateescape is what carries non-UTF-8 bytes back out losslessly.
+    data = proxmox_api(
+        "GET", f"/nodes/{node}/qemu/{vmid}/agent/file-read", params={"file": path},
+    )["data"]["content"].encode("utf-8", "surrogateescape")
+    if local_path:
+        with open(local_path, "wb") as f:
+            f.write(data)
+    else:
+        return data
+
+
+# file-write caps `content` at 61440 chars, and we hand it already-encoded base64
+# (encode=0), so the raw chunk budget is what base64 expands back up to that cap.
+_FILE_WRITE_CHUNK = 61440 // 4 * 3
+
+
+def _guest_agent_write_chunk(node, vmid, path, chunk):
+    import base64
+    # file-write returns null, so there is no envelope to index.
+    proxmox_api(
+        "POST", f"/nodes/{node}/qemu/{vmid}/agent/file-write",
+        data={"file": path, "content": base64.b64encode(chunk).decode("ascii"), "encode": 0},
+    )
 
 
 # The only agent channel before Windows bootstrap brings up the SSH path.
