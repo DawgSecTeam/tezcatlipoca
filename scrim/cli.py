@@ -77,7 +77,15 @@ def main():
                    help="separate LLM base URL for team2's blue (default: same as --blue-base-url)")
     p.add_argument("--blue2-model", default=None,
                    help="model for team2's blue when --blue2-base-url is set")
-    p.add_argument("--red-ip", default="10.0.0.198", help="red01 IP on the cluster (realm default)")
+    # No default: `None` is what lets `red_stage._resolve_red_ip` consult the comp's own
+    # reservation (Compfile `red01_ip`). Hardcoding bad-auto's own default here made that
+    # resolver unreachable, and a re-stage moved red01 off the address the deploy recorded
+    # and the realm C2 still pointed at (live 2026-10-15, scrim-one-light: deploy planted
+    # at 10.0.0.196, re-stage deployed red01 at 10.0.0.198). `--red-vmid` has always
+    # defaulted to None for the same reason.
+    p.add_argument("--red-ip", default=None,
+                   help="red01 IP on the cluster; empty resolves the comp's own reservation "
+                        "(Compfile red01_ip), else the tez default")
     p.add_argument("--red-gw", default="10.0.0.1", help="red01 gateway")
     p.add_argument("--red-storage", default="hdd", help="storage pool red01 clones from")
     p.add_argument("--red-vmid", type=int, default=None,

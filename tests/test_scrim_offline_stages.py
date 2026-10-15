@@ -277,7 +277,7 @@ class StageManifest(Base):
         return [p["phase"] for p in
                 run_manifest.load_manifest(manifests[0].parent).get("phases") or []]
 
-    def _run_main(self, argv):
+    def _run_main(self, argv, on_red=None):
         from scrim import cli, event_run, fire_test, inject_sync, red_stage, staging
         noop = lambda *a, **k: None  # noqa: E731
         with mock.patch.object(sys, "argv", ["run-agent-scrim.py", *argv]), \
@@ -288,10 +288,19 @@ class StageManifest(Base):
                 mock.patch.object(staging, "creds_from_files", return_value=dict(CREDS)), \
                 mock.patch.object(fire_test, "stage_verify", noop), \
                 mock.patch.object(blue_agent, "stage_blues", noop), \
-                mock.patch.object(red_stage, "stage_red", noop), \
+                mock.patch.object(red_stage, "stage_red", on_red or noop), \
                 mock.patch.object(inject_sync, "reanchor_injects", noop), \
                 mock.patch.object(event_run, "run_event_and_finish", noop):
             cli.main()
+
+    def test_a_restage_leaves_red01s_address_to_the_compfile(self):
+        # The CLI default used to be bad-auto's own 10.0.0.198, so `_resolve_red_ip`'s
+        # Compfile lookup never ran and a re-stage moved red01 off the address the deploy
+        # recorded and the realm C2 still pointed at (live 2026-10-15, scrim-one-light).
+        seen = {}
+        self._run_main(["--competition", "c1", "--teams", "1", "--duration-min", "30"],
+                       on_red=lambda args, *a, **k: seen.update(args=args))
+        self.assertIsNone(seen["args"].red_ip)
 
     def test_each_stage_records_itself_in_harness_order(self):
         self._run_main(["--competition", "c1", "--teams", "1", "--duration-min", "30"])
