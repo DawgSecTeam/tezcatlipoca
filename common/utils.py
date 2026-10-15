@@ -1,4 +1,5 @@
 import contextlib
+import fcntl
 import json
 import os
 import re
@@ -313,6 +314,44 @@ def pick_competition(competitions, label="saved", action="Select a competition")
         print(f"  Please enter a number between 1 and {len(competitions)}, or 'exit'.")
 
 
+def _terraform_init_lock_path(env=None):
+    """The lock file that serialises `terraform init` for one shared provider cache."""
+    cache = (env or os.environ).get("TF_PLUGIN_CACHE_DIR")
+    if not cache:
+        return None
+    try:
+        Path(cache).mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return Path(cache) / ".init.lock"
+
+
+@contextlib.contextmanager
+def terraform_init_lock(env=None):
+    """Exclusive, host-wide lock around a `terraform init` that installs into the shared cache.
+
+    The provider cache lives OUTSIDE the checkout (`terraform_plugin_cache_dir`, e0dc52c) and
+    is shared by every run on the host. Two concurrent runs inited at the same moment, one
+    installed `terraform-provider-null` while the other had just exec'd it, and the loser died
+    with `open .../terraform-provider-null_v3.3.2_x5: text file busy` — a normal case, not a
+    corner: the dashboard deliberately allows concurrent runs (and the club's practice loop
+    runs two competitions side by side). init is fast and installs only what is missing, so
+    serialising it costs nothing. Blocking (not LOCK_NB): the wait is bounded by one install.
+    """
+    path = _terraform_init_lock_path(env)
+    if path is None:
+        yield
+        return
+    handle = open(path, "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        handle.close()
+
+
 def run_terraform(args, cwd, env=None, timeout=None, check=True, grace=60):
 # Run terraform in its own process group so a driver interruption can't orphan it.
 #
@@ -323,38 +362,44 @@ def run_terraform(args, cwd, env=None, timeout=None, check=True, grace=60):
 #     SIGKILL after `grace` seconds. SIGKILL of the driver itself is not catchable.
 #     Returns CompletedProcess (returncode only); raises CalledProcessError when check.
     cmd = ["terraform", *args]
-    proc = subprocess.Popen(cmd, cwd=cwd, env=env, start_new_session=True)
+    # `init` is the only subcommand that writes the shared provider cache, and the lock must be
+    # held for the WHOLE install: terraform installs while the process runs, not at exec (the
+    # lock released at Popen time would serialise nothing).
+    lock = (terraform_init_lock(env) if args and args[0] == "init"
+            else contextlib.nullcontext())
+    with lock:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, start_new_session=True)
 
-    def _stop():
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGINT)
-        try:
-            proc.wait(timeout=grace)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        # terraform reaps its own provider plugins before exiting; sweep any straggler
-        # left in the group so nothing keeps mutating infra behind a released lock.
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)
+        def _stop():
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGINT)
+            try:
+                proc.wait(timeout=grace)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            # terraform reaps its own provider plugins before exiting; sweep any straggler
+            # left in the group so nothing keeps mutating infra behind a released lock.
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
 
-    prev = None
-    if threading.current_thread() is threading.main_thread():
-        def _on_term(signum, frame):
-            raise KeyboardInterrupt(f"signal {signum}")
-        prev = signal.signal(signal.SIGTERM, _on_term)
-    try:
+        prev = None
+        if threading.current_thread() is threading.main_thread():
+            def _on_term(signum, frame):
+                raise KeyboardInterrupt(f"signal {signum}")
+            prev = signal.signal(signal.SIGTERM, _on_term)
         try:
-            rc = proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _stop()
-            raise
-        except BaseException:
-            _stop()
-            raise
-    finally:
-        if prev is not None:
-            signal.signal(signal.SIGTERM, prev)
+            try:
+                rc = proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _stop()
+                raise
+            except BaseException:
+                _stop()
+                raise
+        finally:
+            if prev is not None:
+                signal.signal(signal.SIGTERM, prev)
     if check and rc != 0:
         raise subprocess.CalledProcessError(rc, cmd)
     return subprocess.CompletedProcess(cmd, rc)
