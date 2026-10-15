@@ -141,9 +141,24 @@ def red_llm_config(args):
     return llm
 
 
+def _resolve_red_ip(args, comp):
+    """Fill a missing --red-ip from the comp's own reservation (Compfile `red01_ip`).
+
+    Without it the rebuilt config carried `red_ip: None`, bad-auto fell back to its own
+    default, and a re-stage MOVED red01 off the address the deploy recorded and the range
+    was built around: run-a87e0d88 recorded 10.0.0.196, bad-auto re-pointed the VM to
+    10.0.0.198, and every later reader of the recorded address looks at an empty slot
+    (live 2026-10-15). One resolver for all of them.
+    """
+    if getattr(args, "red_ip", None):
+        return args.red_ip
+    args.red_ip = badauto_config_ops.red01_ip_for(comp)
+
+
 def stage_red(args, comp, creds, run_dir):
     llm = red_llm_config(args)
     _resolve_red_vmid(args, comp)   # before the cfg build: the config carries it
+    _resolve_red_ip(args, comp)
     cfg = {
         "llm": llm,
         "intel": "nakon",
