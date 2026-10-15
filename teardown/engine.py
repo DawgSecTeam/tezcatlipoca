@@ -159,6 +159,7 @@ class TeardownEngine:
                     vmid = candidate
                     break
             still = None
+            red01_done = self._journal_done(plan).get("red01")
             if vmid:
                 try:
                     from infra.client import live_vmids
@@ -169,7 +170,7 @@ class TeardownEngine:
                 problems.append("red01 is STILL PRESENT — it holds the LLM key and "
                                 "beacon tasking")
             elif still is None and (self.ctx.deployed_state.get("assume_breach")
-                                    or self._journal_done(plan).get("red01")):
+                                    or (red01_done and red01_done.get("status") != "skipped")):
                 problems.append("red01's vmid could not be verified gone — check by hand")
 
         # 5. no terraform state lock left behind

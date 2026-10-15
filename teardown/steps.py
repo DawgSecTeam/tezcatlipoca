@@ -177,7 +177,10 @@ class RedStep(Step):
                           f"surviving red VM by hand (it holds the LLM key)")
 
     def journal_detail(self, result):
-        return {"detail": result.detail, "vmid": getattr(self, "last_vmid", None)}
+        # status rides along so verify_clean can tell "red01 destroyed" from "skipped —
+        # this run staged no red": only the former demands an absence proof.
+        return {"detail": result.detail, "vmid": getattr(self, "last_vmid", None),
+                "status": result.status}
 
 
 class PreStopStep(Step):
