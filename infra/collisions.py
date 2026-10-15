@@ -27,7 +27,9 @@ class Slot:
     vmid: int
     label: str
     persistent_template: bool = False   # the engine template: expected to survive, reused
-    template_slot: bool = False         # a golden slot: a template here is this comp's golden
+    template_slot: bool = False         # a slot a TEMPLATE may legitimately occupy (golden +
+                                        # engine template): a template here is this comp's,
+                                        # kept for reuse — `--keep-templates`/`--teams-only`
 
 
 def expected_slots(share, boxes, engine_vmid):
@@ -43,7 +45,12 @@ def expected_slots(share, boxes, engine_vmid):
         # there carrying this competition's tag is adopted — reused or rebuilt by hash, NOT
         # a leftover. Another competition's template there is fatal.
         et = engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET
-        slots.append(Slot(et, f"engine template vmid {et}", persistent_template=not share.multi))
+        # template_slot as well as persistent_template: the --keep-templates teardown keeps
+        # this template in MULTI-node mode too, and gating the tolerance on `persistent_template`
+        # alone (False when share.multi) made the next deploy refuse its own kept engine
+        # template as a leftover — the reuse path could never run (2026-10-14).
+        slots.append(Slot(et, f"engine template vmid {et}", template_slot=True,
+                          persistent_template=not share.multi))
     teams = [Slot(vm_id_for(t["identifier"], i), f"team vmid {vm_id_for(t['identifier'], i)} "
                   f"({k}/{boxes[i]['name']})")
              for k, t in share.teams.items() for i in range(len(boxes))]

@@ -97,6 +97,14 @@ class Collisions(unittest.TestCase):
             self._run(_share(), [_vm(1000, f"tezcatlipoca;comp-c1;{RUN}")], bridges=["vmbr101"])
         self.assertIn("destroy-competition.py", str(cm.exception))
 
+    def test_kept_templates_are_adopted_not_refused_multi_node(self):
+        # Multi-node takes the same path: the engine template is kept by --keep-templates in
+        # a nodes.json deploy too, so its slot is a template slot there as well (gating on
+        # persistent_template alone — False when share.multi — refused our own kept template).
+        kept = [dict(_vm(1140, "tezcatlipoca,comp-c1,run-practice,engine-template"),
+                     template=1)]
+        self._run(_share(multi=True), kept)      # must not raise
+
     def test_kept_templates_are_adopted_not_refused(self):
         # The --teams-only loop: a practice run's engine template + goldens are kept on
         # purpose and still carry the PRACTICE run id, while a fresh workspace mints a
