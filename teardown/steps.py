@@ -225,8 +225,9 @@ class EstateStep(Step):
                 f"{r['entry']['kind']} {r['entry']['name']}: {r['reason']}"
                 for r in summary["refused"]))
         # A VM created but never recorded (a crash between the clone and the record) is
-        # invisible to the inventory; the run-id-scoped sweep is the net for it.
-        sweep_tagged_leftovers(ctx.nodes, ctx.ownership)
+        # invisible to the inventory; the run-id-scoped sweep is the net for it. A
+        # teams-only teardown keeps the role templates, so the sweep must not claim them.
+        sweep_tagged_leftovers(ctx.nodes, ctx.ownership, keep_templates=not ctx.full)
         # A range deployed before the inventory existed has no template records, so its
         # goldens and engine template die by vmid math instead.
         if ctx.full and not (document.resources("golden")

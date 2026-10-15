@@ -116,7 +116,7 @@ def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None,
 
 
 # full ownership tag set only: partial overlap does not count (loadtest-2026-09-30), and a same-comp VM with a DIFFERENT run id belongs to another worktree's run (2026-10-02 near-miss)
-def sweep_tagged_leftovers(nodes, ownership):
+def sweep_tagged_leftovers(nodes, ownership, keep_templates=False):
     comp_tags = set(ownership.tags)
     ours = []
     for node in nodes:
@@ -125,8 +125,16 @@ def sweep_tagged_leftovers(nodes, ownership):
         except Exception as e:
             print(f"  WARNING: leftover sweep skipped on {node} — listing failed: {e}")
             continue
+        # `keep_templates` is the teams-only/keep-templates teardown: the estate tiers skip
+        # the golden + engine_template roles, and the sweep must not claim them instead. It
+        # did: the deploy re-stamps a reused template with THIS run's tags (so the strict
+        # guard recognizes it), which put it inside the sweep's ownership match and destroyed
+        # the artifacts a practice run existed to validate — live 2026-10-15, run-ee5717cd
+        # swept engine-template vmid 2241 on `--teams-only`. The PVE `template` flag, not the
+        # name, is the tell.
         ours += [dict(v, _node=node) for v in vms
-                 if comp_tags <= parse_vm_tags(v.get("tags"))]
+                 if comp_tags <= parse_vm_tags(v.get("tags"))
+                 and not (keep_templates and v.get("template"))]
     if not ours:
         return
     print(f"  Leftover sweep: {len(ours)} VM(s) carrying this deploy's full ownership set "

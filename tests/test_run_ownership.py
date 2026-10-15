@@ -93,8 +93,10 @@ class FakePVE:
         return {"data": None}
 
 
-def vm(vmid, name, tags, status="stopped"):
-    return {"vmid": vmid, "name": name, "tags": tags, "status": status}
+def vm(vmid, name, tags, status="stopped", template=None):
+    # `template` is PVE's own flag on the qemu listing — the role templates a teams-only
+    # teardown keeps are exactly the entries that carry it.
+    return {"vmid": vmid, "name": name, "tags": tags, "status": status, "template": template}
 
 
 @patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None)
@@ -162,6 +164,27 @@ class LeftoverSweep(unittest.TestCase):
                 patch.object(destroy_sweep_ops, "wait_for_proxmox_task"):
             destroy_sweep_ops.sweep_tagged_leftovers(["n"], Ownership(COMP, RUN))
         self.assertEqual(fake.deleted, [])
+
+    def test_a_teams_only_teardown_keeps_the_role_templates(self):
+        """--teams-only exists to keep the validated golden + engine templates. The deploy
+        re-stamps a reused template with THIS run's tag (so the strict guard recognizes it),
+        which put it inside the sweep's ownership match: live 2026-10-15, run-ee5717cd swept
+        engine-template vmid 2241 on a teams-only teardown, so the next deploy rebuilt what
+        the practice run had just validated."""
+        fake = FakePVE(nodes={"n": [vm(2241, "engine-template", OURS, template=1),
+                                    vm(2300, "leftover", OURS)]})
+        with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
+                patch.object(destroy_sweep_ops, "wait_for_proxmox_task"):
+            destroy_sweep_ops.sweep_tagged_leftovers(["n"], Ownership(COMP, RUN),
+                                                     keep_templates=True)
+        self.assertEqual(fake.deleted, [2300])
+
+    def test_a_full_teardown_still_sweeps_the_templates(self):
+        fake = FakePVE(nodes={"n": [vm(2241, "engine-template", OURS, template=1)]})
+        with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
+                patch.object(destroy_sweep_ops, "wait_for_proxmox_task"):
+            destroy_sweep_ops.sweep_tagged_leftovers(["n"], Ownership(COMP, RUN))
+        self.assertEqual(fake.deleted, [2241])
 
 
 class PreStopOwnership(unittest.TestCase):

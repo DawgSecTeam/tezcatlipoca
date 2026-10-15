@@ -145,17 +145,28 @@ def wait_for_proxmox_task(node, upid, timeout=1800):
 
 
 def destroy_bridge_if_exists(node, bridge_name):
-    """Delete a Proxmox Linux bridge if it exists. A GET-first existence check keeps
-    a fresh deploy (whose bridges are all new) from spraying spurious 400s — PVE
-    rejects DELETE with "Parameter verification failed" rather than 404 for an
-    absent iface (live noise, m4-validation-2026-09-25 phase 1)."""
+    """Delete a Proxmox Linux bridge if it exists; True when it is gone afterwards.
+
+    A GET-first existence check keeps a fresh deploy (whose bridges are all new) from
+    spraying spurious 400s — PVE rejects DELETE with "Parameter verification failed"
+    rather than 404 for an absent iface (live noise, m4-validation-2026-09-25 phase 1).
+    DELETE only STAGES the change — the same pending/apply pair create_bridge pairs with a
+    reload PUT — so without the apply the bridge stays UP and the next deploy's preflight
+    refuses it (live 2026-10-15, run-ee5717cd left vmbr151 active through a teardown that
+    reported the estate clean).
+    """
     try:
         existing = {n.get("iface") for n in proxmox_api("GET", f"/nodes/{node}/network")["data"]}
         if bridge_name not in existing:
-            return
+            return True
         proxmox_api("DELETE", f"/nodes/{node}/network/{bridge_name}")
+        proxmox_api("PUT", f"/nodes/{node}/network")
+        remaining = {n.get("iface") for n in proxmox_api("GET", f"/nodes/{node}/network")["data"]}
+        return bridge_name not in remaining
     except requests.exceptions.HTTPError as e:
         if e.response is None or e.response.status_code != 404:
             print(f"    WARNING: could not delete bridge {bridge_name}: {e}")
+        return False
     except Exception as e:
         print(f"    WARNING: could not delete bridge {bridge_name}: {e}")
+        return False
