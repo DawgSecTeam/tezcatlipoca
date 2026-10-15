@@ -120,3 +120,47 @@ class RepairEngineCloneId(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerifyCleanSkippedRed(unittest.TestCase):
+    """verify_clean demands a red01 absence proof only when a red01 step actually ran.
+
+    A skipped red01 (the run staged no red) used to leave the teardown NOT CLEAN forever
+    ("red01's vmid could not be verified gone") because the journal entry existed without
+    any vmid to verify — live 2026-10-15, run-bbd30b90: every destroy of a red-less comp
+    exited 1."""
+
+    def _report(self, journal_red01):
+        from teardown import TeardownContext, TeardownEngine, Inventory
+        from teardown.modes import build_terminal_plan
+        from infra.ownership import Ownership
+        import teardown.engine as engine_mod
+        ctx = TeardownContext(
+            comp_dir=Path("."), env={}, teams={"team1": {"identifier": "101"}},
+            boxes=[], deployed_state={"run_id": "run-x"},
+            ownership=Ownership("c1", "run-x"), placement=None, nodes=["n"],
+            default_node="n", inventory=Inventory(["n"]), full=True)
+        plan = build_terminal_plan()
+        done = {"red01": journal_red01} if journal_red01 else {}
+        eng = TeardownEngine(ctx, journal_path=Path("_unused-journal.json"))
+        with patch.object(engine_mod.TeardownEngine, "_load_journal",
+                          return_value={"run_id": "run-x", "done": done}), \
+                patch("red.red_plant_ops.red_vmid_candidates", return_value=[]), \
+                patch("infra.client.live_vmids", side_effect=AssertionError("no vmid to check")):
+            return eng.verify_clean(plan, [])
+
+    def test_a_skipped_red01_needs_no_absence_proof(self):
+        report = self._report({"detail": "no per-comp bad-auto config",
+                               "status": "skipped"})
+        self.assertFalse(any("red01" in p for p in report.problems), report.problems)
+
+    def test_a_run_red01_step_without_a_vmid_still_demands_the_proof(self):
+        report = self._report({"detail": "no output"})
+        self.assertTrue(any("could not be verified gone" in p for p in report.problems),
+                        report.problems)
+
+    def test_journal_detail_carries_the_status(self):
+        from teardown.steps import RedStep
+        detail = RedStep.journal_detail(RedStep(), SimpleNamespace(status="skipped",
+                                                                   detail="x"))
+        self.assertEqual(detail["status"], "skipped")
