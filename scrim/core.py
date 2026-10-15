@@ -125,10 +125,6 @@ def ssh_key_path():
     checkout and died AFTER the range was already built).
     """
     raw = (config.active().ssh.private_key_path or "").strip()
-    if raw:
-        candidate = Path(raw).expanduser()
-        if candidate.is_absolute():
-            return str(candidate)
-        # Same shape the deploy uses for a relative value: relative to the terraform workdir.
-        return str((REPO / "terraform" / candidate).resolve())
-    return str((REPO / "proxmox").resolve())
+    if not raw:
+        return str((REPO / "proxmox").resolve())
+    return str(config.ssh_key_path())

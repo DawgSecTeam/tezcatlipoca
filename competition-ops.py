@@ -25,7 +25,6 @@ deliberate reset-event, never an accident.
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -35,6 +34,7 @@ from dotenv import load_dotenv
 
 from config.injects_config import injects_fingerprint, load_injects, resolve_inject_times
 from estate import state as estate_state
+from estate.engine_setup import engine_ctx
 from quotient.event_capture import end_event
 from quotient.setup import create_injects
 
@@ -51,12 +51,10 @@ def load_state(comp_dir):
 def engine_base(args, comp_dir):
     ip = args.engine_ip
     if not ip:
-        tf_dir = Path(comp_dir) / "terraform"
-        if not (tf_dir / "terraform.tfstate").exists():
-            sys.exit(f"ERROR: {tf_dir}/terraform.tfstate not found — pass --engine-ip")
-        raw = subprocess.run(["terraform", "output", "-json"], cwd=str(tf_dir),
-                             capture_output=True, text=True, check=True).stdout
-        ip = json.loads(json.loads(raw)["agent_context"]["value"])["scoring_engine_ip"]
+        ip = engine_ctx(comp_dir)["scoring_engine_ip"]
+        if not ip:
+            sys.exit(f"ERROR: no engine management IP recorded in "
+                     f"{estate_state.state_path(comp_dir)} — pass --engine-ip")
     host = ip if ip.startswith("http") else f"http://{ip}"
     return host.rstrip("/")
 

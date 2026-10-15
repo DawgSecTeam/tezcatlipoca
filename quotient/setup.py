@@ -215,7 +215,7 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
     return conf
 
 
-# Quotient's IP comes off Terraform as a bare address; requests needs a scheme
+# The recorded engine IP is a bare address; requests needs a scheme
 def _normalize_host(host: str) -> str:
     if host.startswith("http://") or host.startswith("https://"):
         return host.rstrip("/")

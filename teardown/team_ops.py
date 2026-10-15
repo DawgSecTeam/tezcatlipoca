@@ -31,6 +31,7 @@ from pathlib import Path
 import requests
 import urllib3
 
+from estate import config
 from estate import state as estate_state
 from infra.ownership import Refusal
 from multinode.placement_record import activate_placement, read_placement, record_of
@@ -40,7 +41,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def _engine_ctx(state):
-# The engine's SSH coordinates from the state document (was terraform's agent_context).
+# The engine's SSH coordinates from the state document.
     from estate import config as estate_config
     cfg = estate_config.active()
     return {"scoring_engine_ip": state.get("engine_mgmt_ip") or "",
@@ -49,7 +50,7 @@ def _engine_ctx(state):
 
 
 def _team_prefix(team_key, team):
-    # team 1 is named `team1-<box>` (terraform main.tf / targets.enumerate_targets);
+    # team 1 is named `team1-<box>` (targets.enumerate_targets);
     # every other team names its clones `<identifier>-<box>`.
     return team_key if team_key == "team1" else str(team["identifier"])
 
@@ -151,10 +152,7 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
         nodes = [record_of(placement, s["name"]).node for s in placement["satellites"]] + [default_node]
         activate_placement(placement)
         # Callers snapshot os.environ BEFORE activate_placement — see run_terminal_teardown.
-        for key in ("TF_VAR_proxmox_endpoint", "TF_VAR_proxmox_api_token", "TF_VAR_proxmox_node",
-                    "TF_VAR_datastore", "TF_VAR_template_vm_id"):
-            if os.environ.get(key):
-                env[key] = os.environ[key]
+        env.update(config.proxmox_env())
         if team_key in (placement.get("team_nodes") or {}):
             team_nodes = {team_key: record_of(placement, placement["team_nodes"][team_key]).node}
 

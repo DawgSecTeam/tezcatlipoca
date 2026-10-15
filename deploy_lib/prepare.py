@@ -21,7 +21,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
 #     Resolves the engine VMID, loads Compfile/config/state, resolves teams, computes
 #     multi-node placement, runs preflight, THEN mints the competition's secrets,
 #     generates the nakon + stage configs, computes the golden hashes and assembles
-#     terraform.tfvars.json, and enumerates the targets. Returns None when the operator
+#     the state document, and enumerates the targets. Returns None when the operator
 #     declines the confirmation prompt, so deploy() can return without running any phase
 #     (the same early return the inline code had).
 #
@@ -57,7 +57,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
 
     ctx.engine_mgmt_ip = engine_mgmt_ip_from_env(engine_mgmt_ip)
 
-    # Gate 2 (gates.py): stale-terraform-state refusal + capacity/collision preflight.
+    # Gate 2 (gates.py): stale-estate refusal + capacity/collision preflight.
     run_range_gates(ctx, comp_dir, from_phase)
 
     if not ctx.resuming:

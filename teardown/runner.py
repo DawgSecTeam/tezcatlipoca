@@ -26,7 +26,7 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
     competition = comp_dir.name
     frozen = frozen_state(comp_dir)
 
-    # Multi-node: the placement record is authoritative — point the env at the
+    # Multi-node: the placement record is authoritative — point the process config at the
     # engine's host and register the node routes before anything node-scoped runs.
     placement = read_placement(comp_dir)
     default_node = config.active().proxmox.node
@@ -59,14 +59,11 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
     env = dict(env if env is not None else os.environ)
     if placement:
         # Callers snapshot os.environ BEFORE activate_placement runs, so their dict still named
-        # the .env host while the state lives on the placement's host: terraform then destroyed
-        # against the wrong PVE (500 "hostname lookup '<node>' failed") and every
-        # terraform-managed resource — the team bridges — survived the teardown (2026-10-14).
-        # Activation has resolved the identity into os.environ by now; re-apply it.
-        for key in ("TF_VAR_proxmox_endpoint", "TF_VAR_proxmox_api_token", "TF_VAR_proxmox_node",
-                    "TF_VAR_datastore", "TF_VAR_template_vm_id"):
-            if os.environ.get(key):
-                env[key] = os.environ[key]
+        # the profile's host while the range lives on the placement's host: the teardown then
+        # ran against the wrong PVE (500 "hostname lookup '<node>' failed") and every resource
+        # it owned — the team bridges — survived (2026-10-14). Activation has moved the whole
+        # process by now, so project the resolved identity back onto this dict.
+        env.update(config.proxmox_env())
     env["TF_VAR_teams"] = json.dumps(teams)
     env["TF_VAR_boxes_per_team"] = json.dumps(boxes)
     env["TF_VAR_event_name"] = name

@@ -102,7 +102,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
         "sudo apt-get update && sudo apt-get install -y docker-compose-plugin"
     ), timeout=600, step="install docker compose v2 plugin")
 
-    print("  Starting Docker (already installed by Terraform)...")
+    print("  Starting Docker (installed by the engine template)...")
     _run_engine_cmd(ctx, (
         "sudo systemctl start docker && sudo systemctl enable docker && sleep 2 && sudo docker version"
     ), timeout=30, step="start docker")

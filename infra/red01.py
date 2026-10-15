@@ -1,6 +1,6 @@
 """Gate: red01's reserved vmid/IP must not collide with anything live.
 
-red01 is bad-auto's VM — not terraform-managed, carrying no tezcatlipoca
+red01 is bad-auto's VM — not estate-managed, carrying no tezcatlipoca
 ownership tags — so it cannot ride the clash gate's slot math. It gets
 mgmt-IP-style gates instead (agent scans + a cluster-view vmid check), because
 the 2026-10-12 vmid-999 kill was exactly this gap: a validation deploy

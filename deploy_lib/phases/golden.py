@@ -184,7 +184,7 @@ def bootstrap_clones(ctx):
 
 
 def phase4_golden_set(ctx):
-# [4/8] Plant the golden set, then terraform apply #2 to build every team box.
+# [4/8] Plant the golden set, then clone every team box from it.
 #
 #     Two halves on purpose: the goldens must exist as templates before apply #2
 #     flips build_team_boxes on, and both are timed under phase 4 so the timing
@@ -200,6 +200,6 @@ def phase4_golden_set(ctx):
     golden_ids, golden_ids_by_slot = build_goldens(ctx, stored)
     record_golden_set(ctx, golden_ids, golden_ids_by_slot)
 
-    print("[4b/8] Terraform apply #2: every team as a linked clone of the golden set...")
+    print("[4b/8] Cloning every team box as a linked clone of the golden set...")
     apply_team_boxes(ctx, golden_ids, golden_ids_by_slot)
     bootstrap_clones(ctx)

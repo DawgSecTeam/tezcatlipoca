@@ -93,18 +93,6 @@ class Inventory:
             return None
         return [n["iface"] for n in nets if n.get("type") == "bridge"]
 
-    # bridges carry no tags and names collide across same-comp deploys, so the check is by attachment; unreadable configs count as in use — fail closed, the bridge survives to terraform (live rule since phase 1)
-    def bridge_in_use(self, node, bridge):
-        for v in self.view(node).vms:
-            try:
-                cfg = self._api_fn()("GET", f"/nodes/{node}/qemu/{v['vmid']}/config")["data"]
-            except Exception:                                        # noqa: BLE001
-                return True
-            if any(f"bridge={bridge}" in str(cfg.get(k) or "")
-                   for k in cfg if str(k).startswith("net")):
-                return True
-        return False
-
     # a clean verdict is impossible while this is non-empty
     def listing_failed(self):
         return [(nv.node, nv.error) for nv in self.views() if nv.error]

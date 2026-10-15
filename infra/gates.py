@@ -4,11 +4,11 @@ Two layers, one module:
 
   - the driver-state refusals (formerly deploy_lib/gates.py): the deploy lock, resume gates
     (missing state / wrong pipeline version / skipped phases / resume-loop / ghost checkpoints),
-    the stale-terraform-state refusal — collected here and called from exactly two spots in
+    the stale-estate refusal — collected here and called from exactly two spots in
     deploy_lib/prepare.py, in a fixed order:
       1. check_resume_gates   — right after the prior state is read.
       2. run_range_gates      — after placement, BEFORE any secret is minted or tfvars written:
-                                the stale-terraform-state refusal, then the capacity /
+                                the stale-estate refusal, then the capacity /
                                 collision / template preflight (infra.collisions / .resources).
   - the pre-Proxmox-mutation preflight (formerly the preflight/ package): run_preflight(plan)
     is the single pre-mutation entry point, in this order:
@@ -154,7 +154,7 @@ def run_capacity_preflight(ctx, comp_dir, from_phase):
 def run_range_gates(ctx, comp_dir, from_phase):
     """Every refusal that needs the resolved placement, before any credential is minted.
 
-    Order: the cheap local stale-terraform-state check first, then the capacity /
+    Order: the cheap local stale-estate check first, then the capacity /
     collision / template preflight (which queries Proxmox). Both must run before the fresh
     secret mint — see prepare()'s order note on credential-desync corpses."""
     check_stale_estate_state(comp_dir, ctx.comp_name, ctx.previous_state,
@@ -218,8 +218,8 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
     what this removes is the SILENT skip.
 
     Checks, by the phase whose output is being trusted:
-      > 2  the engine VM exists (phase 2's terraform apply #1)
-      > 4  every team box in terraform state exists as a live VM (apply #2)
+      > 2  the engine VM exists (created in phase 2)
+      > 4  every team box in the recorded inventory exists as a live VM (phase 4)
     """
     if force:
         return
@@ -248,7 +248,7 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
         raise SystemExit(
             f"  ERROR: --from-phase {from_phase} skips the phase that creates the scoring "
             f"engine, but vmid {engine_vmid} does not exist.\n"
-            f"        Every later phase targets it (scoring setup, terraform context, "
+            f"        Every later phase targets it (scoring setup, engine context, "
             f"box images).\n"
             f"        Re-run with --from-phase 2 to recreate it."
         )
@@ -269,7 +269,7 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
 
     missing = [v for v in vmids if v not in live]
     if not vmids or missing:
-        found = ("no team boxes at all are recorded in terraform state" if not vmids else
+        found = ("no team boxes at all are recorded in the state document" if not vmids else
                  f"{len(missing)} of {len(vmids)} recorded team box(es) are gone: "
                  f"{', '.join(str(v) for v in missing[:8])}"
                  f"{' …' if len(missing) > 8 else ''}")

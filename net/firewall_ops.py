@@ -582,7 +582,7 @@ def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, node, log=prin
         log(f"    {key}: firewall up on {wan} (config applied)")
 
 
-# NIC naming must match terraform's team_nics exactly: ens19+ are the team NICs in
+# NIC naming must match the engine's netplan exactly: ens19+ are the team NICs in
 # sorted team key order; the transit NICs continue the same positional sequence (one
 # per team, same order).
 def cutover_netplan_yaml(teams):
@@ -604,8 +604,8 @@ def cutover_netplan_yaml(teams):
     return "\n".join(lines) + "\n"
 
 
-# CAVEAT (docs/internals.md): a future `terraform apply` re-writes the pre-cutover
-# netplan file.
+# The cutover rewrites the engine's netplan in place; nothing re-applies the pre-cutover
+# file, so the team gateway address stays on the firewalls.
 def cut_over_engine(ssh_ctx, teams, log=print):
     log("  Engine cutover: 192.168.<team>.1 moves to the firewalls; engine routes "
         "team subnets via the transit /30s")

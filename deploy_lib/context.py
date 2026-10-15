@@ -34,8 +34,8 @@ class DeployContext:
 #     ordinary code that takes this object.
 #
 #     Field order follows the pipeline: identity/config -> secrets/state -> placement and
-#     environment -> generated configs and paths -> targets -> the terraform/SSH fields
-#     phase 2 fills in (a fresh run only has terraform outputs after apply #1; a resume
+#     environment -> generated configs and paths -> targets -> the engine/SSH fields
+#     phase 2 fills in (a fresh run only has engine coordinates after the engine is created; a resume
 #     finds them already there).
 
     # --- run identity + inputs ---
@@ -79,7 +79,7 @@ class DeployContext:
     node: str = ""
     engine_vmid: int = SCORING_ENGINE_VMID
     engine_mgmt_ip: Optional[str] = None
-    # --- generated configs + terraform workdir ---
+    # --- generated configs + the per-competition state document ---
     boxes: list = field(default_factory=list)
     boxes_by_name: dict = field(default_factory=dict)
     unbooted: set = field(default_factory=set)
@@ -95,7 +95,7 @@ class DeployContext:
     managed_targets: list = field(default_factory=list)
     linux_targets: list = field(default_factory=list)
     windows_targets: list = field(default_factory=list)
-    # --- filled in after terraform apply #1 (phase 2) ---
+    # --- filled in after the engine is created (phase 2) ---
     tf_ctx: dict = field(default_factory=dict)
     scoring_user: str = ""
     scoring_ip: str = ""

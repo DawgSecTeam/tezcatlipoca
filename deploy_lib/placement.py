@@ -44,7 +44,7 @@ def apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path=Non
         nodes_path=nodes_path)
     if ctx.placement:
         # Stays active for the whole deploy: every later node-scoped call and the
-        # terraform env point at the placement's hosts.
+        # node-scoped API calls and the process config point at the placement's hosts.
         activate_placement(ctx.placement)
         # The entry banner printed the pre-placement env, which reads as the wrong host on
         # a --nodes/multi-node run; restate the target now that it is the real one.

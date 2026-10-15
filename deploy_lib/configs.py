@@ -65,7 +65,7 @@ def generate_stage_configs_and_hashes(ctx, comp_dir):
         # `box_name`, NOT the event name: this loop used to read `for spec.name in
         # generated.golden_hashes`, which assigned each golden box name onto the spec
         # and left the LAST box there. On any FROZEN competition that clobbered
-        # the Compfile event name before its later uses, so terraform's
+        # the Compfile event name before its later uses, so the deploy's
         # `event_name` — and therefore `local.comp_tag`, the ownership tag on the engine
         # and every team box — became "comp-web01" instead of "comp-<competition>", so
         # every ownership-gated path (preflight, teardown) mis-classified the range;

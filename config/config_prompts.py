@@ -182,6 +182,6 @@ def confirm_deploy(name, scenario, difficulty, teams, boxes):
     for b in boxes:
         print(f"    {b['name']} — {b['template']}  ({b['cpu']} CPU, {b['memory_mb']} MB)")
     print()
-    print("  Terraform will now run; this takes several minutes.")
+    print("  The deploy will now create the estate; this takes several minutes.")
     answer = input("  Continue? (y/n): ").strip().lower()
     return answer == "y"

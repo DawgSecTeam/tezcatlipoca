@@ -245,3 +245,19 @@ def reset():
 def require(key):
     """`active().require(key)` — the module-level form call sites use."""
     return active().require(key)
+
+
+def proxmox_env():
+    """The resolved Proxmox identity as TF_VAR_* env, for subprocess-facing callers.
+
+    `activate_placement` moves the whole process onto the engine's host by mutating the config,
+    not os.environ, so a caller that snapshotted the environment before activation (or handed a
+    dict to a subprocess) still names the profile's host. This is what such a caller re-applies
+    after activation — the same five keys the terraform-era activation exported.
+    """
+    cfg = active()
+    return {"TF_VAR_proxmox_endpoint": cfg.proxmox.endpoint,
+            "TF_VAR_proxmox_api_token": cfg.proxmox.api_token,
+            "TF_VAR_proxmox_node": cfg.proxmox.node,
+            "TF_VAR_datastore": cfg.proxmox.datastore,
+            "TF_VAR_template_vm_id": str(cfg.proxmox.template_vm_id)}

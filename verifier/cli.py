@@ -19,7 +19,7 @@ from verifier.verdict import gate_verdict
 def build_parser():
     parser = argparse.ArgumentParser(description="Verify a deployed Quotient competition range.")
     parser.add_argument("comp_dir", help="path to competitions/<id>")
-    parser.add_argument("--engine-ip", help="override the scoring-engine IP (skip Terraform)")
+    parser.add_argument("--engine-ip", help="override the scoring-engine IP (skip the state document)")
     parser.add_argument("--admin-password", help="override the Quotient admin password")
     parser.add_argument("--strict-services", action="store_true",
                         help="also require every service UP for a passing exit code")

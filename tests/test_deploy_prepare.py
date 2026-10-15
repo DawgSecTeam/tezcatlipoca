@@ -376,10 +376,17 @@ class EstateInputs(unittest.TestCase):
 
 class TargetSplit(unittest.TestCase):
     def test_unmanaged_boxes_stay_in_all_targets_but_leave_the_work_lists(self):
+        # The real shape enumerate_targets returns — the roster mirror needs all of it.
         targets = [
-            {"vmid": 1, "box": {"name": "web01", "template": "ubuntu-fix"}},
-            {"vmid": 2, "box": {"name": "dc01", "template": "win-fix"}},
-            {"vmid": 3, "box": {"name": "fw01", "template": "pfsense-fix", "unmanaged": True}},
+            {"vmid": 1, "vm_name": "team1-web01", "ip": "192.168.101.2", "node": "pve",
+             "slot": 0, "box_name": "web01", "team_key": "team1",
+             "box": {"name": "web01", "template": "ubuntu-fix"}},
+            {"vmid": 2, "vm_name": "team1-dc01", "ip": "192.168.101.3", "node": "pve",
+             "slot": 0, "box_name": "dc01", "team_key": "team1",
+             "box": {"name": "dc01", "template": "win-fix"}},
+            {"vmid": 3, "vm_name": "team1-fw01", "ip": "192.168.101.1", "node": "pve",
+             "slot": 0, "box_name": "fw01", "team_key": "team1",
+             "box": {"name": "fw01", "template": "pfsense-fix", "unmanaged": True}},
         ]
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx()
@@ -397,6 +404,7 @@ class TargetSplit(unittest.TestCase):
         self.assertEqual([t["vmid"] for t in ctx.linux_targets], [1])
         self.assertEqual([t["vmid"] for t in ctx.windows_targets], [2])
         p_persist.assert_called_once()
+        self.assertEqual(ctx.document().data["roster"]["targets"]["team1-web01"]["vmid"], 1)
 
 
 class PrepareSequencer(unittest.TestCase):
