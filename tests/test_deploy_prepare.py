@@ -30,6 +30,7 @@ from deploy_lib import configs as dl_configs  # noqa: E402
 from deploy_lib import inputs as dl_inputs  # noqa: E402
 from deploy_lib import placement as dl_placement  # noqa: E402
 from deploy_lib import targets as dl_targets  # noqa: E402
+from estate import config
 from deploy_lib import estate_inputs as dl_estate_inputs  # noqa: E402
 from deploy_lib.context import DeployContext  # noqa: E402
 from common.constants import (DEFAULT_ENGINE_MGMT_GW, DEFAULT_ENGINE_MGMT_IP,  # noqa: E402
@@ -194,11 +195,14 @@ class PlacementAndLock(unittest.TestCase):
     def test_engine_mgmt_ip_and_gw_come_from_the_resolved_engine_record(self):
         import types
         record = types.SimpleNamespace(engine_mgmt_ip="10.0.0.7", engine_mgmt_gw="10.0.0.1")
+        config.reset()
+        self.addCleanup(config.reset)
         with patch.dict(os.environ, {}, clear=True):
             _placement, order = self._run(1, ({"team_slots": {}}, record))
             self.assertEqual(order, [("resolve", 1), "activate", ("lock", 1)])
-            self.assertEqual(os.environ["TF_VAR_engine_mgmt_ip"], "10.0.0.7")
-            self.assertEqual(os.environ["TF_VAR_engine_mgmt_gw"], "10.0.0.1")
+            # The node record points the process config at the engine's host.
+            self.assertEqual(config.active().engine.mgmt_ip, "10.0.0.7")
+            self.assertEqual(config.active().engine.mgmt_gw, "10.0.0.1")
 
     def test_no_placement_means_no_activation_and_still_a_lock(self):
         _placement, order = self._run(1, (None, None))
@@ -279,14 +283,18 @@ class EstateInputs(unittest.TestCase):
            "TF_VAR_proxmox_endpoint": "https://new:8006/"}
 
     def _run(self, comp_dir, env=None, placement=None):
+        config.reset()
+        self.addCleanup(config.reset)
         ctx = _ctx(engine_vmid=1000, placement=placement)
         with patch.dict(os.environ, env if env is not None else self.ENV, clear=True):
             ctx.engine_mgmt_ip = dl_estate_inputs.engine_mgmt_ip_from_env()  # as prepare() does
             dl_estate_inputs.build_estate_inputs(ctx, comp_dir)
             # os.environ is restored when patch.dict exits, so snapshot the two engine
             # vars here — that is where the code under test exported them.
-            env_view = {k: os.environ.get(k) for k in
-                        ("TF_VAR_engine_mgmt_ip", "TF_VAR_engine_mgmt_gw")}
+            env_view = {"engine_mgmt_ip": config.active().engine.mgmt_ip,
+                        "engine_mgmt_gw": config.active().engine.mgmt_gw,
+                        "marked_default":
+                            "TEZ_ENGINE_MGMT_IP_IS_DEFAULT" in os.environ}
         return ctx, ctx.document(), env_view
 
     def test_document_identity_and_roster(self):
@@ -335,8 +343,9 @@ class EstateInputs(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             ctx, _document, env_view = self._run(Path(d), env=dict(self.ENV))
         self.assertEqual(ctx.engine_mgmt_ip, DEFAULT_ENGINE_MGMT_IP)
-        self.assertEqual(env_view["TF_VAR_engine_mgmt_ip"], DEFAULT_ENGINE_MGMT_IP)
-        self.assertEqual(env_view["TF_VAR_engine_mgmt_gw"], DEFAULT_ENGINE_MGMT_GW)
+        self.assertEqual(env_view["engine_mgmt_ip"], DEFAULT_ENGINE_MGMT_IP)
+        self.assertEqual(env_view["engine_mgmt_gw"], DEFAULT_ENGINE_MGMT_GW)
+        self.assertTrue(env_view["marked_default"])
 
     def test_explicit_empty_mgmt_ip_keeps_dhcp_but_still_defaults_the_gateway(self):
         env = dict(self.ENV)
@@ -344,24 +353,24 @@ class EstateInputs(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             ctx, _document, env_view = self._run(Path(d), env=env)
         self.assertEqual(ctx.engine_mgmt_ip, "")
-        self.assertEqual(env_view["TF_VAR_engine_mgmt_gw"], DEFAULT_ENGINE_MGMT_GW)
+        self.assertEqual(env_view["engine_mgmt_gw"], DEFAULT_ENGINE_MGMT_GW)
 
     def test_explicit_gateway_is_not_overwritten(self):
         env = dict(self.ENV, TF_VAR_engine_mgmt_ip="10.0.0.5", TF_VAR_engine_mgmt_gw="10.9.9.9")
         with tempfile.TemporaryDirectory() as d:
             ctx, _document, env_view = self._run(Path(d), env=env)
         self.assertEqual(ctx.engine_mgmt_ip, "10.0.0.5")
-        self.assertEqual(env_view["TF_VAR_engine_mgmt_gw"], "10.9.9.9")
+        self.assertEqual(env_view["engine_mgmt_gw"], "10.9.9.9")
 
     def test_per_run_mgmt_ip_override_beats_the_env_and_is_reexported(self):
         env = dict(self.ENV, TF_VAR_engine_mgmt_ip="10.0.0.5")
         with patch.dict(os.environ, env, clear=True):
             ip = dl_estate_inputs.engine_mgmt_ip_from_env("10.0.0.77")
-            # downstream (the engine-template build VM's ipconfig0) reads the env
-            exported = os.environ["TF_VAR_engine_mgmt_ip"]
+            # downstream (the engine-template build VM's ipconfig0) reads the config
+            resolved = config.active().engine.mgmt_ip
             marked_default = "TEZ_ENGINE_MGMT_IP_IS_DEFAULT" in os.environ
         self.assertEqual(ip, "10.0.0.77")
-        self.assertEqual(exported, "10.0.0.77")
+        self.assertEqual(resolved, "10.0.0.77")
         self.assertFalse(marked_default)
 
 

@@ -20,6 +20,7 @@ from common.constants import ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_VMID_OFFSET, MA
 from infra.client import proxmox_api
 from common.targets import vm_id_for
 from infra.ownership import MARKER, ownership_verdict, parse_vm_tags
+from estate import config
 
 
 @dataclass
@@ -240,7 +241,7 @@ def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
     # preflight cannot verify is refused outright: the .150 default (.250) drops SSH
     # mid-build on the tailnet path (2026-10-03), and an unverifiable default was a live
     # foreign engine's address once before that (2026-10-02).
-    explicit = (bool((os.environ.get("TF_VAR_engine_mgmt_ip") or "").strip())
+    explicit = (bool((config.active().engine.mgmt_ip or "").strip())
                 and not os.environ.get("TEZ_ENGINE_MGMT_IP_IS_DEFAULT"))
     if unchecked:
         listing = ", ".join(unchecked[:5]) + ("..." if len(unchecked) > 5 else "")

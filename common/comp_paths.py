@@ -8,14 +8,14 @@ run from a worktree root) or the checkout's own competitions/; else the sibling
 ../tezcatlipoca-competitions repo.
 """
 
-import os
 from pathlib import Path
+from estate import config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def comps_root():
-    env = os.environ.get("TEZ_COMPETITIONS_ROOT")
+    env = config.active().knobs.comps_root
     if env:
         return Path(env)
     for candidate in (Path("competitions"), REPO_ROOT / "competitions"):

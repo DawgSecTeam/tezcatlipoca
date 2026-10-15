@@ -7,8 +7,8 @@ import threading
 from scrim.core import log
 
 
-# Grace between the SIGINT that lets terraform release its state lock and the SIGKILL
-# that sweeps whatever ignored it (utils.run_terraform uses the same two-phase stop).
+# Grace between the SIGINT that lets a child release its resources and the SIGKILL that
+# sweeps whatever ignored it.
 TREE_STOP_GRACE = 30
 
 
@@ -42,9 +42,8 @@ def _feed_stdin(proc, text):
         pass
 
 
-# SIGINT first: the graceful stop terraform uses to release its state lock
-# (utils.run_terraform does the same); SIGKILL because the grandchildren this exists to
-# reap may ignore SIGINT. killpg on an already-empty group is a no-op.
+# SIGINT first, so a child can release what it holds; SIGKILL because the grandchildren
+# this exists to reap may ignore SIGINT. killpg on an already-empty group is a no-op.
 def _kill_tree(proc, grace=TREE_STOP_GRACE):
     with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGINT)
@@ -58,10 +57,9 @@ def _kill_tree(proc, grace=TREE_STOP_GRACE):
 
 # own session so a timeout kills the whole tree, not just the direct child: subprocess.run
 # SIGKILLs the DIRECT child only, after which create-competition.py/badauto/their
-# terraform/nakon/ssh grandchildren survive with the deploy lock held and keep mutating
+# nakon/ssh grandchildren survive with the deploy lock held and keep mutating
 # infrastructure (one hung opencode cycle held the shared lock ~80 min because a
-# grandchild outlived the kill). Modelled on utils.run_terraform: SIGINT to the group,
-# escalate to SIGKILL after `grace`.
+# grandchild outlived the kill). SIGINT to the group, escalate to SIGKILL after `grace`.
 def run_tree(cmd, cwd=None, env=None, timeout=None, check=True, tail=None,
              stdin_text=None, grace=TREE_STOP_GRACE):
     cmd = [str(c) for c in cmd]

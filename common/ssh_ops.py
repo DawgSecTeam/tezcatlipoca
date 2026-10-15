@@ -1,6 +1,5 @@
 """SSH helpers via the scoring-engine gateway and Terraform context."""
 
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -12,6 +11,7 @@ from common.utils import PRINT_LOCK, record_degradation, run_concurrent
 # Re-export, not a second definition: ssh_ops' gateway auth and deploy/golden_ops' target
 # split must classify a template identically (windows_ops.is_windows_template owns the rule).
 from common.windows_ops import is_windows_template
+from estate import config
 
 DEFAULT_KNOWN_HOSTS = str(Path.home() / ".tezcatlipoca" / "known_hosts")
 
@@ -196,7 +196,7 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
 # Poll every target's reachability through the gateway, all boxes concurrently, each
 #     with its own full budget (a slow early box no longer eats later boxes' patience).
 #     Raises only if all boxes fail.
-    node = os.environ["TF_VAR_proxmox_node"]
+    node = config.active().proxmox.node
     print("  Waiting for team boxes to accept SSH via gateway...")
     deadline = time.time() + timeout
 

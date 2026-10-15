@@ -1,7 +1,6 @@
 """Redeploy mode rebuild: re-clone a box from its golden template and re-plant."""
 
 import json
-import os
 import re
 import pipeline_api
 
@@ -20,6 +19,7 @@ from common.utils import compfile_flag
 from pathlib import Path
 from redeploy.redeploy_select_ops import box_platform
 from redeploy.redeploy_plant_ops import rerun_domain_configs
+from estate import config as estate_config
 
 
 def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
@@ -31,7 +31,7 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
             "  ERROR: .deploy_state.json has no box_password — can't recreate a box with the "
             "login the rest of the range uses. Rebuild is unavailable for this competition."
         )
-    ssh_public_key = os.environ["TF_VAR_ssh_public_key"]
+    ssh_public_key = estate_config.active().ssh.public_key
     box_username = ctx.get("box_username", "ubuntu")
 
     rebuilt = []
@@ -170,7 +170,7 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
                 return
             bundle = build_nakon_bundle(path)
             key = Path(ctx["ssh_key_path"])
-            scoring_user = os.environ["TF_VAR_vm_username"]
+            scoring_user = estate_config.active().engine.username
             scoring_ip = ctx["scoring_engine_ip"]
             nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
             pipeline_api.ensure_nat_forwarding(ctx)
@@ -226,7 +226,7 @@ def reconcile_estate_state(rebuilt, rctx):
     document = estate_state.open(rctx.comp_dir)
     for t in rebuilt:
         node = t.get("node") or estate_state.load_flat(rctx.comp_dir).get("node") \
-            or os.environ.get("TF_VAR_proxmox_node", "pve")
+            or estate_config.active().proxmox.node
         print(f"  Recording {t['vm_name']} (vmid {t['vmid']}) in the inventory...")
         document.record("team_box", node, t["vm_name"], vmid=t["vmid"])
     document.save()

@@ -1,7 +1,6 @@
 """Misconfig gates: one planted misconfig confirmed (SSH, guest-agent fallback) and survival across team clones."""
 
 import json
-import os
 import subprocess
 from pathlib import Path
 
@@ -11,6 +10,7 @@ from common.utils import MAX_CONCURRENCY, run_concurrent
 
 from verifier import context
 from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
+from estate import config as estate_config
 
 
 MISCONFIG_CHECKS = {
@@ -65,7 +65,7 @@ def misconfig_via_guest_agent(comp_dir, box, verifiable):
     if vmid is None:
         print("  (guest-agent fallback unavailable: could not resolve the box's vmid)")
         return False
-    node = os.environ.get("TF_VAR_proxmox_node")
+    node = estate_config.active().proxmox.node
     if not node:
         print("  (guest-agent fallback unavailable: TF_VAR_proxmox_node not set)")
         return False

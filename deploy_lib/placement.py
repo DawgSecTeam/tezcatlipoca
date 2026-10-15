@@ -1,10 +1,10 @@
 """Multi-node placement: parse --team-node, resolve placement, take the engine lock."""
 
-import os
 
 from nakonops.nakon_lock_ops import acquire_engine_lock
 from multinode.placement_record import activate_placement
 from multinode.placement_planner import resolve_placement
+from estate import config
 
 
 def parse_team_node(team_node):
@@ -51,10 +51,11 @@ def apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path=Non
         from common.utils import env_summary
         print(f"  Effective target: {env_summary()}")
         if _resolved_engine_record is not None and _resolved_engine_record.engine_mgmt_ip:
-            os.environ["TF_VAR_engine_mgmt_ip"] = _resolved_engine_record.engine_mgmt_ip
-            if _resolved_engine_record.engine_mgmt_gw:
-                os.environ.setdefault("TF_VAR_engine_mgmt_gw",
-                                      _resolved_engine_record.engine_mgmt_gw)
+            config.active().activate(
+                {"engine.mgmt_ip": _resolved_engine_record.engine_mgmt_ip})
+            if _resolved_engine_record.engine_mgmt_gw and not config.active().engine.mgmt_gw:
+                config.active().activate(
+                    {"engine.mgmt_gw": _resolved_engine_record.engine_mgmt_gw})
     ctx.state["multi_node"] = bool(ctx.placement)
     ctx.save_state()
     acquire_engine_lock(ctx.engine_vmid)

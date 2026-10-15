@@ -10,6 +10,7 @@ from common.utils import BOX_USERNAME_DEFAULT, load_users_config
 from estate import config as estate_config, state as estate_state
 
 from verifier.model import CheckError
+from estate import config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = REPO_ROOT / ".env"
@@ -30,7 +31,7 @@ def read_estate_ctx(comp_dir):
 
 def resolve_ssh_key():
 # Resolve the configured SSH private key, falling back to the legacy env name.
-    val = os.environ.get("TF_VAR_ssh_private_key_path")
+    val = config.active().ssh.private_key_path
     if not val:
         return str(estate_config.ssh_key_path())
     return str((REPO_ROOT / val).resolve() if not os.path.isabs(val) else Path(val))

@@ -1,7 +1,7 @@
 """Jump VM firewall/sysctl content: pure rule generation (golden-filed in tests)."""
 
-import os
 from ipaddress import ip_network
+from estate import config
 
 JUMP_TAGS_EXTRA = "jump"
 APT_CACHER_PORT = 3142
@@ -106,7 +106,7 @@ def red_segment_from_env():
 #     masq-mode red behave exactly as before. A malformed value is a hard error — a typo
 #     that silently produced no rules would put a live range back in the state that lost
 #     the whole soak's red coverage.
-    raw = (os.environ.get("TEZ_RED_SEGMENT") or "").strip()
+    raw = (config.active().knobs.red_segment or "").strip()
     if not raw:
         return ""
     try:

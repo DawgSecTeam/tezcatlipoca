@@ -24,28 +24,26 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(".env"))
 
-from config.config_ops import write_state  # noqa: E402
 from common.comp_paths import resolve_comp_dir  # noqa: E402
 from multinode.placement_record import activate_placement, read_placement  # noqa: E402
 from portal.portal_ops import access_state, portal_enabled, set_access  # noqa: E402
 from infra.console import mint_console_tokens, node_targets  # noqa: E402
-from common.ssh_ops import read_terraform_ctx  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 from common.targets import load_targets  # noqa: E402
+from estate import config
+from estate.engine_setup import engine_ctx  # noqa: E402
 
 
 def resync(comp_dir):
 # Re-apply this run's console ACLs on every node (the token itself is reused).
-    import os
-
-    state_path = comp_dir / ".deploy_state.json"
-    state = json.loads(state_path.read_text())
+    state = estate_state.load_flat(comp_dir)
     teams = json.loads((comp_dir / "teams.json").read_text())
     boxes = json.loads((comp_dir / "boxes.json").read_text())
     placement = read_placement(comp_dir)
     if placement:
         activate_placement(placement)
     nodes = node_targets(load_targets(comp_dir, teams, boxes), placement,
-                         os.environ.get("TF_VAR_proxmox_node", "pve"))
+                         config.active().proxmox.node)
     previous = state.get("portal_console_tokens") or {}
     tokens, problems = mint_console_tokens(comp_dir.name, state["run_id"], nodes,
                                            previous=previous)
@@ -58,7 +56,7 @@ def resync(comp_dir):
               f"`create-competition.py --competition {comp_dir.name} --from-phase 8 --yes` "
               "so the portal picks up the new secret.")
     state["portal_console_tokens"] = {**previous, **tokens}
-    write_state(state_path, state)
+    estate_state.write_flat(comp_dir, state)
     print(f"  console ACLs re-applied on {len(tokens)} node(s)")
 
 
@@ -76,7 +74,7 @@ def main():
     if args.action == "resync":
         resync(comp_dir)
         return
-    tf_ctx = read_terraform_ctx(comp_dir)
+    tf_ctx = engine_ctx(comp_dir)
     if args.action != "status":
         set_access(tf_ctx, args.action == "open")
     state = access_state(tf_ctx)

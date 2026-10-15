@@ -4,7 +4,6 @@ the incident-hardened behavior; what changed is the vocabulary: every refusal
 is a `Refusal` (saw / expected / remedy), and every destroy-shaped function
 takes an `Ownership` instead of a loose tag set."""
 
-import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from infra.client import proxmox_api, wait_for_proxmox_task
 from infra.ownership import parse_vm_tags
 from engine.engine_template_ops import destroy_engine_template
 from infra.ownership import Ownership, Refusal
+from estate import config
 
 # Concurrent stop/delete worker count for teardown sweeps. Deletes are
 # metadata-light on ZFS (the documented datastore-saturation hazard belongs to
@@ -52,7 +52,7 @@ def load_ownership(comp_dir):
                    f"stamps one; a range without it predates 0.2.0 — remove it by hand on "
                    f"the node.")
     deployed = (deployed_state.get("deployed_endpoint") or "").rstrip("/")
-    current = os.environ.get("TF_VAR_proxmox_endpoint", "").rstrip("/")
+    current = config.active().proxmox.endpoint.rstrip("/")
     if deployed and current and deployed != current:
         raise Refusal(
             saw=f"deploy ran against {deployed}, the loaded env targets {current}",
@@ -163,7 +163,7 @@ def engine_vmid_from_state(deployed_state):
 def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, full):
     skipped = []
     engine_vmid = engine_vmid_from_state(deployed_state)
-    node = os.environ.get("TF_VAR_proxmox_node", "pve")
+    node = config.active().proxmox.node
     if not full:
         print("  Teams-only teardown — templates kept for THIS competition's next run only.")
         print("  Goldens never carry across competitions; run a full teardown (no --teams-only) once the "

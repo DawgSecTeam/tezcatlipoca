@@ -1,13 +1,13 @@
 """Alpine apk/OpenRC service shim (the catalog scripts are apt/dnf/yum only)."""
 
 import json
-import os
 import shlex
 import time
 
 from infra.guest_exec import guest_agent_exec_root, wait_for_guest_agent
 from common.ssh_ops import ssh_via_gateway
 from common.utils import PRINT_LOCK, run_concurrent
+from estate import config
 
 
 # Pinned scored service -> (apk package, OpenRC service) for the alpine_services shim
@@ -86,7 +86,7 @@ def ensure_alpine_services(comp_dir, targets, ctx):
         # pin makes sudoers.d world-writable post-clone, sudo then ignores the whole
         # dir and `sudo sh -c` as medic demands a password it can't answer
         # (live-found 2026-09-28). The -fix alpine template ships the agent.
-        node = os.environ["TF_VAR_proxmox_node"]
+        node = config.active().proxmox.node
         vmid = t.get("vmid")
         if vmid is not None:
             try:

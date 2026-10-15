@@ -45,7 +45,6 @@ already removes.
 
 import base64
 import json
-import os
 import re
 import secrets
 import shlex
@@ -56,6 +55,7 @@ import time
 from pathlib import Path
 
 import yaml
+from estate import config
 
 REPO = Path(__file__).resolve().parents[1]
 BAD_AUTO = REPO.parent / "bad-auto"
@@ -142,7 +142,7 @@ def engine_ip_for(comp_dir):
     m = _ENGINE_URL_RE.search(text)
     if m:
         return m.group(1)
-    return os.environ.get("TF_VAR_engine_mgmt_ip") or None
+    return config.active().engine.mgmt_ip or None
 
 
 def load_bad_auto_config(config_path):

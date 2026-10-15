@@ -7,7 +7,6 @@ shared configure half in redeploy_plant_ops, and the state/run-id gate (checked 
 Proxmox call) in redeploy_gate_ops."""
 
 import argparse
-import os
 from pathlib import Path
 
 import urllib3
@@ -30,6 +29,7 @@ from redeploy.redeploy_rebuild_ops import mode_rebuild, reconcile_estate_state
 from redeploy.redeploy_reset_ops import mode_reset
 from redeploy.redeploy_select_ops import select_targets
 from common.utils import load_compfile, pick_competition, valid_comp_name
+from estate import config
 
 ENV_PATH = Path(".env")
 load_dotenv(ENV_PATH)
@@ -156,7 +156,7 @@ def main():
     if not targets:
         raise SystemExit("  No boxes matched the given filters — nothing to do.")
 
-    node = os.environ["TF_VAR_proxmox_node"]
+    node = config.active().proxmox.node
 
     print(f"\n{'='*64}")
     print(f"  Redeploy — {name} ({comp_name})")

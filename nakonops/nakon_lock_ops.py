@@ -2,11 +2,11 @@
 
 import fcntl
 import contextlib
-import os
 import re
 
 from common.constants import SCORING_ENGINE_VMID
 from pathlib import Path
+from estate import config
 
 
 _ENGINE_LOCKS = {}  # lock path -> open fh (kept referenced so the flock survives)
@@ -23,7 +23,7 @@ def acquire_engine_lock(engine_vmid=SCORING_ENGINE_VMID):
 #     engine vmid, two competitions with DIFFERENT engines (multi-tenant node) take
 #     distinct locks and run concurrently.
 #     Idempotent per process; the flock releases when the process exits or crashes.
-    endpoint = os.environ.get("TF_VAR_proxmox_endpoint", "unknown")
+    endpoint = (config.active().proxmox.endpoint or "unknown")
     host = re.sub(r"^https?://", "", endpoint).split("/")[0].split(":")[0] or "unknown"
     slug = re.sub(r"[^A-Za-z0-9._-]", "_", f"{host}-{engine_vmid}")
     lock_path = Path.home() / ".tezcatlipoca" / "locks" / f"engine-{slug}.lock"

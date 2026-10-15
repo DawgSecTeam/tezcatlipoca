@@ -2,13 +2,13 @@
 
 import base64
 import json
-import os
 import re
 
 from typing import Callable, NamedTuple
 from infra.guest_exec import guest_agent_exec_detached, guest_agent_exec_root
 from common.ssh_ops import ssh_via_gateway
 from common.utils import PRINT_LOCK, run_concurrent
+from estate import config
 
 
 class _ServiceFixup(NamedTuple):
@@ -303,7 +303,7 @@ def service_fixup_script(services, creds):
 def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
 # Post-nakon service hardening (bind address, mail, ftp, dns, etc.) using the per-run credlist secrets.
 
-    node = os.environ["TF_VAR_proxmox_node"]
+    node = config.active().proxmox.node
     print("  Hardening services on all team boxes...")
     box_services = json.loads((comp_dir / "box_services.json").read_text())
 
@@ -398,7 +398,7 @@ def reensure_mysql_credlist_users(comp_dir, targets, ctx, box_creds):
             jobs.append((t, mysql_credlist_reensure_script(cred_items)))
     if not jobs:
         return
-    node = os.environ["TF_VAR_proxmox_node"]
+    node = config.active().proxmox.node
     with PRINT_LOCK:
         print("  Re-ensuring credlist SQL users on mysql-pinned box(es) "
               f"({', '.join(t['box_name'] for t, _ in jobs)})...")

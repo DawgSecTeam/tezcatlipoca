@@ -114,6 +114,25 @@ class Resolution(unittest.TestCase):
         with mock.patch.dict(os.environ, {"TF_VAR_proxmox_api_token": "root@pam!x=secret"}):
             self.assertEqual(self.cfg.require("proxmox.api_token"), "root@pam!x=secret")
 
+    def test_is_set_distinguishes_unset_from_deliberately_empty(self):
+        # `get` cannot: both read as the default. One caller needs the difference — an empty
+        # engine mgmt IP means "DHCP" and must not be re-defaulted to a static address.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TF_VAR_engine_mgmt_ip", None)
+            os.environ.pop("TEZ_ENGINE_MGMT_IP", None)
+            self.assertFalse(self.cfg.is_set("engine.mgmt_ip"))
+            with mock.patch.dict(os.environ, {"TF_VAR_engine_mgmt_ip": ""}):
+                self.assertTrue(self.cfg.is_set("engine.mgmt_ip"))
+
+    def test_is_set_sees_a_file_value(self):
+        self.assertTrue(self.cfg.is_set("proxmox.datastore"))
+
+    def test_require_is_also_a_module_level_function(self):
+        with mock.patch.dict(os.environ, {"TF_VAR_proxmox_api_token": "root@pam!x=secret"}):
+            config.reset()
+            self.addCleanup(config.reset)
+            self.assertEqual(config.require("proxmox.api_token"), "root@pam!x=secret")
+
 
 class Activation(unittest.TestCase):
     def setUp(self):

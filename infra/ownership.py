@@ -14,11 +14,11 @@ guard (destroy_vm_if_exists) classify a VM with the same pure function, `ownersh
 Only OWNED and MARKER VMs are ever touched. A same-comp VM without this run's tag is a DIFFERENT
 worktree's run (2026-10-02 near-miss) and is MISSING, never reclaimed."""
 
-import os
 from dataclasses import dataclass, field
 
 from common.constants import ownership_tags
 from infra.client import proxmox_api, wait_for_proxmox_task
+from estate import config
 
 OWNED = "owned"
 MARKER = "marker"
@@ -90,7 +90,7 @@ def full_clone_data(newid, name, comp_name):
     base template on one pool silently landed there instead of on the pool the comp was
     told to use (live-found 2026-10-04). One definition for every golden / smoke clone."""
     data = {"newid": newid, "name": name, "full": 1, "description": clone_marker(comp_name)}
-    storage = os.environ.get("TF_VAR_datastore")
+    storage = config.active().proxmox.datastore
     if storage:
         data["storage"] = storage
     return data

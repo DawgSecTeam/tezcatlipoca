@@ -1,6 +1,5 @@
 """Engine recovery from the engine template and phase-7 reseed."""
 
-import os
 import sys
 import pipeline_api
 
@@ -13,6 +12,7 @@ from nakonops.nakon_lock_ops import acquire_engine_lock
 from engine.template_freeze import stored_template_hash
 from common.timing import timed
 from common.ssh_ops import forget_engine_host_key, wait_for_ssh
+from estate import config
 
 
 def _identifiers(comp_dir, teams, boxes):
@@ -41,8 +41,8 @@ def _replace_engine(comp_dir, state, teams, boxes):
         estate_state.open(comp_dir), ownership, node, vmid=vmid,
         template_vmid=int(state["engine_template_vmid"]),
         team_identifiers=identifiers, transit_identifiers=identifiers if in_path else [],
-        mgmt_ip=os.environ.get("TF_VAR_engine_mgmt_ip", ""),
-        mgmt_gw=os.environ.get("TF_VAR_engine_mgmt_gw", DEFAULT_ENGINE_MGMT_GW),
+        mgmt_ip=config.active().engine.mgmt_ip,
+        mgmt_gw=(config.active().engine.mgmt_gw or DEFAULT_ENGINE_MGMT_GW),
         datastore=cfg.proxmox.datastore, username=cfg.engine.username,
         ssh_public_key=cfg.ssh.public_key)
     engine_setup.cold_boot(node, vmid)
@@ -69,7 +69,7 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
             "predates the M4 engine template; redeploy the range instead.")
     engine_vmid = int(state.get("scoring_vm_id") or 1000)
     acquire_engine_lock(engine_vmid)
-    node = os.environ["TF_VAR_proxmox_node"]
+    node = config.active().proxmox.node
 
     # Frozen semantics: recovery uses the node's template as-is; a hash mismatch is a
     # loud warning, never a mid-event blocker.

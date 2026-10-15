@@ -8,13 +8,13 @@ asserted: engine enrolled to the right control plane, every team subnet SERVING 
 the router node, SNAT lines in the engine's nat table, this comp's tag-scoped ACL
 lines in the live policy, and no other node advertising our subnets."""
 
-import os
 import subprocess
 
 from estate import state as estate_state
 from net import remote_access_ops
 from verifier import context
 from verifier.model import gate_fail, gate_pass, gate_skip
+from estate import config
 
 
 def _read_state(comp_dir):
@@ -40,7 +40,7 @@ def check_remote_access(comp_dir, teams, ctx):
 
     identifiers = _identifiers(teams)
     # Engine side: enrolled to OUR control plane (shared logic with the deploy).
-    server_url = os.environ.get("TEZ_HEADSCALE_URL", "").rstrip("/")
+    server_url = config.active().headscale.url.rstrip("/")
     if not server_url:
         print("  FAIL  — TEZ_HEADSCALE_URL not set; cannot confirm the engine's "
               "control plane (the deploy required it)")

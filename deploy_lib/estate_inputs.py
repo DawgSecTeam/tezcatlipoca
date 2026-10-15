@@ -27,16 +27,14 @@ def engine_mgmt_ip_from_env(override=None):
 #     run's own --engine-mgmt-ip: it must beat both the ambient env and the node catalog,
 #     because two concurrent ranges on one node cannot share a management address.
     if override:
-        os.environ["TF_VAR_engine_mgmt_ip"] = override
+        config.active().activate({"engine.mgmt_ip": override})
         return override
-    ip = os.environ.get("TF_VAR_engine_mgmt_ip")
-    if ip is None:
-        ip = DEFAULT_ENGINE_MGMT_IP
+    if not config.active().is_set("engine.mgmt_ip"):
+        config.active().activate({"engine.mgmt_ip": DEFAULT_ENGINE_MGMT_IP})
         os.environ["TEZ_ENGINE_MGMT_IP_IS_DEFAULT"] = "1"
-        print(f"  Engine mgmt IP: static {ip} (default — override "
+        print(f"  Engine mgmt IP: static {DEFAULT_ENGINE_MGMT_IP} (default — override "
               f"TF_VAR_engine_mgmt_ip, set '' for DHCP)")
-        os.environ["TF_VAR_engine_mgmt_ip"] = ip
-    return ip
+    return config.active().engine.mgmt_ip
 
 
 def build_estate_inputs(ctx, comp_dir):
@@ -49,8 +47,8 @@ def build_estate_inputs(ctx, comp_dir):
     # Default the gateway whenever the engine mgmt IP is static: an explicitly-set mgmt IP
     # once skipped this and the engine template's ipconfig0 went out with an empty gw=
     # (live-found 2026-09-29 — PVE 400 "Parameter verification failed").
-    if not os.environ.get("TF_VAR_engine_mgmt_gw"):
-        os.environ["TF_VAR_engine_mgmt_gw"] = DEFAULT_ENGINE_MGMT_GW
+    if not config.active().engine.mgmt_gw:
+        config.active().activate({"engine.mgmt_gw": DEFAULT_ENGINE_MGMT_GW})
     # A context built by hand (tests, recovery paths) may not carry its comp dir yet.
     ctx.comp_dir = ctx.comp_dir or comp_dir
     document = ctx.document()

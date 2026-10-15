@@ -26,7 +26,10 @@ python3 -m pytest tests/ -q -k frozen
 git ls-files tests/                  # the current file list — don't hard-code it here
 ```
 
-No fixtures or `conftest.py`; each file is standalone `unittest`-style, safe in any order. A
+One `conftest.py` exists for exactly one reason: `estate.config` is a deliberate process
+singleton (multi-node activation points the whole process at the engine's host), so the
+fixture resets it around each test. Otherwise each file is standalone `unittest`-style, safe
+in any order. A
 handful skip themselves when an optional tool is missing (e.g. `pyflakes` in `test_smoke.py`), so
 a skip is not a pass.
 
@@ -78,7 +81,6 @@ the pytest run above rather than this table.
 | `test_auth_ladder.py` | SSH retry ladders: definitive rejections fail fast instead of burning the full ladder |
 | `test_non_apt_prep.py` | apt-prep/settle scripts are honest fast no-ops on non-apt distros (fedora, alpine) |
 | `test_thin_headroom.py` | Datastore headroom gate and the `TEZ_THIN_HEADROOM` factor |
-| `test_run_terraform.py` | `run_terraform` process-group isolation (the helper remains for back-compat; the pipeline no longer calls it) |
 | `test_destroy_continuation.py` | A failed/interrupted destroy resumes instead of restarting |
 | `test_stream3_robustness.py` | AD-misconfig replays, `.postclone-swept` invalidation |
 | `test_windows_bootstrap.py` | Windows bootstrap script content (firewall profiles, RDP listener checks) |

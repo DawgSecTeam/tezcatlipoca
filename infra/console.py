@@ -25,6 +25,7 @@ import os
 import requests
 
 from infra.client import proxmox_api_for, proxmox_request
+from estate import config
 
 ROLE_ID = "TezConsole"
 ROLE_PRIVS = "VM.Console"
@@ -154,9 +155,9 @@ def node_targets(comp_dir_targets, placement, default_node):
             entry["vmids"].append(int(t["vmid"]))
     else:
         entry = {"pve_node": default_node,
-                 "endpoint": os.environ.get("TF_VAR_proxmox_endpoint", ""),
+                 "endpoint": config.active().proxmox.endpoint,
                  "token_env": "TF_VAR_proxmox_api_token",
-                 "tls_fingerprint": os.environ.get("PROXMOX_TLS_FINGERPRINT", ""),
+                 "tls_fingerprint": config.active().proxmox.tls_fingerprint,
                  "vmids": [int(t["vmid"]) for t in comp_dir_targets]}
         out[default_node] = entry
     for entry in out.values():
