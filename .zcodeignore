@@ -4,7 +4,6 @@ tezcatlipoca.toml
 tezcatlipoca.*.toml
 !tezcatlipoca.example.toml
 infrastructure-status.md
-.tez-backups/
 .worktrees/
 venv/
 quotient/__pycache__/

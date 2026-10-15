@@ -12,7 +12,6 @@ tezcatlipoca.*.toml
 # local only, never published. Tracked docs and prompts point here instead of carrying
 # infrastructure specifics. Enforced by tests/test_secret_hygiene.py.
 infrastructure-status.md
-.tez-backups/
 # Per-stream git worktrees used for parallel development/merges
 .worktrees/
 venv/
