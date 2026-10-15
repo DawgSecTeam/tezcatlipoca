@@ -2,7 +2,7 @@
 
 import os
 
-from common.constants import DEFAULT_ENGINE_MGMT_GW
+from common.constants import DEFAULT_ENGINE_MGMT_GW, ENGINE_TEMPLATE_NAME
 from engine.engine_bootstrap_ops import bootstrap_scoring_engine
 from engine.engine_event_ops import push_event_conf
 from engine.engine_health_ops import ensure_nat_forwarding
@@ -11,6 +11,7 @@ from estate import config
 from golden.golden_target_ops import _quote_sshkeys
 from net.jump_ops import build_jump_vms, red_segment_from_env
 from infra.ownership import destroy_vm_if_exists, retag_ownership
+from multinode.placement_record import record_of
 from multinode.routing_ops import verify_satellite_routing
 from common.ssh_ops import forget_engine_host_key, wait_for_ssh
 from engine.engine_template_ops import build_engine_template, destroy_engine_template, find_engine_template
@@ -90,6 +91,11 @@ def ensure_engine_template(ctx):
     ctx.state["engine_template_vmid"] = tmpl
     ctx.state["engine_template_hash"] = engine_hash
     ctx.save_state()
+    # Inventory it: the teardown destroys what the document records, in the one order
+    # linked clones survive.
+    document = ctx.document()
+    document.record("engine_template", ctx.node, ENGINE_TEMPLATE_NAME, vmid=tmpl)
+    document.save()
     return tmpl
 
 
@@ -106,6 +112,11 @@ def build_satellite_jumps(ctx, apply_ctx):
                        red_segment=red_segment_from_env())
     with timed(ctx.comp_dir, 2, "routing_converge"):
         verify_satellite_routing(ctx.placement, apply_ctx)
+    document = ctx.document()
+    for sat in ctx.placement["satellites"]:
+        node = record_of(ctx.placement, sat["name"]).node
+        document.record("jump", node, f"jump-{sat['name']}", vmid=sat["jump_vmid"])
+    document.save()
 
 
 def phase2_engine_template(ctx):

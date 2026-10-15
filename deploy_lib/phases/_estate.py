@@ -78,6 +78,17 @@ def create_engine_and_bridges(ctx):
     engine_setup.cold_boot(ctx.node, ctx.engine_vmid)
 
 
+def create_team_boxes(ctx, sources):
+# Clone every team box from its golden (slot-aware source vmids, keyed by vm_name).
+    from estate import apply as estate_apply
+    from infra.ownership import Ownership
+    cfg = config.active()
+    estate_apply.create_team_boxes(
+        ctx.document(), Ownership(ctx.comp_name, ctx.run_id), ctx.all_targets,
+        sources=sources, box_username=ctx.box_username, box_password=ctx.box_password,
+        ssh_public_key=cfg.ssh.public_key, datastore=cfg.proxmox.datastore)
+
+
 def configure_engine_network(ctx, engine_ctx):
 # Address the engine's team bridges; the satellite routes keep router traffic alive across
 #     an engine reboot mid-event.
