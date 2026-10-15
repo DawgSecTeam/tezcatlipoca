@@ -209,6 +209,29 @@ under two run ids with no workspace anywhere, and the dashboard's range view had
 **Next action**: hold the workspace of any run whose range is not `retired`, or have the dashboard
 submit an orphan reclaim when it deletes one.
 
+### bad-auto's assume-breach seed exits 0 with every step failed, and the scrim believes it
+
+scrim-one-light run-1ea5494a-run2 (2026-10-15, red+blue scrim of a deployed range): the
+authoritative pre-T0 verify printed `red_teams : PASS  red01 reached all 2 teams`, and **seven
+seconds later** bad-auto's seed reported all six boxes `"step": "access", "detail":
+"192.168.<tid>.<n> unreachable over SSH"` — then exited **0**. `scrim/red_stage.seed_assume_breach`
+gates on that exit code alone, so it logged "assume-breach presence seeded — every box is
+compromised before T0" and started the clock. Red then spent the whole 30 minutes with **0
+footholds** (every red event reads `0 footholds alive, 0 evicted, 0 artifacts standing`), reached
+for one tactic (`db_attack` mysql recon, 10 ok / 2 failed actions) and scored **0 takedowns**; blue
+ran 3 cycles, logged 4 evictions and 2 injects and had nothing to restore. Interaction score 11,
+9 of 12 rehearsal gates failed. Red's LLM calls also timed out on the local endpoint three times
+(`no answer in 300s ... localhost:8180`) and it stalled T+8 → T+21 — the endpoint is too slow for
+red's 300 s decision budget even when the seed works.
+The two observations cannot both hold: either the verifier's `red_teams` probe and bad-auto's seed
+use different transports/credentials/target lists, or the seed evaluates a path the gate does not.
+That is a bad-auto (tlaloc) contract question — this repo can only see bad-auto's stdout.
+**Next action**: make bad-auto's `seed` exit non-zero when no step succeeded (or emit a
+machine-readable per-step result the harness can gate on), then have `seed_assume_breach` refuse
+T0 on a seed that achieved nothing instead of announcing success; the current guard is faithful to
+its intent but blind to the only signal that matters. Needs bad-auto's owner — it is a sibling
+repo's exit-code contract, not a tezcatlipoca change.
+
 ### Fixed in this cycle (kept for the next reader's context)
 
 - A kept template (engine/golden, from an earlier run of the same competition) could not be adopted:
