@@ -1,18 +1,18 @@
 """Interactive competition prompts: box lineup, login/credlist usernames, deploy confirmation."""
 
-import os
 
 from common.constants import MAX_BOXES_PER_TEAM
 from infra.client import proxmox_api_for
 from common.utils import (BOX_USERNAME_DEFAULT, CREDLIST_USERNAMES_DEFAULT, is_legacy_account_name,
                    valid_unix_username)
+from estate import config
 
 
 def list_proxmox_templates():
-    endpoint = os.environ["TF_VAR_proxmox_endpoint"].rstrip("/")
-    scoring_template_id = int(os.environ["TF_VAR_template_vm_id"])
+    endpoint = config.require("proxmox.endpoint").rstrip("/")
+    scoring_template_id = int(config.require("proxmox.template_vm_id"))
     try:
-        vms = proxmox_api_for(endpoint, os.environ["TF_VAR_proxmox_api_token"],
+        vms = proxmox_api_for(endpoint, config.require("proxmox.api_token"),
                               "GET", "/cluster/resources", params={"type": "vm"},
                               timeout=10)["data"]
     except Exception as e:
@@ -182,6 +182,6 @@ def confirm_deploy(name, scenario, difficulty, teams, boxes):
     for b in boxes:
         print(f"    {b['name']} — {b['template']}  ({b['cpu']} CPU, {b['memory_mb']} MB)")
     print()
-    print("  Terraform will now run; this takes several minutes.")
+    print("  The deploy will now create the estate; this takes several minutes.")
     answer = input("  Continue? (y/n): ").strip().lower()
     return answer == "y"

@@ -10,6 +10,8 @@ from dataclasses import dataclass, fields, asdict
 from pathlib import Path
 from urllib.parse import urlparse
 
+from estate import config
+
 NODES_CONFIG_PATH = Path("nodes.json")
 
 MAX_SATELLITES = 4
@@ -24,11 +26,6 @@ JUMP_MGMT_IP_BASE = "10.0.0.249"
 
 PLACEMENT_VERSION = 1
 JUMP_RESERVE_MB = 512  # capacity reservation per satellite (tiny router VM)
-
-_MISSING = object()
-
-_ENV_KEYS = ("TF_VAR_proxmox_endpoint", "TF_VAR_proxmox_api_token", "TF_VAR_proxmox_node",
-             "TF_VAR_datastore", "TF_VAR_template_vm_id")
 
 
 @dataclass
@@ -129,35 +126,30 @@ def load_nodes_config(path=None):
 
 
 def apply_node_env(record):
-# Point the process env (TF_VAR_*) at `record` — the engine-node record for a
-#     deploy, or the recorded engine node for companion ops. Terraform reads the same
-#     env natively, and every env-sourced read in the pipeline keeps working. Returns
-#     a restore dict for restore_node_env().
+# Point the process configuration at `record` — the engine-node record for a deploy, or
+#     the recorded engine node for companion ops. An in-process config override, not an
+#     os.environ mutation: env writes leaked into every later read.
+#     Returns a token for restore_node_env().
     token = os.environ.get(record.token_env)
     if not token:
         raise SystemExit(
             f"  ERROR: nodes.json node '{record.name}' points at token_env "
-            f"'{record.token_env}' but that env var is empty/absent — add the token "
-            f"to .env (never to nodes.json, which is committed).")
-    restore = {k: os.environ.get(k, _MISSING) for k in _ENV_KEYS}
-    os.environ["TF_VAR_proxmox_endpoint"] = record.endpoint
-    os.environ["TF_VAR_proxmox_api_token"] = token
-    os.environ["TF_VAR_proxmox_node"] = record.node
-    os.environ["TF_VAR_datastore"] = record.datastore
-    os.environ["TF_VAR_template_vm_id"] = str(record.engine_base_vmid)
+            f"'{record.token_env}' but that env var is empty/absent — set the token "
+            f"in the environment (never in nodes.json, which is committed).")
+    values = {
+        "proxmox.endpoint": record.endpoint,
+        "proxmox.api_token": token,
+        "proxmox.node": record.node,
+        "proxmox.datastore": record.datastore,
+        "proxmox.template_vm_id": record.engine_base_vmid,
+    }
     if record.tls_fingerprint:
-        restore.setdefault("PROXMOX_TLS_FINGERPRINT",
-                           os.environ.get("PROXMOX_TLS_FINGERPRINT", _MISSING))
-        os.environ["PROXMOX_TLS_FINGERPRINT"] = record.tls_fingerprint
-    return restore
+        values["proxmox.tls_fingerprint"] = record.tls_fingerprint
+    return config.active().activate(values)
 
 
 def restore_node_env(restore):
-    for k, v in restore.items():
-        if v is _MISSING:
-            os.environ.pop(k, None)
-        else:
-            os.environ[k] = v
+    config.active().deactivate(restore)
 
 
 @contextmanager

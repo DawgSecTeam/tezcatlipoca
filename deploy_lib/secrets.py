@@ -3,9 +3,10 @@
 import json
 from pathlib import Path
 
-from config.config_ops import collect_teams, random_password, write_state
+from config.config_ops import collect_teams, random_password
 from common.constants import MAX_TEAMS, PIPELINE_VERSION
 from common.utils import mint_run_id
+from estate import state as estate_state
 
 
 def _tracked_team_identifier_defaults(comp_dir):
@@ -73,7 +74,11 @@ def resolve_competition_teams(ctx, num_teams, from_phase, team_identifiers=None)
 #     would orphan every kept template's ownership.
     ctx.run_id = ctx.previous_state.get("run_id") or mint_run_id()
     if ctx.resuming:
-        ctx.state = json.loads(ctx.state_path.read_text())
+        # Re-read from disk rather than trusting the snapshot prepare() took: the document
+        # holds the only copy of the team passwords. load_flat falls back to the legacy
+        # file, so a range deployed before the document existed still resumes.
+        ctx.state = estate_state.load_flat(ctx.state_path.parent if ctx.state_path
+                                           else ctx.comp_dir)
         ctx.teams = {
             k: {"identifier": v["identifier"], "password": v["password"]}
             for k, v in ctx.state["teams"].items()
@@ -102,7 +107,7 @@ def resolve_competition_teams(ctx, num_teams, from_phase, team_identifiers=None)
             "scoring_vm_id": ctx.engine_vmid,
             "run_id": ctx.run_id,
         })
-        write_state(ctx.state_path, ctx.state)
+        ctx.save_state()
         print(f"  Resuming from phase {from_phase} "
               f"({ctx.number_of_teams} team(s), last completed phase {ctx.state.get('last_phase')})")
     else:
@@ -175,4 +180,4 @@ def mint_competition_secrets(ctx):
         "box_creds": ctx.box_creds,
         "domain_creds": ctx.domain_creds,
     })
-    write_state(ctx.state_path, ctx.state)
+    ctx.save_state()

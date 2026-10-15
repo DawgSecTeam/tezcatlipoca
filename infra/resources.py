@@ -6,10 +6,10 @@ Two families, one module:
   - template resolution (check_share_templates / cloudinit_gate): box templates resolve and
     carry cloud-init, the engine base image exists, satellites have a jump clone source."""
 
-import os
 import re
 
 from infra.client import proxmox_api
+from estate import config
 
 _CLOUDINIT_DISK_RE = re.compile(r"^(?:ide|scsi|sata)\d+$")
 
@@ -36,7 +36,7 @@ def check_datastore_headroom(node, datastore, boxes, num_teams, label="", node_n
     # blocks — the goldens and engine are the only full copies. Opt-in factor
     # (0 < TEZ_THIN_HEADROOM <= 1) counts that fraction of the provisioned math
     # instead of rejecting comps the pool can actually hold.
-    thin = float(os.environ.get("TEZ_THIN_HEADROOM") or 1.0)
+    thin = config.active().knobs.thin_headroom  # float; the config default is 1.0
     if not 0 < thin <= 1:
         raise SystemExit(f"  ERROR: TEZ_THIN_HEADROOM must be in (0, 1], got {thin}")
     counted_gb = need_gb * thin
@@ -81,7 +81,7 @@ def cloudinit_gate(tagged_by_name, boxes, label=""):
     verified = 0
     for box in boxes:
         if box.get("unmanaged"):
-            continue  # unmanaged boxes get no cloud-init identity (terraform skips the block)
+            continue  # unmanaged boxes get no cloud-init identity (the create path skips the block)
         name = box.get("template")
         vm = tagged_by_name.get(name)
         if vm is None or name in seen:

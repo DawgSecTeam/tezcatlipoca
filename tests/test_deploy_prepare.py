@@ -30,7 +30,8 @@ from deploy_lib import configs as dl_configs  # noqa: E402
 from deploy_lib import inputs as dl_inputs  # noqa: E402
 from deploy_lib import placement as dl_placement  # noqa: E402
 from deploy_lib import targets as dl_targets  # noqa: E402
-from deploy_lib import tfinputs as dl_tfinputs  # noqa: E402
+from estate import config
+from deploy_lib import estate_inputs as dl_estate_inputs  # noqa: E402
 from deploy_lib.context import DeployContext  # noqa: E402
 from common.constants import (DEFAULT_ENGINE_MGMT_GW, DEFAULT_ENGINE_MGMT_IP,  # noqa: E402
                        SCORING_ENGINE_VMID)
@@ -155,7 +156,7 @@ class PriorStateGuards(unittest.TestCase):
             ctx = _prior(comp_dir)
             with dpatch("guard_resume_from_phase") as guard:
                 _load_and_gate(ctx, comp_dir, 6, True)
-        guard.assert_called_once_with(6, 5, comp_dir / ".deploy_state.json", force=True)
+        guard.assert_called_once_with(6, 5, comp_dir / "estate-state.json", force=True)
 
     def test_fresh_run_never_calls_the_resume_guard(self):
         with tempfile.TemporaryDirectory() as d:
@@ -179,7 +180,7 @@ class PlacementAndLock(unittest.TestCase):
         with dpatch("resolve_placement",
                           side_effect=lambda *a, **k: order.append(("resolve", a[1])) or resolve_return), \
                 dpatch("activate_placement", side_effect=lambda p: order.append("activate")), \
-                dpatch("write_state"), \
+                dpatch("persist_state"), \
                 dpatch("acquire_engine_lock",
                              side_effect=lambda v: order.append(("lock", v))):
             dl_placement.apply_engine_placement(ctx, Path("/nonexistent"), None, None)
@@ -194,11 +195,14 @@ class PlacementAndLock(unittest.TestCase):
     def test_engine_mgmt_ip_and_gw_come_from_the_resolved_engine_record(self):
         import types
         record = types.SimpleNamespace(engine_mgmt_ip="10.0.0.7", engine_mgmt_gw="10.0.0.1")
+        config.reset()
+        self.addCleanup(config.reset)
         with patch.dict(os.environ, {}, clear=True):
             _placement, order = self._run(1, ({"team_slots": {}}, record))
             self.assertEqual(order, [("resolve", 1), "activate", ("lock", 1)])
-            self.assertEqual(os.environ["TF_VAR_engine_mgmt_ip"], "10.0.0.7")
-            self.assertEqual(os.environ["TF_VAR_engine_mgmt_gw"], "10.0.0.1")
+            # The node record points the process config at the engine's host.
+            self.assertEqual(config.active().engine.mgmt_ip, "10.0.0.7")
+            self.assertEqual(config.active().engine.mgmt_gw, "10.0.0.1")
 
     def test_no_placement_means_no_activation_and_still_a_lock(self):
         _placement, order = self._run(1, (None, None))
@@ -272,94 +276,51 @@ class GoldenGatePosition(unittest.TestCase):
         self.assertEqual(seen["keepme"], ({}, {}, "t"))
 
 
-class TerraformInputs(unittest.TestCase):
-# tfvars assembly, the stale-state guard and the engine mgmt IP/gw defaults.
+class EstateInputs(unittest.TestCase):
+# The document build, the stale-state guard and the engine mgmt IP/gw defaults.
 
     ENV = {"TF_VAR_ssh_private_key_path": "/tmp/key", "TF_VAR_proxmox_node": "pve",
            "TF_VAR_proxmox_endpoint": "https://new:8006/"}
 
-    def _run(self, comp_dir, tf_dir, env=None, placement=None):
+    def _run(self, comp_dir, env=None, placement=None):
+        config.reset()
+        self.addCleanup(config.reset)
         ctx = _ctx(engine_vmid=1000, placement=placement)
-        captured = {}
-        with patch.dict(os.environ, env if env is not None else self.ENV, clear=True), \
-                dpatch("ensure_terraform_workdir", return_value=tf_dir), \
-                dpatch("write_text_atomic",
-                             side_effect=lambda p, t: captured.__setitem__(str(p), t)), \
-                dpatch("satellite_tfvars", return_value=[{"name": "sat1"}]), \
-                dpatch("satellite_routes_for", return_value=[{"fake": True}]):
-            ctx.engine_mgmt_ip = dl_tfinputs.engine_mgmt_ip_from_env()  # as prepare() does
-            dl_tfinputs.build_terraform_inputs(ctx, comp_dir)
+        with patch.dict(os.environ, env if env is not None else self.ENV, clear=True):
+            ctx.engine_mgmt_ip = dl_estate_inputs.engine_mgmt_ip_from_env()  # as prepare() does
+            dl_estate_inputs.build_estate_inputs(ctx, comp_dir)
             # os.environ is restored when patch.dict exits, so snapshot the two engine
             # vars here — that is where the code under test exported them.
-            env_view = {k: os.environ.get(k) for k in
-                        ("TF_VAR_engine_mgmt_ip", "TF_VAR_engine_mgmt_gw")}
-        return ctx, captured, env_view
+            env_view = {"engine_mgmt_ip": config.active().engine.mgmt_ip,
+                        "engine_mgmt_gw": config.active().engine.mgmt_gw,
+                        "marked_default":
+                            "TEZ_ENGINE_MGMT_IP_IS_DEFAULT" in os.environ}
+        return ctx, ctx.document(), env_view
 
-    def test_tfvars_keys(self):
+    def test_document_identity_and_roster(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
-            tf_dir = comp_dir / "terraform"
-            tf_dir.mkdir()
-            _ctx_out, captured, _view = self._run(comp_dir, tf_dir)
-        tfvars = json.loads(captured[str(tf_dir / "terraform.tfvars.json")])
-        self.assertEqual(tfvars["event_name"], "probe")
-        self.assertEqual(tfvars["scoring_vm_id"], 1000)
-        self.assertEqual(tfvars["boxes_per_team"], [{"name": "web01", "template": "ubuntu-fix"}])
-        self.assertIs(tfvars["build_team_boxes"], False)
-        self.assertEqual(tfvars["golden_template_ids"], [])
-        # no state key -> derived from the engine vmid (engine +140), never 0: a
-        # --force-from-phase resume after a phase-1 state reset must still clone the
-        # engine template, not an unbootstrapped base image
-        self.assertEqual(tfvars["engine_clone_id"], 1140)
-        self.assertNotIn("satellites", tfvars)              # single-node: no satellite keys
+            _ctx_out, document, _view = self._run(comp_dir)
+            self.assertTrue((comp_dir / "estate-state.json").exists())
+        identity = document.data["identity"]
+        self.assertEqual(identity["comp_name"], "probe")
+        self.assertEqual(identity["scoring_vm_id"], 1000)
+        self.assertEqual(identity["endpoint"], "https://new:8006")
+        self.assertEqual(identity["node"], "pve")
+        self.assertEqual(document.data["roster"]["boxes"],
+                         [{"name": "web01", "template": "ubuntu-fix"}])
 
-    def test_state_recorded_engine_template_wins_over_the_derived_vmid(self):
+    def _stale_gate(self, previous_state, engine_vmid=1000, from_phase=1):
+    # gates.check_stale_estate_state refuses a document recorded against another host.
         with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            tf_dir = comp_dir / "terraform"
-            tf_dir.mkdir()
-            ctx, captured, _view = self._run(comp_dir, tf_dir)
-        ctx.state["engine_template_vmid"] = 1234
-        with tempfile.TemporaryDirectory() as d2:
-            tf_dir2 = Path(d2) / "terraform"
-            tf_dir2.mkdir()
-            with patch.dict(os.environ, self.ENV, clear=True), \
-                    dpatch("ensure_terraform_workdir", return_value=tf_dir2), \
-                    dpatch("write_text_atomic",
-                                 side_effect=lambda p, t: captured.__setitem__(str(p), t)), \
-                    dpatch("satellite_tfvars", return_value=[{"name": "sat1"}]), \
-                    dpatch("satellite_routes_for", return_value=[{"fake": True}]):
-                dl_tfinputs.build_terraform_inputs(ctx, Path(d2))
-        self.assertEqual(json.loads(captured[str(tf_dir2 / "terraform.tfvars.json")])
-                         ["engine_clone_id"], 1234)
-
-    def test_placement_adds_slots_and_satellite_keys(self):
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            tf_dir = comp_dir / "terraform"
-            tf_dir.mkdir()
-            _ctx_out, captured, _view = self._run(comp_dir, tf_dir,
-                                                  placement={"team_slots": {"team1": 2}})
-        tfvars = json.loads(captured[str(tf_dir / "terraform.tfvars.json")])
-        self.assertEqual(tfvars["teams"]["team1"]["slot"], 2)
-        self.assertEqual(tfvars["satellites"], [{"name": "sat1"}])
-        self.assertEqual(tfvars["satellite_routes"], [{"fake": True}])
-
-    def _stale_gate(self, previous_state, engine_vmid=1000):
-    # gates.check_stale_terraform_state against a workdir that holds a tfstate.
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            tf_dir = comp_dir / "terraform"
-            tf_dir.mkdir()
-            (tf_dir / "terraform.tfstate").write_text("{}")
             with patch.dict(os.environ, self.ENV, clear=True):
-                dl_gates.check_stale_terraform_state(comp_dir, "probe", previous_state,
-                                                     engine_vmid, 1)
+                dl_gates.check_stale_estate_state(Path(d), "probe", previous_state,
+                                                  engine_vmid, from_phase)
 
     def test_stale_state_on_a_different_host_is_refused(self):
         with self.assertRaises(SystemExit) as raised:
             self._stale_gate({"deployed_endpoint": "https://old:8006", "scoring_vm_id": 1000})
-        self.assertIn("Destroy this competition first", str(raised.exception))
+        self.assertIn("deployed it", str(raised.exception))
 
     def test_stale_state_on_a_different_engine_vmid_is_refused(self):
         with self.assertRaises(SystemExit) as raised:
@@ -370,63 +331,62 @@ class TerraformInputs(unittest.TestCase):
         self._stale_gate({"deployed_endpoint": "https://new:8006", "scoring_vm_id": 1000})
 
     def test_a_resume_past_phase_2_skips_the_stale_state_gate(self):
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            (comp_dir / "terraform").mkdir()
-            (comp_dir / "terraform" / "terraform.tfstate").write_text("{}")
-            with patch.dict(os.environ, self.ENV, clear=True):
-                dl_gates.check_stale_terraform_state(
-                    comp_dir, "probe", {"deployed_endpoint": "https://old:8006"}, 1000, 3)
+        with patch.dict(os.environ, self.ENV, clear=True):
+            dl_gates.check_stale_estate_state(
+                Path("/nonexistent"), "probe", {"deployed_endpoint": "https://old:8006"},
+                1000, 3)
+
+    def test_a_fresh_deploy_with_no_prior_state_is_not_refused(self):
+        self._stale_gate({})
 
     def test_engine_mgmt_ip_defaults_to_static_and_gateway_follows(self):
-        env = dict(self.ENV)
         with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            tf_dir = comp_dir / "terraform"
-            tf_dir.mkdir()
-            ctx, _captured, env_view = self._run(comp_dir, tf_dir, env=env)
+            ctx, _document, env_view = self._run(Path(d), env=dict(self.ENV))
         self.assertEqual(ctx.engine_mgmt_ip, DEFAULT_ENGINE_MGMT_IP)
-        self.assertEqual(env_view["TF_VAR_engine_mgmt_ip"], DEFAULT_ENGINE_MGMT_IP)
-        self.assertEqual(env_view["TF_VAR_engine_mgmt_gw"], DEFAULT_ENGINE_MGMT_GW)
+        self.assertEqual(env_view["engine_mgmt_ip"], DEFAULT_ENGINE_MGMT_IP)
+        self.assertEqual(env_view["engine_mgmt_gw"], DEFAULT_ENGINE_MGMT_GW)
+        self.assertTrue(env_view["marked_default"])
 
     def test_explicit_empty_mgmt_ip_keeps_dhcp_but_still_defaults_the_gateway(self):
-        env = dict(self.ENV, TF_VAR_engine_mgmt_ip="")
+        env = dict(self.ENV)
+        env["TF_VAR_engine_mgmt_ip"] = ""
         with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            tf_dir = comp_dir / "terraform"
-            tf_dir.mkdir()
-            ctx, _captured, env_view = self._run(comp_dir, tf_dir, env=env)
+            ctx, _document, env_view = self._run(Path(d), env=env)
         self.assertEqual(ctx.engine_mgmt_ip, "")
-        self.assertEqual(env_view["TF_VAR_engine_mgmt_gw"], DEFAULT_ENGINE_MGMT_GW)
+        self.assertEqual(env_view["engine_mgmt_gw"], DEFAULT_ENGINE_MGMT_GW)
 
     def test_explicit_gateway_is_not_overwritten(self):
         env = dict(self.ENV, TF_VAR_engine_mgmt_ip="10.0.0.5", TF_VAR_engine_mgmt_gw="10.9.9.9")
         with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            tf_dir = comp_dir / "terraform"
-            tf_dir.mkdir()
-            ctx, _captured, env_view = self._run(comp_dir, tf_dir, env=env)
+            ctx, _document, env_view = self._run(Path(d), env=env)
         self.assertEqual(ctx.engine_mgmt_ip, "10.0.0.5")
-        self.assertEqual(env_view["TF_VAR_engine_mgmt_gw"], "10.9.9.9")
+        self.assertEqual(env_view["engine_mgmt_gw"], "10.9.9.9")
 
     def test_per_run_mgmt_ip_override_beats_the_env_and_is_reexported(self):
         env = dict(self.ENV, TF_VAR_engine_mgmt_ip="10.0.0.5")
         with patch.dict(os.environ, env, clear=True):
-            ip = dl_tfinputs.engine_mgmt_ip_from_env("10.0.0.77")
-            # downstream (engine_template_ops build-VM ipconfig0) reads the env, not the return
-            exported = os.environ["TF_VAR_engine_mgmt_ip"]
+            ip = dl_estate_inputs.engine_mgmt_ip_from_env("10.0.0.77")
+            # downstream (the engine-template build VM's ipconfig0) reads the config
+            resolved = config.active().engine.mgmt_ip
             marked_default = "TEZ_ENGINE_MGMT_IP_IS_DEFAULT" in os.environ
         self.assertEqual(ip, "10.0.0.77")
-        self.assertEqual(exported, "10.0.0.77")
+        self.assertEqual(resolved, "10.0.0.77")
         self.assertFalse(marked_default)
 
 
 class TargetSplit(unittest.TestCase):
     def test_unmanaged_boxes_stay_in_all_targets_but_leave_the_work_lists(self):
+        # The real shape enumerate_targets returns — the roster mirror needs all of it.
         targets = [
-            {"vmid": 1, "box": {"name": "web01", "template": "ubuntu-fix"}},
-            {"vmid": 2, "box": {"name": "dc01", "template": "win-fix"}},
-            {"vmid": 3, "box": {"name": "fw01", "template": "pfsense-fix", "unmanaged": True}},
+            {"vmid": 1, "vm_name": "team1-web01", "ip": "192.168.101.2", "node": "pve",
+             "slot": 0, "box_name": "web01", "team_key": "team1",
+             "box": {"name": "web01", "template": "ubuntu-fix"}},
+            {"vmid": 2, "vm_name": "team1-dc01", "ip": "192.168.101.3", "node": "pve",
+             "slot": 0, "box_name": "dc01", "team_key": "team1",
+             "box": {"name": "dc01", "template": "win-fix"}},
+            {"vmid": 3, "vm_name": "team1-fw01", "ip": "192.168.101.1", "node": "pve",
+             "slot": 0, "box_name": "fw01", "team_key": "team1",
+             "box": {"name": "fw01", "template": "pfsense-fix", "unmanaged": True}},
         ]
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx()
@@ -492,12 +452,12 @@ class PrepareSequencer(unittest.TestCase):
                              side_effect=lambda v: order.append(("lock", v))), \
                 dpatch("generate_stage_configs_and_hashes",
                              side_effect=rec("generated")), \
-                dpatch("build_terraform_inputs", side_effect=rec("terraform")), \
+                dpatch("build_estate_inputs", side_effect=rec("terraform")), \
                 dpatch("run_capacity_preflight", side_effect=rec("preflight")), \
                 dpatch("confirm_deploy",
                              side_effect=lambda *a, **k: order.append("confirm") or confirm), \
                 dpatch("enumerate_deploy_targets", side_effect=rec("targets")), \
-                dpatch("write_state"), \
+                dpatch("persist_state"), \
                 contextlib.redirect_stdout(buf if buf is not None else io.StringIO()):
             result = deploy.prepare(comp_dir, num_teams=1, assume_yes=False, scoring_vmid=1234)
         return result

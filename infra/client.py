@@ -1,13 +1,13 @@
 """Proxmox API client: TLS-pinned requests, per-node route table (multi-node), cluster reads,
 task waiting and node-load throttling. Everything else talks to Proxmox through here."""
 
-import os
 import re
 import time
 
 import requests
 
 from common.utils import retry
+from estate import config
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 
@@ -69,11 +69,12 @@ class _FingerprintAdapter(HTTPAdapter):
 
 
 def proxmox_request(method, url, fingerprint=None, **kwargs):
-    """requests wrapper honoring optional TLS pinning. PROXMOX_TLS_FINGERPRINT (sha256) pins the
-    cert; PROXMOX_CA_BUNDLE verifies against a CA path; neither set => verify=False (lab default).
-    An explicit `fingerprint` (per-node record) overrides the env value."""
-    fp = fingerprint or os.environ.get("PROXMOX_TLS_FINGERPRINT")
-    ca = os.environ.get("PROXMOX_CA_BUNDLE")
+    """requests wrapper honoring optional TLS pinning. config.proxmox.tls_fingerprint pins the
+    cert; config.proxmox.ca_bundle verifies against a CA path; neither set => verify=False (lab
+    default). An explicit `fingerprint` (per-node record) overrides the configured value."""
+    cfg = config.active()
+    fp = fingerprint or cfg.proxmox.tls_fingerprint
+    ca = cfg.proxmox.ca_bundle
     session = requests.Session()
     if fp:
         session.mount("https://", _FingerprintAdapter(fp))
@@ -103,8 +104,9 @@ def proxmox_api(method, path, **kwargs):
     if override:
         endpoint, token = override
     else:
-        endpoint = os.environ["TF_VAR_proxmox_endpoint"]
-        token = os.environ["TF_VAR_proxmox_api_token"]
+        cfg = config.active()
+        endpoint = cfg.require("proxmox.endpoint")
+        token = cfg.require("proxmox.api_token")
     return proxmox_api_for(endpoint, token, method, path, **kwargs)
 
 
@@ -143,17 +145,28 @@ def wait_for_proxmox_task(node, upid, timeout=1800):
 
 
 def destroy_bridge_if_exists(node, bridge_name):
-    """Delete a Proxmox Linux bridge if it exists. A GET-first existence check keeps
-    a fresh deploy (whose bridges are all new) from spraying spurious 400s — PVE
-    rejects DELETE with "Parameter verification failed" rather than 404 for an
-    absent iface (live noise, m4-validation-2026-09-25 phase 1)."""
+    """Delete a Proxmox Linux bridge if it exists; True when it is gone afterwards.
+
+    A GET-first existence check keeps a fresh deploy (whose bridges are all new) from
+    spraying spurious 400s — PVE rejects DELETE with "Parameter verification failed"
+    rather than 404 for an absent iface (live noise, m4-validation-2026-09-25 phase 1).
+    DELETE only STAGES the change — the same pending/apply pair create_bridge pairs with a
+    reload PUT — so without the apply the bridge stays UP and the next deploy's preflight
+    refuses it (live 2026-10-15, run-ee5717cd left vmbr151 active through a teardown that
+    reported the estate clean).
+    """
     try:
         existing = {n.get("iface") for n in proxmox_api("GET", f"/nodes/{node}/network")["data"]}
         if bridge_name not in existing:
-            return
+            return True
         proxmox_api("DELETE", f"/nodes/{node}/network/{bridge_name}")
+        proxmox_api("PUT", f"/nodes/{node}/network")
+        remaining = {n.get("iface") for n in proxmox_api("GET", f"/nodes/{node}/network")["data"]}
+        return bridge_name not in remaining
     except requests.exceptions.HTTPError as e:
         if e.response is None or e.response.status_code != 404:
             print(f"    WARNING: could not delete bridge {bridge_name}: {e}")
+        return False
     except Exception as e:
         print(f"    WARNING: could not delete bridge {bridge_name}: {e}")
+        return False

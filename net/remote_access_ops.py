@@ -29,7 +29,26 @@ import re
 import subprocess
 from pathlib import Path
 
+from estate import state as estate_state
+from estate import config
+
 TAILSCALE_INSTALL = "curl -fsSL https://tailscale.com/install.sh | sh"
+# A freshly cloned engine boots with cloud-init + unattended-upgrades holding the dpkg
+# locks for minutes, and the installer's own apt-get then dies on the lock
+# (`Could not get lock /var/lib/dpkg/lock-frontend ... held by process 2353 (apt-get)`,
+# live 2026-10-15 run-0f82f888) through every one of the previous three 5-second retries,
+# ending the step at exit 127. Wait cloud-init and the locks out FIRST (bounded), then
+# install with a real retry; `flock -n` on the two apt locks is the portable probe.
+TAILSCALE_INSTALL_CMD = (
+    "sudo cloud-init status --wait >/dev/null 2>&1 || true; "
+    "for i in $(seq 1 120); do "
+    "sudo flock -n /var/lib/dpkg/lock-frontend -c true 2>/dev/null && "
+    "sudo flock -n /var/lib/dpkg/lock -c true 2>/dev/null && break; "
+    "sleep 5; done; "
+    "for i in 1 2 3; do command -v tailscale >/dev/null && break; "
+    f"sudo {TAILSCALE_INSTALL} > /tmp/ts-install.log 2>&1 || true; sleep 15; done; "
+    "command -v tailscale >/dev/null || { echo 'tailscale install failed:'; "
+    "cat /tmp/ts-install.log; exit 127; }; tailscale version")
 TAILNET_SRC = "100.64.0.0/10"
 INFRA_USER_DEFAULT = "cyberrange-infra"
 POLICY_STATE_FILE = "/home/sysadmin/headscale/config/tezcatlipoca-remote-access.json"
@@ -207,17 +226,19 @@ def enrollment_markdown(comp_id, server_url, entries):
 
 
 def _headscale_env():
-# The TEZ_HEADSCALE_* env contract; a missing var is a deploy-stage failure.
-    missing = [v for v in ("TEZ_HEADSCALE_URL", "TEZ_HEADSCALE_SSH_HOST",
-                           "TEZ_HEADSCALE_SSH_USER", "TEZ_HEADSCALE_SSH_PASSWORD")
-               if not os.environ.get(v)]
+# The headscale contract; a missing value is a deploy-stage failure.
+    cfg = config.active()
+    values = {"TEZ_HEADSCALE_URL": cfg.headscale.url,
+              "TEZ_HEADSCALE_SSH_HOST": cfg.headscale.ssh_host,
+              "TEZ_HEADSCALE_SSH_USER": cfg.headscale.ssh_user,
+              "TEZ_HEADSCALE_SSH_PASSWORD": cfg.headscale.ssh_password}
+    missing = [name for name, value in values.items() if not value]
     if missing:
         raise SystemExit(
             f"  ERROR: remote access is enabled but {', '.join(missing)} not set. "
-            f"Add the TEZ_HEADSCALE_* block to .env (see .env.example and "
-            f"docs/remote-access.md).")
-    return {v: os.environ[v] for v in ("TEZ_HEADSCALE_URL", "TEZ_HEADSCALE_SSH_HOST",
-                                       "TEZ_HEADSCALE_SSH_USER", "TEZ_HEADSCALE_SSH_PASSWORD")}
+            f"Add the headscale block to the config profile (tezcatlipoca.example.toml "
+            f"and docs/remote-access.md).")
+    return values
 
 
 def _hs_ssh(cmd, password, input_text="", timeout=90, check=True, capture=True):
@@ -249,7 +270,7 @@ def hs_json(args, timeout=90, check=True):
 def _infra_user_id():
 # The router nodes' owning service user (TEZ_HEADSCALE_INFRA_USER, default
 #     cyberrange-infra — the account that already owns the tailnet's infra nodes).
-    name = os.environ.get("TEZ_HEADSCALE_INFRA_USER", INFRA_USER_DEFAULT)
+    name = (config.active().headscale.infra_user or INFRA_USER_DEFAULT)
     for u in hs_json("users list"):
         if u.get("name") == name:
             return u["id"]
@@ -398,21 +419,12 @@ def enroll_engine_router(ctx, comp_id, all_identifiers):
 # Install (once) + enroll/update the engine as tag:range-router advertising
 #     every team subnet. Minting a fresh key on each run is deliberate: the key is
 #     single-use, short-lived, and an unused one costs nothing.
-    server_url = os.environ["TEZ_HEADSCALE_URL"].rstrip("/")
+    server_url = config.require("headscale.url").rstrip("/")
     routes = ",".join(team_subnet(i) for i in all_identifiers)
     hostname = router_node_name(comp_id)
     if not engine_tailscale_enrolled(ctx, server_url):
         print("  Installing tailscale on the engine (first run)...")
-        # Retry loop, not `|| true`: the engine's apt machinery races phase 3
-        # (documented class — masked install failures resurface as a 127 on the
-        # version check), and a silently-missing binary is worse than a loud one.
-        _engine_cmd(ctx,
-                    "for i in 1 2 3; do command -v tailscale >/dev/null && break; "
-                    f"sudo {TAILSCALE_INSTALL} > /tmp/ts-install.log 2>&1 || true; "
-                    "sleep 5; done; "
-                    "command -v tailscale >/dev/null || { echo 'tailscale install "
-                    "failed:'; cat /tmp/ts-install.log; exit 127; }; tailscale version",
-                    timeout=900, step="install tailscale")
+        _engine_cmd(ctx, TAILSCALE_INSTALL_CMD, timeout=900, step="install tailscale")
         user_id = _infra_user_id()
         key = _mint_preauth_key(user_id, "tag:range-router", "12h")
         print(f"  Enrolling engine as headscale node '{hostname}' "
@@ -433,7 +445,7 @@ def enroll_engine_router(ctx, comp_id, all_identifiers):
 def push_remote_access_firewall(tf_ctx, engine_mgmt_ip, local_ids, satellite_ids):
 # The per-deploy SNAT/forward unit — separate from the template's
 #     range-firewall.sh so the engine template hash never moves. `tf_ctx` is the
-#     terraform connection dict every engine SSH hop takes.
+#     engine connection dict every engine SSH hop takes.
     script = remote_access_firewall_script(local_ids, satellite_ids, engine_mgmt_ip)
     service, timer = remote_access_systemd_units()
     s_b64 = base64.b64encode(script.encode()).decode()
@@ -508,7 +520,7 @@ def setup_remote_access(ctx):
         for person in team["participants"]:
             user = f"comp-{comp_id}-{person}"
             uid = _ensure_user(user)
-            ttl = os.environ.get("TEZ_REMOTE_KEY_TTL", "72h")
+            ttl = config.active().headscale.key_ttl
             # Deliberately UNTAGGED: a tagged node's identity is its tag, and
             # headscale v0.29 does not expand tag sources into routers' packet
             # filters (live-proven 2026-10-08) — the username is the grant key.
@@ -545,11 +557,7 @@ def teardown_remote_access(comp_dir, state=None):
 #     deploy state's remote_access record; absent (pre-feature comp, or the flag off)
 #     means nothing to do.
     if state is None:
-        state_path = Path(comp_dir) / ".deploy_state.json"
-        try:
-            state = json.loads(state_path.read_text())
-        except (OSError, ValueError):
-            state = {}
+        state = estate_state.load_flat(comp_dir)
     ra = (state or {}).get("remote_access")
     if not ra or not ra.get("enabled"):
         return

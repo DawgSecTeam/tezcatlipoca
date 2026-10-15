@@ -1,16 +1,16 @@
 """Misconfig gates: one planted misconfig confirmed (SSH, guest-agent fallback) and survival across team clones."""
 
 import json
-import os
 import subprocess
 from pathlib import Path
 
 from infra.guest_exec import guest_agent_exec_root
-from common.targets import vm_id_for
+from common.targets import frozen_roster, vm_id_for
 from common.utils import MAX_CONCURRENCY, run_concurrent
 
 from verifier import context
 from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
+from estate import config as estate_config
 
 
 MISCONFIG_CHECKS = {
@@ -39,15 +39,14 @@ def _config_name(entry):
 
 
 def _target_vmid(comp_dir, box):
-# VMID for a nakon machine entry: frozen targets.json, falling back to boxes.json order.
+# VMID for a nakon machine entry: the frozen roster, falling back to boxes.json order.
     try:
         identifier = box["ip"].split(".")[2]
         base_name = box["name"].rsplit("-team", 1)[0]
-        targets_path = Path(comp_dir) / "targets.json"
-        if targets_path.exists():
-            for t in json.loads(targets_path.read_text()).get("targets", {}).values():
-                if str(t["identifier"]) == identifier and t["box_name"] == base_name:
-                    return t["vmid"]
+        frozen = frozen_roster(comp_dir)
+        for t in (frozen or {}).get("targets", {}).values():
+            if str(t["identifier"]) == identifier and t["box_name"] == base_name:
+                return t["vmid"]
         boxes_json = json.loads((Path(comp_dir) / "boxes.json").read_text())
         idx = next(i for i, b in enumerate(boxes_json) if b.get("name") == base_name)
         return vm_id_for(identifier, idx)
@@ -65,7 +64,7 @@ def misconfig_via_guest_agent(comp_dir, box, verifiable):
     if vmid is None:
         print("  (guest-agent fallback unavailable: could not resolve the box's vmid)")
         return False
-    node = os.environ.get("TF_VAR_proxmox_node")
+    node = estate_config.active().proxmox.node
     if not node:
         print("  (guest-agent fallback unavailable: TF_VAR_proxmox_node not set)")
         return False

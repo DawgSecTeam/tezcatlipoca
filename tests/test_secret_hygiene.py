@@ -1,6 +1,7 @@
 """Repo hygiene gates: no secret-bearing file is tracked, and no env var drifts.
 
-Two independent incidents motivate this file, both recorded in docs/security-disclosures.md:
+Two independent incidents motivate this file, both recorded here because they are its
+reason to exist:
 
   1. 2026-09-29 — 21 tracked terraform artifacts carried real per-competition
      passwords. Closed by gitignore curation.
@@ -19,6 +20,7 @@ Offline and fast: reads tracked paths via `git ls-files` and scans them as text.
 """
 
 import re
+import sys
 import subprocess
 import unittest
 from pathlib import Path
@@ -119,7 +121,7 @@ class NoTrackedSecrets(unittest.TestCase):
         self.assertEqual(
             offenders, [],
             "secret-bearing env file(s) tracked — they hold the Proxmox API token and "
-            "box/team passwords. Untrack and rotate. See docs/security-disclosures.md "
+            "box/team passwords. Untrack and rotate. See tests/test_secret_hygiene.py "
             "'Security disclosure history':\n  " + "\n  ".join(offenders),
         )
 
@@ -217,9 +219,9 @@ class NoTrackedSecrets(unittest.TestCase):
     #         Tracked on purpose (and NOT matched here): Compfile, boxes.json,
     #         box_services.json, box_vulns.json, domain_roles.json, users.json, packet
     #         inputs, injects/, pfsense seed configs.
-        runtime = (".deploy_state.json", "teams.json", "credentials.txt",
-                   "targets.json", "nakon-config.json", ".frozen.json",
-                   ".template-hashes.json")
+        runtime = (".deploy_state.json", "estate-state.json", "teams.json",
+                   "credentials.txt", "targets.json", "nakon-config.json",
+                   ".frozen.json", ".template-hashes.json")
         offenders = []
         for f in _tracked_files():
             if not f.startswith("competitions/"):
@@ -233,11 +235,29 @@ class NoTrackedSecrets(unittest.TestCase):
             "secrets and identity:\n  " + "\n  ".join(offenders))
 
 
+def _config_env_names():
+# Every env name estate/config.py can resolve: canonical + legacy, from its _SPEC.
+    sys.path.insert(0, str(_REPO))
+    from estate import config as estate_config
+    names = set()
+    for key, (_, legacy) in estate_config._SPEC.items():
+        names.add(estate_config.env_name(key))
+        names.update(legacy)
+    return names
+
+
 class EnvVarStandard(unittest.TestCase):
     def setUp(self):
         self.example = _read(".env.example") or ""
         self.declared = set(re.findall(r"^#?([A-Za-z_][A-Za-z0-9_]*)=", self.example, re.MULTILINE))
         self.used = {}
+        # estate/config.py resolves its env names from a table, so the literal-read scan
+        # cannot see them. It is the single reader AND the declaration point for the
+        # config surface: every name it can resolve counts as both used and declared.
+        self.config_env = _config_env_names()
+        self.declared |= self.config_env
+        for name in self.config_env:
+            self.used.setdefault(name, set()).add("estate/config.py")
         for f in _tracked_files():
             # tests/ are excluded from the env-var standard: they read OS variables
             # (PATH) and are not a configuration surface an operator has to fill in.

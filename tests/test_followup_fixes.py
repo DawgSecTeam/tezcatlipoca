@@ -30,7 +30,8 @@ sys.path.insert(0, str(_REPO))
 from config import packet_ops  # noqa: E402
 from common.utils import env_summary  # noqa: E402
 
-from redeploy import redeploy_rebuild_ops as redeploy  # noqa: E402  (owns reconcile_terraform_state)
+from estate import state as estate_state  # noqa: E402
+from redeploy import redeploy_rebuild_ops as redeploy  # noqa: E402  (owns reconcile_estate_state)
 from redeploy.redeploy_context import RedeployContext  # noqa: E402
 
 
@@ -142,31 +143,26 @@ class ReconcileStateTests(unittest.TestCase):
     def _target(self, vm_name, vmid, slot=0):
         return {"vm_name": vm_name, "vmid": vmid, "slot": slot}
 
-    def test_imports_slot0_and_satellite_addresses(self):
-        calls = []
-        env = {"TF_VAR_proxmox_node": "pve"}
-        with patch.dict(os.environ, env):
-            with patch.object(redeploy, "run_terraform",
-                              side_effect=lambda *a, **k: calls.append((a[0], k))):
-                redeploy.reconcile_terraform_state(
+    def test_records_every_rebuilt_box_against_its_new_vmid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp_dir = Path(tmp)
+            with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}):
+                redeploy.reconcile_estate_state(
                     [self._target("team1-db01", 1503), self._target("130-web01", 1504, slot=2)],
-                    _rctx(Path("/tmp/comp"), {}, []))
-        self.assertEqual(calls[0][0], ["state", "rm",
-                          'proxmox_virtual_environment_vm.team_box["team1-db01"]'])
-        self.assertEqual(calls[1][0], ["import",
-                          'proxmox_virtual_environment_vm.team_box["team1-db01"]', "pve/1503"])
-        self.assertEqual(calls[2][0], ["state", "rm",
-                          'proxmox_virtual_environment_vm.team_box_sat2["130-web01"]'])
-        self.assertEqual(calls[3][0], ["import",
-                          'proxmox_virtual_environment_vm.team_box_sat2["130-web01"]', "pve/1504"])
-        self.assertIn("cwd", calls[0][1])
+                    _rctx(comp_dir, {}, []))
+            recorded = {r["name"]: r["vmid"]
+                        for r in estate_state.EstateState.load(comp_dir).resources("team_box")}
+        self.assertEqual(recorded, {"team1-db01": 1503, "130-web01": 1504})
 
-    def test_failed_import_warns_and_continues(self):
-        with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}), \
-             patch.object(redeploy, "run_terraform",
-                          side_effect=RuntimeError("provider cannot import")):
-            redeploy.reconcile_terraform_state([self._target("team1-db01", 1503)],
-                                               _rctx(Path("/tmp/comp"), {}, []))  # no raise
+    def test_reconciling_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp_dir = Path(tmp)
+            with patch.dict(os.environ, {"TF_VAR_proxmox_node": "pve"}):
+                for _ in range(2):
+                    redeploy.reconcile_estate_state([self._target("team1-db01", 1503)],
+                                                    _rctx(comp_dir, {}, []))
+            rows = estate_state.EstateState.load(comp_dir).resources("team_box")
+        self.assertEqual([r["vmid"] for r in rows], [1503])
 
 
 class EnvSummaryTests(unittest.TestCase):
@@ -186,6 +182,22 @@ class EnvSummaryTests(unittest.TestCase):
                "TF_VAR_datastore": "d", "TF_VAR_template_vm_id": "1"}
         with patch.dict(os.environ, env, clear=True):
             self.assertIn("engine-mgmt=default", env_summary())
+
+    def test_summary_reads_the_resolved_target_not_the_ambient_env(self):
+        """Placement and --engine-mgmt-ip move the run by activating the config, not the
+        environment. The banner must name what the run DIALS: live 2026-10-15 the canary
+        deployed --engine-mgmt-ip 10.0.0.244 while every line printed 10.0.0.252."""
+        from estate import config
+        env = {"TF_VAR_proxmox_endpoint": "https://10.0.0.150:8006",
+               "TF_VAR_proxmox_node": "proxmox", "TF_VAR_datastore": "hdd",
+               "TF_VAR_template_vm_id": "955", "TF_VAR_engine_mgmt_ip": "10.0.0.252"}
+        with patch.dict(os.environ, env, clear=True):
+            config.reset()
+            config.active().activate({"engine.mgmt_ip": "10.0.0.244",
+                                      "proxmox.endpoint": "https://10.0.0.193:8006"})
+            s = env_summary()
+        self.assertIn("engine-mgmt=10.0.0.244", s)
+        self.assertIn("endpoint=https://10.0.0.193:8006", s)
 
 
 if __name__ == "__main__":

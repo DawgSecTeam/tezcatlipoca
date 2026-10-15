@@ -1,7 +1,6 @@
 """Generated nakon/stage configs and the golden hashes + frozen gate computed from them."""
 
 import json
-import os
 
 from golden.golden_target_ops import _template_vmid_map, unbooted_golden_boxes
 from nakonops.nakon_bundle_ops import build_nakon_bundle
@@ -9,6 +8,7 @@ from nakonops.nakon_config_ops import generate_nakon_config, generate_stage_conf
 from engine.template_freeze import frozen_code_drift, frozen_state, golden_freeze_gate
 
 from deploy_lib.golden_plan import golden_hash_entries
+from estate import config
 
 
 def generate_stage_configs_and_hashes(ctx, comp_dir):
@@ -36,7 +36,7 @@ def generate_stage_configs_and_hashes(ctx, comp_dir):
     # shas. The frozen gate also fires HERE, before any Proxmox mutation ("nothing
     # destroyed" is the whole point of the freeze; the phase-4 per-box gate alone was too
     # late, matrix run 4).
-    node = os.environ["TF_VAR_proxmox_node"]
+    node = config.active().proxmox.node
     golden_bundle = build_nakon_bundle(ctx.golden_config_path)
     golden_machines_by_box = {
         m["name"].rsplit("-golden", 1)[0]: m
@@ -45,7 +45,7 @@ def generate_stage_configs_and_hashes(ctx, comp_dir):
     base_template_ids = _template_vmid_map(node)
     ctx.golden_inputs, ctx.golden_hashes = golden_hash_entries(
         ctx.boxes, base_template_ids, golden_machines_by_box, golden_bundle,
-        ctx.box_password, ctx.box_username, os.environ.get("TF_VAR_ssh_public_key", ""),
+        ctx.box_password, ctx.box_username, config.active().ssh.public_key,
         ctx.apt_cache, unbooted=ctx.unbooted)
 
     frozen = frozen_state(comp_dir)
@@ -65,7 +65,7 @@ def generate_stage_configs_and_hashes(ctx, comp_dir):
         # `box_name`, NOT the event name: this loop used to read `for spec.name in
         # generated.golden_hashes`, which assigned each golden box name onto the spec
         # and left the LAST box there. On any FROZEN competition that clobbered
-        # the Compfile event name before its later uses, so terraform's
+        # the Compfile event name before its later uses, so the deploy's
         # `event_name` — and therefore `local.comp_tag`, the ownership tag on the engine
         # and every team box — became "comp-web01" instead of "comp-<competition>", so
         # every ownership-gated path (preflight, teardown) mis-classified the range;

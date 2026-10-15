@@ -4,7 +4,8 @@ import json
 import shlex
 import pipeline_api
 
-from config.config_ops import write_state
+from estate import state as estate_state
+
 from common.constants import SNAP_BASE, SNAP_READY, WINDOWS_ADMIN_USER
 from engine.engine_event_ops import read_event_conf
 from infra.guest_exec import guest_agent_exec_root, guest_agent_exec_windows
@@ -24,8 +25,8 @@ def mode_resync(targets, rctx):
 #        agent, so drifted boxes come back in line without needing SSH.
 #     box_password (the box login) exists nowhere on the engine — it is baked
 #     into the boxes at bootstrap — so it is reported, not repaired.
-    ctx, node, comp_dir, state, state_path = (
-        rctx.ctx, rctx.node, rctx.comp_dir, rctx.state, rctx.state_path)
+    ctx, node, comp_dir, state = (
+        rctx.ctx, rctx.node, rctx.comp_dir, rctx.state)
     print("  Reading engine-authoritative secrets (event.conf, credlist, /opt/quotient/.env)...")
     secrets = read_event_conf(ctx)
 
@@ -47,15 +48,15 @@ def mode_resync(targets, rctx):
             entry["password"] = pw
             changed.append(f"teams.{team_key}.password")
     if not changed:
-        print("    .deploy_state.json already matches the engine.")
+        print("    the state document already matches the engine.")
     if changed:
         # Atomic + 0600, same reason as run_nakon_and_harden above.
-        write_state(state_path, state)
+        estate_state.write_flat(comp_dir, state)
 
     box_password = state.get("box_password")
     if not box_password:
         raise SystemExit(
-            "  ERROR: .deploy_state.json has no box_password — cannot re-set box logins. "
+            "  ERROR: the state document has no box_password — cannot re-set box logins. "
             "Only the state alignment above was applied.")
     box_username, _credlist = load_users_config(comp_dir)
     for t in targets:

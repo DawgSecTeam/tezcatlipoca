@@ -8,7 +8,6 @@ when the run staged no red (mirrors the scrim harness's c8a2076), and always arm
 reclaim's another-competition guard with this comp's name.
 """
 
-import json
 import sys
 import tempfile
 import unittest
@@ -90,34 +89,6 @@ class RedStepReclaimGuard(unittest.TestCase):
         self.assertEqual(result.status, "failed")
 
 
-class RepairEngineCloneId(unittest.TestCase):
-    def _tfvars(self, d, **fields):
-        from teardown.machinery import repair_engine_clone_id
-        p = Path(d) / "terraform.tfvars.json"
-        p.write_text(json.dumps(fields))
-        return repair_engine_clone_id(p, fields.pop("_scoring", None) or 1550), json.loads(p.read_text())
-
-    def test_zero_is_replaced_with_the_derived_template_vmid(self):
-        with tempfile.TemporaryDirectory() as d:
-            repaired, data = self._tfvars(d, engine_clone_id=0, ssh_private_key_path="/k")
-        self.assertTrue(repaired)
-        self.assertEqual(data["engine_clone_id"], 1690)   # 1550 + 140
-
-    def test_a_valid_value_is_untouched(self):
-        with tempfile.TemporaryDirectory() as d:
-            repaired, data = self._tfvars(d, engine_clone_id=1234)
-        self.assertFalse(repaired)
-        self.assertEqual(data["engine_clone_id"], 1234)
-
-    def test_no_known_scoring_vmid_leaves_the_file_alone(self):
-        with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "terraform.tfvars.json"
-            p.write_text(json.dumps({"engine_clone_id": 0}))
-            from teardown.machinery import repair_engine_clone_id
-            self.assertFalse(repair_engine_clone_id(p, None))
-            self.assertEqual(json.loads(p.read_text())["engine_clone_id"], 0)
-
-
 if __name__ == "__main__":
     unittest.main()
 
@@ -139,10 +110,11 @@ class VerifyCleanSkippedRed(unittest.TestCase):
             comp_dir=Path("."), env={}, teams={"team1": {"identifier": "101"}},
             boxes=[], deployed_state={"run_id": "run-x"},
             ownership=Ownership("c1", "run-x"), placement=None, nodes=["n"],
-            default_node="n", inventory=Inventory(["n"]), full=True)
+            default_node="n", inventory=Inventory(["n"], api=lambda *a, **k: {"data": []}),
+            full=True)
         plan = build_terminal_plan()
         done = {"red01": journal_red01} if journal_red01 else {}
-        eng = TeardownEngine(ctx, journal_path=Path("_unused-journal.json"))
+        eng = TeardownEngine(ctx)
         with patch.object(engine_mod.TeardownEngine, "_load_journal",
                           return_value={"run_id": "run-x", "done": done}), \
                 patch("red.red_plant_ops.red_vmid_candidates", return_value=[]), \

@@ -78,7 +78,7 @@ def assert_engine_build_identity(ctx, vmid):
             f"TF_VAR_engine_mgmt_ip, or stop the other range, then retry.")
 
 
-# Grow / to the whole disk. Terraform resizes the engine's virtual disk (main.tf: 40 GB)
+# Grow / to the whole disk. The create path sizes the engine's virtual disk (40 GB)
 # but nothing grew the partition/PV/LV/filesystem, so the engine ran on the base image's
 # 10 GB root — full within one Windows+Linux deploy (winad-testrun 2026-09-25: 100% used,
 # apt-cacher-ng answering 500 to every box; Postgres would be next). Idempotent: growpart

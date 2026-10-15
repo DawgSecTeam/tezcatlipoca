@@ -44,7 +44,7 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 
 
 def run_pipeline(ctx):
-# Walk PHASES: call each, checkpoint the ones that ran, hook the terraform read.
+# Walk PHASES: call each, checkpoint the ones that ran, read the engine context.
 #
 #     Any failure is recorded (streak + degradations) and re-raised with a resume hint.
     current_phase = max(ctx.from_phase, 1)
@@ -66,16 +66,16 @@ def run_pipeline(ctx):
             if running:
                 ctx.checkpoint(n)
             if n == 2:
-                # The terraform/SSH context is read once, exactly where the inline
+                # The engine/SSH context is read once, exactly where the inline
                 # code read it: after phase 2's checkpoint, before phase 3. A fresh
-                # run only has terraform's outputs after apply #1; a --from-phase 3+
+                # run only has the engine's coordinates after it is created; a --from-phase 3+
                 # resume skips the apply but still needs them. Outside the `running`
                 # gate on purpose, so a failure here reports the phase the operator
                 # asked to resume at rather than phase 2.
-                phases.connect_terraform(ctx)
+                phases.connect_estate(ctx)
             if running:
                 # Last in the iteration, so a hold lands on a phase that is completely done
-                # (phase 2's terraform read included). A skipped phase is no boundary: its
+                # (phase 2's engine read included). A skipped phase is no boundary: its
                 # checkpoint never moved, so holding there would name a phase this run did
                 # not run.
                 pause_at_boundary(ctx, n)
@@ -91,9 +91,9 @@ def report_failure(ctx, current_phase, exc):
     if current_phase >= 2 and "already exists" in str(exc).lower():
         # A deploy never destroys a leftover range, so no --from-phase helps here: the
         # range has to be reclaimed first (docs/usage-agents.md § run ownership).
-        print("      This looks like a Proxmox/Terraform state mismatch (something the "
-              "prior attempt created still exists, but Terraform's state doesn't know about "
-              "it). A deploy never destroys a leftover range — reclaim it, then start fresh:")
+        print("      Something the prior attempt created still exists and this deploy did not "
+              "record it as its own (a half-built clone, an interrupted bridge). A deploy "
+              "never destroys a leftover range — reclaim it, then start fresh:")
         print(f"        python3 destroy-competition.py --competition {ctx.comp_name} --yes")
         print(f"        python3 create-competition.py --competition {ctx.comp_name} --yes")
         return

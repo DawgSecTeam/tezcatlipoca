@@ -471,6 +471,8 @@ if os.environ.get("PORTAL_SECRET_KEY"):  # container entrypoint: `uvicorn app:ap
         default_open=os.environ.get("PORTAL_OPEN") == "1",
         cookie_secure=os.environ.get("PORTAL_COOKIE_SECURE", "1") != "0",
         dist_dir=os.environ.get("PORTAL_DIST") or DIST_DIR,
+        # The portal runs in its own container with its own environment: it must NOT
+        # import the driver's config module (portal/portal_ops._SHIP ships only portal/).
         ops_url=os.environ.get("TEZ_OPS_URL", ""),
         ops_token=os.environ.get("TEZ_OPS_TOKEN", ""),
     )

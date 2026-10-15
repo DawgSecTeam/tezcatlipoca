@@ -10,11 +10,11 @@ kept the tag PUT from ever running), which no other destroy path can claim."""
 
 from pathlib import Path
 
+from estate import state as estate_state
 from engine.template_freeze import engine_template_vmid
 from infra.client import proxmox_api
 from infra.ownership import MARKER, destroy_vm_if_exists, ownership_verdict
 from multinode.placement_record import golden_vmid_for_slot, record_of
-import teardown
 
 
 def reset_domain_markers(comp_dir):
@@ -22,7 +22,7 @@ def reset_domain_markers(comp_dir):
 #     deploy's DCs — run 2's fresh clones were never promoted, but a surviving run-1 artifact
 #     made the domain pass skip promotion (live-found 2026-09-25, matrix run 2). A fresh
 #     deploy resets them; resumes keep them (that is the guard's whole point). The
-#     per-COMPETITION .template-hashes.json is NOT touched — it drives template reuse.
+#     the per-COMPETITION template hash record is NOT touched — it drives template reuse.
     for stale in Path(comp_dir).glob(".nakon-domain-*.json"):
         stale.unlink()
 
@@ -85,4 +85,7 @@ def phase1_cleanup(ctx):
     # the NEW range (live-found 2026-10-12: '[red01] skipped — journalled done'
     # on the redeployed range). Resumes of THIS deploy keep it (that is the
     # resumability contract).
-    (ctx.comp_dir / teardown.TEARDOWN_JOURNAL).unlink(missing_ok=True)
+    if estate_state.state_path(ctx.comp_dir).exists():
+        document = estate_state.open(ctx.comp_dir)
+        document.section("teardown").clear()
+        document.save()

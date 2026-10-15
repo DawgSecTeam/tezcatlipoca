@@ -3,23 +3,21 @@
 Everything here is scoped to the deleted team — the other teams' VMs, the engine and
 the templates are never addressed:
 
-  1. load_ownership + require_terraform_state (the same refusals the full teardown
-     runs; a state without its run id names no ownership).
+  1. load_ownership (the same refusals the full teardown runs; a state without its
+     run id names no ownership).
   2. hard-stop the team's clones (ownership-gated, exactly the terminal plan's
      pre-stop, narrowed to the one team).
-  3. targeted `terraform destroy -target=...` of exactly the team_box / team_box_satN
-     + bridge instances this comp dir's STATE carries, so only instances that exist
-     are ever named. team_box depends only on the per-team bridges — the dependency
-     graph cannot cascade to the engine or to another team.
+  3. destroy exactly the team_box instances and bridges this competition's recorded
+     inventory carries, through the ownership-guarded destroy primitives — the clones
+     before the bridges, and never another team's resources.
   4. deactivate the team in Quotient (active:false drops it from scoring rounds;
      Quotient has no delete API, so the row stays listed as inactive).
   5. regenerate + push event.conf WITHOUT the team (revokes its scoreboard + portal
      login) and rewrite the portal's portal.json without it (the portal reads its
      config at startup, so a compose restart applies it). The push restarts Quotient.
-  6. record the deletion: teams.json + .deploy_state.json (teams/deleted_teams) and
-     terraform.tfvars.json lose the team, so a later full `terraform destroy` and any
-     apply see a consistent config (team_nics' triggers change with it — the next
-     plan re-runs its netplan without the dead subnet).
+  6. record the deletion: teams.json and the state document's roster (teams /
+     deleted_teams) lose the team, so a later full teardown sees a consistent range.
+     The engine keeps the dead subnet's netplan until the next deploy re-addresses it.
 
 Resumable by re-running: every step is idempotent against its own result.
 """
@@ -27,51 +25,45 @@ Resumable by re-running: every step is idempotent against its own result.
 import base64
 import json
 import os
-import subprocess
 import time
 from pathlib import Path
 
 import requests
 import urllib3
 
-from common.ssh_ops import read_terraform_ctx
-from common.terraform_workdir import terraform_plugin_cache_dir
-from common.utils import run_terraform
+from estate import config
+from estate import state as estate_state
 from infra.ownership import Refusal
 from multinode.placement_record import activate_placement, read_placement, record_of
-from teardown.machinery import (clear_stale_state_lock, load_ownership,
-                                pre_stop_windows_boxes, require_terraform_state,
-                                repair_ssh_key_path, terraform_init)
+from teardown.machinery import load_ownership, pre_stop_windows_boxes
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-DESTROY_ATTEMPT_TIMEOUT_S = 1800
+
+def _engine_ctx(state):
+# The engine's SSH coordinates from the state document.
+    from estate import config as estate_config
+    cfg = estate_config.active()
+    return {"scoring_engine_ip": state.get("engine_mgmt_ip") or "",
+            "ssh_key_path": str(estate_config.ssh_key_path()),
+            "vm_username": cfg.engine.username}
 
 
 def _team_prefix(team_key, team):
-    # team 1 is named `team1-<box>` (terraform main.tf / targets.enumerate_targets);
+    # team 1 is named `team1-<box>` (targets.enumerate_targets);
     # every other team names its clones `<identifier>-<box>`.
     return team_key if team_key == "team1" else str(team["identifier"])
 
 
-def team_targets_from_state(tf_state, team_key, team):
-    # The -target list, read from THIS comp dir's terraform state: only instances that
-    # exist are ever named, so the destroy cannot drift into another team.
+def team_resources(document, team_key, team):
+# This team's clones and bridges, read from the recorded inventory: only resources
+#     that exist are named, so the destroy cannot drift into another team.
     prefix = _team_prefix(team_key, team) + "-"
-    vm_res, vm_keys, bridges = None, set(), []
-    for res in tf_state.get("resources") or []:
-        keys = [i.get("index_key") for i in res.get("instances") or []]
-        if res.get("type") == "proxmox_virtual_environment_vm" and str(res.get("name", "")).startswith("team_box"):
-            for k in keys:
-                if isinstance(k, str) and k.startswith(prefix):
-                    vm_res = f"{res['type']}.{res['name']}"
-                    vm_keys.add(k)
-        elif (res.get("type") == "proxmox_network_linux_bridge"
-              and (res.get("name") == "transit_bridge"
-                   or str(res.get("name", "")).startswith("team_bridge"))
-              and team_key in keys):
-            bridges.append(f"{res['type']}.{res['name']}[\"{team_key}\"]")
-    return [f'{vm_res}["{k}"]' for k in sorted(vm_keys)] if vm_res else [], bridges
+    vmids = {row["vmid"] for row in document.resources("team_box")
+             if (row["name"] or "").startswith(prefix)}
+    wanted = {f"vmbr{team['identifier']}", f"vmbrW{team['identifier']}"}
+    bridges = {(row["bridge"] or row["name"]) for row in document.resources("bridge")} & wanted
+    return vmids, bridges
 
 
 def _deactivate_team(base_url, scoring_password, team_key, identifier):
@@ -94,7 +86,7 @@ def _deactivate_team(base_url, scoring_password, team_key, identifier):
 
 def _refresh_engine_conf(comp_dir, teams, boxes, state, name, log):
     from engine.engine_event_ops import push_event_conf
-    push_event_conf(comp_dir, teams, boxes, read_terraform_ctx(comp_dir), name,
+    push_event_conf(comp_dir, teams, boxes, _engine_ctx(state), name,
                     inject_password=state.get("inject_password"),
                     admin_password=state.get("admin_password"),
                     scoring_password=state.get("scoring_password"),
@@ -121,7 +113,7 @@ def _refresh_portal_config(comp_dir, team_key, log):
     config["teams"].pop(team_key)
     config_path.write_text(json.dumps(config, indent=2) + "\n")
     b64 = base64.b64encode(json.dumps(config, indent=2).encode()).decode()
-    _run_engine_cmd(read_terraform_ctx(comp_dir),
+    _run_engine_cmd(_engine_ctx(estate_state.load_flat(comp_dir)),
                     f"echo '{b64}' | base64 -d | sudo tee /opt/tez-portal/portal.json >/dev/null && "
                     f"sudo chmod 600 /opt/tez-portal/portal.json && "
                     f"cd /opt/tez-portal && sudo docker compose restart portal",
@@ -134,7 +126,6 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
     comp_dir = Path(comp_dir)
     env = dict(env if env is not None else os.environ)
     deployed_state, ownership = load_ownership(comp_dir)
-    require_terraform_state(comp_dir, deployed_state)
 
     teams = json.loads((comp_dir / "teams.json").read_text())
     if team_key not in teams:
@@ -143,7 +134,7 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
                                f"{', '.join(sorted(teams))})",
                       remedy="delete with the exact team key shown on the run page")
     if team_key not in (deployed_state.get("teams") or {}):
-        raise Refusal(saw=f"'{team_key}' missing from .deploy_state.json teams",
+        raise Refusal(saw=f"'{team_key}' missing from the state document's teams",
                       expected="a team this deploy owns",
                       remedy="nothing to do — the team was already deleted")
     team = teams[team_key]
@@ -161,50 +152,33 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
         nodes = [record_of(placement, s["name"]).node for s in placement["satellites"]] + [default_node]
         activate_placement(placement)
         # Callers snapshot os.environ BEFORE activate_placement — see run_terminal_teardown.
-        for key in ("TF_VAR_proxmox_endpoint", "TF_VAR_proxmox_api_token", "TF_VAR_proxmox_node",
-                    "TF_VAR_datastore", "TF_VAR_template_vm_id"):
-            if os.environ.get(key):
-                env[key] = os.environ[key]
+        env.update(config.proxmox_env())
         if team_key in (placement.get("team_nodes") or {}):
             team_nodes = {team_key: record_of(placement, placement["team_nodes"][team_key]).node}
 
-    tf_state = json.loads((comp_dir / "terraform" / "terraform.tfstate").read_text())
-    targets, bridges = team_targets_from_state(tf_state, team_key, team)
-    if not targets:
-        raise Refusal(saw="no team_box instances for this team in terraform state",
+    document = estate_state.open(comp_dir)
+    vmids, bridges = team_resources(document, team_key, team)
+    if not vmids:
+        raise Refusal(saw="no team_box instances for this team in the recorded inventory",
                       expected="the linked clones the deploy built",
-                      remedy="the team's VMs are not terraform-managed here — check the "
-                             "node by hand before proceeding")
+                      remedy="the team's VMs are not in this competition's inventory — "
+                             "check the node by hand before proceeding")
 
-    log(f"  Team '{team_key}' (identifier {identifier}): {len(targets)} clone(s), "
+    log(f"  Team '{team_key}' (identifier {identifier}): {len(vmids)} clone(s), "
         f"{len(bridges)} bridge(s) — ownership run id '{ownership.run_id}'.")
 
     log("  Hard-stopping the team's clones...")
     pre_stop_windows_boxes({team_key: team}, boxes, default_node,
                            team_nodes=team_nodes, ownership=ownership)
 
-    tf_cwd = str(comp_dir / "terraform")
-    tf_env = {**env, "TF_PLUGIN_CACHE_DIR": str(terraform_plugin_cache_dir())}
-    repair_ssh_key_path(Path(tf_cwd) / "terraform.tfvars.json", tf_env)
-    terraform_init(tf_env, tf_cwd)
+    from estate import destroy as estate_destroy
     problems = []
-    for attempt in (1, 2, 3, 4):
-        if attempt > 1:
-            clear_stale_state_lock(tf_cwd)
-        try:
-            proc = run_terraform(
-                ["destroy", "-parallelism=4", "-auto-approve",
-                 *(f"-target={t}" for t in targets + bridges)],
-                cwd=tf_cwd, env=tf_env, timeout=DESTROY_ATTEMPT_TIMEOUT_S, check=False)
-        except subprocess.TimeoutExpired:
-            log(f"  terraform destroy timed out (attempt {attempt}/4, partial progress kept)...")
-            continue
-        if proc.returncode == 0:
-            break
-        log(f"  terraform destroy failed (attempt {attempt}/4, partial progress kept)...")
-    else:
-        problems.append("terraform destroy did not complete — the team's VMs may still "
-                        "exist; re-run (it is safe: every step is idempotent)")
+    _, refused, _ = estate_destroy.destroy_tier(document, "team_box", only=vmids, log=log)
+    problems += [f"{r['entry']['name']}: {r['reason']}" for r in refused]
+    if not problems and bridges:
+        _, refused, _ = estate_destroy.destroy_tier(document, "bridge", only=bridges, log=log)
+        problems += [f"{r['entry']['name']}: {r['reason']}" for r in refused]
+    document.save()
 
     # Verify the team's clones are actually gone before touching anything else.
     prefix = _team_prefix(team_key, team) + "-"
@@ -224,7 +198,7 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
         return {"clean": False, "problems": problems}
 
     log(f"  Deactivating '{team_key}' in Quotient...")
-    scoring_ip = read_terraform_ctx(comp_dir)["scoring_engine_ip"]
+    scoring_ip = _engine_ctx(deployed_state)["scoring_engine_ip"]
     try:
         log(f"    {_deactivate_team(f'http://{scoring_ip}', deployed_state.get('scoring_password'), team_key, identifier)}")
     except Exception as e:  # noqa: BLE001
@@ -250,17 +224,10 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
         roster.pop(team_key, None)
     state.setdefault("deleted_teams", []).append(
         {"team": team_key, "identifier": str(identifier), "at": stamp})
-    from config.config_ops import write_state, write_text_atomic
-    write_state(comp_dir / ".deploy_state.json", state)
+    from config.config_ops import write_text_atomic
+    document.absorb(state)
+    document.save()
     write_text_atomic(comp_dir / "teams.json", json.dumps(remaining, indent=2))
-    tfvars_path = comp_dir / "terraform" / "terraform.tfvars.json"
-    if tfvars_path.exists():
-        tfvars = json.loads(tfvars_path.read_text())
-        if isinstance(tfvars.get("teams"), dict) and team_key in tfvars["teams"]:
-            tfvars["teams"].pop(team_key)
-            tfvars_path.write_text(json.dumps(tfvars, indent=2) + "\n")
-            log("  terraform.tfvars.json updated (team_nics re-applies its netplan on the "
-                "next plan — the dead subnet leaves the engine)")
     log(f"  Team '{team_key}' removed: clones destroyed, deactivated in Quotient, "
         f"logins revoked. {len(remaining)} team(s) remain.")
     return {"clean": True, "problems": []}

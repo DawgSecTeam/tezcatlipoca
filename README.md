@@ -24,7 +24,7 @@ Operations, or Reports, with one line on when to read it. The most-used entry po
 
 | Doc | Covers |
 |---|---|
-| [docs/usage-people.md](docs/usage-people.md) | Setup and operation by hand: prerequisites, templates, env-var reference, running, teardown, recovery, troubleshooting |
+| [docs/usage-people.md](docs/usage-people.md) | Setup and operation by hand: prerequisites, templates, the config reference (TOML + env overrides), running, teardown, recovery, troubleshooting |
 | [docs/usage-agents.md](docs/usage-agents.md) | Non-interactive and agent operation: CLI flags, pre-authored configs, verify/redeploy/destroy, operational modes |
 | [docs/architecture.md](docs/architecture.md) | The eight phases, component map, data flow, isolation, state files, invariants |
 | [docs/internals.md](docs/internals.md) | Per-module design notes: the "why" behind functions, parameters, and orderings |
@@ -42,12 +42,12 @@ Operations, or Reports, with one line on when to read it. The most-used entry po
 ```bash
 git clone --recurse-submodules <url>    # or: git submodule update --init --recursive
 git clone ../tezcatlipoca-competitions  # competition definitions (sibling checkout)
-cp .env.example .env                    # fill in real values; .env stays out of git
+cp tezcatlipoca.example.toml tezcatlipoca.toml  # fill in real values; stays out of git
 python3 create-competition.py           # interactive
 python3 create-competition.py --help    # flags documented in docs/usage-agents.md
 ```
 
-Setup details, the env-var reference, and troubleshooting live in
+Setup details, the config reference, and troubleshooting live in
 [docs/usage-people.md](docs/usage-people.md). Scripted and agent-driven use lives in
 [docs/usage-agents.md](docs/usage-agents.md).
 

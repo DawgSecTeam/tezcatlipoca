@@ -21,11 +21,34 @@ if str(_REPO) not in sys.path:
 
 import requests  # noqa: E402
 
+from estate import state as estate_state  # noqa: E402
+
 spec = importlib.util.spec_from_file_location("competition_ops", _REPO / "competition-ops.py")
 ops = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ops)
 
 BASE = "http://10.0.0.9"
+
+
+class EngineBaseFromTheDocument(unittest.TestCase):
+    """The engine IP comes from the state document; a range has no terraform state at all."""
+
+    def test_the_recorded_engine_ip_wins_over_the_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = Path(tmp)
+            from estate import state as estate_state
+            document = estate_state.EstateState.load(comp)
+            document.absorb({"engine_mgmt_ip": "10.0.0.150", "run_id": "run-abc12345"})
+            document.save()
+            self.assertEqual(ops.engine_base(_Args("freeze", None, None), comp), "http://10.0.0.150")
+            self.assertEqual(ops.engine_base(_Args("freeze", None, "10.9.9.9"), comp),
+                             "http://10.9.9.9")
+
+    def test_an_unrecorded_engine_refuses_and_names_the_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit) as raised:
+                ops.engine_base(_Args("freeze", None, None), Path(tmp))
+        self.assertIn("--engine-ip", str(raised.exception))
 
 
 class FakeResp:
@@ -104,7 +127,7 @@ class Start(unittest.TestCase):
             p_create.assert_called_once()
             self.assertEqual(p_create.call_args.args[0], BASE)
             self.assertEqual(p_create.call_args.kwargs.get("username"), "scoring")
-            state = json.loads((comp / ".deploy_state.json").read_text())
+            state = estate_state.load_flat(comp)
         self.assertTrue(state["started"])
         self.assertTrue(state["engine_unpaused"])
         self.assertTrue(state["injects_created"])
@@ -121,7 +144,7 @@ class Start(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertEqual([c for c in fake.calls if c[0] == "POST" and "login" not in c[1]], [])
             p_create.assert_not_called()
-            state = json.loads((comp / ".deploy_state.json").read_text())
+            state = estate_state.load_flat(comp)
         self.assertTrue(state["started"])
 
     def test_engine_unpaused_concurrently_is_not_a_failure(self):
@@ -169,7 +192,7 @@ class End(unittest.TestCase):
             with _patch_session(fake), \
                     unittest.mock.patch.object(ops, "end_event", return_value=rc_of_end):
                 rc = ops.cmd_end(_args(comp, "end"), comp)
-            state = json.loads((comp / ".deploy_state.json").read_text())
+            state = estate_state.load_flat(comp)
         return rc, state
 
     def test_a_clean_end_records_ended(self):

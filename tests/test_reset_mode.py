@@ -9,8 +9,8 @@ Covers:
 * the engine-vantage health probe (SSH/guest-agent + scored ports from the engine),
   including the exact-token port matching (P2 must not match P22=OK);
 * mode_rebuild's ownership stamping: the clone marker rides the clone POST, the tags
-  PUT carries the full run ownership set, and the terraform-drift note fires for every
-  v2 box (M3.3 made all teams terraform resources), not just team1;
+  PUT carries the full run ownership set, and the adoption note fires for every rebuilt box,
+  not just team1;
 * nakon_failed_steps is appended to, never clobbered — the deploy-time record belongs
   to verify's plant-integrity line.
 
@@ -387,12 +387,12 @@ class RebuildStampingTests(unittest.TestCase):
         clone = next((m, p, kw) for m, p, kw in calls if m == "POST" and p.endswith("/clone"))
         self.assertEqual(clone[1].split("/")[4], "9150")  # cloned from the golden
 
-    def test_drift_note_fires_for_non_team1_boxes(self):
+    def test_adoption_note_fires_for_non_team1_boxes(self):
         t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
         state = {"pipeline_version": 3, "box_password": "pw", "run_id": "run-beefcafe",
                  "golden_template_ids": {"web01": 9150}}
         _calls, out, _name = self._run_rebuild(t2, state)
-        self.assertIn("Terraform-managed resource", out)
+        self.assertIn("carries this run's ownership tags", out)
 
 
 # A comp whose plants are all golden-stage has an empty postclone stage —

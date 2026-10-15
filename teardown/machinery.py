@@ -4,32 +4,25 @@ the incident-hardened behavior; what changed is the vocabulary: every refusal
 is a `Refusal` (saw / expected / remedy), and every destroy-shaped function
 takes an `Ownership` instead of a loose tag set."""
 
-import json
-import os
-import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from common.constants import ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_TAG, SCORING_ENGINE_VMID
+from common.constants import GOLDEN_TAG, SCORING_ENGINE_VMID
+from estate import state as estate_state
 from golden.golden_ops import destroy_golden_set
 from net.jump_ops import destroy_jump_vms
 from multinode.placement_record import record_of
 from infra.client import proxmox_api, wait_for_proxmox_task
 from infra.ownership import parse_vm_tags
 from engine.engine_template_ops import destroy_engine_template
-from common.utils import run_terraform
+from engine.template_freeze import forget_template_hashes
 from infra.ownership import Ownership, Refusal
+from estate import config
 
 # Concurrent stop/delete worker count for teardown sweeps. Deletes are
 # metadata-light on ZFS (the documented datastore-saturation hazard belongs to
 # bulk clone writes, not deletes); 4 keeps even a shared node comfortable.
 TEARDOWN_WORKERS = 4
-
-# Per-attempt wall-clock bound for `terraform destroy`. The documented hang mode
-# is a Windows DC whose guest agent is down holding the qm lock mid-destroy
-# (pfsense-rvb: 6m+ "Still destroying"). Every attempt is bounded and a timeout
-# is just another failed attempt, so control reaches the recovery steps.
-DESTROY_ATTEMPT_TIMEOUT_S = 1800
 
 
 # a frozen competition's templates are the verified artifacts the event runs on: a full teardown needs --end-of-competition
@@ -46,13 +39,8 @@ def refuse_frozen_full_teardown(competition, frozen, full, end_of_competition):
 
 # refuses when ownership cannot be proven: no run id in the state, or the env targets a different endpoint than the deploy used
 def load_ownership(comp_dir):
-    deployed_state = {}
-    state_path = Path(comp_dir) / ".deploy_state.json"
-    if state_path.exists():
-        try:
-            deployed_state = json.loads(state_path.read_text())
-        except (ValueError, OSError):
-            deployed_state = {}
+    state_path = estate_state.state_path(comp_dir)
+    deployed_state = estate_state.load_flat(comp_dir)
     run_id = deployed_state.get("run_id") or ""
     if not run_id:
         raise Refusal(
@@ -65,7 +53,7 @@ def load_ownership(comp_dir):
                    f"stamps one; a range without it predates 0.2.0 — remove it by hand on "
                    f"the node.")
     deployed = (deployed_state.get("deployed_endpoint") or "").rstrip("/")
-    current = os.environ.get("TF_VAR_proxmox_endpoint", "").rstrip("/")
+    current = config.active().proxmox.endpoint.rstrip("/")
     if deployed and current and deployed != current:
         raise Refusal(
             saw=f"deploy ran against {deployed}, the loaded env targets {current}",
@@ -77,27 +65,7 @@ def load_ownership(comp_dir):
     return deployed_state, Ownership(Path(comp_dir).name, run_id)
 
 
-# destroying against an empty state 'succeeds' and removes nothing — refuse when a comp deployed past terraform has no state file
-def require_terraform_state(comp_dir, deployed_state):
-    if int(deployed_state.get("last_phase") or 0) < 2:
-        return
-    state_file = Path(comp_dir) / "terraform" / "terraform.tfstate"
-    if state_file.exists():
-        return
-    raise Refusal(
-        saw=f"no {state_file} for a comp deployed to phase {deployed_state.get('last_phase')}",
-        expected="the per-comp terraform state the destroy re-enters",
-        remedy="restore/import the state file, or tear the range down by the recorded "
-               "run id's tags on the node",
-        detail=f"{state_file} is missing, but this competition was deployed (state reached "
-               f"phase {deployed_state.get('last_phase')}, run id "
-               f"'{deployed_state.get('run_id')}'). Destroying against an empty state would "
-               f"remove nothing. Reconstruct the state file (restore it from backup, or "
-               f"`terraform import` the run's VMs), or tear the range down by the recorded "
-               f"run id's tags on the node. Nothing was destroyed.")
-
-
-# hard-stop before destroy: the bpg graceful path hangs on an agent-down DC and holds the qm lock (pfsense-rvb: 6m+ 'Still destroying'); forced stop + remove is the operator call (2026-09-30); ownership gates every stop — the name pattern is shared by every worktree running the same competition ID
+# hard-stop before destroy: the API graceful path hangs on an agent-down DC and holds the qm lock (pfsense-rvb: 6m+ 'Still destroying'); forced stop + remove is the operator call (2026-09-30); ownership gates every stop — the name pattern is shared by every worktree running the same competition ID
 def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None,
                            ownership=None):
     windows = [b["name"] for b in boxes]  # all clones hard-stop, not just Windows
@@ -118,7 +86,7 @@ def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None,
                 live_by_node[node] = []
         for v in live_by_node[node]:
             vm_name = v.get("name") or ""
-            # team 1 is named `team1-<box>` (terraform main.tf / targets.enumerate_targets)
+            # team 1 is named `team1-<box>` (targets.enumerate_targets)
             prefix = team_key if team_key == "team1" else team["identifier"]
             if vm_name not in {f"{prefix}-{box}" for box in windows}:
                 continue
@@ -136,9 +104,9 @@ def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None,
             wait_for_proxmox_task(node, upid)
             return f"  Pre-stopped {vm_name} (vmid {vmid}) — graceful-shutdown hang avoided"
         except Exception as e:
-            return (f"  WARNING: pre-stop of {vm_name} failed ({e}). If terraform "
-                    f"destroy hangs on it: kill -9 $(cat /var/run/qemu-server/"
-                    f"{vmid}.pid) on the node, then re-run.")
+            return (f"  WARNING: pre-stop of {vm_name} failed ({e}). If the destroy hangs on "
+                    f"it: kill -9 $(cat /var/run/qemu-server/{vmid}.pid) on the node, "
+                    f"then re-run.")
 
     # status/stop is the hard API stop (no guest agent involved) — a VM we are
     # about to destroy gets no graceful shutdown.
@@ -147,23 +115,8 @@ def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None,
             print(line, flush=True)
 
 
-# the lock is only real while a terraform process is alive; a SIGKILLed deploy/destroy leaves it behind — remove it when none is running
-def clear_stale_state_lock(tf_cwd):
-    lock_file = Path(tf_cwd) / ".terraform.tfstate.lock.info"
-    if not lock_file.exists():
-        return False
-    running = subprocess.run(["pgrep", "-x", "terraform"], capture_output=True)
-    if running.returncode == 0:
-        print("  state lock present AND a terraform process is alive — not touching "
-              "it; settle that process first")
-        return False
-    lock_file.unlink()
-    print("  removed stale terraform state lock (no terraform process running)")
-    return True
-
-
 # full ownership tag set only: partial overlap does not count (loadtest-2026-09-30), and a same-comp VM with a DIFFERENT run id belongs to another worktree's run (2026-10-02 near-miss)
-def sweep_tagged_leftovers(nodes, ownership):
+def sweep_tagged_leftovers(nodes, ownership, keep_templates=False):
     comp_tags = set(ownership.tags)
     ours = []
     for node in nodes:
@@ -172,8 +125,16 @@ def sweep_tagged_leftovers(nodes, ownership):
         except Exception as e:
             print(f"  WARNING: leftover sweep skipped on {node} — listing failed: {e}")
             continue
+        # `keep_templates` is the teams-only/keep-templates teardown: the estate tiers skip
+        # the golden + engine_template roles, and the sweep must not claim them instead. It
+        # did: the deploy re-stamps a reused template with THIS run's tags (so the strict
+        # guard recognizes it), which put it inside the sweep's ownership match and destroyed
+        # the artifacts a practice run existed to validate — live 2026-10-15, run-ee5717cd
+        # swept engine-template vmid 2241 on `--teams-only`. The PVE `template` flag, not the
+        # name, is the tell.
         ours += [dict(v, _node=node) for v in vms
-                 if comp_tags <= parse_vm_tags(v.get("tags"))]
+                 if comp_tags <= parse_vm_tags(v.get("tags"))
+                 and not (keep_templates and v.get("template"))]
     if not ours:
         return
     print(f"  Leftover sweep: {len(ours)} VM(s) carrying this deploy's full ownership set "
@@ -199,107 +160,6 @@ def sweep_tagged_leftovers(nodes, ownership):
             print(line, flush=True)
 
 
-# resumable by construction: each failure gets stale-lock recovery plus a run-id-scoped sweep, then a retry; a per-attempt timeout is just another failed attempt so control reaches the recovery steps (utils.run_terraform raises TimeoutExpired even with check=False)
-def repair_ssh_key_path(tfvars_path, env):
-    """Point a recorded `ssh_private_key_path` at a key file that still exists.
-
-    terraform.tfvars.json outranks TF_VAR_* in the environment, so a deploy that ran with a
-    RELATIVE TF_VAR_ssh_private_key_path left a path resolved inside its own worktree recorded in
-    the state — and once that worktree is gone (dashboard runs delete it) `terraform destroy`
-    cannot even parse the config: "no file exists at <worktree>/proxmox" (2026-10-14,
-    run-3aaf37f1, four attempts, estate left unverified). The teardown runs with the same key the
-    deploy used, so rewrite the recorded path when the recorded one is dead and the env supplies
-    a live one. Never invents a path: no live replacement leaves the file untouched.
-    """
-    path = Path(tfvars_path)
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return False
-    recorded = str(data.get("ssh_private_key_path") or "")
-    replacement = str(env.get("TF_VAR_ssh_private_key_path") or "")
-    if not recorded or Path(recorded).exists() or not replacement or not Path(replacement).exists():
-        return False
-    data["ssh_private_key_path"] = replacement
-    path.write_text(json.dumps(data, indent=2) + "\n")
-    print(f"  repaired ssh_private_key_path in {path.name}: {recorded} -> {replacement}")
-    return True
-
-
-def repair_engine_clone_id(tfvars_path, scoring_vmid):
-    """Replace an invalid recorded `engine_clone_id` (0) with the derived template vmid.
-
-    terraform.tfvars.json outranks TF_VAR_*, so a deploy whose workspace state was reset
-    (phase 1 of a later fresh attempt) before it could record `engine_template_vmid` saved
-    `engine_clone_id: 0` — and every `terraform destroy` then dies in validation ("expected
-    vm_id to be in the range (100 - 2147483647), got 0") before it removes anything,
-    including the team bridge (live 2026-10-15, run-44a106d2: four failed attempts, sweep
-    removed the VMs, vmbr140 survived). The value is deterministic (engine +140), so a
-    recorded 0 is rewritten the same way tfinputs derives it. Never touches a valid value.
-    """
-    path = Path(tfvars_path)
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return False
-    if not scoring_vmid:
-        return False
-    clone_id = data.get("engine_clone_id")
-    if clone_id and int(clone_id) > 0:
-        return False
-    derived = int(scoring_vmid) + ENGINE_TEMPLATE_VMID_OFFSET
-    data["engine_clone_id"] = derived
-    path.write_text(json.dumps(data, indent=2) + "\n")
-    print(f"  repaired engine_clone_id in {path.name}: {clone_id} -> {derived}")
-    return True
-
-
-def terraform_init(env, tf_cwd, timeout=600):
-    """`terraform init` before destroy.
-
-    Provider links in `<comp>/terraform/.terraform/providers` point into the shared plugin cache
-    (and used to point into a per-run engine worktree that no longer exists), and destroy fails
-    hard when they are stale — four attempts against the same broken links is just four failures.
-    Init repairs them; with a warm cache it is seconds. Never fatal here: a genuinely unusable
-    provider set must still surface as destroy's own error.
-    """
-    try:
-        proc = run_terraform(["init", "-input=false", "-no-color"], cwd=tf_cwd, env=env,
-                             timeout=timeout, check=False)
-    except Exception as e:                                   # noqa: BLE001 - reported
-        print(f"  WARNING: terraform init raised ({type(e).__name__}: {e}); continuing")
-        return False
-    if proc.returncode != 0:
-        print("  WARNING: terraform init failed; destroy will report if the providers are unusable")
-    return proc.returncode == 0
-
-
-def destroy_with_recovery(env, tf_cwd, nodes, ownership):
-    terraform_init(env, tf_cwd)
-    for attempt in (1, 2, 3, 4):
-        if attempt > 1:
-            clear_stale_state_lock(tf_cwd)
-            sweep_tagged_leftovers(nodes, ownership)
-        try:
-            proc = run_terraform(
-                ["destroy", "-parallelism=4", "-auto-approve"],
-                cwd=tf_cwd,
-                env=env,
-                timeout=DESTROY_ATTEMPT_TIMEOUT_S,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            # utils.run_terraform already SIGINT'd the process group and reaped
-            # stragglers, so the state lock is released and a retry is safe.
-            print(f"  terraform destroy timed out after {DESTROY_ATTEMPT_TIMEOUT_S}s "
-                  f"(attempt {attempt}/4, partial progress kept)...")
-            continue
-        if proc.returncode == 0:
-            return True
-        print(f"  terraform destroy failed (attempt {attempt}/4, partial progress kept)...")
-    return False
-
-
 def engine_vmid_from_state(deployed_state):
     engine_vmid = deployed_state.get("scoring_vm_id") or SCORING_ENGINE_VMID
     try:
@@ -308,11 +168,11 @@ def engine_vmid_from_state(deployed_state):
         return SCORING_ENGINE_VMID
 
 
-# templates are the linked clones' base disks and are not in terraform state — they die only after terraform destroy removed every clone; returns the vmids skipped as foreign
+# templates are the linked clones' base disks, so they can only go after every clone has; returns the vmids skipped as foreign
 def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, full):
     skipped = []
     engine_vmid = engine_vmid_from_state(deployed_state)
-    node = os.environ.get("TF_VAR_proxmox_node", "pve")
+    node = config.active().proxmox.node
     if not full:
         print("  Teams-only teardown — templates kept for THIS competition's next run only.")
         print("  Goldens never carry across competitions; run a full teardown (no --teams-only) once the "
@@ -341,8 +201,6 @@ def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, fu
     # A destroyed template's hash record is a loaded gun for the reuse path: the
     # next deploy would 'reuse' a hash with nothing behind it and clone from a
     # dead vmid. Drop the record alongside the templates.
-    hashes_path = Path(comp_dir) / ".template-hashes.json"
-    if hashes_path.exists():
-        hashes_path.unlink()
-        print("  Template hash record (.template-hashes.json) removed.")
+    forget_template_hashes(comp_dir)
+    print("  Template hash record removed from the state document.")
     return skipped

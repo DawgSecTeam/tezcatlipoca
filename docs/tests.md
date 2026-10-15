@@ -26,7 +26,10 @@ python3 -m pytest tests/ -q -k frozen
 git ls-files tests/                  # the current file list — don't hard-code it here
 ```
 
-No fixtures or `conftest.py`; each file is standalone `unittest`-style, safe in any order. A
+One `conftest.py` exists for exactly one reason: `estate.config` is a deliberate process
+singleton (multi-node activation points the whole process at the engine's host), so the
+fixture resets it around each test. Otherwise each file is standalone `unittest`-style, safe
+in any order. A
 handful skip themselves when an optional tool is missing (e.g. `pyflakes` in `test_smoke.py`), so
 a skip is not a pass.
 
@@ -43,6 +46,16 @@ the pytest run above rather than this table.
 | `test_test_artifacts_cli.py` | `test-artifacts.py` subcommands, exit codes, output |
 | `test_scrim_artifacts.py` | The scrim harness's calls into the facade (`collect`, `ingest_verdict`, `finalize`) |
 | `test_teardown_artifacts_hook.py` | Teardown's artifact step through `destroy.artifacts_ops` |
+
+**The estate component** (`estate/` — the one component that mutates infrastructure)
+
+| File | Guards |
+|---|---|
+| `test_estate_state.py` | The monolithic document: schema, atomic 0600 write, resource record/forget/filter, checkpoints, migration from the seven legacy files, `load_all` |
+| `test_estate_config.py` | The config object: file/env/override precedence, the legacy-name table, `require`/`is_set`, per-node activation, SSH key resolution |
+| `test_estate_apply.py` | The create path against a fake API: bridge create, engine NIC order and cloud-init, per-box NIC/cloud-init rules (Windows and unmanaged skip it), adopt-ours/refuse-foreign, grow-only disk sizing |
+| `test_estate_engine_setup.py` | The engine's guest-side setup: netplan ens numbering, the sysctls, the persisted satellite-route unit, cold boot, readiness |
+| `test_estate_destroy.py` | Teardown tier order (clones before goldens — the base-volume constraint), a refusal that never aborts a tier, `full=False` keeping templates |
 
 **Range/config contracts**
 
@@ -78,7 +91,6 @@ the pytest run above rather than this table.
 | `test_auth_ladder.py` | SSH retry ladders: definitive rejections fail fast instead of burning the full ladder |
 | `test_non_apt_prep.py` | apt-prep/settle scripts are honest fast no-ops on non-apt distros (fedora, alpine) |
 | `test_thin_headroom.py` | Datastore headroom gate and the `TEZ_THIN_HEADROOM` factor |
-| `test_run_terraform.py` | `run_terraform` process-group isolation, so an interrupted driver can't orphan terraform |
 | `test_destroy_continuation.py` | A failed/interrupted destroy resumes instead of restarting |
 | `test_stream3_robustness.py` | AD-misconfig replays, `.postclone-swept` invalidation |
 | `test_windows_bootstrap.py` | Windows bootstrap script content (firewall profiles, RDP listener checks) |
@@ -90,7 +102,7 @@ the pytest run above rather than this table.
 
 | File | Guards |
 |---|---|
-| `test_deploy_sequencer.py` | Phase order, checkpoint gating (only a phase that ran may write `last_phase`), one-banner-per-phase, the terraform-context hook between phases 2 and 3, the mid-phase failure/resume hint |
+| `test_deploy_sequencer.py` | Phase order, checkpoint gating (only a phase that ran may write `last_phase`), one-banner-per-phase, the engine-context hook between phases 2 and 3, the mid-phase failure/resume hint |
 | `test_deploy_pause.py` | A pause request holds the pipeline at the end of the phase in progress (a skipped phase is no boundary), the hold is on disk as `paused_after_phase`, deleting the request resumes in-process, and an unset `TEZ_PAUSE_FILE` leaves manual deploys alone |
 | `test_deploy_gates.py` | The single-gate-point contract: `prepare()` runs `gates.check_resume_gates`/`run_range_gates` before any secret is minted; `deploy()` takes the lock first; a held lock refuses |
 | `tests/_deploy_patch.py` | Not a test: `dpatch(name)` patches one name in every `deploy_lib` module that binds it |
@@ -98,8 +110,7 @@ the pytest run above rather than this table.
 | `test_deploy_phase_units.py` | Per-phase units for `deploy_lib/phases/` with every infra call patched |
 | `test_pipeline_api.py` | `create-competition.py --plan-only` runs through `pipeline_api` |
 | `test_engine_steps.py` | `engine_cmd_ops`: every remote step names itself on failure, and Quotient `.env` secrets never appear in argv |
-| `test_destroy_teardown.py` | `terraform destroy` is bounded per attempt and a timeout is retryable |
-| `test_redeploy_state.py` | `.deploy_state.json` writers all go through `config_ops.write_state`; redeploy's Linux hardening order holds (sudoers grant before DNS fix) |
+| `test_redeploy_state.py` | Redeploy's state writes go through the document API; its Linux hardening order holds (sudoers grant before DNS fix) |
 | `test_jump_parallel.py` | `build_jump_vms` runs satellites concurrently (bound 4) without dropping one or turning a hard abort into a partial build |
 
 **verify's gate model**

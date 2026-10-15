@@ -97,14 +97,14 @@ def _resolve_red_vmid(args, comp):
         return args.red_vmid
     engine_vmid = None
     try:
-        engine_vmid = core.read_comp_json(comp, ".deploy_state.json").get("scoring_vm_id")
+        engine_vmid = core.read_state(comp).get("scoring_vm_id")
     except Exception:                                        # noqa: BLE001 - best effort
         pass
     vmid = badauto_config_ops.red01_vmid_for(comp, engine_vmid)
     if vmid is None:
         raise RuntimeError(
             "cannot resolve red01's vmid: no --red-vmid, no Compfile red01_vmid, no "
-            "comp bad-auto config, and no scoring_vm_id in .deploy_state.json. "
+            "comp bad-auto config, and no scoring_vm_id in the state document. "
             "Pass --red-vmid or set red01_vmid in the Compfile — never fall back "
             "to bad-auto's shared built-in default (vmid 999).")
     args.red_vmid = vmid
@@ -141,9 +141,24 @@ def red_llm_config(args):
     return llm
 
 
+def _resolve_red_ip(args, comp):
+    """Fill a missing --red-ip from the comp's own reservation (Compfile `red01_ip`).
+
+    Without it the rebuilt config carried `red_ip: None`, bad-auto fell back to its own
+    default, and a re-stage MOVED red01 off the address the deploy recorded and the range
+    was built around: run-a87e0d88 recorded 10.0.0.196, bad-auto re-pointed the VM to
+    10.0.0.198, and every later reader of the recorded address looks at an empty slot
+    (live 2026-10-15). One resolver for all of them.
+    """
+    if getattr(args, "red_ip", None):
+        return args.red_ip
+    args.red_ip = badauto_config_ops.red01_ip_for(comp)
+
+
 def stage_red(args, comp, creds, run_dir):
     llm = red_llm_config(args)
     _resolve_red_vmid(args, comp)   # before the cfg build: the config carries it
+    _resolve_red_ip(args, comp)
     cfg = {
         "llm": llm,
         "intel": "nakon",

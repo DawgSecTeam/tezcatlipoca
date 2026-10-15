@@ -28,6 +28,7 @@ from deploy_lib.phases import engine as dl_engine  # noqa: E402
 from deploy_lib.phases import golden as dl_golden  # noqa: E402
 from deploy_lib.phases import postclone as dl_postclone  # noqa: E402
 from deploy_lib.phases import seed as dl_seed  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 from infra.ownership import MARKER, MISSING, OWNED, UNPROVEN  # noqa: E402
 from nakonops.nakon_run_ops import NakonResult  # noqa: E402
 
@@ -47,8 +48,8 @@ def _ctx(comp_dir, **overrides):
         golden_config_path=comp_dir / "golden.json",
         predomain_config_path=comp_dir / "predomain.json",
         final_config_path=comp_dir / "final.json",
-        golden_inputs={}, golden_hashes={}, tf_dir=comp_dir,
-        tfvars_path=comp_dir / "terraform.tfvars.json", tfvars={}, ssh_key_abs="/k",
+        golden_inputs={}, golden_hashes={},
+ ssh_key_abs="/k",
         all_targets=[], managed_targets=[], linux_targets=[], windows_targets=[],
         tf_ctx={"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.99",
                 "vm_username": "ubuntu"},
@@ -271,10 +272,7 @@ class Phase4GoldenCoverage(unittest.TestCase):
                                  (captured.append(k["coverage"]) or {"web01": 1250})), \
                 dpatch("_template_vmid_map", return_value={}), \
                 dpatch("write_text_atomic"), \
-                dpatch("terraform_plugin_cache_dir",
-                             return_value=comp_dir), \
-                dpatch("terraform_dir", return_value=comp_dir), \
-                dpatch("run_terraform"), \
+                dpatch("create_team_boxes"), \
                 dpatch("run_concurrent", return_value=[]), \
                 dpatch("wait_for_boxes_ssh"), \
                 dpatch("wait_for_cloud_init"), \
@@ -309,7 +307,7 @@ class Phase4GoldenCoverage(unittest.TestCase):
                                       "steps": [{"name": "apache", "rc": 0}]}])
             coverage(machines, clean)
             self.assertEqual(ctx.state["plant_coverage_failed"], {})
-            on_disk = json.loads((comp_dir / ".deploy_state.json").read_text())
+            on_disk = estate_state.load_flat(comp_dir)
             self.assertEqual(on_disk["plant_coverage_failed"], {})
             gate, out = self._gate(comp_dir, [
                 {"name": "web01-team122", "configurations": ["apache"]}])
@@ -534,10 +532,6 @@ class Phase2EngineTemplate(unittest.TestCase):
            "TF_VAR_ssh_public_key": "ssh-rsa AAAA", "TF_VAR_proxmox_endpoint": "https://pve:8006/",
            "TF_VAR_engine_mgmt_gw": "10.0.0.1"}
 
-    def setUp(self):
-        if not Path("terraform/main.tf").exists():
-            self.skipTest("needs the repo as CWD (reads terraform/main.tf)")
-
     def _run(self, ctx, stored_node_hash):
         record = types.SimpleNamespace(destroyed=[], built=0, tf=[], retagged=[])
         # ExitStack, not one giant with: this harness sits at Python's 20-block
@@ -556,10 +550,14 @@ class Phase2EngineTemplate(unittest.TestCase):
                 ("frozen_gate", dict(return_value=True)),
                 ("save_template_hashes", {}),
                 ("write_text_atomic", {}),
-                ("terraform_dir", dict(return_value=ctx.comp_dir)),
-                ("terraform_plugin_cache_dir", dict(return_value=ctx.comp_dir)),
                 ("forget_engine_host_key", {}),
                 ("wait_for_ssh", {}),
+                # The estate seams: the engine/bridge create, its coordinates, and the
+                # guest-side netplan are all exercised by their own tests.
+                ("configure_engine_network", {}),
+                ("engine_context",
+                 dict(return_value={"scoring_engine_ip": "10.0.0.99", "ssh_key_path": "/k",
+                                    "vm_username": "ubuntu"})),
             ]:
                 stack.enter_context(dpatch(target, **kwargs))
             stack.enter_context(dpatch("destroy_vm_if_exists",
@@ -571,11 +569,9 @@ class Phase2EngineTemplate(unittest.TestCase):
             stack.enter_context(dpatch("build_engine_template",
                 side_effect=lambda *a, **k: (record.__setattr__("built", record.built + 1)
                                              or (901, {"built": True}))))
-            stack.enter_context(dpatch("run_terraform",
-                side_effect=lambda argv, **k: record.tf.append(argv)))
-            stack.enter_context(dpatch("read_terraform_ctx",
-                side_effect=lambda *a, **k: {"scoring_engine_ip": "10.0.0.99",
-                                             "ssh_key_path": "/k", "vm_username": "ubuntu"}))
+            stack.enter_context(dpatch("create_engine_and_bridges",
+                side_effect=lambda c: record.__setattr__(
+                    "engine_clone_id", c.state.get("engine_template_vmid"))))
             stack.enter_context(_nulltimed())
             out = io.StringIO()
             stack.enter_context(contextlib.redirect_stdout(out))
@@ -584,7 +580,7 @@ class Phase2EngineTemplate(unittest.TestCase):
 
     def test_matching_hash_reuses_the_template_without_destroying_anything(self):
         with tempfile.TemporaryDirectory() as d:
-            ctx = _ctx(Path(d), tfvars={})
+            ctx = _ctx(Path(d))
             record, _out = self._run(ctx, stored_node_hash="HASH")
         self.assertEqual(record.destroyed, [])
         self.assertEqual(record.built, 0)
@@ -592,13 +588,12 @@ class Phase2EngineTemplate(unittest.TestCase):
         # pre-run-id deploy carries no run tag).
         self.assertEqual(record.retagged, [900])
         self.assertEqual(ctx.state["engine_template_vmid"], 900)
-        self.assertEqual(ctx.tfvars["engine_clone_id"], 900)
+        self.assertEqual(record.engine_clone_id, 900)
         self.assertEqual(ctx.state["deployed_endpoint"], "https://pve:8006")
-        self.assertEqual([a[0] for a in record.tf], ["init", "apply"])
 
     def test_drifted_hash_rebuilds_and_destroys_the_old_template(self):
         with tempfile.TemporaryDirectory() as d:
-            ctx = _ctx(Path(d), tfvars={})
+            ctx = _ctx(Path(d))
             record, out = self._run(ctx, stored_node_hash="DIFFERENT")
         self.assertIn("hash differs — rebuilding", out)
         self.assertEqual(record.destroyed, [1000, 1000])   # engine clone, then its template

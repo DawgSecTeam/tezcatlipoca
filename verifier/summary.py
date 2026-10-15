@@ -24,10 +24,7 @@ def print_summary(results, allow_unverified, comp_dir):
         golden_short = {k: v["hash"][:12] for k, v in (hashes.get("golden") or {}).items()}
         print(f"  templates        : engine {hashes['engine']['hash'][:12]} | "
               f"golden {json.dumps(golden_short)}")
-    frozen_path = comp_dir / ".frozen.json"
-    if frozen_path.exists():
-        try:
-            frozen_at = json.loads(frozen_path.read_text()).get("frozen_at")
-        except (OSError, ValueError):
-            frozen_at = "?"
-        print(f"  freeze           : FROZEN since {frozen_at}")
+    from engine.template_freeze import frozen_state
+    frozen = frozen_state(comp_dir)
+    if frozen:
+        print(f"  freeze           : FROZEN since {frozen.get('frozen_at') or '?'}")

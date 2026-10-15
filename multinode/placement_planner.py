@@ -1,9 +1,8 @@
 """Placement computation: node probes, capacity-fill team placement, decision table, and the
-`resolve_placement` entry point (existing placement.json wins; else nodes.json; else single-node)."""
+`resolve_placement` entry point (a recorded placement wins; else nodes.json; else single-node)."""
 
 import os
 import time
-from pathlib import Path
 
 from common.constants import ENGINE_TEMPLATE_VMID_OFFSET, MAX_BOXES_PER_TEAM
 from multinode.nodes_config import (MAX_SATELLITES, NODES_CONFIG_PATH, PLACEMENT_VERSION,
@@ -192,7 +191,7 @@ def compute_placement(records, balancing, teams, boxes, engine_vmid, comp_name,
         key=lambda n: (_prefer_index(n, prefer), n))
     if len(used) - 1 > MAX_SATELLITES:
         raise SystemExit(f"  ERROR: placement needs {len(used) - 1} satellites but "
-                         f"MAX_SATELLITES={MAX_SATELLITES} (terraform providers are static)")
+                         f"MAX_SATELLITES={MAX_SATELLITES} (node routes are registered, not dynamic)")
 
     slots = {name: i for i, name in enumerate(used)}
     satellites = []
@@ -263,9 +262,9 @@ def resolve_placement(comp_dir, engine_vmid, teams, boxes, comp_name,
                       nodes_path=None):
 # (placement, engine_record) or (None, None).
 #
-#     Order: an existing placement.json always wins (authoritative for resume/redeploy
+#     Order: a recorded placement always wins (authoritative for resume/redeploy
 #     and every companion op). Otherwise nodes.json triggers a fresh capacity-fill
-#     compute — except on a resume with no placement.json, where the range already
+#     compute — except on a resume with no recorded placement, where the range already
 #     lives on resume_endpoint: re-balancing a live range would strand it, so all
 #     teams adopt that node as a single-slot placement instead. Neither config present
 #     => single-node (None).
@@ -273,12 +272,12 @@ def resolve_placement(comp_dir, engine_vmid, teams, boxes, comp_name,
     if placement:
         if set(placement["team_nodes"]) != set(teams):
             raise SystemExit(
-                f"  ERROR: placement.json was computed for teams "
+                f"  ERROR: the placement was computed for teams "
                 f"{sorted(placement['team_nodes'])} but this deploy has teams "
                 f"{sorted(teams)} — the placement (and its satellite routing) no "
                 "longer matches. Destroy and redeploy to re-place.")
         if team_overrides or engine_override:
-            print("  placement.json exists — ignoring --team-node/--engine-node "
+            print("  a placement is already recorded — ignoring --team-node/--engine-node "
                   "(destroy and redeploy to re-place)")
         return placement, engine_record(placement)
     records, balancing = load_nodes_config(nodes_path)
@@ -303,7 +302,7 @@ def resolve_placement(comp_dir, engine_vmid, teams, boxes, comp_name,
                 f"  ERROR: this competition's state records deploy endpoint "
                 f"{resume_endpoint}, which is not in nodes.json — add that node or "
                 "destroy and redeploy. Refusing to re-place a live range.")
-        print(f"  Resume without placement.json — keeping the whole range on "
+        print(f"  Resume without a recorded placement — keeping the whole range on "
               f"'{match.name}' ({resume_endpoint})")
         probes = {r.name: probe_node(r, sorted({b["template"] for b in boxes}),
                                      engine_vmid,
@@ -326,7 +325,6 @@ def resolve_placement(comp_dir, engine_vmid, teams, boxes, comp_name,
                                   comp_name, team_overrides=team_overrides,
                                   engine_override=engine_override, probes=probes)
     print(placement_decision_table(placement, probes))
-    write_placement(comp_dir, placement)
-    print(f"  Placement written to {Path(comp_dir) / 'placement.json'} "
+    print(f"  Placement recorded in {write_placement(comp_dir, placement)} "
           "(authoritative for resume/redeploy/verify/destroy)")
     return placement, engine_record(placement)

@@ -1,4 +1,4 @@
-"""(team, box) target abstraction: vmid arithmetic, enumeration, frozen targets.json."""
+"""(team, box) target abstraction: vmid arithmetic, enumeration, the frozen roster."""
 
 import json
 from pathlib import Path
@@ -8,7 +8,7 @@ def vm_id_for(identifier, box_index):
 
 
 def box_index(boxes, box_name):
-# Canonical position of a box by name — matches terraform's index(names, name).
+# Canonical position of a box by name — the order the roster template lists them in.
     for i, b in enumerate(boxes):
         if b["name"] == box_name:
             return i
@@ -17,7 +17,9 @@ def box_index(boxes, box_name):
 
 def persist_targets(comp_dir, targets, boxes):
 # Freeze (team,box)->vmid at deploy so later tools don't recompute it from boxes.json order.
-    data = {
+    from estate import state
+    document = state.open(comp_dir)
+    document.section("roster").update({
         "box_order": [b["name"] for b in boxes],
         "targets": {
             t["vm_name"]: {
@@ -30,21 +32,32 @@ def persist_targets(comp_dir, targets, boxes):
             }
             for t in targets
         },
-    }
-    (Path(comp_dir) / "targets.json").write_text(json.dumps(data, indent=2))
+    })
+    document.save()
+
+
+def frozen_roster(comp_dir):
+# The {box_order, targets} record a deploy froze, from the document or a legacy file.
+    from estate import state
+    roster = state.EstateState.load(comp_dir).section("roster")
+    if roster.get("targets"):
+        return {"box_order": roster.get("box_order") or [], "targets": roster["targets"]}
+    path = Path(comp_dir) / "targets.json"
+    if path.exists():
+        return json.loads(path.read_text())
+    return None
 
 
 def load_targets(comp_dir, teams, boxes):
-# Targets with vmid read from targets.json (frozen at deploy); recompute if absent.
+# Targets with vmid read from the frozen roster; recompute if absent.
 #
 #     Refuses when boxes.json was reordered since deploy: vmid is positional, so a
-#     reorder would silently retarget a different VM (and terraform would diverge too).
-    path = Path(comp_dir) / "targets.json"
-    if not path.exists():
-        print("  (targets.json absent — deriving vmids from boxes.json order; "
+#     reorder would silently retarget a different VM.
+    data = frozen_roster(comp_dir)
+    if data is None:
+        print("  (no frozen roster — deriving vmids from boxes.json order; "
               "reorder-unsafe for ranges deployed before this was added)")
         return enumerate_targets(teams, boxes)
-    data = json.loads(path.read_text())
     current = [b["name"] for b in boxes]
     frozen_order = data.get("box_order") or []
     # Append-only is safe: vmid is positional, so boxes ADDED after deploy leave every

@@ -13,17 +13,17 @@ Non-interactive driving: flags, pre-authored configs, machine-readable validatio
 | `--box-username NAME` | New competitions only; default `ubuntu`. Written to `users.json` |
 | `--credlist-usernames A,B,C` | New competitions only; exactly 3; default `admin,user1,user2` |
 | `--scoring-vmid N` | Engine vmid (default 1000) |
-| `--from-phase N` | Resume at phase N; `N > 1` skips cleanup and apply #1 |
+| `--from-phase N` | Resume at phase N; `N > 1` skips phase 1's cleanup and phase 2's create |
 | `--force-from-phase` | Allow `--from-phase` past phases the state never saw complete (known-stale checkpoint only) |
 | `--plan-only` | Generate config and print the summary; touches no infrastructure |
 
-Box selection (`collect_boxes()`) is always interactive. To avoid it, pre-author the competition. Run `--plan-only` before any real deploy; `--yes` otherwise walks straight into `terraform apply`.
+Box selection (`collect_boxes()`) is always interactive. To avoid it, pre-author the competition. Run `--plan-only` before any real deploy; `--yes` otherwise walks straight into the deploy.
 
 ### Resuming
 
 Phases: [architecture.md](architecture.md#phases). A failed deploy prints its phase and the resume command. Each phase writes `last_phase`; `--from-phase N` is refused when `N > last_phase + 1` (a missing `last_phase` reads as 0), and when the state's `pipeline_version` differs.
 
-Phase 8's steps (`seeded`, `engine_unpaused`, `injects_created`) are flag-gated in `.deploy_state.json`; re-unpausing is unsafe and re-creating injects duplicates them. To force a step, clear its flag first.
+Phase 8's steps (`seeded`, `engine_unpaused`, `injects_created`) are flag-gated in the state document (`estate-state.json`); re-unpausing is unsafe and re-creating injects duplicates them. To force a step, clear its flag first.
 
 ## Pre-authoring
 
@@ -84,9 +84,9 @@ Use `--admin-password=PW` (equals form) so a leading `-` isn't parsed as an opti
 
 **Gates are PASS / FAIL / SKIP; SKIP is non-passing.** Summary and exit code come from the same results. Waive a SKIP (never a FAIL) with `--allow-unverified <gate>`; unmatched names are warned. Structurally inapplicable cases (no `nakon-config.json`, `domain_roles.json`, or `injects/`; `--expect-no-vulns`; a comp planting no misconfigs, which auto-SKips misconfig as informational) are shown `[informational]` and don't gate. Service DOWN is not fatal; isolation never downgrades.
 
-Other flags: `--expect-no-vulns` (skip misconfig gates for a packet comp without `box_vulns.json`); `--fix-round-loop` (POST `/api/competition/start` and `/api/engine/pause {pause:false}`; still FAILs, rerun to confirm); `--freeze` (writes `.frozen.json`; needs all gates PASS; do it last, since later commits trip the drift gate); `--unfreeze --confirm-unfreeze`.
+Other flags: `--expect-no-vulns` (skip misconfig gates for a packet comp without `box_vulns.json`); `--fix-round-loop` (POST `/api/competition/start` and `/api/engine/pause {pause:false}`; still FAILs, rerun to confirm); `--freeze` (records the freeze in the state document; needs all gates PASS; do it last, since later commits trip the drift gate); `--unfreeze --confirm-unfreeze`.
 
-Inputs: engine IP from `terraform output -json`, team creds from `teams.json`, admin password from `credentials.txt`, SSH from `.env`, planted configs from `nakon-config.json`. On a fresh deploy, team identifiers come from `TF_VAR_team_identifiers`, then saved local identifiers, then packet-profile suggestions, then the 101+ defaults; that fallback is not an availability check.
+Inputs: engine IP from the state document (`estate-state.json`; `--engine-ip` overrides), team creds from `teams.json`, admin password from `credentials.txt`, SSH from the config (`estate/config.py`), planted configs from `nakon-config.json`. On a fresh deploy, team identifiers come from `TF_VAR_team_identifiers`, then saved local identifiers, then packet-profile suggestions, then the 101+ defaults; that fallback is not an availability check.
 
 ## `redeploy-competition.py`
 
@@ -108,11 +108,11 @@ Selection (AND-combined; none = every box; no match is a hard error): `--teams 2
 | `rebuild` | Destroy, re-clone from the **golden template**, configure, retake both snapshots | VM gone or won't boot |
 | `reset` | Per-box ladder: `tz-ready` → `tz-base` + replant → golden rebuild. Probes after each rung (SSH or guest agent, plus every scored port from the engine); only unhealthy boxes escalate. A PAM preauth verdict escalates one rung. Exits non-zero if anything is still broken | Unknown damage depth |
 | `resync` | Pull engine-authoritative secrets (`event.conf`, credlist, `/opt/quotient/.env`) into state, re-set selected boxes' passwords via guest agent | Credential drift. Cannot recover `box_password` (baked in at bootstrap); reports unreachable boxes |
-| `engine-recovery` | Re-clone the engine from the engine template (`terraform apply -replace`, `-target`-scoped). Ignores selection flags. Scoring DB starts **empty** | Engine broken or deleted. Then `create-competition.py --competition <id> --from-phase 7` |
+| `engine-recovery` | Destroy the engine VM and re-clone it from the engine template through the estate component (scoped to the engine vmid by construction). Ignores selection flags. Scoring DB starts **empty** | Engine broken or deleted. Then `create-competition.py --competition <id> --from-phase 7` |
 
 `--reset-event` (with `rollback-ready`/`rollback-base`/`reset`) also restarts the event from the engine template and reruns the seed, so scores reset and injects re-anchor at now.
 
-- `rebuild` clones the golden template, not a live box, so defenders' changes aren't inherited. It stamps the full ownership tag set and clone marker explicitly (a clone inherits its golden's tags, and a stale `run-<id>` would make teardown refuse it). Rebuilt boxes drift from Terraform state; the next `apply` will want to replace them.
+- `rebuild` clones the golden template, not a live box, so defenders' changes aren't inherited. It stamps the full ownership tag set and clone marker explicitly (a clone inherits its golden's tags, and a stale `run-<id>` would make teardown refuse it).
 - `rollback-base` and `rebuild` rerun the AD chain for selected boxes with a `domain_roles.json` role (a pre-nakon disk undoes promotion/joins). The stale ADDS done-marker is cleared first. If the chain can't run, `tz-ready` is not retaken.
 - `nakon deploy --only` scopes to the selected machines; content comes from the bundle built from the full list, so partial and full redeploys plant identical sets.
 
@@ -131,17 +131,17 @@ python3 destroy-competition.py --competition <id> --end-of-competition  # requir
 python3 destroy-competition.py --competition <id> --artifacts-timeout 20
 ```
 
-Full teardown removes team boxes, engine, bridges, golden and engine templates (clones first; `.template-hashes.json` goes too). **Exit 0 = estate verified clean** for this deploy's ownership set: nothing of ours running or tagged, red01 gone, no terraform state lock, evidence archived. Frozen competitions refuse without `--end-of-competition`. `--teams-only` is for this competition's next run only; once the run's goal is met, run the full teardown, since goldens can't serve another competition (hash inputs and `comp-<id>` tags are per-competition) and otherwise squat on its golden vmids.
+Full teardown removes team boxes, engine, bridges, golden and engine templates (clones first; the state document's template records go too). **Exit 0 = estate verified clean** for this deploy's ownership set: the step plan completed, every hosting node was listable, nothing of ours is running or tagged, and red01 is gone — evidence archived before any of it. Frozen competitions refuse without `--end-of-competition`. `--teams-only` is for this competition's next run only; once the run's goal is met, run the full teardown, since goldens can't serve another competition (hash inputs and `comp-<id>` tags are per-competition) and otherwise squat on its golden vmids.
 
-Reuse keys on the `tezcatlipoca-m4 hash=` description on the template itself, so the next deploy adopts kept templates even from a **fresh worktree or dashboard workspace** — where `.template-hashes.json` does not exist, because the dashboard's workspace seeder deliberately strips it. So `--teams-only` (or the harness's `--keep-templates`) followed by a deploy of the same competition gives the event the exact templates the practice run tested, provided the hash inputs are unchanged; a config change rebuilds, and a frozen competition still refuses config drift. The `--teams-only` teardown must run from the worktree that holds the deploy's state, but the reuse it enables does not.
+Reuse keys on the `tezcatlipoca-m4 hash=` description on the template itself, so the next deploy adopts kept templates even from a **fresh worktree or dashboard workspace** — where the state document does not exist, because the dashboard's workspace seeder deliberately strips it. So `--teams-only` (or the harness's `--keep-templates`) followed by a deploy of the same competition gives the event the exact templates the practice run tested, provided the hash inputs are unchanged; a config change rebuilds, and a frozen competition still refuses config drift. The `--teams-only` teardown must run from the worktree that holds the deploy's state, but the reuse it enables does not.
 
-Requires `run_id` in `.deploy_state.json` plus `teams.json` and `boxes.json`; restores the per-competition `TF_VAR_*` first so Terraform addresses match.
+Requires a `run_id` in the state document (`estate-state.json`, or a legacy `.deploy_state.json`) plus `teams.json` and `boxes.json`; it activates the recorded placement/host first so every node-scoped call addresses the right PVE.
 
 Before the first destructive call it collects the run's artifacts into `competitions/<id>/.automated-tests/<run-id>/` (red report from red01, blue logs, engine capture, harness evidence, `REPORT.md`). Collection warns and proceeds, bounded per file by `--artifacts-timeout` (default 45 s). There is no skip flag; on resume the journal skips it. See [automated-test-artifacts.md](automated-test-artifacts.md).
 
 ### Run ownership
 
-Each deploy mints a `run-<hex>` id (in `.deploy_state.json`) and tags everything it creates. Teardown requires the full set (`tezcatlipoca` + `comp-<id>` + `run-<id>`):
+Each deploy mints a `run-<hex>` id (in `estate-state.json`) and tags everything it creates. Teardown requires the full set (`tezcatlipoca` + `comp-<id>` + `run-<id>`):
 
 - Same comp, different run id → refused with a warning everywhere (preflight, pre-stop, leftover sweep, template destroys).
 - Untagged VM on a computed vmid → refused, unless it carries this competition's clone marker.
@@ -151,7 +151,7 @@ Each deploy mints a `run-<hex>` id (in `.deploy_state.json`) and tags everything
 `verify_clean` classifies survivors: ours (a problem), another run's (a note, untouched), untagged (a note).
 
 **The workspace that owns a run is the only thing that can reclaim it.** A deploy is ownership-scoped,
-so a range outlives its run id only if the workspace holding `.deploy_state.json` goes away while the
+so a range outlives its run id only if the workspace holding `estate-state.json` goes away while the
 range is still up. Preflight then sees a comp-tagged range it cannot prove is its own and refuses
 every later deploy of that competition, and no destroy path can claim it (the tag set in the VMs
 carries the run id nothing local remembers). So always run `destroy-competition.py` — or
@@ -165,7 +165,7 @@ dashboard's per-run workspaces are the mechanical form of that rule; a manual ru
 | `--end-of-competition` | destroy | Full teardown of a frozen competition |
 | `--teams-only` | destroy | Keep this competition's golden + engine templates for its next run |
 | `--keep-templates` | scrim | Same, from the harness: tear down the range but keep the templates |
-| `--freeze` / `--unfreeze --confirm-unfreeze` | verify | Write/remove `.frozen.json` |
+| `--freeze` / `--unfreeze --confirm-unfreeze` | verify | Write/remove the freeze record in the state document |
 | `--fix-round-loop` | verify | Start/unpause POSTs when the round loop didn't resume after an engine reboot |
 | `--expect-no-vulns` | verify | Force misconfig gates to SKIP |
 

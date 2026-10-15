@@ -30,8 +30,9 @@ import os
 import re
 import shlex
 import subprocess
-from pathlib import Path
 
+from estate import state as estate_state
+from common.targets import frozen_roster
 from scrim import core, procs
 from scrim.core import log
 
@@ -128,7 +129,7 @@ def _windows_boxes(comp):
 # fw01 skipped: the in-path firewall is an appliance with no shell to clean — skipping
 # it is not an omission
 def box_targets(comp, creds):
-    data = json.loads((Path(comp) / "targets.json").read_text())
+    data = frozen_roster(comp) or {}
     win = _windows_boxes(comp)
     out = []
     for t in data.get("targets", {}).values():
@@ -143,12 +144,8 @@ def box_targets(comp, creds):
 # set, and its per-artifact check_cmd is the integrity probe the post-wipe re-check
 # re-runs. Best-effort: any failure logs and returns empty.
 def red01_world_artifacts(comp, creds):
-    red_ip = None
-    try:
-        state = json.loads((Path(comp) / ".deploy_state.json").read_text(encoding="utf-8"))
-        red_ip = (state.get("assume_breach") or {}).get("red_ip")
-    except (OSError, ValueError):
-        pass
+    state = estate_state.load_flat(comp)
+    red_ip = (state.get("assume_breach") or {}).get("red_ip")
     key = creds.get("KEY_PATH")
     if not red_ip or not key:
         log("trail wipe: no red01 record (deploy state / key missing) — wipe runs "

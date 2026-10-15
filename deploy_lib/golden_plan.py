@@ -25,7 +25,7 @@ def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden
 # golden_inputs/golden_hashes for every box in boxes.json — unmanaged included.
 #
 #     Extracted from deploy() (the pure part of the M4 hash loop) so the all-boxes
-#     invariant is testable offline: the phase-4 rebuild gate and `.template-hashes.json`
+#     invariant is testable offline: the phase-4 rebuild gate and the template hash record
 #     both key off these dicts, and both iterate the FULL lineup, not just the planted
 #     boxes.
 #
@@ -39,7 +39,7 @@ def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden
     golden_inputs, golden_hashes = {}, {}
     for b in boxes:
         if is_unmanaged(b):
-            # No golden machine, no golden plant: terraform clones it straight from
+            # No golden machine, no golden plant: the box is cloned straight from
             # its own base template. The slot still needs a stable hash entry so the
             # rebuild gate never subscripts it into a KeyError.
             inputs = {"config": {"base_template_vmid": base_template_ids.get(b["template"]),

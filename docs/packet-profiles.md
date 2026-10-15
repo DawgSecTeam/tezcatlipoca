@@ -152,4 +152,4 @@ report before briefing anyone on "we replicated X".
   `--strict-services` and (pre-vulns) `--expect-no-vulns`.
 - Freeze before committing — code drift after `--freeze` trips the frozen gate.
 - `--scoring-vmid` must dodge existing VMs.
-- The in-path pfSense at `.1` is a manual runbook step ([internals.md](internals.md#net-firewall_opspy)), not terraform — for validation deploys the box can sit idle while the engine holds `.1`.
+- The in-path pfSense at `.1` is a manual runbook step ([internals.md](internals.md#net-firewall_opspy)), not automated — for validation deploys the box can sit idle while the engine holds `.1`.

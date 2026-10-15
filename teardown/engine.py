@@ -2,17 +2,27 @@
 
 The engine is the one place that applies step policies (REFUSE vs
 WARN_AND_PROCEED), the one place that journals completion
-(competitions/<id>/.teardown-journal.json — resume skips journalled, resumable
+(the document's `teardown` section — resume skips journalled, resumable
 steps, which is what makes re-running until clean both safe and cheap), and
 the only source of a clean verdict. Exit 0 means verify_clean said clean;
 there is no other exit-0 path."""
 
-import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-TEARDOWN_JOURNAL = ".teardown-journal.json"
+def load_teardown_journal(comp_dir):
+    """This run's completed teardown steps, from the document's teardown section."""
+    from estate import state
+    section = state.EstateState.load(comp_dir).section("teardown")
+    return section if section.get("done") else {}
+
+
+def save_teardown_journal(comp_dir, journal):
+    from estate import state
+    document = state.open(comp_dir)
+    document.section("teardown").update(journal)
+    document.save()
 
 
 @dataclass
@@ -33,22 +43,17 @@ class CleanReport:
 
 
 class TeardownEngine:
-    def __init__(self, ctx, journal_path=None, log=print, journal=True):
+    def __init__(self, ctx, log=print, journal=True):
         self.ctx = ctx
         self.journal_enabled = journal
-        self.journal_path = Path(journal_path) if journal_path \
-            else Path(ctx.comp_dir) / TEARDOWN_JOURNAL
         self.log = log
 
     def _load_journal(self):
         if not self.journal_enabled:
             return {"run_id": self.ctx.ownership.run_id, "done": {}}
-        try:
-            data = json.loads(self.journal_path.read_text())
-            if isinstance(data, dict) and data.get("done"):
-                return data
-        except (OSError, ValueError):
-            pass
+        data = load_teardown_journal(self.ctx.comp_dir)
+        if isinstance(data, dict) and data.get("done"):
+            return data
         return {"run_id": self.ctx.ownership.run_id, "done": {}}
 
     def execute(self, plan):
@@ -84,9 +89,7 @@ class TeardownEngine:
                 if self.journal_enabled:
                     journal["run_id"] = self.ctx.ownership.run_id
                     journal["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-                    from config.config_ops import write_text_atomic
-                    write_text_atomic(self.journal_path, json.dumps(journal, indent=2),
-                                      mode=0o600)
+                    save_teardown_journal(self.ctx.comp_dir, journal)
             if result.status == "failed" and step.failure == "refuse":
                 break
         return results
@@ -173,13 +176,7 @@ class TeardownEngine:
                                     or (red01_done and red01_done.get("status") != "skipped")):
                 problems.append("red01's vmid could not be verified gone — check by hand")
 
-        # 5. no terraform state lock left behind
-        lock = Path(self.ctx.comp_dir) / "terraform" / ".terraform.tfstate.lock.info"
-        if lock.exists():
-            problems.append(f"{lock} still present — a terraform process may be alive; "
-                            f"settle it and re-run")
-
-        # 6. evidence archived — demanded only when a teardown actually ran
+        # 5. evidence archived — demanded only when a teardown actually ran
         # (a fresh journal means this plan never got past its gates)
         done = self._journal_done(plan)
         if done and any(s.kind == "evidence" for s in plan.steps):

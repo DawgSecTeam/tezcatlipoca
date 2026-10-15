@@ -1,20 +1,21 @@
 """The configure half shared by every redeploy mode: scoped nakon plant, hardening, domain re-run."""
 
 import json
-import os
 import pipeline_api
 
-from config.config_ops import write_state
+from estate import state as estate_state
+
 from common.utils import compfile_flag
 from pathlib import Path
 from redeploy.redeploy_select_ops import box_platform
+from estate import config
 
 
 def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
 # Configure half: DNS, auth, scoped nakon (--only), service hardening.
     ctx, comp_dir, state = rctx.ctx, rctx.comp_dir, rctx.state
     key = Path(ctx["ssh_key_path"])
-    scoring_user = os.environ["TF_VAR_vm_username"]
+    scoring_user = config.active().engine.username
     scoring_ip = ctx["scoring_engine_ip"]
 
     linux_targets = [t for t in targets if box_platform(t["box"]) == "linux"]
@@ -59,13 +60,10 @@ def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
         # failed steps resolved — or erase the record that they ever existed.
         state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
             f"redeploy: {line}" for line in result.failed[:20]]
-        state_path = comp_dir / ".deploy_state.json"
-        if state_path.exists():
-            # Shared atomic writer (config_ops.write_state): 0600 at creation, temp+os.replace.
-            # Never hand-roll this — .deploy_state.json carries the only copy of the box
-            # passwords, so a torn write bricks resume AND redeploy at once (deploy.py's
-            # atomic-rename note; winad-testrun 2026-09-25).
-            write_state(state_path, state)
+        # The document carries the only copy of the box passwords, so a torn write bricks
+        # resume AND redeploy at once — estate_state.write_flat is the atomic 0600 writer
+        # (winad-testrun 2026-09-25).
+        estate_state.write_flat(comp_dir, state)
 
     pipeline_api.fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=state.get("box_creds"))
 
@@ -93,7 +91,7 @@ def rerun_domain_configs(targets, rctx, nakon_config_path):
 
     box_password = state.get("box_password")
     if not box_password:
-        print("  WARNING: .deploy_state.json has no box_password — cannot re-run domain "
+        print("  WARNING: the state document has no box_password — cannot re-run domain "
               "configuration for the reset domain-role box(es). Rejoin by hand, or re-run "
               "create-competition.py --from-phase 6.")
         return False
@@ -127,7 +125,7 @@ def rerun_domain_configs(targets, rctx, nakon_config_path):
                 marker.unlink()
         pipeline_api.deploy_domain_configs(
             {team_key: teams[team_key]}, boxes, comp_dir, domain_config_path,
-            Path(ctx["ssh_key_path"]), os.environ["TF_VAR_vm_username"],
+            Path(ctx["ssh_key_path"]), config.active().engine.username,
             ctx["scoring_engine_ip"], box_password, promote_dc=dc_reset,
             force_member_join=dc_reset,
         )

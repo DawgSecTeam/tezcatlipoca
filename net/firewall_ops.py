@@ -46,6 +46,7 @@ import time
 from infra.guest_exec import guest_agent_exec_root
 from infra.client import proxmox_api
 from common.ssh_ops import gateway_proxy, ssh_on_gateway, ssh_via_gateway
+from estate import config
 
 # (port, label) of engine services boxes reach at the team gateway address. apt-cacher-ng
 # is the one every box needs (prep_apt's apt proxy points at 192.168.<id>.1:3142).
@@ -304,7 +305,7 @@ def write_team_configs(comp_dir, teams, red_dnat_spec=None, kind="pfsense"):
             "pfSense 2.7.x: Diagnostics > Backup & Restore) into competitions/"
             f"{comp_dir.name}/pfsense/.")
     seed = seed_path.read_text()
-    key = os.environ.get("TF_VAR_ssh_public_key", "").strip()
+    key = config.active().ssh.public_key.strip()
     out_dir = comp_dir / "pfsense"
     out = {}
     for team_key, team in teams.items():
@@ -581,7 +582,7 @@ def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, node, log=prin
         log(f"    {key}: firewall up on {wan} (config applied)")
 
 
-# NIC naming must match terraform's team_nics exactly: ens19+ are the team NICs in
+# NIC naming must match the engine's netplan exactly: ens19+ are the team NICs in
 # sorted team key order; the transit NICs continue the same positional sequence (one
 # per team, same order).
 def cutover_netplan_yaml(teams):
@@ -603,8 +604,8 @@ def cutover_netplan_yaml(teams):
     return "\n".join(lines) + "\n"
 
 
-# CAVEAT (docs/internals.md): a future `terraform apply` re-writes the pre-cutover
-# netplan file.
+# The cutover rewrites the engine's netplan in place; nothing re-applies the pre-cutover
+# file, so the team gateway address stays on the firewalls.
 def cut_over_engine(ssh_ctx, teams, log=print):
     log("  Engine cutover: 192.168.<team>.1 moves to the firewalls; engine routes "
         "team subnets via the transit /30s")

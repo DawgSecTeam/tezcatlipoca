@@ -25,5 +25,5 @@ def record_degradations(ctx):
     for item in degradation_summary():
         count = f" x{item['count']}" if item["count"] > 1 else ""
         print(f"      - {item['what']}{count}: {item['detail'][:120]}")
-    print("      (recorded in .deploy_state.json as `degradations`; verify-competition "
+    print("      (recorded in the state document as `degradations`; verify-competition "
           "surfaces them)")

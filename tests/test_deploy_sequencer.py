@@ -25,7 +25,7 @@ from infra import gates as dl_gates  # noqa: E402
 
 SKIP_BANNERS = [
     "[1/8] Skipped (resume) — keeping the run's markers in place.",
-    "[2/8] Skipped (resume) — not re-running terraform apply.",
+    "[2/8] Skipped (resume) — not re-creating the engine.",
     "[3/8] Skipped (resume).",
     "[4/8] Skipped (resume).",
     "[5/8] Skipped (resume).",
@@ -52,8 +52,8 @@ def _ctx(comp_dir, from_phase, state=None):
         golden_config_path=comp_dir / "golden.json",
         predomain_config_path=comp_dir / "predomain.json",
         final_config_path=comp_dir / "final.json",
-        golden_inputs={}, golden_hashes={}, tf_dir=comp_dir,
-        tfvars_path=comp_dir / "terraform.tfvars.json", tfvars={}, ssh_key_abs="/k",
+        golden_inputs={}, golden_hashes={},
+ ssh_key_abs="/k",
         all_targets=[], managed_targets=[], linux_targets=[], windows_targets=[],
     )
 
@@ -74,7 +74,7 @@ class BannerSet(unittest.TestCase):
         ctx = _ctx(comp_dir, 9)
         buf = io.StringIO()
         with dpatch("prepare", return_value=ctx), \
-                dpatch("connect_terraform"), \
+                dpatch("connect_estate"), \
                 dpatch("finish_deploy"):
             with contextlib.redirect_stdout(buf):
                 deploy.deploy(comp_dir, assume_yes=True, from_phase=9)
@@ -94,14 +94,14 @@ class Sequencer(unittest.TestCase):
         ctx = _ctx(comp_dir, from_phase)
         with dpatch("prepare", return_value=ctx), \
                 dpatch("PHASES", phases), \
-                dpatch("connect_terraform",
+                dpatch("connect_estate",
                              side_effect=lambda c: calls.append(("connect", 2))), \
                 dpatch("finish_deploy"), \
                 contextlib.redirect_stdout(io.StringIO()):
             deploy.deploy(comp_dir, assume_yes=True, from_phase=from_phase,
                           hold_start=hold_start)
         return ctx
-    def test_phases_run_in_order_and_connect_terraform_sits_after_phase_2(self):
+    def test_phases_run_in_order_and_connect_estate_sits_after_phase_2(self):
         calls = []
         with tempfile.TemporaryDirectory() as d:
             ctx = self._run(Path(d), 1, _stub_phases(calls), calls)
@@ -110,7 +110,7 @@ class Sequencer(unittest.TestCase):
                                  ("phase", 6), ("phase", 7), ("phase", 8)])
         self.assertEqual(ctx.state["last_phase"], 8)
 
-    def test_connect_terraform_is_not_gated_on_phase_2_running(self):
+    def test_connect_estate_is_not_gated_on_phase_2_running(self):
         calls = []
         with tempfile.TemporaryDirectory() as d:
             self._run(Path(d), 3, _stub_phases(calls), calls)
@@ -129,7 +129,7 @@ class Sequencer(unittest.TestCase):
             ctx = _ctx(Path(d), 6)
             with dpatch("prepare", return_value=ctx), \
                     dpatch("PHASES", tuple(phases)), \
-                    dpatch("connect_terraform"), \
+                    dpatch("connect_estate"), \
                     dpatch("finish_deploy"), \
                     contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaises(RuntimeError):
@@ -147,7 +147,7 @@ class Sequencer(unittest.TestCase):
             ctx2 = _ctx(Path(d2), 8, state=dict(ctx.state))
             with dpatch("prepare", return_value=ctx2), \
                     dpatch("PHASES", _stub_phases(calls)), \
-                    dpatch("connect_terraform"), \
+                    dpatch("connect_estate"), \
                     dpatch("finish_deploy"), \
                     contextlib.redirect_stdout(io.StringIO()):
                 deploy.deploy(Path(d2), assume_yes=True, from_phase=8)
@@ -162,7 +162,7 @@ class FailureHandling(unittest.TestCase):
         buf = io.StringIO()
         with dpatch("prepare", return_value=ctx), \
                 dpatch("PHASES", phases), \
-                dpatch("connect_terraform"), \
+                dpatch("connect_estate"), \
                 dpatch("finish_deploy"):
             with contextlib.redirect_stdout(buf):
                 with self.assertRaises(type(exc)) as raised:

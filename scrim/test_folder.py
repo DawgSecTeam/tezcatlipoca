@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 
 from artifacts_lib import artifacts_ops
@@ -8,6 +7,7 @@ from scrim import core
 from scrim import procs
 from scrim import red_link
 from scrim.core import log
+from estate import config
 
 
 BOXES_JSON = "boxes.json"
@@ -51,8 +51,8 @@ def resolve_run_dir(comp, args):
                       or getattr(args, "resume_event", False))
              else artifacts_ops.next_run_key(comp)),
         teams=getattr(args, "teams", None), boxes=_box_names(comp),
-        node=os.environ.get("TF_VAR_proxmox_node"),
-        endpoint=os.environ.get("TF_VAR_proxmox_endpoint"))
+        node=config.active().proxmox.node,
+        endpoint=config.active().proxmox.endpoint)
     args.test_dir = str(test_path)
     explicit = getattr(args, "run_dir", None)
     recorded = (manifest.get("paths") or {}).get("run_dir")
@@ -86,7 +86,7 @@ def record_red_agent(args):
     `ssh` comes from the same helper `_red_ssh_ctx` builds its scp/ssh arguments
     from, so the harness and the collector cannot dial different addresses."""
     spec, _common = red_link._red_ssh_spec(args)
-    node = os.environ.get("TF_VAR_proxmox_node")
+    node = config.active().proxmox.node
     return record_agent(args, "red", present=True, ip=spec["host"],
                         vmid=getattr(args, "red_vmid", None) or None, ssh=spec,
                         **({"node": node} if node else {}))

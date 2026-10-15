@@ -9,16 +9,16 @@ Rules: triage before touching anything; never redo phases 1–2 for a failure in
 Each has burned a real deploy. Per AGENTS.md, each is also a defect to fix in code, not a permanent checklist item.
 
 - **Template has a cloud-init drive**: a tagged template with no `ide*/scsi*/sata*` entry containing `cloudinit` clones into an unreachable box. Use the `-fix` variants ([environment-facts.md](environment-facts.md#templates)).
-- **Env variant matches the node and has no dead vmid** (`TF_VAR_template_vm_id`). Set `TF_VAR_team_identifiers` explicitly: packet-profile identifiers and the 101+ default are not availability checks.
+- **Config profile matches the node and has no dead vmid** (`proxmox.template_vm_id`). Set `TF_VAR_team_identifiers` explicitly: packet-profile identifiers and the 101+ default are not availability checks.
 - **Free golden/engine slots**: another session may have squatted an ad-hoc template vmid in the same block.
-- **Distinct `TF_VAR_engine_mgmt_ip` per concurrent comp**: `clean_engine_for_template` SSHes to the planned mgmt IP, so a shared IP can wipe a live foreign engine's `.env`, `event.conf`, and host keys.
+- **Distinct `engine.mgmt_ip` per concurrent comp**: `clean_engine_for_template` SSHes to the planned mgmt IP, so a shared IP can wipe a live foreign engine's `.env`, `event.conf`, and host keys.
 - **Reclaim orphaned ranges** with `destroy-competition.py` from the matching comp dir, never an ad-hoc sweep.
 - **Probe the API port, not ping**: `curl -k https://<node>:8006/` must return an HTTP code, not `000`. If a node went down, resume with `--from-phase`; state, snapshots and disks survive.
 - **Pool headroom and snapshot capability**: only ZFS, LVM-thin, Ceph, qcow2-on-file snapshot. `TEZ_THIN_HEADROOM` relaxes the gate on thin pools.
 - **Tear bridges down with `ifdown`, never `ip link del`.** If API network changes fail on a missing `vmbrNNN/brif/`, clear `/run/network/ifstatenew` and `ifreload -a`.
 - **Commit deploy-path code before `--freeze`**: it refuses uncommitted `.py/.tf/.sh/.j2/.ps1` (run state like `placement.json`, comp JSON, `.env` backups is ignored). A later commit warns at deploy. `--unfreeze --confirm-unfreeze` is the only way back, so freeze last.
 - **Don't pin a known-broken catalog config** (`constants.KNOWN_BROKEN_CONFIGS`).
-- **Don't point boxes at their team's `dns*` box from Terraform**: its bind9 is installed by nakon via apt, which needs working DNS.
+- **Don't point boxes at their team's `dns*` box at clone time**: its bind9 is installed by nakon via apt, which needs working DNS.
 - **Distinct scoreboard Display per pin per box**: duplicates are refused at generate time; `pins_registered` catches unregistered pins.
 - **`box_username` must not be a legacy system account** (`operator`, `daemon`, `games`, `mail`, `news`, `sync`, …); cloud-init adopts the shadow account and logins fail. `medic` is safe.
 - **Local-model scrims**: don't raise local blue's context above the slot limit (`60000` verified; cloud uses `120000`; opencode's base prompt is ~20k). No `reasoning_effort` on a local endpoint.
@@ -34,12 +34,12 @@ Each has burned a real deploy. Per AGENTS.md, each is also a defect to fix in co
 | Phase 4 `nakon deploy --strict` exit 1 with `FAILED` step lines | A broken vulndb row aborts the golden plant (the only strict pass; phases 6–7 are lenient and tally) | Trim-then-resume (§3) |
 | HTTP 596, authed API hangs, node reboot, `lock = clone` surviving reboot | Clones saturating the datastore; concurrent external provisioners worsen it | Preflight headroom; no concurrent provisioners |
 | apt 404 mid-deploy | Mirror rotation; self-heals after apt-daily | Retry later |
-| Clone has no IPv4/APIPA, resolv.conf reverted | Cloud-init race (rarer on golden-based clones) | No auto-repair: surfaces as `wait_for_boxes_ssh` failing with `diagnose_unreachable_box` output; Terraform-replace the VM or resume |
+| Clone has no IPv4/APIPA, resolv.conf reverted | Cloud-init race (rarer on golden-based clones) | No auto-repair: surfaces as `wait_for_boxes_ssh` failing with `diagnose_unreachable_box` output; re-clone the box (`redeploy-competition.py --mode rebuild`) or resume |
 | Domain Join fails "domain does not exist" right after promotion | dc01 still settling | Resume phase 7; the ADDS artifact skips re-promotion |
 | Phase 2 engine bootstrap `rc=100`, apt archives lock held | First-boot `unattended-upgrades` respawns apt | Handled: units masked, all three locks polled |
 | Fedora/Alpine `apt-get: command not found` ×5 | Debian-assuming prep | Handled: `command -v apt-get` guard |
 | Fedora member: golden plant `Bad authentication type`; httpd/named DOWN; agent flaps | Fedora cloud image: SSH password auth off, `named` localhost-only, httpd hangs on `ServerName` DNS | `base-fedora44-fix` template + `fix_services_on_boxes` (`ServerName localhost`, `listen-on { any; }`) |
-| `terraform destroy` hangs "Still destroying…" on a Windows DC | Graceful shutdown never completes with a dead agent | `kill -9 $(cat /var/run/qemu-server/<vmid>.pid)`; `qm stop` other DCs first |
+| Teardown hangs "Still destroying…" on a Windows DC | Graceful shutdown never completes with a dead agent | `kill -9 $(cat /var/run/qemu-server/<vmid>.pid)`; `qm stop` other DCs first |
 | Scoreboard frozen; `/api/engine` stale `last_round.StartTime`, zero `current_round_time` | Round loop doesn't auto-resume after an engine reboot | `verify-competition.py --fix-round-loop` |
 | Engine→box scoring times out through pfSense, or the clone won't boot | Raw-CIDR WAN rule silently dropped; host-side ZFS config write breaks the loader | `<network>lan</network>`; inject config guest-side only (§5) |
 | Event-side: opencode cycle deaths, scoreboard `Forbidden`, red-evidence scp hangs | Harness/agent side | [rehearsal-gates.md](rehearsal-gates.md) |
@@ -48,7 +48,7 @@ Dominant time sinks historically: environmental saturation and unvetted pin dens
 
 ## 2. Recovery toolbox
 
-- **Resume**: `.deploy_state.json` holds `last_phase`, teams, secrets. `--from-phase N` reloads it and reuses credentials; without state it's a hard error. `N > last_phase + 1` is refused; `--force-from-phase` overrides for a known-stale checkpoint. Phase 8 sub-steps are flag-gated, and `unpause_engine` isn't idempotent, so don't resume "to be safe" past a completed phase 8.
+- **Resume**: `estate-state.json` (or a legacy `.deploy_state.json`) holds `last_phase`, teams, secrets. `--from-phase N` reloads it and reuses credentials; without state it's a hard error. `N > last_phase + 1` is refused; `--force-from-phase` overrides for a known-stale checkpoint. Phase 8 sub-steps are flag-gated, and `unpause_engine` isn't idempotent, so don't resume "to be safe" past a completed phase 8.
 - **Markers**: `.postclone-swept`, `.nakon-domain-<team>-adds.json` (+ live join probes).
 - **Snapshots**: `tz-base` (end of phase 4; goldens pre-plant), `tz-ready` (end of phase 7). A failed snapshot is only a WARNING; check `list_snapshots` before relying on one. Modes: [usage-agents.md](usage-agents.md#redeploy-modes).
 - **Verify** is the pass/fail gate for any deploy claim. An unwaived SKIP fails the run; triage a gate that never ran before assuming the range is broken. `pytest tests/` covers helpers, not the pipeline ([tests.md](tests.md)).
@@ -60,9 +60,9 @@ Phases 1–2 are the expensive, dice-rolling part; 3–8 are mostly idempotent. 
 
 | Phase | Typical cause | Cheapest recovery | Don't |
 |---|---|---|---|
-| 2 | Terraform abort; "already exists" state mismatch; engine-template build | Mismatch: reclaim with `destroy-competition.py`, then deploy fresh. Clean TF death: fix and `--from-phase 2` | Hand-create/destroy TF-managed resources |
+| 2 | Creator abort; "already exists" refusal; engine-template build | Mismatch: reclaim with `destroy-competition.py`, then deploy fresh. Clean abort: fix and `--from-phase 2` | Hand-create/destroy the component's resources |
 | 3 | apt/compose timeout | `--from-phase 3` (idempotent) | Rebuild boxes for an engine timeout |
-| 4 | Strict abort on a bad row; golden build/convert; apply #2 race | Trim → `--from-phase 4` | `--from-phase 1`. A partially *converted* golden set is fatal (destroy and redeploy) |
+| 4 | Strict abort on a bad row; golden build/convert; phase-4 create race | Trim → `--from-phase 4` | `--from-phase 1`. A partially *converted* golden set is fatal (destroy and redeploy) |
 | 5 | Firewall bootstrap/cutover (no-op without `in_path`) | `--from-phase 5` | Skip it on a firewall lineup |
 | 6 | Pre-domain pass (lenient: usually a tally); DNS/auth; fix_services | Trim → `--from-phase 6`; rerun once for transients | Assume it re-clones (cloning is phase 4) |
 | 7 | Domains, final pass, beacons, `tz-ready` | Trim → `--from-phase 7`; check `.nakon-domain-*-adds.json` exist | Expect re-clone |
@@ -90,7 +90,7 @@ Preflight: attribute any deploy-path changes and note the commit as `<last-green
 python3 -u create-competition.py --competition <id> --teams 2 --yes 2>&1 | tee deploy.log
 ```
 
-On failure: capture the tail and phase; triage (§1); strict → §3; timeouts → known class or raise and record; environmental → wait/repair and resume at the same phase; a diverged Terraform state means destroy-then-deploy, since a `--from-phase 1` re-run refuses the leftovers too. **Max 2 repair-resume cycles**, then fix the roots and take one bounded attempt or a fresh deploy; a third consecutive resume is a loop.
+On failure: capture the tail and phase; triage (§1); strict → §3; timeouts → known class or raise and record; environmental → wait/repair and resume at the same phase; a leftover range means destroy-then-deploy, since a `--from-phase 1` re-run refuses the leftovers too. **Max 2 repair-resume cycles**, then fix the roots and take one bounded attempt or a fresh deploy; a third consecutive resume is a loop.
 
 After: `verify-competition.py` (no deploy is green without it); new failure class → row in §1; record trims; teardown unless the next step needs the range.
 
@@ -98,7 +98,7 @@ After: `verify-competition.py` (no deploy is green without it); new failure clas
 
 **Hosts.** Multiple non-clustered Proxmox hosts (plus at least one cluster), each with its own endpoint, node name, API token, template vmids, and datastore; never assume a vmid across them. Per-host values, token sources, and live occupancy: `infrastructure-status.md` (gitignored, repo root).
 
-- Env files hold unquoted JSON/pubkeys that break `source`; parse them (`shlex.quote` per `TF_VAR_*` line) and `unset TF_VAR_teams TF_VAR_boxes_per_team TF_VAR_scoring_vm_id` so stale range values don't override generated ones. Set `TF_VAR_template_vm_id` to a real engine base on the target host and a `--scoring-vmid` the host's live engine does not already hold.
+- Env files hold unquoted JSON/pubkeys that break `source`; parse them (`shlex.quote` per assignment) and `unset TF_VAR_scoring_vm_id` so a stale range value doesn't override the generated one — the environment beats `tezcatlipoca.toml`. Set `proxmox.template_vm_id` to a real engine base on the target host and a `--scoring-vmid` the host's live engine does not already hold.
 - A shared host is usually busy with co-tenant VMs: choose free vmid blocks (`200 + id*10 + box_index`) and identifiers deliberately against the live occupancy.
 - Cross-host template move: `vzdump` → transfer → `qmrestore`, keeping the vzdump filename pattern.
 - Before a host reboot: boot is ext4/LVM (a suspended ZFS data pool can't block it); confirm the bad pool isn't in `zdb -C`; snapshot the running set (`/root/running-before-reboot.txt`) since only `onboot=1` VMs auto-start.

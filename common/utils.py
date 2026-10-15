@@ -1,11 +1,7 @@
-import contextlib
-import fcntl
 import json
 import os
 import re
 import secrets as _secrets
-import signal
-import subprocess
 import sys
 import threading
 import time
@@ -13,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from common.comp_paths import comps_root
+from estate import config
 
 
 def local_python():
@@ -29,7 +26,7 @@ def local_python():
 
     `TEZ_PYTHON` overrides for a host where the dependencies live somewhere else.
     """
-    return os.environ.get("TEZ_PYTHON") or sys.executable
+    return config.active().knobs.python or sys.executable
 
 _USERNAME_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 _COMP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
@@ -141,7 +138,7 @@ def is_unmanaged(box):
 
 
 def is_in_path_fw(box):
-# True for an in-path firewall: unmanaged + `in_path` — terraform gives it two NICs
+# True for an in-path firewall: unmanaged + `in_path` — the create path gives it two NICs
 #     (WAN on vmbrW<id>, LAN on vmbr<id>), deploy phase 5 bootstraps its pfSense config and
 #     cuts the engine over so it routes the team subnet. Every unmanaged skip above applies
 #     to it too; this predicate only adds the network plumbing on top.
@@ -280,15 +277,19 @@ def env_summary():
 #     (main .env targets the DOWN .193; .150 lives in .env.cyberrange-20260930) and a
 #     wrong-variant copy used to be visible only if someone read the file. Printed in
 #     every entry script's banner so the first five lines betray the wrong estate.
-    def get(name, default="?"):
-        return (os.environ.get(name) or "").strip() or default
-    endpoint = get("TF_VAR_proxmox_endpoint")
-    node = get("TF_VAR_proxmox_node")
-    datastore = get("TF_VAR_datastore")
-    template = get("TF_VAR_template_vm_id")
-    mgmt = get("TF_VAR_engine_mgmt_ip", "default")
-    return (f"endpoint={endpoint} node={node} datastore={datastore} "
-            f"tpl={template} engine-mgmt={mgmt}")
+#
+#     The values are the RESOLVED config, not the ambient environment: multi-node
+#     placement and --engine-mgmt-ip move the process onto another host/address by
+#     activating the config (not os.environ), and the "Effective target" restate read
+#     the stale env — so an operator checking the banner saw the pre-placement host and
+#     the pre-flag mgmt IP (live 2026-10-15: --engine-mgmt-ip 10.0.0.244 ran while the
+#     banner said 10.0.0.252).
+    from estate import config
+    cfg = config.active()
+    mgmt = cfg.engine.mgmt_ip if cfg.is_set("engine.mgmt_ip") else ""
+    return (f"endpoint={cfg.proxmox.endpoint or '?'} node={cfg.proxmox.node or '?'} "
+            f"datastore={cfg.proxmox.datastore or '?'} "
+            f"tpl={cfg.proxmox.template_vm_id or '?'} engine-mgmt={mgmt or 'default'}")
 
 
 def pick_competition(competitions, label="saved", action="Select a competition"):
@@ -314,132 +315,3 @@ def pick_competition(competitions, label="saved", action="Select a competition")
         print(f"  Please enter a number between 1 and {len(competitions)}, or 'exit'.")
 
 
-def _terraform_init_lock_path(env=None):
-    """The lock file that serialises `terraform init` for one shared provider cache."""
-    cache = (env or os.environ).get("TF_PLUGIN_CACHE_DIR")
-    if not cache:
-        return None
-    try:
-        Path(cache).mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return None
-    return Path(cache) / ".init.lock"
-
-
-@contextlib.contextmanager
-def terraform_init_lock(env=None):
-    """Exclusive, host-wide lock around a `terraform init` that installs into the shared cache.
-
-    The provider cache lives OUTSIDE the checkout (`terraform_plugin_cache_dir`, e0dc52c) and
-    is shared by every run on the host. Two concurrent runs inited at the same moment, one
-    installed `terraform-provider-null` while the other had just exec'd it, and the loser died
-    with `open .../terraform-provider-null_v3.3.2_x5: text file busy` — a normal case, not a
-    corner: the dashboard deliberately allows concurrent runs (and the club's practice loop
-    runs two competitions side by side). init is fast and installs only what is missing, so
-    serialising it costs nothing. Blocking (not LOCK_NB): the wait is bounded by one install.
-    """
-    path = _terraform_init_lock_path(env)
-    if path is None:
-        yield
-        return
-    handle = open(path, "w")
-    try:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        yield
-    finally:
-        with contextlib.suppress(OSError):
-            fcntl.flock(handle, fcntl.LOCK_UN)
-        handle.close()
-
-
-def run_terraform(args, cwd, env=None, timeout=None, check=True, grace=60):
-# Run terraform in its own process group so a driver interruption can't orphan it.
-#
-#     A plain subprocess.run leaves `terraform apply` running as a grandchild holding the
-#     state lock and still mutating infra if the Python driver is killed (winad-testrun
-#     2026-09-25). Here SIGINT/SIGTERM/timeout/Ctrl-C all forward SIGINT to the group
-#     (terraform's graceful stop: finishes in-flight ops, releases the lock), escalating to
-#     SIGKILL after `grace` seconds. SIGKILL of the driver itself is not catchable.
-#     Returns CompletedProcess (returncode only); raises CalledProcessError when check.
-    cmd = ["terraform", *args]
-    # `init` is the only subcommand that writes the shared provider cache, and the lock must be
-    # held for the WHOLE install: terraform installs while the process runs, not at exec (the
-    # lock released at Popen time would serialise nothing).
-    is_init = bool(args) and args[0] == "init"
-    lock = (terraform_init_lock(env) if is_init else contextlib.nullcontext())
-    with lock:
-        return _terraform_run(cmd, args, cwd, env, timeout, check, grace, is_init)
-
-
-# How many times an `init` may be retried when the shared provider file is being written by
-# another terraform. The lock above serialises the runs that go through this function; it cannot
-# stop an OLDER engine (or a hand-run terraform) installing into the same cache, and that is the
-# case that killed two deploys on 2026-10-14: `open .../terraform-provider-null_v3.3.2_x5: text
-# file busy` while a second competition's run — cut from code that predates the lock — installed
-# the same providers. A bounded retry turns a fatal race into a few seconds.
-INIT_RACE_RETRIES = 3
-
-
-def _provider_install_race(text):
-    return "text file busy" in (text or "").lower()
-
-
-def _terraform_run(cmd, args, cwd, env, timeout, check, grace, is_init):
-    import tempfile
-    for attempt in range(1, (INIT_RACE_RETRIES if is_init else 1) + 1):
-        # init's output is captured to a FILE (not a pipe: nothing here drains a pipe while the
-        # child runs) so a racing failure can be diagnosed and replayed verbatim.
-        cap = tempfile.NamedTemporaryFile("w+", delete=False) if is_init else None
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, start_new_session=True,
-                                stdout=cap or None,
-                                stderr=subprocess.STDOUT if cap else None)
-
-        def _stop():
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(proc.pid, signal.SIGINT)
-            try:
-                proc.wait(timeout=grace)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-            # terraform reaps its own provider plugins before exiting; sweep any straggler
-            # left in the group so nothing keeps mutating infra behind a released lock.
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(proc.pid, signal.SIGKILL)
-
-        prev = None
-        if threading.current_thread() is threading.main_thread():
-            def _on_term(signum, frame):
-                raise KeyboardInterrupt(f"signal {signum}")
-            prev = signal.signal(signal.SIGTERM, _on_term)
-        try:
-            try:
-                rc = proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                _stop()
-                raise
-            except BaseException:
-                _stop()
-                raise
-        finally:
-            if prev is not None:
-                signal.signal(signal.SIGTERM, prev)
-        output = ""
-        if cap is not None:
-            cap.close()
-            output = Path(cap.name).read_text(errors="replace")
-            Path(cap.name).unlink(missing_ok=True)
-            sys.stdout.write(output)
-            sys.stdout.flush()
-        if rc == 0 or not (is_init and _provider_install_race(output)
-                           and attempt < INIT_RACE_RETRIES):
-            break
-        delay = 5 * attempt
-        print(f"  terraform init hit a shared-provider-cache write race "
-              f"(`text file busy`, attempt {attempt}/{INIT_RACE_RETRIES}) — another terraform is "
-              f"installing into {env.get('TF_PLUGIN_CACHE_DIR') if env else 'the provider cache'}; "
-              f"retrying in {delay}s")
-        time.sleep(delay)
-    if check and rc != 0:
-        raise subprocess.CalledProcessError(rc, cmd)
-    return subprocess.CompletedProcess(cmd, rc)

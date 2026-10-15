@@ -1,43 +1,43 @@
-"""placement.json (the authoritative per-competition placement record): read/write, accessors,
-process-wide activation, and the vmid slot math derived from a placement."""
+"""The authoritative per-competition placement record (the document's `placement` section):
+read/write, accessors, process-wide activation, and the vmid slot math derived from it."""
 
 import json
 import os
 
 from common.constants import GOLDEN_VMID_OFFSET, MAX_BOXES_PER_TEAM
-from multinode.nodes_config import (JUMP_MGMT_IP_BASE, JUMP_VMID_OFFSET, MAX_SATELLITES, NodeRecord,
+from multinode.nodes_config import (JUMP_MGMT_IP_BASE, JUMP_VMID_OFFSET, NodeRecord,
                           PLACEMENT_VERSION, apply_node_env, restore_node_env)
 from pathlib import Path
 
 
 
 def read_placement(comp_dir):
-    path = Path(comp_dir) / "placement.json"
-    if not path.exists():
-        return None
-    try:
-        placement = json.loads(path.read_text())
-    except (OSError, ValueError) as e:
-        raise SystemExit(f"  ERROR: {path} is unreadable/malformed ({str(e)[:120]}) — "
-                         "this competition was placed multi-node; the placement record "
-                         "is authoritative for every op against it")
+# The placement record: the document's section, or a legacy placement.json.
+    from estate import state
+    placement = state.EstateState.load(comp_dir).data.get("placement")
+    if not placement:
+        path = Path(comp_dir) / "placement.json"
+        if not path.exists():
+            return None
+        try:
+            placement = json.loads(path.read_text())
+        except (OSError, ValueError) as e:
+            raise SystemExit(f"  ERROR: {path} is unreadable/malformed ({str(e)[:120]}) — "
+                             "this competition was placed multi-node; the placement record "
+                             "is authoritative for every op against it")
     if placement.get("version") != PLACEMENT_VERSION:
-        raise SystemExit(f"  ERROR: {path} was written by placement schema v"
+        raise SystemExit(f"  ERROR: the placement record was written by schema v"
                          f"{placement.get('version')}; this code understands "
                          f"v{PLACEMENT_VERSION}. Tear the competition down and redeploy.")
     return placement
 
 
 def write_placement(comp_dir, placement):
-    path = Path(comp_dir) / "placement.json"
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(placement, indent=2))
-    os.replace(tmp, path)
-    try:
-        os.chmod(path, 0o644)  # token references only, never token values
-    except OSError:
-        pass
-    return path
+    from estate import state
+    document = state.open(comp_dir)
+    document.data["placement"] = placement
+    document.save()
+    return state.state_path(comp_dir)
 
 
 def record_of(placement, node_name):
@@ -71,16 +71,26 @@ def anchor_identifier(placement, node_name):
 
 
 def activate_placement(placement):
-# Make the whole process multi-node-aware: apply the engine node's env (terraform
-#     + every env-sourced read) and register the node->endpoint route table that routes
+# Make the whole process multi-node-aware: apply the engine node's config (every
+#     config-sourced read) and register the node->endpoint route table that routes
 #     node-scoped proxmox_api calls to the owning host. Returns the env restore dict.
     from infra.client import register_node_routes
     engine = engine_record(placement)
     restore = apply_node_env(engine)
     # Keyed by PVE host name ("proxmox"/"pve") — every node-scoped API path uses
     # /nodes/<pve-name>/..., not the nodes.json record name.
-    routes = {rec["node"]: (rec["endpoint"], os.environ[rec["token_env"]])
-              for rec in placement["nodes"].values()}
+    routes = {}
+    for rec in placement["nodes"].values():
+        token = os.environ.get(rec["token_env"])
+        if not token:
+            # A blank token used to surface as a 401 mid-preflight on the far node
+            # (scale8 soak 2026-10-02) with the token-env collision as its cause. Refuse
+            # here instead, naming the node and the variable.
+            raise SystemExit(
+                f"  ERROR: nodes.json node '{rec['name']}' points at token_env "
+                f"'{rec['token_env']}' but that env var is empty/absent — set the token in "
+                f"the environment (never in nodes.json, which is committed).")
+        routes[rec["node"]] = (rec["endpoint"], token)
     register_node_routes(routes)
     return restore
 
@@ -119,39 +129,13 @@ def golden_slot_span(engine_vmid, slot):
 
 
 
-def satellite_tfvars(placement):
-# Per-slot provider settings for terraform (tfvars.json): exactly MAX_SATELLITES
-#     entries; unused slots get dummies so the aliased providers never configure. Token
-#     values resolve from env at write time (tfvars.json is 0600).
-    out = []
-    records = {r.name: r for r in (NodeRecord.from_json(v)
-                                   for v in placement["nodes"].values())}
-    by_slot = {v: k for k, v in placement["slots"].items()}
-    for i in range(1, MAX_SATELLITES + 1):
-        name = by_slot.get(i)
-        if name:
-            rec = records[name]
-            token = os.environ.get(rec.token_env)
-            if not token:
-                raise SystemExit(f"  ERROR: token env '{rec.token_env}' for node "
-                                 f"'{name}' is empty — add it to .env")
-            out.append({"endpoint": rec.endpoint, "api_token": token, "node": rec.node,
-                        "datastore": rec.datastore})
-        else:
-            # bpg configures every DECLARED provider even with zero resources, so the
-            # dummy must pass token-format validation (it never connects).
-            out.append({"endpoint": f"https://sat{i}.invalid",
-                        "api_token": "root@pam!dummy=00000000-0000-0000-0000-000000000000",
-                        "node": "unused", "datastore": "unused"})
-    return out
-
 
 def satellite_routes_for(placement):
 # Engine static routes: one per TEAM SUBNET behind each satellite's jump (not
 #     just the golden anchor — every team box on the satellite is reached through the
 #     same jump, and the engine's default gw blackholes the un-routed subnets).
-#     Written into the engine by the team_nics provisioner (trigger-keyed, so changed
-#     routes re-apply on the next apply #1).
+#     Written into the engine by the estate component's engine-network setup, and
+#     re-asserted by a oneshot unit so an engine reboot mid-event keeps them.
     routes = []
     for sat in placement["satellites"]:
         anchor = sat.get("anchor_identifier")

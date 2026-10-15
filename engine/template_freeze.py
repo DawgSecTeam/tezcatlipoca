@@ -16,7 +16,6 @@ frozen templates — a post-freeze log line must never break a mid-event rebuild
 import hashlib
 import inspect
 import json
-import os
 import re
 import subprocess
 import time
@@ -30,8 +29,17 @@ HASHES_FILE = ".template-hashes.json"
 
 
 def load_template_hashes(comp_dir):
-# The durable per-competition hash record. Lives outside .deploy_state.json on
-#     purpose: a fresh deploy resets state, but template reuse must survive it.
+# The durable per-competition hash record, from the document's templates section.
+#
+#     A fresh deploy rewrites the deploy state but must NOT clear this: it is what template
+#     REUSE keys on, so a redeploy of a validated range clones the same artifacts. A range
+#     deployed before the record moved into the document still reads its legacy file.
+    from estate import state
+    templates = state.EstateState.load(comp_dir).section("templates")
+    record = {key: templates[key] for key in ("engine", "golden", "golden_planted", "updated")
+              if templates.get(key)}
+    if record:
+        return record
     path = Path(comp_dir) / HASHES_FILE
     if not path.exists():
         return {}
@@ -57,23 +65,28 @@ def golden_plant_checkpoints(comp_dir):
 
 
 def save_template_hashes(comp_dir, **entries):
-# Merge entries (engine={hash, inputs}, golden={box: {hash, inputs}}) into the
-#     record. Atomic rename; 0600 — golden inputs embed box_password.
-    path = Path(comp_dir) / HASHES_FILE
-    data = load_template_hashes(comp_dir)
+# Merge entries (engine={hash, inputs}, golden={box: {hash, inputs}}) into the record.
+    from estate import state
+    document = state.open(comp_dir)
+    templates = document.section("templates")
     for key, value in entries.items():
         if key in ("golden", "golden_planted"):
-            data.setdefault(key, {}).update(value)
+            templates.setdefault(key, {}).update(value)
         else:
-            data[key] = value
-    data["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    os.replace(tmp, path)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+            templates[key] = value
+    templates["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    document.save()
+
+
+def forget_template_hashes(comp_dir):
+# Drop the hash record: a destroyed template must not be reused by the next deploy.
+#     The freeze flag is not part of the record and stays.
+    from estate import state
+    document = state.open(comp_dir)
+    templates = document.section("templates")
+    for key in ("engine", "golden", "golden_planted", "updated"):
+        templates.pop(key, None)
+    document.save()
 
 
 def engine_template_vmid(engine_vmid):
@@ -151,24 +164,6 @@ def golden_hash_inputs(box, golden_machine, payload_hash, box_password, box_user
     )
 
 
-def tf_resource_block(tf_text, rtype, rname):
-# The text of one `resource "rtype" "rname" { ... }` block (brace-matched), or the
-#     whole file if it can't be found — hashing too much is safe, too little is not.
-    m = re.search(r'resource\s+"' + re.escape(rtype) + r'"\s+"' + re.escape(rname) + r'"\s*\{', tf_text)
-    if not m:
-        return tf_text
-    depth, i = 0, m.end() - 1
-    while i < len(tf_text):
-        if tf_text[i] == "{":
-            depth += 1
-        elif tf_text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return tf_text[m.start():i + 1]
-        i += 1
-    return tf_text
-
-
 def _clean_func():
     from engine.engine_identity_ops import clean_engine_for_template
     return clean_engine_for_template
@@ -178,21 +173,22 @@ def template_stamp_current(node, vmid, expected_hash):
 # True when the template ON THE NODE was built from exactly these inputs.
 #
 #     The node's `tezcatlipoca-m4 hash=` description is the durable record — it travels with
-#     the template. .template-hashes.json is per-comp-dir state, and the dashboard's workspace
+#     the template. The hash record is per-comp-dir state, and the dashboard's workspace
 #     seeder strips it when it seeds a fresh run workspace, so keying reuse on that file alone
 #     made every later run rebuild templates a --teams-only teardown had deliberately kept.
 #     Both the engine gate and the golden gates decide reuse through here.
     return bool(expected_hash) and stored_template_hash(node, vmid) == expected_hash
 
 
-def engine_hash_inputs(base_engine_vm_id, quotient_ref, main_tf_text, bootstrap_func):
+def engine_hash_inputs(base_engine_vm_id, quotient_ref, engine_shape, bootstrap_func):
 # Engine hash fields. config: base image vmid + the pinned Quotient ref (the hash
 #     must be computable BEFORE building, so the ref is config, not a post-boot capture —
 #     the realized HEAD is recorded for traceability only). code: the bootstrap script and
-#     main.tf (the engine's CPU/memory/disk shape lives there; a shape change is code-class
-#     drift, warn-only on a frozen competition — documented residual risk). OUT: engine
-#     mgmt IP, event.conf, postgres/redis passwords (all applied per-deploy; the clean step
-#     removes them from the template), node endpoint (state's endpoint guard covers it).
+#     the engine's shape — its CPU/memory/disk/NIC wiring, now estate.apply.create_engine
+#     (a shape change is code-class drift, warn-only on a frozen competition — documented
+#     residual risk). OUT: engine mgmt IP, event.conf, postgres/redis passwords (all applied
+#     per-deploy; the clean step removes them from the template), node endpoint (state's
+#     endpoint guard covers it).
     return _split_inputs(
         {
             "base_engine_vm_id": int(base_engine_vm_id),
@@ -201,10 +197,9 @@ def engine_hash_inputs(base_engine_vm_id, quotient_ref, main_tf_text, bootstrap_
         {
             # The clean step shapes the template disk as much as bootstrap does.
             "bootstrap_scoring_engine": code_hash(bootstrap_func, _clean_func()),
-            # Only the engine's own resource block shapes the engine disk; hashing the
-            # whole file rebuilt the engine template on any team-box edit.
-            "main.tf:scoring_engine": sha256_text(tf_resource_block(
-                main_tf_text, "proxmox_virtual_environment_vm", "scoring_engine")),
+            # Only the engine's own shape counts; hashing the whole deploy path rebuilt the
+            # engine template on any team-box edit.
+            "estate.apply:create_engine": code_hash(engine_shape),
         },
     )
 
@@ -234,8 +229,12 @@ def write_template_hash(node, vmid, hash_value, extra=""):
 # ---- frozen state ----
 
 def frozen_state(comp_dir):
-# The frozen record, or None. Never raises — a torn file reads as unfrozen only
-#     if unparseable, which the freeze/unfreeze tooling rewrites atomically.
+# The frozen record, or None. A range frozen before the record moved into the document
+#     still reads its legacy file.
+    from estate import state
+    frozen = state.EstateState.load(comp_dir).section("templates").get("frozen")
+    if frozen:
+        return frozen
     path = Path(comp_dir) / FROZEN_FILE
     if not path.exists():
         return None
@@ -305,7 +304,7 @@ def frozen_gate(comp_dir, stored_inputs, current_inputs, what):
 def frozen_code_drift(frozen):
 # Warn when the checkout no longer matches the code the freeze recorded.
 #
-#     `.frozen.json`'s `code` ({commit, dirty} — git_commit_info) was recorded by
+#     The freeze record's `code` ({commit, dirty} — git_commit_info) was written by
 #     verify --freeze but nothing read it: the drift gate keys on per-template input
 #     hashes and code-class input drift is warn-only, so a commit taken after --freeze
 #     ran the event on code the freeze never verified (known-issues "Freeze is not
@@ -313,7 +312,7 @@ def frozen_code_drift(frozen):
 #
 #     Deliberately NOT fatal: resuming a range after a docs/test commit is a normal
 #     flow, and the operator unfreezes explicitly when a change must invalidate the
-#     freeze. `frozen` is the parsed .frozen.json (template_freeze.frozen_state).
+#     freeze. `frozen` is the parsed freeze record (template_freeze.frozen_state).
     stored = (frozen or {}).get("code") or {}
     stored_commit = str(stored.get("commit") or "").strip()
     if not stored_commit or stored_commit == "unknown":
@@ -347,11 +346,11 @@ def code_path_dirty(porcelain_lines):
 # True when any `git status --porcelain` entry touches deploy-path code.
 #
 #     Only uncommitted *code* invalidates a freeze: the frozen record pins the commit the
-#     run was verified on, while generated/run state (comp JSON, placement.json, nodes.json,
-#     terraform state, .env backups) is written by the run itself and is never committed as
+#     run was verified on, while generated/run state (comp JSON, the placement record, nodes.json,
+#     the state document, .env backups) is written by the run itself and is never committed as
 #     part of the workflow. Treating every porcelain line as dirt made `--freeze` refuse in
 #     any post-deploy worktree (verified 2026-10-02 on the scale8 worktree: a modified
-#     placement.json, an untracked nodes.json and a .env backup), so the gate is scoped here.
+#     a recorded placement, an untracked nodes.json and a .env backup), so the gate is scoped here.
 #     Pure function of the porcelain lines — see verify-competition.do_freeze.
     for line in porcelain_lines or []:
         path = line[3:] if len(line) > 3 else line
@@ -364,7 +363,7 @@ def code_path_dirty(porcelain_lines):
 
 
 def git_commit_info():
-# The code frozen alongside the hashes, recorded in .frozen.json.
+# The code frozen alongside the hashes, recorded in the document's freeze record.
 #
 #     `dirty` means uncommitted *deploy-path code* (see code_path_dirty) — deliberately the
 #     same definition verify --freeze refuses on, so the recorded flag and the gate agree and

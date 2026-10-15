@@ -1,6 +1,5 @@
 """The per-competition engine template: find / build / destroy (API-driven, mirrors golden_ops)."""
 
-import os
 import time
 from pathlib import Path
 
@@ -15,6 +14,7 @@ from infra.lifecycle import start_vm, stop_vm
 from infra.ownership import destroy_vm_if_exists
 from engine.template_freeze import engine_template_vmid, write_template_hash
 from common.utils import record_degradation
+from estate import config
 
 
 def find_engine_template(node, engine_vmid):
@@ -32,7 +32,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                           postgres_password, redis_password, quotient_ref,
                           hash_value, inputs, run_id=None):
 # Build the per-competition engine template (API-driven, mirroring golden_ops —
-#     terraform only consumes the finished template as apply #1's clone source).
+#     the deploy only consumes the finished template as the phase-4 clone source).
 #
 #     Template point: after bootstrap (packages, Docker, Quotient images, apt-cacher-ng)
 #     and BEFORE any competition state exists. Before conversion: containers stopped and
@@ -78,12 +78,12 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     })["data"]
     wait_for_proxmox_task(node, upid)
 
-    mgmt_ip = os.environ.get("TF_VAR_engine_mgmt_ip", "")
+    mgmt_ip = config.active().engine.mgmt_ip
     cfg = {
         "net0": "virtio,bridge=vmbr0",
         "tags": tags,
         # cloud-init identity for the build VM's first boot (the base image bakes none;
-        # terraform's user_account normally supplies it for the deployed engine).
+        # the create path's cloud-init normally supplies it for the deployed engine).
         "ciuser": ctx.get("vm_username", "ubuntu"),
         "sshkeys": ctx.get("ssh_public_key_quoted", ""),
         "cores": 4,
@@ -93,7 +93,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
         # Portable-node mode (realm): boot the build VM on the PLANNED engine mgmt IP —
         # no leftover engine holds it (a fresh deploy refuses one), so it is free,
         # and the converted template's config then matches what apply #1 sets on clones.
-        gw = os.environ.get("TF_VAR_engine_mgmt_gw", "")
+        gw = config.active().engine.mgmt_gw
         cfg["ipconfig0"] = f"ip={mgmt_ip}/24" + (f",gw={gw}" if gw else "")
     # A PUT landing immediately after the clone task commits can 400 with a bare
     # "Parameter verification failed" while pvefs finishes publishing the new VM's
@@ -119,7 +119,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     start_vm(node, vmid)
     build_ip = mgmt_ip
     if not build_ip:
-        # Primary-mode: the base image networks itself (as the terraform engine does
+        # Primary-mode: the base image networks itself (as the deployed engine does
         # today); discover the address via the guest agent once the agent is up.
         from infra.guest_exec import wait_for_guest_agent
         wait_for_guest_agent(node, vmid, timeout=300)
@@ -182,7 +182,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 
 def _discover_vm_ipv4(node, vmid):
 # First non-loopback IPv4 the guest agent reports (primary-mode build VMs DHCP on
-#     vmbr0, exactly as the terraform engine does). Never raises.
+#     vmbr0, exactly as the deployed engine does). Never raises.
     try:
         ifaces = proxmox_api(
             "GET", f"/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"

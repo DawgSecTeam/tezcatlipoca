@@ -1,7 +1,7 @@
 """Phases 1 (multi-node walk), 7 and the finish/connect steps, driven with fakes.
 
 These branches ran only on a live deploy (phase 7's final pass and beacon plant, phase 1's
-satellite bridge reclaim, connect_terraform, the "is live" report), so a TypeError or a
+satellite bridge reclaim, connect_estate, the "is live" report), so a TypeError or a
 renamed attribute introduced by the module split would have surfaced mid-event."""
 
 import contextlib
@@ -105,12 +105,12 @@ class Tail(unittest.TestCase):
             final.phase7_domains_and_final(ctx)
         d.assert_not_called()
 
-    def test_connect_terraform_and_finish(self):
+    def test_connect_estate_and_finish(self):
         ctx = _ctx(self.comp)
-        tf = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.9"}
-        with patch.object(finish, "read_terraform_ctx", return_value=tf), \
-                patch.dict(os.environ, {"TF_VAR_vm_username": "sysadmin"}):
-            finish.connect_terraform(ctx)
+        tf = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.9",
+              "vm_username": "sysadmin"}
+        with patch.object(finish, "engine_context", return_value=tf):
+            finish.connect_estate(ctx)
         self.assertEqual((ctx.scoring_ip, ctx.scoring_user, ctx.ssh_key),
                          ("10.0.0.9", "sysadmin", Path("/k")))
         buf = io.StringIO()

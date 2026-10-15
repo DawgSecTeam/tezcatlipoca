@@ -4,11 +4,11 @@ Two layers, one module:
 
   - the driver-state refusals (formerly deploy_lib/gates.py): the deploy lock, resume gates
     (missing state / wrong pipeline version / skipped phases / resume-loop / ghost checkpoints),
-    the stale-terraform-state refusal — collected here and called from exactly two spots in
+    the stale-estate refusal — collected here and called from exactly two spots in
     deploy_lib/prepare.py, in a fixed order:
       1. check_resume_gates   — right after the prior state is read.
       2. run_range_gates      — after placement, BEFORE any secret is minted or tfvars written:
-                                the stale-terraform-state refusal, then the capacity /
+                                the stale-estate refusal, then the capacity /
                                 collision / template preflight (infra.collisions / .resources).
   - the pre-Proxmox-mutation preflight (formerly the preflight/ package): run_preflight(plan)
     is the single pre-mutation entry point, in this order:
@@ -31,7 +31,6 @@ where documented."""
 
 import fcntl
 import json
-import os
 import subprocess
 import sys
 
@@ -100,33 +99,32 @@ def check_resume_gates(comp_dir, state_path, previous_state, from_phase, force=F
     guard_resume_existence(from_phase, comp_dir, previous_state, force=force)
 
 
-def check_stale_terraform_state(comp_dir, comp_name, previous_state, engine_vmid, from_phase):
-    """Refuse to point terraform at a different host / engine vmid than its saved state.
+def check_stale_estate_state(comp_dir, comp_name, previous_state, engine_vmid, from_phase):
+    """Refuse to point this deploy at a host the competition's state did not come from.
 
-    The per-competition terraform workdir carries state from wherever the LAST deploy ran.
-    Pointing terraform at a different host (or engine vmid) makes it "reconcile" that state
-    against the new endpoint and destroy whatever now sits at the old vmid there
-    (2026-09-24: a realm run deleted that host's existing 1090 engine because a dead primary
-    attempt left 1090 in this comp's state). Refuse unless the recorded host and vmid agree.
-    Runs before the tfvars are written and before any secret is minted, so a refusal
-    leaves no half-written state behind."""
-    from common.terraform_workdir import terraform_dir
-    tf_dir = terraform_dir(comp_dir)
-    if from_phase <= 2 and (tf_dir / "terraform.tfstate").exists() and previous_state:
-        cur_endpoint = os.environ.get("TF_VAR_proxmox_endpoint", "").rstrip("/")
-        prev_endpoint = (previous_state.get("deployed_endpoint") or "").rstrip("/")
-        prev_engine = previous_state.get("scoring_vm_id")
-        host_mismatch = bool(prev_endpoint) and prev_endpoint != cur_endpoint
-        vmid_mismatch = prev_engine is not None and int(prev_engine) != engine_vmid
-        if host_mismatch or vmid_mismatch:
-            raise SystemExit(
-                f"  ERROR: {tf_dir}/terraform.tfstate holds state from a deploy against "
-                f"{prev_endpoint or 'another host'} (engine vmid {prev_engine}); this run "
-                f"targets {cur_endpoint} (engine vmid {engine_vmid}). Terraform would "
-                f"reconcile the stale state and destroy whatever sits at those resources "
-                f"on the new host. Destroy this competition first: python3 "
-                f"destroy-competition.py --competition {comp_name} --yes"
-            )
+    The document records the host and engine vmid the LAST deploy used. Targeting another
+    host would aim the teardown's ownership proof at VMs that are not there and leave the
+    real range standing (2026-09-24: a realm run deleted that host's existing 1090 engine
+    because a dead primary attempt left 1090 in this comp's state). Runs before any secret
+    is minted, so a refusal leaves no half-written state behind."""
+    from estate import config as estate_config
+    if from_phase > 2 or not previous_state:
+        return
+    cur_endpoint = estate_config.active().proxmox.endpoint.rstrip("/")
+    prev_endpoint = (previous_state.get("deployed_endpoint")
+                     or previous_state.get("endpoint") or "").rstrip("/")
+    prev_engine = previous_state.get("scoring_vm_id")
+    host_mismatch = bool(prev_endpoint) and prev_endpoint != cur_endpoint
+    vmid_mismatch = prev_engine is not None and int(prev_engine) != engine_vmid
+    if host_mismatch or vmid_mismatch:
+        raise SystemExit(
+            f"  ERROR: {comp_name}'s state was written by a deploy against "
+            f"{prev_endpoint or 'another host'} (engine vmid {prev_engine}); this run "
+            f"targets {cur_endpoint} (engine vmid {engine_vmid}). Its recorded VMs are not "
+            f"on this host, so nothing here could own or reclaim them. Destroy this "
+            f"competition from the workspace that deployed it: python3 "
+            f"destroy-competition.py --competition {comp_name} --yes"
+        )
 
 
 def run_capacity_preflight(ctx, comp_dir, from_phase):
@@ -156,11 +154,11 @@ def run_capacity_preflight(ctx, comp_dir, from_phase):
 def run_range_gates(ctx, comp_dir, from_phase):
     """Every refusal that needs the resolved placement, before any credential is minted.
 
-    Order: the cheap local stale-terraform-state check first, then the capacity /
+    Order: the cheap local stale-estate check first, then the capacity /
     collision / template preflight (which queries Proxmox). Both must run before the fresh
     secret mint — see prepare()'s order note on credential-desync corpses."""
-    check_stale_terraform_state(comp_dir, ctx.comp_name, ctx.previous_state,
-                                ctx.engine_vmid, from_phase)
+    check_stale_estate_state(comp_dir, ctx.comp_name, ctx.previous_state,
+                             ctx.engine_vmid, from_phase)
     run_capacity_preflight(ctx, comp_dir, from_phase)
 
 
@@ -198,8 +196,8 @@ def _artifact_probes(comp_dir):
     offline, and the single place a caller could inject a cheaper probe. Resolved at
     call time so a patch lands."""
     from infra.client import live_vmids
-    from common.terraform_workdir import team_vmids_from_state
-    return {"vmids_from_state": lambda: team_vmids_from_state(comp_dir),
+    from estate.state import team_vmids
+    return {"vmids_from_state": lambda: team_vmids(comp_dir),
             "vm_exists": live_vmids}
 
 
@@ -220,8 +218,8 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
     what this removes is the SILENT skip.
 
     Checks, by the phase whose output is being trusted:
-      > 2  the engine VM exists (phase 2's terraform apply #1)
-      > 4  every team box in terraform state exists as a live VM (apply #2)
+      > 2  the engine VM exists (created in phase 2)
+      > 4  every team box in the recorded inventory exists as a live VM (phase 4)
     """
     if force:
         return
@@ -250,7 +248,7 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
         raise SystemExit(
             f"  ERROR: --from-phase {from_phase} skips the phase that creates the scoring "
             f"engine, but vmid {engine_vmid} does not exist.\n"
-            f"        Every later phase targets it (scoring setup, terraform context, "
+            f"        Every later phase targets it (scoring setup, engine context, "
             f"box images).\n"
             f"        Re-run with --from-phase 2 to recreate it."
         )
@@ -271,7 +269,7 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
 
     missing = [v for v in vmids if v not in live]
     if not vmids or missing:
-        found = ("no team boxes at all are recorded in terraform state" if not vmids else
+        found = ("no team boxes at all are recorded in the state document" if not vmids else
                  f"{len(missing)} of {len(vmids)} recorded team box(es) are gone: "
                  f"{', '.join(str(v) for v in missing[:8])}"
                  f"{' …' if len(missing) > 8 else ''}")

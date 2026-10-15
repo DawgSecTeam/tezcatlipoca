@@ -139,7 +139,7 @@ class OwnershipTotality(unittest.TestCase):
                 machinery.load_ownership(comp)
             msg = str(ctx.exception)
             self.assertIn("no run id", msg)
-            self.assertIn(".deploy_state.json", msg)   # saw
+            self.assertIn("estate-state.json", msg)    # saw
             self.assertIn("remove it by hand", msg)    # remedy
             self.assertTrue(ctx.exception.remedy)      # the vocabulary is complete
 
@@ -155,28 +155,6 @@ class OwnershipTotality(unittest.TestCase):
             self.assertIn("https://old:8006", msg)     # saw
             self.assertIn("https://new:8006", msg)     # expected
             self.assertIn("TF_VAR_", msg)              # remedy
-
-    def test_deployed_comp_missing_terraform_state_is_refused(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            comp = Path(tmp)
-            (comp / ".deploy_state.json").write_text(json.dumps(
-                {"run_id": RUN, "last_phase": 5}))
-            with self.assertRaises(Refusal) as ctx:
-                machinery.require_terraform_state(comp, {"last_phase": 5, "run_id": RUN})
-            msg = str(ctx.exception)
-            self.assertIn("terraform.tfstate", msg)
-            self.assertIn("Nothing was destroyed", msg)
-
-    def test_state_present_passes_the_tfstate_gate(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            comp = Path(tmp)
-            (comp / "terraform").mkdir()
-            (comp / "terraform" / "terraform.tfstate").write_text("{}")
-            machinery.require_terraform_state(comp, {"last_phase": 7, "run_id": RUN})
-
-    def test_never_applied_comp_passes_the_tfstate_gate(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            machinery.require_terraform_state(Path(tmp), {"last_phase": 1, "run_id": RUN})
 
     def test_sweep_ignores_a_clone_marker_only_vm(self):
     # The leftover sweep matches TAGS only; an interrupted clone (marker, no
@@ -246,12 +224,14 @@ class MainSequence(unittest.TestCase):
         self.log = []
         self._cwd = os.getcwd()
 
-    def _main(self, argv, *, collect=None, red=None, tf=None, frozen=None):
+    def _main(self, argv, *, collect=None, red=None, estate=None, frozen=None):
         calls = self.log
         collect = collect if collect is not None else self._collecting_fake()
         red = red or (lambda *a, **k: calls.append("red_destroy") or
                       subprocess.CompletedProcess(["x"], 0, "", ""))
-        tf = tf if tf is not None else (lambda *a, **k: calls.append("terraform_destroy") or True)
+        estate = estate if estate is not None else (
+            lambda *a, **k: calls.append("estate_destroy") or
+            {"destroyed": [], "skipped": [], "refused": []})
         argv = ["destroy-competition.py", "--competition", "demo"] + argv
         patches = [
             patch.object(destroy, "load_destroyable_competitions", return_value=["demo"]),
@@ -259,7 +239,9 @@ class MainSequence(unittest.TestCase):
             patch.object(trunner, "frozen_state", return_value=frozen or {}),
             patch.object(machinery, "pre_stop_windows_boxes",
                          side_effect=lambda *a, **k: calls.append("pre_stop_windows_boxes")),
-            patch.object(machinery, "destroy_with_recovery", side_effect=tf),
+            patch.object(machinery, "sweep_tagged_leftovers"),
+            patch.object(machinery, "teardown_templates", return_value=[]),
+            patch("estate.destroy.destroy_estate", side_effect=estate),
             patch.object(artifacts_ops, "collect_for_teardown", side_effect=collect),
             patch.object(red_plant_ops, "destroy_red", side_effect=red),
             patch.object(infra_client, "proxmox_api", FakePVE()),
@@ -290,28 +272,28 @@ class MainSequence(unittest.TestCase):
             return {}
         return fake
 
-    def test_i3_evidence_then_red_then_stops_then_terraform(self):
+    def test_i3_evidence_then_red_then_stops_then_estate(self):
         calls = self._main(["--yes"])
         self.assertEqual(calls, ["collect", "red_destroy", "pre_stop_windows_boxes",
-                                 "terraform_destroy"])
+                                 "estate_destroy"])
 
     def test_i3_red_destroy_failure_warns_but_never_blocks_the_range(self):
         calls = self._main(["--yes"], red=lambda *a, **k: self.log.append("red_destroy") or
                            subprocess.CompletedProcess(["x"], 1, "", "identity refused"))
-        self.assertIn("terraform_destroy", calls)
+        self.assertIn("estate_destroy", calls)
 
     def test_i3_collection_crash_never_blocks(self):
         def boom(*a, **k):
             self.log.append("collect")
             raise RuntimeError("estate on fire")
 
-        # The destroy is NOT blocked (terraform runs) — but the exit contract is
+        # The destroy is NOT blocked (the estate destroy runs) — but the exit contract is
         # honest: a crashed collection means the evidence was not archived, so
         # the verdict is nonzero and names exactly that.
         with self.assertRaises(SystemExit) as ctx:
-            calls = self._main(["--yes"], collect=boom)
+            self._main(["--yes"], collect=boom)
         self.assertTrue(ctx.exception.code)
-        self.assertIn("terraform_destroy", self.log)
+        self.assertIn("estate_destroy", self.log)
         self.assertIn("evidence was not archived", self.out)
 
     def test_i4_rerun_needs_no_flag(self):
@@ -321,10 +303,13 @@ class MainSequence(unittest.TestCase):
         second = self._main(["--yes"])
         self.assertEqual(first, second)
 
-    def test_i7_terraform_exhaustion_reports_survivors_and_exits_nonzero(self):
+    def test_i7_estate_refusal_reports_survivors_and_exits_nonzero(self):
+        refused = [{"entry": {"kind": "team_box", "node": "n", "name": "team1-web01",
+                              "vmid": 101, "bridge": None},
+                    "reason": "vmid 101 refused — outside this deploy's ownership set"}]
         with self.assertRaises(SystemExit) as ctx:
-            self._main(["--yes"],
-                       tf=lambda *a, **k: self.log.append("terraform_destroy") or False)
+            self._main(["--yes"], estate=lambda *a, **k: self.log.append("estate_destroy") or
+                       {"destroyed": [], "skipped": [], "refused": refused})
         # sys.exit(str) means a failed (nonzero) teardown
         self.assertTrue(ctx.exception.code)
         self.assertIn("did not complete", self.out)
@@ -359,16 +344,6 @@ class RefusalVocabulary(unittest.TestCase):
         self.assertTrue(ctx.exception.expected)
         self.assertIn("clone marker", ctx.exception.detail)  # the one thing that would change its mind
         self.assertTrue(ctx.exception.as_line().startswith("TEARDOWN-REFUSAL "))
-
-    def test_missing_state_names_reconstruction(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            comp = Path(tmp)
-            (comp / ".deploy_state.json").write_text(json.dumps(
-                {"run_id": RUN, "last_phase": 6}))
-            with self.assertRaises(Refusal) as ctx:
-                machinery.require_terraform_state(comp, {"last_phase": 6, "run_id": RUN})
-            self.assertIn("terraform import", str(ctx.exception))   # remedy
-            self.assertTrue(ctx.exception.remedy)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ MAX_TEAMS = 154
 SCORING_ENGINE_VMID = 1000
 
 # Engine mgmt IP, static by default (deploy.py): the DHCP engine rebooted onto a
-# different address mid-event while terraform's saved output stayed stale
+# different address mid-event while the recorded one stayed stale
 # (shakedown-5x4: .221→.243→.233). High in the lab's 10.0.0.0/24 mgmt range, clear
 # of the red01 slots (.198/.199/.244) and the observed engine drift (.22x/.23x).
 # The preflight sweeps running guests' agent-reported IPs to refuse a collision.

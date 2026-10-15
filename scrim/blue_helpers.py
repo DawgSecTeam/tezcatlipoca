@@ -43,6 +43,8 @@ mv "$tmp" "$JAR"
 SCORE_PY = '''#!/usr/bin/env python3
 """Print your team's live scoreboard status as plain text. Env from scrim.env (exported)."""
 import json
+import os
+import subprocess
 import urllib.request
 
 engine = os.environ["ENGINE_IP"]

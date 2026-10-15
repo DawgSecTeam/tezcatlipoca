@@ -2,8 +2,8 @@
 firewall (pfSense or VyOS — the probes here are OS-agnostic).
 
 Phase 5 proves this once (firewall_ops.verify_in_path). This gate re-proves it on every verify so
-drift is caught — chiefly an out-of-band `terraform apply` that rewrites the pre-cutover engine
-netplan and puts the team gateway address back on the engine (docs/known-issues.md)."""
+drift is caught — chiefly an out-of-band reconfiguration that puts the team gateway address
+back on the engine."""
 
 import json
 import subprocess

@@ -5,8 +5,10 @@ import re
 import time
 from pathlib import Path
 
-from common.utils import local_python  # noqa: F401  (re-exported for scrim/*)
+from common.utils import local_python  # re-exported for scrim/* — see __all__
 from config.config_ops import write_text_atomic
+from estate import config
+__all__ = ["local_python"]
 REPO = Path(__file__).resolve().parent.parent
 BAD_AUTO = REPO.parent / "bad-auto"
 SSH_OPTS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
@@ -23,7 +25,7 @@ SSH_NOCHECK = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/
 # server at the 20261013d run (qwen3.8-flash-next, ~3 min per 10-token reply) every
 # 600 s cycle timed out and blue never engaged at all. Raising the budget trades
 # cycle count for cycles that can actually finish.
-CYCLE_TIMEOUT = int(os.environ.get("TEZ_CYCLE_TIMEOUT") or 600)
+CYCLE_TIMEOUT = int(config.active().knobs.cycle_timeout or 600)
 CYCLE_TARGET_PERIOD = 480
 # Board samples every minute: at 300 s a blue restoring in 2-5 min (live run3)
 # left every DOWN->UP transition between samples — the scoreboard never showed a
@@ -66,7 +68,7 @@ def now_iso(ts=None):
 
 def vm_username():
     """The provisioning user every ssh path to the engine/boxes/red01 logs in as."""
-    return os.environ.get("TF_VAR_vm_username", "sysadmin")
+    return config.active().engine.username
 
 
 def is_local_endpoint(base_url):
@@ -84,8 +86,20 @@ def is_local_endpoint(base_url):
 
 
 def read_comp_json(comp, name):
-    """Parse `<comp>/<name>` (boxes.json, box_services.json, .deploy_state.json, ...)."""
+    """Parse `<comp>/<name>` (boxes.json, box_services.json, estate-state.json, ...)."""
     return json.loads((Path(comp) / name).read_text())
+
+
+def read_state(comp):
+    """The competition's flat state view, through the engine's own reader.
+
+    v0.3.0 writes ONE state document and stopped writing `.deploy_state.json`, so the scrim
+    side's direct reads of that file died with FileNotFoundError on the first estate range
+    (live 2026-10-15, run-75347fca, scrim/cli -> blue_agent.stage_blues). `estate.state`
+    still falls back to the legacy file read-only, so a pre-v0.3 range keeps working.
+    """
+    from estate import state as estate_state
+    return estate_state.load_flat(comp)
 
 
 def is_windows_box(box):
@@ -115,18 +129,14 @@ def box_ssh_base(creds, connect_timeout=None):
 def ssh_key_path():
     """The ssh key this RANGE was built with: the configured absolute path when there is one.
 
-    `TF_VAR_ssh_private_key_path` is what the deploy itself resolved (deploy_lib/tfinputs.py) and
+    The configured key path is what the deploy itself resolved (estate/config.py) and
     what a run host configures (e.g. /home/hna/tez-proxmox). The `<engine>/proxmox` fallback is
     only right for a manual checkout, where the key really sits in the tree: under a central run
     the engine is a per-run WORKTREE with no key in it, so anything that hardcodes a checkout path
     reads a file that is not there (2026-10-14: red staging resolved a key against a sibling
     checkout and died AFTER the range was already built).
     """
-    raw = (os.environ.get("TF_VAR_ssh_private_key_path") or "").strip()
-    if raw:
-        candidate = Path(raw).expanduser()
-        if candidate.is_absolute():
-            return str(candidate)
-        # Same shape the deploy uses for a relative value: relative to the terraform workdir.
-        return str((REPO / "terraform" / candidate).resolve())
-    return str((REPO / "proxmox").resolve())
+    raw = (config.active().ssh.private_key_path or "").strip()
+    if not raw:
+        return str((REPO / "proxmox").resolve())
+    return str(config.ssh_key_path())

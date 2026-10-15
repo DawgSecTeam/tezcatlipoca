@@ -4,11 +4,11 @@ Single-node is simply a plan with ONE share (the whole cluster view, slot 0); mu
 share per hosting node, each scoped to exactly what that node will hold. All checking code is
 parametrized by the share - there is no separate single-node implementation."""
 
-import os
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from infra.client import proxmox_api
+from estate import config
 
 
 @dataclass
@@ -89,11 +89,11 @@ def single_node_plan(comp_dir, boxes, num_teams, teams, engine_vmid, check_free,
                      engine_mgmt_ip, our_run_tag):
     from red import badauto_config_ops
     share = NodeShare(
-        name="", node=os.environ["TF_VAR_proxmox_node"], multi=False, slot=0, is_engine=True,
+        name="", node=config.active().proxmox.node, multi=False, slot=0, is_engine=True,
         teams=teams or {}, num_teams=num_teams,
-        datastore=os.environ.get("TF_VAR_datastore", "local-lvm"),
+        datastore=config.active().proxmox.datastore,
         fetch_vms=_fetch_cluster_vms_single,
-        engine_base=lambda: int(os.environ["TF_VAR_template_vm_id"]),
+        engine_base=lambda: int(config.require("proxmox.template_vm_id")),
         check_collisions=bool(check_free and teams))
     return PreflightPlan(comp_dir, boxes, engine_vmid, [share], our_run_tag=our_run_tag,
                          engine_mgmt_ip=engine_mgmt_ip,
@@ -137,7 +137,7 @@ def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_i
             needs_jump_template=bool(node_teams) and slot > 0,
             jump_template=getattr(rec, "jump_template", ""),
             # resume (check_free off): this competition's own leftovers are
-            # terraform's to reconcile; a fresh deploy refuses them instead
+            # the create path's to reconcile; a fresh deploy refuses them instead
             check_collisions=bool(check_free and not unused_satellite),
             check_headroom=bool(check_free and not unused_satellite)))
     return PreflightPlan(comp_dir, boxes, engine_vmid, shares, our_run_tag=our_run_tag,

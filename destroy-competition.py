@@ -71,7 +71,7 @@ def main():
                              "impossible")
     parser.add_argument("--keep-red", action="store_true", dest="keep_red",
                         help="do not destroy bad-auto's red01 (default: destroy it — it is "
-                             "not terraform-managed and survives the range otherwise)")
+                             "not estate-managed and survives the range otherwise)")
     parser.add_argument("--artifacts-timeout", type=int, default=45, metavar="SEC",
                         dest="artifacts_timeout",
                         help="Per-file timeout for the artifact pull (default 45s). The pull "
@@ -166,9 +166,9 @@ def main():
     print(f"  Mode        : {mode}"
           + ("  [FROZEN — end-of-competition flag present]" if frozen and args.end_of_competition else ""))
     print()
-    print("  This will run: terraform destroy -parallelism=4 -auto-approve, then the")
-    print("  template teardown (goldens are the linked clones' base disks — clones")
-    print("  die first).")
+    print("  This will destroy this run's recorded VMs in tier order — team boxes and")
+    print("  jumps, then the golden set, then the engine template and engine, then the")
+    print("  bridges (goldens are the linked clones' base disks, so the clones go first).")
 
     def confirm(comp_name):
         if args.yes:

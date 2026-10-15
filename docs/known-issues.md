@@ -16,14 +16,17 @@ is attribution, not a false destroy — but `verify_clean` reports every other d
 as "same competition, DIFFERENT run" (live 2026-10-15: run-44a106d2, tearing down tiny-linux,
 listed scrim-one's whole range that way), and the `comp_name` half of the red01 reclaim guard
 cannot tell two dashboard competitions apart — only its companions (the no-red skip gate,
-bad-auto's instance id) prevented the 2026-10-15 kill. **Next action**: derive the comp tag from
-the competition identity the Compfile already carries (`name`), not from the directory, landed with
-a migration that still accepts the legacy `comp-comp` tag for already-deployed VMs — changing the
-derivation alone makes every existing and live range's teardown refuse.
-
-### `terraform apply` on a live firewall range rewrites the pre-cutover engine netplan
-
-Accepted caveat. `null_resource.team_nics` writes the pre-cutover netplan (`192.168.<id>.1/24` on team NICs); phase 5's cutover moves the gateway to the firewalls. Trigger-gated, but a re-apply on a live firewall range whose triggers changed re-adds `.1` under the firewalls' feet. Fix: `create-competition.py --competition <id> --from-phase 5 --yes` afterward (idempotent). `verify-competition.py`'s `firewall_in_path` gate detects the drift. Owning the cutover inside terraform needs the firewall config state round-tripped into tfvars — deferred until needed.
+bad-auto's instance id) prevented the 2026-10-15 kill. The deploy's template-keep branch reads the
+same tag: `infra/collisions.py` compares `comp-<workspace dir name>`, so with the dashboard's
+`<run>/comp` workspace a scrim-one-light deploy reported ANOTHER competition's kept golden as its
+own ("golden vmid (slot 0) #2251 holds this competition's template — kept for reuse") and phase 4
+retagged and reclaimed it before rebuilding the box it actually needed (run-a87e0d88, 2026-10-15).
+The hash gate kept the RANGE correct, so this is still attribution rather than a wrong build — but
+the identity claim is false and another competition's validated template was destroyed by it.
+**Next action**: derive the comp tag from the competition identity the Compfile already carries
+(`name`), not from the directory, landed with a migration that still accepts the legacy `comp-comp`
+tag for already-deployed VMs — changing the derivation alone makes every existing and live range's
+teardown refuse.
 
 ### The template builders reach their scratch VM through node shell
 
@@ -107,9 +110,13 @@ of one lock) — and record the decision next to the gate table in `docs/rehears
 Live 2026-10-15 (run-1c44733b, scrim-one, 2 teams): `misconfig : FAIL  misconfig did not survive
 cloning everywhere` at the deploy-time verify AND at the pre-T0 re-verify, while `plant_coverage`
 PASSed all 12 machines and every other gate came back green. Two independent runs have now shown
-the same shape, so this is not flake. **Next action**: root-cause it in the gate, with a regression
-test — a comp whose pins are provably planted on the goldens and confirmed on the clones must pass.
-This is the one deploy gate whose failure means the scored range is not what the packet promises.
+the same shape, so this is not flake. A third run names the config: run-a87e0d88 (scrim-one-light,
+2 teams) reports `FAIL  'bad-perms-userConfig' absent on every team (['web01-team152',
+'web01-team153']) — the config didn't plant on any clone` while `'writable-sudoers' present on all
+2 team(s)` — so one expected misconfig never reaches the clones at all, and it is not every
+misconfig. **Next action**: root-cause it in the gate, with a regression test — a comp whose pins
+are provably planted on the goldens and confirmed on the clones must pass. This is the one deploy
+gate whose failure means the scored range is not what the packet promises.
 
 ### The deploy-time `verify` reports `pins_registered` FAIL for a range whose pre-T0 verify PASSes it
 
@@ -120,6 +127,21 @@ read as a scoring verdict by anyone (or any gate) that looks at the deploy stage
 either run that check only after the staging it depends on, or label the deploy-time verify
 `interim` in the run log and in the report's verify line — do not leave two contradictory results
 for the same gate in one run's evidence.
+
+### The tailnet→team SNAT rule flaps, and a container restart is what drops it
+
+Live 2026-10-15 (run-9fd68d14, scrim-one-light canary): `remote_access : FAIL  SNAT lines missing
+from the engine nat table` on a range whose identical probe PASSed minutes before and again
+after. Sampling the engine's nat table every 10 s showed the rule present for nine samples, absent
+for three, present again. The engine journal names the cause: `tailscaled: LinkChange: major,
+rebinding: ... diff: ips divisor: [...] rebind-reason=[ips-changed]` — the Quotient container's
+interface gaining an address makes tailscaled re-apply its ruleset, which takes the POSTROUTING
+chain with it; `range-remote-access.timer` only re-adds the rule every 30 s, so tailnet→team
+traffic is genuinely broken inside each window. The verifier now samples past one re-assert cycle
+(`e4e17a6`), so the gate no longer calls a self-healing range dead, but the flap itself is open.
+**Next action**: re-assert on the rebind instead of on a timer (a unit triggered by the interface
+change, or `tailscale set` completion) or move the rules where tailscaled's ruleset cannot reach
+them, then prove it by holding a tailnet→team flow across a container restart.
 
 ### red01's liveness is probed on the same path its traffic uses, so a node network bounce loses red silently
 
@@ -135,11 +157,23 @@ and running `ifreload -a`) brackets the exact minute, and is the leading explana
 a guest-agent ping, or a heartbeat the box itself pushes to the operator) and make the run log say
 which one answered; run at most one range per node while an event is live.
 
+### The scoreboard inject detail page renders markdown literally and prints the title twice
+
+Upstream `dbaseqp/Quotient` bug in `static/templates/pages/injects.html`: the detail pane sets
+`descPara.textContent = inject.Description`, so every inject's markdown description (`#`, `##`,
+`**bold**`, lists) shows as one unformatted paragraph, and both `pane__from` and `pane__subject`
+get `inject.Title`, so the title prints twice. The `marked` library is already loaded on every
+page and `red.html` already renders markdown with it — the fix is two lines. Applied in place on
+2026-10-15 to the only live engine (patched `/opt/quotient/static/templates/pages/injects.html`
+and restarted `quotient_server`; the container mounts `./static` from the checkout and templates
+are parsed at startup, so no rebuild is involved). The canonical copy is local Quotient main
+`ed539df` — unpushable, this host lacks write access to `dbaseqp/Quotient`.
+**Next action**: get the two-line fix upstream (push access to `dbaseqp/Quotient`, or pin a fork
+via `quotient_ref`), because every engine bootstrap re-clones stock upstream and re-introduces
+the bug; re-patch the live engine whenever a new one deploys in the meantime.
+
 ### Fixed in this cycle (kept for the next reader's context)
 
-- Concurrent `terraform init` into the shared `TF_PLUGIN_CACHE_DIR` raced two runs into
-  `text file busy`, killing phase 2 (`0adfc1b` lock, `fb7a995` retry): an exclusive flock on `<cache>/.init.lock` for the
-  whole install, plus a bounded retry for a foreign writer).
 - A kept template (engine/golden, from an earlier run of the same competition) could not be adopted:
   the placement probe counted it as a vmid collision, `check_collisions` did not treat the
   engine-template slot as a template slot in multi-node, and the golden rebuild gate refused to

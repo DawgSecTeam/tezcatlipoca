@@ -54,6 +54,9 @@ class _Cluster:
 
 
 def _gate(vms, api, ip, engine_vmid=2400, node="proxmox", ours_tags=None, explicit=None):
+    # A previous test may have activated a per-node override on the process config.
+    from estate import config
+    config.reset()
     env = dict(os.environ)
     env.pop("TF_VAR_engine_mgmt_ip", None)
     if explicit is not None:

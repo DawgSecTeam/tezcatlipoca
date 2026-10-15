@@ -4,9 +4,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from config.config_ops import write_state
 from common.constants import SCORING_ENGINE_VMID, ownership_tags
+from estate import state as estate_state
 
+
+def persist_state(ctx):
+# Write the competition's monolithic state document.
+#
+#     The file holds the only copy of the generated box and team passwords: a torn write
+#     here bricks both resume and redeploy. `absorb` routes the flat keys the phases use
+#     into their sections and the estate writer is the shared os.replace +
+#     0600-at-creation one. The module-level seam is deliberate: tests stub persistence
+#     through it (tests/_deploy_patch.dpatch) without touching a real competition dir.
+    document = ctx.document()
+    # A context with no comp_dir has nowhere to persist (partial contexts in tests).
+    if document is None:
+        return
+    document.absorb(ctx.state)
+    document.save()
 
 @dataclass
 class DeployContext:
@@ -19,14 +34,16 @@ class DeployContext:
 #     ordinary code that takes this object.
 #
 #     Field order follows the pipeline: identity/config -> secrets/state -> placement and
-#     environment -> generated configs and paths -> targets -> the terraform/SSH fields
-#     phase 2 fills in (a fresh run only has terraform outputs after apply #1; a resume
+#     environment -> generated configs and paths -> targets -> the engine/SSH fields
+#     phase 2 fills in (a fresh run only has engine coordinates after the engine is created; a resume
 #     finds them already there).
 
     # --- run identity + inputs ---
     comp_dir: Optional[Path] = None
     comp_name: str = ""
     state_path: Optional[Path] = None
+    # The monolithic per-competition state document; `state` above is its flat view.
+    estate: object = None
     from_phase: int = 1
     resuming: bool = False
     assume_yes: bool = False
@@ -62,7 +79,7 @@ class DeployContext:
     node: str = ""
     engine_vmid: int = SCORING_ENGINE_VMID
     engine_mgmt_ip: Optional[str] = None
-    # --- generated configs + terraform workdir ---
+    # --- generated configs + the per-competition state document ---
     boxes: list = field(default_factory=list)
     boxes_by_name: dict = field(default_factory=dict)
     unbooted: set = field(default_factory=set)
@@ -72,16 +89,13 @@ class DeployContext:
     final_config_path: Optional[Path] = None
     golden_inputs: dict = field(default_factory=dict)
     golden_hashes: dict = field(default_factory=dict)
-    tf_dir: Optional[Path] = None
-    tfvars_path: Optional[Path] = None
-    tfvars: dict = field(default_factory=dict)
     ssh_key_abs: str = ""
     # --- enumerated targets ---
     all_targets: list = field(default_factory=list)
     managed_targets: list = field(default_factory=list)
     linux_targets: list = field(default_factory=list)
     windows_targets: list = field(default_factory=list)
-    # --- filled in after terraform apply #1 (phase 2) ---
+    # --- filled in after the engine is created (phase 2) ---
     tf_ctx: dict = field(default_factory=dict)
     scoring_user: str = ""
     scoring_ip: str = ""
@@ -94,15 +108,19 @@ class DeployContext:
     run_id: str = ""
     reclaim_run_id: str = ""
 
+    def document(self):
+        # A context built outside prepare() (phase/sequencer unit tests, recovery paths)
+        # owns no document yet: bind it on first use rather than requiring a caller to.
+        # No comp_dir means nowhere to persist, so there is no document to bind.
+        if self.estate is None:
+            if self.comp_dir is None:
+                return None
+            self.estate = estate_state.EstateState.load(self.comp_dir)
+            self.state_path = estate_state.state_path(self.comp_dir)
+        return self.estate
+
     def save_state(self):
-    # Persist .deploy_state.json through the shared config_ops writer.
-        # .deploy_state.json holds the only copy of the generated box and team
-        # passwords: a torn write here bricks both resume and redeploy, and the old
-        # write_text-then-chmod idiom also left the secret briefly world-readable.
-        # config_ops.write_state is the shared os.replace + 0600-at-creation writer
-        # (added 2026-10-01 alongside redeploy's two copies and the post-DB-wipe
-        # recovery path) — one implementation, not four.
-        write_state(self.state_path, self.state)
+        persist_state(self)
 
     def checkpoint(self, n):
         # Record phase n as completed — the resume guard's only source of truth.

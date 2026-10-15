@@ -18,11 +18,12 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 import teardown  # noqa: E402
-from teardown.engine import TeardownEngine  # noqa: E402
+from estate import state as estate_state  # noqa: E402
+from teardown.engine import TeardownEngine, load_teardown_journal  # noqa: E402
 from teardown.inventory import Inventory  # noqa: E402
 from teardown.plan import PlanError, TeardownPlan  # noqa: E402
-from teardown.steps import (EVIDENCE, ArtifactStep, Step, StepResult,  # noqa: E402
-                            TeardownContext, TerraformStep)
+from teardown.steps import (EVIDENCE, ArtifactStep, EstateStep, Step,  # noqa: E402
+                            StepResult, TeardownContext)
 from infra.ownership import Ownership, Refusal  # noqa: E402
 
 RUN = "run-abcdef01"
@@ -113,7 +114,7 @@ class PlanConstruction(unittest.TestCase):
 
     def test_evidence_after_destruction_cannot_be_built(self):
         with self.assertRaises(PlanError) as ctx:
-            self._terminal([TerraformStep(), ArtifactStep()])
+            self._terminal([EstateStep(), ArtifactStep()])
         self.assertIn("evidence-before-destruction", str(ctx.exception))
 
     def test_the_shipped_order_builds(self):
@@ -121,7 +122,7 @@ class PlanConstruction(unittest.TestCase):
         plan = build_terminal_plan()
         names = [s.name for s in plan.steps]
         self.assertEqual(names, ["portal", "artifacts", "red01", "pre_stop",
-                                 "terraform", "templates", "remote_access"])
+                                 "estate", "remote_access"])
 
 
 class EnginePoliciesAndJournal(unittest.TestCase):
@@ -139,8 +140,7 @@ class EnginePoliciesAndJournal(unittest.TestCase):
         self.lines = []
 
     def _engine(self):
-        return TeardownEngine(self.ctx, journal_path=self.comp / ".teardown-journal.json",
-                              log=lambda s: self.lines.append(s))
+        return TeardownEngine(self.ctx, log=lambda s: self.lines.append(s))
 
     def _plan(self, steps):
         return TeardownPlan([], steps or [NoopStep()])
@@ -155,10 +155,7 @@ class EnginePoliciesAndJournal(unittest.TestCase):
 
         results = self._engine().execute(self._plan([Boom()]))
         self.assertEqual(results[0].status, "warned")
-        try:
-            journal = json.loads((self.comp / ".teardown-journal.json").read_text())
-        except FileNotFoundError:
-            journal = {"done": {}}
+        journal = load_teardown_journal(self.comp)
         self.assertNotIn("boom", journal.get("done") or {},
                          "a warned step failed — a re-run must retry it")
 
@@ -237,8 +234,7 @@ class VerifyClean(unittest.TestCase):
             nodes=["n"], default_node="n", inventory=self.inv, full=True)
 
     def _engine(self):
-        return TeardownEngine(self.ctx, journal_path=self.comp / ".teardown-journal.json",
-                              log=lambda s: None)
+        return TeardownEngine(self.ctx, log=lambda s: None)
 
     def _plan(self):
         from teardown.modes import build_terminal_plan
@@ -269,11 +265,6 @@ class VerifyClean(unittest.TestCase):
         self.assertFalse(report.clean)
         self.assertTrue(any("unverifiable" in p for p in report.problems))
 
-    def test_stale_state_lock_is_a_problem(self):
-        (self.comp / "terraform" / ".terraform.tfstate.lock.info").write_text("{}")
-        report = self._engine().verify_clean(self._plan())
-        self.assertFalse(report.clean)
-
     def test_teams_only_keeps_stopped_templates_by_design(self):
         self.ctx.full = False
         self.fake.nodes["n"].append(
@@ -286,26 +277,28 @@ class VerifyClean(unittest.TestCase):
     def test_teams_only_never_reaches_the_template_destroy(self):
         # The scrim harness's --keep-templates sets exactly this (ctx.full=False), which is
         # what makes the templates survive with their hash record for the next run.
-        from engine.template_freeze import HASHES_FILE
-        from teardown.steps import TemplatesStep
-        (self.comp / HASHES_FILE).write_text(json.dumps({"golden": {"web01": {"hash": "h"}}}))
+        from engine.template_freeze import save_template_hashes
+        save_template_hashes(self.comp, golden={"web01": {"hash": "h"}})
         ctx = TeardownContext(comp_dir=self.comp, env={}, teams={}, boxes=[], deployed_state={},
                               ownership=OURS, placement=None, nodes=["n"], default_node="n",
                               inventory=None, full=False)
-        with patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
-            result = TemplatesStep().run(ctx)
-        self.assertFalse(destroy.call_args.kwargs["full"])
+        with patch("teardown.machinery.sweep_tagged_leftovers"), \
+                patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
+            result = EstateStep().run(ctx)
+        destroy.assert_not_called()
         self.assertEqual(result.status, "ok")
-        self.assertTrue((self.comp / HASHES_FILE).exists())   # reuse record kept with them
+        from engine.template_freeze import load_template_hashes
+        # reuse record kept with them
+        self.assertTrue(load_template_hashes(self.comp).get("golden"))
 
     def test_full_teardown_does_reach_the_template_destroy(self):
         # The other half of the pair: a default teardown still removes the templates.
-        from teardown.steps import TemplatesStep
         ctx = TeardownContext(comp_dir=self.comp, env={}, teams={}, boxes=[], deployed_state={},
                               ownership=OURS, placement=None, nodes=["n"], default_node="n",
                               inventory=None, full=True)
-        with patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
-            result = TemplatesStep().run(ctx)
+        with patch("teardown.machinery.sweep_tagged_leftovers"), \
+                patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
+            result = EstateStep().run(ctx)
         self.assertTrue(destroy.call_args.kwargs["full"])
         self.assertEqual(result.status, "ok")
 
@@ -341,7 +334,10 @@ class JournalLifecycle(unittest.TestCase):
         from deploy_lib.phases import cleanup
         with tempfile.TemporaryDirectory() as d:
             comp = Path(d)
-            (comp / teardown.TEARDOWN_JOURNAL).write_text('{"done": {"red01": {}}}')
+            document = estate_state.EstateState.load(comp)
+            document.section("teardown")["journal"] = {"run_id": "run-x",
+                                                       "done": {"red01": {}}}
+            document.save()
             ctx = SimpleNamespace(
                 from_phase=1, comp_dir=comp, node="n", all_targets=[], engine_vmid=1000,
                 boxes=[], reclaim_tags=set(), placement=None, teams={"team1": {"identifier": "101"}},
@@ -349,7 +345,9 @@ class JournalLifecycle(unittest.TestCase):
                 run_id="run-x")
             with patch.object(cleanup, "proxmox_api", return_value={"data": []}):
                 cleanup.phase1_cleanup(ctx)
-            self.assertFalse((comp / teardown.TEARDOWN_JOURNAL).exists())
+            self.assertEqual(
+                estate_state.EstateState.load(comp).section("teardown"), {},
+                "a fresh deploy must drop the previous teardown's journal")
 
     def test_phase1_skip_on_resume_keeps_the_journal(self):
         import tempfile
@@ -357,7 +355,11 @@ class JournalLifecycle(unittest.TestCase):
         from deploy_lib.phases import cleanup
         with tempfile.TemporaryDirectory() as d:
             comp = Path(d)
-            (comp / teardown.TEARDOWN_JOURNAL).write_text('{"done": {"red01": {}}}')
+            document = estate_state.EstateState.load(comp)
+            document.section("teardown")["journal"] = {"run_id": "run-x",
+                                                       "done": {"red01": {}}}
+            document.save()
             ctx = SimpleNamespace(from_phase=2, comp_dir=comp)
             cleanup.phase1_cleanup(ctx)   # early return, nothing touched
-            self.assertTrue((comp / teardown.TEARDOWN_JOURNAL).exists())
+            self.assertTrue(
+                estate_state.EstateState.load(comp).section("teardown").get("journal"))

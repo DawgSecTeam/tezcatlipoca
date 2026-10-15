@@ -12,10 +12,11 @@ from pathlib import Path
 from multinode.placement_record import (activate_placement, engine_record, read_placement,
                                         record_of)
 from teardown import (Inventory, TeardownContext, TeardownEngine, load_ownership,
-                      refuse_frozen_full_teardown, require_terraform_state)
-from teardown.engine import TEARDOWN_JOURNAL
+                      refuse_frozen_full_teardown)
+from teardown.engine import save_teardown_journal
 from teardown.modes import build_terminal_plan
 from engine.template_freeze import frozen_state
+from estate import config
 
 
 def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
@@ -25,10 +26,10 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
     competition = comp_dir.name
     frozen = frozen_state(comp_dir)
 
-    # Multi-node: the placement record is authoritative — point the env at the
+    # Multi-node: the placement record is authoritative — point the process config at the
     # engine's host and register the node routes before anything node-scoped runs.
     placement = read_placement(comp_dir)
-    default_node = os.environ.get("TF_VAR_proxmox_node", "pve")
+    default_node = config.active().proxmox.node
     placement_nodes = [default_node]
     if placement:
         # Every node-scoped API path needs the PVE node NAME, not the nodes-list record name
@@ -45,11 +46,10 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
             + (f"; satellites: {sats}" if sats else ""))
 
     # Every refusal fires BEFORE any destruction — a frozen competition's
-    # templates are the verified artifacts the event runs on; a state without
-    # its run id names no ownership; a missing tfstate makes destroy a no-op.
+    # templates are the verified artifacts the event runs on, and a state
+    # without its run id names no ownership.
     refuse_frozen_full_teardown(competition, frozen, full, end_of_competition)
     deployed_state, ownership = load_ownership(comp_dir)
-    require_terraform_state(comp_dir, deployed_state)
     log(f"  Ownership: run id '{ownership.run_id}' — only VMs carrying this deploy's "
         f"FULL tag set ({sorted(ownership.tags)}) will be touched.")
 
@@ -59,14 +59,11 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
     env = dict(env if env is not None else os.environ)
     if placement:
         # Callers snapshot os.environ BEFORE activate_placement runs, so their dict still named
-        # the .env host while the state lives on the placement's host: terraform then destroyed
-        # against the wrong PVE (500 "hostname lookup '<node>' failed") and every
-        # terraform-managed resource — the team bridges — survived the teardown (2026-10-14).
-        # Activation has resolved the identity into os.environ by now; re-apply it.
-        for key in ("TF_VAR_proxmox_endpoint", "TF_VAR_proxmox_api_token", "TF_VAR_proxmox_node",
-                    "TF_VAR_datastore", "TF_VAR_template_vm_id"):
-            if os.environ.get(key):
-                env[key] = os.environ[key]
+        # the profile's host while the range lives on the placement's host: the teardown then
+        # ran against the wrong PVE (500 "hostname lookup '<node>' failed") and every resource
+        # it owned — the team bridges — survived (2026-10-14). Activation has moved the whole
+        # process by now, so project the resolved identity back onto this dict.
+        env.update(config.proxmox_env())
     env["TF_VAR_teams"] = json.dumps(teams)
     env["TF_VAR_boxes_per_team"] = json.dumps(boxes)
     env["TF_VAR_event_name"] = name
@@ -85,7 +82,6 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
 
 # records steps the CALLER already completed (the scrim harness runs the evidence pull/collect/report and its superior red teardown itself) so the standard plan skips them instead of re-running them against dead boxes
 def record_evidence_done(comp_dir, test_dir=None, red_vmid=None):
-    from config.config_ops import write_text_atomic
 
     comp_dir = Path(comp_dir)
     done = {}
@@ -98,6 +94,4 @@ def record_evidence_done(comp_dir, test_dir=None, red_vmid=None):
     if not done:
         return
     _, ownership = load_ownership(comp_dir)     # Refusal: same verdict the runner would give
-    write_text_atomic(comp_dir / TEARDOWN_JOURNAL,
-                      json.dumps({"run_id": ownership.run_id, "done": done}, indent=2),
-                      mode=0o600)
+    save_teardown_journal(comp_dir, {"run_id": ownership.run_id, "done": done})

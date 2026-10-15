@@ -13,9 +13,7 @@ profile's `schedule:` windows, prints the wall-clock plan from T0, and (with
 the pause kills the loop's last round (the stage_capture lesson: capture first)."""
 
 import argparse
-import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -25,6 +23,8 @@ import urllib3
 from dotenv import load_dotenv
 
 from common.comp_paths import resolve_comp_dir
+from estate import state as estate_state
+from estate.engine_setup import engine_ctx as estate_engine_ctx
 from quotient.event_capture import end_event
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -47,12 +47,10 @@ def load_profile(profile_arg):
 def engine_ctx(args, comp_dir):
     ip = args.engine_ip
     if not ip:
-        tf_dir = comp_dir / "terraform"
-        if not (tf_dir / "terraform.tfstate").exists():
-            sys.exit(f"ERROR: {tf_dir}/terraform.tfstate not found — pass --engine-ip")
-        raw = subprocess.run(["terraform", "output", "-json"], cwd=str(tf_dir),
-                             capture_output=True, text=True, check=True).stdout
-        ip = json.loads(json.loads(raw)["agent_context"]["value"])["scoring_engine_ip"]
+        ip = estate_engine_ctx(comp_dir)["scoring_engine_ip"]
+        if not ip:
+            sys.exit(f"ERROR: no engine management IP recorded in "
+                     f"{estate_state.state_path(comp_dir)} — pass --engine-ip")
     password = args.admin_password
     if not password:
         creds = comp_dir / "credentials.txt"

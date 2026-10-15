@@ -19,7 +19,7 @@ from verifier.verdict import gate_verdict
 def build_parser():
     parser = argparse.ArgumentParser(description="Verify a deployed Quotient competition range.")
     parser.add_argument("comp_dir", help="path to competitions/<id>")
-    parser.add_argument("--engine-ip", help="override the scoring-engine IP (skip Terraform)")
+    parser.add_argument("--engine-ip", help="override the scoring-engine IP (skip the state document)")
     parser.add_argument("--admin-password", help="override the Quotient admin password")
     parser.add_argument("--strict-services", action="store_true",
                         help="also require every service UP for a passing exit code")
@@ -43,9 +43,9 @@ def build_parser():
                              "accounts must exist on the boxes")
     parser.add_argument("--freeze", action="store_true",
                         help="M4: after a PASSING verify (all gates + plant-coverage), "
-                             "record the template hashes + code commit in .frozen.json.")
+                             "record the template hashes + code commit in the state document.")
     parser.add_argument("--unfreeze", action="store_true",
-                        help="M4: remove .frozen.json (needs --confirm-unfreeze; for use "
+                        help="M4: remove the freeze record (needs --confirm-unfreeze; for use "
                              "BEFORE the competition starts).")
     parser.add_argument("--confirm-unfreeze", action="store_true", dest="confirm_unfreeze")
     parser.add_argument("--red-identity", action="store_true", dest="red_identity",

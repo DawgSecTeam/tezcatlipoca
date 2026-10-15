@@ -297,7 +297,7 @@ class MainRunTests(unittest.TestCase):
 
     def _run_main(self, comp_dir, extra=()):
         patches = [
-            patch.object(v_context, "read_terraform_ctx",
+            patch.object(v_context, "read_estate_ctx",
                          side_effect=v_model.CheckError("terraform unavailable")),
             patch.object(v_scoreboard, "check_logins", return_value=(True, object())),
             patch.object(v_scoreboard, "check_services",

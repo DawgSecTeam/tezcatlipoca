@@ -9,7 +9,7 @@ and the engine paused. This drives the engine afterwards:
   python3 competition-ops.py freeze --comp-dir competitions/<id> --engine-ip 10.0.0.150
   python3 competition-ops.py end    --comp-dir competitions/<id>
 
-Auth is always the `scoring` automation account (password from .deploy_state.json or
+Auth is always the `scoring` automation account (password from the estate state or
 credentials.txt): Quotient allows ONE session per account, and a lifecycle login on
 `admin` would evict the operator's browser session.
 
@@ -25,7 +25,6 @@ deliberate reset-event, never an accident.
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -33,8 +32,9 @@ import requests
 import urllib3
 from dotenv import load_dotenv
 
-from config.config_ops import write_state
 from config.injects_config import injects_fingerprint, load_injects, resolve_inject_times
+from estate import state as estate_state
+from estate.engine_setup import engine_ctx
 from quotient.event_capture import end_event
 from quotient.setup import create_injects
 
@@ -45,21 +45,16 @@ ACTIONS = ("start", "freeze", "resume", "end", "status")
 
 
 def load_state(comp_dir):
-    try:
-        return json.loads((Path(comp_dir) / ".deploy_state.json").read_text())
-    except (OSError, ValueError):
-        return {}
+    return estate_state.load_flat(comp_dir)
 
 
 def engine_base(args, comp_dir):
     ip = args.engine_ip
     if not ip:
-        tf_dir = Path(comp_dir) / "terraform"
-        if not (tf_dir / "terraform.tfstate").exists():
-            sys.exit(f"ERROR: {tf_dir}/terraform.tfstate not found — pass --engine-ip")
-        raw = subprocess.run(["terraform", "output", "-json"], cwd=str(tf_dir),
-                             capture_output=True, text=True, check=True).stdout
-        ip = json.loads(json.loads(raw)["agent_context"]["value"])["scoring_engine_ip"]
+        ip = engine_ctx(comp_dir)["scoring_engine_ip"]
+        if not ip:
+            sys.exit(f"ERROR: no engine management IP recorded in "
+                     f"{estate_state.state_path(comp_dir)} — pass --engine-ip")
     host = ip if ip.startswith("http") else f"http://{ip}"
     return host.rstrip("/")
 
@@ -74,7 +69,7 @@ def scoring_password(args, state, comp_dir):
             parts = line.split()
             if len(parts) >= 2 and parts[0] == "scoring":
                 return parts[1]
-    sys.exit("ERROR: no scoring password (.deploy_state.json / credentials.txt empty) — "
+    sys.exit("ERROR: no scoring password (estate state / credentials.txt empty) — "
              "pass --scoring-password")
 
 
@@ -84,7 +79,7 @@ def login(base_url, password):
                      json={"username": "scoring", "password": password}, timeout=10)
     if r.status_code >= 400:
         sys.exit(f"ERROR: scoring login failed → HTTP {r.status_code} (the password lives "
-                 "in .deploy_state.json / credentials.txt; override with --scoring-password)")
+                 "in the estate state / credentials.txt; override with --scoring-password)")
     return session
 
 
@@ -140,7 +135,9 @@ def cmd_start(args, comp_dir):
 
     state["started"] = True
     state["engine_unpaused"] = True
-    write_state(Path(comp_dir) / ".deploy_state.json", state)
+    document = estate_state.open(comp_dir)
+    document.absorb(state)
+    document.save()
     print(f"  Competition live at {base_url} — admin pages: /admin, /announcements, /injects")
     return rc
 
@@ -172,7 +169,9 @@ def cmd_end(args, comp_dir):
         # Only a clean capture AND pause may record the event as over; a failed one
         # leaves the panel showing a still-live engine (run rc tells the operator).
         state["ended"] = True
-        write_state(Path(comp_dir) / ".deploy_state.json", state)
+        document = estate_state.open(comp_dir)
+        document.absorb(state)
+        document.save()
         print("  The competition is over — scoring is frozen at the last round. "
               "The range stays up until teardown.")
     return rc
@@ -210,9 +209,9 @@ def main():
     parser.add_argument("action", choices=ACTIONS)
     parser.add_argument("--comp-dir", dest="comp_dir", required=True,
                         help="the competition dir (or a per-run workspace copy) holding "
-                             ".deploy_state.json, credentials.txt, injects/ and terraform/")
+                             "estate-state.json, credentials.txt and injects/")
     parser.add_argument("--engine-ip", default=None,
-                        help="override the scoring-engine IP (default: terraform output)")
+                        help="override the scoring-engine IP (default: the state document)")
     parser.add_argument("--scoring-password", default=None, dest="scoring_password",
                         help="override the scoring account password")
     args = parser.parse_args()

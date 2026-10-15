@@ -53,7 +53,7 @@ import deploy  # noqa: E402
 from _deploy_patch import dpatch  # noqa: E402
 from deploy_lib import secrets as dl_secrets  # noqa: E402
 from deploy_lib.context import DeployContext  # noqa: E402
-from deploy_lib import tfinputs as dl_tfinputs  # noqa: E402
+from deploy_lib import estate_inputs as dl_estate_inputs  # noqa: E402
 from config import config_ops  # noqa: E402
 from multinode import placement_record  # noqa: E402
 from infra import client  # noqa: E402
@@ -93,8 +93,10 @@ class FakePVE:
         return {"data": None}
 
 
-def vm(vmid, name, tags, status="stopped"):
-    return {"vmid": vmid, "name": name, "tags": tags, "status": status}
+def vm(vmid, name, tags, status="stopped", template=None):
+    # `template` is PVE's own flag on the qemu listing — the role templates a teams-only
+    # teardown keeps are exactly the entries that carry it.
+    return {"vmid": vmid, "name": name, "tags": tags, "status": status, "template": template}
 
 
 @patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None)
@@ -163,6 +165,27 @@ class LeftoverSweep(unittest.TestCase):
             destroy_sweep_ops.sweep_tagged_leftovers(["n"], Ownership(COMP, RUN))
         self.assertEqual(fake.deleted, [])
 
+    def test_a_teams_only_teardown_keeps_the_role_templates(self):
+        """--teams-only exists to keep the validated golden + engine templates. The deploy
+        re-stamps a reused template with THIS run's tag (so the strict guard recognizes it),
+        which put it inside the sweep's ownership match: live 2026-10-15, run-ee5717cd swept
+        engine-template vmid 2241 on a teams-only teardown, so the next deploy rebuilt what
+        the practice run had just validated."""
+        fake = FakePVE(nodes={"n": [vm(2241, "engine-template", OURS, template=1),
+                                    vm(2300, "leftover", OURS)]})
+        with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
+                patch.object(destroy_sweep_ops, "wait_for_proxmox_task"):
+            destroy_sweep_ops.sweep_tagged_leftovers(["n"], Ownership(COMP, RUN),
+                                                     keep_templates=True)
+        self.assertEqual(fake.deleted, [2300])
+
+    def test_a_full_teardown_still_sweeps_the_templates(self):
+        fake = FakePVE(nodes={"n": [vm(2241, "engine-template", OURS, template=1)]})
+        with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
+                patch.object(destroy_sweep_ops, "wait_for_proxmox_task"):
+            destroy_sweep_ops.sweep_tagged_leftovers(["n"], Ownership(COMP, RUN))
+        self.assertEqual(fake.deleted, [2241])
+
 
 class PreStopOwnership(unittest.TestCase):
 # pre_stop_windows_boxes: a name match alone must not hard-stop another run.
@@ -210,7 +233,7 @@ class ReportRemainingClassification(unittest.TestCase):
             boxes=[], deployed_state={"run_id": RUN}, ownership=Ownership(COMP, RUN),
             placement=None, nodes=["n"], default_node="n", inventory=Inventory(["n"], api=fake),
             full=True)
-        report = TeardownEngine(ctx, journal_path=Path("_unused-journal.json")).verify_clean(
+        report = TeardownEngine(ctx).verify_clean(
             _terminal_plan(ctx))
         self.assertTrue(any("ours" in p and "2300" in p for p in report.problems),
                         report.problems)
@@ -259,8 +282,8 @@ class DeployContextTags(unittest.TestCase):
             engine_mgmt_ip="10.0.0.1", boxes=[], boxes_by_name={}, unbooted=set(),
             nakon_config_path=Path("n.json"), golden_config_path=Path("g.json"),
             predomain_config_path=Path("r.json"), final_config_path=Path("f.json"),
-            golden_inputs={}, golden_hashes={}, tf_dir=Path("."),
-            tfvars_path=Path("."), tfvars={}, ssh_key_abs="/k", all_targets=[],
+            golden_inputs={}, golden_hashes={},
+ ssh_key_abs="/k", all_targets=[],
             managed_targets=[], linux_targets=[], windows_targets=[])
         fields.update(kw)
         return deploy.DeployContext(**fields)
@@ -292,7 +315,7 @@ class RunIdMinting(unittest.TestCase):
     def test_fresh_deploy_mints_a_run_id_into_state(self):
         with tempfile.TemporaryDirectory() as d:
             ctx = self._ctx(Path(d) / "s.json")
-            with dpatch("write_state"), \
+            with dpatch("persist_state"), \
                     dpatch("collect_teams",
                                  return_value={"team1": {"identifier": "101",
                                                          "password": "x"}}):
@@ -314,7 +337,7 @@ class RunIdMinting(unittest.TestCase):
                 return {"team1": {"identifier": identifier_defaults[0],
                                   "password": calls["password"]}}
 
-            with dpatch("write_state"), dpatch("collect_teams", side_effect=collect):
+            with dpatch("persist_state"), dpatch("collect_teams", side_effect=collect):
                 dl_secrets.resolve_competition_teams(ctx, 1, 1)
             self.assertEqual(calls["defaults"], ["120"])
             self.assertNotEqual(ctx.teams["team1"]["password"], "old-secret")
@@ -326,7 +349,7 @@ class RunIdMinting(unittest.TestCase):
             (comp_dir / "Compfile").write_text(
                 "packet_source packets/cde-2026/packet.yaml\n")
             ctx = self._ctx(comp_dir / ".deploy_state.json", engine_vmid=1080)
-            with dpatch("write_state"), dpatch(
+            with dpatch("persist_state"), dpatch(
                     "collect_teams",
                     side_effect=lambda count, engine_vmid, identifier_defaults=None, **kw: {
                         "team1": {"identifier": str(identifier_defaults[0]), "password": "fresh"},
@@ -341,31 +364,10 @@ class RunIdMinting(unittest.TestCase):
                 "run_id": RUN, "last_phase": 3,
                 "teams": {"team1": {"identifier": "101", "password": "x"}}}))
             ctx = self._ctx(state_path, previous_state={"run_id": RUN}, resuming=True)
-            with dpatch("write_state"):
+            with dpatch("persist_state"):
                 dl_secrets.resolve_competition_teams(ctx, None, 4)
         self.assertEqual(ctx.run_id, RUN)
         self.assertEqual(ctx.state["run_id"], RUN)
-
-
-class TfvarsCarryRunTag(unittest.TestCase):
-    def test_run_tag_is_written_to_tfvars(self):
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            tf_dir = comp_dir / "terraform"
-            tf_dir.mkdir()
-            ctx = DeployContext(comp_name=COMP, boxes=[{"name": "web01", "template": "t"}],
-                                run_id=RUN, teams={}, number_of_teams=0, engine_vmid=1000)
-            captured = {}
-            env = {"TF_VAR_ssh_private_key_path": "/tmp/key",
-                   "TF_VAR_proxmox_node": "pve",
-                   "TF_VAR_proxmox_endpoint": "https://pve:8006/"}
-            with patch.dict(os.environ, env, clear=True), \
-                    dpatch("ensure_terraform_workdir", return_value=tf_dir), \
-                    dpatch("write_text_atomic",
-                                 side_effect=lambda p, t: captured.__setitem__(str(p), t)):
-                dl_tfinputs.build_terraform_inputs(ctx, comp_dir)
-        tfvars = json.loads(captured[str(tf_dir / "terraform.tfvars.json")])
-        self.assertEqual(tfvars["run_tag"], RUN)
 
 
 class MultinodePreflightRunAware(unittest.TestCase):

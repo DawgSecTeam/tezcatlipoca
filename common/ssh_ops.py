@@ -1,7 +1,5 @@
-"""SSH helpers via the scoring-engine gateway and Terraform context."""
+"""SSH helpers via the scoring-engine gateway and the state document's engine context."""
 
-import json
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -9,11 +7,11 @@ from pathlib import Path
 import requests
 
 from infra.guest_exec import diagnose_unreachable_box, wait_for_guest_agent
-from common.terraform_workdir import terraform_dir
 from common.utils import PRINT_LOCK, record_degradation, run_concurrent
 # Re-export, not a second definition: ssh_ops' gateway auth and deploy/golden_ops' target
 # split must classify a template identically (windows_ops.is_windows_template owns the rule).
 from common.windows_ops import is_windows_template
+from estate import config
 
 DEFAULT_KNOWN_HOSTS = str(Path.home() / ".tezcatlipoca" / "known_hosts")
 
@@ -119,20 +117,6 @@ def forget_engine_host_key(ip, known_hosts=None):
             pass
 
 
-def read_terraform_ctx(comp_dir):
-# Read agent_context from `terraform output -json` in the competition's own
-#     per-comp state dir (competitions/<id>/terraform).
-    tf_dir = str(terraform_dir(comp_dir))
-    raw = subprocess.run(
-        ["terraform", "output", "-json"], cwd=tf_dir, capture_output=True, text=True, check=True
-    ).stdout
-    ctx = json.loads(json.loads(raw)["agent_context"]["value"])
-    key_path = ctx["ssh_key_path"]
-    if not os.path.isabs(key_path):
-        ctx = {**ctx, "ssh_key_path": str((Path(tf_dir) / key_path).resolve())}
-    return ctx
-
-
 def ssh_via_gateway(ctx, target_ip, cmd, timeout=60, user="ubuntu"):
 # SSH to a target box through the engine gateway (ProxyCommand -W).
     args = box_ssh_argv(ctx, target_ip, user, cmd)
@@ -212,7 +196,7 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
 # Poll every target's reachability through the gateway, all boxes concurrently, each
 #     with its own full budget (a slow early box no longer eats later boxes' patience).
 #     Raises only if all boxes fail.
-    node = os.environ["TF_VAR_proxmox_node"]
+    node = config.active().proxmox.node
     print("  Waiting for team boxes to accept SSH via gateway...")
     deadline = time.time() + timeout
 

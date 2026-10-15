@@ -15,6 +15,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from deploy_lib import placement as dl_placement  # noqa: E402
+from estate import config  # noqa: E402
 from net import jump_ops  # noqa: E402
 from multinode import nodes_config  # noqa: E402
 from multinode import placement_planner  # noqa: E402
@@ -126,15 +127,17 @@ class LoadNodesConfigTest(unittest.TestCase):
 class NodeEnvTest(unittest.TestCase):
     def test_apply_and_restore(self):
         rec = _rec("x")
-        with patch.dict(os.environ, {"TOK_X": "tokval"}, clear=False):
-            os.environ.pop("TF_VAR_proxmox_node", None)
+        # Activation is an in-process config override, not an os.environ mutation.
+        cfg = config.configure(Path("/nonexistent/tezcatlipoca.toml"))
+        env = {"TOK_X": "tokval", "TF_VAR_proxmox_node": "", "TEZ_PROXMOX_NODE": ""}
+        with patch.dict(os.environ, env, clear=False):
             restore = nodes_config.apply_node_env(rec)
-            self.assertEqual(os.environ["TF_VAR_proxmox_endpoint"], rec.endpoint)
-            self.assertEqual(os.environ["TF_VAR_proxmox_api_token"], "tokval")
-            self.assertEqual(os.environ["TF_VAR_proxmox_node"], "X")
-            self.assertEqual(os.environ["TF_VAR_template_vm_id"], "900")
+            self.assertEqual(cfg.proxmox.endpoint, rec.endpoint)
+            self.assertEqual(cfg.proxmox.api_token, "tokval")
+            self.assertEqual(cfg.proxmox.node, "X")
+            self.assertEqual(cfg.proxmox.template_vm_id, 900)
             nodes_config.restore_node_env(restore)
-            self.assertNotIn("TF_VAR_proxmox_node", os.environ)
+            self.assertEqual(cfg.proxmox.node, "pve")
 
     def test_missing_token_fails_loud(self):
         rec = _rec("y")
@@ -287,7 +290,8 @@ class PlacementRecordTest(unittest.TestCase):
                 resume_endpoint="https://n2.lab:8006")
             self.assertEqual(placement["engine_node"], "n2")
             self.assertEqual(set(placement["team_nodes"].values()), {"n2"})
-            self.assertTrue((Path(td) / "placement.json").exists())
+            self.assertTrue(placement_record.read_placement(Path(td)),
+                        "the placement record is in the document")
 
     def test_resume_refuses_unknown_endpoint(self):
         records = [_rec("n1")]
@@ -312,17 +316,6 @@ class PlacementRecordTest(unittest.TestCase):
                                                     team_overrides={"team1": "x"})
         self.assertEqual(back["engine_node"], "n1")
 
-
-class TfvarsHelpersTest(unittest.TestCase):
-    def test_satellite_tfvars_shape_and_dummy_padding(self):
-        placement = {"nodes": {"n1": _rec("n1").to_json(), "n2": _rec("n2").to_json()},
-                     "slots": {"n1": 0, "n2": 1}}
-        with patch.dict(os.environ, {"TOK_N2": "tok"}):
-            out = placement_record.satellite_tfvars(placement)
-        self.assertEqual(len(out), nodes_config.MAX_SATELLITES)
-        self.assertEqual(out[0]["endpoint"], "https://n2.lab:8006")
-        self.assertEqual(out[0]["api_token"], "tok")
-        self.assertEqual(out[1]["endpoint"], "https://sat2.invalid")
 
     def test_routes_cover_every_team_subnet_behind_the_jump(self):
         placement = {"team_identifiers": {"team1": "103", "team2": "107"},
@@ -501,6 +494,35 @@ class ActivatePlacementTest(unittest.TestCase):
             finally:
                 placement_record.deactivate_placement(restore)
         self.assertEqual(_NODE_ROUTES, {})
+
+
+class ActivationProjectsBackToEnv(unittest.TestCase):
+    """activate_placement moves the process by mutating the CONFIG, not os.environ.
+
+    A teardown caller snapshots os.environ before activation and hands that dict to the steps
+    and to bad-auto's subprocess. Copying os.environ back is now a no-op, which silently sent
+    a multi-node teardown at the profile's host (the 2026-10-14 wrong-PVE bug). The identity
+    must come from the config.
+    """
+
+    def test_proxmox_env_carries_the_activated_identity(self):
+        from estate import config
+        placement = {
+            "engine_node": "hdd-150",
+            "nodes": {"hdd-150": _rec("hdd-150", node="proxmox",
+                                      token_env="TOK_HDD150").to_json()},
+        }
+        with patch.dict(os.environ,
+                        {"TOK_HDD150": "t1", "TF_VAR_proxmox_node": "profile-host"},
+                        clear=False):
+            restore = placement_record.activate_placement(placement)
+            try:
+                env = config.proxmox_env()
+            finally:
+                placement_record.deactivate_placement(restore)
+        # The placement's node, not the profile's: this is what a stale os.environ copy got wrong.
+        self.assertEqual(env["TF_VAR_proxmox_node"], "proxmox")
+        self.assertEqual(env["TF_VAR_proxmox_api_token"], "t1")
 
 
 class SyncPlannerTest(unittest.TestCase):

@@ -235,5 +235,31 @@ class EnrollmentMarkdownTest(unittest.TestCase):
                       "--authkey hskey-auth-xyz", md)
 
 
+class TailscaleInstallTest(unittest.TestCase):
+    def _install_command(self):
+        calls = []
+        with patch.object(ra, "_engine_cmd",
+                          side_effect=lambda ctx, cmd, **kw: calls.append(cmd)), \
+             patch.object(ra, "engine_tailscale_enrolled", return_value=False), \
+             patch.object(ra, "_infra_user_id", return_value=7), \
+             patch.object(ra, "_mint_preauth_key", return_value="hskey"), \
+             patch.object(ra.config, "require", return_value="https://hs.example"):
+            ra.enroll_engine_router(SimpleNamespace(), "comp", ["151"])
+        return next(c for c in calls if "install.sh" in c)
+
+    def test_the_install_waits_out_the_clones_apt_locks_first(self):
+        """The engine clone's first boot holds the dpkg locks for minutes, so the
+        installer's apt-get died on the lock after the old three 5-second retries and the
+        step ended 127 (live 2026-10-15, run-0f82f888). The lock wait comes first."""
+        cmd = self._install_command()
+        self.assertIn("cloud-init status --wait", cmd)
+        self.assertIn("flock -n /var/lib/dpkg/lock-frontend", cmd)
+        self.assertIn("flock -n /var/lib/dpkg/lock", cmd)
+        self.assertLess(cmd.index("flock -n"), cmd.index("install.sh"))
+        # A genuinely wedged apt still fails loudly with the installer's own log.
+        self.assertIn("exit 127", cmd)
+        self.assertIn("cat /tmp/ts-install.log", cmd)
+
+
 if __name__ == "__main__":
     unittest.main()

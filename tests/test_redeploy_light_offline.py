@@ -17,6 +17,7 @@ sys.path.insert(0, str(_REPO))
 
 from teardown import machinery as dto  # noqa: E402
 from infra.ownership import Ownership  # noqa: E402
+from estate import state as estate_state
 from redeploy import redeploy_light_ops as light  # noqa: E402
 from redeploy.redeploy_context import RedeployContext  # noqa: E402
 from common.constants import SNAP_BASE, SNAP_READY  # noqa: E402
@@ -69,7 +70,7 @@ class Resync(unittest.TestCase):
             self.assertEqual(state["admin_password"], "new")
             self.assertEqual(state["box_creds"], {"a": "y"})
             self.assertEqual(state["teams"]["team1"]["password"], "tnew")
-            self.assertEqual(json.loads((comp / ".deploy_state.json").read_text())["admin_password"], "new")
+            self.assertEqual(estate_state.load_flat(comp)["admin_password"], "new")
             self.assertEqual(lin_calls[0][0], "pve2")       # target's own node
             self.assertEqual(win_calls[0][0], "pve1")       # falls back to the default node
             self.assertIn("guest agent rc=1", out.getvalue())
@@ -146,7 +147,8 @@ class TeardownTemplates(unittest.TestCase):
     def _run(self, full, placement=None):
         with tempfile.TemporaryDirectory() as d:
             comp = Path(d)
-            (comp / ".template-hashes.json").write_text("{}")
+            from engine.template_freeze import save_template_hashes
+            save_template_hashes(comp, engine={"hash": "e1"})
             with patch.object(dto, "destroy_golden_set") as g, patch.object(dto, "destroy_jump_vms") as j, \
                     patch.object(dto, "destroy_engine_template") as e, \
                     patch.object(dto, "record_of", return_value=SimpleNamespace(node="pve2")), \
@@ -154,7 +156,8 @@ class TeardownTemplates(unittest.TestCase):
                 dto.teardown_templates(comp, {"scoring_vm_id": "1234"},
                                        Ownership("c", "run-0badf00d"), [LIN, WIN],
                                        placement, full)
-            return g, j, e, (comp / ".template-hashes.json").exists()
+            from engine.template_freeze import load_template_hashes
+            return g, j, e, bool(load_template_hashes(comp).get("engine"))
 
     def test_teams_only_keeps_everything(self):
         g, j, e, hashes = self._run(False)

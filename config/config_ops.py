@@ -97,7 +97,7 @@ def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
         # engine template (engine+140) and the golden block (engine+150..+159). The
         # old check covered the engine alone (live-found 2026-09-29: engine 1080 +
         # default identifiers put team2's first box vmid exactly on the engine
-        # template slot at 1220 — the collision only surfaces at terraform apply #2,
+        # template slot at 1220 — the collision only surfaced at the team-box clone pass,
         # hours into the deploy). Phase 1's wave logic treats all 10 slots per block,
         # so the guard is full-width.
         reserved = ({engine_vmid}
@@ -112,8 +112,8 @@ def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
                 f"{base}..{base + MAX_BOXES_PER_TEAM - 1}, overlapping this engine's "
                 f"reserved slots (engine {engine_vmid}, engine template "
                 f"{engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET}, goldens "
-                f"{engine_vmid + GOLDEN_VMID_OFFSET}+) — terraform apply #2 would "
-                f"clone a team box onto one of them. Pick different "
+                f"{engine_vmid + GOLDEN_VMID_OFFSET}+) — the team-box clone pass "
+                f"would put one of them on that slot. Pick different "
                 f"TF_VAR_team_identifiers or --scoring-vmid.")
         password = random_password()
         teams[key] = {"identifier": identifier, "password": password}

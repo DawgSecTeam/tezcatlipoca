@@ -43,7 +43,7 @@ class PrepareGateOrder(unittest.TestCase):
             "run_range_gates": step("GATE:range"),
             "mint_competition_secrets": step("MINT"),
             "generate_stage_configs_and_hashes": step("configs"),
-            "build_terraform_inputs": step("tfvars"),
+            "build_estate_inputs": step("estate-inputs"),
             "enumerate_deploy_targets": step("targets"),
         }
         started = [patch.object(dl_prepare, n, side_effect=f) for n, f in patches.items()]

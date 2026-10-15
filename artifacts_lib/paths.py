@@ -4,6 +4,7 @@ import json
 import time
 from pathlib import Path
 
+from estate import state as estate_state
 from .constants import DIRNAME, MANIFEST_NAME, RUN_ID_RE
 
 
@@ -22,10 +23,7 @@ def test_dir(comp_dir, key):
 
 def run_id_from_state(comp_dir):
 # The deploy's run id, or "" when the comp dir has no (valid) deploy state yet.
-    try:
-        state = json.loads((Path(comp_dir) / ".deploy_state.json").read_text())
-    except (OSError, ValueError):
-        return ""
+    state = estate_state.read_flat(comp_dir) or {}
     run_id = state.get("run_id") or ""
     return run_id if RUN_ID_RE.match(run_id or "") else ""
 
@@ -86,14 +84,16 @@ def test_key(comp_dir, run_id=None, *, now=None):
 #     Stability matters because teardown is expected to be re-run until clean
 #     (destroy-competition.py says so): minting a fresh timestamp per invocation would split one
 #     run's evidence across several folders. The untagged fallback is therefore derived from
-#     `.deploy_state.json`'s mtime — which destroy never writes and deploy/resume does — so it is
-#     fixed for the life of a deploy and changes when a new one writes state.
+#     the state document's mtime — which destroy never writes and deploy/resume does — so it is
+#     fixed for the life of a deploy and changes when a new one writes state (a range deployed
+#     before the document existed still resolves through its legacy `.deploy_state.json`).
     comp_dir = Path(comp_dir)
     run_id = run_id or run_id_from_state(comp_dir)
     if run_id:
         return run_id
     stamp = None
-    for candidate in (comp_dir / ".deploy_state.json", comp_dir / ".deploy-timings.jsonl"):
+    for candidate in (estate_state.state_path(comp_dir), comp_dir / ".deploy_state.json",
+                      comp_dir / ".deploy-timings.jsonl"):
         try:
             stamp = candidate.stat().st_mtime
             break

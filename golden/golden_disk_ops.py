@@ -14,7 +14,7 @@ _SIZE_TO_GB = {"": 1 / 1024 ** 3, "K": 1 / 1024 ** 2, "M": 1 / 1024, "G": 1, "T"
 
 # Parsed from the config because the clone inherits the template's size verbatim —
 # there is no other record of it (svc-matrix: the 15 GB ubuntu template disk filled
-# mid-plant on splunk's .deb unpack while team clones got their terraform disk_gb).
+# mid-plant on splunk's .deb unpack while team clones got their configured disk_gb).
 def _root_disk_gb(cfg):
     for key in sorted(k for k in cfg
                       if k.startswith(("scsi", "virtio", "sata", "ide"))):
@@ -27,7 +27,7 @@ def _root_disk_gb(cfg):
     return None, 0
 
 
-# Golden clones inherit the base template's disk verbatim (terraform only sizes the
+# Golden clones inherit the base template's disk verbatim (the create path only sizes the
 # team clones), so a big plant payload (splunk) can fill the template-sized disk
 # mid-golden-build. Grow-only — a shrink would destroy data — and before start_vm.
 # Guest-side expansion is a separate post-boot step (expand_guest_root_disks):

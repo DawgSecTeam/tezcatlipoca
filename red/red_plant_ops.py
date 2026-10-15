@@ -145,7 +145,7 @@ def _deploy_red(comp_dir, env, config_path=None, timeout=1800):
 def destroy_red(comp_dir, env=None, timeout=900):
     """`badauto destroy`: red01 + its realm NAT rules.
 
-    red01 is bad-auto's VM, not a terraform-managed box, so destroying the range
+    red01 is bad-auto's VM, not an estate-managed box, so destroying the range
     leaves it running — with its LLM key, its beacon tasking and its DNAT rules.
     That is the scale8 soak leak (red01 998 alive after the driver printed DONE).
     The harness destroys it in its own teardown; this is the step the standalone

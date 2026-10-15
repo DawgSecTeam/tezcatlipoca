@@ -9,6 +9,7 @@ from config.config_prompts import _prompt_difficulty, collect_boxes, collect_use
 from config.config_ops import load_previous_competitions
 from common.comp_paths import resolve_comp_dir
 from common.utils import valid_comp_name
+from estate import state as estate_state
 
 from deploy_lib.runner import deploy
 
@@ -39,7 +40,7 @@ def build_parser():
                              "when creating a new competition; default 'admin,user1,user2'). "
                              "Written to competitions/<id>/users.json.")
     parser.add_argument("--from-phase", type=int, default=1, dest="from_phase",
-                        help="Resume from this phase (>1 skips the destructive cleanup + terraform "
+                        help="Resume from this phase (>1 skips the destructive cleanup + estate "
                              "apply). See the resume hint printed on a failed deploy. Refused when "
                              "it skips phases the state file doesn't record as completed.")
     parser.add_argument("--force-from-phase", action="store_true", dest="force_from_phase",
@@ -50,7 +51,7 @@ def build_parser():
     parser.add_argument("--scoring-vmid", type=int, default=None, dest="scoring_vmid",
                         help="VMID for this competition's scoring engine (default 1000). Give each "
                              "concurrent competition on a shared node a distinct free VMID so their "
-                             "engines don't collide. Persisted to .deploy_state.json and reused on "
+                             "engines don't collide. Persisted to the state document and reused on "
                              "resume (ignored on --from-phase, which reads it back from state).")
     parser.add_argument("--team-identifiers", dest="team_identifiers", default=None,
                         help="Comma list of team identifiers (subnet ids) for THIS run, outranking "
@@ -65,11 +66,11 @@ def build_parser():
                         help="Multi-node pin: comma list of team=NODE, e.g. '103=zfs-193,104=zfs-193' "
                              "(team key or subnet identifier = nodes.json node name). Unpinned teams "
                              "are placed by capacity-fill. Needs nodes.json; ignored when this "
-                             "competition already has a placement.json.")
+                             "competition already has a recorded placement.")
     parser.add_argument("--engine-node", dest="engine_node", default=None,
                         help="Multi-node pin: which nodes.json node hosts the scoring engine "
                              "(default: the node holding the most teams). Needs nodes.json; ignored "
-                             "when this competition already has a placement.json.")
+                             "when this competition already has a recorded placement.")
     parser.add_argument("--nodes", dest="nodes", default=None,
                         help="Path to this run's node list (the nodes.json schema: name, endpoint, "
                              "node, datastore, engine_base_vmid, token_env, …). Replaces the "
@@ -80,11 +81,11 @@ def build_parser():
                              "seeded, the engine stays paused, and injects are deferred to the "
                              "start so their open/due/close windows anchor at T0. Start later "
                              "with: python3 competition-ops.py start --comp-dir <dir>. The flag "
-                             "is recorded in .deploy_state.json, so resumes stay held.")
+                             "is recorded in the state document, so resumes stay held.")
     parser.add_argument("--plan-only", action="store_true", dest="plan_only",
                         help="Collect/generate the competition's config (Compfile, boxes.json) "
                              "and print a summary, then exit WITHOUT touching any infrastructure "
-                             "— no teardown, no `terraform apply`. There is no confirmation "
+                             "— no teardown, nothing created. There is no confirmation "
                              "checkpoint between the box picker and a real deploy otherwise "
                              "(--yes skips it outright, and piped/scripted stdin that happens to "
                              "satisfy every remaining prompt walks straight into one) — use this "
@@ -102,17 +103,14 @@ def print_plan(comp_name, comp_dir):
         kind = "  (in-path firewall: vmbrW<id> → fw → team bridge, gateway .1)" \
             if b.get("in_path") else "  (unmanaged appliance)" if b.get("unmanaged") else ""
         print(f"    {b['name']:<12} {b['template']:<20} {b['cpu']} CPU, {b['memory_mb']} MB, {disk}{kind}")
-    try:
-        state_run = (json.loads((comp_dir / ".deploy_state.json").read_text()).get("run_id") or "")
-    except (ValueError, OSError):
-        state_run = ""
+    state_run = estate_state.load_flat(comp_dir).get("run_id") or ""
     if state_run:
         print(f"  Run identity: {state_run} (reused from this competition's state)")
     else:
-        print("  Run identity: minted at deploy time (run-<id>, stored in "
-              ".deploy_state.json) — destruction paths require it")
+        print("  Run identity: minted at deploy time (run-<id>, stored in the "
+              "competition's state document) — destruction paths require it")
     print("\n  Team count is decided at deploy time (--teams N, or the prompt).")
-    print("  Nothing was deployed — no teardown, no terraform apply.")
+    print("  Nothing was deployed — no teardown, nothing created.")
     print(f"  Deploy for real with: python3 create-competition.py --competition {comp_name} "
           f"--teams <N> --yes")
 
