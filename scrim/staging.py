@@ -111,10 +111,15 @@ def stage_deploy(args, comp):
         if args.force_resume:
             cmd += ["--force-from-phase"]
     r = procs.run(cmd, cwd=core.REPO, timeout=6 * 3600, check=False)
-    if r.returncode != 0 and args.run_dir:
-        # stderr too: the phase-4 checkpoint SystemExit and a phase-3 ssh timeout both
-        # printed ONLY to stderr, and a stdout-only deploy.log sent the post-mortem to
-        # the live estate for the answer (live-found 2026-10-03, twice).
+    if args.run_dir:
+        # ALWAYS, success included: the phase-by-phase log is the only durable record of what
+        # the deploy did — the template-reuse decisions ("Engine template reuses on the node's
+        # hash stamp", "golden X hash differs — rebuilding") and every phase's output live here
+        # and nowhere else. Written only on failure until 2026-10-15, so a SUCCESSFUL run left
+        # no evidence of the reuse it had just proved (run-1c44733b: no deploy.log anywhere in
+        # the run dir). stderr too: the phase-4 checkpoint SystemExit and a phase-3 ssh timeout
+        # both printed ONLY to stderr, and a stdout-only log sent the post-mortem to the live
+        # estate for the answer (live-found 2026-10-03, twice).
         (Path(args.run_dir) / "deploy.log").write_text(
             (r.stdout or "") + "\n=== STDERR ===\n" + (r.stderr or ""))
     for line in (r.stdout or "").splitlines()[-15:]:
