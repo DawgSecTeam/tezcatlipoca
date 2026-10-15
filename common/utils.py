@@ -365,10 +365,34 @@ def run_terraform(args, cwd, env=None, timeout=None, check=True, grace=60):
     # `init` is the only subcommand that writes the shared provider cache, and the lock must be
     # held for the WHOLE install: terraform installs while the process runs, not at exec (the
     # lock released at Popen time would serialise nothing).
-    lock = (terraform_init_lock(env) if args and args[0] == "init"
-            else contextlib.nullcontext())
+    is_init = bool(args) and args[0] == "init"
+    lock = (terraform_init_lock(env) if is_init else contextlib.nullcontext())
     with lock:
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, start_new_session=True)
+        return _terraform_run(cmd, args, cwd, env, timeout, check, grace, is_init)
+
+
+# How many times an `init` may be retried when the shared provider file is being written by
+# another terraform. The lock above serialises the runs that go through this function; it cannot
+# stop an OLDER engine (or a hand-run terraform) installing into the same cache, and that is the
+# case that killed two deploys on 2026-10-14: `open .../terraform-provider-null_v3.3.2_x5: text
+# file busy` while a second competition's run — cut from code that predates the lock — installed
+# the same providers. A bounded retry turns a fatal race into a few seconds.
+INIT_RACE_RETRIES = 3
+
+
+def _provider_install_race(text):
+    return "text file busy" in (text or "").lower()
+
+
+def _terraform_run(cmd, args, cwd, env, timeout, check, grace, is_init):
+    import tempfile
+    for attempt in range(1, (INIT_RACE_RETRIES if is_init else 1) + 1):
+        # init's output is captured to a FILE (not a pipe: nothing here drains a pipe while the
+        # child runs) so a racing failure can be diagnosed and replayed verbatim.
+        cap = tempfile.NamedTemporaryFile("w+", delete=False) if is_init else None
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, start_new_session=True,
+                                stdout=cap or None,
+                                stderr=subprocess.STDOUT if cap else None)
 
         def _stop():
             with contextlib.suppress(ProcessLookupError):
@@ -400,6 +424,22 @@ def run_terraform(args, cwd, env=None, timeout=None, check=True, grace=60):
         finally:
             if prev is not None:
                 signal.signal(signal.SIGTERM, prev)
+        output = ""
+        if cap is not None:
+            cap.close()
+            output = Path(cap.name).read_text(errors="replace")
+            Path(cap.name).unlink(missing_ok=True)
+            sys.stdout.write(output)
+            sys.stdout.flush()
+        if rc == 0 or not (is_init and _provider_install_race(output)
+                           and attempt < INIT_RACE_RETRIES):
+            break
+        delay = 5 * attempt
+        print(f"  terraform init hit a shared-provider-cache write race "
+              f"(`text file busy`, attempt {attempt}/{INIT_RACE_RETRIES}) — another terraform is "
+              f"installing into {env.get('TF_PLUGIN_CACHE_DIR') if env else 'the provider cache'}; "
+              f"retrying in {delay}s")
+        time.sleep(delay)
     if check and rc != 0:
         raise subprocess.CalledProcessError(rc, cmd)
     return subprocess.CompletedProcess(cmd, rc)

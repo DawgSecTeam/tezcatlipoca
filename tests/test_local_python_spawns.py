@@ -66,11 +66,14 @@ class RedSpawns(unittest.TestCase):
 
         args = SimpleNamespace(competition="c1", comp_dir="/tmp/c1", red_vmid=999,
                                test_dir=None, run_dir=None)
+        # a red01 was deployed by this run; the staged-no-red case (which must NOT run
+        # badauto destroy at all) is covered in tests/test_teardown_red_skip.py
         with mock.patch.object(teardown_stage.procs, "run", side_effect=fake_run), \
                 mock.patch.object(teardown_stage, "log"), \
                 mock.patch.object(teardown_stage.badauto_config_ops, "config_path",
                                   return_value=Path("/nonexistent/config.yaml")), \
                 mock.patch.object(teardown_stage, "_config_red_vmid", return_value=None), \
+                mock.patch.object(teardown_stage, "_manifest_red_vmid", lambda *a, **k: 999), \
                 mock.patch.object(teardown_stage, "_red_vm_still_exists", return_value=False), \
                 mock.patch.object(teardown_stage.red_link, "pull_red_state", return_value=[]):
             teardown_stage.teardown_red(args, {})

@@ -873,8 +873,11 @@ class RedTeardownAssertion(unittest.TestCase):
             return SimpleNamespace(returncode=seq.pop(0) if seq else rc,
                                    stdout="", stderr="")
 
+        # D14 is about a red01 that WAS deployed: the run records its vmid, which is what makes
+        # the destroy run at all (a run that staged no red is skipped outright).
         with mock.patch.object(procs, "run", side_effect=fake_run), \
                 mock.patch.object(teardown_stage, "log"), \
+                mock.patch.object(teardown_stage, "_manifest_red_vmid", lambda *a, **k: red_vmid), \
                 mock.patch.object(teardown_stage, "_config_red_vmid", return_value=configured), \
                 mock.patch.object(teardown_stage, "_red_vm_still_exists",
                                   return_value=(True if still else False)):

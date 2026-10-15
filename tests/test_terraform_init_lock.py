@@ -17,6 +17,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _REPO = Path(__file__).resolve().parents[1]
 
@@ -68,6 +69,52 @@ class TerraformInitLock(unittest.TestCase):
             from common.utils import run_terraform
             self.assertEqual(run_terraform(["plan"], cwd=tmp, env=env).returncode, 0)
             self.assertFalse((tmp / "cache" / ".init.lock").exists())
+
+
+    def test_init_retries_when_a_foreign_writer_holds_the_provider(self):
+        # Two deploys died on 2026-10-14 with `text file busy` because the OTHER run was cut from
+        # code that predates the lock (or was a hand-run terraform). A bounded retry absorbs it.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            cache = tmp / "cache"
+            cache.mkdir()
+            stub = bindir / "terraform"
+            stub.write_text(
+                "#!/bin/sh\n"
+                f"F={cache}/attempts\n"
+                "n=$(cat $F 2>/dev/null || echo 0); n=$((n+1)); echo $n > $F\n"
+                "if [ $n -eq 1 ]; then\n"
+                "  echo 'Error while installing hashicorp/null: text file busy'\n"
+                "  exit 1\n"
+                "fi\n"
+                "echo initialized\n")
+            stub.chmod(0o755)
+            env = {"PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+                   "TF_PLUGIN_CACHE_DIR": str(cache)}
+            from common import utils
+            with mock.patch.object(utils.time, "sleep", lambda _s: None):
+                proc = utils.run_terraform(["init"], cwd=tmp, env=env)
+            self.assertEqual(proc.returncode, 0)
+            self.assertEqual((cache / "attempts").read_text().strip(), "2")
+
+    def test_a_real_init_failure_is_not_retried(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            cache = tmp / "cache"
+            cache.mkdir()
+            stub = bindir / "terraform"
+            stub.write_text("#!/bin/sh\necho 'Error: something else broke'\nexit 1\n")
+            stub.chmod(0o755)
+            env = {"PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+                   "TF_PLUGIN_CACHE_DIR": str(cache)}
+            from common import utils
+            with mock.patch.object(utils.time, "sleep", lambda _s: None):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    utils.run_terraform(["init"], cwd=tmp, env=env)
 
 
 if __name__ == "__main__":

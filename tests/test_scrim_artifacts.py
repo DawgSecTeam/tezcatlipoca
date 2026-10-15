@@ -413,6 +413,10 @@ class TeardownCollection(TmpCase):
             # the range teardown is in-process now: the label records the seam
             mock.patch.object(teardown_stage, "run_range_teardown",
                               side_effect=lambda *a, **k: self.calls.append("destroy-competition")),
+            # this scenario is a run that DID stage red (a red01 exists to destroy). A run
+            # that staged no red is skipped outright by teardown_red — covered in
+            # tests/test_teardown_red_skip.py
+            mock.patch.object(teardown_stage, "_manifest_red_vmid", lambda *a, **k: 999),
         ]
         if log:
             patches.append(mock.patch.object(test_folder, "log",
@@ -481,6 +485,7 @@ class TeardownCollection(TmpCase):
         # the REAL ingest_verdict, so this fails if the report never reaches its source path
         with mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"), \
                 mock.patch.object(test_folder, "log", side_effect=self.warnings.append), \
+                mock.patch.object(teardown_stage, "_manifest_red_vmid", lambda *a, **k: 999), \
                 mock.patch.object(procs, "run", side_effect=self._fake_run), \
                 mock.patch.object(teardown_stage, "run_range_teardown",
                                   side_effect=lambda *a, **k: self.calls.append("destroy-competition")), \
@@ -513,12 +518,15 @@ class Finalize(TmpCase):
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     def test_finalize_runs_last_on_the_keep_range_path(self):
+        # this scenario is a run that DID stage red (a red01 exists to destroy); a run that
+        # staged no red skips `badauto destroy` entirely (tests/test_teardown_red_skip.py)
         self.args.keep_range = True
         with mock.patch.object(event_run, "stage_run", lambda *a: self.calls.append("stage_run")), \
                 mock.patch.object(evidence, "stage_capture",
                                   lambda *a: self.calls.append("capture")), \
                 mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"), \
                 mock.patch.object(test_folder, "log", lambda *a, **k: None), \
+                mock.patch.object(teardown_stage, "_manifest_red_vmid", lambda *a, **k: 999), \
                 mock.patch.object(procs, "run", side_effect=self._fake_run), \
                 mock.patch.object(ao, "collect",
                                   side_effect=lambda *a, **k: self.calls.append("collect") or {}), \
