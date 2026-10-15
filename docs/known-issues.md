@@ -4,6 +4,23 @@ Temporary writepad, not a ledger: every entry has a concrete next action and is 
 
 ## Open
 
+### The comp ownership tag is the workspace directory name, so every dashboard range is `comp-comp`
+
+`teardown/machinery.py` builds `Ownership(Path(comp_dir).name, run_id)` and the deploy stamps
+`ctx.comp_name = comp_dir.name` (`deploy_lib/inputs.py`), but the dashboard hands every run a
+workspace whose comp dir is literally `<run_dir>/comp`. Every dashboard-deployed range therefore
+carries the tag `comp-comp`, and bad-auto's red01 identity marker — also `Path(comp_dir).name` —
+reads `comp=comp` on every dashboard red01. Destruction stays scoped (the full ownership set still
+requires this deploy's `run-<id>`, and bad-auto's marker also compares its `instance_id`), so this
+is attribution, not a false destroy — but `verify_clean` reports every other dashboard range's VMs
+as "same competition, DIFFERENT run" (live 2026-10-15: run-44a106d2, tearing down tiny-linux,
+listed scrim-one's whole range that way), and the `comp_name` half of the red01 reclaim guard
+cannot tell two dashboard competitions apart — only its companions (the no-red skip gate,
+bad-auto's instance id) prevented the 2026-10-15 kill. **Next action**: derive the comp tag from
+the competition identity the Compfile already carries (`name`), not from the directory, landed with
+a migration that still accepts the legacy `comp-comp` tag for already-deployed VMs — changing the
+derivation alone makes every existing and live range's teardown refuse.
+
 ### `terraform apply` on a live firewall range rewrites the pre-cutover engine netplan
 
 Accepted caveat. `null_resource.team_nics` writes the pre-cutover netplan (`192.168.<id>.1/24` on team NICs); phase 5's cutover moves the gateway to the firewalls. Trigger-gated, but a re-apply on a live firewall range whose triggers changed re-adds `.1` under the firewalls' feet. Fix: `create-competition.py --competition <id> --from-phase 5 --yes` afterward (idempotent). `verify-competition.py`'s `firewall_in_path` gate detects the drift. Owning the cutover inside terraform needs the firewall config state round-tripped into tfvars — deferred until needed.
