@@ -118,17 +118,32 @@ class EngineTemplateCloneRetry(unittest.TestCase):
         self.assertEqual(cluster.clones, 2, "lock contention is retried, not failed")
         self.assertIn("DELETE", [m for m, _ in cluster.calls], "the locked partial is reclaimed")
 
-    def test_lock_failure_is_bounded(self):
+    def test_lock_failure_is_bounded_but_persists_past_the_contention(self):
+        # The retry must OUTLAST the contention window, not merely repeat: an earlier flat
+        # 20 s gap exhausted its three attempts inside the window (run-2631ec27, 2026-10-15)
+        # while the winners' clones committed seconds after it started. Assert the wait, not
+        # just the count — a future edit that shortens the backoff reintroduces that failure.
         cluster = FakeCluster(vms_after_failure=[{"vmid": 4140, "name": "engine-template"}],
                               fail_first=True)
+        slept = []
 
         def wait(node, upid):
             raise RuntimeError(LOCK_MESSAGE)
 
-        with self.assertRaises(RuntimeError) as ctx:
-            self._run(cluster, wait)
+        stack = ExitStack()
+        stack.enter_context(patch.object(client, "_route_for_path",
+                                         lambda path: ("https://h:8006", "tok")))
+        stack.enter_context(patch.object(client, "proxmox_api_for", cluster.fake_api_for))
+        stack.enter_context(patch.object(engine_template_ops, "wait_for_proxmox_task", wait))
+        stack.enter_context(patch.object(engine_template_ops.time, "sleep", slept.append))
+        with stack:
+            with self.assertRaises(RuntimeError) as ctx:
+                engine_template_ops.build_engine_template(
+                    "n", "/tmp/comp", 4000, 955, {}, "pg", "redis", "ref", "hash", {})
         self.assertIn("lock file", str(ctx.exception))
-        self.assertEqual(cluster.clones, 3, "the retry is bounded at three attempts")
+        self.assertEqual(cluster.clones, 5, "the retry is bounded at five attempts")
+        self.assertGreaterEqual(sum(slept), 300,
+                                "total backoff must give the datastore queue minutes to drain")
 
     def test_non_lock_failure_is_not_retried(self):
         cluster = FakeCluster()

@@ -75,10 +75,16 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     # concurrent ranges issue it within seconds of each other: PVE serializes them on one
     # datastore lock and reports `clone failed: can't lock file
     # '/var/lock/pve-manager/pve-storage-ssd' - got timeout` to the loser (live-found
-    # 2026-10-15, all three campaign deploys). The lock is held only for the duration of a
-    # volume allocation, so the loss is transient and the operation idempotent — retry it,
+    # 2026-10-15, all three campaign deploys). The operation is idempotent, so retry it,
     # reclaiming the locked partial clone (whose name proves it ours) in between.
-    for attempt in range(3):
+    #
+    # The retry must OUTLAST the contention window, not merely repeat: a flat 20 s gap kept
+    # landing inside it — the loser of a three-way race failed at +0:03, +0:36 and +1:11 while
+    # the two winners' clones committed seconds apart at the start (run-2631ec27, 2026-10-15;
+    # the winner's own clone task completes in ~1 s, so what is contended is the serialised
+    # allocation queue behind the lock, not one long clone). Backing off 40 s, 80 s, 120 s
+    # gives the queue ~6.5 minutes to drain before the last attempt.
+    for attempt in range(5):
         upid = proxmox_api("POST", f"/nodes/{node}/qemu/{base_engine_vm_id}/clone", data={
             "newid": vmid,
             "name": vm_name,
@@ -88,16 +94,16 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
             wait_for_proxmox_task(node, upid)
             break
         except RuntimeError as e:
-            if "lock file" not in str(e) or attempt == 2:
+            if "lock file" not in str(e) or attempt == 4:
                 raise
             print(f"    clone of base image {base_engine_vm_id} hit datastore lock "
                   f"contention — reclaiming the partial clone and retrying "
-                  f"(attempt {attempt + 2}/3)")
+                  f"(attempt {attempt + 2}/5)")
             leftover = next((v for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
                              if v["vmid"] == vmid and (v.get("name") or "") == vm_name), None)
             if leftover:
                 destroy_vm_if_exists(node, vmid, expect_tags=None)
-            time.sleep(20)
+            time.sleep(40 * (attempt + 1))
 
     mgmt_ip = config.active().engine.mgmt_ip
     cfg = {
