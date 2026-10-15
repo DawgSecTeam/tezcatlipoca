@@ -69,7 +69,8 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
     # On agentless-data nodes (realm) the settle check falls back to SSH — otherwise
     # every box burns the full budget returning 'cannot verify' forever.
     unsettled = wait_boxes_settled(targets, node, timeout=240,
-                                   ssh_fallback=lambda t: _box_settled_via_ssh(ctx, t))
+                                   ssh_fallback=lambda t: _box_settled_via_ssh(ctx, t),
+                                   cloud_init_ctx=ctx)
     if unsettled:
         print(f"    WARNING: {len(unsettled)} box(es) never settled after boot — proceeding")
         record_degradation("boxes never settled after boot",

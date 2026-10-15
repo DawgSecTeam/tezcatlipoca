@@ -5,7 +5,7 @@ import time
 
 from infra.guest_exec import guest_agent_exec_root, wait_for_guest_agent
 from common.ssh_ops import ssh_via_gateway
-from common.utils import run_concurrent
+from common.utils import PRINT_LOCK, record_degradation, run_concurrent
 
 
 # Match the upgrade WORKER by full command line. `pgrep -x unattended-upgr` (the
@@ -60,12 +60,90 @@ def _box_settled_via_ssh(ctx, t):
     return r.returncode == 0 and "SETTLED" in (r.stdout or "") and "BUSY" not in (r.stdout or "")
 
 
-def wait_boxes_settled(targets, node, timeout=240, ssh_fallback=None):
+# cloud-init status: `command -v` guard makes a non-cloud-init box an honest no-op
+# (else `cloud-init: command not found` reads 'running' and burns the whole bound);
+# 2>&1 folds cloud-init's own stderr into the tail we report on a stuck box.
+_CLOUD_INIT_CHECK = (
+    "command -v cloud-init >/dev/null 2>&1 || { echo 'status: done'; exit 0; }\n"
+    "cloud-init status 2>&1\n"
+)
+_CLOUD_INIT_POLL = 10
+
+
+def _cloud_init_verdict(rc, out):
+    """`cloud-init status` -> 'done', 'error' or 'running'. The exit code and the
+    text can disagree across cloud-init versions, so either one settles a state:
+    rc 2 is the documented error state, rc 0 done, and 'disabled' means cloud-init
+    will never run again (no apt pass to race) — treat it as done."""
+    out = out or ""
+    if rc == 2 or "status: error" in out:
+        return "error"
+    if rc == 0 or "status: done" in out or "status: disabled" in out:
+        return "done"
+    return "running"
+
+
+def wait_boxes_cloud_init(ctx, targets, timeout=600, run=None):
+    """Bounded wait for cloud-init to finish on freshly cloned boxes before a long
+    apt/build session opens. The base image's boot-time `package_upgrade` (a
+    kernel+firmware batch is enough) argues with the build's own apt chain over
+    the SAME long ssh session, and when the storm bounces sshd mid-session the
+    driver's single ssh call drops with exit 255 (live: engine-template builds
+    died 1-2 min into `install engine packages`). The apt-holder settle check
+    alone can slip through a gap between cloud-init's apt invocations, so the
+    real precondition is cloud-init's own 'done'. A box that reached 'error' is
+    warned about and passed — never block a deploy forever on a broken boot;
+    a box still running at the bound fails loudly with the status tail, because
+    opening the build anyway is exactly the race this closes."""
+    run = run or ssh_via_gateway
+    user = ctx.get("box_username", "ubuntu")
+    deadline = time.time() + timeout
+
+    def _one(t):
+        ip = t["ip"]
+        tail = ""
+        while True:
+            try:
+                r = run(ctx, ip, _CLOUD_INIT_CHECK, timeout=20, user=user)
+                verdict = _cloud_init_verdict(r.returncode, r.stdout)
+                tail = (r.stdout or "").strip() or tail
+            except Exception:
+                verdict = "running"
+            if verdict == "done":
+                with PRINT_LOCK:
+                    print(f"    {ip}: cloud-init done")
+                return True
+            if verdict == "error":
+                with PRINT_LOCK:
+                    print(f"    WARNING: {ip} cloud-init finished with errors — proceeding: "
+                          f"{tail[:150]}")
+                record_degradation("cloud-init errored", f"{ip}: {tail[:150]}")
+                return True
+            if time.time() >= deadline:
+                raise RuntimeError(
+                    f"cloud-init on {ip} still running after {timeout}s — refusing to open "
+                    f"the build session against a box whose boot-time package_upgrade can "
+                    f"bounce sshd mid-build (last status: {tail[-300:]})")
+            time.sleep(_CLOUD_INIT_POLL)
+
+    results = run_concurrent(targets, _one)
+    for r in results:
+        if isinstance(r, Exception):
+            raise r
+
+
+def wait_boxes_settled(targets, node, timeout=240, ssh_fallback=None, *,
+                       cloud_init_ctx, cloud_init_timeout=600):
 # Poll every box until it settles after boot — the real condition the old blind
 #     150s sleep waited out (the initial unattended-upgrades run starves both the guest
 #     agent and the ssh -W forward). Boxes poll concurrently, each with the full budget.
 #     Returns the vmids that never settled; that is not fatal — the caller's per-box
 #     retry ladder covers a stubborn box exactly as before.
+#
+#     cloud_init_ctx is required (keyword-only): a freshly cloned box is not settled
+#     until cloud-init itself is done, and every consumer of this waiter must carry
+#     that guarantee before it opens its own long apt/build session.
+    wait_boxes_cloud_init(cloud_init_ctx, targets, timeout=cloud_init_timeout)
     deadline = time.time() + timeout
 
     def _wait(t):

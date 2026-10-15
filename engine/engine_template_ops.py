@@ -143,8 +143,11 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     # A fresh base-image clone runs unattended-upgrades on first boot; the old
     # engine bootstrap's killall+sleep-2 preamble raced it and lost (live-found
     # 2026-09-25: apt rc=100, dpkg lock held by the image's own apt). Wait for the
-    # real settle condition first. On realm the guest agent returns NULL data, so
-    # this exercises the SSH settle fallback.
+    # real settle condition first — which now includes cloud-init's own boot-time
+    # package_upgrade being finished: the apt-holder check alone slips through the
+    # gaps between cloud-init's apt invocations and the next one bounces sshd
+    # mid-build (2026-10 kernel+firmware batch). On realm the guest agent returns
+    # NULL data, so this exercises the SSH settle fallback.
     from guests.box_settle_ops import wait_boxes_settled, _box_settled_via_ssh
     # Stamp the build VM before anything else touches it: every later SSH goes to a
     # management IP that another competition's engine can share, and the template clean
@@ -153,9 +156,10 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     from engine.engine_identity_ops import stamp_engine_build
     stamp_engine_build(build_ctx, vmid)
 
-    print("    Waiting for the build VM to settle (unattended-upgrades done, dpkg lock free)...")
+    print("    Waiting for the build VM to settle (cloud-init + unattended-upgrades done, dpkg lock free)...")
     unsettled = wait_boxes_settled([{"vmid": vmid, "ip": build_ip}], node, timeout=600,
-                                   ssh_fallback=lambda t: _box_settled_via_ssh(build_ctx, t))
+                                   ssh_fallback=lambda t: _box_settled_via_ssh(build_ctx, t),
+                                   cloud_init_ctx=build_ctx)
     if unsettled:
         print("    WARNING: build VM never fully settled — proceeding (the bootstrap's "
               "Lock::Timeout covers a straggler)")

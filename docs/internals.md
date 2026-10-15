@@ -117,7 +117,7 @@ Nakon is a subprocess with `cwd = NAKON_DIR`. Patch a name on the module whose f
 
 ## Box hardening (`guests/`)
 
-- `wait_boxes_settled()`: polls the actual condition (agent ping, no `unattended-upgr` process, dpkg lock free via `apt-get check` with a 1 s lock timeout) instead of sleeping out the post-boot upgrade storm; ceiling 240 s, then falls through to prep's retry ladder. Once per `prep_apt_on_boxes` call.
+- `wait_boxes_settled()`: gates on cloud-init first — `wait_boxes_cloud_init()` polls `cloud-init status` (formerly `unattended-upgrades` alone) up to 600 s, so a freshly cloned box whose boot-time `package_upgrade` would bounce sshd mid-build is finished before the shared apt/build session opens; `error` warns and proceeds, still-running at the bound fails the step. It then polls the apt condition (agent ping, no `unattended-upgr` process, dpkg lock free via `apt-get check` with a 1 s lock timeout) instead of sleeping out the post-boot upgrade storm; ceiling 240 s, then falls through to prep's retry ladder. Once per `prep_apt_on_boxes` call and once in the engine-template build.
 - `prep_apt_on_boxes()`: 5 attempts, 15 s apart; `command -v apt-get || exit 0` makes Fedora/Alpine an honest no-op.
 - `fix_dns_on_boxes()`: 8 attempts, 15 s apart, then guest-agent root with `DNS_FIX_CMD_ROOT`. All-fail aborts.
 - `setup_ubuntu_auth()`: sshd password auth + NOPASSWD sudo for `box_username`; 8 attempts, then guest-agent root.
