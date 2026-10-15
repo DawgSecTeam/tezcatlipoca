@@ -10,7 +10,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from common.constants import GOLDEN_TAG, SCORING_ENGINE_VMID
+from common.constants import ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_TAG, SCORING_ENGINE_VMID
 from golden.golden_ops import destroy_golden_set
 from net.jump_ops import destroy_jump_vms
 from multinode.placement_record import record_of
@@ -223,6 +223,34 @@ def repair_ssh_key_path(tfvars_path, env):
     data["ssh_private_key_path"] = replacement
     path.write_text(json.dumps(data, indent=2) + "\n")
     print(f"  repaired ssh_private_key_path in {path.name}: {recorded} -> {replacement}")
+    return True
+
+
+def repair_engine_clone_id(tfvars_path, scoring_vmid):
+    """Replace an invalid recorded `engine_clone_id` (0) with the derived template vmid.
+
+    terraform.tfvars.json outranks TF_VAR_*, so a deploy whose workspace state was reset
+    (phase 1 of a later fresh attempt) before it could record `engine_template_vmid` saved
+    `engine_clone_id: 0` — and every `terraform destroy` then dies in validation ("expected
+    vm_id to be in the range (100 - 2147483647), got 0") before it removes anything,
+    including the team bridge (live 2026-10-15, run-44a106d2: four failed attempts, sweep
+    removed the VMs, vmbr140 survived). The value is deterministic (engine +140), so a
+    recorded 0 is rewritten the same way tfinputs derives it. Never touches a valid value.
+    """
+    path = Path(tfvars_path)
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    if not scoring_vmid:
+        return False
+    clone_id = data.get("engine_clone_id")
+    if clone_id and int(clone_id) > 0:
+        return False
+    derived = int(scoring_vmid) + ENGINE_TEMPLATE_VMID_OFFSET
+    data["engine_clone_id"] = derived
+    path.write_text(json.dumps(data, indent=2) + "\n")
+    print(f"  repaired engine_clone_id in {path.name}: {clone_id} -> {derived}")
     return True
 
 

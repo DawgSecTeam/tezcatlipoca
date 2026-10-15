@@ -132,6 +132,17 @@ class RedStep(Step):
         from red import red_plant_ops
         if ctx.keep_red:
             return StepResult(self.name, "skipped", "--keep-red")
+        candidates = red_plant_ops.red_vmid_candidates(ctx.comp_dir, ctx.deployed_state)
+        if not candidates:
+            # A run that never staged red has no per-comp bad-auto config and no recorded red
+            # vmid. Running `badauto destroy` then aims it at the HOST's default config —
+            # built-in red_vmid 999, whoever's box lives there (live 2026-10-15: it found
+            # another session's tdred-2026 red01 at 999, and the reclaim below destroyed it).
+            # Skip, mirroring the scrim harness's teardown; a red01 that genuinely exists for
+            # this comp is still caught by the vmid-candidates resolution and the sweep.
+            return StepResult(self.name, "skipped",
+                              "no per-comp bad-auto config and no recorded red vmid — "
+                              "this run staged no red agent")
         print("  red01      : badauto destroy (not terraform-managed — this script cannot "
               "remove it any other way)...")
         r = red_plant_ops.destroy_red(ctx.comp_dir, env=ctx.env)
@@ -148,7 +159,11 @@ class RedStep(Step):
             # surfaced at the verification (2026-10-14, run-df29374d).
             from infra import red01
             vmid = self.last_vmid
-            if vmid and red01.reclaim_unstamped_red(vmid, log=_log):
+            # comp_name arms reclaim's another-competition guard: a VM whose marker names a
+            # different competition is a recycled vmid, never ours (live 2026-10-15: without
+            # it, a badauto-defaulted 999 found tdred-2026's stamped red01 and reclaimed it).
+            if vmid and red01.reclaim_unstamped_red(vmid, comp_name=ctx.comp_dir.name,
+                                                    log=_log):
                 return StepResult(self.name, "ok",
                                   f"reclaimed unstamped red01 vmid {vmid} (badauto refused: "
                                   f"{refusal.get('saw')})")
@@ -194,14 +209,17 @@ class TerraformStep(Step):
     destructive = True
 
     def run(self, ctx):
-        from teardown.machinery import destroy_with_recovery, repair_ssh_key_path
+        from teardown.machinery import (destroy_with_recovery, repair_engine_clone_id,
+                                        repair_ssh_key_path)
         from common.terraform_workdir import terraform_plugin_cache_dir
         tf_cwd = str(ctx.comp_dir / "terraform")
         print(f"\nRunning terraform destroy (state: {tf_cwd})...")
         # Same provider cache the deploy inits with: without it, destroy cannot resolve the
         # providers the per-comp .terraform links point at (2026-10-14).
         env = {**ctx.env, "TF_PLUGIN_CACHE_DIR": str(terraform_plugin_cache_dir())}
-        repair_ssh_key_path(Path(tf_cwd) / "terraform.tfvars.json", env)
+        tfvars = Path(tf_cwd) / "terraform.tfvars.json"
+        repair_ssh_key_path(tfvars, env)
+        repair_engine_clone_id(tfvars, ctx.deployed_state.get("scoring_vm_id"))
         if destroy_with_recovery(env, tf_cwd, ctx.nodes, ctx.ownership):
             return StepResult(self.name, "ok")
         return StepResult(self.name, "failed",
