@@ -138,7 +138,7 @@ def is_unmanaged(box):
 
 
 def is_in_path_fw(box):
-# True for an in-path firewall: unmanaged + `in_path` — terraform gives it two NICs
+# True for an in-path firewall: unmanaged + `in_path` — the create path gives it two NICs
 #     (WAN on vmbrW<id>, LAN on vmbr<id>), deploy phase 5 bootstraps its pfSense config and
 #     cuts the engine over so it routes the team subnet. Every unmanaged skip above applies
 #     to it too; this predicate only adds the network plumbing on top.
