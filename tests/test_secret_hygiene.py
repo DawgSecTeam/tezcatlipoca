@@ -50,6 +50,10 @@ INTERNAL_ENV = {
     "MY_TEAM": "scrim.env handoff written by run-agent-scrim.py",
     "JAR": "scrim.env handoff written by run-agent-scrim.py",
     "SCRIM_WEB01_PORT": "scrim harness test hook (fresh opencode port per blue cycle)",
+    # tezcatlipoca-dashboard writes the path of a per-run control file into the driver's
+    # environment; the file's existence is the "hold at the next phase boundary" request.
+    # Internal run-queue handoff, never operator configuration.
+    "TEZ_PAUSE_FILE": "tezcatlipoca-dashboard -> deploy_lib/pause.py boundary hold",
     # artifacts_lib/artifacts_ops.py seal step: default author attribution from the OS user, not
     # operator configuration.
     "USER": "OS username, recorded as the default write-up author on seal",

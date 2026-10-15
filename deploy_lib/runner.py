@@ -2,6 +2,7 @@
 
 from deploy_lib import phases
 from deploy_lib.failure import record_degradations
+from deploy_lib.pause import pause_at_boundary
 from infra.gates import acquire_deploy_lock
 from deploy_lib.prepare import prepare
 
@@ -39,6 +40,11 @@ def run_pipeline(ctx):
 #
 #     Any failure is recorded (streak + degradations) and re-raised with a resume hint.
     current_phase = max(ctx.from_phase, 1)
+    # A run that died while parked leaves its marker in the state file, and the observer reads
+    # that marker as the live truth: this process is holding nothing, so clear it before it can
+    # label a resume as paused.
+    if ctx.state.pop("paused_after_phase", None) is not None:
+        ctx.save_state()
     try:
         for n, phase in enumerate(phases.PHASES, 1):
             # Every phase is CALLED so it can print its own "[N/8] Skipped (resume)"
@@ -59,6 +65,12 @@ def run_pipeline(ctx):
                 # gate on purpose, so a failure here reports the phase the operator
                 # asked to resume at rather than phase 2.
                 phases.connect_terraform(ctx)
+            if running:
+                # Last in the iteration, so a hold lands on a phase that is completely done
+                # (phase 2's terraform read included). A skipped phase is no boundary: its
+                # checkpoint never moved, so holding there would name a phase this run did
+                # not run.
+                pause_at_boundary(ctx, n)
     except BaseException as e:
         report_failure(ctx, current_phase, e)
         raise
