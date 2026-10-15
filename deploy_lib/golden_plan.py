@@ -75,7 +75,12 @@ def _is_own_golden_template(node, vmid, comp_name):
     adopt and stays refused.
     """
     from infra.client import proxmox_api
-    cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+    try:
+        cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+    except Exception:
+        # Unreadable config = nothing adopted; the destroy below then refuses loudly on the
+        # ownership proof rather than acting on a guess.
+        return False
     if cfg.get("template") != 1:
         return False
     tags = {t.strip() for t in str(cfg.get("tags") or "").replace(";", ",").split(",") if t.strip()}
