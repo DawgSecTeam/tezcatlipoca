@@ -67,6 +67,9 @@ def print_live_summary(ctx):
     print(f"Scenario: {ctx.scenario}")
     print(f"Saved to: competitions/{ctx.comp_name}/  (credentials.txt, mode 0600)")
     print(f"\nScoreboard:    http://{ctx.scoring_ip}")
+    if ctx.state.get("hold_start"):
+        print("START HELD:    the competition is NOT started — begin it with")
+        print(f"               python3 competition-ops.py start --comp-dir {ctx.comp_dir}")
     portal = ctx.state
     if portal.get("portal_up"):
         print(f"Portal:        {portal.get('portal_url')}")

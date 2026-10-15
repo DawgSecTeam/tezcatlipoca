@@ -9,7 +9,7 @@ from deploy_lib.prepare import prepare
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
            team_node=None, engine_node=None, force_from_phase=False, nodes_path=None,
-           team_identifiers=None, engine_mgmt_ip=None):
+           team_identifiers=None, engine_mgmt_ip=None, hold_start=False):
 # Run the eight-phase deploy for one competition; from_phase > 1 resumes from .deploy_state.json.
 #
 #     scoring_vmid overrides the scoring-engine VMID (default 1000) so several
@@ -19,6 +19,10 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 #     multi-node placement when nodes.json exists; without them teams are placed by
 #     capacity-fill. force_from_phase (--force-from-phase) bypasses the guard that refuses
 #     to skip phases .deploy_state.json never recorded as completed.
+#     hold_start (--hold-start) records a hold in .deploy_state.json that phase 8 obeys:
+#     everything is deployed (teams seeded, portal up) but the competition is not started
+#     and the engine stays paused — competition-ops.py start begins it. A resume of a held
+#     deploy stays held (the flag lives in the state file; the argument is only the mint).
     acquire_deploy_lock(comp_dir)
 
     ctx = prepare(comp_dir, num_teams=num_teams, assume_yes=assume_yes, from_phase=from_phase,
@@ -27,6 +31,10 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
                   team_identifiers=team_identifiers, engine_mgmt_ip=engine_mgmt_ip)
     if ctx is None:
         return
+
+    if hold_start and not ctx.state.get("hold_start"):
+        ctx.state["hold_start"] = True
+        ctx.save_state()
 
     run_pipeline(ctx)
 

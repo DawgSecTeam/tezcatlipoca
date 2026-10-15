@@ -26,6 +26,8 @@ export const api = {
   access: () => request('GET', '/api/admin/access'),
   setAccess: (open) => request('POST', '/api/admin/access', { open }),
   log: () => request('GET', '/api/admin/log'),
+  requests: () => request('GET', '/api/requests'),
+  requestReset: (box) => request('POST', '/api/requests', { box }),
 }
 
 // What a box IS for rendering — the same three kinds webui's kindOf draws (firewall wins).

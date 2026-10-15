@@ -144,6 +144,14 @@ class EnvFileCookieSecure(unittest.TestCase):
         # conservative default: an HTTPS deployment is the case Secure exists for
         self.assertIn("PORTAL_COOKIE_SECURE=1", portal_ops._env_file("s", False, ""))
 
+    def test_ops_sync_channel_only_when_both_values_present(self):
+        wired = portal_ops._env_file("s", True, "", ops_url="http://dash:8787",
+                                     ops_token="tok")
+        self.assertIn("TEZ_OPS_URL=http://dash:8787", wired)
+        self.assertIn("TEZ_OPS_TOKEN=tok", wired)
+        bare = portal_ops._env_file("s", True, "", ops_url="http://dash:8787")
+        self.assertNotIn("TEZ_OPS", bare)
+
 
 class CheckArgs(unittest.TestCase):
     def test_one_sample_per_tokened_node(self):

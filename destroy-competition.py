@@ -10,6 +10,8 @@ Default mode is a FULL teardown: exit 0 leaves nothing of this deploy behind.
 --teams-only keeps the competition's golden + engine templates for the next run
 of the SAME competition (the mid-event mode); goldens never carry across
 competitions. A FROZEN competition's templates require --end-of-competition.
+--team NAME is the mid-event team removal (teardown/team_ops.py): one team's
+clones die, the rest of the range is never addressed.
 """
 
 import json
@@ -74,6 +76,11 @@ def main():
                         dest="artifacts_timeout",
                         help="Per-file timeout for the artifact pull (default 45s). The pull "
                              "never blocks the destroy; it warns and proceeds.")
+    parser.add_argument("--team", metavar="TEAM", default=None,
+                        help="mid-event team removal: destroy THIS team's clones, deactivate "
+                             "it in Quotient and revoke its logins — the rest of the range "
+                             "(other teams, engine, templates) is never addressed. Refuses "
+                             "anything not owned by this deploy's run id.")
     args = parser.parse_args()
 
     print("=" * 64)
@@ -124,6 +131,26 @@ def main():
     teams = json.loads((comp_dir / "teams.json").read_text())
     boxes = json.loads((comp_dir / "boxes.json").read_text())
     frozen = frozen_state(comp_dir)
+
+    if args.team:
+        from teardown.team_ops import run_team_teardown
+        print("─── Deleting team " + "─" * 46)
+        print(f"  Competition : {name} ({competition})")
+        print(f"  Team        : {args.team}")
+        print("  Only this team's clones are touched; the engine, templates and other")
+        print("  teams are never addressed.\n")
+        try:
+            report = run_team_teardown(comp_dir, args.team, name=name, env={**os.environ})
+        except Refusal as r:
+            print(f"\n  REFUSED — {r}")
+            sys.exit(1)
+        print("\n─── Result " + "─" * 52)
+        for problem in report["problems"]:
+            print(f"  PROBLEM: {problem}")
+        if not report["clean"]:
+            sys.exit(1)
+        print(f"Team '{args.team}' removed; the rest of the range is untouched.")
+        return
 
     full = not args.teams_only
     mode = ("FULL (templates destroyed)" if full

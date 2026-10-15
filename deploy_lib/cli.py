@@ -75,6 +75,12 @@ def build_parser():
                              "node, datastore, engine_base_vmid, token_env, …). Replaces the "
                              "ambient ./nodes.json; the node endpoints/tokens/datastore come from "
                              "this list, not from .env. Passed per run by the dashboard.")
+    parser.add_argument("--hold-start", action="store_true", dest="hold_start",
+                        help="Deploy everything but do NOT start the competition: teams are "
+                             "seeded, the engine stays paused, and injects are deferred to the "
+                             "start so their open/due/close windows anchor at T0. Start later "
+                             "with: python3 competition-ops.py start --comp-dir <dir>. The flag "
+                             "is recorded in .deploy_state.json, so resumes stay held.")
     parser.add_argument("--plan-only", action="store_true", dest="plan_only",
                         help="Collect/generate the competition's config (Compfile, boxes.json) "
                              "and print a summary, then exit WITHOUT touching any infrastructure "
@@ -208,4 +214,5 @@ def main():
     deploy(comp_dir, num_teams=args.teams, assume_yes=args.yes, from_phase=args.from_phase,
            scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node,
            force_from_phase=args.force_from_phase, nodes_path=args.nodes,
-           team_identifiers=args.team_identifiers, engine_mgmt_ip=args.engine_mgmt_ip)
+           team_identifiers=args.team_identifiers, engine_mgmt_ip=args.engine_mgmt_ip,
+           hold_start=args.hold_start)

@@ -121,7 +121,8 @@ def tunnel_decision(hostname, comp_name, run_id, tunnel_token, fetch=None):
                     f"(run {data.get('run_id')!r}) — tear that down or unset the tunnel token")
 
 
-def _env_file(session_secret, open_gate, tunnel_token, cookie_secure=True):
+def _env_file(session_secret, open_gate, tunnel_token, cookie_secure=True,
+              ops_url="", ops_token=""):
 # The portal's .env on the engine.
 #
 #     cookie_secure gates SessionMiddleware's `https_only`. It must follow how the browser
@@ -132,11 +133,19 @@ def _env_file(session_secret, open_gate, tunnel_token, cookie_secure=True):
 #     impossible (live-found 2026-10-13: an operator forwarding the portal to a LAN address
 #     got 'Cookie "tez_portal" has been rejected because a non-HTTPS cookie can't be set as
 #     "secure"'). Callers pass use_tunnel.
+#
+#     TEZ_OPS_URL/TEZ_OPS_TOKEN wire the reset-request sync to the run-queue dashboard
+#     (portal/app.py ops sync): the DASHBOARD sets both in the deploy run's env, so only
+#     dashboard-submitted deploys get the channel. Without them the portal still records
+#     requests locally — they just never reach the operator's bell.
     lines = [f"PORTAL_SECRET_KEY={session_secret}",
              f"PORTAL_OPEN={'1' if open_gate else '0'}",
              f"PORTAL_COOKIE_SECURE={'1' if cookie_secure else '0'}"]
     if tunnel_token:
         lines.append(f"TUNNEL_TOKEN={tunnel_token}")
+    if ops_url and ops_token:
+        lines.append(f"TEZ_OPS_URL={ops_url}")
+        lines.append(f"TEZ_OPS_TOKEN={ops_token}")
     return "\n".join(lines) + "\n"
 
 
@@ -238,7 +247,9 @@ def _deploy_portal(ctx, env):
     tar = bundle(config, _env_file(ctx.state["portal_session_secret"],
                                    env.get("TEZ_PORTAL_OPEN") == "1",
                                    tunnel_token if use_tunnel else "",
-                                   cookie_secure=use_tunnel))
+                                   cookie_secure=use_tunnel,
+                                   ops_url=env.get("TEZ_OPS_URL", ""),
+                                   ops_token=env.get("TEZ_OPS_TOKEN", "")))
     _run_engine_cmd(ctx.tf_ctx,
                     f"sudo mkdir -p {REMOTE_DIR}/state && sudo tar xzf - -C {REMOTE_DIR} && "
                     f"sudo chmod 600 {REMOTE_DIR}/portal.json {REMOTE_DIR}/.env",

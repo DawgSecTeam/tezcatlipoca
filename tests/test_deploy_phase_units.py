@@ -357,7 +357,7 @@ class Phase7Seed(unittest.TestCase):
         with dpatch("wait_for_http",
                           side_effect=lambda *a, **k: order.append("http")), \
                 dpatch("seed_teams",
-                             side_effect=lambda *a: order.append("seed")), \
+                             side_effect=lambda *a, **k: order.append("seed")), \
                 dpatch("engine_paused", return_value=True), \
                 dpatch("unpause_engine",
                              side_effect=lambda *a: order.append("unpause")), \
@@ -398,6 +398,51 @@ class Phase7Seed(unittest.TestCase):
         p_unpause.assert_not_called()
         self.assertIn("Engine reports itself unpaused", out.getvalue())
         self.assertTrue(ctx.state["engine_unpaused"])
+
+    def test_hold_start_seeds_without_starting_and_defers_injects(self):
+    # --hold-start: teams are seeded (identifiers posted, clock NOT started), the
+    #         engine stays paused and injects are deferred to competition-ops start —
+    #         their windows anchor at creation time, so creating them here would
+    #         open them before T0.
+        with tempfile.TemporaryDirectory() as d:
+            ctx = _ctx(Path(d), state={"hold_start": True}, injects=[{"title": "i1"}])
+            with dpatch("wait_for_http",
+                              side_effect=lambda *a, **k: None), \
+                    dpatch("seed_teams", return_value=None) as p_seed, \
+                    dpatch("engine_paused", return_value=True), \
+                    dpatch("unpause_engine") as p_unpause, \
+                    dpatch("resolve_inject_times") as p_resolve, \
+                    dpatch("create_injects") as p_create, \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                dl_seed.phase8_seed(ctx)
+        p_seed.assert_called_once()
+        self.assertIs(p_seed.call_args.kwargs.get("start"), False)
+        p_unpause.assert_not_called()
+        p_resolve.assert_not_called()
+        p_create.assert_not_called()
+        self.assertTrue(ctx.state["seeded"])
+        self.assertNotIn("engine_unpaused", ctx.state)
+        self.assertNotIn("injects_created", ctx.state)
+        self.assertIn("Start is HELD", out.getvalue())
+
+    def test_a_held_resume_stays_held_and_posts_nothing(self):
+    # The hold lives in the state file, so --from-phase 8 over a held state re-runs
+    #         phase 8 without starting anything.
+        with tempfile.TemporaryDirectory() as d:
+            ctx = _ctx(Path(d), state={"hold_start": True, "seeded": True},
+                       injects=[{"title": "i1"}])
+            with dpatch("wait_for_http"), \
+                    dpatch("seed_teams") as p_seed, \
+                    dpatch("engine_paused") as p_paused, \
+                    dpatch("unpause_engine") as p_unpause, \
+                    dpatch("create_injects") as p_create, \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                dl_seed.phase8_seed(ctx)
+        p_seed.assert_not_called()
+        p_paused.assert_not_called()
+        p_unpause.assert_not_called()
+        p_create.assert_not_called()
+        self.assertIn("Start is HELD", out.getvalue())
 
     def test_failed_injects_are_not_marked_created(self):
         with tempfile.TemporaryDirectory() as d:

@@ -7,6 +7,7 @@ import json
 import sys
 import tempfile
 import unittest
+import unittest.mock as mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -237,6 +238,83 @@ class PortalApp(unittest.TestCase):
     def test_healthz_names_the_run(self):
         hz = self.client.get("/healthz").json()
         self.assertEqual((hz["comp"], hz["run_id"], hz["open"]), ("probe", "run-abc", False))
+
+    # reset requests (the team → operator channel; the dashboard resolves the status)
+    def test_team_requests_own_box_and_gets_one_open_request_per_box(self):
+        self.login("team1", "t1pw")
+        r = self.client.post("/api/requests", json={"box": "web01"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual((r.json()["team"], r.json()["box"], r.json()["status"]),
+                         ("team1", "web01", "pending"))
+        self.assertEqual(self.client.post("/api/requests", json={"box": "web01"}).status_code, 409)
+        # a second box is fine, and the team's list carries both
+        self.assertEqual(self.client.post("/api/requests", json={"box": "dc01"}).status_code, 200)
+        rows = self.client.get("/api/requests").json()["requests"]
+        self.assertEqual(sorted(r["box"] for r in rows), ["dc01", "web01"])
+
+    def test_team_cannot_request_another_teams_box(self):
+        self.login("team1", "t1pw")
+        self.assertEqual(self.client.post("/api/requests", json={"box": "web01",
+                                                                 "team": "team2"}).status_code, 403)
+
+    def test_team_sees_only_its_own_requests(self):
+        self.login("team1", "t1pw")
+        self.client.post("/api/requests", json={"box": "web01"})
+        self.login("team2", "t2pw")
+        self.client.post("/api/requests", json={"box": "web01"})
+        rows = self.client.get("/api/requests").json()["requests"]
+        self.assertEqual([r["team"] for r in rows], ["team2"])
+
+    def test_admin_sees_every_request(self):
+        self.login("team1", "t1pw")
+        self.client.post("/api/requests", json={"box": "web01"})
+        self.login("admin", "adminpw")
+        rows = self.client.get("/api/requests").json()["requests"]
+        self.assertEqual([r["team"] for r in rows], ["team1"])
+
+    def test_unauthenticated_requests_get_401(self):
+        self.assertEqual(self.client.get("/api/requests").status_code, 401)
+        self.assertEqual(self.client.post("/api/requests", json={"box": "web01"}).status_code, 401)
+
+    def test_resolved_status_frees_the_box_for_a_new_request(self):
+        self.login("team1", "t1pw")
+        self.client.post("/api/requests", json={"box": "web01"})
+        self.app.requests_store.set_status(1, "done")
+        self.assertEqual(self.client.post("/api/requests", json={"box": "web01"}).status_code, 200)
+
+    def test_ops_sync_converges_the_dashboard_status(self):
+        import portal.ops_sync as ops_sync
+
+        class FakeResp:
+            def __init__(self, payload):
+                self._p = payload
+
+            def json(self):
+                return self._p
+
+            def raise_for_status(self):
+                pass
+
+        self.login("team1", "t1pw")
+        self.client.post("/api/requests", json={"box": "web01"})
+        seen = {}
+
+        def fake_post(url, timeout=None, headers=None, json=None):
+            seen.update(url=url, headers=headers, body=json)
+            return FakeResp({"statuses": {str(json["requests"][0]["id"]): "approved"}})
+
+        with mock.patch.object(ops_sync.requests, "post", side_effect=fake_post):
+            ops_sync.sync_once(self.app.requests_store, "http://dash:8787", "tok")
+        self.assertEqual(seen["url"], "http://dash:8787/api/ops/requests")
+        self.assertEqual(seen["headers"]["Authorization"], "Bearer tok")
+        self.assertEqual(seen["body"]["requests"][0]["status"], "pending")
+        rows = self.client.get("/api/requests").json()["requests"]
+        self.assertEqual(rows[0]["status"], "approved")
+        # an agreeing sync changes nothing
+        with mock.patch.object(ops_sync.requests, "post", side_effect=fake_post):
+            ops_sync.sync_once(self.app.requests_store, "http://dash:8787", "tok")
+        self.assertEqual(self.client.get("/api/requests").json()["requests"][0]["status"],
+                         "approved")
 
 
 if __name__ == "__main__":

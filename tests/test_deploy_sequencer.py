@@ -90,7 +90,7 @@ class BannerSet(unittest.TestCase):
 class Sequencer(unittest.TestCase):
 # deploy() walks PHASES, gates checkpointing, and hooks the terraform read.
 
-    def _run(self, comp_dir, from_phase, phases, calls):
+    def _run(self, comp_dir, from_phase, phases, calls, hold_start=False):
         ctx = _ctx(comp_dir, from_phase)
         with dpatch("prepare", return_value=ctx), \
                 dpatch("PHASES", phases), \
@@ -98,7 +98,8 @@ class Sequencer(unittest.TestCase):
                              side_effect=lambda c: calls.append(("connect", 2))), \
                 dpatch("finish_deploy"), \
                 contextlib.redirect_stdout(io.StringIO()):
-            deploy.deploy(comp_dir, assume_yes=True, from_phase=from_phase)
+            deploy.deploy(comp_dir, assume_yes=True, from_phase=from_phase,
+                          hold_start=hold_start)
         return ctx
     def test_phases_run_in_order_and_connect_terraform_sits_after_phase_2(self):
         calls = []
@@ -134,6 +135,23 @@ class Sequencer(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     deploy.deploy(Path(d), assume_yes=True, from_phase=6)
         self.assertEqual(ctx.state["last_phase"], 3)
+
+    def test_hold_start_is_recorded_and_survives_a_resume(self):
+    # Separate comp dirs: the deploy lock is held per dir for the process's life.
+        calls = []
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            ctx = self._run(Path(d1), 1, _stub_phases(calls), calls, hold_start=True)
+            self.assertTrue(ctx.state["hold_start"])
+            # A resume (prepare in real life reads the flag back from the state file —
+            # here the dict is carried over) keeps the hold without the flag being passed.
+            ctx2 = _ctx(Path(d2), 8, state=dict(ctx.state))
+            with dpatch("prepare", return_value=ctx2), \
+                    dpatch("PHASES", _stub_phases(calls)), \
+                    dpatch("connect_terraform"), \
+                    dpatch("finish_deploy"), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                deploy.deploy(Path(d2), assume_yes=True, from_phase=8)
+        self.assertTrue(ctx2.state["hold_start"])
 
 
 class FailureHandling(unittest.TestCase):

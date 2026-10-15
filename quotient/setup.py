@@ -242,7 +242,7 @@ def _admin_session(host: str, ctx: dict) -> requests.Session:
     return session
 
 
-def seed_teams(host: str, ctx: dict) -> None:
+def seed_teams(host: str, ctx: dict, start: bool = True) -> None:
     host = _normalize_host(host)
     _wait_for_quotient(host)
     session = _admin_session(host, ctx)
@@ -261,6 +261,9 @@ def seed_teams(host: str, ctx: dict) -> None:
     r.raise_for_status()
     print(f"[quotient] updated {len(updates)} team identifiers → {r.status_code}")
 
+    if not start:
+        print("[quotient] start HELD — competition clock not started (competition-ops.py start)")
+        return
     r = session.post(f"{host}/api/competition/start", json={"started": True})
     r.raise_for_status()
     print(f"[quotient] competition started (DB) → {r.status_code}")
@@ -296,14 +299,15 @@ def engine_paused(host: str, ctx: dict):
 
 
 # a resume re-runs safely (dedup on titles), so the deploy only records injects_created
-# when nothing failed
-def create_injects(host: str, admin_password: str, injects: list) -> tuple:
+# when nothing failed. username defaults to the operator's `admin`; automation that
+# must not evict that session (competition-ops start) passes the `scoring` account.
+def create_injects(host: str, admin_password: str, injects: list, username: str = "admin") -> tuple:
     if not injects:
         return 0, []
 
     host = _normalize_host(host)
     session = requests.Session()
-    r = session.post(f"{host}/api/login", json={"username": "admin", "password": admin_password})
+    r = session.post(f"{host}/api/login", json={"username": username, "password": admin_password})
     r.raise_for_status()
 
     existing_titles = set()

@@ -80,8 +80,18 @@ function Login({ onDone }) {
   )
 }
 
-function BoxCard({ team, box, enabled, i = 0 }) {
+// Labels the reset-request lifecycle the dashboard drives (ops_sync converges them here).
+const RESET_LABEL = {
+  pending: 'reset requested',
+  approved: 'reset in progress',
+  denied: 'reset denied',
+  done: 'reset done',
+  failed: 'reset failed',
+}
+
+function BoxCard({ team, box, enabled, i = 0, reqState, onRequest }) {
   const kind = kindOf(box)
+  const active = reqState === 'pending' || reqState === 'approved'
   return (
     <div className={`panel rise flex flex-col p-6 ${i < 4 ? `rise-${i + 1}` : ''}`}>
       <div className="flex items-start justify-between gap-3">
@@ -93,9 +103,15 @@ function BoxCard({ team, box, enabled, i = 0 }) {
       </div>
       <div className="mt-auto flex items-center justify-between gap-3 pt-6">
         <span className="text-xs text-faint">{kind === 'windows' ? 'Ctrl-Alt-Del from the toolbar' : kind === 'firewall' ? 'the appliance console menu' : 'log in with your box credentials'}</span>
-        {enabled
-          ? <Link to={consolePath(team, box.name)} target="_blank" rel="noopener" className="btn btn-primary"><Icon name="terminal" />Console</Link>
-          : <span className="btn pointer-events-none opacity-45"><Icon name="terminal" />Console</span>}
+        <div className="flex shrink-0 items-center gap-2">
+          {reqState && <span className="chip bg-sunken text-muted" title="Ask the white team to restore this box to its starting state">{RESET_LABEL[reqState] || reqState}</span>}
+          {onRequest && !active && (
+            <Button variant="ghost" onClick={() => onRequest(box.name)}>Request reset</Button>
+          )}
+          {enabled
+            ? <Link to={consolePath(team, box.name)} target="_blank" rel="noopener" className="btn btn-primary"><Icon name="terminal" />Console</Link>
+            : <span className="btn pointer-events-none opacity-45"><Icon name="terminal" />Console</span>}
+        </div>
       </div>
     </div>
   )
@@ -130,6 +146,19 @@ function VpnSetup({ vpn }) {
 function TeamView({ me }) {
   const open = me.access.open
   const usable = open && me.console
+  const toast = useToast()
+  const [reqs, setReqs] = useState({})
+  const reloadReqs = useCallback(() => api.requests()
+    .then((d) => setReqs(Object.fromEntries(d.requests.map((r) => [r.box, r]))))
+    .catch(() => {}), [])
+  useEffect(() => { reloadReqs(); const t = setInterval(reloadReqs, 15000); return () => clearInterval(t) }, [reloadReqs])
+  const requestReset = async (box) => {
+    try {
+      await api.requestReset(box)
+      toast('Reset requested — the white team will take a look')
+      reloadReqs()
+    } catch (e) { toast(e.message, 'error') }
+  }
   return (
     <>
       <Hero title={me.team} sub={`${me.boxes.length} ${me.boxes.length === 1 ? 'box' : 'boxes'} · ${open ? 'access open' : 'access opens at the start'}`} />
@@ -146,7 +175,8 @@ function TeamView({ me }) {
       <section className="mb-12">
         <h2 className="display mb-5 text-3xl">VM access</h2>
         <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
-          {me.boxes.map((b, i) => <BoxCard key={b.name} team={me.team} box={b} enabled={usable} i={i} />)}
+          {me.boxes.map((b, i) => <BoxCard key={b.name} team={me.team} box={b} enabled={usable} i={i}
+            reqState={reqs[b.name]?.status} onRequest={requestReset} />)}
         </div>
         {!me.boxes.length && <EmptyState icon="boxes" title="No boxes">This team has no boxes in this competition.</EmptyState>}
       </section>

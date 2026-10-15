@@ -35,9 +35,11 @@ from starlette.middleware.sessions import SessionMiddleware
 try:  # package import (tests) or flat import (the container runs `uvicorn app:app`)
     from portal.auth import EventConfAuth
     from portal.console import ConsoleBroker, ConsoleError
+    from portal import ops_sync
 except ImportError:  # pragma: no cover - container layout
     from auth import EventConfAuth
     from console import ConsoleBroker, ConsoleError
+    import ops_sync
 
 DIST_DIR = Path(__file__).resolve().parent / "frontend" / "dist"
 SESSION_MAX_AGE = 12 * 3600
@@ -108,13 +110,71 @@ class LoginLimiter:
             self._fails[key].append(self.clock())
 
 
+# state/requests.json: the team → operator reset-request queue. The dashboard's ops
+# sync (ops_sync.py) is the resolution authority — a status it returns for an id
+# always wins locally, so an operator's Approve/Deny and the reset run's outcome
+# surface here without any dashboard → portal path. A team may hold ONE open
+# request per box (pending or approved); done/denied/failed free the box again.
+class ResetRequests:
+    OPEN = ("pending", "approved")
+
+    def __init__(self, state_dir):
+        self.path = Path(state_dir) / "requests.json"
+        self._lock = threading.Lock()
+
+    def _read(self):
+        try:
+            data = json.loads(self.path.read_text())
+            return data if isinstance(data, list) else []
+        except (OSError, ValueError):
+            return []
+
+    def _write(self, rows):
+        # callers hold the lock; one writer at a time is already guaranteed
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        tmp.write_text(json.dumps(rows))
+        os.replace(tmp, self.path)
+
+    def all(self):
+        return self._read()
+
+    def for_team(self, team):
+        return [r for r in self._read() if r.get("team") == team]
+
+    def add(self, team, box, who):
+        with self._lock:
+            rows = self._read()
+            if any(r.get("team") == team and r.get("box") == box
+                   and r.get("status") in self.OPEN for r in rows):
+                return None
+            row = {"id": (max((r["id"] for r in rows), default=0) + 1),
+                   "team": team, "box": box, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                   "by": who, "status": "pending"}
+            self._write(rows + [row])
+            return row
+
+    def set_status(self, request_id, status):
+        with self._lock:
+            rows = self._read()
+            for r in rows:
+                if r.get("id") == request_id:
+                    if r["status"] == status:
+                        return False
+                    r["status"] = status
+                    self._write(rows)
+                    return True
+            return False
+
+
 def _public_box(box):
     return {"name": box["name"], "os": box.get("os", "linux"), "ip": box.get("ip"),
             "firewall": bool(box.get("firewall"))}
 
 
 def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=None,
-               default_open=False, cookie_secure=True, dist_dir=DIST_DIR, limiter=None):
+               default_open=False, cookie_secure=True, dist_dir=DIST_DIR, limiter=None,
+               ops_url="", ops_token=""):
     config = json.loads(Path(config_path).read_text())
     teams = config.get("teams") or {}
     auth = EventConfAuth(event_conf_path)
@@ -122,8 +182,12 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
     log = AccessLog(state_dir)
     limiter = limiter or LoginLimiter()
     broker = broker if broker is not None else ConsoleBroker(config.get("nodes") or {})
+    requests_store = ResetRequests(state_dir)
+    if ops_url and ops_token:
+        ops_sync.start(requests_store, ops_url, ops_token)
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    app.requests_store = requests_store   # tests + future admin tooling reach the queue here
     app.add_middleware(SessionMiddleware, secret_key=secret_key, session_cookie="tez_portal",
                        max_age=SESSION_MAX_AGE, same_site="lax", https_only=cookie_secure)
 
@@ -346,6 +410,36 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
             lines = []
         return {"entries": [json.loads(x) for x in lines if x.strip()]}
 
+    @app.post("/api/requests")
+    async def request_reset(request: Request):
+        if not same_origin(request):
+            return err(403, "cross-origin request refused")
+        s = session(request)
+        if s is None:
+            return err(401, "not logged in")
+        try:
+            body = await request.json()
+        except ValueError:
+            return err(400, "expected JSON")
+        picked, problem = resolve_box(s, body.get("team"), str(body.get("box") or ""))
+        if problem:
+            return problem
+        team_key, box = picked
+        row = requests_store.add(team_key, box["name"], s.get("display") or s["user"])
+        if row is None:
+            return err(409, "a reset is already requested or running for this box")
+        log.write("reset_request", user=s["user"], display=s.get("display"),
+                  team=team_key, box=box["name"])
+        return row
+
+    @app.get("/api/requests")
+    def list_requests(request: Request):
+        s = session(request)
+        if s is None:
+            return err(401, "not logged in")
+        rows = requests_store.all() if s["role"] == "admin" else requests_store.for_team(s["team"])
+        return {"requests": list(reversed(rows))}
+
     # The SPA, served the way the dashboard service serves its build: /assets from dist, every other
     # GET that is not an API route falls through to index.html (react-router owns / and
     # /console/<team>/<box>). Registered last so it can never shadow a route above.
@@ -377,4 +471,6 @@ if os.environ.get("PORTAL_SECRET_KEY"):  # container entrypoint: `uvicorn app:ap
         default_open=os.environ.get("PORTAL_OPEN") == "1",
         cookie_secure=os.environ.get("PORTAL_COOKIE_SECURE", "1") != "0",
         dist_dir=os.environ.get("PORTAL_DIST") or DIST_DIR,
+        ops_url=os.environ.get("TEZ_OPS_URL", ""),
+        ops_token=os.environ.get("TEZ_OPS_TOKEN", ""),
     )

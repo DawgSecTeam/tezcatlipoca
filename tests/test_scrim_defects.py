@@ -43,6 +43,7 @@ def _load(name, filename):
 
 from scrim import blue_agent, blue_prompt, compworld, core, endpoints, event_run, evidence, inject_sync, llm_probe, procs, quotient_api, red_link, red_stage, run_manifest, staging, supervisor, teardown_stage
 from scrim_report import blue_side, host_labels, loaders, red_side, render, timefmt
+from quotient import event_capture as event_capture
 sched = _load("run_schedule_defects", "run-schedule.py")
 beacon = _load("beacon_ops_defects", "red/beacon_ops.py")
 
@@ -498,7 +499,7 @@ class ScheduleEndAlwaysPauses(unittest.TestCase):
         import requests
         comp = Path(tempfile.mkdtemp())
         session = FakeSession(raises=requests.RequestException("500 Server Error"))
-        errors = sched.dump_scoreboard("http://192.0.2.1", session, comp)
+        errors = event_capture.dump_scoreboard("http://192.0.2.1", session, comp)
         self.assertTrue(errors)
         dumps = sorted((comp / "evidence").glob("event-final-*.json"))
         self.assertEqual(len(dumps), 1)
@@ -508,7 +509,7 @@ class ScheduleEndAlwaysPauses(unittest.TestCase):
     def test_dump_survives_a_non_json_body(self):
         comp = Path(tempfile.mkdtemp())
         session = FakeSession(raises=ValueError("not JSON"))
-        errors = sched.dump_scoreboard("http://192.0.2.1", session, comp)
+        errors = event_capture.dump_scoreboard("http://192.0.2.1", session, comp)
         self.assertTrue(errors)
         self.assertTrue(list((comp / "evidence").glob("event-final-*.json")))
 
@@ -525,7 +526,7 @@ class ScheduleEndAlwaysPauses(unittest.TestCase):
     def test_end_pauses_even_when_the_dump_blows_up(self):
         comp = Path(tempfile.mkdtemp())
         session = FakeSession()
-        with mock.patch.object(sched, "dump_scoreboard", side_effect=RuntimeError("boom")):
+        with mock.patch.object(event_capture, "dump_scoreboard", side_effect=RuntimeError("boom")):
             rc = sched.end_event("http://192.0.2.1", session, comp)
         self.assertEqual(len(session.posts), 1)
         self.assertEqual(rc, 1)
