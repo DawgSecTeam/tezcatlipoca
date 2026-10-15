@@ -2,6 +2,7 @@ import json
 import os
 import shlex
 import time
+from pathlib import Path
 
 from scrim import compworld
 from scrim import core
@@ -10,12 +11,41 @@ from scrim import quotient_api
 from scrim.core import log
 
 
-def stage_verify(args, comp, creds):
-    log("verify-competition + fire test")
+def write_verify_log(args, label, r):
+    """Keep the WHOLE verify output in the run folder, not just the tail the console shows.
+
+    The gate lines scroll past, and the per-config detail behind a FAIL — `'suid-find' present on
+    ['team1-web01'] but MISSING on ['team2-web01']`, `pin 'X' absent on every team` — is exactly
+    what a post-mortem needs and what the console tail drops. Live 2026-10-15 (run-1c44733b): the
+    `misconfig` gate failed at BOTH verifies and the run's evidence held only the one-line summary,
+    so the failure could not be root-caused from the artifacts at all.
+    """
+    run_dir = getattr(args, "run_dir", None)
+    if not run_dir:
+        return None
+    path = Path(run_dir) / "verify.log"
+    with path.open("a") as fh:
+        fh.write(f"\n===== verify [{label}] rc={r.returncode} {core.now_iso()} =====\n")
+        fh.write((r.stdout or "") + "\n=== STDERR ===\n" + (r.stderr or ""))
+    core.secure_evidence(path)
+    return path
+
+
+# label matters: this verify runs BEFORE red/blue are staged, and `pins_registered` in particular
+# is registered during that staging — the deploy-time result is an INTERIM reading, and the pre-T0
+# verify (red_stage, after staging) is the authoritative one. Live 2026-10-15: the same gate read
+# FAIL here and PASS three minutes later with nothing else changed, and the report reader has no
+# way to tell the two apart unless the run says which is which.
+def stage_verify(args, comp, creds, label="interim (pre-staging)"):
+    log(f"verify-competition + fire test [{label}]")
     r = procs.run(compworld.verify_cmd(comp, creds), cwd=core.REPO, timeout=1800, check=False)
     print("\n".join((r.stdout or "").splitlines()[-25:]))
+    write_verify_log(args, label, r)
     if r.returncode != 0:
-        log("WARNING: verify reported failures (continuing — investigate before event)")
+        log(f"WARNING: verify reported failures (continuing — investigate before event; "
+            f"result is {label}"
+            + (" — the pre-T0 verify after staging is the authoritative one" if "interim" in label
+               else "") + ")")
     base = core.box_ssh_base(creds)
     web_ip = (json.loads((comp / "targets.json").read_text()).get("targets", {})
               .get("team1-web01", {}).get("ip"))

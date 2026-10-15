@@ -49,7 +49,7 @@ def plan_targets(manifest, *, comp_dir=None):
     run_dir = resolve_recorded(paths.get("run_dir"), comp_dir)
     harness_want = [{"local_name": name} for name in
                     ("run.json", "T0.txt", "monitor.log", "watchdog.log", "scoreboard-state.jsonl",
-                     "INTERACTION.md", "deploy.log", "evidence/alerts.jsonl",
+                     "INTERACTION.md", "deploy.log", "verify.log", "evidence/alerts.jsonl",
                      "evidence/final-scoreboard.json", ".deploy-timings.jsonl")]
     if run_dir and Path(run_dir).is_dir():
         targets.append({"name": "harness", "route": "local", "kind": "local",

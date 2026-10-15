@@ -195,6 +195,7 @@ def main():
         run_manifest.record_phase(run_dir, args, "deploy")
         staging.stage_deploy(args, comp)
     creds = staging.creds_from_files(comp)
+    staging.warn_co_tenancy(args, comp)
     creds["RUN_DIR"] = args.run_dir
     log(f"engine {creds['ENGINE_IP']}, teams {[(k, v['identifier']) for k, v in json.loads((comp / 'teams.json').read_text()).items()]}")
 

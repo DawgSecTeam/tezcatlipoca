@@ -1,3 +1,4 @@
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -251,6 +252,36 @@ def start_red_director(args):
     raise RuntimeError("could not start bad-auto.service on red01 after the seed")
 
 
+def red_box_power_state(args):
+    """red01's power state straight from the hypervisor — liveness that does NOT need the
+    guest's network.
+
+    Every other red01 signal (ssh probe, event snapshot, report pull) travels the same path that
+    is itself under suspicion, so a dead guest and a dead ROUTE TO it look identical. Live
+    2026-10-15 (run-1c44733b): red01 vanished at T+13 and stayed gone for the rest of a 45-minute
+    event; six red gates and RED-TEAM.md died with it, and the run log could never say whether the
+    box was down or the route to it was — the post-mortem had to reconstruct it from another
+    session's deploy times. This asks Proxmox, which needs no guest networking at all.
+    """
+    vmid = getattr(args, "red_vmid", None)
+    if not vmid:
+        return None
+    try:
+        from infra.client import proxmox_api
+        node = os.environ.get("TF_VAR_proxmox_node") or ""
+        if node:
+            data = (proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/status/current") or {}).get("data") or {}
+            return f"vmid {vmid} is {data.get('status') or 'unknown'} (Proxmox)"
+        resources = (proxmox_api("GET", "/cluster/resources", params={"type": "vm"}) or {}).get("data") or []
+        for res in resources:
+            if str(res.get("vmid")) == str(vmid):
+                return (f"vmid {vmid} is {res.get('status') or 'unknown'} "
+                        f"on node {res.get('node')} (Proxmox)")
+        return f"vmid {vmid} is not in the cluster (Proxmox)"
+    except Exception as e:                                   # noqa: BLE001
+        return f"vmid {vmid} unreadable from Proxmox ({type(e).__name__})"
+
+
 def check_red_llm(args, base_url):
     """From-red01 LLM reachability gate.
 
@@ -274,9 +305,12 @@ def check_red_llm(args, base_url):
             if code in ("200", "401", "403"):
                 log(f"red01 reached the LLM endpoint ({path}, HTTP {code} — unauthenticated probe)")
                 return True
-            log(f"red01 LLM probe ({path}) -> {code or (r.stderr or '').strip()[:80] or 'no answer'}")
+            # say WHAT is unreachable: the box or the path to it. Without this the operator
+            # (and the report reader) sees one indistinguishable failure line
+            log(f"red01 LLM probe ({path}) -> {code or (r.stderr or '').strip()[:80] or 'no answer'}"
+                + (f" [{red_box_power_state(args)}]" if code not in ("", None) else ""))
         except subprocess.TimeoutExpired:
-            log(f"red01 LLM probe ({path}) timed out")
+            log(f"red01 LLM probe ({path}) timed out [{red_box_power_state(args)}]")
     return False
 
 
