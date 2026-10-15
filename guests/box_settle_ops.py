@@ -71,14 +71,26 @@ _CLOUD_INIT_POLL = 10
 
 
 def _cloud_init_verdict(rc, out):
-    """`cloud-init status` -> 'done', 'error' or 'running'. The exit code and the
-    text can disagree across cloud-init versions, so either one settles a state:
-    rc 2 is the documented error state, rc 0 done, and 'disabled' means cloud-init
-    will never run again (no apt pass to race) — treat it as done."""
+    """`cloud-init status` -> 'done', 'error' or 'running'.
+
+    The TEXT settles the state whenever it names one, and the exit code only decides
+    when the text says nothing. rc 2 alone is not an error verdict: cloud-init returns
+    it for a boot that finished with recorded errors, so on an image that always has one
+    (this estate's Ubuntu 24.04) rc 2 arrived alongside `status: done` on every box and
+    `status: running` while the boot was still going. Reading rc first made the gate
+    (a) record a tolerated failure for a box whose boot was over — which hard-fails
+    verify's degradations gate — and (b) skip the wait it exists to perform
+    (live 2026-10-15, run-b1bdb04a: 'cloud-init errored: <ip>: status: done')."""
     out = out or ""
-    if rc == 2 or "status: error" in out:
+    if "status: error" in out:
         return "error"
-    if rc == 0 or "status: done" in out or "status: disabled" in out:
+    if "status: done" in out or "status: disabled" in out:
+        return "done"
+    if "status: running" in out:
+        return "running"
+    if rc == 2:
+        return "error"
+    if rc == 0:
         return "done"
     return "running"
 

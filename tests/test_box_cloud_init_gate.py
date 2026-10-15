@@ -47,6 +47,18 @@ class Verdict(unittest.TestCase):
         self.assertEqual(box_settle_ops._cloud_init_verdict(1, "status: done"), "done")
         self.assertEqual(box_settle_ops._cloud_init_verdict(0, "status: error"), "error")
 
+    def test_rc_two_does_not_outvote_a_named_text_state(self):
+        """cloud-init returns 2 for a boot that FINISHED with recorded errors, so on an
+        image that always has one rc 2 arrived with `status: done` on every box — read
+        rc-first, the gate recorded a tolerated failure for a finished boot (which
+        hard-fails verify's degradations gate) and skipped its own wait when the text
+        said `status: running` (live 2026-10-15, run-b1bdb04a)."""
+        self.assertEqual(box_settle_ops._cloud_init_verdict(2, "status: done"), "done")
+        self.assertEqual(box_settle_ops._cloud_init_verdict(2, "status: running"), "running")
+        self.assertEqual(box_settle_ops._cloud_init_verdict(2, "status: disabled"), "done")
+        # ...and rc still decides when the text names no state at all
+        self.assertEqual(box_settle_ops._cloud_init_verdict(2, ""), "error")
+
     def test_disabled_counts_as_done(self):
         # Nothing will ever run again — there is no apt pass left to race.
         self.assertEqual(box_settle_ops._cloud_init_verdict(1, "status: disabled"), "done")
