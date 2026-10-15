@@ -4,6 +4,34 @@ Temporary writepad, not a ledger: every entry has a concrete next action and is 
 
 ## Open
 
+### A retired range's kept templates cannot be reclaimed until the competition deploys again
+
+`--teams-only` retires the range and keeps this competition's golden + engine templates for
+its next run, which is the documented practice-run loop. But the retired range then blocks
+the only path that can destroy them: `_range_workspace` answers a follow-up destroy with
+`the range in <run> was torn down by <destroy run> — nothing to destroy`, and a full teardown
+run resolves to that retired workspace and dies. Live 2026-10-15 (campaign): pfsense-rvb's
+teams-only teardown left engine-template 2540 + goldens 2550-2552, the follow-up full
+teardown failed, and the templates were only reclaimed by deploying the competition again
+(`run-b7981f23`, which correctly adopted all four) and then tearing *that* range down fully.
+The templates are the whole point of teams-only, so this is the normal path, not an edge case.
+**Next action**: let a full teardown act on a retired range's recorded template inventory when
+that range has no live VMs left, or have the teams-only path record the kept templates
+somewhere a later full teardown can find without a deploy.
+
+### The dashboard's range-workspace resolver can pick a stale workspace
+
+`_range_workspace` returns the newest run dir of that competition carrying **any** `run_id`,
+so a run that died before it built a range still wins over the workspace holding the live one.
+Live 2026-10-15 (campaign): a full pfsense-rvb teardown resolved to an abandoned workspace
+(`run-70b9197f/comp`) and failed rc=1, while the live estate was in `run-cac3644a/comp`; only
+an explicit `params.comp_dir` reached it. The same shape was behind a subagent briefing
+pointing at the wrong workspace for crimson-relay. It also makes the auto-resolved target
+depend on submission order rather than on which workspace owns the VMs.
+**Next action**: rank candidates by whether their state document records a deployed endpoint /
+inventory (i.e. a range that exists), not by run-dir recency; refuse when the winner has no
+resources and another candidate does, naming both.
+
 ### Two concurrent runs of one competition cannot be given distinct red01 slots
 
 `red01_vmid`/`red01_ip` resolve from the **competition** directory
