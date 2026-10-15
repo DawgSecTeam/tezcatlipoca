@@ -74,7 +74,9 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update && "
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 upgrade -y && "
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y "
-        "docker.io git curl python3-pip apt-cacher-ng"
+        # python3-paramiko is what the remote nakon deploy imports; it is baked in here so a
+        # deploy never has to pip-install into the engine's system python.
+        "docker.io git curl python3-pip python3-paramiko apt-cacher-ng"
     ), timeout=1800, step="install engine packages")
 
     # apt-cacher-ng defaults to port 3142 on all interfaces; the boxes' gateway IP is the
