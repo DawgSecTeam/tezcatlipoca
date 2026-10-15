@@ -139,7 +139,7 @@ class OwnershipTotality(unittest.TestCase):
                 machinery.load_ownership(comp)
             msg = str(ctx.exception)
             self.assertIn("no run id", msg)
-            self.assertIn(".deploy_state.json", msg)   # saw
+            self.assertIn("estate-state.json", msg)    # saw
             self.assertIn("remove it by hand", msg)    # remedy
             self.assertTrue(ctx.exception.remedy)      # the vocabulary is complete
 

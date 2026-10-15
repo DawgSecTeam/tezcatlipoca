@@ -1,4 +1,4 @@
-"""Phases 2 and 3: the engine template + terraform apply #1, then per-deploy engine prep."""
+"""Phases 2 and 3: the engine template + the engine and its bridges, then per-deploy engine prep."""
 
 import os
 
@@ -7,21 +7,22 @@ from engine.engine_bootstrap_ops import bootstrap_scoring_engine
 from engine.engine_event_ops import push_event_conf
 from engine.engine_health_ops import ensure_nat_forwarding
 from engine.engine_identity_ops import prepare_engine_from_template
+from estate import config
 from golden.golden_target_ops import _quote_sshkeys
 from net.jump_ops import build_jump_vms, red_segment_from_env
 from infra.ownership import destroy_vm_if_exists, retag_ownership
 from multinode.routing_ops import verify_satellite_routing
-from common.ssh_ops import forget_engine_host_key, read_terraform_ctx, wait_for_ssh
+from common.ssh_ops import forget_engine_host_key, wait_for_ssh
 from engine.engine_template_ops import build_engine_template, destroy_engine_template, find_engine_template
 from engine.template_freeze import (
     engine_hash_inputs, frozen_gate, hash_from_inputs, load_template_hashes, save_template_hashes,
     template_stamp_current,
 )
 from common.timing import timed
-from common.utils import compfile_flag, compfile_value, run_terraform
+from common.utils import compfile_flag, compfile_value
 
-from deploy_lib.phases._terraform import terraform_env_and_cwd, write_tfvars
-from pathlib import Path
+from deploy_lib.phases._estate import (configure_engine_network, create_engine_and_bridges,
+                                       engine_context)
 
 
 def engine_build_ctx(ctx):
@@ -37,11 +38,11 @@ def ensure_engine_template(ctx):
 # M4 engine template lifecycle: build once per competition, reuse across its test
 #     runs; rebuild only on config drift and never when frozen. Records the template vmid
 #     and hash in state and the hash file; returns the template vmid.
-    main_tf_text = Path("terraform/main.tf").read_text()
+    from estate import apply as estate_apply
     quotient_ref = compfile_value(ctx.comp_dir / "Compfile", "quotient_ref")
     engine_inputs = engine_hash_inputs(
-        int(os.environ["TF_VAR_template_vm_id"]), quotient_ref,
-        main_tf_text, bootstrap_scoring_engine)
+        int(config.active().require("proxmox.template_vm_id")), quotient_ref,
+        estate_apply.create_engine, bootstrap_scoring_engine)
     engine_hash = hash_from_inputs(engine_inputs)
     stored = load_template_hashes(ctx.comp_dir)
     tmpl = find_engine_template(ctx.node, ctx.engine_vmid)
@@ -92,17 +93,6 @@ def ensure_engine_template(ctx):
     return tmpl
 
 
-def apply_engine_terraform(ctx):
-# terraform init + apply #1: only the engine (a linked clone of the engine template —
-#     seconds, no bulk disk copy) and the bridges are built (team_box's for_each is empty:
-#     build_team_boxes=false), plus team_nics' netplan for every team bridge and the
-#     cold-boot that surfaces the engine's team NICs.
-    tf_env, tf_cwd = terraform_env_and_cwd(ctx)
-    run_terraform(["init"], cwd=tf_cwd, env=tf_env, timeout=300)
-    with timed(ctx.comp_dir, 2, "terraform_apply"):
-        run_terraform(["apply", "-auto-approve", "-parallelism=1"], cwd=tf_cwd, env=tf_env, timeout=2400)
-
-
 def build_satellite_jumps(ctx, apply_ctx):
 # Jump/router per satellite, then the fail-loud routing gate: nothing
 #     downstream (satellite golden plants, nakon, scoring) works without
@@ -119,37 +109,37 @@ def build_satellite_jumps(ctx, apply_ctx):
 
 
 def phase2_engine_template(ctx):
-# [2/8] Engine template lifecycle, then terraform apply #1.
+# [2/8] Engine template lifecycle, then the engine and its bridges.
 #
 #     M4: the engine template is built once per competition and reused across its test
-#     runs — rebuilt only on config drift, never when frozen. Apply #1 then builds the
-#     engine (a linked clone of that template, seconds) and every team bridge, with
-#     team_box's for_each deliberately empty; apply #2 in phase 4 flips it on once the
-#     goldens exist. The checkpoint and the terraform-context read stay in the caller
-#     (deploy), in that order: a phase-2 resume still needs the outputs, and a run that
-#     dies between them must leave last_phase at 2 on disk.
+#     runs — rebuilt only on config drift, never when frozen. The engine is then a linked
+#     clone of that template; every team bridge is built now, and phase 4 clones the team
+#     boxes once the goldens exist. The checkpoint and the engine-context read stay in the
+#     caller (deploy), in that order: a phase-2 resume still needs the coordinates, and a
+#     run that dies between them must leave last_phase at 2 on disk.
     if ctx.from_phase > 2:
-        print("[2/8] Skipped (resume) — not re-running terraform apply.")
+        print("[2/8] Skipped (resume) — not re-creating the engine.")
         return
-    tmpl = ensure_engine_template(ctx)
+    ensure_engine_template(ctx)
 
-    print("[2/8] Terraform apply #1 (engine from template + bridges; team boxes "
-          "come in apply #2)...")
-    ctx.tfvars["engine_clone_id"] = tmpl
-    write_tfvars(ctx)
-    apply_engine_terraform(ctx)
+    print("[2/8] Creating the team bridges and the scoring engine (team boxes come in "
+          "phase 4)...")
+    with timed(ctx.comp_dir, 2, "create_engine"):
+        create_engine_and_bridges(ctx)
 
-    apply_ctx = ctx.tf_ctx = read_terraform_ctx(ctx.comp_dir)
+    apply_ctx = ctx.tf_ctx = engine_context(ctx)
     # Fresh engine VM => new host key; drop any stale pin so accept-new re-pins it.
     forget_engine_host_key(apply_ctx["scoring_engine_ip"])
     with timed(ctx.comp_dir, 2, "wait_engine_ssh", apply_ctx["scoring_engine_ip"]):
         wait_for_ssh(apply_ctx["ssh_key_path"], apply_ctx["vm_username"],
                      apply_ctx["scoring_engine_ip"], timeout=300)
+    with timed(ctx.comp_dir, 2, "engine_network"):
+        configure_engine_network(ctx, apply_ctx)
     if ctx.placement and ctx.placement["satellites"]:
         build_satellite_jumps(ctx, apply_ctx)
-    # Record where this state's resources live, for the stale-state guard
-    # (gates.check_stale_terraform_state).
-    ctx.state["deployed_endpoint"] = os.environ.get("TF_VAR_proxmox_endpoint", "").rstrip("/")
+    # Record where this state's resources live: teardown's ownership refusal compares the
+    # loaded endpoint against it.
+    ctx.state["deployed_endpoint"] = config.active().proxmox.endpoint.rstrip("/")
 
 
 def phase3_prepare_engine(ctx):

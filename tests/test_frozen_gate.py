@@ -102,23 +102,23 @@ resource "proxmox_virtual_environment_vm" "team_box" {
 
 
 class EngineHashInputTests(unittest.TestCase):
-    def _inputs(self, vmid=955, ref="v1", tf=_ENGINE_TF, boot=_boot_v1):
-        return template_freeze.engine_hash_inputs(vmid, ref, tf, boot)
+    def _inputs(self, vmid=955, ref="v1", shape=_ENGINE_TF, boot=_boot_v1):
+        return template_freeze.engine_hash_inputs(vmid, ref, shape, boot)
 
     def test_unchanged_inputs_match(self):
         self.assertEqual(template_freeze.classify_drift(self._inputs(), self._inputs()),
                          {"config": [], "code": []})
 
-    def test_unrelated_tf_edit_is_not_engine_drift(self):
-        other = _ENGINE_TF.replace("vm_id = 1240", "vm_id = 1241")
-        self.assertEqual(template_freeze.classify_drift(self._inputs(), self._inputs(tf=other)),
-                         {"config": [], "code": []})
-
-    def test_engine_block_edit_is_code_drift(self):
-        other = _ENGINE_TF.replace("vm_id = 1000", "vm_id = 1001")
-        drift = template_freeze.classify_drift(self._inputs(), self._inputs(tf=other))
+    def test_engine_shape_edit_is_code_drift(self):
+        drift = template_freeze.classify_drift(self._inputs(), self._inputs(shape=_ENGINE_TF + "\n"))
         self.assertEqual(drift["config"], [])
-        self.assertEqual(drift["code"], ["main.tf:scoring_engine"])
+        self.assertEqual(drift["code"], ["estate.apply:create_engine"])
+
+    def test_the_engine_hash_covers_exactly_the_engine_shape(self):
+        # The input is the create-engine function itself, not a file: an unrelated deploy
+        # edit cannot leak into the engine hash, so the field list IS the guarantee.
+        self.assertEqual(sorted(self._inputs()["code"]),
+                         ["bootstrap_scoring_engine", "estate.apply:create_engine"])
 
     def test_bootstrap_edit_is_code_drift(self):
         drift = template_freeze.classify_drift(self._inputs(), self._inputs(boot=_boot_v2))

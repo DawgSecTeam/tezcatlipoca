@@ -8,22 +8,17 @@ asserted: engine enrolled to the right control plane, every team subnet SERVING 
 the router node, SNAT lines in the engine's nat table, this comp's tag-scoped ACL
 lines in the live policy, and no other node advertising our subnets."""
 
-import json
 import os
 import subprocess
-from pathlib import Path
 
+from estate import state as estate_state
 from net import remote_access_ops
 from verifier import context
-from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
+from verifier.model import gate_fail, gate_pass, gate_skip
 
 
 def _read_state(comp_dir):
-    path = Path(comp_dir) / ".deploy_state.json"
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
-        return {}
+    return estate_state.load_flat(comp_dir)
 
 
 def _identifiers(teams):

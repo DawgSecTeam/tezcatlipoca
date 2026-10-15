@@ -2,7 +2,6 @@
 
 import os
 
-from config.config_ops import write_state
 from nakonops.nakon_lock_ops import acquire_engine_lock
 from multinode.placement_record import activate_placement
 from multinode.placement_planner import resolve_placement
@@ -57,5 +56,5 @@ def apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path=Non
                 os.environ.setdefault("TF_VAR_engine_mgmt_gw",
                                       _resolved_engine_record.engine_mgmt_gw)
     ctx.state["multi_node"] = bool(ctx.placement)
-    write_state(ctx.state_path, ctx.state)
+    ctx.save_state()
     acquire_engine_lock(ctx.engine_vmid)

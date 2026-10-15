@@ -10,11 +10,26 @@ from config.config_ops import write_text_atomic
 
 SCHEMA_VERSION = 1
 STATE_NAME = "estate-state.json"
-# The estate pipeline's own version; common.constants.PIPELINE_VERSION tracks the
-# terraform-era deploy pipeline this component replaces.
-PIPELINE_VERSION = 4
 
 _LIST_SECTIONS = {"resources"}
+
+# The deploy's flat state keys live in these sections. Everything not named in
+# _FLAT_SECTION lands in `run`, the deploy-bookkeeping catch-all. The flat dict is the
+# in-memory shape the eight phases already use, so this map is the one place the two
+# shapes are reconciled; `absorb` never deletes, so structured keys survive a round trip.
+_SECTIONS = ("identity", "secrets", "roster", "templates", "run")
+_FLAT_SECTION = {
+    "comp_name": "identity", "run_id": "identity", "scoring_vm_id": "identity",
+    "engine_mgmt_ip": "identity", "engine_mgmt_gw": "identity", "endpoint": "identity",
+    "node": "identity", "datastore": "identity",
+    "teams": "secrets", "admin_password": "secrets", "scoring_password": "secrets",
+    "postgres_password": "secrets", "redis_password": "secrets", "box_password": "secrets",
+    "box_creds": "secrets", "domain_creds": "secrets", "inject_password": "secrets",
+    "engine_build_info": "templates", "engine_template_vmid": "templates",
+    "engine_template_hash": "templates", "golden_template_ids": "templates",
+    "golden_ids_by_slot": "templates", "golden_hashes": "templates",
+    "boxes": "roster",
+}
 
 
 def state_path(comp_dir):
@@ -42,7 +57,6 @@ def _resource_key(entry):
 def _skeleton(comp_dir):
     return {
         "schema_version": SCHEMA_VERSION,
-        "pipeline_version": PIPELINE_VERSION,
         "identity": {"comp_name": comp_dir.name},
         "secrets": {},
         "roster": {},
@@ -108,7 +122,10 @@ class EstateState:
             # Neither is in .deploy_state.json; only the env this migration runs with has them.
             "engine_mgmt_ip": os.environ.get("TF_VAR_engine_mgmt_ip") or "",
             "engine_mgmt_gw": os.environ.get("TF_VAR_engine_mgmt_gw") or "",
-            "endpoint": os.environ.get("TF_VAR_proxmox_endpoint") or "",
+            # The deploy's own record outranks the ambient env: teardown's ownership
+            # refusal compares the loaded env against the host the deploy actually used.
+            "endpoint": legacy.get("deployed_endpoint")
+                        or os.environ.get("TF_VAR_proxmox_endpoint") or "",
             "node": node,
             "datastore": os.environ.get("TF_VAR_datastore") or "",
         }
@@ -140,12 +157,16 @@ class EstateState:
             "golden_planted": hashes.get("golden_planted") or {},
             "frozen": _read_json(comp_dir / ".frozen.json"),
         }
+        # `run` is the deploy's bookkeeping section and holds every flat key the phases
+        # write that is not identity/secret/roster/template (see _FLAT_SECTION).
         data["run"] = {key: legacy[key] for key in (
-            "last_phase", "hold_start", "paused_after_phase", "deployed_endpoint",
-            "engine_build_info", "portal_up", "portal_url", "nakon_failed_steps",
-            "degradations") if key in legacy}
-        # The deploy called this machine -> failed-steps map plant_coverage_failed.
-        data["run"]["plant_coverage"] = legacy.get("plant_coverage_failed") or {}
+            "last_phase", "pipeline_version", "hold_start", "paused_after_phase",
+            "deployed_endpoint", "engine_build_info", "portal_up", "portal_url",
+            "portal_console_tokens", "portal_session_secret", "nakon_failed_steps",
+            "degradations", "remote_access", "assume_breach", "multi_node",
+            "started", "ended", "seeded", "engine_unpaused", "firewalls_bootstrapped",
+            "injects_created", "injects_fingerprint", "deleted_teams") if key in legacy}
+        data["run"]["plant_coverage_failed"] = legacy.get("plant_coverage_failed") or {}
         data["external"] = {
             "headscale": legacy.get("remote_access") or {},
             "portal": {"up": bool(legacy.get("portal_up")),
@@ -199,8 +220,51 @@ class EstateState:
         self.section("run")["last_phase"] = phase
         self.save()
 
+    def absorb(self, flat):
+        """Write the deploy's flat state dict into the document's sections."""
+        for key, value in flat.items():
+            self.section(_FLAT_SECTION.get(key, "run"))[key] = value
+
+    def flatten(self):
+        """The deploy's flat state dict, rebuilt from the document's sections."""
+        flat = {}
+        for section in _SECTIONS:
+            flat.update(self.section(section))
+        return flat
+
 
 def load_all(comps_root):
     """Every competition state under a comps root."""
     return [EstateState.load(path.parent)
             for path in sorted(Path(comps_root).glob(f"*/{STATE_NAME}"))]
+
+
+def read_flat(comp_dir):
+    """The competition's flat state view, or None when it has no state at all.
+
+    A range deployed before the estate file existed falls back to its legacy
+    .deploy_state.json — read-only, so a reader never migrates as a side effect.
+    """
+    comp_dir = Path(comp_dir)
+    if state_path(comp_dir).exists():
+        return EstateState.load(comp_dir).flatten()
+    legacy = comp_dir / ".deploy_state.json"
+    if legacy.exists():
+        try:
+            return json.loads(legacy.read_text())
+        except ValueError:
+            return None
+    return None
+
+
+def load_flat(comp_dir):
+    """The competition's flat state view; {} when it has no state yet."""
+    return read_flat(comp_dir) or {}
+
+
+def open(comp_dir):
+    """The competition's document, folding legacy files in on first contact."""
+    comp_dir = Path(comp_dir)
+    if not state_path(comp_dir).exists() and (comp_dir / ".deploy_state.json").exists():
+        return EstateState.migrate(comp_dir)
+    return EstateState.load(comp_dir)

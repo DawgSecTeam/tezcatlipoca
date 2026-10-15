@@ -1,6 +1,7 @@
 import subprocess
 from pathlib import Path
 
+from estate import state as estate_state
 from scrim import core
 from scrim import procs
 from scrim.core import log
@@ -12,8 +13,8 @@ DEFAULT_TEMPLATE = "agent-scrim"  # a competition name under the comps root
 
 
 RUNTIME_FILES = {
-    "teams.json", ".deploy_state.json", "credentials.txt", "nakon-config.json",
-    "packet.md", "event.conf",
+    "teams.json", ".deploy_state.json", "estate-state.json", "credentials.txt",
+    "nakon-config.json", "packet.md", "event.conf",
 }
 
 
@@ -65,7 +66,7 @@ def stage_author(args):
 
 
 def creds_from_files(comp):
-    state = core.read_comp_json(comp, ".deploy_state.json")
+    state = estate_state.load_flat(comp)
     teams = core.read_comp_json(comp, "teams.json")
     engine_ip = core.engine_ip_from(comp)
     box_username, _credlist = load_users_config(comp)
@@ -103,7 +104,7 @@ def stage_deploy(args, comp):
         value = getattr(args, key, None)
         if value:
             cmd += [flag, str(value)]
-    if comp.joinpath(".deploy_state.json").exists() and args.resume:
+    if estate_state.read_flat(comp) is not None and args.resume:
         cmd += ["--from-phase", str(args.resume)]
         # --force-resume must reach create-competition: it is the operator's answer to
         # the resume-loop guard; without the pass-through the harness accepted the flag
@@ -127,6 +128,6 @@ def stage_deploy(args, comp):
     from deploy_lib.phases import PHASES
     final_phase = len(PHASES)
     if f"last_phase: {final_phase}" not in (r.stdout or ""):
-        state = core.read_comp_json(comp, ".deploy_state.json")
+        state = estate_state.load_flat(comp)
         if state.get("last_phase") != final_phase:
             raise RuntimeError(f"deploy did not reach phase {final_phase}")

@@ -29,6 +29,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from estate import state as estate_state
+
 TAILSCALE_INSTALL = "curl -fsSL https://tailscale.com/install.sh | sh"
 TAILNET_SRC = "100.64.0.0/10"
 INFRA_USER_DEFAULT = "cyberrange-infra"
@@ -545,11 +547,7 @@ def teardown_remote_access(comp_dir, state=None):
 #     deploy state's remote_access record; absent (pre-feature comp, or the flag off)
 #     means nothing to do.
     if state is None:
-        state_path = Path(comp_dir) / ".deploy_state.json"
-        try:
-            state = json.loads(state_path.read_text())
-        except (OSError, ValueError):
-            state = {}
+        state = estate_state.load_flat(comp_dir)
     ra = (state or {}).get("remote_access")
     if not ra or not ra.get("enabled"):
         return
