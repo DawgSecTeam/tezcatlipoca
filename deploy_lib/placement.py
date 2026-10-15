@@ -32,10 +32,10 @@ def apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path=Non
 #     point at the engine's host BEFORE the endpoint-keyed lock and any node-scoped call.
 #     The lock is taken last, on the engine vmid prepare() resolved first; it stays held for
 #     the whole process (deploy() relies on that).
-    # Multi-node placement (no-op without nodes.json/placement.json): resolved now —
+    # Multi-node placement (no-op without nodes.json/a recorded placement): resolved now —
     # teams and boxes are known, and the env must point at the engine's host BEFORE
     # the endpoint-keyed engine lock and anything node-scoped. An existing
-    # placement.json always wins (authoritative); a resume without one adopts its
+    # the recorded placement always wins (authoritative); a resume without one adopts its
     # deployed endpoint rather than re-balancing a live range.
     ctx.placement, _resolved_engine_record = resolve_placement(
         comp_dir, ctx.engine_vmid, ctx.teams, ctx.boxes, ctx.comp_name,

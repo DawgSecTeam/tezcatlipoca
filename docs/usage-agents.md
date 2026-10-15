@@ -84,7 +84,7 @@ Use `--admin-password=PW` (equals form) so a leading `-` isn't parsed as an opti
 
 **Gates are PASS / FAIL / SKIP; SKIP is non-passing.** Summary and exit code come from the same results. Waive a SKIP (never a FAIL) with `--allow-unverified <gate>`; unmatched names are warned. Structurally inapplicable cases (no `nakon-config.json`, `domain_roles.json`, or `injects/`; `--expect-no-vulns`; a comp planting no misconfigs, which auto-SKips misconfig as informational) are shown `[informational]` and don't gate. Service DOWN is not fatal; isolation never downgrades.
 
-Other flags: `--expect-no-vulns` (skip misconfig gates for a packet comp without `box_vulns.json`); `--fix-round-loop` (POST `/api/competition/start` and `/api/engine/pause {pause:false}`; still FAILs, rerun to confirm); `--freeze` (writes `.frozen.json`; needs all gates PASS; do it last, since later commits trip the drift gate); `--unfreeze --confirm-unfreeze`.
+Other flags: `--expect-no-vulns` (skip misconfig gates for a packet comp without `box_vulns.json`); `--fix-round-loop` (POST `/api/competition/start` and `/api/engine/pause {pause:false}`; still FAILs, rerun to confirm); `--freeze` (records the freeze in the state document; needs all gates PASS; do it last, since later commits trip the drift gate); `--unfreeze --confirm-unfreeze`.
 
 Inputs: engine IP from the state document (`estate-state.json`; `--engine-ip` overrides), team creds from `teams.json`, admin password from `credentials.txt`, SSH from the config (`estate/config.py`), planted configs from `nakon-config.json`. On a fresh deploy, team identifiers come from `TF_VAR_team_identifiers`, then saved local identifiers, then packet-profile suggestions, then the 101+ defaults; that fallback is not an availability check.
 
@@ -165,7 +165,7 @@ dashboard's per-run workspaces are the mechanical form of that rule; a manual ru
 | `--end-of-competition` | destroy | Full teardown of a frozen competition |
 | `--teams-only` | destroy | Keep this competition's golden + engine templates for its next run |
 | `--keep-templates` | scrim | Same, from the harness: tear down the range but keep the templates |
-| `--freeze` / `--unfreeze --confirm-unfreeze` | verify | Write/remove `.frozen.json` |
+| `--freeze` / `--unfreeze --confirm-unfreeze` | verify | Write/remove the freeze record in the state document |
 | `--fix-round-loop` | verify | Start/unpause POSTs when the round loop didn't resume after an engine reboot |
 | `--expect-no-vulns` | verify | Force misconfig gates to SKIP |
 

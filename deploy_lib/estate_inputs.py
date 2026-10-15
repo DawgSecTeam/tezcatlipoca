@@ -1,7 +1,7 @@
 """Written per-competition inputs: the team roster with its passwords, and the absolute
 SSH key path the phases dial with.
 
-Replaces the terraform.tfvars.json assembly. That file existed to outrank the ambient
+Replaces the generated-inputs assembly. That file existed to outrank the ambient
 TF_VAR_* env for concurrent competitions on one node; the state document now carries the
 authoritative roster and secrets, so all that remains here is the on-disk teams.json the
 teardown and identifier defaults read, plus the resolved key path.

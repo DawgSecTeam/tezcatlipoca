@@ -1,5 +1,5 @@
 """Placement computation: node probes, capacity-fill team placement, decision table, and the
-`resolve_placement` entry point (existing placement.json wins; else nodes.json; else single-node)."""
+`resolve_placement` entry point (a recorded placement wins; else nodes.json; else single-node)."""
 
 import os
 import time
@@ -263,9 +263,9 @@ def resolve_placement(comp_dir, engine_vmid, teams, boxes, comp_name,
                       nodes_path=None):
 # (placement, engine_record) or (None, None).
 #
-#     Order: an existing placement.json always wins (authoritative for resume/redeploy
+#     Order: a recorded placement always wins (authoritative for resume/redeploy
 #     and every companion op). Otherwise nodes.json triggers a fresh capacity-fill
-#     compute — except on a resume with no placement.json, where the range already
+#     compute — except on a resume with no recorded placement, where the range already
 #     lives on resume_endpoint: re-balancing a live range would strand it, so all
 #     teams adopt that node as a single-slot placement instead. Neither config present
 #     => single-node (None).

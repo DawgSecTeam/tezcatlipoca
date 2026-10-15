@@ -57,7 +57,7 @@ the earlier phases complete (`--force-from-phase` overrides).
    run), push `event.conf`/`linux.credlist`, re-assert NAT.
 4. **Golden set + team-box clone** — full-clone one VM per box type onto the anchor team's subnet at
    `.240+`, plant the golden stage (strict, under the `tz-base` rollback guard), clean cloud-init,
-   `qm template` (hash on the template description and `.template-hashes.json`). Then
+   `qm template` (hash on the template description and in the state document). Then
    `estate.apply.create_team_boxes` clones every team box from its golden (an unmanaged box from its
    own template). Windows bootstrap, SSH/cloud-init waits, `setup_ubuntu_auth`, DNS fix, apt prep,
    `tz-base` snapshots. Records the plant-coverage verdict (`{box}-golden`, or `{box}-golden-slot{N}`)
@@ -170,18 +170,19 @@ Per-run secrets are generated in `deploy()` and written to `competitions/<id>/cr
 `estate/config.py` resolves the deploy's process config from `tezcatlipoca.toml` with env overrides
 (its `_SPEC` still accepts the legacy `TF_VAR_*` names); `.env` is loaded by `deploy.py`. Neither file
 is ever rewritten. `vendor/nakon/.env` holds vulndb credentials. Everything per-run is gitignored:
-`teams.json`, `event.conf`, `linux.credlist`, `credentials.txt`, `estate-state.json`, `targets.json`,
-`placement.json`, `.frozen.json`, `nakon-config.json`, `.nakon-*.json`, `.template-hashes.json`,
-`.deploy-timings.jsonl`, `.postclone-swept`, `logs/`, `deploy-*.log`. `boxes.json`,
-`box_services.json`, `Compfile` are not secret.
+`estate-state.json`, `teams.json`, `event.conf`, `linux.credlist`, `credentials.txt`,
+`nakon-config.json`, `.nakon-*.json`, `.deploy-timings.jsonl`, `.postclone-swept`, `logs/`,
+`deploy-*.log`. `boxes.json`, `box_services.json`, `Compfile` are not secret.
 
 | File | Owns | Key fields |
 |---|---|---|
-| `estate-state.json` | Identity, secrets, roster, template records, deploy bookkeeping, and the resource inventory | sections `identity`, `secrets`, `roster`, `templates`, `run`, plus `resources`, `schema_version`, `updated_at`; API and section map in [internals.md](internals.md#estate) |
-| `targets.json` | `(team, box)` → vmid/ip/node, frozen at deploy | `box_order`, `targets` |
-| `.template-hashes.json` | Reuse gate (corroborating record) | `engine` = `{hash, inputs}`, `golden` = `{<box>: {hash, inputs}}`, `golden_planted`, `updated` |
-| `.frozen.json` | Freeze record | `frozen_at`, `code` (git), `hashes`, `verify_report` |
-| `placement.json` | Multi-node placement (absent = single node) | See [multi-node.md](multi-node.md) |
+| `estate-state.json` | Everything the run records: identity, secrets, roster, template records and the frozen flag, the multi-node placement, teardown progress, deploy bookkeeping, and the resource inventory | sections `identity`, `secrets`, `roster`, `templates`, `placement`, `run`, `external`, `teardown`, plus `resources`, `schema_version`, `updated_at`; API and section map in [internals.md](internals.md#estate) |
+| `teams.json` | Generated credentials handoff for the tools that read files rather than the document (verifier, scrim, bad-auto) | `{<team>: {identifier, password}}` |
+| `credentials.txt` | The human-readable secret sheet | same secrets, for an operator |
+
+A range deployed before a record moved into the document still reads its legacy file
+(`targets.json`, `placement.json`, `.template-hashes.json`, `.frozen.json`,
+`.teardown-journal.json`), so every old range stays readable and destroyable.
 
 `deployed_endpoint` + `scoring_vm_id` (the document's `identity`/`run` sections) are the stale-state
 guard. Marker files: `.postclone-swept` (removed by phase 1 and phase 4, written only after a clean
@@ -190,7 +191,7 @@ sweep; `run-agent-scrim.py` skips it), `.nakon-domain-<team>-*.json` (AD chain p
 
 ## Invariants
 
-- `common.targets.vm_id_for` is the sole vmid derivation; `targets.json` freezes it at deploy, and a reordered `boxes.json` refuses.
+- `common.targets.vm_id_for` is the sole vmid derivation; the deploy freezes it into the document's `roster` section, and a reordered `boxes.json` refuses.
 - A resume reuses the original per-run secrets; `infra.gates` refuses to resume without the state document.
 - Teardown destroys the document's recorded inventory (`estate/destroy.py`); a range deployed before the inventory existed has no template records and falls back to vmid math.
 - `config_ops.collect_teams` builds the roster keys `team1`..`teamN`, and `enumerate_targets` special-cases `team1` (its boxes carry the golden-anchor `team1-<box>` names); the pipeline assumes a team literally named `team1`.

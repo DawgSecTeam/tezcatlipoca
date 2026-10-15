@@ -1,5 +1,5 @@
-"""placement.json (the authoritative per-competition placement record): read/write, accessors,
-process-wide activation, and the vmid slot math derived from a placement."""
+"""The authoritative per-competition placement record (the document's `placement` section):
+read/write, accessors, process-wide activation, and the vmid slot math derived from it."""
 
 import json
 import os
@@ -12,32 +12,32 @@ from pathlib import Path
 
 
 def read_placement(comp_dir):
-    path = Path(comp_dir) / "placement.json"
-    if not path.exists():
-        return None
-    try:
-        placement = json.loads(path.read_text())
-    except (OSError, ValueError) as e:
-        raise SystemExit(f"  ERROR: {path} is unreadable/malformed ({str(e)[:120]}) — "
-                         "this competition was placed multi-node; the placement record "
-                         "is authoritative for every op against it")
+# The placement record: the document's section, or a legacy placement.json.
+    from estate import state
+    placement = state.EstateState.load(comp_dir).data.get("placement")
+    if not placement:
+        path = Path(comp_dir) / "placement.json"
+        if not path.exists():
+            return None
+        try:
+            placement = json.loads(path.read_text())
+        except (OSError, ValueError) as e:
+            raise SystemExit(f"  ERROR: {path} is unreadable/malformed ({str(e)[:120]}) — "
+                             "this competition was placed multi-node; the placement record "
+                             "is authoritative for every op against it")
     if placement.get("version") != PLACEMENT_VERSION:
-        raise SystemExit(f"  ERROR: {path} was written by placement schema v"
+        raise SystemExit(f"  ERROR: the placement record was written by schema v"
                          f"{placement.get('version')}; this code understands "
                          f"v{PLACEMENT_VERSION}. Tear the competition down and redeploy.")
     return placement
 
 
 def write_placement(comp_dir, placement):
-    path = Path(comp_dir) / "placement.json"
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(placement, indent=2))
-    os.replace(tmp, path)
-    try:
-        os.chmod(path, 0o644)  # token references only, never token values
-    except OSError:
-        pass
-    return path
+    from estate import state
+    document = state.open(comp_dir)
+    document.data["placement"] = placement
+    document.save()
+    return state.state_path(comp_dir)
 
 
 def record_of(placement, node_name):

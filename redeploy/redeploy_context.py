@@ -21,4 +21,4 @@ class RedeployContext:
     difficulty: Any
     state: dict
     state_path: Any
-    ctx: dict  # terraform agent_context (scoring_engine_ip, ssh_key_path, ...)
+    ctx: dict  # engine context (scoring_engine_ip, ssh_key_path, ...)

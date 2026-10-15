@@ -347,7 +347,7 @@ def code_path_dirty(porcelain_lines):
 #
 #     Only uncommitted *code* invalidates a freeze: the frozen record pins the commit the
 #     run was verified on, while generated/run state (comp JSON, placement.json, nodes.json,
-#     terraform state, .env backups) is written by the run itself and is never committed as
+#     the state document, .env backups) is written by the run itself and is never committed as
 #     part of the workflow. Treating every porcelain line as dirt made `--freeze` refuse in
 #     any post-deploy worktree (verified 2026-10-02 on the scale8 worktree: a modified
 #     placement.json, an untracked nodes.json and a .env backup), so the gate is scoped here.

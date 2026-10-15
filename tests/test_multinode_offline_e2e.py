@@ -113,7 +113,8 @@ class MultinodeOfflineE2E(unittest.TestCase):
     def test_placement_preflight_tfvars_and_jump_rules(self):
         placement, engine = self._resolve()
         self.assertEqual(set(placement["team_nodes"]), set(TEAMS))
-        self.assertTrue((self.comp / "placement.json").exists())
+        self.assertTrue(placement_record.read_placement(self.comp),
+                        "the placement record is in the document")
         self.assertEqual(engine.name, placement["engine_node"])
         # n1 is capped at 2 teams, so a 5-team comp must use satellites
         used = set(placement["team_nodes"].values())

@@ -1,8 +1,7 @@
 """Guest-side engine configuration and the cold boot that makes its NICs appear.
 
-Replaces terraform's three null_resources (main.tf: team_nics, reboot_scoring_engine,
-orchestrate). They were remote-exec/local-exec scripts inside a declarative tool; here they
-are ordinary calls the deploy phase makes in the same order.
+The three things that must happen in this exact order after the engine exists: address the
+team NICs, cold-boot so the guest sees them, then wait for the engine to answer.
 """
 
 import time
@@ -19,7 +18,7 @@ def engine_ctx(comp_dir):
             "ssh_key_path": str(config.ssh_key_path()),
             "vm_username": config.active().engine.username}
 
-# The hard-stop settle terraform used between stop and start: long enough for the VM to be
+# The hard-stop settle between stop and start: long enough for the VM to be
 # fully down, short enough not to matter (main.tf slept 15).
 COLD_BOOT_SETTLE_S = 15
 # The readiness probe's tail settle (main.tf's orchestrate slept 30 after the last probe).
