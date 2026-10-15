@@ -97,7 +97,7 @@ def _resolve_red_vmid(args, comp):
         return args.red_vmid
     engine_vmid = None
     try:
-        engine_vmid = core.read_comp_json(comp, ".deploy_state.json").get("scoring_vm_id")
+        engine_vmid = core.read_state(comp).get("scoring_vm_id")
     except Exception:                                        # noqa: BLE001 - best effort
         pass
     vmid = badauto_config_ops.red01_vmid_for(comp, engine_vmid)

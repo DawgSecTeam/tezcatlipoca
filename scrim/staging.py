@@ -41,7 +41,7 @@ def warn_co_tenancy(args, comp):
         return None
     our_run = ""
     try:
-        our_run = (core.read_comp_json(comp, ".deploy_state.json") or {}).get("run_id") or ""
+        our_run = core.read_state(comp).get("run_id") or ""
     except Exception:                                        # noqa: BLE001
         our_run = ""
     others = {}

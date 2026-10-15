@@ -58,7 +58,7 @@ def stage_blues(args, comp, run_dir, creds, t0):
         wd.mkdir(parents=True, exist_ok=True)
         (wd / "submissions").mkdir(exist_ok=True)
         tid = creds[f"TEAM{n}_ID"]
-        state = core.read_comp_json(comp, ".deploy_state.json")
+        state = core.read_state(comp)
         credlist = ";".join(f"{u}:{pw}" for u, pw in (state.get("box_creds") or {}).items())
         (wd / "scrim.env").write_text(
             f"ENGINE_IP={creds['ENGINE_IP']}\nMY_TEAM=team{n}\nMY_PW={creds[f'TEAM{n}_PW']}\n"

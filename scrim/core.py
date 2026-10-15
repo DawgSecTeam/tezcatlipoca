@@ -90,6 +90,18 @@ def read_comp_json(comp, name):
     return json.loads((Path(comp) / name).read_text())
 
 
+def read_state(comp):
+    """The competition's flat state view, through the engine's own reader.
+
+    v0.3.0 writes ONE state document and stopped writing `.deploy_state.json`, so the scrim
+    side's direct reads of that file died with FileNotFoundError on the first estate range
+    (live 2026-10-15, run-75347fca, scrim/cli -> blue_agent.stage_blues). `estate.state`
+    still falls back to the legacy file read-only, so a pre-v0.3 range keeps working.
+    """
+    from estate import state as estate_state
+    return estate_state.load_flat(comp)
+
+
 def is_windows_box(box):
     """A boxes.json entry whose template name contains "windows" (password auth, Administrator)."""
     return "windows" in str(box.get("template") or "")

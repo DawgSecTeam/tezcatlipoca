@@ -168,7 +168,7 @@ def teardown_red(args, env):
     # 2026-10-12 kill.
     state_vmid = None
     try:
-        state_vmid = core.read_comp_json(comp_path, ".deploy_state.json").get("scoring_vm_id")
+        state_vmid = core.read_state(comp_path).get("scoring_vm_id")
     except Exception:                                        # noqa: BLE001 - best effort
         pass
     vmid = (args.red_vmid or _manifest_red_vmid(args) or configured
