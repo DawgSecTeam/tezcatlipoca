@@ -342,8 +342,8 @@ def check():
         for nic in ("eth0", "eth1"):
             if nic not in eth:
                 raise SystemExit(f"no {nic} in `show interfaces` — NIC naming differs "
-                                 f"from the terraform net0/net1 WAN/LAN order:\n{eth[-1500:]}")
-        print("eth0/eth1 present (terraform NIC order holds)")
+                                 f"from the net0/net1 WAN/LAN order:\n{eth[-1500:]}")
+        print("eth0/eth1 present (NIC order holds)")
 
         pass_a = generate_vyos_commands(CHECK_TID, CHECK_DNAT)
         rc, out = _guest_ssh(pass_a, timeout=120)

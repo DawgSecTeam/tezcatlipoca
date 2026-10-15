@@ -57,7 +57,7 @@ def do_freeze(comp_dir, args, gate, coverage_passed):
     # A freeze taken while deploy-path CODE is uncommitted pins a commit that does not
     # contain the verified code (the deploy-time check is a warning, not a gate trip — see
     # template_freeze.frozen_code_drift). Generated/run state (comp JSON, placement.json,
-    # nodes.json, terraform state, .env backups) is expected to be dirty after a run and
+    # nodes.json, the state document, config backups) is expected to be dirty after a run and
     # must not block; it is noted, not refused.
     dirty = git_dirty_lines()
     if dirty is None:

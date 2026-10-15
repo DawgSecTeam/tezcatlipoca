@@ -85,7 +85,7 @@ def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None,
                 live_by_node[node] = []
         for v in live_by_node[node]:
             vm_name = v.get("name") or ""
-            # team 1 is named `team1-<box>` (terraform main.tf / targets.enumerate_targets)
+            # team 1 is named `team1-<box>` (targets.enumerate_targets)
             prefix = team_key if team_key == "team1" else team["identifier"]
             if vm_name not in {f"{prefix}-{box}" for box in windows}:
                 continue
@@ -159,7 +159,7 @@ def engine_vmid_from_state(deployed_state):
         return SCORING_ENGINE_VMID
 
 
-# templates are the linked clones' base disks and are not in terraform state — they die only after terraform destroy removed every clone; returns the vmids skipped as foreign
+# templates are the linked clones' base disks, so they can only go after every clone has; returns the vmids skipped as foreign
 def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, full):
     skipped = []
     engine_vmid = engine_vmid_from_state(deployed_state)

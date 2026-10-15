@@ -495,6 +495,35 @@ class ActivatePlacementTest(unittest.TestCase):
         self.assertEqual(_NODE_ROUTES, {})
 
 
+class ActivationProjectsBackToEnv(unittest.TestCase):
+    """activate_placement moves the process by mutating the CONFIG, not os.environ.
+
+    A teardown caller snapshots os.environ before activation and hands that dict to the steps
+    and to bad-auto's subprocess. Copying os.environ back is now a no-op, which silently sent
+    a multi-node teardown at the profile's host (the 2026-10-14 wrong-PVE bug). The identity
+    must come from the config.
+    """
+
+    def test_proxmox_env_carries_the_activated_identity(self):
+        from estate import config
+        placement = {
+            "engine_node": "hdd-150",
+            "nodes": {"hdd-150": _rec("hdd-150", node="proxmox",
+                                      token_env="TOK_HDD150").to_json()},
+        }
+        with patch.dict(os.environ,
+                        {"TOK_HDD150": "t1", "TF_VAR_proxmox_node": "profile-host"},
+                        clear=False):
+            restore = placement_record.activate_placement(placement)
+            try:
+                env = config.proxmox_env()
+            finally:
+                placement_record.deactivate_placement(restore)
+        # The placement's node, not the profile's: this is what a stale os.environ copy got wrong.
+        self.assertEqual(env["TF_VAR_proxmox_node"], "proxmox")
+        self.assertEqual(env["TF_VAR_proxmox_api_token"], "t1")
+
+
 class SyncPlannerTest(unittest.TestCase):
     def test_plan_commands_and_vmid_pick(self):
         from multinode.template_sync_ops import plan_sync

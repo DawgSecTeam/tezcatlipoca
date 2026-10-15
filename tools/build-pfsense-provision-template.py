@@ -24,7 +24,7 @@ a scratch VM, reaches the guest's template SSH (192.168.1.1 on a node-side bridg
 the host-level equivalent of phase 5's engine borrow), stages the .pkg dependency closure
 from pkg.freebsd.org offline-installation style (the range has no DNS/internet), installs,
 and reseals under the canonical name (the old template is renamed to a -agentless-bak).
-Terraform already sets `agent { enabled = true }` on firewall clones — this supplies the
+Firewall clones are created with the agent already enabled — this supplies the
 guest half:
 
   tools/build-pfsense-provision-template.py agent-clone   # clone NEWID -> QGA_VMID, agent=1, start

@@ -1,7 +1,7 @@
 """Hold a deploy at a phase boundary when the run queue asks for one.
 
-A boundary is the only consistent place to stop a deploy: a phase can have a terraform apply
-or a VM build in flight, and cutting one open mid-call leaves terraform's view of the estate
+A boundary is the only consistent place to stop a deploy: a phase can have an API burst
+or a VM build in flight, and cutting one open mid-call leaves the recorded estate
 behind reality — the mismatch the resume guards and the "already exists" resume hint exist
 for. The run queue sets TEZ_PAUSE_FILE to a per-run control file: the file existing means
 "hold at the next boundary", deleting it means "carry on", and the held phase goes into

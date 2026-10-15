@@ -144,7 +144,7 @@ class RedStep(Step):
             return StepResult(self.name, "skipped",
                               "no per-comp bad-auto config and no recorded red vmid — "
                               "this run staged no red agent")
-        print("  red01      : badauto destroy (not terraform-managed — this script cannot "
+        print("  red01      : badauto destroy (not estate-managed — this script cannot "
               "remove it any other way)...")
         r = red_plant_ops.destroy_red(ctx.comp_dir, env=ctx.env)
         tail = " ".join(((r.stderr or "") + (r.stdout or "")).split())[-200:]

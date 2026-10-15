@@ -1,9 +1,8 @@
 """The estate plumbing the deploy phases share: the engine's coordinates, the create call,
 and the guest-side network setup.
 
-This replaces `_terraform.py` — the phases call these, and the offline suite stubs them the
-same way it stubbed the terraform runner (tests/_deploy_patch.dpatch patches every
-deploy_lib module binding a name).
+The phases call these, and the offline suite stubs them (tests/_deploy_patch.dpatch patches
+every deploy_lib module binding a name).
 """
 
 
@@ -43,7 +42,7 @@ def engine_context(ctx):
 
 
 def slot_team_identifiers(ctx):
-# Slot 0's team identifiers, in the order the old terraform sorted them — the order is
+# Slot 0's team identifiers, sorted — the order is
 #     load-bearing: it decides both the engine's NIC order and the netplan's ens numbering.
     slots = (ctx.placement or {}).get("team_slots") or {}
     return [ctx.teams[key]["identifier"] for key in sorted(ctx.teams)

@@ -40,7 +40,7 @@ def build_parser():
                              "when creating a new competition; default 'admin,user1,user2'). "
                              "Written to competitions/<id>/users.json.")
     parser.add_argument("--from-phase", type=int, default=1, dest="from_phase",
-                        help="Resume from this phase (>1 skips the destructive cleanup + terraform "
+                        help="Resume from this phase (>1 skips the destructive cleanup + estate "
                              "apply). See the resume hint printed on a failed deploy. Refused when "
                              "it skips phases the state file doesn't record as completed.")
     parser.add_argument("--force-from-phase", action="store_true", dest="force_from_phase",
@@ -85,7 +85,7 @@ def build_parser():
     parser.add_argument("--plan-only", action="store_true", dest="plan_only",
                         help="Collect/generate the competition's config (Compfile, boxes.json) "
                              "and print a summary, then exit WITHOUT touching any infrastructure "
-                             "— no teardown, no `terraform apply`. There is no confirmation "
+                             "— no teardown, nothing created. There is no confirmation "
                              "checkpoint between the box picker and a real deploy otherwise "
                              "(--yes skips it outright, and piped/scripted stdin that happens to "
                              "satisfy every remaining prompt walks straight into one) — use this "
@@ -110,7 +110,7 @@ def print_plan(comp_name, comp_dir):
         print("  Run identity: minted at deploy time (run-<id>, stored in the "
               "competition's state document) — destruction paths require it")
     print("\n  Team count is decided at deploy time (--teams N, or the prompt).")
-    print("  Nothing was deployed — no teardown, no terraform apply.")
+    print("  Nothing was deployed — no teardown, nothing created.")
     print(f"  Deploy for real with: python3 create-competition.py --competition {comp_name} "
           f"--teams <N> --yes")
 

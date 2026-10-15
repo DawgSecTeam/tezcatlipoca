@@ -1,8 +1,8 @@
 """The eight deploy phases, one function per phase, grouped by what they do.
 
   cleanup.py    phase 1  reclaim interrupted clones + reset local deploy state
-  engine.py     phases 2-3  engine template + terraform apply #1, per-deploy engine prep
-  golden.py     phase 4  golden set + terraform apply #2 + clone bootstrap
+  engine.py     phases 2-3  engine template + engine/bridge create, per-deploy engine prep
+  golden.py     phase 4  golden set + the team-box clone pass + clone bootstrap
   firewall.py   phase 5  in-path firewall bootstrap + engine cutover
   postclone.py  phase 6  pre-domain pass
   final.py      phase 7  AD domains, final pass, beacons, tz-ready snapshots

@@ -1,4 +1,4 @@
-"""SSH helpers via the scoring-engine gateway and Terraform context."""
+"""SSH helpers via the scoring-engine gateway and the state document's engine context."""
 
 import subprocess
 import time

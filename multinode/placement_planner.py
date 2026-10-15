@@ -192,7 +192,7 @@ def compute_placement(records, balancing, teams, boxes, engine_vmid, comp_name,
         key=lambda n: (_prefer_index(n, prefer), n))
     if len(used) - 1 > MAX_SATELLITES:
         raise SystemExit(f"  ERROR: placement needs {len(used) - 1} satellites but "
-                         f"MAX_SATELLITES={MAX_SATELLITES} (terraform providers are static)")
+                         f"MAX_SATELLITES={MAX_SATELLITES} (node routes are registered, not dynamic)")
 
     slots = {name: i for i, name in enumerate(used)}
     satellites = []

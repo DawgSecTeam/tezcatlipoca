@@ -135,11 +135,10 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
 
         # Every team is a Terraform resource (`team_box` for_each covers all teams;
         # satellites get team_box_sat1..4), so EVERY rebuilt box drifts from state. Fine
-        # mid-event; nobody runs a full apply against a live range, but the next one will
-        # want to replace these.
-        print(f"    NOTE: {t['vm_name']} is a Terraform-managed resource. It was recreated "
-              f"outside Terraform, so the next `terraform apply` will see drift and want to "
-              f"replace it. Fine mid-event; re-import or accept the replacement afterwards.")
+        # The rebuilt box carries the current run's tags, so the next deploy adopts it
+        # rather than cloning a second one into the same slot.
+        print(f"    NOTE: {t['vm_name']} was recreated outside the deploy. It carries this "
+              f"run's ownership tags, so the next deploy adopts it instead of rebuilding.")
 
     pipeline_api.wait_for_boxes_ssh(ctx, rebuilt, timeout=600)
     pipeline_api.wait_for_cloud_init(ctx, rebuilt, timeout=300)
