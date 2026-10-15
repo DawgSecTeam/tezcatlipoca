@@ -72,7 +72,7 @@ def run_pipeline(ctx):
                 # resume skips the apply but still needs them. Outside the `running`
                 # gate on purpose, so a failure here reports the phase the operator
                 # asked to resume at rather than phase 2.
-                phases.connect_terraform(ctx)
+                phases.connect_estate(ctx)
             if running:
                 # Last in the iteration, so a hold lands on a phase that is completely done
                 # (phase 2's terraform read included). A skipped phase is no boundary: its

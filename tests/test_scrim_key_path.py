@@ -25,7 +25,7 @@ class SshKeyPath(unittest.TestCase):
         with patch.dict(os.environ, {"TF_VAR_ssh_private_key_path": "/home/hna/tez-proxmox"}):
             self.assertEqual(core.ssh_key_path(), "/home/hna/tez-proxmox")
 
-    def test_relative_env_value_resolves_under_the_terraform_workdir(self):
+    def test_relative_env_value_resolves_against_the_checkout(self):
         with patch.dict(os.environ, {"TF_VAR_ssh_private_key_path": "../proxmox"}):
             self.assertEqual(core.ssh_key_path(), str((_REPO / "proxmox").resolve()))
 

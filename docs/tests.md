@@ -78,7 +78,7 @@ the pytest run above rather than this table.
 | `test_auth_ladder.py` | SSH retry ladders: definitive rejections fail fast instead of burning the full ladder |
 | `test_non_apt_prep.py` | apt-prep/settle scripts are honest fast no-ops on non-apt distros (fedora, alpine) |
 | `test_thin_headroom.py` | Datastore headroom gate and the `TEZ_THIN_HEADROOM` factor |
-| `test_run_terraform.py` | `run_terraform` process-group isolation, so an interrupted driver can't orphan terraform |
+| `test_run_terraform.py` | `run_terraform` process-group isolation (the helper remains for back-compat; the pipeline no longer calls it) |
 | `test_destroy_continuation.py` | A failed/interrupted destroy resumes instead of restarting |
 | `test_stream3_robustness.py` | AD-misconfig replays, `.postclone-swept` invalidation |
 | `test_windows_bootstrap.py` | Windows bootstrap script content (firewall profiles, RDP listener checks) |
@@ -98,7 +98,6 @@ the pytest run above rather than this table.
 | `test_deploy_phase_units.py` | Per-phase units for `deploy_lib/phases/` with every infra call patched |
 | `test_pipeline_api.py` | `create-competition.py --plan-only` runs through `pipeline_api` |
 | `test_engine_steps.py` | `engine_cmd_ops`: every remote step names itself on failure, and Quotient `.env` secrets never appear in argv |
-| `test_destroy_teardown.py` | `terraform destroy` is bounded per attempt and a timeout is retryable |
 | `test_redeploy_state.py` | `.deploy_state.json` writers all go through `config_ops.write_state`; redeploy's Linux hardening order holds (sudoers grant before DNS fix) |
 | `test_jump_parallel.py` | `build_jump_vms` runs satellites concurrently (bound 4) without dropping one or turning a hard abort into a partial build |
 

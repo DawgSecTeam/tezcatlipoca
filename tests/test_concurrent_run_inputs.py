@@ -52,7 +52,7 @@ class ExplicitRunInputs(unittest.TestCase):
         noop = ["resolve_engine_vmid", "load_competition_spec", "load_prior_deploy_state",
                 "check_resume_gates", "load_competition_inputs", "apply_engine_placement",
                 "run_range_gates", "mint_competition_secrets",
-                "generate_stage_configs_and_hashes", "build_terraform_inputs",
+                "generate_stage_configs_and_hashes", "build_estate_inputs",
                 "enumerate_deploy_targets"]
         with contextlib.ExitStack() as stack:
             for name in noop:

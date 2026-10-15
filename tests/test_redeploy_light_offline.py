@@ -17,6 +17,7 @@ sys.path.insert(0, str(_REPO))
 
 from teardown import machinery as dto  # noqa: E402
 from infra.ownership import Ownership  # noqa: E402
+from estate import state as estate_state
 from redeploy import redeploy_light_ops as light  # noqa: E402
 from redeploy.redeploy_context import RedeployContext  # noqa: E402
 from common.constants import SNAP_BASE, SNAP_READY  # noqa: E402
@@ -69,7 +70,7 @@ class Resync(unittest.TestCase):
             self.assertEqual(state["admin_password"], "new")
             self.assertEqual(state["box_creds"], {"a": "y"})
             self.assertEqual(state["teams"]["team1"]["password"], "tnew")
-            self.assertEqual(json.loads((comp / ".deploy_state.json").read_text())["admin_password"], "new")
+            self.assertEqual(estate_state.load_flat(comp)["admin_password"], "new")
             self.assertEqual(lin_calls[0][0], "pve2")       # target's own node
             self.assertEqual(win_calls[0][0], "pve1")       # falls back to the default node
             self.assertIn("guest agent rc=1", out.getvalue())

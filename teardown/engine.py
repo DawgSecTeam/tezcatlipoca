@@ -173,13 +173,7 @@ class TeardownEngine:
                                     or (red01_done and red01_done.get("status") != "skipped")):
                 problems.append("red01's vmid could not be verified gone — check by hand")
 
-        # 5. no terraform state lock left behind
-        lock = Path(self.ctx.comp_dir) / "terraform" / ".terraform.tfstate.lock.info"
-        if lock.exists():
-            problems.append(f"{lock} still present — a terraform process may be alive; "
-                            f"settle it and re-run")
-
-        # 6. evidence archived — demanded only when a teardown actually ran
+        # 5. evidence archived — demanded only when a teardown actually ran
         # (a fresh journal means this plan never got past its gates)
         done = self._journal_done(plan)
         if done and any(s.kind == "evidence" for s in plan.steps):

@@ -12,7 +12,7 @@ from pathlib import Path
 from multinode.placement_record import (activate_placement, engine_record, read_placement,
                                         record_of)
 from teardown import (Inventory, TeardownContext, TeardownEngine, load_ownership,
-                      refuse_frozen_full_teardown, require_terraform_state)
+                      refuse_frozen_full_teardown)
 from teardown.engine import TEARDOWN_JOURNAL
 from teardown.modes import build_terminal_plan
 from engine.template_freeze import frozen_state
@@ -45,11 +45,10 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
             + (f"; satellites: {sats}" if sats else ""))
 
     # Every refusal fires BEFORE any destruction — a frozen competition's
-    # templates are the verified artifacts the event runs on; a state without
-    # its run id names no ownership; a missing tfstate makes destroy a no-op.
+    # templates are the verified artifacts the event runs on, and a state
+    # without its run id names no ownership.
     refuse_frozen_full_teardown(competition, frozen, full, end_of_competition)
     deployed_state, ownership = load_ownership(comp_dir)
-    require_terraform_state(comp_dir, deployed_state)
     log(f"  Ownership: run id '{ownership.run_id}' — only VMs carrying this deploy's "
         f"FULL tag set ({sorted(ownership.tags)}) will be touched.")
 

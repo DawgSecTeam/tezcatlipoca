@@ -4,7 +4,8 @@ import json
 import os
 import pipeline_api
 
-from config.config_ops import write_state
+from estate import state as estate_state
+
 from common.utils import compfile_flag
 from pathlib import Path
 from redeploy.redeploy_select_ops import box_platform
@@ -59,13 +60,10 @@ def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
         # failed steps resolved — or erase the record that they ever existed.
         state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
             f"redeploy: {line}" for line in result.failed[:20]]
-        state_path = comp_dir / ".deploy_state.json"
-        if state_path.exists():
-            # Shared atomic writer (config_ops.write_state): 0600 at creation, temp+os.replace.
-            # Never hand-roll this — .deploy_state.json carries the only copy of the box
-            # passwords, so a torn write bricks resume AND redeploy at once (deploy.py's
-            # atomic-rename note; winad-testrun 2026-09-25).
-            write_state(state_path, state)
+        # The document carries the only copy of the box passwords, so a torn write bricks
+        # resume AND redeploy at once — estate_state.write_flat is the atomic 0600 writer
+        # (winad-testrun 2026-09-25).
+        estate_state.write_flat(comp_dir, state)
 
     pipeline_api.fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=state.get("box_creds"))
 

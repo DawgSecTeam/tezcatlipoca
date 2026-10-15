@@ -68,7 +68,7 @@ class PauseAtBoundary(unittest.TestCase):
     def _held(self, phases, ctx, body):
         """Run the pipeline on a thread under the stub phases and always join it before the
         patches come off: a parked thread left alive would wake up on the REAL phases."""
-        with dpatch("PHASES", tuple(phases)), dpatch("connect_terraform"):
+        with dpatch("PHASES", tuple(phases)), dpatch("connect_estate"):
             thread = threading.Thread(target=runner.run_pipeline, args=(ctx,))
             thread.start()
             try:
@@ -138,7 +138,7 @@ class PauseAtBoundary(unittest.TestCase):
     def test_no_request_file_is_a_no_op(self):
         calls = []
         ctx = StubCtx(self.comp_dir)
-        with dpatch("PHASES", _stub_phases(calls)), dpatch("connect_terraform"):
+        with dpatch("PHASES", _stub_phases(calls)), dpatch("connect_estate"):
             runner.run_pipeline(ctx)
         self.assertEqual([c[1] for c in calls], list(range(1, 9)))
         self.assertNotIn("paused_after_phase", ctx.state)
@@ -154,7 +154,7 @@ class PauseAtBoundary(unittest.TestCase):
         calls = []
         ctx = StubCtx(self.comp_dir, from_phase=4, state={"last_phase": 3,
                                                           "paused_after_phase": 3})
-        with dpatch("PHASES", _stub_phases(calls)), dpatch("connect_terraform"):
+        with dpatch("PHASES", _stub_phases(calls)), dpatch("connect_estate"):
             runner.run_pipeline(ctx)
         self.assertNotIn("paused_after_phase", ctx.state)
         self.assertNotIn("paused_after_phase", _on_disk(ctx))

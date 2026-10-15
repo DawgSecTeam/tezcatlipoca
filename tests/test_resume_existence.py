@@ -20,20 +20,17 @@ argument list and stderr/stdout handling are all exercised.
 """
 
 import json
-import os
-import stat
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 from _deploy_patch import dpatch  # noqa: E402
 from infra import gates as dl_gates  # noqa: E402
-from common import terraform_workdir  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 
 STATE_RESOURCES = [
     {"type": "proxmox_virtual_environment_vm", "name": "scoring_engine",
@@ -55,81 +52,46 @@ STATE_JSON = json.dumps({"version": 4, "serial": 14, "resources": STATE_RESOURCE
 # built range as "no team boxes at all" and failed the phase-4 checkpoint).
 
 
-def _fake_terraform(tmp, stdout=STATE_JSON, returncode=0, stderr=""):
-# A `terraform` shim on PATH that answers `state pull` and nothing else.
-    bindir = Path(tmp) / "bin"
-    bindir.mkdir(exist_ok=True)
-    script = bindir / "terraform"
-    script.write_text(
-        "#!/bin/sh\n"
-        f"cat <<'EOF'\n{stdout}\nEOF\n"
-        f"echo {json.dumps(stderr)} >&2\n"
-        f"exit {returncode}\n"
-    )
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    return bindir
+class InventoryReading(unittest.TestCase):
+# The resume gate's "is the work there" probe reads the recorded inventory.
 
 
-class TerraformStateReading(unittest.TestCase):
-# `terraform state pull` -> the vmids a completed phase actually created.
-
-    def _comp(self, tmp):
+    def _comp(self, tmp, rows=()):
         comp = Path(tmp) / "competitions" / "c1"
-        (comp / "terraform").mkdir(parents=True)
+        comp.mkdir(parents=True)
+        document = estate_state.EstateState.load(comp)
+        for name, vmid in rows:
+            document.record("team_box", "pve", name, vmid=vmid)
+        document.record("bridge", "pve", "vmbr101")
+        document.save()
         return comp
 
-    def test_parses_vm_attributes_and_keeps_satellite_boxes(self):
+    def test_reads_every_recorded_box_including_satellites(self):
         with tempfile.TemporaryDirectory() as d:
-            comp = self._comp(d)
-            bindir = _fake_terraform(d)
-            with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
-                vmids = terraform_workdir.team_vmids_from_state(comp)
-        # The engine is read through state["scoring_vm_id"], not this parser, and the
-        # null_resource/bridge entries must not be mistaken for machines.
-        self.assertEqual(vmids, [221, 222, 225])
+            comp = self._comp(d, [("team1-web01", 221), ("team1-db01", 222),
+                                  ("130-web01", 225)])
+            self.assertEqual(estate_state.team_vmids(comp), [221, 222, 225])
 
-    def test_team_box_without_vmid_attribute_is_skipped_not_fatal(self):
+    def test_an_entry_without_a_vmid_is_skipped_not_fatal(self):
         with tempfile.TemporaryDirectory() as d:
-            comp = self._comp(d)
-            resources = json.loads(json.dumps(STATE_RESOURCES))
-            resources[-3]["instances"][0]["attributes"] = {}  # sat1 lost its vm_id
-            bindir = _fake_terraform(d, stdout=json.dumps({"resources": resources}))
-            with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
-                self.assertEqual(terraform_workdir.team_vmids_from_state(comp), [221, 222])
+            comp = self._comp(d, [("team1-web01", 221), ("team1-db01", None)])
+            self.assertEqual(estate_state.team_vmids(comp), [221])
 
-    def test_unreadable_state_raises_instead_of_reporting_nothing(self):
-        # The distinction the whole gate rests on: "no machines" and "could not ask"
-        # must not look alike, or the gate hard-fails a healthy range.
+    def test_a_corrupt_document_raises_instead_of_reporting_nothing(self):
+        # The distinction the whole gate rests on: "no machines" and "could not ask" must
+        # not look alike, or the gate hard-fails a healthy range.
         with tempfile.TemporaryDirectory() as d:
-            comp = self._comp(d)
-            bindir = _fake_terraform(d, returncode=1, stderr="Error: no state file")
-            with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
-                with self.assertRaises(RuntimeError) as raised:
-                    terraform_workdir.team_vmids_from_state(comp)
-        self.assertIn("state pull", str(raised.exception))
+            comp = self._comp(d, [("team1-web01", 221)])
+            estate_state.state_path(comp).write_text("{not json")
+            with self.assertRaises(SystemExit) as raised:
+                estate_state.team_vmids(comp)
+        self.assertIn("corrupt", str(raised.exception))
 
-    def test_unparsable_state_raises_instead_of_reporting_nothing(self):
+    def test_no_document_is_an_empty_list_not_an_error(self):
         with tempfile.TemporaryDirectory() as d:
-            comp = self._comp(d)
-            bindir = _fake_terraform(d, stdout="not json at all")
-            with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
-                with self.assertRaises(RuntimeError) as raised:
-                    terraform_workdir.team_vmids_from_state(comp)
-        self.assertIn("unparsable", str(raised.exception))
-
-    def test_missing_terraform_binary_raises(self):
-        with tempfile.TemporaryDirectory() as d:
-            comp = self._comp(d)
-            with patch.dict(os.environ, {"PATH": str(Path(d) / "empty")}):
-                with self.assertRaises(RuntimeError):
-                    terraform_workdir.team_vmids_from_state(comp)
-
-    def test_empty_state_is_an_empty_list_not_an_error(self):
-        with tempfile.TemporaryDirectory() as d:
-            comp = self._comp(d)
-            bindir = _fake_terraform(d, stdout="{}")
-            with patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
-                self.assertEqual(terraform_workdir.team_vmids_from_state(comp), [])
+            comp = Path(d) / "competitions" / "c1"
+            comp.mkdir(parents=True)
+            self.assertEqual(estate_state.team_vmids(comp), [])
 
 
 class ResumeExistenceGuard(unittest.TestCase):

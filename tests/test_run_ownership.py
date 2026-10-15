@@ -53,7 +53,7 @@ import deploy  # noqa: E402
 from _deploy_patch import dpatch  # noqa: E402
 from deploy_lib import secrets as dl_secrets  # noqa: E402
 from deploy_lib.context import DeployContext  # noqa: E402
-from deploy_lib import tfinputs as dl_tfinputs  # noqa: E402
+from deploy_lib import estate_inputs as dl_estate_inputs  # noqa: E402
 from config import config_ops  # noqa: E402
 from multinode import placement_record  # noqa: E402
 from infra import client  # noqa: E402
@@ -259,8 +259,8 @@ class DeployContextTags(unittest.TestCase):
             engine_mgmt_ip="10.0.0.1", boxes=[], boxes_by_name={}, unbooted=set(),
             nakon_config_path=Path("n.json"), golden_config_path=Path("g.json"),
             predomain_config_path=Path("r.json"), final_config_path=Path("f.json"),
-            golden_inputs={}, golden_hashes={}, tf_dir=Path("."),
-            tfvars_path=Path("."), tfvars={}, ssh_key_abs="/k", all_targets=[],
+            golden_inputs={}, golden_hashes={},
+ ssh_key_abs="/k", all_targets=[],
             managed_targets=[], linux_targets=[], windows_targets=[])
         fields.update(kw)
         return deploy.DeployContext(**fields)
@@ -345,27 +345,6 @@ class RunIdMinting(unittest.TestCase):
                 dl_secrets.resolve_competition_teams(ctx, None, 4)
         self.assertEqual(ctx.run_id, RUN)
         self.assertEqual(ctx.state["run_id"], RUN)
-
-
-class TfvarsCarryRunTag(unittest.TestCase):
-    def test_run_tag_is_written_to_tfvars(self):
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            tf_dir = comp_dir / "terraform"
-            tf_dir.mkdir()
-            ctx = DeployContext(comp_name=COMP, boxes=[{"name": "web01", "template": "t"}],
-                                run_id=RUN, teams={}, number_of_teams=0, engine_vmid=1000)
-            captured = {}
-            env = {"TF_VAR_ssh_private_key_path": "/tmp/key",
-                   "TF_VAR_proxmox_node": "pve",
-                   "TF_VAR_proxmox_endpoint": "https://pve:8006/"}
-            with patch.dict(os.environ, env, clear=True), \
-                    dpatch("ensure_terraform_workdir", return_value=tf_dir), \
-                    dpatch("write_text_atomic",
-                                 side_effect=lambda p, t: captured.__setitem__(str(p), t)):
-                dl_tfinputs.build_terraform_inputs(ctx, comp_dir)
-        tfvars = json.loads(captured[str(tf_dir / "terraform.tfvars.json")])
-        self.assertEqual(tfvars["run_tag"], RUN)
 
 
 class MultinodePreflightRunAware(unittest.TestCase):

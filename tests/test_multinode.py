@@ -316,17 +316,6 @@ class PlacementRecordTest(unittest.TestCase):
         self.assertEqual(back["engine_node"], "n1")
 
 
-class TfvarsHelpersTest(unittest.TestCase):
-    def test_satellite_tfvars_shape_and_dummy_padding(self):
-        placement = {"nodes": {"n1": _rec("n1").to_json(), "n2": _rec("n2").to_json()},
-                     "slots": {"n1": 0, "n2": 1}}
-        with patch.dict(os.environ, {"TOK_N2": "tok"}):
-            out = placement_record.satellite_tfvars(placement)
-        self.assertEqual(len(out), nodes_config.MAX_SATELLITES)
-        self.assertEqual(out[0]["endpoint"], "https://n2.lab:8006")
-        self.assertEqual(out[0]["api_token"], "tok")
-        self.assertEqual(out[1]["endpoint"], "https://sat2.invalid")
-
     def test_routes_cover_every_team_subnet_behind_the_jump(self):
         placement = {"team_identifiers": {"team1": "103", "team2": "107"},
                      "satellites": [

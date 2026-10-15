@@ -17,12 +17,14 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 from net import jump_rules  # noqa: E402
-from multinode import nodes_config  # noqa: E402
+
 from multinode import placement_planner  # noqa: E402
 from multinode import placement_record  # noqa: E402
 from infra import client  # noqa: E402
 from deploy_lib.context import DeployContext  # noqa: E402
-from deploy_lib import tfinputs  # noqa: E402
+from deploy_lib import estate_inputs  # noqa: E402
+from deploy_lib.phases._estate import slot_team_identifiers  # noqa: E402
+from estate import state as estate_state  # noqa: E402
 from infra import gates as gate  # noqa: E402
 from infra.plan import multinode_plan  # noqa: E402
 
@@ -136,26 +138,24 @@ class MultinodeOfflineE2E(unittest.TestCase):
                                               engine_mgmt_ip="10.0.0.250", check_free=True,
                                               our_run_tag=None))
 
-        # terraform inputs: satellite providers/routes + per-team slots
+        # the estate path reads the placement directly: slot 0's teams are the engine's NICs
         ctx = DeployContext(name="mn", box_username="ubuntu", comp_name="mn", boxes=BOXES,
                             teams=TEAMS, box_password="bp", state={}, run_id="run-0badf00d",
                             engine_vmid=1000, placement=placement)
-        with patch.object(tfinputs, "ensure_terraform_workdir",
-                          side_effect=lambda cd: Path(cd) / "tf") as ew:
-            (self.comp / "tf").mkdir()
-            ctx.engine_mgmt_ip = tfinputs.engine_mgmt_ip_from_env()  # as prepare() does
-            tfinputs.build_terraform_inputs(ctx, self.comp)
-            self.assertTrue(ew.called)
-        tfv = json.loads((self.comp / "tf" / "terraform.tfvars.json").read_text())
-        self.assertEqual(len(tfv["satellites"]), nodes_config.MAX_SATELLITES)
-        real = [s for s in tfv["satellites"] if not s["endpoint"].endswith(".invalid")]
-        self.assertEqual({s["node"] for s in real}, {"pve2", "pve3"})
-        self.assertEqual(sorted(t["slot"] for t in tfv["teams"].values()),
-                         sorted(placement["team_slots"].values()))
-        self.assertEqual(tfv["run_tag"], "run-0badf00d")
-        self.assertEqual(tfv["engine_mgmt_ip"], "10.0.0.250")
-        self.assertTrue(tfv["satellite_routes"])
-        mode = (self.comp / "tf" / "terraform.tfvars.json").stat().st_mode & 0o777
+        ctx.engine_mgmt_ip = estate_inputs.engine_mgmt_ip_from_env()  # as prepare() does
+        estate_inputs.build_estate_inputs(ctx, self.comp)
+        slot0 = {t["identifier"] for k, t in TEAMS.items()
+                 if placement["team_slots"][k] == 0}
+        self.assertEqual(set(slot_team_identifiers(ctx)), slot0)
+        self.assertEqual(ctx.engine_mgmt_ip, "10.0.0.250")
+        # The routes are computed at engine-network time; every satellite team subnet must
+        # be reachable through its jump.
+        from multinode.placement_record import satellite_routes_for
+        routes = {r["subnet"] for r in satellite_routes_for(placement)}
+        for sat in placement["satellites"]:
+            for key in sat["teams"]:
+                self.assertIn(f"192.168.{TEAMS[key]['identifier']}.0/24", routes)
+        mode = estate_state.state_path(self.comp).stat().st_mode & 0o777
         self.assertEqual(mode, 0o600)  # holds tokens + passwords
 
         # jump rulesets for each satellite only cover that satellite's teams
@@ -171,11 +171,11 @@ class MultinodeOfflineE2E(unittest.TestCase):
             checked += 1
         self.assertEqual(checked, 2)
 
-    def test_missing_token_env_fails_loud_in_tfvars(self):
+    def test_missing_token_env_fails_loud(self):
         placement, _ = self._resolve()
         with patch.dict(os.environ, {"TOK_N2": ""}):
             with self.assertRaises(SystemExit):
-                placement_record.satellite_tfvars(placement)
+                placement_record.activate_placement(placement)
 
 
 if __name__ == "__main__":

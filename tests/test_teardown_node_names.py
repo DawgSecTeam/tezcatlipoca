@@ -44,7 +44,6 @@ class ContextNodes(unittest.TestCase):
                 patch.object(trunner, "frozen_state", return_value={}), \
                 patch.object(trunner, "refuse_frozen_full_teardown", lambda *a, **k: None), \
                 patch.object(trunner, "load_ownership", return_value=({}, ownership)), \
-                patch.object(trunner, "require_terraform_state", lambda *a, **k: None), \
                 patch.object(trunner, "TeardownContext",
                              side_effect=lambda **kw: captured.update(kw) or SimpleNamespace(**kw)), \
                 patch.object(trunner, "TeardownEngine", return_value=engine):
@@ -55,7 +54,7 @@ class ContextNodes(unittest.TestCase):
         self.assertEqual(captured["nodes"], ["pve1", "pve2"])
 
 
-class PlacementIdentityReachesTerraform(unittest.TestCase):
+class PlacementIdentityReachesTheContext(unittest.TestCase):
     def test_a_stale_caller_snapshot_is_replaced_by_the_placements_identity(self):
         captured = {}
         engine = SimpleNamespace(execute=lambda plan: [],
@@ -78,7 +77,6 @@ class PlacementIdentityReachesTerraform(unittest.TestCase):
                 patch.object(trunner, "frozen_state", return_value={}), \
                 patch.object(trunner, "refuse_frozen_full_teardown", lambda *a, **k: None), \
                 patch.object(trunner, "load_ownership", return_value=({}, ownership)), \
-                patch.object(trunner, "require_terraform_state", lambda *a, **k: None), \
                 patch.object(trunner, "TeardownContext",
                              side_effect=lambda **kw: captured.update(kw) or SimpleNamespace(**kw)), \
                 patch.object(trunner, "TeardownEngine", return_value=engine):

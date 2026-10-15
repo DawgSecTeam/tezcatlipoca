@@ -1,12 +1,12 @@
 """Teardown collects this run's test artifacts, and does it before anything is destroyed.
 
 The ordering is the whole feature, not a detail: the engine's plan puts the
-collector (EVIDENCE) before the red01 destroy, the pre-stop and terraform — a
-collector that runs one line later reads nothing and reports it as "absent",
-which is indistinguishable from a run that produced no evidence at all. Under
-the teardown object model the ordering is ALSO a plan-construction rule; these
-tests drive destroy-competition.main() end-to-end to prove the wiring, not just
-the declaration.
+collector (EVIDENCE) before the red01 destroy, the pre-stop and the estate
+destroy — a collector that runs one line later reads nothing and reports it as
+"absent", which is indistinguishable from a run that produced no evidence at
+all. Under the teardown object model the ordering is ALSO a plan-construction
+rule; these tests drive destroy-competition.main() end-to-end to prove the
+wiring, not just the declaration.
 
 Offline: the engine's destructive steps are patched at their owning modules
 (teardown.machinery, artifacts_ops, red_plant_ops) and the Proxmox API is a
@@ -34,7 +34,6 @@ from infra import ownership  # noqa: E402
 from artifacts_lib import lifecycle as alifecycle  # noqa: E402
 from artifacts_lib import paths as apaths  # noqa: E402
 from teardown import machinery as tm  # noqa: E402
-from teardown import runner as trunner  # noqa: E402
 
 
 def load_module(name, filename):
@@ -105,20 +104,24 @@ class TeardownArtifactsHook(unittest.TestCase):
         self.log = []
         self._cwd = os.getcwd()
 
-    def _main(self, argv, *, collect=None, red=None, tf=None, cancel=False):
+    def _main(self, argv, *, collect=None, red=None, estate=None, cancel=False):
     # Run main() with every destructive call replaced by a log entry.
         calls = self.log
         collect = collect or _collecting_fake(calls)
         red = red or (lambda *a, **k: calls.append("red_destroy") or
                       __import__("subprocess").CompletedProcess(["x"], 0, "", ""))
-        tf = tf if tf is not None else (lambda *a, **k: calls.append("terraform_destroy") or True)
+        estate = estate if estate is not None else (
+            lambda *a, **k: calls.append("estate_destroy") or
+            {"destroyed": [], "skipped": [], "refused": []})
         argv = ["destroy-competition.py", "--competition", "demo"] + argv
         patches = [
             patch.object(destroy, "load_destroyable_competitions", return_value=["demo"]),
             patch.object(destroy, "frozen_state", return_value={}),
             patch.object(tm, "pre_stop_windows_boxes",
                          side_effect=lambda *a, **k: calls.append("pre_stop_windows_boxes")),
-            patch.object(tm, "destroy_with_recovery", side_effect=tf),
+            patch.object(tm, "sweep_tagged_leftovers"),
+            patch.object(tm, "teardown_templates", return_value=[]),
+            patch("estate.destroy.destroy_estate", side_effect=estate),
             patch.object(ao, "collect_for_teardown", side_effect=collect),
             patch.object(red_plant_ops, "destroy_red", side_effect=red),
             ] + _offline_api_patches() + [
@@ -142,7 +145,7 @@ class TeardownArtifactsHook(unittest.TestCase):
     def test_collection_runs_before_any_destructive_call(self):
         calls = self._main(["--yes"])
         self.assertEqual(calls, ["collect", "red_destroy", "pre_stop_windows_boxes",
-                                 "terraform_destroy"])
+                                 "estate_destroy"])
 
     def test_collection_never_runs_when_the_operator_cancels(self):
         with self.assertRaises(SystemExit):
@@ -161,7 +164,7 @@ class TeardownArtifactsHook(unittest.TestCase):
             self._main(["--yes"], collect=boom)
         self.assertTrue(ctx.exception.code)
         self.assertIn("pre_stop_windows_boxes", self.log)
-        self.assertIn("terraform_destroy", self.log)
+        self.assertIn("estate_destroy", self.log)
         self.assertIn("evidence was not archived", self.out)
 
     def test_collector_receives_the_run_id_roster_and_timeout(self):
@@ -195,7 +198,7 @@ class TeardownArtifactsHook(unittest.TestCase):
     #         estate, main() exits 0; the report says so.
         calls = self._main(["--yes"])
         self.assertIn("estate clean", self.out)
-        self.assertIn("terraform_destroy", calls)
+        self.assertIn("estate_destroy", calls)
 
 
 class CrashedHarnessRecovery(unittest.TestCase):
@@ -268,8 +271,11 @@ class CrashedHarnessRecovery(unittest.TestCase):
             patch.object(destroy, "frozen_state", return_value={}),
             patch.object(tm, "pre_stop_windows_boxes",
                          side_effect=lambda *a, **k: calls.append("pre_stop_windows_boxes")),
-            patch.object(tm, "destroy_with_recovery",
-                         side_effect=lambda *a, **k: calls.append("terraform_destroy") or True),
+            patch.object(tm, "sweep_tagged_leftovers"),
+            patch.object(tm, "teardown_templates", return_value=[]),
+            patch("estate.destroy.destroy_estate",
+                  side_effect=lambda *a, **k: calls.append("estate_destroy") or
+                  {"destroyed": [], "skipped": [], "refused": []}),
             patch.object(ao, "default_transport", side_effect=lambda: transport),
             # stage_red_artifacts shells out to ssh OUTSIDE the transport dict; a
             # test must not dial the manifest's IP (it blackholes for the full
@@ -316,7 +322,7 @@ class CrashedHarnessRecovery(unittest.TestCase):
     def test_the_destroy_still_happens_afterwards(self):
         self._teardown()
         self.assertEqual(self.log, ["stage_red", "red_destroy", "pre_stop_windows_boxes",
-                                    "terraform_destroy"])
+                                    "estate_destroy"])
 
     def test_an_unreachable_red01_leaves_an_honest_stub_not_a_lie(self):
         def dead(ssh, remote, dest, timeout=120):

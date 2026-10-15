@@ -19,6 +19,7 @@ from pathlib import Path
 
 DEFAULT_PATH = "tezcatlipoca.toml"
 CONFIG_ENV = "TEZ_CONFIG"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # dotted key -> (default, legacy env names). The default's type drives parsing.
 _SPEC = {
@@ -92,6 +93,16 @@ _TRUE = ("1", "true", "yes", "on")
 
 def env_name(key):
     return "TEZ_" + key.removeprefix("knobs.").upper().replace(".", "_")
+
+
+def ssh_key_path():
+    """The SSH private key, resolved against the repo root when it is relative.
+
+    The old rule was terraform/-relative (TF_VAR_ssh_private_key_path's base); terraform is
+    gone, so the profile's path anchors at the checkout instead.
+    """
+    raw = Path(active().ssh.private_key_path)
+    return raw if raw.is_absolute() else (REPO_ROOT / raw).resolve()
 
 
 def _coerce(default, raw):

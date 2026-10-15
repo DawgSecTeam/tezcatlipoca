@@ -15,7 +15,7 @@ from unittest.mock import Mock, patch
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from deploy_lib import tfinputs as dl_tfinputs
+from deploy_lib import estate_inputs as dl_estate_inputs
 from deploy_lib import coverage as dl_coverage  # noqa: E402
 from infra import gates as dl_gates  # noqa: E402
 from deploy_lib import golden_plan as dl_golden_plan  # noqa: E402
@@ -241,7 +241,7 @@ class AtomicSecretWrites(unittest.TestCase):
                     return real_replace(src, dst)
 
                 with patch("os.replace", side_effect=spy):
-                    dl_tfinputs.write_text_atomic(path, text)
+                    dl_estate_inputs.write_text_atomic(path, text)
 
                 self.assertEqual(seen["tmp_mode"], 0o600)
                 self.assertEqual(seen["tmp_text"], text)

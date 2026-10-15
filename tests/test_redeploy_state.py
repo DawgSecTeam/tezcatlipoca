@@ -72,11 +72,14 @@ NEW_STATE = {"box_password": "new-secret", "teams": {"team1": {"password": "t1"}
 # failed write can never damage the copy already on disk.
 class AtomicStateWriteTests(unittest.TestCase):
     # One atomic writer in the tree, not a second local copy: the name redeploy
-    # imported IS config_ops.write_state, so all three sites share its guarantees.
-    def test_redeploy_uses_the_shared_config_ops_writer(self):
+    # One writer in the tree, not a local copy per call site: every redeploy persistence
+    # goes through the document's atomic writer.
+    def test_every_redeploy_call_site_writes_through_the_document(self):
+        from estate import state as estate_state
         for module in (redeploy_engine_ops, redeploy_light_ops, redeploy_plant_ops,
                        redeploy_rebuild_ops):
-            self.assertIs(module.write_state, config_ops.write_state, module.__name__)
+            self.assertIs(getattr(module, "estate_state", None), estate_state, module.__name__)
+            self.assertFalse(hasattr(module, "write_state"), module.__name__)
 
     def test_round_trips_is_0600_and_leaves_no_tmp(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -147,12 +150,12 @@ class StateWriteCallSiteTests(unittest.TestCase):
                  patch.object(pipeline_api, "run_nakon",
                               return_value=MagicMock(failed=[])), \
                  patch.object(pipeline_api, "fix_services_on_boxes"), \
-                 patch.object(redeploy_plant_ops, "write_state") as p_write:
+                 patch.object(redeploy_plant_ops.estate_state, "write_flat") as p_write:
                 cfg = comp_dir / "nakon-config.json"
                 cfg.write_text(json.dumps({"machines": [{"name": LINUX["machine"]}]}))
                 redeploy_plant_ops.run_nakon_and_harden(
                     [LINUX], _rctx(ctx, comp_dir, state), cfg, comp_dir / "bundle")
-        p_write.assert_called_once_with(state_path, state)
+        p_write.assert_called_once_with(comp_dir, state)
 
     def test_mode_resync_persists_via_helper(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -163,10 +166,10 @@ class StateWriteCallSiteTests(unittest.TestCase):
             with patch.object(redeploy_light_ops, "read_event_conf",
                               return_value={"postgres_password": "new"}), \
                  patch.object(redeploy_light_ops, "load_users_config", return_value=("ops", {})), \
-                 patch.object(redeploy_light_ops, "write_state") as p_write:
+                 patch.object(redeploy_light_ops.estate_state, "write_flat") as p_write:
                 redeploy_light_ops.mode_resync(
                     [], _rctx({"ssh_key_path": "/k"}, comp_dir, state, state_path))
-        p_write.assert_called_once_with(state_path, state)
+        p_write.assert_called_once_with(comp_dir, state)
         self.assertEqual(state["postgres_password"], "new")
 
     # This is the D1 site: the write runs last, after the engine was re-cloned and
@@ -190,9 +193,9 @@ class StateWriteCallSiteTests(unittest.TestCase):
                  patch.object(redeploy_engine_ops, "stored_template_hash", return_value="abc"), \
                  patch.object(redeploy_engine_ops, "args_yes_engine_recovery", return_value=True), \
                  patch.object(redeploy_engine_ops, "timed", return_value=nullcontext()), \
-                 patch.object(redeploy_engine_ops, "run_terraform",
-                              return_value=MagicMock(returncode=0)), \
-                 patch.object(pipeline_api, "read_terraform_ctx",
+                 patch.object(redeploy_engine_ops, "_replace_engine"), \
+                 patch.object(redeploy_engine_ops, "_address_engine"), \
+                 patch.object(pipeline_api, "engine_ctx",
                               return_value={"scoring_engine_ip": "10.0.0.9",
                                             "ssh_key_path": "/k", "vm_username": "ops"}), \
                  patch.object(redeploy_engine_ops, "forget_engine_host_key"), \
@@ -200,11 +203,11 @@ class StateWriteCallSiteTests(unittest.TestCase):
                  patch.object(redeploy_engine_ops, "prepare_engine_from_template"), \
                  patch.object(redeploy_engine_ops, "push_event_conf"), \
                  patch.object(redeploy_engine_ops, "ensure_nat_forwarding"), \
-                 patch.object(redeploy_engine_ops, "write_state") as p_write:
+                 patch.object(redeploy_engine_ops.estate_state, "write_flat") as p_write:
                 self.assertTrue(redeploy_engine_ops.engine_recovery(
                     "comp", comp_dir, {"team1": {}}, [LINUX], state, assume_yes=True))
 
-        p_write.assert_called_once_with(comp_dir / ".deploy_state.json", state)
+        p_write.assert_called_once_with(comp_dir, state)
         for flag in ("seeded", "engine_unpaused", "injects_created"):
             self.assertNotIn(flag, state)
 

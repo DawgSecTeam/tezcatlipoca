@@ -10,7 +10,7 @@ from deploy_lib.inputs import (load_competition_inputs, load_competition_spec,
 from deploy_lib.placement import apply_engine_placement
 from deploy_lib.secrets import mint_competition_secrets, resolve_competition_teams
 from deploy_lib.targets import enumerate_deploy_targets
-from deploy_lib.tfinputs import build_terraform_inputs, engine_mgmt_ip_from_env
+from deploy_lib.estate_inputs import build_estate_inputs, engine_mgmt_ip_from_env
 
 
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
@@ -65,7 +65,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
 
     generate_stage_configs_and_hashes(ctx, comp_dir)
 
-    build_terraform_inputs(ctx, comp_dir)
+    build_estate_inputs(ctx, comp_dir)
 
     if not assume_yes and not ctx.resuming:
         if not confirm_deploy(ctx.name, ctx.scenario, ctx.difficulty, ctx.teams, ctx.boxes):

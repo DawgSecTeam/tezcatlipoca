@@ -71,18 +71,19 @@ class PortalStep(Step):
 
     def run(self, ctx):
         from portal.portal_ops import portal_enabled, teardown_portal
-        from common.ssh_ops import read_terraform_ctx
+        from estate import config as estate_config
         if not (ctx.deployed_state.get("portal_console_tokens")
                 or ctx.deployed_state.get("portal_up") or portal_enabled(ctx.comp_dir)):
             return StepResult(self.name, "ok", "portal not deployed")
         try:
-            try:
-                tf_ctx = read_terraform_ctx(ctx.comp_dir)
-            except Exception:            # noqa: BLE001 - no outputs: skip log, still revoke
-                tf_ctx = None
+            engine_ctx = {
+                "scoring_engine_ip": ctx.deployed_state.get("engine_mgmt_ip") or "",
+                "ssh_key_path": str(estate_config.ssh_key_path()),
+                "vm_username": estate_config.active().engine.username,
+            }
             teardown_portal(ctx.comp_dir, ctx.ownership.comp, ctx.ownership.run_id,
                             ctx.deployed_state, ctx.teams, ctx.boxes, ctx.placement,
-                            ctx.default_node, tf_ctx=tf_ctx)
+                            ctx.default_node, tf_ctx=engine_ctx)
             return StepResult(self.name, "ok")
         except Exception as e:           # noqa: BLE001 - warn-and-proceed by policy
             return StepResult(self.name, "warned",
@@ -203,50 +204,38 @@ class PreStopStep(Step):
         return StepResult(self.name, "ok")
 
 
-class TerraformStep(Step):
-    """`terraform destroy` from the per-comp state dir — bounded attempts with
-    stale-lock recovery and the run-id-scoped sweep between them. REFUSES on
-    exhaustion: a range still standing is never reported as clean."""
-    name = "terraform"
+class EstateStep(Step):
+    """The recorded estate, destroyed through the API in the one order linked clones
+    survive. REFUSES when an owned resource cannot be destroyed: a range still standing is
+    never reported as clean."""
+    name = "estate"
     failure = REFUSE
     destructive = True
 
     def run(self, ctx):
-        from teardown.machinery import (destroy_with_recovery, repair_engine_clone_id,
-                                        repair_ssh_key_path)
-        from common.terraform_workdir import terraform_plugin_cache_dir
-        tf_cwd = str(ctx.comp_dir / "terraform")
-        print(f"\nRunning terraform destroy (state: {tf_cwd})...")
-        # Same provider cache the deploy inits with: without it, destroy cannot resolve the
-        # providers the per-comp .terraform links point at (2026-10-14).
-        env = {**ctx.env, "TF_PLUGIN_CACHE_DIR": str(terraform_plugin_cache_dir())}
-        tfvars = Path(tf_cwd) / "terraform.tfvars.json"
-        repair_ssh_key_path(tfvars, env)
-        repair_engine_clone_id(tfvars, ctx.deployed_state.get("scoring_vm_id"))
-        if destroy_with_recovery(env, tf_cwd, ctx.nodes, ctx.ownership):
-            return StepResult(self.name, "ok")
-        return StepResult(self.name, "failed",
-                          "terraform destroy did not complete after recovery attempts — "
-                          "resolve what verify_clean lists, then re-run (it is safe to "
-                          "re-run: teardown is idempotent)")
-
-
-class TemplatesStep(Step):
-    """Golden + jump + engine templates: API-created, not in terraform state,
-    the linked clones' base disks — they die only after every clone is gone,
-    and only on a full teardown (the default)."""
-    name = "templates"
-    destructive = True
-
-    def run(self, ctx):
-        from teardown.machinery import teardown_templates
-        skipped = teardown_templates(ctx.comp_dir, ctx.deployed_state, ctx.ownership,
-                                     ctx.boxes, ctx.placement, full=ctx.full)
-        if skipped:
-            return StepResult(self.name, "warned",
-                              f"{len(skipped)} template slot(s) skipped as foreign: "
-                              + "; ".join(skipped))
-        return StepResult(self.name, "ok")
+        from estate import destroy as estate_destroy, state as estate_state
+        from teardown.machinery import sweep_tagged_leftovers, teardown_templates
+        print("\nDestroying this deploy's recorded estate...")
+        document = estate_state.open(ctx.comp_dir)
+        summary = estate_destroy.destroy_estate(document, full=ctx.full, nodes=ctx.nodes)
+        if summary["refused"]:
+            return StepResult(self.name, "failed", "; ".join(
+                f"{r['entry']['kind']} {r['entry']['name']}: {r['reason']}"
+                for r in summary["refused"]))
+        # A VM created but never recorded (a crash between the clone and the record) is
+        # invisible to the inventory; the run-id-scoped sweep is the net for it.
+        sweep_tagged_leftovers(ctx.nodes, ctx.ownership)
+        # A range deployed before the inventory existed has no template records, so its
+        # goldens and engine template die by vmid math instead.
+        if ctx.full and not (document.resources("golden")
+                             or document.resources("engine_template")):
+            skipped = teardown_templates(ctx.comp_dir, ctx.deployed_state, ctx.ownership,
+                                         ctx.boxes, ctx.placement, full=True)
+            if skipped:
+                return StepResult(self.name, "warned", "; ".join(skipped))
+        if ctx.full:
+            (Path(ctx.comp_dir) / ".template-hashes.json").unlink(missing_ok=True)
+        return StepResult(self.name, "ok", f"destroyed {len(summary['destroyed'])}")
 
 
 class RemoteAccessStep(Step):

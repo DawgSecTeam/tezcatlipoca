@@ -65,7 +65,7 @@ class RedeployCliOffline(unittest.TestCase):
                 patch.object(self.mod, "proxmox_api",
                              return_value={"data": {"tags": "tezcatlipoca;comp-rd"}}), \
                 patch.object(self.mod, "acquire_engine_lock"), \
-                patch.object(self.mod.pipeline_api, "read_terraform_ctx", return_value={"scoring_engine_ip": "10.0.0.9"}), \
+                patch.object(self.mod.pipeline_api, "engine_ctx", return_value={"scoring_engine_ip": "10.0.0.9"}), \
                 patch.object(self.mod, "prepare_nakon_assets", return_value=("cfg", "bundle")), \
                 patch("builtins.input", return_value=answer or "n"), \
                 contextlib.redirect_stdout(out):
