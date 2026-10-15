@@ -6,9 +6,10 @@
 # dashboard injects per-run values into the process env. Point TEZ_CONFIG at another file
 # to use a per-node profile.
 #
-# Secrets are NEVER written here. A token is named, not stored: set the value in the
-# process environment and reference the variable name here (the same indirection
-# nodes.json uses for its per-host tokens).
+# Secrets are NEVER written here. The API token is read from the environment under its
+# canonical name (TEZ_PROXMOX_API_TOKEN) or the legacy one the repo has always used
+# (TF_VAR_proxmox_api_token); multi-node host tokens are referenced by name from
+# nodes.json's token_env, exactly as before.
 
 [proxmox]
 endpoint = "https://PROXMOX-HOST:8006"
@@ -24,7 +25,9 @@ mgmt_bridge = "vmbr0"
 
 [ssh]
 public_key = "ssh-ed25519 CHANGEME range-automation"
-private_key_path = "../proxmox"
+# Relative paths resolve against this checkout (the legacy "../proxmox" form,
+# which was terraform-relative, still resolves to the same file).
+private_key_path = "proxmox"
 
 [engine]
 username = "sysadmin"

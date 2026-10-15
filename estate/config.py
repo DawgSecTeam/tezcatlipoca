@@ -96,13 +96,21 @@ def env_name(key):
 
 
 def ssh_key_path():
-    """The SSH private key, resolved against the repo root when it is relative.
+    """The SSH private key, resolved to an absolute path.
 
-    The old rule was terraform/-relative (TF_VAR_ssh_private_key_path's base); terraform is
-    gone, so the profile's path anchors at the checkout instead.
+    A relative path is the profile's own (repo-root-relative), but the legacy env value is
+    terraform-relative (`../proxmox` meaning the checkout root), so both bases are tried and
+    an existing file wins. Without a hit the repo-root reading is returned, so the error
+    names the path the profile asked for.
     """
     raw = Path(active().ssh.private_key_path)
-    return raw if raw.is_absolute() else (REPO_ROOT / raw).resolve()
+    if raw.is_absolute():
+        return raw
+    for base in (REPO_ROOT, REPO_ROOT / "terraform"):
+        candidate = (base / raw).resolve()
+        if candidate.exists():
+            return candidate
+    return (REPO_ROOT / raw).resolve()
 
 
 def _coerce(default, raw):
