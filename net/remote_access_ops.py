@@ -33,6 +33,22 @@ from estate import state as estate_state
 from estate import config
 
 TAILSCALE_INSTALL = "curl -fsSL https://tailscale.com/install.sh | sh"
+# A freshly cloned engine boots with cloud-init + unattended-upgrades holding the dpkg
+# locks for minutes, and the installer's own apt-get then dies on the lock
+# (`Could not get lock /var/lib/dpkg/lock-frontend ... held by process 2353 (apt-get)`,
+# live 2026-10-15 run-0f82f888) through every one of the previous three 5-second retries,
+# ending the step at exit 127. Wait cloud-init and the locks out FIRST (bounded), then
+# install with a real retry; `flock -n` on the two apt locks is the portable probe.
+TAILSCALE_INSTALL_CMD = (
+    "sudo cloud-init status --wait >/dev/null 2>&1 || true; "
+    "for i in $(seq 1 120); do "
+    "sudo flock -n /var/lib/dpkg/lock-frontend -c true 2>/dev/null && "
+    "sudo flock -n /var/lib/dpkg/lock -c true 2>/dev/null && break; "
+    "sleep 5; done; "
+    "for i in 1 2 3; do command -v tailscale >/dev/null && break; "
+    f"sudo {TAILSCALE_INSTALL} > /tmp/ts-install.log 2>&1 || true; sleep 15; done; "
+    "command -v tailscale >/dev/null || { echo 'tailscale install failed:'; "
+    "cat /tmp/ts-install.log; exit 127; }; tailscale version")
 TAILNET_SRC = "100.64.0.0/10"
 INFRA_USER_DEFAULT = "cyberrange-infra"
 POLICY_STATE_FILE = "/home/sysadmin/headscale/config/tezcatlipoca-remote-access.json"
@@ -408,16 +424,7 @@ def enroll_engine_router(ctx, comp_id, all_identifiers):
     hostname = router_node_name(comp_id)
     if not engine_tailscale_enrolled(ctx, server_url):
         print("  Installing tailscale on the engine (first run)...")
-        # Retry loop, not `|| true`: the engine's apt machinery races phase 3
-        # (documented class — masked install failures resurface as a 127 on the
-        # version check), and a silently-missing binary is worse than a loud one.
-        _engine_cmd(ctx,
-                    "for i in 1 2 3; do command -v tailscale >/dev/null && break; "
-                    f"sudo {TAILSCALE_INSTALL} > /tmp/ts-install.log 2>&1 || true; "
-                    "sleep 5; done; "
-                    "command -v tailscale >/dev/null || { echo 'tailscale install "
-                    "failed:'; cat /tmp/ts-install.log; exit 127; }; tailscale version",
-                    timeout=900, step="install tailscale")
+        _engine_cmd(ctx, TAILSCALE_INSTALL_CMD, timeout=900, step="install tailscale")
         user_id = _infra_user_id()
         key = _mint_preauth_key(user_id, "tag:range-router", "12h")
         print(f"  Enrolling engine as headscale node '{hostname}' "
