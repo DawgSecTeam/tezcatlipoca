@@ -50,7 +50,7 @@ def ensure_engine_template(ctx):
     if tmpl:
         entry = stored.get("engine") or {}
         # The node's own hash stamp decides reuse, so a deploy from a fresh workspace
-        # (whose .template-hashes.json the dashboard's seeder stripped) still adopts the
+        # (whose hash record the dashboard's seeder stripped) still adopts the
         # engine template a --teams-only teardown kept. The file entry is the corroborating
         # record, not the authority — see engine.template_freeze.template_stamp_current.
         if template_stamp_current(ctx.node, tmpl, engine_hash):

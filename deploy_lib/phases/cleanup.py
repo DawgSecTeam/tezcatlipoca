@@ -22,7 +22,7 @@ def reset_domain_markers(comp_dir):
 #     deploy's DCs — run 2's fresh clones were never promoted, but a surviving run-1 artifact
 #     made the domain pass skip promotion (live-found 2026-09-25, matrix run 2). A fresh
 #     deploy resets them; resumes keep them (that is the guard's whole point). The
-#     per-COMPETITION .template-hashes.json is NOT touched — it drives template reuse.
+#     the per-COMPETITION template hash record is NOT touched — it drives template reuse.
     for stale in Path(comp_dir).glob(".nakon-domain-*.json"):
         stale.unlink()
 

@@ -147,7 +147,8 @@ class TeardownTemplates(unittest.TestCase):
     def _run(self, full, placement=None):
         with tempfile.TemporaryDirectory() as d:
             comp = Path(d)
-            (comp / ".template-hashes.json").write_text("{}")
+            from engine.template_freeze import save_template_hashes
+            save_template_hashes(comp, engine={"hash": "e1"})
             with patch.object(dto, "destroy_golden_set") as g, patch.object(dto, "destroy_jump_vms") as j, \
                     patch.object(dto, "destroy_engine_template") as e, \
                     patch.object(dto, "record_of", return_value=SimpleNamespace(node="pve2")), \
@@ -155,7 +156,8 @@ class TeardownTemplates(unittest.TestCase):
                 dto.teardown_templates(comp, {"scoring_vm_id": "1234"},
                                        Ownership("c", "run-0badf00d"), [LIN, WIN],
                                        placement, full)
-            return g, j, e, (comp / ".template-hashes.json").exists()
+            from engine.template_freeze import load_template_hashes
+            return g, j, e, bool(load_template_hashes(comp).get("engine"))
 
     def test_teams_only_keeps_everything(self):
         g, j, e, hashes = self._run(False)

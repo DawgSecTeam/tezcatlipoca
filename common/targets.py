@@ -37,7 +37,7 @@ def persist_targets(comp_dir, targets, boxes):
 
 
 def frozen_roster(comp_dir):
-# The {box_order, targets} record a deploy froze, from the document or a legacy targets.json.
+# The {box_order, targets} record a deploy froze, from the document or a legacy file.
     from estate import state
     roster = state.EstateState.load(comp_dir).section("roster")
     if roster.get("targets"):

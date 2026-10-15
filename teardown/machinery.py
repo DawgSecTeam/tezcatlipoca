@@ -15,6 +15,7 @@ from multinode.placement_record import record_of
 from infra.client import proxmox_api, wait_for_proxmox_task
 from infra.ownership import parse_vm_tags
 from engine.engine_template_ops import destroy_engine_template
+from engine.template_freeze import forget_template_hashes
 from infra.ownership import Ownership, Refusal
 from estate import config
 
@@ -192,8 +193,6 @@ def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, fu
     # A destroyed template's hash record is a loaded gun for the reuse path: the
     # next deploy would 'reuse' a hash with nothing behind it and clone from a
     # dead vmid. Drop the record alongside the templates.
-    hashes_path = Path(comp_dir) / ".template-hashes.json"
-    if hashes_path.exists():
-        hashes_path.unlink()
-        print("  Template hash record (.template-hashes.json) removed.")
+    forget_template_hashes(comp_dir)
+    print("  Template hash record removed from the state document.")
     return skipped

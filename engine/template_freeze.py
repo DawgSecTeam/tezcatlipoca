@@ -16,7 +16,6 @@ frozen templates — a post-freeze log line must never break a mid-event rebuild
 import hashlib
 import inspect
 import json
-import os
 import re
 import subprocess
 import time
@@ -30,8 +29,17 @@ HASHES_FILE = ".template-hashes.json"
 
 
 def load_template_hashes(comp_dir):
-# The durable per-competition hash record. Lives outside .deploy_state.json on
-#     purpose: a fresh deploy resets state, but template reuse must survive it.
+# The durable per-competition hash record, from the document's templates section.
+#
+#     A fresh deploy rewrites the deploy state but must NOT clear this: it is what template
+#     REUSE keys on, so a redeploy of a validated range clones the same artifacts. A range
+#     deployed before the record moved into the document still reads its legacy file.
+    from estate import state
+    templates = state.EstateState.load(comp_dir).section("templates")
+    record = {key: templates[key] for key in ("engine", "golden", "golden_planted", "updated")
+              if templates.get(key)}
+    if record:
+        return record
     path = Path(comp_dir) / HASHES_FILE
     if not path.exists():
         return {}
@@ -57,23 +65,28 @@ def golden_plant_checkpoints(comp_dir):
 
 
 def save_template_hashes(comp_dir, **entries):
-# Merge entries (engine={hash, inputs}, golden={box: {hash, inputs}}) into the
-#     record. Atomic rename; 0600 — golden inputs embed box_password.
-    path = Path(comp_dir) / HASHES_FILE
-    data = load_template_hashes(comp_dir)
+# Merge entries (engine={hash, inputs}, golden={box: {hash, inputs}}) into the record.
+    from estate import state
+    document = state.open(comp_dir)
+    templates = document.section("templates")
     for key, value in entries.items():
         if key in ("golden", "golden_planted"):
-            data.setdefault(key, {}).update(value)
+            templates.setdefault(key, {}).update(value)
         else:
-            data[key] = value
-    data["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    os.replace(tmp, path)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+            templates[key] = value
+    templates["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    document.save()
+
+
+def forget_template_hashes(comp_dir):
+# Drop the hash record: a destroyed template must not be reused by the next deploy.
+#     The freeze flag is not part of the record and stays.
+    from estate import state
+    document = state.open(comp_dir)
+    templates = document.section("templates")
+    for key in ("engine", "golden", "golden_planted", "updated"):
+        templates.pop(key, None)
+    document.save()
 
 
 def engine_template_vmid(engine_vmid):
@@ -160,7 +173,7 @@ def template_stamp_current(node, vmid, expected_hash):
 # True when the template ON THE NODE was built from exactly these inputs.
 #
 #     The node's `tezcatlipoca-m4 hash=` description is the durable record — it travels with
-#     the template. .template-hashes.json is per-comp-dir state, and the dashboard's workspace
+#     the template. The hash record is per-comp-dir state, and the dashboard's workspace
 #     seeder strips it when it seeds a fresh run workspace, so keying reuse on that file alone
 #     made every later run rebuild templates a --teams-only teardown had deliberately kept.
 #     Both the engine gate and the golden gates decide reuse through here.
@@ -216,8 +229,12 @@ def write_template_hash(node, vmid, hash_value, extra=""):
 # ---- frozen state ----
 
 def frozen_state(comp_dir):
-# The frozen record, or None. Never raises — a torn file reads as unfrozen only
-#     if unparseable, which the freeze/unfreeze tooling rewrites atomically.
+# The frozen record, or None. A range frozen before the record moved into the document
+#     still reads its legacy file.
+    from estate import state
+    frozen = state.EstateState.load(comp_dir).section("templates").get("frozen")
+    if frozen:
+        return frozen
     path = Path(comp_dir) / FROZEN_FILE
     if not path.exists():
         return None

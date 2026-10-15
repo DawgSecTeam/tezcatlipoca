@@ -1,7 +1,5 @@
 """M4 freeze/unfreeze: record (or remove) .frozen.json after a passing verify."""
 
-import json
-import os
 import subprocess
 import time
 
@@ -27,13 +25,8 @@ def git_dirty_lines(repo_root=None):
 
 def freeze_hashes(comp_dir):
 # The template hashes a freeze would record (None when nothing is recorded yet).
-    path = comp_dir / ".template-hashes.json"
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
-        return None
+    from engine.template_freeze import load_template_hashes
+    return load_template_hashes(comp_dir) or None
 
 
 def do_freeze(comp_dir, args, gate, coverage_passed):
@@ -44,7 +37,7 @@ def do_freeze(comp_dir, args, gate, coverage_passed):
 
     hashes = freeze_hashes(comp_dir)
     if not hashes or not (hashes.get("engine") or {}).get("hash") or not hashes.get("golden"):
-        print("  FREEZE refused — no template hash record (.template-hashes.json); "
+        print("  FREEZE refused — no template hash record in the state document; "
               "deploy once on the M4 pipeline first.")
         return False
     if not coverage_passed:
@@ -81,14 +74,13 @@ def do_freeze(comp_dir, args, gate, coverage_passed):
         "hashes": {"engine": hashes["engine"], "golden": hashes["golden"]},
         "verify_report": {"gates": gate, "plant_coverage": coverage_passed},
     }
-    path = comp_dir / ".frozen.json"
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(record, indent=2))
-    os.replace(tmp, path)
-    os.chmod(path, 0o600)
-    print(f"  FROZEN — {path} written. Engine + {len(hashes['golden'])} golden hash(es) "
-          f"recorded. Rebuild is now refused on config drift; a full teardown needs "
-          f"--end-of-competition.")
+    from estate import state
+    document = state.open(comp_dir)
+    document.section("templates")["frozen"] = record
+    document.save()
+    print(f"  FROZEN — {state.state_path(comp_dir)} written. Engine + "
+          f"{len(hashes['golden'])} golden hash(es) recorded. Rebuild is now refused on "
+          f"config drift; a full teardown needs --end-of-competition.")
     return True
 
 
@@ -97,10 +89,11 @@ def do_unfreeze(comp_dir, confirm):
         print("  UNFREEZE refused — pass --confirm-unfreeze. Unfreezing mid-event "
               "defeats the freeze; it is meant for use BEFORE the competition starts.")
         return False
-    path = comp_dir / ".frozen.json"
-    if not path.exists():
+    from estate import state
+    document = state.open(comp_dir)
+    if not document.section("templates").pop("frozen", None):
         print("  Nothing to unfreeze.")
         return True
-    path.unlink()
-    print("  UNFROZEN — .frozen.json removed.")
+    document.save()
+    print("  UNFROZEN — the freeze record is gone.")
     return True

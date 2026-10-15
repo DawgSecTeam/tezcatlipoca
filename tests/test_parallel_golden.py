@@ -36,6 +36,7 @@ _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
+from engine.template_freeze import load_template_hashes, save_template_hashes  # noqa: E402
 from golden import golden_ops  # noqa: E402
 from golden import golden_target_ops
 from common.constants import SNAP_BASE  # noqa: E402
@@ -274,8 +275,7 @@ class GoldenParallelism(unittest.TestCase):
 # conversion barrier (every golden stopped before ANY POST /template) must survive it.
 class GoldenCheckpoint(unittest.TestCase):
     def _seed(self, harness, mapping):
-        (harness.comp_dir / ".template-hashes.json").write_text(
-            json.dumps({"golden_planted": mapping}))
+        save_template_hashes(harness.comp_dir, golden_planted=mapping)
 
     def test_a_checkpointed_golden_is_not_rolled_back(self):
         harness = GoldenBuildHarness(n=2, golden_hashes={"box0": "h0", "box1": "h1"})
@@ -319,7 +319,7 @@ class GoldenCheckpoint(unittest.TestCase):
             template_raises={str(golden_target_ops.golden_vmid_for(1000, 1))})
         _result, _events, exc = harness.run()
         self.assertIsNotNone(exc, "the conversion failure must still raise")
-        recorded = json.loads((harness.comp_dir / ".template-hashes.json").read_text())
+        recorded = load_template_hashes(harness.comp_dir)
         self.assertEqual(recorded.get("golden_planted"), {"box0": "h0", "box1": "h1"})
 
     # Without golden hashes there is no identity to key on, so nothing is skipped —
@@ -327,7 +327,7 @@ class GoldenCheckpoint(unittest.TestCase):
     def test_no_hashes_means_no_checkpointing(self):
         harness = GoldenBuildHarness(n=1)
         harness.run()
-        self.assertFalse((harness.comp_dir / ".template-hashes.json").exists())
+        self.assertEqual(load_template_hashes(harness.comp_dir).get("golden_planted") or {}, {})
 
 
 # Phase 4 emits its plant-coverage verdict through the `coverage` callback on EVERY
