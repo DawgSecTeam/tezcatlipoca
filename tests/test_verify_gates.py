@@ -11,6 +11,9 @@ Each test corresponds to a reproduced defect:
   D6 tri-state GateResult + SUMMARY generated from it (+ --allow-unverified)
   D7 --strict-services vacuous with nothing scored / no freshness precondition
   D8 stale coverage entries failed the gate; f-string/`missing` pyflakes items
+  D9 the tolerated-failure ledger was recorded and promised to be surfaced by verify,
+     and read by nothing — a degraded range (an assume-breach red that never landed)
+     verified clean
 """
 
 import contextlib
@@ -368,6 +371,45 @@ class PlantCoverage(unittest.TestCase):
         self.assertIs(result.status, v_model.Status.SKIP_UNAVAILABLE)
         self.assertFalse(result.gating)
 
+
+class Degradations(unittest.TestCase):
+# D9: the tolerated-failure ledger is the deploy's named-cause record, and the only
+#     consumer of it is this gate. Absent is not clean (same fail-closed rule as coverage).
+
+    def test_absent_ledger_fails_closed(self):
+        tmp, comp_dir = _comp_dir()
+        self.addCleanup(tmp.cleanup)
+        _state(comp_dir, {"plant_coverage_failed": {}})
+        result, out = _run(v_state_gates.check_degradations, comp_dir)
+        self.assertIs(result.status, v_model.Status.FAIL)
+        self.assertIn("never recorded", out)
+        _, passed = v_verdict.gate_verdict([result])
+        self.assertFalse(passed)
+
+    def test_missing_state_file_fails(self):
+        tmp, comp_dir = _comp_dir()
+        self.addCleanup(tmp.cleanup)
+        result, _ = _run(v_state_gates.check_degradations, comp_dir)
+        self.assertIs(result.status, v_model.Status.FAIL)
+
+    def test_any_entry_fails_and_names_it(self):
+        tmp, comp_dir = _comp_dir()
+        self.addCleanup(tmp.cleanup)
+        _state(comp_dir, {"degradations": [
+            {"what": "assume_breach_deploy", "detail": "badauto deploy FAILED"}]})
+        result, out = _run(v_state_gates.check_degradations, comp_dir)
+        self.assertIs(result.status, v_model.Status.FAIL)
+        self.assertIn("assume_breach_deploy: badauto deploy FAILED", out)
+        _, passed = v_verdict.gate_verdict([result])
+        self.assertFalse(passed)
+
+    def test_empty_ledger_passes(self):
+        tmp, comp_dir = _comp_dir()
+        self.addCleanup(tmp.cleanup)
+        _state(comp_dir, {"degradations": []})
+        result, out = _run(v_state_gates.check_degradations, comp_dir)
+        self.assertIs(result.status, v_model.Status.PASS)
+        self.assertIn("no tolerated failures", out)
 
 
 PACKET_PROFILE = {"credentials": {"out_of_scope": ["scorebot", "blackteam"]}}
@@ -748,6 +790,8 @@ class MainSummaryWiring(unittest.TestCase):
             patch.object(v_engine, "check_round_loop", return_value=v_model.gate_pass("round_loop")),
             patch.object(v_state_gates, "check_plant_coverage",
                          return_value=v_model.gate_skip("plant_coverage")),
+            patch.object(v_state_gates, "check_degradations",
+                         return_value=v_model.gate_pass("degradations")),
             patch.object(v_domains, "check_domains",
                          return_value=v_model.gate_skip("domains", gating=False)),
             patch.object(sys, "argv",

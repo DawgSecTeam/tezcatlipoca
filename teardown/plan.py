@@ -1,22 +1,12 @@
-"""TeardownPlan: ordered steps as data, validated at construction.
+"""TeardownPlan: ordered steps as data, validated at construction (docs/internals.md#teardown).
 
 The invariant that used to live in comments — evidence collection happens
-before anything destructive — is a construction rule here: a TERMINAL_TEARDOWN
-plan with a destructive step before an EVIDENCE step cannot be BUILT, so no
-mode added later can reintroduce the ordering races of 2026-10-09.
-
-Two kinds:
-  TERMINAL_TEARDOWN — the end-of-range teardown (destroy-competition.py). The
-      evidence-ordering rule applies.
-  RECLAIM — a plan that only reclaims (no evidence steps). No production caller
-      today: deploy phase 1 no longer destroys a range, so this is the vocabulary a
-      reclaim path (an orphaned range whose run id is gone) would compose."""
+before anything destructive — is a construction rule here: a plan with a
+destructive step before an EVIDENCE step cannot be BUILT, so no step added
+later can reintroduce the ordering races of 2026-10-09."""
 
 EVIDENCE = "evidence"
 TEARDOWN = "teardown"
-
-TERMINAL_TEARDOWN = "terminal_teardown"
-RECLAIM = "reclaim"
 
 
 class PlanError(ValueError):
@@ -24,17 +14,14 @@ class PlanError(ValueError):
 
 
 class TeardownPlan:
-    def __init__(self, kind, gates, steps):
-        self.kind = kind
+    def __init__(self, gates, steps):
         self.gates = list(gates)          # callables(ctx) -> None, raise Refusal
         self.steps = list(steps)
-        if self.kind == RECLAIM:
-            return
         evidence_idx = [i for i, s in enumerate(self.steps) if s.kind == EVIDENCE]
         if not evidence_idx:
             raise PlanError(
-                f"a {TERMINAL_TEARDOWN} plan needs at least one EVIDENCE step "
-                f"(evidence before destruction is a construction rule, not a habit)")
+                "a teardown plan needs at least one EVIDENCE step "
+                "(evidence before destruction is a construction rule, not a habit)")
         last_evidence = max(evidence_idx)
         for i, s in enumerate(self.steps):
             if s.kind == TEARDOWN and s.destructive and i < last_evidence:

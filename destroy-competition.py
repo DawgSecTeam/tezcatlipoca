@@ -1,4 +1,4 @@
-"""Teardown CLI: a thin shim over the teardown package (docs/teardown-redesign.md).
+"""Teardown CLI: a thin shim over the teardown package (docs/internals.md#teardown).
 
 The mechanics, the step policies, the ordering rule and the exit contract live
 in teardown/ — this file only parses flags, builds the context, and turns the

@@ -1,4 +1,4 @@
-"""The teardown object model (docs/teardown-redesign.md).
+"""The teardown object model (docs/internals.md#teardown).
 
 One ownership proof (vm_ownership.Ownership), one refusal vocabulary
 (Refusal), one classified estate view (Inventory), plans of declared steps
@@ -13,13 +13,11 @@ from teardown.machinery import (DESTROY_ATTEMPT_TIMEOUT_S, TEARDOWN_WORKERS,  # 
                                 load_ownership, pre_stop_windows_boxes,
                                 refuse_frozen_full_teardown, require_terraform_state,
                                 sweep_tagged_leftovers, teardown_templates)
-from teardown.plan import (RECLAIM, TERMINAL_TEARDOWN, PlanError,  # noqa: F401
-                           TeardownPlan)
+from teardown.plan import PlanError, TeardownPlan  # noqa: F401
 from teardown.refusal import Refusal  # noqa: F401
 from teardown.steps import (EVIDENCE, REFUSE, TEARDOWN, WARN_AND_PROCEED,  # noqa: F401
-                            ArtifactStep, CallStep, PreStopStep, RedStep,
-                            RemoteAccessStep, Step, StepResult, TemplatesStep,
-                            TerraformStep, TeardownContext)
+                            ArtifactStep, PreStopStep, RedStep, RemoteAccessStep, Step,
+                            StepResult, TemplatesStep, TerraformStep, TeardownContext)
 from infra.ownership import OWNED, MARKER, MISSING, UNPROVEN, Ownership  # noqa: F401
 
 __all__ = [
@@ -34,9 +32,6 @@ __all__ = [
     "StepResult",
     "TeardownContext",
     "TeardownPlan",
-    # plan kinds
-    "RECLAIM",
-    "TERMINAL_TEARDOWN",
     # step vocabulary
     "EVIDENCE",
     "TEARDOWN",

@@ -136,7 +136,6 @@ class TeardownEngine:
                              f"{v.get('name')} (vmid {v['vmid']}) on {node}")
 
         # 3. foreign survivors are named, never touched
-        run_id = self.ctx.ownership.run_id
         for node, v in inv.comp_tagged(self.ctx.ownership.comp):
             tags = parse_vm_tags(v.get("tags"))
             if set(self.ctx.ownership.tags) <= tags:

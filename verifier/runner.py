@@ -121,6 +121,8 @@ def run_gates(args, comp_dir, ctx, teams, admin_password, boxes, base_url):
     print("\n  (M4 plant coverage — expected vs. actually planted, per machine)")
     coverage_result = state_gates.check_plant_coverage(comp_dir)
     run.add(coverage_result)
+    print("\n  (tolerated failures — the deploy's degradation ledger)")
+    run.add(state_gates.check_degradations(comp_dir))
     print("\n  (AD domains — promotion, joins, AD plants, DomainSID uniqueness)")
     run.add(domains.check_domains(comp_dir, teams, boxes, ctx=ctx))
     return RunOutcome(run.results, coverage_result)

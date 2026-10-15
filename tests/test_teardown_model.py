@@ -1,4 +1,4 @@
-"""Unit tests for the teardown object model (docs/teardown-redesign.md).
+"""Unit tests for the teardown object model (docs/internals.md#teardown).
 
 The characterization suite pins the OLD entry points; these pin the NEW
 types: Ownership, Refusal's vocabulary and machine line, Inventory
@@ -109,7 +109,7 @@ class NoopStep(Step):
 
 class PlanConstruction(unittest.TestCase):
     def _terminal(self, steps):
-        return TeardownPlan(teardown.TERMINAL_TEARDOWN, [], steps)
+        return TeardownPlan([], steps)
 
     def test_evidence_after_destruction_cannot_be_built(self):
         with self.assertRaises(PlanError) as ctx:
@@ -122,10 +122,6 @@ class PlanConstruction(unittest.TestCase):
         names = [s.name for s in plan.steps]
         self.assertEqual(names, ["portal", "artifacts", "red01", "pre_stop",
                                  "terraform", "templates", "remote_access"])
-
-    def test_reclaim_is_exempt_from_the_evidence_rule(self):
-        plan = TeardownPlan(teardown.RECLAIM, [], [TerraformStep()])
-        self.assertEqual(plan.kind, teardown.RECLAIM)
 
 
 class EnginePoliciesAndJournal(unittest.TestCase):
@@ -147,7 +143,7 @@ class EnginePoliciesAndJournal(unittest.TestCase):
                               log=lambda s: self.lines.append(s))
 
     def _plan(self, steps):
-        return TeardownPlan(teardown.TERMINAL_TEARDOWN, [], steps or [NoopStep()])
+        return TeardownPlan([], steps or [NoopStep()])
 
     def test_warn_policy_continues_and_never_journals_done(self):
         class Boom(Step):
@@ -222,7 +218,7 @@ class EnginePoliciesAndJournal(unittest.TestCase):
                 return StepResult(self.name, "ok")
 
         with self.assertRaises(Refusal):
-            self._engine().execute(TeardownPlan(teardown.TERMINAL_TEARDOWN, [gate], [Never()]))
+            self._engine().execute(TeardownPlan([gate], [Never()]))
         self.assertEqual(order, ["gate"])
 
 

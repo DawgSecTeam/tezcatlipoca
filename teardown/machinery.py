@@ -7,7 +7,6 @@ takes an `Ownership` instead of a loose tag set."""
 import json
 import os
 import subprocess
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 

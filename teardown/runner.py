@@ -86,7 +86,6 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
 # records steps the CALLER already completed (the scrim harness runs the evidence pull/collect/report and its superior red teardown itself) so the standard plan skips them instead of re-running them against dead boxes
 def record_evidence_done(comp_dir, test_dir=None, red_vmid=None):
     from config.config_ops import write_text_atomic
-    from teardown import Refusal
 
     comp_dir = Path(comp_dir)
     done = {}

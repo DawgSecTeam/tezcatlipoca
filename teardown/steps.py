@@ -65,19 +65,6 @@ class Step:
         return {"detail": result.detail}
 
 
-# the composition seam for callers whose mechanics live module-side; the policy is declared here, at composition
-class CallStep(Step):
-    def __init__(self, name, fn, failure=REFUSE, destructive=True):
-        self.name = name
-        self._fn = fn
-        self.failure = failure
-        self.destructive = destructive
-
-    def run(self, ctx) -> StepResult:
-        detail = self._fn()
-        return StepResult(self.name, "ok", str(detail) if detail else "")
-
-
 # bookkeeping that never outranks destroying the range: save the access log and revoke this run's console user before artifact collection (the log rides it) and while the engine still answers
 class PortalStep(Step):
     name = "portal"

@@ -1,4 +1,4 @@
-"""Plant-coverage gate, fed by .deploy_state.json."""
+"""State-file gates fed by .deploy_state.json: plant coverage + the tolerated-failure ledger."""
 
 import json
 
@@ -94,3 +94,36 @@ def check_plant_coverage(comp_dir):
 
     print(f"  PASS  all {len(machines)} machine(s) report full config coverage")
     return gate_pass("plant_coverage", f"all {len(machines)} machine(s)")
+
+
+def check_degradations(comp_dir):
+# Tolerated-failure gate: every entry in .deploy_state.json["degradations"] is a
+#     prerequisite that failed while the deploy continued — recorded by
+#     common.utils.record_degradation and persisted by deploy_lib.failure on both the
+#     success and failure paths.
+#
+#     The ledger exists so "the range came up with every service down" (or with no red
+#     inside it at all) has a named cause instead of a scrollback WARNING; both the
+#     recorder's docstring and the deploy's summary line promise verify surfaces it, and
+#     until this gate existed nothing read the key. A degraded range is not a passing one:
+#     an assume-breach red that never landed, a box that never answered, an unplanted
+#     config the coverage gate cannot see — each is a failure of the run's own purpose.
+#
+#     Fails CLOSED on an absent key, like the coverage gate: a state written before the
+#     ledger existed is not evidence of a clean run.
+    state = read_deploy_state(comp_dir) or {}
+    entries = state.get("degradations")
+    if not isinstance(entries, list):
+        print("  FAIL  — the tolerated-failure ledger was never recorded: no "
+              "'degradations' in .deploy_state.json. An unrecorded ledger is not a "
+              "passing one.")
+        return gate_fail("degradations", "degradations were never recorded")
+    if entries:
+        for entry in entries:
+            entry = entry if isinstance(entry, dict) else {}
+            print(f"  FAIL  {entry.get('what') or '?'}: "
+                  f"{str(entry.get('detail') or '')[:160]}")
+        return gate_fail("degradations",
+                         f"{len(entries)} tolerated failure(s) while the deploy continued")
+    print("  PASS  the deploy recorded no tolerated failures")
+    return gate_pass("degradations", "none recorded")

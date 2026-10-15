@@ -7,7 +7,7 @@ the pre-redesign code and are the acceptance harness: every one stays green
 under the new model, as a first-class property rather than an incidental
 string match.
 
-The seven invariants (docs/teardown-redesign.md):
+The seven invariants (docs/internals.md#teardown):
   I1 ownership is total and verified (full tag set / clone marker / refusal)
   I2 force by default, but only against owned targets
   I3 evidence before destruction; a dead box never blocks

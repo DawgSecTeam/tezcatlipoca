@@ -11,7 +11,7 @@ Fail-closed is the contract: a node that will not list contributes nothing and
 says so (`listing_failed`), so verify_clean can never read an API outage as a
 clean estate."""
 
-from infra.ownership import MARKER, UNPROVEN, Ownership, ownership_verdict, parse_vm_tags
+from infra.ownership import ownership_verdict, parse_vm_tags
 
 
 # `error` set = fail-closed.
