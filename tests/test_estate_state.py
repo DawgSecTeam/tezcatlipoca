@@ -2,7 +2,7 @@
 
 Offline; every comp dir is a temp directory. The migration fixtures are shaped after
 the real writers (deploy_lib/context.py, multinode/placement_record.py, common/targets.py,
-deploy_lib/tfinputs.py, engine/template_freeze.py, verifier/freeze.py, teardown/engine.py)."""
+deploy_lib/estate_inputs.py, engine/template_freeze.py, verifier/freeze.py, teardown/engine.py)."""
 
 import json
 import os

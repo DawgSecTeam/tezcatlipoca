@@ -65,17 +65,18 @@ def _configure(node, vmid, config):
             time.sleep(2 * (attempt + 1))
 
 
-def _clone(node, source_vmid, vmid, name, ownership, datastore=None):
+def _clone(node, source_vmid, vmid, name, ownership):
     """Linked-clone `source_vmid` into `vmid`.
 
     The description is set IN the clone POST: /clone takes no tags, and the tagging PUT only
     lands after the clone task finishes, so a crash mid-clone would otherwise leave an
     untagged VM in our own slot that no destroy path can claim.
+
+    No `storage`: that parameter is for FULL clones, and a linked clone's disk stays on the
+    source template's pool (which is why the preflight checks headroom per node/datastore).
     """
     data = {"newid": vmid, "name": name, "full": 0,
             "description": clone_marker(ownership.comp)}
-    if datastore:
-        data["storage"] = datastore
     upid = proxmox_api("POST", f"/nodes/{node}/qemu/{source_vmid}/clone", data=data)["data"]
     wait_for_proxmox_task(node, upid)
 
@@ -162,11 +163,11 @@ def create_bridge(state, node, name, comment=""):
 
 
 def create_engine(state, ownership, node, *, vmid, template_vmid, team_identifiers,
-                  transit_identifiers=(), mgmt_ip="", mgmt_gw="", datastore=None,
+                  transit_identifiers=(), mgmt_ip="", mgmt_gw="",
                   username="sysadmin", ssh_public_key=""):
     """The scoring engine: a linked clone of the engine template wired to every team bridge."""
     if not _adopt(node, vmid, ownership, "quotient-engine"):
-        _clone(node, template_vmid, vmid, "quotient-engine", ownership, datastore=datastore)
+        _clone(node, template_vmid, vmid, "quotient-engine", ownership)
         config = {"cores": ENGINE_CORES, "memory": ENGINE_MEMORY_MB, "agent": 1,
                   "tags": _tags(ownership)}
         # Order is load-bearing: the engine's netplan names ens19+ positionally, so vmbr0
@@ -191,11 +192,11 @@ def create_engine(state, ownership, node, *, vmid, template_vmid, team_identifie
 
 
 def create_team_box(state, ownership, target, *, source_vmid, box_username, box_password,
-                    ssh_public_key, datastore=None):
+                    ssh_public_key):
     """One team box: a linked clone of its golden (or its own base template when unmanaged)."""
     box, node, vmid, name = target["box"], target["node"], target["vmid"], target["vm_name"]
     if not _adopt(node, vmid, ownership, name):
-        _clone(node, source_vmid, vmid, name, ownership, datastore=datastore)
+        _clone(node, source_vmid, vmid, name, ownership)
         config = {"cores": box["cpu"], "memory": box["memory_mb"], "agent": 1,
                   "tags": _tags(ownership)}
         # The in-path firewall's WAN NIC comes FIRST (pfSense keys its interfaces on
@@ -225,7 +226,7 @@ def create_team_box(state, ownership, target, *, source_vmid, box_username, box_
 
 
 def create_team_boxes(state, ownership, targets, *, sources, box_username, box_password,
-                      ssh_public_key, datastore=None):
+                      ssh_public_key):
     """Every target's box, linked-cloned in order.
 
     Serial on purpose: the datastore saturation the old apply guarded against was full
@@ -234,5 +235,5 @@ def create_team_boxes(state, ownership, targets, *, sources, box_username, box_p
     for target in targets:
         create_team_box(state, ownership, target, source_vmid=sources[target["vm_name"]],
                         box_username=box_username, box_password=box_password,
-                        ssh_public_key=ssh_public_key, datastore=datastore)
+                        ssh_public_key=ssh_public_key)
     return [target["vmid"] for target in targets]

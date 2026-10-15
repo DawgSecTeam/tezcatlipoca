@@ -43,7 +43,7 @@ def _replace_engine(comp_dir, state, teams, boxes):
         team_identifiers=identifiers, transit_identifiers=identifiers if in_path else [],
         mgmt_ip=config.active().engine.mgmt_ip,
         mgmt_gw=(config.active().engine.mgmt_gw or DEFAULT_ENGINE_MGMT_GW),
-        datastore=cfg.proxmox.datastore, username=cfg.engine.username,
+        username=cfg.engine.username,
         ssh_public_key=cfg.ssh.public_key)
     engine_setup.cold_boot(node, vmid)
 
