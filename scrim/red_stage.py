@@ -222,7 +222,7 @@ def stage_red(args, comp, creds, run_dir):
     # 2026-10-12 vmid-999 kill). Atomic + 0600: a torn config would break every
     # subsequent badauto call, and the file may name an internal endpoint.
     config_file = badauto_config_ops.write_config(comp, cfg)
-    env = {**os.environ, "BAuto_LLM_API_KEY": endpoints.api_key(local=core.is_local_endpoint(args.llm_base_url)),
+    env = {**os.environ, "BAuto_LLM_API_KEY": endpoints.api_key(args.llm_base_url),
            "BAuto_STATE_DIR": str(Path(run_dir) / "bad-auto-state")}
     # A stale BAuto_CONFIG in the environment would shadow nothing while --config
     # is explicit, but scrub it anyway: symmetry with red_plant_ops._deploy_red.

@@ -51,6 +51,13 @@ def jump_rules(team_identifiers, engine_mgmt_ip, mgmt_cidr="10.0.0.0/24",
     if red:
         for t in teams:
             lines.append(f"-A FORWARD -s {red} -d 192.168.{t}.0/24 -j ACCEPT")
+        # Public-LLM egress. red's LLM endpoint used to always be operator-side (llama.cpp on a
+        # host only the operator can dial), reached through a reverse SSH tunnel — so red was
+        # given no WAN path at all. A CLOUD endpoint (api.deepseek.com) has no tunnel that can
+        # carry it: a raw `ssh -R 8180:host:443` hands red a plain-HTTP base_url pointed at a
+        # TLS port. red dials the endpoint directly instead, and this is the same egress shape
+        # the teams already have (`team -> anything outside 192.168.0.0/16`).
+        lines.append(f"-A FORWARD -s {red} ! -d 192.168.0.0/16 -j ACCEPT")
     for t in teams:
         lines.append(f"-A FORWARD -s 192.168.{t}.0/24 -d {engine} -j ACCEPT")
     if red:
@@ -77,6 +84,10 @@ def jump_rules(team_identifiers, engine_mgmt_ip, mgmt_cidr="10.0.0.0/24",
             # would be rewritten twice and arrive as the jump's mgmt address.
             lines.append(f"-A POSTROUTING -s {red} -d 192.168.{t}.0/24 "
                          f"-j SNAT --to-source 192.168.{t}.1")
+        # Red's own WAN egress (see the FORWARD accept above): appended AFTER the per-team SNAT
+        # rules, so team-bound red traffic keeps its gateway source and only genuinely external
+        # destinations are masqueraded.
+        lines.append(f"-A POSTROUTING -s {red} ! -d 192.168.0.0/16 -j MASQUERADE")
     for t in teams:
         # Engine-bound traffic is left UNmangled via a terminal ACCEPT (first match
         # wins in nat POSTROUTING) — the engine sees real box sources, same as with

@@ -1,10 +1,24 @@
 import subprocess
+import time
 from pathlib import Path
 
+from artifacts_lib import artifacts_ops
+from artifacts_lib.constants import SIDES
 from common.comp_paths import resolve_comp_dir
 from scrim import core
 from scrim import procs
 from scrim.core import log
+
+
+# A canonical document smaller than this is a stub (the collector writes one when it finds
+# nothing), never a narrative: 524 bytes was the observed BLUE-TEAM.md stub size.
+STUB_MAX_BYTES = 1024
+# Bounded grace for red's OWN report to land after the event clock stops. red writes
+# /var/lib/bad-auto/report-<utc>.md when its director sees the duration run out, which can be
+# seconds after the harness stops its own clock — the pre-teardown pull used to race exactly
+# that gap and record a present red as "unreachable", losing its account of the event every run.
+RED_REPORT_GRACE_SEC = 90
+RED_REPORT_POLL_SEC = 10
 
 
 def _red_ssh_spec(args):
@@ -69,13 +83,88 @@ def _pull_red_files(args, files, tag=None):
     return got
 
 
+def _red_report_names(args, base="/var/lib/bad-auto"):
+    """Basenames of red's `report-*.md` on red01, newest last (the name carries the UTC stamp).
+
+    Best effort, never raises: an unreadable listing means "no report yet", not a failed pull.
+    """
+    target, common, jump = _red_ssh_ctx(args)
+    cmd = f"ls -1 {base}/report-*.md 2>/dev/null || true"
+    for extra in ([], (["-o", jump] if jump else [])):
+        try:
+            r = procs.run_tree(["ssh"] + common + extra +
+                               ["-o", "ConnectTimeout=10", target, cmd], timeout=45, check=False)
+        except subprocess.TimeoutExpired:
+            continue
+        names = [n.rsplit("/", 1)[-1] for n in (r.stdout or "").split() if n.endswith(".md")]
+        if names:
+            return sorted(names)
+    return []
+
+
 def pull_red_snapshot(args, tag=None):
-    """Best-effort in-run events.jsonl pull from red01. Never raises."""
-    got = _pull_red_files(args, [("/var/lib/bad-auto/events.jsonl", "events.jsonl")])
+    """Best-effort in-run pull from red01: events.jsonl AND red's own report. Never raises.
+
+    The report was only ever fetched at teardown, so a run whose red01 died mid-event (or whose
+    teardown-time pull raced red's own write) had no narrative at all. Same cadence as the
+    events snapshot — the harness calls this every ~60 s.
+    """
+    files = [("/var/lib/bad-auto/events.jsonl", "events.jsonl")]
+    for name in _red_report_names(args)[-1:]:      # newest only: the final narrative
+        files.append((f"/var/lib/bad-auto/{name}", name))
+    got = _pull_red_files(args, files)
     if got and tag:
         ev = Path(args.run_dir) / "evidence" / "red"
-        core.secure_evidence(core.shutil_copy(ev / "events.jsonl", ev / f"events-{tag}.jsonl"))
+        for name in got:
+            core.secure_evidence(core.shutil_copy(ev / name, ev / f"{Path(name).stem}-{tag}{Path(name).suffix}"))
     return bool(got)
+
+
+def await_red_report(args, grace=RED_REPORT_GRACE_SEC, interval=RED_REPORT_POLL_SEC):
+    """Wait, bounded, for red's after-action report to appear on red01. Never raises.
+
+    red is an autonomous agent: it writes its report when IT sees the event end, and the harness
+    stops the clock first. Polling the remote listing (the report is written directly into
+    /var/lib/bad-auto as root, so this looks at the originals, not the staged copies) closes that
+    race without turning teardown into a gate — an expired grace is logged and the run continues.
+    """
+    deadline = time.time() + max(0, grace)
+    while True:
+        if _red_report_names(args):
+            return True
+        if time.time() >= deadline:
+            log(f"red report: none appeared within {grace}s of the event ending — "
+                f"RED-TEAM.md will be recorded as absent (not silently stubbed)")
+            return False
+        time.sleep(interval)
+
+
+def _land_canonical_red_report(args, got):
+    """File the newest pulled report as the test folder's canonical RED-TEAM.md.
+
+    The collector does this too, but only when its own scp-jump route succeeds; landing it here
+    means a report the harness already holds cannot be lost to a collector-route failure. Never
+    overwrites a substantive narrative.
+    """
+    test_dir = getattr(args, "test_dir", None)
+    if not test_dir:
+        return None
+    reports = [Path(args.run_dir) / "evidence" / "red" / n for n in got if n.startswith("report-")]
+    reports = [p for p in reports if p.is_file() and p.stat().st_size > 0]
+    if not reports:
+        return None
+    dest = Path(test_dir) / SIDES["red"]
+    if dest.exists() and dest.stat().st_size > STUB_MAX_BYTES:
+        return None
+    newest = max(reports, key=lambda p: (p.stat().st_mtime, p.name))
+    try:
+        facts = artifacts_ops.seal_local_file(newest, dest)
+    except OSError as e:
+        log(f"WARNING: could not file {SIDES['red']} into the test folder: {e}")
+        return None
+    log(f"{SIDES['red']} filed from {newest.name} ({facts.get('bytes')} bytes, "
+        f"sha256 {str(facts.get('sha256'))[:12]})")
+    return dest
 
 
 def _staged_report_names(args):
@@ -106,6 +195,10 @@ def pull_red_state(args):
     how a whole run's world.json went missing.
     """
     target, common, jump = _red_ssh_ctx(args)
+    # red's narrative is written at the END of the event, seconds after the harness clock stops:
+    # wait (bounded) for it before the staging copy below, or the pull races it and RED-TEAM.md
+    # is recorded absent for an agent that was present and did report.
+    await_red_report(args)
     # report-secrets.md (the organizer-only credlist restore table) is 0600 root, so
     # the collector's scp as the box user fails on it and marks the whole red target
     # unreachable — losing its siblings too. Stage every root-owned artifact to a
@@ -119,12 +212,17 @@ def pull_red_state(args):
     for extra in ([], (["-o", jump] if jump else [])):
         procs.run_tree(["ssh"] + common + extra + ["-o", "ConnectTimeout=10", target, stage],
                        timeout=75, check=False)
+    staged = _staged_report_names(args)
+    if not staged:
+        log("red report: nothing staged under /tmp/ba — the `sudo -n cp` staging chain "
+            "produced no report-*.md (check NOPASSWD on red01 for cp/chmod)")
     got = _pull_red_files(args, [
         ("/tmp/ba/world.json", "world.json"),
         ("/tmp/ba/events.jsonl", "events.jsonl"),
         ("/tmp/ba/report-secrets.md", "report-secrets.md"),
-    ] + [(f"/tmp/ba/{name}", name) for name in _staged_report_names(args)])
+    ] + [(f"/tmp/ba/{name}", name) for name in staged])
     log(f"red state pulled before teardown: {got or 'nothing (see collection.json)'}")
+    _land_canonical_red_report(args, got)
     return got
 
 
@@ -169,7 +267,12 @@ def check_red_llm(args, base_url):
             r = procs.run_tree(["ssh"] + common + extra + [target, probe],
                                timeout=45, check=False)
             code = (r.stdout or "").strip()
-            if code == "200":
+            # 401/403 mean the endpoint ANSWERED: the probe carries no key on purpose (a key
+            # would have to be shipped into red01's shell for a check that only asks "can red
+            # dial this?"). Requiring exactly 200 made a keyed public API look unreachable and
+            # aborted the run pre-T0.
+            if code in ("200", "401", "403"):
+                log(f"red01 reached the LLM endpoint ({path}, HTTP {code} — unauthenticated probe)")
                 return True
             log(f"red01 LLM probe ({path}) -> {code or (r.stderr or '').strip()[:80] or 'no answer'}")
         except subprocess.TimeoutExpired:

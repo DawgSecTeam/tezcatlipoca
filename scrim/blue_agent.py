@@ -12,6 +12,7 @@ from scrim import blue_helpers
 from scrim import blue_prompt
 from scrim import core
 from scrim import endpoints
+from scrim import llm_endpoints
 from scrim import inject_sync
 from scrim import quotient_api
 from scrim import test_folder
@@ -46,12 +47,13 @@ def assert_local_ctx(base_url):
 
 
 def stage_blues(args, comp, run_dir, creds, t0):
-    endpoints.api_key(local=core.is_local_endpoint(args.blue_base_url))
+    log(f"blue endpoint: {llm_endpoints.describe(args.blue_base_url)}")
+    endpoints.api_key(args.blue_base_url)     # public entries raise when their key is missing
     for n in range(1, args.teams + 1):
         base_url, blue_model = endpoints.blue_ep(args, n)
         local_blue = core.is_local_endpoint(base_url)
         if local_blue:
-            assert_local_ctx(base_url)
+            assert_local_ctx(base_url)   # llama.cpp-only /props probe; never for a public API
         wd = run_dir / f"blue-team{n}"
         wd.mkdir(parents=True, exist_ok=True)
         (wd / "submissions").mkdir(exist_ok=True)
@@ -77,11 +79,14 @@ def stage_blues(args, comp, run_dir, creds, t0):
             "# Your after-action report goes in REPORT.md (an operator reads it afterwards)\n")
         if not (wd / "NOTEBOOK.md").exists():
             (wd / "NOTEBOOK.md").write_text(blue_helpers.NOTEBOOK_TEMPLATE.format(n=n))
+        key_env = endpoints.key_env_name(base_url)
         (wd / "opencode.jsonc").write_text(
             blue_helpers.OPENCODE_PROJECT_CFG
             .replace("{PROVIDER_KEY}", endpoints.provider_key(base_url))
             .replace("{BASE_URL}", base_url)
-            .replace("{API_KEY_FIELD}", "{env:OPENROUTER_API_KEY}" if not local_blue else "local")
+            # a public entry names its own key env; only an operator-side endpoint gets
+            # the literal "local" (llama.cpp ignores the header entirely)
+            .replace("{API_KEY_FIELD}", ("{env:%s}" % key_env) if key_env else "local")
             .replace("{MODEL_ID}", blue_model)
             .replace("{CTX}", str(LOCAL_BLUE_CTX) if local_blue else "120000")
             .replace("{OUT}", "4000" if local_blue else "16000")
@@ -188,7 +193,11 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
                "HOME": str(home), "XDG_DATA_HOME": str(home / "data"),
                "XDG_CONFIG_HOME": str(home / "config"), "XDG_CACHE_HOME": str(home / "cache")}
         try:
-            env["OPENROUTER_API_KEY"] = endpoints.api_key()
+            # the same key the workdir's config asks opencode for, exported where opencode
+            # reads env ({env:...} in opencode.jsonc resolves against this process)
+            _base_url, _ = endpoints.blue_ep(args, n)
+            _key_env = endpoints.key_env_name(_base_url) or "OPENROUTER_API_KEY"
+            env[_key_env] = endpoints.api_key(_base_url)
         except RuntimeError:
             pass
         try:
@@ -225,6 +234,64 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
 # the exact header scrim-report.py counts as a timeout, always written from the timeout
 # path — including when the RETRY is the attempt that timed out. The report's
 # `timeouts == 0` rehearsal gate finds this string and nothing else, so a timeout that
+def finalize_blue_narratives(args):
+    """Write a blue narrative for every team that ran, whatever its cycles did. Never raises.
+
+    opencode is asked to write REPORT.md, and it only does so when a cycle ends with judgement to
+    record: a timed-out, crashed or never-started cycle leaves nothing behind, so the artifact set
+    got a stub `BLUE-TEAM.md` for a blue side that really did run (logged every run as
+    "BLUE-TEAM.md is ABSENT although this run had a blue agent"). The narrative below is the
+    harness's own record — the cycle feed's rc= lines, blue's LOG.md, the scoreboard delta — and it
+    says so in the first line, so nobody files it as blue's own account. An existing substantive
+    REPORT.md is never touched.
+    """
+    run_dir = Path(getattr(args, "run_dir", None) or ".")
+    for n in range(1, (getattr(args, "teams", 0) or 0) + 1):
+        wd = run_dir / f"blue-team{n}"
+        if not wd.is_dir():
+            continue
+        report = wd / "REPORT.md"
+        if report.exists() and report.stat().st_size > 1024:
+            continue
+        lines = [f"# Blue team {n} — after-action narrative (harness-synthesized)",
+                 "",
+                 "opencode did not write REPORT.md for this team, so the harness filed this "
+                 "reconstruction",
+                 "from its own records. It is NOT blue's own account.",
+                 ""]
+        feed = wd / "feed.log"
+        if feed.exists():
+            cycles = [ln.strip() for ln in feed.read_text().splitlines()
+                      if ln.startswith("===== cycle")]
+            events = [ln.strip() for ln in feed.read_text().splitlines()
+                      if ln.startswith("===== ") and not ln.startswith("===== cycle")]
+            lines += [f"## Cycles ({len(cycles)} recorded)", ""]
+            lines += [f"- {c}" for c in cycles] or ["- none: no cycle completed"]
+            if events:
+                lines += ["", "## Other feed events", ""] + [f"- {e}" for e in events]
+        else:
+            lines += ["## Cycles", "", "- no feed.log: the blue loop never started"]
+        log_md = wd / "LOG.md"
+        if log_md.exists():
+            body = [ln for ln in log_md.read_text().splitlines()
+                    if not ln.startswith("# Blue team") and ln.strip()]
+            if body:
+                lines += ["", "## blue LOG.md (verbatim, last 40 lines)", ""] + body[-40:]
+        try:
+            delta = blue_prompt.scoreboard_delta(args.run_dir, f"team{n}")
+        except Exception:
+            delta = "(scoreboard delta unavailable)"
+        if delta:
+            lines += ["", "## Scored services at the end of the event", "", str(delta)]
+        body = "\n".join(lines) + "\n"
+        try:
+            core.write_evidence(report, body)
+            log(f"blue-team{n}: REPORT.md synthesized by the harness ({len(body)} bytes)")
+        except OSError as e:
+            log(f"WARNING: could not write blue-team{n} REPORT.md: {e}")
+
+
+# the `timeouts == 0` rehearsal gate finds this string and nothing else, so a timeout that
 # skips it passes the gate silently.
 def write_cycle_timeout(wd, elapsed):
     with (Path(wd) / "feed.log").open("a") as f:

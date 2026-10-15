@@ -70,8 +70,17 @@ def vm_username():
 
 
 def is_local_endpoint(base_url):
-    """True for an operator-side (non-openrouter) LLM endpoint: slower, key-less, tunnelled."""
-    return "openrouter" not in base_url
+    """True for an operator-side LLM endpoint: slower, key-less, tunnelled.
+
+    Table-driven since 2026-10-14 (`scrim/llm_endpoints.py`). The old body was
+    `"openrouter" not in base_url`, so every public API that was not openrouter.com — the
+    official DeepSeek API included — was classified operator-side and driven as if it were a
+    local llama.cpp (literal `local` as blue's apiKey, the slow-local red profile, a reverse
+    tunnel pointed at a TLS port). Unknown hosts stay operator-side: that is what local
+    rehearsals rely on.
+    """
+    from scrim import llm_endpoints          # local: core is imported BY scrim/endpoints
+    return llm_endpoints.is_operator_side(base_url)
 
 
 def read_comp_json(comp, name):

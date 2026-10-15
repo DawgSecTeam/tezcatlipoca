@@ -50,6 +50,12 @@ def run_event_and_finish(args, creds, t0):
         stage_run(args, creds, t0)
     except supervisor.WorkerDiedError as e:
         failure = str(e)
+    # Before the capture, so a blue team that finished without writing REPORT.md still gets a
+    # narrative into the artifact set (the harness holds the cycle record; blue was present).
+    try:
+        blue_agent.finalize_blue_narratives(args)
+    except Exception as e:
+        log(f"WARNING: blue narrative finalize failed: {e}")
     run_manifest.record_phase(args.run_dir, args, "capture")
     evidence.stage_capture(args, creds)
     run_manifest.record_phase(args.run_dir, args, "teardown")
