@@ -271,6 +271,41 @@ class KeepTemplates(TmpCase):
         self.assertTrue(run_manifest.load_manifest(self.root)["keep_templates"])
 
 
+class EvidenceDoneFollowsTheCollection(TmpCase):
+# A collection that never produced a record must not journal the artifact step done — the plan's
+# own artifact step is the retry, and the destroy that follows makes a second attempt impossible.
+# red01's absence proof is independent of that outcome and is journalled either way.
+
+    def _stage(self, collection):
+        args = make_args(self.comp)
+        args.test_dir = str(self.comp / ".automated-tests" / RUN_ID)
+        with mock.patch.object(teardown_stage.endpoints, "api_key", lambda **k: "k"), \
+                mock.patch.object(teardown_stage.test_folder, "collect_run_artifacts",
+                                  return_value=collection), \
+                mock.patch.object(teardown_stage.test_folder, "write_interaction_report"), \
+                mock.patch.object(teardown_stage, "teardown_red", return_value=999), \
+                mock.patch.object(teardown_stage, "run_range_teardown") as run:
+            teardown_stage.stage_teardown(args, creds={"user": "sysadmin"})
+        return run.call_args
+
+    def test_a_failed_collection_leaves_the_artifacts_step_to_the_plan(self):
+        self.assertFalse(self._stage(None).kwargs["evidence_done"])
+
+    def test_a_recorded_collection_journals_the_artifacts_step(self):
+        self.assertTrue(self._stage({"summary": {"ok": 1}}).kwargs["evidence_done"])
+
+    def test_a_failed_collection_still_journals_the_red_proof(self):
+        (self.comp / "teams.json").write_text(json.dumps({"team1": {"identifier": 1}}))
+        from teardown import runner as teardown_runner
+        with mock.patch.object(teardown_runner, "record_evidence_done") as rec, \
+                mock.patch.object(teardown_runner, "run_terminal_teardown",
+                                  return_value=mock.Mock(clean=True)):
+            teardown_stage.run_range_teardown(make_args(self.comp), evidence_done=False,
+                                             red_vmid=999)
+        self.assertIsNone(rec.call_args.kwargs["test_dir"])
+        self.assertEqual(rec.call_args.kwargs["red_vmid"], 999)
+
+
 class AgentIdentity(TmpCase):
 # INV5/INV9: identity is recorded from the one ssh helper, and merged, never replaced.
 

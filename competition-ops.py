@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 from config.injects_config import injects_fingerprint, load_injects, resolve_inject_times
 from estate import state as estate_state
 from estate.engine_setup import engine_ctx
-from quotient.event_capture import end_event
+from quotient.event_capture import end_event, login_scoring
 from quotient.setup import create_injects
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -74,13 +74,11 @@ def scoring_password(args, state, comp_dir):
 
 
 def login(base_url, password):
-    session = requests.Session()
-    r = session.post(f"{base_url}/api/login",
-                     json={"username": "scoring", "password": password}, timeout=10)
-    if r.status_code >= 400:
-        sys.exit(f"ERROR: scoring login failed → HTTP {r.status_code} (the password lives "
-                 "in the estate state / credentials.txt; override with --scoring-password)")
-    return session
+    try:
+        return login_scoring(base_url, password)
+    except RuntimeError as e:
+        sys.exit(f"ERROR: {e} (the password lives in the estate state / credentials.txt; "
+                 "override with --scoring-password)")
 
 
 def engine_status(session, base_url):

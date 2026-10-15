@@ -692,6 +692,44 @@ class TestTeardownEntryPoint(unittest.TestCase):
         self.assertTrue(all(i["status"] == ao.SKIPPED
                             for t in collection["targets"] for i in t["files"]))
 
+    def test_a_failed_transfer_is_retried_once(self):
+        # `failed` means the source answered and the transfer broke: transient, and the destroy
+        # that follows would make a second attempt impossible.
+        real = ao.default_transport()
+        attempts = []
+
+        def flaky_local(source, pattern, dest_dir):
+            if pattern == "run.json":
+                attempts.append(pattern)
+                if len(attempts) == 1:
+                    raise OSError("disk hiccup")
+            return real["local"](source, pattern, dest_dir)
+
+        with patch.object(ao, "default_transport", lambda: dict(real, local=flaky_local)):
+            collection = ao.collect_for_teardown(self.comp, run_id="run-1a2b3c4d",
+                                                 echo=lambda *a: None)
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual([i["status"] for t in collection["targets"] for i in t["files"]
+                          if i["want"] == "run.json"], [ao.OK])
+
+    def test_an_unreachable_source_is_not_retried(self):
+        # `unreachable` means the source is down: a retry only re-pays its timeout.
+        real = ao.default_transport()
+        attempts = []
+
+        def dead_local(source, pattern, dest_dir):
+            if pattern == "monitor.log":
+                attempts.append(pattern)
+                raise ao.Unreachable("host down")
+            return real["local"](source, pattern, dest_dir)
+
+        with patch.object(ao, "default_transport", lambda: dict(real, local=dead_local)):
+            collection = ao.collect_for_teardown(self.comp, run_id="run-1a2b3c4d",
+                                                 echo=lambda *a: None)
+        self.assertEqual(len(attempts), 1)
+        self.assertTrue(any(i["status"] == ao.UNREACHABLE
+                            for t in collection["targets"] for i in t["files"]))
+
 
 if __name__ == "__main__":
     unittest.main()

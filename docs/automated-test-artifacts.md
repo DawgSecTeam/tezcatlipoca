@@ -48,14 +48,17 @@ artifact to git.
 | Writer | What it contributes |
 |---|---|
 | `run-agent-scrim.py` | Creates the folder at run start (identity, teams, boxes, phases), records red/blue identity and workdirs when they are known, and collects + generates the verdict **before** `badauto destroy` erases red01. |
-| `destroy-competition.py` | The safety net, and the one step guaranteed to happen: it collects right after the confirmation prompt and before its first destructive call. This is what saves a run whose harness died. |
+| `destroy-competition.py` | The safety net, and the one step guaranteed to happen: it captures the engine's own final scoreboard when the harness never did, then collects right after the confirmation prompt and before its first destructive call. This is what saves a run whose harness died. Its `--team` mode is the exception: a mid-event team removal has no artifact step because no declared artifact lives on a team box (the plan reads red01, the run dir, blue workdirs, the comp dir and the engine capture) — the removal is recorded in the state document's `deleted_teams` and in `teams.json`. |
 | `scrim-report.py` | `INTERACTION.md` — the interaction score and the `rehearsal-gates.md` gate table. Its verdict is folded into `test.json` verbatim; nothing here recomputes it. |
 | A human or agent | `REPORT.md`'s judgement: the incident classification and both recommendations sections. |
 
 Collection **warns and proceeds** — a dead box never blocks a destroy. What could not be obtained is
 recorded in `collection.json`, restated in the affected document as a stub, and listed in the
 report's *Not verified / caveats*. There is deliberately no gate: an operator who needs to destroy a
-range must never be held hostage by a wedged guest.
+range must never be held hostage by a wedged guest. Two things keep a loss from being silent
+anyway: a `failed` transfer (the source answered, the transfer broke) is retried once before the
+destroy makes a second attempt impossible — `unreachable`/`unrecoverable` sources are not retried —
+and whatever is still lost is printed as a `verify_clean` note at the end of the destroy.
 
 ## The status vocabulary
 

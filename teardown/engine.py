@@ -185,6 +185,19 @@ class TeardownEngine:
             if not test_dir or not Path(test_dir).exists():
                 problems.append("no artifact folder for this run — evidence was not "
                                 "archived before destruction")
+            else:
+                # A note, never a problem: exit 0 must keep meaning "the estate is clean",
+                # and a wedged box must never hold a destroy hostage — but a lossy teardown
+                # must not read like a clean one at the point the operator reads it.
+                from artifacts_lib.collect import load_collection
+                from artifacts_lib.constants import LOST
+                lost = [f"{t.get('name')}/{f.get('want')} ({f.get('status')})"
+                        for t in load_collection(test_dir).get("targets", [])
+                        for f in t.get("files", []) if f.get("status") in LOST]
+                if lost:
+                    notes.append(f"evidence incomplete: {len(lost)} item(s) lost "
+                                 f"({', '.join(lost[:4])}{', …' if len(lost) > 4 else ''}) — "
+                                 f"see {test_dir}/collection.json")
 
         return CleanReport(not problems, problems, notes)
 

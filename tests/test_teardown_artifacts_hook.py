@@ -152,6 +152,27 @@ class TeardownArtifactsHook(unittest.TestCase):
             self._main([], cancel=True)
         self.assertEqual(self.log, [], "a cancelled teardown must not touch the range at all")
 
+    def test_team_removal_claims_no_collection_and_collects_nothing(self):
+        # A team box carries no declared artifact (artifacts_lib/plan.py), so the mid-event
+        # removal has no artifact step — and the banner must not promise one.
+        argv = ["destroy-competition.py", "--competition", "demo", "--team", "team1", "--yes"]
+        os.chdir(self.root)
+        buf = io.StringIO()
+        try:
+            with patch.object(destroy, "load_destroyable_competitions", return_value=["demo"]), \
+                    patch.object(destroy, "frozen_state", return_value={}), \
+                    patch("teardown.team_ops.run_team_teardown",
+                          return_value={"clean": True, "problems": []}) as team, \
+                    patch.object(ao, "collect_for_teardown") as collect, \
+                    patch.object(sys, "argv", argv), \
+                    contextlib.redirect_stdout(buf):
+                destroy.main()
+        finally:
+            os.chdir(self._cwd)
+        team.assert_called_once()
+        collect.assert_not_called()
+        self.assertNotIn("Evidence is collected first", buf.getvalue())
+
     def test_a_collection_crash_does_not_stop_the_teardown(self):
         def boom(*a, **k):
             self.log.append("collect")

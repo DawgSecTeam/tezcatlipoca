@@ -128,6 +128,18 @@ class DestroyVmOwnership(unittest.TestCase):
                     "n", 4150, expect_tags={"tezcatlipoca", f"comp-{COMP}", RUN})
         self.assertEqual(fake.deleted, [])
 
+    def test_the_clone_marker_is_not_enough_when_a_run_must_be_proven(self):
+        # The orphan reclaim has no comp dir to consult, so the comp-level marker (which names
+        # no run) must not be adopted: it can be a live worktree's interrupted clone.
+        fake = FakePVE(nodes={"n": [vm(4150, "half-clone", "")]},
+                       cfgs={4150: {"description": infra.ownership.clone_marker(COMP)}})
+        with patch.object(ownership, "proxmox_api", fake):
+            with self.assertRaisesRegex(RuntimeError, "clone marker, which names no run"):
+                infra.ownership.destroy_vm_if_exists(
+                    "n", 4150, expect_tags={"tezcatlipoca", f"comp-{COMP}", RUN},
+                    require_owned=True)
+        self.assertEqual(fake.deleted, [])
+
     def test_same_comp_different_run_is_refused(self):
         fake = FakePVE(nodes={"n": [vm(4150, "someone-elses-box", OTHER)]},
                        cfgs={4150: {"tags": OTHER}})

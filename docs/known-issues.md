@@ -172,6 +172,22 @@ are parsed at startup, so no rebuild is involved). The canonical copy is local Q
 via `quotient_ref`), because every engine bootstrap re-clones stock upstream and re-introduces
 the bug; re-patch the live engine whenever a new one deploys in the meantime.
 
+### A deleted per-run workspace strands the range that run deployed
+
+The dashboard removes each run's workspace when the run ends — including a run that FAILED and a
+destroy that ended `teardown_failed`. Verified 2026-10-15: of 51 range records, 29 were `failed` and
+4 `teardown_failed`, and all four `teardown_failed` workspaces (`run-48c4d760`, `run-adb8e61a`,
+`run-27b0d9e4`, `run-c84faaac`) had no `comp/estate-state.json` left. Teardown is journaled and
+idempotent precisely so a failed destroy can be re-run, but the journal, the run id and the ownership
+set all live in that workspace, so deleting it removes the sanctioned way to finish. The leftover VMs
+are then reachable only by their own tags (`destroy-competition.py --orphan-comp/--orphan-run`, added
+this cycle), which cannot resume the plan, cannot tell a deliberately kept template from debris, and
+cannot consult the freeze record. Live 2026-10-15: .150 carried two engine-templates and seven goldens
+under two run ids with no workspace anywhere, and the dashboard's range view had gone stale — one
+`live` record still named vmid 2101 after that VM was gone; the API tags were the only truth.
+**Next action**: hold the workspace of any run whose range is not `retired`, or have the dashboard
+submit an orphan reclaim when it deletes one.
+
 ### Fixed in this cycle (kept for the next reader's context)
 
 - A kept template (engine/golden, from an earlier run of the same competition) could not be adopted:

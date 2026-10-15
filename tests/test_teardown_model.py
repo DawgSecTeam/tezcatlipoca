@@ -22,8 +22,8 @@ from estate import state as estate_state  # noqa: E402
 from teardown.engine import TeardownEngine, load_teardown_journal  # noqa: E402
 from teardown.inventory import Inventory  # noqa: E402
 from teardown.plan import PlanError, TeardownPlan  # noqa: E402
-from teardown.steps import (EVIDENCE, ArtifactStep, EstateStep, Step,  # noqa: E402
-                            StepResult, TeardownContext)
+from teardown.steps import (EVIDENCE, ArtifactStep, EngineCaptureStep, EstateStep,  # noqa: E402
+                            Step, StepResult, TeardownContext)
 from infra.ownership import Ownership, Refusal  # noqa: E402
 
 RUN = "run-abcdef01"
@@ -121,7 +121,7 @@ class PlanConstruction(unittest.TestCase):
         from teardown.modes import build_terminal_plan
         plan = build_terminal_plan()
         names = [s.name for s in plan.steps]
-        self.assertEqual(names, ["portal", "artifacts", "red01", "pre_stop",
+        self.assertEqual(names, ["portal", "engine_capture", "artifacts", "red01", "pre_stop",
                                  "estate", "remote_access"])
 
 
@@ -301,6 +301,110 @@ class VerifyClean(unittest.TestCase):
             result = EstateStep().run(ctx)
         self.assertTrue(destroy.call_args.kwargs["full"])
         self.assertEqual(result.status, "ok")
+
+    def test_lost_evidence_is_a_note_never_a_problem(self):
+        # A teardown that lost evidence still exits clean — a wedged box never holds a destroy
+        # hostage — but it must not read like a clean one at the point the operator reads it.
+        from teardown.engine import save_teardown_journal
+        test_dir = self.comp / ".automated-tests" / RUN
+        test_dir.mkdir(parents=True)
+        (test_dir / "collection.json").write_text(json.dumps({"targets": [{"name": "red01", "files": [
+            {"want": "/tmp/ba/world.json", "status": "unreachable"}]}]}))
+        save_teardown_journal(self.comp, {"run_id": RUN, "done": {"artifacts": {
+            "detail": str(test_dir), "test_dir": str(test_dir)}}})
+        report = self._engine().verify_clean(self._plan())
+        self.assertTrue(report.clean, report.problems)
+        self.assertTrue(any("evidence incomplete" in n and "red01" in n for n in report.notes),
+                        report.notes)
+
+
+class EngineCapture(unittest.TestCase):
+# The engine's final scoreboard lives only in its database, and EstateStep deletes that
+#     database: the step must capture it for the run whose harness never did — and never
+#     overwrite a harness capture that already exists.
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.comp = Path(self.tmp.name) / "c1"
+        self.comp.mkdir(parents=True)
+        self.ctx = TeardownContext(
+            comp_dir=self.comp, env={}, teams={"team1": {"identifier": "101"}},
+            boxes=[{"name": "dc01"}],
+            deployed_state={"run_id": RUN, "engine_mgmt_ip": "10.0.0.9",
+                            "scoring_password": "s"},
+            ownership=OURS, placement=None, nodes=["n"], default_node="n", inventory=None)
+
+    def _folder(self):
+        from artifacts_lib.lifecycle import latest_run_key
+        from artifacts_lib.paths import test_dir
+        key, _ = latest_run_key(self.comp, RUN)
+        return test_dir(self.comp, key)
+
+    def test_it_captures_and_records_the_engine_folder(self):
+        seen = {}
+
+        def fake_dump(base_url, session, comp_dir, *, out_dir=None):
+            seen.update(base_url=base_url, comp_dir=comp_dir, out_dir=Path(out_dir))
+            Path(out_dir).mkdir(parents=True, exist_ok=True)
+            (Path(out_dir) / "event-final-20260101-000000.json").write_text("{}")
+            return []
+
+        with patch("quotient.event_capture.login_scoring", return_value=object()), \
+                patch("quotient.event_capture.dump_scoreboard", side_effect=fake_dump):
+            result = EngineCaptureStep().run(self.ctx)
+        from artifacts_lib.manifest import load_manifest
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(seen["base_url"], "http://10.0.0.9")
+        # A source the collector only reads — never its own target, whose local seal unlinks
+        # the destination before copying it.
+        self.assertEqual(seen["out_dir"], self.comp / "evidence")
+        self.assertEqual(load_manifest(self._folder())["paths"]["engine_evidence"],
+                         str(self.comp / "evidence"))
+
+    def test_an_empty_harness_folder_is_replaced_not_captured_into(self):
+        # A recorded-but-empty engine dir means the harness capture never landed. Capturing
+        # into it would be a self-copy: the collector's local seal unlinks the destination
+        # before copying, so the file it just wrote would be gone and recorded absent.
+        from artifacts_lib.manifest import load_manifest, record_paths
+        stale = self._folder() / "evidence" / "engine"
+        stale.mkdir(parents=True)
+        record_paths(self._folder(), engine_evidence=stale)
+        with patch("quotient.event_capture.login_scoring", return_value=object()), \
+                patch("quotient.event_capture.dump_scoreboard", return_value=[]) as dump:
+            result = EngineCaptureStep().run(self.ctx)
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(Path(dump.call_args.kwargs["out_dir"]), self.comp / "evidence")
+        self.assertEqual(load_manifest(self._folder())["paths"]["engine_evidence"],
+                         str(self.comp / "evidence"))
+
+    def test_a_present_harness_capture_is_not_overwritten(self):
+        from artifacts_lib.manifest import record_paths
+        ev = self._folder() / "evidence" / "engine"
+        ev.mkdir(parents=True)
+        (ev / "final-scoreboard.json").write_text("{}")
+        record_paths(self._folder(), engine_evidence=ev)
+        with patch("quotient.event_capture.dump_scoreboard") as dump, \
+                patch("quotient.event_capture.login_scoring") as login:
+            result = EngineCaptureStep().run(self.ctx)
+        self.assertEqual(result.status, "skipped")
+        dump.assert_not_called()
+        login.assert_not_called()
+
+    def test_without_an_engine_address_it_does_nothing(self):
+        self.ctx.deployed_state = {"run_id": RUN}
+        with patch("quotient.event_capture.dump_scoreboard") as dump:
+            result = EngineCaptureStep().run(self.ctx)
+        self.assertEqual(result.status, "ok")
+        self.assertIn("no engine management IP", result.detail)
+        dump.assert_not_called()
+
+    def test_without_a_scoring_password_it_warns_and_does_not_dial(self):
+        self.ctx.deployed_state = {"run_id": RUN, "engine_mgmt_ip": "10.0.0.9"}
+        with patch("quotient.event_capture.login_scoring") as login:
+            result = EngineCaptureStep().run(self.ctx)
+        self.assertEqual(result.status, "warned")
+        login.assert_not_called()
 
 
 if __name__ == "__main__":
