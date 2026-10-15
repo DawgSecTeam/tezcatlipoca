@@ -101,6 +101,15 @@ class Resolution(unittest.TestCase):
         with mock.patch.dict(os.environ, {"TF_VAR_datastore": ""}):
             self.assertEqual(self.cfg.proxmox.datastore, "file-store")
 
+    def test_a_missing_key_is_catchable_by_except_exception(self):
+        # The old read was os.environ[...] (a KeyError), so tolerant callers wrap it in
+        # `except Exception`; a bare SystemExit escapes those and kills the run instead.
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = config.Config(Path(tmp) / "absent.toml")
+            with self.assertRaises(Exception) as raised:
+                cfg.require("proxmox.endpoint")
+            self.assertIsInstance(raised.exception, SystemExit)
+
     def test_require_names_the_key_and_the_override(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = config.Config(Path(tmp) / "absent.toml")
