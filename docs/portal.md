@@ -2,8 +2,9 @@
 
 Blue teams log in with their **Quotient team credentials** and get a **browser console** (the
 VM's own screen, through Proxmox) on each of their team's boxes. Opt-in per competition, deployed
-on the scoring engine, non-fatal: a portal that can't start is recorded as a degradation and the
-range carries on. Unproven paths: [known-issues.md](known-issues.md).
+on the scoring engine, non-fatal to the deploy: a portal that can't start is recorded as a
+degradation and the range carries on, but verify's `degradations` gate reports it as a failure.
+Unproven paths: [known-issues.md](known-issues.md).
 
 ## Turning it on
 
@@ -57,6 +58,17 @@ gate). `scoring` and `inject` are refused.
 
 Students may type a display name at login. Accounts are shared per team, so that name is the only
 per-student attribution, recorded in the access log.
+
+### The dashboard's VPN panel
+
+When remote access is on ([remote-access.md](remote-access.md)), phase 8 folds the enrollment
+into `portal.json` (`vpn`: the login server plus each team's per-person keys, read from
+`remote-access/keys.json` and `TEZ_HEADSCALE_URL`), and `/api/me` hands a team session only its
+own people — a team never sees another team's keys, like boxes. The team view shows a **VPN
+setup** panel (install Tailscale, then each person's `tailscale up --login-server … --authkey …`
+command) above the **VM access** console grid, and the top bar links both the Quotient
+**Scoreboard** and its **Injects** page. With remote access off (or no `people.json` roster)
+there is no `vpn` field and no VPN section.
 
 ### Isolation
 
@@ -174,8 +186,9 @@ picks up the new secret.
 the image builds on the engine from `portal/` alone. `tests/test_portal_frontend.py` pins the
 noVNC release tarball's integrity hash; it doesn't check the copies for drift.
 
-- **Views**: `/` is sign-in, then the team's boxes or the white-team view (gate, every team,
-  access log); `/console/<team>/<box>` is one console per tab. The FastAPI app serves the build as
+- **Views**: `/` is sign-in, then the team hub (VPN setup panel when remote access is on, the
+  VM access console grid) or the white-team view (gate, every team, access log);
+  `/console/<team>/<box>` is one console per tab. The FastAPI app serves the build as
   an SPA, same as the dashboard service.
 - **noVNC** comes from the v1.6.0 GitHub release tarball (pinned integrity hash), not the npm
   package: its `lib/` build is CommonJS with a top-level `await`, which Vite rejects; the release

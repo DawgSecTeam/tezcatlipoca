@@ -67,6 +67,8 @@ engine's `192.168/16 → 192.168/16` FORWARD DROP, and the portless team bridges
    WireGuard data plane rides through).
 5. Write `competitions/<id>/remote-access/` — `enrollment.md` (per-person
    `tailscale up --login-server … --authkey …` commands) and `keys.json` (gitignored, 0600).
+   The student portal also surfaces this enrollment: each team sees its own people's
+   commands on the dashboard ([portal.md](portal.md) → the dashboard's VPN panel).
 
 Teardown (`destroy-competition.py`) deletes the engine's headscale node (revoking its key),
 deletes each participant's devices first (headscale refuses `users destroy` while a user still

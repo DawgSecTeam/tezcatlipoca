@@ -24,6 +24,9 @@ function TopBar({ me, onLogout }) {
         {me?.scoreboard_url && (
           <a className="btn" href={me.scoreboard_url} target="_blank" rel="noopener noreferrer"><Icon name="overview" />Scoreboard</a>
         )}
+        {me?.scoreboard_url && (
+          <a className="btn" href={`${me.scoreboard_url.replace(/\/+$/, '')}/injects`} target="_blank" rel="noopener noreferrer"><Icon name="injects" />Injects</a>
+        )}
         <ThemeToggle />
         {me && <Button variant="ghost" onClick={onLogout}>Sign out</Button>}
       </div>
@@ -98,6 +101,32 @@ function BoxCard({ team, box, enabled, i = 0 }) {
   )
 }
 
+function VpnSetup({ vpn }) {
+  return (
+    <section className="panel rise rise-2 mb-12 p-6">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="display text-2xl">VPN setup</h2>
+        <a className="btn" href="https://tailscale.com/download" target="_blank" rel="noopener noreferrer"><Icon name="net" />Get Tailscale</a>
+      </div>
+      <p className="mt-2 text-sm text-muted">
+        To reach your boxes over the network (SSH, RDP) and the scoreboard, install Tailscale
+        and enroll your device: find your name below, run its command once, one device per key.
+      </p>
+      <div className="mt-4 space-y-2">
+        {vpn.people.map((p) => (
+          <div key={p.person} className="flex items-baseline gap-3">
+            <span className="w-28 shrink-0 truncate text-right font-mono text-xs text-faint">{p.person}</span>
+            <code className="block min-w-0 flex-1 overflow-x-auto rounded-xl bg-sunken px-3 py-2 font-mono text-[12px] shadow-inset">
+              tailscale up --login-server {vpn.server_url} --authkey {p.key}
+            </code>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-xs text-faint">It worked when your boxes' 192.168 addresses answer and other teams' don't.</p>
+    </section>
+  )
+}
+
 function TeamView({ me }) {
   const open = me.access.open
   const usable = open && me.console
@@ -113,10 +142,14 @@ function TeamView({ me }) {
       {open && !me.console && (
         <div className="mx-auto mb-10 max-w-2xl"><ErrorBanner error="Consoles aren't configured for this competition. Tell the organizers." /></div>
       )}
-      <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
-        {me.boxes.map((b, i) => <BoxCard key={b.name} team={me.team} box={b} enabled={usable} i={i} />)}
-      </div>
-      {!me.boxes.length && <EmptyState icon="boxes" title="No boxes">This team has no boxes in this competition.</EmptyState>}
+      {me.vpn && <VpnSetup vpn={me.vpn} />}
+      <section className="mb-12">
+        <h2 className="display mb-5 text-3xl">VM access</h2>
+        <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
+          {me.boxes.map((b, i) => <BoxCard key={b.name} team={me.team} box={b} enabled={usable} i={i} />)}
+        </div>
+        {!me.boxes.length && <EmptyState icon="boxes" title="No boxes">This team has no boxes in this competition.</EmptyState>}
+      </section>
     </>
   )
 }

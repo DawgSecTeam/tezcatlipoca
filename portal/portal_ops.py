@@ -50,7 +50,7 @@ def portal_enabled(comp_dir):
 
 def build_portal_config(*, comp_name, run_id, event_name, scoreboard_url, teams, boxes,
                         targets, placement, default_node, nodes, tokens,
-                        firewall_console=True, public_host=""):
+                        firewall_console=True, public_host="", vpn=None):
 # portal.json: what the portal shows and which console token reaches which box.
 #
 #     teams    {team_key: {identifier, ...}}            (teams.json)
@@ -59,6 +59,8 @@ def build_portal_config(*, comp_name, run_id, event_name, scoreboard_url, teams,
 #     nodes    console.node_targets output      (endpoint, pve_node, fingerprint)
 #     tokens   console.mint_console_tokens      (node_key -> token); a node without a
 #              token is left out of `nodes`, so its boxes list but cannot open a console
+#     vpn      {server_url, teams: {team_key: [{person, key}]}}  — the remote-access
+#              enrollment (phase-3 keys.json); None hides the dashboard's VPN section
 #
 #     Unmanaged boxes that are NOT the in-path firewall are left out (nothing a team operates);
 #     the in-path firewall is listed (teams own their pfSense) unless firewall_console=False.
@@ -91,7 +93,7 @@ def build_portal_config(*, comp_name, run_id, event_name, scoreboard_url, teams,
                           "tls_fingerprint": node.get("tls_fingerprint") or ""}
     return {"comp": comp_name, "run_id": run_id, "event_name": event_name,
             "scoreboard_url": scoreboard_url, "public_host": public_host,
-            "nodes": out_nodes, "teams": out_teams}
+            "nodes": out_nodes, "teams": out_teams, "vpn": vpn}
 
 
 def tunnel_decision(hostname, comp_name, run_id, tunnel_token, fetch=None):
@@ -177,6 +179,23 @@ def deploy_portal(ctx, env=os.environ):
         ctx.save_state()
 
 
+def vpn_config(comp_dir, teams, env):
+# The dashboard's VPN enrollment data — the phase-3 remote-access artifact plus the login
+#     server. keys.json is keyed by identifier (its "team" is the identifier string); None
+#     (remote access off, or no roster) hides the dashboard's VPN section.
+    server_url = env.get("TEZ_HEADSCALE_URL", "")
+    keys_path = Path(comp_dir) / "remote-access" / "keys.json"
+    if not (keys_path.exists() and server_url):
+        return None
+    by_id = {str(v["identifier"]): k for k, v in teams.items()}
+    people = {}
+    for e in json.loads(keys_path.read_text()):
+        tk = by_id.get(str(e["team"]))
+        if tk:
+            people.setdefault(tk, []).append({"person": e["person"], "key": e["key"]})
+    return {"server_url": server_url, "teams": people}
+
+
 def _deploy_portal(ctx, env):
     nodes = node_targets(ctx.all_targets, ctx.placement, ctx.node)
     previous = ctx.state.get("portal_console_tokens") or {}
@@ -203,6 +222,8 @@ def _deploy_portal(ctx, env):
         record_degradation("student portal tunnel", why)
     use_tunnel = verdict == "start"
 
+    vpn = vpn_config(ctx.comp_dir, ctx.teams, env)
+
     config = build_portal_config(
         comp_name=ctx.comp_name, run_id=ctx.run_id, event_name=ctx.name,
         scoreboard_url=compfile_value(ctx.comp_dir / "Compfile", "portal_scoreboard_url",
@@ -211,7 +232,7 @@ def _deploy_portal(ctx, env):
         nodes=nodes, tokens=tokens,
         firewall_console=bool(compfile_flag(ctx.comp_dir / "Compfile",
                                             "portal_firewall_console", 1)),
-        public_host=hostname if use_tunnel else "")
+        public_host=hostname if use_tunnel else "", vpn=vpn)
     write_text_atomic(ctx.comp_dir / "portal.json", json.dumps(config, indent=2))
 
     tar = bundle(config, _env_file(ctx.state["portal_session_secret"],

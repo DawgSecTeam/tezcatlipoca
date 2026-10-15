@@ -162,6 +162,38 @@ class CheckArgs(unittest.TestCase):
             portal_ops.check_portal(lambda cmd: (1, "Traceback"), "probe", TEAMS, "pw", _config())
 
 
+class VpnEnrollment(unittest.TestCase):
+    def _keys(self, d, entries):
+        (d / "remote-access").mkdir()
+        (d / "remote-access" / "keys.json").write_text(json.dumps(entries))
+
+    def test_defaults_to_none_and_carries_what_it_is_given(self):
+        self.assertIsNone(_config()["vpn"])
+        vpn = {"server_url": "https://hs", "teams": {"team1": [{"person": "a", "key": "k"}]}}
+        self.assertEqual(_config(vpn=vpn)["vpn"], vpn)
+
+    def test_keys_json_maps_identifiers_onto_team_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            self._keys(d, [{"person": "alice", "team": "101", "key": "k1"},
+                           {"person": "bob", "team": "102", "key": "k2"},
+                           {"person": "gone", "team": "999", "key": "k3"}])
+            env = {"TEZ_HEADSCALE_URL": "https://hs"}
+            self.assertEqual(portal_ops.vpn_config(d, TEAMS, env), {
+                "server_url": "https://hs",
+                "teams": {"team1": [{"person": "alice", "key": "k1"}],
+                          "team2": [{"person": "bob", "key": "k2"}]}})
+
+    def test_none_without_the_artifact_or_the_login_server(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            self._keys(d, [{"person": "alice", "team": "101", "key": "k1"}])
+            self.assertIsNone(portal_ops.vpn_config(d, TEAMS, {}))
+            (d / "remote-access" / "keys.json").unlink()
+            self.assertIsNone(portal_ops.vpn_config(d, TEAMS,
+                                                    {"TEZ_HEADSCALE_URL": "https://hs"}))
+
+
 # deploy_portal is opt-in and must never fail the deploy
 class DeployHook(unittest.TestCase):
     def _ctx(self, d, compfile):

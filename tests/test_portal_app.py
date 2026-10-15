@@ -40,6 +40,9 @@ CONFIG = {
             {"name": "web01", "os": "linux", "ip": "192.168.102.10", "vmid": 1220,
              "node": "pve", "firewall": False}]},
     },
+    "vpn": {"server_url": "https://hs.example",
+            "teams": {"team1": [{"person": "alice", "key": "k1"}],
+                      "team2": [{"person": "bob", "key": "k2"}]}},
 }
 EVENT_CONF = {"admin": [{"name": "admin", "pw": "adminpw"}, {"name": "scoring", "pw": "s"}],
               "team": [{"name": "team1", "pw": "t1pw"}, {"name": "team2", "pw": "t2pw"}]}
@@ -136,6 +139,26 @@ class PortalApp(unittest.TestCase):
         r = self.client.post("/api/console", json={"team": "team2", "box": "web01"})
         self.assertEqual(r.status_code, 403)
         self.assertEqual(self.broker.minted, [])
+
+    # the vpn enrollment is scoped like the boxes: a team sees only its own people's keys
+    def test_vpn_enrollment_is_scoped_to_the_session_team(self):
+        self.login("team1", "t1pw")
+        me = self.client.get("/api/me").json()
+        self.assertEqual(me["vpn"]["server_url"], "https://hs.example")
+        self.assertEqual([p["person"] for p in me["vpn"]["people"]], ["alice"])
+
+    def test_admin_sees_every_teams_vpn_people(self):
+        self.login("admin", "adminpw")
+        me = self.client.get("/api/me").json()
+        self.assertEqual(sorted(p["person"] for p in me["vpn"]["people"]), ["alice", "bob"])
+
+    def test_no_vpn_key_when_the_config_lacks_it(self):
+        d = Path(self.tmp.name)
+        (d / "portal.json").write_text(
+            json.dumps({k: v for k, v in CONFIG.items() if k != "vpn"}))
+        self.make()
+        self.login("team1", "t1pw")
+        self.assertNotIn("vpn", self.client.get("/api/me").json())
 
     # team2's web01 shares team1's box NAME: a team session always gets its own
     def test_a_box_name_resolves_inside_the_session_team_only(self):

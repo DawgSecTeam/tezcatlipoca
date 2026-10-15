@@ -225,6 +225,15 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
                "event_name": config.get("event_name"),
                "scoreboard_url": config.get("scoreboard_url"),
                "access": gate.get(), "console": broker.available()}
+        # VPN enrollment (remote-access keys baked into portal.json): a team session sees
+        # only its own people, like boxes.
+        vpn_cfg = config.get("vpn") or {}
+        if vpn_cfg.get("server_url") and vpn_cfg.get("teams"):
+            if s["role"] == "team":
+                people = vpn_cfg["teams"].get(s["team"], [])
+            else:
+                people = [p for ps in vpn_cfg["teams"].values() for p in ps]
+            out["vpn"] = {"server_url": vpn_cfg["server_url"], "people": people}
         if s["role"] == "team":
             out["team"] = s["team"]
             out["boxes"] = [_public_box(b) for b in teams[s["team"]]["boxes"]]
