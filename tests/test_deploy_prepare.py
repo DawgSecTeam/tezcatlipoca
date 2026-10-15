@@ -206,9 +206,9 @@ class PlacementAndLock(unittest.TestCase):
 
 
 class GoldenGatePosition(unittest.TestCase):
-# The frozen gate must fire after the hashes and BEFORE phase 1 can destroy.
+# The frozen gate must fire after the hashes, before any Proxmox mutation.
 
-    def test_hashes_then_frozen_gate_then_frozen_keep(self):
+    def test_hashes_then_frozen_gate(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             golden = comp_dir / "golden.json"
@@ -236,13 +236,11 @@ class GoldenGatePosition(unittest.TestCase):
                                  side_effect=lambda *a: calls.append("gate")
                                  or {"code": True, "config": False}):
                 dl_configs.generate_stage_configs_and_hashes(ctx, comp_dir)
-        # the gate is the LAST thing that runs, i.e. before prepare() returns and before
-        # deploy() reaches phase 1's destroy waves
+        # the gate is the LAST thing that runs, i.e. before prepare() returns
         self.assertEqual(calls, ["bundle", "templates", "hashes", "gate"])
         self.assertEqual(ctx.golden_hashes, {"web01": "HASH"})
-        self.assertEqual(ctx.frozen_keep, {"web01"})
 
-    def test_code_drift_keeps_the_golden_and_config_drift_does_not(self):
+    def test_the_gate_sees_every_golden_box(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             golden = comp_dir / "golden.json"
@@ -269,8 +267,9 @@ class GoldenGatePosition(unittest.TestCase):
                                  return_value={"hashes": {"golden": {}}, "frozen_at": "t"}), \
                     dpatch("golden_freeze_gate", side_effect=gate):
                 dl_configs.generate_stage_configs_and_hashes(ctx, comp_dir)
-        self.assertEqual(ctx.frozen_keep, {"keepme"})
+        # one classification per box, from the frozen record's stored inputs
         self.assertEqual(set(seen), {"keepme", "rebuildme"})
+        self.assertEqual(seen["keepme"], ({}, {}, "t"))
 
 
 class TerraformInputs(unittest.TestCase):
@@ -554,8 +553,7 @@ class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):
         self.assertEqual(ctx.comp_name, "probe")
         self.assertEqual(ctx.box_username, "ubuntu")
         self.assertEqual(ctx.difficulty, 3)
-        # code drift IS still collected into the context — the gate did its job
-        self.assertEqual(ctx.frozen_keep, {"web01", "dc01"})
+        self.assertEqual(ctx.golden_hashes, {"web01": "H", "dc01": "H2"})
 
 
 if __name__ == "__main__":

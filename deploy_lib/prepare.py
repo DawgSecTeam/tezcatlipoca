@@ -26,8 +26,9 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
 #     (the same early return the inline code had).
 #
 #     The write lock is deliberately NOT taken here: deploy() holds it across the whole
-#     run, phases included. Nothing here destroys anything — the frozen gate runs before
-#     phase 1 precisely so a freeze can still say "nothing destroyed".
+#     run, phases included. Nothing here destroys anything — and neither does phase 1;
+#     the frozen gate still runs here so a config-class freeze refuses before any Proxmox
+#     mutation.
 #
 #     Order note: preflight runs BEFORE the fresh credential mint. These gates can abort
 #     the deploy (engine mgmt IP collision, missing templates, datastore headroom, catalog

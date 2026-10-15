@@ -1,20 +1,21 @@
-"""Golden-template planning: per-box hashes, and the destroy/keep decisions they drive.
+"""Golden-template planning: per-box hashes, and the rebuild gate they drive.
 
-golden_hash_entries computes the hashes before phase 1; phase1_destroy_waves (phase 1's
-teardown decision) and golden_rebuild_gate (phase 4's per-slot rebuild gate) both consume
-them. Both destroy decisions live here so the tag-ownership + frozen-gate rules that make
-a destroy safe are read in one file.
+golden_hash_entries computes the hashes before phase 1; golden_rebuild_gate (phase 4's
+per-slot rebuild gate) consumes them. The gate lives here so the tag-ownership +
+frozen-gate rules that make a template destroy safe are read in one place. Phase 1 no
+longer destroys anything a run owns — a leftover range is a preflight refusal
+(infra.collisions) reclaimed by destroy-competition.py.
 """
 
-from common.constants import GOLDEN_TAG, MAX_BOXES_PER_TEAM, ownership_tags
+from common.constants import GOLDEN_TAG, ownership_tags
 from golden.golden_target_ops import _is_template
 from golden.golden_ops import build_golden_set
 from guests.apt_dns_ops import _APT_PREP_BODY, _apt_prep_script
 from multinode.placement_record import golden_vmid_for_slot
 from infra.ownership import destroy_vm_if_exists
 from engine.template_freeze import (
-    code_hash, engine_template_vmid, frozen_gate, golden_hash_inputs, golden_payload_hash,
-    hash_from_inputs, template_stamp_current,
+    code_hash, frozen_gate, golden_hash_inputs, golden_payload_hash, hash_from_inputs,
+    template_stamp_current,
 )
 from common.utils import is_unmanaged
 
@@ -24,9 +25,9 @@ def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden
 # golden_inputs/golden_hashes for every box in boxes.json — unmanaged included.
 #
 #     Extracted from deploy() (the pure part of the M4 hash loop) so the all-boxes
-#     invariant is testable offline: phase 1's wave logic, the phase-4 rebuild gate and
-#     `.template-hashes.json` all key off these dicts, and all three iterate the FULL
-#     lineup, not just the planted boxes.
+#     invariant is testable offline: the phase-4 rebuild gate and `.template-hashes.json`
+#     both key off these dicts, and both iterate the FULL lineup, not just the planted
+#     boxes.
 #
 #     Every box MUST get an entry. The unmanaged (pfSense/appliance) case is the one that
 #     used to be unreachable: 8cb755c3 (2026-09-30) added an early `continue` ABOVE
@@ -40,7 +41,7 @@ def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden
         if is_unmanaged(b):
             # No golden machine, no golden plant: terraform clones it straight from
             # its own base template. The slot still needs a stable hash entry so the
-            # rebuild gate and phase 1's wave logic never subscript it into a KeyError.
+            # rebuild gate never subscripts it into a KeyError.
             inputs = {"config": {"base_template_vmid": base_template_ids.get(b["template"]),
                                  "disk_gb": b.get("disk_gb"), "golden": "unmanaged"},
                       "code": {"build_golden_set": code_hash(build_golden_set)}}
@@ -66,14 +67,6 @@ def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden
     return golden_inputs, golden_hashes
 
 
-def golden_stamp_current(stamp, box_hash):
-# phase1_destroy_waves is pure (offline-tested), so it takes the node's hash stamp as data
-#     (`stamp_of`) rather than reading the node; golden_rebuild_gate calls
-#     template_stamp_current, which reads it off the node — both apply the one rule, "the
-#     node stamp decides reuse, the file only corroborates" (see engine.template_freeze).
-    return bool(stamp) and stamp == box_hash
-
-
 def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored,
                         golden_hashes, golden_inputs, comp_name, run_tag=None):
 # Destroy each golden template in `slot` whose stored M4 hash no longer matches.
@@ -90,69 +83,3 @@ def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored
             print(f"  golden-{b['name']} hash differs — rebuilding...")
             destroy_vm_if_exists(destroy_node, vid, expect_tags=ownership_tags(
                 comp_name, run_tag, GOLDEN_TAG))
-
-
-def phase1_destroy_waves(node_vms, all_targets, engine_vmid, boxes, comp_tags,
-                         is_template, golden_hashes, frozen_keep=(), slot=0,
-                         extra_destroy=None, stamp_of=None):
-# Phase 1's teardown decision, pure so the teardown→redeploy loop is testable offline.
-#
-#     Wave 1: every team box (the computed set covers ALL teams now that terraform builds
-#     them) and stranded clones from a PREVIOUS
-#     run with more teams — comp-tagged team boxes the current (smaller) team set no longer
-#     enumerates. Left behind they keep a linked-clone hold on the goldens, so wave 2 can't
-#     rebuild them (winad-testrun 2026-09-25: 3-team run then 2-team redeploy). Linked
-#     clones must die BEFORE their templates.
-#     Wave 2: the engine (a linked clone of the engine template — it dies and re-clones
-#     cheaply every run; slot 0 only), then every golden template that is missing,
-#     hash-mismatched, or a stale slot beyond the current lineup. A golden whose node stamp
-#     matches the current inputs survives — that is the whole test-run reuse (build once per
-#     competition, reuse across its test runs), and the stamp is what makes it survive a
-#     workspace change too: `stamp_of(vmid)` is the node's own `tezcatlipoca-m4 hash=`
-#     description, so a deploy in a fresh worktree (the dashboard strips .template-hashes.json
-#     when it seeds one) reuses the templates a --teams-only teardown kept instead of
-#     rebuilding them. A frozen competition's code-only-drifted goldens (names in
-#     frozen_keep, as classified by the pre-phase-1 golden_freeze_gate) also survive: the
-#     gate already said "proceeding on the frozen template", so destroying the golden here
-#     would rebuild it and silently break freeze semantics (internals "frozen-gate golden
-#     keep").
-#     slot>0 (multi-node satellite): this node's golden span (slot-shifted vmids), no
-#     engine, plus extra_destroy (the satellite's jump VM) — the caller runs one wave
-#     pair per hosting node with that node's own targets.
-    wave1 = {t["vmid"]: t["vm_name"] for t in all_targets}
-    n_slots = max(len(boxes), MAX_BOXES_PER_TEAM)
-    keep_vmids = {golden_vmid_for_slot(engine_vmid, slot, i) for i in range(n_slots)}
-    if slot == 0:
-        keep_vmids |= {engine_vmid, engine_template_vmid(engine_vmid)}
-    for vm in node_vms:
-        vid = vm["vmid"]
-        if vid in wave1 or vid in keep_vmids:
-            continue
-        raw = str(vm.get("tags") or "")
-        tags = {t.strip() for t in raw.replace(";", ",").split(",") if t.strip()}
-        if comp_tags <= tags:
-            wave1[vid] = f"{vm.get('name') or vid} (stranded clone)"
-    wave2 = {engine_vmid: f"engine-{engine_vmid}"} if slot == 0 else {}
-    for i in range(n_slots):
-        vid = golden_vmid_for_slot(engine_vmid, slot, i)
-        b = boxes[i] if i < len(boxes) else None
-        if b is None:
-            wave2[vid] = f"golden-slot-{i} (stale)"
-            continue
-        if is_unmanaged(b):
-            # Unmanaged boxes have no golden; anything templated in the slot is a
-            # stale leftover from an earlier lineup and nothing references it.
-            wave2[vid] = f"golden-slot-{i} (stale, unmanaged box)"
-            continue
-        if is_template(vid) and golden_stamp_current(
-                (stamp_of or (lambda _vid: None))(vid), golden_hashes[b["name"]]):
-            print(f"  golden-{b['name']} hash matches — keeping template (test-run reuse)")
-            continue
-        if b["name"] in frozen_keep and is_template(vid):
-            print(f"  golden-{b['name']} frozen with code-only drift — keeping the frozen "
-                  f"template (rebuild would break freeze semantics)")
-            continue
-        wave2[vid] = f"golden-{b['name']}"
-    if extra_destroy:
-        wave2.update(extra_destroy)
-    return wave1, wave2

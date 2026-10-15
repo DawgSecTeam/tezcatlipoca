@@ -137,7 +137,7 @@ def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_i
             needs_jump_template=bool(node_teams) and slot > 0,
             jump_template=getattr(rec, "jump_template", ""),
             # resume (check_free off): this competition's own leftovers are
-            # phase-1/terraform's to reconcile
+            # terraform's to reconcile; a fresh deploy refuses them instead
             check_collisions=bool(check_free and not unused_satellite),
             check_headroom=bool(check_free and not unused_satellite)))
     return PreflightPlan(comp_dir, boxes, engine_vmid, shares, our_run_tag=our_run_tag,

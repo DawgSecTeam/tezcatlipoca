@@ -349,9 +349,9 @@ class JournalLifecycle(unittest.TestCase):
             ctx = SimpleNamespace(
                 from_phase=1, comp_dir=comp, node="n", all_targets=[], engine_vmid=1000,
                 boxes=[], reclaim_tags=set(), placement=None, teams={"team1": {"identifier": "101"}},
-                golden_hashes={}, frozen_keep=[], comp_name="c1", reclaim_tag="run-x",
+                golden_hashes={}, comp_name="c1", reclaim_tag="run-x",
                 run_id="run-x")
-            with patch.object(cleanup, "destroy_node_waves"):
+            with patch.object(cleanup, "proxmox_api", return_value={"data": []}):
                 cleanup.phase1_cleanup(ctx)
             self.assertFalse((comp / teardown.TEARDOWN_JOURNAL).exists())
 

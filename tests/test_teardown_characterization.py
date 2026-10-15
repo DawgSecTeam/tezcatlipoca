@@ -341,43 +341,6 @@ class MainSequence(unittest.TestCase):
         self.assertEqual(self.log, [])
 
 
-# ── I5: concurrent-safe — bridges ───────────────────────────────────────────────
-
-
-class BridgeReclaim(unittest.TestCase):
-# phase-1's bridge reclaim: a bridge another run's VM still sits on
-#     survives, loudly; unreadable state fails closed.
-
-    def _run(self, configs):
-        from deploy_lib.phases import cleanup
-        fake = FakePVE(nodes={"n": [vm(30 + i, f"holder-{i}", FULL_OTHER, status="running")]
-                             for i in range(len(configs))},
-                       cfgs={30 + i: cfg for i, cfg in enumerate(configs)})
-        with patch.object(cleanup, "proxmox_api", fake), \
-                patch.object(cleanup, "destroy_bridge_if_exists",
-                             side_effect=lambda *a: self.fail("bridge destroyed with a holder")):
-            in_use = cleanup._bridge_in_use("n", "vmbr101")
-        return in_use, fake
-
-    def test_bridge_with_an_attached_vm_is_in_use(self):
-        in_use, _ = self._run([{"net0": "virtio,bridge=vmbr101"}])
-        self.assertTrue(in_use)
-
-    def test_unreadable_config_fails_closed(self):
-    # A VM whose config cannot be read counts as attached — the bridge
-    #         survives to teardown/terraform rather than being ripped out.
-        from deploy_lib.phases import cleanup
-        fake = FakePVE(nodes={"n": [vm(31, "opaque", FULL_OTHER)]})
-
-        def refuse(method, path, **kw):
-            if path.endswith("/config"):
-                raise ConnectionError("config unreadable")
-            return fake(method, path, **kw)
-
-        with patch.object(cleanup, "proxmox_api", refuse):
-            self.assertTrue(cleanup._bridge_in_use("n", "vmbr101"))
-
-
 # ── I6: one refusal vocabulary (saw / expected / remedy) ─────────────────────────
 
 

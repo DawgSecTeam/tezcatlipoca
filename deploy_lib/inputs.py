@@ -21,7 +21,7 @@ def resolve_engine_vmid(ctx, comp_dir, from_phase, scoring_vmid):
 #     raising: load_prior_deploy_state reads the same file a few steps later and does the
 #     refusing, with a message that names the actual problem.
     # Resolve this competition's scoring-engine VMID before taking the engine lock
-    # (the lock is keyed on it) and before phase-1 cleanup destroys it. On resume it
+    # (the lock is keyed on it) and before phase 1 runs. On resume it
     # is authoritative from .deploy_state.json; on a fresh deploy it comes from the
     # flag/arg (default SCORING_ENGINE_VMID).
     _early_state = comp_dir / ".deploy_state.json"

@@ -1,10 +1,12 @@
-"""The M4 reuse loop run twice (winad-testrun rec 2): three blockers — stranded clones, stale
-domain markers, box-password churn — each broke only the SECOND run of a competition. This
-drives phase 1's pure teardown decision across run 1 (3 teams) → teams-only teardown → run 2
-(2 teams), offline."""
+"""The M4 reuse loop run twice, offline: the per-comp-dir state hazards that broke only
+the SECOND run of a competition — stale domain markers and box-password churn.
 
-import contextlib
-import io
+Template reuse is phase 4's gate now (`golden_rebuild_gate` + `template_stamp_current`,
+covered by test_deploy_phases / test_freeze_guard), and the preflight rule that keeps a
+--teams-only teardown's kept templates out of the collision set is covered by
+test_preflight_unified. Phase 1 no longer destroys anything a run owns.
+"""
+
 import sys
 import tempfile
 import unittest
@@ -12,118 +14,11 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from deploy_lib import golden_plan as dl_golden_plan  # noqa: E402
 from deploy_lib.phases import cleanup as dl_cleanup  # noqa: E402
 from deploy_lib import secrets as dl_secrets  # noqa: E402
-from golden.golden_target_ops import golden_vmid_for
-from common.targets import vm_id_for
-from engine.template_freeze import engine_template_vmid
-
-ENGINE = 1000
-BOXES = [{"name": "dc01"}, {"name": "web01"}]
-COMP_TAGS = {"tezcatlipoca", "comp-c1"}
-TAGS = "tezcatlipoca;comp-c1"
-HASHES = {"dc01": "h-dc", "web01": "h-web"}
-
-
-def targets(idents):
-    return [{"vmid": vm_id_for(i, b), "vm_name": f"{i}-{BOXES[b]['name']}"}
-            for i in idents for b in range(len(BOXES))]
-
-
-def node_after_run(idents):
-    vms = [{"vmid": t["vmid"], "name": t["vm_name"], "tags": TAGS} for t in targets(idents)]
-    vms += [{"vmid": ENGINE, "tags": TAGS},
-            {"vmid": engine_template_vmid(ENGINE), "tags": TAGS}]
-    vms += [{"vmid": golden_vmid_for(ENGINE, i), "tags": TAGS + ";template"}
-            for i in range(len(BOXES))]
-    vms.append({"vmid": 4242, "name": "someone-else", "tags": "tezcatlipoca;comp-other"})
-    return vms
 
 
 class RepeatRun(unittest.TestCase):
-    def stamps(self, box_hashes):
-        # The node's own `tezcatlipoca-m4 hash=` description per golden vmid — the durable
-        # artifact record. These tests pass it instead of .template-hashes.json because that
-        # file is per-worktree state (the dashboard's workspace seeder strips it), and a
-        # reuse decision keyed on it alone rebuilt templates a --teams-only teardown kept.
-        return {golden_vmid_for(ENGINE, i): h for i, h in enumerate(box_hashes)}
-
-    def waves(self, node_vms, idents, stamps, frozen_keep=()):
-        goldens = {golden_vmid_for(ENGINE, i) for i in range(len(BOXES))}
-        with contextlib.redirect_stdout(io.StringIO()):
-            return dl_golden_plan.phase1_destroy_waves(
-                node_vms, targets(idents), ENGINE, BOXES, COMP_TAGS,
-                lambda vid: vid in goldens, HASHES, frozen_keep=frozen_keep,
-                stamp_of=stamps.get)
-
-    def test_second_run_with_fewer_teams(self):
-        wave1, wave2 = self.waves(node_after_run([101, 102, 103]), [101, 102],
-                                  self.stamps(["h-dc", "h-web"]))
-        # team3's boxes are stranded clones of the goldens: they must die in wave 1
-        for t in targets([103]):
-            self.assertIn(t["vmid"], wave1)
-        self.assertNotIn(4242, wave1)                       # other competition untouched
-        self.assertNotIn(engine_template_vmid(ENGINE), wave1 | wave2)
-        # hash-matching goldens are reused, not rebuilt; engine always re-clones
-        for i in range(len(BOXES)):
-            self.assertNotIn(golden_vmid_for(ENGINE, i), wave2)
-        self.assertIn(ENGINE, wave2)
-
-    def test_fresh_worktree_reuses_templates_by_node_stamp(self):
-        # The whole point of --teams-only: a later run in a NEW workspace (no
-        # .template-hashes.json — the dashboard's seeder strips it) must adopt the kept
-        # templates, not rebuild them. phase1_destroy_waves is no longer told anything
-        # about that file, so the node stamp is the only thing keeping them alive.
-        stamps = self.stamps(["h-dc", "h-web"])
-        wave1, wave2 = self.waves(node_after_run([101, 102]), [101, 102], stamps)
-        for i in range(len(BOXES)):
-            self.assertNotIn(golden_vmid_for(ENGINE, i), wave2)
-
-    def test_changed_golden_hash_rebuilds_only_that_golden(self):
-        _w1, wave2 = self.waves(node_after_run([101, 102]), [101, 102],
-                                self.stamps(["h-dc", "OLD"]))
-        self.assertNotIn(golden_vmid_for(ENGINE, 0), wave2)
-        self.assertIn(golden_vmid_for(ENGINE, 1), wave2)
-
-    def test_frozen_code_only_drift_keeps_the_golden(self):
-        # Frozen comp, code-only drift: the pre-phase-1 gate said "proceeding on the
-        # frozen template", so phase 1 must not destroy+rebuild the golden out from
-        # under that decision (internals "frozen-gate golden keep").
-        _w1, wave2 = self.waves(node_after_run([101, 102]), [101, 102],
-                                self.stamps(["h-dc", "OLD"]), frozen_keep={"web01"})
-        self.assertNotIn(golden_vmid_for(ENGINE, 1), wave2)
-        self.assertNotIn(golden_vmid_for(ENGINE, 0), wave2)  # hash still matches
-        self.assertIn(ENGINE, wave2)                          # engine still re-clones
-
-    def test_frozen_keep_ignores_a_missing_template(self):
-        # frozen_keep only protects an existing template; a deleted golden slot is
-        # still rebuilt (there is nothing frozen to proceed on).
-        goldens = {golden_vmid_for(ENGINE, 0)}  # web01's golden template is gone
-        with contextlib.redirect_stdout(io.StringIO()):
-            _w1, wave2 = dl_golden_plan.phase1_destroy_waves(
-                node_after_run([101, 102]), targets([101, 102]), ENGINE, BOXES,
-                COMP_TAGS, lambda vid: vid in goldens, HASHES,
-                frozen_keep={"web01"}, stamp_of=self.stamps(["h-dc", "OLD"]).get)
-        self.assertIn(golden_vmid_for(ENGINE, 1), wave2)
-
-    def test_unmanaged_box_slot_needs_no_hash_and_cleans_stale_golden(self):
-        # Unmanaged boxes (pfSense) have no golden and no hash entry; the wave-2
-        # decision must not KeyError on them and must treat a templated leftover in
-        # their slot as stale (nothing references it).
-        boxes = BOXES + [{"name": "fw01", "unmanaged": True}]
-        goldens = {golden_vmid_for(ENGINE, i) for i in range(len(boxes))}
-        fw_slot = golden_vmid_for(ENGINE, 2)
-        vms = node_after_run([101]) + [{"vmid": fw_slot, "tags": TAGS + ";template"}]
-        with contextlib.redirect_stdout(io.StringIO()):
-            _w1, wave2 = dl_golden_plan.phase1_destroy_waves(
-                vms, targets([101]), ENGINE, boxes, COMP_TAGS,
-                lambda vid: vid in goldens, HASHES,
-                stamp_of=self.stamps(HASHES.values()).get)
-        self.assertIn(fw_slot, wave2)
-        self.assertNotIn(golden_vmid_for(ENGINE, 0), wave2)
-        self.assertNotIn(golden_vmid_for(ENGINE, 1), wave2)
-
     def test_domain_markers_reset_but_template_hashes_kept(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)

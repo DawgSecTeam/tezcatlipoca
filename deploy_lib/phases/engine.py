@@ -66,9 +66,9 @@ def ensure_engine_template(ctx):
     if rebuild:
         if tmpl:
             print("  Engine template hash differs — rebuilding...")
-            # The old template's only clone is the deployed engine, and the
-            # build VM needs the planned mgmt IP — on a phase-2 resume the old
-            # engine is still up (phase 1 was skipped), so destroy it here.
+            # The old template's only clone is the deployed engine, and the build VM
+            # needs the planned mgmt IP: on a phase-2 resume the old engine is still up
+            # (phase 1 leaves a run's VMs alone), so destroy it here.
             # Apply #1 recreates it as a linked clone of the new template.
             destroy_vm_if_exists(ctx.node, ctx.engine_vmid, expect_tags=ctx.reclaim_tags)
             destroy_engine_template(ctx.node, ctx.engine_vmid,

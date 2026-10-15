@@ -60,7 +60,7 @@ Phases 1–2 are the expensive, dice-rolling part; 3–8 are mostly idempotent. 
 
 | Phase | Typical cause | Cheapest recovery | Don't |
 |---|---|---|---|
-| 2 | Terraform abort; "already exists" state mismatch; engine-template build | Mismatch: `--from-phase 1` is the only clean path. Clean TF death: fix and `--from-phase 2` | Hand-create/destroy TF-managed resources |
+| 2 | Terraform abort; "already exists" state mismatch; engine-template build | Mismatch: reclaim with `destroy-competition.py`, then deploy fresh. Clean TF death: fix and `--from-phase 2` | Hand-create/destroy TF-managed resources |
 | 3 | apt/compose timeout | `--from-phase 3` (idempotent) | Rebuild boxes for an engine timeout |
 | 4 | Strict abort on a bad row; golden build/convert; apply #2 race | Trim → `--from-phase 4` | `--from-phase 1`. A partially *converted* golden set is fatal (destroy and redeploy) |
 | 5 | Firewall bootstrap/cutover (no-op without `in_path`) | `--from-phase 5` | Skip it on a firewall lineup |
@@ -90,7 +90,7 @@ Preflight: attribute any deploy-path changes and note the commit as `<last-green
 python3 -u create-competition.py --competition <id> --teams 2 --yes 2>&1 | tee deploy.log
 ```
 
-On failure: capture the tail and phase; triage (§1); strict → §3; timeouts → known class or raise and record; environmental → wait/repair and resume at the same phase; `--from-phase 1` only when Terraform state diverged. **Max 2 repair-resume cycles**, then fix the roots and take one bounded attempt or a fresh deploy; a third consecutive resume is a loop.
+On failure: capture the tail and phase; triage (§1); strict → §3; timeouts → known class or raise and record; environmental → wait/repair and resume at the same phase; a diverged Terraform state means destroy-then-deploy, since a `--from-phase 1` re-run refuses the leftovers too. **Max 2 repair-resume cycles**, then fix the roots and take one bounded attempt or a fresh deploy; a third consecutive resume is a loop.
 
 After: `verify-competition.py` (no deploy is green without it); new failure class → row in §1; record trims; teardown unless the next step needs the range.
 

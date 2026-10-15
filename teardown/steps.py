@@ -65,7 +65,7 @@ class Step:
         return {"detail": result.detail}
 
 
-# the composition seam for callers whose mechanics live module-side (phase-1 reclaim composes cleanup.py's wave/bridge functions); the policy is declared here, at composition
+# the composition seam for callers whose mechanics live module-side; the policy is declared here, at composition
 class CallStep(Step):
     def __init__(self, name, fn, failure=REFUSE, destructive=True):
         self.name = name

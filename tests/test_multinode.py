@@ -14,7 +14,6 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from deploy_lib import golden_plan as dl_golden_plan  # noqa: E402
 from deploy_lib import placement as dl_placement  # noqa: E402
 from net import jump_ops  # noqa: E402
 from multinode import nodes_config  # noqa: E402
@@ -481,34 +480,6 @@ class ParseTeamNodeTest(unittest.TestCase):
                          {"103": "n2", "team4": "n1"})
         with self.assertRaises(SystemExit):
             dl_placement.parse_team_node("103-n2")
-
-
-class Phase1WavesSlotTest(unittest.TestCase):
-    def test_satellite_waves_have_no_engine_and_shift_goldens(self):
-        boxes = [{"name": "web01", "template": "t"}]
-        node_vms = [{"vmid": 1000, "tags": "tezcatlipoca,comp-c"},
-                    {"vmid": 1000 + 150, "tags": "tezcatlipoca,tezcatlipoca-golden,comp-c"},
-                    {"vmid": 1000 + 150 + 10, "tags": "tezcatlipoca,tezcatlipoca-golden,comp-c"},
-                    {"vmid": 1131, "tags": "tezcatlipoca,comp-c,jump"}]
-        hashes = {"golden": {"web01": {"hash": "h"}}}
-        golden_hashes = {"web01": "h"}
-        wave1, wave2 = dl_golden_plan.phase1_destroy_waves(
-            node_vms, [], 1000, boxes, {"tezcatlipoca", "comp-c"},
-            lambda vid: False, hashes, golden_hashes, slot=1,
-            extra_destroy={1131: "jump-c-1"})
-        self.assertNotIn(1000, wave2)  # no engine on a satellite
-        self.assertIn(1000 + 150 + 10, wave2)  # slot-1 golden slot
-        self.assertNotIn(1000 + 150, wave2)  # slot-0 golden untouched here
-        self.assertIn(1131, wave2)  # jump VM dies with the satellite wave
-
-    def test_slot0_keeps_engine(self):
-        boxes = [{"name": "web01", "template": "t"}]
-        hashes = {"golden": {"web01": {"hash": "h"}}}
-        wave1, wave2 = dl_golden_plan.phase1_destroy_waves(
-            [], [], 1000, boxes, {"tezcatlipoca", "comp-c"},
-            lambda vid: False, hashes, {"web01": "h"})
-        self.assertIn(1000, wave2)
-        self.assertIn(1000 + 150, wave2)
 
 
 class ActivatePlacementTest(unittest.TestCase):

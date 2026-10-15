@@ -80,11 +80,14 @@ def report_failure(ctx, current_phase, exc):
 # Record the tolerated-failure ledger, print the resume hint.
     record_degradations(ctx)
     print(f"\n  [!] Deploy failed during phase {current_phase} of '{ctx.comp_name}'.")
-    resume_phase = current_phase
     if current_phase >= 2 and "already exists" in str(exc).lower():
-        resume_phase = 1
+        # A deploy never destroys a leftover range, so no --from-phase helps here: the
+        # range has to be reclaimed first (docs/usage-agents.md § run ownership).
         print("      This looks like a Proxmox/Terraform state mismatch (something the "
               "prior attempt created still exists, but Terraform's state doesn't know about "
-              "it) — resuming from the failed phase would just hit the same error again.")
+              "it). A deploy never destroys a leftover range — reclaim it, then start fresh:")
+        print(f"        python3 destroy-competition.py --competition {ctx.comp_name} --yes")
+        print(f"        python3 create-competition.py --competition {ctx.comp_name} --yes")
+        return
     print(f"      Resume with: python3 create-competition.py "
-          f"--competition {ctx.comp_name} --from-phase {resume_phase} --yes")
+          f"--competition {ctx.comp_name} --from-phase {current_phase} --yes")

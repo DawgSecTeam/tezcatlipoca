@@ -9,7 +9,7 @@ is structural, matching the engine's own FORWARD rule. From every box's perspect
 nothing changes (docs/multi-node.md).
 
 Built via the direct API path (golden_ops precedent — outside terraform's lifecycle,
-destroyed by computed vmid in phase 1 / destroy-competition), one per satellite,
+destroyed by computed vmid in destroy-competition), one per satellite,
 cloned from the node's alpine base template. Addressing rides PVE cloud-init
 (ipconfig0 mgmt + ipconfig1..n team gateways); forwarding/NAT rules are pushed over
 SSH after first boot and made persistent with Alpine's iptables init service."""

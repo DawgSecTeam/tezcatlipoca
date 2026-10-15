@@ -8,9 +8,9 @@ mode added later can reintroduce the ordering races of 2026-10-09.
 Two kinds:
   TERMINAL_TEARDOWN — the end-of-range teardown (destroy-competition.py). The
       evidence-ordering rule applies.
-  RECLAIM — phase 1 destroying the PRIOR run's leftovers before a fresh deploy.
-      Evidence steps are exempt by design: the prior run's evidence was that
-      run's teardown's job; reclaim only reclaims."""
+  RECLAIM — a plan that only reclaims (no evidence steps). No production caller
+      today: deploy phase 1 no longer destroys a range, so this is the vocabulary a
+      reclaim path (an orphaned range whose run id is gone) would compose."""
 
 EVIDENCE = "evidence"
 TEARDOWN = "teardown"

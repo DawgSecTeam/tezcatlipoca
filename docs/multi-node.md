@@ -124,8 +124,9 @@ with identical planted content; hashes are slot-independent, so reuse/rebuild wo
 
 ## What deploy does differently
 
-- **Phase 1**: one destroy-wave pair per hosting node (satellite waves also destroy the jump VM
-  and slot-shifted goldens; no engine there).
+- **Phase 1**: the interrupted-clone reclaim scans every hosting node, filtered to this deploy's
+  slots (each satellite's jump VM and slot-shifted goldens included; no engine there). Destruction
+  of a leftover range is preflight's refusal on any node, reclaimed by `destroy-competition.py`.
 - **Phase 2**: apply #1 builds bridges on every host, the engine, and the engine's satellite
   routes (persisted as a systemd oneshot so an engine reboot re-asserts them); jump VMs clone and
   configure concurrently on a bounded pool of 4 (cloud-init static IPs, iptables-restore

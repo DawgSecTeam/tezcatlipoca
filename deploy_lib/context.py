@@ -72,7 +72,6 @@ class DeployContext:
     final_config_path: Optional[Path] = None
     golden_inputs: dict = field(default_factory=dict)
     golden_hashes: dict = field(default_factory=dict)
-    frozen_keep: set = field(default_factory=set)
     tf_dir: Optional[Path] = None
     tfvars_path: Optional[Path] = None
     tfvars: dict = field(default_factory=dict)
@@ -89,9 +88,9 @@ class DeployContext:
     ssh_key: Optional[Path] = None
     # --- run identity (constants.ownership_tags) ---
     # run_id: stamped on everything this run creates. reclaim_run_id: the PRIOR
-    # state's run id — the only id that authorizes destroying a pre-existing VM in
-    # phase 1 / the rebuild gates. They differ only on a fresh deploy with no prior
-    # state; a deploy over prior state always reuses its id.
+    # state's run id — the only id that authorizes destroying a pre-existing VM in the
+    # rebuild gates and in phase 1's interrupted-clone check. They differ only on a
+    # fresh deploy with no prior state; a deploy over prior state always reuses its id.
     run_id: str = ""
     reclaim_run_id: str = ""
 
@@ -118,13 +117,14 @@ class DeployContext:
 
     @property
     def reclaim_tags(self):
-    # The tags that authorize destroying a PRE-EXISTING VM (phase 1, rebuild
-    #         gates): the prior run's full ownership set. A same-comp VM without this tag
+    # The tags that prove ownership of a PRE-EXISTING VM (the rebuild gates,
+    #         phase 1's marker check): the prior run's full ownership set. A same-comp VM
+    #         without this tag
     #         belongs to a DIFFERENT worktree's run and is refused, not reclaimed
     #         (2026-10-02 near-miss).
         return ownership_tags(self.comp_name, self.reclaim_run_id or self.run_id)
 
     @property
     def reclaim_tag(self):
-    # The run-id tag alone that phase-1-style reclamation requires.
+    # The run-id tag alone, for callers that need only the id.
         return self.reclaim_run_id or self.run_id

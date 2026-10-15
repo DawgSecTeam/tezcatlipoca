@@ -24,7 +24,7 @@ from infra import gates as dl_gates  # noqa: E402
 
 
 SKIP_BANNERS = [
-    "[1/8] Skipped (resume) — leaving existing VMs/bridges in place.",
+    "[1/8] Skipped (resume) — keeping the run's markers in place.",
     "[2/8] Skipped (resume) — not re-running terraform apply.",
     "[3/8] Skipped (resume).",
     "[4/8] Skipped (resume).",
@@ -52,7 +52,7 @@ def _ctx(comp_dir, from_phase, state=None):
         golden_config_path=comp_dir / "golden.json",
         predomain_config_path=comp_dir / "predomain.json",
         final_config_path=comp_dir / "final.json",
-        golden_inputs={}, golden_hashes={}, frozen_keep=set(), tf_dir=comp_dir,
+        golden_inputs={}, golden_hashes={}, tf_dir=comp_dir,
         tfvars_path=comp_dir / "terraform.tfvars.json", tfvars={}, ssh_key_abs="/k",
         all_targets=[], managed_targets=[], linux_targets=[], windows_targets=[],
     )
@@ -164,7 +164,8 @@ class FailureHandling(unittest.TestCase):
         # phases 1-2 completed and checkpointed, phase 3 did not
         self.assertEqual(ctx.state["last_phase"], 2)
 
-    def test_already_exists_mismatch_suggests_a_full_re_run_from_phase_1(self):
+    def test_already_exists_mismatch_points_at_destroy_then_deploy(self):
+        # No --from-phase clears a leftover range: preflight refuses it on every phase.
         def boom(ctx):
             raise RuntimeError("VM 101 already exists")
         phases = list(_stub_phases([]))
@@ -172,8 +173,9 @@ class FailureHandling(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             _ctx_, out, _ = self._fail(Path(d), 4, RuntimeError("x"), tuple(phases))
         self.assertIn("Deploy failed during phase 4 of '", out)
-        self.assertIn("--from-phase 1 --yes", out)
-        self.assertIn("state mismatch", out)
+        self.assertIn("destroy-competition.py --competition", out)
+        self.assertIn("never destroys a leftover range", out)
+        self.assertNotIn("--from-phase", out)
 
 
 class CancelledPrepare(unittest.TestCase):

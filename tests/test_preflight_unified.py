@@ -90,8 +90,34 @@ class Collisions(unittest.TestCase):
             self._run(_share(), [_vm(1000, "tezcatlipoca,comp-c1")])
         self.assertIn("ANOTHER worktree", str(cm.exception))
 
-    def test_ours_passes_and_tolerates_own_bridge(self):
-        self._run(_share(), [_vm(1000, f"tezcatlipoca;comp-c1;{RUN}")], bridges=["vmbr101"])
+    def test_our_own_leftover_is_refused_not_tolerated(self):
+        # A fresh deploy never tears a range down, its own included: resume that run, or
+        # reclaim it with destroy-competition.py. A pre-existing bridge goes the same way.
+        with self.assertRaises(SystemExit) as cm:
+            self._run(_share(), [_vm(1000, f"tezcatlipoca;comp-c1;{RUN}")], bridges=["vmbr101"])
+        self.assertIn("destroy-competition.py", str(cm.exception))
+
+    def test_kept_templates_are_adopted_not_refused(self):
+        # The --teams-only loop: a practice run's engine template + goldens are kept on
+        # purpose and still carry the PRACTICE run id, while a fresh workspace mints a
+        # new one. They are cached build artifacts, not a leftover range — phase 2/4
+        # adopt or rebuild them by hash.
+        kept = [dict(_vm(1140, "tezcatlipoca,comp-c1,run-practice,engine-template"),
+                     template=1),
+                dict(_vm(1150, "tezcatlipoca,comp-c1,run-practice,tezcatlipoca-golden"),
+                     template=1)]
+        self._run(_share(), kept)          # must not raise
+
+    def test_an_untemplated_vm_in_a_template_slot_is_a_leftover(self):
+        with self.assertRaises(SystemExit):
+            self._run(_share(), [_vm(1140, f"tezcatlipoca;comp-c1;{RUN}")], bridges=["vmbr101"])
+
+    def test_an_interrupted_clone_is_left_to_phase_1(self):
+        # Untagged, but the clone POST's description carries our marker: no run owns it,
+        # so it is not a leftover for the operator to reclaim — phase 1 destroys it.
+        with patch("infra.collisions.proxmox_api", return_value={"data": []}), \
+                patch.object(ownership, "has_clone_marker", return_value=True):
+            check_collisions(_share(), _plan(_share()), [dict(_vm(1000, ""), lock="clone")])
 
     def test_a_failed_bridge_list_raises_instead_of_skipping_the_check(self):
         with patch("infra.collisions.proxmox_api", side_effect=RuntimeError("500 network")), \
@@ -103,11 +129,6 @@ class Collisions(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             self._run(_share(), [], bridges=["vmbr101"])
         self.assertIn("bridge vmbr101", str(cm.exception))
-
-    def test_persistent_engine_template_is_not_a_leftover_in_single_mode(self):
-        # ours ET alone must not license a pre-existing bridge (single-node semantics)
-        with self.assertRaises(SystemExit):
-            self._run(_share(), [_vm(1140, f"tezcatlipoca;comp-c1;{RUN}")], bridges=["vmbr101"])
 
 
 if __name__ == "__main__":

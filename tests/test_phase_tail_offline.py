@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-from deploy_lib.phases import cleanup, final, finish  # noqa: E402
+from deploy_lib.phases import final, finish  # noqa: E402
 
 TEAMS = {"team1": {"identifier": "101", "password": "p1"},
          "team2": {"identifier": "102", "password": "p2"}}
@@ -30,7 +30,7 @@ def _ctx(comp, **kw):
         comp_dir=comp, comp_name=comp.name, from_phase=1, teams=TEAMS, boxes=BOXES, node="pve1",
         engine_vmid=1000, reclaim_tags={"tezcatlipoca", f"comp-{comp.name}", "run-0badf00d"},
         reclaim_tag="run-0badf00d",
-        golden_hashes={"web01": "h"}, frozen_keep=set(), placement=None,
+        golden_hashes={"web01": "h"}, placement=None,
         all_targets=[{"team_key": k, "vm_name": f"web01-{k}", "vmid": 200 + int(t["identifier"]) * 10,
                       "node": "pve1", "box": BOXES[0], "ip": f"192.168.{t['identifier']}.2"}
                      for k, t in TEAMS.items()],
@@ -104,20 +104,6 @@ class Tail(unittest.TestCase):
         with patch.object(final, "deploy_domain_configs") as d:
             final.phase7_domains_and_final(ctx)
         d.assert_not_called()
-
-    def test_phase1_in_path_fw_also_reclaims_transit_bridges(self):
-        boxes = BOXES + [{"name": "fw01", "template": "pfsense", "unmanaged": True,
-                          "in_path": True, "last_octet": 1}]
-        ctx = _ctx(self.comp, boxes=boxes, all_targets=[])
-        bridges = []
-        with patch.object(cleanup, "proxmox_api", return_value={"data": []}), \
-                patch.object(cleanup, "destroy_vm_if_exists"), \
-                patch.object(cleanup, "destroy_bridge_if_exists",
-                             side_effect=lambda n, b: bridges.append(b)), \
-                patch.object(cleanup, "_is_template", return_value=False), \
-                patch.object(cleanup, "stored_template_hash", return_value=None):
-            cleanup.phase1_cleanup(ctx)
-        self.assertEqual(sorted(bridges), ["vmbr101", "vmbr102", "vmbrW101", "vmbrW102"])
 
     def test_connect_terraform_and_finish(self):
         ctx = _ctx(self.comp)

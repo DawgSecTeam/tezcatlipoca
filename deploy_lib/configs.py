@@ -14,10 +14,9 @@ from deploy_lib.golden_plan import golden_hash_entries
 def generate_stage_configs_and_hashes(ctx, comp_dir):
 # Write the nakon/stage configs and compute every golden hash, onto `ctx`.
 #
-#     The M4 golden hashes are computed BEFORE phase 1 — cleanup must know which golden
-#     templates survive (test-run reuse) and which rebuild — and the frozen gate fires
-#     here for the same reason: a config-class freeze must be able to say "nothing
-#     destroyed" before phase 1 starts deleting. The golden bundle is built now (content
+#     The M4 golden hashes are computed BEFORE phase 1 — phase 4's rebuild gate and the
+#     tfvars both consume them — and the frozen gate fires here so a config-class freeze
+#     refuses before any Proxmox mutation. The golden bundle is built now (content
 #     addressed; the phase-4 plant reuses the cache) because each box's hash consumes its
 #     plan's payload shas. See the comments on each sub-block for the incident history.
     ctx.nakon_config_path = generate_nakon_config(ctx.teams, ctx.boxes, ctx.difficulty, comp_dir, ctx.box_password,
@@ -31,12 +30,12 @@ def generate_stage_configs_and_hashes(ctx, comp_dir):
     ctx.golden_config_path, ctx.predomain_config_path, ctx.final_config_path, _postclone_path = generate_stage_configs(
         comp_dir, ctx.teams, ctx.boxes, unbooted=ctx.unbooted)
 
-    # M4: template hashes are computed BEFORE phase 1 — cleanup must know which golden
-    # templates survive (test-run reuse) and which rebuild. The golden bundle is built
-    # now (content-addressed; the phase-4 plant reuses the cache) because each box's
-    # hash consumes its plan's payload shas. The frozen gate also fires HERE — before
-    # phase 1 destroys anything ("nothing destroyed" is the whole point of the
-    # freeze; the phase-4 per-box gate alone was too late, matrix run 4).
+    # M4: template hashes are computed BEFORE phase 1 — phase 4's rebuild gate and the
+    # tfvars both consume them. The golden bundle is built now (content-addressed; the
+    # phase-4 plant reuses the cache) because each box's hash consumes its plan's payload
+    # shas. The frozen gate also fires HERE, before any Proxmox mutation ("nothing
+    # destroyed" is the whole point of the freeze; the phase-4 per-box gate alone was too
+    # late, matrix run 4).
     node = os.environ["TF_VAR_proxmox_node"]
     golden_bundle = build_nakon_bundle(ctx.golden_config_path)
     golden_machines_by_box = {
@@ -50,7 +49,6 @@ def generate_stage_configs_and_hashes(ctx, comp_dir):
         ctx.apt_cache, unbooted=ctx.unbooted)
 
     frozen = frozen_state(comp_dir)
-    ctx.frozen_keep = set()
     if frozen:
         # The frozen record's `code` (commit + dirty) was written but never read: the
         # per-template drift gate below keys on input hashes and its code-class verdict
@@ -59,25 +57,21 @@ def generate_stage_configs_and_hashes(ctx, comp_dir):
         code_warning = frozen_code_drift(frozen)
         if code_warning:
             print(code_warning)
-        # Goldens now: config-class drift refuses BEFORE phase 1 destroys anything.
-        # The engine's gate still runs at phase 2 (its inputs are computed there),
-        # likewise before any engine destruction. Code-only drift keeps the golden:
-        # phase1_destroy_waves must not rebuild what the gate said to proceed on.
+        # Goldens now: config-class drift refuses here, before any Proxmox mutation.
+        # The engine's gate still runs at phase 2 (its inputs are computed there), and
+        # phase 4's rebuild gate applies the same verdict before it destroys a golden —
+        # code-only drift warns and proceeds off the frozen template.
         frozen_hashes = (frozen.get("hashes") or {})
         # `box_name`, NOT the event name: this loop used to read `for spec.name in
         # generated.golden_hashes`, which assigned each golden box name onto the spec
         # and left the LAST box there. On any FROZEN competition that clobbered
         # the Compfile event name before its later uses, so terraform's
         # `event_name` — and therefore `local.comp_tag`, the ownership tag on the engine
-        # and every team box — became "comp-web01" instead of "comp-<competition>".
-        # Phase 1's destroy compares against `comp-<competition>`, fails its
-        # `comp_tags <= tags` ownership check, and REFUSES to reclaim the range's own
-        # VMs; confirm_deploy also showed the wrong name. Fail-safe rather than
-        # destructive, but it strands infrastructure and the next deploy collides on
-        # those vmids.
+        # and every team box — became "comp-web01" instead of "comp-<competition>", so
+        # every ownership-gated path (preflight, teardown) mis-classified the range;
+        # confirm_deploy also showed the wrong name. Fail-safe rather than destructive,
+        # but it strands infrastructure and the next deploy collides on those vmids.
         for box_name in ctx.golden_hashes:
             stored_inputs = (frozen_hashes.get("golden") or {}).get(box_name, {}).get("inputs") or {}
-            drift = golden_freeze_gate(box_name, stored_inputs, ctx.golden_inputs[box_name],
-                                       frozen.get("frozen_at"))
-            if drift["code"]:
-                ctx.frozen_keep.add(box_name)
+            golden_freeze_gate(box_name, stored_inputs, ctx.golden_inputs[box_name],
+                               frozen.get("frozen_at"))

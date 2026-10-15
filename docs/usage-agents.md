@@ -142,12 +142,20 @@ Before the first destructive call it collects the run's artifacts into `competit
 
 Each deploy mints a `run-<hex>` id (in `.deploy_state.json`) and tags everything it creates. Teardown requires the full set (`tezcatlipoca` + `comp-<id>` + `run-<id>`):
 
-- Same comp, different run id → refused with a warning everywhere (pre-stop, leftover sweep, template destroys, phase-1 reclamation).
+- Same comp, different run id → refused with a warning everywhere (preflight, pre-stop, leftover sweep, template destroys).
 - Untagged VM on a computed vmid → refused, unless it carries this competition's clone marker.
 - State without a run id → refused before anything is collected; remove by hand.
 - A deploy whose preflight finds comp-tagged VMs lacking its run tag refuses; coordinate with the other session.
 
 `verify_clean` classifies survivors: ours (a problem), another run's (a note, untouched), untagged (a note).
+
+**The workspace that owns a run is the only thing that can reclaim it.** A deploy is ownership-scoped,
+so a range outlives its run id only if the workspace holding `.deploy_state.json` goes away while the
+range is still up. Preflight then sees a comp-tagged range it cannot prove is its own and refuses
+every later deploy of that competition, and no destroy path can claim it (the tag set in the VMs
+carries the run id nothing local remembers). So always run `destroy-competition.py` — or
+`--teams-only`, which keeps the templates — from the run's own workspace *before* discarding it. The
+dashboard's per-run workspaces are the mechanical form of that rule; a manual run must do it by hand.
 
 ## Flags outside the happy path
 

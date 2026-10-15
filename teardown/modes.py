@@ -2,8 +2,8 @@
 
 build_terminal_plan is what destroy-competition.py (and, in-process, the scrim
 harness) runs: portal -> artifacts -> red01 -> pre-stop -> terraform
--> templates -> remote access. build_reclaim_plan (phase 1) lives with the
-deploy pipeline's migration."""
+-> templates -> remote access. There is no reclaim-plan builder here: deploy
+phase 1 no longer destroys a range (see teardown/plan.py's RECLAIM note)."""
 
 from teardown.plan import TERMINAL_TEARDOWN, TeardownPlan
 from teardown.steps import (ArtifactStep, PortalStep, PreStopStep, RedStep,  # noqa: F401

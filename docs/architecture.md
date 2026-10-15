@@ -35,10 +35,12 @@ Per-symbol rationale: [internals.md](internals.md). Open problems: [known-issues
 `--from-phase N` needs state from the same pipeline version, and is refused if the state never saw
 the earlier phases complete (`--force-from-phase` overrides).
 
-1. **Cleanup** — two parallel destroy waves (pool of 8, ownership-checked): team boxes, then the
-   engine plus every golden template that is missing, hash-mismatched, or beyond the lineup.
-   Hash-matching goldens survive; golden reuse is per-competition only. The engine template is never
-   touched. Skipped when `--from-phase > 1`.
+1. **Reclaim + local reset** — a deploy destroys nothing a run owns. A leftover range (team boxes,
+   engine, jump VMs, bridges) is a preflight *refusal* naming `destroy-competition.py`; this
+   competition's own templates are kept and adopted (phase 2/4 reuse them by hash, rebuilding only on
+   drift). Phase 1 itself reclaims the untagged interrupted clones carrying this competition's clone
+   marker, resets `.nakon-domain-*` / `.postclone-swept`, and clears the previous teardown's journal.
+   Skipped when `--from-phase > 1`.
 2. **Engine template + apply #1** — compute the engine template hash (base image vmid, pinned
    `quotient_ref`, bootstrap/`main.tf` code); reuse on match, rebuild on drift (never when frozen:
    config drift fails, code drift warns). Rebuild = full-clone base, bootstrap, clean (containers,
@@ -175,7 +177,7 @@ Per-run secrets are generated in `deploy()` and written to `competitions/<id>/cr
 - `event.conf` reaches the engine before nakon runs. Phase 8 sub-steps are flag-gated because `unpause_engine` is not idempotent.
 - On fresh clones the NOPASSWD sudoers grant lands before the DNS fix.
 - The golden plant is the only strict pass and `qm template` is the checkpoint. A non-green plant must not convert; a partially converted set has no resume (destroy and redeploy). Clones inherit golden mistakes.
-- Destroy linked clones before golden templates (phase 1 two waves; `destroy-competition.py` destroys goldens after `terraform destroy`).
+- A deploy never tears down a range: a leftover team box/engine/bridge is a preflight refusal and `destroy-competition.py` reclaims it. Linked clones still die before their golden templates — that ordering lives in teardown (`destroy-competition.py` destroys goldens after `terraform destroy`).
 - Golden sets are per-competition; tear them down when the run's goal is met. Teams-only teardown is a mid-run mode.
 - Never deploy over a per-comp terraform state from another host or engine vmid; terraform would reconcile and destroy whatever now sits at the old vmid. The stale-state guard refuses.
 - The competitor packet omits `box_vulns.json` (it would spoil the exercise).

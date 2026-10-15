@@ -258,11 +258,11 @@ def classify_drift(stored_inputs, current_inputs):
 
 
 def golden_freeze_gate(name, stored_inputs, current_inputs, frozen_at):
-# One golden's frozen-record comparison, before phase 1 destroys anything.
+# One golden's frozen-record comparison, before any Proxmox mutation.
 #
 #     Config-class drift raises (naming the fields — nothing was destroyed); code-class
 #     drift warns and proceeds off the frozen template. Returns the drift classification
-#     so callers can act on code-only drift (phase 1 keeps the frozen golden).
+#     so a caller can act on code-only drift (phase 4's rebuild gate keeps the golden).
     drift = classify_drift(stored_inputs, current_inputs)
     if drift["config"]:
         raise SystemExit(

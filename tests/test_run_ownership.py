@@ -259,7 +259,7 @@ class DeployContextTags(unittest.TestCase):
             engine_mgmt_ip="10.0.0.1", boxes=[], boxes_by_name={}, unbooted=set(),
             nakon_config_path=Path("n.json"), golden_config_path=Path("g.json"),
             predomain_config_path=Path("r.json"), final_config_path=Path("f.json"),
-            golden_inputs={}, golden_hashes={}, frozen_keep=set(), tf_dir=Path("."),
+            golden_inputs={}, golden_hashes={}, tf_dir=Path("."),
             tfvars_path=Path("."), tfvars={}, ssh_key_abs="/k", all_targets=[],
             managed_targets=[], linux_targets=[], windows_targets=[])
         fields.update(kw)
@@ -411,10 +411,12 @@ class MultinodePreflightRunAware(unittest.TestCase):
             self._run("tezcatlipoca,comp-example")
         self.assertIn("ANOTHER worktree", str(ctx.exception))
 
-    def test_full_ownership_match_is_ours(self):
-        # The engine tagged with the FULL set is this deploy's leftover: phase 1
-        # reclaims it, so preflight must not refuse.
-        self._run(f"tezcatlipoca,comp-example,{RUN}")  # must not raise
+    def test_full_ownership_match_is_still_a_leftover(self):
+        # The engine tagged with the FULL set is this comp dir's own prior run: a fresh
+        # deploy never tears it down (resume it, or destroy-competition.py reclaims it).
+        with self.assertRaises(SystemExit) as ctx:
+            self._run(f"tezcatlipoca,comp-example,{RUN}")
+        self.assertIn("destroy-competition.py", str(ctx.exception))
 
 
 if __name__ == "__main__":

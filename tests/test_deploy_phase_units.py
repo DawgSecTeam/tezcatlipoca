@@ -28,6 +28,7 @@ from deploy_lib.phases import engine as dl_engine  # noqa: E402
 from deploy_lib.phases import golden as dl_golden  # noqa: E402
 from deploy_lib.phases import postclone as dl_postclone  # noqa: E402
 from deploy_lib.phases import seed as dl_seed  # noqa: E402
+from infra.ownership import MARKER, MISSING, OWNED, UNPROVEN  # noqa: E402
 from nakonops.nakon_run_ops import NakonResult  # noqa: E402
 
 
@@ -46,7 +47,7 @@ def _ctx(comp_dir, **overrides):
         golden_config_path=comp_dir / "golden.json",
         predomain_config_path=comp_dir / "predomain.json",
         final_config_path=comp_dir / "final.json",
-        golden_inputs={}, golden_hashes={}, frozen_keep=set(), tf_dir=comp_dir,
+        golden_inputs={}, golden_hashes={}, tf_dir=comp_dir,
         tfvars_path=comp_dir / "terraform.tfvars.json", tfvars={}, ssh_key_abs="/k",
         all_targets=[], managed_targets=[], linux_targets=[], windows_targets=[],
         tf_ctx={"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.99",
@@ -63,85 +64,84 @@ def _nulltimed():
 
 
 class Phase1Cleanup(unittest.TestCase):
-    def _run(self, ctx, bridge_in_use=False):
-        calls = types.SimpleNamespace(waves=[], bridges=[], markers=[])
-        with dpatch("destroy_node_waves",
-                          side_effect=lambda *a, **k: calls.waves.append((a, k))), \
-                dpatch("destroy_bridge_if_exists",
-                             side_effect=lambda *a: calls.bridges.append(a)), \
-                dpatch("_bridge_in_use", return_value=bridge_in_use), \
-                dpatch("timed",
-                             side_effect=lambda *a, **k: contextlib.nullcontext()), \
-                dpatch("reset_domain_markers",
-                             side_effect=lambda c: calls.markers.append(c)), \
-                contextlib.redirect_stdout(io.StringIO()):
-            dl_cleanup.phase1_cleanup(ctx)
-        return calls
+    """Phase 1 no longer tears a range down: it reclaims the untagged interrupted clones
+    (infra.ownership.MARKER) at this deploy's own slots and resets the comp dir. Every VM a
+    run owns is preflight's business (infra.collisions refusal + destroy-competition.py)."""
 
-    def test_fresh_run_destroys_wave_1(self):
+    def _run(self, ctx, vms=(), verdicts=None):
+        calls = types.SimpleNamespace(destroyed=[], markers=[])
+        verdicts = verdicts or {}
+
+        def fake_verdict(node, vmid, tags, expect):
+            return verdicts.get(vmid, UNPROVEN), set()
+
+        with dpatch("proxmox_api", return_value={"data": list(vms)}), \
+                dpatch("ownership_verdict", side_effect=fake_verdict), \
+                dpatch("destroy_vm_if_exists",
+                       side_effect=lambda node, vmid, **k: calls.destroyed.append(vmid)), \
+                dpatch("reset_domain_markers",
+                       side_effect=lambda c: calls.markers.append(c)), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            dl_cleanup.phase1_cleanup(ctx)
+        return calls, out.getvalue()
+
+    def _comp(self, d, **overrides):
+        target = {"vmid": 201, "vm_name": "web01-team101", "node": "pve"}
+        return _ctx(Path(d), teams={"team1": {"identifier": "101", "password": "x"}},
+                    all_targets=[target], **overrides)
+
+    def test_fresh_run_reclaims_an_interrupted_clone_and_resets_local_state(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             (comp_dir / ".postclone-swept").write_text("stale")
-            target = {"vmid": 201, "vm_name": "web01-team101", "node": "pve"}
-            ctx = _ctx(comp_dir, teams={"team1": {"identifier": "101", "password": "x"}},
-                       all_targets=[target])
-            calls = self._run(ctx)
-        self.assertEqual(len(calls.waves), 1)
-        (args, kwargs), = calls.waves
-        self.assertEqual(args[1:], ("pve", [target], 0))          # node, that node's targets, slot 0
-        self.assertEqual(calls.bridges, [("pve", "vmbr101")])
-        self.assertEqual(calls.markers, [comp_dir])
-        self.assertFalse((comp_dir / ".postclone-swept").exists())
+            (comp_dir / ".nakon-domain-team1-adds.json").write_text("{}")
+            ctx = self._comp(d)
+            calls, out = self._run(ctx, vms=[{"vmid": 201, "name": "web01-team101"}],
+                                   verdicts={201: MARKER})
+            self.assertEqual(calls.destroyed, [201])
+            self.assertEqual(calls.markers, [comp_dir])
+            self.assertFalse((comp_dir / ".postclone-swept").exists())
+        self.assertIn("reclaiming", out)
 
-    def _run_with_stdout(self, ctx, out):
-        with dpatch("destroy_node_waves"), \
-                dpatch("destroy_bridge_if_exists"), \
-                dpatch("timed",
-                             side_effect=lambda *a, **k: contextlib.nullcontext()), \
-                dpatch("reset_domain_markers"), \
-                contextlib.redirect_stdout(out):
-            dl_cleanup.phase1_cleanup(ctx)
+    def test_a_range_leftover_is_never_destroyed_here(self):
+        # OWNED (this comp dir's own run) and MISSING (another worktree's) are both a
+        # leftover RANGE: preflight refuses the deploy, and phase 1 must not touch it.
+        for verdict in (OWNED, MISSING):
+            with self.subTest(verdict=verdict), tempfile.TemporaryDirectory() as d:
+                calls, _out = self._run(self._comp(d),
+                                        vms=[{"vmid": 201, "name": "web01-team101"}],
+                                        verdicts={201: verdict})
+                self.assertEqual(calls.destroyed, [])
 
-    def test_placement_splits_bridges_and_jumps_by_host(self):
-        placement = {
-            "engine_node": "pve", "team_nodes": {"team1": "sat1", "team2": "pve"},
-            "satellites": [{"name": "sat1", "slot": 1, "jump_vmid": 9001,
-                            "anchor_identifier": "120"}],
-            "nodes": {"sat1": {}, "pve": {}},
-            "team_slots": {"team1": 1, "team2": 0},
-        }
+    def test_a_vmid_outside_this_deploys_slots_is_ignored(self):
+        # No node sweep: a marker VM at a vmid this deploy does not use is not ours to
+        # reclaim here (a full teardown owns the competition's whole span).
+        with tempfile.TemporaryDirectory() as d:
+            calls, _out = self._run(self._comp(d),
+                                    vms=[{"vmid": 9999, "name": "someone-elses"}],
+                                    verdicts={9999: MARKER})
+        self.assertEqual(calls.destroyed, [])
+
+    def test_unreadable_node_is_a_warning_not_a_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            ctx = self._comp(d)
+            with dpatch("proxmox_api", side_effect=RuntimeError("api down")), \
+                    dpatch("reset_domain_markers"), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                dl_cleanup.phase1_cleanup(ctx)
+        self.assertIn("could not scan", out.getvalue())
+
+    def test_resume_touches_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
-            ctx = _ctx(comp_dir, comp_name="probe", placement=placement,
-                       teams={"team1": {"identifier": "101", "password": "x"},
-                              "team2": {"identifier": "102", "password": "y"}},
-                       all_targets=[])
-            with dpatch("record_of",
-                              return_value=types.SimpleNamespace(node="sat-node")):
-                calls = self._run(ctx)
-        # one wave pair per hosting node: the engine node's slot 0, then the satellite's
-        slots = [a[3] for a, _kw in calls.waves]
-        self.assertEqual(slots, [0, 1])
-        sat_args, sat_kwargs = calls.waves[1]
-        self.assertEqual(sat_args[1], "sat-node")
-        self.assertEqual(sat_kwargs["extra_destroy"], {9001: "jump-probe-1"})
-        # satellite team's bridge dies on the satellite host; engine-node team's on pve
-        self.assertEqual(calls.bridges, [("sat-node", "vmbr101"), ("pve", "vmbr102")])
-
-    def test_bridge_with_attached_vms_is_not_destroyed(self):
-        # 2026-10-02: bridge names (vmbr<identifier>) collide across same-comp deploys
-        # sharing team identifiers — a bridge with ANY attached VM survives phase 1.
-        placement = {
-            "engine_node": "pve", "team_nodes": {"team1": "pve"},
-            "satellites": [], "nodes": {"pve": {}}, "team_slots": {"team1": 0},
-        }
-        with tempfile.TemporaryDirectory() as d:
-            comp_dir = Path(d)
-            ctx = _ctx(comp_dir, comp_name="probe", placement=placement,
-                       teams={"team1": {"identifier": "101", "password": "x"}},
-                       all_targets=[])
-            calls = self._run(ctx, bridge_in_use=True)
-        self.assertEqual(calls.bridges, [])
+            (comp_dir / ".postclone-swept").write_text("keep me")
+            ctx = self._comp(d, from_phase=2)
+            with dpatch("proxmox_api") as p_api, \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                dl_cleanup.phase1_cleanup(ctx)
+            p_api.assert_not_called()
+            self.assertEqual((comp_dir / ".postclone-swept").read_text(), "keep me")
+        self.assertIn("Skipped (resume)", out.getvalue())
 
 
 class Phase3Order(unittest.TestCase):

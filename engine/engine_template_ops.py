@@ -91,7 +91,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     }
     if mgmt_ip:
         # Portable-node mode (realm): boot the build VM on the PLANNED engine mgmt IP —
-        # the deployed engine is destroyed by phase 1 by now, so the address is free,
+        # no leftover engine holds it (a fresh deploy refuses one), so it is free,
         # and the converted template's config then matches what apply #1 sets on clones.
         gw = os.environ.get("TF_VAR_engine_mgmt_gw", "")
         cfg["ipconfig0"] = f"ip={mgmt_ip}/24" + (f",gw={gw}" if gw else "")
