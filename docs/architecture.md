@@ -145,7 +145,7 @@ Nakon is consumed as a CLI with `cwd = vendor/nakon` (reads `vendor/nakon/.env`)
 
 - `nakon randomize --platform <linux|windows> --services N --vulns N --exclude <slow> --source auto --json` → `{services, vulns}`. Budgets: `ceil(difficulty/3)` services, `difficulty` vulns, excluding `splunk`/`roundcube`.
 - `nakon build --config <abs> --out bundles --json` → `{bundle_id, path, cached, plans, machines}`; content-addressed, shared across competitions; operator-side builds serialize on a lock.
-- `nakon deploy --bundle … --config … [--only] [--strict] [--jobs N]` runs on the engine after `scp` to a per-run `/tmp/nakon-<tag>` → `/opt/nakon/<tag>/`. `--jobs` parallelizes across machines; per-machine step order is preserved. Staging dirs are removed only by the run that created them.
+- `nakon deploy --bundle … --config … [--only] [--strict] [--jobs N]` runs on the engine after `scp` to a per-run `/tmp/nakon-<tag>` → `/opt/nakon/<tag>/`. `--jobs` parallelizes across machines; per-machine step order is preserved. Staging dirs are removed only by the run that created them. The engine must already have paramiko (`python3-paramiko`, baked into the engine template) — the deploy probes and refuses by name rather than installing into the engine's python.
 
 `vendor/nakon` is pinned to a release tag. Bump with `cd vendor/nakon && git checkout vX.Y.Z` and commit the pointer; develop nakon in its own repo.
 
