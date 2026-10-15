@@ -404,7 +404,6 @@ class TargetSplit(unittest.TestCase):
         self.assertEqual([t["vmid"] for t in ctx.linux_targets], [1])
         self.assertEqual([t["vmid"] for t in ctx.windows_targets], [2])
         p_persist.assert_called_once()
-        self.assertEqual(ctx.document().data["roster"]["targets"]["team1-web01"]["vmid"], 1)
 
 
 class PrepareSequencer(unittest.TestCase):

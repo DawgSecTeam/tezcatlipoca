@@ -146,6 +146,21 @@ and running `ifreload -a`) brackets the exact minute, and is the leading explana
 a guest-agent ping, or a heartbeat the box itself pushes to the operator) and make the run log say
 which one answered; run at most one range per node while an event is live.
 
+### The scoreboard inject detail page renders markdown literally and prints the title twice
+
+Upstream `dbaseqp/Quotient` bug in `static/templates/pages/injects.html`: the detail pane sets
+`descPara.textContent = inject.Description`, so every inject's markdown description (`#`, `##`,
+`**bold**`, lists) shows as one unformatted paragraph, and both `pane__from` and `pane__subject`
+get `inject.Title`, so the title prints twice. The `marked` library is already loaded on every
+page and `red.html` already renders markdown with it — the fix is two lines. Applied in place on
+2026-10-15 to the only live engine (patched `/opt/quotient/static/templates/pages/injects.html`
+and restarted `quotient_server`; the container mounts `./static` from the checkout and templates
+are parsed at startup, so no rebuild is involved). The canonical copy is local Quotient main
+`ed539df` — unpushable, this host lacks write access to `dbaseqp/Quotient`.
+**Next action**: get the two-line fix upstream (push access to `dbaseqp/Quotient`, or pin a fork
+via `quotient_ref`), because every engine bootstrap re-clones stock upstream and re-introduces
+the bug; re-patch the live engine whenever a new one deploys in the meantime.
+
 ### Fixed in this cycle (kept for the next reader's context)
 
 - Concurrent `terraform init` into the shared `TF_PLUGIN_CACHE_DIR` raced two runs into

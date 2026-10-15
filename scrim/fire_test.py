@@ -1,9 +1,9 @@
-import json
 import os
 import shlex
 import time
 from pathlib import Path
 
+from common.targets import frozen_roster
 from scrim import compworld
 from scrim import core
 from scrim import procs
@@ -47,8 +47,8 @@ def stage_verify(args, comp, creds, label="interim (pre-staging)"):
             + (" — the pre-T0 verify after staging is the authoritative one" if "interim" in label
                else "") + ")")
     base = core.box_ssh_base(creds)
-    web_ip = (json.loads((comp / "targets.json").read_text()).get("targets", {})
-              .get("team1-web01", {}).get("ip"))
+    web_ip = (frozen_roster(comp) or {}).get("targets", {}) \
+        .get("team1-web01", {}).get("ip")
     web_ip = web_ip or f"192.168.{creds['TEAM1_ID']}.4"
 
     def ssh_web01(cmd, timeout=60):
@@ -111,8 +111,8 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
 
     _ensure_round_loop(comp, creds)
     units, svc_port, svc_display = compworld._web01_units(comp)
-    web_ip = (json.loads((comp / "targets.json").read_text()).get("targets", {})
-              .get("team1-web01", {}).get("ip"))
+    web_ip = (frozen_roster(comp) or {}).get("targets", {}) \
+        .get("team1-web01", {}).get("ip")
     web_ip = web_ip or f"192.168.{creds['TEAM1_ID']}.4"
     # pick the unit that actually exists on this box (apache2 vs httpd across distros)
     probe = ('u=""; for c in %s; do systemctl list-unit-files "$c.service" --no-legend '

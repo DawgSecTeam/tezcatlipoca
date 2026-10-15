@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 from infra.guest_exec import guest_agent_exec_root
-from common.targets import vm_id_for
+from common.targets import frozen_roster, vm_id_for
 from common.utils import MAX_CONCURRENCY, run_concurrent
 
 from verifier import context
@@ -43,11 +43,10 @@ def _target_vmid(comp_dir, box):
     try:
         identifier = box["ip"].split(".")[2]
         base_name = box["name"].rsplit("-team", 1)[0]
-        targets_path = Path(comp_dir) / "targets.json"
-        if targets_path.exists():
-            for t in json.loads(targets_path.read_text()).get("targets", {}).values():
-                if str(t["identifier"]) == identifier and t["box_name"] == base_name:
-                    return t["vmid"]
+        frozen = frozen_roster(comp_dir)
+        for t in (frozen or {}).get("targets", {}).values():
+            if str(t["identifier"]) == identifier and t["box_name"] == base_name:
+                return t["vmid"]
         boxes_json = json.loads((Path(comp_dir) / "boxes.json").read_text())
         idx = next(i for i, b in enumerate(boxes_json) if b.get("name") == base_name)
         return vm_id_for(identifier, idx)
