@@ -164,7 +164,7 @@ def gc_orphan_volumes(node, vmid):
     return removed
 
 
-def destroy_vm_if_exists(node, vmid, expect_tags=None):
+def destroy_vm_if_exists(node, vmid, expect_tags=None, require_owned=False):
     vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
     vm = next((v for v in vms if v["vmid"] == vmid), None)
     if vm is None:
@@ -187,6 +187,17 @@ def destroy_vm_if_exists(node, vmid, expect_tags=None):
                 remedy="none — ownership cannot be proven, so this VM is never destroyed here",
                 detail=f"refusing to destroy UNTAGGED vmid {vmid} ({vm.get('name')}): ownership "
                        f"cannot be proven (no tags, no clone marker of this competition).")
+        if verdict == MARKER and require_owned:
+            # The clone marker proves the COMPETITION, not the run: a marker VM can be a live
+            # worktree's interrupted clone, so callers that must prove this run (the orphan
+            # reclaim, which has no comp dir to consult) never adopt it.
+            raise Refusal(
+                saw=f"UNTAGGED vmid {vmid} ({vm.get('name')}) with only this competition's clone marker",
+                expected="the full ownership set (this competition's tags + this run's tag)",
+                remedy="none — the marker names no run, so this VM is never destroyed here",
+                detail=f"refusing to destroy vmid {vmid} ({vm.get('name')}): it carries only the "
+                       f"clone marker, which names no run, so it does not prove which run "
+                       f"this VM belongs to")
         if verdict == MARKER:
             print(f"    vmid {vmid} untagged but carries this competition's clone marker — "
                   f"interrupted clone, destroying")

@@ -44,6 +44,59 @@ def load_destroyable_competitions():
     ]
 
 
+# An orphan's comp dir is gone, so its ownership cannot come from state: the caller names the
+# comp + run tags and the VM's own tag set is the proof (teardown/orphan_ops.py). Returns the
+# exit code — 0 means nothing of that ownership set is left.
+def orphan_reclaim(args):
+    from estate import config
+    from teardown import orphan_ops
+
+    if not (args.orphan_comp and args.orphan_run):
+        print("  --orphan-comp and --orphan-run must be given together.")
+        return 1
+    run_tag = args.orphan_run
+    if not run_tag.startswith("run-"):
+        print(f"  '{run_tag}' is not a run tag — pass the tag itself (run-<8hex>), "
+              f"not the bare id.")
+        return 1
+    node = config.active().proxmox.node
+    print("─── Orphan reclaim " + "─" * 43)
+    print(f"  Node        : {node}")
+    print(f"  Ownership   : tezcatlipoca + comp-{args.orphan_comp} + {run_tag}")
+    print("  Templates   : " + ("destroyed too" if args.allow_templates
+                                else "kept (--allow-templates to include)"))
+    print()
+    try:
+        orphan_ops.refuse_when_state_exists(args.orphan_comp, run_tag)
+        if not args.yes:
+            typed = input(f"  Type the run tag to confirm ({run_tag}): ").strip()
+            if typed != run_tag:
+                print("Cancelled — nothing was destroyed.")
+                return 0
+        result = orphan_ops.reclaim(args.orphan_comp, run_tag, node=node,
+                                    allow_templates=args.allow_templates)
+    except Refusal as r:
+        print(f"\n  REFUSED — {r}")
+        return 1
+
+    print("\n─── Result " + "─" * 52)
+    # The scanned count is what tells "nothing matched" apart from "wrong node": a no-op on a
+    # node the profile does not actually host would otherwise read exactly like an empty estate.
+    print(f"  scanned      : {result['scanned']} guest(s) on {node}")
+    for row in result["destroyed"]:
+        print(f"  destroyed    : vmid {row['vmid']} ({row['name']}) — {row['role']}")
+    for row in result["kept_templates"]:
+        print(f"  kept         : vmid {row['vmid']} ({row['name']}) — {', '.join(row['role'])} "
+              f"(pass --allow-templates)")
+    for note in result["notes"]:
+        print(f"  note         : {note}")
+    if result["remaining"]:
+        print(f"  NOT CLEAN    : still present: {result['remaining']} — re-run to retry")
+        return 1
+    print("  estate clean for this ownership set.")
+    return 0
+
+
 def main():
     import argparse
 
@@ -81,11 +134,22 @@ def main():
                              "it in Quotient and revoke its logins — the rest of the range "
                              "(other teams, engine, templates) is never addressed. Refuses "
                              "anything not owned by this deploy's run id.")
+    parser.add_argument("--orphan-comp", metavar="NAME", dest="orphan_comp", default=None,
+                        help="orphan reclaim: the competition name behind the VM tags "
+                             "(tag comp-<NAME>), for a run whose comp dir is gone")
+    parser.add_argument("--orphan-run", metavar="TAG", dest="orphan_run", default=None,
+                        help="orphan reclaim: the deploy's run tag verbatim, e.g. run-1a2b3c4d")
+    parser.add_argument("--allow-templates", action="store_true", dest="allow_templates",
+                        help="orphan reclaim: also destroy this run's golden + engine-template "
+                             "VMs (irreversible — there is no freeze record left to consult)")
     args = parser.parse_args()
 
     print("=" * 64)
     print("  COMPETITION TEARDOWN")
     print("=" * 64)
+
+    if args.orphan_comp or args.orphan_run:
+        sys.exit(orphan_reclaim(args))
 
     if args.comp_dir:
         comp_dir = resolve_comp_dir(comp_dir=args.comp_dir)

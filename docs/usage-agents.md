@@ -129,6 +129,7 @@ python3 destroy-competition.py --competition <id>                    # full tear
 python3 destroy-competition.py --competition <id> --teams-only       # mid-event; keep templates
 python3 destroy-competition.py --competition <id> --end-of-competition  # required if frozen
 python3 destroy-competition.py --competition <id> --artifacts-timeout 20
+python3 destroy-competition.py --orphan-comp <id> --orphan-run run-<hex>   # comp dir gone
 ```
 
 Full teardown removes team boxes, engine, bridges, golden and engine templates (clones first; the state document's template records go too). **Exit 0 = estate verified clean** for this deploy's ownership set: the step plan completed, every hosting node was listable, nothing of ours is running or tagged, and red01 is gone — evidence archived before any of it. Frozen competitions refuse without `--end-of-competition`. `--teams-only` is for this competition's next run only; once the run's goal is met, run the full teardown, since goldens can't serve another competition (hash inputs and `comp-<id>` tags are per-competition) and otherwise squat on its golden vmids.
@@ -150,13 +151,21 @@ Each deploy mints a `run-<hex>` id (in `estate-state.json`) and tags everything 
 
 `verify_clean` classifies survivors: ours (a problem), another run's (a note, untouched), untagged (a note).
 
-**The workspace that owns a run is the only thing that can reclaim it.** A deploy is ownership-scoped,
+**The workspace that owns a run is the sanctioned reclaim path.** A deploy is ownership-scoped,
 so a range outlives its run id only if the workspace holding `estate-state.json` goes away while the
 range is still up. Preflight then sees a comp-tagged range it cannot prove is its own and refuses
-every later deploy of that competition, and no destroy path can claim it (the tag set in the VMs
-carries the run id nothing local remembers). So always run `destroy-competition.py` — or
-`--teams-only`, which keeps the templates — from the run's own workspace *before* discarding it. The
-dashboard's per-run workspaces are the mechanical form of that rule; a manual run must do it by hand.
+every later deploy of that competition. So always run `destroy-competition.py` — or `--teams-only`,
+which keeps the templates — from the run's own workspace *before* discarding it. The dashboard's
+per-run workspaces are the mechanical form of that rule; a manual run must do it by hand.
+
+If that already happened, `--orphan-comp <id> --orphan-run run-<hex>` reclaims exactly the VMs
+carrying `tezcatlipoca` + `comp-<id>` + that run tag (`teardown/orphan_ops.py`). It reads nothing
+local: the VM's own tag set is the proof, the pair must be given together, a same-comp VM with a
+different run tag is reported and never touched, the clone-marker adoption the normal path allows
+is refused (a marker names no run), and golden/engine-template VMs need `--allow-templates`
+because there is no freeze record left to consult. It refuses outright when some comp dir still
+holds that run id, naming the normal command. Bridges are not addressed — a bridge carries no
+tags, so it can never be attributed.
 
 ## Flags outside the happy path
 
@@ -164,6 +173,8 @@ dashboard's per-run workspaces are the mechanical form of that rule; a manual ru
 |---|---|---|
 | `--end-of-competition` | destroy | Full teardown of a frozen competition |
 | `--teams-only` | destroy | Keep this competition's golden + engine templates for its next run |
+| `--orphan-comp` / `--orphan-run` | destroy | Reclaim a run whose comp dir is gone, by the tags on the VMs themselves |
+| `--allow-templates` | destroy | Orphan reclaim: include the golden + engine-template VMs (irreversible) |
 | `--keep-templates` | scrim | Same, from the harness: tear down the range but keep the templates |
 | `--freeze` / `--unfreeze --confirm-unfreeze` | verify | Write/remove the freeze record in the state document |
 | `--fix-round-loop` | verify | Start/unpause POSTs when the round loop didn't resume after an engine reboot |
