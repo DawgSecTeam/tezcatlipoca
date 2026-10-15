@@ -836,3 +836,45 @@ class StateDocumentMissing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RemoteAccessSnatRetry(unittest.TestCase):
+    """The SNAT rule is re-asserted every 30s because a tailscaled rebind drops it, so the
+    gate must sample past one cycle instead of reporting a self-healing range FAIL (live
+    2026-10-15, run-9fd68d14: the rule read present, then MISSING 3 samples running, then
+    present again — the same range, minutes apart)."""
+
+    def _check(self, samples):
+        import verifier.remote_access as v_ra
+        calls = {"n": 0}
+
+        def fake_ssh(ctx, cmd, timeout=30):
+            i = min(calls["n"], len(samples) - 1)
+            calls["n"] += 1
+            return SimpleNamespace(returncode=0, stdout=samples[i], stderr="")
+
+        clock = {"t": 0.0}
+        with patch.object(v_ra.estate_state, "load_flat",
+                          return_value={"remote_access": {"enabled": True, "comp_id": "c"}}), \
+             patch.object(v_ra.config, "active",
+                          return_value=SimpleNamespace(
+                              headscale=SimpleNamespace(url="https://hs.example"))), \
+             patch.object(v_ra.remote_access_ops, "engine_tailscale_enrolled",
+                          return_value=True), \
+             patch.object(v_ra.remote_access_ops, "verify_remote_access",
+                          return_value=(True, [])), \
+             patch.object(v_ra.context, "ssh_to_engine", side_effect=fake_ssh), \
+             patch.object(v_ra.time, "time", lambda: clock["t"]), \
+             patch.object(v_ra.time, "sleep",
+                          lambda s: clock.__setitem__("t", clock["t"] + s)):
+            return v_ra.check_remote_access("/tmp/x", {"team1": {"identifier": "151"}}, {}), calls
+
+    def test_a_gap_inside_the_re_assert_cycle_is_not_a_failure(self):
+        result, calls = self._check(["MISSING151\n", "MISSING151\n", "ok151\n"])
+        self.assertIs(result.status, v_model.Status.PASS)
+        self.assertEqual(calls["n"], 3)
+
+    def test_a_rule_that_stays_gone_still_fails(self):
+        result, _ = self._check(["MISSING151\n"])
+        self.assertIs(result.status, v_model.Status.FAIL)
+        self.assertIn("SNAT", result.detail)

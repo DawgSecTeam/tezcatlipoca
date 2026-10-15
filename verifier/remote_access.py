@@ -9,12 +9,19 @@ the router node, SNAT lines in the engine's nat table, this comp's tag-scoped AC
 lines in the live policy, and no other node advertising our subnets."""
 
 import subprocess
+import time
 
 from estate import state as estate_state
 from net import remote_access_ops
 from verifier import context
 from verifier.model import gate_fail, gate_pass, gate_skip
 from estate import config
+
+# The tailnet->team SNAT rule is re-asserted by range-remote-access.timer every 30s (a
+# tailscaled rebind drops it), so a single sample can catch the gap: give the probe one
+# full cycle before believing the rule is gone.
+SNAT_SETTLE_S = 90
+SNAT_RETRY_S = 15
 
 
 def _read_state(comp_dir):
@@ -56,16 +63,28 @@ def check_remote_access(comp_dir, teams, ctx):
         return gate_fail("remote_access", "engine not enrolled to the headscale control plane")
     print(f"  PASS  engine enrolled to {server_url}")
 
-    # Engine side: the SNAT unit's rules are actually in the nat table.
+    # Engine side: the SNAT unit's rules are actually in the nat table, sampled past one
+    # full re-assert cycle. The rule is self-healing by design — the timer re-adds it every
+    # 30s because tailscaled's rebind (a docker interface gaining an address triggers one)
+    # re-applies its ruleset and takes the POSTROUTING chain with it — so a single sample
+    # reported one unchanged range clean then failing minutes apart (live 2026-10-15:
+    # present for 9 samples, absent for 3, present again). A genuinely absent rule stays
+    # absent through the whole window.
     snat_probe = "; ".join(
         f"sudo iptables -t nat -S POSTROUTING | grep -q 'd 192.168.{i}.0/24 -j SNAT' && "
         f"echo ok{i} || echo MISSING{i}" for i in identifiers)
-    proc = context.ssh_to_engine(ctx, snat_probe)
-    missing = [ln for ln in (proc.stdout or "").split() if ln.startswith("MISSING")]
-    if proc.returncode != 0 or missing:
-        print(f"  FAIL  — tailnet->team SNAT lines absent for: "
-              f"{', '.join(m.split('MISSING')[1] for m in missing) or 'unknown (rc)'}")
-        return gate_fail("remote_access", "SNAT lines missing from the engine nat table")
+    deadline = time.time() + SNAT_SETTLE_S
+    while True:
+        proc = context.ssh_to_engine(ctx, snat_probe)
+        missing = [ln for ln in (proc.stdout or "").split() if ln.startswith("MISSING")]
+        if proc.returncode == 0 and not missing:
+            break
+        if time.time() >= deadline:
+            print(f"  FAIL  — tailnet->team SNAT lines absent for: "
+                  f"{', '.join(m.split('MISSING')[1] for m in missing) or 'unknown (rc)'}"
+                  f" (sampled for {SNAT_SETTLE_S}s)")
+            return gate_fail("remote_access", "SNAT lines missing from the engine nat table")
+        time.sleep(SNAT_RETRY_S)
     print(f"  PASS  SNAT present for {len(identifiers)} team subnet(s)")
 
     # Headscale side: routes serving, no foreign overlap, policy carries the grants.
