@@ -170,5 +170,35 @@ class Singleton(unittest.TestCase):
         self.assertEqual(config.env_name("knobs.thin_headroom"), "TEZ_THIN_HEADROOM")
 
 
+class SshKeyPath(unittest.TestCase):
+    """A relative profile path is repo-root-relative; the legacy env value was
+    terraform-relative, and both must land on the same file."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "proxmox").write_text("key")
+        (self.root / "terraform").mkdir()
+        patch = mock.patch.object(config, "REPO_ROOT", self.root)
+        patch.start()
+        self.addCleanup(patch.stop)
+        config.reset()
+        self.addCleanup(config.reset)
+
+    def _resolve(self, value):
+        with mock.patch.dict(os.environ, {"TEZ_SSH_PRIVATE_KEY_PATH": value}):
+            return config.ssh_key_path()
+
+    def test_an_absolute_path_is_returned_unchanged(self):
+        self.assertEqual(self._resolve("/abs/key"), Path("/abs/key"))
+
+    def test_a_repo_relative_path_resolves_against_the_checkout(self):
+        self.assertEqual(self._resolve("proxmox"), self.root / "proxmox")
+
+    def test_the_legacy_terraform_relative_value_still_resolves(self):
+        self.assertEqual(self._resolve("../proxmox"), self.root / "proxmox")
+
+
 if __name__ == "__main__":
     unittest.main()
