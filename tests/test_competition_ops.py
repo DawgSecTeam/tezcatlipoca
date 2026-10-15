@@ -30,6 +30,27 @@ spec.loader.exec_module(ops)
 BASE = "http://10.0.0.9"
 
 
+class EngineBaseFromTheDocument(unittest.TestCase):
+    """The engine IP comes from the state document; a range has no terraform state at all."""
+
+    def test_the_recorded_engine_ip_wins_over_the_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = Path(tmp)
+            from estate import state as estate_state
+            document = estate_state.EstateState.load(comp)
+            document.absorb({"engine_mgmt_ip": "10.0.0.150", "run_id": "run-abc12345"})
+            document.save()
+            self.assertEqual(ops.engine_base(_Args("freeze", None, None), comp), "http://10.0.0.150")
+            self.assertEqual(ops.engine_base(_Args("freeze", None, "10.9.9.9"), comp),
+                             "http://10.9.9.9")
+
+    def test_an_unrecorded_engine_refuses_and_names_the_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit) as raised:
+                ops.engine_base(_Args("freeze", None, None), Path(tmp))
+        self.assertIn("--engine-ip", str(raised.exception))
+
+
 class FakeResp:
     def __init__(self, status=200, payload=None):
         self.status_code, self._payload = status, payload
