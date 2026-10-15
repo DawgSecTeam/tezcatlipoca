@@ -1,13 +1,13 @@
 """Proxmox API client: TLS-pinned requests, per-node route table (multi-node), cluster reads,
 task waiting and node-load throttling. Everything else talks to Proxmox through here."""
 
-import os
 import re
 import time
 
 import requests
 
 from common.utils import retry
+from estate import config
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 
@@ -69,11 +69,12 @@ class _FingerprintAdapter(HTTPAdapter):
 
 
 def proxmox_request(method, url, fingerprint=None, **kwargs):
-    """requests wrapper honoring optional TLS pinning. PROXMOX_TLS_FINGERPRINT (sha256) pins the
-    cert; PROXMOX_CA_BUNDLE verifies against a CA path; neither set => verify=False (lab default).
-    An explicit `fingerprint` (per-node record) overrides the env value."""
-    fp = fingerprint or os.environ.get("PROXMOX_TLS_FINGERPRINT")
-    ca = os.environ.get("PROXMOX_CA_BUNDLE")
+    """requests wrapper honoring optional TLS pinning. config.proxmox.tls_fingerprint pins the
+    cert; config.proxmox.ca_bundle verifies against a CA path; neither set => verify=False (lab
+    default). An explicit `fingerprint` (per-node record) overrides the configured value."""
+    cfg = config.active()
+    fp = fingerprint or cfg.proxmox.tls_fingerprint
+    ca = cfg.proxmox.ca_bundle
     session = requests.Session()
     if fp:
         session.mount("https://", _FingerprintAdapter(fp))
@@ -103,8 +104,9 @@ def proxmox_api(method, path, **kwargs):
     if override:
         endpoint, token = override
     else:
-        endpoint = os.environ["TF_VAR_proxmox_endpoint"]
-        token = os.environ["TF_VAR_proxmox_api_token"]
+        cfg = config.active()
+        endpoint = cfg.require("proxmox.endpoint")
+        token = cfg.require("proxmox.api_token")
     return proxmox_api_for(endpoint, token, method, path, **kwargs)
 
 

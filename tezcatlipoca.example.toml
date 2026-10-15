@@ -1,0 +1,76 @@
+# Copy to tezcatlipoca.toml and fill in real values; that file is gitignored. This is
+# the deployment surface: `estate.config` reads these keys, and every key also accepts an
+# env override named TEZ_ + the key upper-cased with dots as underscores
+# (proxmox.endpoint -> TEZ_PROXMOX_ENDPOINT; knobs.* drop the prefix, so knobs.thin_headroom
+# is TEZ_THIN_HEADROOM). The environment wins over this file, because the run-queue
+# dashboard injects per-run values into the process env. Point TEZ_CONFIG at another file
+# to use a per-node profile.
+#
+# Secrets are NEVER written here. A token is named, not stored: set the value in the
+# process environment and reference the variable name here (the same indirection
+# nodes.json uses for its per-host tokens).
+
+[proxmox]
+endpoint = "https://PROXMOX-HOST:8006"
+node = "CHANGEME"
+datastore = "CHANGEME"
+# The base image the per-competition engine template is built from.
+template_vm_id = 0
+# api_token is read from $TEZ_PROXMOX_API_TOKEN (or the legacy TF_VAR_proxmox_api_token).
+mgmt_bridge = "vmbr0"
+# Pin the pveproxy certificate instead of accepting a self-signed one (set one):
+# tls_fingerprint = "AA:BB:CC:DD:..."
+# ca_bundle = "/etc/pve/pve-root-ca.pem"
+
+[ssh]
+public_key = "ssh-ed25519 CHANGEME range-automation"
+private_key_path = "../proxmox"
+
+[engine]
+username = "sysadmin"
+# Static mgmt IP for the engine; empty keeps the built-in default (constants.py).
+# mgmt_ip = "10.0.0.250"
+# mgmt_gw = "10.0.0.1"
+
+# Multi-node: nodes.json references each host's API token BY ENV-VAR NAME, so give each
+# additional host its own variable and point the record at it. See docs/multi-node.md.
+
+# Remote access (headscale). Required unless the Compfile opts out with `remote_access 0`.
+[headscale]
+# url = "https://headscale.example"
+# ssh_host = "203.0.113.10"
+# ssh_user = "sysadmin"
+# ssh_password = ""
+# infra_user = "cyberrange-infra"
+# key_ttl = "72h"
+
+# Student portal (Compfile `portal 1`). Put the tunnel pair ONLY in the event's profile:
+# a practice profile that carries it would claim the stable public hostname.
+[portal]
+# hostname = "range.example.com"
+# tunnel_token = ""
+# open = false
+
+[knobs]
+# Count this fraction of the *provisioned* disk math toward the datastore headroom
+# preflight, for thin-provisioned pools where provisioned >> used.
+# thin_headroom = 0.5
+# Blue agent cycle budget in seconds.
+# cycle_timeout = 1500
+# Interpreter for the harness's operator-side children (default: sys.executable).
+# python = ""
+# Red's routed segment when red01 runs in routed mode.
+# red_segment = "10.200.0.0/24"
+# red01's Proxmox template name when it differs from bad-auto's built-in default.
+# red_template = ""
+# Competition definitions live outside the engine (tezcatlipoca-competitions).
+# comps_root = ""
+# Where test-run folders are archived outside the repo.
+# artifacts_archive = ""
+# Set by the run-queue dashboard, never by hand:
+# ops_url = ""
+# ops_token = ""
+# dashboard_data = ""
+# dashboard_host = ""
+# dashboard_port = 0
+# dashboard_tokens = ""

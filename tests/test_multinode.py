@@ -15,6 +15,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from deploy_lib import placement as dl_placement  # noqa: E402
+from estate import config  # noqa: E402
 from net import jump_ops  # noqa: E402
 from multinode import nodes_config  # noqa: E402
 from multinode import placement_planner  # noqa: E402
@@ -126,15 +127,17 @@ class LoadNodesConfigTest(unittest.TestCase):
 class NodeEnvTest(unittest.TestCase):
     def test_apply_and_restore(self):
         rec = _rec("x")
-        with patch.dict(os.environ, {"TOK_X": "tokval"}, clear=False):
-            os.environ.pop("TF_VAR_proxmox_node", None)
+        # Activation is an in-process config override, not an os.environ mutation.
+        cfg = config.configure(Path("/nonexistent/tezcatlipoca.toml"))
+        env = {"TOK_X": "tokval", "TF_VAR_proxmox_node": "", "TEZ_PROXMOX_NODE": ""}
+        with patch.dict(os.environ, env, clear=False):
             restore = nodes_config.apply_node_env(rec)
-            self.assertEqual(os.environ["TF_VAR_proxmox_endpoint"], rec.endpoint)
-            self.assertEqual(os.environ["TF_VAR_proxmox_api_token"], "tokval")
-            self.assertEqual(os.environ["TF_VAR_proxmox_node"], "X")
-            self.assertEqual(os.environ["TF_VAR_template_vm_id"], "900")
+            self.assertEqual(cfg.proxmox.endpoint, rec.endpoint)
+            self.assertEqual(cfg.proxmox.api_token, "tokval")
+            self.assertEqual(cfg.proxmox.node, "X")
+            self.assertEqual(cfg.proxmox.template_vm_id, 900)
             nodes_config.restore_node_env(restore)
-            self.assertNotIn("TF_VAR_proxmox_node", os.environ)
+            self.assertEqual(cfg.proxmox.node, "pve")
 
     def test_missing_token_fails_loud(self):
         rec = _rec("y")

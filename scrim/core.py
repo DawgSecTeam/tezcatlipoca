@@ -5,8 +5,9 @@ import re
 import time
 from pathlib import Path
 
-from common.utils import local_python  # noqa: F401  (re-exported for scrim/*)
+from common.utils import local_python  # re-exported for scrim/* — see __all__
 from config.config_ops import write_text_atomic
+__all__ = ["local_python"]
 REPO = Path(__file__).resolve().parent.parent
 BAD_AUTO = REPO.parent / "bad-auto"
 SSH_OPTS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
