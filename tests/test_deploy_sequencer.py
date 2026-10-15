@@ -25,7 +25,7 @@ from infra import gates as dl_gates  # noqa: E402
 
 SKIP_BANNERS = [
     "[1/8] Skipped (resume) — keeping the run's markers in place.",
-    "[2/8] Skipped (resume) — not re-running terraform apply.",
+    "[2/8] Skipped (resume) — not re-creating the engine.",
     "[3/8] Skipped (resume).",
     "[4/8] Skipped (resume).",
     "[5/8] Skipped (resume).",

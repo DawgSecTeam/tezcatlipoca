@@ -4,9 +4,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from config.config_ops import write_state
 from common.constants import SCORING_ENGINE_VMID, ownership_tags
+from estate import state as estate_state
 
+
+def persist_state(ctx):
+# Write the competition's monolithic state document.
+#
+#     The file holds the only copy of the generated box and team passwords: a torn write
+#     here bricks both resume and redeploy. `absorb` routes the flat keys the phases use
+#     into their sections and the estate writer is the shared os.replace +
+#     0600-at-creation one. The module-level seam is deliberate: tests stub persistence
+#     through it (tests/_deploy_patch.dpatch) without touching a real competition dir.
+    document = ctx.document()
+    # A context with no comp_dir has nowhere to persist (partial contexts in tests).
+    if document is None:
+        return
+    document.absorb(ctx.state)
+    document.save()
 
 @dataclass
 class DeployContext:
@@ -27,6 +42,8 @@ class DeployContext:
     comp_dir: Optional[Path] = None
     comp_name: str = ""
     state_path: Optional[Path] = None
+    # The monolithic per-competition state document; `state` above is its flat view.
+    estate: object = None
     from_phase: int = 1
     resuming: bool = False
     assume_yes: bool = False
@@ -94,15 +111,19 @@ class DeployContext:
     run_id: str = ""
     reclaim_run_id: str = ""
 
+    def document(self):
+        # A context built outside prepare() (phase/sequencer unit tests, recovery paths)
+        # owns no document yet: bind it on first use rather than requiring a caller to.
+        # No comp_dir means nowhere to persist, so there is no document to bind.
+        if self.estate is None:
+            if self.comp_dir is None:
+                return None
+            self.estate = estate_state.EstateState.load(self.comp_dir)
+            self.state_path = estate_state.state_path(self.comp_dir)
+        return self.estate
+
     def save_state(self):
-    # Persist .deploy_state.json through the shared config_ops writer.
-        # .deploy_state.json holds the only copy of the generated box and team
-        # passwords: a torn write here bricks both resume and redeploy, and the old
-        # write_text-then-chmod idiom also left the secret briefly world-readable.
-        # config_ops.write_state is the shared os.replace + 0600-at-creation writer
-        # (added 2026-10-01 alongside redeploy's two copies and the post-DB-wipe
-        # recovery path) — one implementation, not four.
-        write_state(self.state_path, self.state)
+        persist_state(self)
 
     def checkpoint(self, n):
         # Record phase n as completed — the resume guard's only source of truth.

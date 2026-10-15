@@ -102,7 +102,6 @@ class EstateStateTest(unittest.TestCase):
     def test_fresh_skeleton_has_version_and_comp_name(self):
         loaded = state.EstateState.load(self.comp)
         self.assertEqual(loaded.data["schema_version"], state.SCHEMA_VERSION)
-        self.assertEqual(loaded.data["pipeline_version"], 4)
         self.assertEqual(loaded.data["identity"]["comp_name"], "comp-a")
         self.assertFalse(state.state_path(self.comp).exists())
 
@@ -219,7 +218,7 @@ class EstateMigrationTest(unittest.TestCase):
         self.assertEqual(migrated.data["templates"]["frozen"]["frozen_at"],
                          "2026-10-02 10:00:00")
         self.assertEqual(migrated.data["run"]["last_phase"], 8)
-        self.assertEqual(migrated.data["run"]["plant_coverage"],
+        self.assertEqual(migrated.data["run"]["plant_coverage_failed"],
                          {"team1-web01": ["apache"]})
         self.assertEqual(migrated.data["external"]["headscale"]["comp_id"], "comp-a")
         self.assertEqual(migrated.data["external"]["portal"],
@@ -242,3 +241,47 @@ class EstateMigrationTest(unittest.TestCase):
         for legacy in (".deploy_state.json", "placement.json", "targets.json", "teams.json",
                        ".template-hashes.json", ".frozen.json", ".teardown-journal.json"):
             self.assertTrue((self.comp / legacy).exists(), legacy)
+
+    def test_the_deploys_own_endpoint_outranks_the_ambient_env(self):
+        # Teardown's ownership refusal compares the loaded env against the host the deploy
+        # actually used, so the recorded value must win over whatever env is loaded now.
+        with patch.dict(os.environ, {**self.env,
+                                     "TF_VAR_proxmox_endpoint": "https://elsewhere:8006"}):
+            migrated = state.EstateState.migrate(self.comp)
+        self.assertEqual(migrated.data["identity"]["endpoint"], "https://pve.example:8006")
+
+
+class FlatBridgeTest(unittest.TestCase):
+    """The phases still speak the flat state dict; the file speaks sections."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state = state.EstateState.load(Path(self.tmp.name))
+
+    def test_absorb_routes_each_key_to_its_section(self):
+        self.state.absorb({"run_id": "run-abc12345", "teams": {"team1": {"identifier": 101}},
+                           "engine_template_vmid": 1220, "last_phase": 8,
+                           "nakon_failed_steps": ["x"]})
+        self.assertEqual(self.state.data["identity"]["run_id"], "run-abc12345")
+        self.assertEqual(self.state.data["secrets"]["teams"]["team1"]["identifier"], 101)
+        self.assertEqual(self.state.data["templates"]["engine_template_vmid"], 1220)
+        self.assertEqual(self.state.data["run"]["last_phase"], 8)
+        # An undeclared key is deploy bookkeeping and lands in run, never dropped.
+        self.assertEqual(self.state.data["run"]["nakon_failed_steps"], ["x"])
+
+    def test_round_trip_is_lossless_and_survives_a_reload(self):
+        flat = {"run_id": "run-abc12345", "last_phase": 8, "teams": {"team1": {"identifier": 101}},
+                "admin_password": "pw", "boxes": [{"name": "web01"}], "started": True,
+                "injects_created": ["a"], "portal_up": False}
+        self.state.absorb(flat)
+        self.state.save()
+        reloaded = state.EstateState.load(Path(self.tmp.name)).flatten()
+        # Every written key survives; the skeleton's own comp_name is extra.
+        self.assertEqual({key: reloaded[key] for key in flat}, flat)
+        self.assertEqual(reloaded["comp_name"], Path(self.tmp.name).name)
+
+    def test_absorb_leaves_structured_sections_alone(self):
+        self.state.data["templates"]["engine"] = {"hash": "e" * 64}
+        self.state.absorb({"last_phase": 3})
+        self.assertEqual(self.state.data["templates"]["engine"], {"hash": "e" * 64})

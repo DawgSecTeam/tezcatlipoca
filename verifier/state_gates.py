@@ -1,4 +1,4 @@
-"""State-file gates fed by .deploy_state.json: plant coverage + the tolerated-failure ledger."""
+"""State gates fed by the competition's state document: plant coverage + the tolerated-failure ledger."""
 
 import json
 
@@ -10,7 +10,7 @@ def check_plant_coverage(comp_dir):
 # M4 plant-coverage gate: every machine's FULL expected configuration list
 #     (nakon-config.json) must have actually planted.
 #
-#     Deploy records failures per machine in .deploy_state.json["plant_coverage_failed"]
+#     Deploy records failures per machine in the state document's "plant_coverage_failed"
 #     (machine -> [config names whose nakon step reported rc != 0], or every config when
 #     a machine died before reporting any step). Golden-stage entries map onto every team
 #     copy of that box (a golden failure means the clones inherited the gap): the golden
@@ -51,7 +51,7 @@ def check_plant_coverage(comp_dir):
     recorded = failed if isinstance(failed, dict) else None
     if recorded is None:
         print("  FAIL  — plant coverage was never recorded: no 'plant_coverage_failed' in "
-              ".deploy_state.json. An unrecorded coverage gate is not a passing one.")
+              "the state document. An unrecorded coverage gate is not a passing one.")
         return gate_fail("plant_coverage", "coverage was never recorded")
     unplanted = {}
     for m in machines:
@@ -97,7 +97,7 @@ def check_plant_coverage(comp_dir):
 
 
 def check_degradations(comp_dir):
-# Tolerated-failure gate: every entry in .deploy_state.json["degradations"] is a
+# Tolerated-failure gate: every entry in the state document's "degradations" is a
 #     prerequisite that failed while the deploy continued — recorded by
 #     common.utils.record_degradation and persisted by deploy_lib.failure on both the
 #     success and failure paths.
@@ -115,7 +115,7 @@ def check_degradations(comp_dir):
     entries = state.get("degradations")
     if not isinstance(entries, list):
         print("  FAIL  — the tolerated-failure ledger was never recorded: no "
-              "'degradations' in .deploy_state.json. An unrecorded ledger is not a "
+              "'degradations' in the state document. An unrecorded ledger is not a "
               "passing one.")
         return gate_fail("degradations", "degradations were never recorded")
     if entries:

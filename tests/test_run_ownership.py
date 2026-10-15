@@ -292,7 +292,7 @@ class RunIdMinting(unittest.TestCase):
     def test_fresh_deploy_mints_a_run_id_into_state(self):
         with tempfile.TemporaryDirectory() as d:
             ctx = self._ctx(Path(d) / "s.json")
-            with dpatch("write_state"), \
+            with dpatch("persist_state"), \
                     dpatch("collect_teams",
                                  return_value={"team1": {"identifier": "101",
                                                          "password": "x"}}):
@@ -314,7 +314,7 @@ class RunIdMinting(unittest.TestCase):
                 return {"team1": {"identifier": identifier_defaults[0],
                                   "password": calls["password"]}}
 
-            with dpatch("write_state"), dpatch("collect_teams", side_effect=collect):
+            with dpatch("persist_state"), dpatch("collect_teams", side_effect=collect):
                 dl_secrets.resolve_competition_teams(ctx, 1, 1)
             self.assertEqual(calls["defaults"], ["120"])
             self.assertNotEqual(ctx.teams["team1"]["password"], "old-secret")
@@ -326,7 +326,7 @@ class RunIdMinting(unittest.TestCase):
             (comp_dir / "Compfile").write_text(
                 "packet_source packets/cde-2026/packet.yaml\n")
             ctx = self._ctx(comp_dir / ".deploy_state.json", engine_vmid=1080)
-            with dpatch("write_state"), dpatch(
+            with dpatch("persist_state"), dpatch(
                     "collect_teams",
                     side_effect=lambda count, engine_vmid, identifier_defaults=None, **kw: {
                         "team1": {"identifier": str(identifier_defaults[0]), "password": "fresh"},
@@ -341,7 +341,7 @@ class RunIdMinting(unittest.TestCase):
                 "run_id": RUN, "last_phase": 3,
                 "teams": {"team1": {"identifier": "101", "password": "x"}}}))
             ctx = self._ctx(state_path, previous_state={"run_id": RUN}, resuming=True)
-            with dpatch("write_state"):
+            with dpatch("persist_state"):
                 dl_secrets.resolve_competition_teams(ctx, None, 4)
         self.assertEqual(ctx.run_id, RUN)
         self.assertEqual(ctx.state["run_id"], RUN)

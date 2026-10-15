@@ -2,6 +2,7 @@
 
 import json
 
+from estate import state as estate_state
 from verifier.model import CheckError
 
 
@@ -22,15 +23,11 @@ def read_credentials_lines(comp_dir):
 
 
 def read_deploy_state(comp_dir):
-# .deploy_state.json as a dict, or None when absent, unreadable, or not an object.
+# The deploy's flat state view, or None when there is no state, or it is unreadable.
 #
 #     One definition of "what the deploy recorded" for every gate and the SUMMARY: each
 #     caller decides for itself what None means (SKIP, fail-closed, or "pre-tally").
-    try:
-        state = json.loads((comp_dir / ".deploy_state.json").read_text())
-    except (OSError, ValueError):
-        return None
-    return state if isinstance(state, dict) else None
+    return estate_state.read_flat(comp_dir)
 
 
 def load_boxes(comp_dir):

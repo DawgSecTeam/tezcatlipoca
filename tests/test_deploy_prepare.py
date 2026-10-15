@@ -155,7 +155,7 @@ class PriorStateGuards(unittest.TestCase):
             ctx = _prior(comp_dir)
             with dpatch("guard_resume_from_phase") as guard:
                 _load_and_gate(ctx, comp_dir, 6, True)
-        guard.assert_called_once_with(6, 5, comp_dir / ".deploy_state.json", force=True)
+        guard.assert_called_once_with(6, 5, comp_dir / "estate-state.json", force=True)
 
     def test_fresh_run_never_calls_the_resume_guard(self):
         with tempfile.TemporaryDirectory() as d:
@@ -179,7 +179,7 @@ class PlacementAndLock(unittest.TestCase):
         with dpatch("resolve_placement",
                           side_effect=lambda *a, **k: order.append(("resolve", a[1])) or resolve_return), \
                 dpatch("activate_placement", side_effect=lambda p: order.append("activate")), \
-                dpatch("write_state"), \
+                dpatch("persist_state"), \
                 dpatch("acquire_engine_lock",
                              side_effect=lambda v: order.append(("lock", v))):
             dl_placement.apply_engine_placement(ctx, Path("/nonexistent"), None, None)
@@ -497,7 +497,7 @@ class PrepareSequencer(unittest.TestCase):
                 dpatch("confirm_deploy",
                              side_effect=lambda *a, **k: order.append("confirm") or confirm), \
                 dpatch("enumerate_deploy_targets", side_effect=rec("targets")), \
-                dpatch("write_state"), \
+                dpatch("persist_state"), \
                 contextlib.redirect_stdout(buf if buf is not None else io.StringIO()):
             result = deploy.prepare(comp_dir, num_teams=1, assume_yes=False, scoring_vmid=1234)
         return result

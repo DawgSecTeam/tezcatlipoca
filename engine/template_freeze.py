@@ -151,24 +151,6 @@ def golden_hash_inputs(box, golden_machine, payload_hash, box_password, box_user
     )
 
 
-def tf_resource_block(tf_text, rtype, rname):
-# The text of one `resource "rtype" "rname" { ... }` block (brace-matched), or the
-#     whole file if it can't be found — hashing too much is safe, too little is not.
-    m = re.search(r'resource\s+"' + re.escape(rtype) + r'"\s+"' + re.escape(rname) + r'"\s*\{', tf_text)
-    if not m:
-        return tf_text
-    depth, i = 0, m.end() - 1
-    while i < len(tf_text):
-        if tf_text[i] == "{":
-            depth += 1
-        elif tf_text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return tf_text[m.start():i + 1]
-        i += 1
-    return tf_text
-
-
 def _clean_func():
     from engine.engine_identity_ops import clean_engine_for_template
     return clean_engine_for_template
@@ -185,14 +167,15 @@ def template_stamp_current(node, vmid, expected_hash):
     return bool(expected_hash) and stored_template_hash(node, vmid) == expected_hash
 
 
-def engine_hash_inputs(base_engine_vm_id, quotient_ref, main_tf_text, bootstrap_func):
+def engine_hash_inputs(base_engine_vm_id, quotient_ref, engine_shape, bootstrap_func):
 # Engine hash fields. config: base image vmid + the pinned Quotient ref (the hash
 #     must be computable BEFORE building, so the ref is config, not a post-boot capture —
 #     the realized HEAD is recorded for traceability only). code: the bootstrap script and
-#     main.tf (the engine's CPU/memory/disk shape lives there; a shape change is code-class
-#     drift, warn-only on a frozen competition — documented residual risk). OUT: engine
-#     mgmt IP, event.conf, postgres/redis passwords (all applied per-deploy; the clean step
-#     removes them from the template), node endpoint (state's endpoint guard covers it).
+#     the engine's shape — its CPU/memory/disk/NIC wiring, now estate.apply.create_engine
+#     (a shape change is code-class drift, warn-only on a frozen competition — documented
+#     residual risk). OUT: engine mgmt IP, event.conf, postgres/redis passwords (all applied
+#     per-deploy; the clean step removes them from the template), node endpoint (state's
+#     endpoint guard covers it).
     return _split_inputs(
         {
             "base_engine_vm_id": int(base_engine_vm_id),
@@ -201,10 +184,9 @@ def engine_hash_inputs(base_engine_vm_id, quotient_ref, main_tf_text, bootstrap_
         {
             # The clean step shapes the template disk as much as bootstrap does.
             "bootstrap_scoring_engine": code_hash(bootstrap_func, _clean_func()),
-            # Only the engine's own resource block shapes the engine disk; hashing the
-            # whole file rebuilt the engine template on any team-box edit.
-            "main.tf:scoring_engine": sha256_text(tf_resource_block(
-                main_tf_text, "proxmox_virtual_environment_vm", "scoring_engine")),
+            # Only the engine's own shape counts; hashing the whole deploy path rebuilt the
+            # engine template on any team-box edit.
+            "estate.apply:create_engine": code_hash(engine_shape),
         },
     )
 

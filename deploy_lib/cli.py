@@ -9,6 +9,7 @@ from config.config_prompts import _prompt_difficulty, collect_boxes, collect_use
 from config.config_ops import load_previous_competitions
 from common.comp_paths import resolve_comp_dir
 from common.utils import valid_comp_name
+from estate import state as estate_state
 
 from deploy_lib.runner import deploy
 
@@ -102,15 +103,12 @@ def print_plan(comp_name, comp_dir):
         kind = "  (in-path firewall: vmbrW<id> → fw → team bridge, gateway .1)" \
             if b.get("in_path") else "  (unmanaged appliance)" if b.get("unmanaged") else ""
         print(f"    {b['name']:<12} {b['template']:<20} {b['cpu']} CPU, {b['memory_mb']} MB, {disk}{kind}")
-    try:
-        state_run = (json.loads((comp_dir / ".deploy_state.json").read_text()).get("run_id") or "")
-    except (ValueError, OSError):
-        state_run = ""
+    state_run = estate_state.load_flat(comp_dir).get("run_id") or ""
     if state_run:
         print(f"  Run identity: {state_run} (reused from this competition's state)")
     else:
-        print("  Run identity: minted at deploy time (run-<id>, stored in "
-              ".deploy_state.json) — destruction paths require it")
+        print("  Run identity: minted at deploy time (run-<id>, stored in the "
+              "competition's state document) — destruction paths require it")
     print("\n  Team count is decided at deploy time (--teams N, or the prompt).")
     print("  Nothing was deployed — no teardown, no terraform apply.")
     print(f"  Deploy for real with: python3 create-competition.py --competition {comp_name} "

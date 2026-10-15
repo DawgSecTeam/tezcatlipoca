@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from common.constants import ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_TAG, SCORING_ENGINE_VMID
+from estate import state as estate_state
 from golden.golden_ops import destroy_golden_set
 from net.jump_ops import destroy_jump_vms
 from multinode.placement_record import record_of
@@ -46,13 +47,8 @@ def refuse_frozen_full_teardown(competition, frozen, full, end_of_competition):
 
 # refuses when ownership cannot be proven: no run id in the state, or the env targets a different endpoint than the deploy used
 def load_ownership(comp_dir):
-    deployed_state = {}
-    state_path = Path(comp_dir) / ".deploy_state.json"
-    if state_path.exists():
-        try:
-            deployed_state = json.loads(state_path.read_text())
-        except (ValueError, OSError):
-            deployed_state = {}
+    state_path = estate_state.state_path(comp_dir)
+    deployed_state = estate_state.load_flat(comp_dir)
     run_id = deployed_state.get("run_id") or ""
     if not run_id:
         raise Refusal(
