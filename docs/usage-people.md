@@ -7,30 +7,30 @@ Interactive operation: one-time setup, templates, env vars, running a deploy. Sc
 - **API token**: user + token with `PVEAdmin` at `/`, or at minimum `VM.Allocate`, `VM.Clone`, `VM.Config.All`, `VM.PowerMgmt`, `Datastore.AllocateSpace`, `Datastore.Audit`, `Sys.Modify`, `SDN.Use`.
 - **Templates**: see below. An in-path firewall lineup (`in_path: true`) also needs a `pfsense` template on every node hosting teams ([environment-facts.md](environment-facts.md#templates)) and the seed `competitions/<id>/pfsense/pfsense-config-orig.xml` (copy from `competitions/pfsense-ad/pfsense/`). Preflight refuses without the template; phase 5 refuses without the seed.
 - **SSH keypair**: `ssh-keygen -t ed25519 -f ~/.ssh/range_key -C range-automation -N ""`
-- **Tooling**: Terraform (HashiCorp apt repo); `pip install toml requests python-dotenv pyyaml urllib3` (`tools/` VNC screenshots also need `websocket-client Pillow cryptography`).
-- **Config**: `cp .env.example .env` (gitignored; the only home for real creds).
+- **Tooling**: `pip install toml requests python-dotenv pyyaml urllib3` (`tools/` VNC screenshots also need `websocket-client Pillow cryptography`).
+- **Config**: `cp tezcatlipoca.example.toml tezcatlipoca.toml`, both gitignored (secrets stay in the environment; see [Configure the event](#configure-the-event)). `.env.example` remains the legacy env-override reference.
 - **vulndb**: nakon's build/randomize run on your workstation, so vulndb must be reachable from it; the engine needs none. Connection details go in `vendor/nakon/.env` (`host`, `user`, `password`, `database`).
 
 ## Templates
 
 Every VM is a clone of a hand-built Proxmox template. The two roles differ:
 
-- **Engine template** (`TF_VAR_template_vm_id`; the base the per-competition engine template is built from): Terraform never touches its cloud-init, so whatever account/key/sudo is baked in is what every clone gets.
-- **Box templates** (`boxes_per_team[].template`): Terraform's `initialization.user_account` sets `var.box_username`, `var.ssh_public_key`, and a per-competition `var.box_password` (nakon uses password auth). The template only needs working cloud-init.
+- **Engine template** (`proxmox.template_vm_id`; the base the per-competition engine template is built from): its cloud-init is never rewritten, so whatever account/key/sudo is baked in is what every clone gets.
+- **Box templates** (`boxes.json` `template`): the clone sets `ciuser`/`cipassword` from the competition's box login and `sshkeys` from `ssh.public_key` (nakon uses password auth). The template only needs working cloud-init.
 
 | Role | vCPU | RAM | Disk |
 |---|---|---|---|
-| Engine | 4 | 4 GB | 40 GB (hard-coded in `main.tf`) |
+| Engine | 4 | 4 GB | 40 GB (`ENGINE_DISK_GB` in `estate/apply.py`) |
 | Box | ≥1 | ≥512 MB | ≥10 GB |
 
 `/tmp` is a tmpfs at 50% of RAM, and nakon stages attachments there. A 512 MB box has ~256 MB, and a large attachment or leftovers from a failed deploy fill it (`No space left on device`, `size mismatch in put!`). Raise `memory_mb` for that box type.
 
-1. **Base VM** from a cloud-init image (or install `cloud-init` yourself). Install `qemu-guest-agent` (required on the engine template: `main.tf` reads its IP back through the agent). Boot once; `cloud-init status --long` must say `done`.
+1. **Base VM** from a cloud-init image (or install `cloud-init` yourself). Install `qemu-guest-agent` (required on the engine template: the deploy reads its IP back through the agent). Boot once; `cloud-init status --long` must say `done`.
 2. **Seed credentials (engine template only)**: an account named exactly `var.vm_username`, with `var.ssh_public_key` in `authorized_keys` and passwordless sudo (`/etc/sudoers.d/90-range-automation`). Confirm both survive a reboot.
 3. **Reset cloud-init immediately before shutdown**: `sudo cloud-init clean --logs --seed`. Skipping it is silent: clones look like the same instance rebooting, cloud-init skips network config, and `status` still says `done`.
-4. **Convert and tag**: `qm template <vmid>; qm set <vmid> --tags template`. `main.tf` finds box templates by exact name among tagged VMs, and the box picker lists only tagged ones.
+4. **Convert and tag**: `qm template <vmid>; qm set <vmid> --tags template`. The deploy finds box templates by exact name among tagged VMs (`infra/resources.py`), and the box picker lists only tagged ones.
 5. **Verify** with a scratch full clone. Engine: key SSH works and `sudo -n true` passes. Box: `cloud-init status` is `done` **and** `ip -br addr` shows the `ipconfig0` address. Destroy the clone.
-6. **Wire in**: engine → `TF_VAR_template_vm_id` in `.env` (global). Box → nothing; the picker queries tagged templates.
+6. **Wire in**: engine → `template_vm_id` under `[proxmox]` in `tezcatlipoca.toml` (global). Box → nothing; the picker queries tagged templates.
 
 ### Non-Ubuntu Linux
 
@@ -44,7 +44,7 @@ Every VM is a clone of a hand-built Proxmox template. The two roles differ:
 
 ### Windows
 
-No cloud-init: `main.tf` skips `initialization` for templates whose name contains `win` (same substring as nakon's `os_to_platform()`), and `bootstrap_windows_box()` sets IP/DNS/Administrator password over the guest agent post-clone.
+No cloud-init: the clone skips cloud-init config for templates whose name contains `win` (same substring as nakon's `os_to_platform()`), and `bootstrap_windows_box()` sets IP/DNS/Administrator password over the guest agent post-clone.
 
 1. **Unattended install** from an evaluation ISO via `autounattend.xml` on a floppy (`qm set <vmid> --args '-fda /path/autounattend.img'`; a second CD-ROM isn't detected). Declare `xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"` on `<unattend>` if any `wcm:action` is used, or it fails silently past the language screen (which never auto-skips). Use SeaBIOS, SATA disk, `e1000` NIC (no driver injection in WinPE); install virtio-win afterward.
 2. **Guest-agent bootstrap**: `msiexec /i <virtio-win>:\virtio-win-gt-x64.msi /qn /norestart` (the agent reports running but is non-functional without the vioserial driver), then `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`, start and enable `sshd`, open :22.
@@ -53,40 +53,66 @@ No cloud-init: `main.tf` skips `initialization` for templates whose name contain
 
 ## Configure the event
 
-`.env` is the single config for Terraform (`TF_VAR_*`) and the driver; there is no `terraform.tfvars`. Naming: `TF_VAR_<name>` Terraform input; `TEZ_<NAME>` driver knob (new knobs must use it); `NAKON_*`/`VULNDB_*` vendored-tool config. Any other env var the code reads must be in `tests/test_secret_hygiene.py`'s `INTERNAL_ENV` with a reason; that test keeps this table honest.
+The deployment surface is **`tezcatlipoca.toml`** at the repo root, copied from
+`tezcatlipoca.example.toml` and gitignored. `estate/config.py` reads it as one `Config` object
+with typed sections — `proxmox`, `ssh`, `engine`, `headscale`, `portal`, `knobs` — and holds no
+secrets.
 
-**Required:**
+Every key also accepts an env override, canonically `TEZ_` + the key upper-cased with dots as
+underscores: `proxmox.endpoint` → `TEZ_PROXMOX_ENDPOINT`. Keys under `knobs` drop the prefix
+(`knobs.thin_headroom` → `TEZ_THIN_HEADROOM`). The environment beats the file, because the
+run-queue dashboard injects per-run values (node tokens, the engine mgmt IP) into the process env
+and those must win over a committed profile. `TEZ_CONFIG` points the whole read at another file.
 
-| Variable | Meaning |
-|---|---|
-| `TF_VAR_proxmox_endpoint` | API URL, e.g. `https://10.0.0.10:8006/` |
-| `TF_VAR_proxmox_api_token` | `user@realm!tokenid=uuid` |
-| `TF_VAR_proxmox_node` | Node name |
-| `TF_VAR_datastore` | Datastore for engine and clones. Must support snapshots (ZFS, LVM-thin, Ceph, qcow2); thick LVM can't, and rollback modes need them |
-| `TF_VAR_template_vm_id` | Engine template vmid |
-| `TF_VAR_ssh_public_key`, `TF_VAR_ssh_private_key_path` | Keypair; the path is relative to `terraform/` unless absolute |
-| `TF_VAR_vm_username` | Account baked into the engine template; unrelated to box logins |
-| `TF_VAR_box_username`, `TF_VAR_box_password`, `TF_VAR_event_name`, `TF_VAR_teams`, `TF_VAR_boxes_per_team` | **Driver-written** from the competition dir (`users.json`, `credentials.txt`, `Compfile`, …). Stale values in an old env are overridden at terraform time. `teams` is `{"team1":{"identifier":"101","password":"…"}}`; `boxes_per_team` max 10, and a `disk_gb` below the template's fails the clone (Proxmox can't shrink) |
+A token is **named, not stored**: put its value in the environment and reference the variable name
+(the same indirection `nodes.json` uses for per-host tokens). `.env` is still loaded by `deploy.py`
+(python-dotenv) and its values reach the config as env overrides, so an existing `.env` keeps
+working; every legacy name the config accepts per key is listed in `estate/config.py`'s `_SPEC`
+(`TF_VAR_*`, `PROXMOX_TLS_FINGERPRINT`, `TEZ_REMOTE_KEY_TTL`, …). `.env.example` is the
+legacy-override reference; `NAKON_*`/`VULNDB_*` are vendored-tool config. Any other env var the
+code reads must be in `tests/test_secret_hygiene.py`'s `INTERNAL_ENV` with a reason; that test keeps
+this table honest.
+
+**Required** (the first five have no usable default; `node`/`datastore` default only to placeholders):
+
+| Key | Env override | Meaning |
+|---|---|---|
+| `proxmox.endpoint` | `TEZ_PROXMOX_ENDPOINT` | API URL, e.g. `https://10.0.0.10:8006/` |
+| `proxmox.api_token` | `TEZ_PROXMOX_API_TOKEN` | `user@realm!tokenid=uuid`; set it in the environment, never in the profile |
+| `proxmox.template_vm_id` | `TEZ_PROXMOX_TEMPLATE_VM_ID` | Engine template vmid |
+| `ssh.public_key`, `ssh.private_key_path` | `TEZ_SSH_PUBLIC_KEY`, `TEZ_SSH_PRIVATE_KEY_PATH` | Keypair. A relative path is checkout-relative; the legacy `../proxmox` form still resolves to the checkout root |
+| `proxmox.node` | `TEZ_PROXMOX_NODE` | Node name (default `pve` — set it per host) |
+| `proxmox.datastore` | `TEZ_PROXMOX_DATASTORE` | Datastore for engine and clones (default `local-lvm`). Must support snapshots (ZFS, LVM-thin, Ceph, qcow2); thick LVM can't, and rollback modes need them |
 
 **Optional:**
 
-| Variable | Meaning |
-|---|---|
-| `TF_VAR_engine_mgmt_ip` / `_gw` | Static engine management IP (default `10.0.0.250` / `10.0.0.1`); empty IP = DHCP |
-| `TF_VAR_scoring_vm_id` | Engine vmid (default 1000); also `--scoring-vmid` |
-| `TF_VAR_team_identifiers` | Pin team subnets, e.g. `120,121,122`. Set when node vmids collide with the default 101+ blocks |
-| `TEZ_THIN_HEADROOM` | Fraction `(0, 1]` of provisioned disk the headroom preflight counts on thin pools. Unset = strict ([environment-facts.md](environment-facts.md#storage)) |
-| `TEZ_RED_SEGMENT` | Routed-red segment matching bad-auto's `deploy.red_subnet` (default `10.200.0.0/24`). Set → satellite jump VMs accept red and SNAT to `192.168.<id>.1`; malformed is a hard error ([multi-node.md](multi-node.md#routed-red)) |
-| `TEZ_PORTAL_TUNNEL_TOKEN`, `TEZ_PORTAL_HOSTNAME` | Student portal Cloudflare tunnel. **Event env only**: a practice worktree carrying them claims the public name ([portal.md](portal.md)) |
-| `TEZ_PORTAL_OPEN` | `1` opens team console access at start (practice). Default closed |
-| `PROXMOX_CA_BUNDLE` / `PROXMOX_TLS_FINGERPRINT` | Pin API TLS; at most one |
-| `TF_VAR_proxmox_api_token_<node>` | Per-host token referenced by name from `nodes.json` ([multi-node.md](multi-node.md)) |
+| Key | Env override | Meaning |
+|---|---|---|
+| `engine.username` | `TEZ_ENGINE_USERNAME` | Account baked into the engine template (default `sysadmin`); unrelated to box logins |
+| `engine.mgmt_ip` / `engine.mgmt_gw` | `TEZ_ENGINE_MGMT_IP` / `TEZ_ENGINE_MGMT_GW` | Static engine management IP (default `10.0.0.250` / `10.0.0.1`); empty IP = DHCP |
+| `proxmox.tls_fingerprint` / `proxmox.ca_bundle` | `TEZ_PROXMOX_TLS_FINGERPRINT` / `TEZ_PROXMOX_CA_BUNDLE` | Pin API TLS; at most one (legacy `PROXMOX_TLS_FINGERPRINT` / `PROXMOX_CA_BUNDLE`) |
+| `headscale.url`, `.ssh_host`, `.ssh_user`, `.ssh_password`, `.infra_user`, `.key_ttl` | `TEZ_HEADSCALE_*` | Participant access: required unless the Compfile opts out with `remote_access 0`; `key_ttl` defaults `72h` (legacy `TEZ_REMOTE_KEY_TTL`) ([remote-access.md](remote-access.md)) |
+| `portal.hostname`, `.tunnel_token`, `.open` | `TEZ_PORTAL_HOSTNAME`, `TEZ_PORTAL_TUNNEL_TOKEN`, `TEZ_PORTAL_OPEN` | Student portal. **Event profile only**: one carrying the tunnel pair claims the public name ([portal.md](portal.md)) |
+| `knobs.thin_headroom` | `TEZ_THIN_HEADROOM` | Fraction `(0, 1]` of provisioned disk the headroom preflight counts on thin pools. Unset = strict |
+| `knobs.red_segment` | `TEZ_RED_SEGMENT` | Routed-red segment matching bad-auto's `deploy.red_subnet` (default `10.200.0.0/24`). Set → satellite jump VMs accept red and SNAT to `192.168.<id>.1`; malformed is a hard error ([multi-node.md](multi-node.md#routed-red)) |
+| `knobs.cycle_timeout`, `knobs.python`, `knobs.comps_root`, `knobs.artifacts_archive`, … | `TEZ_*` | The rest of the tuning knobs, spelled out in `tezcatlipoca.example.toml` and `.env.example` |
+| `nodes.json` `token_env` | that host's own variable | Per-host API token referenced by name ([multi-node.md](multi-node.md)) |
 
-Not in `.env`: the Quotient `admin` and `scoring` passwords and the inject/postgres/redis passwords, minted per run into `credentials.txt`. `scoring` is a second admin for automation (unattended verify, harnesses) so scheduled logins don't evict an operator's `admin` session. Boxes are chosen per event: the picker queries tagged templates and saves `boxes.json`, which a reuse replays.
+**Read straight from the environment, not the profile:** `TF_VAR_scoring_vm_id` (engine vmid,
+default 1000; `--scoring-vmid` wins) and `TF_VAR_team_identifiers` (pin team subnets, e.g.
+`120,121,122`). Set the latter when the host's live vmids collide with the default 101+ blocks.
+
+**Not config, generated per competition:** the team roster with its passwords, the box list, the
+box login, and the event name are read or minted from the competition dir (`collect_teams()`,
+`users.json`, the box picker) and written into the state document, `teams.json` and
+`credentials.txt` — a stale value elsewhere cannot override them. The box list caps at 10 types
+(`MAX_BOXES_PER_TEAM`); a `disk_gb` below the template's fails the clone (Proxmox can't shrink).
+
+Not in any config file: the Quotient `admin` and `scoring` passwords and the inject/postgres/redis passwords, minted per run into `credentials.txt`. `scoring` is a second admin for automation (unattended verify, harnesses) so scheduled logins don't evict an operator's `admin` session. Boxes are chosen per event: the picker queries tagged templates and saves `boxes.json`, which a reuse replays.
 
 Teams are only counted, not picked: `collect_teams()` names them `team1…`, identifiers `101…`, with fresh passwords every run.
 
-Box `name` doesn't decide scoring; the services picked do. `build_event_conf()` maps each through `_SERVICE_TO_CHECK` in `quotient/setup.py` (apache/nginx → Web, bind → Dns, sshd → Ssh, …). An unmapped service gets no check and a warning; extend the table. A box named `dns*` becomes its team's resolver (`main.tf`).
+Box `name` doesn't decide scoring; the services picked do. `build_event_conf()` maps each through `_SERVICE_TO_CHECK` in `quotient/setup.py` (apache/nginx → Web, bind → Dns, sshd → Ssh, …). An unmapped service gets no check and a warning; extend the table.
 
 To pin services/misconfigs: [usage-agents.md](usage-agents.md#pinning).
 
@@ -115,21 +141,9 @@ Prompted after the box picker, saved to `users.json` (absent = defaults):
 
 **Teardown**: `python3 destroy-competition.py --competition <id>` ([usage-agents.md](usage-agents.md#destroy-competitionpy)).
 
-**Add a team mid-event**: don't rerun `create-competition.py`; it regenerates every password and destroys the range. Do it by hand: new `vmbr<identifier>` bridge, the team's boxes as Terraform-managed linked clones of the goldens, an engine address on that bridge, re-push `event.conf`.
+**Add a team mid-event**: don't rerun `create-competition.py`; it regenerates every password and destroys the range. Do it by hand: new `vmbr<identifier>` bridge, the team's boxes as linked clones of the goldens (the estate component's create path), an engine address on that bridge, re-push `event.conf`.
 
-**Add a box type**: build and tag the template; it appears in the picker. One golden per type; apply #2 clones every team's copy.
-
-**Running `terraform` directly**: a bare `apply` yields an engine, bridges and NICs only. Team boxes need `build_team_boxes` and `golden_template_ids` (phase 4), and it never bootstraps Quotient, runs nakon, or seeds. Terraform doesn't read `.env`, and `source .env` breaks on spaces, `!`, and JSON braces; load it through python-dotenv:
-
-```bash
-cd terraform
-eval "$(python3 -c "
-from dotenv import dotenv_values
-for k, v in dotenv_values('../.env').items():
-    print(f'export {k}={v!r}')
-")"
-terraform init && terraform apply -parallelism=1
-```
+**Add a box type**: build and tag the template; it appears in the picker. One golden per type; the phase-4 box build clones every team's copy.
 
 ## Recovering boxes mid-event
 
@@ -146,12 +160,12 @@ python3 redeploy-competition.py --competition <id> --teams 3 --boxes web01 --mod
 
 | Symptom | Cause / fix |
 |---|---|
-| Clone lock errors | Parallel clones; always `-parallelism=1` |
+| Clone lock errors | The component clones serially; a concurrent cloner on the same datastore (e.g. the workshop portal provisioner) is the usual cause |
 | Template not found | Not tagged `template`, or name mismatch |
 | Can't SSH a fresh clone | Broken cloud-init; verify on a scratch clone before tagging |
-| `apt-get` fails on a fresh clone | Racing `unattended-upgrades` for the dpkg lock; retried 5×15 s, rerun apply if it loses |
+| `apt-get` fails on a fresh clone | Racing `unattended-upgrades` for the dpkg lock; retried 5×15 s, rerun the phase if it loses |
 | Quotient panics on credlist | A check references a credlist that wasn't staged; `linux.credlist` is pushed with `event.conf`, check `config/credlists/` on the engine |
-| nakon has no config on the engine | Bare `terraform apply`; the driver scps stage configs in phases 4–7 |
+| nakon has no config on the engine | The driver scps stage configs in phases 4–7; resume at the phase that stages them |
 | nakon MySQL denied/refused | vulndb unreachable from the workstation, or `vendor/nakon/.env` wrong; check `SHOW GRANTS` |
 | nakon can't SSH a box | Still booting, or the template account doesn't match `generate_nakon_config()` |
 | Bridge creation 403 | Token lacks `Sys.Modify` |
@@ -162,4 +176,4 @@ python3 redeploy-competition.py --competition <id> --teams 3 --boxes web01 --mod
 | Services all down | The first round lands `Delay`+`Jitter` (~70 s) after the summary. Otherwise `ss -ltnp` on the box; if listening, compare `/opt/quotient/config/credlists/linux.credlist` with the box's accounts (`Sql` needs a matching database user) |
 | Scoreboard looks off, nothing crashed | `range-healthcheck.timer` logs failures only: `sudo tail -f /var/log/range-healthcheck.log`, or `verify-competition.py` |
 | No `tz-ready` snapshot | Thick LVM, or deployed before snapshots; use `reconfigure` or `rebuild` |
-| `--from-phase 7` worry about reseeding | Phase 8 steps are flag-gated in `.deploy_state.json`; the INJECTS gate catches duplicates |
+| `--from-phase 7` worry about reseeding | Phase 8 steps are flag-gated in `estate-state.json`; the INJECTS gate catches duplicates |

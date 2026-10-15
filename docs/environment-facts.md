@@ -107,7 +107,7 @@ the deploy env; host and credentials: `infrastructure-status.md`;
 - **New VirtIO NICs need a cold boot** — a guest-level reboot doesn't trigger the PCI scan.
 - **Fresh clones can boot with an empty `/etc/resolv.conf`** (cloud-init ignores
   `dns.servers` on a static IP), so `fix_dns_on_boxes` runs in the deploy. Never point
-  boxes at their own team's `dns*` box from Terraform — deadlock (its bind9 needs a
+  boxes at their own team's `dns*` box at clone time — deadlock (its bind9 needs a
   working resolver to install via apt).
 - **Stale ifupdown2 state breaks `ifreload -a` node-wide**: `/run/network/ifstatenew` can
   carry dead bridges from gone comps, failing every API-driven network change on a missing

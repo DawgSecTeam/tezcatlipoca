@@ -5,7 +5,10 @@ scoring engine, the engine template, and its local teams; each **satellite** hos
 that slot's copies of the golden templates, and a small Alpine **jump/router VM** that
 impersonates the engine's gateway IP there. Config lives in `nodes.json` (committed, no
 secrets); the resolved choice lives in `competitions/<id>/placement.json` (authoritative for
-every later op).
+every later op). Each host is reached through a per-node route table
+(`infra/client.py:register_node_routes`, keyed by PVE node name);
+`multinode/placement_record.activate_placement` points the process config at the engine's host
+and registers those routes, so every node-scoped API call goes to the host that owns it.
 
 ## Why routing, not bridging
 
@@ -29,7 +32,7 @@ with the source preserved so blue can see and firewall the attacker. That covers
 teams only — satellite teams are reachable only through the jump, whose FORWARD policy is DROP
 by default, so red's source matches no rule there.
 
-Set `TEZ_RED_SEGMENT` (`.env.example`) to the same CIDR as the comp's bad-auto
+Set `knobs.red_segment` (or `TEZ_RED_SEGMENT`) to the same CIDR as the comp's bad-auto
 `deploy.red_subnet`. Each jump then accepts red→its local teams, accepts replies, and SNATs red
 to `192.168.<id>.1` so the gateway-only SSH trust holds. Leave unset for single-node ranges and
 `masq`-mode red, which shares the team gateways and needs no path of its own.
@@ -50,7 +53,7 @@ python3 verify-competition.py competitions/<id> --red-ip <red mgmt IP> \
 
 The node list is a per-run input: `--nodes <path>` points at it (the dashboard writes one
 per run from its node catalog). Without `--nodes` the cwd `nodes.json` is used; with
-neither, the run is single-node from `.env`, and an explicit `--engine-node`/`--team-node`
+neither, the run is single-node from the ambient config, and an explicit `--engine-node`/`--team-node`
 is refused rather than silently dropped. The file itself carries no secrets — `token_env`
 names the env var holding that host's token. Real per-host values (endpoint, PVE node,
 datastore, engine base vmid, ssh host): `infrastructure-status.md`.
@@ -71,7 +74,7 @@ datastore, engine base vmid, ssh host): `infrastructure-status.md`.
 }
 ```
 
-- `token_env` names the `.env` variable holding that host's API token (tokens never live in this
+- `token_env` names the env var holding that host's API token (tokens never live in this
   file) and **must be unique per record** — placement writes one record's token into the env var
   that record names, so two records sharing a name make the last-written one win for both.
   `load_nodes_config` refuses duplicates.
@@ -105,7 +108,7 @@ from the owning module). Absent `nodes.json` → every op behaves exactly as sin
    free RAM). Must have `engine_base_vmid`.
 4. The result prints as a decision table and is written to `placement.json`. From then on it is
    authoritative: resume, redeploy, verify, destroy all read it back, so a re-run balancer or an
-   `.env` swap can never move ops onto the wrong host. `--team-node`/`--engine-node` are ignored
+   ambient config swap can never move ops onto the wrong host. `--team-node`/`--engine-node` are ignored
    once `placement.json` exists (destroy first to re-place).
 5. A resume without `placement.json` (a range deployed before it existed) adopts its recorded
    `deployed_endpoint` as a single-slot placement instead of re-balancing a live range.
@@ -127,14 +130,14 @@ with identical planted content; hashes are slot-independent, so reuse/rebuild wo
 - **Phase 1**: the interrupted-clone reclaim scans every hosting node, filtered to this deploy's
   slots (each satellite's jump VM and slot-shifted goldens included; no engine there). Destruction
   of a leftover range is preflight's refusal on any node, reclaimed by `destroy-competition.py`.
-- **Phase 2**: apply #1 builds bridges on every host, the engine, and the engine's satellite
-  routes (persisted as a systemd oneshot so an engine reboot re-asserts them); jump VMs clone and
-  configure concurrently on a bounded pool of 4 (cloud-init static IPs, iptables-restore
-  ruleset; one that never comes up aborts the deploy), then `routing_ops` fail-loud-gates
-  engine→jump reachability before anything depends on it.
+- **Phase 2**: the estate component's create step builds bridges on every host, the engine, and the
+  engine's satellite routes (persisted as a systemd oneshot so an engine reboot re-asserts them);
+  jump VMs clone and configure concurrently on a bounded pool of 4 (cloud-init static IPs,
+  iptables-restore ruleset; one that never comes up aborts the deploy), then `routing_ops`
+  fail-loud-gates engine→jump reachability before anything depends on it.
 - **Phase 4**: builds the golden set on the engine node as usual, then once per satellite
-  (anchored on its first local team subnet, planted through the routed path); apply #2 builds
-  team boxes per slot from that slot's goldens.
+  (anchored on its first local team subnet, planted through the routed path); the box build then
+  clones team boxes per slot from that slot's goldens.
 - **Phases 5–7** are unchanged — everything rides the engine and is routed.
 
 `--plan-only` previews placement decisions without touching infra.
@@ -171,7 +174,7 @@ root SSH gets a template by building it on that host, not by syncing it.
   singular and always co-located with slot 0.
 - vmids only need uniqueness per PVE instance; the slot stride keeps the scheme collision-safe
   even on a future single-cluster backend.
-- `placement.json` beats `.env`, `nodes.json`, and CLI pins for every op against an
+- `placement.json` beats the ambient config, `nodes.json`, and CLI pins for every op against an
   already-placed competition.
 - Engine and jump mgmt IPs are swept against running guests on all hosting nodes — assign
   explicitly on a shared mgmt LAN when other engines hold the defaults.
