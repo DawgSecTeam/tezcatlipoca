@@ -84,5 +84,36 @@ class CompDirOnly(unittest.TestCase):
             self.assertEqual(seen["name"], "scrim-one")
 
 
+class ConfigLessWorkspace(unittest.TestCase):
+    """A workspace whose deploy died before generating teams.json/boxes.json holds no range.
+
+    Reading them unconditionally died with FileNotFoundError instead of a verdict (2026-10-14,
+    run-0c8d7533 / run-1194ddcf, both handed run-c84faaac's workspace — it died in
+    preflight-placement with a deploy state but no generated competition config)."""
+
+    def test_a_missing_generated_config_is_refused_before_anything_is_planned(self):
+        import contextlib
+        import io
+        import tempfile
+        for name in ("teams.json", "boxes.json"):
+            with self.subTest(missing=name), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                comp = make_workspace(tmp_path)
+                (comp / name).unlink()
+                module = load_destroy_cli(tmp_path)
+                calls, out = [], io.StringIO()
+                with mock.patch.object(sys, "argv",
+                                       ["destroy-competition.py", "--comp-dir", str(comp),
+                                        "--yes"]), \
+                        mock.patch("teardown.runner.run_terminal_teardown",
+                                   side_effect=lambda *a, **k: calls.append(a)), \
+                        contextlib.redirect_stdout(out):
+                    with self.assertRaises(SystemExit) as e:
+                        module.main()
+                self.assertEqual(e.exception.code, 1)
+                self.assertEqual(calls, [], "no teardown may be planned or run")
+                self.assertIn(name, out.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -109,6 +109,18 @@ def main():
 
         comp_dir = resolve_comp_dir(competition)
     name, scenario, difficulty = load_compfile(comp_dir / "Compfile")
+    # teams.json/boxes.json are what this teardown plans against. A workspace whose deploy died
+    # before generating them (preflight-placement) never held a range, and reading them
+    # unconditionally died with FileNotFoundError instead of a verdict (2026-10-14, runs
+    # run-0c8d7533 / run-1194ddcf, both handed run-c84faaac's config-less workspace).
+    missing = [f for f in ("teams.json", "boxes.json") if not (comp_dir / f).exists()]
+    if missing:
+        refusal = Refusal(
+            saw=f"{comp_dir} has no {', '.join(missing)}",
+            expected="the teams.json + boxes.json a deploy generates once its range is built",
+            remedy="destroy the workspace that owns the range; this one never held one")
+        print(f"\n  REFUSED — {refusal}")
+        sys.exit(1)
     teams = json.loads((comp_dir / "teams.json").read_text())
     boxes = json.loads((comp_dir / "boxes.json").read_text())
     frozen = frozen_state(comp_dir)
