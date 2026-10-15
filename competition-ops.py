@@ -209,9 +209,9 @@ def main():
     parser.add_argument("action", choices=ACTIONS)
     parser.add_argument("--comp-dir", dest="comp_dir", required=True,
                         help="the competition dir (or a per-run workspace copy) holding "
-                             "estate-state.json, credentials.txt, injects/ and terraform/")
+                             "estate-state.json, credentials.txt and injects/")
     parser.add_argument("--engine-ip", default=None,
-                        help="override the scoring-engine IP (default: terraform output)")
+                        help="override the scoring-engine IP (default: the state document)")
     parser.add_argument("--scoring-password", default=None, dest="scoring_password",
                         help="override the scoring account password")
     args = parser.parse_args()

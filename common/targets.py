@@ -8,7 +8,7 @@ def vm_id_for(identifier, box_index):
 
 
 def box_index(boxes, box_name):
-# Canonical position of a box by name — matches terraform's index(names, name).
+# Canonical position of a box by name — the order the roster template lists them in.
     for i, b in enumerate(boxes):
         if b["name"] == box_name:
             return i

@@ -81,7 +81,7 @@ def cloudinit_gate(tagged_by_name, boxes, label=""):
     verified = 0
     for box in boxes:
         if box.get("unmanaged"):
-            continue  # unmanaged boxes get no cloud-init identity (terraform skips the block)
+            continue  # unmanaged boxes get no cloud-init identity (the create path skips the block)
         name = box.get("template")
         vm = tagged_by_name.get(name)
         if vm is None or name in seen:
