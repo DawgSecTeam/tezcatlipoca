@@ -9,14 +9,12 @@ why. `guard_resume_from_phase` could not catch it: it reads the checkpoint, and 
 checkpoint was the lie.
 
 These tests pin the two answers that fix it:
-  - `team_vmids_from_state` parses the one artifact that records what was built, and
-    refuses to report "nothing there" when it simply could not read it;
+  - `estate.state.team_vmids` reads the one artifact that records what was built (the
+    resource inventory), and refuses to report "nothing there" when it could not read it;
   - `guard_resume_existence` refuses a resume whose skipped phases left nothing behind,
     and names the phase to actually use.
 
-Offline: no Proxmox, no network. The terraform-facing test runs a fake `terraform` on
-PATH (the pattern tests/test_run_terraform.py proved), so the real subprocess wrapper,
-argument list and stderr/stdout handling are all exercised.
+Offline: no Proxmox, no network — temp competition dirs and a fake API only.
 """
 
 import json
