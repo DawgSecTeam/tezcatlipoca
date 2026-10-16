@@ -66,12 +66,17 @@ crimson-relay died **twice** on PVE lock contention, in two different places:
    it returns none).
 2. **A per-VM config lock** (`qmstop 2351`: `can't lock file
    '/var/lock/qemu-server/lock-2351.conf' - got timeout`) on the re-run, in
-   `golden_ops.stop_vm`. **This one is not fixed**: the retry work covers the clone, the conversion
-   and HTTP-500 lock errors, but a *task* that fails on a per-VM lock has no retry. Filed in
-   `known-issues.md`.
+   `golden_ops.stop_vm`. Fixed in the follow-up pass below: the cause was our own abandoned task,
+   not a foreign race — `wait_for_proxmox_task(timeout=120)` gave up on `qmshutdown 2351` while
+   PVE's task was still running and still holding the per-VM lock, and the immediate force-stop
+   then collided with it. `lifecycle.stop_vm` now hands PVE its own `timeout` (so the task ends on
+   its own) and every VM-scoped task in `infra/lifecycle.py` goes through one helper,
+   `infra.client.run_vm_task`, which retries a task whose failure names a lock file.
 
-The lesson is recorded rather than generalised into a retry framework: two of the three sites were
-fixed by queueing before the fact, and the third is the same shape waiting to be fixed the same way.
+The lesson is recorded rather than generalised into a retry framework: the storage sites were
+fixed by queueing before the fact, and the per-VM site turned out to be self-inflicted — a client
+timeout outliving the task it gave up on — which is fixed at the cause, with the shared retry
+helper as the backstop for contention we do not control.
 
 ### `misconfig`: the diagnosis was half right, and the wrong half is instructive
 
@@ -124,8 +129,11 @@ next.
 - pfsense-rvb's verify and scrim-one-light's scrim were submitted and running; their results are
   appended to `logs/round3/campaign-log.md` rather than guessed at here.
 - Only the failed crimson-relay range had been destroyed, so **the estate was not yet clean** at the
-  time of writing; the teardowns are the remaining campaign step.
-- crimson-relay's third attempt needs the per-VM-lock retry above.
+  time of writing; the teardowns are the remaining campaign step. The re-run's own range
+  (`run-dd88db6d`) was left live by the ordering — its destroy ran before the re-run failed — and
+  is reclaimed in the follow-up pass.
+- crimson-relay's third attempt needs the per-VM-lock retry above; that retry is landed and the
+  attempt is the follow-up pass's live verification.
 
 ---
 

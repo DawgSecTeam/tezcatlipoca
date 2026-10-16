@@ -178,6 +178,33 @@ def wait_for_proxmox_task(node, upid, timeout=1800):
             f"Proxmox task {upid} failed: {exitstatus or status or 'unknown status'}")
 
 
+def run_vm_task(node, vmid, method, path, *, timeout=1800, attempts=5, **kwargs):
+    """Issue a VM-scoped PVE operation and wait for its task, retrying one PVE refused for
+    `lock-<vmid>.conf` contention.
+
+    PVE holds that per-VM lock for a task's whole duration, so two shapes collide here: a
+    VM-scoped task racing another already in flight, and — the failure this exists for — a
+    caller that gave up on a still-running task and then issues the next operation against
+    the lock it still holds. crimson-relay's phase 4 did exactly that: a 120 s client timeout
+    abandoned `qmshutdown 2351`, and the immediate force-stop lost `lock-2351.conf` to it
+    (run-dd88db6d, 2026-10-16). `lifecycle.stop_vm` no longer abandons its shutdown task;
+    this absorbs the contention that remains (a foreign operation, or a slow release). Every
+    operation routed here is idempotent, so the retry is safe, and a failure that does not
+    name a lock file is raised at once. Same 40 s-ramp as the datastore clone retry.
+    """
+    for attempt in range(attempts):
+        upid = proxmox_api(method, path, **kwargs)["data"]
+        try:
+            wait_for_proxmox_task(node, upid, timeout=timeout)
+            return
+        except RuntimeError as e:
+            if "lock file" not in str(e) or attempt == attempts - 1:
+                raise
+            print(f"    vmid {vmid} lost the per-VM lock — retrying "
+                  f"(attempt {attempt + 2}/{attempts})")
+            time.sleep(40 * (attempt + 1))
+
+
 def node_bridges(node):
     """{iface: comment} for every bridge the node owns — the only identity a bridge has."""
     nets = proxmox_api("GET", f"/nodes/{node}/network")["data"]

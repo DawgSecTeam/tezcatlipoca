@@ -29,11 +29,14 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 from infra import client  # noqa: E402
+from infra import lifecycle  # noqa: E402
 from engine import engine_template_ops  # noqa: E402
 
 UPID = "UPID:n:1:2:3:qmclone:955:x:"
 LOCK_MESSAGE = ("Proxmox task UPID:x failed: clone failed: can't lock file "
                 "'/var/lock/pve-manager/pve-storage-ssd' - got timeout")
+VM_LOCK_MESSAGE = ("Proxmox task UPID:x failed: can't lock file "
+                   "'/var/lock/qemu-server/lock-2351.conf' - got timeout")
 
 
 class WaitForTaskTerminalStates(unittest.TestCase):
@@ -344,3 +347,112 @@ class TemplateConversionRetry(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             self._convert(lock_failures=5)
         self.assertIn("lock file", str(ctx.exception))
+
+
+class VmScopedLockRetry(unittest.TestCase):
+    """A per-VM `lock-<vmid>.conf` timeout on a VM-scoped task is retried.
+
+    Live-found 2026-10-16 (crimson-relay's re-run, run-dd88db6d): phase 4's ACPI shutdown
+    was abandoned at our own 120 s client timeout while its `qmshutdown` task was still
+    running, and the immediate force-stop then lost `lock-2351.conf` to that same task. Two
+    things are held shut here: `stop_vm` hands PVE its own shutdown timeout so the task ends
+    on its own and releases the lock, and a stop that still loses the lock is retried (a
+    stop is idempotent). A failure that is not a lock is surfaced at once, as before.
+    """
+
+    NODE, VMID = "proxmox", 2351
+
+    @contextlib.contextmanager
+    def _patched(self, api, wait, status="running"):
+        with patch.object(client, "proxmox_api", api), \
+             patch.object(client, "wait_for_proxmox_task", wait), \
+             patch.object(client.time, "sleep", lambda *_: None), \
+             patch.object(lifecycle, "vm_status", lambda *a: status), \
+             contextlib.redirect_stdout(io.StringIO()):
+            yield
+
+    def _stopper(self, wait, status="running"):
+        """(api, posts) where `posts` records every POST body the stop issues."""
+        posts = []
+
+        def api(method, path, **kw):
+            posts.append((path.rsplit("/", 1)[-1], kw.get("data")))
+            return {"data": "UPID:" + ("shutdown" if path.endswith("/shutdown") else "stop")}
+
+        return api, posts, wait, status
+
+    def test_shutdown_gets_pve_its_own_timeout_so_the_task_cannot_be_abandoned(self):
+        waited = []
+
+        def wait(node, upid, timeout=1800):
+            waited.append(timeout)
+
+        posts = []
+
+        def api(method, path, **kw):
+            posts.append(kw.get("data"))
+            return {"data": "UPID:shutdown"}
+
+        with self._patched(api, wait, status="stopped"):
+            lifecycle.stop_vm(self.NODE, self.VMID)
+        self.assertEqual(posts, [{"timeout": lifecycle.SHUTDOWN_GRACE_S}],
+                         "PVE must be told to end its own shutdown task")
+        self.assertGreater(waited[0], lifecycle.SHUTDOWN_GRACE_S,
+                           "our wait must outlast PVE's, or we abandon a lock-holding task")
+
+    def test_a_lock_failed_stop_is_retried(self):
+        stops = []
+
+        def api(method, path, **kw):
+            if not path.endswith("/stop"):
+                return {"data": "UPID:shutdown"}
+            stops.append(path)
+            return {"data": "UPID:stop"}
+
+        def wait(node, upid, timeout=1800):
+            if upid == "UPID:shutdown":
+                raise RuntimeError("Proxmox task UPID:shutdown failed: VM still running")
+            if len(stops) == 1:
+                raise RuntimeError(VM_LOCK_MESSAGE)
+
+        with self._patched(api, wait):
+            lifecycle.stop_vm(self.NODE, self.VMID)
+        self.assertEqual(len(stops), 2, "the lock-failed stop is retried, not fatal")
+
+    def test_a_stop_that_keeps_losing_the_lock_is_bounded(self):
+        stops = []
+
+        def api(method, path, **kw):
+            if not path.endswith("/stop"):
+                return {"data": "UPID:shutdown"}
+            stops.append(path)
+            return {"data": "UPID:stop"}
+
+        def wait(node, upid, timeout=1800):
+            if upid == "UPID:shutdown":
+                raise RuntimeError("Proxmox task UPID:shutdown failed: VM still running")
+            raise RuntimeError(VM_LOCK_MESSAGE)
+
+        with self._patched(api, wait):
+            with self.assertRaises(RuntimeError) as ctx:
+                lifecycle.stop_vm(self.NODE, self.VMID)
+        self.assertIn("lock file", str(ctx.exception))
+        self.assertEqual(len(stops), 5, "the retry is bounded")
+
+    def test_a_non_lock_failure_is_not_retried(self):
+        calls = []
+
+        def api(method, path, **kw):
+            calls.append(path)
+            return {"data": "UPID:x"}
+
+        def wait(node, upid, timeout=1800):
+            raise RuntimeError("Proxmox task UPID:x failed: storage 'hdd' does not exist")
+
+        with patch.object(client, "proxmox_api", api), \
+             patch.object(client, "wait_for_proxmox_task", wait), \
+             patch.object(client.time, "sleep", lambda *_: None):
+            with self.assertRaises(RuntimeError):
+                client.run_vm_task(self.NODE, self.VMID, "POST",
+                                   f"/nodes/{self.NODE}/qemu/{self.VMID}/status/stop")
+        self.assertEqual(len(calls), 1, "a real failure is surfaced, not retried")

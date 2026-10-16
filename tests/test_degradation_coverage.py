@@ -8,7 +8,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import infra.lifecycle  # noqa: E402
-from infra import lifecycle  # noqa: E402
+from infra import client, lifecycle  # noqa: E402
 from common import utils  # noqa: E402
 
 
@@ -23,7 +23,7 @@ class SnapshotFailureIsRecorded(unittest.TestCase):
             raise RuntimeError("zfs error: cannot create snapshot 'hdd/vm-1500-disk-0@tz-base': "
                                "out of space")
         with patch.object(lifecycle, "list_snapshots", return_value=set()), \
-                patch.object(lifecycle, "proxmox_api", side_effect=failing_api), \
+                patch.object(client, "proxmox_api", side_effect=failing_api), \
                 patch("builtins.print"):
             ok = infra.lifecycle.take_snapshot("proxmox", 1500, "tz-base")
         self.assertFalse(ok)                       # still never raises, by design
@@ -35,9 +35,9 @@ class SnapshotFailureIsRecorded(unittest.TestCase):
 
     def test_a_successful_snapshot_records_nothing(self):
         with patch.object(lifecycle, "list_snapshots", return_value=set()), \
-                patch.object(lifecycle, "proxmox_api",
+                patch.object(client, "proxmox_api",
                              return_value={"data": "UPID:pve:0001"}), \
-                patch.object(lifecycle, "wait_for_proxmox_task"), \
+                patch.object(client, "wait_for_proxmox_task"), \
                 patch("builtins.print"):
             ok = infra.lifecycle.take_snapshot("proxmox", 1500, "tz-ready")
         self.assertTrue(ok)

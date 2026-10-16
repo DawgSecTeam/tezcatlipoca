@@ -1,7 +1,13 @@
 """VM power state and snapshot helpers (no ownership decisions in here)."""
 
-from infra.client import proxmox_api, wait_for_proxmox_task
+from infra.client import proxmox_api, run_vm_task
 from common.utils import record_degradation
+
+# PVE's own ACPI-shutdown wait, passed as the `timeout` of POST /status/shutdown. It must
+# expire inside OUR client wait: giving up on a still-running `qmshutdown` task and
+# force-stopping collides with the per-VM lock that task still holds (crimson-relay phase 4,
+# run-dd88db6d, 2026-10-16). With it, PVE ends the task on its own and releases the lock.
+SHUTDOWN_GRACE_S = 120
 
 def vm_status(node, vmid):
     """Current status string ('running'/'stopped'/...) or None if the VM doesn't exist."""
@@ -12,12 +18,13 @@ def vm_status(node, vmid):
 
 def stop_vm(node, vmid):
     try:
-        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/shutdown")["data"]
-        wait_for_proxmox_task(node, upid, timeout=120)
+        run_vm_task(node, vmid, "POST", f"/nodes/{node}/qemu/{vmid}/status/shutdown",
+                    data={"timeout": SHUTDOWN_GRACE_S}, timeout=SHUTDOWN_GRACE_S + 120)
     except RuntimeError:
+        pass
+    if vm_status(node, vmid) == "running":
         print(f"    vmid {vmid} ignored ACPI shutdown — forcing stop")
-        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
-        wait_for_proxmox_task(node, upid, timeout=120)
+        run_vm_task(node, vmid, "POST", f"/nodes/{node}/qemu/{vmid}/status/stop", timeout=120)
 
 
 def start_vm(node, vmid, timeout=120):
@@ -25,8 +32,7 @@ def start_vm(node, vmid, timeout=120):
     status = vm_status(node, vmid)
     if status is None or status == "running":
         return
-    upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/start")["data"]
-    wait_for_proxmox_task(node, upid, timeout=timeout)
+    run_vm_task(node, vmid, "POST", f"/nodes/{node}/qemu/{vmid}/status/start", timeout=timeout)
 
 
 def list_snapshots(node, vmid):
@@ -39,8 +45,8 @@ def list_snapshots(node, vmid):
 
 
 def delete_snapshot(node, vmid, name, timeout=600):
-    upid = proxmox_api("DELETE", f"/nodes/{node}/qemu/{vmid}/snapshot/{name}")["data"]
-    wait_for_proxmox_task(node, upid, timeout=timeout)
+    run_vm_task(node, vmid, "DELETE", f"/nodes/{node}/qemu/{vmid}/snapshot/{name}",
+                timeout=timeout)
 
 
 def take_snapshot(node, vmid, name, description="", timeout=900):
@@ -48,12 +54,11 @@ def take_snapshot(node, vmid, name, description="", timeout=900):
     try:
         if name in list_snapshots(node, vmid):
             delete_snapshot(node, vmid, name)
-        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/snapshot", data={
+        run_vm_task(node, vmid, "POST", f"/nodes/{node}/qemu/{vmid}/snapshot", data={
             "snapname": name,
             "vmstate": 0,
             "description": description or f"tezcatlipoca {name}",
-        })["data"]
-        wait_for_proxmox_task(node, upid, timeout=timeout)
+        }, timeout=timeout)
         return True
     except Exception as e:
         print(f"    WARNING: snapshot '{name}' failed for vmid {vmid}: {e}")
@@ -77,8 +82,8 @@ def rollback_snapshot(node, vmid, name, timeout=900, restart=True):
 
     if vm_status(node, vmid) == "running":
         stop_vm(node, vmid)
-    upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/snapshot/{name}/rollback")["data"]
-    wait_for_proxmox_task(node, upid, timeout=timeout)
+    run_vm_task(node, vmid, "POST", f"/nodes/{node}/qemu/{vmid}/snapshot/{name}/rollback",
+                timeout=timeout)
     if restart:
         start_vm(node, vmid)
         try:
