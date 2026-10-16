@@ -57,6 +57,12 @@ INTERNAL_ENV = {
     # checkout lives once per host while a run's engine is cut into <run_dir>/engine, so the
     # sibling fallback cannot find it (smoke run-cb959268 went live with no red team).
     "TEZ_TLALOC_PATH": "tezcatlipoca-dashboard -> red/tlaloc_ops.py agent checkout path",
+    # The dashboard's own service env, inherited by every driver child it starts, so an
+    # orphan reclaim can retire its range over /api/ranges/retire. Internal run-queue
+    # handoff, never operator configuration.
+    "TEZ_DASHBOARD_HOST": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire call",
+    "TEZ_DASHBOARD_PORT": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire call",
+    "TEZ_DASHBOARD_TOKENS": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire bearer",
     # artifacts_lib/seal.py seal step: default author attribution from the OS user, not
     # operator configuration.
     "USER": "OS username, recorded as the default write-up author on seal",

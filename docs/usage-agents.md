@@ -164,8 +164,11 @@ local: the VM's own tag set is the proof, the pair must be given together, a sam
 different run tag is reported and never touched, the clone-marker adoption the normal path allows
 is refused (a marker names no run), and golden/engine-template VMs need `--allow-templates`
 because there is no freeze record left to consult. It refuses outright when some comp dir still
-holds that run id, naming the normal command. Bridges are not addressed — a bridge carries no
-tags, so it can never be attributed.
+holds that run id, naming the normal command. Once the estate is clean it retires the range on
+the dashboard (a reclaim is not a run, so nothing else would); when the dashboard handoff is not
+in the environment it prints the `curl` to retire it by hand rather than failing the reclaim.
+A bridge carries no tags, so it comes out only when its PVE comment proves this competition and
+run id; a foreign or uncommented bridge is reported and left alone.
 
 ## Flags outside the happy path
 

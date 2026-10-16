@@ -12,11 +12,19 @@ tags, so they come out only when their PVE comment proves this competition and r
 `infra.ownership.bridge_comment`); an uncommented or foreign bridge is named and left alone. No
 state document, no terminal plan."""
 
+import os
+from pathlib import Path
+
+import requests
+from dotenv import load_dotenv
+
 from infra.client import destroy_bridge_if_exists, node_bridges, proxmox_api
 from infra.ownership import (Ownership, Refusal, bridge_owned_by, destroy_vm_if_exists,
                              parse_vm_tags)
 
 TEMPLATE_ROLES = ("tezcatlipoca-golden", "engine-template")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+RETIRE_PATH = "/api/ranges/retire"
 
 
 def refuse_when_state_exists(comp, run_tag):
@@ -36,6 +44,58 @@ def refuse_when_state_exists(comp, run_tag):
                 expected="a run whose comp dir no longer exists",
                 remedy=f"teardown the range from its own state: "
                        f"destroy-competition.py --comp-dir {candidate} --yes")
+
+
+def dashboard_handoff():
+# The dashboard's address + bearer, which it hands every driver it starts (its own
+# TEZ_DASHBOARD_* are inherited by the child process). Not estate config: a manual host has
+# none, and that must not fail the reclaim — retire_range prints the call instead.
+    if not (os.environ.get("TEZ_DASHBOARD_HOST") and os.environ.get("TEZ_DASHBOARD_TOKENS")):
+        load_dotenv(REPO_ROOT / ".env")
+    host = os.environ.get("TEZ_DASHBOARD_HOST", "")
+    # The service BINDS 0.0.0.0, which is a wildcard, not a connect address.
+    host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    tokens = os.environ.get("TEZ_DASHBOARD_TOKENS", "")
+    token = next((p.split("=", 1)[1].strip() for p in tokens.split(",") if "=" in p), "")
+    if not (host and token):
+        return "", ""
+    return f"http://{host}:{os.environ.get('TEZ_DASHBOARD_PORT') or 8787}", token
+
+
+def _retire_call(run_tag):
+    return ("    curl -fsS -X POST http://<dashboard-host>:<port>/api/ranges/retire "
+            "-H 'Authorization: Bearer <token>' -H 'Content-Type: application/json' "
+            f"-d '{{\"run\": \"{run_tag}\", \"by\": \"orphan reclaim\"}}'")
+
+
+def retire_range(run_tag, *, log=print):
+# A reclaim is not a run, so no destroy reaches the dashboard store and the board keeps
+# reading the range live (the defect this closes). Reporting must never fail the reclaim, but
+# it must never be silent either.
+    base, token = dashboard_handoff()
+    if not (base and token):
+        log("  dashboard    : no handoff (TEZ_DASHBOARD_HOST/TEZ_DASHBOARD_TOKENS) — the board "
+            "still reads this range as live; retire it with:")
+        log(_retire_call(run_tag))
+        return None
+    try:
+        resp = requests.request("POST", base + RETIRE_PATH,
+                                json={"run": run_tag, "by": "orphan reclaim"},
+                                headers={"Authorization": f"Bearer {token}"}, timeout=15)
+    except requests.RequestException as exc:
+        log(f"  dashboard    : unreachable ({exc}) — the board was NOT updated; retire it with:")
+        log(_retire_call(run_tag))
+        return None
+    if resp.status_code != 200:
+        try:
+            detail = str(resp.json().get("detail", "")).strip()
+        except ValueError:
+            detail = resp.text.strip()
+        log(f"  dashboard    : refused ({resp.status_code}) {detail} — the board was NOT updated")
+        return None
+    view = resp.json()
+    log(f"  dashboard    : retired {view.get('key')} (state {view.get('state')})")
+    return view
 
 
 def reclaim(comp, run_tag, *, node, allow_templates=False, log=print):
@@ -79,5 +139,9 @@ def reclaim(comp, run_tag, *, node, allow_templates=False, log=print):
             notes.append(f"bridge {iface} carries no ownership comment — not touched")
     remaining = [v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
                  if v["vmid"] in {d["vmid"] for d in destroyed}]
+    # A leftover means the reclaim did not finish, so the range still exists and the board
+    # must keep showing it live rather than retire it.
+    if not remaining:
+        retire_range(run_tag, log=log)
     return {"destroyed": destroyed, "kept_templates": kept, "notes": notes,
             "bridges": bridges, "remaining": remaining, "scanned": len(vms)}

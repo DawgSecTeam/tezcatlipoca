@@ -7,6 +7,7 @@ run. Offline: the Proxmox API and the destroy primitive are faked.
 """
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -51,6 +52,13 @@ def _comp_dir(root, name, run_id):
 
 class Reclaim(unittest.TestCase):
     def setUp(self):
+        # The reclaim reports its result to the dashboard: hold the environment to what each
+        # test sets so an ambient handoff can never dial out from the suite.
+        self._env = mock.patch.dict(os.environ)
+        self._env.start()
+        self.addCleanup(self._env.stop)
+        for key in ("TEZ_DASHBOARD_HOST", "TEZ_DASHBOARD_PORT", "TEZ_DASHBOARD_TOKENS"):
+            os.environ.pop(key, None)
         self.node = "pve"
         self.fake = FakeNode([
             vm(100, "engine", "tezcatlipoca;comp-comp;run-aaaa1111"),
@@ -146,6 +154,101 @@ class Reclaim(unittest.TestCase):
                 with self.assertRaises(Refusal) as ctx:
                     orphan_ops.refuse_when_state_exists("comp", "run-aaaa1111")
         self.assertIn("destroy-competition.py --comp-dir", str(ctx.exception))
+
+    def _retire_call(self, response):
+        # The reclaim with a configured handoff; returns (result, requests.request mock, log lines).
+        out = []
+        with mock.patch.dict(os.environ, {"TEZ_DASHBOARD_HOST": "dash.local",
+                                          "TEZ_DASHBOARD_TOKENS": "engine=sekrit"}):
+            with mock.patch.object(orphan_ops.requests, "request") as call:
+                if isinstance(response, Exception):
+                    call.side_effect = response
+                else:
+                    call.return_value = response
+                result = orphan_ops.reclaim("comp", "run-aaaa1111", node=self.node, log=out.append)
+        return result, call, out
+
+    def test_a_configured_handoff_retires_the_range(self):
+        result, call, out = self._retire_call(
+            mock.Mock(status_code=200, json=lambda: {"key": "/ws", "state": "retired"}))
+        method, url = call.call_args.args
+        self.assertEqual(method, "POST")
+        self.assertEqual(url, "http://dash.local:8787/api/ranges/retire")
+        self.assertEqual(call.call_args.kwargs["json"],
+                         {"run": "run-aaaa1111", "by": "orphan reclaim"})
+        self.assertEqual(call.call_args.kwargs["headers"]["Authorization"], "Bearer sekrit")
+        self.assertEqual([d["vmid"] for d in result["destroyed"]], [100])
+        self.assertTrue(any("retired /ws" in line for line in out), out)
+
+    def test_an_absent_handoff_prints_the_retire_call(self):
+        out = []
+        with mock.patch.object(orphan_ops, "load_dotenv"):
+            result = orphan_ops.reclaim("comp", "run-aaaa1111", node=self.node, log=out.append)
+        self.assertEqual([d["vmid"] for d in result["destroyed"]], [100])
+        text = "\n".join(out)
+        self.assertIn("run-aaaa1111", text)
+        self.assertIn("curl", text)
+
+    def test_a_refused_retire_is_reported_like_a_note(self):
+        result, _, out = self._retire_call(mock.Mock(
+            status_code=409,
+            json=lambda: {"detail": "the run id names several ranges: /a, /b"}))
+        text = "\n".join(out)
+        self.assertIn("409", text)
+        self.assertIn("the run id names several ranges", text)
+        self.assertEqual([d["vmid"] for d in result["destroyed"]], [100])
+
+    def test_an_unreachable_dashboard_does_not_fail_the_reclaim(self):
+        import requests
+        result, _, out = self._retire_call(requests.ConnectionError("refused"))
+        self.assertEqual([d["vmid"] for d in result["destroyed"]], [100])
+        self.assertIn("run-aaaa1111", "\n".join(out))
+
+    def test_a_leftover_is_not_retired(self):
+        # A destroy that failed leaves the range in place, so the board must keep showing it.
+        self.fake.vms[100] = vm(100, "engine", "tezcatlipoca;comp-comp;run-aaaa1111")
+        self._patches.append(mock.patch.object(
+            orphan_ops, "destroy_vm_if_exists", lambda *a, **k: None))
+        self._patches[-1].start()
+        self.addCleanup(self._patches[-1].stop)
+        result, call, _ = self._retire_call(
+            mock.Mock(status_code=200, json=lambda: {"key": "/ws", "state": "retired"}))
+        self.assertEqual(result["remaining"], [100])
+        call.assert_not_called()
+
+
+class Handoff(unittest.TestCase):
+# dashboard_handoff: the run-queue handoff, absent on a host the dashboard does not drive.
+
+    def setUp(self):
+        self._env = mock.patch.dict(os.environ)
+        self._env.start()
+        self.addCleanup(self._env.stop)
+        for key in ("TEZ_DASHBOARD_HOST", "TEZ_DASHBOARD_PORT", "TEZ_DASHBOARD_TOKENS"):
+            os.environ.pop(key, None)
+
+    def test_the_service_env_resolves_host_port_and_first_token(self):
+        os.environ.update(TEZ_DASHBOARD_HOST="dash.local", TEZ_DASHBOARD_PORT="9999",
+                          TEZ_DASHBOARD_TOKENS=" a=tok-a ,b=tok-b")
+        self.assertEqual(orphan_ops.dashboard_handoff(), ("http://dash.local:9999", "tok-a"))
+
+    def test_the_wildcard_bind_address_is_not_used_as_a_connect_address(self):
+        os.environ.update(TEZ_DASHBOARD_HOST="0.0.0.0", TEZ_DASHBOARD_TOKENS="a=tok-a")
+        self.assertEqual(orphan_ops.dashboard_handoff(), ("http://127.0.0.1:8787", "tok-a"))
+
+    def test_absent_or_tokenless_handoffs_do_not_resolve(self):
+        with mock.patch.object(orphan_ops, "load_dotenv"):
+            self.assertEqual(orphan_ops.dashboard_handoff(), ("", ""))
+            os.environ["TEZ_DASHBOARD_HOST"] = "dash.local"
+            self.assertEqual(orphan_ops.dashboard_handoff(), ("", ""))
+
+    def test_the_checkout_env_can_carry_the_handoff(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / ".env").write_text(
+                "TEZ_DASHBOARD_HOST=127.0.0.1\nTEZ_DASHBOARD_TOKENS=engine=from-dotenv\n")
+            with mock.patch.object(orphan_ops, "REPO_ROOT", Path(d)):
+                self.assertEqual(orphan_ops.dashboard_handoff(),
+                                 ("http://127.0.0.1:8787", "from-dotenv"))
 
 
 class Cli(unittest.TestCase):
