@@ -4,6 +4,25 @@ Temporary writepad, not a ledger: every entry has a concrete next action and is 
 
 ## Open
 
+### An orphan reclaim leaves the range reading `live` on the dashboard board
+
+`destroy-competition.py --orphan-comp/--orphan-run` reclaims a range whose workspace is gone by
+the VMs' own tags, but nothing tells the dashboard: `range_state` derives `retired` from the
+newest `destroy`/`scrim` run with `returncode == 0` in its own store
+(`dashboard/ranges.py:retired_by`), and an orphan reclaim is not a run. `has_vms` is evaluated
+first and reads the workspace's recorded `resources` — which the failed build left behind and
+only a teardown's `forget` clears (`estate/destroy.py`) — so the board keeps showing `live` for
+a range that no longer exists. Live 2026-10-15: crimson-relay `range-b289904cf2d5ccdf`
+(`deploy_run_id run-b47cd966`) read `live` with `has_vms` true and `resources` naming
+engine-template 2340 and bridges vmbr180/181, while an independent Proxmox sweep showed zero
+tagged VMs and only `vmbr0`/`untrustedbr` on the node. The same stale record is why a bare
+range action for that competition resolves to that dead workspace instead of the newest one
+(see the resolver entry below).
+**Next action**: give the orphan path a way to retire the range in the store — a dashboard
+endpoint the reclaim calls, or have `range_state` re-probe liveness (the tags it already knows)
+rather than trusting a workspace whose build run ended non-zero.
+
+
 ### A retired range's kept templates cannot be reclaimed until the competition deploys again
 
 `--teams-only` retires the range and keeps this competition's golden + engine templates for
