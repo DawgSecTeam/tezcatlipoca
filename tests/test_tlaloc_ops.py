@@ -57,6 +57,15 @@ class RedDiskTest(unittest.TestCase):
         assert out["ok"] is True and out["grew"] is False, out
         assert not [p for _, p, _ in calls if p.endswith("/resize")], calls
 
+    def test_the_guest_grow_runs_through_sudo(self):
+        """red01's ssh user is a passwordless-sudo account, not root: without
+        `sudo -n` every growpart/pvresize/lvextend/resize2fs call fails with
+        "Permission denied" and the disk stays small (live smoke 2026-10-16)."""
+        script = to._guest_grow_script()
+        for cmd in ("growpart", "pvresize", "lvextend", "resize2fs"):
+            assert f"sudo -n {cmd}" in script, (cmd, script)
+        assert script.rstrip().endswith("df -h /"), script
+
     def test_a_grown_disk_whose_filesystem_was_not_extended_is_not_ok(self):
         """The hypervisor resize alone fooled nobody: an unextended LV fills up the
         same way, so the verdict comes from the box's own df."""
