@@ -15,11 +15,19 @@ restored around each test for the same reason as the config.
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# Every cross-process lock the pipeline takes (engine, scrim, storage queue) lives under
+# Path.home()/.tezcatlipoca/locks. A test that exercises a locked path would otherwise contend
+# with, or be blocked by, a REAL deploy on the same host — and on a shared ops host that is a
+# live run. Nothing in the suite needs the developer's own lock directory.
+_HOME = tempfile.mkdtemp(prefix="tez-tests-home-")
+Path.home = classmethod(lambda cls: Path(_HOME))
 
 # Captured before any test module is imported: driver scripts call load_dotenv() at module
 # level, so importing one for a CLI test writes the real identity into os.environ during

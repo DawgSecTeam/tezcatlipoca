@@ -29,7 +29,7 @@ from guests.ubuntu_auth_ops import setup_ubuntu_auth
 from nakonops.nakon_bundle_ops import build_nakon_bundle
 from nakonops.nakon_run_ops import run_nakon
 from infra.ownership import full_clone_data
-from infra.client import proxmox_api, wait_for_proxmox_task
+from infra.client import proxmox_api, storage_queue_lock, wait_for_proxmox_task
 from infra.lifecycle import (delete_snapshot, list_snapshots, rollback_snapshot, start_vm, stop_vm, take_snapshot,)
 from infra.ownership import (clone_marker, destroy_vm_if_exists, gc_orphan_volumes, retag_ownership,)
 from multinode.placement_record import golden_vmid_for_slot
@@ -167,10 +167,27 @@ def _convert_goldens(node, targets, ownership_tag_str, golden_hashes):
         # gone before the POST /template that needs it gone.
         if SNAP_BASE in list_snapshots(node, t["vmid"]):
             delete_snapshot(node, t["vmid"], SNAP_BASE)
-        proxmox_api("POST", f"/nodes/{node}/qemu/{t['vmid']}/template")["data"]
-        # The POST returns no task to wait on and the rename can lag or lose the race
-        # against an interrupted session; a half-converted golden passes every hash
-        # gate and then breaks apply #2 confusingly. Verify the rename landed.
+        # The conversion takes PVE's datastore lock and a loser's task fails with `can't lock
+        # file ... - got timeout` while STILL leaving `template: 1` and the volume un-renamed,
+        # so queue it and read the task's own result instead of discovering the corpse through
+        # the volume guard (live 2026-10-16: the DC golden failed exactly this way under three
+        # concurrent ranges and the deploy died at the guard).
+        with storage_queue_lock(node):
+            for attempt in range(3):
+                upid = proxmox_api("POST", f"/nodes/{node}/qemu/{t['vmid']}/template")["data"]
+                if not upid:
+                    break
+                try:
+                    wait_for_proxmox_task(node, upid)
+                    break
+                except RuntimeError as e:
+                    if "lock file" not in str(e) or attempt == 2:
+                        raise
+                    print(f"    {t['vm_name']}: template conversion hit datastore lock "
+                          f"contention — retrying (attempt {attempt + 2}/3)")
+                    time.sleep(40 * (attempt + 1))
+        # The rename can still lag or lose the race against an interrupted session; a
+        # half-converted golden passes every hash gate and then breaks apply #2 confusingly.
         _await_base_volumes(node, t["vmid"], t["box"]["name"])
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={"tags": ownership_tag_str})
         # M4: the hash lands on the template (description) AND in the comp's state —

@@ -12,6 +12,8 @@ Requests are routed through `infra.client`'s own per-node override seam, so the 
 no network.
 """
 
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -240,14 +242,13 @@ class LockContentionRetry(unittest.TestCase):
         self.assertEqual(len(calls), 2)
 
 
-class BaseCloneLock(unittest.TestCase):
-    """Same-image clones queue instead of racing for PVE's one datastore lock.
+class StorageQueueLock(unittest.TestCase):
+    """First-time storage-heavy PVE ops on one node queue instead of racing for the datastore.
 
-    Live 2026-10-16 (the second three-range campaign): three ranges issued the base-image clone
-    within seconds, PVE failed two of them with `can't lock file '/var/lock/pve-manager/
-    pve-storage-ssd' - got timeout`, and the loser needed four of its five retries and ten
-    minutes to get through while the other two built. Retrying harder is a worse answer than
-    not racing.
+    Live 2026-10-16 (the second three-range campaign): three base-image clones contended, the
+    loser needed four of its five retries, and a golden's template CONVERSION lost the same lock
+    and failed — leaving `template: 1` with the volume never renamed, which the deploy only
+    noticed at the volume guard. Retrying harder is a worse answer than not racing.
     """
 
     def setUp(self):
@@ -257,11 +258,14 @@ class BaseCloneLock(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_a_second_clone_of_the_same_image_waits_for_the_first(self):
+    def _lock(self, node="n", **kw):
+        return client.storage_queue_lock(node, **kw)
+
+    def test_a_second_op_on_the_same_node_waits_for_the_first(self):
         order, held = [], threading.Event()
 
         def first():
-            with engine_template_ops.base_clone_lock("n", 955):
+            with self._lock():
                 order.append("first-in")
                 held.set()
                 time.sleep(0.3)
@@ -269,7 +273,7 @@ class BaseCloneLock(unittest.TestCase):
 
         def second():
             held.wait(5)
-            with engine_template_ops.base_clone_lock("n", 955):
+            with self._lock():
                 order.append("second-in")
 
         threads = [threading.Thread(target=first), threading.Thread(target=second)]
@@ -280,25 +284,63 @@ class BaseCloneLock(unittest.TestCase):
         self.assertEqual(order, ["first-in", "first-out", "second-in"],
                          "the second holder must not enter while the first is inside")
 
-    def test_a_different_base_image_is_not_serialised_behind_it(self):
+    def test_a_different_node_is_not_serialised_behind_it(self):
         order = []
-        with engine_template_ops.base_clone_lock("n", 955):
-            with engine_template_ops.base_clone_lock("n", 956):
+        with self._lock("n1"):
+            with self._lock("n2"):
                 order.append("both-held")
-        self.assertEqual(order, ["both-held"], "the lock is per base image, not global")
+        self.assertEqual(order, ["both-held"], "the lock is per node, not global")
 
     def test_a_wedged_holder_does_not_block_a_deploy_forever(self):
         # Something alive but stuck must not wedge every later deploy: a wait past the bound
-        # proceeds and leaves the contention to the clone retry.
-        with engine_template_ops.base_clone_lock("n", 955):
-            with engine_template_ops.base_clone_lock("n", 955, wait_s=0):
+        # proceeds and leaves the contention to the operation's own retry.
+        with self._lock():
+            with self._lock(wait_s=0):
                 entered = True
         self.assertTrue(entered)
 
     def test_the_holder_is_named_so_a_wait_is_diagnosable(self):
-        seen = []
-        with engine_template_ops.base_clone_lock("n", 955):
-            holder = (Path(self.tmp.name) / ".tezcatlipoca" / "locks" /
-                      "base-clone-unknown-955.lock").read_text().strip()
-            seen.append(holder)
-        self.assertEqual(seen, [str(os.getpid())])
+        with self._lock():
+            holder = [p for p in (Path(self.tmp.name) / ".tezcatlipoca" / "locks").iterdir()][0]
+            self.assertEqual(holder.read_text().strip(), str(os.getpid()))
+
+
+class TemplateConversionRetry(unittest.TestCase):
+    """A conversion that loses PVE's datastore lock must be retried, not left half-converted.
+
+    The failed task still leaves `template: 1` and the volume un-renamed, so the only other
+    notice is the volume guard — which fails the whole deploy (live 2026-10-16, the DC golden
+    under three concurrent ranges).
+    """
+
+    def _convert(self, lock_failures):
+        from golden import golden_ops
+        posts, waits = [], []
+
+        def wait(node, upid):
+            waits.append(upid)
+            if len(waits) <= lock_failures:
+                raise RuntimeError("Proxmox task UPID:x failed: can't lock file "
+                                   "'/var/lock/pve-manager/pve-storage-hdd' - got timeout")
+
+        target = {"vmid": 2350, "vm_name": "golden-dc01", "box": {"name": "dc01"}}
+        with patch.object(golden_ops, "list_snapshots", lambda *a: []), \
+             patch.object(golden_ops, "proxmox_api",
+                          side_effect=lambda *a, **k: posts.append(a) or {"data": "UPID:x"}), \
+             patch.object(golden_ops, "wait_for_proxmox_task", wait), \
+             patch.object(golden_ops, "storage_queue_lock", contextlib.nullcontext), \
+             patch.object(golden_ops, "_await_base_volumes", lambda *a: None), \
+             patch.object(golden_ops.time, "sleep", lambda *_: None), \
+             contextlib.redirect_stdout(io.StringIO()):
+            golden_ops._convert_goldens("n", [target], "tag", {})
+        return [a for a in posts if a[0] == "POST"], waits
+
+    def test_a_lock_failure_is_retried(self):
+        posts, waits = self._convert(lock_failures=1)
+        self.assertEqual(len(posts), 2, "the conversion is attempted again after a lost lock")
+        self.assertEqual(len(waits), 2)
+
+    def test_a_conversion_that_keeps_losing_the_lock_gives_up(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._convert(lock_failures=5)
+        self.assertIn("lock file", str(ctx.exception))

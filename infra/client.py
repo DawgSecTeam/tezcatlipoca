@@ -1,8 +1,12 @@
 """Proxmox API client: TLS-pinned requests, per-node route table (multi-node), cluster reads,
 task waiting and node-load throttling. Everything else talks to Proxmox through here."""
 
+import fcntl
+import os
 import re
 import time
+from contextlib import contextmanager
+from pathlib import Path
 
 import requests
 
@@ -207,3 +211,58 @@ def destroy_bridge_if_exists(node, bridge_name):
     except Exception as e:
         print(f"    WARNING: could not delete bridge {bridge_name}: {e}")
         return False
+
+
+@contextmanager
+def storage_queue_lock(node, wait_s=900):
+# Serialise this host's first-time storage-heavy PVE operations (base-image clone, golden ->
+#     template conversion).
+#
+#     PVE takes a per-DATASTORE lock for the duration of either and reports `can't lock file
+#     '/var/lock/pve-manager/pve-storage-hdd' - got timeout` to everyone else, so concurrent
+#     ranges do not queue — they fight, and the loser spends its retry budget or fails outright.
+#     Live 2026-10-16, the second three-range campaign: three same-image clones contending left
+#     the loser on its fourth attempt, and a golden's template conversion hit the same lock and
+#     failed, leaving `template: 1` with the volume never renamed to `base-` (linked clones would
+#     have died with the opaque 500 the volume guard now names).
+#
+#     Retrying harder is a worse answer than not racing, so our own deploys queue here. Keyed on
+#     the node rather than the datastore because the datastores in play are node-local and the
+#     conservative superset is the one that cannot contend: over-serialising two operations that
+#     together cost seconds is cheaper than diagnosing a lost conversion. Contention we do not
+#     control (another host, or a manual run on older code) is left to the callers' retries.
+#
+#     Bounded on purpose: a holder that is alive but wedged must not block a deploy forever.
+    endpoint = (config.active().proxmox.endpoint or "unknown")
+    host = re.sub(r"^https?://", "", endpoint).split("/")[0].split(":")[0] or "unknown"
+    slug = re.sub(r"[^A-Za-z0-9._-]", "_", f"{host}-{node}")
+    path = Path.home() / ".tezcatlipoca" / "locks" / f"storage-{slug}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "w")
+    try:
+        deadline, announced = time.time() + wait_s, False
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.time() >= deadline:
+                    print(f"    storage queue lock held >{wait_s}s — proceeding anyway; the "
+                          f"operation's own retry absorbs the contention")
+                    break
+                if not announced:
+                    holder = (path.read_text().strip() or "?")
+                    print(f"    waiting for the storage queue (held by pid {holder}) — queuing "
+                          f"instead of racing for the datastore lock")
+                    announced = True
+                time.sleep(0.5)
+        fh.seek(0)
+        fh.truncate()
+        fh.write(f"{os.getpid()}\n")
+        fh.flush()
+        yield
+    finally:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+        finally:
+            fh.close()
