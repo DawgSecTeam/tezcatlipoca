@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -217,7 +218,7 @@ class PrepareTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result, runner = self._prepared(tmp)
             assert result["ok"] is True, result["degradations"]
-            assert result["reached"] == ["install", "user", "auth", "operation"]
+            assert result["reached"] == ["install", "auth", "user", "operation"]
             assert result["api_key"] == "api-key-123"
             assert result["c2"]["base_url"] == "https://10.0.0.198:7443"
             assert result["c2"]["operation"] == Path(tmp).name
@@ -256,6 +257,33 @@ class PrepareTest(unittest.TestCase):
                        if len(c["argv"]) > 2 and c["argv"][1].endswith("gaia.py")
                        and c["argv"][2] == "install"][0]
             assert install["kwargs"]["timeout"] >= 3600
+
+    def test_auth_runs_before_the_agent_user_is_created(self):
+        """`auth` writes the API key the other subcommands authenticate with.
+
+        Run `user create` first and Gaia prints its auth usage and exits non-zero —
+        which is what the first live smoke reported as an argument error in
+        `gaia user create` (2026-10-16).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            _, runner = self._prepared(tmp)
+            subs = [c["argv"][2] for c in runner.calls
+                    if len(c["argv"]) > 2 and str(c["argv"][1]).endswith("gaia.py")]
+            assert "auth" in subs and "user" in subs, subs
+            assert subs.index("auth") < subs.index("user"), subs
+            assert subs.index("auth") < subs.index("operation"), subs
+
+    def test_a_failing_auth_is_retried_before_it_degrades(self):
+        """Install can return while the web UI is up but not yet serving JSON."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("time.sleep"):
+                result, runner = self._prepared(tmp, fail_on="auth")
+            auths = [c for c in runner.calls
+                     if len(c["argv"]) > 2 and str(c["argv"][1]).endswith("gaia.py")
+                     and c["argv"][2] == "auth"]
+            assert len(auths) == g.AUTH_ATTEMPTS, len(auths)
+            assert result["ok"] is False
+            assert any("gaia auth" in d for d in result["degradations"])
 
     def test_no_box_is_a_degradation_not_a_crash(self):
         with tempfile.TemporaryDirectory() as tmp:

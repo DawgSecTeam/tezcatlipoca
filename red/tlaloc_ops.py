@@ -124,9 +124,14 @@ def resize_red_disk(comp_dir, red_ip, vmid, *, ssh_key, target_gb=None,
         grew = False
     else:
         grew = True
-        add = max(1, target - (current_gb or 0))
-        proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/resize",
-                    data={"disk": disk, "size": f"+{add}G"})
+        # PUT, with an ABSOLUTE size. POST is not implemented on this endpoint (501),
+        # and the API rejects a relative size ("value does not match the regex
+        # pattern") even though the `qm resize` CLI accepts `+45G`. Both cost a live
+        # smoke on 2026-10-16: the resize silently degraded, Mythic's images filled
+        # the old disk, its containers never started, and `gaia auth` got a non-JSON
+        # reply — the deploy then failed three steps away from the actual cause.
+        proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/resize",
+                    data={"disk": disk, "size": f"{target}G"})
 
     ssh_argv = ["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
@@ -135,6 +140,7 @@ def resize_red_disk(comp_dir, red_ip, vmid, *, ssh_key, target_gb=None,
     detail = _tail(proc, 400)
     after = None
     for line in (getattr(proc, "stdout", "") or "").splitlines():
+        line = line.strip()
         if line.startswith("/dev/") and "%" in line:
             after = _gb_from_df(line)
     ok = after is not None and after >= min(target - 2, target * 0.9)
@@ -636,8 +642,11 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
                   f"{grown.get('after_gb')}G (target {red_disk_gb(comp_dir)}G)")
         else:
             record_degradation("mythic_red_disk", str(grown.get("detail"))[:400])
-            print(f"  mythic      : WARNING — could not grow red01's disk "
-                  f"({str(grown.get('detail'))[:160]}); the Mythic install needs it")
+            # A blocker, not a warning: without the space the Mythic install fills the
+            # box and every step after it fails for the wrong reason (2026-10-16).
+            raise RuntimeError(
+                f"tlaloc: could not grow red01's disk to {red_disk_gb(comp_dir)}G — "
+                f"Mythic needs it ({str(grown.get('detail'))[:300]})")
 
     # 1.5 Mythic: install + configure this competition's C2 (Gaia) BEFORE
     #     c2-prep, which builds the payload matrix through its REST API. The

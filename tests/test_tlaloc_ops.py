@@ -18,6 +18,58 @@ sys.path.insert(0, str(ROOT))
 from red import tlaloc_ops as to  # noqa: E402
 
 
+class RedDiskTest(unittest.TestCase):
+    """The disk resize (the C2's hard prerequisite on a live deploy)."""
+
+    @staticmethod
+    def _api(calls, size):
+        def fake_api(method, path, **kwargs):
+            calls.append((method, path, kwargs.get("data") or {}))
+            if path == "/cluster/resources":
+                return {"data": [{"vmid": 1671, "node": "proxmox"}]}
+            if path.endswith("/config"):
+                return {"data": {"scsi0": f"ssd:vm-1671-disk-0,size={size}"}}
+            return {"data": None}
+        return fake_api
+
+    def test_the_disk_is_grown_with_put_and_an_absolute_size(self):
+        """POST is not implemented on PVE's resize endpoint and a relative size is
+        rejected outright — both silently left red01 at 15G on 2026-10-16, and the
+        Mythic install then filled the box."""
+        calls, df = [], "/dev/mapper/ubuntu--vg-ubuntu--lv   59G  1.2G   55G   3% /\n"
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch("infra.client.proxmox_api", self._api(calls, "15G")):
+            out = to.resize_red_disk(compfile(tmp), "10.0.0.195", 1671,
+                                     ssh_key="/tmp/key", target_gb=60,
+                                     runner=lambda argv, **kw: Completed(0, df))
+        assert out["ok"] is True, out
+        assert ("PUT", "/nodes/proxmox/qemu/1671/resize") in [(m, p) for m, p, _ in calls]
+        resize = [d for _, p, d in calls if p.endswith("/resize")][0]
+        assert resize == {"disk": "scsi0", "size": "60G"}, resize
+
+    def test_a_disk_already_at_the_floor_is_left_alone(self):
+        calls, df = [], "/dev/mapper/ubuntu--vg-ubuntu--lv   59G  1.2G   55G   3% /\n"
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch("infra.client.proxmox_api", self._api(calls, "60G")):
+            out = to.resize_red_disk(compfile(tmp), "10.0.0.195", 1671,
+                                     ssh_key="/tmp/key", target_gb=60,
+                                     runner=lambda argv, **kw: Completed(0, df))
+        assert out["ok"] is True and out["grew"] is False, out
+        assert not [p for _, p, _ in calls if p.endswith("/resize")], calls
+
+    def test_a_grown_disk_whose_filesystem_was_not_extended_is_not_ok(self):
+        """The hypervisor resize alone fooled nobody: an unextended LV fills up the
+        same way, so the verdict comes from the box's own df."""
+        calls, df = [], "/dev/mapper/ubuntu--vg-ubuntu--lv  9.8G  5.2G  4.1G  57% /\n"
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch("infra.client.proxmox_api", self._api(calls, "15G")):
+            out = to.resize_red_disk(compfile(tmp), "10.0.0.195", 1671,
+                                     ssh_key="/tmp/key", target_gb=60,
+                                     runner=lambda argv, **kw: Completed(0, df))
+        assert out["ok"] is False, out
+        assert out["after_gb"] == 9, out
+
+
 class Completed:
     def __init__(self, returncode=0, out="", err=""):
         self.returncode, self.stdout, self.stderr = returncode, out, err

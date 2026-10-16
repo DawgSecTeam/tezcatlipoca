@@ -47,6 +47,7 @@ skip cleanly (logged) instead of taking down a deploy whose range is healthy.
 
 import os
 import subprocess
+import time
 from pathlib import Path
 
 from common.utils import compfile_value, local_python, record_degradation
@@ -70,6 +71,11 @@ ENV_FILE = "/etc/tlaloc/c2.env"
 
 INSTALL_TIMEOUT = 5400          # apt + docker + Mythic images: tens of minutes
 SHORT_TIMEOUT = 300
+# `auth` right after install can meet a web UI that is up but not yet serving JSON
+# (install returns as soon as its steps finish). A transient non-JSON reply is not a
+# broken C2, so retry before calling it one.
+AUTH_ATTEMPTS = 4
+AUTH_RETRY_SECONDS = 30
 
 
 def gaia_path(env=None):
@@ -346,8 +352,8 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
                    callback_port=None, agent_user=AGENT_USER, log=print):
     """Install + configure Mythic for one competition. Returns a result dict.
 
-    Order: checkout → install (apt/deps/Mythic) → admin creds → agent user →
-    auth (API key) → operation → the `c2.*` block + 0600 env body for the push.
+    Order: checkout → install (apt/deps/Mythic) → admin creds → auth (API key) →
+    agent user → operation → the `c2.*` block + 0600 env body for the push.
 
     Every failure lands in `degradations` and returns ok=False with what was
     reached; the caller keeps deploying (the agent then skips the C2 stages).
@@ -395,8 +401,26 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
         return result
     result["admin_password"] = password
 
-    # The agent's own account. Gaia prints "user:password"; and re-running for a
-    # competition that already has it is not an error (the account exists).
+    # AUTH FIRST — this is what unlocks everything after it. `user create` and
+    # `operation create` speak to Mythic through the API key `auth` writes into
+    # Gaia's .env; run either before it and Gaia prints the auth usage and exits
+    # non-zero (live smoke 2026-10-16: "gaia user create: rver ... -P, --port 7443
+    # ... -u, --user mythic_admin" was that usage dump, not an argument error).
+    for attempt in range(AUTH_ATTEMPTS):
+        proc = runner(auth_argv(path, box_ip), cwd=cwd, timeout=SHORT_TIMEOUT,
+                      input=f"{password}\n")
+        if getattr(proc, "returncode", 1) == 0:
+            break
+        if attempt + 1 < AUTH_ATTEMPTS:
+            time.sleep(AUTH_RETRY_SECONDS)
+    result["reached"].append("auth")
+    result["gaia_output"]["auth"] = _tail(proc, 300)
+    if getattr(proc, "returncode", 1) != 0:
+        result["degradations"].append(f"gaia auth: {_tail(proc)}")
+
+    # The agent's own account, now that the key exists. Gaia prints
+    # "user:password"; and re-running for a competition that already has it is not
+    # an error (the account exists).
     proc = runner(user_argv(path, [agent_user]), cwd=cwd, timeout=SHORT_TIMEOUT,
                   input="")
     result["reached"].append("user")
@@ -404,14 +428,6 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
     agent_password = _password_from_creds(getattr(proc, "stdout", ""), agent_user)
     if getattr(proc, "returncode", 1) != 0 and not agent_password:
         result["degradations"].append(f"gaia user create: {_tail(proc)}")
-
-    # auth writes MYTHIC_API_KEY + host/port into the checkout's .env.
-    proc = runner(auth_argv(path, box_ip), cwd=cwd, timeout=SHORT_TIMEOUT,
-                  input=f"{password}\n")
-    result["reached"].append("auth")
-    result["gaia_output"]["auth"] = _tail(proc, 300)
-    if getattr(proc, "returncode", 1) != 0:
-        result["degradations"].append(f"gaia auth: {_tail(proc)}")
 
     name = operation or comp_id or comp_dir.name
     proc = runner(operation_argv(path, name), cwd=cwd, timeout=SHORT_TIMEOUT)
