@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -156,6 +157,13 @@ def _resolve_red_ip(args, comp):
 
 
 def stage_red(args, comp, creds, run_dir):
+    # v2 (tlaloc) runs its own loop, its own C2 and its own seed: ONE deploy path
+    # shared with the deploy pipeline's phase 7 (red/tlaloc_ops.plant_assume_breach)
+    # so the harness cannot drift from a dashboard deploy. Everything below this
+    # function is bad-auto's staging.
+    from red import tlaloc_ops
+    if tlaloc_ops.red_engine(comp) == "tlaloc":
+        return stage_red_tlaloc(args, comp, creds, run_dir)
     llm = red_llm_config(args)
     _resolve_red_vmid(args, comp)   # before the cfg build: the config carries it
     _resolve_red_ip(args, comp)
@@ -322,6 +330,88 @@ def stage_red(args, comp, creds, run_dir):
     # (and red's event clock should start at T0, which the harness stamps right
     # after stage_red returns).
     red_link.start_red_director(args)
+
+
+class _PipelineCtx:
+    """The little `ctx` the deploy pipeline's phase 7 expects.
+
+    `plant_assume_breach` reads comp_dir / ssh_key / engine_vmid / red_ip /
+    state / comp_id and saves a state document; the harness has `args` and
+    `comp` instead. One adapter, so both callers run the SAME v2 deploy.
+    """
+
+    def __init__(self, comp, args, ssh_key, engine_vmid=None):
+        self.comp_dir = Path(comp)
+        self.comp_id = getattr(args, "comp_id", None) or self.comp_dir.name
+        self.ssh_key = str(ssh_key)
+        self.ssh_key_abs = str(ssh_key)
+        self.engine_vmid = engine_vmid
+        self.red_ip = getattr(args, "red_ip", None)
+        self.state = {}
+        self.saved = 0
+
+    def save_state(self):
+        self.saved += 1
+
+
+def stage_red_tlaloc(args, comp, creds, run_dir):
+    """Stage a tlaloc v2 run: red01 + Mythic (Gaia) + payload freeze + seed.
+
+    Shape follows the v1 path deliberately — provision, configure, gate, seed,
+    wipe trails, start the loop — because the pre-T0 contract is the same: a
+    scrim that starts with no planted presence or a C2 whose callbacks cannot
+    reach red01 is not the event anyone asked for.
+    """
+    from red import gaia_ops, tlaloc_ops
+    _resolve_red_vmid(args, comp)
+    _resolve_red_ip(args, comp)
+    ssh_key = (creds or {}).get("KEY_PATH") or core.REPO / "proxmox"
+    ctx = _PipelineCtx(comp, args, ssh_key)
+    log(f"staging tlaloc v2 on red01 {args.red_ip} (vmid {args.red_vmid}) — "
+        f"Mythic via Gaia, payload freeze, day-0 seed")
+    out = tlaloc_ops.plant_assume_breach(ctx, ssh_key=str(ssh_key),
+                                         red_ip=args.red_ip)
+    test_folder.record_red_agent(args)
+    if not out.get("ok"):
+        raise RuntimeError(
+            f"tlaloc staging failed ({out.get('reason') or 'see degradations'}) — "
+            f"refusing to start an event with no planted red presence. The "
+            f"degradations list holds the first failing step.")
+    if out.get("red_ip"):
+        args.red_ip = out["red_ip"]
+    verify_tlaloc_seeded(args, comp)
+    try:
+        from scrim import clean_trails
+        clean_trails.clean_trails(comp, creds)
+    except Exception as e:                                   # noqa: BLE001 - never fatal
+        log(f"WARNING: trail wipe failed ({type(e).__name__}: {e}) — blue may be able "
+            f"to read the deploy out of the box logs")
+    red_link.start_red_director(args)
+    return out
+
+
+def verify_tlaloc_seeded(args, comp):
+    """Pre-T0 gate: tlaloc's seed must have landed access on at least one box.
+
+    The v1 path gates on red reaching every team; v2's seed IS that proof (it
+    plants per box over SSH and records per-box results), so the gate reads the
+    manifest the seed just wrote rather than re-running a bad-auto verify.
+    """
+    manifest = Path(comp) / "red" / "manifest.json"
+    try:
+        data = json.loads(manifest.read_text())
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"tlaloc seed left no readable manifest at {manifest} ({exc}) — the "
+            f"assume-breach presence cannot be proven, not an event to start.")
+    boxes = data.get("boxes") or {}
+    seeded = [ip for ip, rec in boxes.items() if rec.get("stages")]
+    if not seeded:
+        raise RuntimeError(
+            f"tlaloc seeded nothing: the manifest lists {len(boxes)} box(es) and no "
+            f"stage landed on any of them (see {manifest}).")
+    log(f"tlaloc seeded {len(seeded)}/{len(boxes)} box(es) — presence planted before T0")
+    return seeded
 
 
 def seed_assume_breach(args, run_dir=None):

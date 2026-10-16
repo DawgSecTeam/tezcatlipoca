@@ -83,13 +83,54 @@ def _pull_red_files(args, files, tag=None):
     return got
 
 
-def _red_report_names(args, base="/var/lib/bad-auto"):
+# The red01 paths each engine keeps: v1 (bad-auto) writes under /var/lib/bad-auto
+# with dated reports; tlaloc v2 writes /var/lib/tlaloc/{report.md,
+# report-secrets.md,restore-table.json,world.json,events.jsonl} from its unit.
+RED_STATE_DIRS = {"badauto": "/var/lib/bad-auto", "tlaloc": "/var/lib/tlaloc"}
+RED_UNITS = {"badauto": "bad-auto.service", "tlaloc": "tlaloc.service"}
+
+
+def red_engine_of(args):
+    """The engine this run's competition selects (badauto when it says nothing)."""
+    try:
+        from red import tlaloc_ops
+        comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
+        return tlaloc_ops.red_engine(comp)
+    except Exception:                                       # noqa: BLE001 - v1 default
+        return "badauto"
+
+
+def red_state_dir(args):
+    return RED_STATE_DIRS.get(red_engine_of(args), RED_STATE_DIRS["badauto"])
+
+
+def red_unit(args):
+    return RED_UNITS.get(red_engine_of(args), RED_UNITS["badauto"])
+
+
+def red_artifact_names(args):
+    """The root-owned artifacts to stage + pull from red01's state dir."""
+    names = ["world.json", "events.jsonl", "report-secrets.md"]
+    if red_engine_of(args) == "tlaloc":
+        # v2's after-action artifacts: the restore table is what the verdict and
+        # the organizer's undo list are built from, and report.md is the one the
+        # canonical RED-TEAM.md is landed from.
+        names += ["report.md", "restore-table.json"]
+    return names
+
+
+def _red_report_names(args, base=None):
     """Basenames of red's `report-*.md` on red01, newest last (the name carries the UTC stamp).
 
     Best effort, never raises: an unreadable listing means "no report yet", not a failed pull.
     """
+    base = base or red_state_dir(args)
+    # v1 writes dated reports (report-<utc>.md); tlaloc v2 writes report.md from
+    # its own unit. report-secrets.md is the organizer-only file, never the
+    # narrative, so it is filtered out either way.
+    glob = "report*.md" if red_engine_of(args) == "tlaloc" else "report-*.md"
     target, common, jump = _red_ssh_ctx(args)
-    cmd = f"ls -1 {base}/report-*.md 2>/dev/null || true"
+    cmd = f"ls -1 {base}/{glob} 2>/dev/null || true"
     for extra in ([], (["-o", jump] if jump else [])):
         try:
             r = procs.run_tree(["ssh"] + common + extra +
@@ -97,6 +138,7 @@ def _red_report_names(args, base="/var/lib/bad-auto"):
         except subprocess.TimeoutExpired:
             continue
         names = [n.rsplit("/", 1)[-1] for n in (r.stdout or "").split() if n.endswith(".md")]
+        names = [n for n in names if n != "report-secrets.md"]
         if names:
             return sorted(names)
     return []
@@ -109,9 +151,12 @@ def pull_red_snapshot(args, tag=None):
     teardown-time pull raced red's own write) had no narrative at all. Same cadence as the
     events snapshot — the harness calls this every ~60 s.
     """
-    files = [("/var/lib/bad-auto/events.jsonl", "events.jsonl")]
+    files = [(f"{red_state_dir(args)}/events.jsonl", "events.jsonl")]
     for name in _red_report_names(args)[-1:]:      # newest only: the final narrative
-        files.append((f"/var/lib/bad-auto/{name}", name))
+        files.append((f"{red_state_dir(args)}/{name}", name))
+    for name in red_artifact_names(args):
+        if name.endswith(".md") or name == "restore-table.json":
+            files.append((f"{red_state_dir(args)}/{name}", name))
     got = _pull_red_files(args, files)
     if got and tag:
         ev = Path(args.run_dir) / "evidence" / "red"
@@ -149,7 +194,8 @@ def _land_canonical_red_report(args, got):
     test_dir = getattr(args, "test_dir", None)
     if not test_dir:
         return None
-    reports = [Path(args.run_dir) / "evidence" / "red" / n for n in got if n.startswith("report-")]
+    reports = [Path(args.run_dir) / "evidence" / "red" / n for n in got
+               if n.startswith("report-") or n == "report.md"]
     reports = [p for p in reports if p.is_file() and p.stat().st_size > 0]
     if not reports:
         return None
@@ -203,10 +249,10 @@ def pull_red_state(args):
     # the collector's scp as the box user fails on it and marks the whole red target
     # unreachable — losing its siblings too. Stage every root-owned artifact to a
     # world-readable dir first; the collector reads the staged copies.
-    stage = ("sudo -n mkdir -p /tmp/ba && sudo -n chmod 755 /tmp/ba; "
-             "sudo -n cp /var/lib/bad-auto/world.json /tmp/ba/world.json && "
-             "sudo -n cp /var/lib/bad-auto/events.jsonl /tmp/ba/events.jsonl && "
-             "for f in /var/lib/bad-auto/report-*.md; do "
+    stage = ("sudo -n mkdir -p /tmp/ba && sudo -n chmod 755 /tmp/ba; " +
+             "".join(f"sudo -n cp {red_state_dir(args)}/{name} /tmp/ba/{name} "
+                     f"2>/dev/null; " for name in red_artifact_names(args)) +
+             f"for f in {red_state_dir(args)}/report-*.md; do "
              "sudo -n cp \"$f\" /tmp/ba/ 2>/dev/null; done; "
              "sudo -n chmod 644 /tmp/ba/* 2>/dev/null; true")
     for extra in ([], (["-o", jump] if jump else [])):
@@ -220,7 +266,9 @@ def pull_red_state(args):
         ("/tmp/ba/world.json", "world.json"),
         ("/tmp/ba/events.jsonl", "events.jsonl"),
         ("/tmp/ba/report-secrets.md", "report-secrets.md"),
-    ] + [(f"/tmp/ba/{name}", name) for name in staged])
+    ] + [(f"/tmp/ba/{name}", name) for name in red_artifact_names(args)
+         if name not in ("world.json", "events.jsonl", "report-secrets.md")]
+      + [(f"/tmp/ba/{name}", name) for name in staged])
     log(f"red state pulled before teardown: {got or 'nothing (see collection.json)'}")
     _land_canonical_red_report(args, got)
     return got
@@ -236,8 +284,9 @@ def start_red_director(args):
     lines red's event clock up with T0.
     """
     target, common, jump = _red_ssh_ctx(args)
-    cmd = ("sudo -n systemctl start bad-auto.service; sleep 3; "
-           "systemctl is-active bad-auto.service")
+    unit = red_unit(args)
+    cmd = (f"sudo -n systemctl start {unit}; sleep 3; "
+           f"systemctl is-active {unit}")
     for extra in ([], (["-o", jump] if jump else [])):
         try:
             r = procs.run_tree(["ssh"] + common + extra + ["-o", "ConnectTimeout=10", target, cmd],
@@ -248,7 +297,7 @@ def start_red_director(args):
             log(f"red director started after the seed — {target} "
                 f"{' '.join((r.stdout or '').split())[-24:]}")
             return True
-    raise RuntimeError("could not start bad-auto.service on red01 after the seed")
+    raise RuntimeError(f"could not start {red_unit(args)} on red01 after the seed")
 
 
 def red_box_power_state(args):
