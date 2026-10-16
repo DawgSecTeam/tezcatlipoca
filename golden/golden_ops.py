@@ -50,6 +50,32 @@ from golden.golden_disk_ops import ensure_golden_disk_size, expand_guest_root_di
 from estate import config
 
 
+def _await_base_volumes(node, vmid, box_name):
+# The conversion renames a golden's disk volumes to base-<vmid>-disk-N, and only those can
+#     back a linked clone. The rename is asynchronous, so a golden whose conversion was
+#     accepted but whose rename never landed stays template=1 on a plain vm- volume and then
+#     fails later and confusingly at the team-box clone: PVE 500 "Linked clone feature is not
+#     supported for 'hdd:vm-<vmid>-disk-0'". Both conversion paths must wait for it — the
+#     booted one has since 2026-10-04; the unbooted/DC path only got the guard after a
+#     campaign run died at [4b/8] with exactly that 500 (2026-10-15, run-b47cd966).
+    for _ in range(10):
+        cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+        # Disk ifaces only (ide carries the cloudinit drive; its name differs) — a volume
+        # string is "<storage>:<name>,<opts>"; the NAME is what the conversion renames.
+        volids = [str(v) for k, v in cfg.items()
+                  if k.startswith(("scsi", "sata", "virtio")) and isinstance(v, str) and ":" in v]
+        missing = [v for v in volids
+                   if not v.split(":", 1)[1].split(",")[0].startswith("base-")]
+        if not missing:
+            return
+        time.sleep(2)
+    raise RuntimeError(
+        f"golden '{box_name}' (vmid {vmid}) converted but its disk volume(s) {missing} "
+        f"never became base- volumes — linked clones would fail with 'Linked clone "
+        f"feature is not supported'. Destroy this golden and re-run phase 4 so it is "
+        f"rebuilt from scratch.")
+
+
 def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_tag_str,
                            golden_hashes):
     for t in cold:
@@ -82,6 +108,7 @@ def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
             "net0": f"virtio,bridge={t['bridge']}", "tags": ownership_tag_str})
         proxmox_api("POST", f"/nodes/{node}/qemu/{t['vmid']}/template")
+        _await_base_volumes(node, t["vmid"], t["box"]["name"])
         if golden_hashes:
             write_template_hash(node, t["vmid"], golden_hashes[t["box"]["name"]],
                                 extra=f"box={t['box']['name']} unbooted")
@@ -144,28 +171,7 @@ def _convert_goldens(node, targets, ownership_tag_str, golden_hashes):
         # The POST returns no task to wait on and the rename can lag or lose the race
         # against an interrupted session; a half-converted golden passes every hash
         # gate and then breaks apply #2 confusingly. Verify the rename landed.
-        # The conversion renames volumes to base-<vmid>-disk-N; linked clones only work
-        # from those (live-found 2026-10-04: a golden half-converted by an interrupted
-        # POST kept template=1 on its plain vm- volume, and every team clone of it died
-        # with HTTP 500 "Linked clone feature is not supported").
-        for _ in range(10):
-            # Disk ifaces only (ide carries the cloudinit drive; its name differs) — a
-            # volume string is "<storage>:<name>,<opts>"; the NAME is what the
-            # conversion renames.
-            cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"]
-            volids = [str(v) for k, v in cfg.items()
-                      if k.startswith(("scsi", "sata", "virtio")) and isinstance(v, str) and ":" in v]
-            missing = [v for v in volids
-                       if not v.split(":", 1)[1].split(",")[0].startswith("base-")]
-            if not missing:
-                break
-            time.sleep(2)
-        if missing:
-            raise RuntimeError(
-                f"golden '{t['box']['name']}' (vmid {t['vmid']}) converted but its disk "
-                f"volume(s) {missing} never became base- volumes — linked clones would "
-                f"fail with 'Linked clone feature is not supported'. Destroy this golden "
-                f"and re-run phase 4 so it is rebuilt from scratch.")
+        _await_base_volumes(node, t["vmid"], t["box"]["name"])
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={"tags": ownership_tag_str})
         # M4: the hash lands on the template (description) AND in the comp's state —
         # reuse/rebuild decisions read it back at the next deploy's hash gate.
