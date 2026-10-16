@@ -137,6 +137,10 @@ only trustworthy statement of what a run executed; "we ran main" is not evidence
 
 ## Newly found, not yet fixed
 
+*"Not yet fixed" as of the day this campaign ended — this section is the round's own record and is
+left as written. Every item below was fixed on 2026-10-16 with a regression test: see
+[defect-remediation-2026-10-16.md](defect-remediation-2026-10-16.md) for the fix and its proof.*
+
 - **No `[7/8]` banner exists** — phase 7 prints it only on the skip branch, so every deploy's
   log and the dashboard's stage jump 6 → 8.
 - **`.deploy-timings.jsonl` mislabels and double-counts the AD work** — the `domain_adds` rows
