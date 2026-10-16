@@ -87,7 +87,10 @@ sufficient. The deploy's own evidence:
 and the verify minutes later still reads the mode as absent on both boxes.
 
 So the file is rewritten **after** the plant, within the same phase: `fix_services` creates the
-credlist accounts and `chpasswd`s them, which is exactly the shadow write that resets the mode. The
+credlist accounts with a `useradd` each, and shadow-utils' commonio recreates `/etc/shadow` (and
+`/etc/passwd`, `/etc/group`) at its default mode. The `chpasswd` that follows preserves whatever
+mode is already there (probed 2026-10-16: `chmod 666` then `useradd` reads `664`; `chpasswd` alone
+leaves `666`), so the resetting writer is the account creation, not the password write. The
 correct rule is stronger than "plant it post-clone": **account-file modes must plant after every
 account writer**. A parallel session reached that independently and landed it as `7db5750` ("golden
 plant: account-file modes plant last, after every account writer") — *after* the commit this
