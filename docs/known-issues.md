@@ -23,6 +23,19 @@ somewhere a later full teardown can find without a deploy.
 
 `tools/build-{pfsense,vyos}-provision-template.py` alias `192.168.1.2` on the node's bridge and `ssh -W` through `root@<node>` to drive the scratch VM's bootstrap LAN (`192.168.1.0/24`); their ISO fetch (`download-url`) and template rename (`PUT .../config`) are API-only, leaving this hop and template sync ([multi-node.md](multi-node.md#template-copies)) as the repo's only node-shell uses. The pfSense agent retrofit cannot simply switch to the agent channel instead: installing that agent is what the hop is for. **Next action**: on a host whose shell is closed, either alias `192.168.1.2` on the *operator's* NIC where the operator shares the scratch VM's bridge L2, or console-type an operator-routable bootstrap address (`/monitor sendkey`, which these tools already drive the console with).
 
+### PVE per-VM lock timeouts are not retried, so a deploy dies where a queue would have waited
+
+Round 3, live: crimson-relay's re-run died in phase 4 at `golden_ops.stop_vm` with
+`Proxmox task UPID:…:qmstop:2351:… failed: can't lock file
+'/var/lock/qemu-server/lock-2351.conf' - got timeout`. That is the *per-VM* config lock, a
+different lock from the per-datastore one the clone and the template conversion now queue on
+(`stamp: can't lock file '/var/lock/pve-manager/pve-storage-hdd'`), and nothing retries it: the
+retry work covers the base-image clone, the conversion, and HTTP-500 lock errors from `proxmox_api`,
+but a task whose **exitstatus** names a lock failure is raised as fatal.
+**Next action**: the same shape as the two sites already fixed — either queue the VM-scoped
+operations that take `lock-<vmid>.conf`, or retry a task whose failure names a lock file (a stop is
+idempotent). Prefer one helper over a fourth bespoke retry.
+
 ### The deploy-time seed reports "every box is owned" for a partial seed
 
 `red/red_plant_ops.plant_assume_breach` (deploy phase 7) gates on bad-auto's exit code, so a wholly

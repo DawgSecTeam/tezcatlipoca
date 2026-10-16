@@ -17,7 +17,112 @@ that proves each fix. *§3* records the two design documents this pass found to 
 
 ## 1. Verification campaign: what the runs actually showed
 
-*(recorded after the round-3 runs complete — see `logs/round3/REPORT.md` for the raw evidence)*
+Three real competitions deployed in parallel on `main` @ `9e3ad19`, with one defect-driven re-run on
+`55b8e54`. Raw evidence, including the preflight lines and the lock tasks quoted below:
+`logs/round3/campaign-log.md`. **Live estate values are in `infrastructure-status.md`; the
+placements are recorded there, not here.**
+
+| competition | run | `engine_head` | deploy | verify |
+|---|---|---|---|---|
+| pfsense-rvb | `run-4d790ce0` | `9e3ad19` | **succeeded, 8/8** | `run-1dc3cf75` (submitted) |
+| scrim-one-light | `run-526c58ea` | `9e3ad19` | **succeeded, 8/8** | `run-d84d10a6` — FAIL |
+| crimson-relay | `run-68aa9678` | `9e3ad19` | **failed, phase 4** | — (range destroyed cleanly, `run-9a12aeb9`) |
+| crimson-relay (re-run) | `run-dd88db6d` | `55b8e54` | **failed, phase 4** | — |
+
+This is the first campaign in which "which code ran" is a recorded field rather than an inference:
+every run's `engine_head` was read back from the store, which is the fix for the round-2 finding
+that a whole round executed an older revision than the fixes pushed during it.
+
+### What the new preflight proved
+
+- `management bridge vmbr0 exists on node` — the `mgmt_bridge` knob is read for the first time.
+- `engine mgmt IP <x> — UNVERIFIED (2 running guest(s) have no agent: …); proceeding because
+  TEZ_ENGINE_MGMT_IP is set explicitly` — the designed asymmetry, on the real estate.
+- `red01 IP <x> — UNVERIFIED (…); proceeding because the Compfile sets it explicitly`.
+- The **red band scanned entirely free**, so the engine addresses were placed outside it and the
+  band belongs to red01 alone; the red01 vmids were derived, not reserved (the Compfiles'
+  hand-derived reservations were deleted before the campaign).
+
+### The identity fix, verified end to end
+
+The state documents carry `comp_name: crimson-relay` / `pfsense-rvb-2026-09-28` /
+`scrim-one-light` where every dashboard range used to carry `comp`; the engine templates carry
+`comp-crimson-relay` instead of `comp-comp`; and the failed range's teardown reported
+`estate clean for this ownership set` and retired the range on the board
+(`retired_by=run-9a12aeb9`). The competition identity is genuinely not the directory name — the
+pfsense range proves it, since that Compfile's `name` differs from its directory.
+
+### The datastore lock is a whole class, not one site
+
+crimson-relay died **twice** on PVE lock contention, in two different places:
+
+1. **Template conversion** (`qmtemplate 2350`: `can't lock file
+   '/var/lock/pve-manager/pve-storage-hdd' - got timeout`). PVE left `template: 1` with the volume
+   never renamed to `base-`. The volume guard added on 2026-10-15 is what turned that into a named
+   refusal at the moment of damage instead of an opaque `HTTP 500 Linked clone feature is not
+   supported` two phases later — it worked exactly as designed, and it is why the root cause took
+   one query to find. Fixed: the conversion now queues on the same per-node storage lock as the
+   clone, and waits on the task PVE returns (its return value had been discarded on the belief that
+   it returns none).
+2. **A per-VM config lock** (`qmstop 2351`: `can't lock file
+   '/var/lock/qemu-server/lock-2351.conf' - got timeout`) on the re-run, in
+   `golden_ops.stop_vm`. **This one is not fixed**: the retry work covers the clone, the conversion
+   and HTTP-500 lock errors, but a *task* that fails on a per-VM lock has no retry. Filed in
+   `known-issues.md`.
+
+The lesson is recorded rather than generalised into a retry framework: two of the three sites were
+fixed by queueing before the fact, and the third is the same shape waiting to be fixed the same way.
+
+### `misconfig`: the diagnosis was half right, and the wrong half is instructive
+
+The staging fix shipped in this pass **is** necessary and **did** take effect — the pre-domain stage
+config carries `bad-perms-userConfig` for both teams and the golden stage no longer does. It is not
+sufficient. The deploy's own evidence:
+
+```
+[web01-team150] step 000/4 config: bad-perms-userConfig
+[web01-team150]   └─ bad-perms-userConfig: ok (0s)      # planted post-boot, rc 0
+```
+
+and the verify minutes later still reads the mode as absent on both boxes.
+
+So the file is rewritten **after** the plant, within the same phase: `fix_services` creates the
+credlist accounts and `chpasswd`s them, which is exactly the shadow write that resets the mode. The
+correct rule is stronger than "plant it post-clone": **account-file modes must plant after every
+account writer**. A parallel session reached that independently and landed it as `7db5750` ("golden
+plant: account-file modes plant last, after every account writer") — *after* the commit this
+campaign's scrim-one-light ran, so the campaign could not have seen it pass.
+**The next step for this gate is a re-verify on `≥ 7db5750`, not another design change.**
+
+The two gates that failed alongside it are expected, not defects:
+
+- `pins_registered FAIL 5 pinned checks` at deploy time is the interim reading this pass labelled
+  (`--interim`); the same gate PASSes after the red/blue staging.
+- `round_loop FAIL` follows directly from the deliberate `--hold-start`.
+
+### The seed is broken, and the harness now says so
+
+The verify's `degradations` gate caught the deploy's own ledger:
+
+```
+assume_breach_seed: "detail": "192.168.151.4 unreachable over SSH"
+```
+
+bad-auto's seed could not reach the team boxes from red01 — the same failure as the 2026-10-15
+scrims, now **recorded as a degradation instead of announced as success** thanks to the exit-code
+fix. The pre-T0 gate is correspondingly strict: this is the condition it refuses T0 on, so the scrim
+was submitted knowing it would either seed properly or refuse with a named cause. **A
+red-versus-empty-room event is never reported as a red success** — if the scrim refuses, that is the
+correct and honest outcome, and the seed path (red01 → team boxes over SSH) is the defect to chase
+next.
+
+### Still outstanding when this was written
+
+- pfsense-rvb's verify and scrim-one-light's scrim were submitted and running; their results are
+  appended to `logs/round3/campaign-log.md` rather than guessed at here.
+- Only the failed crimson-relay range had been destroyed, so **the estate was not yet clean** at the
+  time of writing; the teardowns are the remaining campaign step.
+- crimson-relay's third attempt needs the per-VM-lock retry above.
 
 ---
 
