@@ -173,3 +173,22 @@ class TheDocumentIsTheOnlyWriter(unittest.TestCase):
         document.save()
         self.assertEqual(frozen_state(self.comp), {"frozen_at": "now"})
         self.assertEqual(sorted(p.name for p in self.comp.iterdir()), ["estate-state.json"])
+
+    def test_a_placement_write_survives_the_deploy_state_save(self):
+        # The planner writes `placement` straight to the file while the deploy context holds
+        # its own copy of the document from load_prior_deploy_state, so saving that copy back
+        # dropped the record: every state document through 2026-10-16 read `placement: None`
+        # while the run's own log said "Placement recorded in <that file>". The record is what
+        # makes red01's selected address durable ("the recorded value is never re-derived"),
+        # so it must outlive the deploy's own save.
+        from deploy_lib.context import DeployContext
+        from multinode.placement_record import write_placement
+
+        ctx = DeployContext(comp_dir=self.comp)  # binds a copy of the document, no placement
+        self.assertIsNone(ctx.document().data.get("placement"))
+        write_placement(self.comp, {"version": 2, "engine_vmid": 2200})
+        ctx.state["last_phase"] = 1
+        ctx.save_state()
+
+        self.assertEqual(state.EstateState.load(self.comp).data["placement"],
+                         {"version": 2, "engine_vmid": 2200})
