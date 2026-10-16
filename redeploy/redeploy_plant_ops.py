@@ -66,6 +66,34 @@ def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
         estate_state.write_flat(comp_dir, state)
 
     pipeline_api.fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=state.get("box_creds"))
+    run_late_pass(targets, rctx)
+
+
+def run_late_pass(targets, rctx):
+# Account-file mode pins, after every account writer this path has.
+#
+#     fix_services_on_boxes' credlist useradd recreates /etc/passwd, /etc/shadow and
+#     /etc/group at their default modes, so a mode planted by the post-clone sweep above is
+#     gone again. This is the deploy's last pass, replayed for the selected boxes. The
+#     domain chain some callers run afterwards creates AD objects, not local accounts.
+    ctx, comp_dir, state = rctx.ctx, rctx.comp_dir, rctx.state
+    path = comp_dir / ".nakon-late.json"
+    if not path.exists():
+        return
+    staged = {m["name"] for m in json.loads(path.read_text())["machines"]}
+    machines = [t["machine"] for t in targets if t["machine"] in staged]
+    if not machines:
+        return
+    print(f"  Account-file mode pass on {len(machines)} machine(s) (after hardening)...")
+    result = pipeline_api.run_nakon(
+        Path(ctx["ssh_key_path"]), config.active().engine.username, ctx["scoring_engine_ip"],
+        pipeline_api.build_nakon_bundle(path), path, only=machines,
+        timeout=max(2400, pipeline_api.PER_MACHINE_NAKON_BUDGET * len(machines)),
+        strict=False, jobs=max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4)))
+    if result.failed:
+        state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
+            f"redeploy late-stage: {line}" for line in result.failed[:20]]
+        estate_state.write_flat(comp_dir, state)
 
 
 def _domain_config_path(comp_dir, fallback):

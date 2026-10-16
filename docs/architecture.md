@@ -92,7 +92,8 @@ Compfile + boxes.json
       .nakon-predomain.json  every team machine, sshd/sudoers touchers  pass 2, lenient, phase 6
       .nakon-final.json      every team machine, disruptive/boot-hostile pass 3, lenient, phase 7
       .nakon-late.json       every team machine, account-file mode pins  pass 4, lenient, phase 7
-      .nakon-postclone.json  pre-domain ∪ final ∪ last; replayed by redeploy rollback/reconfigure
+      .nakon-postclone.json  pre-domain ∪ final; replayed by redeploy rollback/reconfigure
+                             (the last pass is replayed separately, after redeploy's hardening)
   → content-addressed bundles (vendor/nakon/bundles/, cached by config hash)
   → engine /opt/nakon/<run-tag>/  (`nakon deploy --bundle --config [--only] [--strict] [--jobs N]` over SSH)
 ```

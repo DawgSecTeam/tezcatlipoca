@@ -275,8 +275,9 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
 #     split matters) carry every team machine with their own subsets; the last stage holds
 #     the account-file mode pins and runs after the deploy's final account writer. Machines
 #     with an empty subset for a stage are dropped from that stage's file. A combined
-#     post-clone view (pre-domain ∪ final ∪ last) is also written for redeploy's
-#     convergence sweeps. Returns (golden_path, predomain_path, final_path, postclone_path,
+#     post-clone view (pre-domain ∪ final) is also written for redeploy's convergence
+#     sweeps; the last pass has its own file because it must run after the sweep's
+#     hardening. Returns (golden_path, predomain_path, final_path, postclone_path,
 #     late_path); all 0600 and gitignored (per-run-secret class — they carry box_password).
 #
 #     unbooted: box types whose golden stays generalized (domain controllers — see
@@ -339,11 +340,14 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
     predomain_machines = stage_machines(PREDOMAIN_STAGE_CONFIGS, include_golden_stage=True)
     final_machines = stage_machines(FINAL_STAGE_CONFIGS | domain_dependent)
     late_machines = stage_machines(late_names)
-    # Merge pre-domain ∪ final ∪ last per machine, deduping on the pin's full identity
+    # Merge pre-domain ∪ final per machine, deduping on the pin's full identity
     # (_pin_key: name + vars) rather than its name alone — a name-only collapse drops
-    # packet-promised same-named decoy accounts (audit-found 2026-10-02).
+    # packet-promised same-named decoy accounts (audit-found 2026-10-02). The last pass
+    # is deliberately NOT in this view: redeploy's sweep replays it before hardening, and
+    # hardening's credlist useradd would clobber the modes it plants. Redeploy runs the
+    # late file itself, after hardening.
     combined = {}
-    for m in predomain_machines + final_machines + late_machines:
+    for m in predomain_machines + final_machines:
         entry = combined.setdefault(m["name"], {**m, "configurations": []})
         seen = {_pin_key(c) for c in entry["configurations"]}
         for c in m["configurations"]:

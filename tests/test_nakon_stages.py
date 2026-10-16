@@ -227,7 +227,11 @@ class AccountFileModeStaging(unittest.TestCase):
         for name in ("bad-perms-userConfig", "writable-etc-group", "loosen-file-mode"):
             self.assertNotIn(name, predomain.get("web01-team1", []))
             self.assertNotIn(name, final.get("web01-team1", []))
-            self.assertIn(name, postclone["web01-team1"] + postclone["mail01-team1"])
+            # not in the sweep view either: redeploy replays that before hardening, whose
+            # credlist useradd would clobber a mode planted there. Redeploy runs the late
+            # file itself, after hardening.
+            self.assertNotIn(name, postclone.get("web01-team1", []))
+            self.assertNotIn(name, postclone.get("mail01-team1", []))
 
 
 if __name__ == "__main__":

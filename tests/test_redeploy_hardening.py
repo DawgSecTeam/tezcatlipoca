@@ -49,26 +49,34 @@ WIN = _target(WIN_BOX, 2105)
 
 
 class RunNakonAndHardenTests(unittest.TestCase):
-    def _run(self, targets):
+    def _run(self, targets, late=None):
         ctx = {"ssh_key_path": "/tmp/id_ed25519", "scoring_engine_ip": "10.0.0.9"}
+        order = []
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
+            if late is not None:
+                (comp_dir / ".nakon-late.json").write_text(
+                    json.dumps({"machines": [{"name": n} for n in late]}))
             with patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops"}), \
                  patch.object(pipeline_api, "fix_dns_on_boxes") as p_dns, \
                  patch.object(pipeline_api, "setup_ubuntu_auth") as p_auth, \
                  patch.object(pipeline_api, "ensure_nat_forwarding"), \
+                 patch.object(pipeline_api, "build_nakon_bundle", return_value="bundle"), \
                  patch.object(pipeline_api, "run_nakon",
-                              return_value=MagicMock(failed=[])) as p_nakon, \
-                 patch.object(pipeline_api, "fix_services_on_boxes") as p_fix:
+                              side_effect=lambda *a, **k: (
+                                  order.append(("nakon", Path(a[4]).name)),
+                                  MagicMock(failed=[]))[1]) as p_nakon, \
+                 patch.object(pipeline_api, "fix_services_on_boxes",
+                              side_effect=lambda *a, **k: order.append(("harden", ""))) as p_fix:
                 cfg = comp_dir / "nakon-config.json"
                 cfg.write_text(json.dumps(
                     {"machines": [{"name": t["machine"]} for t in targets]}))
                 redeploy_plant_ops.run_nakon_and_harden(
                     targets, _rctx(ctx, comp_dir), cfg, comp_dir / "bundle")
-        return p_dns, p_auth, p_nakon, p_fix
+        return p_dns, p_auth, p_nakon, p_fix, order
 
     def test_mixed_input_hardens_linux_only(self):
-        p_dns, p_auth, p_nakon, p_fix = self._run([LINUX, WIN])
+        p_dns, p_auth, p_nakon, p_fix, _ = self._run([LINUX, WIN])
         self.assertEqual(p_fix.call_args[0][1], [LINUX])
         self.assertEqual(p_dns.call_args[0][0], [LINUX])
         self.assertEqual(p_auth.call_args[0][0], [LINUX])
@@ -78,14 +86,25 @@ class RunNakonAndHardenTests(unittest.TestCase):
     def test_linux_only_input_hardens_everything(self):
         linux2 = _target({"name": "app01", "template": "ubuntu-2204-app",
                           "cpu": 2, "memory_mb": 2048}, 2106)
-        _, _, _, p_fix = self._run([LINUX, linux2])
+        _, _, _, p_fix, _ = self._run([LINUX, linux2])
         self.assertEqual(p_fix.call_args[0][1], [LINUX, linux2])
+
+    def test_late_mode_pass_runs_after_hardening(self):
+        # The sweep plants before fix_services' credlist useradd; a mode planted there is
+        # gone. The late file must replay it AFTER hardening, for the Linux boxes only.
+        _, _, p_nakon, _, order = self._run([LINUX, WIN], late=["web01-team1"])
+        self.assertEqual(p_nakon.call_count, 2)
+        late_call = p_nakon.call_args_list[1]
+        self.assertEqual(Path(late_call[0][4]).name, ".nakon-late.json")
+        self.assertEqual(late_call.kwargs["only"], ["web01-team1"])
+        self.assertEqual([k for k, _ in order], ["nakon", "harden", "nakon"])
 
 
 class ModeRebuildTests(unittest.TestCase):
-    def _run(self, targets):
+    def _run(self, targets, late=None):
         ctx = {"ssh_key_path": "/tmp/id_ed25519", "scoring_engine_ip": "10.0.0.9",
                "box_username": "ubuntu"}
+        order = []
         state = {
             "box_password": "pw",
             "pipeline_version": 3,
@@ -100,6 +119,9 @@ class ModeRebuildTests(unittest.TestCase):
                 json.dumps({**stage, "steps": []}))
             (comp_dir / ".nakon-final.json").write_text(
                 json.dumps({**stage, "steps": []}))
+            if late is not None:
+                (comp_dir / ".nakon-late.json").write_text(
+                    json.dumps({"machines": [{"name": n} for n in late]}))
             with patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops",
                                          "TEZ_SSH_PUBLIC_KEY": "ssh-ed25519 AAAA test"}), \
                  patch.object(redeploy_rebuild_ops, "proxmox_api",
@@ -115,16 +137,20 @@ class ModeRebuildTests(unittest.TestCase):
                  patch.object(pipeline_api, "wait_for_boxes_ssh"), \
                  patch.object(pipeline_api, "wait_for_cloud_init"), \
                  patch.object(pipeline_api, "ensure_nat_forwarding"), \
+                 patch.object(pipeline_api, "build_nakon_bundle", return_value="bundle"), \
                  patch.object(pipeline_api, "run_nakon",
-                              return_value=MagicMock(failed=[])) as p_nakon, \
-                 patch.object(pipeline_api, "fix_services_on_boxes") as p_fix:
+                              side_effect=lambda *a, **k: (
+                                  order.append(("nakon", Path(a[4]).name)),
+                                  MagicMock(failed=[]))[1]) as p_nakon, \
+                 patch.object(pipeline_api, "fix_services_on_boxes",
+                              side_effect=lambda *a, **k: order.append(("harden", ""))) as p_fix:
                 redeploy_rebuild_ops.mode_rebuild(
                     targets, _rctx(ctx, comp_dir, state),
                     comp_dir / "nakon-config.json", comp_dir / "bundle")
-        return p_boot, p_start, p_snap, p_nakon, p_fix, p_api
+        return p_boot, p_start, p_snap, p_nakon, p_fix, p_api, order
 
     def test_mixed_rebuild_hardens_linux_bootstraps_windows(self):
-        p_boot, p_start, p_snap, p_nakon, p_fix, _ = self._run([LINUX, WIN])
+        p_boot, p_start, p_snap, p_nakon, p_fix, _, _ = self._run([LINUX, WIN])
         self.assertEqual(p_fix.call_args[0][1], [LINUX])
         self.assertEqual(p_boot.call_args[0][1], WIN["vmid"])
         self.assertEqual({c[0][1] for c in p_start.call_args_list},
@@ -137,9 +163,18 @@ class ModeRebuildTests(unittest.TestCase):
     def test_linux_only_rebuild_hardens_all(self):
         linux2 = _target({"name": "app01", "template": "ubuntu-2204-app",
                           "cpu": 2, "memory_mb": 2048}, 2106)
-        p_boot, _, _, _, p_fix, _ = self._run([LINUX, linux2])
+        p_boot, _, _, _, p_fix, _, _ = self._run([LINUX, linux2])
         self.assertEqual(p_fix.call_args[0][1], [LINUX, linux2])
         p_boot.assert_not_called()
+
+    def test_rebuild_runs_the_late_mode_pass_after_the_final_stage(self):
+        # The rebuild's own fix_services useradd would clobber a mode planted by the
+        # pre-domain/final passes, so the late pass must be the last writer here too.
+        _, _, _, p_nakon, _, _, order = self._run([LINUX, WIN], late=["web01-team1"])
+        self.assertEqual(Path(p_nakon.call_args_list[-1][0][4]).name, ".nakon-late.json")
+        self.assertEqual(p_nakon.call_args_list[-1].kwargs["only"], ["web01-team1"])
+        kinds = [k for k, _ in order]
+        self.assertEqual(kinds, ["nakon", "harden", "nakon", "nakon"])
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ from common.ssh_ops import quote_sshkeys
 from common.utils import compfile_flag, competition_name
 from pathlib import Path
 from redeploy.redeploy_select_ops import box_platform
-from redeploy.redeploy_plant_ops import rerun_domain_configs
+from redeploy.redeploy_plant_ops import rerun_domain_configs, run_late_pass
 from estate import config as estate_config
 
 
@@ -201,6 +201,10 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
         if final_path.exists():
             print("  Final-stage pass (disruption + boot-hostile) on rebuilt boxes...")
             _stage_pass(final_path, "final")
+
+        # After every account writer above (fix_services' credlist useradd, the domain
+        # chain), so the modes the packet promises reach the rebuilt box.
+        run_late_pass(rebuilt, rctx)
 
         if domain_settled:
             print(f"  Snapshotting rebuilt boxes as '{SNAP_READY}'...")
