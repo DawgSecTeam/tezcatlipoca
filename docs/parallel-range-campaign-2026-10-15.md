@@ -79,3 +79,75 @@ from the slot count instead of the fixed `+170` offset (which really does collid
 with the tool's own limits), select management addresses from a free-address scan instead of
 defaulting them, and collapse the four collision gates into one proof — while leaving run
 ownership, teardown tag matching and the template hash lifecycle exactly as they are.
+
+---
+
+# Round 2 (later the same day) — consolidation, re-run, and what it proved
+
+After the campaign above, every outstanding branch and worktree was consolidated onto `main`
+(now the only branch, old tips kept as `pre-consolidation/*` tags), and the pipeline was run
+again end to end. Full evidence: `logs/round2/FINDINGS.md`, one report per range, and
+`logs/consolidation-patches/CONSOLIDATION.md`.
+
+## Two more real defects, found by re-running
+
+1. **The datastore-lock retry did not outlast the contention.** Round 1's fix retried three
+   times 20 s apart; a three-way race still lost, failing at +0:03, +0:36 and +1:11 while the
+   winners' clones committed seconds apart at the very start. What is contended is the
+   serialised allocation queue behind the lock, not one long clone. Now five attempts backing
+   off 40/80/120/160 s (~6.5 min), and the regression test asserts the **total wait**, not the
+   attempt count.
+2. **The unbooted (DC) golden conversion never waited for its `base-` volume rename.** Linked
+   clones only work from `base-<vmid>-disk-N` volumes and the rename is asynchronous: the
+   booted path had guarded it since 2026-10-04, the DC path never did. A run died at `[4b/8]`
+   with `HTTP 500 Linked clone feature is not supported for 'hdd:vm-2350-disk-0'`, and the
+   earlier failure's own `qmtemplate` task is on record as having hit a storage-lock timeout —
+   its UPID was discarded, so the driver printed success while the rename never happened. Both
+   paths now share one guard, and the next run proved it live: the guard polled twice (2 s
+   each) and the rename landed on the third poll, with the team boxes then cloning from
+   `base-2350-disk-0`.
+
+Both fixes are on `main` with regression tests. A third and fourth fix went into the dashboard
+(not this repo): its range resolver could target a workspace whose state document has no
+resources — a refused run's stub outranked the live range, so range actions died on "no engine
+management IP recorded" — and a top-level `comp_dir` in the request body was silently dropped.
+
+**Provenance matters, and it bit this round:** every run deployed between the push and the
+dashboard's next `fetch origin`, so all of them executed the *older* commit while reporting
+`engine_ref: main`. The first line of each `run.log` (`$ engine origin/main @ <sha>`) is the
+only trustworthy statement of what a run executed; "we ran main" is not evidence.
+
+## What round 2 verified
+
+- **pfsense-rvb** — deploy 8/8; **`firewall_in_path PASS`** (engine routes each team subnet
+  `via 172.31.<id>.2`, holds no `192.168.<id>.1`, both firewall WANs answer on `:22`, transit
+  bridges present) and **`domains PASS`** (both DCs serving their own forest with distinct
+  DomainSIDs; the Fedora member joined, so the SELinux/guest-agent edge is not a domain-path
+  failure). Full teardown, templates reclaimed, estate re-proved.
+- **crimson-relay** — deploy 8/8 on the fixed code; `domains PASS`, `isolation PASS`,
+  `portal PASS`; the held-start verify fails only on `misconfig` (the long-open known issue)
+  and on gates that need a scored round, which the deliberate `--hold-start` withholds. Full
+  teardown with zero warnings.
+- **scrim-one-light** — deploy 8/8; verify's sole failure is the same known `misconfig`. The
+  scrim itself is a **failed run**: the harness's own verdict is *"NO INTERACTION — blue never
+  engaged"*, interaction score 1 (a single inject submission), with zero takedowns,
+  restorations, evictions and eradications. Red's assume-breach seed failed on all six boxes
+  and still exited 0, so the harness announced success — the same open bad-auto defect, now
+  seen a fourth time. Both agents were present and live; they were starved, not absent.
+
+## Newly found, not yet fixed
+
+- **No `[7/8]` banner exists** — phase 7 prints it only on the skip branch, so every deploy's
+  log and the dashboard's stage jump 6 → 8.
+- **`.deploy-timings.jsonl` mislabels and double-counts the AD work** — the `domain_adds` rows
+  are filed under phase 6 while their parent `domains` is phase 7 and they run concurrently,
+  so the same wall clock is counted twice and the per-phase totals can exceed the run's own
+  duration.
+- **`bad-perms-userConfig` is absent on every clone while nakon returns rc 0 and
+  `plant_coverage` PASSes** — a contradiction between two gates that needs a decision, not
+  another re-run.
+- **No range-level mutex for `scrim`** — a second scrim of the same range is accepted; two ran
+  concurrently here (each stops nginx for its fire test, and both log in as the same accounts)
+  until one was cancelled.
+- **An orphan reclaim leaves the range's bridges behind**, and a bridge carries no tags, so no
+  destroy path can ever attribute one.
