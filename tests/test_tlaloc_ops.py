@@ -178,6 +178,19 @@ class PlantTests(unittest.TestCase):
         self.comp = compfile(self.tmp.name, "red.engine tlaloc\n", red_yaml="red.yaml")
         self.ctx = FakeCtx(self.comp)
         self.degradations = []
+        # A checkout fixture, not whatever the host happens to have: TLALOC_REPO is resolved
+        # from TEZ_TLALOC_PATH/$HOME at import, so a box without a cloned tlaloc failed every
+        # stage test with "no tlaloc checkout" instead of exercising the stage.
+        repo = Path(self.tmp.name) / "tlaloc-repo"
+        (repo / "tlaloc").mkdir(parents=True)
+        (repo / "tlaloc" / "__init__.py").write_text("")
+        (repo / "systemd").mkdir()
+        (repo / "systemd" / "tlaloc.service").write_text("[Unit]\n")
+        (repo / "config.example.yaml").write_text("")
+        patcher = mock.patch.multiple(to, TLALOC_REPO=repo,
+                                      UNIT_SRC=repo / "systemd" / "tlaloc.service")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
         self.tmp.cleanup()

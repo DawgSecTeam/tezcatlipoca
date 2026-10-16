@@ -53,6 +53,10 @@ INTERNAL_ENV = {
     # environment; the file's existence is the "hold at the next phase boundary" request.
     # Internal run-queue handoff, never operator configuration.
     "TEZ_PAUSE_FILE": "tezcatlipoca-dashboard -> deploy_lib/pause.py boundary hold",
+    # Names the tlaloc v2 agent checkout. The dashboard carries it in its .env because the
+    # checkout lives once per host while a run's engine is cut into <run_dir>/engine, so the
+    # sibling fallback cannot find it (smoke run-cb959268 went live with no red team).
+    "TEZ_TLALOC_PATH": "tezcatlipoca-dashboard -> red/tlaloc_ops.py agent checkout path",
     # artifacts_lib/seal.py seal step: default author attribution from the OS user, not
     # operator configuration.
     "USER": "OS username, recorded as the default write-up author on seal",

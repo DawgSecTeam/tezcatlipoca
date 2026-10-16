@@ -372,7 +372,7 @@ def stage_red_tlaloc(args, comp, creds, run_dir):
     scrim that starts with no planted presence or a C2 whose callbacks cannot
     reach red01 is not the event anyone asked for.
     """
-    from red import gaia_ops, tlaloc_ops
+    from red import tlaloc_ops
     _resolve_red_vmid(args, comp)
     _resolve_red_ip(args, comp)
     ssh_key = (creds or {}).get("KEY_PATH") or core.REPO / "proxmox"
