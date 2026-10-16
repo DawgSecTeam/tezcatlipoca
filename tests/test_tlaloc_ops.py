@@ -66,6 +66,14 @@ class RedDiskTest(unittest.TestCase):
             assert f"sudo -n {cmd}" in script, (cmd, script)
         assert script.rstrip().endswith("df -h /"), script
 
+    def test_the_partition_comes_from_lvm_not_a_walk_up_the_device_tree(self):
+        """`/` is an LV: basename() of it is the LV name and `lsblk -no PKNAME
+        /dev/dm-N` is empty on this box, so a device-tree walk found no partition and
+        skipped the grow entirely — 13G of a 60G disk (live smoke 2026-10-16)."""
+        script = to._guest_grow_script()
+        assert "pvs --noheadings -o pv_name" in script, script
+        assert "/sys/class/block/$(basename \"$PV\")/partition" in script, script
+
     def test_a_grown_disk_whose_filesystem_was_not_extended_is_not_ok(self):
         """The hypervisor resize alone fooled nobody: an unextended LV fills up the
         same way, so the verdict comes from the box's own df."""

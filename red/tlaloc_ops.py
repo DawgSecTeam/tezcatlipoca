@@ -82,20 +82,26 @@ def red_disk_gb(comp_dir, default=None):
 def _guest_grow_script():
     """Extend the root filesystem into whatever space the hypervisor just added.
 
-    Every write step needs `sudo -n`: the red01 ssh user is a passwordless-sudo
-    account, NOT root, so growpart/pvresize/lvextend/resize2fs each fail with
-    "Permission denied" — individually, and the `|| true`s then hide it until the
-    final df check reports the old size (live smoke 2026-10-16: the resize blocked
-    the deploy with "could not grow red01's disk", which is how this was found).
+    Two things this gets wrong easily, both learned live on 2026-10-16:
+
+    * every write step needs `sudo -n` — red01's ssh user is a passwordless-sudo
+      account, not root, so each call otherwise fails with "Permission denied";
+    * the partition is NOT found by walking up from the root DEVICE. `/` is an LV
+      (`/dev/mapper/ubuntu--vg-ubuntu--lv`), `basename` of that is the LV name, and
+      `lsblk -no PKNAME /dev/dm-N` is EMPTY on this box — so the partition-grow block
+      was skipped entirely and the box sat at 13G with a 60G disk. LVM itself names
+      the partition that backs the LV (`pvs` → `/dev/sda3`), which is version-proof.
     """
     return (
         "set -x; ROOT=$(findmnt -no SOURCE /); "
-        "PART=$(basename \"$ROOT\"); "
-        "if [ -e \"/sys/class/block/$PART/partition\" ]; then "
-        "  SYS=/dev/$(lsblk -no pkname \"/dev/$PART\" | head -1); "
-        "  NUM=$(cat \"/sys/class/block/$PART/partition\"); "
-        "  sudo -n growpart \"$SYS\" \"$NUM\" || true; "
-        "  sudo -n pvresize \"${SYS}${NUM}\" || true; "
+        "PV=$(sudo -n pvs --noheadings -o pv_name 2>/dev/null | head -1 | tr -d ' '); "
+        "if [ -n \"$PV\" ] && [ -b \"$PV\" ]; then "
+        "  DISK=$(lsblk -no PKNAME \"$PV\" 2>/dev/null | head -1); "
+        "  NUM=$(cat \"/sys/class/block/$(basename \"$PV\")/partition\" 2>/dev/null); "
+        "  if [ -n \"$DISK\" ] && [ -n \"$NUM\" ]; then "
+        "    sudo -n growpart \"/dev/$DISK\" \"$NUM\" || true; "
+        "  fi; "
+        "  sudo -n pvresize \"$PV\" || true; "
         "fi; "
         "sudo -n lvextend -l +100%FREE \"$ROOT\" || true; "
         "sudo -n resize2fs \"$ROOT\" || true; df -h /")
