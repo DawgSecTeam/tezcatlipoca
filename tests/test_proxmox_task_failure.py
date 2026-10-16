@@ -31,6 +31,9 @@ sys.path.insert(0, str(_REPO))
 from infra import client  # noqa: E402
 from infra import lifecycle  # noqa: E402
 from engine import engine_template_ops  # noqa: E402
+from golden import golden_ops  # noqa: E402
+
+COMP_NAME = "tlaloc-smoke"
 
 UPID = "UPID:n:1:2:3:qmclone:955:x:"
 LOCK_MESSAGE = ("Proxmox task UPID:x failed: clone failed: can't lock file "
@@ -163,6 +166,89 @@ class EngineTemplateCloneRetry(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self._run(cluster, wait)
         self.assertEqual(cluster.clones, 1, "a real failure is surfaced, not retried")
+
+
+class GoldenCloneQueueRetry(unittest.TestCase):
+    """A GOLDEN clone takes PVE's datastore lock too, so it must queue like the
+    conversion beside it.
+
+    Live 2026-10-16: phases 1-3 of a clean tlaloc-smoke deploy were fine, then phase 4
+    died with `can't lock file '/var/lock/pve-manager/pve-storage-hdd' - got timeout`
+    while four concurrent clones ran on a node at load 22 and two other comps deployed.
+    `storage_queue_lock`'s own charter names "base-image clone" and the conversion path
+    already used it — this call site never did.
+    """
+
+    def _state_api(self):
+        state = {"calls": [], "clones": 0, "destroys": [], "partial": False}
+
+        def fake(endpoint, token, method, path, **kw):
+            state["calls"].append((method, path))
+            if method == "POST" and path.endswith("/clone"):
+                state["clones"] += 1
+                state["partial"] = True
+                return {"data": UPID}
+            if method == "GET" and path == "/nodes/n/qemu":
+                # the half-copy only appears once a clone has been attempted
+                return {"data": [{"vmid": 1150, "name": "golden-web01"}] if state["partial"] else []}
+            if method == "GET" and path.endswith("/config"):
+                return {"data": {"lock": "clone",
+                                 "description": f"tezcatlipoca-clone comp-{COMP_NAME}"}}
+            if method == "DELETE":
+                state["destroys"].append(path)
+                state["partial"] = False
+                return {"data": None}
+            if path.endswith("/status"):
+                return {"data": {"status": "stopped", "exitstatus": "OK"}}
+            if method == "GET":
+                return {"data": []}
+            return {"data": {}}
+        return state, fake
+
+    def _run(self, state, fake, wait, queued):
+        comp = Path(tempfile.mkdtemp())
+        (comp / "Compfile").write_text(f"name {COMP_NAME}\nteams 1\n")
+        templates = {"web-tpl": 955}
+        missing = [{"vmid": 1150, "vm_name": "golden-web01", "ip": "192.168.190.50",
+                    "gateway": "192.168.190.1", "bridge": "vmbr190",
+                    "box": {"template": "web-tpl", "name": "web01"}}]
+        stack = ExitStack()
+        stack.enter_context(patch.object(client, "_route_for_path",
+                                         lambda path: ("https://h:8006", "tok")))
+        stack.enter_context(patch.object(client, "proxmox_api_for", fake))
+        stack.enter_context(patch.object(golden_ops, "wait_for_proxmox_task", wait))
+        stack.enter_context(patch.object(golden_ops.time, "sleep", lambda *_: None))
+        stack.enter_context(patch.object(golden_ops, "storage_queue_lock", queued))
+        with stack:
+            golden_ops._clone_missing_goldens("n", missing, templates, str(comp),
+                                              {"box_username": "ubuntu"}, "pw", "tags")
+
+    def test_the_clone_queues_and_a_lock_failure_is_retried(self):
+        state, fake = self._state_api()
+        entered = []
+
+        def queued(node, wait_s=900):
+            entered.append(node)
+            return contextlib.nullcontext()
+
+        def wait(node, upid, **kw):
+            if state["clones"] == 1:
+                raise RuntimeError(LOCK_MESSAGE)
+
+        self._run(state, fake, wait, queued)
+        self.assertTrue(entered, "the golden clone must take the datastore queue lock")
+        self.assertEqual(state["clones"], 2, "lock contention is retried, not failed")
+        self.assertTrue(state["destroys"], "the locked half-clone is reclaimed before the retry")
+
+    def test_a_non_lock_failure_is_not_retried(self):
+        state, fake = self._state_api()
+
+        def wait(node, upid, **kw):
+            raise RuntimeError("Proxmox task UPID:x failed: storage 'hdd' does not exist")
+
+        with self.assertRaises(RuntimeError):
+            self._run(state, fake, wait, lambda node, wait_s=900: contextlib.nullcontext())
+        self.assertEqual(state["clones"], 1, "a real failure is surfaced, not retried")
 
 
 if __name__ == "__main__":

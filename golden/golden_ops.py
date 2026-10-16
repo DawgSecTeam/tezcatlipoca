@@ -119,30 +119,55 @@ def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_
 def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password,
                           ownership_tag_str):
     print(f"  Cloning {len(missing)} golden box(es) from base templates...")
-    existing_vmids = {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
+    # The clone takes PVE's per-DATASTORE lock — `storage_queue_lock`'s own charter names
+    # "base-image clone" — and the conversion path a few lines down already queues for it,
+    # but this call never did: concurrent ranges fought and the loser died with
+    # `can't lock file '/var/lock/pve-manager/pve-storage-hdd' - got timeout`. Live
+    # 2026-10-16 on a node at load 22 with four concurrent clones: phases 1-3 fine, phase 4
+    # fatal, while two other comps deployed on the same host. Queue it, and keep a bounded
+    # retry for the holder we do not control (another host, or older code).
     for t in missing:
+        skipped = False
         src = templates.get(t["box"]["template"])
         if src is None:
             raise RuntimeError(f"no stopped template named '{t['box']['template']}' on the node")
-        if t["vmid"] in existing_vmids:
-            locked_cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"]
-            if not locked_cfg.get("lock"):
-                continue
-            # An interrupted clone: half-copied disk, never usable — start over.
-            # Ownership proof: only THIS competition's clone marker in the
-            # description adopts it; expect_tags=set() used to destroy ANY VM
-            # found here, foreign ones included.
-            if clone_marker(competition_name(comp_dir)) not in str(locked_cfg.get("description") or ""):
-                raise RuntimeError(
-                    f"refusing to destroy locked vmid {t['vmid']} on reserved golden "
-                    f"slot '{t['vm_name']}' — no clone marker in its description, "
-                    f"not provably ours")
-            destroy_vm_if_exists(node, t["vmid"], expect_tags=None)
-        else:
-            gc_orphan_volumes(node, t["vmid"])
-        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone",
-                           data=full_clone_data(t["vmid"], t["vm_name"], competition_name(comp_dir)))["data"]
-        wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
+        with storage_queue_lock(node):
+            for attempt in range(3):
+                existing_vmids = {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]}
+                if t["vmid"] in existing_vmids:
+                    locked_cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"]
+                    if not locked_cfg.get("lock"):
+                        skipped = True
+                        break
+                    # An interrupted clone: half-copied disk, never usable — start over.
+                    # Ownership proof: only THIS competition's clone marker in the
+                    # description adopts it; expect_tags=set() used to destroy ANY VM
+                    # found here, foreign ones included.
+                    if clone_marker(competition_name(comp_dir)) not in str(locked_cfg.get("description") or ""):
+                        raise RuntimeError(
+                            f"refusing to destroy locked vmid {t['vmid']} on reserved golden "
+                            f"slot '{t['vm_name']}' — no clone marker in its description, "
+                            f"not provably ours")
+                    destroy_vm_if_exists(node, t["vmid"], expect_tags=None)
+                else:
+                    gc_orphan_volumes(node, t["vmid"])
+                upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone",
+                                   data=full_clone_data(t["vmid"], t["vm_name"], competition_name(comp_dir)))["data"]
+                try:
+                    wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
+                    break
+                except RuntimeError as e:
+                    # A task that lost the datastore lock may leave a half-clone with a
+                    # `lock: clone` config — the next attempt's interrupted-clone branch
+                    # above is what cleans it up, which is why existing_vmids is re-read
+                    # inside the loop rather than once before it.
+                    if "lock file" not in str(e) or attempt == 2:
+                        raise
+                    print(f"    {t['vm_name']}: golden clone hit datastore lock contention — "
+                          f"retrying (attempt {attempt + 2}/3)")
+                    time.sleep(40 * (attempt + 1))
+        if skipped:
+            continue
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
             "ipconfig0": f"ip={t['ip']}/24,gw={t['gateway']}",
             "net0": f"virtio,bridge={t['bridge']}",
