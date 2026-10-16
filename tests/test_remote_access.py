@@ -235,6 +235,46 @@ class EnrollmentMarkdownTest(unittest.TestCase):
                       "--authkey hskey-auth-xyz", md)
 
 
+class RebindingReassertTest(unittest.TestCase):
+# tailscaled re-applies its ruleset when an interface gains an address
+#     ("LinkChange: major, rebinding: ... rebind-reason=[ips-changed]"), taking the
+#     POSTROUTING chain with it; the 30s timer left tailnet->team traffic broken inside
+#     every window (live 2026-10-15, run-9fd68d14: present 9 samples, absent 3, present).
+
+    def test_the_monitor_reasserts_on_the_interface_event(self):
+        script = ra.remote_access_monitor_script()
+        self.assertIn("ip monitor address link", script)
+        self.assertIn("/usr/local/sbin/range-remote-access.sh", script)
+        # restarted if ip monitor's socket dies
+        self.assertIn("while :; do", script)
+
+    def test_the_monitor_unit_runs_that_script_and_restarts(self):
+        unit = ra.remote_access_monitor_unit()
+        self.assertIn("ExecStart=/usr/local/sbin/range-remote-access-monitor.sh", unit)
+        self.assertIn("Restart=always", unit)
+        self.assertIn("WantedBy=multi-user.target", unit)
+
+    def test_the_timer_stays_as_the_fallback(self):
+        _service, timer = ra.remote_access_systemd_units()
+        self.assertIn("OnUnitActiveSec=30", timer)
+
+    def test_the_firewall_script_names_both_triggers(self):
+        text = ra.remote_access_firewall_script(["101"], [], "10.0.0.252")
+        self.assertIn("range-remote-access-monitor.service", text)
+        self.assertIn("range-remote-access.timer", text)
+
+    def test_push_installs_and_enables_the_monitor_alongside_the_timer(self):
+        calls = []
+        with patch.object(ra, "_engine_cmd",
+                          side_effect=lambda ctx, cmd, **kw: calls.append(cmd)):
+            ra.push_remote_access_firewall({}, "10.0.0.252", ["101"], ["130"])
+        install = next(c for c in calls if "range-remote-access-monitor.sh" in c)
+        self.assertIn("/etc/systemd/system/range-remote-access-monitor.service", install)
+        self.assertIn("enable --now range-remote-access.timer "
+                      "range-remote-access-monitor.service", install)
+        self.assertIn("/etc/systemd/system/range-remote-access.timer", install)
+
+
 class TailscaleInstallTest(unittest.TestCase):
     def _install_command(self):
         calls = []

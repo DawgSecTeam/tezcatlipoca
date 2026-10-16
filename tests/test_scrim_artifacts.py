@@ -363,7 +363,10 @@ class AgentIdentity(TmpCase):
                 mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"), \
                 mock.patch.object(red_stage.red_plant_ops, "_seed_red",
                                   lambda *a, **k: subprocess.CompletedProcess(
-                                      ["seed"], 0, "seeded", "")), \
+                                      ["seed"], 0,
+                                      json.dumps({"boxes": 2, "failed": [],
+                                                  "access": ["192.168.101.2",
+                                                             "192.168.102.2"]}), "")), \
                 mock.patch.object(red_stage.realm_c2_ops, "provision_realm_c2",
                                   lambda *a, **k: {"ok": True, "transports": ["http1"],
                                                    "mcp": "http://10.0.0.199:8000/mcp"}), \

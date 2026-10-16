@@ -44,9 +44,12 @@ The SNAT is the load-bearing piece (`remote_access_firewall_script`): box sshd a
 gateway-IP auth only, so participant traffic must arrive as `192.168.<id>.1` — the same
 treatment the jump VMs give routed-red traffic. **Satellite teams** SNAT to the *engine's mgmt
 IP* instead; the satellite jump (which owns `.1` there) re-SNATs to the gateway with its
-existing engine-source rule. Rules are re-asserted every 30s by a per-deploy
-`range-remote-access.timer` (Docker wipes iptables on restart), mirroring `range-firewall`.
-The engine template is untouched — no template hash churn.
+existing engine-source rule. tailscaled re-applies its ruleset whenever an interface gains an
+address (`LinkChange … rebind-reason=[ips-changed]`), which takes the POSTROUTING chain with it,
+so a per-deploy `range-remote-access-monitor.service` watches `ip monitor address link` and
+re-asserts on the event; `range-remote-access.timer` re-asserts every 30 s as the fallback
+(Docker also wipes iptables on restart), mirroring `range-firewall`. The engine template is
+untouched — no template hash churn.
 
 Isolation stays triple-layered: the headscale ACL (enforced on the engine's tailscale), the
 engine's `192.168/16 → 192.168/16` FORWARD DROP, and the portless team bridges.
@@ -59,8 +62,8 @@ engine's `192.168/16 → 192.168/16` FORWARD DROP, and the portless team bridges
    `TEZ_TEAM_IDENTIFIERS`).
 2. Install tailscale on the engine (first run), enroll/update it as `eng-<comp-id>` advertising
    every team subnet (routes auto-approve via `autoApprovers` + `tag:range-router`).
-3. Push `range-remote-access.sh` + timer (local teams → SNAT `.1`; satellite teams → SNAT
-   engine mgmt IP).
+3. Push `range-remote-access.sh` + monitor service (re-assert on an interface change) + timer
+   (local teams → SNAT `.1`; satellite teams → SNAT engine mgmt IP).
 4. Create `comp-<id>-<person>` users + single-use preauth keys for everyone in `people.json`;
    re-apply the whole ACL policy from the headscale host's
    `tezcatlipoca-remote-access.json` state file; restart the headscale container (seconds; the

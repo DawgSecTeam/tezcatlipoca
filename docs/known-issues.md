@@ -88,19 +88,6 @@ the file that should carry it — when neither `TEZ_PROXMOX_ENDPOINT` nor
 `TEZ_PROXMOX_API_TOKEN` resolves, and give bad-auto a `TEZ_PROXMOX_*` read with a `TF_VAR_*`
 fallback instead of keeping both name sets alive in an ops-host file by hand.
 
-### A blue cycle can overrun the orchestrator's own event deadline
-
-`run-59a685c0` (2026-10-15, scrim-one-light): a 30-minute `--duration-min` event was still in
-`stage=event` at 56 minutes elapsed. `monitor_loop` stopped writing snapshots at T+30 while
-the harness waited on a blue cycle that had already exceeded its 1800 s budget, so the event
-did not end at its deadline and the clock-bounded deliverables (interaction report, teardown)
-were deferred with it. The cycle contract is 6 wall-clock minutes; a model that spends 20+ in
-one cycle (one trivial completion took 11.5 min on the local endpoint) turns that into an
-unbounded event.
-**Next action**: make the deadline authoritative for the feed loop — stop starting cycles past
-`duration_min`, and cap the join on an in-flight cycle by the remaining window — so the
-harness always reaches capture and teardown on time.
-
 ### The comp ownership tag is the workspace directory name, so every dashboard range is `comp-comp`
 
 `teardown/machinery.py` builds `Ownership(Path(comp_dir).name, run_id)` and the deploy stamps
@@ -188,25 +175,6 @@ checks look somewhere the clones do not have. **Next action**: run the two check
 one clone and against its golden, then fix whichever of planting order / check path is wrong; both
 gates must be green before scrim-one is used for scoring.
 
-### A blue agent never produces its narrative
-
-`BLUE-TEAM.md` is a 524-byte stub, and the harness logged `BLUE-TEAM.md is ABSENT although this run
-had a blue agent` at finalize (2026-10-14, run-e7e12115; same shape as the run15 finding "Blue never
-writes REPORT.md when its cycles time out → BLUE-TEAM.md is a stub every run"). Blue's side of the
-report therefore has to be reconstructed from `INTERACTION.md` and the cycle logs every time.
-**Next action**: make the blue side write its narrative at the end of the event whatever its cycles
-did (including the timeout path), and keep the collector's "present agent, missing canonical
-document" warning as the guard.
-
-### A 45-minute event holds two blue cycles at current endpoint latency
-
-Measured 2026-10-14 (run-e7e12115): a blue cycle costs 20–30 min wall clock (LLM decision ~220 s at
-`qwen3.8-27b` on `10.0.0.143:8080`), the two teams serialise on a shared LLM lock, and the event
-therefore produced 4 cycles total — below the rehearsal gates that require `>= 6` cycles and
-`>= 2` restorations, so "NOT READY" is partly an artefact of the clock rather than of the teams'
-behaviour. **Next action**: decide deliberately — recalibrate the blue gates to the endpoint the
-club actually has, or change the budget (longer event, faster model, or per-team endpoints instead
-of one lock) — and record the decision next to the gate table in `docs/rehearsal-gates.md`.
 
 ### `misconfig` is red in every verify, deploy-time and pre-T0 (scoring integrity)
 
@@ -221,34 +189,6 @@ misconfig. **Next action**: root-cause it in the gate, with a regression test �
 are provably planted on the goldens and confirmed on the clones must pass. This is the one deploy
 gate whose failure means the scored range is not what the packet promises.
 
-### The tailnet→team SNAT rule flaps, and a container restart is what drops it
-
-Live 2026-10-15 (run-9fd68d14, scrim-one-light canary): `remote_access : FAIL  SNAT lines missing
-from the engine nat table` on a range whose identical probe PASSed minutes before and again
-after. Sampling the engine's nat table every 10 s showed the rule present for nine samples, absent
-for three, present again. The engine journal names the cause: `tailscaled: LinkChange: major,
-rebinding: ... diff: ips divisor: [...] rebind-reason=[ips-changed]` — the Quotient container's
-interface gaining an address makes tailscaled re-apply its ruleset, which takes the POSTROUTING
-chain with it; `range-remote-access.timer` only re-adds the rule every 30 s, so tailnet→team
-traffic is genuinely broken inside each window. The verifier now samples past one re-assert cycle
-(`e4e17a6`), so the gate no longer calls a self-healing range dead, but the flap itself is open.
-**Next action**: re-assert on the rebind instead of on a timer (a unit triggered by the interface
-change, or `tailscale set` completion) or move the rules where tailscaled's ruleset cannot reach
-them, then prove it by holding a tailnet→team flow across a container restart.
-
-### red01's liveness is probed on the same path its traffic uses, so a node network bounce loses red silently
-
-Live 2026-10-15 (run-1c44733b): red01 (10.0.0.198) went unreachable at T+13 — every 60 s probe
-returned `No route to host` for the remaining 30 minutes, the in-run snapshots stopped at
-`events-T+013.jsonl`, and the teardown could not collect `RED-TEAM.md`. Red had 13 minutes of the
-45-minute event; six red gates failed as a direct consequence. The harness did everything right
-(the alert fired at the third miss, and the absence was recorded rather than stubbed), but nothing
-can distinguish "red is dead" from "the path to red is dead" — both are the same probe. A second
-session's range churn on the same node (repeat deploy/destroy, each creating and destroying bridges
-and running `ifreload -a`) brackets the exact minute, and is the leading explanation.
-**Next action**: give a live event's red01 an out-of-band liveness signal (a second address family,
-a guest-agent ping, or a heartbeat the box itself pushes to the operator) and make the run log say
-which one answered; run at most one range per node while an event is live.
 
 ### The scoreboard inject detail page renders markdown literally and prints the title twice
 
@@ -281,28 +221,23 @@ under two run ids with no workspace anywhere, and the dashboard's range view had
 **Next action**: hold the workspace of any run whose range is not `retired`, or have the dashboard
 submit an orphan reclaim when it deletes one.
 
-### bad-auto's assume-breach seed exits 0 with every step failed, and the scrim believes it
+### bad-auto's assume-breach seed exits 0 with every step failed
 
 scrim-one-light run-1ea5494a-run2 (2026-10-15, red+blue scrim of a deployed range): the
 authoritative pre-T0 verify printed `red_teams : PASS  red01 reached all 2 teams`, and **seven
 seconds later** bad-auto's seed reported all six boxes `"step": "access", "detail":
-"192.168.<tid>.<n> unreachable over SSH"` — then exited **0**. `scrim/red_stage.seed_assume_breach`
-gates on that exit code alone, so it logged "assume-breach presence seeded — every box is
-compromised before T0" and started the clock. Red then spent the whole 30 minutes with **0
-footholds** (every red event reads `0 footholds alive, 0 evicted, 0 artifacts standing`), reached
-for one tactic (`db_attack` mysql recon, 10 ok / 2 failed actions) and scored **0 takedowns**; blue
-ran 3 cycles, logged 4 evictions and 2 injects and had nothing to restore. Interaction score 11,
-9 of 12 rehearsal gates failed. Red's LLM calls also timed out on the local endpoint three times
-(`no answer in 300s ... localhost:8180`) and it stalled T+8 → T+21 — the endpoint is too slow for
-red's 300 s decision budget even when the seed works.
-The two observations cannot both hold: either the verifier's `red_teams` probe and bad-auto's seed
-use different transports/credentials/target lists, or the seed evaluates a path the gate does not.
-That is a bad-auto (tlaloc) contract question — this repo can only see bad-auto's stdout.
-**Next action**: make bad-auto's `seed` exit non-zero when no step succeeded (or emit a
-machine-readable per-step result the harness can gate on), then have `seed_assume_breach` refuse
-T0 on a seed that achieved nothing instead of announcing success; the current guard is faithful to
-its intent but blind to the only signal that matters. Needs bad-auto's owner — it is a sibling
-repo's exit-code contract, not a tezcatlipoca change.
+"192.168.<tid>.<n> unreachable over SSH"` — then exited **0**. Reproduced a fourth time at
+run-2652d9bc. The two observations cannot both hold: either the verifier's `red_teams` probe and
+bad-auto's seed use different transports/credentials/target lists, or the seed evaluates a path
+the gate does not. That is a bad-auto (tlaloc) contract question — this repo can only see
+bad-auto's stdout.
+The harness side is closed: `seed_assume_breach` reads bad-auto's per-step report from stdout and
+refuses T0 when no box was seeded (or when the report cannot be interpreted), so a wholly failed
+seed can no longer start an event. The deploy-time `plant_assume_breach` still reads the exit code
+alone and prints `seeded (depth 2) — every box is owned` for a seed that owned nothing.
+**Next action**: make bad-auto's `seed` exit non-zero when no step succeeded, and have
+`red/red_plant_ops.plant_assume_breach` read the same per-step report the scrim now does. Needs
+bad-auto's owner — it is a sibling repo's exit-code contract, not a tezcatlipoca change.
 
 ## Pending upstream — catalog / nakon
 

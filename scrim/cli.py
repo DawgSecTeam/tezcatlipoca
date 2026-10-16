@@ -14,6 +14,7 @@ from scrim import core
 from scrim import event_run
 from scrim import fire_test
 from scrim import inject_sync
+from scrim import lock_ops
 from scrim import procs
 from scrim import red_stage
 from scrim import run_manifest
@@ -141,6 +142,7 @@ def main():
             # resolve_run_dir opens/creates the test folder under comp, so a typo must not
             # mint a comp dir for a run that cannot exist.
             sys.exit(f"no such competition: {comp}")
+        lock_ops.acquire_scrim_lock(comp)
         # The same folder the first run used: the test folder is keyed on this comp's run
         # id, and a paths.run_dir already recorded in test.json is authoritative, so a
         # resume can never mint a second key or fork the evidence (INV1).
@@ -189,6 +191,9 @@ def main():
         staging.stage_author(args)
     if not (comp / "Compfile").exists():
         sys.exit(f"no such competition: {comp}")
+    # Before any staging: one scrim per resolved range workspace (the deploy's engine lock
+    # only covers engine-touching work, and a --skip-deploy scrim takes no engine lock).
+    lock_ops.acquire_scrim_lock(comp)
 
     run_dir, test_dir = test_folder.resolve_run_dir(comp, args)
     run_dir.mkdir(parents=True, exist_ok=True)

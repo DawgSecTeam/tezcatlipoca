@@ -62,7 +62,7 @@ def build_report(run_dir):
                     **({"injects": injects_threshold} if injects_threshold else {})},
         gates=gate_rows)
     if injects_threshold is None:
-        gates.append(("blue", "injects", "n/a (comp ships none)", "-", "n/a"))
+        gates.append(("blue", "injects", "n/a (comp ships none)", "-", "n/a", ">="))
     gates_failed = [r for r in gates if r[4] == "FAIL"]
 
     L = []
@@ -180,8 +180,9 @@ def build_report(run_dir):
     L.append("## Gates (docs/rehearsal-gates.md)\n")
     L.append("| side | gate | value | threshold | verdict |")
     L.append("|---|---|---|---|---|")
-    for section, key, val, threshold, verdict_cell in gates:
-        L.append(f"| {section} | {key} | {val} | {gate_table.op_str(threshold)} | {verdict_cell} |")
+    for section, key, val, threshold, verdict_cell, op in gates:
+        L.append(f"| {section} | {key} | {val} | "
+                 f"{gate_table.op_str(threshold, op)} | {verdict_cell} |")
     L.append("")
     if no_scoreboard:
         L.append("Data limitations: no scoreboard-state.jsonl in this run dir — "

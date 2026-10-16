@@ -21,6 +21,10 @@ from scrim.core import log
 
 
 LOCAL_BLUE_CTX = 60000
+# A cycle is watched in short slices so the event deadline can abort it: the supervisor's
+# join past the deadline is capped by the window (scrim/supervisor.py), and a cycle that
+# ignored stop for the rest of its CYCLE_TIMEOUT would keep the driver alive past it.
+CYCLE_POLL_SEC = 1.0
 
 
 def local_endpoint_n_ctx(base_url, timeout=5):
@@ -113,7 +117,7 @@ def stage_blues(args, comp, run_dir, creds, t0):
     test_folder.record_blue_agents(args, run_dir)
 
 
-def _opencode_run(args, prompt, wd, env):
+def _opencode_run(args, prompt, wd, env, stop=None):
     m = re.search(r"team(\d+)$", wd.name)
     n_team = int(m.group(1)) if m else 1
     base_url, blue_model = endpoints.blue_ep(args, n_team)
@@ -127,29 +131,36 @@ def _opencode_run(args, prompt, wd, env):
                             cwd=wd, env=child_env, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
                             text=True, start_new_session=True)
-    try:
-        out, err = proc.communicate(timeout=core.CYCLE_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        # opencode leaves a server grandchild holding the pipes; killing only the
-        # direct child made subprocess.run block for that grandchild's lifetime
-        # (run-12: one hung cycle held the shared lock ~80 min). bash is the
-        # session leader (start_new_session), so killpg takes the whole tree.
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)
-        out, err = proc.communicate()
-        # ...but opencode's managed `serve --service` grandchild starts its OWN session,
-        # so killpg leaves it holding the cycle's port and the NEXT cycle dies on
-        # "port already in use" (run15 2026-10-13: a 4 h orphan squatted 49374 and
-        # every later cycle failed). HOME is per-cycle and unique, so it identifies it.
-        _reap_managed_servers(child_env.get("HOME", ""))
+    deadline = time.time() + core.CYCLE_TIMEOUT
+    while True:
         try:
-            (wd / "cycles").mkdir(exist_ok=True)
-            (wd / "cycles" / "last-timeout.partial.log").write_text(
-                re.sub(r"\x1b\[[0-9;]*m", "", (out or "") + (err or ""))[-4000:])
-        except OSError:
-            pass
-        raise
-    return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+            out, err = proc.communicate(
+                timeout=min(CYCLE_POLL_SEC, max(0.05, deadline - time.time())))
+            return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+        except subprocess.TimeoutExpired:
+            # a retried communicate loses no output (documented Popen behavior); the cycle
+            # ends on its own budget OR on the event deadline, whichever comes first
+            if time.time() >= deadline or (stop is not None and stop.is_set()):
+                break
+    # opencode leaves a server grandchild holding the pipes; killing only the
+    # direct child made subprocess.run block for that grandchild's lifetime
+    # (run-12: one hung cycle held the shared lock ~80 min). bash is the
+    # session leader (start_new_session), so killpg takes the whole tree.
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(proc.pid, signal.SIGKILL)
+    out, err = proc.communicate()
+    # ...but opencode's managed `serve --service` grandchild starts its OWN session,
+    # so killpg leaves it holding the cycle's port and the NEXT cycle dies on
+    # "port already in use" (run15 2026-10-13: a 4 h orphan squatted 49374 and
+    # every later cycle failed). HOME is per-cycle and unique, so it identifies it.
+    _reap_managed_servers(child_env.get("HOME", ""))
+    try:
+        (wd / "cycles").mkdir(exist_ok=True)
+        (wd / "cycles" / "last-timeout.partial.log").write_text(
+            re.sub(r"\x1b\[[0-9;]*m", "", (out or "") + (err or ""))[-4000:])
+    except OSError:
+        pass
+    raise subprocess.TimeoutExpired(proc.args, core.CYCLE_TIMEOUT)
 
 
 def _reap_managed_servers(home):
@@ -322,9 +333,9 @@ def write_cycle_timeout(wd, elapsed):
 def run_cycle_with_retry(args, prompt, wd, env, llm_lock, stop, team=None):
     who = team if team is not None else "?"
     with llm_lock:
-        r = _opencode_run(args, prompt, wd, env)
+        r = _opencode_run(args, prompt, wd, env, stop=stop)
     if r.returncode != 0 and not stop.is_set():
         log(f"blue-team{who} cycle rc={r.returncode} — retrying once (lock released)")
         with llm_lock:
-            r = _opencode_run(args, prompt, wd, env)
+            r = _opencode_run(args, prompt, wd, env, stop=stop)
     return r

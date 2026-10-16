@@ -27,14 +27,18 @@ blue's actions change what red does next and vice versa.
 
 ## Blue gates
 
+Numbers recalibrated 2026-10-15 from the round-1/round-2 campaign (`docs/parallel-range-campaign-2026-10-15.md`, `logs/campaign/REPORT.md`, `logs/round2/scrim-one-light.md`); the measured basis is in each row. The red gates were not touched — the same campaign gives no measured endpoint-side bound on them.
+
 | Gate | Threshold | Why |
 |---|---|---|
-| Cycles rc=0 | ≥ 6 | The orchestrator must actually run; the gate follows measured cadence (a cycle with real incident work runs 8–10 min), not the raw endpoint capacity |
-| Restorations | ≥ 2 | Blue answers red's takedowns |
-| Time-to-restore | ≤ 15 min | A restore 40 min later is not a game |
-| Injects | ≥ 2 | The paperwork layer of CCDC is real points |
-| Notebook entries | ≥ 10 | Working memory, not a write-only diary |
-| Cycle timeouts | 0 | A timed-out cycle is invisible to `rc=` counts; counted from `feed.log` TIMEOUT headers |
+| Cycles rc=0 | ≥ 2 | One completed cycle per blue team. Measured: a cycle with real incident work costs 20–30 min wall clock at `qwen3.8-27b` on `10.0.0.143:8080` (a trivial completion took 11.5 min) and the two teams serialise on one shared LLM lock, so a 30-minute scrim affords about one cycle per team. Basis: 4 cycles in 45 min (`run-e7e12115`), 3 in 30 min (`run-1ea5494a-run2`), 1 rc=0 in 30 min (`run-59a685c0`), 0 in 25 min (`run-2652d9bc`). Recalibrated from ≥ 6. A cadence floor for `--teams 2`, not a target |
+| Restorations | ≥ 2 | Blue answers red's takedowns. **Not recalibrated**: all four scrims logged 0 restorations because red had 0 footholds (bad-auto's assume-breach seed, `known-issues.md`), so nothing measures blue's restore capacity — lowering it would launder the seed defect into a pass |
+| Time-to-restore | ≤ 15 min | A restore 40 min later is not a game. **Not recalibrated**: no run has produced a restoration to time |
+| Injects | ≥ 2 | The paperwork layer of CCDC is real points. **Not recalibrated**: measured 0 (`run-59a685c0`), 1 (`run-2652d9bc`), 2 (`run-1ea5494a-run2`) — one run met it, so the cadence does not bound it |
+| Notebook entries | ≥ 10 | Working memory, not a write-only diary. **Not recalibrated**: measured 0 and 2, both in windows where blue completed at most one cycle; a single cycle can write many lines, so no measured ceiling |
+| Cycle timeouts | ≤ 2 | One window-edge cut per blue team: with 20–30 min cycles and the 25–45 min scrims this club runs, a cycle started near the end is always cut at the event deadline (and is logged as a TIMEOUT, since the deadline is now authoritative). Measured 2 in a 25-minute scrim (`run-2652d9bc`), 1 in a 30-minute one (`run-59a685c0`). Recalibrated from 0; three or more means the endpoint stopped producing, and `Cycles rc=0` still fails a run that never completed a cycle |
+
+**Per-team LLM endpoints were considered and declined** (2026-10-15). Splitting blue across per-team endpoints would only raise the cadence if the endpoints could take it: the club's GX10 endpoint sits on the tailnet and red01 cannot reach it, and the local `10.0.0.143:8080` llama.cpp has 4 slots but blue still serialises on one shared lock per base URL (`stage_run` builds one lock per distinct endpoint, and concurrent opencode sessions on one endpoint are what the lock exists to prevent). A split that leaves the lock in place changes nothing, so the numbers above are calibrated to the serialised cadence.
 
 `scrim-report.py` prints `n/a` for a gate whose underlying data the run dir doesn't have
 (everything scoreboard-derived needs `scoreboard-state.jsonl`); `n/a` does not fail the run, and

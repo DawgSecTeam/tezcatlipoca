@@ -7,6 +7,8 @@ record was a one-line summary, and a co-tenanted node nobody mentioned in the ru
 
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +16,7 @@ from unittest import mock
 
 from artifacts_lib import plan
 from estate import state as estate_state
-from scrim import fire_test, red_link, staging
+from scrim import fire_test, red_link, scoreboard_monitor, staging
 
 
 class RedBoxPowerState(unittest.TestCase):
@@ -40,6 +42,53 @@ class RedBoxPowerState(unittest.TestCase):
 
     def test_no_vmid_is_unknown_rather_than_a_guess(self):
         self.assertIsNone(red_link.red_box_power_state(SimpleNamespace(red_vmid=None)))
+
+
+class RedLivenessInTheRunLog(unittest.TestCase):
+# The out-of-band signal has to appear on the failure shapes that need it: an ssh that never
+# connected produces no HTTP code, and the pre-fix line only appended the hypervisor state when
+# a code was present — i.e. every `No route to host` probe stayed unattributable.
+
+    def test_an_ssh_that_never_connected_still_reports_the_hypervisor_state(self):
+        lines = []
+        args = SimpleNamespace(red_vmid=1470)
+        r = SimpleNamespace(returncode=255, stdout="", stderr="ssh: No route to host")
+        with mock.patch.object(red_link, "_red_ssh_ctx",
+                               return_value=("sysadmin@10.0.0.196", [], None)), \
+                mock.patch.object(red_link.procs, "run_tree", return_value=r), \
+                mock.patch.object(red_link, "red_box_power_state",
+                                  return_value="vmid 1470 is running (Proxmox)"), \
+                mock.patch.object(red_link, "log", side_effect=lines.append):
+            self.assertFalse(red_link.check_red_llm(args, "http://llm.local/v1"))
+        self.assertTrue(any("No route to host" in line for line in lines), lines)
+        self.assertTrue(any("vmid 1470 is running (Proxmox)" in line for line in lines), lines)
+
+    def test_the_monitor_names_the_out_of_band_signal_when_the_snapshot_fails(self):
+        lines = []
+        stop = threading.Event()
+
+        def pull(args_, tag):
+            stop.set()
+            return False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            args = SimpleNamespace(run_dir=tmp, teams=1, duration_min=30, red_vmid=1470)
+            with mock.patch.object(red_link, "pull_red_snapshot", side_effect=pull), \
+                    mock.patch.object(scoreboard_monitor.quotient_api, "parsed_status",
+                                      side_effect=RuntimeError("unreachable")), \
+                    mock.patch.object(scoreboard_monitor.llm_probe, "red_llm_watch",
+                                      lambda *a: None), \
+                    mock.patch.object(red_link, "red_box_power_state",
+                                      return_value="vmid 1470 is running (Proxmox)"), \
+                    mock.patch.object(scoreboard_monitor, "log", side_effect=lines.append):
+                scoreboard_monitor.monitor_loop(args, {"TEAM1_PW": "pw"}, time.time(), stop)
+        warning = next(line for line in lines if "snapshot unavailable" in line)
+        self.assertIn("vmid 1470 is running (Proxmox)", warning)
+
+    def test_no_recorded_vmid_names_the_signal_as_missing(self):
+        with mock.patch.object(red_link, "red_box_power_state", return_value=None):
+            self.assertIn("no red vmid recorded",
+                          red_link.red_liveness(SimpleNamespace(red_vmid=None)))
 
 
 class VerifyLog(unittest.TestCase):

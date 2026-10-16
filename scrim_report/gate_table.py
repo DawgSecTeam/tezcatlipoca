@@ -6,15 +6,16 @@ GATES = {
             ("distinct_tactics", 4, ">="), ("windows_footholds", 1, ">="),
             ("max_simultaneous_down", 4, ">="), ("stalls", 0, "=="),
             ("evictions", 1, ">=")],
-    # cycles_rc0 tuned 8 -> 6 (2026-10-12) per docs/rehearsal-gates.md's
-    # post-rehearsal protocol: two full rehearsals on the GX10 qwen-flash
-    # measure 8-17 min per meaningful blue cycle even scoped to ONE change
-    # (run3: 2/2 overruns of a 1800 s cap; run4: 1 rc=0 + 5 overruns of 540 s;
-    # run5: 4 rc=0 + 2 timeouts of 600 s), so >= 8 in a 60-min event was
-    # unreachable at zero timeouts. Must stay in sync with the doc's row.
-    "blue": [("cycles_rc0", 6, ">="), ("restorations", 2, ">="),
+    # cycles_rc0/timeouts tuned 6/0 -> 2/2 (2026-10-15) per docs/rehearsal-gates.md's
+    # post-rehearsal protocol: a meaningful blue cycle costs 20-30 min at the club's
+    # qwen3.8-27b endpoint and the two teams serialise on one shared LLM lock, so a
+    # 30-minute scrim affords about one cycle per team (measured: 4 cycles/45 min
+    # run-e7e12115, 3/30 min run-1ea5494a-run2, 1 rc=0/30 min run-59a685c0, 0/25 min
+    # run-2652d9bc) and a late cycle cut at the event deadline is logged as a TIMEOUT
+    # (2 measured, run-2652d9bc). Must stay in sync with the doc's rows.
+    "blue": [("cycles_rc0", 2, ">="), ("restorations", 2, ">="),
              ("injects", 2, ">="), ("notebook_entries", 10, ">="),
-             ("timeouts", 0, "==")],
+             ("timeouts", 2, "<=")],
 }
 
 
@@ -31,12 +32,14 @@ def evaluate(gm, bm, thresholds=None, gates=None):
             threshold = thresholds.get(key, threshold)
             val = metrics.get(key)
             if val is None:
-                rows.append((section, key, "n/a", threshold, "n/a"))
+                rows.append((section, key, "n/a", threshold, "n/a", op))
                 continue
-            ok = val >= threshold if op == ">=" else val == threshold
-            rows.append((section, key, val, threshold, "PASS" if ok else "FAIL"))
+            ok = (val <= threshold if op == "<="
+                  else val >= threshold if op == ">=" else val == threshold)
+            rows.append((section, key, val, threshold, "PASS" if ok else "FAIL", op))
     return rows
 
 
-def op_str(threshold):
-    return f"== {threshold}" if threshold == 0 else f">= {threshold}"
+def op_str(threshold, op="=="):
+    return f"<= {threshold}" if op == "<=" else (
+        f"== {threshold}" if op == "==" else f">= {threshold}")

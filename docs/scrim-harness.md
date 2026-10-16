@@ -25,6 +25,7 @@ Design rules:
 
 - Fresh opencode session per cycle with a compact prompt; exact SSH and inject-submit commands embedded in every prompt (agents failed to re-derive them); helper scripts materialized into each blue workdir.
 - Blue sessions launch sequentially (concurrent opencode boots race its DB).
+- One scrim per resolved range workspace: `cli.main` takes a flock under `~/.tezcatlipoca/locks/` before anything is staged and refuses a second scrim naming the holder. The deploy's engine lock covers engine-touching work only, and a `--skip-deploy` scrim takes none of it.
 - Red reaches OpenRouter directly from red01; reverse tunnels are for tailnet-local endpoints only.
 
 ### Staging
@@ -51,6 +52,7 @@ Design rules:
 - `blue_feed_loop`: serialized per **endpoint** (`stage_run` builds one lock per distinct base URL). Only team2 has its own endpoint flag (`--blue2-base-url`/`--blue2-model`); every other team shares the default, so decide the split before launch. Throughput: at 8 teams each team gets a cycle about every 10 minutes, the biggest lever on blue's score. One immediate retry per failed cycle. Each cycle keeps its prompt and transcript (`cycles/cycle-T+NNN.{prompt.txt,output.log}`); `feed.log` is a 2000-char tail.
 - Pacing: sleep = clamp(30..600 s, `CYCLE_TARGET_PERIOD` 600 − actual cycle time); `CYCLE_TIMEOUT` 1800 s per run.
 - `stage_run`: blues staggered (team1 T+0, team2 +300 s) **and** lock-serialized; both are needed because the shared local endpoint has few slots and rejects oversized prompts.
+- `finalize_blue_narratives` runs before capture: a team whose cycles timed out, crashed or never started has no REPORT.md, so the harness files its own record (cycle rc= lines, `LOG.md`, scoreboard delta) as that team's REPORT.md, labelled harness-synthesized. The collector's "present agent, missing canonical document" warning stays as the guard for a run that died before this point.
 - `blue_cycle_prompt`: notebook first, then at most two change/fix actions (read-only investigation is unbounded, since hunts are where blue learns), then stop. Priority: restore > inject due within 30 min > one hunt-checklist item. States a ~25-minute budget with wrap-up by minute 20. ROE in every prompt: never attack the engine (`$ENGINE_IP`); never change the scoring-check accounts (triage/svc-imaging/wardops).
 - `scoreboard_delta`: new DOWN → "RESTORE IT FIRST"; back UP → "expect red to re-attack it"; still DOWN annotated with since-T+.
 - `inject_brief`/`due_in_min`: unsubmitted and due ≤30 min is flagged "TASK #1". The engine's timezone isn't guaranteed, so either UTC or local interpretation is accepted if it lands within −15 min … +12 h.
@@ -61,6 +63,7 @@ Design rules:
 
 - `monitor_loop` snapshots every `MONITOR_INTERVAL` (300 s) from T+0 (down-minute math needs the full window). `scoreboard-state.jsonl` is the structured source of truth; `monitor.log` is human-readable. Red's `events.jsonl` is pulled every snapshot so a teardown-time scp flake can't lose it.
 - t0 is captured **after** `stage_red` returns: red setup can take 5–30 min and mustn't count against `--duration-min`. The T0 log line prints the out-of-scoring setup time.
+- The window is authoritative: `supervise_workers` sets `stop` at `t0 + duration_min*60` and joins a worker still inside a cycle only for what is left of the window plus `EVENT_END_GRACE` (120 s); `_opencode_run` aborts the opencode session as soon as `stop` is set. Capture and teardown therefore run at the deadline even when a cycle would have overrun it.
 - `reanchor_injects`: inject offsets resolve at deploy time, so a `--skip-deploy` restart or long staging gap reaches T0 with injects expired. Right after t0 the offsets are re-resolved at now and pushed via UpdateInject (`POST /api/injects/{id}`), matched by title, re-listing every attachment under keep-files (unlisted ones are deleted). Unconditional and idempotent; unordered offsets abort before the event.
 
 ### Red
@@ -68,10 +71,12 @@ Design rules:
 - Posture: `decision_window_min` 2; concurrent-down ramp 2/4/6 (6 at T−15); `min_standing_services=2` floor. Re-tune after a rehearsal, not before.
 - Red01 wiring is flag-driven: `--red-ip/--red-gw/--red-storage` default to 10.0.0.198 / 10.0.0.1 / `hdd`; `--red-vmid/--red-template` override the reservation. Without `--red-vmid` it resolves from Compfile `red01_vmid`, the comp's bad-auto config, or `<scoring-vmid>+170`, never bad-auto's shared default 999; preflight refuses an occupied slot. Local endpoints get `timeout: 120`, `json_retries: 0` (cloud: 240/1); a single 8–16 min decision otherwise yields ~2 actions/hour.
 - **LLM gate**: `validate-llm` and the dry-run run on the operator and prove nothing about what red01 can reach. `--red-tunnel` (default `auto`, on for non-openrouter endpoints) runs a reverse SSH forward (red01 dials `localhost:8180`; `ServerAliveInterval` + 15 s supervisor restart). Red01's config gets the localhost URL only after the operator-side check used the real one. Post-deploy, `check_red_llm` curls `/models` from red01 (direct, then via the engine jump); non-200 aborts before T0. `monitor_loop` repeats that probe every tick (`red_llm_watch`) and alerts once per failure episode.
+- The day-0 seed (`seed_assume_breach`) is gated on bad-auto's per-step JSON report, not only its exit code: bad-auto's `seed` exits 0 with every box unreachable, so a report naming no seeded box — or no report at all — refuses T0 instead of announcing a presence red does not have.
 - State dir: operator-side bad-auto needs a writable one; `BAuto_STATE_DIR` under the run dir affects the host side only (the VM's config hardcodes `/var/lib/bad-auto`).
 - Identity: `--red-mode/--red-subnet/--red-seg-ip` pass through to bad-auto's `deploy.red_mode` ([architecture.md](architecture.md#network-and-isolation)); verify with `verify-competition.py --red-identity`.
 - `pull_red_evidence`: `events.jsonl`, `world.json`, and the bad-auto journal (`sudo -n journalctl -u bad-auto`) are fetched before `badauto destroy`. If the direct scp hangs (>60 s), fall back to the engine as a jump host. `pull_red_snapshot` is the in-run best-effort variant (75 s timeout, never raises).
 - `_red_ssh_ctx`: red01 IP defaults to 10.0.0.198, overridden by the competition's own bad-auto config (`deploy.red_ip`); never the sibling checkout's shared config.
+- Liveness has an out-of-band signal: `red_box_power_state` asks Proxmox (no guest networking), and `red_liveness` is printed on every failed guest-path probe — the monitor's snapshot warning, `check_red_llm` (including an ssh that never connected), and the red-LLM alert's `liveness` field. "red is dead" and "the path to red is dead" therefore read differently in the run log (live 2026-10-15, run-1c44733b had no way to tell them apart).
 
 ### Capture and teardown
 

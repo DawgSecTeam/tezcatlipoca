@@ -331,6 +331,17 @@ def red_box_power_state(args):
         return f"vmid {vmid} unreadable from Proxmox ({type(e).__name__})"
 
 
+def red_liveness(args):
+    """The out-of-band answer to "is red01 alive?", naming the signal that answered.
+
+    Every guest-path signal (ssh probe, event snapshot, report pull) travels the route that may
+    itself be dead, so it cannot distinguish "red is down" from "the path to red is down". The
+    hypervisor state needs no guest networking, so it answers even when ssh cannot connect
+    (live 2026-10-15, run-1c44733b: 30 minutes of `No route to host` with no way to tell).
+    """
+    return red_box_power_state(args) or "no red vmid recorded — no out-of-band signal"
+
+
 def check_red_llm(args, base_url):
     """From-red01 LLM reachability gate.
 
@@ -354,12 +365,13 @@ def check_red_llm(args, base_url):
             if code in ("200", "401", "403"):
                 log(f"red01 reached the LLM endpoint ({path}, HTTP {code} — unauthenticated probe)")
                 return True
-            # say WHAT is unreachable: the box or the path to it. Without this the operator
-            # (and the report reader) sees one indistinguishable failure line
+            # say WHAT is unreachable: the box or the path to it. The out-of-band state is
+            # asked on EVERY failure — an ssh that never connected produces no code, and the
+            # old `if code` guard skipped the signal on exactly that shape.
             log(f"red01 LLM probe ({path}) -> {code or (r.stderr or '').strip()[:80] or 'no answer'}"
-                + (f" [{red_box_power_state(args)}]" if code not in ("", None) else ""))
+                f" [{red_liveness(args)}]")
         except subprocess.TimeoutExpired:
-            log(f"red01 LLM probe ({path}) timed out [{red_box_power_state(args)}]")
+            log(f"red01 LLM probe ({path}) timed out [{red_liveness(args)}]")
     return False
 
 

@@ -17,9 +17,10 @@ from verifier import context
 from verifier.model import gate_fail, gate_pass, gate_skip
 from estate import config
 
-# The tailnet->team SNAT rule is re-asserted by range-remote-access.timer every 30s (a
-# tailscaled rebind drops it), so a single sample can catch the gap: give the probe one
-# full cycle before believing the rule is gone.
+# The tailnet->team SNAT rule is re-asserted by range-remote-access-monitor.service when an
+# interface changes (tailscaled rebind) and by range-remote-access.timer every 30s as a
+# fallback, so a single sample can catch the gap: give the probe one full timer cycle before
+# believing the rule is gone.
 SNAT_SETTLE_S = 90
 SNAT_RETRY_S = 15
 

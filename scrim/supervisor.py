@@ -16,6 +16,12 @@ class WorkerDiedError(RuntimeError):
 # once stop is set, so a single attempt is the worst case).
 WORKER_JOIN_BUDGET = core.CYCLE_TIMEOUT + 120
 
+# ...but that bound is a whole cycle, so joining by it lets a 25-minute event reach capture at
+# minute 50 (live 2026-10-15, run-2652d9bc: the join waited out a cycle started at T+5). Past
+# the deadline the join is capped by what is left of the window plus this grace, which is all
+# a cycle that is already wrapping up needs.
+EVENT_END_GRACE = 120
+
 
 # polled rather than assumed: nothing else observed these threads, so a worker killed by
 # an exception escaping its own handler otherwise goes unnoticed to run completion
@@ -36,7 +42,9 @@ def supervise_workers(threads, deadline, stop, poll=60, t0=None):
     reported = []
     try:
         while time.time() < deadline:
-            time.sleep(poll)
+            # never sleep past the deadline: at a 60s poll the loop used to overrun it by
+            # up to a minute, which is event time the clock-bounded deliverables lost
+            time.sleep(min(poll, max(0.0, deadline - time.time())))
             for t in dead_workers(threads, reported):
                 when = f" at T+{int((time.time() - t0) // 60)}min" if t0 else ""
                 reported.append(t)
@@ -44,9 +52,11 @@ def supervise_workers(threads, deadline, stop, poll=60, t0=None):
                     f"supervising is now unattended")
     finally:
         stop.set()
-        for t in join_workers(threads):
+        budget = min(WORKER_JOIN_BUDGET,
+                     max(0.0, deadline - time.time()) + EVENT_END_GRACE)
+        for t in join_workers(threads, budget=budget):
             log(f"ERROR: worker thread {t.name!r} did not stop within "
-                f"{WORKER_JOIN_BUDGET}s of the event window closing — capture/teardown "
+                f"{budget:.0f}s of the event window closing — capture/teardown "
                 f"would have raced it")
             reported.append(t)
     return reported

@@ -412,6 +412,53 @@ def verify_tlaloc_seeded(args, comp):
             f"stage landed on any of them (see {manifest}).")
     log(f"tlaloc seeded {len(seeded)}/{len(boxes)} box(es) — presence planted before T0")
     return seeded
+# bad-auto's `seed` EXITS 0 with every box failed ("<ip> unreachable over SSH"), so the exit
+# code alone cannot decide whether T0 is safe (live 2026-10-15: run-1ea5494a-run2 and
+# run-2652d9bc seeded nothing, announced success, and red spent both events with zero
+# footholds). Its per-step report — and, where bad-auto emits them, its `steps` tally and
+# `ok` — is the only signal that a box was actually seeded.
+def seed_report(stdout):
+    """The per-step JSON report bad-auto's `seed` printed on stdout, or None."""
+    text = stdout or ""
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            report, _ = json.JSONDecoder().raw_decode(text[index:])
+        except ValueError:
+            continue
+        if isinstance(report, dict) and "boxes" in report and "failed" in report:
+            return report
+    return None
+
+
+def seed_verdict(report):
+    """(boxes, accessed, refusal) for bad-auto's seed report; refusal is None when it seeded all.
+
+    Prefers bad-auto's own `steps` tally over the per-pass box lists: `steps` counts the
+    persistent world records, so a re-run over an already-seeded range reports full numbers
+    while its per-pass lists are empty. A seed that missed any box it looked at is refused —
+    the mode's contract is that the range is already owned EVERYWHERE before T0.
+    """
+    boxes = int(report.get("boxes") or 0)
+    steps = report.get("steps")
+    if isinstance(steps, dict):
+        accessed, source = int(steps.get("access") or 0), "bad-auto's steps tally"
+    elif report.get("ok") is True:
+        accessed, source = boxes, "bad-auto's ok flag"
+    else:
+        accessed = len({ip for step in ("access", "rooted", "implants", "artifacts", "evasion")
+                        for ip in (report.get(step) or [])})
+        source = "the per-pass box lists"
+    if boxes and accessed >= boxes:
+        return boxes, accessed, None
+    if not boxes:
+        return boxes, accessed, f"it looked at no box ({source})"
+    failed = "; ".join(f"{f.get('ip')} ({f.get('step')}: {f.get('detail')})"
+                       for f in (report.get("failed") or []))
+    return boxes, accessed, (
+        f"it compromised {accessed} of {boxes} box(es) according to {source}"
+        + (f" — {failed}" if failed else " — the report names no failed box"))
 
 
 def seed_assume_breach(args, run_dir=None):
@@ -438,4 +485,19 @@ def seed_assume_breach(args, run_dir=None):
             f"assume-breach seed failed on red01 (rc={res.returncode}) — refusing to start "
             f"an event with no pre-planted beacons. Fix and re-run with --skip-deploy, "
             f"or pass --no-seed-red to run without the seeded presence.\n{tail}")
-    log("assume-breach presence seeded — every box is compromised before T0")
+    report = seed_report(res.stdout)
+    if report is None:
+        raise RuntimeError(
+            f"assume-breach seed on red01 exited 0 but printed no per-step report — refusing "
+            f"T0, because whether any box was seeded cannot be established from this output. "
+            f"bad-auto's `seed` prints its JSON report on stdout; fix bad-auto and re-run with "
+            f"--skip-deploy, or pass --no-seed-red to run without the seeded presence.\n{tail}")
+    boxes, accessed, refusal = seed_verdict(report)
+    if refusal:
+        raise RuntimeError(
+            f"assume-breach seed on red01 did not compromise the range — refusing T0: "
+            f"{refusal}. Every team box must already be owned before T0; fix the seed path "
+            f"(or the range) and re-run with --skip-deploy, or pass --no-seed-red to run "
+            f"without the seeded presence.\n{tail}")
+    log(f"assume-breach presence seeded on {accessed} of {boxes} box(es) — "
+        f"every box is compromised before T0")

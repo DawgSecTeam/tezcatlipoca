@@ -423,6 +423,29 @@ class TestWarningsAndStubs(unittest.TestCase):
         warnings = ao.warn_summary(collection, ao.load_manifest(self.path), self.path)
         self.assertTrue(any("RED-TEAM.md is UNREACHABLE" in w for w in warnings), warnings)
 
+    def test_a_synthesized_blue_narrative_reaches_the_canonical_document(self):
+        # Blue is present, every cycle timed out, so blue itself wrote no REPORT.md; the
+        # harness's narrative must still land as BLUE-TEAM.md and clear the collector's
+        # "present agent, missing canonical document" guard (live 2026-10-14, run-e7e12115).
+        from scrim import blue_agent
+        ao.update_manifest(self.path, agents={"red": {"present": False},
+                                              "blue": {"present": True, "teams": 1}})
+        workdir = Path(self.tmp.name) / "blue-team1"
+        workdir.mkdir()
+        (workdir / "feed.log").write_text("\n===== cycle T+0 TIMEOUT =====\n")
+        (workdir / "LOG.md").write_text("# Blue team 1 — defense log\nnothing yet\n")
+        ao.record_paths(self.path, blue_workdirs=[str(workdir)])
+        blue_agent.finalize_blue_narratives(
+            SimpleNamespace(run_dir=str(workdir.parent), teams=1, test_dir=str(self.path)))
+        manifest = ao.load_manifest(self.path)
+        collection = ao.collect(self.path, ao.plan_targets(manifest, comp_dir=self.comp))
+        ao.finalize(self.path, manifest=manifest)
+        body = (self.path / "BLUE-TEAM.md").read_text()
+        self.assertIn("harness-synthesized", body)
+        self.assertIn("TIMEOUT", body)
+        warnings = ao.warn_summary(collection, manifest, self.path)
+        self.assertFalse(any("BLUE-TEAM.md" in w for w in warnings), warnings)
+
     def test_no_agent_means_no_warning(self):
         ao.update_manifest(self.path, agents={"red": {"present": False},
                                               "blue": {"present": False}})

@@ -134,7 +134,7 @@ class TrackingLock:
 
 class BlueFeedLockAndTimeout(unittest.TestCase):
     def _fake_opencode(self, results, calls, stop=None, stop_on=()):
-        def fake(args, prompt, wd, env):
+        def fake(args, prompt, wd, env, stop=None):
             calls.append(1)
             n = len(calls)
             if stop is not None and n in stop_on:

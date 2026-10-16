@@ -162,7 +162,8 @@ def remote_access_firewall_script(local_ids, satellite_ids, engine_mgmt_ip):
 #     treatment routed-red traffic gets (return traffic rides conntrack back through
 #     the engine, whose tailscale0 delivers it to the participant).
     lines = ["#!/bin/bash",
-             "# Re-asserted every 30s (range-remote-access.timer): tailnet -> team "
+             "# Re-asserted on every interface change (range-remote-access-monitor.service) and "
+             "every 30s as a fallback (range-remote-access.timer): tailnet -> team "
              "forwarding + gateway SNAT for headscale remote access.",
              f"iptables -C FORWARD -s {TAILNET_SRC} -d 192.168.0.0/16 -j ACCEPT 2>/dev/null || "
              f"iptables -A FORWARD -s {TAILNET_SRC} -d 192.168.0.0/16 -j ACCEPT"]
@@ -202,6 +203,40 @@ def remote_access_systemd_units():
              "[Install]\n"
              "WantedBy=timers.target\n")
     return service, timer
+
+
+def remote_access_monitor_script():
+# The rebind-triggered re-assert. A tailscaled LinkChange with reason [ips-changed] (the
+#     Quotient container's interface gaining an address) makes tailscaled re-apply its
+#     ruleset, which takes the POSTROUTING chain — and the SNAT rules — with it; the 30s
+#     timer leaves tailnet->team traffic broken inside every window (live 2026-10-15,
+#     run-9fd68d14: present for 9 samples, absent for 3, present again). Watch the interface
+#     event itself and re-assert immediately; the timer stays as the fallback.
+    return ("#!/bin/bash\n"
+            "while :; do\n"
+            "  stdbuf -oL ip monitor address link | while read -r _event; do\n"
+            "    /usr/local/sbin/range-remote-access.sh\n"
+            "  done\n"
+            "  sleep 5\n"
+            "done\n")
+
+
+def remote_access_monitor_unit():
+# range-remote-access-monitor.service — long-running, because the trigger is an event
+#     (an interface address change), not a schedule.
+    return ("[Unit]\n"
+            "Description=Re-assert tailnet->team SNAT/forwarding when an interface changes "
+            "(tailscaled rebind)\n"
+            "After=docker.service network-online.target\n"
+            "Wants=network-online.target\n"
+            "\n"
+            "[Service]\n"
+            "ExecStart=/usr/local/sbin/range-remote-access-monitor.sh\n"
+            "Restart=always\n"
+            "RestartSec=5\n"
+            "\n"
+            "[Install]\n"
+            "WantedBy=multi-user.target\n")
 
 
 def enrollment_markdown(comp_id, server_url, entries):
@@ -448,18 +483,28 @@ def push_remote_access_firewall(tf_ctx, engine_mgmt_ip, local_ids, satellite_ids
 #     engine connection dict every engine SSH hop takes.
     script = remote_access_firewall_script(local_ids, satellite_ids, engine_mgmt_ip)
     service, timer = remote_access_systemd_units()
+    monitor_script = remote_access_monitor_script()
+    monitor_unit = remote_access_monitor_unit()
     s_b64 = base64.b64encode(script.encode()).decode()
     svc_b64 = base64.b64encode(service.encode()).decode()
     tmr_b64 = base64.b64encode(timer.encode()).decode()
+    mon_b64 = base64.b64encode(monitor_script.encode()).decode()
+    monu_b64 = base64.b64encode(monitor_unit.encode()).decode()
     _engine_cmd(tf_ctx, (
         f"echo '{s_b64}' | base64 -d | sudo tee /usr/local/sbin/range-remote-access.sh "
         f"> /dev/null && sudo chmod +x /usr/local/sbin/range-remote-access.sh && "
+        f"echo '{mon_b64}' | base64 -d | sudo tee "
+        f"/usr/local/sbin/range-remote-access-monitor.sh > /dev/null && "
+        f"sudo chmod +x /usr/local/sbin/range-remote-access-monitor.sh && "
         f"echo '{svc_b64}' | base64 -d | sudo tee /etc/systemd/system/range-remote-access.service "
         f"> /dev/null && "
         f"echo '{tmr_b64}' | base64 -d | sudo tee /etc/systemd/system/range-remote-access.timer "
         f"> /dev/null && "
-        "sudo systemctl daemon-reload && sudo systemctl enable --now range-remote-access.timer"
-    ), timeout=30, step="install range-remote-access unit+timer")
+        f"echo '{monu_b64}' | base64 -d | sudo tee "
+        f"/etc/systemd/system/range-remote-access-monitor.service > /dev/null && "
+        "sudo systemctl daemon-reload && sudo systemctl enable --now "
+        "range-remote-access.timer range-remote-access-monitor.service"
+    ), timeout=30, step="install range-remote-access units")
     _engine_cmd(tf_ctx, "sudo /usr/local/sbin/range-remote-access.sh && "
                         "sudo iptables -t nat -S POSTROUTING | grep -c SNAT || true",
                 timeout=30, step="assert remote-access SNAT rules")
@@ -512,7 +557,8 @@ def setup_remote_access(ctx):
               "disjoint team identifiers (TEZ_TEAM_IDENTIFIERS).")
 
     enroll_engine_router(ctx.tf_ctx, comp_id, all_ids)
-    print("  Pushing range-remote-access unit (tailnet->team SNAT, re-asserted 30s)...")
+    print("  Pushing range-remote-access units (tailnet->team SNAT: re-asserted on interface "
+          "change, 30s timer fallback)...")
     push_remote_access_firewall(ctx.tf_ctx, ctx.engine_mgmt_ip, local_ids, satellite_ids)
 
     entries = []

@@ -308,6 +308,25 @@ class StageManifest(Base):
         self._run_main(["--competition", "c1", "--teams", "1", "--duration-min", "30"])
         self.assertEqual(self._recorded(), ["deploy", "verify", "blues", "red", "event"])
 
+    def test_the_range_lock_is_taken_before_anything_is_staged(self):
+        # the deploy's engine lock does not cover a --skip-deploy scrim, so the range's own
+        # workspace flock is what refuses a second concurrent scrim (live 2026-10-15)
+        from scrim import cli, staging
+        calls = []
+        noop = lambda *a, **k: None  # noqa: E731
+        with mock.patch.object(sys, "argv", ["run-agent-scrim.py", "--competition", "c1",
+                                             "--teams", "1", "--duration-min", "30"]), \
+                mock.patch.object(cli, "resolve_comp_dir", return_value=self.comp), \
+                mock.patch.object(cli.lock_ops, "acquire_scrim_lock",
+                                  side_effect=lambda c: calls.append("lock")), \
+                mock.patch.object(cli.procs, "run", noop), \
+                mock.patch.object(staging, "stage_deploy",
+                                  side_effect=lambda *a, **k: calls.append("deploy")), \
+                mock.patch.object(staging, "creds_from_files", side_effect=SystemExit("stop")):
+            with self.assertRaises(SystemExit):
+                cli.main()
+        self.assertEqual(calls, ["lock", "deploy"])
+
     def test_author_is_recorded_only_when_the_run_authors(self):
         self._run_main(["--new", "c1", "--competition", "c1", "--teams", "1",
                         "--duration-min", "30"])

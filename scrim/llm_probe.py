@@ -78,6 +78,7 @@ def red_llm_watch(args, t_plus):
         dead = hasattr(tunnel, "proc") and tunnel.proc is not None and tunnel.proc.poll() is not None
         log(f"WARNING: T+{t_plus // 60} — red01 cannot reach the LLM endpoint ({url})"
             + (" (tunnel process dead; supervisor will respawn it)" if dead else "")
+            + f" [{red_link.red_liveness(args)}]"
             + " — red is making decisions blind until this recovers")
         return
     if st["failures"] < RED_LLM_FAIL_THRESHOLD or st["restarted"]:
@@ -89,4 +90,5 @@ def red_llm_watch(args, t_plus):
     write_alert(args.run_dir, "red_llm_restart",
                 f"red01 missed {st['failures']} consecutive LLM probes to {url}; {detail}",
                 endpoint=url, failed_probes=st["failures"],
-                down_since=core.now_iso(st["since"]))
+                down_since=core.now_iso(st["since"]),
+                liveness=red_link.red_liveness(args))
