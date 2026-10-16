@@ -385,8 +385,14 @@ def seed_via_red01(ssh_key, red_ip, *, runner=None, timeout=5400):
     return {"ok": getattr(proc, "returncode", 1) == 0, "detail": _tail(proc)}
 
 
-def verify_config_contract(ssh_key, red_ip, *, runner=None, timeout=180):
-    """Fetch the pushed config back and diff it against the contract.
+def verify_config_contract(ssh_key, red_ip, *, intended=None, runner=None,
+                           timeout=180):
+    """Fetch the pushed config back and diff it against what red01 must read.
+
+    The pushed file is a DIFF against tlaloc's documented defaults (the renderer
+    writes only what the deploy knows), so a field absent from it is not a defect
+    by itself — red01 falls back to the default. A defect is a field the deploy
+    MEANT to set (it is in `intended`) that the pushed file does not carry.
 
     The v1 lesson this exists for: a push allowlist that omits a field the red VM
     reads makes the feature dead on the VM while every local test stays green
@@ -399,8 +405,24 @@ def verify_config_contract(ssh_key, red_ip, *, runner=None, timeout=180):
         return {"ok": False, "reason": f"cannot read {CONFIG_PATH}: {_tail(proc)}"}
     import yaml
     pushed = yaml.safe_load(getattr(proc, "stdout", "") or "") or {}
-    missing = [f for f in contract_fields(runner=runner) if _missing(pushed, f)]
+    wanted = _load_intended(intended)
+    missing = [f for f in contract_fields(runner=runner)
+               if _missing(pushed, f) and not _missing(wanted, f)]
     return {"ok": not missing, "missing": missing}
+
+
+def _load_intended(intended):
+    """The config the deploy meant to push (a dict, a path to the rendered file,
+    or None -> {} meaning "only tlaloc's defaults are expected")."""
+    if intended is None:
+        return {}
+    if isinstance(intended, dict):
+        return intended
+    try:
+        import yaml
+        return yaml.safe_load(Path(intended).read_text()) or {}
+    except Exception:                                  # unreadable -> defaults only
+        return {}
 
 
 def _missing(cfg, dotted):
@@ -497,11 +519,12 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
     if not pushed.get("ok"):
         record_degradation("tlaloc_config_push", pushed.get("detail", ""))
         return {"ok": False, "reason": "config push failed"}
-    contract = verify_config_contract(ssh_key, red_ip, runner=runner)
+    contract = verify_config_contract(ssh_key, red_ip, intended=cfg_path,
+                                      runner=runner)
     if not contract.get("ok"):
         record_degradation("tlaloc_config_contract", json.dumps(contract)[:400])
-        print(f"  tlaloc: pushed config is missing {contract.get('missing')} — "
-              f"those features are dead on the VM (fix the compression, then re-run)")
+        print(f"  tlaloc: the pushed config dropped {contract.get('missing')} — "
+              f"those features would run on defaults (or be dead) on the VM")
     installed = install_unit(ssh_key, red_ip, runner=runner)
     if not installed.get("ok"):
         record_degradation("tlaloc_unit", installed.get("detail", ""))

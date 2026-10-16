@@ -212,13 +212,39 @@ class PlantTests(unittest.TestCase):
                         self.degradations)
 
     def test_contract_missing_fields_are_reported_not_ignored(self):
+        """A field the deploy MEANT to set that the pushed file does not carry is
+        the v1 defect (feature dead on the VM) — it must be reported."""
         config = "run:\n  comp: x\nred:\n  assume_breach: full\n"
         pushed = mock.Mock(returncode=0, stdout=config)
+        intended = {"run": {"comp": "x"}, "red": {"assume_breach": "full", "depth": 3}}
         runner = lambda cmd, **kw: Completed(0, json.dumps(["run.comp", "red.depth"]))  # noqa: E731
         with mock.patch.object(to, "_ssh_run", return_value=pushed):
-            out = to.verify_config_contract("k.pem", "10.0.0.198", runner=runner)
+            out = to.verify_config_contract("k.pem", "10.0.0.198", intended=intended,
+                                            runner=runner)
         self.assertFalse(out["ok"])
         self.assertEqual(out["missing"], ["red.depth"])
+
+    def test_a_default_valued_omission_is_not_a_defect(self):
+        """The pushed file is a diff against tlaloc's defaults, so a field the
+        deploy never meant to set is not 'missing' — it is the default."""
+        pushed = mock.Mock(returncode=0, stdout="run:\n  comp: x\n")
+        intended = {"run": {"comp": "x"}}
+        runner = lambda cmd, **kw: Completed(0, json.dumps(["run.comp", "red.depth"]))  # noqa: E731
+        with mock.patch.object(to, "_ssh_run", return_value=pushed):
+            out = to.verify_config_contract("k.pem", "10.0.0.198", intended=intended,
+                                            runner=runner)
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["missing"], [])
+
+    def test_an_unreadable_intended_file_falls_back_to_defaults_only(self):
+        """Never crash the deploy over the check that guards the deploy."""
+        pushed = mock.Mock(returncode=0, stdout="run:\n  comp: x\n")
+        runner = lambda cmd, **kw: Completed(0, json.dumps(["red.depth"]))  # noqa: E731
+        with mock.patch.object(to, "_ssh_run", return_value=pushed):
+            out = to.verify_config_contract("k.pem", "10.0.0.198",
+                                            intended="/nonexistent/path.yaml",
+                                            runner=runner)
+        self.assertTrue(out["ok"])
 
 
 class VerdictTests(unittest.TestCase):
