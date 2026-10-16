@@ -36,7 +36,23 @@ from pathlib import Path
 from common.utils import local_python, record_degradation
 
 REPO = Path(__file__).resolve().parents[1]
-TLALOC_REPO = REPO.parent / "tlaloc"
+# Where the tlaloc v2 checkout lives. A sibling of the engine checkout is right on
+# a dev box but wrong under the dashboard, which cuts the engine into
+# `<run_dir>/engine` while the agent repo lives once per host — that mismatch let a
+# deploy print "tlaloc: no checkout … skipped" and still go live with NO red team
+# (smoke run-cb959268). `TEZ_TLALOC_PATH` names it, the dashboard's .env carries it,
+# and the sibling stays the fallback for a dev tree.
+def _tlaloc_repo():
+    raw = os.environ.get("TEZ_TLALOC_PATH")
+    if raw:
+        return Path(raw).expanduser().resolve()
+    sibling = REPO.parent / "tlaloc"
+    if (sibling / "tlaloc" / "__init__.py").exists():
+        return sibling
+    return Path.home() / "tlaloc"
+
+
+TLALOC_REPO = _tlaloc_repo()
 
 RED_USER = "sysadmin"
 INSTALL_DIR = "/opt/tlaloc"
