@@ -33,6 +33,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from common.constants import red_bridge_name
 from common.utils import local_python, record_degradation
 
 REPO = Path(__file__).resolve().parents[1]
@@ -623,7 +624,8 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
                 (getattr(ctx, "state", None) or {}).get("scoring_vm_id")
             base_path, red_vmid, reserved_ip = badauto_config_ops.prepare_deploy_config(
                 comp_dir, engine_vmid,
-                engine_ip=realm_c2_ops.engine_ip_for(comp_dir), ssh_key=ssh_key)
+                engine_ip=realm_c2_ops.engine_ip_for(comp_dir), ssh_key=ssh_key,
+                red_bridge=red_bridge_name(ctx.run_id))
             red_ip = red_ip or reserved_ip
             provision = red_plant_ops._deploy_red(comp_dir, {**os.environ}, base_path)
         except (TypeError, ValueError) as exc:

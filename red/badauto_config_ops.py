@@ -213,7 +213,7 @@ def pin_deploy_key(cfg, ssh_key):
 
 
 def prepare_deploy_config(comp_dir, engine_vmid, engine_ip=None, ssh_key=None, placement=None,
-                          red_ip=None):
+                          red_ip=None, red_bridge=None):
     """Write the comp's bad-auto config for a red01 deploy and return its path.
 
     Layers: carried blackbox blocks (comp's own prior config) under a fresh
@@ -222,7 +222,10 @@ def prepare_deploy_config(comp_dir, engine_vmid, engine_ip=None, ssh_key=None, p
     (bad-auto's own fallback would need the abs comp dir anyway). The realm
     layer (local-C2 retarget + synthesis) is applied by the caller through
     realm_c2_ops when the Compfile enables it — this function owns the base,
-    and the caller owns the layer, same split prepare_local_c2 always had."""
+    and the caller owns the layer, same split prepare_local_c2 always had.
+
+    `red_bridge` (this run's private red-segment bridge) makes bad-auto attach red01 to it and
+    put the segment there instead of on the shared management L2."""
     cfg = dict(existing_blackbox(comp_dir))
     cfg["competition_dir"] = str(Path(comp_dir).resolve())
     vmid, ip = red01_target(comp_dir, engine_vmid, placement)
@@ -244,6 +247,12 @@ def prepare_deploy_config(comp_dir, engine_vmid, engine_ip=None, ssh_key=None, p
     deploy["red_ip"] = ip
     if engine_ip and not deploy.get("engine_ip"):
         deploy["engine_ip"] = engine_ip
+    if red_bridge:
+        from common.constants import RED_SEGMENT_IP, RED_SEGMENT_SUBNET
+        deploy["red_mode"] = "routed"
+        deploy["red_bridge"] = red_bridge
+        deploy["red_subnet"] = RED_SEGMENT_SUBNET
+        deploy["red_seg_ip"] = RED_SEGMENT_IP
     cfg["deploy"] = deploy
     # After the assignment: pin_deploy_key reads cfg["deploy"] back, so pinning before this line
     # would be overwritten by the local dict (caught by the peer's key-pinning test).

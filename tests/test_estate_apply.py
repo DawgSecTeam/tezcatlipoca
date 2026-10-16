@@ -161,6 +161,17 @@ class Engine(Base):
         self.assertEqual(config["net3"], "virtio,bridge=vmbrW120")
         self.assertEqual(config["net4"], "virtio,bridge=vmbrW121")
 
+    def test_the_red_segment_nic_appends_after_the_transits(self):
+        # The private red bridge is the range's own L2: without it red01's segment gateway
+        # (10.200.0.1) is ambiguous with every other range's on the shared management L2.
+        self._create(transit_identifiers=["120"], red_bridge="vmbrRabc12345")
+        config = self.fake.config_write(1300)
+        self.assertEqual(config["net4"], "virtio,bridge=vmbrRabc12345")
+
+    def test_a_range_without_red_gets_no_red_nic(self):
+        self._create()
+        self.assertNotIn("net3", self.fake.config_write(1300))
+
     def test_static_mgmt_ip_gets_cloud_init(self):
         self._create(mgmt_ip="10.0.0.252", mgmt_gw="10.0.0.1")
         config = self.fake.config_write(1300)

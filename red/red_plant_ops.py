@@ -42,6 +42,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from common.constants import red_bridge_name
 from common.utils import compfile_flag, compfile_value, local_python, record_degradation
 from red import badauto_config_ops
 from red import realm_c2_ops
@@ -297,7 +298,8 @@ def plant_assume_breach(ctx):
     try:
         base_path, red_vmid, red_ip = badauto_config_ops.prepare_deploy_config(
             comp_dir, engine_vmid, engine_ip=realm_c2_ops.engine_ip_for(comp_dir),
-            ssh_key=ssh_key, placement=ctx.placement, red_ip=red_ip)
+            ssh_key=ssh_key, placement=ctx.placement, red_ip=red_ip,
+            red_bridge=red_bridge_name(ctx.run_id))
         config_path = base_path
     except (TypeError, ValueError) as e:
         record_degradation("assume_breach_config", f"cannot reserve red01 identity: {e}")

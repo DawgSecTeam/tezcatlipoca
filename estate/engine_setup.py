@@ -76,12 +76,14 @@ def satellite_route_commands(routes):
     ]
 
 
-def netplan_yaml(team_identifiers, transit_identifiers=()):
+def netplan_yaml(team_identifiers, transit_identifiers=(), red_segment=None):
     """The engine's team-interface netplan.
 
     Addresses follow the NIC order create_engine built: net0 is the mgmt bridge (vmbr0,
     addressed by the image), then one NIC per slot-0 team bridge, then the in-path transit
-    NICs — so team k is ens19+k and transit k appends after every team NIC.
+    NICs — so team k is ens19+k and transit k appends after every team NIC. `red_segment`
+    (the range's private red bridge) appends one more NIC after the transits, holding the
+    segment gateway so red01's route to it stays on the private L2.
     """
     lines = ["network:", "  version: 2", "  ethernets:"]
     for index, identifier in enumerate(team_identifiers):
@@ -90,10 +92,15 @@ def netplan_yaml(team_identifiers, transit_identifiers=()):
         lines.append(
             f'    ens{18 + len(team_identifiers) + index + 1}:\n'
             f'      addresses: ["172.31.{identifier}.1/30"]')
+    if red_segment:
+        interface = 18 + len(team_identifiers) + len(transit_identifiers) + 1
+        gw = red_segment["gw"]
+        lines.append(f'    ens{interface}:\n      addresses: ["{gw}/24"]')
     return "\n".join(lines)
 
 
-def configure_engine_network(ctx, team_identifiers, transit_identifiers=(), satellite_routes=()):
+def configure_engine_network(ctx, team_identifiers, transit_identifiers=(), satellite_routes=(),
+                             red_segment=None):
     """Address the engine's team bridges and enable forwarding, over SSH.
 
     The netplan block is omitted when the engine hosts no slot-0 teams (an all-satellite
@@ -101,7 +108,7 @@ def configure_engine_network(ctx, team_identifiers, transit_identifiers=(), sate
     """
     if team_identifiers:
         _run(ctx, "sudo tee /etc/netplan/60-team-ifaces.yaml << 'EOF'\n"
-                  + netplan_yaml(team_identifiers, transit_identifiers) + "\nEOF")
+                  + netplan_yaml(team_identifiers, transit_identifiers, red_segment) + "\nEOF")
         # netplan refuses a world-readable file.
         _run(ctx, "sudo chmod 600 /etc/netplan/60-team-ifaces.yaml")
         _run(ctx, "sudo netplan apply")

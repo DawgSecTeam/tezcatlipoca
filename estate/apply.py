@@ -169,8 +169,11 @@ def create_bridge(state, node, name, comment=""):
 
 def create_engine(state, ownership, node, *, vmid, template_vmid, team_identifiers,
                   transit_identifiers=(), mgmt_ip="", mgmt_gw="", mgmt_bridge="vmbr0",
-                  username="sysadmin", ssh_public_key=""):
-    """The scoring engine: a linked clone of the engine template wired to every team bridge."""
+                  username="sysadmin", ssh_public_key="", red_bridge=None):
+    """The scoring engine: a linked clone of the engine template wired to every team bridge.
+
+    `red_bridge` (a range that stages red01) appends the private red-segment NIC LAST, so the
+    team/transit ens numbering the engine's netplan depends on is unchanged."""
     if not _adopt(node, vmid, ownership, "quotient-engine"):
         _clone(node, template_vmid, vmid, "quotient-engine", ownership)
         config = {"cores": ENGINE_CORES, "memory": ENGINE_MEMORY_MB, "agent": 1,
@@ -178,7 +181,8 @@ def create_engine(state, ownership, node, *, vmid, template_vmid, team_identifie
         # Order is load-bearing: the engine's netplan names ens19+ positionally, so the
         # management bridge stays net0 and transit NICs append AFTER every team NIC.
         bridges = [mgmt_bridge] + [f"vmbr{t}" for t in team_identifiers] \
-                           + [f"vmbrW{t}" for t in transit_identifiers]
+                           + [f"vmbrW{t}" for t in transit_identifiers] \
+                           + ([red_bridge] if red_bridge else [])
         for index, bridge in enumerate(bridges):
             config[f"net{index}"] = f"virtio,bridge={bridge}"
         if mgmt_ip:

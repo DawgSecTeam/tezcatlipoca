@@ -58,6 +58,8 @@ def create_engine_and_bridges(ctx):
 # The team bridges, then the engine, then the cold boot that surfaces its team NICs.
     from estate import apply as estate_apply, engine_setup
     from infra.ownership import Ownership, bridge_comment
+    from common.constants import red_bridge_name
+    from common.utils import stages_red
     cfg = config.active()
     document = ctx.document()
     ownership = Ownership(ctx.comp_name, ctx.run_id)
@@ -73,6 +75,12 @@ def create_engine_and_bridges(ctx):
             document, ctx.node, f"vmbrW{identifier}",
             comment=bridge_comment(ctx.comp_name, ctx.run_id,
                                    f"Quotient team {identifier} — transit to in-path firewall"))
+    red_bridge = red_bridge_name(ctx.run_id) if stages_red(ctx.comp_dir) else None
+    if red_bridge:
+        estate_apply.create_bridge(
+            document, ctx.node, red_bridge,
+            comment=bridge_comment(ctx.comp_name, ctx.run_id,
+                                   "Quotient red segment — engine + red01 only, no uplink"))
     estate_apply.create_engine(
         document, ownership, ctx.node, vmid=ctx.engine_vmid,
         template_vmid=int(ctx.state["engine_template_vmid"]),
@@ -81,7 +89,8 @@ def create_engine_and_bridges(ctx):
         mgmt_gw=(config.active().engine.mgmt_gw or DEFAULT_ENGINE_MGMT_GW),
         mgmt_bridge=resolved_mgmt_bridge(ctx.placement),
         username=cfg.engine.username,
-        ssh_public_key=cfg.ssh.public_key)
+        ssh_public_key=cfg.ssh.public_key,
+        red_bridge=red_bridge)
     engine_setup.cold_boot(ctx.node, ctx.engine_vmid)
 
 
@@ -101,7 +110,11 @@ def configure_engine_network(ctx, engine_ctx):
 #     an engine reboot mid-event.
     from estate import engine_setup
     from multinode.placement_record import satellite_routes_for
+    from common.constants import RED_SEGMENT_GW, RED_SEGMENT_SUBNET
+    from common.utils import stages_red
     teams = slot_team_identifiers(ctx)
     engine_setup.configure_engine_network(
         engine_ctx, teams, teams if has_in_path_firewall(ctx) else [],
-        satellite_routes_for(ctx.placement) if ctx.placement else [])
+        satellite_routes_for(ctx.placement) if ctx.placement else [],
+        red_segment=({"subnet": RED_SEGMENT_SUBNET, "gw": RED_SEGMENT_GW}
+                     if stages_red(ctx.comp_dir) else None))

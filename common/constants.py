@@ -227,6 +227,23 @@ GOLDEN_CLONE_TIMEOUT = 5400
 GOLDEN_IP_BASE = 240
 GOLDEN_TAG = "tezcatlipoca-golden"
 
+# The routed-red segment red01 and its engine share. It rides its OWN per-run bridge
+# (red_bridge_name), never the management bridge: the segment's gateway `.1` and red01's
+# `.10` are the same two addresses in every range, so on a shared L2 the second concurrent
+# range's engine answers red01's ARP for `.1` and red's traffic to its teams goes to a range
+# that has no route to them — total "unreachable over SSH" (live 2026-10-16: three campaign
+# ranges plus a fourth session's red01 all held 10.200.0.1/24 on vmbr0). A private bridge
+# keeps the same addresses unique because the L2 itself is per-run.
+RED_SEGMENT_SUBNET = "10.200.0.0/24"
+RED_SEGMENT_GW = "10.200.0.1"
+RED_SEGMENT_IP = "10.200.0.10"
+
+
+def red_bridge_name(run_id):
+    """This run's private red-segment bridge. PVE cap: 15 chars; `vmbrR` + 8 hex fits."""
+    hex_id = "".join(c for c in (run_id or "").lower() if c in "0123456789abcdef")[:8]
+    return f"vmbrR{hex_id}"
+
 def ownership_tags(comp_name, run_id=None, *extra):
 # The full ownership tag set for a competition's VMs — every destruction guard
 #     requires ALL of it on a VM before touching it.

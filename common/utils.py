@@ -290,6 +290,16 @@ def compfile_value(path, key, default=""):
     return default
 
 
+def stages_red(comp_dir):
+# Whether this competition's deploy stages a red presence (red01): exactly the ranges that
+#     need the private per-run red-segment bridge and engine NIC. A Compfile may state it the
+#     v1 way (`assume_breach <n>`) or the v2 way (`red.assume_breach` / `red.engine`).
+    compfile = Path(comp_dir) / "Compfile"
+    return bool(compfile_flag(compfile, "assume_breach", 0)
+                or compfile_value(compfile, "red.assume_breach", "")
+                or compfile_value(compfile, "red.engine", ""))
+
+
 def env_summary():
 # One line naming the estate this run targets: endpoint/node/datastore/template/
 #     engine mgmt IP. Live-found 2026-10-04: the repo carries several env variants

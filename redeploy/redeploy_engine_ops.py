@@ -3,8 +3,9 @@
 import sys
 import pipeline_api
 
-from common.constants import DEFAULT_ENGINE_MGMT_GW
-from common.utils import competition_name
+from common.constants import (DEFAULT_ENGINE_MGMT_GW, RED_SEGMENT_GW,
+                              RED_SEGMENT_SUBNET, red_bridge_name)
+from common.utils import competition_name, stages_red
 from multinode.placement_record import resolved_mgmt_bridge
 from engine.engine_event_ops import push_event_conf
 from engine.engine_health_ops import ensure_nat_forwarding
@@ -47,7 +48,8 @@ def _replace_engine(comp_dir, state, teams, boxes):
         mgmt_gw=(config.active().engine.mgmt_gw or DEFAULT_ENGINE_MGMT_GW),
         mgmt_bridge=resolved_mgmt_bridge(placement),
         username=cfg.engine.username,
-        ssh_public_key=cfg.ssh.public_key)
+        ssh_public_key=cfg.ssh.public_key,
+        red_bridge=red_bridge_name(state.get("run_id")) if stages_red(comp_dir) else None)
     engine_setup.cold_boot(node, vmid)
 
 
@@ -58,7 +60,9 @@ def _address_engine(comp_dir, state, teams, boxes, ctx):
     placement, identifiers, in_path = _identifiers(comp_dir, teams, boxes)
     engine_setup.configure_engine_network(
         ctx, identifiers, identifiers if in_path else [],
-        satellite_routes_for(placement) if placement else [])
+        satellite_routes_for(placement) if placement else [],
+        red_segment=({"subnet": RED_SEGMENT_SUBNET, "gw": RED_SEGMENT_GW}
+                     if stages_red(comp_dir) else None))
 
 
 def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):

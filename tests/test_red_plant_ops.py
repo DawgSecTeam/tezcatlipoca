@@ -23,6 +23,7 @@ class FakeCtx:
         self.engine_vmid = engine_vmid
         self.placement = None
         self.comp_tags = {"tezcatlipoca", "comp-t"}
+        self.run_id = "run-test1234"
         self.state = {}
         self.saved = 0
 

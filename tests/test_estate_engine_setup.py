@@ -32,6 +32,23 @@ class Netplan(unittest.TestCase):
         # An empty ethernets map is a netplan error, so the block is not emitted at all.
         self.assertNotIn("ens", engine_setup.netplan_yaml([]))
 
+    def test_the_red_segment_nic_appends_after_the_transits(self):
+        # red01's segment gateway lives on the range's private red bridge; the engine holds
+        # it on that NIC, never as a second address on the management interface.
+        yaml = engine_setup.netplan_yaml(["120"], ["120"],
+                                         {"subnet": "10.200.0.0/24", "gw": "10.200.0.1"})
+        self.assertIn("ens19:", yaml)
+        self.assertIn('addresses: ["192.168.120.1/24"]', yaml)
+        self.assertIn("ens20:", yaml)
+        self.assertIn('addresses: ["172.31.120.1/30"]', yaml)
+        self.assertIn("ens21:", yaml)
+        self.assertIn('addresses: ["10.200.0.1/24"]', yaml)
+
+    def test_no_red_segment_adds_no_extra_nic(self):
+        yaml = engine_setup.netplan_yaml(["120"], ["120"])
+        self.assertNotIn("ens21:", yaml)
+        self.assertNotIn("10.200.0.1", yaml)
+
 
 class Base(unittest.TestCase):
     def setUp(self):
