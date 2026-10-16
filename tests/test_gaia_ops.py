@@ -40,8 +40,11 @@ class Runner:
     def __call__(self, argv, **kwargs):
         argv = [str(a) for a in argv]
         self.calls.append({"argv": argv, "kwargs": kwargs})
-        sub = argv[2] if argv and argv[1].endswith("gaia.py") else argv[0]
-        if self.fail_on and self.fail_on in argv:
+        is_gaia = len(argv) > 2 and argv[1].endswith("gaia.py")
+        sub = argv[2] if is_gaia else argv[0]
+        # fail_on names a gaia SUBCOMMAND (not any argv containing the word: the
+        # setup step installs pip requirements, which also says "install")
+        if self.fail_on and is_gaia and argv[2] == self.fail_on:
             return Completed(1, "", f"boom {self.fail_on}")
         if sub == "install":
             (self.gaia / "mythic_admin_creds.txt").write_text(self.creds)
@@ -109,6 +112,60 @@ class HandoffTest(unittest.TestCase):
             assert ok is False and "no gaia.py" in detail      # the fake never clones
             assert runner.has("git clone")
 
+    def test_setup_builds_the_venv_and_runs_on_it(self):
+        """Gaia's deps are not in the engine's interpreter: it gets its own venv,
+        and gaia.py runs on that interpreter once it exists."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gaia"
+            path.mkdir()
+            (path / "gaia.py").write_text("")
+            (path / "requirements.txt").write_text("mythic==0.2.11\n")
+            assert g.venv_python(path) != str(path / ".venv" / "bin" / "python")
+            runner = Runner(path)
+            ok, detail = g.ensure_setup(path, runner=runner)
+            assert ok and detail == "created"
+            assert runner.has("-m venv") and runner.has("requirements.txt")
+            (path / ".venv" / "bin").mkdir(parents=True)
+            (path / ".venv" / "bin" / "python").write_text("")
+            assert g.venv_python(path) == str(path / ".venv" / "bin" / "python")
+            argv = g.gaia_argv(path, "install", "-S", "10.0.0.198", "-u", "x")
+            assert argv[0] == str(path / ".venv" / "bin" / "python")
+            ok, detail = g.ensure_setup(path, runner=runner)
+            assert ok and detail == "present"
+
+    def test_a_failed_setup_is_a_degradation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gaia"
+            path.mkdir()
+            (path / "gaia.py").write_text("")
+            (path / "requirements.txt").write_text("mythic==0.2.11\n")
+
+            def runner(argv, **kw):
+                if "pip" in argv[0]:
+                    return Completed(1, "", "pip exploded")
+                return Completed(0, "")
+
+            ok, detail = g.ensure_setup(path, runner=runner)
+            assert ok is False and "pip exploded" in detail
+
+    def test_a_checkout_without_requirements_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gaia"
+            path.mkdir()
+            (path / "gaia.py").write_text("")
+            ok, detail = g.ensure_setup(path, runner=Runner(path))
+            assert ok is False and "requirements" in detail
+
+    def test_a_utf16_requirements_file_is_normalised_for_pip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            req = Path(tmp) / "requirements.txt"
+            req.write_bytes("mythic==0.2.11\n".encode("utf-16"))
+            out = g.normalize_requirements(req)
+            assert out != req and out.read_text(encoding="utf-8").startswith("mythic==")
+            plain = Path(tmp) / "plain.txt"
+            plain.write_text("mythic==0.2.11\n")
+            assert g.normalize_requirements(plain) == plain
+
 
 class CallbackAddressTest(unittest.TestCase):
     def test_port_comes_from_the_compfile_firewall_dnat(self):
@@ -148,6 +205,7 @@ class PrepareTest(unittest.TestCase):
         gaia = Path(tmp) / "gaia"
         gaia.mkdir()
         (gaia / "gaia.py").write_text("")
+        (gaia / "requirements.txt").write_text("mythic==0.2.11\n")
         runner = Runner(gaia, **kw)
         result = g.prepare_mythic(comp, box_ip="10.0.0.198", ssh_user="sysadmin",
                                   ssh_key="/keys/deploy", runner=runner, gaia=gaia,
@@ -194,7 +252,9 @@ class PrepareTest(unittest.TestCase):
     def test_install_timeout_is_generous(self):
         with tempfile.TemporaryDirectory() as tmp:
             _, runner = self._prepared(tmp)
-            install = [c for c in runner.calls if "install" in c["argv"]][0]
+            install = [c for c in runner.calls
+                       if len(c["argv"]) > 2 and c["argv"][1].endswith("gaia.py")
+                       and c["argv"][2] == "install"][0]
             assert install["kwargs"]["timeout"] >= 3600
 
     def test_no_box_is_a_degradation_not_a_crash(self):

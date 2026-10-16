@@ -222,6 +222,7 @@ class PlantTests(unittest.TestCase):
         gaia = Path(self.tmp.name) / "gaia"
         gaia.mkdir()
         (gaia / "gaia.py").write_text("")
+        (gaia / "requirements.txt").write_text("mythic==0.2.11\n")
         calls = []
 
         def mythic_runner(argv, **kwargs):

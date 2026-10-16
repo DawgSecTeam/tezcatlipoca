@@ -78,9 +78,53 @@ def gaia_path(env=None):
     return Path(raw).expanduser()
 
 
+def venv_python(path):
+    """Gaia's own interpreter when its venv exists, else the engine's python.
+
+    Gaia is not importable from the engine's interpreter: its requirements pin
+    the `mythic` SDK plus aiohttp and friends. The venv is built once by
+    `setup_argv` and every gaia.py invocation uses it.
+    """
+    candidate = Path(path) / ".venv" / "bin" / "python"
+    return str(candidate) if candidate.exists() else local_python()
+
+
 def gaia_argv(path, *args):
     """`<python> <checkout>/gaia.py <args>` — the checkout is the CWD."""
-    return [local_python(), str(Path(path) / "gaia.py"), *args]
+    return [venv_python(path), str(Path(path) / "gaia.py"), *args]
+
+
+def setup_argv(path, requirements=None):
+    """The two commands that make the checkout runnable."""
+    path = Path(path)
+    req = Path(requirements) if requirements else path / "requirements.txt"
+    venv = path / ".venv"
+    return [
+        ["python3", "-m", "venv", str(venv)],
+        [str(venv / "bin" / "pip"), "install", "-q", "--disable-pip-version-check",
+         "-r", str(req)],
+    ]
+
+
+def normalize_requirements(path):
+    """A UTF-8 copy of Gaia's requirements file when it is not already UTF-8.
+
+    Upstream ships `requirements.txt` as UTF-16 (a CRLF editor's accident), and
+    pip reads requirements files as text — it either errors or installs nothing.
+    The normalized copy is what `setup_argv` installs from; the original is left
+    alone so `git status` in the checkout stays clean.
+    """
+    path = Path(path)
+    try:
+        raw = path.read_bytes()
+    except OSError:                       # no file: nothing to normalise
+        return path
+    if not raw.startswith(b"\xff\xfe") and not raw.startswith(b"\xfe\xff"):
+        return path
+    text = raw.decode("utf-16")
+    out = path.with_suffix(".utf8.txt")
+    out.write_text(text, encoding="utf-8")
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -258,6 +302,30 @@ def ensure_checkout(path, *, runner=None, ref=GAIA_REF, repo=GAIA_REPO):
     return True, "cloned"
 
 
+def ensure_setup(path, *, runner=None, timeout=900):
+    """Gaia's venv + its requirements (once per checkout). Returns (ok, detail).
+
+    Gaia imports the `mythic` SDK, aiohttp and friends — none of which the engine
+    host's interpreter has — so the checkout gets its own venv and every
+    gaia.py call runs on that interpreter.
+    """
+    path = Path(path)
+    if not (path / "gaia.py").exists():
+        return False, "no checkout"
+    if (path / ".venv" / "bin" / "python").exists():
+        return True, "present"
+    if not (path / "requirements.txt").exists():
+        return False, "no requirements.txt in the checkout"
+    runner = runner or _default_runner
+    argv_venv, argv_pip = setup_argv(
+        path, requirements=normalize_requirements(path / "requirements.txt"))
+    for argv in (argv_venv, argv_pip):
+        proc = runner(argv, cwd=str(path), timeout=timeout)
+        if getattr(proc, "returncode", 1) != 0:
+            return False, f"{' '.join(argv[:4])}: {_tail(proc)}"
+    return True, "created"
+
+
 def checkout_commit(path, runner=None):
     runner = runner or _default_runner
     try:
@@ -295,6 +363,11 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
         result["degradations"].append(f"gaia checkout: {detail}")
         return result
     result["commit"] = checkout_commit(path, runner=runner)
+
+    ok, detail = ensure_setup(path, runner=runner)
+    if not ok:
+        result["degradations"].append(f"gaia setup: {detail}")
+        return result
 
     cwd = str(path)
     proc = runner(install_argv(path, box_ip, ssh_user, key=ssh_key),
