@@ -313,7 +313,7 @@ class MainRunTests(unittest.TestCase):
                          return_value=v_model.gate_skip("domains", gating=False)),
             # The entry point refuses without the ambient estate identity (every lifecycle
             # path needs it); this harness exercises the gates, not the refusal.
-            patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://10.0.0.150:8006"}),
+            patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://pve.invalid:8006"}),
             patch.object(sys, "argv",
                          ["verify-competition.py", str(comp_dir), "--engine-ip",
                           "10.0.0.1", *extra]),

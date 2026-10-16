@@ -17,7 +17,7 @@ from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
 # The ambient estate identity every lifecycle entry point refuses without.
-IDENTITY = "https://10.0.0.150:8006"
+IDENTITY = "https://pve.invalid:8006"
 
 
 def load_destroy_cli(tmp_path):

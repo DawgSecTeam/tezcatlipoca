@@ -129,7 +129,7 @@ class TeardownArtifactsHook(unittest.TestCase):
             ] + _offline_api_patches() + [
             # The entry point refuses without the ambient estate identity (teardown's
             # verify_clean needs it); this harness exercises the hook, not the refusal.
-            patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://10.0.0.150:8006"}),
+            patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://pve.invalid:8006"}),
             patch.object(sys, "argv", argv),
         ]
         if cancel:
@@ -170,7 +170,7 @@ class TeardownArtifactsHook(unittest.TestCase):
                           return_value={"clean": True, "problems": []}) as team, \
                     patch.object(ao, "collect_for_teardown") as collect, \
                     patch.dict(os.environ,
-                               {"TEZ_PROXMOX_ENDPOINT": "https://10.0.0.150:8006"}), \
+                               {"TEZ_PROXMOX_ENDPOINT": "https://pve.invalid:8006"}), \
                     patch.object(sys, "argv", argv), \
                     contextlib.redirect_stdout(buf):
                 destroy.main()
@@ -320,7 +320,7 @@ class CrashedHarnessRecovery(unittest.TestCase):
             ] + _offline_api_patches() + [
             # The entry point refuses without the ambient estate identity (teardown's
             # verify_clean needs it); this harness exercises recovery, not the refusal.
-            patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://10.0.0.150:8006"}),
+            patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://pve.invalid:8006"}),
             patch.object(sys, "argv", ["destroy-competition.py", "--competition", "demo",
                                        "--yes"]),
         ]
