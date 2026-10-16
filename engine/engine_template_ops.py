@@ -1,6 +1,10 @@
 """The per-competition engine template: find / build / destroy (API-driven, mirrors golden_ops)."""
 
+import fcntl
+import os
+import re
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import requests
@@ -16,6 +20,56 @@ from engine.template_freeze import engine_template_vmid, write_template_hash
 from common.utils import competition_name, record_degradation
 from multinode.placement_record import resolved_mgmt_bridge
 from estate import config
+
+
+@contextmanager
+def base_clone_lock(node, base_engine_vm_id, wait_s=900):
+# Serialise this host's clones of ONE base image.
+#
+#     PVE holds a datastore lock for the duration of a clone and reports `can't lock file
+#     '/var/lock/pve-manager/pve-storage-ssd' - got timeout` to everyone else, so concurrent
+#     ranges do not queue — they fight, and the loser burns its retry budget (live 2026-10-16,
+#     the second three-range campaign: the loser of three same-image clones needed four of its
+#     five attempts and ten minutes while the other two built). Retrying harder is a worse
+#     answer than not racing: our own deploys take this lock, so the only contention left is a
+#     clone we do not control (another host, or a manual run on older code), which the retry
+#     loop below still absorbs.
+#
+#     Bounded on purpose: a holder that is alive but wedged must not block a deploy forever, so
+#     a wait past wait_s proceeds anyway and leaves the PVE lock to the retry.
+    endpoint = (config.active().proxmox.endpoint or "unknown")
+    host = re.sub(r"^https?://", "", endpoint).split("/")[0].split(":")[0] or "unknown"
+    slug = re.sub(r"[^A-Za-z0-9._-]", "_", f"{host}-{base_engine_vm_id}")
+    path = Path.home() / ".tezcatlipoca" / "locks" / f"base-clone-{slug}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "w")
+    try:
+        deadline, announced = time.time() + wait_s, False
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.time() >= deadline:
+                    print(f"    base-image clone lock held >{wait_s}s — proceeding anyway; "
+                          f"the clone retry absorbs the contention")
+                    break
+                if not announced:
+                    holder = (path.read_text().strip() or "?")
+                    print(f"    waiting for the base-image clone lock (held by pid {holder}) — "
+                          f"queuing instead of racing for it")
+                    announced = True
+                time.sleep(5)
+        fh.seek(0)
+        fh.truncate()
+        fh.write(f"{os.getpid()}\n")
+        fh.flush()
+        yield
+    finally:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+        finally:
+            fh.close()
 
 
 def find_engine_template(node, engine_vmid):
@@ -85,26 +139,27 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     # the winner's own clone task completes in ~1 s, so what is contended is the serialised
     # allocation queue behind the lock, not one long clone). Backing off 40 s, 80 s, 120 s
     # gives the queue ~6.5 minutes to drain before the last attempt.
-    for attempt in range(5):
-        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{base_engine_vm_id}/clone", data={
-            "newid": vmid,
-            "name": vm_name,
-            "full": 1,
-        })["data"]
-        try:
-            wait_for_proxmox_task(node, upid)
-            break
-        except RuntimeError as e:
-            if "lock file" not in str(e) or attempt == 4:
-                raise
-            print(f"    clone of base image {base_engine_vm_id} hit datastore lock "
-                  f"contention — reclaiming the partial clone and retrying "
-                  f"(attempt {attempt + 2}/5)")
-            leftover = next((v for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
-                             if v["vmid"] == vmid and (v.get("name") or "") == vm_name), None)
-            if leftover:
-                destroy_vm_if_exists(node, vmid, expect_tags=None)
-            time.sleep(40 * (attempt + 1))
+    with base_clone_lock(node, base_engine_vm_id):
+        for attempt in range(5):
+            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{base_engine_vm_id}/clone", data={
+                "newid": vmid,
+                "name": vm_name,
+                "full": 1,
+            })["data"]
+            try:
+                wait_for_proxmox_task(node, upid)
+                break
+            except RuntimeError as e:
+                if "lock file" not in str(e) or attempt == 4:
+                    raise
+                print(f"    clone of base image {base_engine_vm_id} hit datastore lock "
+                      f"contention — reclaiming the partial clone and retrying "
+                      f"(attempt {attempt + 2}/5)")
+                leftover = next((v for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
+                                 if v["vmid"] == vmid and (v.get("name") or "") == vm_name), None)
+                if leftover:
+                    destroy_vm_if_exists(node, vmid, expect_tags=None)
+                time.sleep(40 * (attempt + 1))
 
     mgmt_ip = config.active().engine.mgmt_ip
     cfg = {

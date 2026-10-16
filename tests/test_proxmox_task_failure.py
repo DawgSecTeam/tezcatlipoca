@@ -12,7 +12,11 @@ Requests are routed through `infra.client`'s own per-node override seam, so the 
 no network.
 """
 
+import os
 import sys
+import tempfile
+import threading
+import time
 import unittest
 
 import requests
@@ -234,3 +238,67 @@ class LockContentionRetry(unittest.TestCase):
         self.assertEqual(retry(flaky, attempts=3, gap=0,
                                retry_on=lambda e: isinstance(e, ValueError)), "ok")
         self.assertEqual(len(calls), 2)
+
+
+class BaseCloneLock(unittest.TestCase):
+    """Same-image clones queue instead of racing for PVE's one datastore lock.
+
+    Live 2026-10-16 (the second three-range campaign): three ranges issued the base-image clone
+    within seconds, PVE failed two of them with `can't lock file '/var/lock/pve-manager/
+    pve-storage-ssd' - got timeout`, and the loser needed four of its five retries and ten
+    minutes to get through while the other two built. Retrying harder is a worse answer than
+    not racing.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = patch.object(Path, "home", return_value=Path(self.tmp.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_second_clone_of_the_same_image_waits_for_the_first(self):
+        order, held = [], threading.Event()
+
+        def first():
+            with engine_template_ops.base_clone_lock("n", 955):
+                order.append("first-in")
+                held.set()
+                time.sleep(0.3)
+                order.append("first-out")
+
+        def second():
+            held.wait(5)
+            with engine_template_ops.base_clone_lock("n", 955):
+                order.append("second-in")
+
+        threads = [threading.Thread(target=first), threading.Thread(target=second)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(10)
+        self.assertEqual(order, ["first-in", "first-out", "second-in"],
+                         "the second holder must not enter while the first is inside")
+
+    def test_a_different_base_image_is_not_serialised_behind_it(self):
+        order = []
+        with engine_template_ops.base_clone_lock("n", 955):
+            with engine_template_ops.base_clone_lock("n", 956):
+                order.append("both-held")
+        self.assertEqual(order, ["both-held"], "the lock is per base image, not global")
+
+    def test_a_wedged_holder_does_not_block_a_deploy_forever(self):
+        # Something alive but stuck must not wedge every later deploy: a wait past the bound
+        # proceeds and leaves the contention to the clone retry.
+        with engine_template_ops.base_clone_lock("n", 955):
+            with engine_template_ops.base_clone_lock("n", 955, wait_s=0):
+                entered = True
+        self.assertTrue(entered)
+
+    def test_the_holder_is_named_so_a_wait_is_diagnosable(self):
+        seen = []
+        with engine_template_ops.base_clone_lock("n", 955):
+            holder = (Path(self.tmp.name) / ".tezcatlipoca" / "locks" /
+                      "base-clone-unknown-955.lock").read_text().strip()
+            seen.append(holder)
+        self.assertEqual(seen, [str(os.getpid())])
