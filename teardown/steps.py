@@ -175,7 +175,7 @@ class RedStep(Step):
     resumable = True
 
     def run(self, ctx):
-        from red import red_plant_ops
+        from red import red_plant_ops, tlaloc_ops
         if ctx.keep_red:
             return StepResult(self.name, "skipped", "--keep-red")
         candidates = red_plant_ops.red_vmid_candidates(ctx.comp_dir, ctx.deployed_state)
@@ -191,7 +191,13 @@ class RedStep(Step):
                               "this run staged no red agent")
         print("  red01      : badauto destroy (not estate-managed — this script cannot "
               "remove it any other way)...")
-        r = red_plant_ops.destroy_red(ctx.comp_dir, env=ctx.env)
+        if tlaloc_ops.red_engine(ctx.comp_dir) == "tlaloc":
+            # tlaloc v2 runs as its own unit on red01: stop it (ending the event
+            # clock and flushing the audit log) and then use the same VM/NAT
+            # teardown that owns red01.
+            r = tlaloc_ops.destroy_tlaloc_red(ctx.comp_dir, env=ctx.env)
+        else:
+            r = red_plant_ops.destroy_red(ctx.comp_dir, env=ctx.env)
         tail = " ".join(((r.stderr or "") + (r.stdout or "")).split())[-200:]
         self.last_vmid = _red_target_vmid(r) or (
             red_plant_ops.red_vmid_candidates(ctx.comp_dir, ctx.deployed_state) or [None])[0]

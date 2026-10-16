@@ -92,10 +92,22 @@ def phase7_domains_and_final(ctx):
     # prebaked Realm C2 beacons + the persistence/evasion layer) BEFORE the
     # snapshot, so the restore point every box carries is already-compromised
     # and phase 8 starts the clock on a range red owns.
-    if compfile_flag(ctx.comp_dir / "Compfile", "assume_breach"):
-        print("  Planting assume-breach red presence (red01 + beacons + persistence)...")
-        with timed(ctx.comp_dir, 7, "assume_breach"):
-            plant_assume_breach(ctx)
+    # Engine selection: `red.engine tlaloc` runs the v2 design (same red01, its
+    # own loop/decisions/effects); anything else — including every existing
+    # Compfile — keeps the v1 path. v2 is not the production red until it has
+    # passed a scrim (migration plan phase 0/6).
+    from red import tlaloc_ops
+    tlaloc_selected = tlaloc_ops.red_engine(ctx.comp_dir) == "tlaloc"
+    if tlaloc_selected or compfile_flag(ctx.comp_dir / "Compfile", "assume_breach"):
+        if tlaloc_selected:
+            print("  Planting assume-breach red presence (tlaloc v2: red01 + "
+                  "C2 payloads + persistence)...")
+            with timed(ctx.comp_dir, 7, "assume_breach"):
+                tlaloc_ops.plant_assume_breach(ctx)
+        else:
+            print("  Planting assume-breach red presence (red01 + beacons + persistence)...")
+            with timed(ctx.comp_dir, 7, "assume_breach"):
+                plant_assume_breach(ctx)
 
     # Trails first, snapshot second: the wipe has to be inside the restore point,
     # or a rollback to tz-ready hands blue every deploy log back.
