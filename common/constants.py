@@ -67,6 +67,14 @@ PREDOMAIN_STAGE_CONFIGS = {
     "ssh-root-login", "ssh-x11-forwarding", "sshd-config-weak",
     "sshd-force-sftp-broken-chroot", "ssh-backdoor-listener-2222",
     "writable-sudoers",
+    # A clone's first boot rewrites the files this config modes: PVE hands every team box
+    # a ciuser+cipassword, so cloud-init's chpasswd recreates /etc/shadow (and /etc/passwd)
+    # at their standard modes. A golden-disk plant of `chmod 666` therefore cannot reach a
+    # clone. Live 2026-10-15: bad-perms-userConfig read ABSENT on every team clone while
+    # writable-sudoers — a DIRECTORY mode the boot does not recreate, pre-domain for its own
+    # reasons — was present on all of them, and plant_coverage still PASSed because the
+    # golden plant genuinely applied.
+    "bad-perms-userConfig",
     # Cross-box identity (amongus-cde-2026): airship-webapp writes the app's SQL
     # config with DB_HOST = its team's polus address (REQUIRED_VARS "ip:polus"), so
     # it must plant per machine post-clone — apache itself rides the golden disk.

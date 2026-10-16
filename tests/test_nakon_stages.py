@@ -151,5 +151,33 @@ class PostCloneMerge(unittest.TestCase):
         self.assertEqual(postclone, [("both-stage-x", {"K": "v"})])
 
 
+class BootRewrittenModeStaging(unittest.TestCase):
+    """A file MODE planted on the golden disk does not survive the clone's first boot.
+
+    PVE gives every team box a `cipassword`, so cloud-init's chpasswd recreates /etc/shadow
+    (and /etc/passwd) at their standard modes before anything probes the clone. A verifier
+    probe of the form `stat -c %a <one of those files>` therefore reads a golden-stage plant
+    as ABSENT on every clone while plant_coverage still PASSes — live 2026-10-15:
+    bad-perms-userConfig was absent on every team clone, writable-sudoers (a DIRECTORY mode
+    the boot does not recreate, pre-domain for its own reasons) was present on all of them.
+    """
+
+    BOOT_REWRITTEN = ("/etc/passwd", "/etc/shadow", "/etc/group", "/etc/gshadow")
+
+    def test_mode_probes_on_boot_rewritten_files_are_post_clone(self):
+        from verifier.misconfig import MISCONFIG_CHECKS
+
+        checked = 0
+        for name, (cmd, _predicate) in MISCONFIG_CHECKS.items():
+            if "stat -c %a" not in cmd or not any(p in cmd for p in self.BOOT_REWRITTEN):
+                continue
+            checked += 1
+            self.assertIn(
+                name, constants.POST_CLONE_CONFIGS,
+                f"'{name}' probes a file the clone's first boot rewrites, so a golden-disk "
+                f"mode plant cannot reach the clone — it must plant per team post-clone")
+        self.assertTrue(checked, "no mode probe on a boot-rewritten file is left to guard")
+
+
 if __name__ == "__main__":
     unittest.main()
