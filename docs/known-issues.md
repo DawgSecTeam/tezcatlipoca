@@ -38,43 +38,55 @@ The templates are the whole point of teams-only, so this is the normal path, not
 that range has no live VMs left, or have the teams-only path record the kept templates
 somewhere a later full teardown can find without a deploy.
 
-### The dashboard's range-workspace resolver can pick a stale workspace
-
-`_range_workspace` returns the newest run dir of that competition carrying **any** `run_id`,
-so a run that died before it built a range still wins over the workspace holding the live one.
-Live 2026-10-15 (campaign): a full pfsense-rvb teardown resolved to an abandoned workspace
-(`run-70b9197f/comp`) and failed rc=1, while the live estate was in `run-cac3644a/comp`; only
-an explicit `params.comp_dir` reached it. The same shape was behind a subagent briefing
-pointing at the wrong workspace for crimson-relay. It also makes the auto-resolved target
-depend on submission order rather than on which workspace owns the VMs.
-**Next action**: rank candidates by whether their state document records a deployed endpoint /
-inventory (i.e. a range that exists), not by run-dir recency; refuse when the winner has no
-resources and another candidate does, naming both.
-
-### The drivers' config contract moved to `TEZ_*` but the deployed env files did not
-
-`estate/config.py` resolves only `TEZ_*` (its `_SPEC` + `env_name`) and no module maps the
-legacy `TF_VAR_*` names any more, but the ops host's engine env still defined **only**
-`TF_VAR_*`. A deploy survives that — nodes.json supplies the endpoint — so the gap stays
-invisible until teardown, whose `verify_clean` needs the ambient config: two teardowns
-`destroyed 0` and exited non-zero with `config 'proxmox.endpoint' is not set`, while the
-line immediately before said `[estate] ok — destroyed 0`. Same class: bad-auto's
-`badauto.deploy.proxmox.load_proxmox_env()` still demands `TF_VAR_proxmox_{endpoint,
-api_token,node}`, so a scrim dies deploying red01 over names the pipeline no longer sets;
-`dashboard/config.py:engine_config_file`'s docstring still promises the legacy resolution.
-**Next action**: have each driver refuse at startup — before any phase, naming the key and
-the file that should carry it — when neither `TEZ_PROXMOX_ENDPOINT` nor
-`TEZ_PROXMOX_API_TOKEN` resolves, and give bad-auto a `TEZ_PROXMOX_*` read with a `TF_VAR_*`
-fallback instead of keeping both name sets alive in an ops-host file by hand.
-
-
 ### The template builders reach their scratch VM through node shell
 
 `tools/build-{pfsense,vyos}-provision-template.py` alias `192.168.1.2` on the node's bridge and `ssh -W` through `root@<node>` to drive the scratch VM's bootstrap LAN (`192.168.1.0/24`); their ISO fetch (`download-url`) and template rename (`PUT .../config`) are API-only, leaving this hop and template sync ([multi-node.md](multi-node.md#template-copies)) as the repo's only node-shell uses. The pfSense agent retrofit cannot simply switch to the agent channel instead: installing that agent is what the hop is for. **Next action**: on a host whose shell is closed, either alias `192.168.1.2` on the *operator's* NIC where the operator shares the scratch VM's bridge L2, or console-type an operator-routable bootstrap address (`/monitor sendkey`, which these tools already drive the console with).
 
+### A per-run workspace keeps disappearing, and no code in this repo deletes it
+
+The original entry claimed the dashboard removes each run's workspace when the run ends, including
+a run that FAILED and a destroy that ended `teardown_failed`, stranding the range: the journal,
+the run id and the ownership set all live in that workspace, so deleting it removes the sanctioned
+way to finish. **That premise does not reproduce.** There is no code in the dashboard that deletes
+`<run_dir>/comp` — the only per-run deletion is the engine worktree — and on the live ops host 76
+of 168 stored runs still have their workspace, including a `teardown_failed` range that still
+carries its eight recorded resources. Of the four `teardown_failed` ids the entry named, two have
+no store row at all and two have no run dir. So *something outside both repos* is removing run
+directories, and until it is identified this cannot be fixed here.
+**Fixed in passing**: the deletion site that does exist (`workspaces.release`) now holds the
+workspace of any run whose range is not retired, reclaiming only bare debris.
+**Next action**: identify what removes run dirs on the ops host (a janitor, a retention job, a
+systemd timer) and make it retire the range through `POST /api/ranges/retire` before it deletes.
+
+### The engine management IP is resolved but never selected
+
+The placement redesign's second step selects one value the operator used to guess — red01's
+address — but the engine's management address stops at *resolution*, not selection:
+`deploy_lib/prepare._resolve_engine_mgmt_ip` takes the flag, then the node record, then the
+profile, then the marked default (`DEFAULT_ENGINE_MGMT_IP`, documented as contested and poisoned
+on a flat shared L2). On an estate where the default is unusable and every candidate is
+unverifiable — this one has co-tenant guests with no guest agent — selecting unattended would
+trade a wrong answer for a guess, which is why it is still an explicit per-run input. The campaign
+shows the intended behaviour in the meantime: an explicit address proceeds with a named warning
+and an unverifiable one refuses.
+**Next action**: decide the rule deliberately (refuse and require a pin, or select from the
+declared band with the agent-less guests named, as red01's address now does) and record the
+decision next to the band constants.
+
+### Tracked test fixtures still carry estate ground truth
+
+`AGENTS.md` says the only place estate facts belong is `infrastructure-status.md` — "a tracked
+doc, prompt, commit message, or test fixture may name the file, never the values". This pass
+replaced the endpoint literals in the six fixtures it touched, but ~15 occurrences remain in
+files unrelated to it (portal, console, competition-ops and follow-up fixtures, which use the
+host address, the node name, a datastore and a template vmid as convenient values).
+**Next action**: sweep them to non-routable placeholders. Two are deliberate — the leak-detection
+fixture in `tests/test_followup_fixes.py` exists to assert those values are *absent* from output,
+so it needs real-looking data and should keep it with a comment saying why.
+
 ### Planted Linux boxes deny all SSH at the PAM account stage after a restart
 
-Root cause unsolved. A stop/start on a planted box can kill SSH preauth (`Access denied ... by PAM account configuration`) while services still listen. `redeploy --mode reset` recognizes the signature and escalates past it. Unreproduced since 2026-09-29 (four stop/starts came back clean); the standing repro lab was destroyed. **Next action**: commit the diagnostic kit (`tools/pam-bisect-lab.py`) so the next occurrence can be bisected.
+Root cause unsolved. A stop/start on a planted box can kill SSH preauth (`Access denied ... by PAM account configuration`) while services still listen. `redeploy --mode reset` recognizes the signature and escalates past it. Unreproduced since 2026-09-29 (four stop/starts came back clean); the standing repro lab was destroyed. **Not the `bad-perms-userConfig` misconfig**: the 2026-10-16 pass checked Linux-PAM master and `pam_unix`'s auth and account paths carry no `stat`/mode check on `/etc/shadow`, so a world-readable shadow cannot fail `pam_acct_mgmt` — do not reconnect the two without new evidence. **Next action**: commit the diagnostic kit (`tools/pam-bisect-lab.py`) so the next occurrence can be bisected; it does not exist in the tree, so this is a from-scratch build.
 
 ### Scoring round loop does not auto-resume after an engine reboot
 
@@ -92,85 +104,3 @@ Mitigated, not closed. The qemu-guest-agent domain is confined on Fedora 44 (dnf
 
 Several modules assume a second login evicts the first cookie (the `scoring` second-admin account, a comment in `deploy_lib/context.py`, `usage-people.md`). On `portal-live-2026-10-08`'s engine, two logins as `team1` and separately as `admin` both left the first cookie valid. **Next action**: re-test before relying on the rule either way; the `scoring` account and the student portal are harmless regardless.
 
-### bad-auto `world.json` has no concurrent-writer protection
-
-Upstream-worthy (bad-auto). `World.save()` is last-writer-wins; the director's periodic save can clobber an operator-side `badauto seed` that ran in between (live-found 2026-10-11: a 24+ artifact re-seed vanished under the director's next health-check save, though the planted units stayed live). **Next action**: hand off to bad-auto — needs a save-side reload-merge, not just a lock.
-
-### bad-auto clones red01 before it validates its SSH key
-
-Upstream-worthy (bad-auto). `badauto deploy` clones the VM and only then reads `<deploy.ssh_key>.pub`, so an unresolvable key leaves a cloned, unstamped, unstarted red01 holding the LLM key — the shape live-found 2026-10-14, when a red-staging run whose bad-auto config carried no `deploy.ssh_key` fell back to bad-auto's built-in default (a sibling checkout's `proxmox` that no run host has). The engine side is closed: `core.ssh_key_path()` pins the resolved absolute key on every bad-auto config both writers produce, and an unstamped red01 is reclaimed on both teardown paths (`red: pin the RANGE's ssh key on every bad-auto config it writes`, `red01: one narrow reclaim for an unstamped red01`). **Next action**: hand off to bad-auto — read and validate the public half before the clone, so no caller can leave a VM behind.
-
-### scrim-one's verify gate is red on two checks in every deploy
-
-`pins_registered` ("12 pinned checks") and `misconfig` ("misconfig did not survive cloning
-everywhere") FAIL while the other ten gates PASS, identically on two independent deploys
-(2026-10-14: run-df29374d and run-e7e12115 — `run.log` verify block, `RESULT: FAIL — see failing
-checks above`). The range deploys, scores and heals, so this is content drift, not plumbing: either
-the golden-set/seed order drops the pins and the misconfigs before the clones are taken, or both
-checks look somewhere the clones do not have. **Next action**: run the two checks by hand against
-one clone and against its golden, then fix whichever of planting order / check path is wrong; both
-gates must be green before scrim-one is used for scoring.
-
-
-### `misconfig` is red in every verify, deploy-time and pre-T0 (scoring integrity)
-
-Live 2026-10-15 (run-1c44733b, scrim-one, 2 teams): `misconfig : FAIL  misconfig did not survive
-cloning everywhere` at the deploy-time verify AND at the pre-T0 re-verify, while `plant_coverage`
-PASSed all 12 machines and every other gate came back green. Two independent runs have now shown
-the same shape, so this is not flake. A third run names the config: run-a87e0d88 (scrim-one-light,
-2 teams) reports `FAIL  'bad-perms-userConfig' absent on every team (['web01-team152',
-'web01-team153']) — the config didn't plant on any clone` while `'writable-sudoers' present on all
-2 team(s)` — so one expected misconfig never reaches the clones at all, and it is not every
-misconfig. **Next action**: root-cause it in the gate, with a regression test — a comp whose pins
-are provably planted on the goldens and confirmed on the clones must pass. This is the one deploy
-gate whose failure means the scored range is not what the packet promises.
-
-
-### A deleted per-run workspace strands the range that run deployed
-
-The dashboard removes each run's workspace when the run ends — including a run that FAILED and a
-destroy that ended `teardown_failed`. Verified 2026-10-15: of 51 range records, 29 were `failed` and
-4 `teardown_failed`, and all four `teardown_failed` workspaces (`run-48c4d760`, `run-adb8e61a`,
-`run-27b0d9e4`, `run-c84faaac`) had no `comp/estate-state.json` left. Teardown is journaled and
-idempotent precisely so a failed destroy can be re-run, but the journal, the run id and the ownership
-set all live in that workspace, so deleting it removes the sanctioned way to finish. The leftover VMs
-are then reachable only by their own tags (`destroy-competition.py --orphan-comp/--orphan-run`, added
-this cycle), which cannot resume the plan, cannot tell a deliberately kept template from debris, and
-cannot consult the freeze record. Live 2026-10-15: .150 carried two engine-templates and seven goldens
-under two run ids with no workspace anywhere, and the dashboard's range view had gone stale — one
-`live` record still named vmid 2101 after that VM was gone; the API tags were the only truth.
-**Next action**: hold the workspace of any run whose range is not `retired`, or have the dashboard
-submit an orphan reclaim when it deletes one.
-
-### bad-auto's assume-breach seed exits 0 with every step failed
-
-scrim-one-light run-1ea5494a-run2 (2026-10-15, red+blue scrim of a deployed range): the
-authoritative pre-T0 verify printed `red_teams : PASS  red01 reached all 2 teams`, and **seven
-seconds later** bad-auto's seed reported all six boxes `"step": "access", "detail":
-"192.168.<tid>.<n> unreachable over SSH"` — then exited **0**. Reproduced a fourth time at
-run-2652d9bc. The two observations cannot both hold: either the verifier's `red_teams` probe and
-bad-auto's seed use different transports/credentials/target lists, or the seed evaluates a path
-the gate does not. That is a bad-auto (tlaloc) contract question — this repo can only see
-bad-auto's stdout.
-The harness side is closed: `seed_assume_breach` reads bad-auto's per-step report from stdout and
-refuses T0 when no box was seeded (or when the report cannot be interpreted), so a wholly failed
-seed can no longer start an event. The deploy-time `plant_assume_breach` still reads the exit code
-alone and prints `seeded (depth 2) — every box is owned` for a seed that owned nothing.
-**Next action**: make bad-auto's `seed` exit non-zero when no step succeeded, and have
-`red/red_plant_ops.plant_assume_breach` read the same per-step report the scrim now does. Needs
-bad-auto's owner — it is a sibling repo's exit-code contract, not a tezcatlipoca change.
-
-## Pending upstream — catalog / nakon
-
-- **`IIS FTP` golden plant is timing-fragile and non-idempotent** (catalog DB step body). `Start-Service FTPSVC`/`New-WebFtpSite` can race the just-installed config store; the step's `$Error.Count -gt 0` footer turns a transient into a hard failure, and the body doesn't re-run cleanly without the phase-4 `tz-base` rollback. Recovery: `--from-phase 4 --yes`. Failed-run logs are preserved on the engine (`/opt/nakon/failed-<tag>-<ts>`) since 2026-10-11.
-- **`mailenable-cleartext-mail-win`** — the only remaining `KNOWN_BROKEN_CONFIGS` row. `choco install mailenable` names a package the community feed doesn't have, so only the firewall rule lands; MailEnable's real installer is the likely fix.
-- **`nakon randomize` can hand out names whose script needs vars it can't supply** — catalog half fixed (`catalog check` reports `missing-vars`; the driver filters unplantable bare names). `randomize` itself is unchanged, so `catalog check` remains the gate.
-- **Windows package-manager fallback** — writes `.nakon-step-rc` and states plainly it has never run against real winget/chocolatey. Still not live-verified.
-
-`constants.KNOWN_BROKEN_CONFIGS` is the repo-side guard, enforced at generate time and packet-compile time: a fresh selection hitting a broken row is a hard error; a competition that already records the pin gets a warning instead (so historical comps stay re-deployable). Delete a row here when fixed upstream — don't archive it.
-
-## Standing limitations — not fixable here
-
-- **Windows scoring is port-open only.** Every Windows service check maps to the generic `Tcp` slice (WinRM 5985, SMB 445, RDP 3389); it can't distinguish a healthy service from one merely listening.
-- **Nakon step failures are recorded but never fatal by design.** A failed install shows as `FAILED` in `nakon_failed_steps`, surfaced by verify as a plant-integrity line; the deploy never raises on it.
-- **Orphaned ranges and vmid contention on shared nodes.** Not a code bug — discarded comp dirs leave VMs holding vmids/disk/golden slots. Reclaim with `destroy-competition.py` from the matching comp dir, never an ad-hoc sweep.
