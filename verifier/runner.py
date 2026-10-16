@@ -66,6 +66,13 @@ def _red_gate(run, name, label, fn):
 
 def run_gates(args, comp_dir, ctx, teams, admin_password, boxes, base_url):
 # Run every gate in order; returns a RunOutcome. Raises PacketProfileError.
+    if getattr(args, "interim", False):
+        # The deploy-time verify runs BEFORE red/blue staging, and staging is what registers
+        # the pins — live 2026-10-15 the same `pins_registered` gate read FAIL here and PASS
+        # three minutes later with nothing else changed. Say which reading this is.
+        print("\n  INTERIM VERIFY — the deploy-time reading, taken before red/blue staging: a "
+              "gate the staging still changes (pins_registered) is not the scoring verdict. "
+              "The pre-T0 verify after staging is the authoritative one.")
     run = _Run()
     logins_ok, admin_session = scoreboard.check_logins(base_url, teams, admin_password)
     run.add(bool_gate("logins", logins_ok))

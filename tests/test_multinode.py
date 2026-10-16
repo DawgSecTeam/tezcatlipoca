@@ -4,6 +4,8 @@ No live Proxmox: probes are stubbed, placement is computed from fake probe dicts
 and the sync planner's API reads are patched. The single-node invariant (no
 nodes.json -> single-node fallback) is asserted alongside."""
 
+import contextlib
+import io
 import json
 import os
 import sys
@@ -329,6 +331,35 @@ class PlacementRecordTest(unittest.TestCase):
         self.assertEqual(placement_record.satellite_routes_for(placement),
                          [{"subnet": "192.168.103.0/24", "via": "10.0.0.248"},
                           {"subnet": "192.168.107.0/24", "via": "10.0.0.248"}])
+
+
+class DeployBannerTest(unittest.TestCase):
+# The entry banner must not name an estate before placement resolves it. On a
+# nodes.json-only run the ambient config has no endpoint/template, so the old banner
+# printed endpoint=? node=pve datastore=local-lvm tpl=? engine-mgmt=default — a first-time
+# operator read that as the target host mid-deploy.
+
+    def test_entry_banner_prints_no_unresolved_estate_values(self):
+        from deploy_lib import inputs as dl_inputs
+        from deploy_lib.context import DeployContext
+        with tempfile.TemporaryDirectory() as td:
+            comp = Path(td) / "probe"
+            comp.mkdir()
+            (comp / "Compfile").write_text("name probe\nscenario s\ndifficulty 1\n")
+            (comp / "users.json").write_text(json.dumps(
+                {"box_username": "ubuntu", "credlist_usernames": ["admin"]}))
+            (comp / "boxes.json").write_text(json.dumps(
+                [{"name": "web01", "template": "ubuntu-fix"}]))
+            config.reset()
+            self.addCleanup(config.reset)
+            buf = io.StringIO()
+            with patch.dict(os.environ, {"TEZ_CONFIG": str(Path(td) / "absent.toml")},
+                            clear=True), contextlib.redirect_stdout(buf):
+                dl_inputs.load_competition_spec(DeployContext(), comp)
+        out = buf.getvalue()
+        self.assertIn("Deploying probe", out)
+        self.assertNotIn("=?", out)
+        self.assertNotIn("engine-mgmt=", out)
 
 
 class JumpRulesTest(unittest.TestCase):

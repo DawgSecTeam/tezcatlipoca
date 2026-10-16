@@ -55,7 +55,8 @@ class RedeployCliOffline(unittest.TestCase):
         cwd = os.getcwd()
         os.chdir(self.root)
         self.addCleanup(os.chdir, cwd)
-        p = patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve1"})
+        p = patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve1",
+                                    "TEZ_PROXMOX_ENDPOINT": "https://10.0.0.150:8006"})
         p.start()
         self.addCleanup(p.stop)
         self.mod = _load_script()

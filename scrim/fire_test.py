@@ -28,6 +28,15 @@ def write_verify_log(args, label, r):
         fh.write(f"\n===== verify [{label}] rc={r.returncode} {core.now_iso()} =====\n")
         fh.write((r.stdout or "") + "\n=== STDERR ===\n" + (r.stderr or ""))
     core.secure_evidence(path)
+    # The outcome beside the log, with its label: the report's verify line has to say
+    # whether a failure it shows is the deploy-time (interim) reading or the authoritative
+    # pre-T0 one. The pre-T0 verify runs last, so its record is the one a finished run keeps.
+    test_dir = getattr(args, "test_dir", None)
+    if test_dir:
+        from artifacts_lib import artifacts_ops
+        artifacts_ops.update_manifest(test_dir, verify={
+            "exit_code": r.returncode, "interim": "interim" in label,
+            "log": "evidence/harness/verify.log"})
     return path
 
 
@@ -38,7 +47,8 @@ def write_verify_log(args, label, r):
 # way to tell the two apart unless the run says which is which.
 def stage_verify(args, comp, creds, label="interim (pre-staging)"):
     log(f"verify-competition + fire test [{label}]")
-    r = procs.run(compworld.verify_cmd(comp, creds), cwd=core.REPO, timeout=1800, check=False)
+    r = procs.run(compworld.verify_cmd(comp, creds, "--interim"),
+                  cwd=core.REPO, timeout=1800, check=False)
     print("\n".join((r.stdout or "").splitlines()[-25:]))
     write_verify_log(args, label, r)
     if r.returncode != 0:

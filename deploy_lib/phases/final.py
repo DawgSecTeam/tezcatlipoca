@@ -43,7 +43,8 @@ def phase7_domains_and_final(ctx):
     if ctx.from_phase > 7:
         print("[7/8] Skipped (resume).")
         return
-    print("  Configuring Windows AD domains (if any)...")
+    print("[7/8] Configuring Windows AD domains (if any), then the final "
+          "disruption/boot-hostile pass and beacons...")
     with timed(ctx.comp_dir, 7, "domains"):
         deploy_domain_configs(ctx.teams, ctx.boxes, ctx.comp_dir, ctx.nakon_config_path,
                               ctx.ssh_key, ctx.scoring_user, ctx.scoring_ip, ctx.box_password)

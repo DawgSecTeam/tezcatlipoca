@@ -65,6 +65,10 @@ def build_parser():
     parser.add_argument("--red-seg-ip", default=None,
                         help="red01's red-segment address for --red-identity "
                              "(default: the comp's bad-auto config, else 10.200.0.10)")
+    parser.add_argument("--interim", action="store_true",
+                        help="this is the deploy-time reading, taken before red/blue staging: "
+                             "label its gates as interim, because staging still registers "
+                             "pins and the pre-T0 verify after it is the authoritative one")
     return parser
 
 
@@ -72,6 +76,11 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
 
     load_dotenv(ENV_PATH)
+
+    # The verifier reaches every node through the ambient estate identity, and the range it
+    # checks will still need it at teardown.
+    from estate import config
+    config.require_proxmox_identity()
 
     comp_dir = Path(args.comp_dir).resolve()
     if not comp_dir.is_dir():

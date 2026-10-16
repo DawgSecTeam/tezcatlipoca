@@ -16,6 +16,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
+# The ambient estate identity every lifecycle entry point refuses without.
+IDENTITY = "https://10.0.0.150:8006"
 
 
 def load_destroy_cli(tmp_path):
@@ -57,6 +59,7 @@ class CompDirOnly(unittest.TestCase):
 
             with mock.patch.object(sys, "argv",
                                    ["destroy-competition.py", "--comp-dir", str(comp), "--yes"]), \
+                    mock.patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": IDENTITY}), \
                     mock.patch("teardown.runner.run_terminal_teardown",
                                side_effect=fake_teardown):
                 module.main()                     # UnboundLocalError here before the fix
@@ -78,6 +81,7 @@ class CompDirOnly(unittest.TestCase):
             with mock.patch.object(sys, "argv",
                                    ["destroy-competition.py", "--comp-dir", str(comp),
                                     "--competition", "scrim-one", "--yes"]), \
+                    mock.patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": IDENTITY}), \
                     mock.patch("teardown.runner.run_terminal_teardown",
                                side_effect=fake_teardown):
                 module.main()
@@ -105,6 +109,7 @@ class ConfigLessWorkspace(unittest.TestCase):
                 with mock.patch.object(sys, "argv",
                                        ["destroy-competition.py", "--comp-dir", str(comp),
                                         "--yes"]), \
+                        mock.patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": IDENTITY}), \
                         mock.patch("teardown.runner.run_terminal_teardown",
                                    side_effect=lambda *a, **k: calls.append(a)), \
                         contextlib.redirect_stdout(out):

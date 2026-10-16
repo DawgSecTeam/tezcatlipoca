@@ -98,6 +98,15 @@ class Tail(unittest.TestCase):
         self.assertIn("plant_coverage_failed", ctx.state)
         self.assertEqual(ctx.state["nakon_failed_steps"], [])
 
+    def test_phase7_normal_path_prints_the_banner(self):
+        # The [N/8] banners are what operators and the dashboard's stage jump key on.
+        # Phase 7's banner lived only on the skip branch, so every real deploy ran
+        # [6/8] → [8/8] in the log.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self._p7([])
+        self.assertIn("[7/8] Configuring Windows AD domains", buf.getvalue())
+
     def test_phase7_skipped_on_resume(self):
         (self.comp / "final.json").write_text('{"machines": []}')
         ctx = _ctx(self.comp, from_phase=8)

@@ -198,16 +198,6 @@ report therefore has to be reconstructed from `INTERACTION.md` and the cycle log
 did (including the timeout path), and keep the collector's "present agent, missing canonical
 document" warning as the guard.
 
-### red's pre-T0 validation cycle addresses a box in the wrong subnet
-
-The pre-T0 `validate-llm`/dry-run cycle asks for `web01` at `192.168.101.2`
-(2026-10-14, run-e7e12115 and run-df29374d: `PASS: decision={..."box": "web01", "target_ip":
-"192.168.101.2"...}`) while the team subnets are `192.168.120.0/24` and `192.168.121.0/24`. The
-event's own live cycles address `192.168.120.x`/`192.168.121.x` correctly, so the wrong address is
-synthesised by the validation/dry-run path (or by a carried config block), not by red's live loop.
-**Next action**: find where `192.168.101.*` is synthesised and make the validation path read the
-placement like the live path does; a pre-T0 check that cannot reach a real box validates nothing.
-
 ### A 45-minute event holds two blue cycles at current endpoint latency
 
 Measured 2026-10-14 (run-e7e12115): a blue cycle costs 20–30 min wall clock (LLM decision ~220 s at
@@ -230,16 +220,6 @@ the same shape, so this is not flake. A third run names the config: run-a87e0d88
 misconfig. **Next action**: root-cause it in the gate, with a regression test — a comp whose pins
 are provably planted on the goldens and confirmed on the clones must pass. This is the one deploy
 gate whose failure means the scored range is not what the packet promises.
-
-### The deploy-time `verify` reports `pins_registered` FAIL for a range whose pre-T0 verify PASSes it
-
-Same run: at deploy `pins_registered : FAIL  12 pinned checks`; 3 minutes later, after the red/blue
-staging, the identical verify command reported `pins_registered : PASS  12 pinned checks` with
-everything else unchanged. The deploy-time result is therefore an INTERIM reading, and it is being
-read as a scoring verdict by anyone (or any gate) that looks at the deploy stage. **Next action**:
-either run that check only after the staging it depends on, or label the deploy-time verify
-`interim` in the run log and in the report's verify line — do not leave two contradictory results
-for the same gate in one run's evidence.
 
 ### The tailnet→team SNAT rule flaps, and a container restart is what drops it
 

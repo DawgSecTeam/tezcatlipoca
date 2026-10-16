@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from config.config_ops import write_text_atomic
+from common.timing import read_timings, top_level
 
 from .collect import load_collection
 from .constants import LOST, NOT_COLLECTED, REPORT_NAME, SIDES, SKIPPED, TODO_MARK, UNRECOVERABLE
@@ -54,17 +55,12 @@ def timing_rows(test_path):
         path = Path(test_path) / "evidence" / "harness" / "deploy-timings.jsonl"
     if not path.exists():
         return [], []
-    totals, slowest = {}, []
-    for line in path.read_text().splitlines():
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        phase = row.get("phase") or "?"
-        seconds = float(row.get("seconds") or 0.0)
-        totals[phase] = totals.get(phase, 0.0) + seconds
-        slowest.append((seconds, phase, row.get("op"), row.get("target")))
-    slowest.sort(reverse=True)
+    rows = read_timings(path)
+    totals = {}
+    for row in top_level(rows):
+        totals[row["phase"]] = totals.get(row["phase"], 0.0) + row["seconds"]
+    slowest = sorted((r["seconds"], r["phase"], r["op"], r["target"]) for r in rows)
+    slowest.reverse()
     return sorted(totals.items(), key=lambda kv: -kv[1]), slowest[:5]
 
 
@@ -170,8 +166,11 @@ def render_report_skeleton(test_path):
                              f"{item['status']} | artifact missing | no | `collection.json` |")
     verify = manifest.get("verify") or {}
     if verify.get("exit_code") not in (None, 0):
-        lines.append(f"| (verify) | verify-competition.py exit {verify['exit_code']} | gate "
-                     f"failure | ? | `{verify.get('log', 'evidence/harness/')}` |")
+        # A deploy-time verify runs before red/blue staging, which is what registers some of
+        # the pins; its failures are an interim reading, never the scoring verdict.
+        which = "interim deploy-time " if verify.get("interim") else ""
+        lines.append(f"| (verify) | {which}verify-competition.py exit {verify['exit_code']} | "
+                     f"gate failure | ? | `{verify.get('log', 'evidence/harness/')}` |")
     lines += ["", "<!-- TODO(author): classify the seeded rows, delete the ones that are not "
               "incidents, add anything only a human saw -->", ""]
 

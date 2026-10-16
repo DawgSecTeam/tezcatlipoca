@@ -248,6 +248,23 @@ def require(key):
     return active().require(key)
 
 
+def require_proxmox_identity():
+    """Refuse when the ambient config carries neither a Proxmox endpoint nor an API token.
+
+    A deploy can survive that (nodes.json supplies its endpoint), so the gap stays invisible
+    until teardown, whose verify_clean reads the ambient config — two teardowns printed
+    `[estate] ok — destroyed 0` and then exited on `config 'proxmox.endpoint' is not set`.
+    """
+    cfg = active()
+    if cfg.get("proxmox.endpoint") or cfg.get("proxmox.api_token"):
+        return
+    raise ConfigError(
+        f"  ERROR: config 'proxmox.endpoint' (or 'proxmox.api_token') is not set. Set the "
+        f"estate identity in {cfg.path} (or export TEZ_PROXMOX_ENDPOINT / "
+        f"TEZ_PROXMOX_API_TOKEN) — teardown's verify_clean needs it even when nodes.json "
+        f"supplied the deploy's endpoint.")
+
+
 def proxmox_env():
     """The resolved Proxmox identity as TEZ_* env, for subprocess-facing callers.
 

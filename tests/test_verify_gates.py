@@ -19,6 +19,7 @@ Each test corresponds to a reproduced defect:
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -798,6 +799,9 @@ class MainSummaryWiring(unittest.TestCase):
                          return_value=v_model.gate_pass("degradations")),
             patch.object(v_domains, "check_domains",
                          return_value=v_model.gate_skip("domains", gating=False)),
+            # The entry point refuses without the ambient estate identity (every lifecycle
+            # path needs it); this harness exercises the gates, not the refusal.
+            patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://10.0.0.150:8006"}),
             patch.object(sys, "argv",
                          ["verify-competition.py", str(comp_dir), "--engine-ip",
                           "10.0.0.1", *extra]),

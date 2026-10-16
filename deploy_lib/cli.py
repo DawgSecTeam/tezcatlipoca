@@ -9,6 +9,7 @@ from config.config_prompts import _prompt_difficulty, collect_boxes, collect_use
 from config.config_ops import load_previous_competitions
 from common.comp_paths import resolve_comp_dir
 from common.utils import valid_comp_name
+from estate import config
 from estate import state as estate_state
 
 from deploy_lib.runner import deploy
@@ -196,6 +197,12 @@ def select_interactive_competition():
 
 def main():
     args = build_parser().parse_args()
+
+    # Refuse before anything runs: every lifecycle path (teardown's verify_clean included)
+    # reads the ambient estate identity, which a nodes.json-only deploy never needed until
+    # teardown. --plan-only touches no infrastructure and no lifecycle path, so it is exempt.
+    if not args.plan_only:
+        config.require_proxmox_identity()
 
     print("Tezcatlipoca - CTF Range Deployment")
     print("=" * 40)

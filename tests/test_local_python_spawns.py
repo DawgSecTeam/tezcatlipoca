@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from common.utils import local_python
+from estate import config
 from scrim import core, staging, teardown_stage
 
 REPO = Path(__file__).resolve().parents[1]
@@ -40,20 +41,37 @@ class LocalPython(unittest.TestCase):
 
 
 class StageDeploySpawn(unittest.TestCase):
-    def test_deploy_child_uses_the_harness_interpreter(self):
+    def _spawn(self, executable=None):
         calls = []
 
         def fake_run(cmd, **kw):
             calls.append(cmd)
             return SimpleNamespace(returncode=0, stdout="last_phase: 8\n", stderr="")
 
+        args = SimpleNamespace(teams=2, resume=None, force_resume=False, run_dir=None)
         with mock.patch.object(staging.procs, "run", side_effect=fake_run), \
-                mock.patch.object(core, "read_comp_json", return_value={"last_phase": 8}):
-            args = SimpleNamespace(teams=2, resume=None, force_resume=False, run_dir=None)
-            comp = Path("/tmp/does-not-matter")
-            staging.stage_deploy(args, comp)
-        self.assertEqual(calls[0][0], sys.executable, calls[0][:2])
-        self.assertNotIn("python3", calls[0][0])
+                mock.patch.object(core, "read_comp_json", return_value={"last_phase": 8}), \
+                mock.patch.dict("os.environ", {"TEZ_PYTHON": ""}):
+            if executable is not None:
+                with mock.patch.object(sys, "executable", executable):
+                    config.reset()
+                    self.addCleanup(config.reset)
+                    staging.stage_deploy(args, Path("/tmp/does-not-matter"))
+            else:
+                staging.stage_deploy(args, Path("/tmp/does-not-matter"))
+        return calls[0]
+
+    def test_deploy_child_uses_the_harness_interpreter(self):
+        cmd = self._spawn()
+        self.assertEqual(cmd[0], local_python(), cmd[:2])
+
+    def test_deploy_child_uses_the_harness_interpreter_when_that_is_a_distro_python(self):
+        # The contract is argv[0] == local_python(), not "argv[0] is not named python3":
+        # the harness itself can be /usr/bin/python3, which carries none of the deps. The
+        # old assertion (`"python3" not in sys.executable`) tested the host, not the spawn.
+        cmd = self._spawn(executable="/usr/bin/python3")
+        self.assertEqual(cmd[0], local_python())
+        self.assertEqual(cmd[0], "/usr/bin/python3")
 
 
 class RedSpawns(unittest.TestCase):

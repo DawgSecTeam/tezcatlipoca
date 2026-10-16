@@ -112,6 +112,10 @@ def main():
                              "reset and injects re-open anchored at now. Use for scrim reruns.")
     args = parser.parse_args()
 
+    # Every redeploy path reuses the ambient estate identity (and teardown will need it);
+    # a deploy alone would survive its absence on nodes.json.
+    config.require_proxmox_identity()
+
     comp_name = args.competition
     if comp_name is not None and not valid_comp_name(comp_name):
         raise SystemExit(f"  ERROR: invalid competition name {comp_name!r} — use "

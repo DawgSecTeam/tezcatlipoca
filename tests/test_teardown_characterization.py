@@ -254,6 +254,9 @@ class MainSequence(unittest.TestCase):
             patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None),
             patch.object(infra_client, "live_vmids", lambda: []),
             patch.object(red_plant_ops, "red_vmid_candidates", lambda *a, **k: [999]),
+            # The entry point refuses without the ambient estate identity (teardown's
+            # verify_clean needs it); this harness exercises the sequence, not the refusal.
+            patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://10.0.0.150:8006"}),
             patch.object(sys, "argv", argv),
         ]
         os.chdir(self.root)

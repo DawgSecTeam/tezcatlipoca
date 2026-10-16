@@ -141,7 +141,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                 with PRINT_LOCK:
                     print(f"  [{team_key}] Promoting {dc_box['name']} ({dc_ip}) to a new AD "
                           f"forest ({domain})...")
-                with timed(comp_dir, 6, "domain_adds", team_key):
+                with timed(comp_dir, 7, "domain_adds", team_key):
                     _run_single_nakon_config(
                         dc_machine,
                         [{"name": "ADDS", "vars": {"domain": domain, "dsrm_password": box_password}}],
@@ -264,7 +264,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                 # retry.
                 for attempt in range(1, JOIN_ATTEMPTS + 1):
                     try:
-                        with timed(comp_dir, 6, "domain_join", f"{team_key}/{member_box['name']}"):
+                        with timed(comp_dir, 7, "domain_join", f"{team_key}/{member_box['name']}"):
                             _run_single_nakon_config(
                                 member_machine,
                                 [{"name": "Domain Join", "vars": {
@@ -311,7 +311,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                           f"to {domain} via realmd/sssd...")
                 for attempt in range(1, JOIN_ATTEMPTS + 1):
                     try:
-                        with timed(comp_dir, 6, "domain_join", f"{team_key}/{member_box['name']}"):
+                        with timed(comp_dir, 7, "domain_join", f"{team_key}/{member_box['name']}"):
                             _run_single_nakon_config(
                                 member_machine,
                                 [{"name": "domain-join", "vars": {

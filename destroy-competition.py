@@ -144,6 +144,11 @@ def main():
                              "VMs (irreversible — there is no freeze record left to consult)")
     args = parser.parse_args()
 
+    # Teardown is the path that always needed the ambient estate identity (verify_clean
+    # reads it), while a deploy survives its absence on nodes.json alone.
+    from estate import config
+    config.require_proxmox_identity()
+
     print("=" * 64)
     print("  COMPETITION TEARDOWN")
     print("=" * 64)
