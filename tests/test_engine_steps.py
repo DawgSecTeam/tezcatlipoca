@@ -20,13 +20,15 @@ import base64
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
-from engine.engine_bootstrap_ops import push_quotient_env
+from engine.engine_bootstrap_ops import (_QUOTIENT_INJECTS_PY, bootstrap_scoring_engine,
+                                         push_quotient_env, _patch_quotient_injects_cmd)
 from engine.engine_cmd_ops import _run_engine_cmd
 
 _CTX = {
@@ -118,6 +120,93 @@ class SecretHygiene(unittest.TestCase):
         self.assertNotIn(self.PG, msg)
         self.assertNotIn(self.REDIS, msg)
         self.assertIsInstance(cm.exception.__cause__, subprocess.CalledProcessError)
+
+
+class QuotientInjectPatch(unittest.TestCase):
+    """The inject-detail re-patch every bootstrap runs on the fresh clone. The
+    script is the artifact under test: run it here exactly as the engine does."""
+
+    STOCK = (
+        '                from.className = ""\n'
+        '                subject.className = ""\n'
+        '                description.className = ""\n'
+        '                \n'
+        '                from.textContent = inject.Title\n'
+        '                subject.textContent = inject.Title\n'
+        '                                \n'
+        '                let descTemp = document.createElement("div")\n'
+        '\n'
+        '                let descPara = document.createElement("p")\n'
+        '                descPara.textContent = inject.Description\n'
+        '                descTemp.appendChild(descPara)\n'
+    )
+    PATCHED = (
+        '                from.className = ""\n'
+        '                subject.className = ""\n'
+        '                description.className = ""\n'
+        '                \n'
+        '                subject.textContent = inject.Title\n'
+        '                                \n'
+        '                let descTemp = document.createElement("div")\n'
+        '\n'
+        '                let descPara = document.createElement("p")\n'
+        '                descPara.innerHTML = marked.parse(inject.Description)\n'
+        '                descTemp.appendChild(descPara)\n'
+    )
+
+    def _run(self, text):
+        path = Path(tempfile.mkdtemp()) / "injects.html"
+        if text is not None:
+            path.write_text(text, encoding="utf-8")
+        return subprocess.run([sys.executable, "-c", _QUOTIENT_INJECTS_PY, str(path)],
+                              capture_output=True, text=True), path
+
+    def test_patch_applies_to_a_stock_template(self):
+        r, path = self._run(self.STOCK)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(path.read_text(encoding="utf-8"), self.PATCHED)
+        self.assertIn("patched", r.stdout)
+
+    def test_patched_template_is_a_no_op(self):
+        r, path = self._run(self.PATCHED)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(path.read_text(encoding="utf-8"), self.PATCHED)
+        self.assertIn("already patched", r.stdout)
+
+    def test_missing_file_reports_failure(self):
+        r, _ = self._run(None)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not found", r.stderr)
+
+    def test_missing_anchor_reports_failure(self):
+        # Upstream rewrote the pane: neither the legacy nor the fixed anchor is there,
+        # so the patch did NOT apply and must not be swallowed.
+        r, path = self._run("<html>upstream rewrote the inject pane</html>")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("did not apply", r.stderr)
+        self.assertEqual(path.read_text(encoding="utf-8"),
+                         "<html>upstream rewrote the inject pane</html>")
+
+    def test_command_wraps_the_script_and_targets_the_checkout(self):
+        cmd = _patch_quotient_injects_cmd()
+        self.assertIn("/opt/quotient/static/templates/pages/injects.html", cmd)
+        blob = _BLOB_RE.search(cmd).group(1)
+        self.assertEqual(base64.b64decode(blob).decode(), _QUOTIENT_INJECTS_PY)
+
+    def test_bootstrap_runs_the_patch_after_the_clone(self):
+        import engine.engine_bootstrap_ops as bo
+        steps = []
+
+        def fake_run_cmd(ctx, cmd, step, **kwargs):
+            steps.append(step)
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+        with mock.patch.object(bo, "_run_engine_cmd", side_effect=fake_run_cmd), \
+                mock.patch.object(bo, "install_range_healthcheck"):
+            bootstrap_scoring_engine(_CTX, "pg", "redis", quotient_ref="abc")
+        self.assertIn("patch Quotient inject page", steps)
+        self.assertLess(steps.index("clone Quotient"),
+                        steps.index("patch Quotient inject page"))
 
 
 if __name__ == "__main__":

@@ -33,6 +33,42 @@ def _clone_quotient_cmd(quotient_ref):
             f"2>/dev/null || (cd /opt/quotient && sudo git submodule update --init --recursive)")
 
 
+# The canonical dbaseqp/Quotient inject-detail fix (local main ed539df): render the
+# description as markdown and drop the stray `from` assignment that printed the title
+# twice. Upstream is unpushable, so every clone gets it re-applied here. The anchors are
+# exact strings: a miss means the template moved and the patch did NOT apply — fail the
+# build loudly rather than ship the bug. Idempotent: an already-patched tree is rewritten
+# identically and reports so.
+_QUOTIENT_INJECTS_PY = r'''
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+legacy = "descPara.textContent = inject.Description"
+fixed = "descPara.innerHTML = marked.parse(inject.Description)"
+dup = "from.textContent = inject.Title"
+if not path.is_file():
+    sys.exit(f"injects.html not found at {path}")
+src = path.read_text(encoding="utf-8")
+new = src.replace(legacy, fixed, 1) if legacy in src else src
+new = "\n".join(line for line in new.split("\n") if line.strip() != dup)
+if fixed not in new or dup in new:
+    sys.exit(f"injects.html patch did not apply at {path} — anchor text changed upstream")
+if new != src:
+    path.write_text(new, encoding="utf-8")
+    print("Quotient inject detail page patched (markdown + single title)")
+else:
+    print("Quotient inject detail page already patched — verified")
+'''
+
+
+def _patch_quotient_injects_cmd():
+# Apply + verify the inject-detail fix on the freshly cloned checkout. The script
+#     prints one verification line and exits non-zero on a missing file or anchor, so
+#     _run_engine_cmd turns that into a named, failing "patch Quotient inject page" step.
+    blob = base64.b64encode(_QUOTIENT_INJECTS_PY.encode()).decode()
+    return (f"echo '{blob}' | base64 -d | sudo python3 - "
+            f"/opt/quotient/static/templates/pages/injects.html")
+
+
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_ref=None):
 # Bootstrap the scoring engine: install packages, Docker, Quotient.
 #
@@ -110,6 +146,11 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
     print(f"  Cloning Quotient ({quotient_ref or 'default branch'})...")
     _run_engine_cmd(ctx, _clone_quotient_cmd(quotient_ref), timeout=120,
                     step="clone Quotient")
+
+    # Upstream ships the inject-detail bug; re-patch every clone so a rebuilt engine
+    # template cannot reintroduce it. Idempotent, and a missing file/anchor fails here.
+    _run_engine_cmd(ctx, _patch_quotient_injects_cmd(), timeout=30,
+                    step="patch Quotient inject page")
 
     realized = _run_engine_cmd(ctx, "git -C /opt/quotient rev-parse HEAD 2>/dev/null || true",
                                check=False, timeout=10, capture=True, step="read Quotient HEAD")
