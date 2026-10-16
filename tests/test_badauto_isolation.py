@@ -28,6 +28,15 @@ def _comp(d, extra=""):
     return d
 
 
+def _dashboard_comp(td):
+    """The dashboard's workspace shape: the comp dir is <run_dir>/comp, and only the
+    Compfile names the real competition."""
+    comp = Path(td) / "run-a87e0d88" / "comp"
+    comp.mkdir(parents=True)
+    (comp / "Compfile").write_text("name crimson-relay\nred01_ip 10.0.0.240\n")
+    return comp
+
+
 class Red01Resolution(unittest.TestCase):
     def test_vmid_derives_from_the_scoring_vmids_block(self):
         # One golden stride past the last band this placement uses: +160 with no
@@ -101,6 +110,27 @@ class PerCompConfig(unittest.TestCase):
             self.assertEqual(cfg["realm"]["c2_port"], 8000)                      # carried
             self.assertEqual(cfg["beacon"]["port"], 4470)                        # carried
             self.assertEqual(cfg["deploy"]["red_vmid"], 1460)                    # reserved
+
+    def test_written_config_names_the_competition_not_the_workspace_dir(self):
+        """<run_dir>/comp is the dashboard's shape, so the config must carry the Compfile
+        name: bad-auto stamps it into red01's description marker, and infra/red01.py's
+        resume gate compares that marker to this plan's comp_name — a directory-derived
+        `comp` made a range refuse its OWN live red01 (2026-10-15, run-a87e0d88)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            comp = _dashboard_comp(td)
+            bco.prepare_deploy_config(comp, 1300)
+            self.assertEqual(bco.load_config(comp)["deploy"]["comp_name"], "crimson-relay")
+
+    def test_written_config_comp_name_matches_the_plans(self):
+        import tempfile
+        from infra.plan import PreflightPlan
+        with tempfile.TemporaryDirectory() as td:
+            comp = _dashboard_comp(td)
+            bco.prepare_deploy_config(comp, 1300)
+            plan = PreflightPlan(comp_dir=comp, boxes=[], engine_vmid=1300, shares=[])
+            self.assertEqual(plan.comp_name, "crimson-relay")
+            self.assertEqual(bco.load_config(comp)["deploy"]["comp_name"], plan.comp_name)
 
     def test_prepare_pins_the_deploys_own_ssh_key(self):
         """bad-auto defaults deploy.ssh_key to a SIBLING tezcatlipoca checkout's `proxmox`

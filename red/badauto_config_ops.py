@@ -27,7 +27,7 @@ from pathlib import Path
 import yaml
 
 from common.constants import GOLDEN_VMID_OFFSET, MAX_BOXES_PER_TEAM
-from common.utils import compfile_value
+from common.utils import compfile_value, competition_name
 
 # The one file name for a competition's bad-auto config. YAML on disk (JSON
 # parses as YAML, so hand-written JSON in it also loads).
@@ -71,6 +71,12 @@ def load_config(comp_dir):
 def write_config(comp_dir, cfg):
     """Write the competition's bad-auto config atomically; returns the ABSOLUTE
     path for `--config` threading (see config_path for why absolute)."""
+    # bad-auto's red01 description marker takes its comp= from deploy.comp_name. A dashboard
+    # run's comp dir is literally <run_dir>/comp, so the directory-basename fallback tagged
+    # every dashboard range "comp" while this plan's tags carried the Compfile name — and
+    # infra/red01.py's resume gate compares the two, so it refused this competition's OWN
+    # live red01. Stamped here, where every writer lands, so the two cannot disagree.
+    cfg["deploy"] = {**(cfg.get("deploy") or {}), "comp_name": competition_name(comp_dir)}
     path = config_path(comp_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
