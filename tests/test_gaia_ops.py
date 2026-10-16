@@ -34,13 +34,19 @@ def comp_dir(tmp, extra=""):
 class Runner:
     """Records argv, answers from a script, and can write Gaia's handoffs."""
 
-    def __init__(self, gaia, fail_on=None, creds="mythic_admin:s3cret-pw\n"):
+    def __init__(self, gaia, fail_on=None, creds="mythic_admin:s3cret-pw\n",
+                 box_password=None, reject_passwords=()):
         self.gaia, self.fail_on, self.creds = Path(gaia), fail_on, creds
+        self.box_password = box_password
+        self.reject_passwords = set(reject_passwords)
         self.calls = []
 
     def __call__(self, argv, **kwargs):
         argv = [str(a) for a in argv]
         self.calls.append({"argv": argv, "kwargs": kwargs})
+        # the C2 box's own .env lookup (the admin-password fallback)
+        if argv[0] == "ssh":
+            return Completed(0, f"{self.box_password}\n" if self.box_password else "")
         is_gaia = len(argv) > 2 and argv[1].endswith("gaia.py")
         sub = argv[2] if is_gaia else argv[0]
         # fail_on names a gaia SUBCOMMAND (not any argv containing the word: the
@@ -52,6 +58,10 @@ class Runner:
         if sub == "user":
             return Completed(0, "tlaloc:a-gent-pw\n")
         if sub == "auth":
+            # Mythic answers 403 "Authentication Failed" for a password its database
+            # does not hold (a stale handoff file after an install re-run).
+            if (kwargs.get("input") or "").strip() in self.reject_passwords:
+                return Completed(1, "", "403 Authentication Failed")
             (self.gaia / ".env").write_text(
                 'MYTHIC_API_KEY="api-key-123"\nMYTHIC_LOGIN_SERVER_PORT=7443\n')
         return Completed(0, "ok")
@@ -249,6 +259,34 @@ class PrepareTest(unittest.TestCase):
             assert result["degradations"] and "boom install" in result["degradations"][0]
             assert not runner.has("operation")
             assert result["c2"] is None and result["env"] is None
+
+    def test_a_stale_creds_password_falls_back_to_the_boxs_own_env(self):
+        """An install re-run leaves the handoff file and Mythic's database disagreeing.
+
+        Live 2026-10-16: /auth answered 403 for the creds file's password while the
+        box's own MYTHIC_ADMIN_PASSWORD returned 200 + an access_token — the stack was
+        healthy and the step was blaming a C2 it could not log in to.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("time.sleep"):
+                result, _ = self._prepared(tmp, creds="mythic_admin:stale-pw\n",
+                                           box_password="good-pw",
+                                           reject_passwords={"stale-pw"})
+            creds_text = (Path(tmp) / "gaia" / "mythic_admin_creds.txt").read_text()
+        assert result["ok"] is True, result["degradations"]
+        assert result["admin_password"] == "good-pw"
+        assert result["password_source"] == "the C2 box's /opt/Mythic/.env"
+        assert "mythic_admin:good-pw" in creds_text, creds_text
+
+    def test_no_password_that_authenticates_is_a_degradation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("time.sleep"):
+                result, runner = self._prepared(tmp, creds="mythic_admin:only-pw\n",
+                                                reject_passwords={"only-pw"})
+        assert result["ok"] is False
+        assert any("gaia auth" in d for d in result["degradations"]), result["degradations"]
+        # the user/operation steps still ran — the chain degrades, it does not crash
+        assert "user" in result["reached"] and "operation" in result["reached"]
 
     def test_install_timeout_is_generous(self):
         with tempfile.TemporaryDirectory() as tmp:

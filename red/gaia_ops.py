@@ -189,6 +189,49 @@ def parse_admin_password(text):
     return None
 
 
+def box_admin_password(box_ip, ssh_user, ssh_key, *, runner=None, timeout=60):
+    """The C2 box's OWN admin password, from /opt/Mythic/.env.
+
+    This is the authority: Mythic stores the password hash in its database, so a
+    re-run of the installer — which rewrites `.env` and the host-side handoff file
+    but cannot change an existing user — can leave the handoff file stale while the
+    box keeps working (live 2026-10-16).
+    """
+    if not box_ip or not ssh_key:
+        return None
+    argv = ["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
+            f"{ssh_user}@{box_ip}",
+            "sudo -n grep -E '^MYTHIC_ADMIN_PASSWORD=' /opt/Mythic/.env 2>/dev/null "
+            "| head -1 | cut -d= -f2- | tr -d '\"'"]
+    proc = (runner or _default_runner)(argv, timeout=timeout)
+    if getattr(proc, "returncode", 1) != 0:
+        return None
+    value = (getattr(proc, "stdout", "") or "").strip()
+    return value or None
+
+
+def rewrite_admin_password(creds_path, password):
+    """Put the password the C2 actually accepts into the handoff file."""
+    creds_path = Path(creds_path)
+    try:
+        lines = creds_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    replaced = False
+    for index, line in enumerate(lines):
+        if line.strip().startswith(f"{MYTHIC_ADMIN}:"):
+            lines[index] = f"{MYTHIC_ADMIN}:{password}"
+            replaced = True
+    if not replaced:
+        lines.append(f"{MYTHIC_ADMIN}:{password}")
+    try:
+        creds_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
 def parse_env_value(text, key):
     """A `KEY=value` line out of Gaia's .env (quotes stripped)."""
     for line in (text or "").splitlines():
@@ -392,31 +435,57 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
 
     creds = path / "mythic_admin_creds.txt"
     try:
-        password = parse_admin_password(creds.read_text(encoding="utf-8"))
-    except OSError as exc:
-        result["degradations"].append(f"admin creds unreadable: {exc}")
+        file_password = parse_admin_password(creds.read_text(encoding="utf-8"))
+    except OSError:
+        file_password = None
+
+    # The C2 box's own .env is the authority on its admin password. An install re-run
+    # against a Mythic that already has a database leaves the passwords disagreeing —
+    # and the handoff file lands on THIS host, so it can be the stale one. Live
+    # 2026-10-16: `POST /auth` answered 403 "Authentication Failed" for the creds
+    # file's password while the box's MYTHIC_ADMIN_PASSWORD returned 200 + an
+    # access_token, with the whole stack healthy — the step blamed a C2 that worked.
+    candidates = []
+    if file_password:
+        candidates.append(("mythic_admin_creds.txt", file_password))
+    env_password = box_admin_password(box_ip, ssh_user, ssh_key, runner=runner)
+    if env_password and env_password != file_password:
+        candidates.append(("the C2 box's /opt/Mythic/.env", env_password))
+    if not candidates:
+        result["degradations"].append(
+            "no admin password: install left no creds and the box has no "
+            "MYTHIC_ADMIN_PASSWORD")
         return result
-    if not password:
-        result["degradations"].append("install left no mythic_admin_creds.txt password")
-        return result
-    result["admin_password"] = password
 
     # AUTH FIRST — this is what unlocks everything after it. `user create` and
     # `operation create` speak to Mythic through the API key `auth` writes into
     # Gaia's .env; run either before it and Gaia prints the auth usage and exits
     # non-zero (live smoke 2026-10-16: "gaia user create: rver ... -P, --port 7443
     # ... -u, --user mythic_admin" was that usage dump, not an argument error).
-    for attempt in range(AUTH_ATTEMPTS):
-        proc = runner(auth_argv(path, box_ip), cwd=cwd, timeout=SHORT_TIMEOUT,
-                      input=f"{password}\n")
-        if getattr(proc, "returncode", 1) == 0:
+    authed_with = None
+    for source, candidate in candidates:
+        for attempt in range(AUTH_ATTEMPTS):
+            proc = runner(auth_argv(path, box_ip), cwd=cwd, timeout=SHORT_TIMEOUT,
+                          input=f"{candidate}\n")
+            if getattr(proc, "returncode", 1) == 0:
+                authed_with = (source, candidate)
+                break
+            if attempt + 1 < AUTH_ATTEMPTS:
+                time.sleep(AUTH_RETRY_SECONDS)
+        if authed_with:
             break
-        if attempt + 1 < AUTH_ATTEMPTS:
-            time.sleep(AUTH_RETRY_SECONDS)
     result["reached"].append("auth")
     result["gaia_output"]["auth"] = _tail(proc, 300)
-    if getattr(proc, "returncode", 1) != 0:
+    if not authed_with:
         result["degradations"].append(f"gaia auth: {_tail(proc)}")
+    else:
+        result["admin_password"] = authed_with[1]
+        if authed_with[0] != "mythic_admin_creds.txt":
+            result["password_source"] = authed_with[0]
+            # Do not hand the organizer a password the C2 rejects.
+            if rewrite_admin_password(creds, authed_with[1]) and log:
+                log(f"  mythic      : admin password came from {authed_with[0]} — "
+                    f"mythic_admin_creds.txt corrected")
 
     # The agent's own account, now that the key exists. Gaia prints
     # "user:password"; and re-running for a competition that already has it is not
@@ -444,7 +513,7 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
     # The agent authenticates with USERNAME/PASSWORD (tlaloc's client posts
     # /auth), so the password that travels is its OWN account's when Gaia handed
     # one back, else the admin password (never logged).
-    result["env"] = env_file_body(agent_password or password, host=box_ip,
+    result["env"] = env_file_body(agent_password or result.get("admin_password"), host=box_ip,
                                  user=agent_user)
     result["environment"] = _environment(sshd=True, mythic=True)
     result["ok"] = not result["degradations"]
