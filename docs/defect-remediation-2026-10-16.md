@@ -92,20 +92,35 @@ runs showed the same shape.
 
 Comparing the probe to the catalog step body excluded the check-side explanation (the probe is
 `stat -c %a /etc/shadow == 666`; the step is `chmod 666 /etc/passwd /etc/shadow /etc/crontab` —
-they agree). The mechanism is a clone's **first boot**: PVE hands every team box a
-`ciuser`+`cipassword`, so cloud-init's `chpasswd` recreates `/etc/shadow` — and the same boot's
-user handling rewrites `/etc/passwd` — at their standard modes, discarding a file *mode* that was
-planted on the golden disk. Three facts confirm it rather than merely fit it:
+they agree). The mechanism is that **shadow-utils recreates the file**: `useradd`/`groupadd`/
+`usermod` (commonio) rewrite `/etc/passwd`, `/etc/shadow` and `/etc/group` at their default
+modes, discarding a planted *mode*; `chpasswd` alone preserves it. Probed 2026-10-16 in both
+Linux golden bases (Debian 13 and Ubuntu 24.04, shadow-utils 4.17.4): `chmod 666` then `useradd`
+reads `664`, reproducibly across runs; `chpasswd` alone leaves `666`.
+
+That localized the defect but the first correction staged it wrong. It is not the clone's boot and
+not the pre-domain pass that matters — **two account writers run after the passes a mode pin would
+use**:
+
+- `guests.service_fixup_ops.fix_services_on_boxes`, whose script always begins with a credlist
+  `useradd` + `chpasswd` for every team box — the end of phase 6, i.e. **after** the pre-domain
+  plant;
+- bad-auto's assume-breach seed, whose depth-3 persistence `user` method runs `useradd` on every
+  rooted box in phase 7 — **after** the final plant.
+
+So the pins plant in the deploy's **last** pass (phase 7, after the seed and before the trail
+wipe): `constants.ACCOUNT_FILE_MODE_CONFIGS` — `bad-perms-userConfig`, `passwd-world-readable`,
+`writable-etc-group`, plus any pin whose own vars name one of those files (the parameterized
+`loosen-file-mode FILE_PATH=/etc/shadow` shape) — carried by a `.nakon-late.json` config, with a
+structural guard that fails against any earlier staging.
+`tests/test_nakon_stages.py::AccountFileModeStaging`.
+
+Three facts that localized it, none of which explain the *timing* on their own:
 
 - the plant applied on the **golden** (`web01-golden`, `rc 0`), so "never planted" is excluded;
-- the sibling probe `writable-sudoers` was present on every team — a **directory** mode the boot
-  does not recreate, and already staged per-team post-clone (`PREDOMAIN_STAGE_CONFIGS`);
-- `bad-perms-userConfig` was **not** in that set, so it rode the golden disk and died on the first
-  boot of every clone, deterministically — which is why it failed identically on four runs.
-
-Fixed by staging it per-team post-clone like its sibling, with a guard that ties every verifier
-mode probe on a boot-rewritten file to `POST_CLONE_CONFIGS`; the guard fails against the old
-staging. `tests/test_nakon_stages.py::BootRewrittenModeStaging`.
+- the sibling probe `writable-sudoers` was present on every team — a **directory** mode neither
+  account writer touches;
+- the failing pin and the probe both name `/etc/shadow`, the file the writers recreate.
 
 Two things this diagnosis **ruled out**, recorded so they are not reconnected without new
 evidence:
@@ -115,7 +130,7 @@ evidence:
   `/etc/shadow` (verified against Linux-PAM master; `pam_unix_passwd.c` carries none either), so a
   world-readable shadow does not fail `pam_acct_mgmt`. The misconfig does not lock teams out.
 - it is not a phase-4 clone/rollback dropping the plant: the pattern that died is exactly the one
-  the boot rewrites, and its sibling that the boot does not touch survived.
+  the account writers recreate, and its sibling that they do not touch survived.
 
 ### 2.6 The dashboard
 

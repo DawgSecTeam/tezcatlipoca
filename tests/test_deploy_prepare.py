@@ -226,7 +226,7 @@ class GoldenGatePosition(unittest.TestCase):
                     dpatch("unbooted_golden_boxes", return_value=set()), \
                     dpatch("generate_stage_configs",
                                  return_value=(golden, comp_dir / "r.json",
-                                               comp_dir / "f.json", None)), \
+                                               comp_dir / "f.json", None, None)), \
                     dpatch("build_nakon_bundle",
                                  side_effect=lambda p: calls.append("bundle")), \
                     dpatch("_template_vmid_map",
@@ -262,7 +262,7 @@ class GoldenGatePosition(unittest.TestCase):
                     dpatch("unbooted_golden_boxes", return_value=set()), \
                     dpatch("generate_stage_configs",
                                  return_value=(golden, comp_dir / "r.json",
-                                               comp_dir / "f.json", None)), \
+                                               comp_dir / "f.json", None, None)), \
                     dpatch("build_nakon_bundle", return_value=None), \
                     dpatch("_template_vmid_map", return_value={}), \
                     dpatch("golden_hash_entries",
@@ -514,7 +514,7 @@ class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):
                 dpatch("unbooted_golden_boxes", return_value=set()), \
                 dpatch("generate_stage_configs",
                              return_value=(golden, comp_dir / "r.json",
-                                           comp_dir / "f.json", None)), \
+                                           comp_dir / "f.json", None, None)), \
                 dpatch("build_nakon_bundle", return_value=None), \
                 dpatch("_template_vmid_map", return_value={}), \
                 dpatch("golden_hash_entries",

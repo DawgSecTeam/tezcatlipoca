@@ -81,7 +81,7 @@ the pytest run above rather than this table.
 | `test_root_disk_expansion.py` | Guest-side root-disk expansion (cloud-init/partition parsing on btrfs) |
 | `test_interrupted_clone.py` | Interrupted-clone recovery: clone marker, stale-lock unlock, orphan handling |
 | `test_parallel_golden.py` | `build_golden_set`'s snapshot/convert passes on the 4-worker pool without weakening delete-snapshot→convert ordering |
-| `test_nakon_stages.py` | Three-stage split safety: the golden identity ban on both golden paths (slot 0 and every satellite), the combined post-clone pin merge |
+| `test_nakon_stages.py` | Four-stage split safety (golden / pre-domain / final / last): the golden identity ban on both golden paths (slot 0 and every satellite), the combined post-clone pin merge, and account-file mode pins landing in the last pass |
 
 **Deploy robustness**
 

@@ -108,7 +108,7 @@ class CrossBoxIdentityVars(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             _write_machines(tmp, pins)
-            golden_p, predomain_p, final_p, _ = nakon_config_ops.generate_stage_configs(
+            golden_p, predomain_p, final_p, _, _ = nakon_config_ops.generate_stage_configs(
                 Path(tmp), TEAMS, BOXES)
             golden_configs = [c for cfgs in _stage_names(golden_p).values()
                               for c in cfgs]
@@ -146,7 +146,7 @@ class PostDomainStageRouting(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             _write_machines(tmp, pins)
-            golden_p, predomain_p, final_p, _ = nakon_config_ops.generate_stage_configs(
+            golden_p, predomain_p, final_p, _, _ = nakon_config_ops.generate_stage_configs(
                 Path(tmp), TEAMS, BOXES, unbooted={"mira"})
             self.assertNotIn("mira-golden", _stage_names(golden_p),
                              "the DC's golden stays generalized: no golden machine")

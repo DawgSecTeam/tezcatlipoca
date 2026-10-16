@@ -3,10 +3,12 @@
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 
 from common.constants import (
+    ACCOUNT_FILE_MODE_CONFIGS,
     DISRUPTIVE_CONFIGS,
     DOMAIN_INFRA_CONFIGS,
     FINAL_STAGE_CONFIGS,
@@ -35,6 +37,28 @@ from nakonops.nakon_pin_ops import (
     _drop_catalog_var_bare,
     catalog_required_var_names,
 )
+
+
+_ACCOUNT_FILE_PATH = re.compile(r"^/etc/(passwd|shadow|group|gshadow)$")
+
+
+def _late_mode_names(machines):
+# Names of pins whose planted effect is a MODE on an account file the deploy rewrites.
+#
+#     The curated ACCOUNT_FILE_MODE_CONFIGS covers the named configs, but the catalog also
+#     ships parameterized ones (loosen-file-mode takes FILE_PATH/FILE_MODE vars), and a pin
+#     asking for /etc/shadow rides an earlier pass and dies silently. Classify by the pin's
+#     own vars so that shape cannot slip through the name list.
+    names = set()
+    for m in machines:
+        for c in m["configurations"]:
+            name = _config_name(c)
+            if name in ACCOUNT_FILE_MODE_CONFIGS or (
+                    isinstance(c, dict)
+                    and any(isinstance(v, str) and _ACCOUNT_FILE_PATH.match(v)
+                            for v in (c.get("vars") or {}).values())):
+                names.add(name)
+    return names
 
 
 def os_to_platform(template):
@@ -200,8 +224,10 @@ def _golden_stage_machines(full, unbooted, anchor_identifier, box_index_by_name)
             continue
         seen_types.add(box_name)
         box_idx = box_index_by_name[box_name]
+        late = _late_mode_names([m])
         golden_kept = [c for c in m["configurations"]
                        if (c if isinstance(c, str) else c["name"]) not in POST_CLONE_CONFIGS
+                       and _config_name(c) not in late
                        and not is_domain_dependent(
                            c if isinstance(c, str) else c["name"])]
         banned = sorted({(c if isinstance(c, str) else c["name"]) for c in golden_kept}
@@ -238,7 +264,7 @@ def generate_slot_golden_config(comp_dir, boxes, unbooted, anchor_identifier, sl
 
 
 def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
-# Split the full nakon config into golden / pre-domain / final stage configs (M3.2).
+# Split the full nakon config into golden / pre-domain / final / last stage configs (M3.2).
 #
 #     nakon-config.json (all teams, full configuration lists) stays the source of truth.
 #     The golden stage takes ONE machine per box type — team1's copy of the full list minus
@@ -246,11 +272,12 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
 #     set exists so linked clones inherit the heavy work (package installs, services,
 #     non-disruptive misconfigs) as bytes on disk. The pre-domain stage (phase 6, before
 #     domains) and the final stage (phase 7, after domains — see constants for why the
-#     split matters) carry every team machine with their own subsets; machines with an
-#     empty subset for a stage are dropped from that stage's file. A combined post-clone
-#     view (pre-domain ∪ final) is also written for redeploy's convergence sweeps. Returns
-#     (golden_path, predomain_path, final_path, postclone_path); all 0600 and gitignored
-#     (per-run-secret class — they carry box_password).
+#     split matters) carry every team machine with their own subsets; the last stage holds
+#     the account-file mode pins and runs after the deploy's final account writer. Machines
+#     with an empty subset for a stage are dropped from that stage's file. A combined
+#     post-clone view (pre-domain ∪ final ∪ last) is also written for redeploy's
+#     convergence sweeps. Returns (golden_path, predomain_path, final_path, postclone_path,
+#     late_path); all 0600 and gitignored (per-run-secret class — they carry box_password).
 #
 #     unbooted: box types whose golden stays generalized (domain controllers — see
 #     golden_ops' identity note). They get no golden machine; everything that would have
@@ -277,6 +304,8 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
     domain_dependent = {config_name(c) for m in full for c in m["configurations"]
                         if is_domain_dependent(config_name(c))}
     post_clone = POST_CLONE_CONFIGS | domain_dependent
+    # Account-file mode pins, by name or by their own FILE_PATH var (see _late_mode_names).
+    late_names = _late_mode_names(full)
 
     def stage_machines(want, include_golden_stage=False):
         out = []
@@ -285,7 +314,7 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
             kept = []
             for c in m["configurations"]:
                 name = config_name(c)
-                golden_stage = name not in post_clone
+                golden_stage = name not in post_clone and name not in late_names
                 if name not in want and not (include_golden_stage and cold and golden_stage):
                     continue
                 required = REQUIRED_VARS.get(name) or {}
@@ -309,11 +338,12 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
 
     predomain_machines = stage_machines(PREDOMAIN_STAGE_CONFIGS, include_golden_stage=True)
     final_machines = stage_machines(FINAL_STAGE_CONFIGS | domain_dependent)
-    # Merge pre-domain ∪ final per machine, deduping on the pin's full identity
+    late_machines = stage_machines(late_names)
+    # Merge pre-domain ∪ final ∪ last per machine, deduping on the pin's full identity
     # (_pin_key: name + vars) rather than its name alone — a name-only collapse drops
     # packet-promised same-named decoy accounts (audit-found 2026-10-02).
     combined = {}
-    for m in predomain_machines + final_machines:
+    for m in predomain_machines + final_machines + late_machines:
         entry = combined.setdefault(m["name"], {**m, "configurations": []})
         seen = {_pin_key(c) for c in entry["configurations"]}
         for c in m["configurations"]:
@@ -328,7 +358,8 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
     for suffix, machines in ((".nakon-golden.json", golden_machines),
                              (".nakon-predomain.json", predomain_machines),
                              (".nakon-final.json", final_machines),
-                             (".nakon-postclone.json", postclone_machines)):
+                             (".nakon-postclone.json", postclone_machines),
+                             (".nakon-late.json", late_machines)):
         path = comp_dir / suffix
         path.write_text(json.dumps({"machines": machines}, indent=2))
         os.chmod(path, 0o600)

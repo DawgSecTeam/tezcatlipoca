@@ -119,6 +119,27 @@ def phase7_domains_and_final(ctx):
             with timed(ctx.comp_dir, 7, "assume_breach"):
                 plant_assume_breach(ctx)
 
+    # Account-file MODES last, after every account writer this deploy has: fix_services'
+    # credlist useradd (phase 6) and the assume-breach seed's persistence user (above).
+    # shadow-utils' useradd recreates /etc/passwd, /etc/shadow and /etc/group at their
+    # default modes, so a mode planted in any earlier pass is already gone when verify
+    # probes it. Before the trail wipe, so this pass's own SSH leaves no trace.
+    late_machines = json.loads(ctx.late_config_path.read_text())["machines"]
+    if late_machines:
+        print(f"  Account-file mode pass on {len(late_machines)} machine(s) "
+              f"(after the last account writer)...")
+        late_bundle = build_nakon_bundle(ctx.late_config_path)
+        with timed(ctx.comp_dir, 7, "nakon", f"late x{len(late_machines)}"):
+            result = run_nakon(ctx.ssh_key, ctx.scoring_user, ctx.scoring_ip, late_bundle,
+                               ctx.late_config_path,
+                               timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(late_machines)),
+                               strict=False, jobs=ctx.nakon_jobs)
+        merged = list(ctx.state.get("nakon_failed_steps") or [])
+        merged += [f"late: {line}" for line in result.failed[:20]]
+        seen = set()
+        ctx.state["nakon_failed_steps"] = [x for x in merged if not (x in seen or seen.add(x))][:40]
+        record_stage_coverage(ctx.state, late_machines, result, ctx.save_state)
+
     # Trails first, snapshot second: the wipe has to be inside the restore point,
     # or a rollback to tz-ready hands blue every deploy log back.
     try:

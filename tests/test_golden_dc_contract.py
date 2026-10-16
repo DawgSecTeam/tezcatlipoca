@@ -49,7 +49,7 @@ class GenerateStageConfigsTests(unittest.TestCase):
             ]
             (comp_dir / "nakon-config.json").write_text(
                 json.dumps({"machines": machines}))
-            golden_p, predomain_p, final_p, _ = nakon_config_ops.generate_stage_configs(
+            golden_p, predomain_p, final_p, _, _ = nakon_config_ops.generate_stage_configs(
                 comp_dir, TEAMS, BOXES, unbooted={"dc01"})
             golden = json.loads(golden_p.read_text())["machines"]
             predomain = json.loads(predomain_p.read_text())["machines"]

@@ -37,7 +37,8 @@ def _ctx(comp, **kw):
         state={}, save_state=MagicMock(), nakon_jobs=2, tf_ctx={}, ssh_key=Path("k"),
         scoring_user="sysadmin", scoring_ip="10.0.0.9", box_password="bp", box_username="u",
         box_creds={"a": "b"}, linux_targets=[], windows_targets=[], nakon_config_path=Path("n"),
-        final_config_path=comp / "final.json", name="N", scenario="S", admin_password="ap",
+        final_config_path=comp / "final.json", late_config_path=comp / "late.json",
+        name="N", scenario="S", admin_password="ap",
         scoring_password="sp", inject_password="ip", injects=[1, 2], domain_creds=None,
         packet_pw=None, comp_tags={"tezcatlipoca"}, ssh_key_abs="k", engine_mgmt_ip="10.0.0.250")
     base.update(kw)
@@ -55,8 +56,9 @@ class Tail(unittest.TestCase):
         out.__enter__()
         self.addCleanup(out.__exit__, None, None, None)
 
-    def _p7(self, machines, **kw):
+    def _p7(self, machines, late=(), **kw):
         (self.comp / "final.json").write_text(json.dumps({"machines": machines}))
+        (self.comp / "late.json").write_text(json.dumps({"machines": list(late)}))
         ctx = _ctx(self.comp, **kw)
         mocks = {}
         with patch.object(final, "deploy_domain_configs") as mocks["domains"], \
@@ -82,6 +84,7 @@ class Tail(unittest.TestCase):
 
     def test_phase7_merges_prior_failures_without_duplicates(self):
         (self.comp / "final.json").write_text(json.dumps({"machines": [{"n": 1}]}))
+        (self.comp / "late.json").write_text('{"machines": []}')
         ctx = _ctx(self.comp, state={"nakon_failed_steps": ["predomain: a", "final: x: boom"]})
         with patch.object(final, "deploy_domain_configs"), \
                 patch.object(final, "build_nakon_bundle"), \
@@ -91,6 +94,16 @@ class Tail(unittest.TestCase):
                 patch.object(final, "record_stage_coverage"):
             final.phase7_domains_and_final(ctx)
         self.assertEqual(ctx.state["nakon_failed_steps"], ["predomain: a", "final: x: boom"])
+
+    def test_phase7_plants_account_file_modes_after_the_seed(self):
+        # The last pass must be the phase's LAST nakon call: fix_services (phase 6) and the
+        # assume-breach seed both useradd, which recreates the account files at their
+        # default modes and discards a mode planted any earlier.
+        ctx, m = self._p7([{"name": "web01-team101"}], late=[{"name": "web01-team101"}])
+        self.assertEqual(m["nakon"].call_count, 2)
+        self.assertEqual(m["cov"].call_count, 2)
+        self.assertEqual(m["nakon"].call_args_list[1].args[4], ctx.late_config_path)
+        self.assertIn("late: x: boom", ctx.state["nakon_failed_steps"])
 
     def test_phase7_empty_final_stage_records_clean_coverage(self):
         ctx, m = self._p7([])

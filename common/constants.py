@@ -44,7 +44,7 @@ DISRUPTIVE_CONFIGS = {"resolv-conf-null-dns", "apt-sources-empty", "apt-hold-all
 # golden-stage machine list would run dcpromo without those vars.
 DOMAIN_INFRA_CONFIGS = {"ADDS", "Domain Join", "domain-join"}
 
-# M3.2 stage split, in THREE passes (see generate_stage_configs):
+# M3.2 stage split, in FOUR passes (see generate_stage_configs):
 #
 #   golden   — everything identity-free and non-disruptive/non-boot-hostile: planted once
 #              on the golden set, rides the linked clone.
@@ -60,6 +60,9 @@ DOMAIN_INFRA_CONFIGS = {"ADDS", "Domain Join", "domain-join"}
 #              (plausibly the long-documented "Linux member joins blow their timeouts"
 #              flakiness). This is the
 #              as-started competition flavor, so it lands right before beacons/tz-ready.
+#   last     — account-file MODES, planted after the last account writer of the deploy
+#              (bad-auto's assume-breach seed) and before the trail wipe; see
+#              ACCOUNT_FILE_MODE_CONFIGS for why no earlier pass can hold them.
 #
 # Within each pass, DISRUPTIVE_CONFIGS still sort last per machine.
 PREDOMAIN_STAGE_CONFIGS = {
@@ -67,14 +70,6 @@ PREDOMAIN_STAGE_CONFIGS = {
     "ssh-root-login", "ssh-x11-forwarding", "sshd-config-weak",
     "sshd-force-sftp-broken-chroot", "ssh-backdoor-listener-2222",
     "writable-sudoers",
-    # A clone's first boot rewrites the files this config modes: PVE hands every team box
-    # a ciuser+cipassword, so cloud-init's chpasswd recreates /etc/shadow (and /etc/passwd)
-    # at their standard modes. A golden-disk plant of `chmod 666` therefore cannot reach a
-    # clone. Live 2026-10-15: bad-perms-userConfig read ABSENT on every team clone while
-    # writable-sudoers — a DIRECTORY mode the boot does not recreate, pre-domain for its own
-    # reasons — was present on all of them, and plant_coverage still PASSed because the
-    # golden plant genuinely applied.
-    "bad-perms-userConfig",
     # Cross-box identity (amongus-cde-2026): airship-webapp writes the app's SQL
     # config with DB_HOST = its team's polus address (REQUIRED_VARS "ip:polus"), so
     # it must plant per machine post-clone — apache itself rides the golden disk.
@@ -126,8 +121,28 @@ def is_domain_dependent(name):
             or name in DOMAIN_DEPENDENT_CONFIGS)
 
 
+# Account-file MODES plant in the deploy's LAST pass, not the golden or post-clone passes.
+#
+#     shadow-utils' commonio (useradd/groupadd/usermod) recreates /etc/passwd, /etc/shadow
+#     and /etc/group at their default modes, discarding a planted mode; chpasswd alone
+#     preserves it (probed 2026-10-16 in the Debian 13 and Ubuntu 24.04 base images:
+#     666 -> 664 on useradd, unchanged on chpasswd). Two account writers run after the
+#     pre-domain and final passes — `guests.service_fixup_ops.fix_services_on_boxes`
+#     (a credlist `useradd` for every team box, end of phase 6) and bad-auto's assume-breach
+#     seed (its depth-3 persistence `user` method, phase 7). Live 2026-10-15:
+#     bad-perms-userConfig read ABSENT on every team clone while writable-sudoers — a
+#     DIRECTORY mode neither writer touches — was present on all of them, and
+#     plant_coverage PASSed because the earlier plant genuinely applied.
+#     nakon_config_ops stages these after the seed and before the trail wipe.
+ACCOUNT_FILE_MODE_CONFIGS = {
+    "bad-perms-userConfig",     # chmod 666 /etc/passwd /etc/shadow /etc/crontab
+    "passwd-world-readable",    # chmod 666 /etc/passwd
+    "writable-etc-group",       # chmod 666 /etc/group
+}
+
 # Combined view: what a convergence sweep (redeploy rollback-base/rebuild) must plant.
-POST_CLONE_CONFIGS = PREDOMAIN_STAGE_CONFIGS | FINAL_STAGE_CONFIGS
+POST_CLONE_CONFIGS = (PREDOMAIN_STAGE_CONFIGS | FINAL_STAGE_CONFIGS
+                      | ACCOUNT_FILE_MODE_CONFIGS)
 
 # Pin-var requirements (M4 pin fix). The catalog DB carries no required-vars metadata
 # (only depends_on), so this curated table is the operator-level source of truth:

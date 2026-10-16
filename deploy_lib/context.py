@@ -97,6 +97,7 @@ class DeployContext:
     golden_config_path: Optional[Path] = None
     predomain_config_path: Optional[Path] = None
     final_config_path: Optional[Path] = None
+    late_config_path: Optional[Path] = None
     golden_inputs: dict = field(default_factory=dict)
     golden_hashes: dict = field(default_factory=dict)
     ssh_key_abs: str = ""

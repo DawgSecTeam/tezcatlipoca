@@ -27,7 +27,8 @@ def generate_stage_configs_and_hashes(ctx, comp_dir):
     # Domain controllers keep an unbooted golden so each team's forest specializes its
     # own machine SID before promotion; their configs move to the pre-domain stage.
     ctx.unbooted = unbooted_golden_boxes(comp_dir)
-    ctx.golden_config_path, ctx.predomain_config_path, ctx.final_config_path, _postclone_path = generate_stage_configs(
+    (ctx.golden_config_path, ctx.predomain_config_path, ctx.final_config_path,
+     _postclone_path, ctx.late_config_path) = generate_stage_configs(
         comp_dir, ctx.teams, ctx.boxes, unbooted=ctx.unbooted)
 
     # M4: template hashes are computed BEFORE phase 1 — phase 4's rebuild gate and the
