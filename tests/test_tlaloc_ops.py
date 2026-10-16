@@ -206,10 +206,77 @@ class PlantTests(unittest.TestCase):
         with mock.patch.object(to, "record_degradation",
                                side_effect=lambda *a, **k: self.degradations.append(a)):
             out = to.plant_assume_breach(self.ctx, provision=Completed(0),
-                                         runner=runner)
+                                         runner=runner, mythic=False)
         self.assertFalse(out["ok"])
         self.assertTrue(any(d[0] == "tlaloc_stage" for d in self.degradations),
                         self.degradations)
+
+    def test_the_mythic_step_runs_before_c2_prep_and_lands_its_keys(self):
+        """Gaia installs/configures the C2, and the callback address the frozen
+        payloads dial reaches the agent's config + the 0600 env file."""
+        import json as _json
+        comp = compfile(Path(self.tmp.name) / "c2comp",
+                        "red.engine tlaloc\nfirewall_dnat 4470->10.0.0.198\n")
+        (comp / "teams.json").write_text(_json.dumps(
+            {"team-1": {"identifier": 2, "name": "Blue1"}}))
+        gaia = Path(self.tmp.name) / "gaia"
+        gaia.mkdir()
+        (gaia / "gaia.py").write_text("")
+        calls = []
+
+        def mythic_runner(argv, **kwargs):
+            argv = [str(a) for a in argv]
+            calls.append(argv)
+            if argv[1].endswith("gaia.py"):
+                if argv[2] == "install":
+                    (gaia / "mythic_admin_creds.txt").write_text("mythic_admin:pw\n")
+                if argv[2] == "user":
+                    return Completed(0, "tlaloc:agent-pw\n")
+                if argv[2] == "auth":
+                    (gaia / ".env").write_text('MYTHIC_API_KEY="k"\n')
+                return Completed(0, "ok")
+            return Completed(0, "")          # the ssh pushes
+
+        runner = mythic_runner
+        with mock.patch.dict("os.environ", {"TEZ_GAIA_PATH": str(gaia)}), \
+                mock.patch.object(to, "record_degradation",
+                                  side_effect=lambda *a, **k: self.degradations.append(a)):
+            out = to.plant_assume_breach(FakeCtx(comp), provision=Completed(0),
+                                         runner=runner, red_ip="10.0.0.198",
+                                         mythic_runner=runner)
+        gaia_calls = [c for c in calls if len(c) > 2 and c[1].endswith("gaia.py")]
+        self.assertTrue(any(c[2] == "install" for c in gaia_calls), gaia_calls)
+        self.assertTrue(any(c[2] == "operation" for c in gaia_calls), gaia_calls)
+        # the order that matters: Mythic is up before the payload matrix is built
+        install_idx = max(i for i, c in enumerate(calls)
+                          if len(c) > 2 and c[2] == "install")
+        prep_idx = [i for i, c in enumerate(calls) if "c2-prep" in " ".join(c)]
+        self.assertTrue(prep_idx, "c2-prep must run (it builds the payload matrix)")
+        self.assertLess(install_idx, prep_idx[0])
+        rendered = (comp / ".tlaloc-config.yaml").read_text()
+        self.assertIn("base_url: https://10.0.0.198:7443", rendered)
+        self.assertIn("callback_host: http://172.31.2.1", rendered)
+        self.assertIn("callback_port: 4470", rendered)
+        self.assertIn("password_env: TLALOC_MYTHIC_PASSWORD", rendered)
+        self.assertNotIn("agent-pw", rendered)      # the secret is not in config
+        self.assertTrue(any("/etc/tlaloc/c2.env" in " ".join(c) for c in calls),
+                        "the env file must be pushed for the unit to read")
+        self.assertTrue(out["ok"])
+
+    def test_the_mythic_step_can_be_opted_out_per_competition(self):
+        comp = compfile(Path(self.tmp.name) / "noc2", "red.engine tlaloc\nred.c2 off\n")
+        calls = []
+
+        def mythic_runner(argv, **kwargs):
+            calls.append(argv)
+            return Completed(0, "")
+
+        with mock.patch.object(to, "record_degradation",
+                               side_effect=lambda *a, **k: self.degradations.append(a)):
+            to.plant_assume_breach(FakeCtx(comp), provision=Completed(0),
+                                   runner=lambda cmd, **kw: Completed(0, ""),
+                                   red_ip="10.0.0.198", mythic_runner=mythic_runner)
+        self.assertEqual(calls, [], "red.c2 off must not run the Gaia step")
 
     def test_contract_missing_fields_are_reported_not_ignored(self):
         """A field the deploy MEANT to set that the pushed file does not carry is

@@ -435,7 +435,7 @@ def _missing(cfg, dotted):
 
 
 def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
-                        provision=None):
+                        provision=None, mythic=None, mythic_runner=None):
     """[7/8] Deploy red01 (v1 provisioning) and seed tlaloc's assume-breach presence.
 
     Warn-and-continue: every failure is a degradation, never an aborted deploy.
@@ -501,9 +501,40 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
         from red import red_plant_ops
         red_ip = red_plant_ops.red_ip_for(comp_dir)
 
+    # 1.5 Mythic: install + configure this competition's C2 (Gaia) BEFORE
+    #     c2-prep, which builds the payload matrix through its REST API. The
+    #     callback address the frozen payloads dial comes from the Compfile
+    #     (`firewall_dnat`) + the team transit IP: a payload built without it
+    #     inherits Mythic's install default (loopback) and the channel can never
+    #     check in, which is invisible until the event is running.
+    from red import gaia_ops
+    mythic_result = None
+    if mythic is None:
+        mythic = gaia_ops.mythic_enabled(comp_dir)
+    if mythic:
+        plan = gaia_ops.c2_plan(comp_dir, red_ip=red_ip,
+                                comp_id=getattr(ctx, "comp_id", None))
+        if not plan["callback_port"]:
+            record_degradation(
+                "mythic_callback",
+                "no `firewall_dnat <port>-><ip>` in the Compfile: the callback "
+                "port is unknown, so the frozen payloads have no address they "
+                "can reach")
+            print("  mythic      : WARNING — no firewall_dnat in the Compfile; the "
+                  "payloads will be built without a reachable callback port")
+        mythic_result = gaia_ops.prepare_mythic(
+            comp_dir, box_ip=plan["box"], ssh_user=RED_USER, ssh_key=ssh_key,
+            # an injected runner keeps a test (and a dry deploy) off the network
+            runner=mythic_runner or runner, operation=plan["operation"],
+            callback_host=plan["callback_host"],
+            callback_port=plan["callback_port"])
+        gaia_ops.degrade(mythic_result, "step")
+        if mythic_result.get("c2"):
+            gaia_ops.apply_c2_to_config(cfg_path, mythic_result["c2"])
+
     # 2. comp-prep: build + freeze the payload matrix while Mythic is idle.
-    prep = _default_runner(comp_prep_command(comp_dir), cwd=str(TLALOC_REPO),
-                           timeout=1800)
+    prep = (runner or _default_runner)(comp_prep_command(comp_dir),
+                                       cwd=str(TLALOC_REPO), timeout=1800)
     if getattr(prep, "returncode", 1) != 0:
         record_degradation("tlaloc_c2_prep", _tail(prep))
         print("  tlaloc: c2-prep FAILED — the channel stage will skip "
@@ -519,6 +550,15 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
     if not pushed.get("ok"):
         record_degradation("tlaloc_config_push", pushed.get("detail", ""))
         return {"ok": False, "reason": "config push failed"}
+    if mythic_result and mythic_result.get("env"):
+        # The Mythic password rides a 0600 root-owned env file the unit reads,
+        # never the pushed config (whose diff the organizer sees).
+        env_push = gaia_ops.push_env(ssh_key, red_ip, mythic_result["env"],
+                                    runner=runner)
+        if not env_push.get("ok"):
+            record_degradation("tlaloc_c2_env", env_push.get("detail", ""))
+            print("  tlaloc: pushing the C2 env file FAILED — the agent has no "
+                  "Mythic password on red01 (see degradations)")
     contract = verify_config_contract(ssh_key, red_ip, intended=cfg_path,
                                       runner=runner)
     if not contract.get("ok"):

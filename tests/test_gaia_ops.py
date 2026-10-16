@@ -1,0 +1,209 @@
+"""gaia_ops — the Mythic install/configure step (engine side, no live C2).
+
+Every subprocess is injected, so these prove the command shapes against Gaia's
+real argparse, the credential handoff (admin password, agent password, API key),
+the callback address the payloads will dial, and the degrade-and-continue
+contract — the parts that go wrong silently on a real deploy.
+"""
+
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from red import gaia_ops as g  # noqa: E402
+
+
+class Completed:
+    def __init__(self, returncode=0, out="", err=""):
+        self.returncode, self.stdout, self.stderr = returncode, out, err
+
+
+def comp_dir(tmp, extra=""):
+    path = Path(tmp)
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "Compfile").write_text("name testcomp\nteams 2\n" + extra)
+    (path / "teams.json").write_text('{"team-1": {"identifier": 2}}')
+    return path
+
+
+class Runner:
+    """Records argv, answers from a script, and can write Gaia's handoffs."""
+
+    def __init__(self, gaia, fail_on=None, creds="mythic_admin:s3cret-pw\n"):
+        self.gaia, self.fail_on, self.creds = Path(gaia), fail_on, creds
+        self.calls = []
+
+    def __call__(self, argv, **kwargs):
+        argv = [str(a) for a in argv]
+        self.calls.append({"argv": argv, "kwargs": kwargs})
+        sub = argv[2] if argv and argv[1].endswith("gaia.py") else argv[0]
+        if self.fail_on and self.fail_on in argv:
+            return Completed(1, "", f"boom {self.fail_on}")
+        if sub == "install":
+            (self.gaia / "mythic_admin_creds.txt").write_text(self.creds)
+        if sub == "user":
+            return Completed(0, "tlaloc:a-gent-pw\n")
+        if sub == "auth":
+            (self.gaia / ".env").write_text(
+                'MYTHIC_API_KEY="api-key-123"\nMYTHIC_LOGIN_SERVER_PORT=7443\n')
+        return Completed(0, "ok")
+
+    def has(self, needle):
+        return any(needle in " ".join(c["argv"]) for c in self.calls)
+
+
+class CommandShapeTest(unittest.TestCase):
+    def test_install_command_matches_gaia_argparse(self):
+        argv = g.install_argv("/tmp/gaia", "10.0.0.198", "sysadmin", key="k.pem")
+        assert argv[1].endswith("gaia.py")
+        assert argv[2:] == ["install", "-S", "10.0.0.198", "-u", "sysadmin",
+                            "-P", "22", "-i", "k.pem", "--install-updates",
+                            "--install-deps", "--install-mythic"]
+
+    def test_auth_uses_the_prompt_flag_and_the_default_web_port(self):
+        argv = g.auth_argv("/tmp/gaia", "10.0.0.198")
+        assert argv[2:] == ["auth", "-S", "10.0.0.198", "-P", "7443",
+                            "-u", "mythic_admin", "-p", "-k"]
+
+    def test_user_and_operation_commands(self):
+        assert g.user_argv("/g", ["tlaloc"])[2:] == ["user", "create", "-u",
+                                                     "tlaloc", "--cred-stdout"]
+        assert g.operation_argv("/g", "scrim-one")[2:] == ["operation", "create",
+                                                           "-n", "scrim-one"]
+
+    def test_clone_is_depth_one_at_the_pinned_ref(self):
+        argv = g.clone_argv("/tmp/gaia2")
+        assert argv[:6] == ["git", "clone", "--depth", "1", "--branch", "main"]
+        assert argv[-2] == g.GAIA_REPO and argv[-1] == "/tmp/gaia2"
+
+
+class HandoffTest(unittest.TestCase):
+    def test_admin_password_and_env_key_parsing(self):
+        assert g.parse_admin_password("mythic_admin:hunter2\n") == "hunter2"
+        assert g.parse_admin_password("nonsense") is None
+        assert g.parse_env_value('MYTHIC_API_KEY="abc"\n', "MYTHIC_API_KEY") == "abc"
+        assert g.parse_env_value("OTHER=1\n", "MYTHIC_API_KEY") is None
+
+    def test_env_file_body_carries_the_secret_and_nothing_else_does(self):
+        body = g.env_file_body("pw-1", host="10.0.0.198")
+        assert f"{g.PASSWORD_ENV}=pw-1" in body and "MYTHIC_HOST=10.0.0.198" in body
+        block = g.tlaloc_c2_block("/tmp", server="10.0.0.198", operation="c",
+                                  callback_host="http://172.31.2.1", callback_port=4470)
+        assert "pw-1" not in repr(block)
+        assert block["password_env"] == g.PASSWORD_ENV and block["enabled"] is True
+
+    def test_ensure_checkout_clones_only_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gaia"
+            path.mkdir()
+            (path / "gaia.py").write_text("")
+            runner = Runner(path)
+            ok, detail = g.ensure_checkout(path, runner=runner)
+            assert ok and detail == "present" and runner.calls == []
+            missing = Path(tmp) / "gaia2"
+            ok, detail = g.ensure_checkout(missing, runner=runner)
+            assert ok is False and "no gaia.py" in detail      # the fake never clones
+            assert runner.has("git clone")
+
+
+class CallbackAddressTest(unittest.TestCase):
+    def test_port_comes_from_the_compfile_firewall_dnat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = comp_dir(tmp, "firewall_dnat 4470->10.0.0.198\n")
+            assert g.callback_port_for(comp) == 4470
+            assert g.callback_port_for(comp_dir(tmp + "empty")) is None
+
+    def test_box_defaults_to_red01_and_can_be_declared(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = comp_dir(tmp)
+            assert g.c2_box_for(comp, default_ip="10.0.0.198") == "10.0.0.198"
+            comp2 = comp_dir(tmp + "b", "red.c2_ip 10.0.0.240\n")
+            assert g.c2_box_for(comp2, default_ip="10.0.0.198") == "10.0.0.240"
+
+    def test_callback_address_reaches_the_agent_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = comp_dir(tmp, "firewall_dnat 4470->10.0.0.198\n")
+            from red import realm_c2_ops
+            host = realm_c2_ops.callback_ip_for(comp)
+            port = g.callback_port_for(comp)
+            assert host == "172.31.2.1" and port == 4470
+            block = g.tlaloc_c2_block(comp, server="10.0.0.198", operation="comp",
+                                      callback_host=host, callback_port=port)
+            assert block["callback_host"] == "http://172.31.2.1"
+            assert block["callback_port"] == 4470
+
+    def test_callback_url_normalisation(self):
+        assert g.callback_url("172.31.2.1") == "http://172.31.2.1"
+        assert g.callback_url("https://172.31.2.1:9000") == "https://172.31.2.1"
+        assert g.callback_url("") is None
+
+
+class PrepareTest(unittest.TestCase):
+    def _prepared(self, tmp, **kw):
+        comp = comp_dir(tmp, "firewall_dnat 4470->10.0.0.198\n")
+        gaia = Path(tmp) / "gaia"
+        gaia.mkdir()
+        (gaia / "gaia.py").write_text("")
+        runner = Runner(gaia, **kw)
+        result = g.prepare_mythic(comp, box_ip="10.0.0.198", ssh_user="sysadmin",
+                                  ssh_key="/keys/deploy", runner=runner, gaia=gaia,
+                                  callback_host="http://172.31.2.1",
+                                  callback_port=4470, log=None)
+        return result, runner
+
+    def test_happy_path_installs_configures_and_hands_the_agent_its_creds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, runner = self._prepared(tmp)
+            assert result["ok"] is True, result["degradations"]
+            assert result["reached"] == ["install", "user", "auth", "operation"]
+            assert result["api_key"] == "api-key-123"
+            assert result["c2"]["base_url"] == "https://10.0.0.198:7443"
+            assert result["c2"]["operation"] == Path(tmp).name
+            # the agent's OWN password travels, not the admin's
+            assert f"{g.PASSWORD_ENV}=a-gent-pw" in result["env"]
+            assert "s3cret-pw" not in result["env"]
+
+    def test_every_gaia_command_runs_with_the_checkout_as_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, runner = self._prepared(tmp)
+            gaia = str(Path(tmp) / "gaia")
+            gaia_calls = [c for c in runner.calls if c["argv"][1].endswith("gaia.py")]
+            assert len(gaia_calls) >= 4
+            for call in gaia_calls:
+                assert call["kwargs"].get("cwd") == gaia, call["argv"]
+
+    def test_the_admin_password_is_fed_to_auth_on_stdin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, runner = self._prepared(tmp)
+            auth = [c for c in runner.calls if "auth" in c["argv"]][0]
+            assert auth["kwargs"].get("input") == "s3cret-pw\n"
+
+    def test_a_failed_install_degrades_and_stops_before_configuring(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, runner = self._prepared(tmp, fail_on="install")
+            assert result["ok"] is False
+            assert result["reached"] == ["install"]
+            assert result["degradations"] and "boom install" in result["degradations"][0]
+            assert not runner.has("operation")
+            assert result["c2"] is None and result["env"] is None
+
+    def test_install_timeout_is_generous(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, runner = self._prepared(tmp)
+            install = [c for c in runner.calls if "install" in c["argv"]][0]
+            assert install["kwargs"]["timeout"] >= 3600
+
+    def test_no_box_is_a_degradation_not_a_crash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = comp_dir(tmp)
+            result = g.prepare_mythic(comp, box_ip=None, ssh_user="sysadmin",
+                                      ssh_key="/k", runner=Runner(tmp), log=None)
+            assert result["ok"] is False and "no C2 box" in result["degradations"][0]
+
+
+if __name__ == "__main__":
+    unittest.main()
