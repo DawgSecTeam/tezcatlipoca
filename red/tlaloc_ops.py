@@ -358,10 +358,14 @@ def stage_red01(ssh_key, red_ip, comp_dir, *, runner=None, timeout=600):
     remote = (f"sudo -n mkdir -p {INSTALL_DIR} {INTEL_DIR} {STATE_DIR} && "
               f"sudo -n tee /tmp/tlaloc-stage.tgz >/dev/null && "
               f"sudo -n tar -xzf /tmp/tlaloc-stage.tgz -C {INSTALL_DIR}")
+    # text=False: this pushes a BINARY tar stream on stdin. The default runner is
+    # text=True (every other call here carries a string), and feeding it bytes is
+    # an AttributeError at the call, not a failed transfer (smoke run-4b9ff805:
+    # 'bytes' object has no attribute 'encode' aborted phase 7).
     proc = runner(["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
                    "-o", "UserKnownHostsFile=/dev/null",
                    f"{RED_USER}@{red_ip}", remote],
-                  input=tar.stdout, timeout=timeout)
+                  input=tar.stdout, text=False, timeout=timeout)
     if proc.returncode != 0:
         return {"ok": False, "reason": _tail(proc)}
     for name in ("teams.json", "boxes.json", "users.json", "box_services.json",
@@ -371,13 +375,13 @@ def stage_red01(ssh_key, red_ip, comp_dir, *, runner=None, timeout=600):
         if not source.exists():
             continue
         remote_put = (f"sudo -n tee {INTEL_DIR}/{name} >/dev/null")
-        with open(source, "rb") as fh:
-            put = runner(["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
-                          "-o", "UserKnownHostsFile=/dev/null",
-                          f"{RED_USER}@{red_ip}", remote_put],
-                         input=fh.read(), timeout=timeout)
-        if put.returncode != 0:
-            return {"ok": False, "reason": f"pushing {name}: {_tail(put)}"}
+        # bytes on stdin here too (intel files are read binary-safe)
+        proc = runner(["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
+                       "-o", "UserKnownHostsFile=/dev/null",
+                       f"{RED_USER}@{red_ip}", remote_put],
+                      input=source.read_bytes(), text=False, timeout=timeout)
+        if proc.returncode != 0:
+            return {"ok": False, "reason": f"pushing {name}: {_tail(proc)}"}
     return {"ok": True}
 
 

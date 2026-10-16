@@ -209,13 +209,19 @@ def env_file_body(password, host=None, port=MYTHIC_WEB_PORT, user=AGENT_USER):
 # --------------------------------------------------------------------------- #
 
 def callback_port_for(comp_dir, default=None):
-    """The gateway port the Compfile's `firewall_dnat` maps to the C2 box.
+    """The gateway port the callback is DNAT'd on.
 
-    `firewall_dnat 4470->10.0.0.198` means the team gateways expose 4470 and the
-    range DNATs it to the C2 box on the SAME port — so the payload's callback
-    port and the profile's listening port are both this number.
+    `red.c2_callback_port` wins when set (the port the Mythic http profile
+    actually listens on — the range's DNAT translates port-for-port, so the
+    gateway port and the profile's listening port must be the same number).
+    Otherwise the Compfile's `firewall_dnat` supplies it:
+    `firewall_dnat 4470->10.0.0.198` means the team gateways expose 4470.
     """
-    raw = compfile_value(Path(comp_dir) / "Compfile", "firewall_dnat", "") or ""
+    comp = Path(comp_dir) / "Compfile"
+    explicit = str(compfile_value(comp, "red.c2_callback_port", "") or "").strip()
+    if explicit.isdigit():
+        return int(explicit)
+    raw = compfile_value(comp, "firewall_dnat", "") or ""
     for spec in str(raw).split(","):
         spec = spec.strip()
         if "->" not in spec:
@@ -373,7 +379,7 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
     proc = runner(install_argv(path, box_ip, ssh_user, key=ssh_key),
                   cwd=cwd, timeout=INSTALL_TIMEOUT)
     result["reached"].append("install")
-    result["gaia_output"]["install"] = _tail(proc, 400)
+    result["gaia_output"]["install"] = _tail(proc, 2000)
     if getattr(proc, "returncode", 1) != 0:
         result["degradations"].append(f"gaia install: {_tail(proc)}")
         return result
