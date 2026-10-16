@@ -79,6 +79,11 @@ def run_late_pass(targets, rctx):
     ctx, comp_dir, state = rctx.ctx, rctx.comp_dir, rctx.state
     path = comp_dir / ".nakon-late.json"
     if not path.exists():
+        # A range deployed before the last pass existed has no late file; its mode pins
+        # were planted by whatever stage the old code chose. Say so rather than skip
+        # silently — the next verify is where an absent pin would surface.
+        print("  (.nakon-late.json is missing — no account-file mode pins to replay; "
+              "the range predates the last pass)")
         return
     staged = {m["name"] for m in json.loads(path.read_text())["machines"]}
     machines = [t["machine"] for t in targets if t["machine"] in staged]
