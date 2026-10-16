@@ -35,8 +35,12 @@ only for established, engine→its teams, teams→engine, and teams→internet.
 ## Routed red
 
 Under bad-auto's `routed` mode (default), red01 sits on its own segment (`deploy.red_subnet`,
-default `10.200.0.0/24`) with the engine holding that segment's gateway, forwarding red→teams
-with the source preserved so blue can see and firewall the attacker. That covers engine-node
+default `10.200.0.0/24`) on a **private per-run bridge** (`vmbrR<run hex>`, created by the deploy;
+the engine gets an extra NIC there holding that segment's gateway). Red's source is preserved
+so blue can see and firewall the attacker. The private bridge is what keeps the segment's fixed
+`.1`/`.10` addresses unique: on the shared management bridge a second concurrent range's engine
+would answer red01's ARP for the gateway and red's team traffic would go to an engine with no
+route to those subnets. That covers engine-node
 teams only — satellite teams are reachable only through the jump, whose FORWARD policy is DROP
 by default, so red's source matches no rule there.
 

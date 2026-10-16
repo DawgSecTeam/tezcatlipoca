@@ -138,7 +138,7 @@ Each rebooting step is its own single-machine nakon pass. A missing `domain_role
 
 Red identity is owned by `../bad-auto` (`badauto/deploy/engine_nat.py`, `deploy.red_mode`), installed as a `bad-auto-firewall` unit + 30 s timer:
 
-- **routed** (default): red01 holds a secondary address on a dedicated segment (default `10.200.0.0/24`, gateway `.1` added by `ip addr add` in the re-assert script, not netplan). Attacks keep the red source end-to-end; scoring still sources from the team gateway.
+- **routed** (default): red01 holds a segment address on a **private per-run bridge** (`vmbrR<run hex>`, created by the deploy; the engine gets an extra NIC there holding the gateway `.1`, red01 the `.10`). The private L2 is what keeps those two fixed addresses unique — on the shared management bridge every range's engine would claim `.1`. Attacks keep the red source end-to-end; scoring still sources from the team gateway.
 - **masq**: red01 is MASQUERADEd into the team gateways, indistinguishable from scoring.
 
 Both: `FORWARD ACCEPT red→192.168.0.0/16`, ESTABLISHED accept ahead of the DROP, `FORWARD DROP` toward red. Beacon C2 is a DNAT from the team gateway to red01. `verify-competition.py --red-identity` proves the routed source survives.

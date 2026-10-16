@@ -54,7 +54,8 @@ the pytest run above rather than this table.
 | `test_estate_state.py` | The monolithic document: schema version, resource record/forget/filter, checkpoints, the flat-dict round trip, `load_all` |
 | `test_estate_config.py` | The config object: file/env/override precedence, canonical `TEZ_` env-name derivation (`knobs.` prefix dropped), `require`/`is_set`, per-node activation, SSH key resolution |
 | `test_estate_apply.py` | The create path against a fake API: bridge create, engine NIC order and cloud-init, per-box NIC/cloud-init rules (Windows and unmanaged skip it), adopt-ours/refuse-foreign, grow-only disk sizing |
-| `test_estate_engine_setup.py` | The engine's guest-side setup: netplan ens numbering, the sysctls, the persisted satellite-route unit, cold boot, readiness |
+| `test_estate_engine_setup.py` | The engine's guest-side setup: netplan ens numbering (including the private red-segment NIC), the sysctls, the persisted satellite-route unit, cold boot, readiness |
+| `test_red_bridge.py` | The private per-run red segment: the `vmbrR<run hex>` name, which Compfiles stage red, and the bad-auto `deploy.red_bridge`/`red_subnet`/`red_seg_ip` keys |
 | `test_estate_destroy.py` | Teardown tier order (clones before goldens — the base-volume constraint), a refusal that never aborts a tier, `full=False` keeping templates |
 
 **Range/config contracts**
