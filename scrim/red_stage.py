@@ -12,6 +12,7 @@ from scrim import red_link
 from scrim import red_tunnel
 from scrim import test_folder
 from scrim.core import log
+from multinode.placement_record import read_placement
 from red import badauto_config_ops
 from red import red_plant_ops
 from red import realm_c2_ops
@@ -142,18 +143,26 @@ def red_llm_config(args):
     return llm
 
 
-def _resolve_red_ip(args, comp):
-    """Fill a missing --red-ip from the comp's own reservation (Compfile `red01_ip`).
+def _resolve_red_ip(args, comp, placement):
+    """Fill a missing --red-ip from the range's own recorded reservation.
 
     Without it the rebuilt config carried `red_ip: None`, bad-auto fell back to its own
     default, and a re-stage MOVED red01 off the address the deploy recorded and the range
     was built around: run-a87e0d88 recorded 10.0.0.196, bad-auto re-pointed the VM to
     10.0.0.198, and every later reader of the recorded address looks at an empty slot
-    (live 2026-10-15). One resolver for all of them.
-    """
+    (live 2026-10-15). One resolver for all of them."""
     if getattr(args, "red_ip", None):
         return args.red_ip
-    args.red_ip = badauto_config_ops.red01_ip_for(comp)
+    ip = badauto_config_ops.red01_ip_for(comp, placement)
+    if not ip:
+        # A range that never deployed red01 (deploy with assume_breach off) has no recorded
+        # address: select one now, exactly as phase 7 would.
+        ip, _unchecked = red_plant_ops.select_red_ip_for(comp, placement)
+    if not ip:
+        raise RuntimeError(
+            "no provably free address in the red band — pass --red-ip with an address you "
+            "have checked yourself")
+    args.red_ip = ip
 
 
 def stage_red(args, comp, creds, run_dir):
@@ -165,8 +174,9 @@ def stage_red(args, comp, creds, run_dir):
     if tlaloc_ops.red_engine(comp) == "tlaloc":
         return stage_red_tlaloc(args, comp, creds, run_dir)
     llm = red_llm_config(args)
+    placement = read_placement(comp)
     _resolve_red_vmid(args, comp)   # before the cfg build: the config carries it
-    _resolve_red_ip(args, comp)
+    _resolve_red_ip(args, comp, placement)
     cfg = {
         "llm": llm,
         "intel": "nakon",

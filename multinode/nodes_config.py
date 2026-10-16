@@ -24,7 +24,7 @@ JUMP_VMID_OFFSET = 130
 # per node with jump_mgmt_ip in nodes.json.
 JUMP_MGMT_IP_BASE = "10.0.0.249"
 
-PLACEMENT_VERSION = 1
+PLACEMENT_VERSION = 2
 JUMP_RESERVE_MB = 512  # capacity reservation per satellite (tiny router VM)
 
 
@@ -39,6 +39,7 @@ class NodeRecord:
     engine_mgmt_ip: str = ""   # static engine mgmt IP when this node hosts the engine
     engine_mgmt_gw: str = ""
     jump_mgmt_ip: str = ""     # static jump mgmt IP when this node is a satellite
+    mgmt_bridge: str = ""      # this node's management bridge (default: the profile's, else vmbr0)
     ssh_host: str = ""         # for root SSH (template sync); defaults to endpoint host
     jump_template: str = ""    # name substring for the jump clone source (default "alpine")
     weight: float = 1.0
@@ -90,6 +91,7 @@ def load_nodes_config(path=None):
             engine_mgmt_ip=str(raw.get("engine_mgmt_ip") or ""),
             engine_mgmt_gw=str(raw.get("engine_mgmt_gw") or ""),
             jump_mgmt_ip=str(raw.get("jump_mgmt_ip") or ""),
+            mgmt_bridge=str(raw.get("mgmt_bridge") or ""),
             ssh_host=str(raw.get("ssh_host") or ""),
             jump_template=str(raw.get("jump_template") or ""),
             weight=float(raw.get("weight") or 1.0),

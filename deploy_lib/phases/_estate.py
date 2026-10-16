@@ -9,6 +9,7 @@ every deploy_lib module binding a name).
 from common.constants import DEFAULT_ENGINE_MGMT_GW
 from engine.engine_template_ops import _discover_vm_ipv4
 from infra.guest_exec import wait_for_guest_agent
+from multinode.placement_record import resolved_mgmt_bridge
 from estate import config
 
 ENGINE_NAME = "quotient-engine"
@@ -56,25 +57,29 @@ def has_in_path_firewall(ctx):
 def create_engine_and_bridges(ctx):
 # The team bridges, then the engine, then the cold boot that surfaces its team NICs.
     from estate import apply as estate_apply, engine_setup
-    from infra.ownership import Ownership
+    from infra.ownership import Ownership, bridge_comment
     cfg = config.active()
     document = ctx.document()
     ownership = Ownership(ctx.comp_name, ctx.run_id)
     teams = slot_team_identifiers(ctx)
     transit = teams if has_in_path_firewall(ctx) else []
     for identifier in teams:
-        estate_apply.create_bridge(document, ctx.node, f"vmbr{identifier}",
-                                   comment=f"Quotient team {identifier} — isolated, no uplink")
+        estate_apply.create_bridge(
+            document, ctx.node, f"vmbr{identifier}",
+            comment=bridge_comment(ctx.comp_name, ctx.run_id,
+                                   f"Quotient team {identifier} — isolated, no uplink"))
     for identifier in transit:
         estate_apply.create_bridge(
             document, ctx.node, f"vmbrW{identifier}",
-            comment=f"Quotient team {identifier} — transit to in-path firewall")
+            comment=bridge_comment(ctx.comp_name, ctx.run_id,
+                                   f"Quotient team {identifier} — transit to in-path firewall"))
     estate_apply.create_engine(
         document, ownership, ctx.node, vmid=ctx.engine_vmid,
         template_vmid=int(ctx.state["engine_template_vmid"]),
         team_identifiers=teams, transit_identifiers=transit,
         mgmt_ip=ctx.engine_mgmt_ip or "",
         mgmt_gw=(config.active().engine.mgmt_gw or DEFAULT_ENGINE_MGMT_GW),
+        mgmt_bridge=resolved_mgmt_bridge(ctx.placement),
         username=cfg.engine.username,
         ssh_public_key=cfg.ssh.public_key)
     engine_setup.cold_boot(ctx.node, ctx.engine_vmid)

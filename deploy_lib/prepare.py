@@ -13,6 +13,33 @@ from deploy_lib.targets import enumerate_deploy_targets
 from deploy_lib.estate_inputs import build_estate_inputs, engine_mgmt_ip_from_env
 
 
+def _resolve_engine_mgmt_ip(ctx, override):
+# The engine's management address, resolved once: the flag, else the engine node record's,
+#     else the profile's, else the marked default. The record used to be applied AFTER
+#     prepare, silently outranking the operator's --engine-mgmt-ip.
+    from common.constants import DEFAULT_ENGINE_MGMT_GW
+    from estate import config
+    from multinode.placement_record import engine_record
+    record = engine_record(ctx.placement) if ctx.placement else None
+    ip = engine_mgmt_ip_from_env(override or (record.engine_mgmt_ip if record else ""))
+    gw = (config.active().engine.mgmt_gw or (record.engine_mgmt_gw if record else "")
+          or DEFAULT_ENGINE_MGMT_GW)
+    config.active().activate({"engine.mgmt_gw": gw})
+    return ip
+
+
+def _record_placement_identities(ctx):
+# Write every identity this run will create into the placement, before preflight reads it.
+    from estate import config
+    from multinode.placement_record import record_placement_identities
+    from red import badauto_config_ops
+    record_placement_identities(
+        ctx.comp_dir, ctx.placement, ctx.engine_mgmt_ip, config.active().engine.mgmt_gw,
+        red01=badauto_config_ops.red01_identity(
+            ctx.comp_dir, ctx.engine_vmid, config.active().proxmox.node,
+            placement=ctx.placement))
+
+
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
             team_node=None, engine_node=None, force_from_phase=False, nodes_path=None,
             team_identifiers=None, engine_mgmt_ip=None):
@@ -55,7 +82,9 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
 
     apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path)
 
-    ctx.engine_mgmt_ip = engine_mgmt_ip_from_env(engine_mgmt_ip)
+    ctx.engine_mgmt_ip = _resolve_engine_mgmt_ip(ctx, engine_mgmt_ip)
+    if ctx.placement:
+        _record_placement_identities(ctx)
     # The banner above printed the pre-placement, pre-flag target. --engine-mgmt-ip is the
     # last thing to move it, so the effective line belongs here — an operator checking the
     # banner must see the address this run will actually dial (the 2026-10-15 canary ran

@@ -27,13 +27,15 @@ def _comp(d, extra=""):
     return d
 
 
-def _plan(comp, vms=(), resuming=False, red01_vmid=1470, red01_ip="10.0.0.198"):
+def _plan(comp, vms=(), resuming=False, red01_vmid=1470, red01_ip="10.0.0.198",
+          red01_ip_explicit=False):
     share = NodeShare(name="", node="pve", multi=False, slot=0, is_engine=True,
                       teams=TEAMS, num_teams=1, datastore="ds",
                       fetch_vms=lambda: list(vms))
     share.raw_vms = list(vms)
     return PreflightPlan(Path(comp), BOXES, 1300, [share], red01_vmid=red01_vmid,
-                         red01_ip=red01_ip, resuming=resuming)
+                         red01_ip=red01_ip, red01_ip_explicit=red01_ip_explicit,
+                         resuming=resuming)
 
 
 def _vm(vmid, status="running"):
@@ -134,7 +136,7 @@ class IpGate(unittest.TestCase):
                     patch("infra.red01.proxmox_api", return_value={"data": {}}):
                 red01.red01_ip_gate(
                     _plan(_comp(td, "assume_breach 1\nred01_ip 10.9.9.9\n"),
-                          vms=[_vm(100)], red01_ip="10.9.9.9"))
+                          vms=[_vm(100)], red01_ip="10.9.9.9", red01_ip_explicit=True))
 
 
 class GateWiring(unittest.TestCase):
@@ -159,12 +161,12 @@ class GateWiring(unittest.TestCase):
             self.assertEqual(plan.red01_vmid, 777)
             self.assertEqual(plan.red01_ip, "10.9.9.9")
             self.assertFalse(plan.resuming)
-            # the derived default: engine+170, clear of the +140/+150/+130 slots
+            # the derived value: one golden stride past slot 0's band
             with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve",
                                          "TEZ_PROXMOX_DATASTORE": "ds"}):
                 plan2 = single_node_plan(_comp(td, "assume_breach 1\n"), BOXES, 1,
                                          TEAMS, 1300, False, "10.0.0.252", None)
-            self.assertEqual(plan2.red01_vmid, 1470)
+            self.assertEqual(plan2.red01_vmid, 1460)   # one stride past slot 0's goldens
             self.assertTrue(plan2.resuming)
 
 

@@ -51,27 +51,6 @@ depend on submission order rather than on which workspace owns the VMs.
 inventory (i.e. a range that exists), not by run-dir recency; refuse when the winner has no
 resources and another candidate does, naming both.
 
-### Two concurrent runs of one competition cannot be given distinct red01 slots
-
-`red01_vmid`/`red01_ip` resolve from the **competition** directory
-(`red/badauto_config_ops.red01_vmid_for`/`red01_ip_for`, called at `infra/plan.py:100-101`
-and again at phase 7 `red/red_plant_ops.py:247`), while everything else about placement is
-per run, and `create-competition.py` has no `--red-vmid`/`--red-ip` (`deploy_lib/cli.py`).
-So two concurrent runs of ONE competition read the same reservation: the second is refused
-by `infra/red01.py`'s gates, or — if both pass the point-in-time check in the same window —
-its bad-auto deploy reconfigures the first run's live red01 (bad-auto's deploy is
-clone-or-reuse; that is the 2026-10-12 kill shape the gates were added for). `AGENTS.md`'s
-"Concurrent ranges" recipe names only `--scoring-vmid` and team identifiers, so it does not
-cover this, and the only lock in play is keyed on the engine vmid
-(`nakonops/nakon_lock_ops.py`) — nothing reserves red01.
-Measured cost this cycle: the three-parallel-range campaign hand-derived a red01 vmid/IP per
-competition and committed a checked-free pair into two Compfiles (competitions repo
-`cf68857`) — exactly the "operator must remember it" class this project files as a bug.
-**Next action**: carry red01 in the per-run placement object (derived vmid from the slot
-count rather than the fixed `+170` offset, address selected from a declared management band)
-and write it before preflight, keeping the Compfile keys readable for already-deployed
-ranges. Design, blast radius and migration cost: `logs/campaign/placement-simplification.md`.
-
 ### The drivers' config contract moved to `TEZ_*` but the deployed env files did not
 
 `estate/config.py` resolves only `TEZ_*` (its `_SPEC` + `env_name`) and no module maps the
@@ -88,45 +67,6 @@ the file that should carry it — when neither `TEZ_PROXMOX_ENDPOINT` nor
 `TEZ_PROXMOX_API_TOKEN` resolves, and give bad-auto a `TEZ_PROXMOX_*` read with a `TF_VAR_*`
 fallback instead of keeping both name sets alive in an ops-host file by hand.
 
-### The comp ownership tag is the workspace directory name, so every dashboard range is `comp-comp`
-
-`teardown/machinery.py` builds `Ownership(Path(comp_dir).name, run_id)` and the deploy stamps
-`ctx.comp_name = comp_dir.name` (`deploy_lib/inputs.py`), but the dashboard hands every run a
-workspace whose comp dir is literally `<run_dir>/comp`. Every dashboard-deployed range therefore
-carries the tag `comp-comp`, and bad-auto's red01 identity marker — also `Path(comp_dir).name` —
-reads `comp=comp` on every dashboard red01. Destruction stays scoped (the full ownership set still
-requires this deploy's `run-<id>`, and bad-auto's marker also compares its `instance_id`), so this
-is attribution, not a false destroy — but `verify_clean` reports every other dashboard range's VMs
-as "same competition, DIFFERENT run" (live 2026-10-15: run-44a106d2, tearing down tiny-linux,
-listed scrim-one's whole range that way), and the `comp_name` half of the red01 reclaim guard
-cannot tell two dashboard competitions apart — only its companions (the no-red skip gate,
-bad-auto's instance id) prevented the 2026-10-15 kill. The deploy's template-keep branch reads the
-same tag: `infra/collisions.py` compares `comp-<workspace dir name>`, so with the dashboard's
-`<run>/comp` workspace a scrim-one-light deploy reported ANOTHER competition's kept golden as its
-own ("golden vmid (slot 0) #2251 holds this competition's template — kept for reuse") and phase 4
-retagged and reclaimed it before rebuilding the box it actually needed (run-a87e0d88, 2026-10-15).
-The hash gate kept the RANGE correct, so this is still attribution rather than a wrong build — but
-the identity claim is false and another competition's validated template was destroyed by it.
-**Next action**: derive the comp tag from the competition identity the Compfile already carries
-(`name`), not from the directory. Changing the derivation alone makes every already-deployed range's
-teardown refuse, so it lands as a pre-release identity break — a range still carrying the old tag is
-torn down by the code version that wrote it — not behind a compatibility shim.
-
-### `proxmox.mgmt_bridge` is declared and never read, so only a `vmbr0` estate can host a range
-
-The estate profile carries the knob (`estate/config.py`'s spec, and `mgmt_bridge = "vmbr0"` in
-`tezcatlipoca.example.toml`) and nothing resolves it: `estate/apply.py:create_engine` builds
-`bridges = ["vmbr0"] + …`, `engine/engine_template_ops.py` sets `"net0": "virtio,bridge=vmbr0"`, and
-`net/jump_ops.py` its own `{"net0": "virtio,bridge=vmbr0"}`. An estate whose management bridge is
-not `vmbr0` (the cyber range's is `vmbr100`) therefore still cannot host a range, and the failure is
-a VM attached to a bridge the node may not have rather than a refusal. The per-node half — a
-`mgmt_bridge` field on a `nodes.json` record, preferred over the profile, with a preflight that
-refuses a bridge the node does not own — is unimplemented.
-**Next action**: thread the resolved bridge through `create_engine` (`estate/apply.py`),
-`engine/engine_template_ops.py` and `net/jump_ops.py`, read it in the plan, and add
-`infra/collisions.check_mgmt_bridge` to the preflight. Needs the user's call first: `create_engine`
-is hashed as code-class drift (`estate.apply:create_engine`), so the port makes every existing engine
-template report stale and rebuild on its next deploy.
 
 ### The template builders reach their scratch VM through node shell
 
@@ -159,10 +99,6 @@ Upstream-worthy (bad-auto). `World.save()` is last-writer-wins; the director's p
 ### bad-auto clones red01 before it validates its SSH key
 
 Upstream-worthy (bad-auto). `badauto deploy` clones the VM and only then reads `<deploy.ssh_key>.pub`, so an unresolvable key leaves a cloned, unstamped, unstarted red01 holding the LLM key — the shape live-found 2026-10-14, when a red-staging run whose bad-auto config carried no `deploy.ssh_key` fell back to bad-auto's built-in default (a sibling checkout's `proxmox` that no run host has). The engine side is closed: `core.ssh_key_path()` pins the resolved absolute key on every bad-auto config both writers produce, and an unstamped red01 is reclaimed on both teardown paths (`red: pin the RANGE's ssh key on every bad-auto config it writes`, `red01: one narrow reclaim for an unstamped red01`). **Next action**: hand off to bad-auto — read and validate the public half before the clone, so no caller can leave a VM behind.
-
-### `verify_clean` proves red01 gone by bare vmid membership
-
-`teardown/engine.py` and `scrim/teardown_stage.py` both answer "is red01 gone?" with `int(vmid) in live_vmids()` — every vmid the endpoint's cluster view knows, with no tag, comp or node filter — so an occupant at that vmid cannot be attributed to this range or to another. The verdict stays fail-closed (an unaccounted-for vmid is never clean), so this is attribution robustness, not a false refusal: the 2026-10-14 refusals were correct. The marker reader the deploy preflight already uses (`infra/red01.py`, bad-auto's `bad-auto red01 comp=<name> id=<uuid>` description) is the pattern to follow. **Next action**: attribute the occupant and keep failing closed when it carries no marker; validating it needs a live vmid collision.
 
 ### scrim-one's verify gate is red on two checks in every deploy
 

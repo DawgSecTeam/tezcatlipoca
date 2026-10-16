@@ -257,6 +257,38 @@ class VerifyClean(unittest.TestCase):
         self.assertTrue(report.clean, report.problems)   # concurrent coexistence
         self.assertTrue(any("DIFFERENT run" in n for n in report.notes))
 
+    def test_a_recycled_red01_vmid_is_attributed_and_not_this_ranges_leak(self):
+        # The occupant's bad-auto marker names another competition, so OUR red01 is gone and
+        # the vmid was recycled — a note, not a refusal.
+        (self.comp / ".badauto-config.yaml").write_text("deploy: {red_vmid: 3570}\n")
+        self.ctx.deployed_state = {"run_id": RUN, "assume_breach": {"vmid": 3570}}
+
+        def api(method, path, **kw):
+            if path == "/cluster/resources":
+                return {"data": [{"vmid": 3570, "node": "n", "name": "bad-auto-red01",
+                                  "status": "running"}]}
+            return {"data": {"description": "bad-auto red01 comp=other-range id=deadbeef"}}
+
+        with patch("infra.red01.proxmox_api", side_effect=api):
+            report = self._engine().verify_clean(self._plan())
+        self.assertTrue(report.clean, report.problems)
+        self.assertTrue(any("another competition's red01" in n for n in report.notes))
+
+    def test_an_unmarked_red01_occupant_is_fail_closed(self):
+        (self.comp / ".badauto-config.yaml").write_text("deploy: {red_vmid: 3570}\n")
+        self.ctx.deployed_state = {"run_id": RUN, "assume_breach": {"vmid": 3570}}
+
+        def api(method, path, **kw):
+            if path == "/cluster/resources":
+                return {"data": [{"vmid": 3570, "node": "n", "name": "some-vm",
+                                  "status": "running"}]}
+            return {"data": {"description": ""}}
+
+        with patch("infra.red01.proxmox_api", side_effect=api):
+            report = self._engine().verify_clean(self._plan())
+        self.assertFalse(report.clean)
+        self.assertTrue(any("no bad-auto marker" in p for p in report.problems))
+
     def test_unlistable_node_is_not_clean(self):
         self.fake.listing_fails.add("n")
         report = self._engine().verify_clean(self._plan())

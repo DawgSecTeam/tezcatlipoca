@@ -35,8 +35,8 @@ import subprocess
 import sys
 
 from common.constants import NAKON_DIR, PIPELINE_VERSION, SCORING_ENGINE_VMID
-from infra.collisions import (check_collisions, engine_mgmt_ip_gate,  # noqa: F401
-                              jump_mgmt_ip_gate)
+from infra.collisions import (check_collisions, check_mgmt_bridge, check_placement,  # noqa: F401
+                              engine_mgmt_ip_gate, jump_mgmt_ip_gate, share_mgmt_bridge)
 from infra.resources import check_datastore_headroom, check_share_templates
 from common.utils import compfile_flag
 
@@ -382,6 +382,9 @@ def run_preflight(plan):
     """The single pre-Proxmox-mutation entry point."""
     if compfile_flag(plan.comp_dir / "Compfile", "remote_access", 1):
         remote_access_gate(plan)
+    # The one proof that the object is free of itself, before any gate proves the CLUSTER is
+    # free of others: no vmid in two of this run's bands, no team block over one.
+    check_placement(plan.placement)
     for share in plan.shares:
         share.raw_vms = share.fetch_vms()
         vms = ([vm for vm in share.raw_vms if vm.get("node") == share.node]
@@ -394,6 +397,7 @@ def run_preflight(plan):
             check_datastore_headroom(
                 share.node, share.datastore, plan.boxes, share.num_teams,
                 label=share.label, node_name=share.name or None)
+        check_mgmt_bridge(share.node, share_mgmt_bridge(plan, share))
     if plan.engine_mgmt_ip:
         engine = next(s for s in plan.shares if s.is_engine)
         engine_mgmt_ip_gate(engine.node, engine.raw_vms, plan.engine_vmid,

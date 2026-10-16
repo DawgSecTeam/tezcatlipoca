@@ -62,8 +62,9 @@ the same scoring engine. Safe coexistence is otherwise on you: distinct `--scori
 
 **bad-auto state is per-competition.** red01's config, deploy stamp, and identity live in
 `competitions/<id>/` (`.badauto-config.yaml` + the stamp bad-auto writes next to it); its vmid is
-reserved per comp (Compfile `red01_vmid`, else `<scoring-vmid>+170`) and its IP pinned
-(`red01_ip`, else `10.0.0.198`) — both preflight-gated like the engine's: an occupied red01 slot
+reserved per comp (Compfile `red01_vmid`, else derived one golden stride past this placement's
+last band) and its IP is selected from the red band `10.0.0.240-10.0.0.249` at deploy time
+(`red01_ip` overrides it). The vmid is preflight-gated like the engine's — an occupied red01 slot
 is a refusal naming the owner, never a silent default. Two worktrees may deploy ranges with red01s
 concurrently against the one shared bad-auto checkout with zero coordination.
 

@@ -3,7 +3,7 @@ read/write, accessors, process-wide activation, and the vmid slot math derived f
 
 import os
 
-from common.constants import GOLDEN_VMID_OFFSET, MAX_BOXES_PER_TEAM
+from common.constants import ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_VMID_OFFSET, MAX_BOXES_PER_TEAM
 from multinode.nodes_config import (JUMP_MGMT_IP_BASE, JUMP_VMID_OFFSET, NodeRecord,
                           PLACEMENT_VERSION, apply_node_env, restore_node_env)
 
@@ -11,15 +11,51 @@ from multinode.nodes_config import (JUMP_MGMT_IP_BASE, JUMP_VMID_OFFSET, NodeRec
 
 def read_placement(comp_dir):
 # The placement record from the document's `placement` section, or None when unplaced.
+#
+#     A v1 document predates the identity block; it upgrades on read and is written back, so
+#     a companion op (teardown above all) can still find the red01 that range deployed. A
+#     version this code does not know is refused: the record is the only map of vmids the
+#     range owns.
     from estate import state
     placement = state.EstateState.load(comp_dir).data.get("placement")
     if not placement:
         return None
-    if placement.get("version") != PLACEMENT_VERSION:
-        raise SystemExit(f"  ERROR: the placement record was written by schema v"
-                         f"{placement.get('version')}; this code understands "
-                         f"v{PLACEMENT_VERSION}. Tear the competition down and redeploy.")
-    return placement
+    version = placement.get("version")
+    if version == PLACEMENT_VERSION:
+        return placement
+    if version == 1:
+        upgraded = _upgrade_v1(comp_dir, placement)
+        write_placement(comp_dir, upgraded)
+        return upgraded
+    raise SystemExit(f"  ERROR: the placement record was written by schema v"
+                     f"{version}; this code understands "
+                     f"v{PLACEMENT_VERSION}. Tear the competition down and redeploy.")
+
+
+def _upgrade_v1(comp_dir, placement):
+# Fill the v2 identity block on a range deployed by the older code, resolving red01 the
+#     way that code did (Compfile -> the comp's .badauto-config.yaml -> engine + 170) —
+#     the v1 derivation, not this build's, because that is where the live red01 sits.
+    from estate import state
+    from red import badauto_config_ops
+    upgraded = dict(placement)
+    engine_vmid = int(upgraded["engine_vmid"])
+    engine = engine_record(upgraded)
+    flat = state.load_flat(comp_dir)
+    upgraded["version"] = PLACEMENT_VERSION
+    upgraded["engine_template_vmid"] = engine_template_vmid(engine_vmid)
+    upgraded["golden_vmids"] = _golden_vmids(upgraded)
+    upgraded["engine_mgmt_ip"] = flat.get("engine_mgmt_ip") or ""
+    upgraded["engine_mgmt_gw"] = flat.get("engine_mgmt_gw") or ""
+    upgraded["mgmt_bridge"] = mgmt_bridge_for(engine)
+    vmid, ip = badauto_config_ops.red01_v1_target(comp_dir, engine_vmid)
+    upgraded["red01"] = {
+        "vmid": vmid,
+        "ip": ip,
+        "node": engine.node,
+        "explicit_ip": badauto_config_ops.red01_ip_is_explicit(comp_dir),
+    }
+    return upgraded
 
 
 def write_placement(comp_dir, placement):
@@ -28,6 +64,90 @@ def write_placement(comp_dir, placement):
     document.data["placement"] = placement
     document.save()
     return state.state_path(comp_dir)
+
+
+def engine_template_vmid(engine_vmid):
+# The engine template's slot, just below the golden block (+150) so one preflight scan covers both.
+    return int(engine_vmid) + ENGINE_TEMPLATE_VMID_OFFSET
+
+
+def mgmt_bridge_for(record=None):
+# The management bridge this run attaches every NIC at net0 to: the node's own when its L2
+#     is not vmbr0 (the .67 cyber range's is vmbr100), else the profile's, else the default.
+    from estate import config
+    if record is not None and record.mgmt_bridge:
+        return record.mgmt_bridge
+    return config.active().proxmox.mgmt_bridge or "vmbr0"
+
+
+def resolved_mgmt_bridge(placement=None):
+# The bridge a NIC attaches to: the placement's resolved value when this run is placed,
+#     else the profile's (defaulting to vmbr0 — absent a per-node value, nothing changes).
+    return (placement or {}).get("mgmt_bridge") or mgmt_bridge_for()
+
+
+def _golden_vmids(placement):
+    return {name: golden_slot_span(placement["engine_vmid"], slot)
+            for name, slot in placement["slots"].items()}
+
+
+def record_placement_identities(comp_dir, placement, engine_mgmt_ip="", engine_mgmt_gw="",
+                                red01=None):
+# Write every identity this run will create into the placement, before preflight reads it.
+#
+#     Same values every later reader derives, written once: preflight, resume, verify and
+#     teardown otherwise each re-add the same offsets and can disagree about a vmid.
+    placement["version"] = PLACEMENT_VERSION
+    placement["engine_template_vmid"] = engine_template_vmid(placement["engine_vmid"])
+    placement["golden_vmids"] = _golden_vmids(placement)
+    placement["engine_mgmt_ip"] = engine_mgmt_ip or ""
+    placement["engine_mgmt_gw"] = engine_mgmt_gw or ""
+    placement["mgmt_bridge"] = mgmt_bridge_for(engine_record(placement))
+    if red01 is not None:
+        placement["red01"] = red01
+    write_placement(comp_dir, placement)
+    return placement
+
+
+def write_red01_ip(comp_dir, placement, ip):
+# Record the address SELECTED at deploy time. explicit_ip stays false: a selected address was
+#     proven free when it was chosen and is not re-litigated, unlike an operator's value.
+    placement.setdefault("red01", {})["ip"] = ip
+    placement["red01"]["explicit_ip"] = False
+    write_placement(comp_dir, placement)
+    return ip
+
+
+def reserved_vmids(placement):
+# Every vmid THIS placement's own bands occupy: engine, engine template, each used slot's
+#     golden span and jump, and red01.
+    from red.badauto_config_ops import default_red_vmid
+    engine_vmid = int(placement["engine_vmid"])
+    reserved = {engine_vmid, engine_template_vmid(engine_vmid),
+                default_red_vmid(engine_vmid, len(placement.get("satellites") or []))}
+    for slot in set((placement.get("slots") or {}).values()):
+        reserved.update(golden_slot_span(engine_vmid, slot))
+    for sat in placement.get("satellites") or []:
+        reserved.add(int(sat["jump_vmid"]))
+    return reserved
+
+
+def check_team_blocks(placement, teams):
+# Refuse a team vmid block overlapping a band this placement reserves: collect_teams
+#     validates the engine's slot-0 bands only, and runs before the slot count exists.
+    reserved = reserved_vmids(placement)
+    for key, team in teams.items():
+        identifier = team["identifier"]
+        base = 200 + int(identifier) * 10
+        block = set(range(base, base + MAX_BOXES_PER_TEAM))
+        clash = sorted(block & reserved)
+        if clash:
+            raise SystemExit(
+                f"  ERROR: team {key} (identifier {identifier}) maps to vmids "
+                f"{base}..{base + MAX_BOXES_PER_TEAM - 1}, overlapping this placement's own "
+                f"reserved vmids {clash} (engine, engine template, a slot's goldens, a jump or "
+                f"red01). Pick a team-identifier block clear of the whole engine span, or a "
+                f"different --scoring-vmid.")
 
 
 def record_of(placement, node_name):

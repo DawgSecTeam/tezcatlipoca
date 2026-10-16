@@ -10,6 +10,14 @@ every later op). Each host is reached through a per-node route table
 `multinode/placement_record.activate_placement` points the process config at the engine's host
 and registers those routes, so every node-scoped API call goes to the host that owns it.
 
+Since placement schema v2 that section also records every identity the run will create —
+`engine_template_vmid`, `golden_vmids` per node, the engine management IP and gateway, the
+management bridge, and red01's `{vmid, ip, node, explicit_ip}`. `prepare()` writes them once,
+before preflight reads anything, so preflight, resume, verify and teardown derive no vmid
+independently. A v1 section is upgraded on read — red01 resolved by the v1 derivation, from the
+Compfile or the comp's own bad-auto config — and written back, so a teardown run by newer code
+can still find the red01 an older deploy left live.
+
 ## Why routing, not bridging
 
 Bridges are node-local L2. The engine needs `192.168.<id>.1` on every team bridge (scoring
@@ -67,7 +75,7 @@ datastore, engine base vmid, ssh host): `infrastructure-status.md`.
      "token_env": "TEZ_PROXMOX_API_TOKEN",
      "node": "<pve-node>", "datastore": "<datastore>",
      "engine_base_vmid": 0,
-     "engine_mgmt_ip": "", "jump_mgmt_ip": "",
+     "engine_mgmt_ip": "", "jump_mgmt_ip": "", "mgmt_bridge": "",
      "ssh_host": "<host>", "jump_template": "alpine",
      "weight": 1.0, "max_teams": 8}
   ]
@@ -84,6 +92,9 @@ datastore, engine base vmid, ssh host): `infrastructure-status.md`.
 - `jump_mgmt_ip` pins the satellite jump's mgmt address; empty walks down from `10.0.0.249` per
   slot. Preflight sweeps running guests' agent IPs on every hosting node and refuses collisions —
   assign explicitly on a shared mgmt LAN.
+- `mgmt_bridge` is that node's management bridge (default: the profile's `proxmox.mgmt_bridge`,
+  else `vmbr0`). The engine, the engine-template build VM and the node's jump VM all attach their
+  `net0` there, and preflight refuses a bridge the node does not own.
 - `weight` divides a node's free RAM (bigger weight = counts for less); `max_teams` caps how many
   teams capacity-fill stacks on a node.
 

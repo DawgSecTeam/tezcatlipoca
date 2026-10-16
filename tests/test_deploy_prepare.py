@@ -188,17 +188,22 @@ class PlacementAndLock(unittest.TestCase):
         self.assertEqual(order, [("resolve", 1234), "activate", ("lock", 1234)])
         self.assertEqual(placement, {"team_slots": {"team1": 0}})
 
-    def test_engine_mgmt_ip_and_gw_come_from_the_resolved_engine_record(self):
-        import types
-        record = types.SimpleNamespace(engine_mgmt_ip="10.0.0.7", engine_mgmt_gw="10.0.0.1")
+    def test_the_engine_record_is_an_input_to_the_one_mgmt_ip_resolution(self):
+        # The record used to overwrite the resolved value AFTER prepare, silently beating
+        # --engine-mgmt-ip; it is now one input to the single resolution, and the flag wins.
+        from deploy_lib.prepare import _resolve_engine_mgmt_ip
+        from multinode.nodes_config import NodeRecord
+        record = NodeRecord(name="n1", endpoint="https://n1.lab:8006", node="pve1",
+                            datastore="ds", token_env="TOK", engine_mgmt_ip="10.0.0.7",
+                            engine_mgmt_gw="10.0.0.1")
+        ctx = _ctx(engine_vmid=1, placement={"engine_node": "n1",
+                                             "nodes": {"n1": record.to_json()}})
         config.reset()
         self.addCleanup(config.reset)
         with patch.dict(os.environ, {}, clear=True):
-            _placement, order = self._run(1, ({"team_slots": {}}, record))
-            self.assertEqual(order, [("resolve", 1), "activate", ("lock", 1)])
-            # The node record points the process config at the engine's host.
-            self.assertEqual(config.active().engine.mgmt_ip, "10.0.0.7")
+            self.assertEqual(_resolve_engine_mgmt_ip(ctx, None), "10.0.0.7")
             self.assertEqual(config.active().engine.mgmt_gw, "10.0.0.1")
+            self.assertEqual(_resolve_engine_mgmt_ip(ctx, "10.0.0.9"), "10.0.0.9")
 
     def test_no_placement_means_no_activation_and_still_a_lock(self):
         _placement, order = self._run(1, (None, None))
@@ -441,7 +446,12 @@ class PrepareSequencer(unittest.TestCase):
                              return_value="10.0.0.250"), \
                 dpatch("resolve_placement",
                              side_effect=lambda *a, **k: order.append("resolve")
-                             or ({"team_slots": {}}, None)), \
+                             or ({"version": 2, "engine_vmid": 1234, "engine_node": "n1",
+                                  "nodes": {"n1": {"name": "n1",
+                                                   "endpoint": "https://n1.lab:8006",
+                                                   "node": "pve1", "datastore": "ds",
+                                                   "token_env": "TOK"}},
+                                  "slots": {"n1": 0}}, None)), \
                 dpatch("activate_placement",
                              side_effect=lambda p: order.append("activate")), \
                 dpatch("acquire_engine_lock",

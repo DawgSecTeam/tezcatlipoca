@@ -4,6 +4,8 @@ import sys
 import pipeline_api
 
 from common.constants import DEFAULT_ENGINE_MGMT_GW
+from common.utils import competition_name
+from multinode.placement_record import resolved_mgmt_bridge
 from engine.engine_event_ops import push_event_conf
 from engine.engine_health_ops import ensure_nat_forwarding
 from engine.engine_identity_ops import prepare_engine_from_template
@@ -31,11 +33,11 @@ def _replace_engine(comp_dir, state, teams, boxes):
 #     old `-target` scoping existed for (winad-testrun 2026-09-25).
     from estate import apply as estate_apply, config as estate_config, engine_setup
     from infra.ownership import Ownership, destroy_vm_if_exists
-    _, identifiers, in_path = _identifiers(comp_dir, teams, boxes)
+    placement, identifiers, in_path = _identifiers(comp_dir, teams, boxes)
     cfg = estate_config.active()
     node = cfg.proxmox.node
     vmid = int(state["scoring_vmid"])
-    ownership = Ownership(comp_dir.name, state["run_id"])
+    ownership = Ownership(competition_name(comp_dir), state["run_id"])
     destroy_vm_if_exists(node, vmid, expect_tags=ownership.tags)
     estate_apply.create_engine(
         estate_state.EstateState.load(comp_dir), ownership, node, vmid=vmid,
@@ -43,6 +45,7 @@ def _replace_engine(comp_dir, state, teams, boxes):
         team_identifiers=identifiers, transit_identifiers=identifiers if in_path else [],
         mgmt_ip=config.active().engine.mgmt_ip,
         mgmt_gw=(config.active().engine.mgmt_gw or DEFAULT_ENGINE_MGMT_GW),
+        mgmt_bridge=resolved_mgmt_bridge(placement),
         username=cfg.engine.username,
         ssh_public_key=cfg.ssh.public_key)
     engine_setup.cold_boot(node, vmid)
@@ -126,7 +129,7 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
 
     print(f"\n  Engine recovered from template (vmid {state['engine_template_vmid']}).")
     print("  The scoring DB is EMPTY — re-seed with:")
-    print(f"    python3 create-competition.py --competition {comp_dir.name} "
+    print(f"    python3 create-competition.py --competition {competition_name(comp_dir)} "
           f"--from-phase 7 --yes")
     return True
 
@@ -137,7 +140,7 @@ def reseed_event(comp_dir):
 #     offsets resolve at phase-7 time, so a rollback-ready alone left every inject closed
 #     (winad-scrim2 2026-09-26: all 12 closed ~1.5h before T0).
     import subprocess
-    subprocess.run([sys.executable, "create-competition.py", "--competition", comp_dir.name,
+    subprocess.run([sys.executable, "create-competition.py", "--competition", competition_name(comp_dir),
                     "--from-phase", "7", "--yes"], check=True)
 
 

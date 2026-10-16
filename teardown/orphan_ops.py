@@ -7,12 +7,14 @@ names the comp tag and the run tag, and a VM is touched only when its own tag se
 plus `tezcatlipoca`. Two deliberate narrowings: the clone-marker adoption the other paths allow
 is refused (`require_owned=True` — a marker names the competition, not the run, so it can be a
 live worktree's interrupted clone), and templates (golden / engine-template) are irreversible
-and need `allow_templates` because there is no freeze record left to consult. Nothing else about
-the range is addressed: no bridges (a bridge carries no tags, so it can never be attributed), no
+and need `allow_templates` because there is no freeze record left to consult. Bridges have no
+tags, so they come out only when their PVE comment proves this competition and run id (see
+`infra.ownership.bridge_comment`); an uncommented or foreign bridge is named and left alone. No
 state document, no terminal plan."""
 
-from infra.client import proxmox_api
-from infra.ownership import Ownership, Refusal, destroy_vm_if_exists, parse_vm_tags
+from infra.client import destroy_bridge_if_exists, node_bridges, proxmox_api
+from infra.ownership import (Ownership, Refusal, bridge_owned_by, destroy_vm_if_exists,
+                             parse_vm_tags)
 
 TEMPLATE_ROLES = ("tezcatlipoca-golden", "engine-template")
 
@@ -61,7 +63,21 @@ def reclaim(comp, run_tag, *, node, allow_templates=False, log=print):
                              expect_tags=ownership.with_role(*role).tags, require_owned=True)
         destroyed.append({"vmid": vm["vmid"], "name": vm.get("name"),
                           "role": "+".join(sorted(role)) or "vm"})
+    # Bridges carry no tags, so their comment is the whole proof. Only this run's come out; a
+    # foreign or uncommented bridge is left alone and named.
+    bridges = []
+    for iface, comment in node_bridges(node).items():
+        if not iface.startswith("vmbr"):
+            continue
+        if bridge_owned_by(comment, comp, run_tag):
+            log(f"  bridge {iface} ({comment})")
+            if destroy_bridge_if_exists(node, iface):
+                bridges.append(iface)
+        elif "comp-" in comment or "tezcatlipoca" in comment:
+            notes.append(f"bridge {iface} is another run's ({comment}) — not touched")
+        elif iface != "vmbr0" and iface[4:].isdigit():
+            notes.append(f"bridge {iface} carries no ownership comment — not touched")
     remaining = [v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
                  if v["vmid"] in {d["vmid"] for d in destroyed}]
     return {"destroyed": destroyed, "kept_templates": kept, "notes": notes,
-            "remaining": remaining, "scanned": len(vms)}
+            "bridges": bridges, "remaining": remaining, "scanned": len(vms)}

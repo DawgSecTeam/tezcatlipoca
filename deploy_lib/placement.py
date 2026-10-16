@@ -4,7 +4,6 @@
 from nakonops.nakon_lock_ops import acquire_engine_lock
 from multinode.placement_record import activate_placement
 from multinode.placement_planner import resolve_placement
-from estate import config
 
 
 def parse_team_node(team_node):
@@ -37,7 +36,7 @@ def apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path=Non
     # the endpoint-keyed engine lock and anything node-scoped. An existing
     # the recorded placement always wins (authoritative); a resume without one adopts its
     # deployed endpoint rather than re-balancing a live range.
-    ctx.placement, _resolved_engine_record = resolve_placement(
+    ctx.placement, _engine_record = resolve_placement(
         comp_dir, ctx.engine_vmid, ctx.teams, ctx.boxes, ctx.comp_name,
         team_overrides=parse_team_node(team_node), engine_override=engine_node,
         resume_endpoint=(ctx.previous_state.get("deployed_endpoint") if ctx.resuming else None),
@@ -50,12 +49,6 @@ def apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path=Non
         # a --nodes/multi-node run; restate the target now that it is the real one.
         from common.utils import env_summary
         print(f"  Effective target: {env_summary()}")
-        if _resolved_engine_record is not None and _resolved_engine_record.engine_mgmt_ip:
-            config.active().activate(
-                {"engine.mgmt_ip": _resolved_engine_record.engine_mgmt_ip})
-            if _resolved_engine_record.engine_mgmt_gw and not config.active().engine.mgmt_gw:
-                config.active().activate(
-                    {"engine.mgmt_gw": _resolved_engine_record.engine_mgmt_gw})
     ctx.state["multi_node"] = bool(ctx.placement)
     ctx.save_state()
     acquire_engine_lock(ctx.engine_vmid)

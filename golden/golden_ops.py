@@ -37,7 +37,7 @@ from common.ssh_ops import ssh_via_gateway, wait_for_boxes_ssh, wait_for_cloud_i
 from engine.template_freeze import (
     golden_plant_checkpoints, save_template_hashes, stored_template_hash, write_template_hash,
 )
-from common.utils import PRINT_LOCK, compfile_flag, run_concurrent
+from common.utils import PRINT_LOCK, compfile_flag, competition_name, run_concurrent
 from common.windows_ops import bootstrap_windows_box, is_windows_template
 from golden.golden_target_ops import (
     _quote_sshkeys,
@@ -91,7 +91,7 @@ def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_
             desc = str(cfg.get("description") or "")
             raw_tags = str(cfg.get("tags") or "")
             tags = {x.strip() for x in raw_tags.replace(";", ",").split(",") if x.strip()}
-            if (cfg.get("name") == t["vm_name"] and clone_marker(comp_dir.name) in desc
+            if (cfg.get("name") == t["vm_name"] and clone_marker(competition_name(comp_dir)) in desc
                     and "tezcatlipoca" not in tags):
                 print(f"    vmid {t['vmid']}: untagged dead-attempt clone of "
                       f"'{t['vm_name']}' (our clone marker in description) — adopting")
@@ -103,7 +103,7 @@ def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_
         if src is None:
             raise RuntimeError(f"no stopped template named '{t['box']['template']}' on the node")
         upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone",
-                           data=full_clone_data(t["vmid"], t["vm_name"], comp_dir.name))["data"]
+                           data=full_clone_data(t["vmid"], t["vm_name"], competition_name(comp_dir)))["data"]
         wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
             "net0": f"virtio,bridge={t['bridge']}", "tags": ownership_tag_str})
@@ -132,7 +132,7 @@ def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password
             # Ownership proof: only THIS competition's clone marker in the
             # description adopts it; expect_tags=set() used to destroy ANY VM
             # found here, foreign ones included.
-            if clone_marker(comp_dir.name) not in str(locked_cfg.get("description") or ""):
+            if clone_marker(competition_name(comp_dir)) not in str(locked_cfg.get("description") or ""):
                 raise RuntimeError(
                     f"refusing to destroy locked vmid {t['vmid']} on reserved golden "
                     f"slot '{t['vm_name']}' — no clone marker in its description, "
@@ -141,7 +141,7 @@ def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password
         else:
             gc_orphan_volumes(node, t["vmid"])
         upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone",
-                           data=full_clone_data(t["vmid"], t["vm_name"], comp_dir.name))["data"]
+                           data=full_clone_data(t["vmid"], t["vm_name"], competition_name(comp_dir)))["data"]
         wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
             "ipconfig0": f"ip={t['ip']}/24,gw={t['gateway']}",
@@ -206,7 +206,7 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
                              anchor_identifier=anchor_identifier)
     # Full ownership set (comp tag + per-deploy run tag): stamped on everything this
     # build creates and required before any destroy here touches a VM.
-    own_set = ownership_tags(comp_dir.name, run_id, GOLDEN_TAG)
+    own_set = ownership_tags(competition_name(comp_dir), run_id, GOLDEN_TAG)
     ownership_tag_str = ",".join(sorted(own_set))
     templates = _template_vmid_map(node)
     # Loaded lazily but only once: the coverage skip paths and the plant section both

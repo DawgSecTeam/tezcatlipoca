@@ -15,7 +15,7 @@ from common.targets import describe_target
 from engine.template_freeze import stored_template_hash
 from common.timing import timed
 from common.ssh_ops import quote_sshkeys
-from common.utils import compfile_flag
+from common.utils import compfile_flag, competition_name
 from pathlib import Path
 from redeploy.redeploy_select_ops import box_platform
 from redeploy.redeploy_plant_ops import rerun_domain_configs
@@ -80,7 +80,7 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
         # belongs to another run of the same competition ID (a second worktree) is
         # refused — rebuilding over it would eat someone else's range.
         destroy_vm_if_exists(tnode, t["vmid"],
-                             expect_tags=ownership_tags(comp_dir.name, state["run_id"]))
+                             expect_tags=ownership_tags(competition_name(comp_dir), state["run_id"]))
 
         upid = proxmox_api("POST", f"/nodes/{tnode}/qemu/{src_vmid}/clone", data={
             "newid": t["vmid"],
@@ -90,7 +90,7 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
             # task finishes — a kill mid-clone would otherwise leave an unmarked VM
             # squatting our vmid slot. The description exists from the clone's first
             # instant (infra.ownership.clone_marker; winad-testrun 2026-09-25).
-            "description": clone_marker(comp_dir.name),
+            "description": clone_marker(competition_name(comp_dir)),
         })["data"]
         wait_for_proxmox_task(tnode, upid)
 
@@ -101,7 +101,7 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
             # Stamp ownership explicitly: a clone INHERITS its source's tags, and a
             # golden reused across runs carries a stale run-<id> — the next teardown's
             # full-tag-set guard would then refuse this box as foreign.
-            "tags": ";".join(sorted(ownership_tags(comp_dir.name, state["run_id"]))),
+            "tags": ";".join(sorted(ownership_tags(competition_name(comp_dir), state["run_id"]))),
         }
         if not windows:
             config.update({

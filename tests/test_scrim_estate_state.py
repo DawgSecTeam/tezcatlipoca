@@ -50,7 +50,7 @@ class RedIpResolution(unittest.TestCase):
             comp = Path(td)
             (comp / "Compfile").write_text("name c\nred01_ip 10.0.0.196\n")
             args = SimpleNamespace(red_ip=None)
-            red_stage._resolve_red_ip(args, comp)
+            red_stage._resolve_red_ip(args, comp, None)
             self.assertEqual(args.red_ip, "10.0.0.196")
 
     def test_an_explicit_flag_still_wins(self):
@@ -58,7 +58,7 @@ class RedIpResolution(unittest.TestCase):
             comp = Path(td)
             (comp / "Compfile").write_text("name c\nred01_ip 10.0.0.196\n")
             args = SimpleNamespace(red_ip="10.0.0.240")
-            red_stage._resolve_red_ip(args, comp)
+            red_stage._resolve_red_ip(args, comp, None)
             self.assertEqual(args.red_ip, "10.0.0.240")
 
 

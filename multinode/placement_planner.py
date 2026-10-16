@@ -7,9 +7,9 @@ import time
 from common.constants import ENGINE_TEMPLATE_VMID_OFFSET, MAX_BOXES_PER_TEAM
 from multinode.nodes_config import (MAX_SATELLITES, NODES_CONFIG_PATH, PLACEMENT_VERSION,
                                     load_nodes_config)
-from multinode.placement_record import (anchor_identifier, default_jump_mgmt_ip, engine_record,
-                              golden_slot_span, jump_vmid_for, read_placement, teams_on_node,
-                              write_placement)
+from multinode.placement_record import (anchor_identifier, check_team_blocks,
+                              default_jump_mgmt_ip, engine_record, golden_slot_span,
+                              jump_vmid_for, read_placement, teams_on_node, write_placement)
 
 
 
@@ -247,6 +247,7 @@ def compute_placement(records, balancing, teams, boxes, engine_vmid, comp_name,
             for r in records},
         "computed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    check_team_blocks(placement, teams)
     return placement
 
 

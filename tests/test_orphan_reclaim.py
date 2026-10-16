@@ -18,7 +18,7 @@ _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from infra.ownership import Refusal  # noqa: E402
+from infra.ownership import Refusal, bridge_comment  # noqa: E402
 from teardown import orphan_ops  # noqa: E402
 from estate import state as estate_state  # noqa: E402
 
@@ -26,9 +26,11 @@ from estate import state as estate_state  # noqa: E402
 class FakeNode:
 # The node's VMs; a patched destroy removes the vmid so the reclaim's own re-list sees it gone.
 
-    def __init__(self, vms):
+    def __init__(self, vms, bridges=None):
         self.vms = {int(v["vmid"]): dict(v) for v in vms}
+        self.bridges = dict(bridges or {})
         self.deleted = []
+        self.deleted_bridges = []
 
     def __call__(self, method, path, **kw):
         assert method == "GET" and path.endswith("/qemu"), (method, path)
@@ -61,6 +63,9 @@ class Reclaim(unittest.TestCase):
         self._patches = [
             mock.patch.object(orphan_ops, "proxmox_api", self.fake),
             mock.patch.object(orphan_ops, "destroy_vm_if_exists", self._destroy),
+            mock.patch.object(orphan_ops, "node_bridges",
+                              side_effect=lambda node: dict(self.fake.bridges)),
+            mock.patch.object(orphan_ops, "destroy_bridge_if_exists", self._destroy_bridge),
         ]
         for p in self._patches:
             p.start()
@@ -70,6 +75,11 @@ class Reclaim(unittest.TestCase):
         self.calls.append({"vmid": vmid, "expect_tags": set(expect_tags or ()),
                            "require_owned": require_owned})
         self.fake.vms.pop(int(vmid), None)
+
+    def _destroy_bridge(self, node, iface):
+        self.fake.deleted_bridges.append(iface)
+        self.fake.bridges.pop(iface, None)
+        return True
 
     def _reclaim(self, **kw):
         return orphan_ops.reclaim("comp", "run-aaaa1111", node=self.node, log=lambda *a: None, **kw)
@@ -113,6 +123,21 @@ class Reclaim(unittest.TestCase):
                          {"tezcatlipoca", "comp-comp", "run-aaaa1111", "tezcatlipoca-golden"})
         self.assertEqual(by_vmid[111]["expect_tags"],
                          {"tezcatlipoca", "comp-comp", "run-aaaa1111", "engine-template"})
+
+    def test_only_this_runs_commented_bridges_come_out(self):
+        self.fake.bridges = {
+            "vmbr0": "",
+            "vmbr101": bridge_comment("comp", "run-aaaa1111", "team 101"),
+            "vmbr102": bridge_comment("other", "run-cccc3333", "team 102"),
+            "vmbr103": "Quotient team 103 — isolated, no uplink",   # uncommented ownership
+        }
+        result = self._reclaim()
+        self.assertEqual(result["bridges"], ["vmbr101"])
+        self.assertEqual(self.fake.deleted_bridges, ["vmbr101"])
+        self.assertTrue(any("vmbr102" in n and "another run" in n for n in result["notes"]),
+                        result["notes"])
+        self.assertTrue(any("vmbr103" in n and "no ownership comment" in n
+                            for n in result["notes"]), result["notes"])
 
     def test_it_refuses_when_a_comp_dir_still_owns_the_run(self):
         with tempfile.TemporaryDirectory() as d:

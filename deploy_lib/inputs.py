@@ -9,7 +9,7 @@ import sys
 from config.config_ops import load_boxes, load_packet_passwords
 from config.injects_config import load_injects
 from common.constants import SCORING_ENGINE_VMID
-from common.utils import compfile_flag, load_compfile, load_users_config
+from common.utils import compfile_flag, competition_name, load_compfile, load_users_config
 from estate import config
 from estate import state as estate_state
 
@@ -65,7 +65,7 @@ def load_competition_spec(ctx, comp_dir):
     # apt (it still breaks every other resolver user on the box); empty-sources/hold
     # configs break apt either way. Set `apt_cache 0` in the Compfile for full realism.
     ctx.apt_cache = bool(compfile_flag(comp_dir / "Compfile", "apt_cache", 1))
-    ctx.comp_name = comp_dir.name
+    ctx.comp_name = competition_name(comp_dir)
     # No estate line in this banner: placement — and with it the endpoint, node, datastore
     # and template — is only resolved later, so it printed '?' and profile defaults
     # (endpoint=? node=pve datastore=local-lvm tpl=? engine-mgmt=default). The resolved

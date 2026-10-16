@@ -49,13 +49,16 @@ class PreflightPlan:
     our_run_tag: Optional[str] = None
     engine_mgmt_ip: Optional[str] = None
     placement: Optional[dict] = None   # multi-node only (jump-IP sweep)
-    red01_vmid: int = 0                # the comp's reserved red01 (engine+170 unless overridden)
-    red01_ip: str = ""                 # the comp's red01 address (10.0.0.198 unless overridden)
+    red01_vmid: int = 0                # the comp's reserved red01 (one stride past the goldens)
+    red01_ip: str = ""                 # the comp's red01 address ('' until deploy-time selection)
+    red01_ip_explicit: bool = False    # the address was chosen (operator or proven selection):
+                                       # unverifiable is only a warning, never a refusal
     resuming: bool = False             # collision gates relax for THIS comp's own leftovers
 
     @property
     def comp_name(self):
-        return self.comp_dir.name
+        from common.utils import competition_name
+        return competition_name(self.comp_dir)
 
     @property
     def our_tags(self):
@@ -99,6 +102,7 @@ def single_node_plan(comp_dir, boxes, num_teams, teams, engine_vmid, check_free,
                          engine_mgmt_ip=engine_mgmt_ip,
                          red01_vmid=badauto_config_ops.red01_vmid_for(comp_dir, engine_vmid),
                          red01_ip=badauto_config_ops.red01_ip_for(comp_dir),
+                         red01_ip_explicit=badauto_config_ops.red01_ip_is_explicit(comp_dir),
                          resuming=not check_free)
 
 
@@ -140,8 +144,13 @@ def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_i
             # the create path's to reconcile; a fresh deploy refuses them instead
             check_collisions=bool(check_free and not unused_satellite),
             check_headroom=bool(check_free and not unused_satellite)))
+    red = placement.get("red01") or {}
     return PreflightPlan(comp_dir, boxes, engine_vmid, shares, our_run_tag=our_run_tag,
                          engine_mgmt_ip=engine_mgmt_ip, placement=placement,
-                         red01_vmid=badauto_config_ops.red01_vmid_for(comp_dir, engine_vmid),
-                         red01_ip=badauto_config_ops.red01_ip_for(comp_dir),
+                         red01_vmid=red.get("vmid")
+                         or badauto_config_ops.red01_vmid_for(comp_dir, engine_vmid, placement),
+                         red01_ip=red.get("ip") or "",
+                         # A recorded address was either typed by the operator or proven free
+                         # when it was selected; either way it is not re-litigated here.
+                         red01_ip_explicit=bool(red.get("ip")),
                          resuming=not check_free)

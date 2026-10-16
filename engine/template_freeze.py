@@ -21,8 +21,8 @@ import subprocess
 import time
 from pathlib import Path
 
-from common.constants import ENGINE_TEMPLATE_VMID_OFFSET
 from infra.client import proxmox_api
+from multinode.placement_record import engine_template_vmid
 
 
 def load_template_hashes(comp_dir):
@@ -74,11 +74,6 @@ def forget_template_hashes(comp_dir):
     for key in ("engine", "golden", "golden_planted", "updated"):
         templates.pop(key, None)
     document.save()
-
-
-def engine_template_vmid(engine_vmid):
-# Just below the golden block (+150), so one preflight scan covers both.
-    return int(engine_vmid) + ENGINE_TEMPLATE_VMID_OFFSET
 
 
 def sha256_text(text):

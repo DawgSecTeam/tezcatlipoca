@@ -8,8 +8,9 @@ still references it. TIERS is that fixed order and is the only thing that decide
 """
 
 from common.constants import GOLDEN_TAG
-from infra.client import destroy_bridge_if_exists
-from infra.ownership import Ownership, Refusal, destroy_vm_if_exists
+from infra.client import destroy_bridge_if_exists, node_bridges
+from infra.ownership import (Ownership, Refusal, bridge_owned_by, destroy_vm_if_exists,
+                             ownership_identity)
 
 TIERS = (("team_box", "jump"), ("golden",), ("engine",), ("engine_template",), ("bridge",))
 
@@ -43,8 +44,8 @@ def destroy_tier(state, kind, *, nodes=None, only=None, log=print):
     destroys one team's resources without touching the others.
     """
     identity = state.data.get("identity") or {}
-    ownership = Ownership(identity.get("comp_name") or state.comp_dir.name,
-                          identity.get("run_id") or "")
+    comp_name = ownership_identity(state.comp_dir, identity.get("comp_name"))
+    ownership = Ownership(comp_name, identity.get("run_id") or "")
     destroyed, refused, skipped = [], [], []
     for row in state.resources(kind):
         if nodes is not None and row["node"] not in nodes:
@@ -65,6 +66,17 @@ def destroy_tier(state, kind, *, nodes=None, only=None, log=print):
                 # silently no-opped while the row was forgotten and reported destroyed —
                 # live 2026-10-15, run-ee5717cd left vmbr151 active through a "clean" teardown.
                 name = row["bridge"] or row["name"]
+                # A bridge carries no tags, so its comment is the whole ownership proof:
+                # never remove one that cannot be attributed to this run.
+                comments = node_bridges(row["node"])
+                if name in comments and not bridge_owned_by(
+                        comments[name], comp_name, identity.get("run_id") or ""):
+                    refused.append({"entry": _entry(row),
+                                    "reason": f"bridge {name} on {row['node']} is not this "
+                                              f"run's (comment: {comments[name]!r})"})
+                    log(f"  REFUSED {kind} {row['name']}: bridge {name} is not attributable "
+                        f"to this run — not removed")
+                    continue
                 if not destroy_bridge_if_exists(row["node"], name):
                     refused.append({"entry": _entry(row),
                                     "reason": f"bridge {name} is still on {row['node']} "
@@ -85,6 +97,9 @@ def destroy_tier(state, kind, *, nodes=None, only=None, log=print):
 
 def destroy_estate(state, *, full=True, nodes=None, log=print):
     """Destroy the state's estate in TIERS order; returns the teardown summary."""
+    identity = state.data.get("identity") or {}
+    comp_name = ownership_identity(state.comp_dir, identity.get("comp_name"))
+    run_id = identity.get("run_id") or ""
     refused, skipped, killed = [], [], []
     for tier in TIERS:
         for kind in tier:
@@ -105,5 +120,20 @@ def destroy_estate(state, *, full=True, nodes=None, log=print):
             killed += destroyed
             refused += tier_refused
             skipped += tier_skipped
+    # A bridge created but never recorded (the state write failed) is still ours: its comment
+    # proves it, and the tier above only walks the record. No estate (or no run id) means
+    # there is nothing to attribute, so the node is not even asked.
+    for node in (nodes or []) if run_id and state.resources() else []:
+        for iface, comment in node_bridges(node).items():
+            if not iface.startswith("vmbr") or not bridge_owned_by(
+                    comment, comp_name, run_id):
+                continue
+            if any(r["node"] == node and (r["bridge"] or r["name"]) == iface
+                   for r in state.resources("bridge")):
+                continue
+            if destroy_bridge_if_exists(node, iface):
+                log(f"  destroyed unrecorded bridge {iface} on {node}")
+                killed.append({"kind": "bridge", "node": node, "name": iface, "vmid": None,
+                               "bridge": iface})
     state.save()
     return {"destroyed": killed, "skipped": skipped, "refused": refused}

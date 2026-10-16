@@ -50,9 +50,10 @@ def _resource_key(entry):
 
 
 def _skeleton(comp_dir):
+    from common.utils import competition_name
     return {
         "schema_version": SCHEMA_VERSION,
-        "identity": {"comp_name": comp_dir.name},
+        "identity": {"comp_name": competition_name(comp_dir)},
         "secrets": {},
         "roster": {},
         "placement": None,

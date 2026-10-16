@@ -16,7 +16,6 @@ Two families, one module:
 import os
 from dataclasses import dataclass
 
-from common.constants import ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_VMID_OFFSET, MAX_BOXES_PER_TEAM
 from infra.client import proxmox_api
 from common.targets import vm_id_for
 from infra.ownership import MARKER, ownership_verdict, parse_vm_tags
@@ -33,19 +32,23 @@ class Slot:
                                         # kept for reuse — `--keep-templates`/`--teams-only`
 
 
-def expected_slots(share, boxes, engine_vmid):
+def expected_slots(share, plan):
     """Every vmid this share's deploy will create, with its report label.
 
-    Order and wording differ between single- and multi-node only in the report (the vmid math
-    is identical: goldens at engine+GOLDEN_VMID_OFFSET+slot*MAX_BOXES_PER_TEAM, teams by
-    vm_id_for)."""
+    Reads the placement object's own `engine_template_vmid`, `golden_vmids` and satellite
+    `jump_vmid`; a single-node plan (no placement) derives them from the one module that owns
+    the arithmetic. Order and wording differ between single- and multi-node only in the
+    report."""
+    from multinode import placement_record as placement_ops
+    boxes, engine_vmid, placement = plan.boxes, plan.engine_vmid, plan.placement
     slots = []
     if share.is_engine:
         slots.append(Slot(engine_vmid, f"scoring engine vmid {engine_vmid}"))
         # M4: the engine template's reserved slot (just below the golden block). A TEMPLATE
         # there carrying this competition's tag is adopted — reused or rebuilt by hash, NOT
         # a leftover. Another competition's template there is fatal.
-        et = engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET
+        et = ((placement or {}).get("engine_template_vmid")
+              or placement_ops.engine_template_vmid(engine_vmid))
         # template_slot as well as persistent_template: the --keep-templates teardown keeps
         # this template in MULTI-node mode too, and gating the tolerance on `persistent_template`
         # alone (False when share.multi) made the next deploy refuse its own kept engine
@@ -55,21 +58,61 @@ def expected_slots(share, boxes, engine_vmid):
     teams = [Slot(vm_id_for(t["identifier"], i), f"team vmid {vm_id_for(t['identifier'], i)} "
                   f"({k}/{boxes[i]['name']})")
              for k, t in share.teams.items() for i in range(len(boxes))]
+    recorded_goldens = ((placement or {}).get("golden_vmids") or {}).get(share.name)
     goldens = []
     for i in range(len(boxes)):
-        vid = engine_vmid + GOLDEN_VMID_OFFSET + share.slot * MAX_BOXES_PER_TEAM + i
+        vid = (recorded_goldens[i] if recorded_goldens
+               else placement_ops.golden_vmid_for_slot(engine_vmid, share.slot, i))
         goldens.append(Slot(vid, f"golden vmid {vid} ({boxes[i]['name']})" if not share.multi
                             else f"golden vmid (slot {share.slot}) #{vid}",
                             template_slot=True))
     if share.multi:
         slots += goldens
         if share.slot > 0:
-            slots.append(Slot(engine_vmid + 130 + share.slot,
-                              f"jump vmid {engine_vmid + 130 + share.slot}"))
+            jump = next((s["jump_vmid"] for s in (placement or {}).get("satellites") or []
+                         if s["slot"] == share.slot),
+                        placement_ops.jump_vmid_for(engine_vmid, share.slot))
+            slots.append(Slot(jump, f"jump vmid {jump}"))
         slots += teams
     else:
         slots += teams + goldens
     return slots
+
+
+def check_placement(placement):
+    """The one proof over the whole placement object: no vmid appears in two of this run's
+    own bands, and no team block overlaps them.
+
+    The gates below prove the CLUSTER is free of other people's resources; this proves the
+    OBJECT is free of itself, so four gates no longer each carry a partial version of the
+    arithmetic."""
+    if not placement or not placement.get("engine_vmid"):
+        return
+    from multinode import placement_record as placement_ops
+    engine_vmid = int(placement["engine_vmid"])
+    bands = {
+        "engine": {engine_vmid},
+        "engine template": {int(placement.get("engine_template_vmid")
+                                or placement_ops.engine_template_vmid(engine_vmid))},
+    }
+    if placement.get("red01"):
+        bands["red01"] = {int(placement["red01"]["vmid"])}
+    for name, vmids in (placement.get("golden_vmids") or {}).items():
+        bands[f"goldens on {name}"] = {int(v) for v in vmids}
+    for sat in placement.get("satellites") or []:
+        bands[f"jump on {sat['name']}"] = {int(sat["jump_vmid"])}
+    seen = {}
+    for name, band in bands.items():
+        for vmid in band:
+            if vmid in seen:
+                raise SystemExit(
+                    f"  ERROR: the placement record puts vmid {vmid} in two of this run's own "
+                    f"bands ({seen[vmid]} and {name}) — the record is inconsistent; destroy "
+                    f"and redeploy to re-place.")
+            seen[vmid] = name
+    placement_ops.check_team_blocks(
+        placement, {k: {"identifier": i}
+                    for k, i in (placement.get("team_identifiers") or {}).items()})
 
 
 def expected_bridges(share, boxes):
@@ -102,7 +145,8 @@ def check_collisions(share, plan, vms):
     vm_by_vmid = {vm.get("vmid"): vm for vm in vms}
 
     clashes, leftovers, reclaim = [], [], 0
-    for slot in expected_slots(share, plan.boxes, plan.engine_vmid):
+    check_placement(plan.placement)
+    for slot in expected_slots(share, plan):
         if slot.vmid not in existing:
             continue
         vm = vm_by_vmid[slot.vmid]
@@ -177,9 +221,75 @@ def check_collisions(share, plan, vms):
         print(f"  Preflight{share.label}: {reclaim} interrupted clone(s) of this competition "
               f"— phase 1 reclaims them")
     elif not share.multi:
+        from multinode import placement_record as placement_ops
         print(f"  Preflight: engine vmid {plan.engine_vmid}, engine template vmid "
-              f"{plan.engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET}, golden vmids "
-              f"{plan.engine_vmid + GOLDEN_VMID_OFFSET}+, all team vmids, and team bridges are free")
+              f"{placement_ops.engine_template_vmid(plan.engine_vmid)}, golden vmids "
+              f"{placement_ops.golden_vmid_for_slot(plan.engine_vmid, 0, 0)}+, all team vmids, "
+              f"and team bridges are free")
+
+
+def share_mgmt_bridge(plan, share):
+# The bridge this share's management NIC attaches to: the node record's own when it names
+#     one (a node whose L2 is vmbr100), else the placement's resolved value, else vmbr0.
+    from multinode.placement_record import record_of, resolved_mgmt_bridge
+    if plan.placement and share.name:
+        rec = record_of(plan.placement, share.name)
+        return rec.mgmt_bridge or resolved_mgmt_bridge(plan.placement)
+    return resolved_mgmt_bridge(plan.placement)
+
+
+def check_mgmt_bridge(node, mgmt_bridge):
+    """Refuse a management bridge the node does not own.
+
+    Attaching every NIC to a bridge that is not there fails at clone time with a PVE error
+    the operator cannot act on; the node's own network list is the proof."""
+    nets = proxmox_api("GET", f"/nodes/{node}/network")["data"]
+    if mgmt_bridge not in {n.get("iface") for n in nets}:
+        raise SystemExit(
+            f"  ERROR: the management bridge {mgmt_bridge} does not exist on node '{node}' — "
+            f"NICs would attach to a bridge that is not there. Set proxmox.mgmt_bridge (or "
+            f"this node's mgmt_bridge in nodes.json) to the bridge carrying the estate's "
+            f"management L2.")
+    print(f"  Preflight: management bridge {mgmt_bridge} exists on node '{node}'")
+
+
+def scan_vms_for(nodes):
+    """Union of every hosting node's cluster view.
+
+    The management L2 is one segment, but on independent hosts /cluster/resources sees only
+    its own VMs — so an address scan must ask every node that could answer it."""
+    from infra.client import cluster_vms_for
+    seen, out = set(), []
+    for node in nodes:
+        for vm in cluster_vms_for(node):
+            key = (vm.get("vmid"), vm.get("node"))
+            if key not in seen:
+                seen.add(key)
+                out.append(vm)
+    return out
+
+
+# The band red01's address is selected from (a tool constant, not a knob). The legacy
+# .196-.199 defaults are excluded so a selected value can never be one of them.
+RED01_IP_BAND = ("10.0.0.240", "10.0.0.249")
+RED01_LEGACY_IPS = ("10.0.0.196", "10.0.0.197", "10.0.0.198", "10.0.0.199")
+
+
+def select_red_ip(vms, claimed=(), skip_vmids=(), ours_tags=None):
+    """The lowest red-band address nothing answers and no claimant holds, or (None, unchecked).
+
+    `claimed` is everything this placement already takes on the L2 — the engine's address, its
+    gateway, every jump address — because a scan taken before those VMs exist cannot see them,
+    and handing red01 the engine's own address is exactly the collision to exclude."""
+    takers, unchecked = running_guest_ips(vms, set(skip_vmids), ours_tags)
+    taken = set(takers) | set(claimed) | set(RED01_LEGACY_IPS)
+    prefix, lo = RED01_IP_BAND[0].rsplit(".", 1)
+    hi = int(RED01_IP_BAND[1].rsplit(".", 1)[1])
+    for octet in range(int(lo), hi + 1):
+        ip = f"{prefix}.{octet}"
+        if ip not in taken:
+            return ip, unchecked
+    return None, unchecked
 
 
 def guest_ipv4s(vm):

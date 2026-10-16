@@ -21,6 +21,8 @@ class FakeCtx:
         self.ssh_key_abs = ssh_key
         self.ssh_key = ssh_key
         self.engine_vmid = engine_vmid
+        self.placement = None
+        self.comp_tags = {"tezcatlipoca", "comp-t"}
         self.state = {}
         self.saved = 0
 
@@ -44,6 +46,12 @@ class PlantAssumeBreachTests(unittest.TestCase):
     def setUp(self):
         import tempfile
         self.tmp = tempfile.mkdtemp(prefix="tz-redplant-")
+        # Address selection is its own test (test_preflight_unified.Selection): the plant
+        # control flow must not depend on a live management-L2 scan.
+        picker = mock.patch.object(rp, "select_red_ip_for",
+                                   return_value=("10.0.0.240", []))
+        picker.start()
+        self.addCleanup(picker.stop)
 
     def test_no_bad_auto_checkout_degrades(self):
         ctx = FakeCtx(_write_compfile(self.tmp))
@@ -235,10 +243,10 @@ class PlantAssumeBreachTests(unittest.TestCase):
         d = _write_compfile(self.tmp, "assume_breach_red_ip 10.9.9.9\n")
         self.assertEqual(rp.red_ip_for(d), "10.9.9.9")
 
-    def test_red_ip_falls_back_to_default(self):
+    def test_red_ip_without_an_override_is_unresolved(self):
+        # '' means "select one at plant time" — never a silent legacy default.
         d = _write_compfile(self.tmp)
-        with mock.patch.object(rp, "_configured_red_ip", return_value=None):
-            self.assertEqual(rp.red_ip_for(d), rp.badauto_config_ops.DEFAULT_RED01_IP)
+        self.assertEqual(rp.red_ip_for(d), "")
 
 
 # destroy_red must hand badauto an ABSOLUTE competition path.

@@ -99,7 +99,9 @@ def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
         # default identifiers put team2's first box vmid exactly on the engine
         # template slot at 1220 — the collision only surfaced at the team-box clone pass,
         # hours into the deploy). Phase 1's wave logic treats all 10 slots per block,
-        # so the guard is full-width.
+        # so the guard is full-width. The rest of the reserved span depends on how many
+        # satellite slots the placement ends up using, so it is checked there
+        # (multinode.placement_record.check_team_blocks).
         reserved = ({engine_vmid}
                     | set(range(engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET,
                                 engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET + MAX_BOXES_PER_TEAM))

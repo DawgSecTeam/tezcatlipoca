@@ -77,7 +77,7 @@ Use `--admin-password=PW` (equals form) so a leading `-` isn't parsed as an opti
 | `plant_coverage` | Reads `plant_coverage_failed` from state; FAILs if never recorded. Golden plants record `{box}-golden` keys, which map onto every clone |
 | `degradations` | Reads the deploy's tolerated-failure ledger from state; FAILs if never recorded or if ANY entry is present (an assume-breach red that never landed, a box that never answered, a failed apt prep). The deploy continues past these; verify does not pass them |
 | `domains` | AD promotion, joins, AD plants, cross-team DomainSID uniqueness; fail-closed on a malformed `domain_roles.json` |
-| `red_identity` | With `--red-identity`: red's routed source address survives to the boxes (`--red-ip`, `--red-seg-ip`, `--red-user`; defaults from `.badauto-config.yaml`, else red01 `10.0.0.198`, `sysadmin`, `10.200.0.10`) |
+| `red_identity` | With `--red-identity`: red's routed source address survives to the boxes (`--red-ip`, `--red-seg-ip`, `--red-user`; defaults from `.badauto-config.yaml` (the address red01 was actually created at), else the legacy `10.0.0.198` fallback, `sysadmin`, `10.200.0.10`) |
 | `packet_creds`, `packet_accounts` | With `--packet <profile>`: published credentials match `credentials.txt`; `out_of_scope` decoy accounts exist |
 | `round_loop` | Rounds are advancing and the latest is fresh |
 | `firewall_in_path` | Per team: engine routes `192.168.<id>.1` via `172.31.<id>.2`, the firewall answers on `:22`, the engine no longer holds `.1`. Non-gating SKIP without a firewall |

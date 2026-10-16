@@ -147,6 +147,14 @@ class Engine(Base):
         self.assertEqual(config["memory"], 4096)
         self.assertIn("run-abc123", config["tags"])
 
+    def test_the_management_nic_uses_the_resolved_bridge(self):
+        # An estate whose management L2 is not vmbr0 (the cyber range's is vmbr100) used to
+        # get VMs attached to vmbr0 — a bridge the node may not even have.
+        self._create(mgmt_bridge="vmbr100")
+        config = self.fake.config_write(1300)
+        self.assertEqual(config["net0"], "virtio,bridge=vmbr100")
+        self.assertEqual(config["net1"], "virtio,bridge=vmbr120")
+
     def test_transit_nics_come_after_every_team_nic(self):
         self._create(transit_identifiers=["120", "121"])
         config = self.fake.config_write(1300)

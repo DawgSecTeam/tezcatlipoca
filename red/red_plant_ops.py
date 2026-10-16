@@ -100,11 +100,50 @@ def parse_teardown_refusal(proc):
     return None
 
 
-def red_ip_for(comp_dir):
-    """Compfile override -> the comp's own bad-auto config -> built-in default."""
-    return (compfile_value(comp_dir / "Compfile", "assume_breach_red_ip", "")
-            or compfile_value(comp_dir / "Compfile", "red01_ip", "")
-            or _configured_red_ip(comp_dir) or badauto_config_ops.DEFAULT_RED01_IP)
+def red_ip_for(comp_dir, placement=None):
+# The address red01 will be created at: the operator's Compfile value, the placement's
+#     recorded one, else '' — the selection happens at plant time (_resolve_red_ip).
+    return badauto_config_ops.red01_ip_for(comp_dir, placement)
+
+
+def select_red_ip_for(comp_dir, placement, engine_mgmt_ip="", comp_tags=None):
+# Select an address from the red band NOW and record it in the placement.
+#
+#     Called immediately before red01 is created (deploy phase 7, or a scrim staging red on
+#     a range that never deployed one): a selection made in prepare() is hours early, and two
+#     ranges submitted together would both take the same "lowest free" address.
+    from estate import config
+    from infra import collisions
+    from multinode.placement_record import write_red01_ip
+    claimed = {engine_mgmt_ip or "", config.active().engine.mgmt_gw or ""}
+    nodes = [config.active().proxmox.node]
+    skip = set()
+    if placement:
+        claimed |= {s["jump_mgmt_ip"] for s in placement.get("satellites") or []}
+        nodes = [rec["node"] for rec in placement["nodes"].values()]
+        skip |= {s["jump_vmid"] for s in placement.get("satellites") or []}
+        skip.add(placement.get("engine_vmid") or 0)
+    ip, unchecked = collisions.select_red_ip(
+        collisions.scan_vms_for(nodes), claimed, skip, comp_tags)
+    if ip and placement:
+        write_red01_ip(comp_dir, placement, ip)
+    return ip, unchecked
+
+
+def _resolve_red_ip(ctx):
+# red01's address for this deploy: the operator's value, the placement's recorded one, else
+#     selected now. The residual window (a VM created between the scan and bad-auto's clone)
+#     is real and is why the recorded value is never re-derived.
+    override = badauto_config_ops.red01_ip_override(ctx.comp_dir)
+    if override:
+        return override, []
+    placement = getattr(ctx, "placement", None)
+    recorded = ((placement or {}).get("red01") or {}).get("ip")
+    if recorded:
+        return recorded, []
+    return select_red_ip_for(ctx.comp_dir, placement,
+                             engine_mgmt_ip=getattr(ctx, "engine_mgmt_ip", "") or "",
+                             comp_tags=getattr(ctx, "comp_tags", None))
 
 
 def _deploy_red(comp_dir, env, config_path=None, timeout=1800):
@@ -228,7 +267,19 @@ def plant_assume_breach(ctx):
 
     depth = min(max(compfile_flag(comp_dir / "Compfile", "assume_breach_depth", 3), 0),
                 SEED_DEPTH_MAX)
-    red_ip = red_ip_for(comp_dir)
+    red_ip, unchecked = _resolve_red_ip(ctx)
+    if not red_ip:
+        from infra import collisions
+        detail = (f" ({len(unchecked)} running guest(s) have no agent to ask: "
+                  f"{', '.join(unchecked[:5])})" if unchecked else "")
+        record_degradation("assume_breach_red_ip", "no free address in the red band")
+        print(f"  assume-breach: REFUSING to create red01 — no address in the red band "
+              f"{collisions.RED01_IP_BAND[0]}..{collisions.RED01_IP_BAND[1]} is provably free"
+              f"{detail}. Set red01_ip in the Compfile to an address you have checked yourself.")
+        return {"ok": False, "reason": "no free red01 address"}
+    if unchecked:
+        print(f"  assume-breach: red01 takes the lowest unanswered red-band address; "
+              f"{len(unchecked)} running guest(s) have no agent to ask")
     ssh_key = getattr(ctx, "ssh_key_abs", None) or getattr(ctx, "ssh_key", None)
     if not ssh_key:
         record_degradation("assume_breach", "no ssh key on the deploy context")
@@ -246,7 +297,7 @@ def plant_assume_breach(ctx):
     try:
         base_path, red_vmid, red_ip = badauto_config_ops.prepare_deploy_config(
             comp_dir, engine_vmid, engine_ip=realm_c2_ops.engine_ip_for(comp_dir),
-            ssh_key=ssh_key)
+            ssh_key=ssh_key, placement=ctx.placement, red_ip=red_ip)
         config_path = base_path
     except (TypeError, ValueError) as e:
         record_degradation("assume_breach_config", f"cannot reserve red01 identity: {e}")

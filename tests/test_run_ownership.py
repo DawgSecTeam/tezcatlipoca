@@ -413,7 +413,8 @@ class MultinodePreflightRunAware(unittest.TestCase):
                 patch("infra.resources.proxmox_api",
                       return_value={"data": {"ostype": "l26",
                                              "ide2": "local:vm-900-cloudinit"}}), \
-                patch("infra.collisions.proxmox_api", return_value={"data": []}), \
+                patch("infra.collisions.proxmox_api",
+                      return_value={"data": [{"iface": "vmbr0"}]}), \
                 patch("infra.resources.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
                 patch("infra.gates.remote_access_gate"), \
                 patch("infra.gates.catalog_gate"):

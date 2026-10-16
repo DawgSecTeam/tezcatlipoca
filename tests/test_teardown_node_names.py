@@ -7,8 +7,12 @@ verdict read NOT CLEAN) even though the satellite entries were already mapped
 (2026-10-14, a field deploy's teardown).
 """
 
+import contextlib
+import io
+import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +21,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
+from estate import state as estate_state  # noqa: E402
 import teardown.machinery as tmach  # noqa: E402
 import teardown.runner as trunner  # noqa: E402
 import teardown.steps as tsteps  # noqa: E402
@@ -101,6 +106,54 @@ class PreStopNodes(unittest.TestCase):
                           side_effect=lambda *a, **k: seen.update(k)):
             tsteps.PreStopStep().run(ctx)
         self.assertEqual(seen["team_nodes"], {"team1": "pve1", "team2": "pve2"})
+
+
+class OwnershipIdentity(unittest.TestCase):
+    def _workspace(self, td, comp_name):
+        comp = Path(td) / "run-abc12345" / "comp"
+        comp.mkdir(parents=True)
+        (comp / "Compfile").write_text("name scrim-one-light\nscenario x\ndifficulty 1\n")
+        (comp / "estate-state.json").write_text(json.dumps({
+            "schema_version": 1,
+            "identity": {"comp_name": comp_name, "run_id": "run-abc12345"},
+            "resources": []}))
+        return comp
+
+    def test_the_deploys_recorded_identity_wins_over_the_container_dir(self):
+        with tempfile.TemporaryDirectory() as td:
+            _state, ownership = tmach.load_ownership(self._workspace(td, "scrim-one-light"))
+        self.assertIn("comp-scrim-one-light", ownership.tags)
+        self.assertNotIn("comp-comp", ownership.tags)
+
+    def test_a_state_without_the_record_falls_back_to_the_compfile_name(self):
+        with tempfile.TemporaryDirectory() as td:
+            _state, ownership = tmach.load_ownership(self._workspace(td, ""))
+        self.assertIn("comp-scrim-one-light", ownership.tags)
+
+    def test_the_document_and_the_deploy_stamp_the_same_comp_tag(self):
+        # A dashboard workspace is <run_dir>/comp: the deploy stamps the Compfile `name`,
+        # and the destroy path must resolve that same string from the document.
+        from common.constants import ownership_tags
+        with tempfile.TemporaryDirectory() as td:
+            comp = Path(td) / "run-abc12345" / "comp"
+            comp.mkdir(parents=True)
+            (comp / "Compfile").write_text("name crimson-relay\nscenario x\ndifficulty 1\n")
+            document = estate_state.EstateState.load(comp)
+            document.section("identity")["run_id"] = "run-abc12345"
+            document.save()
+            recorded = estate_state.EstateState.load(comp).data["identity"]["comp_name"]
+            _state, ownership = tmach.load_ownership(comp)
+        self.assertEqual(recorded, "crimson-relay")
+        self.assertEqual(ownership.tags, ownership_tags(recorded, "run-abc12345"))
+
+    def test_an_old_documents_tag_wins_and_the_disagreement_is_named(self):
+        with tempfile.TemporaryDirectory() as td:
+            comp = self._workspace(td, "comp")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                _state, ownership = tmach.load_ownership(comp)
+        self.assertIn("comp-comp", ownership.tags)      # the tag its VMs actually carry
+        self.assertIn("using the RECORDED name", out.getvalue())
 
 
 if __name__ == "__main__":

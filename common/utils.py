@@ -223,6 +223,19 @@ def load_users_config(comp_dir):
     return box_username, credlist_usernames
 
 
+def competition_name(comp_dir):
+# The competition's own identity — the name its Compfile carries, never the directory.
+#     The dashboard seeds every run's comp dir as <run_dir>/comp, so a directory-derived
+#     tag made every dashboard range "comp-comp": verify_clean blamed the whole estate on
+#     it and a scrim-one-light deploy adopted another competition's kept golden as its own
+#     (2026-10-15, run-a87e0d88). Dir name only when a legacy Compfile names nothing.
+    path = Path(comp_dir) / "Compfile"
+    if not path.exists():
+        return Path(comp_dir).name
+    name, _, _ = load_compfile(path)
+    return name or Path(comp_dir).name
+
+
 def load_compfile(path):
     name = ""
     scenario = ""

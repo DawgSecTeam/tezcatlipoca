@@ -19,7 +19,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from estate import state as estate_state  # noqa: E402
-from infra.ownership import Ownership, Refusal  # noqa: E402
+from infra.ownership import Ownership, Refusal, bridge_comment  # noqa: E402
 from teardown import team_ops  # noqa: E402
 
 COMP = "probe"
@@ -49,7 +49,8 @@ class FakePVE:
                 else ";".join(self.vms[vmid]["tags"])
             return {"data": {"tags": tags}}
         if method == "GET" and path.endswith("/network"):
-            return {"data": [{"iface": b} for b in self.bridges]}
+            return {"data": [{"iface": b, "comments": bridge_comment(COMP, RUN, "team")}
+                             for b in self.bridges]}
         if method == "DELETE" and "/network/" in path:
             bridge = path.rsplit("/", 1)[1]
             self.bridges.discard(bridge)

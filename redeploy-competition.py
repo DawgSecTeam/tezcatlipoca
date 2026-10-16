@@ -28,7 +28,7 @@ from redeploy.redeploy_plant_ops import prepare_nakon_assets
 from redeploy.redeploy_rebuild_ops import mode_rebuild, reconcile_estate_state
 from redeploy.redeploy_reset_ops import mode_reset
 from redeploy.redeploy_select_ops import select_targets
-from common.utils import load_compfile, pick_competition, valid_comp_name
+from common.utils import competition_name, load_compfile, pick_competition, valid_comp_name
 from estate import config
 
 ENV_PATH = Path(".env")
@@ -133,7 +133,9 @@ def main():
             raise SystemExit("Quitting.")
 
     comp_dir = resolve_comp_dir(comp_name, args.comp_dir)
-    comp_name = comp_name or comp_dir.name
+    # Display/resolution value only (ownership comes from the state document) — but the
+    # dashboard's --comp-dir workspace would otherwise be announced as "comp".
+    comp_name = comp_name or competition_name(comp_dir)
     if not comp_dir.is_dir():
         raise SystemExit(f"  ERROR: no such competition: {comp_dir}")
 

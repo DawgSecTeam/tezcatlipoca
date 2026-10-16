@@ -235,6 +235,60 @@ class PlacementComputeTest(unittest.TestCase):
         self.assertEqual(placement_record.jump_vmid_for(1000, 4), 1134)
 
 
+class RedAddressWriteBack(unittest.TestCase):
+    def _placement(self):
+        return {"version": 2, "engine_vmid": 1300, "engine_node": "n1",
+                "nodes": {"n1": _rec("n1").to_json()}, "slots": {"n1": 0, "n2": 1},
+                "team_nodes": {"team1": "n1"}, "team_slots": {"team1": 0},
+                "team_identifiers": {"team1": "140"},
+                "satellites": [{"name": "n2", "slot": 1, "teams": [], "jump_vmid": 1431,
+                                "jump_mgmt_ip": "10.0.0.249", "anchor_identifier": ""}],
+                "jump_mgmt_ips": {"n2": "10.0.0.249"}, "probe_summary": {},
+                "red01": {"vmid": 1470, "ip": "", "node": "N1", "explicit_ip": False}}
+
+    def test_the_selected_address_is_written_back_to_the_document(self):
+        from red.red_plant_ops import select_red_ip_for
+        placement = self._placement()
+        with tempfile.TemporaryDirectory() as td:
+            comp = Path(td)
+            placement_record.write_placement(comp, placement)
+            with patch("infra.collisions.scan_vms_for",
+                       return_value=[{"vmid": 100, "node": "N1", "status": "running",
+                                      "tags": ""}]), \
+                    patch("infra.collisions.guest_ipv4s", return_value=["10.0.0.240"]):
+                ip, _unchecked = select_red_ip_for(
+                    comp, placement, engine_mgmt_ip="10.0.0.250", comp_tags={"tezcatlipoca"})
+            stored = estate_state.EstateState.load(comp).data["placement"]["red01"]
+        self.assertEqual(ip, "10.0.0.241")            # .240 is answered, .241 is free
+        self.assertEqual(stored["ip"], "10.0.0.241")  # the address red01 was created at
+        self.assertFalse(stored["explicit_ip"])
+        self.assertEqual(stored["vmid"], 1470)
+
+    def test_a_team_block_over_the_placements_own_bands_is_refused(self):
+        placement = self._placement()
+        # engine 1300 with one satellite: slot 1's goldens are 1460..1469, so identifier
+        # 126's block (1460..1469) lands exactly on them.
+        with self.assertRaises(SystemExit) as cm:
+            placement_record.check_team_blocks(placement, {"team1": {"identifier": "126"}})
+        self.assertIn("reserved vmids", str(cm.exception))
+        placement_record.check_team_blocks(placement, {"team1": {"identifier": "140"}})
+
+
+class ManagementBridge(unittest.TestCase):
+    def test_a_node_record_carries_its_own_bridge(self):
+        rec = nodes_config.NodeRecord.from_json(
+            {**_rec("n1").to_json(), "mgmt_bridge": "vmbr100"})
+        self.assertEqual(placement_record.mgmt_bridge_for(rec), "vmbr100")
+
+    def test_without_a_node_value_the_profile_applies(self):
+        self.assertEqual(placement_record.mgmt_bridge_for(_rec("n1")),
+                         config.active().proxmox.mgmt_bridge or "vmbr0")
+        self.assertEqual(placement_record.resolved_mgmt_bridge({"mgmt_bridge": "vmbr100"}),
+                         "vmbr100")
+        self.assertEqual(placement_record.resolved_mgmt_bridge(None),
+                         config.active().proxmox.mgmt_bridge or "vmbr0")
+
+
 class PlacementRecordTest(unittest.TestCase):
     def test_write_read_roundtrip_and_authority(self):
         placement = {"version": nodes_config.PLACEMENT_VERSION, "comp": "c",
@@ -248,6 +302,64 @@ class PlacementRecordTest(unittest.TestCase):
             placement_record.write_placement(Path(td), placement)
             back = placement_record.read_placement(Path(td))
         self.assertEqual(back["engine_node"], "n1")
+
+    def test_a_v1_document_resolves_red01_the_old_way_and_writes_it_back(self):
+        placement = {"version": 1, "comp": "c", "engine_vmid": 2000, "engine_node": "n1",
+                     "nodes": {"n1": _rec("n1").to_json()},
+                     "slots": {"n1": 0}, "team_nodes": {"team1": "n1"},
+                     "team_slots": {"team1": 0},
+                     "team_identifiers": {"team1": "101"},
+                     "satellites": [], "jump_mgmt_ips": {}, "probe_summary": {}}
+        with tempfile.TemporaryDirectory() as td:
+            comp = Path(td)
+            (comp / "Compfile").write_text("name c\nred01_vmid 2222\n")
+            placement_record.write_placement(comp, placement)
+            back = placement_record.read_placement(comp)
+            document = estate_state.EstateState.load(comp)
+        self.assertEqual(back["version"], 2)
+        self.assertEqual(back["red01"]["vmid"], 2222)          # Compfile wins, as v1 did
+        self.assertEqual(back["golden_vmids"], {"n1": list(range(2150, 2160))})
+        self.assertEqual(back["engine_template_vmid"], 2140)
+        stored = document.data["placement"]
+        self.assertEqual((stored["version"], stored["red01"]["vmid"]), (2, 2222))
+
+    def test_a_v1_document_without_an_override_derives_engine_plus_170(self):
+        placement = {"version": 1, "comp": "c", "engine_vmid": 2000, "engine_node": "n1",
+                     "nodes": {"n1": _rec("n1").to_json()},
+                     "slots": {"n1": 0}, "team_nodes": {"team1": "n1"},
+                     "team_slots": {"team1": 0},
+                     "team_identifiers": {"team1": "101"},
+                     "satellites": [], "jump_mgmt_ips": {}, "probe_summary": {}}
+        with tempfile.TemporaryDirectory() as td:
+            placement_record.write_placement(Path(td), placement)
+            back = placement_record.read_placement(Path(td))
+        self.assertEqual(back["red01"], {"vmid": 2170, "ip": "10.0.0.198", "node": "N1",
+                                         "explicit_ip": False})
+
+    def test_record_identities_writes_the_whole_block_once(self):
+        placement = {"version": 2, "comp": "c", "engine_vmid": 2000, "engine_node": "n1",
+                     "nodes": {"n1": _rec("n1").to_json(), "n2": _rec("n2").to_json()},
+                     "slots": {"n1": 0, "n2": 1},
+                     "team_nodes": {"team1": "n1", "team2": "n2"},
+                     "team_slots": {"team1": 0, "team2": 1},
+                     "team_identifiers": {"team1": "101", "team2": "102"},
+                     "satellites": [{"name": "n2", "slot": 1, "teams": ["team2"],
+                                     "jump_vmid": 2131, "jump_mgmt_ip": "10.0.0.249",
+                                     "anchor_identifier": "102"}],
+                     "jump_mgmt_ips": {"n2": "10.0.0.249"}, "probe_summary": {},
+                "red01": {"vmid": 1470, "ip": "", "node": "N1", "explicit_ip": False}}
+        with tempfile.TemporaryDirectory() as td:
+            comp = Path(td)
+            placement_record.record_placement_identities(
+                comp, placement, "10.0.0.230", "10.0.0.1",
+                red01={"vmid": 2160, "ip": "", "node": "pve1", "explicit_ip": False})
+            stored = estate_state.EstateState.load(comp).data["placement"]
+        self.assertEqual(stored["engine_mgmt_ip"], "10.0.0.230")
+        self.assertEqual(stored["engine_mgmt_gw"], "10.0.0.1")
+        self.assertEqual(stored["mgmt_bridge"], "vmbr0")
+        self.assertEqual(stored["engine_template_vmid"], 2140)
+        self.assertEqual(stored["golden_vmids"]["n2"], list(range(2160, 2170)))
+        self.assertEqual(stored["red01"]["vmid"], 2160)
 
     def test_bad_version_refused(self):
         with tempfile.TemporaryDirectory() as td:
@@ -631,7 +743,8 @@ class MultinodePreflightResumeTest(unittest.TestCase):
                 patch("infra.resources.proxmox_api",
                       return_value={"data": {"ostype": "l26",
                                              "ide2": "local:vm-901-cloudinit"}}), \
-                patch("infra.collisions.proxmox_api", return_value={"data": []}), \
+                patch("infra.collisions.proxmox_api",
+                      return_value={"data": [{"iface": "vmbr0"}]}), \
                 patch("infra.resources.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
                 patch("infra.gates.remote_access_gate"), \
                 patch("infra.gates.catalog_gate"), \

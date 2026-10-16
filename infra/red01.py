@@ -67,9 +67,9 @@ def red01_vmid_gate(plan):
         f"{owner}. This is the 2026-10-12 kill shape: bad-auto's deploy is "
         f"clone-or-reuse, so deploying onto an occupied red01 vmid reconfigures "
         f"and re-stamps whoever owns it. Set red01_vmid in the Compfile (or pass "
-        f"--red-vmid on the scrim) to a vmid outside every other range's block — "
-        f"the default derivation <scoring-vmid>+170 is collision-free whenever "
-        f"the scoring vmid is.")
+        f"--red-vmid on the scrim) to a vmid outside every other range's block — the "
+        f"derived red01 vmid sits one golden stride past THIS placement's last golden "
+        f"band, clear of it only for the slots this run uses.")
 
 
 def red01_ip_gate(plan):
@@ -77,11 +77,9 @@ def red01_ip_gate(plan):
     this competition's red01 (cluster-wide: the mgmt L2 spans nodes).
 
     Same unverifiable-is-not-free rule as the engine mgmt-IP gate: guests whose
-    agent cannot be asked refuse the DEFAULT red01 IP (nobody chose it) and
-    only warn on one the operator set in the Compfile."""
-    explicit = bool(compfile_value(plan.comp_dir / "Compfile", "red01_ip", "")
-                    or compfile_value(plan.comp_dir / "Compfile",
-                                      "assume_breach_red_ip", ""))
+    agent cannot be asked refuse an address nobody chose, and only warn on one that
+    was chosen (the operator's Compfile value, or a value selection proved free)."""
+    explicit = plan.red01_ip_explicit
     ours_resuming = plan.resuming
     unchecked, taker = [], None
     for vm in _all_vms(plan):
@@ -133,6 +131,35 @@ def vm_at(vmid):
     except Exception:                                       # noqa: BLE001 - reported by caller
         return None
     return next((v for v in vms if int(v.get("vmid") or -1) == int(vmid)), None)
+
+
+def occupant_verdict(vmid, comp_name=None):
+    """Who holds `vmid`: 'absent', 'ours', 'foreign', 'unmarked' or 'unknown'.
+
+    A bare vmid in the live set attributes nothing — the bad-auto marker is the only identity
+    a red01 has. 'unmarked' and 'unknown' must never read as clean; 'foreign' is an occupant
+    whose marker names another competition (our red01 is gone and its vmid was recycled)."""
+    try:
+        vms = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
+    except Exception:                                       # noqa: BLE001 - reported as unknown
+        return "unknown"
+    vm = next((v for v in vms if int(v.get("vmid") or -1) == int(vmid)), None)
+    if vm is None:
+        return "absent"
+    owner = _marker_of(vm)
+    if not owner:
+        return "unmarked"
+    if comp_name and owner != comp_name:
+        return "foreign"
+    return "ours"
+
+
+def occupant_label(vmid):
+    """The occupant's bad-auto marker, or the fact that it has none — for a refusal message."""
+    vm = vm_at(vmid)
+    owner = _marker_of(vm) if vm else None
+    return (f"bad-auto marker comp={owner}" if owner
+            else "no bad-auto marker (a recycled vmid or a foreign VM — check by hand)")
 
 
 def reclaim_unstamped_red(vmid, comp_name=None, log=print):

@@ -104,9 +104,42 @@ def has_clone_marker(node, vmid, comp_name):
     return clone_marker(comp_name) in str(cfg.get("description") or "")
 
 
+def ownership_identity(comp_dir, recorded):
+    """The comp name a range's VMs carry: what its deploy recorded, else the Compfile's."""
+    # The document wins because a range deployed before the name came from the Compfile
+    # carries the older tag (`comp-comp` under a dashboard workspace) and must still tear
+    # down. A disagreement is named: silently looking for a tag no VM carries destroys
+    # nothing, and a teardown that finds nothing reads as success.
+    from common.utils import competition_name
+    resolved = competition_name(comp_dir)
+    if recorded and recorded != resolved:
+        print(f"  NOTE: {comp_dir} records this range's competition as '{recorded}' but its "
+              f"Compfile names '{resolved}' — using the RECORDED name, which is the ownership "
+              f"tag its VMs carry.")
+    return recorded or resolved
+
+
 def comp_name_from_tags(expect_tags):
     """The competition name encoded in an ownership set's `comp-<name>` tag, or None."""
     return next((t[len("comp-"):] for t in expect_tags if t.startswith("comp-")), None)
+
+
+def bridge_comment(comp_name, run_id, prose=""):
+    """A bridge's PVE comment — the only ownership a bridge can carry, since bridges have no tags."""
+    base = f"tezcatlipoca comp-{comp_name} {run_id}"
+    return f"{base} — {prose}" if prose else base
+
+
+def bridge_owned_by(comment, comp_name, run_id):
+    """Whether a bridge's comment proves THIS run created it (comp tag + run tag + tezcatlipoca).
+
+    No run id is no proof: an empty run id would match every comment, and an unattributable
+    bridge must never be removed."""
+    if not run_id or not comp_name:
+        return False
+    text = str(comment or "")
+    return all(token in text for token in
+               ("tezcatlipoca", f"comp-{comp_name}", run_id))
 
 
 def ownership_verdict(node, vmid, raw_tags, expect_tags):

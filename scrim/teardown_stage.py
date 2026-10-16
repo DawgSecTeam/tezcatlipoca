@@ -5,7 +5,7 @@ from pathlib import Path
 from config.config_ops import write_text_atomic
 from common.comp_paths import resolve_comp_dir
 from multinode.placement_record import activate_placement, read_placement
-from common.utils import load_compfile
+from common.utils import competition_name, load_compfile
 
 from scrim import core
 from scrim import endpoints
@@ -64,7 +64,7 @@ def _reclaim_unstamped_red(vmid, comp_path):
     because it is unstamped is reclaimed here, before the teardown fails.
     """
     from infra import red01
-    name = Path(comp_path).name
+    name = competition_name(comp_path)
     placement = read_placement(comp_path)
     if placement:
         activate_placement(placement)
@@ -174,14 +174,24 @@ def teardown_red(args, env):
     vmid = (args.red_vmid or _manifest_red_vmid(args) or configured
             or badauto_config_ops.red01_vmid_for(comp_path, state_vmid))
     still = _red_vm_still_exists(vmid)
+    verdict = None
     if still:
+        from infra import red01
+        verdict = red01.occupant_verdict(vmid, competition_name(comp_path))
+        if verdict == "foreign":
+            # The occupant's marker names another competition: our red01 is gone and this
+            # vmid was recycled. Accounted for, so it is not this range's leak.
+            log(f"  red01 vmid {vmid} now holds another competition's red01 "
+                f"({red01.occupant_label(vmid)}) — this range's red01 is gone")
+            still = False
         # badauto's identity guard will not act without its deploy stamp, and a deploy that died
         # before stamping leaves exactly that (see _reclaim_unstamped_red).
-        if _reclaim_unstamped_red(vmid, comp_path):
+        elif _reclaim_unstamped_red(vmid, comp_path):
             still = _red_vm_still_exists(vmid)
     if still:
         raise RuntimeError(
-            f"badauto destroy reported success but vmid {vmid} is STILL PRESENT — red01 "
+            f"badauto destroy reported success but vmid {vmid} is STILL PRESENT "
+            f"({red01.occupant_label(vmid) if verdict else 'unattributable'}) — red01 "
             f"survived teardown EVEN AFTER the unstamped-red01 reclaim. This is the scale8 "
             f"soak's leak (red01 998 left running, "
             f"with the beacon controller and its LLM key, after the driver printed DONE). "

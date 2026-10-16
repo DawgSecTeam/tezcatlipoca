@@ -27,5 +27,37 @@ class RedVmidProof(unittest.TestCase):
             self.assertIsNone(teardown_stage._red_vm_still_exists(999))
 
 
+class Red01Attribution(unittest.TestCase):
+    def _verdict(self, description=None, comp_name=None, vms=None, boom=False):
+        from infra import red01
+
+        def api(method, path, **kw):
+            if boom:
+                raise RuntimeError("api down")
+            if path == "/cluster/resources":
+                return {"data": vms if vms is not None else [
+                    {"vmid": 998, "node": "n", "name": "bad-auto-red01", "status": "running"}]}
+            return {"data": {"description": description}}
+
+        with mock.patch("infra.red01.proxmox_api", side_effect=api):
+            return red01.occupant_verdict(998, comp_name)
+
+    def test_a_bare_vmid_with_a_foreign_marker_is_attributed(self):
+        self.assertEqual(self._verdict("bad-auto red01 comp=other id=deadbeef", "mine"),
+                         "foreign")
+
+    def test_a_marker_naming_this_competition_is_ours(self):
+        self.assertEqual(self._verdict("bad-auto red01 comp=mine id=deadbeef", "mine"), "ours")
+
+    def test_an_unmarked_occupant_is_never_clean(self):
+        self.assertEqual(self._verdict("", "mine"), "unmarked")
+
+    def test_an_absent_vmid_is_absent(self):
+        self.assertEqual(self._verdict(vms=[]), "absent")
+
+    def test_an_unreadable_cluster_is_unknown(self):
+        self.assertEqual(self._verdict(boom=True), "unknown")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -58,7 +58,7 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
         lock = threading.Lock()
 
         def fake_build_one(rec, sat, vmid, team_ids, ctx, comp_name, eng_ip, eng_gw,
-                           run_id=None, red_segment=""):
+                           run_id=None, red_segment="", mgmt_bridge="vmbr0"):
             with lock:
                 seen.append((sat["name"], vmid, tuple(team_ids)))
 
@@ -83,7 +83,7 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
         lock = threading.Lock()
 
         def fake_build_one(rec, sat, vmid, team_ids, ctx, comp_name, eng_ip, eng_gw,
-                           run_id=None, red_segment=""):
+                           run_id=None, red_segment="", mgmt_bridge="vmbr0"):
             with lock:
                 seen.append(red_segment)
 
@@ -135,6 +135,41 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
                 jump_ops.build_jump_vms({"satellites": []}, 1000, {}, "t", "10.0.0.250"),
                 {})
             build.assert_not_called()
+
+
+class JumpManagementBridge(unittest.TestCase):
+    def _net0(self, rec_bridge, placement_bridge):
+        placement = _placement(1)
+        placement["mgmt_bridge"] = placement_bridge or "vmbr0"
+        rec = NodeRecord.from_json({**placement["nodes"]["sat1"],
+                                    "mgmt_bridge": rec_bridge})
+        writes = []
+
+        def api(method, path, **kw):
+            if method == "GET":
+                raise RuntimeError("no such VM")
+            writes.append(kw.get("data"))
+            return {"data": None}
+
+        with patch.object(jump_ops, "proxmox_api", side_effect=api), \
+                patch.object(jump_ops, "find_jump_template", return_value={"alpine": 900}), \
+                patch.object(jump_ops, "destroy_vm_if_exists"), \
+                patch.object(jump_ops, "gc_orphan_volumes"), \
+                patch.object(jump_ops, "wait_for_proxmox_task"), \
+                patch.object(jump_ops, "start_vm", side_effect=RuntimeError("built")), \
+                patch.object(jump_ops, "vm_status", return_value="stopped"):
+            with self.assertRaises(RuntimeError):
+                jump_ops._build_one(rec, placement["satellites"][0], 1900, ["201"],
+                                    {"ssh_public_key_quoted": "ssh-ed25519 AAAA"},
+                                    "t", "10.0.0.250", "10.0.0.1",
+                                    mgmt_bridge=placement["mgmt_bridge"])
+        return next(d["net0"] for d in writes if d and "net0" in d)
+
+    def test_the_node_records_own_bridge_wins(self):
+        self.assertEqual(self._net0("vmbr100", "vmbr0"), "virtio,bridge=vmbr100")
+
+    def test_the_placements_resolved_bridge_is_the_fallback(self):
+        self.assertEqual(self._net0("", "vmbr100"), "virtio,bridge=vmbr100")
 
 
 if __name__ == "__main__":

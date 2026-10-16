@@ -9,7 +9,7 @@ from engine.engine_identity_ops import prepare_engine_from_template
 from golden.golden_target_ops import _quote_sshkeys
 from net.jump_ops import build_jump_vms, red_segment_from_env
 from infra.ownership import destroy_vm_if_exists, retag_ownership
-from multinode.placement_record import record_of
+from multinode.placement_record import record_of, resolved_mgmt_bridge
 from multinode.routing_ops import verify_satellite_routing
 from common.ssh_ops import forget_engine_host_key, wait_for_ssh
 from engine.engine_template_ops import build_engine_template, destroy_engine_template, find_engine_template
@@ -79,7 +79,8 @@ def ensure_engine_template(ctx):
                 ctx.node, ctx.comp_dir, ctx.engine_vmid,
                 int(config.require("proxmox.template_vm_id")),
                 engine_build_ctx(ctx), ctx.postgres_password, ctx.redis_password, quotient_ref,
-                engine_hash, engine_inputs, run_id=ctx.run_id)
+                engine_hash, engine_inputs, run_id=ctx.run_id,
+                mgmt_bridge=resolved_mgmt_bridge(ctx.placement))
         ctx.state["engine_build_info"] = build_info
     elif tmpl:
         # Kept (hash match or frozen): re-stamp its ownership to THIS run so the

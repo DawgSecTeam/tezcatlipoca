@@ -11,6 +11,7 @@ import json
 import subprocess
 
 from portal.portal_ops import check_portal, portal_enabled
+from common.utils import competition_name
 
 from verifier import context
 from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
@@ -37,7 +38,8 @@ def check_portal_gate(ctx, comp_dir, teams, admin_password):
         return proc.returncode, proc.stdout or ""
 
     try:
-        rows = check_portal(run_engine, comp_dir.name, teams, admin_password, config)
+        rows = check_portal(run_engine, competition_name(comp_dir), teams, admin_password,
+                            config)
     except CheckError as e:
         print(f"  SKIP  — could not reach the engine to probe the portal ({e})")
         return gate_skip("portal", "engine unreachable")

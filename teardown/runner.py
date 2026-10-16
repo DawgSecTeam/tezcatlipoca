@@ -16,6 +16,7 @@ from teardown import (Inventory, TeardownContext, TeardownEngine, load_ownership
 from teardown.engine import save_teardown_journal
 from teardown.modes import build_terminal_plan
 from engine.template_freeze import frozen_state
+from common.utils import competition_name
 from estate import config
 
 
@@ -23,7 +24,7 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
                           end_of_competition=False, keep_red=False,
                           artifacts_timeout=45, confirm=None, log=print):
     comp_dir = Path(comp_dir)
-    competition = comp_dir.name
+    competition = competition_name(comp_dir)
     frozen = frozen_state(comp_dir)
 
     # Multi-node: the placement record is authoritative — point the process config at the

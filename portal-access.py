@@ -30,6 +30,7 @@ from portal.portal_ops import access_state, portal_enabled, set_access  # noqa: 
 from infra.console import mint_console_tokens, node_targets  # noqa: E402
 from estate import state as estate_state  # noqa: E402
 from common.targets import load_targets  # noqa: E402
+from common.utils import competition_name  # noqa: E402
 from estate import config
 from estate.engine_setup import engine_ctx  # noqa: E402
 
@@ -45,7 +46,7 @@ def resync(comp_dir):
     nodes = node_targets(load_targets(comp_dir, teams, boxes), placement,
                          config.active().proxmox.node)
     previous = state.get("portal_console_tokens") or {}
-    tokens, problems = mint_console_tokens(comp_dir.name, state["run_id"], nodes,
+    tokens, problems = mint_console_tokens(competition_name(comp_dir), state["run_id"], nodes,
                                            previous=previous)
     for p in problems:
         print(f"  WARNING: {p}")
@@ -53,7 +54,7 @@ def resync(comp_dir):
         # The token had to be re-created (PVE only shows a secret at creation), so the
         # engine's portal.json is stale: re-run phase 8 to re-ship it.
         print("  NOTE: a console token was re-created — re-run "
-              f"`create-competition.py --competition {comp_dir.name} --from-phase 8 --yes` "
+              f"`create-competition.py --competition {competition_name(comp_dir)} --from-phase 8 --yes` "
               "so the portal picks up the new secret.")
     state["portal_console_tokens"] = {**previous, **tokens}
     estate_state.write_flat(comp_dir, state)

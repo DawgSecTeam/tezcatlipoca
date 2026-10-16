@@ -17,6 +17,7 @@ sys.path.insert(0, str(_REPO))
 from estate import destroy  # noqa: E402
 from estate.state import EstateState  # noqa: E402
 from infra import client, ownership  # noqa: E402
+from infra.ownership import bridge_comment  # noqa: E402
 
 COMP = "c1"
 RUN = "run-abcdef01"
@@ -42,9 +43,12 @@ class FakePVE:
         self.network = {"vmbr101"}
         self.pending_removed = set()
         self.reloads = 0
+        self.comment = bridge_comment(COMP, RUN, "team")
 
     def _visible(self):
-        return {"data": [{"iface": name} for name in sorted(self.network - self.pending_removed)]}
+        # Bridges carry no tags: the comment is the ownership proof the teardown reads.
+        return {"data": [{"iface": name, "comments": self.comment}
+                         for name in sorted(self.network - self.pending_removed)]}
 
     def __call__(self, method, path, **kw):
         if method == "GET" and path.endswith("/qemu"):
@@ -181,6 +185,25 @@ class Idempotent(FakeAPI):
         self.assertEqual(summary["refused"], [])
         self.assertEqual(len(summary["destroyed"]), 6)
         self.assertEqual(state.resources(), [])
+
+
+class BridgeAttribution(FakeAPI):
+    def test_a_foreign_bridge_comment_is_refused_not_deleted(self):
+        state = full_state(self.comp)
+        fake = self.patch_api(state)
+        fake.comment = bridge_comment("other", "run-99999999", "team")
+        summary = destroy.destroy_estate(state, log=lambda *a: None)
+        self.assertEqual(fake.bridges, [])                    # nothing was deleted
+        self.assertTrue(any(e["entry"]["kind"] == "bridge" for e in summary["refused"]))
+        self.assertEqual([r["kind"] for r in state.resources()], ["bridge"])
+
+    def test_an_uncommented_bridge_is_refused(self):
+        state = full_state(self.comp)
+        fake = self.patch_api(state)
+        fake.comment = "Quotient team 101 — isolated, no uplink"   # pre-change prose only
+        summary = destroy.destroy_estate(state, log=lambda *a: None)
+        self.assertEqual(fake.bridges, [])
+        self.assertEqual([r["kind"] for r in state.resources()], ["bridge"])
 
 
 class ForgetAndSave(FakeAPI):

@@ -26,22 +26,23 @@ from pathlib import Path
 
 import yaml
 
+from common.constants import GOLDEN_VMID_OFFSET, MAX_BOXES_PER_TEAM
 from common.utils import compfile_value
 
 # The one file name for a competition's bad-auto config. YAML on disk (JSON
 # parses as YAML, so hand-written JSON in it also loads).
 CONFIG_NAME = ".badauto-config.yaml"
 
-# red01's default address — ONE default for every path (the .198/.199 split
-# between the scrim CLI and the deploy path meant two sessions could each be
-# "right" about different addresses).
+# The pre-placement address: read only as a v1 document's recorded value or a scrim's
+# last-resort fallback. A fresh range SELECTS its address (infra.collisions.select_red_ip).
 DEFAULT_RED01_IP = "10.0.0.198"
 
-# red01's derived vmid offset from the scoring engine's. The engine's reserved
-# block: +140 engine template, +150+slot*N goldens, +130+slot jumps (multi-node)
-# — +170 sits clear of all of them, so a scoring vmid that is collision-free
-# yields a red01 vmid that is too (the preflight gate still verifies).
-RED01_VMID_OFFSET = 170
+
+def default_red_vmid(engine_vmid, slots_used):
+    """red01's derived vmid: one golden stride past this placement's last golden band."""
+    # The old +170 offset landed exactly on slot-2 box 0 of a 10-box default range: one
+    # stride past the goldens is clear of every slot's band for any MAX_BOXES_PER_TEAM.
+    return int(engine_vmid) + GOLDEN_VMID_OFFSET + (int(slots_used) + 1) * MAX_BOXES_PER_TEAM
 
 
 def config_path(comp_dir):
@@ -88,9 +89,14 @@ def existing_blackbox(comp_dir):
     return load_config(comp_dir)
 
 
-def red01_vmid_for(comp_dir, engine_vmid=None):
-    """red01's vmid: Compfile `red01_vmid <n>`, else the comp config's
-    deploy.red_vmid, else derived engine+170 (None when nothing resolves).
+def _placement_of(comp_dir):
+    from multinode.placement_record import read_placement
+    return read_placement(comp_dir)
+
+
+def red01_vmid_override(comp_dir):
+    """The operator's reservation: Compfile `red01_vmid <n>` or the comp config's
+    deploy.red_vmid, else None (never a derived value).
 
     There is deliberately NO fall-through to bad-auto's built-in 999 — a shared
     default vmid is a shared node slot, and sharing it is the 2026-10-12 kill."""
@@ -106,25 +112,81 @@ def red01_vmid_for(comp_dir, engine_vmid=None):
             return int(cfgd)
         except (TypeError, ValueError):
             pass
+    return None
+
+
+def red01_vmid_for(comp_dir, engine_vmid=None, placement=None):
+    """red01's vmid: the operator's override, the recorded placement, else the stride.
+
+    The placement is authoritative once written: a resume and every companion op must see the
+    slot the range was actually deployed at."""
+    override = red01_vmid_override(comp_dir)
+    if override is not None:
+        return override
+    placement = _placement_of(comp_dir) if placement is None else placement
+    recorded = ((placement or {}).get("red01") or {}).get("vmid")
+    if recorded:
+        return int(recorded)
     if engine_vmid is None:
         return None
-    return int(engine_vmid) + RED01_VMID_OFFSET
+    return default_red_vmid(engine_vmid, len((placement or {}).get("satellites") or []))
 
 
-def red01_ip_for(comp_dir):
-    """red01's address: Compfile `red01_ip` (legacy `assume_breach_red_ip`
-    still honored), else the one tez default."""
+def red01_vmid_legacy(comp_dir, engine_vmid):
+    """The pre-placement derivation (override, else engine+170) — a v1 document's own range."""
+    override = red01_vmid_override(comp_dir)
+    return override if override is not None else int(engine_vmid) + 170
+
+
+def red01_ip_override(comp_dir):
+    """The operator's address (Compfile `red01_ip`, legacy `assume_breach_red_ip`), else ''."""
     compfile = Path(comp_dir) / "Compfile"
     return (compfile_value(compfile, "red01_ip", "")
-            or compfile_value(compfile, "assume_breach_red_ip", "")
-            or DEFAULT_RED01_IP)
+            or compfile_value(compfile, "assume_breach_red_ip", "") or "")
 
 
-def red01_target(comp_dir, engine_vmid):
+def red01_ip_is_explicit(comp_dir):
+# Whether the address came from the operator (Compfile) rather than from selection: an
+#     explicit address keeps the "unverifiable is not free" refusal (infra/red01.py); a
+#     selected one was proven free when it was chosen.
+    return bool(red01_ip_override(comp_dir))
+
+
+def red01_ip_for(comp_dir, placement=None):
+    """red01's address: the operator's, the placement's recorded one, else ''.
+
+    Empty means NOT RESOLVED YET: the address is selected at deploy time, immediately before
+    red01 is created, so a preflight hours earlier cannot prove it."""
+    override = red01_ip_override(comp_dir)
+    if override:
+        return override
+    placement = _placement_of(comp_dir) if placement is None else placement
+    return ((placement or {}).get("red01") or {}).get("ip") or ""
+
+
+def red01_ip_legacy(comp_dir):
+    """The pre-placement address chain (Compfile, else the one legacy default)."""
+    return red01_ip_override(comp_dir) or DEFAULT_RED01_IP
+
+
+def red01_v1_target(comp_dir, engine_vmid):
+    """(vmid, ip) the pre-placement code would have deployed this range's red01 at."""
+    return red01_vmid_legacy(comp_dir, engine_vmid), red01_ip_legacy(comp_dir)
+
+
+def red01_identity(comp_dir, engine_vmid, node, placement=None):
+# This run's red01 slot, as the placement document records it.
+    return {"vmid": red01_vmid_for(comp_dir, engine_vmid, placement),
+            "ip": red01_ip_for(comp_dir, placement), "node": node,
+            "explicit_ip": red01_ip_is_explicit(comp_dir)}
+
+
+def red01_target(comp_dir, engine_vmid, placement=None):
     """(vmid, ip) this competition's red01 deploys at — one resolution for the
     deploy, the scrim harness, the verifier and the preflight, so they cannot
     disagree (they used to: .198 vs .199 vs whatever the singleton said)."""
-    return red01_vmid_for(comp_dir, engine_vmid), red01_ip_for(comp_dir)
+    return (red01_vmid_for(comp_dir, engine_vmid, placement),
+            red01_ip_for(comp_dir, placement))
 
 
 def pin_deploy_key(cfg, ssh_key):
@@ -144,7 +206,8 @@ def pin_deploy_key(cfg, ssh_key):
     return cfg
 
 
-def prepare_deploy_config(comp_dir, engine_vmid, engine_ip=None, ssh_key=None):
+def prepare_deploy_config(comp_dir, engine_vmid, engine_ip=None, ssh_key=None, placement=None,
+                          red_ip=None):
     """Write the comp's bad-auto config for a red01 deploy and return its path.
 
     Layers: carried blackbox blocks (comp's own prior config) under a fresh
@@ -156,11 +219,20 @@ def prepare_deploy_config(comp_dir, engine_vmid, engine_ip=None, ssh_key=None):
     and the caller owns the layer, same split prepare_local_c2 always had."""
     cfg = dict(existing_blackbox(comp_dir))
     cfg["competition_dir"] = str(Path(comp_dir).resolve())
-    vmid, ip = red01_target(comp_dir, engine_vmid)
+    vmid, ip = red01_target(comp_dir, engine_vmid, placement)
+    # A single-node range has no placement to record the selection in; the caller that made
+    # it passes the address through rather than letting it be re-derived here.
+    ip = red_ip or ip
     if vmid is None:
         raise ValueError(
             "cannot reserve red01's vmid: no Compfile red01_vmid, no comp config "
             "deploy.red_vmid, and no scoring vmid to derive from")
+    if not ip:
+        # Never write an empty red_ip: bad-auto falls back to its own default and the VM
+        # lands somewhere nobody recorded (the 2026-10-09 .199 split).
+        raise ValueError(
+            "red01's address is not resolved — select one from the red band (or set "
+            "red01_ip in the Compfile) before deploying it")
     deploy = dict(cfg.get("deploy") or {})
     deploy["red_vmid"] = vmid
     deploy["red_ip"] = ip

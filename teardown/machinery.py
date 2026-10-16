@@ -5,7 +5,6 @@ is a `Refusal` (saw / expected / remedy), and every destroy-shaped function
 takes an `Ownership` instead of a loose tag set."""
 
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 from common.constants import GOLDEN_TAG, SCORING_ENGINE_VMID
 from estate import state as estate_state
@@ -16,7 +15,7 @@ from infra.client import proxmox_api, wait_for_proxmox_task
 from infra.ownership import parse_vm_tags
 from engine.engine_template_ops import destroy_engine_template
 from engine.template_freeze import forget_template_hashes
-from infra.ownership import Ownership, Refusal
+from infra.ownership import Ownership, Refusal, ownership_identity
 from estate import config
 
 # Concurrent stop/delete worker count for teardown sweeps. Deletes are
@@ -62,7 +61,8 @@ def load_ownership(comp_dir):
             detail=f"this competition was deployed against {deployed}, but the "
                    f"loaded env targets {current}. Point the profile at the deployment's host "
                    f"(same overrides create-competition ran with) and re-run.")
-    return deployed_state, Ownership(Path(comp_dir).name, run_id)
+    return deployed_state, Ownership(
+        ownership_identity(comp_dir, deployed_state.get("comp_name")), run_id)
 
 
 # hard-stop before destroy: the API graceful path hangs on an agent-down DC and holds the qm lock (pfsense-rvb: 6m+ 'Still destroying'); forced stop + remove is the operator call (2026-09-30); ownership gates every stop — the name pattern is shared by every worktree running the same competition ID

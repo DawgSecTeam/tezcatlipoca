@@ -11,6 +11,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from common.utils import competition_name
+
 def load_teardown_journal(comp_dir):
     """This run's completed teardown steps, from the document's teardown section."""
     from estate import state
@@ -162,16 +164,27 @@ class TeardownEngine:
                     vmid = candidate
                     break
             still = None
+            verdict = None
             red01_done = self._journal_done(plan).get("red01")
             if vmid:
                 try:
-                    from infra.client import live_vmids
-                    still = int(vmid) in live_vmids()
+                    from infra import red01
+                    verdict = red01.occupant_verdict(vmid, competition_name(self.ctx.comp_dir))
                 except Exception:            # noqa: BLE001 - unverifiable is not clean
-                    still = None
-            if still is True:
+                    verdict = None
+                still = verdict in ("ours", "unmarked")
+            if verdict == "ours":
                 problems.append("red01 is STILL PRESENT — it holds the LLM key and "
                                 "beacon tasking")
+            elif verdict == "foreign":
+                # The marker names another competition: our red01 is gone and its vmid was
+                # recycled. Accounted for, so it does not refuse this range's clean verdict.
+                notes.append(f"vmid {vmid} now holds another competition's red01 "
+                             f"({red01.occupant_label(vmid)}) — this range's red01 is gone")
+            elif verdict == "unmarked":
+                problems.append(f"a VM occupies red01's vmid {vmid} with no bad-auto marker "
+                                f"({red01.occupant_label(vmid)}) — its owner cannot be "
+                                f"attributed, so it is not proven gone")
             elif still is None and (self.ctx.deployed_state.get("assume_breach")
                                     or (red01_done and red01_done.get("status") != "skipped")):
                 problems.append("red01's vmid could not be verified gone — check by hand")

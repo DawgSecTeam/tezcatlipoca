@@ -13,7 +13,8 @@ from infra.client import proxmox_api, wait_for_proxmox_task
 from infra.lifecycle import start_vm, stop_vm
 from infra.ownership import destroy_vm_if_exists
 from engine.template_freeze import engine_template_vmid, write_template_hash
-from common.utils import record_degradation
+from common.utils import competition_name, record_degradation
+from multinode.placement_record import resolved_mgmt_bridge
 from estate import config
 
 
@@ -30,7 +31,7 @@ def find_engine_template(node, engine_vmid):
 
 def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                           postgres_password, redis_password, quotient_ref,
-                          hash_value, inputs, run_id=None):
+                          hash_value, inputs, run_id=None, mgmt_bridge=""):
 # Build the per-competition engine template (API-driven, mirroring golden_ops —
 #     the deploy only consumes the finished template as the phase-4 clone source).
 #
@@ -47,7 +48,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 
     vmid = engine_template_vmid(engine_vmid)
     vm_name = ENGINE_TEMPLATE_NAME
-    expect_tags = ownership_tags(Path(comp_dir).name, run_id, "engine-template")
+    expect_tags = ownership_tags(competition_name(comp_dir), run_id, "engine-template")
     tags = ",".join(sorted(expect_tags))
 
     # A previous build's leftover (plain VM, never converted) is a dead attempt:
@@ -107,7 +108,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 
     mgmt_ip = config.active().engine.mgmt_ip
     cfg = {
-        "net0": "virtio,bridge=vmbr0",
+        "net0": f"virtio,bridge={mgmt_bridge or resolved_mgmt_bridge()}",
         "tags": tags,
         # cloud-init identity for the build VM's first boot (the base image bakes none;
         # the create path's cloud-init normally supplies it for the deployed engine).

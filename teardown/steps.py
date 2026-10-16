@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from engine.template_freeze import forget_template_hashes
+from common.utils import competition_name
 
 EVIDENCE = "evidence"
 TEARDOWN = "teardown"
@@ -214,7 +215,7 @@ class RedStep(Step):
             # comp_name arms reclaim's another-competition guard: a VM whose marker names a
             # different competition is a recycled vmid, never ours (live 2026-10-15: without
             # it, a badauto-defaulted 999 found tdred-2026's stamped red01 and reclaimed it).
-            if vmid and red01.reclaim_unstamped_red(vmid, comp_name=ctx.comp_dir.name,
+            if vmid and red01.reclaim_unstamped_red(vmid, comp_name=competition_name(ctx.comp_dir),
                                                     log=_log):
                 return StepResult(self.name, "ok",
                                   f"reclaimed unstamped red01 vmid {vmid} (badauto refused: "

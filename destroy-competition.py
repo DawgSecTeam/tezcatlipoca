@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from teardown import Refusal
 from engine.template_freeze import frozen_state
 from common.comp_paths import comps_root, resolve_comp_dir
-from common.utils import load_compfile, pick_competition
+from common.utils import competition_name, load_compfile, pick_competition
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -161,7 +161,7 @@ def main():
         # `competition` is only bound by the comps-root branch below, and the banner prints it —
         # `--comp-dir` alone (the dashboard's shape: a per-run workspace with no name of its own)
         # died with UnboundLocalError before any teardown ran (2026-10-14, run-eab53563).
-        competition = args.competition or comp_dir.name
+        competition = args.competition or competition_name(comp_dir)
     else:
         competitions = load_destroyable_competitions()
         if not competitions:

@@ -174,6 +174,13 @@ def wait_for_proxmox_task(node, upid, timeout=1800):
             f"Proxmox task {upid} failed: {exitstatus or status or 'unknown status'}")
 
 
+def node_bridges(node):
+    """{iface: comment} for every bridge the node owns — the only identity a bridge has."""
+    nets = proxmox_api("GET", f"/nodes/{node}/network")["data"]
+    return {n.get("iface"): str(n.get("comments") or "")
+            for n in nets if n.get("iface") and n.get("type") in (None, "bridge")}
+
+
 def destroy_bridge_if_exists(node, bridge_name):
     """Delete a Proxmox Linux bridge if it exists; True when it is gone afterwards.
 

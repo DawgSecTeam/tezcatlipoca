@@ -27,6 +27,7 @@ from infra.lifecycle import start_vm, vm_status
 from infra.ownership import clone_marker, destroy_vm_if_exists, gc_orphan_volumes
 from common.ssh_ops import DEFAULT_KNOWN_HOSTS, forget_engine_host_key
 from common.utils import PRINT_LOCK, run_concurrent
+from multinode.placement_record import resolved_mgmt_bridge
 from estate import config
 
 
@@ -198,7 +199,8 @@ def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
                   f"vmid {vmid}, mgmt {sat['jump_mgmt_ip']})...")
         team_ids = sorted({placement["team_identifiers"][k] for k in sat["teams"]}, key=int)
         _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_mgmt_gw,
-                   run_id=run_id, red_segment=red_segment)
+                   run_id=run_id, red_segment=red_segment,
+                   mgmt_bridge=resolved_mgmt_bridge(placement))
 
     results = run_concurrent(sats, _one, max_workers=4)
     # run_concurrent captures exceptions per slot instead of raising, so each caller
@@ -211,7 +213,7 @@ def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
 
 
 def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_mgmt_gw,
-               run_id=None, red_segment=""):
+               run_id=None, red_segment="", mgmt_bridge="vmbr0"):
     node = rec.node
     ownership = ownership_tags(comp_name, run_id, JUMP_TAGS_EXTRA)
     vm_name = f"jump-{comp_name}-{sat['slot']}"
@@ -249,7 +251,7 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
             "description": clone_marker(comp_name)})["data"]
         wait_for_proxmox_task(node, upid)
 
-        nics = {"net0": "virtio,bridge=vmbr0"}
+        nics = {"net0": f"virtio,bridge={rec.mgmt_bridge or mgmt_bridge}"}
         for i, t in enumerate(team_ids):
             nics[f"net{i + 1}"] = f"virtio,bridge=vmbr{t}"
         cfg = {

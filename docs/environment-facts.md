@@ -47,11 +47,15 @@ base image on which host: `infrastructure-status.md`.
   `TEZ_TEAM_IDENTIFIERS` (or `--team-identifiers`) explicitly on any host that is not empty; the
   occupied blocks per host are in `infrastructure-status.md`.
 - **red01's slot is per-competition, never 999** (see [AGENTS.md § bad-auto
-  isolation](../AGENTS.md)): vmid from Compfile `red01_vmid`, else `<scoring-vmid>+170`;
-  IP from Compfile `red01_ip`, else `10.0.0.198`. Both are preflight-gated — an occupied
-  vmid or an answering IP is a refusal naming the owner; an unverifiable network refuses
-  the default too. Concurrent comps need scoring vmids spaced more than 10 apart (the
-  +140/+150/+170 offsets and golden box count must not overlap).
+  isolation](../AGENTS.md)): vmid from Compfile `red01_vmid` (or the comp's own bad-auto
+  config), else derived — one golden stride past the last band this placement uses
+  (`<scoring-vmid>+160+10*satellites`). The IP comes from Compfile `red01_ip`, else it is
+  SELECTED at deploy time from `10.0.0.240-10.0.0.249`: the lowest address nothing answers
+  and this placement does not already claim (the legacy `.196`-`.199` defaults are excluded).
+  The vmid is preflight-gated — an occupied slot is a refusal naming the owner; an operator's
+  address keeps the "unverifiable is not free" refusal, a selected one was proven free when
+  chosen. The positional arithmetic is enforced by `check_placement` and a slot-band property
+  test, so concurrent comps no longer need hand-spaced scoring vmids to keep red01 clear.
 - **Engine management IPs are shared across concurrent deploys unless separated.**
   `clean_engine_for_template` SSHes to the *planned* mgmt IP, so a collision can land
   cleanup on a live foreign engine's `.env`/`event.conf`/host keys. Give each concurrent
