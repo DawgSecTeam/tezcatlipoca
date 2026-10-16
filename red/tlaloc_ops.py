@@ -61,6 +61,105 @@ STATE_DIR = "/var/lib/tlaloc"
 INTEL_DIR = "/var/lib/tlaloc/intel"
 UNIT = "tlaloc.service"
 UNIT_SRC = TLALOC_REPO / "systemd" / "tlaloc.service"
+# A v2 red01 hosts Mythic, and a beacon-sized disk cannot: the install filled 9.8G
+# to 100% mid-clone ('no space left on device'), Mythic's containers never started
+# and the channel had no C2 to reach (smoke run-4b9ff805). The deploy grows the
+# disk to this floor before the Gaia step; `red.disk_gb` in the Compfile overrides
+# it, and a disk already at/above the floor is left alone.
+DEFAULT_RED_DISK_GB = 60
+
+
+def red_disk_gb(comp_dir, default=None):
+    from common.utils import compfile_value
+    raw = compfile_value(Path(comp_dir) / "Compfile", "red.disk_gb", "") or ""
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        value = 0
+    return value if value > 0 else int(default or DEFAULT_RED_DISK_GB)
+
+
+def _guest_grow_script():
+    """Extend the root filesystem into whatever space the hypervisor just added."""
+    return (
+        "set -x; ROOT=$(findmnt -no SOURCE /); "
+        "PART=$(basename \"$ROOT\"); "
+        "if [ -e \"/sys/class/block/$PART/partition\" ]; then "
+        "  SYS=/dev/$(lsblk -no pkname \"/dev/$PART\" | head -1); "
+        "  NUM=$(cat \"/sys/class/block/$PART/partition\"); "
+        "  growpart \"$SYS\" \"$NUM\" || true; "
+        "  pvresize \"${SYS}${NUM}\" || true; "
+        "fi; "
+        "lvextend -l +100%FREE \"$ROOT\" || true; "
+        "resize2fs \"$ROOT\" || true; df -h /")
+
+
+def resize_red_disk(comp_dir, red_ip, vmid, *, ssh_key, target_gb=None,
+                    runner=None, timeout=600):
+    """Grow red01's disk to the Mythic floor (hypervisor resize + guest grow).
+
+    Idempotent by construction: Proxmox only ever grows, and the guest side
+    re-runs harmlessly (growpart/resize2fs on an already-extended FS is a no-op).
+    Returns {"ok", "before_gb", "after_gb", "detail"} — verified from the box's own
+    df, because an unextended filesystem still fills up the same way.
+    """
+    from infra.client import proxmox_api
+    runner = runner or _default_runner
+    target = int(target_gb or red_disk_gb(comp_dir))
+    node = None
+    for vm in ((proxmox_api("GET", "/cluster/resources", params={"type": "vm"}) or {})
+               .get("data") or []):
+        if vm.get("vmid") == vmid:
+            node = vm.get("node")
+            break
+    if not node:
+        return {"ok": False, "detail": f"vmid {vmid} not found in the cluster"}
+
+    config = (proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config") or {}).get("data") or {}
+    disk = next((key for key in ("scsi0", "virtio0", "sata0") if config.get(key)), None)
+    if not disk:
+        return {"ok": False, "detail": f"vmid {vmid} has no scsi0/virtio0/sata0 disk"}
+    current_gb = _disk_gb(config.get(disk))
+    if current_gb and current_gb >= target:
+        grew = False
+    else:
+        grew = True
+        add = max(1, target - (current_gb or 0))
+        proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/resize",
+                    data={"disk": disk, "size": f"+{add}G"})
+
+    ssh_argv = ["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
+                f"{RED_USER}@{red_ip}", _guest_grow_script()]
+    proc = runner(ssh_argv, timeout=timeout)
+    detail = _tail(proc, 400)
+    after = None
+    for line in (getattr(proc, "stdout", "") or "").splitlines():
+        if line.startswith("/dev/") and "%" in line:
+            after = _gb_from_df(line)
+    ok = after is not None and after >= min(target - 2, target * 0.9)
+    return {"ok": bool(ok), "disk": disk, "before_gb": current_gb,
+            "after_gb": after, "grew": grew, "detail": detail}
+
+
+def _disk_gb(value):
+    """`scsi0: hdd:vm-1671-disk-0,size=10G` -> 10."""
+    import re
+    match = re.search(r"size=(\d+(?:\.\d+)?)([GMT])", str(value or ""))
+    if not match:
+        return None
+    number = float(match.group(1))
+    return int(number * {"G": 1, "M": 1 / 1024, "T": 1024}[match.group(2)])
+
+
+def _gb_from_df(line):
+    """A `df -h /` row -> the size in GB (e.g. '59G')."""
+    import re
+    match = re.search(r"\s(\d+(?:\.\d+)?)([GMT])\s", str(line))
+    if not match:
+        return None
+    number = float(match.group(1))
+    return int(number * {"G": 1, "M": 1 / 1024, "T": 1024}[match.group(2)])
 
 ENGINE_KEY = "red.engine"
 # v1 first: a competition that says nothing keeps running the engine that has.
@@ -497,6 +596,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
     #    reserved in the comp's OWN config and its deploy stamp lives beside it,
     #    so a validation deploy can never recycle another session's red01.
     red_ip = (red_ip or block.get("red_ip") or getattr(ctx, "red_ip", None))
+    red_vmid = None
     if provision is None:
         from red import badauto_config_ops, red_plant_ops, realm_c2_ops
         try:
@@ -520,6 +620,24 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
     if not red_ip:
         from red import red_plant_ops
         red_ip = red_plant_ops.red_ip_for(comp_dir)
+
+    # 1.4 Size red01 for the C2 BEFORE anything installs on it. A v2 red01 hosts
+    #     Mythic; a beacon-sized disk (9.8G here) filled to 100% mid-install and
+    #     Docker never started (smoke run-4b9ff805). Grow, then verify from the
+    #     box's own df — an unextended filesystem fails exactly the same way.
+    if red_vmid:
+        try:
+            grown = resize_red_disk(comp_dir, red_ip, red_vmid, ssh_key=ssh_key,
+                                    runner=runner)
+        except Exception as exc:                            # noqa: BLE001 - reported
+            grown = {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
+        if grown.get("ok"):
+            print(f"  mythic      : red01 disk {grown.get('before_gb')}G -> "
+                  f"{grown.get('after_gb')}G (target {red_disk_gb(comp_dir)}G)")
+        else:
+            record_degradation("mythic_red_disk", str(grown.get("detail"))[:400])
+            print(f"  mythic      : WARNING — could not grow red01's disk "
+                  f"({str(grown.get('detail'))[:160]}); the Mythic install needs it")
 
     # 1.5 Mythic: install + configure this competition's C2 (Gaia) BEFORE
     #     c2-prep, which builds the payload matrix through its REST API. The
@@ -551,6 +669,15 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
         gaia_ops.degrade(mythic_result, "step")
         if mythic_result.get("c2"):
             gaia_ops.apply_c2_to_config(cfg_path, mythic_result["c2"])
+        # A v2 comp with no C2 is not a range: the seed's channel stage, the loop's
+        # takedowns over the channel and the frozen payloads all depend on it. Red
+        # failing to deploy is a BLOCKER (owner's directive 2026-10-16) — the deploy
+        # stops here instead of going live with a red team that cannot check in.
+        if not mythic_result.get("ok"):
+            detail = "; ".join(mythic_result.get("degradations") or [])[:500]
+            raise RuntimeError(
+                f"tlaloc: the Mythic step failed — refusing to deploy a v2 comp with "
+                f"no C2 ({detail})")
 
     # 2. comp-prep: build + freeze the payload matrix while Mythic is idle.
     prep = (runner or _default_runner)(comp_prep_command(comp_dir),
@@ -595,6 +722,11 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
     if not seeded.get("ok"):
         record_degradation("tlaloc_seed", seeded.get("detail", ""))
         print("  tlaloc: seed FAILED (see degradations)")
+        # Same rule as the C2 step: a comp whose red presence never landed is not a
+        # competition — the deploy stops rather than scoring an empty range.
+        raise RuntimeError(
+            f"tlaloc: the day-0 seed failed on red01 {red_ip} — refusing to deploy a "
+            f"v2 comp with no planted red presence ({_tail(seeded)})")
     try:
         ctx.state["assume_breach"] = summary
         ctx.save_state()

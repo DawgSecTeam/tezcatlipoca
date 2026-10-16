@@ -103,7 +103,16 @@ def phase7_domains_and_final(ctx):
             print("  Planting assume-breach red presence (tlaloc v2: red01 + "
                   "C2 payloads + persistence)...")
             with timed(ctx.comp_dir, 7, "assume_breach"):
-                tlaloc_ops.plant_assume_breach(ctx)
+                red_out = tlaloc_ops.plant_assume_breach(ctx)
+                # Red failing to deploy is a BLOCKER for a v2 comp (owner's directive,
+                # 2026-10-16): warn-and-continue covers a range whose other components
+                # are healthy, not one with no red team at all — the first live smoke
+                # went "live" with red skipped entirely and looked successful.
+                if not (red_out or {}).get("ok"):
+                    raise RuntimeError(
+                        "tlaloc v2 red deployment failed ("
+                        f"{(red_out or {}).get('reason') or 'see degradations'}) — "
+                        "refusing to leave a v2 competition without its red team")
         else:
             print("  Planting assume-breach red presence (red01 + beacons + persistence)...")
             with timed(ctx.comp_dir, 7, "assume_breach"):
