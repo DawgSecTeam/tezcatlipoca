@@ -1,8 +1,8 @@
-# Round-4 remediation: the per-VM lock, the shared red segment, and the misconfig re-verify
+# Round-4 remediation: the per-VM lock, the seed's credential gap, and the misconfig re-verify
 
-Follow-up to `defect-remediation-2026-10-16.md`, closing the three items that pass left open.
-Live estate values live in `infrastructure-status.md`; this document names the file, never the
-values. Evidence: `logs/round4/`.
+Follow-up to `defect-remediation-2026-10-16.md`, closing the items that pass left open. Live
+estate values live in `infrastructure-status.md`; this document names the file, never the
+values. Raw run logs are under `logs/round4/`.
 
 ## 1. crimson-relay's third attempt deployed
 
@@ -52,39 +52,66 @@ erases them. The run's remaining FAILs are the held-range ones: `round_loop` (th
 `--hold-start`, so the clock never started) and the frozen-scoreboard consequence. `degradations`
 PASSed — the attempt-3 deploy recorded no tolerated failures.
 
-## 3. The seed's real defect: one fixed red segment on a shared L2
+## 3. The seed: "unreachable over SSH" was a missing credential, not a network verdict
 
-The seed's `unreachable over SSH` was not an SSH bug. Under bad-auto's default `routed` mode every
-range put the **same** segment on the shared management bridge: red01 as `10.200.0.10/24`, its
-engine as `10.200.0.1/24`. Two ranges at once means two engines claiming `.1` and two red01s
-claiming `.10` on one broadcast domain, and whichever engine answers red01's ARP for `.1` becomes
-its gateway. If that is the other range's engine, red's `192.168.0.0/16` traffic reaches a host
-with no route to those team subnets and every box reads "unreachable".
+The deploy-time seed failed six-for-six with `unreachable over SSH` on every box. It was not
+the network. Instrumenting `cred_spray` on a live red01 printed, for every box:
 
-Proven live (read-only) while a range was up with a second range's engine on the same L2:
+```
+TRY 192.168.150.4 'medic' None (False, 'unreachable')
+```
 
-- both engines held `10.200.0.1/24` on `eth0` simultaneously;
-- red01's cache for `10.200.0.1` was whichever engine had last announced — right engine in the
-  sample, which is exactly why this looks intermittent;
-- `10.200.0.10` was simultaneously claimed by two different red01s, with two engines' neighbour
-  caches pointing at one of them.
+`None` is the password. A direct paramiko login with the box's real password succeeded in 0.1 s
+from the same host, and a raw `/dev/tcp` to `:22` worked too.
 
-### The fix: a private per-run bridge
+**Cause.** bad-auto's nakon intel reads the box account and credlist from
+`<comp_dir>/.deploy_state.json` — its terraform-era contract. The native (terraform-free)
+pipeline never wrote that file. With it absent, `known_creds` still offered
+`(user, None)` pairs; paramiko raised "no authentication methods"; `cred_spray` folded every
+non-auth exception into its network branch and reported `unreachable over SSH`. The misleading
+message is why this survived four rounds of live runs as a "network" bug.
 
-A range that stages red now gets its own red bridge (`red_bridge_name`: `vmbrR<run hex>`), created
-with the team bridges and destroyed by teardown like any other recorded bridge. The engine gets an
-extra NIC on it, addressed with the segment gateway by the engine netplan; bad-auto's config names
-the bridge, so red01 attaches a second NIC there and keeps the segment off the management L2.
-`ensure_segment_addr` and the re-assert script's `ip addr add` are skipped for the private bridge —
-the address is netplan-managed on the red NIC, not a secondary on the management interface.
+**Fix (both ends).**
 
-The segment addresses themselves stay `10.200.0.0/24` / `.1` / `.10`; the L2 is what makes them
-unique now. `red_mode: masq` and standalone bad-auto (no `red_bridge`) keep the legacy single-NIC
-shape.
+- tezcatlipoca phase 7 now writes `<comp_dir>/.deploy_state.json` (`box_password`, `box_creds`,
+  0600) before the assume-breach step, so it rides to red01 with the other intel files.
+- bad-auto's `known_creds` never offers a credential it cannot fill (`candidate_passwords` and
+  `candidate_pairs` inherit it, so a re-run does not burn the attempt cap), and `_try_ssh` answers
+  `auth` — not `unreachable` — when there is no password to try.
 
-Proving tests: `tests/test_red_bridge.py` (naming, the "does this range stage red" gate, the
-bad-auto config keys), `tests/test_estate_apply.py::Engine` (the red NIC appends after the
-transits), `tests/test_estate_engine_setup.py::Netplan` (the engine's red NIC address),
-`bad-auto tests/test_engine_nat.py` (the segment + team route move to the second NIC).
+**Live proof.** On the up range, publishing the file took the exact seed command from
+`ok: false, access 0/6` to a clean-state run of:
 
-Cross-repo: tezcatlipoca `fcff836`, bad-auto `77ac577`.
+```
+"boxes": 6, "access": 6, "root": 6, "implant": 6, "artifacts": 6,
+"failed": [], "ok": true
+```
+
+Tests: `tests/test_phase_tail_offline.py::Tail::test_phase7_publishes_bad_autos_intel_state`,
+`bad-auto tests/test_seed.py::CredentialGap` (three).
+
+### A second, latent defect found while chasing: the shared red segment
+
+The diagnostic detour was worth keeping. Every routed-red range used the **same** segment
+(`10.200.0.0/24`, gateway `.1`, red01 `.10`) as a secondary on the shared management bridge, so
+two live ranges put two engines on `10.200.0.1` and two red01s on `10.200.0.10` in one broadcast
+domain; the engine that answered red01's ARP for `.1` became its gateway, and if that was the
+other range's engine red's team traffic had no route. Observed live: both engines held
+`10.200.0.1/24` at once, red01's cache flipped between them, and two red01s claimed `.10`.
+
+Fixed by giving each range that stages red its **own** bridge (`vmbrR<run hex>`), created with the
+team bridges and destroyed with them; the engine gets an extra NIC addressed as the segment
+gateway there, and bad-auto's config names the bridge so red01 attaches its second NIC to it. The
+segment addresses are unchanged — the private L2 is what makes them unique.
+
+Tests: `tests/test_red_bridge.py`, `tests/test_estate_apply.py::Engine` (red NIC order),
+`tests/test_estate_engine_setup.py::Netplan`, `bad-auto tests/test_engine_nat.py` (the segment and
+team route move to the second NIC).
+
+## 4. The estate
+
+Round 3's three ownership sets (`crimson-relay`, `pfsense-rvb`, `scrim-one-light`) were confirmed
+gone by an independent tag/bridge sweep, and the one range the earlier pass missed — crimson-relay's
+re-run (`run-dd88db6d`, ownership `run-a84c26d4`) — was reclaimed through the normal destroy path,
+which reported `estate clean for this ownership set`. The round-4 scrim-one-light range built for
+this verification is left to be torn down after its reports are collected.
