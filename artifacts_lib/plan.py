@@ -71,7 +71,7 @@ def plan_targets(manifest, *, comp_dir=None):
             # Exactly ONE blue workdir claims the canonical BLUE-TEAM.md. With a workdir per
             # team, two targets claiming one canonical name give the derivation two candidates
             # for a single document, and a later collection can flip which team's narrative is
-            # the canonical one (live 2026-10-15, run-1c44733b: "canonical document changed
+            # the canonical one (caught live: "canonical document changed
             # after collection: BLUE-TEAM.md"). Every team's REPORT.md is still collected, under
             # its own evidence/blue/<team>/.
             report_want = {"local_name": "REPORT.md"}

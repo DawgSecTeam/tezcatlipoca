@@ -11,12 +11,12 @@ from common.utils import PRINT_LOCK, record_degradation, run_concurrent
 # Match the upgrade WORKER by full command line. `pgrep -x unattended-upgr` (the
 # 15-char truncated comm) ALSO matches Ubuntu's permanent unattended-upgrade-shutdown
 # --wait-for-signal daemon, so every Ubuntu box read BUSY forever and each prep_apt
-# pass burned the full settle budget (winad-testrun 2026-09-25). The [e] keeps the
+# pass burned the full settle budget (measured on a Windows/AD test run). The [e] keeps the
 # pattern from matching this script's own shell.
 _SETTLE_CHECK = (
     # Non-apt distro: nothing can hold a dpkg lock, so it is settled by definition —
     # without this guard `apt-get check` is rc=127 BUSY forever and every such box
-    # burns the full 240s settle budget per pass (live-found 2026-09-27).
+    # burns the full 240s settle budget per pass (caught live).
     "command -v apt-get >/dev/null 2>&1 || { echo SETTLED; exit 0; }\n"
     "pgrep -f '/usr/bin/unattended-upgrad[e]( |$)' >/dev/null 2>&1 && echo BUSY\n"
     "apt-get -o DPkg::Lock::Timeout=1 check >/dev/null 2>&1 || echo BUSY\n"
@@ -34,7 +34,7 @@ def _box_settled(node, vmid):
 #     Returns None (not False) when the agent channel is alive but its data calls are
 #     useless — the realm node answers pings and returns NULL for every exec result, so
 #     "no SETTLED seen" there means 'cannot verify', not 'busy'. Treating that as False
-#     burned the whole 240s settle budget per prep_apt pass on realm (2026-09-25);
+#     burned the whole 240s settle budget per prep_apt pass on realm ;
 #     callers fall back to the SSH probe on None.
     try:
         if not wait_for_guest_agent(node, vmid, timeout=20):
@@ -80,7 +80,7 @@ def _cloud_init_verdict(rc, out):
     `status: running` while the boot was still going. Reading rc first made the gate
     (a) record a tolerated failure for a box whose boot was over — which hard-fails
     verify's degradations gate — and (b) skip the wait it exists to perform
-    (live 2026-10-15, run-b1bdb04a: 'cloud-init errored: <ip>: status: done')."""
+    (caught live: 'cloud-init errored: <ip>: status: done')."""
     out = out or ""
     if "status: error" in out:
         return "error"

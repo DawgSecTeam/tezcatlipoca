@@ -38,7 +38,7 @@ def _scp_files(ssh, remote, dest_dir, timeout=120):
 #     a truncated events.jsonl that looks complete is worse than a loud failure.
 #
 #     The whole route pair retries ONCE after 10s when everything failed network-side:
-#     the 2026-10-03 teardown's red01 pull died on a seconds-long "no route to host" flap
+#     a teardown's red01 pull died on a seconds-long "no route to host" flap
 #     on the ENGINE's jump address — reachable again before the destroy that ran next —
 #     and the red report was lost to a transient. "No such file" raises immediately: that
 #     is a real absence, not a route flap.

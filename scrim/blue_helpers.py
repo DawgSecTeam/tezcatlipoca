@@ -2,9 +2,8 @@
 from scrim import core
 
 
-# one case branch per box from boxes.json: the helper used to hardcode the 5-box
-# dc01/win01/web01/app01/db01 lineup with fixed octets — on any other comp (cde-2026:
-# ad01/ftp01/web01/db01, db01 at .5) it silently targeted the wrong hosts or refused
+# one case branch per box from boxes.json: the helper used to hardcode one lineup
+# with fixed octets — on any other comp it silently targeted the wrong hosts or refused
 # known boxes. Windows = boxes whose template name contains "windows" (password auth as
 # Administrator); everything else = key auth as the provisioning user
 def mybox_script(comp):
@@ -189,7 +188,7 @@ def scorch_script(comp):
              'echo "== scored-check oracle (engine vantage) — team $MY_TEAM =="']
     if not (http_specs or port_specs or ssh_specs):
         # Catalog-name pins ("apache") carry no port metadata, so no engine-vantage
-        # probe can be derived — scrim-fresh-a 2026-10-03 printed the header and
+        # probe can be derived — the header alone printed and
         # nothing else, and blue read the silence as "scorch is broken". Fall back to
         # the scorer's own view so the oracle always says SOMETHING actionable.
         lines.append('echo "(this comp\'s pins carry no ports, so there is no independent')

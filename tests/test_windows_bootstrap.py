@@ -1,7 +1,7 @@
 """Windows bootstrap script content: the base-windows-server template ships all
 three firewall profiles disabled, so firewall rules (sshd, RDP) and any later
 firewall-rule effect are dead paper until the profiles are enabled
-(svc-matrix-2026-09-28: RDP listener up, every external 3389 dial filtered).
+(caught live: RDP listener up, every external 3389 dial filtered).
 Captured-script tests; no network."""
 
 import sys

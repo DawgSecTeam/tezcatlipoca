@@ -81,7 +81,7 @@ class FakePVE:
         raise AssertionError(f"unexpected {method} {path}")
 
 
-NODES = {"pve": {"pve_node": "proxmox", "endpoint": "https://10.0.0.150:8006",
+NODES = {"pve": {"pve_node": "proxmox", "endpoint": "https://203.0.113.10:8006",
                  "token_env": "TOK", "tls_fingerprint": "", "vmids": [1210, 1211, 1220]}}
 ENV = {"TOK": "deploy@pam!x=y"}
 USER = "tezcon-probe-run-abc@pve"

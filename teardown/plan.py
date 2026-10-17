@@ -3,7 +3,7 @@
 The invariant that used to live in comments — evidence collection happens
 before anything destructive — is a construction rule here: a plan with a
 destructive step before an EVIDENCE step cannot be BUILT, so no step added
-later can reintroduce the ordering races of 2026-10-09."""
+later can reintroduce the ordering races the redesign removed."""
 
 EVIDENCE = "evidence"
 TEARDOWN = "teardown"

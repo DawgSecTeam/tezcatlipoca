@@ -183,8 +183,8 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
                     # JSON onto it ("...exit 0.{...}") — and it carries a "[nakon] " prefix
                     # on some builds. Requiring the line to START with "{" then silently
                     # drops the whole result set, and the rc=0 "nothing answered" guard
-                    # below aborts a fully-green pass (live-found 2026-10-13 on
-                    # crimson-relay phase 7). Decode from the first "{" instead.
+                    # below aborts a fully-green pass (a phase-7 run lost its whole
+                    # result set exactly that way). Decode from the first "{" instead.
                     parsed = _machines_from_line(line)
                     if parsed is not None:
                         machines_json = parsed
@@ -200,7 +200,7 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
                 # whose every machine was unreachable finishes rc=0 with zero FAILED
                 # steps, because a host that never answered cannot report a failing
                 # step. That is how the scale8 soak's pre-domain pass "succeeded" against
-                # 32 machines that did not exist (2026-10-02) and checkpointed phase 6.
+                # 32 machines that did not exist  and checkpointed phase 6.
                 # 2 flaky steps of 41 is a tolerated failure; 41 of 41 is a broken
                 # sweep, and only the latter must stop the run.
                 nothing = _nothing_answered(machines_json)
@@ -275,7 +275,7 @@ def _preserve_failed_run(ssh_base, opt_dir, failed_steps, runner=None):
 #
 #     The per-machine .log under <bundle>/runs/<stamp>/ is the ONLY record of WHY
 #     a step failed, and run_nakon's finally deletes the whole staging dir — so
-#     the first IIS FTP golden failure (2026-10-11) printed a `logs:` path that
+#     the first IIS FTP golden failure  printed a `logs:` path that
 #     stopped existing seconds later and was undiagnosable without a re-run.
 #     Failed runs keep their evidence at /opt/nakon/failed-<tag>-<ts>; successful
 #     runs are still cleaned up normally.

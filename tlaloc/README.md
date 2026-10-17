@@ -5,8 +5,7 @@ CCDC red teamer that holds pre-planted access, applies escalating downtime
 pressure on scored services, and adapts to blue's response — with the club
 owning the whole lifecycle.
 
-This is a rebuild of v1 (GitHub `DawgSecTeam/tlaloc`, the `bad-auto` checkout
-beside this tree), not a refactor; the findings of the v1 audit are what every
+This is a rebuild of v1 (a private agent repo), not a refactor; the findings of the v1 audit are what every
 module here is shaped by. Where this README states behaviour, the code in
 `tlaloc/` is the authority — this file is the map.
 

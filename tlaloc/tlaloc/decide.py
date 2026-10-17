@@ -335,7 +335,7 @@ class Decider:
         The bundle is built first, its cost measured, and the digest gets the
         remainder of the batch (minus a small envelope margin) — so a growing
         question bundle can never silently push the request over the endpoint's
-        ceiling mid-event. The ceiling is 16k since 2026-10-16, which means the
+        ceiling mid-event. The ceiling is 16k, which means the
         first attempt (full bundle, full digest) is the normal path; the compact
         and shrink attempts below survive as the fallback for a smaller endpoint.
         """

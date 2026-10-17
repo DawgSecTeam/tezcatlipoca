@@ -342,7 +342,7 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
     late_machines = stage_machines(late_names)
     # Merge pre-domain ∪ final per machine, deduping on the pin's full identity
     # (_pin_key: name + vars) rather than its name alone — a name-only collapse drops
-    # packet-promised same-named decoy accounts (audit-found 2026-10-02). The last pass
+    # packet-promised same-named decoy accounts (audited). The last pass
     # is deliberately NOT in this view: redeploy's sweep replays it before hardening, and
     # hardening's credlist useradd would clobber the modes it plants. Redeploy runs the
     # late file itself, after hardening.

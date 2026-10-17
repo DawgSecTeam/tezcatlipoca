@@ -32,7 +32,7 @@ def resolve_engine_vmid(ctx, comp_dir, from_phase, scoring_vmid):
             ctx.engine_vmid = SCORING_ENGINE_VMID
     else:
         # flag wins, then the configured scoring vmid (per-run profiles carry it; live-found
-        # 2026-10-03 it was silently ignored and the default 1000 was taken instead —
+        # it was once silently ignored and the default 1000 was taken instead —
         # invisible until a second range on the node collided), then the built-in default.
         if scoring_vmid is not None:
             ctx.engine_vmid = int(scoring_vmid)
@@ -51,7 +51,7 @@ def load_competition_spec(ctx, comp_dir):
     # A comp dir that arrived by git (stage_author authoring, manual copy, fresh clone)
     # lacks compile-packet's gitignored secret layer; without it the machine list has
     # no packet-promised decoy/local accounts and the harness's pre-T0 verify --packet
-    # aborts the run (live-found 2026-10-04, scrim-reset). Compile-on-demand here.
+    # aborts the run (caught live, scrim-reset). Compile-on-demand here.
     from config.packet_ops import ensure_packet_secrets
     ensure_packet_secrets(comp_dir)
     ctx.box_username, ctx.credlist_usernames = load_users_config(comp_dir)

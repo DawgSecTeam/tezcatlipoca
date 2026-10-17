@@ -1,6 +1,6 @@
 """Per-run test artifacts under a competition directory.
 
-The contract (design + rationale: docs/reports/automated-test-artifacts-plan-2026-10-03.md;
+The contract (design + rationale: docs/automated-test-artifacts.md;
 canonical prose lands in docs/automated-test-artifacts.md with step 7 of that plan):
 
     competitions/<comp>/.automated-tests/
@@ -37,7 +37,7 @@ an empty folder that could mean anything:
     skipped        not applicable to this run (e.g. no red agent in a plain deploy test)
 
 Nothing here blocks a teardown. A missing report is printed loudly and recorded; destroying a
-range is never held hostage by a dead guest box (operator decision, 2026-10-03).
+range is never held hostage by a dead guest box (deliberate operator decision).
 """
 
 # Thin facade. The implementation lives in the `artifacts_lib` package, one concern per module:

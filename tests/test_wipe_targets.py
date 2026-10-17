@@ -3,7 +3,7 @@
 deploy_lib.phases.final built its target rows with top-level t.get("windows"),
 but managed_targets carry the box record nested under t["box"] — every box got
 windows=False and dc01/win02 went down the Linux wipe path, hanging out their
-180 s budget (live 2026-10-11: "dc01 ... NOT cleaned" in every firewall-era
+180 s budget (caught live: "dc01 ... NOT cleaned" in every firewall-era
 deploy; the harness-side wipe masked it pre-T0).
 """
 import sys

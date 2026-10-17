@@ -89,8 +89,8 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
                         and (tp - earlier) * 60 >= REAKILL_GAP_SEC)
         # A re-kill that closely follows blue restoring THAT box is a reaction too,
         # even when red never left (continuous pressure): red saw the restore and
-        # answered it. scrim-fresh-a 2026-10-03: red re-killed IIS within minutes of
-        # every blue restore, but the >=15-min-gap rule counted 0 restore-reactions
+        # answered it (red re-killed the same service within minutes of
+        # every blue restore on the run that tuned this, but the >=15-min-gap rule counted 0 restore-reactions
         # and the gate failed red for exactly the behavior the gate is about. The
         # blue_restore event carries target=null and a detail like "web01-roundcube
         # is UP again on team2", so the match is box-level: the killed IP's team

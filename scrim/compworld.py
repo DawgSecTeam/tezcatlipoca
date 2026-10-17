@@ -3,9 +3,9 @@ from pathlib import Path
 from scrim import core
 
 
-# which unit exists is resolved on the box (apache2 vs httpd across distros); the old
-# hardcoded nginx stopped a non-existent unit, saw no scoreboard change, and aborted
-# (cde-2026: Fedora httpd). scrims-one 2026-10-03: a port-less ssh pin took the `or 80`
+# which unit exists is resolved on the box (apache2 vs httpd across distros); a
+# hardcoded nginx stopped a non-existent unit, saw no scoreboard change, and aborted.
+# Also caught live: a port-less ssh pin took the `or 80`
 # default, tied nginx on the sort, and won — the test stopped sshd while probing HTTP :80
 # and the scoreboard never moved. So: a pin is httpish from its display, an explicit :80,
 # or a well-known web NAME; a non-http pin gets no default port; the ssh unit is only
@@ -58,8 +58,8 @@ def comp_world(comp):
 
 
 # an empty box_vulns.json means the misconfig spot-check has nothing to confirm and must
-# be skipped (cde-2026 failed verify as 'FAIL' with every summary line PASS — the packet
-# AD-misconfig model plants no box configurations); packet-sourced comps get the packet
+# be skipped (a packet-compiled comp failed verify as 'FAIL' with every summary line PASS —
+# the packet AD-misconfig model plants no box configurations); packet-sourced comps get the packet
 # fidelity gates
 def _verify_flags(comp):
     flags = []
@@ -92,7 +92,7 @@ _WATCHDOG_UNITS = {
 
 # The scoreboard service name a catalog pin registers as (<box>-<Display>): the fire
 # test watches its own row, and "first row starting with web01" is web01-ssh on any
-# comp whose web01 carries an ssh pin — scrim-one 2026-10-03 "detected down" from a
+# comp whose web01 carries an ssh pin — a stale ssh row "detected down" from a
 # stale ssh outage and then failed to restore the nginx service it never watched.
 _WATCHDOG_DISPLAY = {
     "nginx": "http", "apache": "http", "httpd": "http", "iis": "http",
@@ -109,7 +109,7 @@ def comp_arg(comp):
     Relative when the competition lives inside the engine tree (short, readable paths in logs
     and state), absolute when it does not — the dashboard's per-run workspace sits outside the
     repo, where `relative_to()` raises ValueError and a bare name would resolve under the
-    comps root instead of the workspace (2026-10-14).
+    comps root instead of the workspace.
     """
     try:
         return str(Path(comp).relative_to(core.REPO))

@@ -6,7 +6,7 @@ those files that is neither shipped nor declared is a runtime crash in the conta
 test time — the offline suite runs against the developer venv, where the whole driver and
 every dependency is importable.
 
-live-found 2026-10-13 (crimson-relay): the portal container crash-looped with
+caught live (crimson-relay): the portal container crash-looped with
     ModuleNotFoundError: No module named 'requests'
 because console.py imported requests but requirements.txt never listed it. The same class of
 defect — a driver import in an image that ships no driver (`from infra.console import
@@ -142,5 +142,5 @@ class PortalImageImports(unittest.TestCase):
                     f"declare it — the container would crash on start")
 
     def test_requests_is_declared(self):
-        # the exact 2026-10-13 regression, pinned by name so it cannot silently return
+        # the exact regression, pinned by name so it cannot silently return
         self.assertIn("requests", _declared_requirements())

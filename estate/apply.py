@@ -50,8 +50,8 @@ def _configure(node, vmid, config):
     """PUT a VM config, retrying the brief post-clone publish window.
 
     A PUT landing the instant a clone task commits 400s with a bare "Parameter verification
-    failed" while pvefs finishes publishing the new VM's config (amongus-cde-2026: three
-    deploys died here, the identical payload succeeding seconds later against the same vmid).
+    failed" while pvefs finishes publishing the new VM's config: the identical payload
+    succeeds seconds later against the same vmid.
     """
     for attempt in range(_CLONE_RETRIES):
         try:
@@ -154,7 +154,7 @@ def create_bridge(state, node, name, comment=""):
     # No `bridge_ports`: the parameter is the port LIST and PVE resolves every entry as an
     # existing interface, so the /etc/network/interfaces spelling for "no ports" ("none")
     # is rejected with `bridge '<name>' - unable to find bridge port 'none'` (HTTP 500,
-    # live 2026-10-15 run-ea77ef6c). Omitting it is how the API expresses an empty list —
+    # caught live). Omitting it is how the API expresses an empty list —
     # PVE stores bridge_ports='' and writes the isolated bridge itself.
     proxmox_api("POST", f"/nodes/{node}/network",
                 data={"iface": name, "type": "bridge", "autostart": 1,

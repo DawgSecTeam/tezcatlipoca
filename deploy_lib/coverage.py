@@ -14,8 +14,8 @@ def record_coverage(state, stage_machines, result):
 #     deploy before anything is recorded, but an alpine_services-tolerated failure is a
 #     real gap on the golden disk and must reach the gate. A machine whose stage reported
 #     NO failed steps drops its stale entry: a recovered config (replanted by a later
-#     sweep) must not keep the coverage gate red forever (amongus-cde-2026 2026-09-30:
-#     SMB v1 stayed 'failed' across three green replants).
+#     sweep) must not keep the coverage gate red forever (SMB v1 stayed 'failed' across
+#     three green replants on the run that found this).
     failed = result.failed_configs()
     cov = state.setdefault("plant_coverage_failed", {})
     if not failed:
@@ -35,11 +35,10 @@ def record_coverage(state, stage_machines, result):
 def record_stage_coverage(state, stage_machines, result, save_state):
 # Record one post-clone stage's coverage AND persist it, unconditionally.
 #
-#     record_coverage's stale-entry clearing only counts once it reaches disk. Phase 6
-#     used to guard its save on the nakon tally (`if state["nakon_failed_steps"]`), so a
-#     final pass that was fully green yet popped a stale entry lost the pop at process
-#     exit and verify's coverage gate stayed red — re-creating exactly the bug ff9b19f
-#     fixed (amongus-cde-2026 2026-09-30: "SMB v1 stayed 'failed' across three green
+#     record_coverage's stale-entry clearing only counts once it reaches disk. A phase-6
+#     guard on the nakon tally (`if state["nakon_failed_steps"]`) lost a fully-green pass's
+#     stale-pop at process exit and verify's coverage gate stayed red — re-creating the
+#     stale-entry bug this gate exists for ("SMB v1 stayed 'failed' across three green
 #     replants"). The window is narrow but real: phase-6 tally empty, final pass fully
 #     green, and the stale entry belongs to a final-only machine (one carrying just
 #     systemd-system-masked / hosts-redirect-linux, so predomain_machines never names it).
@@ -54,7 +53,7 @@ def record_clean_coverage(ctx):
 #
 #     A stage with no configurations is a clean result, not an absent one: without the
 #     keys verify's coverage gate fails closed with "coverage was never recorded"
-#     (live-found 2026-10-02). Shared by phase 6 (no pre-domain configs) and phase 7
+#     (caught live). Shared by phase 6 (no pre-domain configs) and phase 7
 #     (no final-stage configs).
     ctx.state.setdefault("plant_coverage_failed", {})
     ctx.state.setdefault("nakon_failed_steps", [])

@@ -1,5 +1,5 @@
 """Teardown mechanics, moved from destroy_gate_ops / destroy_sweep_ops /
-destroy_templates_ops (deleted 2026-10-12, teardown-redesign). The behavior is
+the old destroy_templates_ops (deleted in the teardown redesign). The behavior is
 the incident-hardened behavior; what changed is the vocabulary: every refusal
 is a `Refusal` (saw / expected / remedy), and every destroy-shaped function
 takes an `Ownership` instead of a loose tag set."""
@@ -65,7 +65,7 @@ def load_ownership(comp_dir):
         ownership_identity(comp_dir, deployed_state.get("comp_name")), run_id)
 
 
-# hard-stop before destroy: the API graceful path hangs on an agent-down DC and holds the qm lock (pfsense-rvb: 6m+ 'Still destroying'); forced stop + remove is the operator call (2026-09-30); ownership gates every stop — the name pattern is shared by every worktree running the same competition ID
+# hard-stop before destroy: the API graceful path hangs on an agent-down DC and holds the qm lock for many minutes ("Still destroying"); forced stop + remove is the operator call; ownership gates every stop — the name pattern is shared by every worktree running the same competition ID
 def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None,
                            ownership=None):
     windows = [b["name"] for b in boxes]  # all clones hard-stop, not just Windows
@@ -115,7 +115,7 @@ def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None,
             print(line, flush=True)
 
 
-# full ownership tag set only: partial overlap does not count (loadtest-2026-09-30), and a same-comp VM with a DIFFERENT run id belongs to another worktree's run (2026-10-02 near-miss)
+# full ownership tag set only: partial overlap does not count , and a same-comp VM with a DIFFERENT run id belongs to another worktree's run (a near-miss)
 def sweep_tagged_leftovers(nodes, ownership, keep_templates=False):
     comp_tags = set(ownership.tags)
     ours = []
@@ -129,7 +129,7 @@ def sweep_tagged_leftovers(nodes, ownership, keep_templates=False):
         # the golden + engine_template roles, and the sweep must not claim them instead. It
         # did: the deploy re-stamps a reused template with THIS run's tags (so the strict
         # guard recognizes it), which put it inside the sweep's ownership match and destroyed
-        # the artifacts a practice run existed to validate — live 2026-10-15, run-ee5717cd
+        # the artifacts a practice run existed to validate — caught live: the run
         # swept engine-template vmid 2241 on `--teams-only`. The PVE `template` flag, not the
         # name, is the tell.
         ours += [dict(v, _node=node) for v in vms

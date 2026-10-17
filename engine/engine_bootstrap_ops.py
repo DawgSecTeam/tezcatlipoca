@@ -80,13 +80,13 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
         # Stop the apt machinery for the build window: unattended-upgrades both holds
         # the dpkg lock past Lock::Timeout and re-fires when `apt-get update` refreshes
         # the lists — and the preamble's killall can catch it mid-upgrade, leaving an
-        # old libc6 under freshly unpacked -dev packages (live-found 2026-09-26, two
+        # old libc6 under freshly unpacked -dev packages (caught across two
         # engine-template builds in a row: rc=100, first on the lock, then on the
         # half-upgrade; stopping only the TIMERS left an already-running
         # apt-daily-upgrade.service free to spawn apt-get mid-bootstrap).
         #
-        # `systemctl stop` alone still lost the race (live-found 2026-09-27, cyberrange:
-        # rc=100, `/var/cache/apt/archives/lock` held by a fresh apt-get pid that
+        # `systemctl stop` alone still lost the race: rc=100 with
+        # `/var/cache/apt/archives/lock` held by a fresh apt-get pid that
         # apt-daily-upgrade.service spawned *between* the stop and our `upgrade`).
         # DPkg::Lock::Timeout does NOT cover the archives-cache lock, so that timeout
         # can't save us. Fix: MASK the units (a masked unit cannot be started or

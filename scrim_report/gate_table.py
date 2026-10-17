@@ -6,13 +6,12 @@ GATES = {
             ("distinct_tactics", 4, ">="), ("windows_footholds", 1, ">="),
             ("max_simultaneous_down", 4, ">="), ("stalls", 0, "=="),
             ("evictions", 1, ">=")],
-    # cycles_rc0/timeouts tuned 6/0 -> 2/2 (2026-10-15) per docs/rehearsal-gates.md's
+    # cycles_rc0/timeouts tuned 6/0 -> 2/2  per docs/rehearsal-gates.md's
     # post-rehearsal protocol: a meaningful blue cycle costs 20-30 min at the club's
     # qwen3.8-27b endpoint and the two teams serialise on one shared LLM lock, so a
-    # 30-minute scrim affords about one cycle per team (measured: 4 cycles/45 min
-    # run-e7e12115, 3/30 min run-1ea5494a-run2, 1 rc=0/30 min run-59a685c0, 0/25 min
-    # run-2652d9bc) and a late cycle cut at the event deadline is logged as a TIMEOUT
-    # (2 measured, run-2652d9bc). Must stay in sync with the doc's rows.
+    # 30-minute scrim affords about one cycle per team (measured across runs: 4 cycles/45 min,
+    # 3/30 min, 1 rc=0/30 min, 0/25 min) and a late cycle cut at the event deadline is logged as a TIMEOUT
+    # (2 measured). Must stay in sync with the doc's rows.
     "blue": [("cycles_rc0", 2, ">="), ("restorations", 2, ">="),
              ("injects", 2, ">="), ("notebook_entries", 10, ">="),
              ("timeouts", 2, "<=")],

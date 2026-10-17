@@ -1,6 +1,6 @@
 """Scoring reads: the phantom round (E3) and the inject-count path (E4).
 
-Two harness-side reading defects from scale8-soak-2026-10-02, both of which made the
+Two harness-side reading defects from a scale soak, both of which made the
 automated evidence disagree with what actually happened:
 
 E3 — `/api/services` returns `Last10Rounds` newest-first, and at >=8 teams a poll lands
@@ -146,7 +146,7 @@ class InjectCounting(unittest.TestCase):
         # The two halves must agree, or the next run repeats the soak exactly.
         from unittest import mock
         creds = {"TEAM1_PW": "p", "BOX_USER": "u", "BOX_PASSWORD": "b", "KEY_PATH": "/k",
-                 "VM_USER": "sysadmin", "ENGINE_IP": "10.0.0.252", "TEAM1_ID": 221,
+                 "VM_USER": "sysadmin", "ENGINE_IP": "10.0.0.248", "TEAM1_ID": 221,
                  "ADMIN_PW": "a"}
         args = type("A", (), {"teams": 1, "competition": "c", "duration_min": 120,
                               "run_dir": "/tmp"})()
@@ -159,7 +159,7 @@ class InjectCounting(unittest.TestCase):
 
 
 class GateCalibration(unittest.TestCase):
-# Per-run gate calibration (2026-10-04 hardening): the max_simultaneous_down gate
+# Per-run gate calibration: the max_simultaneous_down gate
 #     judges against red's own pacing cap, and the injects gate gets out of the way when
 #     the comp publishes none.
 

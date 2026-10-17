@@ -1,6 +1,6 @@
 """The pre-T0 assume-breach seed must be believed only when the whole range was seeded.
 
-bad-auto's `seed` reports every box failed and still exits 0 (live 2026-10-15: run-1ea5494a-run2
+bad-auto's `seed` reports every box failed and still exits 0 (caught live: run-1ea5494a-run2
 and run-2652d9bc), so `seed_assume_breach` gates on its per-step stdout report as well as on the
 exit code, and refuses T0 on output it cannot interpret rather than passing silently. The current
 bad-auto also prints a `steps` tally (counted over the persistent world, so an idempotent re-run

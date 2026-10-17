@@ -1,4 +1,4 @@
-"""strict=False still fails when nothing answered (C2) — scale8 soak 2026-10-02.
+"""strict=False still fails when nothing answered — found in a scale soak.
 
 The phase-6 pre-domain pass runs `nakon deploy` with strict=False so a couple of flaky pins
 of 41 cannot abort a deploy. But a host that never answered cannot report a failing step,
@@ -50,7 +50,7 @@ def _run_with(json_line, strict=False):
             patch.object(nakon_run_ops.subprocess, "Popen", side_effect=fake_popen), \
             patch.object(nakon_run_ops.time, "sleep"):
         return nakon_run_ops.run_nakon(
-            key="/k", scoring_user="ubuntu", scoring_ip="10.0.0.252",
+            key="/k", scoring_user="ubuntu", scoring_ip="10.0.0.248",
             bundle=Path("/tmp/b.tar.gz"), config_path=Path("/tmp/c.json"),
             strict=strict, run_tag="t")
 
@@ -89,8 +89,8 @@ class NothingAnsweredFloor(unittest.TestCase):
         self.assertEqual(len(result.machines), 1)
 
     def test_result_glued_to_status_line_is_still_parsed(self):
-        # live-found 2026-10-13 (crimson-relay phase 7): nakon's status line lost its
-        # trailing newline, gluing the JSON onto it ("...exit 0.{...}"). Requiring the
+        # nakon's status line lost its trailing newline on the phase-7 run that
+        # found this, gluing the JSON onto it ("...exit 0.{...}"). Requiring the
         # line to START with "{" dropped the whole result set, and the rc=0 floor then
         # aborted a fully-green pass.
         glued = ("[nakon] All configurations completed with exit 0."

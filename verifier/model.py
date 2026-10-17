@@ -15,7 +15,7 @@ class Status(enum.Enum):
 #     SKIP_UNAVAILABLE means the gate could not be evaluated (dead SSH, missing
 #     state, no vantage point) and is deliberately NOT a pass: a check that never
 #     ran exiting 0 is how a dead box reads as a healthy range (live-found
-#     2026-10-02: isolation's cross-team probe "PASSed" on stopped VMs). The
+#     caught live: isolation's cross-team probe "PASSed" on stopped VMs). The
 #     operator can waive a specific gate with --allow-unverified.
     PASS = "PASS"
     FAIL = "FAIL"

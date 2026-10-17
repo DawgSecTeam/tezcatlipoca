@@ -17,11 +17,11 @@ from net import remote_access_ops as ra  # noqa: E402
 from estate import state as estate_state  # noqa: E402
 
 
-COMPS_ONE = [{"comp_id": "cde-2026", "engine_ip": "10.0.0.252",
+COMPS_ONE = [{"comp_id": "cde-2026", "engine_ip": "10.0.0.248",
               "teams": [{"identifier": "101", "participants": ["alice", "bob"]},
                         {"identifier": "102", "participants": []}]}]
 
-COMPS_TWO = [{"comp_id": "cde-2026", "engine_ip": "10.0.0.252",
+COMPS_TWO = [{"comp_id": "cde-2026", "engine_ip": "10.0.0.248",
               "teams": [{"identifier": "101", "participants": ["alice"]}]},
              {"comp_id": "scrim-two", "engine_ip": "10.0.0.250",
               "teams": [{"identifier": "130", "participants": ["carol"]}]}]
@@ -46,7 +46,7 @@ class RenderPolicyTest(unittest.TestCase):
         self.assertIn('"comp-cde-2026-bob@"', text)
         self.assertIn('{"src": ["comp-cde-2026-alice@", "comp-cde-2026-bob@"], '
                       '"dst": ["192.168.101.0/24"], "ip": ["*"]},', text)
-        self.assertIn('"dst": ["10.0.0.252"], "ip": ["80"]},', text)
+        self.assertIn('"dst": ["10.0.0.248"], "ip": ["80"]},', text)
         # team 102 has no participants: no grant lines
         self.assertNotIn("192.168.102.0/24", text)
         self.assertEqual(text.count('"src"'), 3)
@@ -74,20 +74,20 @@ class RenderPolicyTest(unittest.TestCase):
 
 class FirewallScriptTest(unittest.TestCase):
     def test_local_teams_snat_to_gateway(self):
-        text = ra.remote_access_firewall_script(["101", "102"], [], "10.0.0.252")
+        text = ra.remote_access_firewall_script(["101", "102"], [], "10.0.0.248")
         self.assertIn("-s 100.64.0.0/10 -d 192.168.0.0/16 -j ACCEPT", text)
         self.assertIn("-d 192.168.101.0/24 -j SNAT --to-source 192.168.101.1", text)
         self.assertIn("-d 192.168.102.0/24 -j SNAT --to-source 192.168.102.1", text)
-        self.assertNotIn("--to-source 10.0.0.252", text)
+        self.assertNotIn("--to-source 10.0.0.248", text)
 
     def test_satellite_teams_snat_to_engine_mgmt(self):
-        text = ra.remote_access_firewall_script(["101"], ["130"], "10.0.0.252")
-        self.assertIn("-d 192.168.130.0/24 -j SNAT --to-source 10.0.0.252", text)
+        text = ra.remote_access_firewall_script(["101"], ["130"], "10.0.0.248")
+        self.assertIn("-d 192.168.130.0/24 -j SNAT --to-source 10.0.0.248", text)
         self.assertIn("-d 192.168.101.0/24 -j SNAT --to-source 192.168.101.1", text)
         self.assertEqual(text.count("-C FORWARD"), 1)  # one blanket tailnet accept
 
     def test_idempotent_pairs(self):
-        text = ra.remote_access_firewall_script(["101"], [], "10.0.0.252")
+        text = ra.remote_access_firewall_script(["101"], [], "10.0.0.248")
         for line in text.splitlines():
             if " -C " in line or " -t nat -C " in line:
                 self.assertIn("2>/dev/null || ", line)
@@ -239,7 +239,7 @@ class RebindingReassertTest(unittest.TestCase):
 # tailscaled re-applies its ruleset when an interface gains an address
 #     ("LinkChange: major, rebinding: ... rebind-reason=[ips-changed]"), taking the
 #     POSTROUTING chain with it; the 30s timer left tailnet->team traffic broken inside
-#     every window (live 2026-10-15, run-9fd68d14: present 9 samples, absent 3, present).
+#     every window (caught live: present 9 samples, absent 3, present).
 
     def test_the_monitor_reasserts_on_the_interface_event(self):
         script = ra.remote_access_monitor_script()
@@ -259,7 +259,7 @@ class RebindingReassertTest(unittest.TestCase):
         self.assertIn("OnUnitActiveSec=30", timer)
 
     def test_the_firewall_script_names_both_triggers(self):
-        text = ra.remote_access_firewall_script(["101"], [], "10.0.0.252")
+        text = ra.remote_access_firewall_script(["101"], [], "10.0.0.248")
         self.assertIn("range-remote-access-monitor.service", text)
         self.assertIn("range-remote-access.timer", text)
 
@@ -267,7 +267,7 @@ class RebindingReassertTest(unittest.TestCase):
         calls = []
         with patch.object(ra, "_engine_cmd",
                           side_effect=lambda ctx, cmd, **kw: calls.append(cmd)):
-            ra.push_remote_access_firewall({}, "10.0.0.252", ["101"], ["130"])
+            ra.push_remote_access_firewall({}, "10.0.0.248", ["101"], ["130"])
         install = next(c for c in calls if "range-remote-access-monitor.sh" in c)
         self.assertIn("/etc/systemd/system/range-remote-access-monitor.service", install)
         self.assertIn("enable --now range-remote-access.timer "
@@ -290,7 +290,7 @@ class TailscaleInstallTest(unittest.TestCase):
     def test_the_install_waits_out_the_clones_apt_locks_first(self):
         """The engine clone's first boot holds the dpkg locks for minutes, so the
         installer's apt-get died on the lock after the old three 5-second retries and the
-        step ended 127 (live 2026-10-15, run-0f82f888). The lock wait comes first."""
+        step ended 127 (caught live: the run that found it). The lock wait comes first."""
         cmd = self._install_command()
         self.assertIn("cloud-init status --wait", cmd)
         self.assertIn("flock -n /var/lib/dpkg/lock-frontend", cmd)

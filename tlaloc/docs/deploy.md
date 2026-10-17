@@ -31,7 +31,7 @@ red.caps.max_down 4
 red.caps.min_standing 1
 red.windows.endgame_teardown 15
 red.windows.lockout 3
-red.clef_url http://10.0.0.143:8080
+red.clef_url http://203.0.113.30:8080
 red.c2_url https://10.0.0.210
 red_yaml red.yaml           # a nested block (ladder/tiers) as YAML, if you prefer
 ```

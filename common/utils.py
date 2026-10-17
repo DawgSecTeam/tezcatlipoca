@@ -18,7 +18,7 @@ def local_python():
     A bare `python3` on PATH is a different environment from the one the harness runs under.
     The dashboard launches the harness with its service venv (which carries toml/paramiko);
     a distro `python3` may carry neither, and the child then dies at import — deep inside the
-    deploy, after the run record, workspace and worktree exist. 2026-10-14: two scrim runs
+    deploy, after the run record, workspace and worktree exist. Two parallel runs once
     through the dashboard died at `ModuleNotFoundError: No module named 'toml'` inside the
     deploy child, and the same trap waits for verify-competition.py, scrim-report.py and every
     `python3 -m badauto` spawn. Remote commands (ssh to a box) must NOT use this — there the
@@ -85,7 +85,7 @@ def mint_run_id():
 #
 #     The comp dir is per-worktree, so two concurrent deploys of the SAME competition ID
 #     mint different ids and can no longer destroy each other's VMs — destruction paths
-#     require the full ownership tag set including this tag (2026-10-02 near-miss).
+#     require the full ownership tag set including this tag (a near-miss).
     return f"run-{_secrets.token_hex(4)}"
 
 
@@ -159,7 +159,7 @@ def valid_unix_username(name):
 # Legacy distro system accounts (uid<=100 on the Debian and Fedora families): cloud-init
 # adopts a colliding name instead of creating it, so the sudoers rule and SSH key land on
 # a nologin root-homed shadow and every ssh <name>@box fails no matter what
-# (distro-matrix-2026-09-27: box_username operator). Alpine lacks most of these, which is
+# (distro matrix: box_username operator). Alpine lacks most of these, which is
 # why the collision never surfaced on the ubuntu/debian lineup.
 LEGACY_ACCOUNT_NAMES = frozenset({
     "root", "bin", "daemon", "adm", "lp", "sync", "shutdown", "halt", "mail",
@@ -226,9 +226,9 @@ def load_users_config(comp_dir):
 def competition_name(comp_dir):
 # The competition's own identity — the name its Compfile carries, never the directory.
 #     The dashboard seeds every run's comp dir as <run_dir>/comp, so a directory-derived
-#     tag made every dashboard range "comp-comp": verify_clean blamed the whole estate on
-#     it and a scrim-one-light deploy adopted another competition's kept golden as its own
-#     (2026-10-15, run-a87e0d88). Dir name only when a legacy Compfile names nothing.
+#     tag made every dashboard range "comp-comp": verify_clean then blamed the whole
+#     estate on it, and one deploy adopted another competition's kept golden as its own.
+#     Dir name only when a legacy Compfile names nothing.
     path = Path(comp_dir) / "Compfile"
     if not path.exists():
         return Path(comp_dir).name
@@ -302,8 +302,7 @@ def stages_red(comp_dir):
 
 def env_summary():
 # One line naming the estate this run targets: endpoint/node/datastore/template/
-#     engine mgmt IP. Live-found 2026-10-04: the repo carries several env variants
-#     (main .env targets the DOWN .193; .150 lives in .env.cyberrange-20260930) and a
+#     engine mgmt IP. The repo carries several operator env variants, and a
 #     wrong-variant copy used to be visible only if someone read the file. Printed in
 #     every entry script's banner so the first five lines betray the wrong estate.
 #
@@ -311,8 +310,8 @@ def env_summary():
 #     placement and --engine-mgmt-ip move the process onto another host/address by
 #     activating the config (not os.environ), and the "Effective target" restate read
 #     the stale env — so an operator checking the banner saw the pre-placement host and
-#     the pre-flag mgmt IP (live 2026-10-15: --engine-mgmt-ip 10.0.0.244 ran while the
-#     banner said 10.0.0.252).
+#     the pre-flag mgmt IP (caught live: --engine-mgmt-ip 10.0.0.246 ran while the
+#     banner said 10.0.0.248).
     from estate import config
     cfg = config.active()
     mgmt = cfg.engine.mgmt_ip if cfg.is_set("engine.mgmt_ip") else ""

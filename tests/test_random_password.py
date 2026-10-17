@@ -1,4 +1,4 @@
-"""config_ops.random_password charset: the incidents hung on it (scrim-extreme-2026-09-20).
+"""config_ops.random_password charset: the incidents hung on it (a live scrim).
 
 A letters+digits pool produced digit-free passwords that AD complexity policy rejected, and
 a forbidden character in the pool breaks DSN/quoting. Pin 14 chars, every class present, and

@@ -52,7 +52,7 @@ class Verdict(unittest.TestCase):
         image that always has one rc 2 arrived with `status: done` on every box — read
         rc-first, the gate recorded a tolerated failure for a finished boot (which
         hard-fails verify's degradations gate) and skipped its own wait when the text
-        said `status: running` (live 2026-10-15, run-b1bdb04a)."""
+        said `status: running` (caught live: the run that found it)."""
         self.assertEqual(box_settle_ops._cloud_init_verdict(2, "status: done"), "done")
         self.assertEqual(box_settle_ops._cloud_init_verdict(2, "status: running"), "running")
         self.assertEqual(box_settle_ops._cloud_init_verdict(2, "status: disabled"), "done")

@@ -16,7 +16,7 @@ from the official go.dev tarball. The unit layout, the MariaDB durability pair
 (MYSQL_ADDR + SECRETS_FILE_PATH — tavern otherwise wipes its state on every
 restart and rotates its server key, orphaning every baked beacon), the
 setcap/sysctl requirements of the icmp redirector and the port map mirror
-VM101's live 2026-10-07 setup, which is the verified reference.
+VM101's caught live setup, which is the verified reference.
 
 Gating (Compfile; all defaults shown):
     assume_breach 1             # red01 must exist for the C2 to live on it
@@ -149,7 +149,7 @@ def load_bad_auto_config(config_path):
     """A bad-auto config file from disk (YAML or JSON — the harness writes YAML,
     hand edits have been JSON). Explicit path only: the sibling checkout's
     repo-root config.yaml is standalone-bad-auto state tezcatlipoca no longer
-    reads (2026-10-12 cross-session clobber)."""
+    reads (a cross-session clobber showed it)."""
     path = Path(config_path)
     if not path.exists():
         return {}
@@ -207,7 +207,7 @@ def missing_local_c2_keys(realm):
 
     A realm block without them deploys cleanly, prints "tavern live … all
     transports", seeds `implant: True` flags — and plants one dead legacy http1
-    beacon per box with no engine DNAT (live 2026-10-11). Every local-C2 entry
+    beacon per box with no engine DNAT (caught live). Every local-C2 entry
     point validates against this before anything deploys.
     """
     realm = realm or {}
@@ -273,7 +273,7 @@ def build_local_c2_config(red_ip, config_path=None, comp_dir=None):
     """The bad-auto config for a deploy whose tavern lives on red01.
 
     Base is the COMPETITION's own config (config_path defaults to it) — the
-    sibling checkout's repo-root singleton is no longer a source (2026-10-12
+    sibling checkout's repo-root singleton is no longer a source (caught live
     cross-session clobber). Returns None when that base is missing or realm is
     disabled outright (provisioning a tavern nothing would use). Also pins
     deploy.red_ip to `red_ip` so the Compfile's `assume_breach_red_ip`
@@ -302,7 +302,7 @@ def write_local_c2_config(comp_dir, cfg):
     `--config` resolves inside its own tree, `load_config` finds no file and
     silently falls back to its built-in defaults (red01 then comes up on the
     default red_ip while everything else targets the comp's address — caught
-    live 2026-10-09, after a 95-minute deploy whose entire red presence died
+    caught live: after a 95-minute deploy whose entire red presence died
     with "No route to host").
     """
     from red import badauto_config_ops
@@ -447,7 +447,7 @@ UDIR="$HOME/.config/systemd/user"
 # The tavern build is a from-source Go build. Its caches and scratch default to
 # /tmp and ~/go on the ROOT filesystem, and a fresh red01 clone ships a 10G root
 # LV — a build dies mid-compile with "mkdir /tmp/go-build…: no space left on
-# device" (live 2026-10-08) that reads like a code error. Claim any unallocated
+# device" (caught live) that reads like a code error. Claim any unallocated
 # VG space, keep every Go dir on the disk, and say plainly if headroom is short
 # (the operator then resizes red01's disk and grows the filesystem: growpart +
 # pvresize + lvextend -r -l +100%FREE + resize2fs).
@@ -467,14 +467,14 @@ fi
 
 # "active" is NOT enough: tavern writes its secrets file on FIRST start and only
 # binds the core port after a restart, so an active-but-unbound tavern must NOT
-# short-circuit a repair (live 2026-10-09).
+# short-circuit a repair (caught live).
 if systemctl --user is-active --quiet tavern.service 2>/dev/null && [ -x "$BIN" ] && ss -tln | grep -q ':{c2_port} '; then
   say "tavern already provisioned, active, and serving :{c2_port} — nothing to do"
   exit 0
 fi
 
 # MariaDB's FIRST init can exceed systemd's 5-min start timeout (VM101 lesson,
-# 2026-10-07) — write the drop-in before the package's postinst starts it.
+) — write the drop-in before the package's postinst starts it.
 sudo -n mkdir -p /etc/systemd/system/mariadb.service.d
 printf '[Service]\\nTimeoutStartSec=1800\\n' | sudo -n tee /etc/systemd/system/mariadb.service.d/timeout.conf >/dev/null
 sudo -n systemctl daemon-reload
@@ -540,7 +540,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now {unit_names}
 
 # Tavern generates secrets/tavern-secrets on its FIRST start and does not bind the
-# core port until it is restarted after that write (live 2026-10-09: the unit read
+# core port until it is restarted after that write (caught live: the unit read
 # `active`, :{c2_port} never listened, tavern_pubkey could not read the key, and every
 # planted beacon went out keyless — tavern then answered "failed to decrypt
 # chacha20poly1305"). Restart once so the core server actually comes up.
@@ -730,7 +730,7 @@ def tavern_pubkey(red_ip, ssh_key, timeout=90, attempts=6, delay=5):
 
     Retried: on a FIRST provision the units have only just started and tavern prints
     the key a few seconds later, so a single read races it and reports "no key" —
-    which then plants beacons that cannot decrypt (caught live 2026-10-09). Returns
+    which then plants beacons that cannot decrypt (caught caught live). Returns
     None only when it is still unreadable after the whole window.
     """
     cmd = ("journalctl --user -u tavern.service --no-pager 2>/dev/null "

@@ -1,10 +1,10 @@
 """The range's ssh key must come from the RUN's configuration, never from a checkout path.
 
-Regression for the 2026-10-14 e2e finding: `scrim/staging.py` hardcoded
+Regression for an e2e finding: `scrim/staging.py` hardcoded
 `<engine checkout>/proxmox` and `stage_red` never pinned `deploy.ssh_key` on the config it builds
 from scratch, so under a central run (engine = a per-run WORKTREE with no key in it) bad-auto fell
 back to its built-in default — a SIBLING tezcatlipoca checkout — and `badauto deploy` died with
-FileNotFoundError '/home/hna/tezcatlipoca/proxmox.pub' AFTER the range had been built.
+FileNotFoundError on `<sibling>/proxmox.pub` AFTER the range had been built.
 """
 
 import os
@@ -22,8 +22,8 @@ from scrim import core  # noqa: E402
 
 class SshKeyPath(unittest.TestCase):
     def test_absolute_env_value_wins(self):
-        with patch.dict(os.environ, {"TEZ_SSH_PRIVATE_KEY_PATH": "/home/hna/tez-proxmox"}):
-            self.assertEqual(core.ssh_key_path(), "/home/hna/tez-proxmox")
+        with patch.dict(os.environ, {"TEZ_SSH_PRIVATE_KEY_PATH": "/home/operator/tez-proxmox"}):
+            self.assertEqual(core.ssh_key_path(), "/home/operator/tez-proxmox")
 
     def test_no_env_value_falls_back_to_the_checkout(self):
         env = {k: v for k, v in os.environ.items() if k != "TEZ_SSH_PRIVATE_KEY_PATH"}
@@ -34,8 +34,8 @@ class SshKeyPath(unittest.TestCase):
 class PinDeployKey(unittest.TestCase):
     def test_pins_the_resolved_absolute_path(self):
         cfg = {"deploy": {"red_vmid": 999}, "realm": {}}
-        badauto_config_ops.pin_deploy_key(cfg, "/home/hna/tez-proxmox")
-        self.assertEqual(cfg["deploy"]["ssh_key"], "/home/hna/tez-proxmox")
+        badauto_config_ops.pin_deploy_key(cfg, "/home/operator/tez-proxmox")
+        self.assertEqual(cfg["deploy"]["ssh_key"], "/home/operator/tez-proxmox")
         self.assertEqual(cfg["deploy"]["red_vmid"], 999, "sibling keys must survive")
 
     def test_no_key_leaves_the_config_alone(self):

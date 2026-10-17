@@ -23,8 +23,8 @@ def warn_co_tenancy(args, comp):
     """Warn when ANOTHER tezcatlipoca range is running on this run's node.
 
     A live event's guests share the node's networking with every other range: a concurrent deploy
-    or teardown creates/destroys bridges and runs `ifreload -a` node-wide. Live 2026-10-15
-    (run-1c44733b): red01 went unreachable at T+13 and stayed gone for 30 of the event's 45
+    or teardown creates/destroys bridges and runs `ifreload -a` node-wide. caught live
+    : red01 went unreachable at T+13 and stayed gone for 30 of the event's 45
     minutes, six red gates and RED-TEAM.md with it; a second session's scrim plus ten
     deploy/destroy cycles on the same node bracket the exact minute, and nothing in the run log
     said a word about the co-tenancy. Nothing here REFUSES — concurrent runs are deliberate — but
@@ -60,7 +60,7 @@ def warn_co_tenancy(args, comp):
     log("WARNING: another tezcatlipoca range is RUNNING on "
         + node + " (" + ", ".join(f"{k}: {n} guest(s)" for k, n in sorted(others.items()))
         + ") — its deploys/teardowns bounce the node's networking and can drop this range's guests "
-          "mid-event (run-1c44733b lost red01 exactly that way). Prefer an idle node for a live event.")
+          "mid-event (one run lost red01 exactly that way). Prefer an idle node for a live event.")
     return others
 
 
@@ -104,7 +104,7 @@ def stage_author(args):
     (dst / "Compfile").write_text("\n".join(compfile) + "\n")
     if not (dst / "injects").exists():
         log("WARNING: template ships no injects/ — blue's inject work is structurally "
-            "impossible on this comp (2026-10-03 scrim-fresh-a: injects gate n/a and "
+            "impossible on this comp (injects gate n/a and "
             "half of blue's job missing). Author at least two under "
             f"{dst / 'injects'} before the event.")
     log("authored (scenario/creds carry over; edit Compfile/box_vulns.json to re-theme)")
@@ -132,14 +132,14 @@ def stage_deploy(args, comp):
     # --comp-dir is the whole point of the dashboard's per-run workspace: the comp lives OUTSIDE
     # the engine tree there, so a bare `--competition <dir name>` resolved under the comps root,
     # found nothing, and scaffolded a NEW competition called "comp" instead of reusing this one
-    # (2026-10-14, run-9c45d48c: interactive prompt → EOFError). `--competition` carries the
+    # (interactive prompt → EOFError). `--competition` carries the
     # run's real comp id when the caller gave one (the workspace dir is just "comp").
     name = getattr(args, "competition", None) or comp.name
     cmd = [core.local_python(), "-u", "create-competition.py", "--competition", name,
            "--comp-dir", str(comp), "--teams", str(args.teams), "--yes"]
     if getattr(args, "nodes", None):
         # The dashboard hands every action the run's node list; without this the deploy
-        # stage silently targeted whatever TEZ_ENGINE_ENV_FILE points at (2026-10-14).
+        # stage silently targeted whatever TEZ_ENGINE_ENV_FILE points at .
         cmd += ["--nodes", str(args.nodes)]
     # Placement inputs travel with the scrim, not just the env: a scrim that deploys while
     # another range holds the env's engine vmid / team block / management IP would collide.
@@ -153,7 +153,7 @@ def stage_deploy(args, comp):
         cmd += ["--from-phase", str(args.resume)]
         # --force-resume must reach create-competition: it is the operator's answer to
         # the resume-loop guard; without the pass-through the harness accepted the flag
-        # while the deploy refused anyway (2026-10-04).
+        # while the deploy refused anyway .
         if args.force_resume:
             cmd += ["--force-from-phase"]
     r = procs.run(cmd, cwd=core.REPO, timeout=6 * 3600, check=False)
@@ -161,11 +161,11 @@ def stage_deploy(args, comp):
         # ALWAYS, success included: the phase-by-phase log is the only durable record of what
         # the deploy did — the template-reuse decisions ("Engine template reuses on the node's
         # hash stamp", "golden X hash differs — rebuilding") and every phase's output live here
-        # and nowhere else. Written only on failure until 2026-10-15, so a SUCCESSFUL run left
-        # no evidence of the reuse it had just proved (run-1c44733b: no deploy.log anywhere in
+        # and nowhere else. Written only on failure early on, so a SUCCESSFUL run left
+        # no evidence of the reuse it had just proved (on the run that found it: no deploy.log anywhere in
         # the run dir). stderr too: the phase-4 checkpoint SystemExit and a phase-3 ssh timeout
         # both printed ONLY to stderr, and a stdout-only log sent the post-mortem to the live
-        # estate for the answer (live-found 2026-10-03, twice).
+        # estate for the answer (caught live, twice).
         (Path(args.run_dir) / "deploy.log").write_text(
             (r.stdout or "") + "\n=== STDERR ===\n" + (r.stderr or ""))
     for line in (r.stdout or "").splitlines()[-15:]:
@@ -174,7 +174,7 @@ def stage_deploy(args, comp):
         raise RuntimeError(f"deploy failed rc={r.returncode} (log above); fix and resume with --skip-deploy/--from-phase")
     # The pipeline's final phase number is the source of truth — hardcoded 7s went
     # stale when firewalls became phase 5 and seed became phase 8 (live-found
-    # 2026-10-03: a completed deploy was rejected as "did not reach phase 7").
+    # caught live: a completed deploy was rejected as "did not reach phase 7").
     from deploy_lib.phases import PHASES
     final_phase = len(PHASES)
     if f"last_phase: {final_phase}" not in (r.stdout or ""):

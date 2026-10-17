@@ -53,7 +53,7 @@ class KnobTests(unittest.TestCase):
 class LocalConfigTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="tz-realmc2-cfg-")
-        # The comp's OWN config is the base (2026-10-12 isolation): no sibling
+        # The comp's OWN config is the base (per-run isolation): no sibling
         # checkout file is read, backed up, or restored by these tests.
         self.comp_cfg = Path(self.tmp) / ".badauto-config.yaml"
         # callback_ip derives from teams.json; every prepare_local_c2 test needs one
@@ -88,7 +88,7 @@ class LocalConfigTests(unittest.TestCase):
         self.assertEqual(realm["c2_ip"], "10.0.0.198")
 
     def test_derived_block_synthesizes_the_full_realm_table(self):
-        """The skeletal-operator-config regression (2026-10-11): a derived block
+        """The skeletal-operator-config regression: a derived block
         without transports/callback_ip planted one dead legacy beacon per box
         while the deploy printed 'tavern live … all transports'."""
         import yaml
@@ -142,8 +142,8 @@ class LocalConfigTests(unittest.TestCase):
     def test_engine_ip_comes_from_the_comps_credentials_file(self):
         """Same source bad-auto reads: the published scoreboard URL."""
         (Path(self.tmp) / "credentials.txt").write_text(
-            "Competition: scrim-one\nScoreboard:  http://10.0.0.252\nadmin  pw\n")
-        self.assertEqual(rc.engine_ip_for(self.tmp), "10.0.0.252")
+            "Competition: scrim-one\nScoreboard:  http://10.0.0.248\nadmin  pw\n")
+        self.assertEqual(rc.engine_ip_for(self.tmp), "10.0.0.248")
 
     def test_engine_ip_falls_back_to_the_deploy_env(self):
         with mock.patch.dict(os.environ, {"TEZ_ENGINE_MGMT_IP": "10.0.0.251"}):
@@ -157,10 +157,10 @@ class LocalConfigTests(unittest.TestCase):
         must be self-sufficient (a relative --competition path broke its own lookup)."""
         import yaml
         self.comp_cfg.write_text("realm:\n  enabled: true\n")
-        (Path(self.tmp) / "credentials.txt").write_text("Scoreboard:  http://10.0.0.252\n")
+        (Path(self.tmp) / "credentials.txt").write_text("Scoreboard:  http://10.0.0.248\n")
         path, _ = rc.prepare_local_c2(self.tmp, "10.0.0.198")
         cfg = yaml.safe_load(path.read_text())
-        self.assertEqual(cfg["deploy"]["engine_ip"], "10.0.0.252")
+        self.assertEqual(cfg["deploy"]["engine_ip"], "10.0.0.248")
         self.assertEqual(cfg["deploy"]["red_ip"], "10.0.0.198")
 
 
@@ -319,7 +319,7 @@ class PubkeyTests(unittest.TestCase):
     def test_pubkey_read_retries_a_first_provision_race(self):
         """Tavern logs its key a few seconds after the units start, so the first read
         right after provisioning finds nothing — without the retry the beacons are
-        planted with no key and never register (live 2026-10-09)."""
+        planted with no key and never register (caught live)."""
         answers = [_CP(0, out="(no key yet)"), _CP(0, out="(still nothing)"),
                    _CP(0, out=self.JOURNAL)]
         with mock.patch.object(rc, "_ssh", side_effect=answers) as ssh, \

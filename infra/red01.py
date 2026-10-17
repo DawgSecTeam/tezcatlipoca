@@ -3,7 +3,7 @@
 red01 is bad-auto's VM — not estate-managed, carrying no tezcatlipoca
 ownership tags — so it cannot ride the clash gate's slot math. It gets
 mgmt-IP-style gates instead (agent scans + a cluster-view vmid check), because
-the 2026-10-12 vmid-999 kill was exactly this gap: a validation deploy
+a vmid-999 kill was exactly this gap: a validation deploy
 defaulting onto the shared red01 slot sailed through preflight and recycled
 another session's in-flight red01 (bad-auto's deploy is clone-or-reuse, so a
 live VM at the vmid is "reconfigured", re-stamped, and its owner's ground
@@ -64,7 +64,7 @@ def red01_vmid_gate(plan):
              else "NO bad-auto marker (not a tezcatlipoca-managed VM — check by hand)")
     raise SystemExit(
         f"  ERROR: red01 vmid {plan.red01_vmid} is already occupied by {label}, "
-        f"{owner}. This is the 2026-10-12 kill shape: bad-auto's deploy is "
+        f"{owner}. This is the vmid-999 kill shape: bad-auto's deploy is "
         f"clone-or-reuse, so deploying onto an occupied red01 vmid reconfigures "
         f"and re-stamps whoever owns it. Set red01_vmid in the Compfile (or pass "
         f"--red-vmid on the scrim) to a vmid outside every other range's block — the "
@@ -168,7 +168,7 @@ def reclaim_unstamped_red(vmid, comp_name=None, log=print):
     A deploy that dies before bad-auto stamps its description marker leaves a red01 no destroy
     will claim (its identity guard refuses: rc 17, "VM <vmid> with no bad-auto identity marker").
     The standalone teardown then reported "warned" and the range was left with a red box holding
-    the LLM key and its beacon tasking (2026-10-14, run-df29374d; the leak class the scale8 soak
+    the LLM key and its beacon tasking (the leak class a scale soak
     hit with red01 998).
 
     Deliberately narrow, on top of `ownership.destroy_vm_if_exists`:

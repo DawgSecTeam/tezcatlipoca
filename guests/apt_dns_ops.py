@@ -13,7 +13,7 @@ _APT_PREP_BODY = r"""
 set +e
 # Non-Debian boxes (fedora/dnf, alpine/apk) have no apt at all — exit before the
 # mask/kill/purge noise so the prep is an honest rc=0 no-op instead of 5 retries of
-# command-not-found (live-found 2026-09-27, distro-matrix run).
+# command-not-found (caught live, distro-matrix run).
 command -v apt-get >/dev/null 2>&1 || exit 0
 # Fresh Ubuntu/Debian boots start apt-daily + unattended-upgrades, which (a) hold the
 # dpkg lock (nakon's install-package times out) and (b) leave the apt index pointing at a

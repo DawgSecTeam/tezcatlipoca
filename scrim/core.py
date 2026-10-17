@@ -14,21 +14,20 @@ BAD_AUTO = REPO.parent / "bad-auto"
 SSH_OPTS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 # The same two options as argv pairs, for the callers that build an ssh/scp argv list.
 SSH_NOCHECK = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
-# A blue cycle is a SCOPED visit, not a shift: the old 1800 s budget let each
+# A blue cycle is a SCOPED visit, not a shift: an 1800 s budget let each
 # opencode run pace to its prompt's "25 wall-clock minutes" and the whole event
-# collapsed to two TIMED OUT cycles (run3 2026-10-11: 0 of 2 cycles rc=0 against
-# the gates' >= 8). 600 s hard cap + a prompt scoped to ONE change keeps the
-# cadence honest: measured on the GX10 qwen-flash (run4 2026-10-12), a cycle
-# with real incident work needs 8-10 min — 540 killed 5 of 6 — so the cap gives
-# the one-action scope headroom while the target period keeps ~6 starts/hour.
-# TEZ_CYCLE_TIMEOUT overrides it for a slower LLM endpoint: on the only reachable
-# server at the 20261013d run (qwen3.8-flash-next, ~3 min per 10-token reply) every
-# 600 s cycle timed out and blue never engaged at all. Raising the budget trades
-# cycle count for cycles that can actually finish.
+# collapsed to a couple of TIMED OUT cycles instead of the gates' >= 8. A 600 s
+# hard cap + a prompt scoped to ONE change keeps the cadence honest: measured on
+# a mid-size local model, a cycle with real incident work needs 8-10 min — 540
+# killed 5 of 6 — so the cap gives the one-action scope headroom while the
+# target period keeps ~6 starts/hour.
+# TEZ_CYCLE_TIMEOUT overrides it for a slower LLM endpoint: with a several-minutes
+# per 10-token reply, every 600 s cycle timed out and blue never engaged at all.
+# Raising the budget trades cycle count for cycles that can actually finish.
 CYCLE_TIMEOUT = int(config.active().knobs.cycle_timeout or 600)
 CYCLE_TARGET_PERIOD = 480
-# Board samples every minute: at 300 s a blue restoring in 2-5 min (live run3)
-# left every DOWN->UP transition between samples — the scoreboard never showed a
+# Board samples every minute: at 300 s a blue restoring in 2-5 min left every
+# DOWN->UP transition between samples — the scoreboard never showed a
 # down state, and restorations/max-simultaneous-down graded on nothing.
 MONITOR_INTERVAL = 60
 
@@ -74,7 +73,7 @@ def vm_username():
 def is_local_endpoint(base_url):
     """True for an operator-side LLM endpoint: slower, key-less, tunnelled.
 
-    Table-driven since 2026-10-14 (`scrim/llm_endpoints.py`). The old body was
+    Table-driven (`scrim/llm_endpoints.py`). The earlier body was
     `"openrouter" not in base_url`, so every public API that was not openrouter.com — the
     official DeepSeek API included — was classified operator-side and driven as if it were a
     local llama.cpp (literal `local` as blue's apiKey, the slow-local red profile, a reverse
@@ -124,11 +123,11 @@ def ssh_key_path():
     """The ssh key this RANGE was built with: the configured absolute path when there is one.
 
     The configured key path is what the deploy itself resolved (estate/config.py) and
-    what a run host configures (e.g. /home/hna/tez-proxmox). The `<engine>/proxmox` fallback is
+    what a run host configures (e.g. /home/operator/tez-proxmox). The `<engine>/proxmox` fallback is
     only right for a manual checkout, where the key really sits in the tree: under a central run
     the engine is a per-run WORKTREE with no key in it, so anything that hardcodes a checkout path
-    reads a file that is not there (2026-10-14: red staging resolved a key against a sibling
-    checkout and died AFTER the range was already built).
+    reads a file that is not there — and red staging died that way only AFTER the range was
+    already built.
     """
     raw = (config.active().ssh.private_key_path or "").strip()
     if not raw:

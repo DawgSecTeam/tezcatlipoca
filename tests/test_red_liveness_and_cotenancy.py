@@ -1,6 +1,6 @@
 """Diagnostics a red-side post-mortem actually needs.
 
-Three things a live run proved missing on 2026-10-15 (run-1c44733b, the official-DeepSeek scrim):
+Three things a live run proved missing (a canonically-keyed public-endpoint scrim):
 a red01 outage that could not be attributed to the box or the route, a verify FAIL whose only
 record was a one-line summary, and a co-tenanted node nobody mentioned in the run log.
 """

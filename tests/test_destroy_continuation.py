@@ -1,4 +1,4 @@
-"""Teardown continuation (loadtest-2026-09-30): a failed/interrupted destroy must be
+"""Teardown continuation : a failed/interrupted destroy must be
 completable by re-running the pipeline — a foreign template slot skips and the remaining
 slots continue. Offline; fake Proxmox API."""
 

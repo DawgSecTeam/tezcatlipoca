@@ -28,8 +28,8 @@ from portal.app import LoginLimiter, create_app  # noqa: E402
 
 CONFIG = {
     "comp": "probe", "run_id": "run-abc", "event_name": "Probe Event",
-    "scoreboard_url": "http://10.0.0.252",
-    "nodes": {"pve": {"endpoint": "https://10.0.0.150:8006", "pve_node": "proxmox",
+    "scoreboard_url": "http://10.0.0.248",
+    "nodes": {"pve": {"endpoint": "https://203.0.113.10:8006", "pve_node": "proxmox",
                       "token": "u@pve!portal=s", "tls_fingerprint": ""}},
     "teams": {
         "team1": {"identifier": "101", "boxes": [

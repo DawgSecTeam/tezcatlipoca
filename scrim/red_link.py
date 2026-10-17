@@ -31,7 +31,7 @@ def _red_ssh_spec(args):
     bad-auto config (written by stage_red from the comp's reservation) when it
     carries one, else the CLI arg — never the sibling checkout's shared
     config.yaml, which on concurrent sessions names whichever red01 staged last
-    (that read used to overwrite --red-ip outright; 2026-10-12)."""
+    (that read used to overwrite --red-ip outright)."""
     from red import badauto_config_ops
     red_ip = getattr(args, "red_ip", None) or badauto_config_ops.DEFAULT_RED01_IP
     comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
@@ -306,7 +306,7 @@ def red_box_power_state(args):
 
     Every other red01 signal (ssh probe, event snapshot, report pull) travels the same path that
     is itself under suspicion, so a dead guest and a dead ROUTE TO it look identical. Live
-    2026-10-15 (run-1c44733b): red01 vanished at T+13 and stayed gone for the rest of a 45-minute
+    caught live: red01 vanished at T+13 and stayed gone for the rest of a 45-minute
     event; six red gates and RED-TEAM.md died with it, and the run log could never say whether the
     box was down or the route to it was — the post-mortem had to reconstruct it from another
     session's deploy times. This asks Proxmox, which needs no guest networking at all.
@@ -337,7 +337,7 @@ def red_liveness(args):
     Every guest-path signal (ssh probe, event snapshot, report pull) travels the route that may
     itself be dead, so it cannot distinguish "red is down" from "the path to red is down". The
     hypervisor state needs no guest networking, so it answers even when ssh cannot connect
-    (live 2026-10-15, run-1c44733b: 30 minutes of `No route to host` with no way to tell).
+    (caught live: 30 minutes of `No route to host` with no way to tell).
     """
     return red_box_power_state(args) or "no red vmid recorded — no out-of-band signal"
 

@@ -31,7 +31,7 @@ RED_REPORT = "/tmp/ba/report-*.md"
 def make_comp(root, *, run_id="run-1a2b3c4d", comp="demo"):
     comp = Path(root) / "competitions" / comp
     comp.mkdir(parents=True, exist_ok=True)
-    (comp / "Compfile").write_text("name demo-2026-10-03\nscenario x\n")
+    (comp / "Compfile").write_text("name demo-comp\nscenario x\n")
     state = {"teams": {"team1": {"identifier": "101"}}}
     if run_id:
         state["run_id"] = run_id
@@ -426,7 +426,7 @@ class TestWarningsAndStubs(unittest.TestCase):
     def test_a_synthesized_blue_narrative_reaches_the_canonical_document(self):
         # Blue is present, every cycle timed out, so blue itself wrote no REPORT.md; the
         # harness's narrative must still land as BLUE-TEAM.md and clear the collector's
-        # "present agent, missing canonical document" guard (live 2026-10-14, run-e7e12115).
+        # "present agent, missing canonical document" guard caught live.
         from scrim import blue_agent
         ao.update_manifest(self.path, agents={"red": {"present": False},
                                               "blue": {"present": True, "teams": 1}})
@@ -568,7 +568,7 @@ class TestIndexAndArchive(unittest.TestCase):
 
 
 class TestVerdictIngestion(unittest.TestCase):
-    INTERACTION = """# INTERACTION — run-1a2b3c4d
+    INTERACTION = """# INTERACTION — the run that found it
 
 Generated now from 12 red events.
 
@@ -760,7 +760,7 @@ if __name__ == "__main__":
 
 
 class ScpRetry(unittest.TestCase):
-# The route pair retries once on a network-side flap (2026-10-03: the red01
+# The route pair retries once on a network-side flap (the red01
 #     pull died on a seconds-long no-route flap on the ENGINE's jump address and the
 #     red report was lost; the destroy that ran next reached the same engine fine).
 #

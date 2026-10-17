@@ -1,15 +1,10 @@
 """Repo hygiene gates: no secret-bearing file is tracked, and no env var drifts.
 
-Two independent incidents motivate this file, both recorded here because they are its
-reason to exist:
-
-  1. 2026-09-29 — 21 tracked per-competition artifacts carried real passwords.
-     Closed by gitignore curation.
-  2. 2026-10-01 — `.env.pre-cde-20260929` (a hand-named env backup) stayed tracked
-     for weeks and reached the public remote because .gitignore listed ".env" and
-     ".env.realm-backup*" by name and missed the variant. It carried a live Proxmox
-     API token plus box and per-team passwords. Closed by the blanket `.env.*` rule
-     AND by this test, so a future rule edit cannot silently reopen it.
+Why this file exists: gitignore curation alone did not hold. A hand-named env backup
+(".env.<qualifier>") stayed tracked under name-based ignore rules and reached the public
+remote carrying a live API token plus box and per-team passwords. Secret-bearing files are
+therefore covered by a BLANKET rule (`.env.*`, no per-name exemptions) and this test pins
+what may be tracked, so a future rule edit cannot silently reopen the hole.
 
 The env-var half exists because the variable reference had drifted: variables the code
 reads were absent from the operator-facing reference. `estate/config.py`'s `_SPEC` is now
@@ -43,8 +38,7 @@ INTERNAL_ENV = {
     # but is only ever consumed by the generated shell, never read by Python, so it
     # is deliberately absent here — the staleness check below would flag it.)
     # Internal handoff within one process: deploy_lib/estate_inputs.py marks its
-    # own DEFAULT export so the preflight cannot read it as an operator-set address
-    # (F5, 2026-10-04).
+    # own DEFAULT export so the preflight cannot read it as an operator-set address.
     "TEZ_ENGINE_MGMT_IP_IS_DEFAULT": "deploy_lib/estate_inputs.py default marker (same process)",
     "ENGINE_IP": "scrim.env handoff written by run-agent-scrim.py",
     "MY_TEAM": "scrim.env handoff written by run-agent-scrim.py",
@@ -115,7 +109,7 @@ def _read(path):
 
 class NoTrackedSecrets(unittest.TestCase):
     def test_no_env_variant_is_tracked(self):
-    # The 2026-10-01 leak: a hand-named .env backup reached the public remote.
+        # a hand-named .env backup once stayed tracked and reached the public remote
         offenders = [
             f for f in _tracked_files()
             if Path(f).name == ".env" or Path(f).name.startswith(".env.")
@@ -123,13 +117,12 @@ class NoTrackedSecrets(unittest.TestCase):
         self.assertEqual(
             offenders, [],
             "secret-bearing env file(s) tracked — they hold the Proxmox API token and "
-            "box/team passwords. Untrack and rotate. See tests/test_secret_hygiene.py "
-            "'Security disclosure history':\n  " + "\n  ".join(offenders),
+            "box/team passwords. Untrack and rotate immediately:\n  " + "\n  ".join(offenders),
         )
 
     def test_env_variants_are_gitignored(self):
-    # Belt and braces: .gitignore must actually ignore the variants.
-        for probe in (".env", ".env.pre-old", ".env.realm-backup-20260101", ".env.local"):
+        # Belt and braces: .gitignore must actually ignore the variants.
+        for probe in (".env", ".env.pre-old", ".env.backup-20260101", ".env.local"):
             r = subprocess.run(
                 ["git", "check-ignore", "-q", probe], cwd=_REPO, capture_output=True
             )

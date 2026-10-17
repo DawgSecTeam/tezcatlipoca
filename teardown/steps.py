@@ -183,7 +183,7 @@ class RedStep(Step):
         if not candidates:
             # A run that never staged red has no per-comp bad-auto config and no recorded red
             # vmid. Running `badauto destroy` then aims it at the HOST's default config —
-            # built-in red_vmid 999, whoever's box lives there (live 2026-10-15: it found
+            # built-in red_vmid 999, whoever's box lives there (caught live: it found
             # another session's tdred-2026 red01 at 999, and the reclaim below destroyed it).
             # Skip, mirroring the scrim harness's teardown; a red01 that genuinely exists for
             # this comp is still caught by the vmid-candidates resolution and the sweep.
@@ -209,11 +209,11 @@ class RedStep(Step):
             # bad-auto refuses without ITS marker, and a deploy that died before stamping leaves
             # exactly that — a red01 no destroy will claim. Reclaim it narrowly, then FAIL if it
             # is still there: reporting "warned" left the LLM key and beacon tasking up and only
-            # surfaced at the verification (2026-10-14, run-df29374d).
+            # surfaced at the verification .
             from infra import red01
             vmid = self.last_vmid
             # comp_name arms reclaim's another-competition guard: a VM whose marker names a
-            # different competition is a recycled vmid, never ours (live 2026-10-15: without
+            # different competition is a recycled vmid, never ours (caught live: without
             # it, a badauto-defaulted 999 found tdred-2026's stamped red01 and reclaimed it).
             if vmid and red01.reclaim_unstamped_red(vmid, comp_name=competition_name(ctx.comp_dir),
                                                     log=_log):
@@ -239,7 +239,7 @@ class RedStep(Step):
 class PreStopStep(Step):
     """Hard-stop every team clone (force by default, owned only): the bpg
     graceful path hangs on an agent-down DC and burns minutes the disk about
-    to be destroyed does not need (owner directive 2026-09-30)."""
+    to be destroyed does not need (owner directive)."""
     name = "pre_stop"
     destructive = True
 
@@ -248,7 +248,7 @@ class PreStopStep(Step):
         from multinode.placement_record import record_of
         # A placement's team_nodes maps teams to RECORD names; the API path needs the PVE node
         # name (the route table is keyed by it). Unmapped, the pre-stop listed
-        # /nodes/<record>/qemu and silently skipped every hard-stop (2026-10-14).
+        # /nodes/<record>/qemu and silently skipped every hard-stop .
         team_nodes = {k: record_of(ctx.placement, v).node
                       for k, v in (ctx.placement or {}).get("team_nodes", {}).items()} or None
         pre_stop_windows_boxes(ctx.teams, ctx.boxes, ctx.default_node,

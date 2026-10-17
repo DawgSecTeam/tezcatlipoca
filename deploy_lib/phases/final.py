@@ -23,7 +23,7 @@ def _wipe_targets(managed_targets):
 #     The box record (name, template) is nested under t["box"] — reading top-level
 #     keys silently yielded name="" windows=False for EVERY box, dispatching
 #     Windows boxes into the Linux wipe path where they hung out their 180 s
-#     budget (live 2026-10-11, dc01 NOT cleaned). fw01 needs no filter here:
+#     budget (caught live: dc01 NOT cleaned). fw01 needs no filter here:
 #     unmanaged boxes never enter managed_targets.
     from common.windows_ops import is_windows_template
     return [{"ip": t["ip"],
@@ -36,7 +36,7 @@ def _publish_bad_auto_state(ctx):
 # bad-auto's nakon intel reads the box account from `<comp_dir>/.deploy_state.json`, its
 #     terraform-era contract; the modern pipeline never wrote it, so every seed sprayed
 #     `(box_user, None)`, paramiko failed with "no authentication methods", and cred_spray
-#     reported the whole seed as `unreachable over SSH` on every box (live 2026-10-16).
+#     reported the whole seed as `unreachable over SSH` on every box (caught live).
 #     The file rides to red01 with the other intel files. 0600: it holds the box password
 #     and the credlist.
     path = ctx.comp_dir / ".deploy_state.json"
@@ -94,7 +94,7 @@ def phase7_domains_and_final(ctx):
 
     # The mysql final-stage plants rebuild the auth tables, taking the credlist SQL
     # accounts fix_services created pre-plant with them — the auth-based sql check
-    # then fails on every team copy (2026-09-30 testcomp-7box: db01-sql DOWN at first
+    # then fails on every team copy (a 7-box test comp: db01-sql DOWN at first
     # verify, users re-added by hand mid-prep). Idempotent; mysql-pinned boxes only.
     reensure_mysql_credlist_users(ctx.comp_dir, ctx.linux_targets, ctx.tf_ctx, ctx.box_creds)
 
@@ -122,7 +122,7 @@ def phase7_domains_and_final(ctx):
             with timed(ctx.comp_dir, 7, "assume_breach"):
                 red_out = tlaloc_ops.plant_assume_breach(ctx)
                 # Red failing to deploy is a BLOCKER for a v2 comp (owner's directive,
-                # 2026-10-16): warn-and-continue covers a range whose other components
+                # the run that found it): warn-and-continue covers a range whose other components
                 # are healthy, not one with no red team at all — the first live smoke
                 # went "live" with red skipped entirely and looked successful.
                 if not (red_out or {}).get("ok"):

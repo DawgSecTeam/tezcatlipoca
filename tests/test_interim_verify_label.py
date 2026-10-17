@@ -1,6 +1,6 @@
 """The deploy-time verify is labelled INTERIM wherever its result is read.
 
-It runs before red/blue staging, and staging is what registers the pins: live 2026-10-15 the
+It runs before red/blue staging, and staging is what registers the pins: caught live the
 same `pins_registered` gate read FAIL at deploy time and PASS three minutes later with
 everything else unchanged, so one run's evidence held two contradictory results for one gate.
 """

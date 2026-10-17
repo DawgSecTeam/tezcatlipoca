@@ -1,4 +1,4 @@
-"""bad-auto session isolation — the 2026-10-12 vmid-999 incident's regression tests.
+"""bad-auto session isolation — the vmid-999 kill class's regression tests.
 
 Every tezcatlipoca worktree resolves the SAME sibling bad-auto checkout, and its
 deploy identity used to live in that checkout's repo-root files (one config.yaml
@@ -31,9 +31,9 @@ def _comp(d, extra=""):
 def _dashboard_comp(td):
     """The dashboard's workspace shape: the comp dir is <run_dir>/comp, and only the
     Compfile names the real competition."""
-    comp = Path(td) / "run-a87e0d88" / "comp"
+    comp = Path(td) / "run-adopt123" / "comp"
     comp.mkdir(parents=True)
-    (comp / "Compfile").write_text("name crimson-relay\nred01_ip 10.0.0.240\n")
+    (comp / "Compfile").write_text("name relay-fixture\nred01_ip 10.0.0.240\n")
     return comp
 
 
@@ -61,7 +61,7 @@ class Red01Resolution(unittest.TestCase):
             self.assertEqual(bco.red01_vmid_for(d, 1300), 555)
 
     def test_no_sources_is_none_never_999(self):
-        """The 2026-10-12 kill: no resolution may land on a shared default."""
+        """The kill class: no resolution may land on a shared default."""
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             self.assertIsNone(bco.red01_vmid_for(_comp(td), None))
@@ -101,11 +101,11 @@ class PerCompConfig(unittest.TestCase):
             bco.write_config(d, {"realm": {"enabled": True, "c2_port": 8000},
                                  "beacon": {"port": 4470},
                                  "deploy": {"template": "base-ubuntu24.04-fix"}})
-            path, vmid, ip = bco.prepare_deploy_config(d, 1300, engine_ip="10.0.0.252")
+            path, vmid, ip = bco.prepare_deploy_config(d, 1300, engine_ip="10.0.0.248")
             cfg = bco.load_config(d)
             self.assertEqual((vmid, ip), (1460, "10.0.0.240"))
             self.assertEqual(cfg["competition_dir"], str(d.resolve()))
-            self.assertEqual(cfg["deploy"]["engine_ip"], "10.0.0.252")
+            self.assertEqual(cfg["deploy"]["engine_ip"], "10.0.0.248")
             self.assertEqual(cfg["deploy"]["template"], "base-ubuntu24.04-fix")  # carried
             self.assertEqual(cfg["realm"]["c2_port"], 8000)                      # carried
             self.assertEqual(cfg["beacon"]["port"], 4470)                        # carried
@@ -115,12 +115,12 @@ class PerCompConfig(unittest.TestCase):
         """<run_dir>/comp is the dashboard's shape, so the config must carry the Compfile
         name: bad-auto stamps it into red01's description marker, and infra/red01.py's
         resume gate compares that marker to this plan's comp_name — a directory-derived
-        `comp` made a range refuse its OWN live red01 (2026-10-15, run-a87e0d88)."""
+        `comp` made a range refuse its OWN live red01 (caught live)."""
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             comp = _dashboard_comp(td)
             bco.prepare_deploy_config(comp, 1300)
-            self.assertEqual(bco.load_config(comp)["deploy"]["comp_name"], "crimson-relay")
+            self.assertEqual(bco.load_config(comp)["deploy"]["comp_name"], "relay-fixture")
 
     def test_written_config_comp_name_matches_the_plans(self):
         import tempfile
@@ -129,13 +129,13 @@ class PerCompConfig(unittest.TestCase):
             comp = _dashboard_comp(td)
             bco.prepare_deploy_config(comp, 1300)
             plan = PreflightPlan(comp_dir=comp, boxes=[], engine_vmid=1300, shares=[])
-            self.assertEqual(plan.comp_name, "crimson-relay")
+            self.assertEqual(plan.comp_name, "relay-fixture")
             self.assertEqual(bco.load_config(comp)["deploy"]["comp_name"], plan.comp_name)
 
     def test_prepare_pins_the_deploys_own_ssh_key(self):
         """bad-auto defaults deploy.ssh_key to a SIBLING tezcatlipoca checkout's `proxmox`
         and reads `<key>.pub` beside it — absent under the dashboard, where the assume-breach
-        red01 deploy died on FileNotFoundError after the range itself was built (2026-10-14)."""
+        red01 deploy died on FileNotFoundError after the range itself was built (caught live)."""
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             d = _comp(td, "red01_ip 10.0.0.240\n")

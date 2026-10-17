@@ -68,7 +68,7 @@ def check_remote_access(comp_dir, teams, ctx):
     # full re-assert cycle. The rule is self-healing by design — the timer re-adds it every
     # 30s because tailscaled's rebind (a docker interface gaining an address triggers one)
     # re-applies its ruleset and takes the POSTROUTING chain with it — so a single sample
-    # reported one unchanged range clean then failing minutes apart (live 2026-10-15:
+    # reported one unchanged range clean then failing minutes apart (caught live:
     # present for 9 samples, absent for 3, present again). A genuinely absent rule stays
     # absent through the whole window.
     snat_probe = "; ".join(

@@ -93,7 +93,7 @@ def check_isolation(ctx, teams, boxes):
 #     Returns a GateResult. A rule that exists but couldn't be exercised is SKIP,
 #     never a pass.
 #
-#     D5 (live-found 2026-10-02): a target box whose sshd is down, whose VM is
+#     D5 (caught live): a target box whose sshd is down, whose VM is
 #     stopped, or that is otherwise unreachable also yields RC!=0 from the
 #     cross-team /dev/tcp probe, and the old `blocked = "RC=0" not in stdout` read
 #     that as "blocked as expected" PASS. Establishing "blocked" now additionally
@@ -131,7 +131,7 @@ def check_isolation(ctx, teams, boxes):
             continue
         # Prefer a Linux box per team: the probe authenticates as the linux
         # box_username and Windows boxes want Administrator (a medic probe there
-        # always 255s — live-found 2026-09-29 on the dc01-first lineup).
+        # always 255s — caught live on the dc01-first lineup).
         cur = team_ips.get(parts[2])
         if cur is None or (is_linux_box(box) and not is_linux_box(box_by_ip.get(cur, {}))):
             team_ips[parts[2]] = box["ip"]

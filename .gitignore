@@ -1,7 +1,8 @@
-# Every .env variant is secret-bearing (the Proxmox API token, box + team passwords). The
-# blanket rule exists because a hand-named backup (".env.pre-...") once stayed tracked and
-# reached the public remote; tezcatlipoca.example.toml is the configuration reference and
-# no env template ships. Enforced by tests/test_secret_hygiene.py.
+# Every .env variant is secret-bearing (the Proxmox API token, box + team passwords) —
+# including hand-named backups (".env.pre-..."), so the rule is deliberately a blanket
+# one: name-based ignore lists have missed variants before. tezcatlipoca.example.toml is
+# the configuration reference and no env template ships. Enforced by
+# tests/test_secret_hygiene.py.
 .env
 .env.*
 # The native config profile (estate.config): per-node, secret-bearing by reference.

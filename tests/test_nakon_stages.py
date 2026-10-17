@@ -155,11 +155,11 @@ class AccountFileModeStaging(unittest.TestCase):
     """An account-file MODE must plant in the deploy's LAST pass.
 
     shadow-utils' commonio (useradd/groupadd) recreates /etc/passwd, /etc/shadow and
-    /etc/group at their default modes — probed 2026-10-16 in the Debian 13 and Ubuntu 24.04
+    /etc/group at their default modes — probed in the Debian 13 and Ubuntu 24.04
     base images: `chmod 666` then `useradd` reads 664, while `chpasswd` alone preserves it.
     Two account writers run after the pre-domain and final passes: fix_services' credlist
     `useradd` (end of phase 6) and bad-auto's assume-breach seed (persistence `user`,
-    phase 7). A mode staged any earlier is gone before verify probes it — live 2026-10-15:
+    phase 7). A mode staged any earlier is gone before verify probes it — caught live:
     bad-perms-userConfig read ABSENT on every team clone while writable-sudoers, a DIRECTORY
     mode neither writer touches, was present on all of them.
     """

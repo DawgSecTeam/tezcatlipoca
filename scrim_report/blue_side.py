@@ -80,7 +80,7 @@ def blue_metrics(run_dir):
             if erad_re.search(line) and erad_verbs.search(line):
                 m["eradication"] += 1
         # E1's eviction loop logs "EVICTED: <what> on <box>" — blue's own record of
-        # attacker persistence it removed (2026-10-04 validation scrim: frontdesk
+        # attacker persistence it removed (a validation scrim: frontdesk
         # Domain Admin membership, win02 Run-key persistence). red's foothold
         # health-checks only see SSH-class footholds, so without this the report
         # scores a real eviction as 0.
@@ -98,7 +98,7 @@ def blue_metrics(run_dir):
 _SUB_FILE_RE = re.compile(r"^sub(?:-?\d+|-[\w.-]+)?\.(?:md|txt)$", re.IGNORECASE)
 
 
-# scale8-soak-2026-10-02 reported "injects submitted: 0" and scored the blue inject gate
+# a scale soak reported "injects submitted: 0" and scored the blue inject gate
 # FAIL while the run had really submitted them: the teams wrote `sub.md`, `sub7.md` …
 # `sub12.md` at the team directory root, and the counter only matched `sub-*.md` or files
 # inside `submissions/` — a gate that reports zero because of a filename fails a team for

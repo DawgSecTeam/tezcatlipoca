@@ -6,7 +6,7 @@ Why this file exists: the SNAP_BASE snapshot loop and the "delete snapshot, POST
 snapshot wall plus ~30-60s of conversion wall for work that is independent per box.
 Measured snapshot wall across 13 competitions (.deploy-timings.jsonl, 460 successful
 records, 16 sub-second warn-path records excluded): median 7.4s, mean 12.1s, p95 33.8s,
-max 103.3s — bench-parallel-2026-09-24 phase 4 alone was 12 snapshots / 135s. deploy.py
+max 103.3s — measured worst case, one snapshot-heavy phase 4 alone was 12 snapshots / 135s. deploy.py
 has run this exact op on a 4-worker pool since M2.1.
 
 What a concurrent rewrite can silently break is not speed but ordering and failure
@@ -400,7 +400,7 @@ class GoldenCoverageRecords(unittest.TestCase):
         self.assertEqual([m["name"] for m in machines],
                          ["box0-golden", "box1-golden"])
 
-    # Live-found 2026-10-04: an interrupted POST /template left a golden with
+    # caught live: an interrupted POST /template left a golden with
     # template=1 on a plain vm- volume; every linked clone of it then died with
     # HTTP 500 "Linked clone feature is not supported". _convert must verify the
     # base- rename landed and fail loudly when it did not.

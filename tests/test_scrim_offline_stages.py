@@ -48,17 +48,17 @@ CREDS = {"ENGINE_IP": "10.0.0.50", "ADMIN_PW": "adminpw", "INJECT_PW": "injpw", 
 class RedLlmHeadroom(unittest.TestCase):
 # A local red endpoint gets headroom for a REASONING model: at timeout 120 /
 #     max_tokens 4096 every decision timed out or truncated to empty content and the
-#     director fell back to scripted tactics without saying so (2026-10-09).
+#     director fell back to scripted tactics without saying so .
 
     def test_local_endpoint_gets_reasoning_model_headroom(self):
         from scrim import red_stage
         llm = red_stage.red_llm_config(
-            _args(None, llm_base_url="http://100.64.0.19:8000/v1", red_model="qwen3.8-flash-next"))
+            _args(None, llm_base_url="http://100.64.0.47:8000/v1", red_model="qwen3.8-flash-next"))
         self.assertEqual(llm["timeout"], 300)
         self.assertEqual(llm["max_tokens"], 6144)
         self.assertEqual(llm["json_retries"], 0)
         self.assertEqual(llm["model"], "qwen3.8-flash-next")
-        # run4 (2026-10-12): a 360 s decide budget turned endpoint latency into
+        # a live run: a 360 s decide budget turned endpoint latency into
         # a 20-min red stall; the harness bounds the decision wait so the
         # deterministic ladder (which presses) takes over.
         self.assertEqual(llm["decide_budget_sec"], 180)
@@ -298,7 +298,7 @@ class StageManifest(Base):
         # A re-stage must leave red01's address to the Compfile: the CLI leaves red_ip
         # unset so `_resolve_red_ip`'s Compfile lookup runs, or a re-stage would move
         # red01 off the address the deploy recorded and the realm C2 still points at
-        # (live 2026-10-15, scrim-one-light).
+        # (caught live: scrim-one-light).
         seen = {}
         self._run_main(["--competition", "c1", "--teams", "1", "--duration-min", "30"],
                        on_red=lambda args, *a, **k: seen.update(args=args))
@@ -310,7 +310,7 @@ class StageManifest(Base):
 
     def test_the_range_lock_is_taken_before_anything_is_staged(self):
         # the deploy's engine lock does not cover a --skip-deploy scrim, so the range's own
-        # workspace flock is what refuses a second concurrent scrim (live 2026-10-15)
+        # workspace flock is what refuses a second concurrent scrim (caught live)
         from scrim import cli, staging
         calls = []
         noop = lambda *a, **k: None  # noqa: E731

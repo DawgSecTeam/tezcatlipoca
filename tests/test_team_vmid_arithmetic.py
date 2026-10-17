@@ -1,4 +1,4 @@
-"""Team identifier vs engine-derived-slot vmid arithmetic (live-found 2026-09-29:
+"""Team identifier vs engine-derived-slot vmid arithmetic (caught live:
 engine 1080 + default identifiers 101/102 put team2's first box vmid exactly on the
 engine-template slot (engine+140 = 1220) — undetectable at preflight time because the
 template doesn't exist yet, surfacing hours later when the template is cloned). Offline."""
@@ -67,7 +67,7 @@ class TeamVmidArithmetic(unittest.TestCase):
 
     def test_explicit_per_run_identifiers_beat_the_environment_override(self):
         # Two ranges of one competition on one node need different blocks, but the env is
-        # one value for the whole run host (2026-10-14: scrim-one held 120 while
+        # one value for the whole run host (caught live: a run held 120 while
         # scrim-one-light had no way to ask for another).
         import os
         os.environ["TEZ_TEAM_IDENTIFIERS"] = "120,121"

@@ -18,7 +18,7 @@ override what's already set):
   tools/build-pfsense-provision-template.py shot OUT     # console PNG (verify by eye)
   tools/build-pfsense-provision-template.py seal         # halt, serial0, convert to template
 
-qemu-guest-agent retrofit (2026-10-08) — adds the FreeBSD qemu-guest-agent to the sealed
+qemu-guest-agent retrofit — adds the FreeBSD qemu-guest-agent to the sealed
 `pfsense-provision` template WITHOUT touching the console: it full-clones the template to
 a scratch VM, reaches the guest's template SSH (192.168.1.1 on a node-side bridge alias,
 the host-level equivalent of phase 5's engine borrow), stages the .pkg dependency closure

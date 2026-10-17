@@ -89,7 +89,7 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
             # /clone takes no tags, and the tagging PUT below only lands after the clone
             # task finishes — a kill mid-clone would otherwise leave an unmarked VM
             # squatting our vmid slot. The description exists from the clone's first
-            # instant (infra.ownership.clone_marker; winad-testrun 2026-09-25).
+            # instant (infra.ownership.clone_marker).
             "description": clone_marker(competition_name(comp_dir)),
         })["data"]
         wait_for_proxmox_task(tnode, upid)

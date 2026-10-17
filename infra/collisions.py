@@ -52,7 +52,7 @@ def expected_slots(share, plan):
         # template_slot as well as persistent_template: the --keep-templates teardown keeps
         # this template in MULTI-node mode too, and gating the tolerance on `persistent_template`
         # alone (False when share.multi) made the next deploy refuse its own kept engine
-        # template as a leftover — the reuse path could never run (2026-10-14).
+        # template as a leftover — the reuse path could never run .
         slots.append(Slot(et, f"engine template vmid {et}", template_slot=True,
                           persistent_template=not share.multi))
     teams = [Slot(vm_id_for(t["identifier"], i), f"team vmid {vm_id_for(t['identifier'], i)} "
@@ -172,7 +172,7 @@ def check_collisions(share, plan, vms):
             # (`build_engine_template`'s dead-attempt branch, by reserved vmid + name).
             # Without the exemption the deploy cannot clean up its own wreckage: the clone
             # that failed is both the debris and the reason no later attempt can start
-            # (live-found 2026-10-15: run-bc3452dd/run-70b9197f refused on their own
+            # (caught live refused on their own
             # partial engine-template clones at vmids 2340/2540). Anything tagged into
             # another run stays a refusal: only UNPROVEN ownership is adopted.
             print(f"  Preflight{share.label}: {slot.label} holds an unconverted leftover of "
@@ -330,7 +330,7 @@ def running_guest_ips(vms, skip_vmids, ours_tags=None):
 def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
     """Static engine mgmt IP must not collide with any running guest on the mgmt L2.
 
-    Two things this gate got wrong, both live-found on the 2026-10-02 same-type-2box
+    Two things this gate got wrong, both caught live on a same-type 2-box comp
     practice run — where it printed "engine mgmt IP 10.0.0.250 is free" while a FOREIGN
     live `quotient-engine` was answering that exact address:
 
@@ -348,7 +348,7 @@ def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
     Guests without a working agent can't be checked; count them out loud instead of
     claiming the range is clean."""
     # Our own engine from a prior failed attempt holds the planned mgmt IP until that run
-    # is destroyed or resumed (live-found 2026-09-29: every retry after a phase-2+ failure
+    # is destroyed or resumed (caught live: every retry after a phase-2+ failure
     # re-tripped this gate against our own leftover). Kept by vmid, not only by tag: a state
     # file predating run ids gives the resume no run tag to match, and the collision gate
     # that would otherwise catch it is off on resume. A fresh deploy with that engine still
@@ -363,8 +363,8 @@ def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
     # "Explicitly set" means the OPERATOR set it — not that the code exported the
     # default into the same variable seconds ago (deploy_lib.inputs). A default IP the
     # preflight cannot verify is refused outright: the .150 default (.250) drops SSH
-    # mid-build on the tailnet path (2026-10-03), and an unverifiable default was a live
-    # foreign engine's address once before that (2026-10-02).
+    # mid-build on the tailnet path , and an unverifiable default was a live
+    # foreign engine's address once before that .
     explicit = (bool((config.active().engine.mgmt_ip or "").strip())
                 and not os.environ.get("TEZ_ENGINE_MGMT_IP_IS_DEFAULT"))
     if unchecked:
@@ -373,12 +373,10 @@ def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
             raise SystemExit(
                 f"  ERROR: cannot verify the engine mgmt IP {engine_mgmt_ip} — "
                 f"{len(unchecked)} running guest(s) have no working agent to ask "
-                f"({listing}). This is the DEFAULT address, and on this estate the "
-                f"default has already been a live foreign engine's address once "
-                f"(2026-10-02). Set TEZ_ENGINE_MGMT_IP to an address you have checked "
-                f"yourself (or '' for DHCP). On this estate the default (.250) also "
-                f"drops SSH mid-build on the .150 tailnet path (2026-10-03) — the "
-                f"cyberrange env variants pin 10.0.0.252 instead.")
+                f"({listing}). This is the DEFAULT address, and an unverifiable default "
+                f"has been a live foreign engine's address before, on a shared estate. "
+                f"Set TEZ_ENGINE_MGMT_IP to an address you have checked "
+                f"yourself (or '' for DHCP).")
         print(f"  Preflight: engine mgmt IP {engine_mgmt_ip} — UNVERIFIED "
               f"({len(unchecked)} running guest(s) have no agent: {listing}); proceeding "
               f"because TEZ_ENGINE_MGMT_IP is set explicitly")

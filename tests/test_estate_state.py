@@ -177,7 +177,7 @@ class TheDocumentIsTheOnlyWriter(unittest.TestCase):
     def test_a_placement_write_survives_the_deploy_state_save(self):
         # The planner writes `placement` straight to the file while the deploy context holds
         # its own copy of the document from load_prior_deploy_state, so saving that copy back
-        # dropped the record: every state document through 2026-10-16 read `placement: None`
+        # dropped the record: state documents written before this gate read `placement: None`
         # while the run's own log said "Placement recorded in <that file>". The record is what
         # makes red01's selected address durable ("the recorded value is never re-derived"),
         # so it must outlive the deploy's own save.

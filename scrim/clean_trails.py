@@ -17,7 +17,7 @@ So this runs as the LAST tezcatlipoca step before the clock starts:
 
 The wipe is scoped by red01's world.json first: every planted artifact path goes
 on an explicit never-touch skip-list, because a decoy IS payload the operator
-planted on purpose — the 2026-10-11 run lost one in this window (cause unproven;
+planted on purpose — one run lost a decoy in this window (cause unproven;
 the staging rm globs and the journal vacuum are the prime suspects). After the
 wipe the artifact checks are re-run and anything that was alive before and is
 dead after is named loudly. Best-effort by design: a box that cannot be reached
@@ -37,7 +37,7 @@ from scrim import core, procs
 from scrim.core import log
 
 # Windows wipe budget: 180 s ScrimTimeout-ed on BOTH Windows boxes live
-# (2026-10-11) — Remove-Item -Recurse over Temp/LogFiles is simply slow.
+#  — Remove-Item -Recurse over Temp/LogFiles is simply slow.
 WIN_WIPE_TIMEOUT = 600
 
 # What a deploy/plant/seed leaves behind on a Linux box. Truncation (not
@@ -197,7 +197,7 @@ def _linux_skip_block(paths):
 def _windows_skip_header(paths):
     safe = [p.replace("'", "''") for p in paths if "\n" not in p]
     # commas BETWEEN entries only: PowerShell 5.1 rejects a trailing comma
-    # before the closing paren ("Missing expression after ','", live 2026-10-12)
+    # before the closing paren ("Missing expression after ','", caught live)
     entries = ",\n".join(f"'{p}'" for p in safe)
     return (f"$skip = @(\n{entries}\n)\n"
             "function Test-SkipPath($p) { return ($skip -contains $p) }\n")
@@ -206,7 +206,7 @@ def _windows_skip_header(paths):
 def _run_windows_script(creds, ip, script, timeout=WIN_WIPE_TIMEOUT):
     # -EncodedCommand dies above the Windows shell's command-line limit (the 103-path
     # skip header pushed the UTF-16LE base64 past cmd.exe's 8191 chars: "The command
-    # line is too long.", live 2026-10-12), and `-Command -` parses stdin LINE BY LINE
+    # line is too long.", caught live), and `-Command -` parses stdin LINE BY LINE
     # so any multi-line construct breaks ("Missing expression after ','"). A staged
     # .ps1 + -File has neither cliff. The script must stay ASCII (the skip-list
     # extraction already filters to a safe charset).

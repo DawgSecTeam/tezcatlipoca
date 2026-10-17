@@ -519,7 +519,7 @@ class EnumerateTargetsTest(unittest.TestCase):
         self.assertEqual(slots["team2"], 1)
 
 
-# Routed red -> satellite teams (scale8 soak 2026-10-02): red01 sat on its own segment
+# Routed red -> satellite teams (a scale soak caught it): red01 sat on its own segment
 # (10.200.0.0/24) with the engine as its gateway, and the jump's FORWARD policy is DROP
 # with accepts only for the engine and team egress, so red's source matched nothing —
 # all 15 cred_sprays + 2 db_attacks against satellite teams failed "unreachable over
@@ -648,7 +648,7 @@ class ActivationProjectsBackToEnv(unittest.TestCase):
 
     A teardown caller snapshots os.environ before activation and hands that dict to the steps
     and to bad-auto's subprocess. Copying os.environ back is now a no-op, which silently sent
-    a multi-node teardown at the profile's host (the 2026-10-14 wrong-PVE bug). The identity
+    a multi-node teardown at the profile's host (the wrong-PVE bug). The identity
     must come from the config.
     """
 

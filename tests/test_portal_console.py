@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT))
 
 from portal.console import ConsoleBroker, ConsoleError, upstream_url  # noqa: E402
 
-NODE = {"endpoint": "https://10.0.0.150:8006", "pve_node": "proxmox",
+NODE = {"endpoint": "https://203.0.113.10:8006", "pve_node": "proxmox",
         "token": "tezcon-c-run-1@pve!portal=s3cret", "tls_fingerprint": ""}
 BOX = {"name": "web01", "vmid": 1210, "node": "pve150"}
 
@@ -73,7 +73,7 @@ class MintAndTake(unittest.TestCase):
 
     def test_upstream_url_matches_the_proven_pfsense_tool_shape(self):
         url = upstream_url(NODE, 1210, 5901, "PVEVNC:abc+/=")
-        self.assertEqual(url, "wss://10.0.0.150:8006/api2/json/nodes/proxmox/qemu/1210/"
+        self.assertEqual(url, "wss://203.0.113.10:8006/api2/json/nodes/proxmox/qemu/1210/"
                               "vncwebsocket?port=5901&vncticket=PVEVNC%3Aabc%2B%2F%3D")
 
 

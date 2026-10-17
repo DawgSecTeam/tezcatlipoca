@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from estate import engine_setup  # noqa: E402
 from infra import client  # noqa: E402
 
-CTX = {"ssh_key_path": "/tmp/key", "vm_username": "sysadmin", "scoring_engine_ip": "10.0.0.252"}
+CTX = {"ssh_key_path": "/tmp/key", "vm_username": "sysadmin", "scoring_engine_ip": "10.0.0.248"}
 
 
 class Netplan(unittest.TestCase):

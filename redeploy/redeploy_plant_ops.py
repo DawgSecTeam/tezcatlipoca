@@ -36,7 +36,7 @@ def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
         # The post-clone stage only lists machines that have post-clone plants. A selected
         # box whose plants all ride the golden clone is absent from it, and
         # `nakon --only <it>` then errors ("matched no machine") — which the retry loop
-        # misreads as a dead SSH session (live-found 2026-10-05, pfsense-ad web01).
+        # misreads as a dead SSH session (caught live, pfsense-ad web01).
         staged = {m["name"] for m in json.loads(Path(nakon_config_path).read_text())["machines"]}
         machines = [m for m in machines if m in staged]
     if nakon_bundle is None or nakon_config_path is None or not machines:
@@ -62,7 +62,7 @@ def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
             f"redeploy: {line}" for line in result.failed[:20]]
         # The document carries the only copy of the box passwords, so a torn write bricks
         # resume AND redeploy at once — estate_state.write_flat is the atomic 0600 writer
-        # (winad-testrun 2026-09-25).
+        # (a Windows/AD test run).
         estate_state.write_flat(comp_dir, state)
 
     pipeline_api.fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=state.get("box_creds"))
@@ -148,7 +148,7 @@ def rerun_domain_configs(targets, rctx, nakon_config_path):
             # A reset DC wipes the ENTIRE AD content: promotion state, the svc-support
             # and packet accounts, the AD misconfigs, and every member's machine
             # account. Each chain step keys on its own done-marker, so ALL of this
-            # team's domain markers are void (live-found 2026-10-03: deleting only the
+            # team's domain markers are void (caught live: deleting only the
             # ADDS marker re-promoted the DC but skipped account re-creation —
             # svc-support went missing and verify's domain gate failed).
             for marker in sorted(comp_dir.glob(f".nakon-domain-{team_key}-*.json")):
@@ -176,8 +176,9 @@ def prepare_nakon_assets(comp_dir, boxes):
     # split removed.
     postclone = comp_dir / ".nakon-postclone.json"
     if postclone.exists():
-        # A comp whose plants are ALL golden-stage (e.g. every cde-2026-style pin)
-        # has an empty postclone stage — live-found 2026-10-03: build_nakon_bundle
+        # A comp whose plants are ALL golden-stage (e.g. every pin already covered
+        # by the golden plant)
+        # has an empty postclone stage — build_nakon_bundle
         # refuses an empty machine list, so a legitimate no-replant must not try.
         # Auth/DNS/service hardening below still re-runs; the probe judges health.
         if not json.loads(postclone.read_text()).get("machines"):

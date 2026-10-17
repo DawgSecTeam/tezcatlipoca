@@ -2,7 +2,7 @@
 
 With a workdir per team, two targets claiming one canonical name give the derivation two
 candidates for a single document, and a later collection can flip which team's narrative becomes
-the canonical one — live 2026-10-15, run-1c44733b sealed with "canonical document changed after
+the canonical one — caught live: sealed with "canonical document changed after
 collection: BLUE-TEAM.md". Every team's REPORT.md must still be collected, under its own
 evidence/blue/<team>/.
 """

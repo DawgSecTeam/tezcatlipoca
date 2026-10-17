@@ -57,20 +57,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""examples:
   # one team's boxes, back to the state the competition started in
-  redeploy-competition.py --competition cde-2026 --teams 3
+  redeploy-competition.py --competition <comp-id> --teams 3
 
   # one box for one team
-  redeploy-competition.py --competition cde-2026 --teams 3 --boxes web01
+  redeploy-competition.py --competition <comp-id> --teams 3 --boxes web01
 
   # one team's linux boxes, rebuilt from tz-base and re-planted by Nakon
-  redeploy-competition.py --competition cde-2026 --teams 3 --platform linux \\
+  redeploy-competition.py --competition <comp-id> --teams 3 --platform linux \\
       --mode rollback-base
 
   # see what would be touched, change nothing
-  redeploy-competition.py --competition cde-2026 --teams 3 --dry-run
+  redeploy-competition.py --competition <comp-id> --teams 3 --dry-run
 
   # one box, cheapest reset that works (rollback -> replant -> rebuild as needed)
-  redeploy-competition.py --competition cde-2026 --teams 3 --boxes web01 --mode reset
+  redeploy-competition.py --competition <comp-id> --teams 3 --boxes web01 --mode reset
 """,
     )
     parser.add_argument("--competition", help="Competition ID (competitions/<id>). Omit for a "

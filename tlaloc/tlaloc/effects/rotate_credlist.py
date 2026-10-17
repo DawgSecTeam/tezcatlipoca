@@ -14,7 +14,7 @@ Ported from v1's `credlist_sabotage`, with four of its lessons load-bearing:
   self-lockout;
 * **the original comes from intel ground truth first** — a world cred is only a
   fallback, and never one this effect wrote — or a second pass "restores" the
-  first pass's random password (svc-matrix 2026-09-28);
+  first pass's random password (caught live);
 * **a rotation is only real if the OLD credential stops working and the NEW one
   starts.** Both are probed over SSH before `ok=True`, because the ledger and
   the seed record are graded on that flag. If the old credential still

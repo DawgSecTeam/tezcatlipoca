@@ -51,7 +51,7 @@ def check_packet_accounts(ctx, profile, boxes):
 #     on a Linux box. The packet promises these accounts exist and stay untouched — teams
 #     enumerate local accounts in minute-zero IR, and a missing decoy breaks that promise.
 #     Unprovable (SSH dead) is a SKIP, not a pass — the old code returned True on every
-#     unprovable path, so a dead SSH exited 0 (live-found 2026-10-02).
+#     unprovable path, so a dead SSH exited 0 (caught live).
     users = list((profile.get("credentials") or {}).get("out_of_scope") or [])
     if not users:
         return gate_pass("packet_accounts", "packet declares no out-of-scope accounts")

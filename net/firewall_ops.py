@@ -1,7 +1,7 @@
 """In-path firewall plumbing: per-team firewall config generation, SSH bootstrap, and the
 engine cutover that moves the team gateway onto the firewall.
 
-Per team <id> (the topology docs/pfsense-inpath-2026-09-28.md proved by hand and
+Per team <id> (the topology topology below and
 deploy phase 5 now automates):
 
     engine ─transit 172.31.<id>.0/30 (vmbrW<id>)─ firewall WAN 172.31.<id>.2/30
@@ -68,7 +68,7 @@ FW_PUSH_ATTEMPT_S = 30       # one push attempt; sshd answers before a booting a
 
 # The WAN pass rule must be the FIRST <rule> in the filter block and its destination
 # the `lan` KEYWORD — pfSense's <network> field takes a keyword/alias, not a CIDR, and
-# a raw CIDR there silently drops the rule (pfsense-ad 2026-09-28).
+# a raw CIDR there silently drops the rule (caught live).
 def generate_team_config(seed_xml, team_id, red_dnat_spec=None, authorized_key=None):
     tid = str(team_id)
     x = seed_xml
@@ -134,7 +134,7 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None, authorized_key=N
     # The deploy's success probe (and later admin access) is SSH from the engine to the
     # firewall's own WAN address. pfSense blocks WAN-inbound to itself by default and the
     # rule above only matches traffic destined to the LAN, so without this the probe can
-    # never answer even though the config applied (live-found 2026-10-05, pfsense-ad).
+    # never answer even though the config applied (caught live, pfsense-ad).
     # Source is pinned to the engine's transit address: the transit /30 has no other host.
     ssh_rule = f"""<rule>
 \t\t\t<type>pass</type>
@@ -157,7 +157,7 @@ def generate_team_config(seed_xml, team_id, red_dnat_spec=None, authorized_key=N
     nat_rows = "\t\t\t<outbound>\n\t\t\t\t<mode>disabled</mode>\n\t\t\t</outbound>\n"
     # Services the boxes reach at the gateway address (apt-cacher via the 95proxy
     # apt.conf) live on the engine; once the firewall owns that address they must be
-    # redirected to the engine's transit address (live-found 2026-10-05: every Linux
+    # redirected to the engine's transit address (caught live: every Linux
     # domain-join failed on `Unable to connect to 192.168.<id>.1:3142`).
     for port, desc in ENGINE_GATEWAY_SERVICES:
         nat_rows += f"""\t\t\t<rule>
@@ -215,7 +215,7 @@ def firewall_kind(template_name):
 # address alone — `inbound-interface eth1` is not a valid leaf on this image. The
 # script ends on a grep canary at the op-mode prompt and closes with a final `exit` —
 # a script ending at `exit` leaves the canary line to land on a fresh login prompt
-# and wedges the PTY (live-found 2026-10-08).
+# and wedges the PTY (caught live).
 def generate_vyos_commands(team_id, red_dnat_spec=None):
     tid = str(team_id)
     wan, gw, lan_gw = f"172.31.{tid}.2", f"172.31.{tid}.1", f"192.168.{tid}.1"
@@ -351,7 +351,7 @@ def _push_command(config_xml):
 
 
 # Retried while the appliance is still booting: sshd listens before a login can
-# complete (live-found 2026-10-05: the first push hung its whole 90s on a freshly
+# complete (caught live: the first push hung its whole 90s on a freshly
 # cloned firewall). The push is idempotent, so a retry after a half-run is safe.
 def _push_config(ssh_ctx, ip, config_xml, who, budget_s=FW_BOOT_BUDGET_S):
     deadline = time.time() + budget_s
@@ -385,7 +385,7 @@ def _strip_ansi(text):
 
 
 # Feeding is expect-style — the next line goes in only after the transcript shows a
-# prompt — because blind pacing loses twice on this image (live-found 2026-10-08):
+# prompt — because blind pacing loses twice on this image (caught live):
 # bulk-written input wedges the CLI inside `save`, and save flushes the tty input
 # queue on return, eating any line still queued behind it.
 def _pty_session(args, script, timeout_s=45):
@@ -643,7 +643,7 @@ def verify_in_path(ssh_ctx, teams, managed_first_ip, log=print, kind="pfsense",
     The route check retries over a bounded window: the cutover that installs these routes ends
     with `netplan apply`, which restarts the engine's networking, and a single immediate probe
     read an EMPTY answer one second after the write although the routes were in place moments
-    later — aborting a range that was routing correctly (2026-10-14, phase 5 of run-4495b079:
+    later — aborting a range that was routing correctly (caught live, phase 5:
     "engine does not route 192.168.120.0/24 via 172.31.120.2 (got: )"). The box-reachability
     probe below always had such a window; the route probe did not.
     """
@@ -674,7 +674,7 @@ def verify_in_path(ssh_ctx, teams, managed_first_ip, log=print, kind="pfsense",
         tid = teams[k]["identifier"]
         box_ip = managed_first_ip.get(k)
         # The cutover just moved the gateway MAC: give ARP/routing a bounded window to
-        # converge instead of failing on the first probe (live-found 2026-10-05).
+        # converge instead of failing on the first probe (caught live).
         if box_ip and not _wait_tcp(ssh_ctx, box_ip, 22):
             failures.append(f"{k}: first managed box {box_ip}:22 not reachable through "
                             f"the firewall — check the WAN filter loaded ({inspect})")

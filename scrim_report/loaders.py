@@ -56,7 +56,7 @@ def load_red_events(run_dir):
 # red01 was up); bad-auto's world.json event_start is written on the FIRST harness
 # contact — including a failed stage_red attempt whose red01 never deployed — so on a
 # retried red deploy it predates red01's existence and every red event reads as shifted
-# late (live-found 2026-10-03: a 14-minute-early t0 manufactured a phantom "27-minute
+# late (caught live: a 14-minute-early t0 manufactured a phantom "27-minute
 # opening stall" out of red's normal pre-T0 sprint). world.json stays the fallback for a
 # run dir without run.json.
 def load_event_start(run_dir):

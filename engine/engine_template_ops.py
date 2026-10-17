@@ -56,7 +56,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     # rebuild it from scratch rather than resuming a half-bootstrapped disk. An
     # untagged leftover passes with the ownership warning; anything tagged without
     # ours is refused — the reserved slot is not a license to destroy foreign VMs.
-    # Exception (live-found 2026-09-29): a full clone inherits the BASE image's tags,
+    # Exception (caught live): a full clone inherits the BASE image's tags,
     # so a config-PUT failure between the clone and the tag PUT leaves a leftover
     # wearing 'cloud-init;template' — the strict guard would refuse it forever. A
     # NOT-yet-converted VM on the reserved slot carrying the reserved NAME is our
@@ -77,12 +77,12 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     # concurrent ranges issue it within seconds of each other: PVE serializes them on one
     # datastore lock and reports `clone failed: can't lock file
     # '/var/lock/pve-manager/pve-storage-ssd' - got timeout` to the loser (live-found
-    # 2026-10-15, all three campaign deploys). The operation is idempotent, so retry it,
+    # caught live across concurrent deploys). The operation is idempotent, so retry it,
     # reclaiming the locked partial clone (whose name proves it ours) in between.
     #
     # The retry must OUTLAST the contention window, not merely repeat: a flat 20 s gap kept
     # landing inside it — the loser of a three-way race failed at +0:03, +0:36 and +1:11 while
-    # the two winners' clones committed seconds apart at the start (run-2631ec27, 2026-10-15;
+    # the two winners' clones committed seconds apart at the start (the run that found it;
     # the winner's own clone task completes in ~1 s, so what is contended is the serialised
     # allocation queue behind the lock, not one long clone). Backing off 40 s, 80 s, 120 s
     # gives the queue ~6.5 minutes to drain before the last attempt.
@@ -127,7 +127,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
         cfg["ipconfig0"] = f"ip={mgmt_ip}/24" + (f",gw={gw}" if gw else "")
     # A PUT landing immediately after the clone task commits can 400 with a bare
     # "Parameter verification failed" while pvefs finishes publishing the new VM's
-    # config (amongus-cde-2026 2026-09-30: three deploys in a row died here; the
+    # config (three deploys in a row died here; the
     # identical payload succeeded against the same vmid seconds later). Retry the
     # transient window, and surface the response body if it's a real rejection.
     for attempt in range(4):
@@ -159,9 +159,9 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                                "set TEZ_ENGINE_MGMT_IP (portable-node mode) or fix "
                                "the agent channel")
     forget_engine_host_key(build_ip)
-    # 300s lost twice to first-boot-under-load (parallel deploy saturating the node
-    # while this clone regenerates host keys + applies cloud-init; amongus-cde-2026
-    # 2026-09-30 — manual SSH succeeded minutes after each timed-out wait).
+    # 300s lost twice to first-boot-under-load (a parallel deploy saturating the node
+    # while this clone regenerates host keys + applies cloud-init — manual SSH
+    # succeeded minutes after each timed-out wait).
     if not wait_for_ssh(ctx["ssh_key_path"], ctx.get("vm_username", "ubuntu"), build_ip,
                         timeout=900):
         raise RuntimeError(f"engine-template build VM {build_ip} never accepted SSH")
@@ -172,7 +172,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 
     # A fresh base-image clone runs unattended-upgrades on first boot; the old
     # engine bootstrap's killall+sleep-2 preamble raced it and lost (live-found
-    # 2026-09-25: apt rc=100, dpkg lock held by the image's own apt). Wait for the
+    # caught live: apt rc=100, dpkg lock held by the image's own apt). Wait for the
     # real settle condition first — which now includes cloud-init's own boot-time
     # package_upgrade being finished: the apt-holder check alone slips through the
     # gaps between cloud-init's apt invocations and the next one bounces sshd

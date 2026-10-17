@@ -60,7 +60,7 @@ def make_comp(root, *, name="demo", run_id=RUN_ID):
 # A competition dir with just the files the harness reads at start.
     comp = Path(root) / "competitions" / name
     comp.mkdir(parents=True)
-    (comp / "Compfile").write_text(f"name {name}-2026-10-03\nscenario x\n")
+    (comp / "Compfile").write_text(f"name {name}-fixture\nscenario x\n")
     (comp / "boxes.json").write_text(json.dumps(BOXES))
     estate_state.write_flat(comp, {"run_id": run_id} if run_id else {})
     return comp
@@ -86,7 +86,7 @@ class TmpCase(unittest.TestCase):
         # as the cleanup callable, so each setUp applied a patch that was never stopped — the
         # real `_red_vm_still_exists` stayed replaced for the whole rest of the process, which
         # is both a masked-coverage hole and why an unrelated module's assertions on the real
-        # behavior failed only in a full-suite run (found 2026-10-14).
+        # behavior failed only in a full-suite run (caught live).
         self.enterContext(mock.patch.object(teardown_stage, "_red_vm_still_exists",
                                             lambda *a, **k: False))
         # These tests assert teardown ORDERING and collection; they must not dial
@@ -102,7 +102,7 @@ class TmpCase(unittest.TestCase):
     def resolve(self, args, comp=None):
     # resolve_run_dir with the node/endpoint env a deploy would have set.
         with mock.patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve",
-                                          "TEZ_PROXMOX_ENDPOINT": "https://10.0.0.193:8006"}):
+                                          "TEZ_PROXMOX_ENDPOINT": "https://203.0.113.20:8006"}):
             return test_folder.resolve_run_dir(comp or self.comp, args)
 
 
@@ -132,11 +132,11 @@ class RunDirResolution(TmpCase):
         self.assertEqual(man["kind"], "scrim")
         self.assertEqual(man["created_by"]["script"], "run-agent-scrim.py")
         self.assertEqual(man["comp"], "demo")
-        self.assertEqual(man["comp_name"], "demo-2026-10-03")
+        self.assertEqual(man["comp_name"], "demo-fixture")
         self.assertEqual(man["teams"], 2)
         self.assertEqual(man["boxes"], ["dc01", "web01"])
         self.assertEqual(man["node"], "pve")
-        self.assertEqual(man["endpoint"], "https://10.0.0.193:8006")
+        self.assertEqual(man["endpoint"], "https://203.0.113.20:8006")
         self.assertEqual(man["run_id"], RUN_ID)
         self.assertEqual(man["paths"]["run_dir"], str(test_dir))
 
@@ -145,7 +145,7 @@ class RunDirResolution(TmpCase):
 #
     #         Stable: a resume returns to the folder its first attempt made. Per run: a
     #         second fresh run gets its own folder, so one run's REPORT.md can never sit
-    #         next to another's (the 2026-10-08 evidence-mixing bug).
+    #         next to another's (the evidence-mixing bug).
         comp = make_comp(self.root, name="legacy", run_id=None)
         first_run, first_test = self.resolve(make_args(comp), comp=comp)
         self.assertTrue(first_test.name.startswith("untagged-"))
@@ -315,13 +315,13 @@ class AgentIdentity(TmpCase):
         # A fake repo root, so the ssh helper reads THIS run's files without
         # ever touching the real repo, the sibling bad-auto, or the network.
         # red01's address lives in the COMP's own bad-auto config now (the
-        # sibling checkout's singleton is no longer a source, 2026-10-12).
+        # sibling checkout's singleton is no longer a source).
         self.repo = self.root
         self.bad = self.root / "bad-auto"
         self.bad.mkdir()
         (self.comp / ".badauto-config.yaml").write_text(
             "deploy:\n  red_ip: 10.0.0.199\n  red_vmid: 999\n")
-        (self.comp / "credentials.txt").write_text("engine http://10.0.0.193:8006/\n")
+        (self.comp / "credentials.txt").write_text("engine http://203.0.113.20:8006/\n")
         # teams.json feeds realm_c2's callback_ip (172.31.<id>.1); without it the
         # staged realm block is refused as a dark C2 (the completeness check).
         (self.comp / "teams.json").write_text(
@@ -342,7 +342,7 @@ class AgentIdentity(TmpCase):
         self.assertEqual(spec["key"], str(self.repo / "proxmox"))
         self.assertEqual(spec["jump"], jump)
         self.assertIn("ProxyCommand=ssh", jump)
-        self.assertIn("10.0.0.193", jump)
+        self.assertIn("203.0.113.20", jump)
         self.assertEqual(target, "sysadmin@10.0.0.199")
         self.assertEqual(common, spec_common)
         self.assertIn(spec["key"], common)
@@ -373,7 +373,7 @@ class AgentIdentity(TmpCase):
                 mock.patch.object(red_link, "start_red_director", lambda *a, **k: None):
             # creds must be real-shaped: routed red runs the pre-T0 reachability gate,
             # which reads ENGINE_IP/ADMIN_PW (mocked run answers with PASS lines)
-            red_stage.stage_red(args, self.comp, {"ENGINE_IP": "10.0.0.193",
+            red_stage.stage_red(args, self.comp, {"ENGINE_IP": "203.0.113.20",
                                               "ADMIN_PW": "pw"}, run_dir)
         red = ao.load_manifest(test_dir)["agents"]["red"]
         self.assertTrue(red["present"])
@@ -466,7 +466,7 @@ class TeardownCollection(TmpCase):
         with contextlib.ExitStack() as stack:
             for patch in self._patches(**kwargs):
                 stack.enter_context(patch)
-            teardown_stage.stage_teardown(self.args, {"ENGINE_IP": "10.0.0.193"})
+            teardown_stage.stage_teardown(self.args, {"ENGINE_IP": "203.0.113.20"})
 
     def test_the_collector_runs_before_badauto_destroy(self):
         self._teardown()
@@ -530,7 +530,7 @@ class TeardownCollection(TmpCase):
                                   side_effect=lambda *a, **k: self.calls.append("destroy-competition")), \
                 mock.patch.object(ao, "collect",
                                   side_effect=lambda *a, **k: self.calls.append("collect") or {}):
-            teardown_stage.stage_teardown(self.args, {"ENGINE_IP": "10.0.0.193"})
+            teardown_stage.stage_teardown(self.args, {"ENGINE_IP": "203.0.113.20"})
         verdict = ao.load_manifest(self.test_dir).get("verdict") or {}
         self.assertEqual(verdict.get("status"), "GREEN")
         self.assertEqual(verdict.get("score"), 11)
@@ -650,7 +650,7 @@ class BluePrompt(TmpCase):
         (self.comp / "packet.md").write_text("# packet\n")
         self.run_dir = self.root / "run"
         (self.run_dir / "blue-team1").mkdir(parents=True)
-        self.creds = {"ENGINE_IP": "10.0.0.193", "TEAM1_ID": "101", "TEAM1_PW": "p",
+        self.creds = {"ENGINE_IP": "203.0.113.20", "TEAM1_ID": "101", "TEAM1_PW": "p",
                       "BOX_PW": "p", "INJECT_PW": "p", "KEY_PATH": "/tmp/k",
                       "VM_USER": "u", "BOX_USER": "airship"}
 
@@ -666,7 +666,7 @@ class BluePrompt(TmpCase):
         # the change is additive: the cycle prompt's structure is untouched
         self.assertIn("CYCLE TASK", prompt)
         self.assertIn("ROE: never attack the engine", prompt)
-        # 2026-10-04 hardening: eviction guidance + the idle case
+        # hardening: eviction guidance + the idle case
         self.assertIn("EVICTED:", prompt)
         self.assertIn("Idling is not defending", prompt)
 
@@ -690,7 +690,7 @@ class BluePrompt(TmpCase):
 class FireTest(TmpCase):
 # The fire test, with the box and the scoreboard scripted (no SSH, no engine).
 #
-#     Pins three behaviors the 2026-10-03 scrims bought the hard way: the residue guard
+#     Pins three behaviors the first scrims bought the hard way: the residue guard
 #     (an aborted earlier run can leave the unit down — restore BEFORE testing), the
 #     watched row (web01-<display>, not "first web01*"), and agreement polling (probe and
 #     scoreboard must agree within the deadline, not one stale sample).

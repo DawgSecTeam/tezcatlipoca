@@ -52,7 +52,7 @@ def vncproxy_mint(endpoint, token, pve_node, vmid, fingerprint=None, timeout=30)
     Returns {port: int, ticket: str}. Deliberately self-contained: the portal IMAGE ships
     only portal/ (portal/Dockerfile + portal.portal_ops._SHIP), so it must not import the
     driver's `infra` package — `infra/__init__` imports `infra.gates`, which drags the whole
-    deploy driver into the container and dies there (live-found 2026-10-13: the portal
+    deploy driver into the container and dies there (caught live: the portal
     container raised ModuleNotFoundError on both this import and `requests`). Wire shape and
     TLS rule match infra.console.vncproxy_mint / infra.client.proxmox_request: pin the peer
     cert with a recorded sha256, else the lab default (no CA these hosts lack).

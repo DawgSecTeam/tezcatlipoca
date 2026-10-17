@@ -1,6 +1,6 @@
 """Operator-side children must run under the harness's OWN interpreter.
 
-Regression for the 2026-10-14 dashboard e2e: `stage_deploy` spawned the deploy as bare
+Regression for a dashboard e2e finding: `stage_deploy` spawned the deploy as bare
 `python3`, so under the dashboard (whose service venv is the interpreter with the engine deps)
 the child got the distro python3 — `ModuleNotFoundError: No module named 'toml'` — and two runs
 died minutes in, after the run record, workspace and worktree existed. The same bare spawn sat on
@@ -175,7 +175,7 @@ class DeployTargetsTheWorkspaceTests(unittest.TestCase):
     def test_deploy_child_carries_this_runs_placement(self):
         # A scrim's deploy stage can run while another range holds the env's engine vmid,
         # team block and management IP — one value each for the whole run host
-        # (2026-10-14: scrim-one held 1000/120/10.0.0.252 on the realm).
+        # (caught live: a shared engine env held one vmid/team block/mgmt IP for every run).
         calls = []
 
         def fake_run(cmd, **kw):
@@ -184,7 +184,7 @@ class DeployTargetsTheWorkspaceTests(unittest.TestCase):
 
         with mock.patch.object(staging.procs, "run", side_effect=fake_run), \
                 mock.patch.object(core, "read_comp_json", return_value={"last_phase": 8}):
-            args = SimpleNamespace(competition="scrim-one-light", teams=1, resume=None,
+            args = SimpleNamespace(competition="lamp-fixture", teams=1, resume=None,
                                    force_resume=False, run_dir=None, scoring_vmid=1300,
                                    team_identifiers="130", engine_mgmt_ip="10.0.0.248")
             staging.stage_deploy(args, Path("/data/runs/run-x/comp"))
@@ -202,7 +202,7 @@ class DeployTargetsTheWorkspaceTests(unittest.TestCase):
 
         with mock.patch.object(staging.procs, "run", side_effect=fake_run), \
                 mock.patch.object(core, "read_comp_json", return_value={"last_phase": 8}):
-            args = SimpleNamespace(competition="scrim-one-light", teams=1, resume=None,
+            args = SimpleNamespace(competition="lamp-fixture", teams=1, resume=None,
                                    force_resume=False, run_dir=None)
             staging.stage_deploy(args, Path("/data/runs/run-x/comp"))
         cmd = calls[0]

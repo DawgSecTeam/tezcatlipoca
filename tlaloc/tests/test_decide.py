@@ -333,7 +333,7 @@ def _wide_board(ctx, n=6, reason_pad=0):
 
 
 def test_compose_sends_the_whole_state_to_the_16k_endpoint(tmp_path):
-    """The endpoint takes 16k since 2026-10-16, so a wide board is sent WHOLE:
+    """The endpoint takes a 16k-token batch, so a wide board is sent WHOLE:
     full option list, every interesting box, and a real history window — no
     compaction, nothing dropped off the digest."""
     from tlaloc.decide import tokens_needed

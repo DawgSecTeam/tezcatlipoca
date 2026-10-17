@@ -76,7 +76,7 @@ Design rules:
 - Identity: `--red-mode/--red-subnet/--red-seg-ip` pass through to bad-auto's `deploy.red_mode` ([architecture.md](architecture.md#network-and-isolation)); verify with `verify-competition.py --red-identity`.
 - `pull_red_evidence`: `events.jsonl`, `world.json`, and the bad-auto journal (`sudo -n journalctl -u bad-auto`) are fetched before `badauto destroy`. If the direct scp hangs (>60 s), fall back to the engine as a jump host. `pull_red_snapshot` is the in-run best-effort variant (75 s timeout, never raises).
 - `_red_ssh_ctx`: red01 IP defaults to 10.0.0.198, overridden by the competition's own bad-auto config (`deploy.red_ip`); never the sibling checkout's shared config.
-- Liveness has an out-of-band signal: `red_box_power_state` asks Proxmox (no guest networking), and `red_liveness` is printed on every failed guest-path probe — the monitor's snapshot warning, `check_red_llm` (including an ssh that never connected), and the red-LLM alert's `liveness` field. "red is dead" and "the path to red is dead" therefore read differently in the run log (live 2026-10-15, run-1c44733b had no way to tell them apart).
+- Liveness has an out-of-band signal: `red_box_power_state` asks Proxmox (no guest networking), and `red_liveness` is printed on every failed guest-path probe — the monitor's snapshot warning, `check_red_llm` (including an ssh that never connected), and the red-LLM alert's `liveness` field. "red is dead" and "the path to red is dead" therefore read differently in the run log (caught live: they used to read identically and the fix triage went down the wrong branch).
 
 ### Capture and teardown
 

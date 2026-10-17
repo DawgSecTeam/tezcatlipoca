@@ -35,7 +35,7 @@ class TimeoutOverride(unittest.TestCase):
     def test_a_callers_timeout_is_honored(self):
         # list_proxmox_templates passes timeout=10; the wrapper's own timeout=60 raised
         # "got multiple values for keyword argument 'timeout'", which that caller swallowed
-        # into an empty template list (the picker read "0 of 17 live", 2026-10-15).
+        # into an empty template list (the picker read "0 of 17 live").
         self.assertEqual(self._seen_timeout(params={"type": "vm"}, timeout=10), 10)
 
     def test_the_wrapper_default_still_applies(self):

@@ -1,5 +1,6 @@
-"""amongus-cde-2026 wiring: Windows service mappings, post-domain AD configs, and
-cross-box ("ip:<box>") identity vars for airship-webapp's DB_HOST.
+"""the AD lineup wiring: Windows service mappings, post-domain AD configs, and
+cross-box ("ip:<box>") identity vars for airship-webapp's DB_HOST (box names follow the
+catalog config's own required-var names).
 
 Offline: build_event_conf needs no I/O, and generate_stage_configs runs against a
 written nakon-config.json (Proxmox/Nakon boundaries mocked upstream)."""
@@ -37,7 +38,7 @@ def _by_box(conf, box):
     return next(b for b in conf["box"] if b["name"] == box)
 
 
-class AmongusCheckMappings(unittest.TestCase):
+class CheckMappings(unittest.TestCase):
     def test_iis_ftp_scores_port_open_only(self):
         # skeld's real pin shape: the IIS FTP plant is plant_only, the score is a
         # score-only Tcp pin — the credlist-backed Ftp table row can't work on a
@@ -63,7 +64,7 @@ class AmongusCheckMappings(unittest.TestCase):
                          [{"Kind": "A", "Domain": "localhost",
                            "Answer": ["127.0.0.1"]}])
 
-    def test_expected_service_names_cover_amongus_pins(self):
+    def test_expected_service_names_cover_the_pin_shapes(self):
         pins = {
             "mira": ["ad-dns-localhost", "New SMB Share", "Enable WinRM"],
             "skeld": [

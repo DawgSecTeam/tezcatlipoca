@@ -18,8 +18,9 @@ def watchdog_script(services, box_pw):
     units = []
     for svc in services:
         # box_services entries are strings OR dicts ({name, plant_only, score_only, ...})
-        # — the dict form used to raise TypeError (unhashable) in .get / `in` (scrim-one
-        # 2026-10-07: win02's plant_only/score_only pins killed the watchdog at T+1min).
+        # — the dict form used to raise TypeError (unhashable) in .get / `in`
+        # (a Windows box's plant_only/score_only pins killed the watchdog at T+1min
+        # on the run that found it).
         name = svc.get("name") if isinstance(svc, dict) else svc
         if not name:
             continue

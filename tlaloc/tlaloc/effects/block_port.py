@@ -13,8 +13,8 @@ script so the box itself says which one landed:
                 firewalld hosts the iptables call can be a shim that says yes)
 * ``nft``      an ``inet`` table of OUR OWN, hooked at ``input`` — the lesson
                 v1 learned after ``nft insert rule inet filter input`` died with
-                "No such file or directory" on a firewalld box (run-1 cde-2026
-                Fedora web01: three failed actions)
+                "No such file or directory" on a firewalld box (caught live,
+                three failed actions)
 
 Each mechanism echoes its own return code, so the box says which one landed
 (v1's `_picked_cleanup` fix, kept). What v2 adds is that an add's own rc is never

@@ -137,7 +137,7 @@ def guest_agent_exec_windows(node, vmid, ps_script, timeout=120):
 
 
 # A bare "didn't finish within Ns" gives an operator nothing to act on, and five exec
-# logs carry exactly that at the 120s cap (live-found 2026-09-26..10-01). The agent
+# logs carry exactly that at the 120s cap (caught live..10-01). The agent
 # already holds the partial output by the time we give up — include it, and point at
 # the detached path for work that legitimately outlives a poll budget.
 def _exec_timeout_message(vmid, pid, timeout, status):

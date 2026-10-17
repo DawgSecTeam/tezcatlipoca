@@ -74,8 +74,8 @@ the deploy env; host and credentials: `infrastructure-status.md`;
 - Runtime `headscale/headscale` (v0.29.x) in a container with an sqlite DB; `docker` is
   root-only, so every CLI call is `sudo docker exec headscale headscale …`. Embedded DERP
   enabled for clients with no direct path.
-- **DNS**: MagicDNS on, base domain `vpn.hnasheralneam.dev`
-  (`eng-<comp>.vpn.hnasheralneam.dev`).
+- **DNS**: MagicDNS on, base domain `<tailnet-base-domain>`
+  (`eng-<comp>.<tailnet-base-domain>`; the live value: `infrastructure-status.md`).
 - **Policy**: `policy.mode: file`; the pipeline regenerates the whole policy from
   `tezcatlipoca-remote-access.json` beside it. Pre-existing nodes are untagged and keep
   access via `group:full-access`.

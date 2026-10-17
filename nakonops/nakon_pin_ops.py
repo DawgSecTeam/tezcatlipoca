@@ -18,7 +18,7 @@ def _pin_key(c):
 #     Same-named pins with different vars are DIFFERENT plants — box_baseline.json
 #     emits 3+ same-named local-user/local-user-win decoy accounts per box, and a cold
 #     box's otherwise golden-stage configs ride the pre-domain stage into the same combined
-#     list. Keying on the name alone silently collapsed them (audit-found 2026-10-02:
+#     list. Keying on the name alone silently collapsed them (audited:
 #     .nakon-postclone.json — what redeploy's convergence sweep deploys and verify
 #     --packet probes — kept 2 of the 4 decoy/plant pins, so a rollback-base sweep
 #     stopped re-planting packet-promised accounts).
@@ -51,7 +51,7 @@ def _identity_banned_configs():
 #     machine's own address ("ip") or a same-team box's address ("ip:<box>") writes that
 #     address into the disk, so riding a golden bakes the golden's address into every
 #     linked clone. _golden_stage_machines consults this directly; the two public paths
-#     can no longer disagree. audit-found 2026-10-02: the satellite path tested
+#     can no longer disagree. audited: the satellite path tested
 #     `"ip" in kinds.values()`, so a cross-box-only ("ip:<box>") config escaped the ban
 #     while _fill_identity_vars had already baked team1's database IP into the pin —
 #     every clone on that satellite would have pointed at team1's database. It was
@@ -132,7 +132,7 @@ def _validate_pin_vars(configurations, where):
                     f"  ERROR: '{name}' requires var(s) {', '.join(literals)} but is pinned "
                     f"as a bare name in {where}. Pin it as {{\"name\": \"{name}\", \"vars\": {{...}} }} "
                     f"in box_services.json / box_vulns.json — a bare-name plant fails mid-deploy "
-                    f"(sudoers-rule rc=2, live-found 2026-09-24).")
+                    f"(sudoers-rule rc=2, caught live).")
         else:
             provided = c.get("vars") or {}
             missing = [v for v in literals if v not in provided]
@@ -148,9 +148,9 @@ def _validate_known_broken_pins(configurations, where, exempt=frozenset()):
 #     constants.KNOWN_BROKEN_CONFIGS is the curated, machine-readable replacement for the
 #     prose + per-competition-JSON pruning that let a new comp silently re-pin one of these
 #     (tftpd's Noble dpkg wedge, sshd-force-sftp killing SSH, the Windows user-policy set).
-#     `exempt` is the escape hatch for a competition that already records the pin — the
-#     historical comps that predate this gate (cde-2026, pfsense-rvb, scrim-live all pin
-#     local-user-win) must stay re-deployable; they get a warning instead of an error.
+#     `exempt` is the escape hatch for a competition that already records the pin —
+#     competitions that predate this gate (they pin local-user-win) must stay
+#     re-deployable; they get a warning instead of an error.
     for c in configurations:
         name = _config_name(c)
         reason = KNOWN_BROKEN_CONFIGS.get(name)
@@ -164,7 +164,7 @@ def _validate_known_broken_pins(configurations, where, exempt=frozenset()):
             f"  ERROR: '{name}' is a known-broken catalog config and cannot be pinned "
             f"({where}): {reason} Unpin it from box_vulns.json/box_services.json "
             f"(the list lives in constants.KNOWN_BROKEN_CONFIGS; it shrinks as upstream "
-            f"fixes land — see docs/upstream-defects-handoff.md).")
+            f"fixes land).")
 
 
 def catalog_required_var_names(timeout=180):
@@ -172,7 +172,7 @@ def catalog_required_var_names(timeout=180):
 #
 #     The curated REQUIRED_VARS table encodes var KINDS (literal vs ip) but is an
 #     incomplete mirror of the catalog's own metadata — a fresh randomize kept selecting
-#     catalog-var configs the table did not list (2026-10-13: raw-socket-beacon,
+#     catalog-var configs the table did not list (caught live: raw-socket-beacon,
 #     desktop-autostart, rc-local-persistence, MSSQL), each aborting the deploy at the
 #     generate-time var gate or the bundle lint. This asks the catalog directly so the
 #     fresh-selection drop no longer depends on the table being complete.
@@ -244,6 +244,5 @@ def _drop_unplantable_bare(names, where):
     if dropped:
         detail = "; ".join(f"{n} ({r})" for n, r in dropped)
         print(f"  Skipping {len(dropped)} unplantable bare config(s) in {where}: {detail} — "
-              f"pin them explicitly with vars, or see constants.KNOWN_BROKEN_CONFIGS / "
-              f"docs/upstream-defects-handoff.md")
+              f"pin them explicitly with vars, or see constants.KNOWN_BROKEN_CONFIGS")
     return kept

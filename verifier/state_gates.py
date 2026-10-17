@@ -21,7 +21,7 @@ def check_plant_coverage(comp_dir):
 #     catches a broken/undeclared-var config the moment it fails to plant, instead of a
 #     mid-competition discovery.
 #
-#     D2 (live-found 2026-10-02): this gate used to read ONLY plant_coverage_failed and
+#     D2 (caught live): this gate used to read ONLY plant_coverage_failed and
 #     fail OPEN when it was absent — missing/unparseable state, an older state, or a
 #     nakon that produced no --json outcome left `failed = {}`, so it printed
 #     "PASS all N machine(s) report full config coverage" and exited 0 while its own
@@ -69,7 +69,7 @@ def check_plant_coverage(comp_dir):
                       for c in (v or [])]
         # Intersect each recorded failure with what this machine STILL expects: a
         # failure for a config no longer in its `configurations` is stale and must not
-        # fail the gate (amongus-cde-2026 2026-09-30: a recovered SMB v1 entry stayed
+        # fail the gate (caught live: a recovered SMB v1 entry stayed
         # 'failed' across three green replants). The `<machine ...>` sentinel is kept
         # because it means "died before reporting any step" and is never a config name.
         bad = {c for c in machine_bad if c in expected or c.startswith("<machine")}
@@ -85,7 +85,7 @@ def check_plant_coverage(comp_dir):
         problems.append(f"{sum(len(c) for c in unplanted.values())} unplanted config(s)")
     if tally:
         # The tally is merged history, never the authority: "predomain: X FAILED" stays listed
-        # even after a later stage replanted X green (scrim-one 2026-10-03).
+        # even after a later stage replanted X green (caught live).
         print(f"  (informational) nakon history: {len(tally)} FAILED plant step(s) on "
               f"record — superseded failures stay listed; the coverage record above is "
               f"authoritative")

@@ -130,7 +130,7 @@ def _env_file(session_secret, open_gate, tunnel_token, cookie_secure=True,
 #     correct and required), but the tunnel-less path documented in docs/portal.md is
 #     `ssh -L 8443:…` over plain HTTP — and any host that is not localhost/127.0.0.1 is not
 #     a secure context, so a Secure cookie is REJECTED by the browser and login is
-#     impossible (live-found 2026-10-13: an operator forwarding the portal to a LAN address
+#     impossible (caught live: an operator forwarding the portal to a LAN address
 #     got 'Cookie "tez_portal" has been rejected because a non-HTTPS cookie can't be set as
 #     "secure"'). Callers pass use_tunnel.
 #

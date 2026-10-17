@@ -1,4 +1,4 @@
-"""Resume existence gates (C1) — scale8 soak 2026-10-02.
+"""Resume existence gates.
 
 Attempts 9-11 of that soak resumed at `--from-phase 5/6` after a phase-4 death. Apply
 #2 had never run, so no team box existed; the phase-6 pre-domain pass is `strict=False`,
@@ -46,7 +46,7 @@ STATE_RESOURCES = [
 STATE_JSON = json.dumps({"version": 4, "serial": 14, "resources": STATE_RESOURCES})
 
 # The real team_box address keys are BOX NAMES, not vmids — the vmid lives in the
-# instance attributes (live-found 2026-10-03: an address-shape parser read a fully
+# instance attributes (caught live: an address-shape parser read a fully
 # built range as "no team boxes at all" and failed the phase-4 checkpoint).
 
 

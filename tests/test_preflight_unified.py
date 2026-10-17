@@ -295,7 +295,7 @@ class Collisions(unittest.TestCase):
         # A template build whose clone task failed leaves an untagged, unconverted clone on
         # the reserved template vmid wearing the base image's own tags. It is this run's
         # wreckage, not a leftover range: phase 2 adopts and rebuilds it. Refusing here left
-        # the deploy no way to clean up after itself (live 2026-10-15, run-bc3452dd:
+        # the deploy no way to clean up after itself (caught live:
         # 'collides with VMs already on node: engine template vmid 2340').
         self._run(_share(), [dict(_vm(1140, "cloud-init;template"), name="engine-template")])
 

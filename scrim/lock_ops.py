@@ -21,8 +21,8 @@ def acquire_scrim_lock(comp):
     Two scrims of one range collide on everything the harness touches: the fire test (each
     stops nginx, so the second reads the first's DOWN), red01 (a second bad-auto deploy
     reconfigures the first's live red), and the Quotient sessions (every qlogin evicts the
-    other harness's cookie). Live 2026-10-15: run-2652d9bc and run-98067fcd scrimmed
-    scrim-one-light concurrently until one was cancelled. The flock releases on process exit
+    other harness's cookie — seen with two concurrent scrims on one range, one of them
+    cancelled). The flock releases on process exit
     or crash, exactly like `nakonops.nakon_lock_ops.acquire_engine_lock`.
     """
     lock_path = scrim_lock_path(comp)

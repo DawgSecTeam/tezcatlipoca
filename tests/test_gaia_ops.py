@@ -263,7 +263,7 @@ class PrepareTest(unittest.TestCase):
     def test_a_stale_creds_password_falls_back_to_the_boxs_own_env(self):
         """An install re-run leaves the handoff file and Mythic's database disagreeing.
 
-        Live 2026-10-16: /auth answered 403 for the creds file's password while the
+        caught live: /auth answered 403 for the creds file's password while the
         box's own MYTHIC_ADMIN_PASSWORD returned 200 + an access_token — the stack was
         healthy and the step was blaming a C2 it could not log in to.
         """
@@ -301,7 +301,7 @@ class PrepareTest(unittest.TestCase):
 
         Run `user create` first and Gaia prints its auth usage and exits non-zero —
         which is what the first live smoke reported as an argument error in
-        `gaia user create` (2026-10-16).
+        `gaia user create`).
         """
         with tempfile.TemporaryDirectory() as tmp:
             _, runner = self._prepared(tmp)

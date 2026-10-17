@@ -42,7 +42,7 @@ def monitor_loop(args, creds, t0, stop):
             log("red events.jsonl snapshot pulled")
         else:
             # the guest path failed; name the out-of-band signal, or "red is dead" and "the
-            # path to red is dead" stay indistinguishable (run-1c44733b, 2026-10-15)
+            # path to red is dead" stay indistinguishable
             log(f"WARNING: red events.jsonl snapshot unavailable — out-of-band: "
                 f"{red_link.red_liveness(args)}")
         llm_probe.red_llm_watch(args, t_plus)

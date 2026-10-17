@@ -54,7 +54,7 @@ def _drive(probe_rc):
     with patch.object(nakon_run_ops.subprocess, "run", fake_run), \
             patch.object(nakon_run_ops.subprocess, "Popen", fake_popen):
         try:
-            nakon_run_ops.run_nakon("key", "root", "10.0.0.252", bundle, config)
+            nakon_run_ops.run_nakon("key", "root", "10.0.0.248", bundle, config)
         except _Stop:
             pass
     return sent

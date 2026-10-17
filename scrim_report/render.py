@@ -37,11 +37,11 @@ def build_report(run_dir):
              + bm["injects"] + bm["eradication"])
     # Per-run gate calibration:
     # - max_simultaneous_down judges against red's own max_concurrent_down_end pacing
-    #   cap (run.json pacing, added 2026-10-04) — a gate that demanded 4 while the
-    #   harness paced red at 2 failed red for obeying orders (scrim-one 2026-10-03).
+    #   cap (run.json pacing) — a gate that demanded 4 failed red while
+    #   the harness paced red at 2 for obeying orders.
     # - the injects gate drops out (n/a, comp shape) when the capture proves the comp
-    #   published none, and caps at the published count otherwise — scrim-fresh-a
-    #   shipped no injects/ dir and blue failed a gate it could never pass.
+    #   published none, and caps at the published count otherwise — a comp that
+    #   shipped no injects/ dir made blue fail a gate it could never pass.
     pacing = loaders.load_pacing(run_dir)
     max_sim_threshold = int(pacing.get("max_concurrent_down_end") or 4)
     final = loaders.load_final_scoreboard(run_dir)
@@ -95,14 +95,14 @@ def build_report(run_dir):
     L.append("## Red\n")
     if events and not labels:
         L.append("_Note: no boxes.json could be resolved for this run dir, so host labels "
-                 "below are raw addresses rather than box names (the old fixed 17b table "
-                 "would have invented the wrong names)._\n")
+                 "below are raw addresses rather than box names (a fixed table would invent "
+                 "the wrong names)._\n")
     L.append(f"- takedowns: **{rm['takedowns']}**")
     for tp, host, svc, mode in rm["timeline"]:
         L.append(f"  - {timefmt.fmt_t(tp)} {host} {svc} ({mode})")
     # Rotation health (informational, not gated — yet): the biggest single target's
-    # share of all takedowns. scrim-fresh-a 2026-10-03: 20 of 22 were one box's IIS;
-    # the number that justifies — and then measures — bad-auto's rotation rule.
+    # share of all takedowns (measured pathological skew: 20 of 22 were one service;
+    # the number that justifies — and then measures — bad-auto's rotation rule).
     if rm["timeline"]:
         per_host = Counter(host for _, host, _, _ in rm["timeline"])
         top_host, top_n = per_host.most_common(1)[0]

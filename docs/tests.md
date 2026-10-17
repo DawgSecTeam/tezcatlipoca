@@ -139,7 +139,7 @@ defining `verifier.*` module — the entrypoint only re-exports.
 | `test_packet_compile.py` | Packet-profile compilation and the pin semantics it leans on (score-only pins, credlist swaps, dual credit) |
 | `test_scrim_harness_teams.py` | Inject clocks re-anchored at T0, every scoreboard/evidence loop scaling past 2 teams |
 | `test_blue_watchdog.py` | The blue watchdog script shape (pure string build, no SSH) |
-| `test_amongus_cde.py` | Windows service mappings and post-domain AD configs |
+| `test_event_ad_wiring.py` | Windows service mappings and post-domain AD configs |
 | `test_multinode.py` | Multi-node placement, jump rules, slot vmid math, the sync planner — offline (the largest file) |
 | `test_secret_hygiene.py` | No secret-bearing file is tracked, and no env var drifts — fails the suite if code reads a variable `estate/config.py`'s `_SPEC` does not declare and `INTERNAL_ENV` does not allowlist |
 | `test_packet_validation.py` | Compile-boundary packet shapes that would otherwise die later in a live deploy |

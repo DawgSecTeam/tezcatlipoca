@@ -63,7 +63,7 @@ class DeployPersists(unittest.TestCase):
         return types.SimpleNamespace(state={}, comp_name="probe", comp_dir=comp_dir)
 
     def test_a_clean_run_records_an_empty_ledger(self):
-    # Verify must be able to tell "clean" from "never ran". The 2026-10-02 live
+    # Verify must be able to tell "clean" from "never ran". A live
     #         run left the key absent and verify reported it as a pre-ledger state file.
         with tempfile.TemporaryDirectory() as d:
             ctx = self._ctx(Path(d))

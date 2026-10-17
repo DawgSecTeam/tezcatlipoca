@@ -44,7 +44,7 @@ def build_estate_inputs(ctx, comp_dir):
     ctx.ssh_key_abs = str(config.ssh_key_path())
     # Default the gateway whenever the engine mgmt IP is static: an explicitly-set mgmt IP
     # once skipped this and the engine template's ipconfig0 went out with an empty gw=
-    # (live-found 2026-09-29 — PVE 400 "Parameter verification failed").
+    # (caught live — PVE 400 "Parameter verification failed").
     if not config.active().engine.mgmt_gw:
         config.active().activate({"engine.mgmt_gw": DEFAULT_ENGINE_MGMT_GW})
     # A context built by hand (tests, recovery paths) may not carry its comp dir yet.

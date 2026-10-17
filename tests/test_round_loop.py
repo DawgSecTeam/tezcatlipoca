@@ -5,7 +5,7 @@ watchdog would have had to re-derive it, and two implementations of the same jud
 drift — the failure mode this repo keeps paying for. `round_loop.py` is now canonical
 and verify's gate uses it.
 
-The live signature (pfsense-ad 2026-09-28, and the guaranteed aftermath of the
+The live signature (caught live, and the guaranteed aftermath of the
 owner-confirmed .193 hard-downs): after an engine VM reboots, Docker brings the
 containers back but the round loop stays stopped. `/api/engine` then reports the engine
 as NOT paused, the Go zero time in `current_round_time`, and a stale

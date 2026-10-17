@@ -34,7 +34,7 @@ def _targets():
     return out
 
 
-NODES = {"pve": {"pve_node": "proxmox", "endpoint": "https://10.0.0.150:8006",
+NODES = {"pve": {"pve_node": "proxmox", "endpoint": "https://203.0.113.10:8006",
                  "token_env": "T", "tls_fingerprint": "", "vmids": []}}
 TOKENS = {"pve": {"user": "u@pve", "token_id": "u@pve!portal", "secret": "s3"}}
 
@@ -129,7 +129,7 @@ class EnvFileCookieSecure(unittest.TestCase):
 
     Secure cookies are rejected over plain HTTP on any host that is not localhost (a secure
     context), so a hardcoded Secure made login impossible on the documented tunnel-less
-    `ssh -L` path (live-found 2026-10-13). Behind cloudflared the public side IS https, so
+    `ssh -L` path (caught live). Behind cloudflared the public side IS https, so
     the flag is still on there.
     """
 

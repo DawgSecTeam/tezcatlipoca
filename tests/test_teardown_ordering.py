@@ -1,7 +1,7 @@
 """The rehearsal report grades red's OWN world.json, so the final red pull must land
 before the report is generated.
 
-Live run4 2026-10-09: evidence/red/world.json held 2 Windows footholds (dc01 + win02,
+Caught live: evidence/red/world.json held 2 Windows footholds (dc01 + win02,
 Administrator, escalation system), but INTERACTION.md — written two seconds EARLIER —
 read windows_footholds 0 and failed the rehearsal gate. The final pull lived only inside
 teardown_red, which stage_teardown calls AFTER write_interaction_report, so the report

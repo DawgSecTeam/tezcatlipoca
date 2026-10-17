@@ -7,10 +7,9 @@ from common.comp_paths import comps_root
 REPO = Path(__file__).resolve().parent.parent
 
 
-# the fixed HOST_BY_OCTET table hardcoded the 17b lineup, so every red timeline entry and
-# target label was WRONG on any other competition (cde-2026 is ad01/ftp01/web01/db01,
-# amongus-cde-2026 is mira/skeld/airship/polus) even though the report already knew the
-# competition directory through the run dir's name (audit find D8). Returns {} when it
+# the fixed HOST_BY_OCTET table hardcoded one lineup, so every red timeline entry and
+# target label was WRONG on any other competition even though the report already knew the
+# competition directory through the run dir's name. Returns {} when it
 # cannot resolve one, so host_label degrades to the raw dotted octet instead of inventing
 # a name from the wrong lineup.
 def box_labels(run_dir):
@@ -25,7 +24,7 @@ def box_labels(run_dir):
         i = p.parts.index(".automated-tests")
         cands.append(Path(*p.parts[:i]) / "boxes.json")
     if comps.is_dir():
-        # run dirs are often suffixed (cde-2026-run2): take the longest competition
+        # run dirs are often suffixed ("comp-run2"): take the longest competition
         # name that prefixes the run dir.
         prefixes = sorted((p for p in comps.iterdir()
                            if p.is_dir() and name.startswith(p.name)),
@@ -43,9 +42,10 @@ def box_labels(run_dir):
     return {}
 
 
-# the windows_footholds fallback used to hardcode octets 2/3 (the 17b dc01/win01 slots);
-# scrim-fresh-a's only Windows box sits at .5, so red's two real win01 cred_spray
-# footholds counted 0 and the gate failed red for footholds it held. Unresolvable -> no
+# the windows_footholds fallback used to hardcode octets 2/3 (one lineup's
+# dc01/win01 slots); a competition whose only Windows box sits elsewhere counted red's
+# two real win01 cred_spray
+# footholds as 0 and the gate failed red for footholds it held. Unresolvable -> no
 # Windows octets (the gate counts none rather than guessing).
 def windows_octets(run_dir):
     p = Path(run_dir).resolve()

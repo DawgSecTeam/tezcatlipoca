@@ -181,7 +181,7 @@ def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
 #     direct API path (node-scoped calls follow the placement route table) with its SSH
 #     configuration going over the mgmt LAN, and each build is dominated by a full clone
 #     plus a first-boot cloud-init wait — measured 17s to 547s, avg ~150s, across
-#     17 samples in multinode-spread-2026-09-30. Serially that made an 8-satellite
+#     17 samples on a spread multinode run. Serially that made an 8-satellite
 #     spread pay ~18 minutes of pure waiting for no reason.
 #
 #     Bounded at 4 rather than the pool's default 8: unlike the per-box work, each unit

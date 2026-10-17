@@ -1,7 +1,7 @@
 """One scrim per resolved range workspace.
 
-Two scrims of scrim-one-light ran concurrently on 2026-10-15 (run-2652d9bc and the cancelled
-run-98067fcd): both stopped nginx for the fire test, both logged in as the same Quotient
+Two scrims of one range ran concurrently once: both stopped nginx for the fire test, both
+logged in as the same Quotient
 accounts, and the second bad-auto deploy reconfigured the first's live red01. The engine
 flock does not cover a --skip-deploy scrim, so the range's own workspace takes a flock.
 """

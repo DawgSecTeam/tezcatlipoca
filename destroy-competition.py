@@ -160,7 +160,7 @@ def main():
         comp_dir = resolve_comp_dir(comp_dir=args.comp_dir)
         # `competition` is only bound by the comps-root branch below, and the banner prints it —
         # `--comp-dir` alone (the dashboard's shape: a per-run workspace with no name of its own)
-        # died with UnboundLocalError before any teardown ran (2026-10-14, run-eab53563).
+        # died with UnboundLocalError before any teardown ran .
         competition = args.competition or competition_name(comp_dir)
     else:
         competitions = load_destroyable_competitions()
@@ -185,8 +185,8 @@ def main():
     name, scenario, difficulty = load_compfile(comp_dir / "Compfile")
     # teams.json/boxes.json are what this teardown plans against. A workspace whose deploy died
     # before generating them (preflight-placement) never held a range, and reading them
-    # unconditionally died with FileNotFoundError instead of a verdict (2026-10-14, runs
-    # run-0c8d7533 / run-1194ddcf, both handed run-c84faaac's config-less workspace).
+    # unconditionally died with FileNotFoundError instead of a verdict (caught live: two runs
+    # were handed a config-less workspace that had never held a range). Missing == refuse.
     missing = [f for f in ("teams.json", "boxes.json") if not (comp_dir / f).exists()]
     if missing:
         refusal = Refusal(

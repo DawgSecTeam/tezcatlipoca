@@ -33,7 +33,7 @@ def main():
     os.umask(0o077)
     # The deploy child reads .env itself, but the harness's IN-PROCESS paths (the
     # end-of-event teardown runner, compworld) resolve their config from this process's
-    # environment: run-e9d17d65's teardown died with a missing TEZ_PROXMOX_ENDPOINT because
+    # environment: the run's teardown died with a missing TEZ_PROXMOX_ENDPOINT because
     # only the child had loaded .env.
     from dotenv import load_dotenv
     load_dotenv(core.REPO / ".env")
@@ -81,8 +81,8 @@ def main():
     # No default: `None` is what lets `red_stage._resolve_red_ip` consult the comp's own
     # reservation (Compfile `red01_ip`). Hardcoding bad-auto's own default here made that
     # resolver unreachable, and a re-stage moved red01 off the address the deploy recorded
-    # and the realm C2 still pointed at (live 2026-10-15, scrim-one-light: deploy planted
-    # at 10.0.0.196, re-stage deployed red01 at 10.0.0.198). `--red-vmid` has always
+    # and the realm C2 still pointed at (caught live: deploy planted at the legacy .196
+    # default, re-stage re-selected the address). `--red-vmid` has always
     # defaulted to None for the same reason.
     p.add_argument("--red-ip", default=None,
                    help="red01 IP on the cluster; empty resolves the comp's own reservation "
@@ -90,7 +90,7 @@ def main():
     p.add_argument("--red-gw", default="10.0.0.1", help="red01 gateway")
     p.add_argument("--red-storage", default="hdd", help="storage pool red01 clones from")
     p.add_argument("--red-vmid", type=int, default=None,
-                   help="red01 vmid when the cluster default collides (cyberfield used 999)")
+                   help="red01 vmid when the cluster default collides")
     p.add_argument("--red-template", default=config.active().knobs.red_template or None,
                    help="red01 template name when it differs from the cluster default "
                         "(default: $TEZ_RED_TEMPLATE — bad-auto's built-in default is a "

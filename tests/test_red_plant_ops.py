@@ -95,7 +95,7 @@ class PlantAssumeBreachTests(unittest.TestCase):
 
     # badauto runs with cwd=bad-auto and resolves <comp>/credentials.txt for the
     # engine IP; a relative path then looks in the wrong tree and dies with
-    # 'engine IP unknown' (live 2026-10-08). The derived config must exist, or
+    # 'engine IP unknown' (caught live). The derived config must exist, or
     # _deploy_red now refuses outright (see DeployRedConfigPathTests).
     def test_deploy_red_passes_an_absolute_competition_path(self):
         import tempfile
@@ -154,7 +154,7 @@ class PlantAssumeBreachTests(unittest.TestCase):
         deg.assert_called_once()                        # ...and the failure is named
         self.assertEqual(deg.call_args[0][0], "realm_c2_provision")
 
-    # The dark-C2 trap (2026-10-11): a block lacking transports/callback_ip
+    # The dark-C2 trap : a block lacking transports/callback_ip
     # deployed 'successfully', printed tavern-live, and nothing phoned home.
     # plant_assume_breach must refuse LOUDLY — degradation, banner, no deploy,
     # no seed.
@@ -197,7 +197,7 @@ class PlantAssumeBreachTests(unittest.TestCase):
 
     def test_local_c2_knob_off_keeps_legacy_layout(self):
         """Knob off: no realm layer, but the deploy still runs on the COMP'S OWN
-        config — isolation is not conditional on the C2 layout (2026-10-12)."""
+        config — isolation is not conditional on the C2 layout."""
         comp = _write_compfile(self.tmp, "realm_c2_local 0\n")
         ctx = FakeCtx(comp)
         with mock.patch.object(rp, "_bad_auto_present", return_value=True), \
@@ -226,7 +226,7 @@ class PlantAssumeBreachTests(unittest.TestCase):
         deg.assert_called_once()
         # A failed attempt IS recorded (ok=False): red01 may be standing, and
         # teardown's verify_clean must know an attempt happened (live-found
-        # 2026-10-12: a failed deploy left red01 up and the teardown exited 0).
+        # caught live: a failed deploy left red01 up and the teardown exited 0).
         self.assertEqual(ctx.state["assume_breach"]["ok"], False)
         self.assertEqual(ctx.state["assume_breach"]["reason"], "seed failed")
 
@@ -256,7 +256,7 @@ class PlantAssumeBreachTests(unittest.TestCase):
 # <comp_dir>/credentials.txt; a relative path resolves under bad-auto, discovery
 # fails, and the identity guard refuses with "engine IP unknown" — which leaves
 # red01 (and its LLM key + DNAT rules) alive after the range is already gone.
-# Caught live 2026-10-09.
+# Caught caught live.
 class DestroyRedTests(unittest.TestCase):
     def test_competition_path_is_absolute(self):
         with mock.patch.object(rp.subprocess, "run", return_value=_CP(0)) as run:
@@ -274,7 +274,7 @@ class DestroyRedTests(unittest.TestCase):
 # the override file cannot be found — so a relative (or absent) --config builds
 # red01 at the compiled-in red_ip 10.0.0.199 while the rest of the pipeline
 # targets the comp's 10.0.0.198: the C2 provision and the whole seed then die with
-# "No route to host" (live 2026-10-09, after a 95-minute deploy).
+# "No route to host" (caught live: after a 95-minute deploy).
 class DeployRedConfigPathTests(unittest.TestCase):
     def test_missing_config_is_refused_not_deployed_on_defaults(self):
         with mock.patch.object(rp.subprocess, "run") as run:

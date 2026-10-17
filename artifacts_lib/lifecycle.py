@@ -104,7 +104,7 @@ def collect_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=
 #     then is gone. Red01 is worse — `badauto destroy` removes it before teardown even starts, so
 #     this is the safety net for the run whose harness died, not the primary path.
 #
-#     Warns and proceeds; never blocks (operator decision 2026-10-03): a dead box must not wedge a
+#     Warns and proceeds; never blocks (deliberate operator decision): a dead box must not wedge a
 #     teardown. The failure is recorded in collection.json, in the stubs, and in REPORT.md, which
 #     is where a reader will actually see it.
 #

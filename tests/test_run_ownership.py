@@ -1,4 +1,4 @@
-"""Per-deploy run-identity ownership (2026-10-02 near-miss).
+"""Per-deploy run-identity ownership (a near-miss).
 
 Two worktrees deployed the SAME competition ID concurrently; every destruction
 guard matched on `comp-<name>` tags alone, so either session's phase 1 or teardown
@@ -180,7 +180,7 @@ class LeftoverSweep(unittest.TestCase):
     def test_a_teams_only_teardown_keeps_the_role_templates(self):
         """--teams-only exists to keep the validated golden + engine templates. The deploy
         re-stamps a reused template with THIS run's tag (so the strict guard recognizes it),
-        which put it inside the sweep's ownership match: live 2026-10-15, run-ee5717cd swept
+        which put it inside the sweep's ownership match: caught live: run-ee5717cd swept
         engine-template vmid 2241 on a teams-only teardown, so the next deploy rebuilt what
         the practice run had just validated."""
         fake = FakePVE(nodes={"n": [vm(2241, "engine-template", OURS, template=1),

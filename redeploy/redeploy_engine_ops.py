@@ -31,7 +31,7 @@ def _replace_engine(comp_dir, state, teams, boxes):
 #
 #     Scoped by construction: the destroy names the engine's vmid and the create builds one
 #     VM, so a team box rebuilt out-of-band cannot be wiped mid-event — which is what the
-#     old `-target` scoping existed for (winad-testrun 2026-09-25).
+#     old `-target` scoping existed for (a Windows/AD test run).
     from estate import apply as estate_apply, config as estate_config, engine_setup
     from infra.ownership import Ownership, destroy_vm_if_exists
     placement, identifiers, in_path = _identifiers(comp_dir, teams, boxes)
@@ -127,7 +127,7 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
         state.pop(flag, None)
     # This write lands LAST in engine-recovery, after the engine was re-cloned and the
     # scoring DB wiped. A torn write here leaves a live engine with unreadable resume state
-    # and no second chance (winad-testrun 2026-09-25) — always through the document's
+    # and no second chance (caught live) — always through the document's
     # atomic writer.
     estate_state.write_flat(comp_dir, state)
 
@@ -142,7 +142,7 @@ def reseed_event(comp_dir):
 # Phase 7 against the freshly recovered engine: seed, unpause, and create injects with
 #     offsets anchored at NOW. This is how a reset-and-rerun gets a live inject window —
 #     offsets resolve at phase-7 time, so a rollback-ready alone left every inject closed
-#     (winad-scrim2 2026-09-26: all 12 closed ~1.5h before T0).
+#     (caught live: all 12 closed ~1.5h before T0).
     import subprocess
     subprocess.run([sys.executable, "create-competition.py", "--competition", competition_name(comp_dir),
                     "--from-phase", "7", "--yes"], check=True)

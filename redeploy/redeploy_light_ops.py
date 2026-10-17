@@ -93,7 +93,7 @@ def mode_rollback(targets, rctx, snapshot, nakon_config_path, nakon_bundle, reco
             tnode = t.get("node") or node
             if snapshot == SNAP_BASE:
                 # PVE only rolls a disk back to its MOST RECENT snapshot (live-found
-                # 2026-10-03: "can't rollback, 'tz-base' is not most recent snapshot").
+                # caught live: "can't rollback, base is not most recent snapshot").
                 # tz-ready is always taken after tz-base, so reaching the pre-plant
                 # disk requires dropping the newer restore point first — the replant
                 # below re-takes it (and rebuild re-takes both), so nothing is lost

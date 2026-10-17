@@ -79,7 +79,7 @@ per window rather than a timeout every question.
 ## Batch budget
 
 The whole request (state + questions) must fit the model's physical batch.
-**That batch is 16384 tokens since 2026-10-16** (was 512 at `--ubatch-size 512`
+**That batch is 16384 tokens** (was 512 at `--ubatch-size 512`
 when v2 was designed), and the endpoint states it in its own words when it
 refuses: `input (17783 tokens) is too large to process. increase the physical
 batch size (current batch size: 16384)`. Verified from red01's side of the wire:

@@ -1,7 +1,7 @@
 """The per-competition bad-auto config: red01's identity, reserved and isolated.
 
 Every tezcatlipoca worktree resolves the SAME sibling bad-auto checkout
-(``REPO.parent/"bad-auto"``), and until 2026-10-12 bad-auto's deploy identity
+(``REPO.parent/"bad-auto"``), and bad-auto's deploy identity
 lived in that checkout's repo-root files — one ``config.yaml`` plus one
 ``.deploy-stamp.json`` shared by every session. A validation deploy following
 the shared config recycled vmid 999 and killed another session's in-flight
@@ -105,7 +105,7 @@ def red01_vmid_override(comp_dir):
     deploy.red_vmid, else None (never a derived value).
 
     There is deliberately NO fall-through to bad-auto's built-in 999 — a shared
-    default vmid is a shared node slot, and sharing it is the 2026-10-12 kill."""
+    default vmid is a shared node slot, and sharing it is the kill class red01's isolation exists to prevent."""
     raw = compfile_value(Path(comp_dir) / "Compfile", "red01_vmid", "")
     if raw:
         try:
@@ -202,7 +202,7 @@ def pin_deploy_key(cfg, ssh_key):
     tezcatlipoca checkout's `proxmox` — a path that does not exist on a run host (the engine
     there is a per-run worktree). Every path that writes a bad-auto config for this range must
     pin the key, or `badauto deploy` dies with FileNotFoundError after the range is built
-    (2026-10-14: the assume-breach path, then red staging). No key → leave the config alone.
+    (the assume-breach path, then red staging). No key → leave the config alone.
     """
     if not ssh_key:
         return cfg
@@ -238,7 +238,7 @@ def prepare_deploy_config(comp_dir, engine_vmid, engine_ip=None, ssh_key=None, p
             "deploy.red_vmid, and no scoring vmid to derive from")
     if not ip:
         # Never write an empty red_ip: bad-auto falls back to its own default and the VM
-        # lands somewhere nobody recorded (the 2026-10-09 .199 split).
+        # lands somewhere nobody recorded (a deployed red01 once split off the recorded .199).
         raise ValueError(
             "red01's address is not resolved — select one from the red band (or set "
             "red01_ip in the Compfile) before deploying it")

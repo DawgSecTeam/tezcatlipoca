@@ -201,7 +201,7 @@ class LadderTests(unittest.TestCase):
             self._run([T1], {T1["vmid"]: ["tz-base", "tz-ready"]}, verdicts)
 
 
-# PVE rolls a disk back only to its MOST RECENT snapshot (live-found 2026-10-03:
+# PVE rolls a disk back only to its MOST RECENT snapshot (caught live:
 # "can't rollback, 'tz-base' is not most recent snapshot"). Reaching the pre-plant
 # tz-base disk requires dropping the newer tz-ready first.
 class RollbackOrderTests(unittest.TestCase):
@@ -396,7 +396,7 @@ class RebuildStampingTests(unittest.TestCase):
 
 
 # A comp whose plants are all golden-stage has an empty postclone stage —
-# live-found 2026-10-03: building a bundle from it crashed the whole replant.
+# caught live: building a bundle from it crashed the whole replant.
 class PrepareAssetsTests(unittest.TestCase):
     def test_empty_postclone_stage_yields_no_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -435,7 +435,7 @@ class PrepareAssetsTests(unittest.TestCase):
             redeploy_plant_ops.run_nakon_and_harden([T1], _rctx(ctx=ctx, comp_dir=Path(tmp)), stage, object())
         return p_run, p_fix
 
-    # Live-found 2026-10-05 (pfsense-ad web01): every plant rides the golden clone, so the
+    # caught live (pfsense-ad web01): every plant rides the golden clone, so the
     # box is not in the post-clone stage; `nakon --only` then errored and the retry loop
     # mistook it for a dead ssh session. Skip the plant, still harden.
     def test_a_box_absent_from_a_non_empty_stage_is_not_handed_to_nakon(self):
@@ -450,7 +450,7 @@ class PrepareAssetsTests(unittest.TestCase):
 
 
 # A reset DC wipes the entire AD content — every done-marker of that team's
-# domain chain is void (live-found 2026-10-03: deleting only the ADDS marker left
+# domain chain is void (caught live: deleting only the ADDS marker left
 # svc-support missing and failed verify's domain gate).
 class DomainMarkerCascadeTests(unittest.TestCase):
     def _markers(self, tmp, team="team1"):

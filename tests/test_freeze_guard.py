@@ -80,7 +80,7 @@ class FreezeRefusesDirtyTree(unittest.TestCase):
         tmp, comp = _comp_dir()
         self.addCleanup(tmp.cleanup)
         ok, out = self._freeze(comp, [" M comp/estate-state.json", "?? nodes.json",
-                                      "?? .env.pre-cde-20260929"])
+                                      "?? .env.pre-fixture-20260101"])
         self.assertTrue(ok)
         self.assertIn("FROZEN", out)
         self.assertIn("non-code", out)
@@ -97,7 +97,7 @@ class FreezeRefusesDirtyTree(unittest.TestCase):
 
 class FrozenCodeDrift(unittest.TestCase):
     def _drift(self, frozen_code, current):
-        frozen = {"frozen_at": "2026-10-02 10:00:00", "code": frozen_code}
+        frozen = {"frozen_at": "2026-01-02 10:00:00", "code": frozen_code}
         with patch.object(template_freeze, "git_commit_info", return_value=current):
             return template_freeze.frozen_code_drift(frozen)
 
@@ -138,7 +138,7 @@ class CodePathDirty(unittest.TestCase):
 
     def test_generated_state_not_dirty(self):
         for line in [" M competitions/x/estate-state.json", "?? nodes.json",
-                     "?? .env.pre-cde-20260929", " M docs/known-issues.md",
+                     "?? .env.pre-fixture-20260101", " M docs/known-issues.md",
                      "?? competitions/x/.nakon-golden-slot1.json"]:
             self.assertFalse(template_freeze.code_path_dirty([line]), line)
 

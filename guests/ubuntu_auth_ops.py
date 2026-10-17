@@ -24,7 +24,7 @@ def setup_ubuntu_auth(targets, ctx):
     print(f"  Enabling password auth + NOPASSWD sudo for {box_username} on team boxes...")
     sudoers_line = shlex.quote(f"{box_username} ALL=(ALL) NOPASSWD:ALL")
     # sshd_config.d drop-in: cloud-init ships `PasswordAuthentication no` in
-    # /etc/ssh/sshd_config.d/50-cloud-init.conf (alpine; distro-matrix-2026-09-27), and
+    # /etc/ssh/sshd_config.d/50-cloud-init.conf (alpine; the distro matrix), and
     # OpenSSH keeps the FIRST value seen — the Include beats the main-file sed lines
     # below. A 00- drop-in wins on every distro with the include; the sed lines still
     # cover distros whose sshd_config has no include.

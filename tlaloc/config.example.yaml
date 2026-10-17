@@ -46,11 +46,11 @@ red:                        # the ROE — normally supplied by the Compfile
 
 clef:                       # the decision model (judgment between bounded options)
   enabled: true
-  base_url: http://10.0.0.143:8080
+  base_url: http://203.0.113.30:8080
   path: /v1/systemone
   model: clef-flash
   timeout_sec: 5
-  max_request_tokens: 16384 # the endpoint's batch (clef: 16384 since 2026-10-16;
+  max_request_tokens: 16384 # the endpoint's batch (clef: 16384;
                             # it names the number in its own rejection message)
   tokens_per_char: 0.7      # conservative estimate; the client learns the real
                             # ratio from a rejection and wins over this
@@ -62,7 +62,7 @@ clef:                       # the decision model (judgment between bounded optio
 
 llm:                        # generation + arbitration ONLY — never the decider
   enabled: false
-  base_url: ""              # e.g. http://100.64.0.19:8000/v1
+  base_url: ""              # e.g. http://100.64.0.47:8000/v1
   model: ""
   timeout_sec: 60
   max_tokens: 1024

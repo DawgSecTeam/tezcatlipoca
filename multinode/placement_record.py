@@ -194,7 +194,7 @@ def activate_placement(placement):
         token = os.environ.get(rec["token_env"])
         if not token:
             # A blank token used to surface as a 401 mid-preflight on the far node
-            # (scale8 soak 2026-10-02) with the token-env collision as its cause. Refuse
+            # (a scale soak) with the token-env collision as its cause. Refuse
             # here instead, naming the node and the variable.
             raise SystemExit(
                 f"  ERROR: nodes.json node '{rec['name']}' points at token_env "

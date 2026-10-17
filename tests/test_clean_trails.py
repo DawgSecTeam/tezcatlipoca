@@ -3,7 +3,7 @@
 The tezcatlipoca deploy, the nakon plant and the day-0 seed all reach each box
 over ssh as root, so the box's own logs (auth.log, the journal, apt history, the
 shell histories, the Windows SCM event log + PowerShell history) describe the
-whole operation. Blue's 2026-10-08 note already listed every planted unit and the
+whole operation. Blue's own notebook already listed every planted unit and the
 key comment, so the wipe is what keeps the randomized naming from being undone by
 a single `grep`.
 """
@@ -51,18 +51,18 @@ class TestTargets(unittest.TestCase):
         self.assertFalse(by_name["web01"]["windows"])
 
     def test_creds_for_deploy_shape(self):
-        ctx = SimpleNamespace(ssh_key_abs="/k", engine_mgmt_ip="10.0.0.252",
+        ctx = SimpleNamespace(ssh_key_abs="/k", engine_mgmt_ip="10.0.0.248",
                               box_username="medic", box_password="pw")
         creds = clean_trails.creds_for_deploy(ctx)
         self.assertEqual(creds["KEY_PATH"], "/k")
-        self.assertEqual(creds["ENGINE_IP"], "10.0.0.252")
+        self.assertEqual(creds["ENGINE_IP"], "10.0.0.248")
         self.assertEqual(creds["BOX_USER"], "medic")
         self.assertTrue(creds["VM_USER"])       # the engine jump user
 
 
 class TestScripts(unittest.TestCase):
     def test_linux_skip_block_guards_every_destructive_line(self):
-    # The decoy kill (2026-10-11): a planted path matching a staging rm glob
+    # The decoy kill : a planted path matching a staging rm glob
     #         died in the wipe. Every rm/truncate in LINUX_SCRIPT must go through
     #         in_skip, and the skip block must define it before any use.
         block = clean_trails._linux_skip_block(["/tmp/.imix-decoy", "/opt/plant"])
@@ -120,7 +120,7 @@ class TestIntegrity(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
         self.comp = _comp(self.root)
-        self.creds = {"KEY_PATH": "/k", "VM_USER": "jump", "ENGINE_IP": "10.0.0.252",
+        self.creds = {"KEY_PATH": "/k", "VM_USER": "jump", "ENGINE_IP": "10.0.0.248",
                       "BOX_USER": "medic", "BOX_PW": "pw"}
         self.arts = [
             {"ip": "192.168.120.3", "kind": "realm-imix", "detail": "d1",
@@ -155,7 +155,7 @@ class TestIntegrity(unittest.TestCase):
 
     def test_clean_trails_runs_the_pre_and_post_check(self):
     # The wipe must re-run the artifact checks around itself and name
-    #         anything that died in the window (the vanished decoy, 2026-10-11).
+    #         anything that died in the window (the vanished decoy).
         checks = {"n": 0}
 
         def fake_integrity(comp, creds, artifacts):

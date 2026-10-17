@@ -1,7 +1,7 @@
 """The single-gate-point contract: every pre-flight refusal lives in infra/gates.py and
 runs inside prepare() BEFORE a credential is minted, a competition input written, or a target
 enumerated. Ordering is the property -- a refusal after the mint leaves a credential-desync
-corpse (2026-09-30 testcomp-7box)."""
+corpse caught live."""
 
 import sys
 import unittest

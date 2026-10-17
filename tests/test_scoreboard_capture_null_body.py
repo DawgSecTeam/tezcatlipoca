@@ -1,6 +1,6 @@
 """Final-scoreboard capture must survive a null body and must never raise IndexError.
 
-Live-found 2026-10-15 by the campaign's two teardown subagents: every dashboard teardown
+caught live by the campaign's two teardown subagents: every dashboard teardown
 reported `[engine_capture] warned — engine capture failed (IndexError: list index out of
 range)` and lost the engine's final scoreboard before the engine VM was destroyed.
 `dump_scoreboard`'s `_get` returned `r.json()` — a 200 body that is literally `null` gives

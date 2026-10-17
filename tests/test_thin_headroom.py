@@ -1,5 +1,5 @@
 """Datastore headroom gate: TEZ_THIN_HEADROOM factor for thin-provisioned pools
-(cyberrange loadtest-2026-09-29: 8x7 boxes = ~1.9 TB provisioned vs pools with
+(a loadtest: 8x7 boxes = ~1.9 TB provisioned vs pools with
 ~900 GB free; ZFS linked clones only allocate written blocks). Offline; fake API."""
 
 import sys

@@ -74,7 +74,7 @@ def _probe_joined(node, member_box, member_vmid, domain):
 def password_trips_ad_complexity(username, password, full_name=""):
 # True when AD's default complexity rule rejects the password: it may not contain the
 #     account name or any 3+ char token of the display name (the CDE packet's `Red123!` for
-#     `Red` is exactly that — 10 `New-ADUser` failures per team, live-found 2026-10-06).
+#     `Red` is exactly that — 10 `New-ADUser` failures per team, caught live).
     low = password.lower()
     tokens = [username] + [t for t in full_name.replace(",", " ").split()]
     return any(len(t) >= 3 and t.lower() in low for t in tokens)
@@ -86,7 +86,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
 #
 #     force_member_join bypasses the members' "already joined" self-report: a reset DC
 #     re-promoted a FRESH AD database, so members claiming membership hold trusts the new
-#     DC knows nothing about (live-found 2026-10-03 — the member probe cannot see this).
+#     DC knows nothing about (caught live — the member probe cannot see this).
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
         return
@@ -259,7 +259,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                 with PRINT_LOCK:
                     print(f"  [{team_key}] Joining {member_box['name']} to {domain}...")
                 # A DC that just answered DNS can still refuse a join ("domain does not
-                # exist or could not be contacted" — winad-testrun 2026-09-25), and a failed
+                # exist or could not be contacted" ), and a failed
                 # join looked identical to a good one here. Confirm with the live probe and
                 # retry.
                 for attempt in range(1, JOIN_ATTEMPTS + 1):
@@ -349,7 +349,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
     results = run_concurrent(list(teams.items()), _deploy_team_domains, max_workers=4)
     # run_concurrent never raises — a team chain that blew up mid-flight (ADDS planted
     # but misconfigs/joins skipped) used to vanish silently here and only surface as a
-    # verify domains FAIL an hour later (live-found 2026-09-30). Surface every failure,
+    # verify domains FAIL an hour later (caught live). Surface every failure,
     # then fail the phase: resume re-enters per team via the promotion/marker probes.
     failures = [(item[0], r) for item, r in zip(list(teams.items()), results)
                 if isinstance(r, Exception)]

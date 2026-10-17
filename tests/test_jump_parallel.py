@@ -1,7 +1,7 @@
 """build_jump_vms runs satellites concurrently instead of one host at a time.
 
 Why this test exists: the serial loop was measured at 17s..547s per satellite
-(avg ~150s, n=17) in multinode-spread-2026-09-30, so an 8-satellite spread paid
+(avg ~150s, n=17) measured on a spread multinode run, so an 8-satellite spread paid
 ~18 minutes of pure waiting. Satellites are independent Proxmox hosts reached over
 the direct API path and the mgmt LAN, so the wait collapses under a bounded pool.
 
@@ -74,7 +74,7 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
         self.assertEqual(by_name["sat1"], ("201", "202"))
         self.assertEqual(by_name["sat3"], ("205", "206"))
 
-    # scale8 soak 2026-10-02: routed red could not reach any satellite team because the
+    # a scale soak found routed red could not reach any satellite team because the
     # jump's FORWARD policy dropped its source — a segment that stops at build_jump_vms
     # leaves the range unreachable; it must survive the thread-pool hop.
     def test_red_segment_reaches_every_satellite_build(self):

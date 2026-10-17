@@ -1,7 +1,7 @@
 """State primitives: timestamps, atomic writes, the schema version.
 
 world.json is written 0600 (it holds credentials by design), atomically
-(mkstemp + chmod + replace) and behind an flock. v1 lesson (2026-10-11): the
+(mkstemp + chmod + replace) and behind an flock. v1 lesson: the
 director's stale in-memory copy clobbered an operator re-seed's artifact
 records — a bare atomic write is not enough with two writers; the flock +
 reload-then-mutate-then-save contract is the whole concurrency story, there is

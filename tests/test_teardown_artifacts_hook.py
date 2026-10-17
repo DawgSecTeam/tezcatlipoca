@@ -96,7 +96,7 @@ class TeardownArtifactsHook(unittest.TestCase):
         self.root = Path(self.tmp.name)
         comp = self.root / "competitions" / "demo"
         comp.mkdir(parents=True)
-        (comp / "Compfile").write_text("name demo-2026-10-03\nscenario x\ndifficulty 3\n")
+        (comp / "Compfile").write_text("name demo-comp\nscenario x\ndifficulty 3\n")
         (comp / "teams.json").write_text(json.dumps(TEAMS))
         (comp / "boxes.json").write_text(json.dumps(BOXES))
         document = estate_state.EstateState.load(comp)
@@ -243,7 +243,7 @@ class CrashedHarnessRecovery(unittest.TestCase):
         self.root = Path(self.tmp.name)
         comp = self.root / "competitions" / "demo"
         comp.mkdir(parents=True)
-        (comp / "Compfile").write_text("name demo-2026-10-03\nscenario x\ndifficulty 3\n")
+        (comp / "Compfile").write_text("name demo-comp\nscenario x\ndifficulty 3\n")
         (comp / "teams.json").write_text(json.dumps(TEAMS))
         (comp / "boxes.json").write_text(json.dumps(BOXES))
         document = estate_state.EstateState.load(comp)

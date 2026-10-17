@@ -75,7 +75,7 @@ class EngineVmidResolution(unittest.TestCase):
         self.assertEqual(ctx.engine_vmid, SCORING_ENGINE_VMID)
 
     def test_fresh_run_without_a_flag_takes_the_env_vmid(self):
-        # TEZ_SCORING_VMID ships in every env variant; live-found 2026-10-03 it was
+        # TEZ_SCORING_VMID ships in every env variant; caught live it was
         # silently ignored (the default 1000 was taken) until a second range collided.
         with tempfile.TemporaryDirectory() as d:
             with patch.dict(os.environ, {"TEZ_SCORING_VMID": "777"}):
@@ -236,7 +236,7 @@ class GoldenGatePosition(unittest.TestCase):
                                  or ({"web01": {"config": {}}}, {"web01": "HASH"})), \
                     dpatch("frozen_state",
                                  return_value={"hashes": {"golden": {"web01": {"inputs": {}}}},
-                                               "frozen_at": "2026-09-30"}), \
+                                               "frozen_at": "2026-01-01 10:00:00"}), \
                     dpatch("golden_freeze_gate",
                                  side_effect=lambda *a: calls.append("gate")
                                  or {"code": True, "config": False}):

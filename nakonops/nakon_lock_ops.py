@@ -47,7 +47,7 @@ def release_engine_lock():
 # Drop every engine flock this process holds. Needed whenever this process is
 #     about to spawn create-competition as a child (redeploy --reset-event's reseed):
 #     the child takes the lock itself, so a parent still holding it self-deadlocks
-#     the reseed (live-found 2026-10-01, cde-2026 reset-event).
+#     the reseed.
     for path, fh in list(_ENGINE_LOCKS.items()):
         with contextlib.suppress(OSError):
             fcntl.flock(fh, fcntl.LOCK_UN)

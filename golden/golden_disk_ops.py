@@ -50,7 +50,7 @@ def ensure_golden_disk_size(node, vmid, disk_gb):
 
 # Guest-side companion to ensure_golden_disk_size: cloud-init only expands a PLAIN
 # partition+fs on first boot — LVM layouts (ubuntu cloud images) keep their original
-# root LV, and btrfs layouts (default on Fedora cloud images — live-found 2026-09-29:
+# root LV, and btrfs layouts (default on Fedora cloud images — caught live:
 # findmnt reports '/dev/sda3[/root]', whose bracketed subvolume suffix broke the
 # partition-digit parse AND resize2fs can't grow btrfs) need their own grow. Boxes
 # without growpart (Alpine) are skipped. Windows goldens are out of scope (they boot
@@ -60,7 +60,7 @@ def expand_guest_root_disks(targets, ctx):
         "command -v growpart >/dev/null || { echo 'growpart unavailable - skipping'; exit 0; }; "
         "set -e; "
         # base-ubuntu24.04-fix golden clones can run MINUTES with the LV mounted but
-        # no /dev/dm-N node (udev late under boot load — live-found 2026-09-29:
+        # no /dev/dm-N node (udev late under boot load — caught live:
         # resize2fs "No such file or directory" on the live root LV at T+40s, node
         # present at T+16min). dmsetup mknodes materializes the node immediately.
         "command -v dmsetup >/dev/null 2>&1 && dmsetup mknodes 2>/dev/null || true; "
@@ -93,9 +93,9 @@ def expand_guest_root_disks(targets, ctx):
     )
     for t in targets:
         # The grow itself is retried across the whole boot window: a fresh golden's SSH
-        # can be dark for MINUTES under node load (live-found 2026-10-04, the scrim-one
-        # validation: 3x15s of retries all landed inside the dark window, the expansion
-        # was skipped, and splunk01's plant then died on ENOSPC). Escalating backoff
+        # can be dark for MINUTES under node load (3x15s of retries all landed inside
+        # the dark window, the expansion
+        # was skipped, and a downstream plant then died on ENOSPC). Escalating backoff
         # spans ~6.5 min; each attempt is also the SSH-wait, so no separate probe phase
         # is needed.
         r = None

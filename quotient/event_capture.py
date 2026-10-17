@@ -43,9 +43,8 @@ def dump_scoreboard(base_url, session, comp_dir, *, out_dir=None):
         # Returns (payload, error). A 200 whose body is literally `null` is a failed read
         # too: it used to return None without touching `errors`, and the callers then read
         # `errors[-1]` off an empty list — IndexError, caught by the teardown's step wrapper
-        # and downgraded to a warning, so every dashboard teardown lost the engine's final
-        # scoreboard (live 2026-10-15, three destroys; proved by the crimson-relay and
-        # pfsense-rvb teardown subagents with a stub session).
+        # and downgraded to a warning, so a teardown silently lost the engine's final
+        # scoreboard (proved with a stub session).
         try:
             r = session.get(f"{base_url}{path}", timeout=10)
             r.raise_for_status()

@@ -5,9 +5,9 @@ A golden backs a linked clone only from a `base-<vmid>-disk-N` volume. The renam
 on a plain `vm-` volume, then fails later at the team-box clone with
 `HTTP 500 Linked clone feature is not supported for 'hdd:vm-<vmid>-disk-0'`.
 
-The booted path has guarded this since 2026-10-04. The unbooted (DC) path did not, and a
+The booted path guards this. The unbooted (DC) path did not, and a
 campaign run died at `[4b/8]` on exactly that 500 with `golden-dc01` as the only golden in
-the estate still on a `vm-` volume (live 2026-10-15, run-b47cd966). Both now share one guard.
+the estate still on a `vm-` volume (caught live). Both now share one guard.
 """
 
 import sys

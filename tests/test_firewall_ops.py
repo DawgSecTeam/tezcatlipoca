@@ -48,7 +48,7 @@ TEAMS = {"team2": {"identifier": "121", "password": "x"},
 class TeamConfig(unittest.TestCase):
     def test_wan_allows_only_the_engine_to_ssh_the_firewall(self):
     # The phase-5 success probe is SSH to the firewall's own WAN address; pfSense blocks
-    #         WAN-inbound to itself unless a rule says otherwise (live-found 2026-10-05).
+    #         WAN-inbound to itself unless a rule says otherwise (caught live).
         out = generate_team_config(SEED, "120")
         at = out.index("Allow engine SSH to the firewall")
         rule = out[out.rindex("<rule>", 0, at):out.index("</rule>", at)]
@@ -68,7 +68,7 @@ class TeamConfig(unittest.TestCase):
         self.assertIn("<hostname>fw-team120</hostname>", out)
         self.assertIn("<ssh><enable>enabled</enable></ssh>", out)  # probe + operator SSH
         self.assertIn("<mode>disabled</mode>", out)             # engine keeps the NAT
-        # the pfsense-ad 2026-09-28 bug: <network> takes the `lan` keyword, never a CIDR
+        # caught live: <network> takes the `lan` keyword, never a CIDR
         self.assertIn("<network>lan</network>", out)
         self.assertNotIn("<network>192.168.120.0/24</network>", out)
         # the WAN pass rule must be the FILTER section's first rule
@@ -124,7 +124,7 @@ class VyosCommands(unittest.TestCase):
 
     def test_no_filter_rules_circinus_default_accepts_the_path(self):
     # The 1.5 firewall revamp removed interface-attached rulesets AND the
-    #         `firewall interface` attachment (live-found 2026-10-08); the pfSense WAN rule
+    #         `firewall interface` attachment (caught live); the pfSense WAN rule
     #         set's effect is what circinus's default-accept chains already allow, so the
     #         generated script ships none of it.
         out = generate_vyos_commands("120")
@@ -209,7 +209,7 @@ class VyosBootstrap(unittest.TestCase):
 
 
 FAKE_SSH_CTX = {"ssh_key_path": "k", "vm_username": "ops",
-                "scoring_engine_ip": "10.0.0.252"}
+                "scoring_engine_ip": "10.0.0.248"}
 
 
 class PushVyos(unittest.TestCase):
@@ -414,7 +414,7 @@ class GuestAgentShellcmd(unittest.TestCase):
 #     local-script pass in /etc/rc only globs *.sh), so rc.conf.local alone is inert —
 #     the <system><afterbootupshellcmd> tag in config.xml (/etc/rc.bootup mwexec's it)
 #     is the only mechanism that survives, and it must ride EVERY config the firewall
-#     runs: the template's (sealed 2026-10-08) and the generated per-team ones.
+#     runs: the template's and the generated per-team ones.
 
     def test_generated_config_carries_the_agent_boot_hook(self):
         out = generate_team_config(SEED, "120")

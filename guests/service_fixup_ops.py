@@ -125,7 +125,7 @@ def _dovecot_fixup(creds):
 SERVICE_FIXUPS: dict[str, _ServiceFixup] = {
     "apache": _ServiceFixup("apache", ("apache", "httpd"), lines=(
         # Catalog scoreability gaps on non-Debian packagings
-        # (distro-matrix-2026-09-27): the apache/bind dnf/yum branches install+start
+        # (the distro matrix): the apache/bind dnf/yum branches install+start
         # but never touch distro defaults, so the checks they're pinned for still fail
         # — fedora httpd serves an EMPTY docroot (403 on /) and fedora named listens
         # on 127.0.0.1 behind the systemd-resolved stub (refused from the scoring
@@ -383,7 +383,7 @@ def reensure_mysql_credlist_users(comp_dir, targets, ctx, box_creds):
 # Re-create the credlist SQL accounts AFTER the phase-6 final-stage pass.
 #
 #     fix_services creates them pre-plant, but the mysql final-stage plants rebuild the
-#     auth tables (2026-09-30 testcomp-7box: db01 ended with only the install + plant
+#     auth tables (a 7-box test comp: db01 ended with only the install + plant
 #     accounts, so the auth-based sql check failed until the users were re-added by
 #     hand). Idempotent; touches only boxes whose box_services pins include
 #     mysql/mariadb.

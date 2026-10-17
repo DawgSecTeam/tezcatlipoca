@@ -63,7 +63,7 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
 #     Per team: the DC answers Get-ADDomain for team<id>.local with a syntactically
 #     valid DomainSID, the planted AD misconfig (svc-support) exists, and every member
 #     box is actually joined. Across teams: DomainSIDs must be unique (a collision
-#     means DC promotion reused image state — winad-testrun 2026-09-25 found exactly
+#     means DC promotion reused image state — found exactly
 #     that); with a single team uniqueness cannot be exercised, so the PASS says so
 #     instead of claiming it. Member machine SIDs are reported, not gated: members
 #     linked-cloned from one golden share them by design, which is harmless for
@@ -136,7 +136,7 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
     #         The main thread then walks `jobs` in the serial order and aggregates, so every
     #         verdict, every printed line, and (critically) the team order inside the
     #         duplicate-DomainSID message stay exactly what the serial loop produced — the
-    #         2026-10-02 tri-state gate contract: same status, same message, same exit code.
+    #         tri-state gate contract: same status, same message, same exit code.
         team_key, name = job["team_key"], job["name"]
         ident, domain = job["ident"], job["domain"]
         if job["windows"]:
@@ -156,7 +156,7 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
             return {"kv": _kv(out), "err": err or "", "info": [], "fail": ""}
         except Exception as agent_err:
             # The PVE agent channel has a per-instance exec breaker that can stay
-            # tripped (amongus-cde 2026-09-30: airship's failed join probes tripped it
+            # tripped (caught live: a join's failure probes tripped it
             # permanently). Linux boxes are still reachable over gateway SSH — fall
             # back to it before failing the gate.
             try:
@@ -178,7 +178,7 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
 
     probe_results = run_concurrent(jobs, _probe, max_workers=MAX_CONCURRENCY)
 
-    # DC-side trust map (live-found 2026-10-03, reset matrix): a member can self-report
+    # DC-side trust map (caught live, reset matrix): a member can self-report
     # joined while the DC's freshly re-promoted AD holds NO machine account for it —
     # Add-Computer then refuses any re-join ("already in that domain") and the dead
     # trust is invisible to the member-side probe. The DC's Get-ADComputer listing is

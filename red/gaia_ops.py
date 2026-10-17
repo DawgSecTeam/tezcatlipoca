@@ -195,7 +195,7 @@ def box_admin_password(box_ip, ssh_user, ssh_key, *, runner=None, timeout=60):
     This is the authority: Mythic stores the password hash in its database, so a
     re-run of the installer — which rewrites `.env` and the host-side handoff file
     but cannot change an existing user — can leave the handoff file stale while the
-    box keeps working (live 2026-10-16).
+    box keeps working (caught live).
     """
     if not box_ip or not ssh_key:
         return None
@@ -442,7 +442,7 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
     # The C2 box's own .env is the authority on its admin password. An install re-run
     # against a Mythic that already has a database leaves the passwords disagreeing —
     # and the handoff file lands on THIS host, so it can be the stale one. Live
-    # 2026-10-16: `POST /auth` answered 403 "Authentication Failed" for the creds
+    # caught live: `POST /auth` answered 403 "Authentication Failed" for the creds
     # file's password while the box's MYTHIC_ADMIN_PASSWORD returned 200 + an
     # access_token, with the whole stack healthy — the step blamed a C2 that worked.
     candidates = []
@@ -460,7 +460,7 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
     # AUTH FIRST — this is what unlocks everything after it. `user create` and
     # `operation create` speak to Mythic through the API key `auth` writes into
     # Gaia's .env; run either before it and Gaia prints the auth usage and exits
-    # non-zero (live smoke 2026-10-16: "gaia user create: rver ... -P, --port 7443
+    # non-zero (caught live: "gaia user create: rver ... -P, --port 7443
     # ... -u, --user mythic_admin" was that usage dump, not an argument error).
     authed_with = None
     for source, candidate in candidates:

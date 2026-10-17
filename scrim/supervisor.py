@@ -17,7 +17,7 @@ class WorkerDiedError(RuntimeError):
 WORKER_JOIN_BUDGET = core.CYCLE_TIMEOUT + 120
 
 # ...but that bound is a whole cycle, so joining by it lets a 25-minute event reach capture at
-# minute 50 (live 2026-10-15, run-2652d9bc: the join waited out a cycle started at T+5). Past
+# minute 50 (caught live: the join waited out a cycle started at T+5). Past
 # the deadline the join is capped by what is left of the window plus this grace, which is all
 # a cycle that is already wrapping up needs.
 EVENT_END_GRACE = 120

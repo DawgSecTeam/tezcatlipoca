@@ -8,7 +8,7 @@ context is built — anything that needs to change mid-run lives in the Compfile
 or world state, not in cfg mutation.
 
 An explicit --config path that does not exist is a HARD error (v1 silently fell
-back to DEFAULTS — the 2026-10-09 wrong-red_vmid incident). API keys never enter
+back to DEFAULTS — the v1 wrong-red_vmid incident). API keys never enter
 cfg: only the NAME of the env var to read them from.
 
 ROE lives in data: the ``red:`` block (ladder, caps, windows) mirrors the
@@ -72,12 +72,12 @@ DEFAULTS = {
     },
     "clef": {
         "enabled": True,
-        "base_url": "http://10.0.0.143:8080",
+        "base_url": "http://203.0.113.30:8080",
         "path": "/v1/systemone",
         "model": "clef-flash",
         "timeout_sec": 5,
-        # The endpoint's batch ceiling, in tokens. clef was relaunched on
-        # 2026-10-16 with a 16k context (was 512 at --ubatch-size 512), so the
+        # The endpoint's batch ceiling, in tokens. clef runs with a 16k
+        # context (was 512 at --ubatch-size 512), so the
         # digest no longer has to be squeezed to fit: the whole state goes out.
         # The truncation cascade in state/digest.py stays as a guard for a
         # smaller endpoint or another model — it is sized against this number.
@@ -241,7 +241,7 @@ def load_config(path=None):
     if path:
         if not Path(path).exists():
             raise ConfigError(f"config file {path} does not exist (refusing to "
-                              "silently run on defaults — v1 incident 2026-10-09)")
+                              "silently run on defaults — v1 incident)")
     else:
         path = os.environ.get(ENV_PREFIX + "CONFIG") or None
         if path is None:

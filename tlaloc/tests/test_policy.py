@@ -170,8 +170,8 @@ def test_question_bundle_is_bounded_and_typed(tmp_path):
     # every criterion key is a real candidate id (nothing invented)
     for key in questions["next_effect"]["criteria"]:
         assert key == "hold" or key in meta["options"]
-    # Every question at once must fit the endpoint's batch on its own: since
-    # 2026-10-16 that batch is 16k, so the full bundle is the normal path and the
+    # Every question at once must fit the endpoint's batch on its own: that
+    # batch is 16k, so the full bundle is the normal path and the
     # decider's compaction cascade is the fallback, not the default.
     from tlaloc.decide import Decider, StubClef, tokens_needed
     assert tokens_needed(digest, questions) <= ctx.cfg["clef"]["max_request_tokens"]

@@ -21,7 +21,7 @@ from red import realm_c2_ops
 def verify_red_reaches_teams(args, comp, creds):
     """Pre-T0 gate: red01 must be able to dial a box on EVERY team.
 
-    scale8-soak-2026-10-02: routed red01 could not reach any satellite team box — all
+    a scale soak: routed red01 could not reach any satellite team box — all
     15 cred_sprays and both db_attacks failed "unreachable over SSH" — and the run went
     40 minutes before anyone noticed, because nothing checked red's path before T0 and
     `verify --red-identity` only proved red reached one box on its own segment. Red
@@ -82,7 +82,7 @@ def _existing_blackbox(comp):
     tier: realm_plant on red01 saw realm.enabled false and the "newly improved"
     multi-transport beacons were never planted on a range.
 
-    Read from the COMP'S config (per-run since the 2026-10-12 isolation), never
+    Read from the COMP'S config (per-run), never
     the sibling checkout's repo-root singleton — on a shared checkout that file
     names whichever session staged last.
     """
@@ -122,7 +122,7 @@ def red_llm_config(args):
     max_tokens 4096 every decision came back ok=false ("Read timed out") or
     finish=length with empty content, so the director silently fell back to
     scripted tactics — red looked busy for a whole event and decided nothing
-    (live 2026-10-09). 300 s + 6144 still bounds a single decision and a fast
+    (caught live). 300 s + 6144 still bounds a single decision and a fast
     model simply answers early; cloud keeps the tighter 240/1 pair.
     """
     local = core.is_local_endpoint(args.llm_base_url)
@@ -133,7 +133,7 @@ def red_llm_config(args):
            # Bound the DECISION wait, not just the HTTP read: the director's
            # default decide budget is 360 s, and under load (blue cycles on the
            # same endpoint) a slow decision burned 3x that as one silent stall —
-           # red's 20-min no-action window in run4 (2026-10-12) is three such
+           # a red no-action window of 20 minutes is three such
            # waits. 180 s: two re-prompts' worth; past it the deterministic
            # ladder takes the cycle, and the ladder presses instead of idling.
            "decide_budget_sec": 180,
@@ -148,9 +148,9 @@ def _resolve_red_ip(args, comp, placement):
 
     Without it the rebuilt config carried `red_ip: None`, bad-auto fell back to its own
     default, and a re-stage MOVED red01 off the address the deploy recorded and the range
-    was built around: run-a87e0d88 recorded 10.0.0.196, bad-auto re-pointed the VM to
-    10.0.0.198, and every later reader of the recorded address looks at an empty slot
-    (live 2026-10-15). One resolver for all of them."""
+    was built around: the recorded address said one thing, the VM moved to another, and
+    every later reader of the recorded address looks at an empty slot
+    (caught live). One resolver for all of them."""
     if getattr(args, "red_ip", None):
         return args.red_ip
     ip = badauto_config_ops.red01_ip_for(comp, placement)
@@ -217,7 +217,7 @@ def stage_red(args, comp, creds, run_dir):
         if carried.get(key):
             cfg[key] = carried[key]
     # A freshly authored comp carries no realm block (the club singleton the
-    # per-comp isolation stopped reading) — run-e9d17d65's realm_plant refused
+    # per-comp isolation stopped reading) — the run's realm_plant refused
     # 'realm.enabled' every attempt and red dropped to the raw-socket beacon
     # tier for the whole event. realm_c2_local defaults ON in the Compfile, so
     # seed the block here; apply_local_c2 below synthesizes the rest and the
@@ -238,7 +238,7 @@ def stage_red(args, comp, creds, run_dir):
         if missing:
             raise RuntimeError(
                 f"realm.c2_local is on but the staged realm block lacks {missing} — "
-                "this plants dead beacons under a 'tavern live' banner (2026-10-11). "
+                "this plants dead beacons under a 'tavern live' banner. "
                 "Fix the comp's realm block or the teams.json and re-run.")
     # ...and so does the REST of the operator's deploy block. stage_red builds this
     # config from scratch, so anything it does not set is lost: `template` most of
@@ -252,12 +252,12 @@ def stage_red(args, comp, creds, run_dir):
     # bad-auto reads `<deploy.ssh_key>.pub` beside the key and its built-in default is a SIBLING
     # tezcatlipoca checkout, which no run host has. This config is built from scratch, so the key
     # is set here from the range's own resolved key — without it `badauto deploy` dies on
-    # FileNotFoundError after the range is already built (2026-10-14, run-df29374d).
+    # FileNotFoundError after the range is already built .
     badauto_config_ops.pin_deploy_key(cfg, (creds or {}).get("KEY_PATH") or core.ssh_key_path())
     # The COMPETITION's own config — one file per deploy, threaded to every
     # badauto call below (and bad-auto stamps .deploy-stamp.json next to it, so
     # concurrent sessions cannot clobber each other's red01 identity — the
-    # 2026-10-12 vmid-999 kill). Atomic + 0600: a torn config would break every
+    # the vmid-999 kill class). Atomic + 0600: a torn config would break every
     # subsequent badauto call, and the file may name an internal endpoint.
     config_file = badauto_config_ops.write_config(comp, cfg)
     env = {**os.environ, "BAuto_LLM_API_KEY": endpoints.api_key(args.llm_base_url),
@@ -423,8 +423,7 @@ def verify_tlaloc_seeded(args, comp):
     log(f"tlaloc seeded {len(seeded)}/{len(boxes)} box(es) — presence planted before T0")
     return seeded
 # bad-auto's `seed` EXITS 0 with every box failed ("<ip> unreachable over SSH"), so the exit
-# code alone cannot decide whether T0 is safe (live 2026-10-15: run-1ea5494a-run2 and
-# run-2652d9bc seeded nothing, announced success, and red spent both events with zero
+# code alone cannot decide whether T0 is safe (caught live two run-pairs in a row: one seeded nothing, announced success, and red spent both events with zero
 # footholds). Its per-step report — and, where bad-auto emits them, its `steps` tally and
 # `ok` — is the only signal that a box was actually seeded.
 def seed_report(stdout):

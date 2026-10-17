@@ -94,7 +94,7 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
 def check_red_teams(ctx, boxes, red_ip, red_user="sysadmin", timeout=12):
     """--red-teams all: every team must be reachable from red01, not just one.
 
-    scale8-soak-2026-10-02: routed red01 could not reach ANY satellite team box
+    a scale soak: routed red01 could not reach ANY satellite team box
     ("unreachable over SSH" on 15/15 cred_sprays) and this went unnoticed until
     T+40 because `--red-identity` only proves red reaches one box on its own
     segment. Red's whole job depends on this path, so it is a gate, and it runs

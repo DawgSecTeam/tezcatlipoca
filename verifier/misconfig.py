@@ -57,7 +57,7 @@ def _target_vmid(comp_dir, box):
 def misconfig_via_guest_agent(comp_dir, box, verifiable):
 # SSH-dead fallback: run the same checks via the QEMU guest agent.
 #
-#     scrim-extreme-cyberfield-2026-09-22 lost its only verifier FAIL to dead
+#     a live scrim lost its only verifier FAIL to dead
 #     Linux SSH while the planted artifacts were independently confirmed fine —
 #     the agent (virtio-serial, no network) reaches the box anyway.
     vmid = _target_vmid(comp_dir, box)

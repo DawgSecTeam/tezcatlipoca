@@ -4,13 +4,13 @@ Every hard-won fix from v1's transport is carried here verbatim in spirit:
 
 * TCP keepalive on every connection (15 s) — a half-dead link (session gone,
   no RST, NAT/conntrack drop) otherwise stays ESTAB forever and wedges the
-  next blocked wait (live 2026-10-15).
+  next blocked wait (caught live).
 * Every wait bounded: exec_command's timeout only gates reads; recv_exit_status
-  waits on the status event with NO timeout of its own (live 2026-10-15: seed
+  waits on the status event with NO timeout of its own (caught live: seed
   sat in poll() forever after its real work finished). status_event.wait(tmo)
   is mandatory; a breach closes the client and raises TransportError.
 * Close-before-replace: a dropped paramiko client owns a socket + a thread;
-  leaking them surfaces hours in as "Too many open files" (live 2026-10-09,
+  leaking them surfaces hours in as "Too many open files" (caught live,
   ~35 min into an event hammering one unreachable box).
 * Drain stdout/stderr before waiting on the exit status (paramiko warns of a
   deadlock once output exceeds the channel window).

@@ -1,11 +1,11 @@
 """The LLM endpoint table: a public API is never driven as an operator-side llama.cpp.
 
-Regression cover for the 2026-10-14 DeepSeek wiring. Before this, classification was
-`"openrouter" not in base_url`, so `api.deepseek.com` was operator-side: blue's opencode.jsonc
-carried the literal string `local` as its apiKey (401 on every cycle), red took the slow-local
-profile, red_tunnel opened a reverse forward onto the endpoint's TLS port, a missing key degraded
-to `local`, and `check_red_llm` required exactly HTTP 200 from an unauthenticated probe (401 on a
-keyed API) so the run aborted pre-T0.
+The string test (`"openrouter" not in base_url`) treated every non-cloud host — a keyed public
+API included — as operator-side: blue's opencode.jsonc carried the literal string `local` as
+its apiKey (401 on every cycle), red took the slow-local profile, red_tunnel opened a reverse
+forward onto the endpoint's TLS port, a missing key degraded to `local`, and `check_red_llm`
+required exactly HTTP 200 from an unauthenticated probe (401 on a keyed API) so the run aborted
+pre-T0. These tests pin the table's classification instead.
 """
 
 import os
@@ -19,7 +19,7 @@ from net import jump_rules
 from scrim import blue_helpers, core, endpoints, llm_endpoints, red_link, red_stage, red_tunnel
 
 DEEPSEEK = "https://api.deepseek.com/v1"
-LLAMA = "http://10.0.0.143:8080/v1"
+LLAMA = "http://203.0.113.30:8080/v1"
 OPENROUTER = "https://openrouter.ai/api/v1"
 
 
@@ -115,7 +115,7 @@ class RedProfileAndTunnel(unittest.TestCase):
 class RedReachabilityGate(unittest.TestCase):
 
     def _probe(self, code):
-        args = SimpleNamespace(competition="scrim-one", comp_dir=None, red_ip="10.0.0.198")
+        args = SimpleNamespace(competition="scrim-fixture", comp_dir=None, red_ip="10.0.0.198")
         with mock.patch.object(red_link, "_red_ssh_ctx",
                                lambda a: ("sysadmin@10.0.0.198", [], None)), \
              mock.patch.object(red_link.procs, "run_tree",
@@ -139,7 +139,7 @@ class RedSegmentEgress(unittest.TestCase):
     RED = "10.200.0.0/24"
 
     def _rules(self):
-        return jump_rules.jump_rules([120, 121], "10.0.0.252", red_segment=self.RED)
+        return jump_rules.jump_rules([120, 121], "10.0.0.248", red_segment=self.RED)
 
     def test_red_gets_a_wan_accept(self):
         rules = self._rules()
@@ -158,7 +158,7 @@ class RedSegmentEgress(unittest.TestCase):
     def test_no_red_segment_emits_no_red_rules(self):
         # The teams' own egress MASQUERADE is unrelated and must stay; what must NOT appear is
         # anything sourced from the red segment (the pre-soak ruleset, byte for byte).
-        rules = jump_rules.jump_rules([120, 121], "10.0.0.252")
+        rules = jump_rules.jump_rules([120, 121], "10.0.0.248")
         self.assertNotIn(self.RED, rules)
         self.assertNotIn("-s 10.200.0.0/24", rules)
 

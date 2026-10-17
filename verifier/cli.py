@@ -109,7 +109,7 @@ def main(argv=None):
 
     # red01's address resolves from the comp's own bad-auto config (this
     # deploy's reservation) unless the operator passed one — the shared
-    # sibling config.yaml is no longer a source (2026-10-12).
+    # sibling config.yaml is no longer a source .
     if args.red_ip is None:
         from red import badauto_config_ops
         args.red_ip = ((badauto_config_ops.load_config(comp_dir).get("deploy") or {})

@@ -15,7 +15,7 @@ def read_event_conf(ctx):
 #
 #     The engine is the source of truth after any re-bootstrap or partially
 #     applied seed — the state document can drift, these files cannot (the
-#     scrim-dress-2026-09-20 credential-drift incident). box_password itself is
+#     a race where a re-stage changed credentials on the existing red01). box_password itself is
 #     baked into the boxes at bootstrap and lives nowhere on the engine, so it
 #     is NOT recoverable here.
     import tomllib
@@ -120,7 +120,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
             # /opt/quotient is root-owned (sudo git clone at template build); the
             # config dir must be created with sudo too — the clean step removes
             # event.conf/credlists, and an unsudo'd mkdir here died with rc=1 on
-            # the M4 validation run (live-found 2026-09-25).
+            # the M4 validation run (caught live).
             f"sudo mkdir -p /opt/quotient/config && "
             f"echo '{event_conf_b64}' | base64 -d | sudo tee /opt/quotient/config/event.conf > /dev/null && "
             "sudo chmod 600 /opt/quotient/config/event.conf",
@@ -184,7 +184,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
         ],
         # A full-stack restart stops and starts db + redis + server + 5 runners +
         # divisor; on a loaded / ZFS-backed range node the postgres stop+start
-        # alone runs past a minute (seen live 2026-10-08: 60 s timed out mid-phase
+        # alone runs past a minute (seen caught live: 60 s timed out mid-phase
         # 3 and aborted the deploy after everything had actually come up).
         check=True, timeout=300,
     )

@@ -328,7 +328,7 @@ class MainSequence(unittest.TestCase):
 
     def test_i6_frozen_full_teardown_is_refused_before_any_mutation(self):
         with self.assertRaises(SystemExit):
-            self._main(["--yes"], frozen={"frozen_at": "2026-10-01"})
+            self._main(["--yes"], frozen={"frozen_at": "2026-01-01"})
         self.assertIn("FROZEN", self.out)
         self.assertIn("--end-of-competition", self.out)     # remedy
         self.assertEqual(self.log, [])

@@ -12,7 +12,7 @@ from estate import config
 
 # Pinned scored service -> (apk package, OpenRC service) for the alpine_services shim
 # (ensure_alpine_services). The vulndb catalog service scripts are apt/dnf/yum-only, so
-# Alpine boxes get their services here instead (distro-matrix-2026-09-27).
+# Alpine boxes get their services here instead (the distro matrix).
 ALPINE_SERVICES = {
     "nginx": ("nginx", "nginx"),
     "apache": ("apache2", "apache2"),
@@ -36,7 +36,7 @@ def ensure_alpine_services(comp_dir, targets, ctx):
 # Install + enable pinned scored services on Alpine boxes via apk + OpenRC.
 #
 # The vulndb service configs only speak apt/dnf/yum (and systemd), so on Alpine every
-# catalog service step exits 1 in 0 seconds (distro-matrix-2026-09-27). With the
+# catalog service step exits 1 in 0 seconds (the distro matrix). With the
 # Compfile `alpine_services` knob set, the golden plant runs non-strict and this shim
 # owns Alpine services instead: apk add, rc-update add default, rc-service start, and
 # a status probe as the pass condition. Idempotent — clones inherit the golden disk,
@@ -85,7 +85,7 @@ def ensure_alpine_services(comp_dir, targets, ctx):
         # Primary channel: guest agent as root. The pre-domain pass's writable-sudoers
         # pin makes sudoers.d world-writable post-clone, sudo then ignores the whole
         # dir and `sudo sh -c` as medic demands a password it can't answer
-        # (live-found 2026-09-28). The -fix alpine template ships the agent.
+        # (caught live). The -fix alpine template ships the agent.
         node = config.active().proxmox.node
         vmid = t.get("vmid")
         if vmid is not None:

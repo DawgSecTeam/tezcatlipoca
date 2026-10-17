@@ -10,9 +10,8 @@ from .constants import DIRNAME, MANIFEST_NAME, RUN_ID_RE
 
 def artifacts_root(comp_dir):
 # `<comp_dir>/.automated-tests` — the drop point. Gitignored, deliberately: box-pulled
-#     reports quote flags and credentials, and this repo has already leaked secrets twice by
-#     tracking a file nobody re-checked (.gitignore's own header says so). There is no publish
-#     path on purpose (operator decision, 2026-10-03): harvest a recommendation by writing it into
+#     reports quote flags and credentials. There is no publish path on purpose
+#     (a deliberate operator decision): harvest a recommendation by writing it into
 #     docs/known-issues.md or a fixes plan, never by copying the artifact into git.
     return Path(comp_dir) / DIRNAME
 
@@ -49,7 +48,7 @@ def run_folders(comp_dir):
 #     Each harness run mints its own folder (see latest_run_key): one run per folder
 #     means one run's evidence per folder, so a stale REPORT.md can never sit next to
 #     a fresh run's artifacts the way it did when every run reused the deploy-keyed
-#     folder (2026-10-08: october-7 reports were still in the folder a new run wrote into).
+#     folder (an earlier run's reports were still in the folder a new run wrote into).
     root = Path(comp_dir) / ".automated-tests"
     found = []
     for d in sorted(root.glob("*")):

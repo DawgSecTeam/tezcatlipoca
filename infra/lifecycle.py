@@ -5,8 +5,9 @@ from common.utils import record_degradation
 
 # PVE's own ACPI-shutdown wait, passed as the `timeout` of POST /status/shutdown. It must
 # expire inside OUR client wait: giving up on a still-running `qmshutdown` task and
-# force-stopping collides with the per-VM lock that task still holds (crimson-relay phase 4,
-# run-dd88db6d, 2026-10-16). With it, PVE ends the task on its own and releases the lock.
+# force-stopping collides with the per-VM lock that task still holds (a phase-4 force-stop
+# lost exactly that race, on the run that found it). With it, PVE ends the task on its own
+# and releases the lock.
 SHUTDOWN_GRACE_S = 120
 
 def vm_status(node, vmid):
@@ -65,7 +66,7 @@ def take_snapshot(node, vmid, name, description="", timeout=900):
         # Never raises by design, but this is NOT a cosmetic warning: `tz-base`/`tz-ready`
         # are the rollback points, so a range whose snapshot failed cannot be rolled back
         # (`redeploy --mode rollback-base`) and a failed golden snapshot removes the
-        # pre-plant guard. Live-found 2026-10-02: hdd filled during a Windows-heavy run and
+        # pre-plant guard. caught live: hdd filled during a Windows-heavy run and
         # both snapshots failed with `zfs error: ... out of space`, silently, mid-deploy.
         record_degradation(f"snapshot '{name}' failed",
                            f"vmid {vmid}: {str(e)[:200]}")
@@ -77,7 +78,7 @@ def rollback_snapshot(node, vmid, name, timeout=900, restart=True):
 
     Waits for the guest agent after the restart: whatever runs next dialled the box
     the moment start_vm returned and failed in ~1s against a still-booting Windows
-    guest (win02-golden's IIS FTP plant, 2026-10-04 — the rollback+re-plant cycle
+    guest (a golden's IIS FTP plant — the rollback+re-plant cycle
     failed the exact step that had succeeded on the first, fully-waited plant)."""
 
     if vm_status(node, vmid) == "running":

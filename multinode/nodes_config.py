@@ -109,7 +109,7 @@ def load_nodes_config(path=None):
     # token_env must be unique per record: activate_placement reads each record's named var
     # to build that host's route, so two records sharing one name give both hosts the same
     # credential — the scale8 soak's satellite 401'd mid-preflight against a token belonging
-    # to the other node (2026-10-02). This rejects the collision instead of letting it
+    # to the other node . This rejects the collision instead of letting it
     # surface as an authentication failure on the far node.
     dupes = sorted({r.token_env for r in records if
                     sum(1 for o in records if o.token_env == r.token_env) > 1})

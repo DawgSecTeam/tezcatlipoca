@@ -2,7 +2,7 @@
 
 A clone shares its base volume — a golden's for a team box, the engine template's for the
 deployed engine — so destroying a base first fails with 'base volume ... is still in use by
-linked clone' (logs/destroy-diag/run-fa882ee8.log), and a bridge cannot go while a VM NIC
+linked clone' (a teardown diagnostic log shows it), and a bridge cannot go while a VM NIC
 still references it. TIERS is that fixed order and is the only thing that decides it;
 `_CLONE_KINDS` re-checks it for the case a clone tier REFUSED and carried on.
 """
@@ -64,7 +64,7 @@ def destroy_tier(state, kind, *, nodes=None, only=None, log=print):
                 # A bridge row carries its NAME ("vmbr120"); `bridge` is only set by the
                 # per-team paths. Reading row["bridge"] alone passed None and the delete
                 # silently no-opped while the row was forgotten and reported destroyed —
-                # live 2026-10-15, run-ee5717cd left vmbr151 active through a "clean" teardown.
+                # caught live left vmbr151 active through a "clean" teardown.
                 name = row["bridge"] or row["name"]
                 # A bridge carries no tags, so its comment is the whole ownership proof:
                 # never remove one that cannot be attributed to this run.

@@ -65,7 +65,7 @@ def test_kill_switch_blocks_every_command_path(tmp_path):
 def test_off_target_ip_is_a_guardrail_breach(tmp_path):
     ctx = make_ctx(tmp_path)
     with pytest.raises(GuardrailError):
-        execute("recon", {"ip": "10.0.0.143"}, ctx)
+        execute("recon", {"ip": "203.0.113.99"}, ctx)
 
 
 def test_dry_run_short_circuits_before_the_transport(tmp_path):

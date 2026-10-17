@@ -3,7 +3,7 @@
 That is the dashboard's shape: its destroy run is handed a per-run workspace path and no
 competition NAME (the workspace dir is called `comp`), and the banner prints the name —
 `competition` was only bound in the comps-root branch, so the CLI died with UnboundLocalError
-before tearing anything down (2026-10-14, run-eab53563).
+before tearing anything down (caught live).
 """
 
 import importlib.util
@@ -91,8 +91,8 @@ class CompDirOnly(unittest.TestCase):
 class ConfigLessWorkspace(unittest.TestCase):
     """A workspace whose deploy died before generating teams.json/boxes.json holds no range.
 
-    Reading them unconditionally died with FileNotFoundError instead of a verdict (2026-10-14,
-    run-0c8d7533 / run-1194ddcf, both handed run-c84faaac's workspace — it died in
+    Reading them unconditionally died with FileNotFoundError instead of a verdict (caught live,
+    two runs were handed another run's config-less workspace — one died in
     preflight-placement with a deploy state but no generated competition config)."""
 
     def test_a_missing_generated_config_is_refused_before_anything_is_planned(self):

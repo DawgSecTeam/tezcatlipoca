@@ -24,7 +24,7 @@ def persist_state(ctx):
     # `placement` is not part of the flat state: the planner writes it straight to the file
     # when the placement resolves, and the plant-time red01 selection updates it there, while
     # this context has held its own copy of the document since load_prior_deploy_state. Saving
-    # that copy back therefore dropped the record — every state document through 2026-10-16
+    # that copy back therefore dropped the record — state documents written before this gate
     # read `placement: None` even though the run's own log said "Placement recorded in <that
     # file>". The record is what makes red01's selected address durable ("the recorded value is
     # never re-derived"), so the on-disk one wins over the stale in-memory one.
@@ -150,7 +150,7 @@ class DeployContext:
     #         phase 1's marker check): the prior run's full ownership set. A same-comp VM
     #         without this tag
     #         belongs to a DIFFERENT worktree's run and is refused, not reclaimed
-    #         (2026-10-02 near-miss).
+    #         (a near-miss).
         return ownership_tags(self.comp_name, self.reclaim_run_id or self.run_id)
 
     @property

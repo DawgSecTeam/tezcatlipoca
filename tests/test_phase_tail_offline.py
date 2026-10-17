@@ -124,7 +124,7 @@ class Tail(unittest.TestCase):
         # bad-auto's nakon intel reads the box account from <comp>/.deploy_state.json; the
         # modern pipeline never wrote it, so every seed sprayed (user, None) and paramiko's
         # "no authentication methods" was reported as "unreachable over SSH" on every box
-        # (live 2026-10-16). It must exist before the assume-breach step reads the intel.
+        # (caught live). It must exist before the assume-breach step reads the intel.
         self._p7([])
         path = self.comp / ".deploy_state.json"
         data = json.loads(path.read_text())

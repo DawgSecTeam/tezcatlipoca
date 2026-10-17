@@ -98,7 +98,7 @@ def proxmox_api_for(endpoint, token, method, path, **kwargs):
         # A caller's own timeout wins. Passing both it and a default raised "got multiple
         # values for keyword argument 'timeout'" — which list_proxmox_templates swallowed
         # into an empty list, so the templates picker read "0 of 17 live" on every call
-        # (2026-10-15).
+        # .
         kwargs.setdefault("timeout", 60)
         r = proxmox_request(method, url, headers=headers, **kwargs)
         r.raise_for_status()
@@ -109,8 +109,8 @@ def proxmox_api_for(endpoint, token, method, path, **kwargs):
         # and per-datastore (`pve-storage-*`) lock files, and answers the loser of a race
         # with a 500 "can't lock file ... - got timeout" while the winner's operation is
         # still running. With concurrent ranges that is routine, not exceptional — three
-        # parallel deploys hit it on a config PUT in phase 4 (live 2026-10-15,
-        # run-6cd31cc3: golden vmid 2350). The request is idempotent and the lock is held
+        # parallel deploys hit it on a config PUT in phase 4 (caught live,
+        # on the run that found it: golden vmid 2350). The request is idempotent and the lock is held
         # only for the duration of one operation, so the same bounded retry that already
         # covers connection errors applies.
         if not isinstance(exc, (requests.exceptions.ConnectionError,
@@ -161,13 +161,13 @@ def wait_for_proxmox_task(node, upid, timeout=1800):
         # A task whose worker died carries the failure IN `status` ("clone failed: can't
         # lock file … - got timeout") and has no `exitstatus` at all, so a `== "stopped"`
         # test never fires and the caller polls a corpse to its 1800 s timeout
-        # (live-found 2026-10-15: two concurrent deploys sat 30 min on a dead qmclone
+        # (caught live: two concurrent deploys sat 30 min on a dead qmclone
         # while the third died on the same task in 7 s). Only "running" is not-terminal.
         if status == "running":
             time.sleep(3)
             continue
         # "WARNINGS: n" is PVE's completed-with-warnings exit — the task's work
-        # is done (live-found 2026-09-26: qmdestroy of a team clone whose
+        # is done (caught live: qmdestroy of a team clone whose
         # cloud-init volume was already gone exits WARNINGS, VM verifiably
         # destroyed). An empty exit is "still being written", not a failure.
         if status == "stopped" and exitstatus in ("", "OK"):
@@ -185,9 +185,9 @@ def run_vm_task(node, vmid, method, path, *, timeout=1800, attempts=5, **kwargs)
     PVE holds that per-VM lock for a task's whole duration, so two shapes collide here: a
     VM-scoped task racing another already in flight, and — the failure this exists for — a
     caller that gave up on a still-running task and then issues the next operation against
-    the lock it still holds. crimson-relay's phase 4 did exactly that: a 120 s client timeout
-    abandoned `qmshutdown 2351`, and the immediate force-stop lost `lock-2351.conf` to it
-    (run-dd88db6d, 2026-10-16). `lifecycle.stop_vm` no longer abandons its shutdown task;
+    the lock it still holds (a 120 s client timeout abandoning `qmshutdown` and the
+    immediate force-stop that lost `lock-<vmid>.conf` to it, on the run that found this).
+    `lifecycle.stop_vm` no longer abandons its shutdown task;
     this absorbs the contention that remains (a foreign operation, or a slow release). Every
     operation routed here is idempotent, so the retry is safe, and a failure that does not
     name a lock file is raised at once. Same 40 s-ramp as the datastore clone retry.
@@ -217,10 +217,10 @@ def destroy_bridge_if_exists(node, bridge_name):
 
     A GET-first existence check keeps a fresh deploy (whose bridges are all new) from
     spraying spurious 400s — PVE rejects DELETE with "Parameter verification failed"
-    rather than 404 for an absent iface (live noise, m4-validation-2026-09-25 phase 1).
+    rather than 404 for an absent iface (observed live).
     DELETE only STAGES the change — the same pending/apply pair create_bridge pairs with a
     reload PUT — so without the apply the bridge stays UP and the next deploy's preflight
-    refuses it (live 2026-10-15, run-ee5717cd left vmbr151 active through a teardown that
+    refuses it (caught live: left vmbr151 active through a teardown that
     reported the estate clean).
     """
     try:
@@ -248,7 +248,7 @@ def storage_queue_lock(node, wait_s=900):
 #     PVE takes a per-DATASTORE lock for the duration of either and reports `can't lock file
 #     '/var/lock/pve-manager/pve-storage-hdd' - got timeout` to everyone else, so concurrent
 #     ranges do not queue — they fight, and the loser spends its retry budget or fails outright.
-#     Live 2026-10-16, the second three-range campaign: three same-image clones contending left
+#     caught live: the second three-range campaign: three same-image clones contending left
 #     the loser on its fourth attempt, and a golden's template conversion hit the same lock and
 #     failed, leaving `template: 1` with the volume never renamed to `base-` (linked clones would
 #     have died with the opaque 500 the volume guard now names).

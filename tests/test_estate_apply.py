@@ -112,7 +112,7 @@ class Bridges(Base):
         post = [c for c in self.fake.calls if c[0] == "POST" and c[1].endswith("/network")]
         # No bridge_ports: PVE's parameter is the port LIST and it resolves every entry as
         # an existing interface, so "none" (the file spelling) 500s with "unable to find
-        # bridge port 'none'" on real hardware (live 2026-10-15, run-ea77ef6c). An empty
+        # bridge port 'none'" on real hardware caught live. An empty
         # list is expressed by omitting the key.
         self.assertNotIn("bridge_ports", post[0][2])
         self.assertEqual(post[0][2]["iface"], "vmbr120")
@@ -173,9 +173,9 @@ class Engine(Base):
         self.assertNotIn("net3", self.fake.config_write(1300))
 
     def test_static_mgmt_ip_gets_cloud_init(self):
-        self._create(mgmt_ip="10.0.0.252", mgmt_gw="10.0.0.1")
+        self._create(mgmt_ip="10.0.0.248", mgmt_gw="10.0.0.1")
         config = self.fake.config_write(1300)
-        self.assertEqual(config["ipconfig0"], "ip=10.0.0.252/24,gw=10.0.0.1")
+        self.assertEqual(config["ipconfig0"], "ip=10.0.0.248/24,gw=10.0.0.1")
         self.assertEqual(config["ciuser"], "sysadmin")
         self.assertIn("sshkeys", config)
 

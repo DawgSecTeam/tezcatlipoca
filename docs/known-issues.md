@@ -10,10 +10,10 @@ Temporary writepad, not a ledger: every entry has a concrete next action and is 
 its next run, which is the documented practice-run loop. But the retired range then blocks
 the only path that can destroy them: `_range_workspace` answers a follow-up destroy with
 `the range in <run> was torn down by <destroy run> — nothing to destroy`, and a full teardown
-run resolves to that retired workspace and dies. Live 2026-10-15 (campaign): pfsense-rvb's
-teams-only teardown left engine-template 2540 + goldens 2550-2552, the follow-up full
-teardown failed, and the templates were only reclaimed by deploying the competition again
-(`run-b7981f23`, which correctly adopted all four) and then tearing *that* range down fully.
+run resolves to that retired workspace and dies. Caught live: a teams-only teardown left the
+engine template and its goldens in place, the follow-up full teardown failed, and the
+templates were only reclaimed by deploying the competition again (which correctly adopted all
+four) and then tearing *that* range down fully.
 The templates are the whole point of teams-only, so this is the normal path, not an edge case.
 **Next action**: let a full teardown act on a retired range's recorded template inventory when
 that range has no live VMs left, or have the teams-only path record the kept templates
@@ -29,7 +29,7 @@ somewhere a later full teardown can find without a deploy.
 failed seed is now correctly recorded as a degradation and returns `ok: False` — that half is
 fixed. What remains is the *partial* case: `_seed_red` reaching one box of six still exits 0 and
 the deploy prints `seeded (depth N) — every box is owned before T0`, which is false for the five it
-missed (`logs/round2/scrim-one-light.md` §7.7 is the original sighting). The scrim's own pre-T0
+missed (caught live on a scrim run). The scrim's own pre-T0
 gate is stricter and refuses a partial seed; the deploy path is warn-and-continue by design, so it
 should still say what it actually achieved.
 **Next action**: reuse `scrim/red_stage.seed_verdict` on the report `_seed_red` already captures
@@ -42,8 +42,8 @@ The original entry claimed the dashboard removes each run's workspace when the r
 a run that FAILED and a destroy that ended `teardown_failed`, stranding the range: the journal,
 the run id and the ownership set all live in that workspace, so deleting it removes the sanctioned
 way to finish. **That premise does not reproduce.** There is no code in the dashboard that deletes
-`<run_dir>/comp` — the only per-run deletion is the engine worktree — and on the live ops host 76
-of 168 stored runs still have their workspace, including a `teardown_failed` range that still
+`<run_dir>/comp` — the only per-run deletion is the engine worktree — and on the ops host most
+stored runs still have their workspace, including a `teardown_failed` range that still
 carries its eight recorded resources. Of the four `teardown_failed` ids the entry named, two have
 no store row at all and two have no run dir. So *something outside both repos* is removing run
 directories, and until it is identified this cannot be fixed here.
@@ -59,28 +59,17 @@ address — but the engine's management address stops at *resolution*, not selec
 `deploy_lib/prepare._resolve_engine_mgmt_ip` takes the flag, then the node record, then the
 profile, then the marked default (`DEFAULT_ENGINE_MGMT_IP`, documented as contested and poisoned
 on a flat shared L2). On an estate where the default is unusable and every candidate is
-unverifiable — this one has co-tenant guests with no guest agent — selecting unattended would
-trade a wrong answer for a guess, which is why it is still an explicit per-run input. The campaign
-shows the intended behaviour in the meantime: an explicit address proceeds with a named warning
+unverifiable — co-tenant guests with no guest agent — selecting unattended would
+trade a wrong answer for a guess, which is why it is still an explicit per-run input. Live runs
+show the intended behaviour in the meantime: an explicit address proceeds with a named warning
 and an unverifiable one refuses.
 **Next action**: decide the rule deliberately (refuse and require a pin, or select from the
 declared band with the agent-less guests named, as red01's address now does) and record the
 decision next to the band constants.
 
-### Tracked test fixtures still carry estate ground truth
-
-`AGENTS.md` says the only place estate facts belong is `infrastructure-status.md` — "a tracked
-doc, prompt, commit message, or test fixture may name the file, never the values". This pass
-replaced the endpoint literals in the six fixtures it touched, but ~15 occurrences remain in
-files unrelated to it (portal, console, competition-ops and follow-up fixtures, which use the
-host address, the node name, a datastore and a template vmid as convenient values).
-**Next action**: sweep them to non-routable placeholders. Two are deliberate — the leak-detection
-fixture in `tests/test_followup_fixes.py` exists to assert those values are *absent* from output,
-so it needs real-looking data and should keep it with a comment saying why.
-
 ### Planted Linux boxes deny all SSH at the PAM account stage after a restart
 
-Root cause unsolved. A stop/start on a planted box can kill SSH preauth (`Access denied ... by PAM account configuration`) while services still listen. `redeploy --mode reset` recognizes the signature and escalates past it. Unreproduced since 2026-09-29 (four stop/starts came back clean); the standing repro lab was destroyed. **Not the `bad-perms-userConfig` misconfig**: the 2026-10-16 pass checked Linux-PAM master and `pam_unix`'s auth and account paths carry no `stat`/mode check on `/etc/shadow`, so a world-readable shadow cannot fail `pam_acct_mgmt` — do not reconnect the two without new evidence. **Next action**: commit the diagnostic kit (`tools/pam-bisect-lab.py`) so the next occurrence can be bisected; it does not exist in the tree, so this is a from-scratch build.
+Root cause unsolved. A stop/start on a planted box can kill SSH preauth (`Access denied ... by PAM account configuration`) while services still listen. `redeploy --mode reset` recognizes the signature and escalates past it. Unreproduced since it was confirmed (four stop/starts came back clean); the standing repro lab was destroyed. **Not the `bad-perms-userConfig` misconfig**: a recent pass checked Linux-PAM master and `pam_unix`'s auth and account paths carry no `stat`/mode check on `/etc/shadow`, so a world-readable shadow cannot fail `pam_acct_mgmt` — do not reconnect the two without new evidence. **Next action**: commit the diagnostic kit (`tools/pam-bisect-lab.py`) so the next occurrence can be bisected; it does not exist in the tree, so this is a from-scratch build.
 
 ### Scoring round loop does not auto-resume after an engine reboot
 
@@ -92,9 +81,9 @@ Mitigated, not closed. The qemu-guest-agent domain is confined on Fedora 44 (dnf
 
 ### Student portal: unproven paths from the first live run
 
-2026-10-08 proved console access, the gate, and verify PASS. Still unproven: the Cloudflare tunnel path (no token used), `pveproxy` under event-size concurrency (only one console was open), box rebuilds (console ACL survival), multi-node, teardown revocation (range was left up). **Next action**: a run exercising each.
+A first live run proved console access, the gate, and verify PASS. Still unproven: the Cloudflare tunnel path (no token used), `pveproxy` under event-size concurrency (only one console was open), box rebuilds (console ACL survival), multi-node, teardown revocation (range was left up). **Next action**: a run exercising each.
 
-### Quotient "one session per account" not reproduced on 2026-10-08
+### Quotient "one session per account" not reproduced
 
-Several modules assume a second login evicts the first cookie (the `scoring` second-admin account, a comment in `deploy_lib/context.py`, `usage-people.md`). On `portal-live-2026-10-08`'s engine, two logins as `team1` and separately as `admin` both left the first cookie valid. **Next action**: re-test before relying on the rule either way; the `scoring` account and the student portal are harmless regardless.
+Several modules assume a second login evicts the first cookie (the `scoring` second-admin account, a comment in `deploy_lib/context.py`, `usage-people.md`). On the portal's live engine, two logins as `team1` and separately as `admin` both left the first cookie valid. **Next action**: re-test before relying on the rule either way; the `scoring` account and the student portal are harmless regardless.
 

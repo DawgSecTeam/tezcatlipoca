@@ -26,24 +26,24 @@ class RedDiskTest(unittest.TestCase):
         def fake_api(method, path, **kwargs):
             calls.append((method, path, kwargs.get("data") or {}))
             if path == "/cluster/resources":
-                return {"data": [{"vmid": 1671, "node": "proxmox"}]}
+                return {"data": [{"vmid": 2099, "node": "proxmox"}]}
             if path.endswith("/config"):
-                return {"data": {"scsi0": f"ssd:vm-1671-disk-0,size={size}"}}
+                return {"data": {"scsi0": f"ssd:vm-2099-disk-0,size={size}"}}
             return {"data": None}
         return fake_api
 
     def test_the_disk_is_grown_with_put_and_an_absolute_size(self):
         """POST is not implemented on PVE's resize endpoint and a relative size is
-        rejected outright — both silently left red01 at 15G on 2026-10-16, and the
+        rejected outright — both silently left red01 at 15G then, and the
         Mythic install then filled the box."""
         calls, df = [], "/dev/mapper/ubuntu--vg-ubuntu--lv   59G  1.2G   55G   3% /\n"
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch("infra.client.proxmox_api", self._api(calls, "15G")):
-            out = to.resize_red_disk(compfile(tmp), "10.0.0.195", 1671,
+            out = to.resize_red_disk(compfile(tmp), "10.0.0.241", 2099,
                                      ssh_key="/tmp/key", target_gb=60,
                                      runner=lambda argv, **kw: Completed(0, df))
         assert out["ok"] is True, out
-        assert ("PUT", "/nodes/proxmox/qemu/1671/resize") in [(m, p) for m, p, _ in calls]
+        assert ("PUT", "/nodes/proxmox/qemu/2099/resize") in [(m, p) for m, p, _ in calls]
         resize = [d for _, p, d in calls if p.endswith("/resize")][0]
         assert resize == {"disk": "scsi0", "size": "60G"}, resize
 
@@ -51,7 +51,7 @@ class RedDiskTest(unittest.TestCase):
         calls, df = [], "/dev/mapper/ubuntu--vg-ubuntu--lv   59G  1.2G   55G   3% /\n"
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch("infra.client.proxmox_api", self._api(calls, "60G")):
-            out = to.resize_red_disk(compfile(tmp), "10.0.0.195", 1671,
+            out = to.resize_red_disk(compfile(tmp), "10.0.0.241", 2099,
                                      ssh_key="/tmp/key", target_gb=60,
                                      runner=lambda argv, **kw: Completed(0, df))
         assert out["ok"] is True and out["grew"] is False, out
@@ -60,7 +60,7 @@ class RedDiskTest(unittest.TestCase):
     def test_the_guest_grow_runs_through_sudo(self):
         """red01's ssh user is a passwordless-sudo account, not root: without
         `sudo -n` every growpart/pvresize/lvextend/resize2fs call fails with
-        "Permission denied" and the disk stays small (live smoke 2026-10-16)."""
+        "Permission denied" and the disk stays small (caught live)."""
         script = to._guest_grow_script()
         for cmd in ("growpart", "pvresize", "lvextend", "resize2fs"):
             assert f"sudo -n {cmd}" in script, (cmd, script)
@@ -69,7 +69,7 @@ class RedDiskTest(unittest.TestCase):
     def test_the_partition_comes_from_lvm_not_a_walk_up_the_device_tree(self):
         """`/` is an LV: basename() of it is the LV name and `lsblk -no PKNAME
         /dev/dm-N` is empty on this box, so a device-tree walk found no partition and
-        skipped the grow entirely — 13G of a 60G disk (live smoke 2026-10-16)."""
+        skipped the grow entirely — 13G of a 60G disk (caught live)."""
         script = to._guest_grow_script()
         assert "pvs --noheadings -o pv_name" in script, script
         assert "/sys/class/block/$(basename \"$PV\")/partition" in script, script
@@ -80,7 +80,7 @@ class RedDiskTest(unittest.TestCase):
         calls, df = [], "/dev/mapper/ubuntu--vg-ubuntu--lv  9.8G  5.2G  4.1G  57% /\n"
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch("infra.client.proxmox_api", self._api(calls, "15G")):
-            out = to.resize_red_disk(compfile(tmp), "10.0.0.195", 1671,
+            out = to.resize_red_disk(compfile(tmp), "10.0.0.241", 2099,
                                      ssh_key="/tmp/key", target_gb=60,
                                      runner=lambda argv, **kw: Completed(0, df))
         assert out["ok"] is False, out

@@ -46,7 +46,7 @@ _DEPLOY_LOCKS = {}  # path -> open fh (keep referenced so flock survives)
 def acquire_deploy_lock(comp_dir):
     """One driver per competition. Two concurrent deploys share the engine's
     /opt/nakon staging dir and each one's 'rm -rf /opt/nakon/*' wipes the
-    other's plan archives mid-plant (scrim-extreme-2026-09-20: a pkill'd
+    other's plan archives mid-plant (caught live: a pkill'd
     wrapper left run-2's python alive while run-3 started; both died with
     'bundle is missing its plan archive'). The flock is held for the process's life."""
     lock_fh = open(comp_dir / ".deploy.lock", "w")
@@ -95,7 +95,7 @@ def check_resume_gates(comp_dir, state_path, previous_state, from_phase, force=F
                             force=force)
     # ...and refuse to trust a checkpoint whose work is not actually there. The two
     # guards above read the checkpoint as a fact; this one checks the fact
-    # (see guard_resume_existence for the 2026-10-02 soak that proved why).
+    # (see guard_resume_existence for the soak that proved why).
     guard_resume_existence(from_phase, comp_dir, previous_state, force=force)
 
 
@@ -104,8 +104,8 @@ def check_stale_estate_state(comp_dir, comp_name, previous_state, engine_vmid, f
 
     The document records the host and engine vmid the LAST deploy used. Targeting another
     host would aim the teardown's ownership proof at VMs that are not there and leave the
-    real range standing (2026-09-24: a realm run deleted that host's existing 1090 engine
-    because a dead primary attempt left 1090 in this comp's state). Runs before any secret
+    real range standing (a real range once got deleted doing exactly that: the host's
+    existing engine was destroyed off the state's stale vmid). Runs before any secret
     is minted, so a refusal leaves no half-written state behind."""
     from estate import config as estate_config
     if from_phase > 2 or not previous_state:
@@ -206,7 +206,7 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
     """Refuse a resume whose skipped phases left no artifacts behind.
 
     `guard_resume_from_phase` reads the checkpoint, which is a claim about work done —
-    and a claim can be written by a run that did nothing. scale8 soak 2026-10-02 attempts
+    and a claim can be written by a run that did nothing. One observable: attempts
     9-11 resumed at --from-phase 5/6 after a phase-4 death: apply #2 never ran, the
     phase-6 pre-domain pass is strict=False so it "succeeded" against 32 nonexistent
     machines, and it checkpointed phase 5. Every later wait then raced a ghost, and the

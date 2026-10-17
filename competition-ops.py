@@ -6,7 +6,7 @@ everything deployed, teams seeded, the portal up — but the competition clock u
 and the engine paused. This drives the engine afterwards:
 
   python3 competition-ops.py start  --comp-dir competitions/<id>
-  python3 competition-ops.py freeze --comp-dir competitions/<id> --engine-ip 10.0.0.150
+  python3 competition-ops.py freeze --comp-dir competitions/<id> --engine-ip 10.0.0.248
   python3 competition-ops.py end    --comp-dir competitions/<id>
 
 Auth is always the `scoring` automation account (password from the estate state or

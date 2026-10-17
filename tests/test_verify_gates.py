@@ -272,7 +272,7 @@ class PlantCoverage(unittest.TestCase):
     def test_superseded_tally_history_does_not_gate_a_clean_record(self):
     # A record exists and is clean: the merged tally is history, not state.
 #
-    #         scrim-one 2026-10-03: seven ad-* plants failed in the pre-promotion pre-domain
+    #         caught live: seven ad-* plants failed in the pre-promotion pre-domain
     #         stage, the post-domain final pass replanted them green (clearing the record),
     #         and the merged tally still listed the pre-domain failures — the gate stayed red
     #         forever on entries a later pass had already fixed. The record side fixed this
@@ -697,7 +697,7 @@ class TriStateVerdict(unittest.TestCase):
 class RedTeamsReachability(unittest.TestCase):
 # --red-teams all: red must reach EVERY team, not just one box.
 #
-#     scale8-soak-2026-10-02: routed red01 could not reach any satellite team box
+#     a scale soak: routed red01 could not reach any satellite team box
 #     (15/15 cred_sprays "unreachable over SSH", 0 footholds) and half the range was
 #     never attacked. `--red-identity` proved red's source address on a single box, so
 #     a whole-node routing failure still reported PASS. This gate is the missing one,
@@ -835,7 +835,7 @@ class MainSummaryWiring(unittest.TestCase):
 class StateDocumentMissing(unittest.TestCase):
     def test_missing_document_names_the_workspace_not_a_binary(self):
         """A workspace with no deploy state must say so: naming a missing binary sent a queue
-        verify hunting a PATH bug instead of the real cause (2026-10-14)."""
+        verify hunting a PATH bug instead of the real cause (caught live)."""
         with tempfile.TemporaryDirectory() as td:
             with self.assertRaises(v_model.CheckError) as raised:
                 v_context.read_estate_ctx(Path(td))
@@ -849,7 +849,7 @@ if __name__ == "__main__":
 class RemoteAccessSnatRetry(unittest.TestCase):
     """The SNAT rule is re-asserted every 30s because a tailscaled rebind drops it, so the
     gate must sample past one cycle instead of reporting a self-healing range FAIL (live
-    2026-10-15, run-9fd68d14: the rule read present, then MISSING 3 samples running, then
+    caught live: the rule read present, then MISSING 3 samples running, then
     present again — the same range, minutes apart)."""
 
     def _check(self, samples):

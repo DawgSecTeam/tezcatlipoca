@@ -2,7 +2,7 @@
 
 Two incidents drive this file:
 
-* D1 (winad-testrun 2026-09-25) — the state document holds the only copy of the box
+* The state document holds the only copy of the box
   passwords. Three of the four writers (two in redeploy-competition.py, plus the one at
   the END of engine-recovery, which runs after the scoring DB was already wiped) used a
   plain `write_text` + `chmod`. A torn write there leaves a live engine with unreadable

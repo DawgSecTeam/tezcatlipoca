@@ -40,9 +40,9 @@ def golden_plant_checkpoints(comp_dir):
 # box name -> golden hash, for goldens that have been planted AND smoke-passed.
 #
 #     Deliberately a separate key from `golden` (which records *converted* templates):
-#     this one marks the intermediate state that used to be thrown away. On cde-2026 a
-#     re-entry rolled every planted golden back to tz-base and re-planted the whole set —
-#     33 rollbacks (11 each for web01, ftp01, db01) across 10 runs — while only ftp01 was
+#     this one marks the intermediate state that used to be thrown away. On a live comp a
+#     re-entry rolled every planted golden back to base and re-planted the whole set —
+#     33 rollbacks (11 each for three boxes) across 10 runs — while only one box was
 #     ever the problem. Conversion still waits for the whole set; this only avoids
 #     repeating work that already passed.
 #
@@ -321,7 +321,7 @@ def code_path_dirty(porcelain_lines):
 #     run was verified on, while generated/run state (comp JSON, the placement record, nodes.json,
 #     the state document, .env backups) is written by the run itself and is never committed as
 #     part of the workflow. Treating every porcelain line as dirt made `--freeze` refuse in
-#     any post-deploy worktree (verified 2026-10-02 on the scale8 worktree: a modified
+#     any post-deploy worktree (verified on an old worktree: a modified
 #     placement record, an untracked nodes.json and a .env backup), so the gate is scoped here.
 #     Pure function of the porcelain lines — see verify-competition.do_freeze.
     for line in porcelain_lines or []:

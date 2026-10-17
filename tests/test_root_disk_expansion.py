@@ -1,4 +1,4 @@
-"""Guest-side root-disk expansion for goldens (regression-4x1-2026-09-28: cloud-init
+"""Guest-side root-disk expansion for goldens (caught live: cloud-init
 grows only plain partition+fs — ubuntu's LVM layout kept a 10G root LV inside the
 30G hypervisor disk and the first big plant died with ENOSPC). expand_guest_root_disks
 runs growpart/pvresize/lvextend/resize2fs post-boot; captured-command tests."""
@@ -39,7 +39,7 @@ class ExpansionScript(unittest.TestCase):
 
     def test_resize2fs_device_is_not_wrapped_in_literal_quotes(self):
     # $GROW_FS is expanded unquoted, so inner quotes become part of the path and
-    #         resize2fs fails opening '"/dev/mapper/..."' (live-found 2026-10-05: every LVM
+    #         resize2fs fails opening '"/dev/mapper/..."' (caught live: every LVM
     #         golden logged 8 failed attempts and a 'size unmeasurable' degradation).
         script = _run()["cmds"][0][1]
         self.assertIn('GROW_FS="resize2fs $SRC"', script)
@@ -48,7 +48,7 @@ class ExpansionScript(unittest.TestCase):
     def test_btrfs_layout_grows_via_btrfs_resize(self):
     # Fedora cloud default: root is btrfs and findmnt reports the subvolume
     #         suffix ('/dev/sda3[/root]') — the parse must strip it and grow with
-    #         `btrfs filesystem resize`, not resize2fs (live-found 2026-09-29).
+    #         `btrfs filesystem resize`, not resize2fs (caught live).
         captured = _run()
         script = captured["cmds"][0][1]
         self.assertIn("${ROOT_SRC%%\\[*}", script)
@@ -64,7 +64,7 @@ class ExpansionScript(unittest.TestCase):
         self.assertLess(script.index("GROW_FS="), script.index("/dev/mapper/*"))
 
     def test_script_is_valid_shell(self):
-    # Live-found 2026-09-29: a '; ;' where a case branch needs ';;' survived the
+    # caught live: a '; ;' where a case branch needs ';;' survived the
     #         substring tests and died as a syntax error on the golden. sh -n parses without
     #         executing.
         captured = _run()
@@ -83,7 +83,7 @@ class ExpansionScript(unittest.TestCase):
         _run(stdout=out)  # rc=0 → no raise even though nothing grew
 
     def test_failure_warns_and_continues_with_a_degradation(self):
-        # Live-found 2026-09-29 x3: the boot-window instability that breaks the grow must
+        # caught live x3: the boot-window instability that breaks the grow must
         # warn, not kill phase 4 — the plant coverage gate catches a truly undersized root.
         failed = type("R", (), {"returncode": 1, "stdout": "", "stderr": "boom"})()
         with patch.object(golden_disk_ops, "ssh_via_gateway", return_value=failed), \

@@ -13,7 +13,7 @@ def record_degradations(ctx):
 #     document and verify can read them.
     entries = degradations()
     # ALWAYS record the key, even when empty. A gate cannot tell "clean" from "never
-    # ran" if the success path writes nothing: verify reported the 2026-10-02 live
+    # ran" if the success path writes nothing: verify once reported
     # run's ledger as "not recorded by this deploy (pre-dates the ledger)", which reads
     # as a stale state file rather than the clean run it actually was. Same trap the
     # plant-coverage gate had to learn — and which verify caught on that same run.

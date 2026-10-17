@@ -1,4 +1,4 @@
-"""SSH retry ladders (cyberrange loadtest 2026-09-30): definitive rejections
+"""SSH retry ladders: definitive rejections
 (Permission denied / host-key failure) must go straight to the guest-agent
 fallback instead of burning the 8x15s ladder — only boot-time timeouts deserve
 retries. Offline; fake subprocess/agent."""

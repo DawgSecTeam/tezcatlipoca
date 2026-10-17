@@ -1,9 +1,9 @@
-"""Regression tests for the red-vs-blue scrim harness defect audit (findings D1-D12).
+"""Regression tests for the red-vs-blue scrim harness defect audit.
 
-Every test here pins a defect that was found by reading the code and that only shows up
+Every test here pins a defect that only shows up
 on live infrastructure (a 90-minute run against real ranges), where the evidence is a
-post-hoc report — so the failure paths matter more than the happy path. Each fix cites
-its incident in the source; each test below names the mechanism it protects.
+post-hoc report — so the failure paths matter more than the happy path. The source
+carries the why for each fix; each test below names the mechanism it protects.
 
 Offline and fast: no network, no SSH, no real opencode. The one slow fixture is D1's
 orphaned-grandchild reproduction, which is two sub-second timeouts.
@@ -23,7 +23,7 @@ import time
 import unittest
 from pathlib import Path
 
-from common.comp_paths import comps_root
+from estate import config
 from types import SimpleNamespace
 from unittest import mock
 
@@ -66,7 +66,6 @@ def _wait_dead(pid, timeout=5.0):
 
 
 
-# D1 ---------------------------------------------------------------------------
 class ProcessTreeSupervision(unittest.TestCase):
 # run_tree must reap the whole process group; subprocess.run(timeout=) does not.
 
@@ -113,7 +112,6 @@ class ProcessTreeSupervision(unittest.TestCase):
         self.assertEqual(r.stdout, "secret\nscript\n")
 
 
-# D2 ---------------------------------------------------------------------------
 class TrackingLock:
 # Records the exact acquire/release order (a plain Lock cannot show the interval).
 
@@ -205,7 +203,6 @@ class BlueFeedLockAndTimeout(unittest.TestCase):
         self.assertIn("===== cycle T+42 TIMEOUT =====", (rd / "feed.log").read_text())
 
 
-# D3 ---------------------------------------------------------------------------
 class WorkerSupervision(unittest.TestCase):
     def test_dead_workers_reports_each_thread_once(self):
         t = threading.Thread(target=lambda: None, name="feed"); t.start(); t.join()
@@ -270,7 +267,6 @@ class WorkerSupervision(unittest.TestCase):
         self.assertIn("blue-feed-1", failure)
 
 
-# D4 ---------------------------------------------------------------------------
 class RedLlmWatchdog(unittest.TestCase):
     class Tunnel:
         def __init__(self):
@@ -364,7 +360,6 @@ class RedLlmWatchdog(unittest.TestCase):
         self.assertEqual(len(loaders.load_alerts(rd)), 1)
 
 
-# D5/D6 ------------------------------------------------------------------------
 class EvidenceHygiene(unittest.TestCase):
     def test_jar_path_is_private_and_out_of_shared_tmp(self):
         rd = Path(tempfile.mkdtemp())
@@ -450,7 +445,6 @@ class EvidenceHygiene(unittest.TestCase):
                 pass  # RLock: qget -> _qlogin must not self-deadlock
 
 
-# D7 ---------------------------------------------------------------------------
 class FakeResp:
     def __init__(self, payload=None, status=200, raises=None):
         self._payload = payload
@@ -549,33 +543,66 @@ class ScheduleEndAlwaysPauses(unittest.TestCase):
         self.assertEqual(len(session.posts), 1)
 
 
-# D8 ---------------------------------------------------------------------------
+# The report must derive host labels from the COMPETITION's boxes.json, never from a
+# name-keyed table baked into the report code: a fixed table silently mislabels or
+# zero-labels every other lineup.
 class LineupDerivation(unittest.TestCase):
-    AMONGUS = comps_root() / "amongus-cde"
-    LEGACY_17B = {"web01": 45, "app01": 60, "db01": 90}
+    # the old name-keyed interval table, kept as the behavior baseline the
+    # roster-derived plan must still reproduce on a same-shaped lineup
+    LEGACY_NAME_GATE = {"web01": 45, "app01": 60, "db01": 90}
+    LINEUP = ["db01", "file01", "app01", "relay01"]
 
-    def _boxes(self, comp):
-        return json.loads((comps_root() / comp / "boxes.json").read_text())
+    def setUp(self):
+        # a private comps root so the suite never reads the developer's real comps checkout
+        self.tmp = Path(tempfile.mkdtemp())
+        token = config.active().activate({"knobs.competitions_root": str(self.tmp)})
+        self.addCleanup(config.active().deactivate, token)
+
+    def _comp(self, names=None):
+        comp = self.tmp / "lineup-comp"
+        comp.mkdir(parents=True, exist_ok=True)
+        (comp / "boxes.json").write_text(json.dumps(
+            [{"name": n, "last_octet": i + 2, "template": "base-ubuntu24.04-fix"}
+             for i, n in enumerate(names or self.LINEUP)]))
+        return comp
+
+    def _run_dir(self, name):
+        run = self.tmp / name
+        (run / "evidence" / "red").mkdir(parents=True)
+        return run
+
+    def _boxes(self, names, templates=None):
+        return [
+            {"name": n, "last_octet": i + 2,
+             "template": (templates or {}).get(n, "base-ubuntu24.04-fix")}
+            for i, n in enumerate(names)]
 
     def test_box_labels_come_from_the_competition_boxes_json(self):
-        labels = host_labels.box_labels(self.AMONGUS)
-        self.assertEqual(labels, {"2": "mira", "3": "skeld", "4": "airship", "5": "polus"})
-        self.assertEqual(host_labels.host_label("192.168.101.4", labels), "1:airship")
+        comp = self._comp()
+        labels = host_labels.box_labels(comp)
+        self.assertEqual(labels, {"2": "db01", "3": "file01", "4": "app01", "5": "relay01"})
+        self.assertEqual(host_labels.host_label("192.168.101.4", labels), "1:app01")
         # a non-team address (red01) keeps its raw octets and is never team-labelled
-        self.assertEqual(host_labels.host_label("10.0.0.198", labels), ".198")
-        self.assertNotIn(":", host_labels.host_label("10.0.0.198", labels))
+        self.assertEqual(host_labels.host_label("10.0.0.243", labels), ".243")
+        self.assertNotIn(":", host_labels.host_label("10.0.0.243", labels))
+
+    def test_run_dir_inside_the_competition_resolves_three_levels_up(self):
+        comp = self._comp()
+        run = comp / ".automated-tests" / "run-abc12345" / "evidence" / "red"
+        run.mkdir(parents=True)
+        self.assertEqual(host_labels.box_labels(run),
+                         {"2": "db01", "3": "file01", "4": "app01", "5": "relay01"})
 
     def test_box_labels_resolve_a_suffixed_run_dir(self):
-        fake_run = Path(tempfile.mkdtemp()) / "amongus-cde-2026-run2"
-        fake_run.mkdir()
-        self.assertEqual(host_labels.box_labels(fake_run)["4"], "airship")
+        self._comp()
+        fake_run = self._run_dir("lineup-comp-run2")
+        self.assertEqual(host_labels.box_labels(fake_run)["4"], "app01")
 
     def test_unknown_run_dir_does_not_invent_a_name_from_the_wrong_lineup(self):
-        fake_run = Path(tempfile.mkdtemp()) / "totally-unknown-run"
-        fake_run.mkdir()
+        fake_run = self._run_dir("totally-unknown-run")
         labels = host_labels.box_labels(fake_run)
         self.assertEqual(labels, {})
-        # empty map -> raw dotted octet, NOT the 17b dc01/win01/web01 guess
+        # empty map -> raw dotted octet, never a guessed name
         self.assertEqual(host_labels.host_label("192.168.101.4", labels), "1:.4")
 
     def test_report_says_so_when_it_cannot_resolve_the_lineup(self):
@@ -592,36 +619,38 @@ class LineupDerivation(unittest.TestCase):
     def test_no_label_map_degrades_to_raw_octets_never_a_guessed_name(self):
         self.assertEqual(host_labels.host_label("192.168.101.4"), "1:.4")
 
-    def test_red_timeline_labels_the_amongus_lineup(self):
-        run = Path(tempfile.mkdtemp()) / "amongus-cde-2026-run2"
-        (run / "evidence" / "red").mkdir(parents=True)
+    def test_red_timeline_labels_the_competition_lineup(self):
+        self._comp()
+        run = self._run_dir("lineup-comp-run2")
         ev = {"ts": "2026-09-29T07:00:00Z", "kind": "action", "ok": True,
               "tactic": "impact_service", "target": "192.168.101.4",
               "data": {"unit": "httpd"}, "detail": "httpd is DOWN on 192.168.101.4"}
         (run / "evidence" / "red" / "events.jsonl").write_text(json.dumps(ev) + "\n")
         t0 = timefmt.parse_ts(ev["ts"])
         rm = red_side.red_metrics([ev], t0, {}, host_labels.box_labels(run))
-        self.assertEqual(rm["timeline"][0][1], "1:airship")
+        self.assertEqual(rm["timeline"][0][1], "1:app01")
         out, _meta = render.build_report(run)
-        self.assertIn("1:airship", out)
-        self.assertNotIn("1:web01", out)
+        self.assertIn("1:app01", out)
+        self.assertNotIn("1:file01", out)
 
-    def test_beacon_plan_matches_the_17b_table_it_replaces(self):
-        plan = dict(beacon.beacon_plan(self._boxes("agent-scrim")))
-        self.assertEqual(plan, self.LEGACY_17B)
+    def test_beacon_plan_intervals_follow_the_roster_order(self):
+        plan = dict(beacon.beacon_plan(self._boxes(["web01", "app01", "db01"])))
+        self.assertEqual(plan, self.LEGACY_NAME_GATE)
 
-    def test_beacon_plan_covers_a_non_17b_lineup(self):
-        boxes = self._boxes("amongus-cde")
+    def test_beacon_plan_covers_an_arbitrary_lineup(self):
+        boxes = self._boxes(
+            ["alpha", "bravo", "charlie", "delta"],
+            templates={"alpha": "base-windows-11-pro-fix", "bravo": "base-windows-server"})
         old_gate = [b["name"] for b in boxes
                     if not beacon._is_windows(b["template"])
-                    and b["name"] in self.LEGACY_17B]           # the pre-fix gate
+                    and b["name"] in self.LEGACY_NAME_GATE]   # the pre-fix gate
         plan = beacon.beacon_plan(boxes)
         self.assertEqual(old_gate, [], "fixture: the old name gate plants nothing here")
-        self.assertEqual([name for name, _interval in plan], ["airship", "polus"])
+        self.assertEqual([name for name, _interval in plan], ["charlie", "delta"])
         self.assertEqual([i for _name, i in plan], [45, 60])
 
     def test_beacon_plan_skips_windows_and_unmanaged_appliances(self):
-        # loadtest-cr-a's lineup (the comp dir was pruned 2026-10-02): two Windows
+        # a pruned comp dir's lineup: two Windows
         # boxes, an unmanaged pfSense appliance, two beaconable Linux boxes.
         boxes = [
             {"name": "dc01", "last_octet": 2, "template": "base-windows-server"},
@@ -646,7 +675,6 @@ class LineupDerivation(unittest.TestCase):
         self.assertIn("0/0", str(ctx.exception))  # names the silent-degradation sentence
 
 
-# D9 ---------------------------------------------------------------------------
 class PasswordHandling(unittest.TestCase):
     def test_box_sudo_keeps_the_password_out_of_argv(self):
         pw = "a'b;c$(d)"
@@ -656,7 +684,6 @@ class PasswordHandling(unittest.TestCase):
         self.assertIn("sudo -S", argv[-1])
         self.assertEqual(stdin_text, pw + "\nsystemctl stop nginx")
 
-# D10 --------------------------------------------------------------------------
 class ResumeGuardAndManifest(unittest.TestCase):
     def test_resume_window_threshold(self):
         from scrim import core
@@ -703,7 +730,6 @@ class ResumeGuardAndManifest(unittest.TestCase):
     def test_missing_manifest_is_empty_not_an_error(self):
         self.assertEqual(run_manifest.load_manifest(Path(tempfile.mkdtemp())), {})
 
-# D11 --------------------------------------------------------------------------
 class AuthoredCompSweepMarker(unittest.TestCase):
     def test_a_swept_template_does_not_leak_the_postclone_marker(self):
         tmp = Path(tempfile.mkdtemp())
@@ -729,7 +755,7 @@ class AuthoredCompSweepMarker(unittest.TestCase):
         self.assertFalse((dst / ".postclone-swept").exists())
 
     def test_bare_from_template_name_resolves_against_competitions(self):
-    # full-scrim-20261013d: --from-template agent-scrim was Path("agent-scrim"),
+    # caught live: a bare --from-template <name> resolved as a cwd-relative Path,
     #     a cwd-relative path, so a driver launched from anywhere but the repo root
     #     died in authoring on a template that demonstrably exists.
         tmp = Path(tempfile.mkdtemp())
@@ -747,9 +773,9 @@ class AuthoredCompSweepMarker(unittest.TestCase):
         self.assertTrue((tmp / "competitions" / "demo" / "Compfile").exists())
 
 class RedReachabilityGate(unittest.TestCase):
-# D13: pre-T0 gate that red01 can dial a box on every team.
+# pre-T0 gate: red01 can dial a box on every team.
 #
-#     scale8-soak-2026-10-02: routed red01 could not reach any satellite team box (15/15
+#     a scale soak: routed red01 could not reach any satellite team box (15/15
 #     cred_sprays, both db_attacks "unreachable over SSH", 0 footholds) and the run went
 #     40 minutes before anyone noticed. `verify --red-identity` only proved red reached
 #     ONE box on its own segment, and stage_verify runs before red exists, so nothing
@@ -787,7 +813,7 @@ class RedReachabilityGate(unittest.TestCase):
                 mock.patch.object(procs, "run", side_effect=fake_run), \
                 mock.patch.object(compworld, "_verify_flags", return_value=[]):
             red_stage.verify_red_reaches_teams(
-                self._args(), comp, {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
+                self._args(), comp, {"ENGINE_IP": "10.0.0.248", "ADMIN_PW": "pw"})
 
         cmd, kw = calls[0]
         self.assertIn("--red-teams", cmd)
@@ -804,7 +830,7 @@ class RedReachabilityGate(unittest.TestCase):
                     returncode=1, stdout=self.PASS_OUT, stderr="")), \
                 mock.patch.object(compworld, "_verify_flags", return_value=[]):
             red_stage.verify_red_reaches_teams(
-                self._args(), comp, {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
+                self._args(), comp, {"ENGINE_IP": "10.0.0.248", "ADMIN_PW": "pw"})
 
     def test_red_check_failure_stops_the_run(self):
         for stdout in (self.PASS_OUT.replace("red_teams         : PASS",
@@ -817,7 +843,7 @@ class RedReachabilityGate(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     red_stage.verify_red_reaches_teams(
                         self._args(), comp,
-                        {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
+                        {"ENGINE_IP": "10.0.0.248", "ADMIN_PW": "pw"})
 
     def test_masq_mode_is_skipped(self):
         calls = []
@@ -826,7 +852,7 @@ class RedReachabilityGate(unittest.TestCase):
                 mock.patch.object(compworld, "_verify_flags", return_value=[]):
             red_stage.verify_red_reaches_teams(
                 self._args(mode="masq"), Path("/tmp/comp"),
-                {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
+                {"ENGINE_IP": "10.0.0.248", "ADMIN_PW": "pw"})
         self.assertEqual(calls, [], "masq red shares the gateways: nothing to prove")
 
     def test_default_mode_is_treated_as_routed(self):
@@ -840,14 +866,14 @@ class RedReachabilityGate(unittest.TestCase):
                                                       stderr=""))[1]), \
                 mock.patch.object(compworld, "_verify_flags", return_value=[]):
             red_stage.verify_red_reaches_teams(
-                self._args(), comp, {"ENGINE_IP": "10.0.0.252", "ADMIN_PW": "pw"})
+                self._args(), comp, {"ENGINE_IP": "10.0.0.248", "ADMIN_PW": "pw"})
         self.assertEqual(len(calls), 1)
 
 
 class RedTeardownAssertion(unittest.TestCase):
-# D14: red01 must not survive teardown, and a failed destroy must not read as DONE.
+# red01 must not survive teardown, and a failed destroy must not read as DONE.
 #
-#     scale8-soak-2026-10-02: red01 (998) outlived `badauto destroy` and had to be removed
+#     a scale soak: a stray red01 outlived `badauto destroy` and had to be removed
 #     by hand. The stage ran with check=False and never looked at the result or at the
 #     cluster, so a destroy that removed nothing was indistinguishable from one that
 #     worked — the driver printed DONE while a red box holding the beacon controller and
@@ -890,11 +916,11 @@ class RedTeardownAssertion(unittest.TestCase):
         self.assertIn("destroy", calls[0])
         # the resolved competition path: bad-auto's destroy cross-checks it against
         # config.yaml's competition_dir, and the bare name was the real cause of the
-        # "transient" teardown rc=1 on the 2026-10-03/04 scrims
+        # "transient" teardown rc=1 on the early scrims
         self.assertIn("competitions/c1", calls[0][-2])
 
     def test_transient_destroy_failure_is_retried_once(self):
-        # live-found 2026-10-03: attempt 1 rc=1 (transient Proxmox hiccup), the manual
+        # caught live: attempt 1 rc=1 (transient Proxmox hiccup), the manual
         # re-run succeeded in seconds — but the harness had already aborted the whole
         # teardown, leaving the range up.
         calls = self._run(rcs=[1, 0])
@@ -953,7 +979,6 @@ class RedTeardownAssertion(unittest.TestCase):
         self.assertEqual(seen, [1234])
 
 
-# D12 --------------------------------------------------------------------------
 class PyflakesClean(unittest.TestCase):
     FILES = ("run-agent-scrim.py", "scrim", "scrim-report.py", "red/beacon_ops.py", "run-schedule.py")
 
@@ -971,9 +996,9 @@ if __name__ == "__main__":
 
 
 class CycleTimeoutKnob(unittest.TestCase):
-# run-e9d17d65: the only reachable LLM needed ~3 min per 10-token reply; blue's
-#     every 600 s cycle timed out and blue never engaged. The cap is calibrated
-#     for the GX10 qwen-flash, so a slower endpoint needs an override.
+# On a too-slow endpoint (~3 min per 10-token reply) blue's every 600 s cycle
+#     timed out and blue never engaged. The cap is calibrated for a mid-size
+#     local model, so a slower endpoint needs an override.
     def test_tez_cycle_timeout_overrides(self):
         import importlib
         from scrim import core

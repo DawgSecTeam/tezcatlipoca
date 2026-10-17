@@ -1,6 +1,6 @@
 """A red01 deployed by a run that never stamped must still be reclaimable at teardown.
 
-Regression for the 2026-10-14 e2e finding: stage_red died reading `<deploy.ssh_key>.pub` AFTER
+Regression for an e2e finding: stage_red died reading `<deploy.ssh_key>.pub` AFTER
 bad-auto had created red01, so no deploy stamp was ever written. `badauto destroy` then exited 0
 having removed nothing (its identity guard is the stamp), the teardown aborted with
 "red01 is STILL PRESENT", and the range was left with a red box holding the LLM key and its

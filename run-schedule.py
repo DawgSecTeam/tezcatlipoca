@@ -5,9 +5,9 @@ The engine has no schedule model — pausing IS the schedule. This reads a packe
 profile's `schedule:` windows, prints the wall-clock plan from T0, and (with
 --execute) drives the engine through start / lunch-freeze / resume / end:
 
-  python3 run-schedule.py packets/cde-2026/packet.yaml --t0 "2026-10-03 09:30"
-  python3 run-schedule.py packets/cde-2026/packet.yaml --execute freeze
-  python3 run-schedule.py packets/cde-2026/packet.yaml --execute end
+  python3 run-schedule.py <packet-dir>/packet.yaml --t0 "<iso8601 t0>"
+  python3 run-schedule.py <packet-dir>/packet.yaml --execute freeze
+  python3 run-schedule.py <packet-dir>/packet.yaml --execute end
 
 `end` also dumps the final scoreboard + inject state into <comp>/evidence/ BEFORE
 the pause kills the loop's last round (the stage_capture lesson: capture first)."""

@@ -1,17 +1,17 @@
-"""Regression tests for the 2026-10-04 follow-up fixes (live-found in the reset
-matrix + scrim authoring, see docs/reports/reset-live-test-2026-10-03-report.md):
+"""Regression tests for the follow-up fixes (live-found in the reset
+matrix + scrim authoring):
 
-* F5 — the engine mgmt IP preflight must not treat the CODE-exported default as an
+* The engine mgmt IP preflight must not treat the CODE-exported default as an
   operator-set address: an unverifiable DEFAULT is refused, an explicit one warned.
-* F7 — ensure_packet_secrets compiles the packet's gitignored secret layer into a
+* ensure_packet_secrets compiles the packet's gitignored secret layer into a
   comp dir that arrived without it (stage_author/manual copy/fresh clone), so the
   machine list carries the packet-promised decoy accounts and the harness's pre-T0
   `verify --packet` cannot abort the run.
-* F6 — a member that self-reports joined but has no machine account on the team's DC
+* A member that self-reports joined but has no machine account on the team's DC
   is a dead trust and must not read as a pass (verify's _member_trusted).
-* F9 — reconcile_estate_state imports rebuilt boxes by their deterministic vmid;
+* reconcile_estate_state imports rebuilt boxes by their deterministic vmid;
   a failed import warns instead of dying.
-* F8 — env_summary names the estate (endpoint/node/datastore/tpl/mgmt) so a
+* env_summary names the estate (endpoint/node/datastore/tpl/mgmt) so a
   wrong-variant env copy shows in the banner.
 
 Offline; no Proxmox, no network."""
@@ -75,8 +75,6 @@ class EngineMgmtGateTests(unittest.TestCase):
 
 
 class EnsurePacketSecretsTests(unittest.TestCase):
-# F7: the secret layer is compiled on demand, never silently absent.
-
     COMPFILE = "name Test\npacket_source packets/cde-2026/packet.yaml\n"
 
     def _comp(self, tmp, compfile=COMPFILE):
@@ -166,15 +164,13 @@ class ReconcileStateTests(unittest.TestCase):
 
 
 class EnvSummaryTests(unittest.TestCase):
-# F8: the banner line names the estate.
-
     def test_summary_carries_all_five_facts(self):
-        env = {"TEZ_PROXMOX_ENDPOINT": "https://10.0.0.150:8006",
-               "TEZ_PROXMOX_NODE": "proxmox", "TEZ_PROXMOX_DATASTORE": "wkshp-pool",
-               "TEZ_PROXMOX_TEMPLATE_VM_ID": "955", "TEZ_ENGINE_MGMT_IP": "10.0.0.252"}
+        env = {"TEZ_PROXMOX_ENDPOINT": "https://203.0.113.10:8006",
+               "TEZ_PROXMOX_NODE": "proxmox", "TEZ_PROXMOX_DATASTORE": "pve-pool",
+               "TEZ_PROXMOX_TEMPLATE_VM_ID": "5001", "TEZ_ENGINE_MGMT_IP": "10.0.0.248"}
         with patch.dict(os.environ, env, clear=True):
             s = env_summary()
-        for fact in ("10.0.0.150", "proxmox", "wkshp-pool", "955", "10.0.0.252"):
+        for fact in ("203.0.113.10", "proxmox", "pve-pool", "5001", "10.0.0.248"):
             self.assertIn(fact, s)
 
     def test_unset_mgmt_ip_reads_as_default(self):
@@ -185,19 +181,19 @@ class EnvSummaryTests(unittest.TestCase):
 
     def test_summary_reads_the_resolved_target_not_the_ambient_env(self):
         """Placement and --engine-mgmt-ip move the run by activating the config, not the
-        environment. The banner must name what the run DIALS: live 2026-10-15 the canary
-        deployed --engine-mgmt-ip 10.0.0.244 while every line printed 10.0.0.252."""
+        environment. The banner must name what the run DIALS: failed once when a canary
+        deployed --engine-mgmt-ip 10.0.0.246 while every line printed 10.0.0.248."""
         from estate import config
-        env = {"TEZ_PROXMOX_ENDPOINT": "https://10.0.0.150:8006",
+        env = {"TEZ_PROXMOX_ENDPOINT": "https://203.0.113.10:8006",
                "TEZ_PROXMOX_NODE": "proxmox", "TEZ_PROXMOX_DATASTORE": "hdd",
-               "TEZ_PROXMOX_TEMPLATE_VM_ID": "955", "TEZ_ENGINE_MGMT_IP": "10.0.0.252"}
+               "TEZ_PROXMOX_TEMPLATE_VM_ID": "5001", "TEZ_ENGINE_MGMT_IP": "10.0.0.248"}
         with patch.dict(os.environ, env, clear=True):
             config.reset()
-            config.active().activate({"engine.mgmt_ip": "10.0.0.244",
-                                      "proxmox.endpoint": "https://10.0.0.193:8006"})
+            config.active().activate({"engine.mgmt_ip": "10.0.0.246",
+                                      "proxmox.endpoint": "https://203.0.113.20:8006"})
             s = env_summary()
-        self.assertIn("engine-mgmt=10.0.0.244", s)
-        self.assertIn("endpoint=https://10.0.0.193:8006", s)
+        self.assertIn("engine-mgmt=10.0.0.246", s)
+        self.assertIn("endpoint=https://203.0.113.20:8006", s)
 
 
 if __name__ == "__main__":

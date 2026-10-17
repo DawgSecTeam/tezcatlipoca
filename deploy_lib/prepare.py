@@ -61,7 +61,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
 #     the deploy (engine mgmt IP collision, missing templates, datastore headroom, catalog
 #     errors) — a state file written with minted credentials no engine ever received is a
 #     credential-desync corpse: every login 401s against the live range until state is
-#     restored by hand (2026-09-30 testcomp-7box: a create-competition re-run against an
+#     restored by hand (a 7-box test comp: a create-competition re-run against an
 #     already-deployed comp rotated state while the engine kept the originals). Resumes
 #     keep the gate where it was relative to their carried (not minted) credentials.
     ctx = DeployContext(comp_dir=comp_dir, from_phase=from_phase, assume_yes=assume_yes)
@@ -87,7 +87,7 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
         _record_placement_identities(ctx)
     # The banner above printed the pre-placement, pre-flag target. --engine-mgmt-ip is the
     # last thing to move it, so the effective line belongs here — an operator checking the
-    # banner must see the address this run will actually dial (the 2026-10-15 canary ran
+    # banner must see the address this run will actually dial (a canary ran
     # .244 while the banner said .252).
     from common.utils import env_summary
     print(f"  Effective target: {env_summary()}")

@@ -131,7 +131,7 @@ def _strip_ansi(text):
 def _guest_ssh(script=None, timeout=120):
 # Run `script` (CLI lines) through the guest over a REAL local PTY sized 24x80,
 #     expect-style: the next line goes in only after the transcript shows a prompt.
-#     Blind feeding loses twice on this image (live-found 2026-10-08): bulk-written
+#     Blind feeding loses twice on this image (caught live): bulk-written
 #     input wedges the CLI inside `save`, and save flushes the tty input queue on
 #     return, eating any line still queued behind it. Returns (returncode, transcript).
     import fcntl
@@ -242,7 +242,7 @@ def create():
 def install():
 # Console-typed `install image`. The live ISO does NOT autologin (2026.03 stream):
 #     log in vyos/vyos first. The prompt sequence below matches the 2026.03 stream
-#     (verified live 2026-10-08): continue → image name (default) → vyos password ×2 →
+#     (verified caught live): continue → image name (default) → vyos password ×2 →
 #     console (default K) → disk (default /dev/sda) → delete-all-data Yes → free space
 #     (default) → boot config file (default 1). VERIFY with `shot` — when a prompt
 #     differs, finish the walk with `type`.
@@ -282,7 +282,7 @@ def provision():
 #     VyOS stamps each configured interface's MAC as `hw-id` and pins the interface NAME
 #     to it at boot, so a clone with fresh MACs gets bumped to eth2/eth3 and the config
 #     fails to apply. Unpinned names assign in PCI order on every clone (live-found
-#     2026-10-08). Assumes the installed system's login prompt.
+#     caught live). Assumes the installed system's login prompt.
     print("logging in and typing the provision config")
     type_line("vyos", after_s=2)             # login:
     type_line(PW, after_s=3)                 # Password:

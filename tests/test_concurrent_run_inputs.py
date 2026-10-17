@@ -3,8 +3,8 @@ coexist on ONE node.
 
 The dashboard runs every driver against a single shared engine env, so before these flags a
 second concurrent range could only reuse that env's team-identifier block and management IP —
-each one value for the whole run host (live-found 2026-10-14: scrim-one held team 120 /
-10.0.0.252 on the realm while scrim-one-light had no way to ask for anything else, and the
+each one value for the whole run host (caught live: two ranges of one competition shared one
+team block / one engine mgmt IP, and the
 catalog's engine_mgmt_ip is per NODE, not per run). Offline; nothing here touches a node.
 """
 

@@ -20,7 +20,7 @@ from multinode.placement_record import golden_vmid_for_slot, record_of
 def reset_domain_markers(comp_dir):
 # The per-deploy domain done-markers (.nakon-domain-<team>-adds.json) describe THIS
 #     deploy's DCs — run 2's fresh clones were never promoted, but a surviving run-1 artifact
-#     made the domain pass skip promotion (live-found 2026-09-25, matrix run 2). A fresh
+#     made the domain pass skip promotion (caught live, matrix run 2). A fresh
 #     deploy resets them; resumes keep them (that is the guard's whole point). The
 #     document's template record is NOT touched — it drives template reuse.
     for stale in Path(comp_dir).glob(".nakon-domain-*.json"):
@@ -82,7 +82,7 @@ def phase1_cleanup(ctx):
     # A fresh deploy starts a new teardown cycle: the journal of the PREVIOUS
     # teardown must not survive into this run's — with a reused run id (the
     # comp dir mints it once) the stale journal would skip red01/artifacts of
-    # the NEW range (live-found 2026-10-12: '[red01] skipped — journalled done'
+    # the NEW range (caught live: '[red01] skipped — journalled done'
     # on the redeployed range). Resumes of THIS deploy keep it (that is the
     # resumability contract).
     if estate_state.state_path(ctx.comp_dir).exists():

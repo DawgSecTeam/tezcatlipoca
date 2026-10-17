@@ -1,6 +1,6 @@
 """Guest-agent exec: detached long-running path + diagnosable timeouts.
 
-Why this file exists (live-found 2026-09-26..10-01):
+Why this file exists (caught live..10-01):
   * five exec logs die on `did not finish within 120s` — the agent exec channel is a
     poll loop with a caller-set budget, so any plant that legitimately outlives the
     budget dies mid-plant and leaves its partial effects on the box;

@@ -1,4 +1,4 @@
-"""box_username legacy-account lint (distro-matrix-2026-09-27: box_username operator
+"""box_username legacy-account lint (the distro matrix: box_username operator
 collides with the uid-11 legacy `operator` account; cloud-init adopts it, the sudoers
 rule and SSH key land on a nologin root-homed shadow, and phase 4's auth ladder burns
 out). Both users.json paths reject the name. Pure functions + tempfile users.json."""

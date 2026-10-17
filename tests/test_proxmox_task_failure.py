@@ -1,6 +1,6 @@
 """A failed PVE task must end the wait, and a transient datastore-lock clone must be retried.
 
-Live-found 2026-10-15 (three concurrent campaign deploys): PVE reported the loser of a
+caught live (three concurrent campaign deploys): PVE reported the loser of a
 storage-lock race as `{"status": "clone failed: can't lock file
 '/var/lock/pve-manager/pve-storage-ssd' - got timeout"}` with no `exitstatus`, so the
 `status == "stopped"` test never fired. One run died in 7 s; the other two polled the
@@ -132,7 +132,7 @@ class EngineTemplateCloneRetry(unittest.TestCase):
 
     def test_lock_failure_is_bounded_but_persists_past_the_contention(self):
         # The retry must OUTLAST the contention window, not merely repeat: an earlier flat
-        # 20 s gap exhausted its three attempts inside the window (run-2631ec27, 2026-10-15)
+        # 20 s gap exhausted its three attempts inside the window (caught live)
         # while the winners' clones committed seconds after it started. Assert the wait, not
         # just the count — a future edit that shortens the backoff reintroduces that failure.
         cluster = FakeCluster(vms_after_failure=[{"vmid": 4140, "name": "engine-template"}],
@@ -172,7 +172,7 @@ class GoldenCloneQueueRetry(unittest.TestCase):
     """A GOLDEN clone takes PVE's datastore lock too, so it must queue like the
     conversion beside it.
 
-    Live 2026-10-16: phases 1-3 of a clean tlaloc-smoke deploy were fine, then phase 4
+    caught live: phases 1-3 of a clean tlaloc-smoke deploy were fine, then phase 4
     died with `can't lock file '/var/lock/pve-manager/pve-storage-hdd' - got timeout`
     while four concurrent clones ran on a node at load 22 and two other comps deployed.
     `storage_queue_lock`'s own charter names "base-image clone" and the conversion path
@@ -258,7 +258,7 @@ if __name__ == "__main__":
 class LockContentionRetry(unittest.TestCase):
     """PVE answers the loser of a lock race with 500 'can't lock file ... - got timeout'.
 
-    Live-found 2026-10-15, run-6cd31cc3: three parallel deploys, the phase-4 golden config
+    caught live: three parallel deploys, the phase-4 golden config
     PUT died on `/var/lock/qemu-server/lock-2350.conf`. The request is idempotent and the
     lock is held only while the winner's operation runs, so `proxmox_api_for` retries it —
     but only it: a real 500 must still surface.
@@ -334,7 +334,7 @@ class LockContentionRetry(unittest.TestCase):
 class StorageQueueLock(unittest.TestCase):
     """First-time storage-heavy PVE ops on one node queue instead of racing for the datastore.
 
-    Live 2026-10-16 (the second three-range campaign): three base-image clones contended, the
+    caught live (the second three-range campaign): three base-image clones contended, the
     loser needed four of its five retries, and a golden's template CONVERSION lost the same lock
     and failed — leaving `template: 1` with the volume never renamed, which the deploy only
     noticed at the volume guard. Retrying harder is a worse answer than not racing.
@@ -398,7 +398,7 @@ class TemplateConversionRetry(unittest.TestCase):
     """A conversion that loses PVE's datastore lock must be retried, not left half-converted.
 
     The failed task still leaves `template: 1` and the volume un-renamed, so the only other
-    notice is the volume guard — which fails the whole deploy (live 2026-10-16, the DC golden
+    notice is the volume guard — which fails the whole deploy (caught live: the DC golden
     under three concurrent ranges).
     """
 
@@ -438,7 +438,7 @@ class TemplateConversionRetry(unittest.TestCase):
 class VmScopedLockRetry(unittest.TestCase):
     """A per-VM `lock-<vmid>.conf` timeout on a VM-scoped task is retried.
 
-    Live-found 2026-10-16 (crimson-relay's re-run, run-dd88db6d): phase 4's ACPI shutdown
+    caught live (crimson-relay's re-run): phase 4's ACPI shutdown
     was abandoned at our own 120 s client timeout while its `qmshutdown` task was still
     running, and the immediate force-stop then lost `lock-2351.conf` to that same task. Two
     things are held shut here: `stop_vm` hands PVE its own shutdown timeout so the task ends

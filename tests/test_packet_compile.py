@@ -274,7 +274,7 @@ class BaselineAccounts(unittest.TestCase):
                 self.assertTrue(p["vars"]["PASSWORD"])
         # windows boxes with a cred-carrying service get credlist users whose packet
         # password meets the Windows minimum length (8) — airship/airship is filtered
-        # out (live-found 2026-09-30: InvalidPasswordException; it stays MySQL-only)
+        # out (caught live: InvalidPasswordException; it stays MySQL-only)
         ftp_pins = baseline["ftp01"]
         ftp_names = [p["vars"]["USERNAME"] for p in ftp_pins]
         for user in ("scorebot", "blackteam", "red_scoring", "blueteam"):
@@ -390,7 +390,7 @@ class ShippedProfiles(unittest.TestCase):
     def test_cde_fidelity_flags_dual_credit_and_gaps(self):
         profile = load_profile(_REPO / "packets/cde-2026/packet.yaml")
         fidelity = packet_ops.render_fidelity(profile)
-        # live validation 2026-09-30: the domain SSH dimension is NOT expressible
+        # validated live: the domain SSH dimension is NOT expressible
         # (local blueteam shadows the domain account; shared credlist can't carry
         # per-team qualified names) — the report must say so honestly
         self.assertIn("NOT expressible", fidelity)

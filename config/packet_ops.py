@@ -48,12 +48,12 @@ _BASELINE_LINUX_CONFIG = "local-user"
 
 # Decoy baseline passwords come from config_ops.random_password — one canonical
 # implementation, not a copy. The 14-char upper+lower+digit+symbol, cmd/PS- and
-# URL-safe charset is load-bearing (a digit-free pool got rejected by AD complexity
-# policy on every Windows box, scrim-extreme-2026-09-20; URL-specials broke postgres
-# DSNs, scrim-extreme-cyberfield-2026-09-22), so two copies could silently drift apart
-# on exactly the property that keeps a range deployable. The old local copy claimed to
-# spare packet_ops the config_ops -> infra.client -> requests chain, but that isolation was
-# already nominal: quotient.setup (imported above) pulls requests regardless.
+# URL-safe charset is load-bearing (a digit-free pool gets rejected by AD complexity
+# policy on every Windows box; URL-specials break postgres DSNs), so two copies could
+# silently drift apart on exactly the property that keeps a range deployable. A second
+# copy here would claim to spare packet_ops the config_ops -> infra.client -> requests
+# chain, but that isolation is already nominal: quotient.setup (imported above) pulls
+# requests regardless.
 
 
 def team_domain_parts(name_template):
@@ -71,7 +71,7 @@ def _has_control_chars(value):
 # True for newlines / C0 controls / DEL. The Compfile is line-oriented
 #     (utils.load_compfile splits on newlines into `key value`), so a newline in any
 #     interpolated field silently truncates the value or injects arbitrary keys —
-#     a YAML `|` block scalar with a trailing newline is enough (audit-found 2026-10-02:
+#     a YAML `|` block scalar with a trailing newline is enough (audited:
 #     event.name/event.scenario/domain.name_template reach compile_profile raw).
     return any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in str(value))
 
@@ -150,14 +150,14 @@ def validate_profile(p):
             # The 8-char floor is a Windows local-account rule (net user / the guest
             # agent push during bootstrap), so it applies to box_password itself, not
             # just the baseline credlist users build_baseline filters (audit-found
-            # 2026-10-02). Linux-only lineups have no such floor.
+            # caught live). Linux-only lineups have no such floor.
             win_boxes = [b.get("name") for b in (p.get("boxes") or [])
                          if not b.get("unmanaged")
                          and _platform_of(b.get("template")) == "windows"]
             if win_boxes and len(box_password) < 8:
                 err(f"credentials.box_password is {len(box_password)} chars but Windows "
                     f"box(es) {win_boxes} need >= 8 — bootstrap's net user/guest-agent "
-                    "push dies with InvalidPasswordException (live-found 2026-09-30)")
+                    "push dies with InvalidPasswordException (caught live)")
     out_of_scope = creds.get("out_of_scope")
     if out_of_scope is not None:
         if not isinstance(out_of_scope, list):
@@ -236,7 +236,7 @@ def validate_profile(p):
             err(f"box {name!r}: an in-path firewall owns the team gateway address — "
                 f"last_octet must be 1 (got {lo})")
         if lo == 1 and not b.get("unmanaged"):
-            # An unmanaged fw01 at .1 is valid: cde-2026/maccdc packets carry one
+            # An unmanaged fw01 at .1 is valid: the shipped packets carry one
             # as a packet-fidelity stand-in (idle while the engine holds the
             # gateway). Managed hosts must never claim the gateway address, though.
             err(f"box {name!r}: last_octet 1 is the team gateway — only an unmanaged "
@@ -306,7 +306,7 @@ def validate_profile(p):
                 f"{broken}")
         # fidelity is required like boxes[].fidelity: the honesty report defaults a
         # missing value to "exact" (render_fidelity), silently claiming parity the
-        # packet may not have (audit-found 2026-10-02).
+        # packet may not have (audited).
         fidelity = s.get("fidelity")
         if fidelity not in FIDELITY_LEVELS:
             err(f"service {s.get('name')!r}: fidelity must be one of {FIDELITY_LEVELS} "
@@ -451,7 +451,7 @@ def _platform_of(template):
 #     coercion is the only intentional difference and it is preserved here (for every str
 #     input the two are identical). Nothing else may re-implement the mapping: the packet
 #     compiler's Windows/Linux split here and nakon's machine tagging have to agree
-#     (audit 2026-10-02).
+#     (audited).
     return os_to_platform(str(template))
 
 
@@ -479,7 +479,7 @@ def build_baseline(p):
         for user in out_of_scope:
             if platform == "windows":
                 # New-LocalUser caps -Description at 48 chars (Windows API) — live-found
-                # 2026-09-30: 54-char descriptions died in ParameterBindingValidation.
+                # 54-char descriptions died in ParameterBindingValidation.
                 password = random_password()
                 while _windows_password_error(user, password, "Scoring infrastructure"):
                     password = random_password()
@@ -493,8 +493,9 @@ def build_baseline(p):
         if platform == "windows" and credlist_users and _cred_carrying_services(p, b["name"]):
             for user in credlist_users:
                 # Windows local-account creation enforces a minimum password length
-                # (live-found 2026-09-30: airship/airship died InvalidPasswordException
-                # while blueteam/n0t_sus1 passed — 8 chars is the floor). A credlist
+                # (caught live: a short credlist password died InvalidPasswordException
+                # while the packet's regular-password users passed — 8 chars is the floor).
+                # A credlist
                 # user whose packet password is too short stays MySQL/OS-only on Linux
                 # (fix_services_on_boxes has no such floor); the engine's cred-carrying
                 # check iterates the whole credlist, so one valid Windows account is
@@ -544,7 +545,7 @@ def ensure_packet_secrets(comp_dir):
 #     compile-packet's outputs are 0600 gitignored files, so a comp dir that arrived by
 #     git — a stage_author authoring, a manual copy, a fresh clone — deploys without
 #     them: the machine list then lacks the packet-promised decoy/local accounts and
-#     the harness's pre-T0 `verify --packet` aborts the run (live-found 2026-10-04,
+#     the harness's pre-T0 `verify --packet` aborts the run (caught live,
 #     scrim-reset: packet_accounts FAIL killed the run before the event window). The
 #     Compfile's packet_source names the profile; this re-emits ONLY the secret files
 #     it promises, never the public shape (Compfile/boxes/pins are the comp's own).

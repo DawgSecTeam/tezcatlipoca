@@ -37,7 +37,7 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
         # (activate_placement keys the route table by PVE name): the engine entry used the
         # record name, so the inventory, the pre-stop and the leftover sweep all listed
         # /nodes/<record>/qemu and 500'd, and a finished teardown reported NOT CLEAN
-        # (2026-10-14; the satellite entries were already mapped).
+        # (the satellite entries were already mapped).
         placement_nodes = [engine_record(placement).node] + [
             record_of(placement, s["name"]).node for s in placement["satellites"]]
         activate_placement(placement)
@@ -62,7 +62,7 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
         # Callers snapshot os.environ BEFORE activate_placement runs, so their dict still named
         # the profile's host while the range lives on the placement's host: the teardown then
         # ran against the wrong PVE (500 "hostname lookup '<node>' failed") and every resource
-        # it owned — the team bridges — survived (2026-10-14). Activation has moved the whole
+        # it owned — the team bridges — survived . Activation has moved the whole
         # process by now, so project the resolved identity back onto this dict.
         env.update(config.proxmox_env())
 

@@ -28,10 +28,10 @@ def blue_cycle_prompt(n, creds, args, elapsed, remain, delta_text, inject_text, 
     reach.append("  ./mybox runs one command through the gateway and prints output — prefer it over hand-building ssh.")
     scoring = ["HOW THE SCORER SEES YOUR BOXES — check with ./scorch after ANY change to sshd, a firewall, or a scored service:",
                "  ./scorch runs every scored check from the engine's vantage. The ssh pins log in as a credlist",
-               f"  account (airship/blueteam) WITH A PASSWORD from the gateway 192.168.{tid}.1 — if you set",
+               f"  account (a credlist Linux account) WITH A PASSWORD from the gateway 192.168.{tid}.1 — if you set",
                "  PasswordAuthentication no, the scored check itself fails and the pin shows DOWN forever even",
                "  though sshd is healthy locally. Safe hardening is a gateway-only exception:",
-               f"    Match User airship Address 192.168.{tid}.1",
+               f"    Match User <credlist-user> Address 192.168.{tid}.1",
                "        PasswordAuthentication yes",
                "  (global PasswordAuthentication no), then sshd -t, reload ssh, and ./scorch must show the ssh pin UP."]
     if unit and lin:
@@ -65,7 +65,7 @@ SCOREBOARD + INJECTS — Quotient allows ONE session per account, so NEVER log i
 directly (that kills the shared jar's session). Use the shipped helpers — they
 share the jar, re-login on rejection, and resolve the engine's INTERNAL team id
 themselves ($MY_TID is your SUBNET number; the services API rejects it with
-{{"error":"Forbidden"}} forever — live-found 2026-10-03, both teams flew blind
+{{"error":"Forbidden"}} forever — caught live, both teams flew blind
 on it):
   ./score.py          # your team's services, scorer's-eye view (UP/DOWN per pin)
   ./myscore           # same, one line per service

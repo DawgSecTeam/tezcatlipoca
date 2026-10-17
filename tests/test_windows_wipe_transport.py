@@ -1,6 +1,6 @@
 """The Windows wipe transport must survive real script sizes.
 
-Three transports were live-proven and two broke (2026-10-12, iteration 2's
+Three transports were live-proven and two broke (in iteration 2's
 pre-T0 wipe): -EncodedCommand with the 103-path skip header crossed the Windows
 shell's command-line limit ("The command line is too long.", instant fail), and
 `powershell -Command -` parses stdin LINE BY LINE so the multi-line $skip array
@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 
 from scrim import clean_trails  # noqa: E402
 
-CREDS = {"KEY_PATH": "/k", "VM_USER": "jump", "ENGINE_IP": "10.0.0.252",
+CREDS = {"KEY_PATH": "/k", "VM_USER": "jump", "ENGINE_IP": "10.0.0.248",
          "BOX_USER": "medic", "BOX_PW": "pw"}
 
 

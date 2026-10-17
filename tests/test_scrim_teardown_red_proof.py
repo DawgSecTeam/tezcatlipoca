@@ -1,6 +1,6 @@
 """Teardown's red01-gone proof must be able to read the live cluster.
 
-Regression for the 2026-10-14 e2e preflight: `_red_vm_still_exists` imported `live_vmids`
+Regression for an e2e preflight finding: `_red_vm_still_exists` imported `live_vmids`
 from `range_ops`, a module the 0.2.0 rewrite removed. The failure was swallowed into
 "could not verify red01 vmid … is gone" and returned None, so the teardown assertion
 degraded from "verified gone" to "unverifiable" — and verify_clean could never read clean.

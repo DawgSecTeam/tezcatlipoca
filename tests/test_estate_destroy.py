@@ -1,6 +1,6 @@
 """estate.destroy: teardown tier order, and a refusal that never aborts the tier.
 
-Linked clones share their golden's base volume (logs/destroy-diag/run-fa882ee8.log), so the
+Linked clones share their golden's base volume (a teardown diagnostic log shows it), so the
 delete sequence is an invariant: clones, goldens, engine template, engine, bridges. A refused
 resource stays in state and is reported; everything else still dies. Offline: fake Proxmox API,
 a temp comp dir per test."""
@@ -32,7 +32,7 @@ class FakePVE:
     Network state is stateful on purpose: `/network` reports the PENDING config (a POST or
     DELETE shows up at once) and only the reload PUT applies it, so a fake that always
     reported vmbr101 present would hide both halves of the bridge bug live-found on
-    2026-10-15 (run-ee5717cd): the name came from the wrong field, and the deletion was
+    caught live: the name came from the wrong field, and the deletion was
     never applied.
     """
 
@@ -134,7 +134,7 @@ class TierOrder(FakeAPI):
         self.assertEqual([vmid for _, vmid in fake.deleted], [2001, 2002, 1151, 1000, 1140])
         self.assertEqual(fake.bridges, [("pve", "vmbr101")])
         # DELETE only stages: the removal must be applied, or the bridge stays up on the
-        # node while the row leaves the document (live 2026-10-15, run-ee5717cd).
+        # node while the row leaves the document caught live.
         self.assertEqual(fake.reloads, 1)
         # The cross-tier rule TIERS encodes, asserted on the flat sequence: every clone
         # before its own base — the deployed engine IS a linked clone of the engine template.

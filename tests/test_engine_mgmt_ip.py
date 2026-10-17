@@ -1,6 +1,6 @@
 """The engine mgmt-IP preflight.
 
-Live-found 2026-10-02, first attempt of the same-type-2box practice run: the gate
+caught live, first attempt of the same-type-2box practice run: the gate
 printed
 
     Preflight: engine mgmt IP 10.0.0.250 is free (4 running guest(s) unverifiable — agent down)
@@ -121,14 +121,14 @@ class SelfCollisionsAreNotForeign(unittest.TestCase):
         self.assertIn("is free", out)
 
     def test_our_own_tagged_guests_are_skipped(self):
-        ours = {"tezcatlipoca", "comp-same-type-2box-2026-09-29"}
-        vms = [_vm(1500, "proxmox", "web01", tags="tezcatlipoca,comp-same-type-2box-2026-09-29")]
+        ours = {"tezcatlipoca", "comp-same-type-2box"}
+        vms = [_vm(1500, "proxmox", "web01", tags="tezcatlipoca,comp-same-type-2box")]
         out = _gate(vms, _Cluster({1500: ["10.0.0.250"]}), "10.0.0.250", ours_tags=ours)
         self.assertIn("is free", out)
 
     def test_a_foreign_guest_with_a_different_comp_tag_still_blocks(self):
-        ours = {"tezcatlipoca", "comp-same-type-2box-2026-09-29"}
-        vms = [_vm(1100, "pve", "quotient-engine", tags="tezcatlipoca,comp-cde-2026")]
+        ours = {"tezcatlipoca", "comp-same-type-2box"}
+        vms = [_vm(1100, "pve", "quotient-engine", tags="tezcatlipoca,comp-fixture")]
         with self.assertRaises(SystemExit):
             _gate(vms, _Cluster({1100: ["10.0.0.250"]}), "10.0.0.250", ours_tags=ours)
 
@@ -149,7 +149,7 @@ class JumpGateSharesTheScan(unittest.TestCase):
                 preflight_mgmt_ip.jump_mgmt_ip_gate(self._plan(vms))
 
     def test_a_foreign_guest_on_a_jump_ip_is_refused(self):
-        vms = [_vm(1100, "proxmox", "quotient-engine", tags="tezcatlipoca,comp-cde-2026")]
+        vms = [_vm(1100, "proxmox", "quotient-engine", tags="tezcatlipoca,comp-fixture")]
         with self.assertRaises(SystemExit):
             self._run(vms, _Cluster({1100: ["10.0.0.249"]}))
 

@@ -10,7 +10,7 @@ the bug.
 tlaloc v2 — the red-team component of the tezcatlipoca scoring range. An
 assume-breach CCDC red teamer: it is already inside when the event starts, then
 pressures scored services while adapting to blue. It is a **rebuild** of v1
-(GitHub `DawgSecTeam/tlaloc`, the `bad-auto` checkout beside this tree); the v1
+(a private v1 agent repo); the v1
 audit's findings are what every module here is shaped by. This folder is part of
 the tezcatlipoca tree: the range deploys it through `red/tlaloc_ops.py`, and the
 ownership split (the engine owns the range, tlaloc owns decisions and effects) is
@@ -57,7 +57,7 @@ architecture change.
    Secrets only ever go into the organizer-facing 0600 artifact.
 10. **The digest is sized to the model's batch.** `Decider.compose()` builds the
     question bundle first and gives the digest the remainder of
-    `clef.max_request_tokens` (16384 since 2026-10-16; a fixed-size digest with a
+    `clef.max_request_tokens` (16384; a fixed-size digest with a
     growing bundle 500s the endpoint mid-event). At that ceiling the whole state
     and the full option list go out; `policy.frame()`'s truncation cascade may
     drop `recent`, per-box `resp`, boxes past 2/team and untouched boxes — never

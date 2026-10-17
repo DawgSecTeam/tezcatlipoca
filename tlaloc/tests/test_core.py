@@ -34,7 +34,7 @@ def test_kill_switch_halts_per_command(tmp_path):
 def test_ensure_target_only_team_subnets(tmp_path):
     ctx = make_ctx(tmp_path)
     ctx.gate.ensure_target("192.168.1.10")            # a team box: fine
-    for out_of_scope in ("10.0.0.143", "10.0.0.92", "192.168.9.10", "10.200.0.5"):
+    for out_of_scope in ("203.0.113.99", "10.200.0.5", "172.16.5.4", "192.168.9.10"):
         with pytest.raises(GuardrailError):
             ctx.gate.ensure_target(out_of_scope)
 

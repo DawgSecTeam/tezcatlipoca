@@ -1,4 +1,4 @@
-"""No agent wait may outlive the deadline that is waiting on it (C3) — scale8 soak 2026-10-02.
+"""No agent wait may outlive the deadline that is waiting on it — found in a scale soak.
 
 The soak's phase-6 resume hung ~40 minutes in `wait_for_windows_sshd`. The cause was one
 level down: `_wait_for_windows_setup_complete` passed `wait_for_guest_agent` the ENTIRE

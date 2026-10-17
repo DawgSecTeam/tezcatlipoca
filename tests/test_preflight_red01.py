@@ -1,4 +1,4 @@
-"""red01's preflight gates — the 2026-10-12 vmid-999 kill was this exact gap.
+"""red01's preflight gates — a vmid-999 kill was this exact gap.
 
 red01 is bad-auto's VM (no tezcatlipoca ownership tags), so it cannot ride
 the clash gate's slot math. These gates refuse a deploy whose reserved red01
@@ -61,7 +61,7 @@ class VmidGate(unittest.TestCase):
                     red01.red01_vmid_gate(_plan(comp, vms=[_vm(1470)]))
             self.assertIn("already occupied", str(cm.exception))
             self.assertIn("comp=other-comp", str(cm.exception))
-            self.assertIn("2026-10-12", str(cm.exception))
+            self.assertIn("vmid-999 kill shape", str(cm.exception))
 
     def test_unmarked_occupant_refused_with_check_by_hand(self):
         import tempfile
@@ -157,7 +157,7 @@ class GateWiring(unittest.TestCase):
             with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve",
                                          "TEZ_PROXMOX_DATASTORE": "ds"}):
                 plan = single_node_plan(comp, BOXES, 1, TEAMS, 1300, True,
-                                        "10.0.0.252", None)
+                                        "10.0.0.248", None)
             self.assertEqual(plan.red01_vmid, 777)
             self.assertEqual(plan.red01_ip, "10.9.9.9")
             self.assertFalse(plan.resuming)
@@ -165,7 +165,7 @@ class GateWiring(unittest.TestCase):
             with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve",
                                          "TEZ_PROXMOX_DATASTORE": "ds"}):
                 plan2 = single_node_plan(_comp(td, "assume_breach 1\n"), BOXES, 1,
-                                         TEAMS, 1300, False, "10.0.0.252", None)
+                                         TEAMS, 1300, False, "10.0.0.248", None)
             self.assertEqual(plan2.red01_vmid, 1460)   # one stride past slot 0's goldens
             self.assertTrue(plan2.resuming)
 

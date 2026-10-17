@@ -64,7 +64,7 @@ class GoldenFreezeGateTests(unittest.TestCase):
     def _run(self, stored, current):
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            template_freeze.golden_freeze_gate("web01", stored, current, "2026-09-26")
+            template_freeze.golden_freeze_gate("web01", stored, current, "2026-01-01")
         return stdout.getvalue()
 
     def test_clean_match_is_silent(self):

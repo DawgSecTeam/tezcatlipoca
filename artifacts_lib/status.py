@@ -28,7 +28,7 @@ def warn_summary(collection, manifest, test_path=None):
 #
 #     Severity comes from the manifest, not the collection: a run with no red agent is not missing
 #     anything when there is no red report. Nothing here blocks — the operator chose warn-and-
-#     proceed (2026-10-03) because a dead guest box must never wedge a teardown.
+#     proceed  because a dead guest box must never wedge a teardown.
     warnings = []
     for target in collection.get("targets", []):
         for item in target.get("files", []):

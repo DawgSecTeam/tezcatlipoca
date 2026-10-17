@@ -4,7 +4,7 @@ activate_placement keys the route table by PVE node name, so `/nodes/<record>/qe
 HTTP 500 ("hostname lookup '<record>' failed"). The teardown's engine node used the record
 name, so the inventory, the pre-stop and the leftover sweep were all skipped (and the
 verdict read NOT CLEAN) even though the satellite entries were already mapped
-(2026-10-14, a field deploy's teardown).
+(a field deploy's teardown).
 """
 
 import contextlib

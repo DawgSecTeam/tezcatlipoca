@@ -20,7 +20,8 @@ def api_key(base_url=None, local=None):
     blue as a 401 on every cycle, and red as a bogus bearer token — an "empty room" that looked
     like a working defense).
 
-    No base_url, or a host that is not in the table (operator-side llama.cpp / GX10), keeps the
+    No base_url, or a host that is not in the table (operator-side llama.cpp / a tailnet LLM
+    host), keeps the
     legacy order: `OPENROUTER_API_KEY`, then bad-auto/.env's `BAuto_LLM_API_KEY`, then the
     literal "local" when `local=True` (a local llama.cpp ignores whatever it is sent).
     """

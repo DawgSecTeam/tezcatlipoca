@@ -1,7 +1,7 @@
 """The scrim package reads the competition's ONE state document, `estate-state.json`.
 
 Nothing in scrim/ may reach for a second state file: reading one directly is what broke
-blue staging on the first estate range (live 2026-10-15, run-75347fca) and the scrim never
+blue staging on the first estate range (caught live: run-75347fca) and the scrim never
 reached T0.
 """
 
@@ -45,7 +45,7 @@ class RedIpResolution(unittest.TestCase):
     def test_the_scrim_carries_the_comps_red01_pin_into_the_rebuilt_config(self):
         """The scrim rebuilds bad-auto's config from scratch; a red_ip of None made bad-auto
         fall back to its own default and MOVED red01 off the address the deploy recorded
-        (live 2026-10-15, run-a87e0d88: recorded 10.0.0.196, VM re-pointed to 10.0.0.198)."""
+        (caught live: recorded 10.0.0.196, VM re-pointed to 10.0.0.198)."""
         with tempfile.TemporaryDirectory() as td:
             comp = Path(td)
             (comp / "Compfile").write_text("name c\nred01_ip 10.0.0.196\n")
@@ -69,7 +69,7 @@ if __name__ == "__main__":
 class GeneratedHelpers(unittest.TestCase):
     def test_scrim_envs_credlist_is_a_valid_bash_array(self):
         """`;`-separated entries inside `( )` are a bash syntax error, so `source scrim.env`
-        failed for every helper (live 2026-10-15, run-ce88e7b6: blue's first cycle repaired
+        failed for every helper (caught live: run-ce88e7b6: blue's first cycle repaired
         the harness by hand before it could defend)."""
         import os
         import subprocess as sp

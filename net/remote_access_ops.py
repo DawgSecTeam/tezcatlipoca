@@ -14,7 +14,7 @@ This module owns the ENTIRE headscale ACL policy file: the policy is regenerated
 from a small state file that lives beside it on the headscale host, so deploys and
 teardowns never text-surgery HuJSON. The VPS-side state (full-access users + the
 active competitions) seeds itself on first contact from the foundation installed
-2026-10-08; edit the state file to change full-access membership until the
+; edit the state file to change full-access membership until the
 limiting-by-groups work replaces it.
 
 Everything here degrades loudly: a missing TEZ_HEADSCALE_* env var or an
@@ -36,7 +36,7 @@ TAILSCALE_INSTALL = "curl -fsSL https://tailscale.com/install.sh | sh"
 # A freshly cloned engine boots with cloud-init + unattended-upgrades holding the dpkg
 # locks for minutes, and the installer's own apt-get then dies on the lock
 # (`Could not get lock /var/lib/dpkg/lock-frontend ... held by process 2353 (apt-get)`,
-# live 2026-10-15 run-0f82f888) through every one of the previous three 5-second retries,
+# caught live) through every one of the previous three 5-second retries,
 # ending the step at exit 127. Wait cloud-init and the locks out FIRST (bounded), then
 # install with a real retry; `flock -n` on the two apt locks is the portable probe.
 TAILSCALE_INSTALL_CMD = (
@@ -114,7 +114,7 @@ def render_policy(full_access_users, comps):
 #     `full_access_users`: headscale usernames WITH the trailing @ the v2 policy
 #     syntax requires. `comps`: [{"comp_id", "engine_ip", "teams": [{"identifier",
 #     "participants"}]}]. Grants are keyed on the participant's USERNAME, not a node
-#     tag: live-proven 2026-10-08, headscale v0.29 builds routers' packet filters for
+#     tag: live-proven, headscale v0.29 builds routers' packet filters for
 #     user/group sources but NOT for tag sources (tag-sourced dials black-hole at the
 #     router while netmap route visibility still works), so participant nodes enroll
 #     untagged and each team's grant names its people directly. Two grant lines per
@@ -125,7 +125,7 @@ def render_policy(full_access_users, comps):
     out.append("  // Managed by tezcatlipoca (remote_access_ops.render_policy) — do not")
     out.append("  // hand-edit: regenerated from tezcatlipoca-remote-access.json on every")
     out.append("  // deploy/teardown that touches remote access. Foundation behavior:")
-    out.append("  // the tailnet ran with NO policy (allow-all) until 2026-10-08; the")
+    out.append("  // the tailnet ran with NO policy (allow-all) before the first seed; the")
     out.append("  // full-access grant preserves that for the pre-existing users.")
     users = ", ".join(f'"{u}"' for u in full_access_users)
     out.append(f'  "groups": {{"group:full-access": [{users},]}},')
@@ -209,8 +209,8 @@ def remote_access_monitor_script():
 # The rebind-triggered re-assert. A tailscaled LinkChange with reason [ips-changed] (the
 #     Quotient container's interface gaining an address) makes tailscaled re-apply its
 #     ruleset, which takes the POSTROUTING chain — and the SNAT rules — with it; the 30s
-#     timer leaves tailnet->team traffic broken inside every window (live 2026-10-15,
-#     run-9fd68d14: present for 9 samples, absent for 3, present again). Watch the interface
+#     timer leaves tailnet->team traffic broken inside every window (caught live,
+#     on the run that found it: present for 9 samples, absent for 3, present again). Watch the interface
 #     event itself and re-assert immediately; the timer stays as the fallback.
     return ("#!/bin/bash\n"
             "while :; do\n"
@@ -349,7 +349,7 @@ def _read_policy_state():
                 check=False)
     if r.returncode == 0 and r.stdout.strip():
         return json.loads(r.stdout)
-    # Seed: the foundation installed 2026-10-08 granted these users the tailnet's
+    # Seed: the foundation policy grants these users the tailnet's
     # previous (policy-less, allow-all) behavior. Edit the state file on the
     # headscale host to change full-access membership.
     return {"full_access": [f"{u}@" for u in (INFRA_USER_DEFAULT, "hnasher1", "dipam1",
@@ -569,7 +569,7 @@ def setup_remote_access(ctx):
             ttl = config.active().headscale.key_ttl
             # Deliberately UNTAGGED: a tagged node's identity is its tag, and
             # headscale v0.29 does not expand tag sources into routers' packet
-            # filters (live-proven 2026-10-08) — the username is the grant key.
+            # filters (live-proven) — the username is the grant key.
             key = _mint_preauth_key(uid, None, ttl)
             entries.append({"person": person, "team": team["identifier"], "key": key,
                             "user": user})

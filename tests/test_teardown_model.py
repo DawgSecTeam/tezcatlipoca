@@ -444,7 +444,7 @@ if __name__ == "__main__":
 class RedTargetVmid(unittest.TestCase):
 # RedStep records the vmid badauto's own target line names — not the
 #     shared config.yaml's (another session's deploy rewrites it mid-flight;
-#     live-found 2026-10-12: verify_clean then verified the WRONG vmid).
+#     caught live: verify_clean then verified the WRONG vmid).
 
     def test_parses_the_target_line(self):
         from teardown.steps import _red_target_vmid
@@ -460,7 +460,7 @@ class RedTargetVmid(unittest.TestCase):
 class JournalLifecycle(unittest.TestCase):
 # A FRESH deploy starts a new teardown cycle: phase-1 clears the previous
 #     teardown's journal (a reused run id would otherwise skip red01/artifacts of
-#     the new range — live-found 2026-10-12). Resumes keep it.
+#     the new range — caught live). Resumes keep it.
 
     def test_phase1_clears_a_stale_journal(self):
         import tempfile

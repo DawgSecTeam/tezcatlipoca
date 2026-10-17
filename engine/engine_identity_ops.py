@@ -80,7 +80,7 @@ def assert_engine_build_identity(ctx, vmid):
 
 # Grow / to the whole disk. The create path sizes the engine's virtual disk (40 GB)
 # but nothing grew the partition/PV/LV/filesystem, so the engine ran on the base image's
-# 10 GB root — full within one Windows+Linux deploy (winad-testrun 2026-09-25: 100% used,
+# 10 GB root — full within one Windows+Linux deploy (a Windows/AD test run: 100% used,
 # apt-cacher-ng answering 500 to every box; Postgres would be next). Idempotent: growpart
 # exits nonzero ("NOCHANGE") once the partition already fills the disk.
 _GROW_ROOT_CMD = (

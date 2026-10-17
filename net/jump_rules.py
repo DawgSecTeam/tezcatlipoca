@@ -21,7 +21,7 @@ def jump_rules(team_identifiers, engine_mgmt_ip, mgmt_cidr="10.0.0.0/24",
 #     satellite hop: FORWARD accept red -> local teams, and SNAT to the team gateway
 #     so the boxes' gateway-IP-only SSH trust still sees 192.168.<id>.1 — the same
 #     treatment engine -> box traffic gets. Without it red's source matches nothing
-#     and falls off the FORWARD DROP: scale8-soak-2026-10-02 measured 15/15
+#     and falls off the FORWARD DROP: a scale soak measured 15/15
 #     cred_sprays failing "unreachable over SSH" against satellite teams for exactly
 #     that reason. Return traffic needs no rule: conntrack de-SNATs it and the
 #     established/related accept above carries it. Empty (the default) reproduces the

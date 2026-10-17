@@ -1,10 +1,8 @@
 """The LLM endpoint table: what kind of endpoint a base_url names, and where its key lives.
 
-Why a table instead of a string test: classification used to be
-`"openrouter" not in base_url` (`scrim/core.py:is_local_endpoint`), so EVERY public API that was
-not openrouter.com — the official DeepSeek API included — was driven as if it were an
-operator-side llama.cpp. Driving a public TLS API down that path silently produced, in a single
-setup:
+Why a table instead of a string test: a string test can only ask "is this the one cloud host I
+know", so EVERY public API that escaped the test — a keyed official API included — was driven as
+if it were an operator-side llama.cpp. Driving a public TLS API down that path causes:
 
 - blue's `opencode.jsonc` carrying the literal string ``local`` as its apiKey: a 401 on every
   cycle, which makes a broken defense indistinguishable from an empty room;
@@ -15,12 +13,11 @@ setup:
 
 An entry is matched by HOST, so `https://api.deepseek.com` and `https://api.deepseek.com/v1` name
 the same endpoint. Anything NOT in the table is OPERATOR-SIDE by default: that is the behaviour
-llama.cpp / GX10 URLs rely on (no key, slower, reached by red01 over a reverse tunnel), so
-single-host rehearsals are unchanged.
+operator llama.cpp / tailnet-host URLs rely on (no key, slower, reached by red01 over a reverse
+tunnel), so single-host rehearsals are unchanged.
 
-Model ids are the ENDPOINT's own. The DeepSeek entry was read from `GET /v1/models` on
-2026-10-14 (`deepseek-flash`, `deepseek-v4-pro`); a gateway that fronts the same models under a
-different id is a different endpoint and needs its own entry.
+Model ids are the ENDPOINT's own (read from `GET /v1/models`). A gateway that fronts the same
+models under a different id is a different endpoint and needs its own entry.
 """
 
 from dataclasses import dataclass

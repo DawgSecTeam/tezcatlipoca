@@ -65,13 +65,13 @@ def probe_node(record, need_templates, engine_vmid, team_identifiers, comp_name=
     # no longer matches (engine.template_freeze.template_stamp_current;
     # infra.collisions.check_collisions makes the same exception). Counting them as
     # collisions made the node ineligible for the very run they were kept for — the
-    # template-reuse path could never be reached (2026-10-14, run-0a59b188: "vmid
+    # template-reuse path could never be reached (caught live: "vmid
     # collisions: [1140, 1150, ...]" → no eligible node for team1, team2).
     # The slot belongs to this run's engine vmid, so a VM sitting on it is THIS competition's
     # build attempt whatever its tags say — phase 2 adopts it or reclaims it. A dead attempt
     # that never reached the tag PUT (a clone whose task failed) wears the base image's own
     # `cloud-init;template` tags, and counting those as collisions left the deploy with no way
-    # to clean up after itself (live-found 2026-10-15: run-f5d7db99 and run-6b5610d1 refused
+    # to clean up after itself (caught live and the run refused
     # with "vmid collisions: [2340]"/"[2540]" over the partial clones of their own failed
     # engine-template build). Only a CONVERTED template belonging to ANOTHER competition
     # still collides — our slot is not a license to build over a foreign golden.

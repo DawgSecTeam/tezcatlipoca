@@ -22,7 +22,7 @@ def _config_red_vmid(comp_dir):
 
     `badauto destroy` follows its config by design (cmd_destroy refuses to be a
     silent target override), so this is the number to reconcile `--red-vmid`
-    against. Per-competition since the 2026-10-12 isolation — the sibling
+    against. Per-competition — the sibling
     checkout's shared config.yaml named whichever session staged last."""
     return ((badauto_config_ops.load_config(comp_dir).get("deploy") or {})
             .get("red_vmid"))
@@ -76,7 +76,7 @@ def teardown_red(args, env):
     proof ran against (None when unknowable) so the caller can journal it for
     verify_clean.
 
-    scale8 soak 2026-10-02: red01 (998) survived `badauto destroy` and had to be
+    caught live: a stray red01 survived `badauto destroy` and had to be
     destroyed by hand. The stage ran with check=False and never looked at the result, so
     a destroy that removed nothing was indistinguishable from one that worked — the
     driver printed DONE while a red box with a live LLM key and beacon tasking stayed
@@ -101,23 +101,23 @@ def teardown_red(args, env):
     # One retry: the first attempt's rc=1 can be a transient Proxmox task/API hiccup,
     # and the fail-loud raise below aborts the whole teardown mid-sequence (the range
     # destroy never runs, and the harness dies leaving everything up — live-found
-    # 2026-10-03: the manual re-run succeeded in seconds). Identity guards live inside
+    # caught live: the manual re-run succeeded in seconds). Identity guards live inside
     # badauto, so a retry cannot widen what may be deleted.
     proc = None
     # The --competition value must be the SAME string stage_red wrote into the
     # config's competition_dir (the resolved path): bad-auto's destroy cross-checks
-    # the two and refuses a mismatch (both 2026-10-03 teardowns failed on the bare
+    # the two and refuses a mismatch (teardowns failed on the bare
     # name). --config threads the comp's OWN config so destroy reads the comp's
-    # own deploy stamp (per-competition since 2026-10-12) — only when it exists:
+    # own deploy stamp) — only when it exists:
     # a missing --config silently falls back to built-in defaults (vmid 999).
     cmd = [core.local_python(), "-m", "badauto"]
     comp_cfg = badauto_config_ops.config_path(comp_path)
     # A run that never staged red has no per-comp bad-auto config and no recorded red vmid.
     # Running `badauto destroy` then means running it against the HOST's default config — which
-    # on a shared ops host belongs to whichever session touched bad-auto last. Live 2026-10-14:
+    # on a shared ops host belongs to whichever session touched bad-auto last. caught live:
     # tearing down a workspace whose run died at phase 4 read the other session's tdred-2026
     # checkout (`stamp competition_dir .../tezcatlipoca-teardown-redesign/competitions/tdred-2026
-    # != .../run-27b0d9e4/comp`) and refused with rc 17, failing the whole teardown of a run that
+    # != .../the run/comp`) and refused with rc 17, failing the whole teardown of a run that
     # had no red01 at all; had the stamps agreed it would have destroyed another session's box.
     # Skip the step outright; the vmid proof below still runs, so a red01 that DOES exist is
     # caught and the teardown still fails loudly if it survives.
@@ -163,9 +163,9 @@ def teardown_red(args, env):
     # the comp config says, then the comp's own reservation (Compfile red01_vmid,
     # else derived from the deploy state's scoring vmid) — one of them is the
     # number `badauto destroy` acted on, and an unknown vmid is an unverifiable
-    # teardown (2026-10-08 run 6b logged "vmid None could not be verified gone").
+    # teardown (one run logged "vmid None could not be verified gone").
     # No fall-through to bad-auto's built-in 999 — a shared default vmid is the
-    # 2026-10-12 kill.
+    # vmid-999 kill class.
     state_vmid = None
     try:
         state_vmid = core.read_state(comp_path).get("scoring_vm_id")
@@ -246,7 +246,7 @@ def stage_teardown(args, creds=None):
         # The final red pull MUST land BEFORE the report is generated. The report grades
         # red's own world.json (footholds, artifact set, beacon score), but that pull used
         # to live only inside teardown_red — i.e. AFTER write_interaction_report — so the
-        # report raced it and graded red's PREVIOUS state. Live run4 2026-10-09: world.json
+        # report raced it and graded red's PREVIOUS state. Caught live: world.json
         # held 2 Windows footholds while the report written 2 s earlier read 0, and the
         # rehearsal's windows_footholds gate failed against a world that did not exist yet.
         try:

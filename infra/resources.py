@@ -19,7 +19,7 @@ def check_datastore_headroom(node, datastore, boxes, num_teams, label="", node_n
 
     `label` ("[name]") and `node_name` are the multi-node scoping: the same gate run once per
     hosting node over that node's share."""
-    # The storage LIST zeroes/omits free on some pools (cyberfield hdrives-zfs);
+    # The storage LIST zeroes/omits free on some pools;
     # the per-store STATUS endpoint's avail is the authoritative number.
     free = proxmox_api("GET", f"/nodes/{node}/storage/{datastore}/status")["data"].get("avail")
     if free is None:

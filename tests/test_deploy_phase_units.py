@@ -212,7 +212,7 @@ class Phase6PredomainPass(unittest.TestCase):
             self.assertTrue((comp_dir / ".postclone-swept").exists())
 
     def test_a_lineup_with_no_postclone_configs_records_a_clean_verdict(self):
-    # Live-found 2026-10-02: a lineup whose configs are ALL golden-stage
+    # caught live: a lineup whose configs are ALL golden-stage
     #         (same-type-2box) never reached record_stage_coverage, so
     #         `plant_coverage_failed` was never created and verify's coverage gate failed
     #         closed on a completely clean run — "coverage was never recorded (pre-tally

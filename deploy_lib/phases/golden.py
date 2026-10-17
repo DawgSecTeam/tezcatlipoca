@@ -135,7 +135,7 @@ def apply_team_boxes(ctx, golden_ids, golden_ids_by_slot):
 #
 #     Keyed by vm_name, not by box type: two box types may share one base template, so a
 #     name-keyed lookup is the only one that cannot cross-wire golden disks (live-found
-#     2026-09-24: web01 clones came from golden-db01's disk). Unmanaged boxes (pfSense)
+#     caught live: web01 clones came from golden-db01's disk). Unmanaged boxes (pfSense)
 #     have no golden — they clone from their own base template, ON THE TEAM'S OWN NODE for
 #     satellite slots (a linked clone cannot cross hosts on separate storages).
     from deploy_lib.phases._estate import create_team_boxes

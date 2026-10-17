@@ -1,6 +1,6 @@
 """The dedicated `scoring` automation account.
 
-Why a second admin account exists (2026-10-02): Quotient allows **ONE session per
+Why a second admin account exists: Quotient allows **ONE session per
 account** — every login kills that account's previous cookie. Automation that has to
 authenticate on its own schedule (the round-loop watchdog, an unattended verify) would
 therefore evict the operator's or the harness's `admin` session every time it ran. A

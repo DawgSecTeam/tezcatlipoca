@@ -118,10 +118,10 @@ if __name__ == "__main__":
 class RouteProbeConvergence(unittest.TestCase):
     """The cutover's `netplan apply` bounces the engine's networking: the route probe must have a
     bounded retry window, exactly like the box-reachability probe beside it. It aborted a range
-    that was routing correctly seconds later (2026-10-14, phase 5 of run-4495b079, "(got: )")."""
+    that was routing correctly seconds later (phase 5 logged an empty diff, "(got: )")."""
 
     def _ctx(self):
-        return {"ssh_key_path": "k", "vm_username": "sysadmin", "scoring_engine_ip": "10.0.0.252"}
+        return {"ssh_key_path": "k", "vm_username": "sysadmin", "scoring_engine_ip": "10.0.0.248"}
 
     def test_empty_answer_is_retried_then_succeeds(self):
         answers = [type("R", (), {"returncode": 255, "stdout": "", "stderr": "Connection closed"})(),

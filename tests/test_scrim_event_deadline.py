@@ -1,6 +1,6 @@
 """`duration_min` is authoritative: a slow blue cycle cannot stretch the event.
 
-Live 2026-10-15 (run-59a685c0, run-2652d9bc): a 25-minute event reached capture at minute 50
+caught live (run-59a685c0): a 25-minute event reached capture at minute 50
 because `supervise_workers` joined an in-flight opencode cycle with a budget of a whole
 CYCLE_TIMEOUT. The join is now capped by what is left of the window plus a bounded grace, and
 the cycle itself is aborted once the event window closes, so capture and teardown always run

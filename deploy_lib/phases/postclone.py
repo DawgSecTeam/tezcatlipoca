@@ -44,10 +44,10 @@ def phase6_predomain_pass(ctx):
         else:
             print("  No pre-domain configurations in this lineup — pass skipped")
             # Still record the verdict. A lineup whose configs are ALL golden-stage
-            # (same-type-2box-2026-09-29: apache/roundcube/bind + WinRM/IIS) never
+            # (a same-type 2-box comp: apache/roundcube/bind + WinRM/IIS) never
             # reaches record_stage_coverage, so the key was never created and verify's
             # coverage gate failed closed on a completely clean run with "coverage was
-            # never recorded (pre-tally deploy?)" (live-found 2026-10-02). "Nothing to
+            # never recorded (pre-tally deploy?)" (caught live). "Nothing to
             # plant post-clone" is a clean result, not an absent one.
             record_clean_coverage(ctx)
         # fix_services right after the pre-domain pass: it un-wedges sshd (the ssh-*

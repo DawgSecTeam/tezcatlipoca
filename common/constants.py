@@ -70,22 +70,21 @@ PREDOMAIN_STAGE_CONFIGS = {
     "ssh-root-login", "ssh-x11-forwarding", "sshd-config-weak",
     "sshd-force-sftp-broken-chroot", "ssh-backdoor-listener-2222",
     "writable-sudoers",
-    # Cross-box identity (amongus-cde-2026): airship-webapp writes the app's SQL
-    # config with DB_HOST = its team's polus address (REQUIRED_VARS "ip:polus"), so
-    # it must plant per machine post-clone — apache itself rides the golden disk.
+    # Cross-box identity: airship-webapp writes the app's SQL config with
+    # DB_HOST = another box's address (REQUIRED_VARS "ip:polus"), so it must
+    # plant per machine post-clone — apache itself rides the golden disk.
     "airship-webapp",
 }
 FINAL_STAGE_CONFIGS = DISRUPTIVE_CONFIGS | {
-    # Boot-hostile (live-found 2026-09-24: baked into the golden disk, it left every
-    # linked clone bootless — masked multi-user/graphical/default targets mean systemd
-    # boots with no multi-user.target, so no cloud-init and no network). Catalog audit
-    # (2026-09-24, all 179 linux misconfigs grepped for target/mask/fstab/initramfs/
-    # kernel tampering): this is the only config that damages boot itself.
+    # Boot-hostile (a live deploy caught it: baked into the golden disk, it left
+    # every linked clone bootless — masked multi-user/graphical/default targets
+    # mean systemd boots with no multi-user.target, so no cloud-init and no
+    # network). Catalog audit: this is the only config that damages boot itself.
     "systemd-system-masked",
     # Identity-dependent (see REQUIRED_VARS): writes a machine-specific /etc/hosts
     # entry, so it must plant per machine post-clone, never ride the golden disk.
     "hosts-redirect-linux",
-    # AD-dependent / domain-identity Windows configs (amongus-cde-2026): each only does
+    # AD-dependent / domain-identity Windows configs: each only does
     # the right thing on a PROMOTED DC (AD module present, policy now domain-scoped,
     # zone DNSRoot resolvable). The DC's per-team pass for its otherwise golden-stage
     # configs still runs pre-promotion (pre-domain stage), so these plant per team after
@@ -96,12 +95,12 @@ FINAL_STAGE_CONFIGS = DISRUPTIVE_CONFIGS | {
     "Elevate Guest Account",
     "weak-password-policy-win",
 }
-# AD-dependent catalog configs by SHAPE, not enumeration: the cde-2026-era catalog
-# grew a whole family of `ad-*` Windows misconfigs plus GPO/GPP ones that only do the
-# right thing on a PROMOTED DC (scrim-one 2026-10-03: seven of them rode a DC's
-# pre-domain plant pre-promotion, failed rc=1, and the range silently lost its AD
-# attack surface — invisible until the plant_coverage gate existed). Everything
-# `ad-*` and these GPO/GPP names plants per team in the final stage, post-domains.
+# AD-dependent catalog configs by SHAPE, not enumeration: the catalog carries a whole
+# family of `ad-*` Windows misconfigs plus GPO/GPP ones that only do the right thing
+# on a PROMOTED DC (caught on a live run: seven of them rode a DC's pre-domain plant
+# pre-promotion, failed rc=1, and the range silently lost its AD attack surface —
+# invisible until the plant_coverage gate existed). Everything `ad-*` and these
+# GPO/GPP names plants per team in the final stage, post-domains.
 DOMAIN_DEPENDENT_CONFIG_PREFIXES = ("ad-",)
 DOMAIN_DEPENDENT_CONFIGS = {
     "gpo-persistence-win",
@@ -109,7 +108,7 @@ DOMAIN_DEPENDENT_CONFIGS = {
     # ldap-signing-off-win seeds the DC's NTDS LDAP-signing parameters, which only exist
     # once a DC is promoted — run in the phase-6 pre-domain pass it dies rc=1 with
     # "NTDS Parameters key not found -- this seed only applies to a domain controller"
-    # (live-found 2026-10-13 on crimson-relay dc01; the name has no `ad-` prefix so the
+    # (a live DC run showed it; the name has no `ad-` prefix so the
     # prefix rule missed it).
     "ldap-signing-off-win",
 }
@@ -125,11 +124,11 @@ def is_domain_dependent(name):
 #
 #     shadow-utils' commonio (useradd/groupadd/usermod) recreates /etc/passwd, /etc/shadow
 #     and /etc/group at their default modes, discarding a planted mode; chpasswd alone
-#     preserves it (probed 2026-10-16 in the Debian 13 and Ubuntu 24.04 base images:
+#     preserves it (probed in the Debian 13 and Ubuntu 24.04 base images:
 #     666 -> 664 on useradd, unchanged on chpasswd). Two account writers run after the
 #     pre-domain and final passes — `guests.service_fixup_ops.fix_services_on_boxes`
 #     (a credlist `useradd` for every team box, end of phase 6) and bad-auto's assume-breach
-#     seed (its depth-3 persistence `user` method, phase 7). Live 2026-10-15:
+#     seed (its depth-3 persistence `user` method, phase 7). caught live:
 #     bad-perms-userConfig read ABSENT on every team clone while writable-sudoers — a
 #     DIRECTORY mode neither writer touches — was present on all of them, and
 #     plant_coverage PASSed because the earlier plant genuinely applied.
@@ -147,7 +146,7 @@ POST_CLONE_CONFIGS = (PREDOMAIN_STAGE_CONFIGS | FINAL_STAGE_CONFIGS
 # Pin-var requirements (M4 pin fix). The catalog DB carries no required-vars metadata
 # (only depends_on), so this curated table is the operator-level source of truth:
 # a bare-name selection of one of these configs is rejected at generate time instead
-# of failing mid-plant (live-found 2026-09-24: sudoers-rule rc=2, hosts-redirect-linux
+# of failing mid-plant (caught live: sudoers-rule rc=2, hosts-redirect-linux
 # rc=2, unrealircd rc=127). Var kinds:
 #   "ip"      — machine-identity: auto-filled with that machine's own IP at stage-file
 #               generation, and ONLY in the pre-domain/final stages. A golden-stage plant
@@ -165,14 +164,14 @@ REQUIRED_VARS = {
     # (identity — auto-filled per machine, post-clone only), HOSTS = the
     # hostname(s) the operator wants that box to resolve to itself (literal).
     "hosts-redirect-linux": {"IP": "ip", "HOSTS": "literal"},
-    # live-found 2026-09-25 (M4 validation run 1): the payload checks BOTH vars
-    # uppercase via :?-required expansions — lowercase "rule" dies rc=2 in 0s.
+    # The payload checks BOTH vars uppercase via :?-required expansions —
+    # lowercase "rule" dies rc=2 in 0s.
     "sudoers-rule": {"DROPIN_NAME": "literal", "RULE": "literal"},
-    # airship-webapp (amongus-cde-2026) writes the app's SQL connection config; DB_HOST
+    # airship-webapp writes the app's SQL connection config; DB_HOST
     # is the DATABASE box's address on the same team subnet, not the web box's own.
     "airship-webapp": {"DB_USER": "literal", "DB_PASS": "literal",
                        "DB_HOST": "ip:polus"},
-    # Random-selection guard (2026-10-13): these carry catalog `required_vars` but were
+    # Random-selection guard: these carry catalog `required_vars` but were
     # absent from this table, so `nakon randomize` returned them as BARE names on a fresh
     # competition, the generate-time var gate had nothing to reject, and the nakon bundle
     # lint aborted the whole deploy with "catalog payload(s) reference variable(s) their
@@ -189,8 +188,8 @@ REQUIRED_VARS = {
 # shared vulndb catalog that takes a scored service down until it is fixed upstream. Pinning
 # one is a generate-time error (nakon_pin_ops._validate_known_broken_pins, packet_ops' compiler)
 # instead of a mid-plant surprise. Pin sets used to carry this as prose + per-competition JSON
-# pruning, so a new comp could silently re-pin them. Reasons: docs/known-issues.md and
-# docs/upstream-defects-handoff.md; shrink the table as upstream fixes land.
+# pruning, so a new comp could silently re-pin them. The reason string is on each row; shrink
+# the table as upstream fixes land.
 #
 # mailenable-cleartext-mail-win is STILL BROKEN: `choco install mailenable` names a package the
 # community feed does not have, so the row plants no mail service at all.
@@ -204,8 +203,8 @@ KNOWN_BROKEN_CONFIGS = {
         "without bootstrapping the NuGet provider (Install-Module aborts with \"NuGet "
         "provider is required to interact with NuGet-based repositories\"), then "
         "`Invoke-Sqlcmd -ServerInstance \"YourServerName\"` against an unparameterized "
-        "placeholder — the step exits rc=1 in ~23s. live-found 2026-10-13 on crimson-relay "
-        "win02-golden, where a FRESH randomize selected it and aborted phase 4.",
+        "placeholder — the step exits rc=1 in ~23s on a fresh random selection, aborting "
+        "phase 4.",
 }
 
 # M4 per-competition templates: the engine template sits just below the golden block
@@ -221,8 +220,8 @@ ENGINE_TEMPLATE_NAME = "engine-template"
 GOLDEN_VMID_OFFSET = 150
 
 # Full 60G Windows-template clones land on whatever pool the node offers; on
-# HDD-ZFS the same template has measured 13 min and >30 min (live-found 2026-09-30,
-# cyberfield hdrives-zfs) — the 1800s task-wait default aborted a healthy clone.
+# The same template has measured 13 min and >30 min on a HDD-ZFS pool —
+# the 1800s task-wait default aborted a healthy clone.
 GOLDEN_CLONE_TIMEOUT = 5400
 GOLDEN_IP_BASE = 240
 GOLDEN_TAG = "tezcatlipoca-golden"
@@ -231,7 +230,7 @@ GOLDEN_TAG = "tezcatlipoca-golden"
 # (red_bridge_name), never the management bridge: the segment's gateway `.1` and red01's
 # `.10` are the same two addresses in every range, so on a shared L2 the second concurrent
 # range's engine answers red01's ARP for `.1` and red's traffic to its teams goes to a range
-# that has no route to them — total "unreachable over SSH" (live 2026-10-16: three campaign
+# that has no route to them — total "unreachable over SSH" (caught live: three campaign
 # ranges plus a fourth session's red01 all held 10.200.0.1/24 on vmbr0). A private bridge
 # keeps the same addresses unique because the L2 itself is per-run.
 RED_SEGMENT_SUBNET = "10.200.0.0/24"
@@ -251,7 +250,7 @@ def ownership_tags(comp_name, run_id=None, *extra):
 #     `run_id` is the per-deploy identity (utils.mint_run_id, persisted in
 #     the state document): the comp tag alone is shared by every worktree running the
 #     same competition ID, so two concurrent deploys were indistinguishable to every
-#     sweep (2026-10-02 near-miss — smoke vs live-2box). A VM tagged comp-<name> but
+#     sweep (a near-miss between a smoke range and another comp). A VM tagged comp-<name> but
 #     missing the expected run tag belongs to a DIFFERENT run and must be refused.
     tags = {"tezcatlipoca", f"comp-{comp_name}"}
     if run_id:

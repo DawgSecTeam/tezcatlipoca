@@ -56,8 +56,8 @@ def credlist_literal(box_creds):
 
     A bash ARRAY — the helpers iterate "${CREDLIST[@]}". ";"-separated entries inside `( )`
     are a syntax error, so `source ./scrim.env` failed for EVERY helper and each blue cycle
-    spent its first minutes repairing the harness by hand (live 2026-10-15, run-ce88e7b6
-    blue-team1's notebook). Each pair is quoted for the password's punctuation.
+    spent its first minutes repairing the harness by hand (a blue team's own notebook
+    recorded it). Each pair is quoted for the password's punctuation.
     """
     return "(" + " ".join(shlex.quote(f"{u}:{pw}") for u, pw in box_creds.items()) + ")"
 
@@ -77,8 +77,8 @@ def stage_blues(args, comp, run_dir, creds, t0):
         state = core.read_state(comp)
         # A bash ARRAY (the helpers iterate "${CREDLIST[@]}"): ";"-separated entries inside
         # `( )` are a syntax error, so `source ./scrim.env` failed for EVERY helper and each
-        # blue cycle spent its first minutes repairing the harness by hand (live 2026-10-15,
-        # run-ce88e7b6 blue-team1's notebook). Quote each pair for the password's punctuation.
+        # blue cycle spent its first minutes repairing the harness by hand (caught live,
+        # A blue team's notebook). Quote each pair for the password's punctuation.
         credlist = credlist_literal(state.get("box_creds") or {})
         (wd / "scrim.env").write_text(
             f"ENGINE_IP={creds['ENGINE_IP']}\nMY_TEAM=team{n}\nMY_PW={creds[f'TEAM{n}_PW']}\n"
@@ -151,7 +151,7 @@ def _opencode_run(args, prompt, wd, env, stop=None):
     out, err = proc.communicate()
     # ...but opencode's managed `serve --service` grandchild starts its OWN session,
     # so killpg leaves it holding the cycle's port and the NEXT cycle dies on
-    # "port already in use" (run15 2026-10-13: a 4 h orphan squatted 49374 and
+    # "port already in use" (caught live: a 4 h orphan squatted 49374 and
     # every later cycle failed). HOME is per-cycle and unique, so it identifies it.
     _reap_managed_servers(child_env.get("HOME", ""))
     try:
@@ -211,7 +211,7 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
         svc_cfg.mkdir(parents=True, exist_ok=True)
         # Fresh OS-assigned port every cycle: the fixed 49370+n collides with any
         # orphaned opencode service left by an earlier run/team on this host
-        # (cde-2026 T+0: a Sep-30 orphan held 49371 and burned team1's first cycle).
+        # (one team's first cycle was burned by exactly such an orphan).
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             svc_port = sock.getsockname()[1]

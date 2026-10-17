@@ -16,7 +16,8 @@ REMOTE_BIN = f"{REMOTE_DIR}/beacon"
 UNIT_NAME = "wda-digest.service"
 
 # Staggered call-home intervals (seconds), assigned to the beaconable boxes in
-# boxes.json order. The old table was keyed on the 17b box NAMES — see beacon_plan.
+# boxes.json order (staggered so simultaneous periodic egress cannot be a single
+# telltale pattern).
 BEACON_STAGGER_SEC = (45, 60, 90)
 BEACON_PORT = 4444
 
@@ -28,12 +29,11 @@ def _is_windows(template_name):
 def beacon_plan(boxes):
 # [(box_name, interval)] for every beaconable box, derived from boxes.json.
 #
-#     The previous gate was `t["box_name"] in BEACON_INTERVALS` with
-#     BEACON_INTERVALS = {"web01": 45, "app01": 60, "db01": 90}: on any other lineup
-#     (cde-2026 ad01/ftp01/web01/db01, amongus-cde-2026 mira/skeld/airship/polus) the
-#     competition silently got ZERO beacons while deploy's phase-6 banner announced
-#     "Planting team beacons…" and the summary claimed "beacons planted on 0/0 linux
-#     boxes" (audit find D8). Windows boxes are skipped (no systemd unit to install) and
+#     The interval must come from the roster, not from a name-keyed table: a table
+#     keyed on one lineup's box names silently gave a DEPLOYED competition ZERO
+#     beacons while deploy's phase-6 banner announced "Planting team beacons…" and
+#     the summary claimed "beacons planted on 0/0 linux
+#     boxes". Windows boxes are skipped (no systemd unit to install) and
 #     unmanaged appliances (pfSense) are skipped by contract; every other box IS a
 #     beacon target, so no lineup can silently degrade to zero.
     plan = []

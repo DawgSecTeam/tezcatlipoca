@@ -5,7 +5,7 @@ template and goldens on the node so the next deploy can adopt them (or rebuild t
 node's `tezcatlipoca-m4 hash=` stamp no longer matches). The placement probe's quick veto
 counted those vmids as collisions, so the node became ineligible for the very run the templates
 were kept for and the deploy died at `no eligible node for team(s) …` before it could reuse
-anything (live: run-0a59b188, 2026-10-14).
+anything (caught live).
 """
 
 import os
@@ -46,13 +46,13 @@ class ProbeKeptTemplates(unittest.TestCase):
 
     def setUp(self):
         os.environ["TEST_PVE_TOKEN"] = "token"
-        self.record = SimpleNamespace(name="hdd-150", node="proxmox", datastore="hdd",
-                                      endpoint="https://10.0.0.150:8006",
+        self.record = SimpleNamespace(name="store-main", node="proxmox", datastore="vmdata",
+                                      endpoint="https://203.0.113.10:8006",
                                       token_env="TEST_PVE_TOKEN")
         self.need = ["base-debian13-lite-fix"]
 
     def _probe(self, vms):
-        vms = list(vms) + [_vm(955, template=1, tags="cloud-init;template",
+        vms = list(vms) + [_vm(5001, template=1, tags="cloud-init;template",
                                name="base-debian13-lite-fix")]
         with mock.patch("infra.client.proxmox_api_for", _api(vms)):
             return placement_planner.probe_node(self.record, self.need, ENGINE, [120, 121], "comp")
@@ -91,7 +91,7 @@ class ProbeKeptTemplates(unittest.TestCase):
         # A clone whose task failed before the tag PUT wears the base image's own
         # `cloud-init;template` tags. Phase 2 adopts and rebuilds it, but the probe refused
         # the node over it, so the deploy could never clean up its own wreckage
-        # (live 2026-10-15: run-f5d7db99 "vmid collisions: [2340]").
+        # (caught live "vmid collisions: [2340]").
         probe = self._probe([_vm(ET, template=0, tags="cloud-init;template",
                                  name="engine-template")])
         self.assertEqual(probe["collisions"], [])
@@ -106,7 +106,7 @@ class ProbeKeptTemplates(unittest.TestCase):
 class GoldenRebuildAdoption(unittest.TestCase):
     """A drifted golden kept from an EARLIER run must still be rebuildable.
 
-    run-27b0d9e4 (2026-10-14) died in phase 4: golden-win02's node stamp no longer matched, the
+    a real run died in phase 4: the golden's node stamp no longer matched, the
     gate went to rebuild it, and the ownership proof refused — the kept template carries the
     PREVIOUS run's tag while the reclaim tag falls back to this run's id. Adoption (the path a
     REUSED engine template already takes) makes the destroy legitimate.

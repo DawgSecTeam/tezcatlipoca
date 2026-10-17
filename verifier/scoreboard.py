@@ -57,7 +57,7 @@ def check_services(base_url, admin_session, teams, strict, expected_names=frozen
 #     the exit code regardless of --strict.
 #
 #     Under --strict-services nothing-scored is a FAIL, not a vacuous pass (live-found
-#     2026-10-02: a range where the engine had never scored a round still passed strict
+#     caught live: a range where the engine had never scored a round still passed strict
 #     mode because every service was skipped as "not yet scored"). Round freshness is
 #     check_round_loop's job (verifier/engine.py), not this gate's.
     print("\n[2/5] SERVICES")

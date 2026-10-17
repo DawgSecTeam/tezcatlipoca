@@ -29,13 +29,11 @@ def golden_hash_entries(boxes, base_template_ids, golden_machines_by_box, golden
 #     both key off these dicts, and both iterate the FULL lineup, not just the planted
 #     boxes.
 #
-#     Every box MUST get an entry. The unmanaged (pfSense/appliance) case is the one that
-#     used to be unreachable: 8cb755c3 (2026-09-30) added an early `continue` ABOVE
-#     e91a5039's compensating unmanaged-inputs block, so the block went dead and the slot
-#     carried no hash. The merge-order accident did not fix the KeyError, it moved it into
-#     the phase-4 gate (live-found 2026-09-29, cyberfield hdrives-zfs: the first
-#     pfsense-carried bundle through the M4 hash path). Unmanaged is checked FIRST now so
-#     the entry exists no matter where a later branch continues from.
+#     Every box MUST get an entry. The unmanaged (pfSense/appliance) case is the one
+#     merge-order accidents have broken: an early `continue` above the compensating
+#     unmanaged-inputs block left the block dead and the slot unhashed, moving the KeyError
+#     into the phase-4 gate. Unmanaged is checked FIRST now so the entry exists no matter
+#     where a later branch continues from.
     golden_inputs, golden_hashes = {}, {}
     for b in boxes:
         if is_unmanaged(b):
@@ -106,8 +104,8 @@ def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored
             # fresh (dashboard-seeded) workspace has no prior state to reclaim it by: the reclaim
             # tag falls back to this run's id, which no existing VM has — so the rebuild's own
             # ownership proof refused our own cached template and killed phase 4
-            # (run-27b0d9e4, 2026-10-14: "refusing to destroy vmid 1151 (golden-win02) ... missing
-            # ['run-a48d4f5b']"). Adopt it first, under the template-slot proof the preflight
+            # (the run that found it: "refusing to destroy vmid 1151 (golden-win02) ... missing
+            # ['the run']"). Adopt it first, under the template-slot proof the preflight
             # already makes, exactly as phase 2 re-stamps a REUSED engine template.
             if _is_own_golden_template(destroy_node, vid, comp_name):
                 retag_ownership(destroy_node, vid, ownership)

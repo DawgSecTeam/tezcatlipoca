@@ -584,8 +584,8 @@ class Policy:
     def frame(self, ctx, candidates, recent=None, budget_tokens=8192):
         """The digest input: what the model is allowed to see (typed, ordered).
 
-        Typed and compact, but no longer squeezed: the endpoint takes 16k since
-        2026-10-16, so the frame carries every interesting box with its service
+        Typed and compact, but no longer squeezed: the endpoint takes a 16k-token
+        batch, so the frame carries every interesting box with its service
         states and blue-response history, and `budget_tokens` is only the guard
         `state/digest.build` trims against if a smaller endpoint is configured.
         """

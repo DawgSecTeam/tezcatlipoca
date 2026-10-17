@@ -43,16 +43,15 @@ def random_password():
 # 14 chars, guaranteed upper+lower+digit+symbol, cmd/PS- and URL-safe charset.
 #
 #     Windows guest boxes set this via `net user` and AD enforces complexity:
-#     the old letters+digits pool produced digit-free passwords ~13% of runs
-#     (scrim-extreme-2026-09-20) and the policy rejection killed every Windows
-#     login downstream. Characters are cmd/PS-quoting safe (no &|<>^%$`"' or
-#     whitespace) and URL-grammar free (no #/?@): these secrets land in
-#     postgres DSNs in /opt/quotient/.env, and `#` silently truncates the DSN
-#     at the password (scrim-extreme-cyberfield-2026-09-22 crash loop).
+#     a letters+digits pool produced digit-free passwords ~13% of runs and the
+#     policy rejection killed every Windows login downstream. Characters are
+#     cmd/PS-quoting safe (no &|<>^%$`"' or whitespace) and URL-grammar free
+#     (no #/?@): these secrets land in postgres DSNs in /opt/quotient/.env, and
+#     `#` silently truncates the DSN at the password.
 #
 #     Single source of truth for every generated secret, including packet_ops' decoy
-#     baseline accounts (which used to carry a copy of this generator, audit 2026-10-02).
-#     Changing the charset or length changes behaviour everywhere at once — deliberately.
+#     baseline accounts. Changing the charset or length changes behaviour everywhere
+#     at once — deliberately.
     pools = [string.ascii_uppercase, string.ascii_lowercase, string.digits, "!*_-+="]
     alphabet = "".join(pools)
     while True:
@@ -95,7 +94,7 @@ def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
         base = 200 + int(identifier) * 10
         # A team's vmid block must clear not just the engine but its DERIVED slots:
         # engine template (engine+140) and the golden block (engine+150..+159). The
-        # old check covered the engine alone (live-found 2026-09-29: engine 1080 +
+        # old check covered the engine alone (caught live: engine 1080 +
         # default identifiers put team2's first box vmid exactly on the engine
         # template slot at 1220 — the collision only surfaced at the team-box clone pass,
         # hours into the deploy). Phase 1's wave logic treats all 10 slots per block,

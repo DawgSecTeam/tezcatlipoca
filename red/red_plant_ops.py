@@ -78,7 +78,7 @@ def red_vmid_candidates(comp_dir, deployed_state=None):
     """Every place red01's vmid is recorded, most-authoritative first: the comp's
     bad-auto config (deploy.red_vmid — what `badauto destroy` actually acts on),
     then the deploy state's assume-breach record. Teardown's verify step uses
-    this to prove the specific VM is gone (2026-10-08: an unknown vmid made the
+    this to prove the specific VM is gone (an unknown vmid made the
     check unverifiable and the leak invisible)."""
     candidates = [_configured_red_vmid(comp_dir)]
     recorded = ((deployed_state or {}).get("assume_breach") or {}).get("vmid")
@@ -156,7 +156,7 @@ def _deploy_red(comp_dir, env, config_path=None, timeout=1800):
     The competition path is ABSOLUTE on purpose: this runs with cwd=BAD_AUTO, and
     `badauto deploy` resolves `<comp_dir>/credentials.txt` (its engine-IP source) —
     a relative path would look there instead of in the competition directory and
-    die with "engine IP unknown" (caught live 2026-10-08).
+    die with "engine IP unknown" (caught caught live).
     """
     comp_abs = Path(comp_dir).resolve()
     cmd = [local_python(), "-m", "badauto"]
@@ -166,7 +166,7 @@ def _deploy_red(comp_dir, env, config_path=None, timeout=1800):
         # then falls back to the built-in defaults WITHOUT a word, which is how a
         # 95-minute deploy built red01 at the default red_ip 10.0.0.199 while every
         # other component targeted the comp's 10.0.0.198 and the whole red presence
-        # died with "No route to host" (2026-10-09).
+        # died with "No route to host" .
         cfg_path = Path(config_path).resolve()
         if not cfg_path.exists():
             return subprocess.CompletedProcess(
@@ -192,13 +192,13 @@ def destroy_red(comp_dir, env=None, timeout=900):
     teardown was missing for the run whose harness died."""
     # BAuto_COMPETITION_DIR must be set: bad-auto's destroy verifies the VM's deploy
     # stamp against the competition directory, and without it the identity guard
-    # refuses the target ("mismatched target is refused") — caught live 2026-10-08,
+    # refuses the target ("mismatched target is refused") — caught caught live,
     # where destroy-competition's env reached the call without it.
     #
     # Absolute for the same reason _deploy_red resolves: this runs with cwd=BAD_AUTO
     # and badauto discovers the engine IP from <comp_dir>/credentials.txt, so a
     # relative path resolves under bad-auto, discovery fails and the guard refuses
-    # with "engine IP unknown" — caught live 2026-10-09, with the range already gone
+    # with "engine IP unknown" — caught caught live: with the range already gone
     # and red01 the only thing left standing.
     comp_dir = Path(comp_dir).resolve()
     env = {**(env if env is not None else os.environ), "BAuto_COMPETITION_DIR": str(comp_dir)}
@@ -219,7 +219,7 @@ def destroy_red(comp_dir, env=None, timeout=900):
 
 def _record_attempt(ctx, red_ip, reason, vmid=None):
     """Record a FAILED assume-breach attempt in the deploy state too. A failed
-    deploy may still have left red01 standing (live-found 2026-10-12: the V1
+    deploy may still have left red01 standing (caught live: the V1
     validation deploy failed after `badauto deploy` created the VM, and the
     teardown exited 0 with red01 up because nothing recorded the attempt).
     verify_clean keys on this record to demand red01's destruction."""
@@ -321,7 +321,7 @@ def plant_assume_breach(ctx):
             record_degradation("realm_c2_config", str(e))
             print("  " + "!" * 70)
             print(f"  realm-c2: REFUSING to deploy the local C2: {e}")
-            print("  realm-c2: the 2026-10-11 deploy ran exactly this state — it printed")
+            print("  realm-c2: a past deploy ran exactly this state — it printed")
             print("  realm-c2: 'tavern live … all transports', seeded implant flags, and")
             print("  realm-c2: the C2 was DARK. Fix teams.json / the bad-auto realm")
             print("  realm-c2: block, then re-run. No red01 was deployed for this.")

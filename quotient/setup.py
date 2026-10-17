@@ -43,15 +43,14 @@ _SERVICE_TO_CHECK = {
     "IIS HTTP":       ("Web", {"Display": "iis",   "Port": 80, "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
     # CredLists authenticate against the linux.credlist accounts, which only exist on
     # Linux boxes — a Windows box wanting port-open-only FTP scoring uses a plant_only
-    # pin plus a score-only {"check": "Tcp"} pin instead (cde-2026 ftp01,
-    # amongus-cde-2026 skeld).
+    # pin plus a score-only {"check": "Tcp"} pin instead.
     "IIS FTP":        ("Ftp", {"Display": "ftp",   "Port": 21,  "CredLists": ["linux.credlist"]}),
 
     # Scored but not nakon-planted: domain_ops owns ADDS/Domain Join (phase 6 injects
     # them with per-team vars); generate_nakon_config strips them from machine lists.
     "ADDS":           ("Tcp", {"Display": "ldap",  "Port": 389}),
 
-    # amongus-cde-2026: AD DNS on the DC, scored with the same localhost A-record
+    # AD DNS on the DC, scored with the same localhost A-record
     # query the bind/named plants satisfy. The config plants post-promotion
     # (FINAL_STAGE_CONFIGS) so the zone exists to hold the record.
     "ad-dns-localhost": ("Dns", {"Display": "dns", "Port": 53,
@@ -157,7 +156,7 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
             "Jitter": 10,
             "Points": 5,
         },
-        # TWO admin accounts, deliberately (2026-10-02). Quotient allows ONE session per
+        # TWO admin accounts, deliberately . Quotient allows ONE session per
         # account: a second login on the same account kills the first cookie. `scoring` is
         # for automation that has to authenticate on its own schedule — the round-loop
         # watchdog, an unattended verify — so it can never evict the operator's or the

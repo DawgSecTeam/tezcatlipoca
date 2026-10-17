@@ -1,7 +1,7 @@
 """A machine with no pins (empty `configurations`) is a legal lineup entry.
 
 nakon's runner used to fail its 0-step plan as "no output from the remote plan — check
-credentials" (live-found 2026-10-04); fixed upstream in vendor/nakon (zero-step-plan), and the
+credentials" (caught live); fixed upstream in vendor/nakon (zero-step-plan), and the
 driver-side reconcile that carried us is gone. These tests pin the contract on both sides:
 the driver hands a zero-pin machine to nakon untouched, and nakon's runner records a silent
 clean exit of a 0-step plan as success while still failing a plan that HAD steps and never

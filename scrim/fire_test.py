@@ -16,7 +16,7 @@ def write_verify_log(args, label, r):
 
     The gate lines scroll past, and the per-config detail behind a FAIL — `'suid-find' present on
     ['team1-web01'] but MISSING on ['team2-web01']`, `pin 'X' absent on every team` — is exactly
-    what a post-mortem needs and what the console tail drops. Live 2026-10-15 (run-1c44733b): the
+    what a post-mortem needs and what the console tail drops. caught live: the
     `misconfig` gate failed at BOTH verifies and the run's evidence held only the one-line summary,
     so the failure could not be root-caused from the artifacts at all.
     """
@@ -42,7 +42,7 @@ def write_verify_log(args, label, r):
 
 # label matters: this verify runs BEFORE red/blue are staged, and `pins_registered` in particular
 # is registered during that staging — the deploy-time result is an INTERIM reading, and the pre-T0
-# verify (red_stage, after staging) is the authoritative one. Live 2026-10-15: the same gate read
+# verify (red_stage, after staging) is the authoritative one. caught live: the same gate read
 # FAIL here and PASS three minutes later with nothing else changed, and the report reader has no
 # way to tell the two apart unless the run says which is which.
 def stage_verify(args, comp, creds, label="interim (pre-staging)"):
@@ -82,7 +82,7 @@ def stage_verify(args, comp, creds, label="interim (pre-staging)"):
 # a paused engine cannot register a service going down: the harness PAUSES the scoring
 # loop at teardown (correct — the event is over) and the loop does not self-resume, so
 # the NEXT run's pre-T0 fire test watched a healthy web01 for its whole deadline and
-# aborted before T0 (2026-10-08, run 6) — it only appeared to work because red01/loop
+# aborted before T0 on one run — it only appeared to work because red01/loop
 # state happened to survive from the run before. Prove the scoring path against a live
 # loop: unpause first, with the same two POSTs verify's --fix-round-loop issues.
 def _ensure_round_loop(comp, creds):
@@ -133,8 +133,8 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
     log(f"fire test unit: {unit} on {web_ip} (port {svc_port})")
     port = config.active().knobs.scrim_web01_port or svc_port
 
-    # Residue guard: an aborted earlier fire test can leave the unit stopped (scrim-one
-    # 2026-10-03: web01's sshd died with the harness and the next attempt inherited the
+    # Residue guard: an aborted earlier fire test can leave the unit stopped (a web
+    # box's sshd died with the harness and the next attempt inherited the
     # outage until a manual rollback). Restore BEFORE testing — a stop-then-restore cycle
     # that starts from an already-down service proves nothing and heals nothing.
     st = ssh_web01(f"systemctl is-active {shlex.quote(unit)}")
@@ -169,8 +169,8 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
 
     # watches the FIRED service's row (<box>-<display>): other scored services may
     # legitimately start down (planted broken services blue must restore), and even a
-    # sibling web01 row can be down (scrim-one 2026-10-03: the stale web01-ssh row from
-    # an aborted attempt answered "down" for a nginx stop and then refused every nginx
+    # sibling web01 row can be down (the stale ssh row from
+    # an aborted attempt answered "down" for an nginx stop and then refused every nginx
     # restore). Falls back to the first web01 row only when the expected name is not
     # registered at all.
     def scoreboard_down():
@@ -189,7 +189,7 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
     sudo_web01(f"systemctl stop {shlex.quote(unit)}")
     # The scoreboard lags reality: a round that started before the stop lands its
     # result late, and Quotient's per-round cadence means "the latest completed round"
-    # can trail the actual service by a minute or two (scrim-one 2026-10-03: the probe
+    # can trail the actual service by a minute or two (the probe
     # read 000 while the scoreboard still said UP at +150s, and the run aborted on a
     # service that was demonstrably down). Poll until BOTH vantages agree the service
     # is down, within a deadline — the engine-path probe is the fast truth, the

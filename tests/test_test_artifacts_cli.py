@@ -52,7 +52,7 @@ class CliTestCase(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.comp = self.root / "competitions" / "demo"
         self.comp.mkdir(parents=True)
-        (self.comp / "Compfile").write_text("name demo-2026-10-03\nscenario demo\n")
+        (self.comp / "Compfile").write_text("name demo-comp\nscenario demo\n")
         estate_state.write_flat(self.comp,
                                 {"run_id": RUN_ID, "teams": {"team1": {"identifier": "101"}}})
         self._cwd = os.getcwd()

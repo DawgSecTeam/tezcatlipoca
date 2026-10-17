@@ -1,11 +1,11 @@
 """Quotient's scoring round loop: is it cycling, and how do we tell?
 
-Extracted so there is ONE definition of "the loop is stopped" (2026-10-02). It lived
+Extracted so there is ONE definition of "the loop is stopped". It lived
 only inside `verify-competition.py`'s gate, and an engine-side watchdog would have had
 to re-derive it — two implementations of the same judgement, drifting apart, which is
 exactly the failure mode this repo keeps paying for.
 
-The signature of a stopped loop (live-confirmed 2026-09-29, pfsense-ad):
+The signature of a stopped loop (live-confirmed):
 `GET /api/engine` reports the Go zero time in `current_round_time`
 (`0001-01-01T00:00:00Z` means "not cycling") and a `last_round.StartTime` older than
 freshness window. After an engine reboot, `running` may be false as well as the loop

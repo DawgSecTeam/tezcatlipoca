@@ -1,6 +1,6 @@
 """The standalone teardown's red01 step must never reach another session's red box.
 
-Live 2026-10-15 (run-44a106d2): destroying a workspace whose run had no red agent ran
+caught live (run-44a106d2): destroying a workspace whose run had no red agent ran
 `badauto destroy` against the HOST's default config (built-in red_vmid 999), found another
 session's tdred-2026 red01 there, and — because the reclaim call passed no comp_name —
 destroyed it despite its marker naming a different competition. Two guards: skip the step
@@ -98,7 +98,7 @@ class VerifyCleanSkippedRed(unittest.TestCase):
 
     A skipped red01 (the run staged no red) used to leave the teardown NOT CLEAN forever
     ("red01's vmid could not be verified gone") because the journal entry existed without
-    any vmid to verify — live 2026-10-15, run-bbd30b90: every destroy of a red-less comp
+    any vmid to verify — caught live: run-bbd30b90: every destroy of a red-less comp
     exited 1."""
 
     def _report(self, journal_red01):

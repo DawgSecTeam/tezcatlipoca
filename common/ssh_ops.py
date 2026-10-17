@@ -122,10 +122,10 @@ def ssh_via_gateway(ctx, target_ip, cmd, timeout=60, user="ubuntu"):
     args = box_ssh_argv(ctx, target_ip, user, cmd)
     r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     if r.returncode == 255 and "REMOTE HOST IDENTIFICATION HAS CHANGED" in (r.stderr or ""):
-        # Live-found 2026-09-29 (cyberrange loadtest): a re-cloned engine served a new
-        # host key on a re-run while the TOFU pin survived, hard-failing every proxied
-        # call. Re-pin once and retry — the box hop inside the tunnel is unverified
-        # anyway, so the pin guards a lab-internal hop, not an internet path.
+        # A re-cloned engine serves a new host key on a re-run while the TOFU pin
+        # survives, hard-failing every proxied call. Re-pin once and retry — the box
+        # hop inside the tunnel is unverified anyway, so the pin guards a
+        # lab-internal hop, not an internet path.
         forget_engine_host_key(ctx["scoring_engine_ip"])
         r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     return r

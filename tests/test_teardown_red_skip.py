@@ -1,6 +1,6 @@
 """A teardown for a run that never staged red must not touch the host's bad-auto config.
 
-Live 2026-10-14: tearing down a workspace whose run died in phase 4 (no red01 was ever
+caught live: tearing down a workspace whose run died in phase 4 (no red01 was ever
 deployed) ran `badauto destroy` with no per-comp config, so bad-auto read the HOST's default
 config — which belonged to another session working in `tezcatlipoca-teardown-redesign/
 competitions/tdred-2026`. Its identity guard refused (rc 17), and the whole teardown of a run

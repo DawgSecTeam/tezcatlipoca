@@ -17,7 +17,7 @@ The v1 mechanic (`badauto/tactics/cred_spray.py`), restated on the v2 contract:
   foothold), so this effect records no artifact and has no undo recipe.
 * **A cap hit is a failure, not a success.** v1 returned `ok=True` when the
   attempt cap ran out with no working pair, and the seed then recorded `access`
-  for boxes it had never entered (both Windows boxes, live 2026-10-09, with no
+  for boxes it had never entered (both Windows boxes, caught live, with no
   foothold and no seeded persistence). Here that path returns `ok=False` and
   says so; `ok=True` means a credential answered on the wire.
 

@@ -13,12 +13,12 @@ You are the independent tester for **tlaloc v2**, the rebuilt CCDC red-team agen
 
 Context you need, and should verify rather than assume:
 - v2 lives IN the range engine: it is the `tlaloc/` folder of the tezcatlipoca
-  checkout (`git@github.com:DawgSecTeam/tezcatlipoca.git`). The v1 agent it
-  replaces is GitHub `DawgSecTeam/tlaloc` (local `bad-auto` checkout) and is
+  checkout). The v1 agent it
+  replaces lives in a separate private repo and is
   still the production red until v2 passes a scrim.
 - The design it must satisfy is this folder's `docs/` (architecture,
   decision-layer, roe, effects-authoring); the v1 audit that motivated the
-  rebuild was an external 2026-10-15 review, not part of this tree.
+  rebuild was an external review, not part of this tree.
 - The engine's v2 integration is `red/tlaloc_ops.py` (a competition selects it
   with `red.engine tlaloc` in its Compfile; the default stays v1/badauto).
 

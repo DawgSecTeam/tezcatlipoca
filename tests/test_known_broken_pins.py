@@ -1,7 +1,7 @@
 """Known-broken catalog configs are a machine-readable list
 (constants.KNOWN_BROKEN_CONFIGS) enforced at generate/compile time, replacing the prose +
 per-competition-JSON pruning that let a new comp silently re-pin one. The four Linux rows
-(tftpd, postgresql pair, sshd-force-sftp) were fixed and verified live on 2026-10-02, and so
+(tftpd, postgresql pair, sshd-force-sftp) were fixed upstream, and so
 were four of the five "Windows user-policy" rows (local-user-win,
 powershell-execution-unrestricted, rpc-proxy-on-dc-web-win, unauth-kiosk-app-startup-win):
 the user-policy/account-ordering diagnosis was wrong and none of them is an account defect.
@@ -40,10 +40,10 @@ class KnownBrokenList(unittest.TestCase):
             self.assertTrue(reason.strip(), name)
 
     def test_fixed_rows_are_no_longer_banned(self):
-        # The four Linux rows were fixed and verified live 2026-10-02, as was unrealircd's
-        # rc=127 (it now installs a runtime or exits rc=1 with a reason), as were four of the
-        # five "Windows user-policy" rows (the whole account/policy diagnosis was wrong — see
-        # docs/upstream-defects-handoff.md §5).
+        # These rows were fixed upstream (verified live at the time, as was unrealircd's
+        # rc=127 — it now installs a runtime or exits rc=1 with a reason), as were four of
+        # the five "Windows user-policy" rows (the whole account/policy diagnosis was
+        # wrong).
         for name in ("tftpd-hpa-anon-write", "postgresql-no-auth", "postgresql-remote-access",
                      "sshd-force-sftp-broken-chroot", "unrealircd-backdoor-container",
                      "local-user-win", "powershell-execution-unrestricted",
@@ -120,7 +120,7 @@ class GenerateNakonConfigGate(unittest.TestCase):
     def test_fresh_randomized_selection_is_filtered_not_fatal(self):
         # randomize cannot know this driver-side table, so a fresh pick of a broken config is
         # dropped with a notice — aborting create-competition for a pin nobody chose was the
-        # worse behaviour (found in integration, 2026-10-02).
+        # worse behaviour (found in integration).
         with tempfile.TemporaryDirectory() as tmp:
             comp = _comp(tmp)
             out = io.StringIO()
@@ -176,7 +176,7 @@ class DropUnplantableBare(unittest.TestCase):
         self.assertIn("hosts-redirect-linux", out.getvalue())
 
     def test_catalog_var_configs_dropped_from_fresh_selection(self):
-        # Regression 2026-10-13: raw-socket-beacon (SERVICE_NAME) and desktop-autostart
+        # Regression: raw-socket-beacon (SERVICE_NAME) and desktop-autostart
         # (DEST, EXEC) carry catalog required_vars but were missing from REQUIRED_VARS, so a
         # fresh randomize selected them as BARE names and the nakon bundle lint aborted the
         # whole deploy ("catalog payload(s) reference variable(s) their step does not declare").

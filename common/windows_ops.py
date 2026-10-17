@@ -7,7 +7,7 @@ from infra.guest_exec import guest_agent_exec_windows, wait_for_guest_agent
 
 
 def is_windows_template(template_name):
-# The single definition of the "win" rule (audit 2026-10-02).
+# The single definition of the "win" rule.
 #
 #     nakon's machine routing, ssh_ops' gateway auth choice, golden_ops/deploy's target
 #     split and redeploy's box_platform all classify the same free-text template name, and
@@ -52,7 +52,7 @@ def _wait_for_windows_setup_complete(node, vmid, deadline):
 #
 #     The agent answers during specialize, but the box reboots (and renames itself)
 #     minutes later — anything applied before that races the reboot. Live-found on the
-#     golden path (winad-testrun 2026-09-25: exec timed out ~370s in, reboot at ~470s,
+#     golden path (a Windows/AD test run: exec timed out ~370s in, reboot at ~470s,
 #     settled ~520s). A longer exec timeout alone still races the reboot; wait for the
 #     image to actually report complete.
     while time.time() < deadline:
@@ -78,14 +78,14 @@ def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, t
 #     (`golden_ops`) has always passed. The post-clone path used to take the 900 s default:
 #     on a loaded range node a fresh DC clone — its golden is deliberately unbooted, so the
 #     clone runs the whole specialize+OOBE itself — is IO-bound for far longer than that
-#     (live 2026-10-08: ~1.5 MB/s disk reads, ~0% CPU, still incomplete at 900 s), and the
+#     (caught live: ~1.5 MB/s disk reads, ~0% CPU, still incomplete at 900 s), and the
 #     hard-cycle that follows throws the partial progress away and starts over. Give it the
 #     same window the golden path gets.
     deadline = time.time() + timeout
     if not _wait_for_windows_setup_complete(node, vmid, deadline):
         # A clone's first boot can deadlock pre-specialize at IDLE cpu with no agent
-        # (amongus-cde-2026 2026-09-30: golden-skeld wedged identically on every
-        # snapshot-rollback re-boot; a forced stop/start cleared it and specialize
+        # (golden boxes have wedged identically on every snapshot-rollback re-boot;
+        # a forced stop/start cleared it and specialize
         # then completed). Hard-cycle once and re-wait within the same budget —
         # the physical-power-cycle remedy from environment-facts, automated.
         from infra.lifecycle import start_vm, stop_vm
@@ -94,7 +94,7 @@ def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, t
         time.sleep(3)
         start_vm(node, vmid)
         # a fresh full budget: the first-boot wedge clears on the SECOND boot (the
-        # second boot's specialize completes — amongus-cde-2026 2026-09-30), and the
+        # second boot's specialize completes), and the
         # first wait consumed the original deadline
         if not _wait_for_windows_setup_complete(node, vmid, time.time() + timeout):
             raise RuntimeError(f"vmid {vmid}: Windows setup (sysprep first boot) did not complete "
@@ -110,8 +110,8 @@ New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress '{ip}' -PrefixLengt
 Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses '{dns_server}'
 
 net user {WINDOWS_ADMIN_USER} "{admin_password}"
-# ErrorActionPreference doesn't abort on native exit codes — check it ourselves.
-# scrim-extreme-2026-09-20: a policy-rejected password here failed silently and
+# ErrorActionPreference doesn't abort on native exit codes — check it ourselves:
+# a policy-rejected password here failed silently and
 # every downstream WinRM/paramiko login died with 'Authentication failed'.
 if ($LASTEXITCODE -ne 0) {{ throw "net user (admin password) failed, rc=$LASTEXITCODE" }}
 
@@ -121,7 +121,7 @@ Set-Service -Name QEMU-GA -StartupType Automatic -ErrorAction SilentlyContinue
 Start-Service -Name QEMU-GA -ErrorAction SilentlyContinue
 # The template ships all three firewall profiles disabled, so every rule below
 # (and any later firewall-rule effect or blue hardening) is dead paper until the
-# profiles are on. Idempotent; svc-matrix-2026-09-28.
+# profiles are on. Idempotent.
 Set-NetFirewallProfile -All -Enabled True -ErrorAction SilentlyContinue | Out-Null
 if (-not (Get-NetFirewallRule -Name sshd -ErrorAction SilentlyContinue)) {{
     New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
@@ -168,7 +168,7 @@ def wait_for_adws(node, vmid, timeout=900):
 #
 #     sshd comes back well before Active Directory Web Services after the promotion
 #     reboot; AD-flavored plants run in that window died with ADServerDownException
-#     (winad-testrun 2026-09-25: svc-support never created, silently — the AD misconfig
+#     (a Windows/AD test run: svc-support never created, silently — the AD misconfig
 #     pass is non-strict and outside nakon-config.json's coverage).
     deadline = time.time() + timeout
     errors = 0
@@ -186,7 +186,7 @@ def wait_for_adws(node, vmid, timeout=900):
     if errors:
         # A DC whose agent answered nothing at all is a different problem from a DC whose
         # ADWS is slow, and the difference decides whether the fix is "wait" or "look at
-        # the guest agent" (scale8 soak 2026-10-02: exec 500s on every satellite dc01).
+        # the guest agent" (a scale soak: exec 500s on every satellite DC).
         print(f"    WARNING: ADWS never came up in {timeout}s and {errors} agent probe(s) "
               f"failed — the DC may be agent-unreachable rather than slow")
     return None

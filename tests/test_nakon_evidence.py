@@ -2,7 +2,7 @@
 
 run_nakon's cleanup removed the whole staging dir off the engine — including
 the per-machine run logs that are the only record of WHY a step failed — so
-the first IIS FTP golden failure (2026-10-11) printed a `logs:` path that was
+the first IIS FTP golden failure printed a `logs:` path that was
 gone seconds later and could only be diagnosed by re-running the deploy.
 _preserve_failed_run moves the staging aside and prints the failed machines'
 log tails instead; successful runs still clean up normally.

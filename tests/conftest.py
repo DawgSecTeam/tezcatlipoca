@@ -8,7 +8,7 @@ around each test.
 
 `load_dotenv` writes the real estate identity into `os.environ` and never removes it, so a
 test that drives a driver's `main()` handed every later test the LIVE endpoint: an "offline"
-suite made real HTTPS requests to the production host (measured 2026-10-16: 13 requests,
+suite made real HTTPS requests to the production host (measured: 13 requests,
 and the affected modules ran 100x slower than when truly offline). The ambient TEZ_* set is
 restored around each test for the same reason as the config.
 """

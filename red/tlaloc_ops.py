@@ -39,7 +39,7 @@ from common.utils import local_python, record_degradation
 REPO = Path(__file__).resolve().parents[1]
 # The agent lives in this tree (tlaloc/). Staging, comp-prep and the scrim all read
 # it from here, so no host-side checkout can take its place and a deploy cannot go
-# live with NO red team because a path was missing (smoke run-cb959268).
+# live with NO red team because a path was missing.
 TLALOC_REPO = REPO / "tlaloc"
 
 RED_USER = "sysadmin"
@@ -51,7 +51,7 @@ UNIT = "tlaloc.service"
 UNIT_SRC = TLALOC_REPO / "systemd" / "tlaloc.service"
 # A v2 red01 hosts Mythic, and a beacon-sized disk cannot: the install filled 9.8G
 # to 100% mid-clone ('no space left on device'), Mythic's containers never started
-# and the channel had no C2 to reach (smoke run-4b9ff805). The deploy grows the
+# and the channel had no C2 to reach (caught live in a smoke run). The deploy grows the
 # disk to this floor before the Gaia step; `red.disk_gb` in the Compfile overrides
 # it, and a disk already at/above the floor is left alone.
 DEFAULT_RED_DISK_GB = 60
@@ -70,7 +70,7 @@ def red_disk_gb(comp_dir, default=None):
 def _guest_grow_script():
     """Extend the root filesystem into whatever space the hypervisor just added.
 
-    Two things this gets wrong easily, both learned live on 2026-10-16:
+    Two things this gets wrong easily, both learned live:
 
     * every write step needs `sudo -n` — red01's ssh user is a passwordless-sudo
       account, not root, so each call otherwise fails with "Permission denied";
@@ -128,7 +128,7 @@ def resize_red_disk(comp_dir, red_ip, vmid, *, ssh_key, target_gb=None,
         # PUT, with an ABSOLUTE size. POST is not implemented on this endpoint (501),
         # and the API rejects a relative size ("value does not match the regex
         # pattern") even though the `qm resize` CLI accepts `+45G`. Both cost a live
-        # smoke on 2026-10-16: the resize silently degraded, Mythic's images filled
+        # caught in a smoke: the resize silently degraded, Mythic's images filled
         # the old disk, its containers never started, and `gaia auth` got a non-JSON
         # reply — the deploy then failed three steps away from the actual cause.
         proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/resize",
@@ -150,7 +150,7 @@ def resize_red_disk(comp_dir, red_ip, vmid, *, ssh_key, target_gb=None,
 
 
 def _disk_gb(value):
-    """`scsi0: hdd:vm-1671-disk-0,size=10G` -> 10."""
+    """`scsi0: vmdata:vm-2099-disk-0,size=10G` -> 10."""
     import re
     match = re.search(r"size=(\d+(?:\.\d+)?)([GMT])", str(value or ""))
     if not match:
@@ -466,7 +466,7 @@ def stage_red01(ssh_key, red_ip, comp_dir, *, runner=None, timeout=600):
               f"sudo -n tar -xzf /tmp/tlaloc-stage.tgz -C {INSTALL_DIR}")
     # text=False: this pushes a BINARY tar stream on stdin. The default runner is
     # text=True (every other call here carries a string), and feeding it bytes is
-    # an AttributeError at the call, not a failed transfer (smoke run-4b9ff805:
+    # an AttributeError at the call, not a failed transfer (a smoke run:
     # 'bytes' object has no attribute 'encode' aborted phase 7).
     proc = runner(["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
                    "-o", "UserKnownHostsFile=/dev/null",
@@ -631,7 +631,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
 
     # 1.4 Size red01 for the C2 BEFORE anything installs on it. A v2 red01 hosts
     #     Mythic; a beacon-sized disk (9.8G here) filled to 100% mid-install and
-    #     Docker never started (smoke run-4b9ff805). Grow, then verify from the
+    #     Docker never started (caught live in a smoke run). Grow, then verify from the
     #     box's own df — an unextended filesystem fails exactly the same way.
     if red_vmid:
         try:
@@ -645,7 +645,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
         else:
             record_degradation("mythic_red_disk", str(grown.get("detail"))[:400])
             # A blocker, not a warning: without the space the Mythic install fills the
-            # box and every step after it fails for the wrong reason (2026-10-16).
+            # box and every step after it fails for the wrong reason (caught live).
             raise RuntimeError(
                 f"tlaloc: could not grow red01's disk to {red_disk_gb(comp_dir)}G — "
                 f"Mythic needs it ({str(grown.get('detail'))[:300]})")
@@ -682,7 +682,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
             gaia_ops.apply_c2_to_config(cfg_path, mythic_result["c2"])
         # A v2 comp with no C2 is not a range: the seed's channel stage, the loop's
         # takedowns over the channel and the frozen payloads all depend on it. Red
-        # failing to deploy is a BLOCKER (owner's directive 2026-10-16) — the deploy
+        # failing to deploy is a BLOCKER (owner's directive) — the deploy
         # stops here instead of going live with a red team that cannot check in.
         if not mythic_result.get("ok"):
             detail = "; ".join(mythic_result.get("degradations") or [])[:500]

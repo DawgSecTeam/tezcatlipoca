@@ -45,7 +45,7 @@ def check_round_loop(base_url, admin_session, fix=False):
 # Scoring round loop vs an engine reboot. The Docker containers restart after
 #     a reboot but the round loop stays stopped (pfsense-ad: frozen scoreboard) —
 #     and verify reads the LAST SCORED round, reporting stale UP/DOWN as if live.
-#     /api/engine is snake_case (live-confirmed 2026-09-29): `running` (False =
+#     /api/engine is snake_case (live-confirmed): `running` (False =
 #     paused), `competition_started`, `current_round_time` (RFC3339; the Go zero
 #     time "0001-01-01T00:00:00Z" means the loop is NOT cycling), and
 #     `last_round.StartTime`.

@@ -1,7 +1,7 @@
 """The rehearsal gate table, its recalibrated blue thresholds, and the doc that states them.
 
 `scrim_report/gate_table.py` says it must stay in sync with `docs/rehearsal-gates.md`; these
-tests are that sync check plus the behaviour of the recalibrated numbers (2026-10-15 campaign:
+tests are that sync check plus the behaviour of the recalibrated numbers (campaign:
 a blue cycle costs 20-30 min and the two teams serialise on one shared endpoint).
 """
 
@@ -39,13 +39,13 @@ class BlueGateThresholds(unittest.TestCase):
         self.assertEqual(gate_table.op_str(2, "<="), "<= 2")
 
     def test_a_measured_cadence_run_passes_both_cadence_gates(self):
-        # run-e7e12115: 4 cycles in a 45-minute event
+        # on the run that found it: 4 cycles in a 45-minute event
         rows = _blue({"cycles_rc0": 4, "timeouts": 1})
         self.assertEqual(rows["cycles_rc0"][4], "PASS")
         self.assertEqual(rows["timeouts"][4], "PASS")
 
     def test_the_25_minute_scrim_passes_timeouts_but_fails_engagement(self):
-        # run-2652d9bc: 0 rc=0 cycles, 2 timeouts (a cycle cut at the event deadline)
+        # on the run that found it: 0 rc=0 cycles, 2 timeouts (a cycle cut at the event deadline)
         rows = _blue({"cycles_rc0": 0, "timeouts": 2})
         self.assertEqual(rows["cycles_rc0"][4], "FAIL")
         self.assertEqual(rows["timeouts"][4], "PASS")

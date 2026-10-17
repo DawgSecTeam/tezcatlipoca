@@ -38,9 +38,9 @@ class EngineBaseFromTheDocument(unittest.TestCase):
             comp = Path(tmp)
             from estate import state as estate_state
             document = estate_state.EstateState.load(comp)
-            document.absorb({"engine_mgmt_ip": "10.0.0.150", "run_id": "run-abc12345"})
+            document.absorb({"engine_mgmt_ip": "10.0.0.248", "run_id": "run-abc12345"})
             document.save()
-            self.assertEqual(ops.engine_base(_Args("freeze", None, None), comp), "http://10.0.0.150")
+            self.assertEqual(ops.engine_base(_Args("freeze", None, None), comp), "http://10.0.0.248")
             self.assertEqual(ops.engine_base(_Args("freeze", None, "10.9.9.9"), comp),
                              "http://10.9.9.9")
 

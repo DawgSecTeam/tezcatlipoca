@@ -54,9 +54,10 @@ def load_targets(comp_dir, teams, boxes):
     current = [b["name"] for b in boxes]
     frozen_order = data.get("box_order") or []
     # Append-only is safe: vmid is positional, so boxes ADDED after deploy leave every
-    # earlier index (and therefore every frozen vmid) untouched — a Compfile can gain a
-    # box later (scrim-one gained the unmanaged in_path fw01) and the range it describes
-    # is still the same range. A reorder or a removal is what must refuse.
+    # earlier index (and therefore every frozen vmid) untouched — comp boxes are added
+    # after a deploy in practice (an unmanaged in-path fw box appeared exactly this way),
+    # and the range a frozen vmid map describes is still the same range. A reorder or a
+    # removal is what must refuse.
     if current[:len(frozen_order)] != frozen_order:
         raise SystemExit(
             f"  ERROR: boxes.json box order changed since deploy (was {frozen_order}, "
