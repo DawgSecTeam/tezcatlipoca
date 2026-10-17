@@ -13,19 +13,7 @@ from estate import config
 
 
 def local_python():
-    """Interpreter for OPERATOR-SIDE child processes (the harness's own children).
-
-    A bare `python3` on PATH is a different environment from the one the harness runs under.
-    The dashboard launches the harness with its service venv (which carries toml/paramiko);
-    a distro `python3` may carry neither, and the child then dies at import — deep inside the
-    deploy, after the run record, workspace and worktree exist. Two parallel runs once
-    through the dashboard died at `ModuleNotFoundError: No module named 'toml'` inside the
-    deploy child, and the same trap waits for verify-competition.py, scrim-report.py and every
-    `python3 -m badauto` spawn. Remote commands (ssh to a box) must NOT use this — there the
-    remote interpreter is the right one.
-
-    `TEZ_PYTHON` overrides for a host where the dependencies live somewhere else.
-    """
+    """Interpreter for operator-side children: a distro python3 may lack toml/paramiko, so use the harness's own (TEZ_PYTHON overrides)."""
     return config.active().knobs.python or sys.executable
 
 _USERNAME_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
@@ -34,21 +22,13 @@ _COMP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
 PRINT_LOCK = threading.Lock()
 MAX_CONCURRENCY = 8
 
-# Failures a caller chose to tolerate. Every entry is a prerequisite that did NOT
-# succeed while the deploy continued anyway — historically a WARNING line in a
-# scrollback and nothing else, which is how "the range came up with every service down"
-# had no named cause (nakon's install failures are silent by design, and apt prep that
-# installed nothing looked exactly like apt prep that worked).
+# Prerequisites that failed while the deploy continued anyway; collected so a run that came
+# up with every service down has a named cause instead of a scrollback WARNING.
 _DEGRADATIONS = []
 _DEGRADATION_LOCK = threading.Lock()
 
 
 def record_degradation(what, detail=""):
-# Note that a prerequisite failed and execution continued anyway.
-#
-#     The deploy still continues — each site has its own reason for tolerating the
-#     failure — but the fact is collected, written into the state document and printed
-#     once in a summary, so it survives the scrollback and can be surfaced by verify.
     import time
 
     entry = {"what": str(what), "detail": str(detail)[:300],
@@ -59,7 +39,6 @@ def record_degradation(what, detail=""):
 
 
 def degradations():
-# The degradations recorded so far in this process, oldest first.
     with _DEGRADATION_LOCK:
         return [dict(entry) for entry in _DEGRADATIONS]
 
@@ -70,7 +49,6 @@ def clear_degradations():
 
 
 def degradation_summary():
-# One line per distinct degradation, with a count — for the end-of-run print.
     seen = {}
     for entry in degradations():
         key = (entry["what"], entry["detail"])
@@ -80,22 +58,14 @@ def degradation_summary():
 
 
 def mint_run_id():
-# Per-deploy run identity: `run-` + 8 hex chars, minted once per competition
-#     directory and reused by every later deploy/resume from it (constants.ownership_tags).
-#
-#     The comp dir is per-worktree, so two concurrent deploys of the SAME competition ID
-#     mint different ids and can no longer destroy each other's VMs — destruction paths
-#     require the full ownership tag set including this tag (a near-miss).
+# Per-deploy run identity; teardown requires it, so two concurrent deploys of one
+# competition directory cannot destroy each other's VMs.
     return f"run-{_secrets.token_hex(4)}"
 
 
 def retry(fn, *, attempts, gap, backoff=False, retry_on=Exception):
-# Call fn() up to `attempts` times, returning its result on success. On a
-#     `retry_on` exception, sleep `gap` seconds (or gap*attempt with backoff) and try
-#     again; the final attempt's exception propagates. Any other exception propagates
-#     immediately. `retry_on` may also be a predicate, which then sees every exception and
-#     decides — used where the retryable condition lives in the response body rather than
-#     its type (PVE's "can't lock file" 500).
+# `retry_on` may be a predicate: it sees every exception and decides (used where the
+# retryable condition lives in the response body rather than its type).
     predicate = callable(retry_on) and not (isinstance(retry_on, type)
                                             and issubclass(retry_on, BaseException))
     for attempt in range(1, attempts + 1):
@@ -110,16 +80,8 @@ def retry(fn, *, attempts, gap, backoff=False, retry_on=Exception):
 
 
 def run_concurrent(items, fn, max_workers=MAX_CONCURRENCY):
-# Run fn(item) for every item on a bounded thread pool.
-#
-#     M2.1's shared helper for per-box work. Returns a LIST aligned with `items`: each
-#     slot holds fn's return value, or the exception fn raised — never raised here — so
-#     each caller keeps its own aggregate semantics (all-fail abort vs warn-and-continue).
-#     Items need not be hashable (they're target dicts). max_workers is capped at
-#     MAX_CONCURRENCY (8), which stays far under the engine's raised sshd MaxSessions
-#     (64), so the ControlMaster channel is never the bottleneck; the ceiling also keeps
-#     the Proxmox API poll load bounded. Output interleaving is the caller's problem:
-#     wrap prints in PRINT_LOCK.
+# Returns a LIST aligned with `items` holding fn's return or the exception it raised (never
+# raised here), so each caller keeps its own aggregate semantics. Wrap prints in PRINT_LOCK.
     results = [None] * len(items)
     if not items:
         return results
@@ -135,32 +97,23 @@ def run_concurrent(items, fn, max_workers=MAX_CONCURRENCY):
 
 
 def is_unmanaged(box):
-# True for a box the pipeline must not plant/configure/score/domain-join — e.g. an
-#     in-path pfSense firewall (FreeBSD): no nakon plant, no golden, no pre-domain/fix_services,
-#     no cloud-init identity, no scored check, no domain role. It is cloned straight from its
-#     own template with operator-specified NICs. Kept in boxes.json so per-box-index vmids
-#     stay positional; every plant/config/scoring path skips it via this predicate.
+# Boxes every plant/config/scoring path must skip (e.g. an in-path pfSense fw); kept in
+# boxes.json so per-box-index vmids stay positional.
     return bool(box.get("unmanaged"))
 
 
 def is_in_path_fw(box):
-# True for an in-path firewall: unmanaged + `in_path` — the create path gives it two NICs
-#     (WAN on vmbrW<id>, LAN on vmbr<id>), deploy phase 5 bootstraps its pfSense config and
-#     cuts the engine over so it routes the team subnet. Every unmanaged skip above applies
-#     to it too; this predicate only adds the network plumbing on top.
+# Unmanaged + in-path: two NICs (WAN on vmbrW<id>, LAN on vmbr<id>), and deploy phase 5
+# bootstraps its pfSense config so the engine routes the team subnet.
     return is_unmanaged(box) and bool(box.get("in_path"))
 
 
 def valid_unix_username(name):
-# Safe as a remote-shell token, useradd name, and sudoers filename.
     return bool(name) and _USERNAME_RE.fullmatch(name) is not None
 
 
-# Legacy distro system accounts (uid<=100 on the Debian and Fedora families): cloud-init
-# adopts a colliding name instead of creating it, so the sudoers rule and SSH key land on
-# a nologin root-homed shadow and every ssh <name>@box fails no matter what
-# (distro matrix: box_username operator). Alpine lacks most of these, which is
-# why the collision never surfaced on the ubuntu/debian lineup.
+# cloud-init adopts a colliding legacy system account instead of creating it, landing the
+# sudoers rule and SSH key on a nologin shadow so every ssh <name>@box fails.
 LEGACY_ACCOUNT_NAMES = frozenset({
     "root", "bin", "daemon", "adm", "lp", "sync", "shutdown", "halt", "mail",
     "news", "uucp", "operator", "games", "man", "ftp", "proxy", "www-data",
@@ -173,13 +126,10 @@ LEGACY_ACCOUNT_NAMES = frozenset({
 
 
 def is_legacy_account_name(name):
-# True when the name collides with a legacy distro system account — auth setup
-#     bricks on the distros that carry it, so both users.json paths reject the name.
     return name in LEGACY_ACCOUNT_NAMES
 
 
 def valid_comp_name(name):
-# Confines the competitions/<name> path — no traversal, no shell metachars.
     return bool(name) and ".." not in name and _COMP_NAME_RE.fullmatch(name) is not None
 
 DNS_FIX_CMD = (
@@ -198,8 +148,6 @@ CREDLIST_USERNAMES_DEFAULT = ["admin", "user1", "user2"]
 
 
 def load_users_config(comp_dir):
-# Load themeable box login + credlist usernames from users.json, or fall back to defaults.
-
     path = Path(comp_dir) / "users.json"
     if not path.exists():
         return BOX_USERNAME_DEFAULT, list(CREDLIST_USERNAMES_DEFAULT)
@@ -214,9 +162,7 @@ def load_users_config(comp_dir):
               f"distro system account (cloud-init would adopt it and brick auth) — using "
               f"{BOX_USERNAME_DEFAULT} instead (docs/e2e-testing.md §0).")
         box_username = BOX_USERNAME_DEFAULT
-    # 1..8 (was exactly 3): packet-compiled bundles carry whatever accounts the packet
-    # publishes (CDE ships 2). fix_services_on_boxes iterates the pairs, so the count
-    # was never load-bearing — only the interactive prompt kept the 3.
+    # 1..8: packet-compiled bundles carry whatever account count the packet publishes (CDE ships 2).
     if not (1 <= len(credlist_usernames) <= 8
             and all(valid_unix_username(n) for n in credlist_usernames)):
         credlist_usernames = list(CREDLIST_USERNAMES_DEFAULT)
@@ -224,11 +170,8 @@ def load_users_config(comp_dir):
 
 
 def competition_name(comp_dir):
-# The competition's own identity — the name its Compfile carries, never the directory.
-#     The dashboard seeds every run's comp dir as <run_dir>/comp, so a directory-derived
-#     tag made every dashboard range "comp-comp": verify_clean then blamed the whole
-#     estate on it, and one deploy adopted another competition's kept golden as its own.
-#     Dir name only when a legacy Compfile names nothing.
+# The name the Compfile carries, never the directory: the dashboard seeds every run's comp
+# dir as <run_dir>/comp, so a directory-derived tag made every dashboard range "comp-comp".
     path = Path(comp_dir) / "Compfile"
     if not path.exists():
         return Path(comp_dir).name
@@ -261,7 +204,6 @@ def load_compfile(path):
 
 
 def compfile_flag(path, key, default=0):
-# Read an integer Compfile knob; default when the key or the file is absent.
     try:
         with open(path) as f:
             for line in f:
@@ -277,8 +219,6 @@ def compfile_flag(path, key, default=0):
 
 
 def compfile_value(path, key, default=""):
-# Read a string Compfile knob (e.g. `quotient_ref <sha-or-tag>`); default when
-#     the key or the file is absent.
     try:
         with open(path) as f:
             for line in f:
@@ -291,9 +231,7 @@ def compfile_value(path, key, default=""):
 
 
 def stages_red(comp_dir):
-# Whether this competition's deploy stages a red presence (red01): exactly the ranges that
-#     need the private per-run red-segment bridge and engine NIC. A Compfile may state it the
-#     v1 way (`assume_breach <n>`) or the v2 way (`red.assume_breach` / `red.engine`).
+# Compfile states red presence as `assume_breach <n>` (v1) or `red.assume_breach`/`red.engine` (v2).
     compfile = Path(comp_dir) / "Compfile"
     return bool(compfile_flag(compfile, "assume_breach", 0)
                 or compfile_value(compfile, "red.assume_breach", "")
@@ -301,17 +239,8 @@ def stages_red(comp_dir):
 
 
 def env_summary():
-# One line naming the estate this run targets: endpoint/node/datastore/template/
-#     engine mgmt IP. The repo carries several operator env variants, and a
-#     wrong-variant copy used to be visible only if someone read the file. Printed in
-#     every entry script's banner so the first five lines betray the wrong estate.
-#
-#     The values are the RESOLVED config, not the ambient environment: multi-node
-#     placement and --engine-mgmt-ip move the process onto another host/address by
-#     activating the config (not os.environ), and the "Effective target" restate read
-#     the stale env — so an operator checking the banner saw the pre-placement host and
-#     the pre-flag mgmt IP (caught live: --engine-mgmt-ip 10.0.0.246 ran while the
-#     banner said 10.0.0.248).
+# The RESOLVED config, not the ambient environment: multi-node placement and
+# --engine-mgmt-ip move host/address in-process, so an operator reading the env sees stale values.
     from estate import config
     cfg = config.active()
     mgmt = cfg.engine.mgmt_ip if cfg.is_set("engine.mgmt_ip") else ""

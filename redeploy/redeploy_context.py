@@ -1,10 +1,4 @@
-"""The state a redeploy threads through every mode.
-
-One object replaces the `(targets, ctx, node, comp_dir, state, ...)` positional cluster
-every mode function used to re-declare — the redeploy analogue of deploy_lib's
-DeployContext. Per-invocation values that vary within a run (the nakon bundle a reset
-prepares lazily, a rollback's snapshot) stay explicit arguments, not fields here.
-"""
+"""State threaded through every redeploy mode; the redeploy analogue of deploy_lib's DeployContext."""
 
 from dataclasses import dataclass
 from typing import Any

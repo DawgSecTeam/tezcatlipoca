@@ -25,16 +25,13 @@ JOIN_RETRY_WAIT = 60
 
 
 def team_domain(comp_dir, identifier):
-# Per-team AD domain name. Compfile knobs domain_prefix/domain_suffix (packet
-#     profiles: `mira-{team}.corp.sus` compiles to prefix 'mira-' + suffix '.corp.sus');
-#     default stays the historical team<identifier>.local.
+# Compfile knobs domain_prefix/domain_suffix ('mira-{team}.corp.sus'); default team<identifier>.local.
     prefix = compfile_value(Path(comp_dir) / "Compfile", "domain_prefix", "team")
     suffix = compfile_value(Path(comp_dir) / "Compfile", "domain_suffix", ".local")
     return f"{prefix}{identifier}{suffix}"
 
 
 def _dc_promoted(node, dc_vmid, domain, marker_present):
-# Ask the DC whether it actually serves the team's domain before trusting a marker.
     try:
         rc, out, _ = guest_agent_exec_windows(
             node, dc_vmid,
@@ -72,9 +69,8 @@ def _probe_joined(node, member_box, member_vmid, domain):
 
 
 def password_trips_ad_complexity(username, password, full_name=""):
-# True when AD's default complexity rule rejects the password: it may not contain the
-#     account name or any 3+ char token of the display name (the CDE packet's `Red123!` for
-#     `Red` is exactly that — 10 `New-ADUser` failures per team, caught live).
+# AD's default complexity rejects a password containing the account name or any 3+ char token of
+# the display name (the CDE packet's `Red123!` for `Red`).
     low = password.lower()
     tokens = [username] + [t for t in full_name.replace(",", " ").split()]
     return any(len(t) >= 3 and t.lower() in low for t in tokens)
@@ -82,11 +78,8 @@ def password_trips_ad_complexity(username, password, full_name=""):
 
 def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scoring_user,
                           scoring_ip, box_password, promote_dc=True, force_member_join=False):
-# Per-team AD forest promotion + member joins from domain_roles.json; no-op when absent.
-#
-#     force_member_join bypasses the members' "already joined" self-report: a reset DC
-#     re-promoted a FRESH AD database, so members claiming membership hold trusts the new
-#     DC knows nothing about (caught live — the member probe cannot see this).
+# force_member_join bypasses the members' "already joined" self-report: a reset DC re-promoted a
+# fresh AD database, so a member's trust is unknown to the new DC.
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
         return
@@ -101,9 +94,6 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
     if dc_box is None:
         print("  WARNING: domain_roles.json has no 'dc' box — skipping domain configuration.")
         return
-    # Packet-published AD accounts (domain_accounts.json): planted per team right after
-    # the domain is up, before the misconfig pass. The CDE packet publishes blueteam +
-    # the color accounts as Domain Admins — teams enumerate them in minute zero IR.
     packet_accounts = []
     accounts_path = comp_dir / "domain_accounts.json"
     if accounts_path.exists():
@@ -164,10 +154,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                         print(f"  WARNING: [{team_key}] AD Web Services never answered on "
                               f"{dc_box['name']} — AD-flavored plants will likely fail")
 
-            # The AD plants key on their OWN marker, not on first promotion: a resume
-            # that finds the domain already up (lost marker, re-clone churn) used to
-            # skip the 4 plants with the promotion — shakedown-5x4 recovery had to
-            # replay them by hand via _run_single_nakon_config.
+            # Keyed on their OWN marker: a resume finding the domain up would otherwise skip these.
             if (comp_dir / f".nakon-domain-{team_key}-ad-misconfigs.json").exists():
                 with PRINT_LOCK:
                     print(f"  [{team_key}] AD misconfigs already planted (resume marker)")
@@ -189,8 +176,6 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                     strict=False,
                 )
 
-            # Packet-published AD accounts (marker-gated like the misconfigs, so a resume
-            # never re-adds). Each account is Add User Account + Elevate when admin.
             if packet_accounts:
                 if (comp_dir / f".nakon-domain-{team_key}-ad-accounts.json").exists():
                     with PRINT_LOCK:
@@ -199,8 +184,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                     if any(password_trips_ad_complexity(
                             a["username"], a["password"], a.get("full_name") or "")
                             for a in packet_accounts):
-                        # The packet publishes these exact passwords, so the domain policy
-                        # yields, not the passwords.
+                        # The packet publishes these passwords, so the policy yields, not the passwords.
                         with PRINT_LOCK:
                             print(f"  [{team_key}] packet passwords break AD complexity — "
                                   f"disabling ComplexityEnabled on {domain}")
@@ -258,10 +242,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
 
                 with PRINT_LOCK:
                     print(f"  [{team_key}] Joining {member_box['name']} to {domain}...")
-                # A DC that just answered DNS can still refuse a join ("domain does not
-                # exist or could not be contacted" ), and a failed
-                # join looked identical to a good one here. Confirm with the live probe and
-                # retry.
+                # A DC that just answered DNS can still refuse a join, and a failed join looks good.
                 for attempt in range(1, JOIN_ATTEMPTS + 1):
                     try:
                         with timed(comp_dir, 7, "domain_join", f"{team_key}/{member_box['name']}"):
@@ -341,16 +322,8 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                         print(f"  WARNING: [{team_key}] {member_box['name']} NOT joined to "
                               f"{domain} after {JOIN_ATTEMPTS} attempts")
 
-    # Each team's ADDS/join chain is team-local, so the chains run concurrently (M2.4)
-    # while staying serial within a team (promotion must precede joins). Safe since M2.3:
-    # every nakon pass stages into its own run dir, and bundle builds are serialized
-    # operator-side by build_nakon_bundle's lock. Up to ~20 min of reboot-wait per DC
-    # team collapses from a sum into a max.
     results = run_concurrent(list(teams.items()), _deploy_team_domains, max_workers=4)
-    # run_concurrent never raises — a team chain that blew up mid-flight (ADDS planted
-    # but misconfigs/joins skipped) used to vanish silently here and only surface as a
-    # verify domains FAIL an hour later (caught live). Surface every failure,
-    # then fail the phase: resume re-enters per team via the promotion/marker probes.
+    # run_concurrent never raises; a chain that blew up mid-flight would only surface as a verify FAIL.
     failures = [(item[0], r) for item, r in zip(list(teams.items()), results)
                 if isinstance(r, Exception)]
     for team_key, exc in failures:

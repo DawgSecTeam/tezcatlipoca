@@ -1,18 +1,4 @@
-"""Per-satellite jump/router VM: build, configure, verify.
-
-The jump impersonates the scoring engine at L3 on the satellite's team bridges: it
-holds 192.168.<id>.1 for each locally-placed team (the address every box knows as
-its gateway), DNATs the gateway IP's apt-cacher port to the engine, and SNATs
-engine->box traffic so the boxes' gateway-IP-only SSH trust still sees their
-gateway. Forwarding is default-DROP with explicit accepts — team-to-team isolation
-is structural, matching the engine's own FORWARD rule. From every box's perspective
-nothing changes (docs/multi-node.md).
-
-Built via the direct API path (golden_ops precedent — outside any resource lifecycle,
-destroyed by computed vmid in destroy-competition), one per satellite,
-cloned from the node's alpine base template. Addressing rides PVE cloud-init
-(ipconfig0 mgmt + ipconfig1..n team gateways); forwarding/NAT rules are pushed over
-SSH after first boot and made persistent with Alpine's iptables init service."""
+"""Per-satellite jump/router VM: build, configure, verify."""
 
 import secrets
 import subprocess
@@ -33,8 +19,7 @@ from estate import config
 
 
 def find_jump_template(node, hint=""):
-# The satellite's alpine base template (jump clone source). Name-substring match,
-#     stopped, tagged `template`, ON this node — mirrors _template_vmid_map's rules.
+    # The satellite's alpine base template: name-substring, stopped, tagged `template`, on node.
     hint = hint or "alpine"
     matches = {}
     for vm in cluster_vms_for(node):
@@ -64,8 +49,7 @@ def _node_template_names(node):
 
 
 def _jump_ssh(ip, user, key_path, cmd, timeout=60):
-# Direct SSH to the jump's mgmt IP (deploy host and jump share the mgmt LAN;
-#     no engine hop needed).
+    # Deploy host and jump share the mgmt LAN, so no engine hop is needed.
     return subprocess.run(
         ["ssh", "-i", key_path,
          "-o", "StrictHostKeyChecking=accept-new",
@@ -76,19 +60,11 @@ def _jump_ssh(ip, user, key_path, cmd, timeout=60):
 
 
 def wait_jump_ready(node, vmid, ip, user, key_path, expected_key, timeout=900):
-# Wait for the jump to be SSH-able, watching the PREREQUISITES over the guest
-#     agent (no SSH needed): cloud-init must have installed THE DEPLOY KEY (a fresh
-#     clone carries the template's build key in authorized_keys before cloud-init
-#     runs — "non-empty" would pass on stale state) and unlocked the account (a
-#     shadow-locked user is refused even with a valid key). Cold clones take ~10 min
-#     from first agent ping to sshd-ready, so the agent channel is the signal; only
-#     then poll SSH briefly.
+    # Watch the PREREQUISITES over the guest agent: cloud-init done, THE DEPLOY KEY installed, the
+    # account unlocked. A fresh clone carries the template's build key and is shadow-locked before
+    # cloud-init runs, so key-matching alone passes instantly on stale state. Cold clones ~10 min.
     from infra.guest_exec import guest_agent_exec_root
     key_body = expected_key.split()[1] if len(expected_key.split()) > 1 else expected_key
-    # cloud-init-done is the real gate: the template's build key IS the deploy key
-    # (same operator key built the template), so key-matching alone passes instantly
-    # on stale pre-cloud-init state — while cloud-init is mid-rewrite of exactly the
-    # files (keys/shadow) that make SSH work.
     probe = (f"cloud-init status 2>/dev/null | grep -q done && "
              f"grep -qF '{key_body}' /home/sysadmin/.ssh/authorized_keys && "
              "! grep -q '^sysadmin:!' /etc/shadow && echo READY")
@@ -117,8 +93,8 @@ def wait_jump_ready(node, vmid, ip, user, key_path, expected_key, timeout=900):
 
 def configure_jump(ip, user, key_path, team_identifiers, engine_mgmt_ip,
                    red_segment=""):
-# Push forwarding + NAT rules and make them persistent (Alpine OpenRC or
-#     Debian netfilter-persistent, detected from the guest itself).
+    # Push forwarding + NAT rules and make them persistent (Alpine OpenRC or Debian
+    # netfilter-persistent, detected from the guest itself).
     rules = jump_rules(team_identifiers, engine_mgmt_ip, red_segment=red_segment)
     quoted = subprocess.list2cmdline([rules]).replace("'", "'\\''")
     probe = _jump_ssh(ip, user, key_path,
@@ -126,9 +102,8 @@ def configure_jump(ip, user, key_path, team_identifiers, engine_mgmt_ip,
                       timeout=30)
     alpine = "alpine" in (probe.stdout or "")
     if alpine:
-        # Alpine's iptables OpenRC service ignores /etc/iptables/rules.v4 (Debian's
-        # persistent path): apply the rules LIVE, then `rc-service iptables save`
-        # persists them to Alpine's save file, which the boot service loads.
+        # Alpine's iptables OpenRC service ignores /etc/iptables/rules.v4: apply the rules LIVE,
+        # then `rc-service iptables save` persists them to Alpine's boot-loaded save file.
         cmds = [
             "command -v iptables-restore >/dev/null || sudo apk add --no-cache iptables",
             f"printf '%s' {quoted} | sudo tee /etc/iptables/rules.v4 > /dev/null",
@@ -138,9 +113,8 @@ def configure_jump(ip, user, key_path, team_identifiers, engine_mgmt_ip,
             jump_sysctl_script(),
         ]
     else:
-        # Debian non-login SSH PATH lacks /usr/sbin (iptables-restore, sysctl), and
-        # a static-ipconfig0 cloud-init jump may boot with no resolver at all —
-        # push one before any apt call.
+        # Debian non-login SSH PATH lacks /usr/sbin (iptables-restore, sysctl), and a
+        # static-ipconfig0 cloud-init jump may boot with no resolver at all.
         path = "export PATH=$PATH:/usr/sbin:/sbin; "
         resolver = ("printf 'nameserver 10.0.0.1\\nnameserver 1.1.1.1\\n' | "
                     "sudo tee /etc/resolv.conf > /dev/null")
@@ -166,8 +140,8 @@ def configure_jump(ip, user, key_path, team_identifiers, engine_mgmt_ip,
 
 
 def _log(*args, **kwargs):
-# print() under the shared lock: _build_one runs on a thread pool (build_jump_vms),
-#     so an unwrapped multi-line print from one satellite interleaves into another's.
+    # print() under the shared lock: _build_one runs on a thread pool, so an unwrapped
+    # multi-line print from one satellite interleaves into another's.
     with PRINT_LOCK:
         print(*args, **kwargs)
 
@@ -175,19 +149,8 @@ def _log(*args, **kwargs):
 def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
                    engine_mgmt_gw=DEFAULT_ENGINE_MGMT_GW, engine_node_name=None,
                    run_id=None, red_segment=""):
-# Clone + configure one jump per satellite. Returns {node_name: jump_vmid}.
-#
-#     Satellites run CONCURRENTLY. Each is a different Proxmox host reached over the
-#     direct API path (node-scoped calls follow the placement route table) with its SSH
-#     configuration going over the mgmt LAN, and each build is dominated by a full clone
-#     plus a first-boot cloud-init wait — measured 17s to 547s, avg ~150s, across
-#     17 samples on a spread multinode run. Serially that made an 8-satellite
-#     spread pay ~18 minutes of pure waiting for no reason.
-#
-#     Bounded at 4 rather than the pool's default 8: unlike the per-box work, each unit
-#     here is a *full* clone onto a datastore, and a satellite host may be running
-#     several. 4 keeps clone-write saturation and the Proxmox task load in the range the
-#     M0.2/M2.1 benchmarks validated, while still collapsing the wait.
+    # Clone + configure one jump per satellite, CONCURRENTLY (each dominated by a full clone plus a
+    # first-boot cloud-init wait, 17s-547s). Bounded at 4: each is a full clone onto a datastore.
     from multinode.placement_record import record_of
     sats = list(placement["satellites"])
 
@@ -203,9 +166,8 @@ def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
                    mgmt_bridge=resolved_mgmt_bridge(placement))
 
     results = run_concurrent(sats, _one, max_workers=4)
-    # run_concurrent captures exceptions per slot instead of raising, so each caller
-    # keeps its own aggregate semantics. Here the semantics are unchanged from the
-    # serial loop: one satellite that never comes up aborts the deploy.
+    # run_concurrent captures exceptions per slot instead of raising; one satellite that never
+    # comes up aborts the deploy.
     for sat, r in zip(sats, results):
         if isinstance(r, Exception):
             raise r
@@ -218,8 +180,8 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
     ownership = ownership_tags(comp_name, run_id, JUMP_TAGS_EXTRA)
     vm_name = f"jump-{comp_name}-{sat['slot']}"
 
-    # Resume short-circuit: a running, ours jump from a failed attempt is
-    # reconfigured in place instead of re-cloned (another ~10 min cloud-init wait).
+    # Resume short-circuit: a running, ours jump from a failed attempt is reconfigured in place
+    # instead of re-cloned (another ~10 min cloud-init wait).
     reuse = False
     try:
         cfg0 = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
@@ -230,8 +192,7 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
 
     if reuse:
         _log("    jump VM already running from a previous attempt — reconfiguring in place")
-        # Re-stamp ownership so a jump adopted from an earlier attempt is recognized
-        # by this run's teardown guards.
+        # This run's teardown guards must recognize a jump adopted from an earlier attempt.
         from infra.ownership import retag_ownership
         try:
             retag_ownership(node, vmid, ownership)
@@ -260,17 +221,14 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
             "ciuser": ctx.get("vm_username", "sysadmin"),
             "sshkeys": ctx["ssh_public_key_quoted"],
             "ipconfig0": f"ip={sat['jump_mgmt_ip']}/24,gw={engine_mgmt_gw}",
-            # Alpine's adduser leaves a fresh account shadow-locked ('!'), and sshd
-            # refuses pubkey auth to a locked account. cloud-init only unlocks when a
-            # password is set — random, never used (login is key-only).
+            # Alpine's adduser leaves a fresh account shadow-locked ('!') and sshd refuses pubkey
+            # auth to a locked account; cloud-init only unlocks it when a (random, unused) password is set.
             "cipassword": secrets.token_urlsafe(12),
         }
         for i, t in enumerate(team_ids):
             cfg[f"ipconfig{i + 1}"] = f"ip=192.168.{t}.1/24"
-        # The alpine base template carries its BUILD-TIME cicustom user-data (its own
-        # seeded key); it overrides the generated ciuser/sshkeys fragment, so the clone
-        # would come up trusting the builder's key instead of the deploy key. Strip it
-        # before first boot — the generated fragment is everything the jump needs.
+        # The alpine base template carries its BUILD-TIME cicustom user-data (its own seeded
+        # key) that overrides the generated ciuser/sshkeys fragment; strip it before first boot.
         try:
             proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data={"delete": "cicustom"})
         except Exception as e:
@@ -278,8 +236,7 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
                   f"{str(e)[:100]}")
         proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data=cfg)
 
-        # First start can outlive start_vm's budget on a busy host (live: qmstart on
-        # the satellite took >120s) — tolerate a timed-out-but-running start.
+        # First start can outlive start_vm's budget on a busy host — tolerate a timed-out-but-running start.
         try:
             start_vm(node, vmid, timeout=300)
         except RuntimeError:
@@ -289,10 +246,8 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
         if not wait_for_guest_agent(node, vmid, timeout=180):
             _log("    WARNING: jump agent not answering (cloud-init may still be running)")
     user = ctx.get("vm_username", "sysadmin")
-    # Every fresh clone regenerates its sshd host keys — the PREVIOUS jump's pinned
-    # key for this mgmt IP makes accept-new refuse everything ("host key changed").
-    # This was the real wait_jump failure across all earlier attempts: manual SSH
-    # with /dev/null known_hosts worked minutes into the same boot.
+    # Every fresh clone regenerates its sshd host keys, so the PREVIOUS jump's pinned key for
+    # this mgmt IP makes accept-new refuse everything ("host key changed").
     forget_engine_host_key(sat["jump_mgmt_ip"])
     if not wait_jump_ready(node, vmid, sat["jump_mgmt_ip"], user, ctx["ssh_key_path"],
                            config.active().ssh.public_key):
@@ -305,7 +260,6 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
 
 
 def destroy_jump_vms(placement, comp_tags):
-# Phase-1/teardown half: destroy every satellite's jump VM (ownership-checked).
     from multinode.placement_record import record_of
     for sat in placement.get("satellites", []):
         rec = record_of(placement, sat["name"])

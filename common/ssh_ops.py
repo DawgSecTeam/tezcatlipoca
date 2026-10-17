@@ -8,8 +8,6 @@ import requests
 
 from infra.guest_exec import diagnose_unreachable_box, wait_for_guest_agent
 from common.utils import PRINT_LOCK, record_degradation, run_concurrent
-# Re-export, not a second definition: ssh_ops' gateway auth and deploy/golden_ops' target
-# split must classify a template identically (windows_ops.is_windows_template owns the rule).
 from common.windows_ops import is_windows_template
 from estate import config
 
@@ -17,22 +15,12 @@ DEFAULT_KNOWN_HOSTS = str(Path.home() / ".tezcatlipoca" / "known_hosts")
 
 
 def _engine_opts(known_hosts=None, host=None):
-# SSH -o options that authenticate the scoring engine: TOFU via a persistent known_hosts.
-#
-#     accept-new pins the key on first connect and rejects a *changed* key afterwards (MITM
-#     protection); the residual exposure is the very first connection only.
-#
-#     With host, the options multiplex over one ControlMaster socket (M1.5): every per-box
-#     ProxyCommand and every direct engine call reuses a single authenticated engine
-#     connection instead of paying a fresh double handshake per call. engine_bootstrap_ops raises
-#     sshd's MaxSessions to 64 so M2's concurrent workers can share the master.
+# accept-new pins the engine key on first connect and rejects a changed key afterwards (TOFU).
     kh = known_hosts or DEFAULT_KNOWN_HOSTS
     Path(kh).parent.mkdir(parents=True, exist_ok=True)
     opts = ["-o", f"UserKnownHostsFile={kh}", "-o", "StrictHostKeyChecking=accept-new",
             "-o", "ConnectTimeout=10",
-            # Dead-peer detection: a silently dropped node link otherwise leaves an
-            # established TCP session hanging until the caller's full timeout (live:
-            # a docker build burned its whole 1800s budget against a dead node).
+            # A silently dropped node link otherwise hangs until the caller's full timeout.
             "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
     if host:
         opts += ["-o", "ControlMaster=auto",
@@ -46,17 +34,13 @@ def engine_ssh_opts(ctx):
 
 
 def gateway_proxy(ctx):
-# ProxyCommand that jumps through the engine. The engine hop is host-key pinned; the inner
-#     box hop stays unverified (box keys rotate on clone/rebuild/rollback) but is tunneled inside
-#     the now-authenticated engine channel.
     opts = " ".join(engine_ssh_opts(ctx))
     return f"ssh -i {ctx['ssh_key_path']} {opts} -W %h:%p {ctx['vm_username']}@{ctx['scoring_engine_ip']}"
 
 
 def box_ssh_opts(proxy, *, extra_opts=()):
-# The `-o` options for a box hop through the engine gateway. The box key is left
-#     unverified — it rotates on clone/rebuild/rollback — because the hop is tunneled
-#     inside the host-key-pinned engine channel that `gateway_proxy` establishes.
+# The box key rotates on clone/rebuild/rollback, so the box hop is unverified; it is tunnelled
+# inside the host-key-pinned engine channel.
     return ["-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ConnectTimeout=10",
@@ -64,8 +48,6 @@ def box_ssh_opts(proxy, *, extra_opts=()):
 
 
 def box_ssh_argv(ctx, target_ip, user, remote=None, *, extra_opts=()):
-# Full ssh argv for the box hop through the engine gateway. With `remote`, the
-#     command is appended as the final argument.
     argv = ["ssh", "-i", ctx["ssh_key_path"],
             *box_ssh_opts(gateway_proxy(ctx), extra_opts=extra_opts),
             f"{user}@{target_ip}"]
@@ -75,10 +57,6 @@ def box_ssh_argv(ctx, target_ip, user, remote=None, *, extra_opts=()):
 
 
 def box_ssh_retry(ctx, ip, user, remote_cmd, *, timeout, attempts, what):
-# Run remote_cmd on a box over SSH, retrying through boot-time timeouts. Returns
-#     (True, "") on success; (False, stderr) on a definitive rejection, where retries
-#     cannot help; (False, "") once the attempts are spent. A False is the caller's cue to
-#     fall back to the guest agent.
     for attempt in range(1, attempts + 1):
         try:
             r = subprocess.run(box_ssh_argv(ctx, ip, user, remote_cmd),
@@ -90,7 +68,7 @@ def box_ssh_retry(ctx, ip, user, remote_cmd, *, timeout, attempts, what):
                                       "Host key verification failed")):
                 return False, err
         except subprocess.TimeoutExpired:
-            pass  # box still booting — retry
+            pass
         if attempt < attempts:
             with PRINT_LOCK:
                 print(f"    {what} attempt {attempt}/{attempts} failed for {ip}, retrying in 15s...")
@@ -99,9 +77,8 @@ def box_ssh_retry(ctx, ip, user, remote_cmd, *, timeout, attempts, what):
 
 
 def forget_engine_host_key(ip, known_hosts=None):
-# Drop any pinned key for the engine IP so a freshly-rebuilt engine re-pins cleanly,
-#     and retire the ControlMaster socket — a surviving master would keep speaking with the
-#     old host key and old session.
+# Retire the engine's pinned key and ControlMaster socket — a surviving master keeps speaking
+# with the old host key.
     kh = known_hosts or DEFAULT_KNOWN_HOSTS
     if Path(kh).exists():
         subprocess.run(["ssh-keygen", "-R", ip, "-f", kh], capture_output=True, text=True)
@@ -118,14 +95,11 @@ def forget_engine_host_key(ip, known_hosts=None):
 
 
 def ssh_via_gateway(ctx, target_ip, cmd, timeout=60, user="ubuntu"):
-# SSH to a target box through the engine gateway (ProxyCommand -W).
     args = box_ssh_argv(ctx, target_ip, user, cmd)
     r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     if r.returncode == 255 and "REMOTE HOST IDENTIFICATION HAS CHANGED" in (r.stderr or ""):
-        # A re-cloned engine serves a new host key on a re-run while the TOFU pin
-        # survives, hard-failing every proxied call. Re-pin once and retry — the box
-        # hop inside the tunnel is unverified anyway, so the pin guards a
-        # lab-internal hop, not an internet path.
+        # A re-cloned engine serves a new host key while the TOFU pin survives, hard-failing
+        # every proxied call; re-pin once and retry.
         forget_engine_host_key(ctx["scoring_engine_ip"])
         r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     return r
@@ -135,13 +109,8 @@ PAM_PREAUTH_SIGNATURE = "by PAM account configuration"
 
 
 def classify_ssh_failure(ctx, target_ip, user=None, timeout=25):
-# One BatchMode SSH attempt through the gateway, classified for reset escalation.
-#
-#     Returns 'ok', 'pam-trap', or 'unreachable'. 'pam-trap' is the planted-box restart
-#     wound (known-issues.md, "Planted Linux boxes deny all SSH at the PAM account stage
-#     after a restart"): the TCP handshake completes and sshd kills the session preauth
-#     with the PAM account-stage fatal, distinguishable from a box that is merely still
-#     booting (refused/timeout) or one whose network is broken. Never raises.
+# 'pam-trap' is the planted-box restart wound: the TCP handshake completes and sshd kills the
+# session preauth with the PAM account-stage fatal (distinct from a box still booting).
     args = box_ssh_argv(ctx, target_ip, user or "ubuntu", "true",
                         extra_opts=["-o", "BatchMode=yes"])
     try:
@@ -158,7 +127,6 @@ def classify_ssh_failure(ctx, target_ip, user=None, timeout=25):
 
 
 def ssh_on_gateway(ctx, cmd, timeout=30):
-# Run a command directly on the scoring engine gateway.
     return subprocess.run(
         ["ssh", "-i", ctx["ssh_key_path"], *engine_ssh_opts(ctx),
          f"{ctx['vm_username']}@{ctx['scoring_engine_ip']}", cmd],
@@ -167,8 +135,6 @@ def ssh_on_gateway(ctx, cmd, timeout=30):
 
 
 def wait_for_ssh(key, user, host, timeout=300):
-# Poll SSH until `ssh user@host true` succeeds. Returns True/False; never raises.
-
     print(f"  Waiting for {host} to accept SSH (timeout {timeout}s)...")
     deadline = time.time() + timeout
     attempt = 0
@@ -193,9 +159,6 @@ def wait_for_ssh(key, user, host, timeout=300):
 
 
 def wait_for_boxes_ssh(ctx, targets, timeout=300):
-# Poll every target's reachability through the gateway, all boxes concurrently, each
-#     with its own full budget (a slow early box no longer eats later boxes' patience).
-#     Raises only if all boxes fail.
     node = config.active().proxmox.node
     print("  Waiting for team boxes to accept SSH via gateway...")
     deadline = time.time() + timeout
@@ -234,8 +197,6 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
 
 
 def wait_for_cloud_init(ctx, targets, timeout=240):
-# Wait for cloud-init to finish on all targets before nakon plants anything, concurrently:
-#     each box gets the full budget from its own thread.
     print("  Waiting for cloud-init to finish on all team boxes...")
     deadline = time.time() + timeout
 
@@ -269,8 +230,6 @@ def wait_for_cloud_init(ctx, targets, timeout=240):
 
 
 def wait_for_http(url, timeout=120):
-# Poll URL until any HTTP response. Never raises; warns on timeout.
-
     print(f"  Waiting for {url} to respond (timeout {timeout}s)...")
     deadline = time.time() + timeout
     attempt = 0
@@ -289,8 +248,6 @@ def wait_for_http(url, timeout=120):
 
 
 def quote_sshkeys(public_key):
-# Proxmox's `sshkeys` config param wants the key URL-encoded. The one definition:
-#     golden clones (golden_target_ops._quote_sshkeys is an alias) and redeploy rebuilds
-#     both use it.
+# Proxmox's `sshkeys` config param wants the key URL-encoded.
     from urllib.parse import quote
     return quote(public_key.strip(), safe="")

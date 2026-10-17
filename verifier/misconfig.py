@@ -34,12 +34,10 @@ MISCONFIG_CHECKS = {
 
 
 def _config_name(entry):
-# Normalize config entry (string or {"name": ...}) to name for dict lookup.
     return entry if isinstance(entry, str) else entry.get("name")
 
 
 def _target_vmid(comp_dir, box):
-# VMID for a nakon machine entry: the frozen roster, falling back to boxes.json order.
     try:
         identifier = box["ip"].split(".")[2]
         base_name = box["name"].rsplit("-team", 1)[0]
@@ -55,11 +53,7 @@ def _target_vmid(comp_dir, box):
 
 
 def misconfig_via_guest_agent(comp_dir, box, verifiable):
-# SSH-dead fallback: run the same checks via the QEMU guest agent.
-#
-#     a live scrim lost its only verifier FAIL to dead
-#     Linux SSH while the planted artifacts were independently confirmed fine —
-#     the agent (virtio-serial, no network) reaches the box anyway.
+# SSH-dead fallback: the guest agent (virtio-serial, no network) reaches the box anyway.
     vmid = _target_vmid(comp_dir, box)
     if vmid is None:
         print("  (guest-agent fallback unavailable: could not resolve the box's vmid)")
@@ -87,9 +81,8 @@ def misconfig_via_guest_agent(comp_dir, box, verifiable):
 
 
 def comp_is_clean(comp_dir, boxes):
-# True for a deliberately-clean comp: box_vulns.json plants nothing AND no nakon-config
-#     machine carries a verifiable misconfig. A comp that pins vulns but whose machines lost them
-#     is drift, not clean — that stays a FAIL in check_misconfig.
+# True for a deliberately-clean comp: nothing pinned AND no machine carries a verifiable misconfig;
+#     pinned-but-lost is drift, a FAIL in check_misconfig.
     try:
         pinned = json.loads((Path(comp_dir) / "box_vulns.json").read_text())
     except (OSError, ValueError):
@@ -101,10 +94,8 @@ def comp_is_clean(comp_dir, boxes):
 
 
 def misconfigs_unverifiable(comp_dir, boxes):
-# True when box_vulns.json pins misconfigs, every pin reached a machine's configuration list,
-#     and none of them has a probe here (Windows-only pins, catalog rows without a check). The
-#     spot-check cannot confirm what it has no probe for; plant_coverage is the gate that proves
-#     those pins were planted, so this is a non-gating SKIP, not a FAIL.
+# Pinned misconfigs with no probe here (Windows-only, catalog rows without a check) → non-gating
+#     SKIP; plant_coverage is the gate that proves those pins were planted.
     try:
         pinned = json.loads((Path(comp_dir) / "box_vulns.json").read_text())
     except (OSError, ValueError):
@@ -117,13 +108,9 @@ def misconfigs_unverifiable(comp_dir, boxes):
 
 
 def check_misconfig(ctx, boxes, comp_dir):
-# One gate for the planted misconfigs, one probe per (box, verifiable config).
-#
-#     Every team's copy of a box must carry the configs its clones share (clone-race
-#     guard), and at least one planted misconfig must be confirmed somewhere — over SSH,
-#     or via the guest agent for a box whose SSH is dead. With one team there is no second
-#     copy to compare, so the confirmation alone decides. Unprovable everywhere is SKIP,
-#     never a pass.
+# Every team's copy of a box must carry the configs its clones share (clone-race guard), and at
+#     least one planted misconfig must be confirmed somewhere — over SSH or via the guest agent.
+#     With one team the confirmation alone decides; unprovable everywhere is SKIP, never a pass.
     print("\n[4/5] MISCONFIG SPOT-CHECK")
     candidates = []
     for box in boxes:
@@ -150,7 +137,6 @@ def check_misconfig(ctx, boxes, comp_dir):
 
     outcome = {}
     for (box, config), r in zip(units, run_concurrent(units, _probe, max_workers=MAX_CONCURRENCY)):
-        # Only the two SSH failures are classified above; anything else escapes here.
         if isinstance(r, Exception):
             raise r
         outcome[(box["ip"], config)] = r

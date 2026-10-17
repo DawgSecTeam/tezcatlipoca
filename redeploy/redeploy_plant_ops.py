@@ -12,20 +12,14 @@ from estate import config
 
 
 def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
-# Configure half: DNS, auth, scoped nakon (--only), service hardening.
     ctx, comp_dir, state = rctx.ctx, rctx.comp_dir, rctx.state
     key = Path(ctx["ssh_key_path"])
     scoring_user = config.active().engine.username
     scoring_ip = ctx["scoring_engine_ip"]
 
     linux_targets = [t for t in targets if box_platform(t["box"]) == "linux"]
-    # Order matters, and it is a documented invariant (docs/architecture.md: "On fresh
-    # clones the NOPASSWD sudoers grant lands BEFORE the DNS fix, whose sudo calls
-    # soft-fail until the grant does"). Same order as deploy.py phase 4. Re-inverting
-    # these two is a silent ~2-minute-per-box regression: without the grant, DNS_FIX_CMD's
-    # sudo is rejected, so fix_dns_on_boxes burns its full 8x15s retry ladder before
-    # falling back to the root guest agent (guests/apt_dns_ops.py), which is the only reason
-    # the wrong order "works" at all.
+    # Order matters: the NOPASSWD sudoers grant must land BEFORE the DNS fix, whose sudo calls
+    # soft-fail until it does — re-inverted, fix_dns burns its full 8x15s retry ladder first.
     pipeline_api.setup_ubuntu_auth(linux_targets, ctx)
     pipeline_api.fix_dns_on_boxes(linux_targets, ctx)
 
@@ -33,21 +27,15 @@ def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
 
     machines = [t["machine"] for t in targets]
     if nakon_bundle is not None and nakon_config_path is not None:
-        # The post-clone stage only lists machines that have post-clone plants. A selected
-        # box whose plants all ride the golden clone is absent from it, and
-        # `nakon --only <it>` then errors ("matched no machine") — which the retry loop
-        # misreads as a dead SSH session (caught live, pfsense-ad web01).
+        # The stage lists only machines with post-clone plants; `nakon --only` on an absent box
+        # errors ("matched no machine"), which the retry loop misreads as a dead SSH session.
         staged = {m["name"] for m in json.loads(Path(nakon_config_path).read_text())["machines"]}
         machines = [m for m in machines if m in staged]
     if nakon_bundle is None or nakon_config_path is None or not machines:
-        # No stage, or none of the selected boxes is in it: every plant for them rides the
-        # golden clone, so there is nothing for nakon to re-apply. The python-side
-        # steps below (auth grant, DNS, service hardening) still re-run.
         print("  (no nakon replant stage for the selected box(es) — skipping the plant pass)")
     else:
         print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
-        # strict=False, mirroring deploy.py's phase-6 stance: these re-plants hit live
-        # boxes mid-event, and one flaky/broken pin must not abort a pre-domain pass.
+        # strict=False mirrors phase 6: one flaky pin must not abort a mid-event pre-domain pass.
         nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
         result = pipeline_api.run_nakon(
             key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
@@ -55,14 +43,11 @@ def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
             timeout=max(2400, pipeline_api.PER_MACHINE_NAKON_BUDGET * len(machines)),
             strict=False, jobs=nakon_jobs,
         )
-        # Append, never replace: the deploy-time entries belong to verify's plant-integrity
-        # line, and a scoped mid-event replant must not retroactively declare the deploy's
-        # failed steps resolved — or erase the record that they ever existed.
+        # Append, never replace: a scoped mid-event replant must not erase the deploy's failed
+        # steps or declare them resolved — verify's plant-integrity line reads this.
         state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
             f"redeploy: {line}" for line in result.failed[:20]]
-        # The document carries the only copy of the box passwords, so a torn write bricks
-        # resume AND redeploy at once — estate_state.write_flat is the atomic 0600 writer
-        # (a Windows/AD test run).
+        # The document holds the only copy of the box passwords; write_flat is the atomic writer.
         estate_state.write_flat(comp_dir, state)
 
     pipeline_api.fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=state.get("box_creds"))
@@ -70,18 +55,11 @@ def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
 
 
 def run_late_pass(targets, rctx):
-# Account-file mode pins, after every account writer this path has.
-#
-#     fix_services_on_boxes' credlist useradd recreates /etc/passwd, /etc/shadow and
-#     /etc/group at their default modes, so a mode planted by the post-clone sweep above is
-#     gone again. This is the deploy's last pass, replayed for the selected boxes. The
-#     domain chain some callers run afterwards creates AD objects, not local accounts.
+# fix_services_on_boxes' credlist useradd recreates /etc/passwd, /etc/shadow and /etc/group at
+#     default modes, so this last pass re-applies the mode pins after every account writer.
     ctx, comp_dir, state = rctx.ctx, rctx.comp_dir, rctx.state
     path = comp_dir / ".nakon-late.json"
     if not path.exists():
-        # A range deployed before the last pass existed has no late file; its mode pins
-        # were planted by whatever stage the old code chose. Say so rather than skip
-        # silently — the next verify is where an absent pin would surface.
         print("  (.nakon-late.json is missing — no account-file mode pins to replay; "
               "the range predates the last pass)")
         return
@@ -107,12 +85,8 @@ def _domain_config_path(comp_dir, fallback):
 
 
 def rerun_domain_configs(targets, rctx, nakon_config_path):
-# Re-run AD domain chain for affected teams (promote DC only if reset).
-#
-#     Returns True when the boxes' domain state may be treated as settled — no
-#     domain semantics at all, or the chain re-ran clean — and False when the
-#     chain was supposed to run but could not. Callers must NOT re-take tz-ready
-#     on False: snapshotting then would bake a broken state in as 'as delivered'.
+# Returns True when the chain re-ran clean (or there are no domain semantics) and False when it
+#     could not; callers must NOT re-take tz-ready on False, or they bake in a broken state.
     ctx, comp_dir, state = rctx.ctx, rctx.comp_dir, rctx.state
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
@@ -135,9 +109,7 @@ def rerun_domain_configs(targets, rctx, nakon_config_path):
 
     print("  Domain-role box(es) were reset to a pre-domain state — re-running domain "
           "configuration for " + ", ".join(sorted(affected_teams)) + "...")
-    # The post-clone stage file may contain only the selected/rebuilt box types. Domain
-    # orchestration still needs every member machine in the affected team so it can
-    # rejoin them after a DC reset; use the full source-of-truth machine list here.
+    # The stage file may hold only the selected box types; the domain chain needs every team member.
     domain_config_path = _domain_config_path(comp_dir, nakon_config_path)
     for team_key in sorted(affected_teams):
         dc_reset = any(
@@ -145,12 +117,9 @@ def rerun_domain_configs(targets, rctx, nakon_config_path):
             for t in domain_targets
         )
         if dc_reset:
-            # A reset DC wipes the ENTIRE AD content: promotion state, the svc-support
-            # and packet accounts, the AD misconfigs, and every member's machine
-            # account. Each chain step keys on its own done-marker, so ALL of this
-            # team's domain markers are void (caught live: deleting only the
-            # ADDS marker re-promoted the DC but skipped account re-creation —
-            # svc-support went missing and verify's domain gate failed).
+            # A reset DC wipes the entire AD content and each chain step keys on its own
+            # done-marker, so every one of this team's markers is void; deleting only ADDS
+            # skipped account re-creation.
             for marker in sorted(comp_dir.glob(f".nakon-domain-{team_key}-*.json")):
                 print(f"  Deleting stale domain marker {marker.name} — the DC was reset, "
                       f"so the whole domain chain (promotion, AD content, member joins) "
@@ -166,21 +135,10 @@ def rerun_domain_configs(targets, rctx, nakon_config_path):
 
 
 def prepare_nakon_assets(comp_dir, boxes):
-# (nakon_config_path, nakon_bundle) for the replant modes.
-#
-#     A function rather than main() inline so the reset ladder can build them LAZILY —
-#     a reset that settles at the tz-ready rung must not demand stage files it would
-#     never have used.
-    # Pre-domain re-plants run the POST-CLONE stage only — the golden-stage installs ride the
-    # linked clone and re-running them over live boxes mid-event is exactly what the stage
-    # split removed.
+# Pre-domain re-plants run the post-clone stage only — the golden-stage installs ride the
+#     linked clone. Built lazily so a reset settling at tz-ready never demands unused files.
     postclone = comp_dir / ".nakon-postclone.json"
     if postclone.exists():
-        # A comp whose plants are ALL golden-stage (e.g. every pin already covered
-        # by the golden plant)
-        # has an empty postclone stage — build_nakon_bundle
-        # refuses an empty machine list, so a legitimate no-replant must not try.
-        # Auth/DNS/service hardening below still re-runs; the probe judges health.
         if not json.loads(postclone.read_text()).get("machines"):
             print("  (postclone stage is empty — every plant rides the golden clone; "
                   "nakon has nothing to re-plant. Auth/DNS/hardening still re-runs.)")

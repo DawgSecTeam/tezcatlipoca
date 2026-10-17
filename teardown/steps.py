@@ -1,12 +1,4 @@
-"""Steps: the units a teardown plan is made of.
-
-Each step declares — as data, not convention — what it is (EVIDENCE or
-TEARDOWN), what may happen when it fails (REFUSE the teardown, or WARN_AND_
-PROCEED), whether it destroys range resources (destructive), and whether it is
-resumable (skipped when the journal records it done). The EXECUTOR applies the
-policies in one place; the steps themselves only do their one job and return a
-StepResult. That is the replacement for the copy-pasted try/except forest of
-the old sequencings."""
+"""Steps: the units a teardown plan is made of."""
 
 import re
 from dataclasses import dataclass
@@ -18,8 +10,8 @@ from common.utils import competition_name
 EVIDENCE = "evidence"
 TEARDOWN = "teardown"
 
-REFUSE = "refuse"                # a failure aborts the plan (re-enter by re-running)
-WARN_AND_PROCEED = "warn"        # a failure is recorded; the teardown continues
+REFUSE = "refuse"
+WARN_AND_PROCEED = "warn"
 
 
 # the truthful vmid: config.yaml is a shared checkout whose deploy.red_vmid another session's deploy can rewrite mid-flight; the target line is what the guards verified and what got deleted
@@ -36,7 +28,6 @@ class StepResult:
     detail: str = ""
 
 
-# built once by the CLI shim / caller; steps must not reach into os.environ or argv themselves
 @dataclass
 class TeardownContext:
     comp_dir: Path
@@ -68,7 +59,7 @@ class Step:
         return {"detail": result.detail}
 
 
-# bookkeeping that never outranks destroying the range: save the access log and revoke this run's console user before artifact collection (the log rides it) and while the engine still answers
+# save the access log and revoke this run's console user before artifact collection (the log rides it) and while the engine still answers
 class PortalStep(Step):
     name = "portal"
 
@@ -94,9 +85,8 @@ class PortalStep(Step):
                               f"re-run the destroy to retry the console-user removal")
 
 
-# The engine's final scoreboard lives only in its database, and EstateStep deletes that
-# database: capture it here, before anything destructive, for the run whose harness died
-# before its own capture. A harness capture, when one exists, is the better artifact — skip.
+# The engine's final scoreboard lives only in its database, and EstateStep deletes that database:
+# capture it here, before anything destructive, for the run whose harness died before its own capture.
 class EngineCaptureStep(Step):
     name = "engine_capture"
     kind = EVIDENCE
@@ -122,8 +112,7 @@ class EngineCaptureStep(Step):
         if recorded and Path(recorded).is_dir() and any(Path(recorded).iterdir()):
             return StepResult(self.name, "skipped", f"harness capture present at {recorded}")
         # Never the directory the collector swaps into: a local seal unlinks its destination
-        # first, so capturing into the collector's own target would delete the file just written
-        # and record it absent. `<comp_dir>/evidence/` is a source the collector only reads.
+        # first, so capturing into the collector's own target would delete the file just written.
         ev = ctx.comp_dir / "evidence"
         ev.mkdir(parents=True, exist_ok=True)
         try:
@@ -138,10 +127,6 @@ class EngineCaptureStep(Step):
 
 
 class ArtifactStep(Step):
-    """Collect this run's test artifacts BEFORE anything is stopped or deleted.
-    The red report and the blue logs only exist while the boxes do; this is also
-    the safety net for a run whose harness died. Never blocks: a dead box is
-    recorded, not raised (EVIDENCE, warn-and-proceed)."""
     name = "artifacts"
     kind = EVIDENCE
     resumable = True
@@ -166,11 +151,7 @@ def _log(msg):
 
 
 class RedStep(Step):
-    """red01 is bad-auto's VM: nothing else in this plan touches it. A normal
-    harness run destroys red01 in its own teardown, so reaching the standalone
-    teardown with red01 alive means the harness died; leaving it up leaves the
-    LLM key and beacon tasking up (scale8 soak). Resumable: a second destroy
-    finds nothing, and a journalled first pass proves which vmid died."""
+    """red01 is bad-auto's VM; reaching the standalone teardown with it alive means the harness died."""
     name = "red01"
     destructive = True
     resumable = True
@@ -181,21 +162,14 @@ class RedStep(Step):
             return StepResult(self.name, "skipped", "--keep-red")
         candidates = red_plant_ops.red_vmid_candidates(ctx.comp_dir, ctx.deployed_state)
         if not candidates:
-            # A run that never staged red has no per-comp bad-auto config and no recorded red
-            # vmid. Running `badauto destroy` then aims it at the HOST's default config —
-            # built-in red_vmid 999, whoever's box lives there (caught live: it found
-            # another session's tdred-2026 red01 at 999, and the reclaim below destroyed it).
-            # Skip, mirroring the scrim harness's teardown; a red01 that genuinely exists for
-            # this comp is still caught by the vmid-candidates resolution and the sweep.
+            # No per-comp bad-auto config and no recorded vmid: `badauto destroy` would aim at the
+            # HOST's default config (red_vmid 999 — caught live: it destroyed another session's red01).
             return StepResult(self.name, "skipped",
                               "no per-comp bad-auto config and no recorded red vmid — "
                               "this run staged no red agent")
         print("  red01      : badauto destroy (not estate-managed — this script cannot "
               "remove it any other way)...")
         if tlaloc_ops.red_engine(ctx.comp_dir) == "tlaloc":
-            # tlaloc v2 runs as its own unit on red01: stop it (ending the event
-            # clock and flushing the audit log) and then use the same VM/NAT
-            # teardown that owns red01.
             r = tlaloc_ops.destroy_tlaloc_red(ctx.comp_dir, env=ctx.env)
         else:
             r = red_plant_ops.destroy_red(ctx.comp_dir, env=ctx.env)
@@ -207,14 +181,11 @@ class RedStep(Step):
         refusal = red_plant_ops.parse_teardown_refusal(r)
         if refusal:
             # bad-auto refuses without ITS marker, and a deploy that died before stamping leaves
-            # exactly that — a red01 no destroy will claim. Reclaim it narrowly, then FAIL if it
-            # is still there: reporting "warned" left the LLM key and beacon tasking up and only
-            # surfaced at the verification .
+            # exactly that — a red01 no destroy will claim. Reclaim narrowly, then FAIL if still there.
             from infra import red01
             vmid = self.last_vmid
             # comp_name arms reclaim's another-competition guard: a VM whose marker names a
-            # different competition is a recycled vmid, never ours (caught live: without
-            # it, a badauto-defaulted 999 found tdred-2026's stamped red01 and reclaimed it).
+            # different competition is a recycled vmid, never ours.
             if vmid and red01.reclaim_unstamped_red(vmid, comp_name=competition_name(ctx.comp_dir),
                                                     log=_log):
                 return StepResult(self.name, "ok",
@@ -230,25 +201,21 @@ class RedStep(Step):
                           f"surviving red VM by hand (it holds the LLM key)")
 
     def journal_detail(self, result):
-        # status rides along so verify_clean can tell "red01 destroyed" from "skipped —
-        # this run staged no red": only the former demands an absence proof.
+        # status lets verify_clean tell "red01 destroyed" from "skipped — no red staged":
+        # only the former demands an absence proof.
         return {"detail": result.detail, "vmid": getattr(self, "last_vmid", None),
                 "status": result.status}
 
 
 class PreStopStep(Step):
-    """Hard-stop every team clone (force by default, owned only): the bpg
-    graceful path hangs on an agent-down DC and burns minutes the disk about
-    to be destroyed does not need (owner directive)."""
+    """Hard-stop every team clone: the bpg graceful path hangs on an agent-down DC."""
     name = "pre_stop"
     destructive = True
 
     def run(self, ctx):
         from teardown.machinery import pre_stop_windows_boxes
         from multinode.placement_record import record_of
-        # A placement's team_nodes maps teams to RECORD names; the API path needs the PVE node
-        # name (the route table is keyed by it). Unmapped, the pre-stop listed
-        # /nodes/<record>/qemu and silently skipped every hard-stop .
+        # team_nodes maps teams to RECORD names; the API path needs the PVE node name.
         team_nodes = {k: record_of(ctx.placement, v).node
                       for k, v in (ctx.placement or {}).get("team_nodes", {}).items()} or None
         pre_stop_windows_boxes(ctx.teams, ctx.boxes, ctx.default_node,
@@ -257,9 +224,7 @@ class PreStopStep(Step):
 
 
 class EstateStep(Step):
-    """The recorded estate, destroyed through the API in the one order linked clones
-    survive. REFUSES when an owned resource cannot be destroyed: a range still standing is
-    never reported as clean."""
+    """The recorded estate, destroyed in the one order linked clones survive; REFUSES when an owned resource cannot be destroyed."""
     name = "estate"
     failure = REFUSE
     destructive = True
@@ -274,9 +239,8 @@ class EstateStep(Step):
             return StepResult(self.name, "failed", "; ".join(
                 f"{r['entry']['kind']} {r['entry']['name']}: {r['reason']}"
                 for r in summary["refused"]))
-        # A VM created but never recorded (a crash between the clone and the record) is
-        # invisible to the inventory; the run-id-scoped sweep is the net for it. A
-        # teams-only teardown keeps the role templates, so the sweep must not claim them.
+        # A VM created but never recorded (a crash between clone and record) is invisible to the
+        # inventory; the run-id-scoped sweep is the net for it.
         sweep_tagged_leftovers(ctx.nodes, ctx.ownership, keep_templates=not ctx.full)
         # A range deployed before the inventory existed has no template records, so its
         # goldens and engine template die by vmid math instead.
@@ -292,9 +256,7 @@ class EstateStep(Step):
 
 
 class RemoteAccessStep(Step):
-    """Headscale: revoke the engine's tailnet node, delete this comp's
-    participant users, re-apply the policy. A dead headscale host never blocks
-    destroying a range."""
+    """Headscale: revoke the engine's tailnet node, delete this comp's participant users, re-apply the policy; a dead headscale host never blocks destroying a range."""
     name = "remote_access"
 
     def run(self, ctx):

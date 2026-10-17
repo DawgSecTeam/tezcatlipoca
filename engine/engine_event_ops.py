@@ -10,14 +10,9 @@ from common.ssh_ops import engine_ssh_opts
 
 
 def read_event_conf(ctx):
-# Pull the engine-authoritative secrets: /opt/quotient/config/event.conf
-#     (TOML), the linux credlist, and /opt/quotient/.env.
-#
-#     The engine is the source of truth after any re-bootstrap or partially
-#     applied seed — the state document can drift, these files cannot (the
-#     a race where a re-stage changed credentials on the existing red01). box_password itself is
-#     baked into the boxes at bootstrap and lives nowhere on the engine, so it
-#     is NOT recoverable here.
+# The engine's files are the source of truth after a re-bootstrap or a partially applied
+# seed — the state document can drift. box_password is baked into the boxes and is not
+# recoverable here.
     import tomllib
 
     key = ctx["ssh_key_path"]
@@ -53,7 +48,6 @@ def read_event_conf(ctx):
     if box_creds:
         secrets["box_creds"] = box_creds
 
-    # Packet dual-credit adds further credlists (e.g. domain.credlist); recover them all.
     extra = {}
     listing = subprocess.run(
         ["ssh", "-i", key, *engine_ssh_opts(ctx),
@@ -85,12 +79,8 @@ def read_event_conf(ctx):
 def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
                     postgres_password, redis_password, box_creds, inject_password=None,
                     extra_credlists=None, scoring_password=None):
-# Build event.conf and push it to the scoring engine with the per-run secrets.
-#
-#     extra_credlists maps additional credlist names to {user: pw} (packet dual-credit's
-#     domain.credlist); each is pushed as <name>.credlist next to linux.credlist and must
-#     be referenced by some check's credlist override so build_event_conf declares it in
-#     CredlistSettings.
+# Each extra credlist is pushed as <name>.credlist and must be named by some check's credlist
+# override so build_event_conf declares it in CredlistSettings.
 
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
@@ -117,10 +107,6 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
             "ssh", "-i", key,
             *engine_ssh_opts(ctx),
             f"{scoring_user}@{scoring_ip}",
-            # /opt/quotient is root-owned (sudo git clone at template build); the
-            # config dir must be created with sudo too — the clean step removes
-            # event.conf/credlists, and an unsudo'd mkdir here died with rc=1 on
-            # the M4 validation run (caught live).
             f"sudo mkdir -p /opt/quotient/config && "
             f"echo '{event_conf_b64}' | base64 -d | sudo tee /opt/quotient/config/event.conf > /dev/null && "
             "sudo chmod 600 /opt/quotient/config/event.conf",
@@ -182,10 +168,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
             f"{scoring_user}@{scoring_ip}",
             "cd /opt/quotient && sudo docker compose restart",
         ],
-        # A full-stack restart stops and starts db + redis + server + 5 runners +
-        # divisor; on a loaded / ZFS-backed range node the postgres stop+start
-        # alone runs past a minute (seen caught live: 60 s timed out mid-phase
-        # 3 and aborted the deploy after everything had actually come up).
+        # The postgres stop+start alone can run past a minute on a loaded node, outliving the 60s default.
         check=True, timeout=300,
     )
 

@@ -10,9 +10,7 @@ from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
 
 
 def default_red_seg_ip(comp_dir=None):
-    """--red-seg-ip fallback: the competition's own bad-auto config, else the
-    routed default. (The sibling checkout's shared config.yaml is no longer a
-    source — on concurrent sessions it names whichever red01 staged last.)"""
+    """--red-seg-ip fallback: the competition's own bad-auto config, else the routed default."""
     if comp_dir is not None:
         from red import badauto_config_ops
         deploy = badauto_config_ops.load_config(comp_dir).get("deploy") or {}
@@ -21,14 +19,9 @@ def default_red_seg_ip(comp_dir=None):
 
 
 def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
-    """--red-identity: prove red's attack traffic arrives at boxes carrying
-    its red-segment source address (routed mode), not the team gateway the
-    scoring checks source from. Holds a TCP connection open from red01 to a
-    Linux box's :22 and reads the box's connection table (ss) while it's up.
-
-    Returns a GateResult; unprovable paths are SKIP, never a pass. Gateway-peer
-    lines in the ss output are the verify jump itself (ProxyCommand enters
-    through the engine) — expected, not a red sighting."""
+    """--red-identity: prove red's attack traffic arrives at boxes carrying its red-segment source
+    address (routed mode), not the team gateway. Gateway-peer lines in the ss output are the verify
+    jump itself — expected, not a red sighting."""
     print(f"\n[+RED] RED IDENTITY (routed-mode source address; red01 {red_ip}, "
           f"expecting source {seg_ip})")
     linux_ips = [b["ip"] for b in boxes
@@ -51,7 +44,7 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
         observed = ""
         for _ in range(5):
             if hold.poll() is not None:
-                break  # probe died early — red01 unreachable or box refused
+                break  # probe died early
             time.sleep(2)
             try:
                 proc = context.ssh_via_gateway(
@@ -70,9 +63,7 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
     finally:
         hold.wait()
 
-    # rc 0/-9/-15/-None: connected (or we killed the holder mid-sleep — fine).
-    # A positive rc means the remote bash died, i.e. the /dev/tcp connect to
-    # the box failed — red cannot reach the team subnet at all.
+    # A positive rc means the remote bash died, i.e. the /dev/tcp connect to the box failed.
     if hold.returncode is not None and hold.returncode > 0:
         print(f"  FAIL  — red01 could not open the probe connection to "
               f"{box_ip}:22 at all (probe rc={hold.returncode}): red cannot "
@@ -92,18 +83,9 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
 
 
 def check_red_teams(ctx, boxes, red_ip, red_user="sysadmin", timeout=12):
-    """--red-teams all: every team must be reachable from red01, not just one.
-
-    a scale soak: routed red01 could not reach ANY satellite team box
-    ("unreachable over SSH" on 15/15 cred_sprays) and this went unnoticed until
-    T+40 because `--red-identity` only proves red reaches one box on its own
-    segment. Red's whole job depends on this path, so it is a gate, and it runs
-    before T0 in the scrim's stage_verify.
-
-    Probes each team's boxes in turn and stops at the first that answers, so a
-    team costs one round trip when it is healthy. Fails closed: a team whose boxes
-    all refuse the connect is a FAIL, and an unreadable team list is a SKIP (never
-    a pass), matching the discipline of every other gate in this file."""
+    """--red-teams all: every team must be reachable from red01, not just one — --red-identity
+    only proves red reaches one box on its own segment. Fails closed: a team whose boxes all refuse
+    the connect is a FAIL, an unreadable team list is a SKIP."""
     print(f"\n[+RED] RED REACHABILITY (red01 {red_ip} -> one box per team)")
     by_team = boxes_by_team(boxes)
     if not by_team:

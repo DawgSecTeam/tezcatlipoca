@@ -1,24 +1,4 @@
-"""Per-competition console-only Proxmox tokens for the student portal (docs/portal.md).
-
-The portal on the engine opens team consoles through PVE's vncproxy/vncwebsocket, which needs a
-Proxmox credential ON the engine — a host every team NIC touches. So that credential is minted
-per competition and scoped to the bone:
-
-  user   tezcon-<comp>-<run_id>@pve       one per node the competition's teams live on
-  token  <user>!portal                    privsep=0: the token IS the user's permissions
-  role   TezConsole = VM.Console only     (shared across competitions; never deleted)
-  ACLs   /vms/<vmid> -> user, one per team VM of THIS competition on that node
-
-What the token can do is exactly what the students already get: a console on this competition's
-own team VMs. It cannot start/stop, read configs, or touch any other VM.
-
-Teardown deletes exactly `tezcon-<comp>-<run_id>@pve` on every node (the user's token and ACLs
-go with it). Exact name only — never a prefix sweep: AGENTS.md records an over-broad sweep
-destroying two other competitions' infrastructure. A user that is already gone is success.
-
-This module never decides WHETHER the portal runs; portal_ops calls it and degrades (logins
-work, consoles off) when minting fails.
-"""
+"""Per-competition console-only Proxmox tokens for the student portal (docs/portal.md)."""
 
 import os
 
@@ -30,8 +10,6 @@ from estate import config
 ROLE_ID = "TezConsole"
 ROLE_PRIVS = "VM.Console"
 TOKEN_NAME = "portal"
-# Privileges the deploy token needs to mint (preflight probe). Sys.Modify only matters the
-# first time, when the TezConsole role does not exist yet on a node.
 REQUIRED_PRIVS = ("User.Modify", "Permissions.Modify", "Realm.AllocateUser", "Sys.Modify")
 
 
@@ -50,11 +28,7 @@ def _http_detail(e):
 
 
 def vncproxy_mint(endpoint, token, pve_node, vmid, fingerprint=None, timeout=30):
-    """Mint a PVE noVNC ticket: POST /nodes/<pve_node>/qemu/<vmid>/vncproxy {websocket: 1}.
-
-    Returns {port: int, ticket: str}. The one handshake every console consumer shares
-    (portal broker, the two build-*-provision-template tools). `fingerprint` pins the TLS
-    peer for a per-node record; None leaves the env rules of proxmox_request in force."""
+    """Mint a PVE noVNC ticket: POST vncproxy {websocket: 1} -> {port, ticket}."""
     url = (f"{endpoint.rstrip('/')}/api2/json/nodes/{pve_node}/qemu/{int(vmid)}/vncproxy")
     r = proxmox_request("POST", url, data={"websocket": 1},
                         headers={"Authorization": f"PVEAPIToken={token}"},
@@ -67,11 +41,7 @@ def vncproxy_mint(endpoint, token, pve_node, vmid, fingerprint=None, timeout=30)
 
 
 def vnc_screenshot(endpoint, token, pve_node, vmid, out_path, fingerprint=None):
-    """PNG of a VM's VGA console via the PVE vncwebsocket (raw RFB, 3.3-style handshake).
-
-    PVE rejects the 3.8 type-list path over vncwebsocket, and packs several RFB messages
-    into one websocket frame, so reads are buffered. Heavy imports (websocket-client, PIL,
-    cryptography) stay inside: the tools are the only callers, and they shell out."""
+    """PNG of a VM's VGA console via vncwebsocket (raw RFB 3.3), reads buffered across frames."""
     import ssl
     import struct
     from urllib.parse import quote
@@ -136,13 +106,8 @@ def _exists_already(e):
 
 
 def node_targets(comp_dir_targets, placement, default_node):
-    """Group a competition's team VMs by the node record that hosts them.
-
-    Returns {node_key: {"pve_node", "endpoint", "token_env", "tls_fingerprint", "vmids"}}.
-    node_key is the nodes.json record NAME under a multi-node placement (PVE hostnames can
-    repeat across independent hosts) and the env node otherwise; every portal box record
-    carries the same key, so the portal can find its node without re-deriving placement.
-    """
+    """Group a competition's team VMs by the node record that hosts them; node_key is the
+    nodes.json record NAME under placement (PVE hostnames repeat across hosts), else the node."""
     out = {}
     if placement:
         for t in comp_dir_targets:
@@ -166,7 +131,6 @@ def node_targets(comp_dir_targets, placement, default_node):
 
 
 def team_node_key(target, placement, default_node):
-    """The node_key (see node_targets) of one target."""
     return placement["team_nodes"][target["team_key"]] if placement else default_node
 
 
@@ -191,14 +155,9 @@ def _ensure_role(endpoint, token, api):
         if not _exists_already(e):  # another deploy created it between our GET and POST
             raise
 
-
 def mint_node_token(comp_name, run_id, node, token, previous=None, api=proxmox_api_for):
     """Mint (or re-mint) this run's console token on one node and (re)apply its ACLs.
-
-    `previous` is the {user, token_id, secret} recorded by an earlier attempt of the SAME run:
-    the secret is reused (PVE only reveals it at creation) as long as the token still exists;
-    otherwise the token is recreated. ACL PUTs are idempotent, so a resume re-applies them —
-    which also picks up vmids added since (a redeploy that rebuilt boxes)."""
+    `previous` reuses the secret PVE only reveals at creation; ACL PUTs are idempotent."""
     endpoint = node["endpoint"]
     userid = console_user(comp_name, run_id)
     _ensure_role(endpoint, token, api)
@@ -237,12 +196,8 @@ def mint_node_token(comp_name, run_id, node, token, previous=None, api=proxmox_a
 
 def mint_console_tokens(comp_name, run_id, nodes, previous=None, api=proxmox_api_for,
                         env=os.environ):
-    """Mint the console token on every node of `nodes` (node_targets output).
-
-    Returns (tokens, problems): tokens maps node_key -> {user, token_id, secret} for the nodes
-    that succeeded; problems lists "<node_key>: <why>" for the rest. Never raises for a
-    Proxmox refusal — the caller records a degradation and the portal runs without consoles on
-    those nodes."""
+    """Mint the console token on every node; returns (tokens, problems), never raises for a
+    Proxmox refusal (the caller records a degradation)."""
     tokens, problems = {}, []
     previous = previous or {}
     for key, node in nodes.items():
@@ -263,8 +218,8 @@ def mint_console_tokens(comp_name, run_id, nodes, previous=None, api=proxmox_api
 
 
 def revoke_console_tokens(comp_name, run_id, nodes, api=proxmox_api_for, env=os.environ):
-    """Delete exactly this run's console user on every node. Returns a list of problems
-    (empty = clean). An already-absent user counts as clean, so teardown re-runs converge."""
+    """Delete exactly this run's console user on every node. Exact name only, never a prefix
+    sweep — an over-broad sweep once destroyed two other competitions' infrastructure."""
     userid = console_user(comp_name, run_id)
     problems = []
     for key, node in nodes.items():

@@ -8,12 +8,7 @@ from engine.engine_health_ops import install_range_healthcheck
 
 
 def _clone_quotient_cmd(quotient_ref):
-# The git clone command for the pinned Quotient ref.
-#
-#     A 40-hex commit can't be `git clone --branch`ed, so it goes through an explicit
-#     fetch + checkout (GitHub serves arbitrary SHA fetches at depth 1). Branch/tag refs
-#     clone directly. Empty ref = historical behavior: depth-1 HEAD of the default
-#     branch (deterministic only because the template freezes whatever it built).
+# A 40-hex commit can't be `git clone --branch`ed, so it goes through fetch + checkout.
     url = "https://github.com/dbaseqp/Quotient.git"
     ref = (quotient_ref or "").strip()
     if re.fullmatch(r"[0-9a-f]{40}", ref):
@@ -33,12 +28,8 @@ def _clone_quotient_cmd(quotient_ref):
             f"2>/dev/null || (cd /opt/quotient && sudo git submodule update --init --recursive)")
 
 
-# The canonical dbaseqp/Quotient inject-detail fix (local main ed539df): render the
-# description as markdown and drop the stray `from` assignment that printed the title
-# twice. Upstream is unpushable, so every clone gets it re-applied here. The anchors are
-# exact strings: a miss means the template moved and the patch did NOT apply — fail the
-# build loudly rather than ship the bug. Idempotent: an already-patched tree is rewritten
-# identically and reports so.
+# Upstream is unpushable, so every clone gets the inject-detail fix re-applied here. The
+# anchors are exact strings: a miss fails the build loudly rather than ship the bug.
 _QUOTIENT_INJECTS_PY = r'''
 import pathlib, sys
 path = pathlib.Path(sys.argv[1])
@@ -61,39 +52,17 @@ else:
 
 
 def _patch_quotient_injects_cmd():
-# Apply + verify the inject-detail fix on the freshly cloned checkout. The script
-#     prints one verification line and exits non-zero on a missing file or anchor, so
-#     _run_engine_cmd turns that into a named, failing "patch Quotient inject page" step.
     blob = base64.b64encode(_QUOTIENT_INJECTS_PY.encode()).decode()
     return (f"echo '{blob}' | base64 -d | sudo python3 - "
             f"/opt/quotient/static/templates/pages/injects.html")
 
 
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_ref=None):
-# Bootstrap the scoring engine: install packages, Docker, Quotient.
-#
-#     M4: runs on the engine-TEMPLATE build VM (never on the deployed engine, which
-#     clones from that template). Returns build info {"quotient_head": ...} for
-#     traceability record; the HASH input is the pinned ref from config, not this
-#     realized HEAD.
     _run_engine_cmd(ctx, (
-        # Stop the apt machinery for the build window: unattended-upgrades both holds
-        # the dpkg lock past Lock::Timeout and re-fires when `apt-get update` refreshes
-        # the lists — and the preamble's killall can catch it mid-upgrade, leaving an
-        # old libc6 under freshly unpacked -dev packages (caught across two
-        # engine-template builds in a row: rc=100, first on the lock, then on the
-        # half-upgrade; stopping only the TIMERS left an already-running
-        # apt-daily-upgrade.service free to spawn apt-get mid-bootstrap).
-        #
-        # `systemctl stop` alone still lost the race: rc=100 with
-        # `/var/cache/apt/archives/lock` held by a fresh apt-get pid that
-        # apt-daily-upgrade.service spawned *between* the stop and our `upgrade`).
-        # DPkg::Lock::Timeout does NOT cover the archives-cache lock, so that timeout
-        # can't save us. Fix: MASK the units (a masked unit cannot be started or
-        # re-activated by the timer/dbus), kill their cgroups, then poll until every
-        # apt/dpkg lock is actually free before touching apt. Upgrade first, then
-        # install, so the dependency set is deterministic; `dpkg --configure -a` +
-        # `-f install` repair whatever an earlier interrupted upgrade left behind.
+        # unattended-upgrades holds the dpkg/archives locks past Lock::Timeout and re-fires
+        # mid-upgrade; stopping the units alone let apt-daily-upgrade spawn apt-get between
+        # the stop and our upgrade. So mask the units, kill their cgroups, poll until every
+        # lock is free, then upgrade before install.
         "sudo systemctl mask --now unattended-upgrades.service apt-daily.service "
         "apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer 2>/dev/null; "
         "sudo systemctl kill --kill-whom=all unattended-upgrades.service "
@@ -110,16 +79,13 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update && "
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 upgrade -y && "
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y "
-        # python3-paramiko is what the remote nakon deploy imports; it is baked in here so a
-        # deploy never has to pip-install into the engine's system python.
+        # python3-paramiko is what the remote nakon deploy imports; baked in so a deploy
+        # never pip-installs into the engine's system python.
         "docker.io git curl python3-pip python3-paramiko apt-cacher-ng"
     ), timeout=1800, step="install engine packages")
 
-    # apt-cacher-ng defaults to port 3142 on all interfaces; the boxes' gateway IP is the
-    # engine's team-NIC address, so no listener change is needed. Enable it here so it is
-    # serving before the first box-side apt prep (phase 5). Not fatal if the probe fails:
-    # the per-box proxy write in apt_dns_ops is gated by the same Compfile flag and apt
-    # works unproxied, just slower.
+    # apt-cacher-ng defaults to port 3142 on all interfaces; the boxes' gateway is the
+    # engine's team-NIC address, so no listener change is needed.
     print("  Enabling apt-cacher-ng (package mirror cache for team boxes)...")
     _run_engine_cmd(ctx, (
         "sudo systemctl enable --now apt-cacher-ng && "
@@ -147,8 +113,6 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
     _run_engine_cmd(ctx, _clone_quotient_cmd(quotient_ref), timeout=120,
                     step="clone Quotient")
 
-    # Upstream ships the inject-detail bug; re-patch every clone so a rebuilt engine
-    # template cannot reintroduce it. Idempotent, and a missing file/anchor fails here.
     _run_engine_cmd(ctx, _patch_quotient_injects_cmd(), timeout=30,
                     step="patch Quotient inject page")
 
@@ -171,18 +135,14 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
 
 
 def _install_firewall_and_healthcheck(ctx):
-# Disk state every engine carries: forwarding rules, sshd multiplexing headroom,
-#     the range-firewall + range-healthcheck units. Runs at template build; the firewall
-#     timer re-asserts the rules on every clone.
     print("  Restoring network forwarding rules after Docker start...")
     _run_engine_cmd(ctx, (
             "sudo iptables -P FORWARD ACCEPT && "
             "sudo iptables -C FORWARD -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP 2>/dev/null || "
             "sudo iptables -I FORWARD 1 -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP && "
             "sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE && "
-            # MaxSessions raised for the operator's ControlMaster multiplexing (M1.5): every
-            # per-box ProxyCommand shares one engine connection, and the default 10 would
-            # throttle M2's concurrent waits; MaxStartups absorbs cold-start bursts.
+            # MaxSessions 64 for the operator's ControlMaster multiplexing: every per-box
+            # ProxyCommand shares one engine connection and the default 10 throttles it.
             "sudo sed -i -e 's/^#*AllowTcpForwarding.*/AllowTcpForwarding yes/' "
             "-e 's/^#*MaxSessions.*/MaxSessions 64/' "
             "-e 's/^#*MaxStartups.*/MaxStartups 30:30:100/' /etc/ssh/sshd_config && "
@@ -235,10 +195,7 @@ def _install_firewall_and_healthcheck(ctx):
 
 
 def push_quotient_env(ctx, postgres_password, redis_password):
-# Write /opt/quotient/.env (per-competition DB secrets). Extracted from bootstrap:
-#     the template build removes this file before conversion, and every engine clone
-#     re-writes it BEFORE compose up so the fresh postgres volume initializes with the
-#     right credentials.
+# Must precede compose up: the fresh postgres volume initializes with the credentials in this file.
     print("  Writing Quotient .env...")
     quotient_env = (
         f"POSTGRES_PASSWORD={postgres_password}\n"

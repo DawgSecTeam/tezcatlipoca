@@ -7,8 +7,6 @@ from common.ssh_ops import engine_ssh_opts
 
 
 def install_range_healthcheck(ctx):
-# Install live-ops health check timer on scoring engine (Quotient + NAT/isolation).
-
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]
@@ -86,7 +84,6 @@ def install_range_healthcheck(ctx):
 
 
 def ensure_nat_forwarding(ctx):
-# Idempotently (re)assert the engine's team-subnet NAT + forwarding + team isolation.
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]

@@ -7,11 +7,8 @@ _GATE_LABEL_WIDTH = 18
 
 
 def gate_verdict(results, allow_unverified=()):
-# (gate, passed) derived from GateResults.
-#
-#     gate maps every gating gate name to `status is PASS` (what do_freeze records).
-#     A SKIP is non-passing — it must not yield exit 0 — unless the operator named
-#     that gate in --allow-unverified; a FAIL always fails.
+# (gate, passed) derived from GateResults: a SKIP is non-passing (never exit 0) unless the
+#     operator named that gate in --allow-unverified; a FAIL always fails.
     allowed = set(allow_unverified)
 
     gate = {r.name: r.passed for r in results if r.gating}
@@ -23,7 +20,6 @@ def gate_verdict(results, allow_unverified=()):
 
 
 def summary_lines(results, allow_unverified=()):
-# The SUMMARY body, generated from the GateResults themselves (D6).
     allowed = set(allow_unverified)
     lines = []
     for r in results:

@@ -23,7 +23,6 @@ from estate import config as estate_config
 
 
 def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
-# Recreate VM from template then configure (clones template, not team1 live box).
     ctx, node, comp_dir, state = rctx.ctx, rctx.node, rctx.comp_dir, rctx.state
     box_password = state.get("box_password")
     if not box_password:
@@ -42,8 +41,7 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
         full_clone = True
         src_vmid = None
         src_label = None
-        # Multi-node: the box's golden is its own node's slot copy (state carries
-        # per-slot ids); single-node keeps the flat map.
+        # Multi-node: the golden is the box's own node slot copy (state carries per-slot ids).
         by_slot = state.get("golden_ids_by_slot") or {}
         if by_slot:
             from multinode.placement_record import read_placement, slot_of_team
@@ -56,10 +54,6 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
             src_vmid = int(slot_ids[box["name"]])
             full_clone = False
             src_label = f"golden template '{box['template']}' (vmid {src_vmid}, linked clone)"
-            # M4 frozen semantics: the rebuild uses the frozen template as-is. A hash
-            # mismatch against the verified record is a WARNING, never a mid-event
-            # blocker — but it must be loud, because it means the node's template is
-            # not the one the verify PASS covered.
             expected_hash = (state.get("golden_hashes") or {}).get(box["name"])
             on_node = stored_template_hash(tnode, src_vmid)
             if expected_hash and on_node and on_node != expected_hash:
@@ -76,9 +70,7 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
                 f"Redeploy the range instead.")
         print(f"  Rebuilding {describe_target(t)} from {src_label}...")
 
-        # Ownership guard: the state's run id is the destruction anchor. A box that
-        # belongs to another run of the same competition ID (a second worktree) is
-        # refused — rebuilding over it would eat someone else's range.
+        # The state's run id is the destruction anchor: a box belonging to another run is refused.
         destroy_vm_if_exists(tnode, t["vmid"],
                              expect_tags=ownership_tags(competition_name(comp_dir), state["run_id"]))
 
@@ -86,10 +78,9 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
             "newid": t["vmid"],
             "name": t["vm_name"],
             "full": 1 if full_clone else 0,
-            # /clone takes no tags, and the tagging PUT below only lands after the clone
-            # task finishes — a kill mid-clone would otherwise leave an unmarked VM
-            # squatting our vmid slot. The description exists from the clone's first
-            # instant (infra.ownership.clone_marker).
+            # /clone takes no tags and the tagging PUT lands only after the clone finishes, so a
+            # kill mid-clone would leave an unmarked VM squatting our vmid slot (the description
+            # exists from the first instant).
             "description": clone_marker(competition_name(comp_dir)),
         })["data"]
         wait_for_proxmox_task(tnode, upid)
@@ -98,9 +89,8 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
             "net0": f"virtio,bridge=vmbr{t['identifier']}",
             "cores": box["cpu"],
             "memory": box["memory_mb"],
-            # Stamp ownership explicitly: a clone INHERITS its source's tags, and a
-            # golden reused across runs carries a stale run-<id> — the next teardown's
-            # full-tag-set guard would then refuse this box as foreign.
+            # A clone inherits its source's tags and a reused golden carries a stale run-<id>,
+            # which teardown's full-tag-set guard would refuse as foreign.
             "tags": ";".join(sorted(ownership_tags(competition_name(comp_dir), state["run_id"]))),
         }
         if not windows:
@@ -113,9 +103,8 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
         proxmox_api("PUT", f"/nodes/{tnode}/qemu/{t['vmid']}/config", data=config)
 
         if box.get("disk_gb"):
-            # The box's own disk interface (Windows boxes are sata0 — a hardcoded scsi0
-            # made every Windows rebuild die here), and only ever grow: a golden clone
-            # already carries the box's size, and PVE refuses a shrink.
+            # The box's own disk interface — Windows boxes are sata0, and a hardcoded scsi0 made
+            # every Windows rebuild die. Only ever grow: PVE refuses a shrink.
             iface = box.get("disk_iface") or "scsi0"
             cur = proxmox_api("GET", f"/nodes/{tnode}/qemu/{t['vmid']}/config")["data"].get(iface, "")
             m = re.search(r"size=(\d+)G", cur)
@@ -133,8 +122,6 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
 
         rebuilt.append(t)
 
-        # The rebuilt box carries the current run's tags, so the next deploy adopts it
-        # rather than cloning a second one into the same slot.
         print(f"    NOTE: {t['vm_name']} was recreated outside the deploy. It carries this "
               f"run's ownership tags, so the next deploy adopts it instead of rebuilding.")
 
@@ -148,10 +135,8 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
             take_snapshot(t.get("node") or node, t["vmid"], SNAP_BASE,
                           description="tezcatlipoca: rebuilt from template, pre-Nakon")
 
-        # M4: the rebuild plants the POST-CLONE STAGES in the deploy's order, not the
-        # full config — the golden-stage work rides the clone, and planting the
-        # disruptive/boot-hostile final stage before the domain joins is exactly the
-        # brick hazard the three-pass split exists to prevent.
+        # The rebuild plants the post-clone stages in deploy order — golden-stage work rides the
+        # clone, and planting the disruptive final stage before the domain joins bricks the box.
         rebuilt_names = [t["machine"] for t in rebuilt]
         predomain_path = comp_dir / ".nakon-predomain.json"
         final_path = comp_dir / ".nakon-final.json"
@@ -202,8 +187,7 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
             print("  Final-stage pass (disruption + boot-hostile) on rebuilt boxes...")
             _stage_pass(final_path, "final")
 
-        # After every account writer above (fix_services' credlist useradd, the domain
-        # chain), so the modes the packet promises reach the rebuilt box.
+        # After every account writer above, so the packet's promised modes reach the rebuilt box.
         run_late_pass(rebuilt, rctx)
 
         if domain_settled:
@@ -217,12 +201,7 @@ def mode_rebuild(targets, rctx, nakon_config_path, nakon_bundle):
 
 
 def reconcile_estate_state(rebuilt, rctx):
-# Re-point each rebuilt box's inventory record at the VM that now holds its vmid.
-#
-#     mode_rebuild recreates boxes through the API, so the recorded entry still names the
-#     destroyed VM. Re-recording by deterministic vmid re-pins the inventory to the live
-#     box, which is what the teardown destroys and the preflight checks. Idempotent: an
-#     entry already naming this vmid is upserted in place.
+# mode_rebuild recreates boxes through the API, leaving the recorded entry naming the dead VM.
     from estate import state as estate_state
     document = estate_state.EstateState.load(rctx.comp_dir)
     for t in rebuilt:

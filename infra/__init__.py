@@ -1,19 +1,5 @@
-"""infra: everything that touches the Proxmox estate lives here.
-
-  client      the one Proxmox API client (TLS pinning, per-node routes, cluster reads,
-              task wait, node-load throttle). Everything else talks to Proxmox through it.
-  guest_exec  guest-agent exec / detached exec / agent waits
-  lifecycle   start/stop + snapshots
-  ownership   ownership-guarded mutations (destroy / retag / unlock / gc / clone marker)
-  console     VNC console sessions (vncproxy + vncwebsocket)
-  gates       every refusal the deploy makes before it builds or destroys anything
-  plan        preflight plan model (PreflightPlan / NodeShare + builders)
-  collisions  live-cluster overlap refusals (vmid/bridge slot, mgmt IP)
-  resources   node resource gates (datastore headroom, template/cloud-init checks)
-
-Import from the owning submodule (`from infra.client import proxmox_api`); the names
-re-exported here are the public surface for callers that want the package-level import.
-Patching: patch the owning module, not this package."""
+"""infra: everything that touches the Proxmox estate lives here."""
+# Patch the owning submodule, never this package: the names here are re-exports.
 
 from infra.client import (clear_node_routes, cluster_vms_for, live_vmids,  # noqa: F401
                           node_routes_active, proxmox_api,

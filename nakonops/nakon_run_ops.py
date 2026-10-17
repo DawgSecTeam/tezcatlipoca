@@ -14,24 +14,18 @@ from nakonops.nakon_bundle_ops import build_nakon_bundle
 from pathlib import Path
 
 
-# nakon stdout announces each step as "<machine> step <i>/<n> ...". Seeing one
-# proves the plant started executing — after that, a dead ssh session leaves
+# Seeing a step line proves the plant started executing — after that, a dead ssh session leaves
 # the outcome unknown.
 _STEP_LINE_RE = re.compile(r"\bstep \d+/\d+\b")
 
-# A transport death in the first seconds is a cold ssh (auth, engine handshake,
-# bundle staging) — nothing ran, and the 20s retry is safe. Past this window
-# steps were in flight and the outcome must be treated as unknown.
+# A transport death in the first seconds is a cold ssh (auth, engine handshake, staging) —
+# nothing ran and the 20s retry is safe. Past this window steps were in flight.
 COLD_DEATH_WINDOW = 120
 
 
 class NakonResult:
-# Structured outcome of one `nakon deploy` (M4 plant-coverage source).
-#
-#     failed: raw FAILED output lines (the human-facing tally, as before).
-#     machines: per-machine step results from nakon deploy --json — name, exit_status,
-#     error, and steps[{name, rc, ...}] — so coverage = expected configs minus rc!=0
-#     steps, exactly, instead of parsed from interleaved --jobs stdout.
+    # Structured outcome of one `nakon deploy`: `failed` is the raw FAILED lines; `machines` the
+    # per-machine step results from --json, so coverage is exact rather than parsed from stdout.
 
     def __init__(self, failed, machines):
         self.failed = failed
@@ -41,7 +35,6 @@ class NakonResult:
         return not self.failed
 
     def failed_configs(self):
-    # {machine_name: set(config names whose step rc != 0 or never reported)}.
         out = {}
         for m in self.machines:
             bad = {s["name"] for s in m.get("steps", []) if s.get("rc") != 0}
@@ -53,17 +46,9 @@ class NakonResult:
 
 
 def _nothing_answered(machines):
-# Why a rc=0 plant applied nothing, or None when the run was real.
-#
-#     `machines` is nakon deploy --json's per-machine outcome list. A machine that was
-#     never reached carries no steps at all (`steps: []`) — nakon records the connection
-#     error in `error` and moves on, so an all-unreachable plant is indistinguishable from
-#     a clean one by exit code alone.
-#
-#     Deliberately narrow. It fires only when NO machine produced a single step result:
-#     a plant where even one host ran one step is a real (if disappointing) outcome and
-#     must not be escalated, or the floor would abort runs that are merely imperfect —
-#     exactly the tolerated-failure case the ledger exists for.
+    # Why a rc=0 plant applied nothing, or None when the run was real: a machine never reached
+    # carries no steps, so an all-unreachable plant is indistinguishable from a clean one by exit
+    # code. Narrow: one step result on any host is a real outcome and must not be escalated.
     if not machines:
         return "no per-machine results were reported"
     ran = [m for m in machines if m.get("steps")]
@@ -74,8 +59,7 @@ def _nothing_answered(machines):
 
 
 def _machines_from_line(line):
-# Parse a nakon result line into its machine list, tolerating a glued status line and a
-# "[nakon] " prefix. Returns None when the line carries no result object.
+    # Parse a nakon result line, tolerating a glued status line and a "[nakon] " prefix; None when absent.
     if '"machines"' not in line:
         return None
     idx = line.find("{")
@@ -91,28 +75,17 @@ def _machines_from_line(line):
 
 def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, timeout=2400,
               strict=True, jobs=1, run_tag=None):
-# Push the bundle to the scoring engine and run `nakon deploy` there.
-#
-#     Returns the FAILED step lines from the deploy output ([] when the plant was
-#     clean, or when --strict aborted on the first one). jobs > 1 passes nakon's
-#     --jobs through: per-machine work is atomic in nakon's runner, so machines
-#     plant in parallel while each machine's steps keep their order.
-#
-#     Staging is per-run (M2.3): /tmp/nakon-<tag> on the way up, /opt/nakon/<tag> on
-#     the engine, created and removed only by the run that owns them. Concurrent
-#     nakon runs (M2.4's parallel domain passes) no longer race on a shared staging
-#     slot.
+    # Push the bundle to the scoring engine and run `nakon deploy` there; returns the FAILED step
+    # lines ([] clean). jobs > 1 passes nakon's --jobs through (per-machine work is atomic, so
+    # machines plant in parallel). Staging is per-run: /tmp/nakon-<tag> up, /opt/nakon/<tag> on the
+    # engine, created and removed only by the run that owns them.
     ssh_base = [
         "ssh", "-i", str(key), *_engine_opts(host=scoring_ip),
         f"{scoring_user}@{scoring_ip}",
     ]
 
-    # paramiko is baked into the engine template (engine_bootstrap_ops installs
-    # python3-paramiko), so this probes instead of installing. It used to
-    # `pip3 install --break-system-packages paramiko` on demand, which mutated the scoring
-    # engine's system python mid-deploy and raced concurrent runs on the engine's pip; an
-    # engine cloned from a pre-bake template is a template problem, and refusing names it.
-    # Probed before the scp so a pre-bake engine never gets the bundle in the first place.
+    # paramiko is baked into the engine template, so this probes instead of installing — a pip
+    # install mutated the engine's python mid-deploy and raced concurrent runs.
     probe = subprocess.run(ssh_base + ["sudo python3 -c 'import paramiko'"],
                            capture_output=True, timeout=60)
     if probe.returncode != 0:
@@ -177,14 +150,8 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
                         failed_steps.append(line.strip())
                     if _STEP_LINE_RE.search(line):
                         step_line_seen = True
-                    # nakon deploy --json prints the structured outcomes as one JSON
-                    # object with a "machines" key. It is USUALLY the final line, but
-                    # nakon's status line can land without a trailing newline, gluing the
-                    # JSON onto it ("...exit 0.{...}") — and it carries a "[nakon] " prefix
-                    # on some builds. Requiring the line to START with "{" then silently
-                    # drops the whole result set, and the rc=0 "nothing answered" guard
-                    # below aborts a fully-green pass (a phase-7 run lost its whole
-                    # result set exactly that way). Decode from the first "{" instead.
+                    # The structured outcomes are USUALLY the final line, but nakon's status line
+                    # can glue the JSON on and some builds prefix "[nakon] ", so decode from "{".
                     parsed = _machines_from_line(line)
                     if parsed is not None:
                         machines_json = parsed
@@ -196,13 +163,9 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
             finally:
                 pump.join(timeout=5)
             if proc.returncode == 0:
-                # rc=0 is not the same as "the plant did something". A strict=False run
-                # whose every machine was unreachable finishes rc=0 with zero FAILED
-                # steps, because a host that never answered cannot report a failing
-                # step. That is how the scale8 soak's pre-domain pass "succeeded" against
-                # 32 machines that did not exist  and checkpointed phase 6.
-                # 2 flaky steps of 41 is a tolerated failure; 41 of 41 is a broken
-                # sweep, and only the latter must stop the run.
+                # rc=0 is not "the plant did something": an all-unreachable plant of a strict=False
+                # run finishes rc=0 with zero FAILED steps. 2 flaky steps of 41 is tolerated; 41 of
+                # 41 is a broken sweep.
                 nothing = _nothing_answered(machines_json)
                 if nothing:
                     raise RuntimeError(
@@ -217,14 +180,8 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
                 return NakonResult(failed_steps, machines_json)
             if failed_steps or attempt == 3:
                 break
-            # A transport death is only recoverable by re-running the bundle when
-            # NOTHING executed. full-scrim-20261013d phase 7: both DC promotions
-            # completed on the boxes (674 s) while the reporting ssh died rc=255;
-            # the blind retry re-promoted already-promoted DCs and failed the
-            # phase with DCPromo General.77 'InstallDNS' not recognized. So retry
-            # only a death that looks cold — near-instant and before any step
-            # line streamed. Past that the outcome is unknown: fail the phase and
-            # let the resume path probe the real state and skip completed work.
+            # A transport death is only recoverable by re-running the bundle when NOTHING executed:
+            # a blind retry re-promoted already-promoted DCs and failed the phase. Retry only a cold death.
             if step_line_seen or time.monotonic() - attempt_started > COLD_DEATH_WINDOW:
                 outcome_unknown = True
                 print(f"\n  nakon ssh session died (rc={proc.returncode}) after "
@@ -253,8 +210,7 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
                f"(the resume probes what actually planted)" if outcome_unknown else ""))
     except subprocess.TimeoutExpired:
         try:
-            # Scoped to THIS run's staging path: the remote cmdline carries
-            # /opt/nakon/<tag>/, so a concurrent run's deploy (its own tag) survives.
+            # Scoped to THIS run's staging path, so a concurrent run's deploy survives.
             subprocess.run(ssh_base + [f"sudo pkill -9 -f '{opt_dir}' || true"],
                            timeout=30)
         except Exception:
@@ -270,15 +226,8 @@ def run_nakon(key, scoring_user, scoring_ip, bundle, config_path, only=None, tim
 
 
 def _preserve_failed_run(ssh_base, opt_dir, failed_steps, runner=None):
-# Move a failed plant's staging (its run logs included) aside, then print
-#     the failed steps' output tails.
-#
-#     The per-machine .log under <bundle>/runs/<stamp>/ is the ONLY record of WHY
-#     a step failed, and run_nakon's finally deletes the whole staging dir — so
-#     the first IIS FTP golden failure  printed a `logs:` path that
-#     stopped existing seconds later and was undiagnosable without a re-run.
-#     Failed runs keep their evidence at /opt/nakon/failed-<tag>-<ts>; successful
-#     runs are still cleaned up normally.
+    # Move a failed plant's staging aside, then print the failed steps' output tails. The
+    # per-machine .log is the ONLY record of WHY a step failed and the finally deletes staging.
     if not failed_steps:
         return None
     run = runner or (lambda argv, timeout=90:
@@ -309,12 +258,8 @@ def _preserve_failed_run(ssh_base, opt_dir, failed_steps, runner=None):
 
 def _run_single_nakon_config(machine, configurations, key, scoring_user, scoring_ip, comp_dir,
                               tag, timeout=1800, strict=True):
-# Deploy one machine with overridden configs in isolation (reboot-safe).
-#
-#     The config file doubles as a done-marker (deploy_domain_configs skips ADDS
-#     promotion when .nakon-domain-<team>-adds.json exists), so it is written as
-#     .pending and renamed into place only after the run succeeds — a failed
-#     promotion must not read as done on the next resume.
+    # Deploy one machine with overridden configs in isolation. The config file doubles as a
+    # done-marker (ADDS promotion is skipped when it exists), so write .pending and rename on success.
     tmp_machine = {**machine, "configurations": configurations}
     final_path = comp_dir / f".nakon-domain-{tag}.json"
     pending_path = comp_dir / f".nakon-domain-{tag}.pending.json"

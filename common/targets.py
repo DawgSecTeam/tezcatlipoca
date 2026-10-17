@@ -5,7 +5,6 @@ def vm_id_for(identifier, box_index):
 
 
 def box_index(boxes, box_name):
-# Canonical position of a box by name — the order the roster template lists them in.
     for i, b in enumerate(boxes):
         if b["name"] == box_name:
             return i
@@ -34,7 +33,6 @@ def persist_targets(comp_dir, targets, boxes):
 
 
 def frozen_roster(comp_dir):
-# The {box_order, targets} record a deploy froze, or None when none was written.
     from estate import state
     roster = state.EstateState.load(comp_dir).section("roster")
     if not roster.get("targets"):
@@ -43,21 +41,16 @@ def frozen_roster(comp_dir):
 
 
 def load_targets(comp_dir, teams, boxes):
-# Targets with vmid read from the frozen roster; recompute if absent.
-#
-#     Refuses when boxes.json was reordered since deploy: vmid is positional, so a
-#     reorder would silently retarget a different VM.
+# Refuses when boxes.json was reordered since deploy: vmid is positional, so a reorder
+# silently retargets a different VM.
     data = frozen_roster(comp_dir)
     if data is None:
         print("  (no frozen roster yet — deriving vmids from boxes.json order)")
         return enumerate_targets(teams, boxes)
     current = [b["name"] for b in boxes]
     frozen_order = data.get("box_order") or []
-    # Append-only is safe: vmid is positional, so boxes ADDED after deploy leave every
-    # earlier index (and therefore every frozen vmid) untouched — comp boxes are added
-    # after a deploy in practice (an unmanaged in-path fw box appeared exactly this way),
-    # and the range a frozen vmid map describes is still the same range. A reorder or a
-    # removal is what must refuse.
+    # Append-only is safe (vmid is positional, added boxes land after every frozen index); a
+    # reorder or a removal must refuse.
     if current[:len(frozen_order)] != frozen_order:
         raise SystemExit(
             f"  ERROR: boxes.json box order changed since deploy (was {frozen_order}, "
@@ -75,17 +68,11 @@ def load_targets(comp_dir, teams, boxes):
 
 
 def enumerate_targets(teams, boxes, placement=None, default_node=None):
-# One target per (team, box); build from full lists then filter — vmid is positional.
-#
-#     With a multi-node placement, each target carries `node` + `slot` from its team's
-#     placement; without one, `default_node` (the env node) is stamped so downstream
-#     node-scoped calls have one uniform field.
     team_node = placement.get("team_nodes") if placement else None
     team_slot = placement.get("team_slots") if placement else None
 
     def _pve_node(name):
-        # placement keys (team_nodes, node record names) are nodes.json NAMES; every
-        # /nodes/<name>/... API path needs the PVE hostname inside that record.
+        # Placement keys are nodes.json NAMES; the API path needs the PVE hostname inside that record.
         rec = (placement or {}).get("nodes", {}).get(name)
         return rec["node"] if rec else name
 

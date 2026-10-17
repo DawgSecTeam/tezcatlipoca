@@ -12,18 +12,8 @@ from estate import config
 
 
 class _ServiceFixup(NamedTuple):
-# One conditional block of the service-hardening script.
-#
-#     `triggers` are the catalog config names that select the block — the aliasing is
-#     data here, not the `or` chain the pre-refactor if-chain spelled out by hand. Those
-#     hand-written chains had drifted apart, and the drift is real and deliberate:
-#     the apache gap-filler fires on apache|httpd, the fedora named.conf block fires on
-#     bind ALONE, and the bind9 options block fires on bind|named|dns. Nothing here
-#     normalises that; it reproduces it.
-#
-#     Exactly one of `lines` (a literal fragment) or `build` (a fragment that
-#     interpolates the credlist accounts) is set. Preserve every byte: this script runs
-#     on live boxes and has been debugged through several incidents.
+# One conditional block of the service-hardening script. `triggers` are the catalog config
+# names that select it; the aliasing reproduces the pre-refactor if-chain's deliberate drift.
 
     name: str
     triggers: tuple[str, ...]
@@ -32,14 +22,8 @@ class _ServiceFixup(NamedTuple):
 
 
 def _credlist_account_lines(creds):
-# The `useradd ... || true` + `chpasswd` pair for every credlist account, in
-#     credlist order.
-#
-#     ONE generator, TWO call sites: the script prologue and the postfix fragment. The
-#     postfix branch used to carry its own copy-pasted pair, so credlist accounts were
-#     asserted twice on a mail box (harmless — useradd is idempotent, chpasswd
-#     re-asserts the same password). That duplicate is IN the captured golden, so only
-#     the generator was deduplicated here; the emitted lines are unchanged.
+# One generator, two call sites (prologue + postfix); the duplicate pair that stays in the
+# emitted lines is part of the captured golden.
     lines = []
     for username, password in creds.items():
         lines.append(f"sudo useradd -m -s /bin/bash {username} 2>/dev/null || true")
@@ -48,9 +32,7 @@ def _credlist_account_lines(creds):
 
 
 def _mysql_fixup(creds):
-# MySQL/MariaDB: bind 0.0.0.0, restart, then replay the credlist as DB users.
-#     Credlist order matters twice: the account lines, and which account gets
-#     WITH GRANT OPTION (the first one, as before).
+# Credlist order matters twice: the account lines, and which account gets WITH GRANT OPTION.
     lines = [
         "# MySQL/MariaDB: bind to 0.0.0.0",
         "# Try all possible config file locations",
@@ -81,7 +63,6 @@ def _mysql_fixup(creds):
 
 
 def _postfix_fixup(creds):
-# Postfix: listen on all interfaces + re-assert the credlist mail accounts.
     lines = [
         "# Postfix: ensure it listens on all interfaces",
         "sudo postconf -e 'inet_interfaces = all' 2>/dev/null || true",
@@ -98,7 +79,6 @@ def _postfix_fixup(creds):
 
 
 def _dovecot_fixup(creds):
-# Dovecot: plaintext auth + a per-account maildir.
     lines = [
         "# Dovecot: enable plaintext auth, create mail dirs",
         "sudo sed -i 's/^#*disable_plaintext_auth.*/disable_plaintext_auth = no/' /etc/dovecot/conf.d/10-auth.conf 2>/dev/null || true",
@@ -118,19 +98,12 @@ def _dovecot_fixup(creds):
     return lines
 
 
-# Per-service script fragments, keyed by canonical group name. SERVICE_FIXUP_ORDER is
-# the emission order and is OUTPUT, not a preference: the old if-chain appended the
-# fedora named.conf block before the bind9 options block, so a box pinned `bind` gets
-# both, in that order. Never sort this dict, and never merge the two bind groups.
+# Keyed by canonical group name. SERVICE_FIXUP_ORDER is the emission order and is OUTPUT: a
+# box pinned `bind` gets the named.conf block before the bind9 options block. Never merge the two.
 SERVICE_FIXUPS: dict[str, _ServiceFixup] = {
     "apache": _ServiceFixup("apache", ("apache", "httpd"), lines=(
-        # Catalog scoreability gaps on non-Debian packagings
-        # (the distro matrix): the apache/bind dnf/yum branches install+start
-        # but never touch distro defaults, so the checks they're pinned for still fail
-        # — fedora httpd serves an EMPTY docroot (403 on /) and fedora named listens
-        # on 127.0.0.1 behind the systemd-resolved stub (refused from the scoring
-        # engine). Idempotent; no-ops on Debian packagings (index.html already exists;
-        # the catalog's apt branch already did the resolved/named work).
+        # The dnf/yum branches install+start but never touch distro defaults: fedora httpd
+        # serves an empty docroot and named listens on 127.0.0.1 behind systemd-resolved.
         "if [ -d /var/www/html ] && [ ! -f /var/www/html/index.html ]; then "
         "echo '<html><body>tz</body></html>' | sudo tee /var/www/html/index.html >/dev/null; fi || true",
         # Emitted, not a Python comment: this line is part of the generated script.
@@ -172,11 +145,8 @@ SERVICE_FIXUPS: dict[str, _ServiceFixup] = {
     "dovecot": _ServiceFixup("dovecot", ("dovecot", "imap"), build=_dovecot_fixup),
     "bind9": _ServiceFixup("bind9", ("bind", "named", "dns"), lines=(
         "# Bind9: allow queries from anywhere",
-        # The nakon bind plant declares zone "localhost" in
-        # named.conf.local; on Ubuntu named.conf.default-zones already
-        # declares it and named refuses to start on the duplicate. The
-        # default-zones copy serves db.local (A localhost -> 127.0.0.1),
-        # which is what the scored Dns check resolves.
+        # The plant declares zone "localhost" in named.conf.local and Ubuntu's default-zones
+        # already declares it, so named refuses to start on the duplicate; the stripped copy is the fix.
         "sudo python3 -c \"import re; p='/etc/bind/named.conf.local'; \""
         "\"s=open(p).read(); \""
         "\"open(p,'w').write(re.sub(r'zone \\\"localhost\\\" \\{[^}]*\\};\\\\n?', '', s))\""
@@ -254,19 +224,8 @@ SERVICE_FIXUP_ORDER: tuple[str, ...] = (
 
 
 def service_fixup_script(services, creds):
-# Build the per-box service-hardening bash script.
-#
-#     PURE by design — no I/O, no env, no printing — so tests/test_service_fixups.py
-#     can compare it byte for byte against a golden captured from the pre-refactor
-#     code (the script runs on live boxes; a subtle change is a live incident).
-#
-#     `services` is the box's pin list from box_services.json: catalog config names, or
-#     per-pin override dicts that ride the file for scoring only (fixups key on the
-#     catalog name). `creds` is the per-run credlist {username: password} in credlist
-#     order.
-#
-#     Block order comes from SERVICE_FIXUP_ORDER, NOT from the pin order: a box pinned
-#     ["splunk", "nginx"] gets nginx first, exactly as the old if-chain did.
+# PURE by design so tests compare it byte for byte against a golden captured from the
+# pre-refactor code — the script runs on live boxes. Block order comes from SERVICE_FIXUP_ORDER.
     names = [s if isinstance(s, str) else s.get("name") for s in services]
 
     lines = ["#!/bin/bash", "set -e", ""]
@@ -301,15 +260,11 @@ def service_fixup_script(services, creds):
 
 
 def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
-# Post-nakon service hardening (bind address, mail, ftp, dns, etc.) using the per-run credlist secrets.
-
     node = config.active().proxmox.node
     print("  Hardening services on all team boxes...")
     box_services = json.loads((comp_dir / "box_services.json").read_text())
 
-    # Script construction is pure string building (fast, no I/O) and stays serial; the
-    # SSH/guest-agent execution per box is what runs concurrently. The per-service shell
-    # lives in SERVICE_FIXUPS, rendered by the pure service_fixup_script() above.
+    # Script construction is pure string building and stays serial; per-box execution runs concurrently.
     scripts = [(t, service_fixup_script(box_services.get(t["box_name"], []), box_creds))
                for t in targets]
 
@@ -334,9 +289,8 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
                 vmid = t["vmid"]
                 root_script = re.sub(r"\bsudo ", "", script_content)
                 try:
-                    # Detached: this script restarts several services and can outlive
-                    # the agent channel's budget (the 120s cap is what the exec logs
-                    # showed dying mid-plant). The guest-side log is the evidence.
+                    # Detached: this script restarts several services and can outlive the
+                    # agent channel's 120s budget; the guest-side log is the evidence.
                     res = guest_agent_exec_detached(
                         node, vmid, root_script, f"/tmp/tz-harden-{vmid}.log", timeout=900)
                     if res.rc == 0:
@@ -360,9 +314,8 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
 
 
 def mysql_credlist_reensure_script(cred_items):
-# Bash that re-creates the credlist SQL accounts, tolerating the post-plant client/server
-#     TLS mismatch (final-stage mysql flags disable server TLS while the stock client insists
-#     on it — hence the --skip-ssl fallbacks). Idempotent.
+# Tolerates the post-plant client/server TLS mismatch (final-stage flags disable server TLS
+# while the stock client insists on it) — hence the --skip-ssl fallbacks.
     lines = ["#!/bin/bash", "set -e", ""]
     lines.append("cat > /tmp/tz-credlist.sql << 'SQLEOF'")
     for username, password in cred_items:
@@ -380,13 +333,7 @@ def mysql_credlist_reensure_script(cred_items):
 
 
 def reensure_mysql_credlist_users(comp_dir, targets, ctx, box_creds):
-# Re-create the credlist SQL accounts AFTER the phase-6 final-stage pass.
-#
-#     fix_services creates them pre-plant, but the mysql final-stage plants rebuild the
-#     auth tables (a 7-box test comp: db01 ended with only the install + plant
-#     accounts, so the auth-based sql check failed until the users were re-added by
-#     hand). Idempotent; touches only boxes whose box_services pins include
-#     mysql/mariadb.
+# The mysql final-stage plants rebuild the auth tables and drop the pre-plant credlist accounts.
     cred_items = list(box_creds.items())
     box_services = json.loads((comp_dir / "box_services.json").read_text())
 

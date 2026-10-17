@@ -12,9 +12,7 @@ from common.utils import record_degradation
 _SIZE_TO_GB = {"": 1 / 1024 ** 3, "K": 1 / 1024 ** 2, "M": 1 / 1024, "G": 1, "T": 1024}
 
 
-# Parsed from the config because the clone inherits the template's size verbatim —
-# there is no other record of it (svc-matrix: the 15 GB ubuntu template disk filled
-# mid-plant on splunk's .deb unpack while team clones got their configured disk_gb).
+# Parsed from the config: the clone inherits the template's size verbatim, with no other record.
 def _root_disk_gb(cfg):
     for key in sorted(k for k in cfg
                       if k.startswith(("scsi", "virtio", "sata", "ide"))):
@@ -27,12 +25,8 @@ def _root_disk_gb(cfg):
     return None, 0
 
 
-# Golden clones inherit the base template's disk verbatim (the create path only sizes the
-# team clones), so a big plant payload (splunk) can fill the template-sized disk
-# mid-golden-build. Grow-only — a shrink would destroy data — and before start_vm.
-# Guest-side expansion is a separate post-boot step (expand_guest_root_disks):
-# cloud-init only grows a plain partition+fs, so LVM layouts need
-# growpart + pvresize + lvextend + resize2fs.
+# The create path only sizes team clones, so a big plant payload (splunk) can fill the
+# template-sized golden disk mid-build. Grow-only, and before start_vm.
 def ensure_golden_disk_size(node, vmid, disk_gb):
     if not disk_gb:
         return
@@ -48,24 +42,17 @@ def ensure_golden_disk_size(node, vmid, disk_gb):
     print(f"    golden {vmid}: {key} grown {cur_gb}G -> {disk_gb}G")
 
 
-# Guest-side companion to ensure_golden_disk_size: cloud-init only expands a PLAIN
-# partition+fs on first boot — LVM layouts (ubuntu cloud images) keep their original
-# root LV, and btrfs layouts (default on Fedora cloud images — caught live:
-# findmnt reports '/dev/sda3[/root]', whose bracketed subvolume suffix broke the
-# partition-digit parse AND resize2fs can't grow btrfs) need their own grow. Boxes
-# without growpart (Alpine) are skipped. Windows goldens are out of scope (they boot
-# at their template's own size).
+# cloud-init only expands a PLAIN partition+fs: LVM keeps its original root LV and btrfs needs
+# its own grow ('/dev/sda3[/root]' also breaks the partition-digit parse). Alpine/Windows skipped.
 def expand_guest_root_disks(targets, ctx):
     script = (
         "command -v growpart >/dev/null || { echo 'growpart unavailable - skipping'; exit 0; }; "
         "set -e; "
-        # base-ubuntu24.04-fix golden clones can run MINUTES with the LV mounted but
-        # no /dev/dm-N node (udev late under boot load — caught live:
-        # resize2fs "No such file or directory" on the live root LV at T+40s, node
-        # present at T+16min). dmsetup mknodes materializes the node immediately.
+        # Golden clones can run minutes with the LV mounted but no /dev/dm-N node (udev
+        # late under load), so resize2fs fails; dmsetup mknodes materializes it.
         "command -v dmsetup >/dev/null 2>&1 && dmsetup mknodes 2>/dev/null || true; "
         "ROOT_SRC=$(findmnt -no SOURCE /); "
-        "SRC=${ROOT_SRC%%\\[*}; "  # strip a btrfs subvolume suffix: /dev/sda3[/root] -> /dev/sda3
+        "SRC=${ROOT_SRC%%\\[*}; "
         "case \"$(stat -f -c %T /)\" in "
         "btrfs) GROW_FS=\"btrfs filesystem resize max /\";; "
         "xfs) GROW_FS=\"xfs_growfs /\";; "
@@ -92,12 +79,8 @@ def expand_guest_root_disks(targets, ctx):
         "df -h /"
     )
     for t in targets:
-        # The grow itself is retried across the whole boot window: a fresh golden's SSH
-        # can be dark for MINUTES under node load (3x15s of retries all landed inside
-        # the dark window, the expansion
-        # was skipped, and a downstream plant then died on ENOSPC). Escalating backoff
-        # spans ~6.5 min; each attempt is also the SSH-wait, so no separate probe phase
-        # is needed.
+        # Retried across the whole boot window: a fresh golden's SSH can be dark for minutes
+        # under load, and a skipped expansion dies later on ENOSPC.
         r = None
         for attempt, backoff in enumerate((15, 30, 45, 60, 60, 60, 60, 60), 1):
             r = ssh_via_gateway(ctx, t["ip"], f"sudo -H sh -c {shlex.quote(script)}",
@@ -109,9 +92,7 @@ def expand_guest_root_disks(targets, ctx):
             time.sleep(backoff)
         out = (r.stdout or "").strip()
         if r.returncode != 0:
-            # Expansion is an ENOSPC guard, not a correctness gate: warn and continue. A
-            # genuinely undersized root dies loudly at first big plant, named by the plant
-            # coverage gate.
+            # Warn and continue: a genuinely undersized root dies loudly at first big plant.
             record_degradation("golden root-disk expansion failed", f"{t['ip']}: rc={r.returncode}")
             print(f"    {t['ip']}: WARNING expansion failed (rc={r.returncode}) — continuing; "
                   f"first big plant will surface a truly undersized root")

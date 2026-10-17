@@ -1,4 +1,4 @@
-"""M4 freeze/unfreeze: record (or remove) the freeze record after a passing verify."""
+"""freeze/unfreeze: record (or remove) the freeze record after a passing verify."""
 
 import subprocess
 import time
@@ -7,11 +7,7 @@ from verifier.context import REPO_ROOT
 
 
 def git_dirty_lines(repo_root=None):
-# Uncommitted paths in this checkout (`git status --porcelain` at the repo root).
-#
-#     Returns a list of porcelain lines, or None when git cannot answer (not a repo, git
-#     missing, non-zero rc) — an unverifiable tree must never read as clean. Scoped to
-#     REPO_ROOT rather than the cwd so the same answer holds wherever verify was invoked.
+# Uncommitted paths at the repo root, or None when git cannot answer — an unverifiable tree must never read as clean.
     try:
         out = subprocess.run(["git", "status", "--porcelain"],
                              cwd=str(repo_root or REPO_ROOT),
@@ -24,15 +20,12 @@ def git_dirty_lines(repo_root=None):
 
 
 def freeze_hashes(comp_dir):
-# The template hashes a freeze would record (None when nothing is recorded yet).
     from engine.template_freeze import load_template_hashes
     return load_template_hashes(comp_dir) or None
 
 
 def do_freeze(comp_dir, args, gate, coverage_passed):
-# M4 freeze: record the template hashes this verify just passed against, plus the
-#     code commit, timestamp, and gate results. Preconditions: every gate PASS including
-#     plant-coverage and services.
+# Records the template hashes this verify just passed against plus the code commit; refused unless every gate passed.
     from engine.template_freeze import code_path_dirty, git_commit_info
 
     hashes = freeze_hashes(comp_dir)
@@ -47,11 +40,8 @@ def do_freeze(comp_dir, args, gate, coverage_passed):
         print(f"  FREEZE refused — failing gates: "
               f"{', '.join(k for k, v in gate.items() if not v)}")
         return False
-    # A freeze taken while deploy-path CODE is uncommitted pins a commit that does not
-    # contain the verified code (the deploy-time check is a warning, not a gate trip — see
-    # template_freeze.frozen_code_drift). Generated/run state (comp JSON,
-    # nodes.json, the state document, config backups) is expected to be dirty after a run and
-    # must not block; it is noted, not refused.
+    # A freeze taken while deploy-path CODE is uncommitted pins a commit that does not contain the
+    # verified code; generated/run state is expected to be dirty after a run and only noted.
     dirty = git_dirty_lines()
     if dirty is None:
         print("  FREEZE warning — could not read the git worktree state (git unavailable "

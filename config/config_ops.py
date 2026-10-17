@@ -14,11 +14,8 @@ from estate import config
 
 
 def load_packet_passwords(comp_dir):
-# Packet-published credentials from passwords.json (compile-packet.py output), or None.
-#
-#     Present means the deploy uses the packet's default credentials verbatim (that IS the
-#     competition: teams get them in the packet and rotate at minute zero) instead of
-#     minting random ones. 0600 + gitignored — future profiles may carry private secrets.
+# Present when the deploy uses the packet's published credentials verbatim rather than
+# minting random ones (that IS the competition: teams rotate at minute zero).
     path = Path(comp_dir) / "passwords.json"
     if not path.exists():
         return None
@@ -40,18 +37,8 @@ def load_previous_competitions():
 
 
 def random_password():
-# 14 chars, guaranteed upper+lower+digit+symbol, cmd/PS- and URL-safe charset.
-#
-#     Windows guest boxes set this via `net user` and AD enforces complexity:
-#     a letters+digits pool produced digit-free passwords ~13% of runs and the
-#     policy rejection killed every Windows login downstream. Characters are
-#     cmd/PS-quoting safe (no &|<>^%$`"' or whitespace) and URL-grammar free
-#     (no #/?@): these secrets land in postgres DSNs in /opt/quotient/.env, and
-#     `#` silently truncates the DSN at the password.
-#
-#     Single source of truth for every generated secret, including packet_ops' decoy
-#     baseline accounts. Changing the charset or length changes behaviour everywhere
-#     at once — deliberately.
+# 14 chars with a guaranteed upper+lower+digit+symbol, cmd/PS-quoting safe and URL-grammar
+# free (`#` silently truncates a postgres DSN; AD complexity rejects a digit-free password).
     pools = [string.ascii_uppercase, string.ascii_lowercase, string.digits, "!*_-+="]
     alphabet = "".join(pools)
     while True:
@@ -63,9 +50,8 @@ def random_password():
 def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
                   identifier_defaults=None, team_identifiers=None):
     teams = {}
-    # An explicit per-run list (--team-identifiers) outranks the ambient value: two ranges of
-    # one competition on a shared node need different blocks, and the config carries one value
-    # for the whole run host.
+    # An explicit per-run list outranks the ambient config: two ranges of one competition on a
+    # shared node need different blocks.
     override = (team_identifiers or config.active().knobs.team_identifiers or "").strip()
     if override:
         ids = [s.strip() for s in override.split(",")]
@@ -92,15 +78,9 @@ def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
             raise SystemExit(f"  ERROR: duplicate team identifier {identifier} — subnets/vmids would collide.")
         seen.add(identifier)
         base = 200 + int(identifier) * 10
-        # A team's vmid block must clear not just the engine but its DERIVED slots:
-        # engine template (engine+140) and the golden block (engine+150..+159). The
-        # old check covered the engine alone (caught live: engine 1080 +
-        # default identifiers put team2's first box vmid exactly on the engine
-        # template slot at 1220 — the collision only surfaced at the team-box clone pass,
-        # hours into the deploy). Phase 1's wave logic treats all 10 slots per block,
-        # so the guard is full-width. The rest of the reserved span depends on how many
-        # satellite slots the placement ends up using, so it is checked there
-        # (multinode.placement_record.check_team_blocks).
+        # A team's vmid block must clear the engine's DERIVED slots too (engine template at
+        # +140, goldens at +150..+159): checking the engine alone put team2's first box vmid
+        # exactly on the engine template slot. Phase 1 treats all 10 slots per block.
         reserved = ({engine_vmid}
                     | set(range(engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET,
                                 engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET + MAX_BOXES_PER_TEAM))
@@ -123,17 +103,8 @@ def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
 
 
 def write_text_atomic(path, text, mode=0o600):
-# Write `text` to `path` so a torn write can never be observed, then chmod.
-#
-#     Both halves matter and both have bitten this repo:
-#
-#     *Atomicity* — the competition's state document holds the only copy of the generated
-#     box and team passwords; a partial write bricks resume AND redeploy at once. The
-#     artefacts and scrim manifests written here carry the same kind of secret.
-#
-#     *Mode at creation* — creating with the process umask and chmod-ing afterwards
-#     leaves a window where the file is world-readable. os.open() applies the mode
-#     atomically with creation, so the secret is never briefly public.
+# Atomicity matters (the state document holds the only copy of the generated passwords) and
+# the mode must apply at creation: creating then chmod-ing leaves the secret briefly readable.
     path = Path(path)
     tmp_path = path.with_name(path.name + ".tmp")
     fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
@@ -148,7 +119,6 @@ def write_text_atomic(path, text, mode=0o600):
 
 
 def write_state(path, state):
-# Persist a JSON state dict atomically, 0600.
     write_text_atomic(path, json.dumps(state, indent=2), mode=0o600)
 
 

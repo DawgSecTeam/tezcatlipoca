@@ -1,8 +1,5 @@
-"""Teardown mechanics, moved from destroy_gate_ops / destroy_sweep_ops /
-the old destroy_templates_ops (deleted in the teardown redesign). The behavior is
-the incident-hardened behavior; what changed is the vocabulary: every refusal
-is a `Refusal` (saw / expected / remedy), and every destroy-shaped function
-takes an `Ownership` instead of a loose tag set."""
+"""Teardown mechanics: every refusal is a `Refusal` (saw / expected / remedy), and
+every destroy-shaped function takes an `Ownership` instead of a loose tag set."""
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -18,9 +15,7 @@ from engine.template_freeze import forget_template_hashes
 from infra.ownership import Ownership, Refusal, ownership_identity
 from estate import config
 
-# Concurrent stop/delete worker count for teardown sweeps. Deletes are
-# metadata-light on ZFS (the documented datastore-saturation hazard belongs to
-# bulk clone writes, not deletes); 4 keeps even a shared node comfortable.
+# Deletes are metadata-light on ZFS; 4 workers keeps even a shared node comfortable.
 TEARDOWN_WORKERS = 4
 
 
@@ -36,7 +31,7 @@ def refuse_frozen_full_teardown(competition, frozen, full, end_of_competition):
                    f"Re-run with --end-of-competition if the event is genuinely over.")
 
 
-# refuses when ownership cannot be proven: no run id in the state, or the env targets a different endpoint than the deploy used
+# refuses when ownership cannot be proven: no run id in the state, or the env targets a different endpoint
 def load_ownership(comp_dir):
     state_path = estate_state.state_path(comp_dir)
     deployed_state = estate_state.load_flat(comp_dir)
@@ -65,10 +60,10 @@ def load_ownership(comp_dir):
         ownership_identity(comp_dir, deployed_state.get("comp_name")), run_id)
 
 
-# hard-stop before destroy: the API graceful path hangs on an agent-down DC and holds the qm lock for many minutes ("Still destroying"); forced stop + remove is the operator call; ownership gates every stop — the name pattern is shared by every worktree running the same competition ID
+# hard-stop before destroy: the API graceful path hangs on an agent-down DC and holds the qm lock for minutes ("Still destroying"); ownership gates every stop — the name pattern is shared by every worktree running the same competition ID
 def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None,
                            ownership=None):
-    windows = [b["name"] for b in boxes]  # all clones hard-stop, not just Windows
+    windows = [b["name"] for b in boxes]
     if not windows:
         return
     expect_tags = set(ownership.tags) if ownership is not None else None
@@ -108,14 +103,12 @@ def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None,
                     f"it: kill -9 $(cat /var/run/qemu-server/{vmid}.pid) on the node, "
                     f"then re-run.")
 
-    # status/stop is the hard API stop (no guest agent involved) — a VM we are
-    # about to destroy gets no graceful shutdown.
     with ThreadPoolExecutor(max_workers=TEARDOWN_WORKERS) as pool:
         for line in pool.map(_hard_stop, targets):
             print(line, flush=True)
 
 
-# full ownership tag set only: partial overlap does not count , and a same-comp VM with a DIFFERENT run id belongs to another worktree's run (a near-miss)
+# full ownership tag set only: partial overlap does not count, and a same-comp VM with a DIFFERENT run id belongs to another worktree's run
 def sweep_tagged_leftovers(nodes, ownership, keep_templates=False):
     comp_tags = set(ownership.tags)
     ours = []
@@ -125,13 +118,9 @@ def sweep_tagged_leftovers(nodes, ownership, keep_templates=False):
         except Exception as e:
             print(f"  WARNING: leftover sweep skipped on {node} — listing failed: {e}")
             continue
-        # `keep_templates` is the teams-only/keep-templates teardown: the estate tiers skip
-        # the golden + engine_template roles, and the sweep must not claim them instead. It
-        # did: the deploy re-stamps a reused template with THIS run's tags (so the strict
-        # guard recognizes it), which put it inside the sweep's ownership match and destroyed
-        # the artifacts a practice run existed to validate — caught live: the run
-        # swept engine-template vmid 2241 on `--teams-only`. The PVE `template` flag, not the
-        # name, is the tell.
+        # teams-only keeps the role templates, so the sweep must not claim them: the deploy
+        # re-stamps a reused template with THIS run's tags, putting it inside the full-set match
+        # (caught live: engine-template 2241 swept on --teams-only). The PVE `template` flag is the tell.
         ours += [dict(v, _node=node) for v in vms
                  if comp_tags <= parse_vm_tags(v.get("tags"))
                  and not (keep_templates and v.get("template"))]
@@ -168,7 +157,7 @@ def engine_vmid_from_state(deployed_state):
         return SCORING_ENGINE_VMID
 
 
-# templates are the linked clones' base disks, so they can only go after every clone has; returns the vmids skipped as foreign
+# templates are the clones' base disks, so they can only go after every clone has
 def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, full):
     skipped = []
     engine_vmid = engine_vmid_from_state(deployed_state)
@@ -182,8 +171,6 @@ def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, fu
     skipped += destroy_golden_set(node, engine_vmid, len(boxes), slot=0,
                                   expect_tags=ownership.with_role(GOLDEN_TAG).tags)
     if placement and placement["satellites"]:
-        # Multi-node: each satellite's golden copies and the jump VMs die on
-        # their own hosts, then the engine template here.
         for sat in placement["satellites"]:
             sat_rec = record_of(placement, sat["name"])
             print(f"  Destroying satellite '{sat['name']}' golden set (slot "
@@ -198,9 +185,8 @@ def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, fu
                                 expect_tags=ownership.with_role("engine-template").tags)
     except Refusal as e:
         skipped.append(str(e))
-    # A destroyed template's hash record is a loaded gun for the reuse path: the
-    # next deploy would 'reuse' a hash with nothing behind it and clone from a
-    # dead vmid. Drop the record alongside the templates.
+    # A destroyed template's hash record is a loaded gun for the reuse path: the next deploy
+    # would clone from a dead vmid.
     forget_template_hashes(comp_dir)
     print("  Template hash record removed from the state document.")
     return skipped

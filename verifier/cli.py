@@ -77,8 +77,6 @@ def main(argv=None):
 
     load_dotenv(ENV_PATH)
 
-    # The verifier reaches every node through the ambient estate identity, and the range it
-    # checks will still need it at teardown.
     from estate import config
     config.require_proxmox_identity()
 
@@ -87,8 +85,8 @@ def main(argv=None):
         print(f"ERROR: competition directory not found: {comp_dir}", file=sys.stderr)
         return 2
 
-    # Multi-node: activate the recorded placement (env -> engine host, node routes
-    # for any node-scoped API call) before anything talks to Proxmox.
+    # Multi-node: activate the recorded placement (env -> engine host, node routes) before
+    # anything talks to Proxmox.
     from multinode.placement_record import activate_placement, read_placement
     placement = read_placement(comp_dir)
     if placement:
@@ -107,9 +105,7 @@ def main(argv=None):
     base_url = f"http://{engine_ip}"
     print(f"Verifying competition '{comp_dir.name}' against engine {base_url}")
 
-    # red01's address resolves from the comp's own bad-auto config (this
-    # deploy's reservation) unless the operator passed one — the shared
-    # sibling config.yaml is no longer a source .
+    # red01's address resolves from the comp's own bad-auto config unless the operator passed one.
     if args.red_ip is None:
         from red import badauto_config_ops
         args.red_ip = ((badauto_config_ops.load_config(comp_dir).get("deploy") or {})
@@ -137,7 +133,6 @@ def main(argv=None):
 
 
 def run():
-# Script entry: main() with the Ctrl-C contract (exit 130).
     try:
         sys.exit(main())
     except KeyboardInterrupt:

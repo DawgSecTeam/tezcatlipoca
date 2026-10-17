@@ -1,17 +1,4 @@
-"""Collision gates: what this deploy will create must not already exist as someone else's.
-
-Two families, one module:
-
-  - vmid/bridge slot collisions (check_collisions): everything this deploy will create must
-    be free of another run's resources. ONE implementation for single- and multi-node (a
-    single-node plan is one share). Ownership is answered by infra.ownership.ownership_verdict
-    - the same proof the destroy guard uses - so preflight and teardown can never disagree
-    about whose VM a vmid holds. A leftover RANGE is refused (a deploy never destroys one; see
-    the function docstring); this competition's own templates are adopted, and an untagged
-    interrupted clone of ours is left to phase 1.
-  - management-IP collisions (engine_mgmt_ip_gate / jump_mgmt_ip_gate): the engine's static
-    mgmt IP and each satellite's jump mgmt IP must not already be answered by a running guest
-    on the (cross-node) management L2."""
+"""Collision gates: what this deploy will create must not already exist as someone else's."""
 
 import os
 from dataclasses import dataclass
@@ -27,32 +14,23 @@ class Slot:
     vmid: int
     label: str
     persistent_template: bool = False   # the engine template: expected to survive, reused
-    template_slot: bool = False         # a slot a TEMPLATE may legitimately occupy (golden +
-                                        # engine template): a template here is this comp's,
-                                        # kept for reuse — `--keep-templates`/`--teams-only`
+    template_slot: bool = False         # a slot a template may legitimately occupy (golden/engine
+                                        # template): a template here is this comp's, kept for reuse
 
 
 def expected_slots(share, plan):
-    """Every vmid this share's deploy will create, with its report label.
-
-    Reads the placement object's own `engine_template_vmid`, `golden_vmids` and satellite
-    `jump_vmid`; a single-node plan (no placement) derives them from the one module that owns
-    the arithmetic. Order and wording differ between single- and multi-node only in the
-    report."""
+    """Every vmid this share's deploy will create, with its report label."""
     from multinode import placement_record as placement_ops
     boxes, engine_vmid, placement = plan.boxes, plan.engine_vmid, plan.placement
     slots = []
     if share.is_engine:
         slots.append(Slot(engine_vmid, f"scoring engine vmid {engine_vmid}"))
-        # M4: the engine template's reserved slot (just below the golden block). A TEMPLATE
-        # there carrying this competition's tag is adopted — reused or rebuilt by hash, NOT
-        # a leftover. Another competition's template there is fatal.
+        # The engine template's reserved slot (just below the golden block): this comp's
+        # template there is adopted by hash, another competition's is fatal.
         et = ((placement or {}).get("engine_template_vmid")
               or placement_ops.engine_template_vmid(engine_vmid))
-        # template_slot as well as persistent_template: the --keep-templates teardown keeps
-        # this template in MULTI-node mode too, and gating the tolerance on `persistent_template`
-        # alone (False when share.multi) made the next deploy refuse its own kept engine
-        # template as a leftover — the reuse path could never run .
+        # template_slot too: --keep-templates keeps this in multi-node mode where
+        # persistent_template is False.
         slots.append(Slot(et, f"engine template vmid {et}", template_slot=True,
                           persistent_template=not share.multi))
     teams = [Slot(vm_id_for(t["identifier"], i), f"team vmid {vm_id_for(t['identifier'], i)} "
@@ -81,11 +59,7 @@ def expected_slots(share, plan):
 
 def check_placement(placement):
     """The one proof over the whole placement object: no vmid appears in two of this run's
-    own bands, and no team block overlaps them.
-
-    The gates below prove the CLUSTER is free of other people's resources; this proves the
-    OBJECT is free of itself, so four gates no longer each carry a partial version of the
-    arithmetic."""
+    own bands, and no team block overlaps them."""
     if not placement or not placement.get("engine_vmid"):
         return
     from multinode import placement_record as placement_ops
@@ -116,8 +90,7 @@ def check_placement(placement):
 
 
 def expected_bridges(share, boxes):
-    """Team bridges (and, for in-path firewalls, the per-team transit bridge vmbrW<id>) this
-    share creates. Transit bridges are engine-node resources (slot-0 teams)."""
+    """Team bridges, and for in-path firewalls the per-team transit bridge, this share creates."""
     bridges = [f"vmbr{t['identifier']}" for t in share.teams.values()]
     if any(b.get("in_path") for b in boxes) and share.slot == 0:
         bridges += [f"vmbrW{t['identifier']}" for t in share.teams.values()]
@@ -127,18 +100,9 @@ def expected_bridges(share, boxes):
 def check_collisions(share, plan, vms):
     """Raise SystemExit on anything a fresh deploy must not create over.
 
-    A deploy never tears a range down. Any planned vmid holding a VM an earlier run of
-    this competition owns — team boxes, the engine, a satellite jump VM — is a REFUSAL
-    naming the remedy: destroy-competition.py reclaims it from the workspace that owns
-    the run, or the operator resumes that run with --from-phase. Two things are not
-    leftovers and do not refuse:
-
-      * this competition's own TEMPLATES (engine template + goldens): cached build
-        artifacts a --teams-only teardown keeps on purpose, which phase 2/4 adopt or
-        rebuild by hash. A slot is a template slot; a hand-converted template in a
-        team-box slot is still a leftover.
-      * an untagged VM carrying this competition's clone marker: an interrupted clone
-        that no run owns (infra.ownership.MARKER). Phase 1 reclaims it."""
+    A planned vmid holding a VM an earlier run of this competition owns is a REFUSAL naming the
+    remedy (destroy-competition.py from the owning workspace, or --from-phase). This competition's
+    own templates and an untagged VM carrying its clone marker are not leftovers."""
     node, comp_name = share.node, plan.comp_name
     comp_tag = f"comp-{comp_name}"
     existing = {vm.get("vmid") for vm in vms}
@@ -158,23 +122,14 @@ def check_collisions(share, plan, vms):
                   f"template — kept for reuse (rebuilt only on hash drift)")
             continue
         if verdict == MARKER:
-            # The clone POST wrote the marker into the description; a crash or reboot
-            # kept the tag PUT from ever running, so no run id owns this VM.
             print(f"  Preflight{share.label}: vmid {slot.vmid} is an interrupted clone of "
                   f"this competition (lock={vm.get('lock') or 'none'}) — phase 1 reclaims it")
             reclaim += 1
             continue
         if slot.template_slot and not vm.get("template") and not any(
                 t.startswith("comp-") and t != comp_tag for t in tags):
-            # This run's own build slot holding an unconverted VM: a template build whose
-            # clone task failed before the tag PUT, so it wears the base image's tags and
-            # carries neither ours nor a marker. Phase 2 adopts and rebuilds exactly this
-            # (`build_engine_template`'s dead-attempt branch, by reserved vmid + name).
-            # Without the exemption the deploy cannot clean up its own wreckage: the clone
-            # that failed is both the debris and the reason no later attempt can start
-            # (caught live refused on their own
-            # partial engine-template clones at vmids 2340/2540). Anything tagged into
-            # another run stays a refusal: only UNPROVEN ownership is adopted.
+            # This run's own build slot holding an unconverted VM (a template build whose clone
+            # failed before the tag PUT, wearing the base image's tags); phase 2 reclaims it.
             print(f"  Preflight{share.label}: {slot.label} holds an unconverted leftover of "
                   f"this competition's own build (vmid {slot.vmid}) — phase 2 reclaims it")
             continue
@@ -186,8 +141,8 @@ def check_collisions(share, plan, vms):
     nets = proxmox_api("GET", f"/nodes/{node}/network")["data"]
     existing_bridges = {n.get("iface") for n in nets}
     for bridge in expected_bridges(share, plan.boxes):
-        # Bridges carry no per-comp tags, so an existing one can only be assumed to
-        # belong to a range someone still owns — never destroyed from here.
+        # Bridges carry no per-comp tags, so an existing one belongs to a range someone
+        # still owns — never destroyed from here.
         if bridge in existing_bridges:
             leftovers.append(f"bridge {bridge}")
 
@@ -229,8 +184,7 @@ def check_collisions(share, plan, vms):
 
 
 def share_mgmt_bridge(plan, share):
-# The bridge this share's management NIC attaches to: the node record's own when it names
-#     one (a node whose L2 is vmbr100), else the placement's resolved value, else vmbr0.
+    # The node record's own bridge when it names one, else the placement's resolved value.
     from multinode.placement_record import record_of, resolved_mgmt_bridge
     if plan.placement and share.name:
         rec = record_of(plan.placement, share.name)
@@ -239,10 +193,8 @@ def share_mgmt_bridge(plan, share):
 
 
 def check_mgmt_bridge(node, mgmt_bridge):
-    """Refuse a management bridge the node does not own.
-
-    Attaching every NIC to a bridge that is not there fails at clone time with a PVE error
-    the operator cannot act on; the node's own network list is the proof."""
+    """Refuse a management bridge the node does not own: attaching NICs to a bridge that is
+    not there fails at clone time with a PVE error the operator cannot act on."""
     nets = proxmox_api("GET", f"/nodes/{node}/network")["data"]
     if mgmt_bridge not in {n.get("iface") for n in nets}:
         raise SystemExit(
@@ -254,10 +206,8 @@ def check_mgmt_bridge(node, mgmt_bridge):
 
 
 def scan_vms_for(nodes):
-    """Union of every hosting node's cluster view.
-
-    The management L2 is one segment, but on independent hosts /cluster/resources sees only
-    its own VMs — so an address scan must ask every node that could answer it."""
+    """Union of every hosting node's cluster view: on independent hosts a host sees only
+    its own VMs, so an address scan must ask every node that could answer."""
     from infra.client import cluster_vms_for
     seen, out = set(), []
     for node in nodes:
@@ -269,18 +219,15 @@ def scan_vms_for(nodes):
     return out
 
 
-# The band red01's address is selected from (a tool constant, not a knob). The legacy
-# .196-.199 defaults are excluded so a selected value can never be one of them.
+# red01's address band (a tool constant). The legacy .196-.199 defaults are excluded so a
+# selected value can never be one of them.
 RED01_IP_BAND = ("10.0.0.240", "10.0.0.249")
 RED01_LEGACY_IPS = ("10.0.0.196", "10.0.0.197", "10.0.0.198", "10.0.0.199")
 
 
 def select_red_ip(vms, claimed=(), skip_vmids=(), ours_tags=None):
     """The lowest red-band address nothing answers and no claimant holds, or (None, unchecked).
-
-    `claimed` is everything this placement already takes on the L2 — the engine's address, its
-    gateway, every jump address — because a scan taken before those VMs exist cannot see them,
-    and handing red01 the engine's own address is exactly the collision to exclude."""
+    `claimed` is everything this placement already takes on the L2 (engine, gateway, jumps)."""
     takers, unchecked = running_guest_ips(vms, set(skip_vmids), ours_tags)
     taken = set(takers) | set(claimed) | set(RED01_LEGACY_IPS)
     prefix, lo = RED01_IP_BAND[0].rsplit(".", 1)
@@ -307,14 +254,14 @@ def guest_ipv4s(vm):
 
 def running_guest_ips(vms, skip_vmids, ours_tags=None):
     """(takers, unchecked): the first running guest to answer each address, and the guests
-    whose agent cannot say. Both mgmt-IP gates scan the mgmt L2 this way."""
+    whose agent cannot tell."""
     takers, unchecked = {}, []
     for vm in vms:
         if vm.get("status") != "running" or vm.get("template") == 1 or vm.get("vmid") in skip_vmids:
             continue
-        # Broader than the vmid skip: ANY VM tagged as this deploy's answers the IP only
-        # because a leftover range holds it — only a FOREIGN guest squatting the address
-        # is a collision (a leftover of ours is refused by check_collisions).
+        # Broader than the vmid skip: a VM tagged as this deploy's answers the IP only
+        # because a leftover range holds it — only a FOREIGN guest squatting the address is
+        # a collision.
         if ours_tags and set(ours_tags) <= parse_vm_tags(vm.get("tags")):
             continue
         label = f"{vm.get('vmid')} ({vm.get('name') or '?'} on {vm.get('node') or '?'})"
@@ -328,31 +275,11 @@ def running_guest_ips(vms, skip_vmids, ours_tags=None):
 
 
 def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
-    """Static engine mgmt IP must not collide with any running guest on the mgmt L2.
-
-    Two things this gate got wrong, both caught live on a same-type 2-box comp
-    practice run — where it printed "engine mgmt IP 10.0.0.250 is free" while a FOREIGN
-    live `quotient-engine` was answering that exact address:
-
-    * **The mgmt L2 spans nodes.** The scan did `vm["node"] != node: continue`, but
-      10.0.0.0/24 is one flat segment: the foreign engine was on .193 and this deploy
-      was on .150. The data was already cluster-wide (`/cluster/resources`) — the filter
-      threw away the rows that mattered. The scan is now cluster-wide.
-    * **Unverifiable is not free.** A guest whose agent is down was counted and skipped,
-      and the gate then claimed the address was free from an absence of evidence. When
-      any running guest cannot be checked the address is *unknown*: refusing is correct
-      for the DEFAULT ip (it is what every comp gets, and nobody chose it), while an IP
-      the operator set explicitly gets a loud warning instead, because they have taken
-      responsibility for it.
-
-    Guests without a working agent can't be checked; count them out loud instead of
-    claiming the range is clean."""
-    # Our own engine from a prior failed attempt holds the planned mgmt IP until that run
-    # is destroyed or resumed (caught live: every retry after a phase-2+ failure
-    # re-tripped this gate against our own leftover). Kept by vmid, not only by tag: a state
-    # file predating run ids gives the resume no run tag to match, and the collision gate
-    # that would otherwise catch it is off on resume. A fresh deploy with that engine still
-    # up is refused by check_collisions before this gate runs.
+    """Static engine mgmt IP must not collide with any running guest on the mgmt L2 (cluster-wide,
+    since the L2 spans nodes). An unverifiable address is not free: the DEFAULT ip is refused
+    (nobody chose it), while an explicitly set one gets a loud warning instead."""
+    # Our own engine from a prior failed attempt holds the planned mgmt IP until that run is
+    # destroyed or resumed — kept by vmid too, since a run-id-less state file gives no tag.
     takers, unchecked = running_guest_ips(vms, {engine_vmid}, ours_tags)
     if engine_mgmt_ip in takers:
         raise SystemExit(
@@ -360,11 +287,8 @@ def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
             f"running guest ({takers[engine_mgmt_ip]}). Pick another "
             f"TEZ_ENGINE_MGMT_IP (or set it to '' for DHCP). The management network is "
             f"shared across nodes, so a guest on ANY node counts.")
-    # "Explicitly set" means the OPERATOR set it — not that the code exported the
-    # default into the same variable seconds ago (deploy_lib.inputs). A default IP the
-    # preflight cannot verify is refused outright: the .150 default (.250) drops SSH
-    # mid-build on the tailnet path , and an unverifiable default was a live
-    # foreign engine's address once before that .
+    # "Explicitly set" means the OPERATOR set it — not that the code exported the default into the
+    # same variable seconds ago (deploy_lib.inputs).
     explicit = (bool((config.active().engine.mgmt_ip or "").strip())
                 and not os.environ.get("TEZ_ENGINE_MGMT_IP_IS_DEFAULT"))
     if unchecked:

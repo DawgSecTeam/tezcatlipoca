@@ -1,7 +1,4 @@
-"""nodes.json: multi-node constants, NodeRecord, config loading and per-node env application.
-
-The module docstring of the multi-node model lives in docs/multi-node.md; placement state is
-in placement_record and planning in placement_planner."""
+"""nodes.json: multi-node constants, NodeRecord, config loading and per-node env application."""
 
 import json
 import os
@@ -15,17 +12,14 @@ from estate import config
 NODES_CONFIG_PATH = Path("nodes.json")
 
 MAX_SATELLITES = 4
-# Jump/router VM per satellite: engine_vmid + 130 + slot (slots 1..4 — slot 0 is the
-# engine node and has no jump). Below the engine-template slot (+140) so one preflight
-# scan still covers the whole reserved span.
+# Jump/router VM per satellite: engine_vmid + 130 + slot (slot 0 is the engine, no jump),
+# below the engine-template slot (+140) so one preflight scan covers the reserved span.
 JUMP_VMID_OFFSET = 130
-# Default jump mgmt IPs walk down from .249 (slot 1) — clear of the engine's default
-# .250 and of the red01 slots (.198/.199/.244). Collision-swept in preflight; override
-# per node with jump_mgmt_ip in nodes.json.
+# Jump mgmt IPs walk down from .249, clear of the engine's default .250 and the red01 slots.
 JUMP_MGMT_IP_BASE = "10.0.0.249"
 
 PLACEMENT_VERSION = 2
-JUMP_RESERVE_MB = 512  # capacity reservation per satellite (tiny router VM)
+JUMP_RESERVE_MB = 512
 
 
 @dataclass
@@ -36,12 +30,12 @@ class NodeRecord:
     datastore: str
     token_env: str
     engine_base_vmid: int = 0
-    engine_mgmt_ip: str = ""   # static engine mgmt IP when this node hosts the engine
+    engine_mgmt_ip: str = ""
     engine_mgmt_gw: str = ""
-    jump_mgmt_ip: str = ""     # static jump mgmt IP when this node is a satellite
-    mgmt_bridge: str = ""      # this node's management bridge (default: the profile's, else vmbr0)
-    ssh_host: str = ""         # for root SSH (template sync); defaults to endpoint host
-    jump_template: str = ""    # name substring for the jump clone source (default "alpine")
+    jump_mgmt_ip: str = ""
+    mgmt_bridge: str = ""
+    ssh_host: str = ""
+    jump_template: str = ""
     weight: float = 1.0
     max_teams: int = 8
     tls_fingerprint: str = ""
@@ -64,8 +58,6 @@ def _require(cond, msg):
 
 
 def load_nodes_config(path=None):
-# Parse and validate nodes.json. Returns (records, balancing) or (None, None)
-#     when the file is absent — the single-node signal.
     path = Path(path or NODES_CONFIG_PATH)
     if not path.exists():
         return None, None
@@ -106,11 +98,6 @@ def load_nodes_config(path=None):
     _require(len(set(names)) == len(names), f"duplicate node names: {names}")
     _require(len(set(r.node for r in records)) == len(records),
              "duplicate 'node' (PVE host) names — the route table keys on them")
-    # token_env must be unique per record: activate_placement reads each record's named var
-    # to build that host's route, so two records sharing one name give both hosts the same
-    # credential — the scale8 soak's satellite 401'd mid-preflight against a token belonging
-    # to the other node . This rejects the collision instead of letting it
-    # surface as an authentication failure on the far node.
     dupes = sorted({r.token_env for r in records if
                     sum(1 for o in records if o.token_env == r.token_env) > 1})
     if dupes:
@@ -126,10 +113,8 @@ def load_nodes_config(path=None):
 
 
 def apply_node_env(record):
-# Point the process configuration at `record` — the engine-node record for a deploy, or
-#     the recorded engine node for companion ops. An in-process config override, not an
-#     os.environ mutation: env writes leaked into every later read.
-#     Returns a token for restore_node_env().
+# In-process config override, not an os.environ mutation: env writes leaked into every
+#     later read.
     token = os.environ.get(record.token_env)
     if not token:
         raise SystemExit(

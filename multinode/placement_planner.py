@@ -1,5 +1,4 @@
-"""Placement computation: node probes, capacity-fill team placement, decision table, and the
-`resolve_placement` entry point (a recorded placement wins; else nodes.json; else single-node)."""
+"""Placement computation: node probes, capacity-fill team placement, decision table, and resolve_placement."""
 
 import os
 import time
@@ -14,9 +13,6 @@ from multinode.placement_record import (anchor_identifier, check_team_blocks,
 
 
 def probe_node(record, need_templates, engine_vmid, team_identifiers, comp_name=""):
-# Read-only eligibility probe of one node. Returns a dict; ok=False carries the
-#     reason. need_templates: template names this node might have to host (per-team
-#     eligibility checks them; a node missing some is still usable for other teams).
     from infra.client import proxmox_api_for
     probe = {"name": record.name, "node": record.node, "ok": True, "reasons": [],
              "missing_templates": [], "collisions": [], "mem_free_bytes": None,
@@ -49,8 +45,6 @@ def probe_node(record, need_templates, engine_vmid, team_identifiers, comp_name=
             probe["running_ours"] += 1
     probe["missing_templates"] = sorted(set(need_templates) - set(probe["templates"]))
 
-    # Quick collision veto (the authoritative per-node check is preflight): engine +
-    # engine template + every slot's golden span + every candidate team block + jumps.
     vm_by_vmid = {vm.get("vmid"): vm for vm in vms if vm.get("node") == record.node}
     existing = set(vm_by_vmid)
     wanted = {engine_vmid, engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET}
@@ -59,22 +53,8 @@ def probe_node(record, need_templates, engine_vmid, team_identifiers, comp_name=
         wanted.add(jump_vmid_for(engine_vmid, slot))
     for ident in team_identifiers:
         wanted.update(range(200 + int(ident) * 10, 200 + int(ident) * 10 + MAX_BOXES_PER_TEAM))
-    # This competition's own TEMPLATE slots (the engine template + the goldens) hold cached
-    # build artifacts a `--keep-templates` / `--teams-only` teardown keeps ON PURPOSE: the
-    # next deploy adopts them, or rebuilds them when the node's `tezcatlipoca-m4 hash=` stamp
-    # no longer matches (engine.template_freeze.template_stamp_current;
-    # infra.collisions.check_collisions makes the same exception). Counting them as
-    # collisions made the node ineligible for the very run they were kept for — the
-    # template-reuse path could never be reached (caught live: "vmid
-    # collisions: [1140, 1150, ...]" → no eligible node for team1, team2).
-    # The slot belongs to this run's engine vmid, so a VM sitting on it is THIS competition's
-    # build attempt whatever its tags say — phase 2 adopts it or reclaims it. A dead attempt
-    # that never reached the tag PUT (a clone whose task failed) wears the base image's own
-    # `cloud-init;template` tags, and counting those as collisions left the deploy with no way
-    # to clean up after itself (caught live and the run refused
-    # with "vmid collisions: [2340]"/"[2540]" over the partial clones of their own failed
-    # engine-template build). Only a CONVERTED template belonging to ANOTHER competition
-    # still collides — our slot is not a license to build over a foreign golden.
+    # This run's own template slots (engine template + goldens) hold our build attempts and
+    # kept artifacts, not collisions; only a foreign competition's converted template does.
     template_slots = {engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET}
     for slot in range(MAX_SATELLITES + 1):
         template_slots.update(golden_slot_span(engine_vmid, slot))
@@ -85,10 +65,10 @@ def probe_node(record, need_templates, engine_vmid, team_identifiers, comp_name=
             return False
         tags = {t.strip() for t in str(vm.get("tags") or "").replace(";", ",").split(",") if t.strip()}
         if vm.get("template") == 1 and vm.get("status") == "stopped":
-            return "tezcatlipoca" in tags                  # keep the engine/golden template
+            return "tezcatlipoca" in tags
         if any(t.startswith("comp-") and t != f"comp-{comp_name}" for t in tags):
-            return False                                   # another competition's VM — never ours
-        return True                                        # our own build attempt/leftover
+            return False
+        return True
 
     probe["collisions"] = sorted(v for v in wanted & existing if not _not_a_collision(v))
     if probe["collisions"]:
@@ -118,9 +98,6 @@ def _prefer_index(name, prefer):
 
 def compute_placement(records, balancing, teams, boxes, engine_vmid, comp_name,
                       team_overrides=None, engine_override=None, probes=None):
-# Capacity-fill team placement. Teams pack biggest-first onto the eligible node
-#     with the most effective free RAM (mem_free / weight minus reservations). Explicit
-#     overrides win outright. Returns the placement dict (not yet persisted).
     team_overrides = dict(team_overrides or {})
     identifiers = {k: str(t["identifier"]) for k, t in teams.items()}
     by_identifier = {v: k for k, v in identifiers.items()}
@@ -185,8 +162,6 @@ def compute_placement(records, balancing, teams, boxes, engine_vmid, comp_name,
             + f". Node state: {detail}. Sync missing templates (sync-template.py), free "
               "capacity, or raise max_teams/weight in nodes.json.")
 
-    # Engine node: override, else the node holding the most teams (tie: prefer order,
-    # then more free RAM).
     if engine_override:
         if engine_override not in known:
             raise SystemExit(f"  ERROR: --engine-node {engine_override}: no such node")
@@ -252,7 +227,6 @@ def compute_placement(records, balancing, teams, boxes, engine_vmid, comp_name,
 
 
 def placement_decision_table(placement, probes=None):
-# Human-readable placement summary for the deploy log / --plan-only preview.
     probes = probes or placement.get("probe_summary") or {}
     lines = ["  Multi-node placement:"]
     eng = placement["engine_node"]
@@ -275,14 +249,8 @@ def placement_decision_table(placement, probes=None):
 def resolve_placement(comp_dir, engine_vmid, teams, boxes, comp_name,
                       team_overrides=None, engine_override=None, resume_endpoint=None,
                       nodes_path=None):
-# (placement, engine_record) or (None, None).
-#
-#     Order: a recorded placement always wins (authoritative for resume/redeploy
-#     and every companion op). Otherwise nodes.json triggers a fresh capacity-fill
-#     compute — except on a resume with no recorded placement, where the range already
-#     lives on resume_endpoint: re-balancing a live range would strand it, so all
-#     teams adopt that node as a single-slot placement instead. Neither config present
-#     => single-node (None).
+# A recorded placement always wins; a resume with no record adopts its deployed endpoint
+#     instead of re-balancing a live range (which would strand it).
     placement = read_placement(comp_dir)
     if placement:
         if set(placement["team_nodes"]) != set(teams):
@@ -298,8 +266,8 @@ def resolve_placement(comp_dir, engine_vmid, teams, boxes, comp_name,
     records, balancing = load_nodes_config(nodes_path)
     if records is None:
         if team_overrides or engine_override:
-            # A pin with nothing to resolve it against used to fall through to the
-            # ambient single-node env, silently deploying to the wrong host.
+            # A pin with nothing to resolve it against would silently deploy to the
+            # ambient single-node host.
             raise SystemExit(
                 f"  ERROR: --engine-node/--team-node given but no nodes list resolved "
                 f"({nodes_path or NODES_CONFIG_PATH} does not exist) — refusing to "

@@ -13,16 +13,11 @@ from common.utils import is_unmanaged
 _quote_sshkeys = quote_sshkeys
 
 
-# Slot 0 of golden_vmid_for_slot (satellite slots shift by box-stride — placement_record).
-# Golden boxes sit just above the engine's slot; preflight gates the span for
-# collisions with team vmid space.
+# Golden boxes sit just above the engine's slot; preflight gates the span for collisions with team vmid space.
 def golden_vmid_for(engine_vmid, box_idx):
     return golden_vmid_for_slot(engine_vmid, 0, box_idx)
 
 
-# Free because golden boxes are converted to (stopped) templates before any real team
-# box exists. Satellite slots anchor on their first local team (the jump answers .1
-# there and routes to the engine).
 def golden_ip_for(anchor_identifier, box_idx):
     return f"192.168.{anchor_identifier}.{GOLDEN_IP_BASE + box_idx}"
 
@@ -39,9 +34,7 @@ def _vm_exists(node, vmid):
     return any(v["vmid"] == vmid for v in vms)
 
 
-# Asks the host that owns `node` (infra.client.cluster_vms_for): with a multi-node
-# placement that is the satellite's own endpoint — a primary-side cluster query would
-# never see its templates on independent hosts.
+# The satellite's own endpoint owns its templates; a primary-side cluster query would never see them.
 def _template_vmid_map(node):
     vms = cluster_vms_for(node)
     out = {}
@@ -55,9 +48,8 @@ def _template_vmid_map(node):
     return out
 
 
-# A PRESENT but malformed or invalid domain_roles.json raises: treating it as
-# no-domain would hand the DC a booted shared golden — the exact duplicate-DomainSID
-# failure this split exists to prevent.
+# A malformed domain_roles.json raises rather than reading as no-domain, which would give every
+# team the same DomainSID off a booted shared golden.
 def unbooted_golden_boxes(comp_dir):
     path = comp_dir / "domain_roles.json"
     if not path.exists():
@@ -87,11 +79,8 @@ def unbooted_golden_boxes(comp_dir):
     return {name for name, role in roles.items() if role == "dc"}
 
 
-# box_idx stays positional — mirrors enumerate_targets' invariant: build from the full
-# box list, never a filtered one. Slot 0 anchors on team1's subnet (historical
-# behavior exactly); a satellite slot anchors on its first local team's subnet — the
-# satellite's goldens must sit on a bridge that exists on the satellite's host, with
-# the jump answering .1 there.
+# box_idx stays positional — build from the full box list, never a filtered one. Slot 0 anchors
+# on team1's subnet; a satellite slot on its first local team's bridge.
 def golden_targets(engine_vmid, teams, boxes, slot=0, anchor_identifier=None):
     if anchor_identifier is None:
         anchor_identifier = str(teams["team1"]["identifier"])

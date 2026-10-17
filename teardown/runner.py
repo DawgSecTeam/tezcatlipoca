@@ -1,9 +1,4 @@
-"""run_terminal_teardown: the shared executor behind both terminal-teardown surfaces.
-
-destroy-competition.py (interactive, with banner + confirm) and the scrim
-harness (in-process, already committed to tearing down) both come through
-here: gates -> confirm -> context -> plan -> engine -> verify_clean. The
-caller turns the CleanReport into its own exit code / exception."""
+"""run_terminal_teardown: the shared executor behind both terminal-teardown surfaces."""
 
 import json
 import os
@@ -33,11 +28,9 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
     default_node = config.active().proxmox.node
     placement_nodes = [default_node]
     if placement:
-        # Every node-scoped API path needs the PVE node NAME, not the nodes-list record name
-        # (activate_placement keys the route table by PVE name): the engine entry used the
-        # record name, so the inventory, the pre-stop and the leftover sweep all listed
-        # /nodes/<record>/qemu and 500'd, and a finished teardown reported NOT CLEAN
-        # (the satellite entries were already mapped).
+        # node-scoped API paths need the PVE node NAME, not the record name (activate_placement
+        # keys routes by PVE name): using the record name 500'd every path and made a finished
+        # teardown report NOT CLEAN.
         placement_nodes = [engine_record(placement).node] + [
             record_of(placement, s["name"]).node for s in placement["satellites"]]
         activate_placement(placement)
@@ -46,9 +39,8 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
         log(f"  Multi-node placement: engine on '{placement['engine_node']}'"
             + (f"; satellites: {sats}" if sats else ""))
 
-    # Every refusal fires BEFORE any destruction — a frozen competition's
-    # templates are the verified artifacts the event runs on, and a state
-    # without its run id names no ownership.
+    # Every refusal fires BEFORE any destruction: a frozen comp's templates are the verified
+    # artifacts the event runs on, and a state without its run id names no ownership.
     refuse_frozen_full_teardown(competition, frozen, full, end_of_competition)
     deployed_state, ownership = load_ownership(comp_dir)
     log(f"  Ownership: run id '{ownership.run_id}' — only VMs carrying this deploy's "
@@ -60,10 +52,8 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
     env = dict(env if env is not None else os.environ)
     if placement:
         # Callers snapshot os.environ BEFORE activate_placement runs, so their dict still named
-        # the profile's host while the range lives on the placement's host: the teardown then
-        # ran against the wrong PVE (500 "hostname lookup '<node>' failed") and every resource
-        # it owned — the team bridges — survived . Activation has moved the whole
-        # process by now, so project the resolved identity back onto this dict.
+        # the profile's host while the range lives on the placement's host; activation has moved
+        # the process, so project the resolved identity back onto this dict.
         env.update(config.proxmox_env())
 
     ctx = TeardownContext(
@@ -78,7 +68,7 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
     return engine.verify_clean(plan, results)
 
 
-# records steps the CALLER already completed (the scrim harness runs the evidence pull/collect/report and its superior red teardown itself) so the standard plan skips them instead of re-running them against dead boxes
+# records steps the CALLER already completed (the scrim harness) so the standard plan skips them
 def record_evidence_done(comp_dir, test_dir=None, red_vmid=None):
 
     comp_dir = Path(comp_dir)

@@ -1,26 +1,4 @@
-"""Remote access: the scoring engine becomes a headscale subnet router; participants
-reach only their own team's network.
-
-Model (docs/remote-access.md): every deploy enrolls the engine as a tailscale node
-(tag:range-router) advertising each team's 192.168.<identifier>.0/24, pushes a
-per-deploy firewall unit that SNATs tailnet-sourced traffic to the team gateway IP
-(boxes trust SSH only from 192.168.<id>.1 — the same treatment the jump VMs give
-routed-red traffic), and hands out per-person one-time preauth keys tagged
-tag:comp-<id>-team-<tid>. The headscale ACL policy grants each tag its own subnet
-plus the scoreboard; the pre-existing users keep the full access they had when the
-tailnet ran with no policy at all (group:full-access -> *:*).
-
-This module owns the ENTIRE headscale ACL policy file: the policy is regenerated
-from a small state file that lives beside it on the headscale host, so deploys and
-teardowns never text-surgery HuJSON. The VPS-side state (full-access users + the
-active competitions) seeds itself on first contact from the foundation installed
-; edit the state file to change full-access membership until the
-limiting-by-groups work replaces it.
-
-Everything here degrades loudly: a missing TEZ_HEADSCALE_* env var or an
-unreachable headscale host is a deploy-stage failure, not a skipped step —
-"deployed for every comp" means the tailnet wiring is part of the range.
-"""
+"""Remote access: the engine becomes a headscale subnet router; participants reach only their own team's network."""
 
 import base64
 import json
@@ -33,12 +11,7 @@ from estate import state as estate_state
 from estate import config
 
 TAILSCALE_INSTALL = "curl -fsSL https://tailscale.com/install.sh | sh"
-# A freshly cloned engine boots with cloud-init + unattended-upgrades holding the dpkg
-# locks for minutes, and the installer's own apt-get then dies on the lock
-# (`Could not get lock /var/lib/dpkg/lock-frontend ... held by process 2353 (apt-get)`,
-# caught live) through every one of the previous three 5-second retries,
-# ending the step at exit 127. Wait cloud-init and the locks out FIRST (bounded), then
-# install with a real retry; `flock -n` on the two apt locks is the portable probe.
+# A freshly cloned engine's cloud-init + unattended-upgrades hold the dpkg locks for minutes and the installer's apt-get dies on them, so wait the locks out first, then install.
 TAILSCALE_INSTALL_CMD = (
     "sudo cloud-init status --wait >/dev/null 2>&1 || true; "
     "for i in $(seq 1 120); do "
@@ -57,9 +30,6 @@ POLICY_FILE = "/etc/headscale/acl.hujson"
 PERSON_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
 
-# ── pure renderers (golden-filed in tests/test_remote_access.py) ─────────────────
-
-
 def team_subnet(identifier):
     return f"192.168.{identifier}.0/24"
 
@@ -73,12 +43,7 @@ def router_node_name(comp_id):
 
 
 def load_roster(comp_dir):
-# people.json: {"team1": ["alice", ...], ...} — optional; {} when absent.
-#
-#     Person names become headscale usernames (`comp-<id>-<person>`) and argv
-#     fragments on the headscale host, so they are validated hard: lowercase
-#     [a-z0-9._-], must be unique across the whole roster, and must name a team this
-#     competition actually has.
+    # people.json: {"team1": ["alice", ...]}, optional. Names become headscale usernames and argv fragments, so validated hard: [a-z0-9._-], unique, and a known team.
     path = Path(comp_dir) / "people.json"
     if not path.exists():
         return {}
@@ -109,17 +74,9 @@ def load_roster(comp_dir):
 
 
 def render_policy(full_access_users, comps):
-# The WHOLE headscale ACL policy, regenerated every time.
-#
-#     `full_access_users`: headscale usernames WITH the trailing @ the v2 policy
-#     syntax requires. `comps`: [{"comp_id", "engine_ip", "teams": [{"identifier",
-#     "participants"}]}]. Grants are keyed on the participant's USERNAME, not a node
-#     tag: live-proven, headscale v0.29 builds routers' packet filters for
-#     user/group sources but NOT for tag sources (tag-sourced dials black-hole at the
-#     router while netmap route visibility still works), so participant nodes enroll
-#     untagged and each team's grant names its people directly. Two grant lines per
-#     team: the whole /24 on every port, the scoreboard on 80 only. Teams without
-#     participants emit nothing.
+    # The WHOLE headscale ACL policy, regenerated every time; this module is the only writer of acl.hujson.
+    # Grants key on the participant USERNAME, not a node tag: headscale v0.29 builds routers' packet
+    # filters for user sources but NOT tag sources, so a tag-sourced dial black-holes elsewhere.
     out = []
     out.append("{")
     out.append("  // Managed by tezcatlipoca (remote_access_ops.render_policy) — do not")
@@ -152,15 +109,9 @@ def render_policy(full_access_users, comps):
 
 
 def remote_access_firewall_script(local_ids, satellite_ids, engine_mgmt_ip):
-# iptables-restore-free re-assert script for the ENGINE (idempotent -C || -A lines).
-#
-#     Local teams: SNAT to 192.168.<id>.1 — the engine owns the gateway IP on its own
-#     team bridges, so tailnet-sourced traffic arrives at boxes indistinguishable from
-#     engine traffic (gateway-IP-only SSH trust preserved). Satellite teams: SNAT to
-#     the ENGINE'S MGMT IP instead — the jump VM owns .1 on satellite bridges and its
-#     existing `-s engine -> SNAT to .1` rule finishes the job, exactly the two-hop
-#     treatment routed-red traffic gets (return traffic rides conntrack back through
-#     the engine, whose tailscale0 delivers it to the participant).
+    # iptables-restore-free re-assert script for the ENGINE (idempotent -C || -A). Local teams:
+    # SNAT to 192.168.<id>.1, which the engine owns on its team bridges. Satellite teams: SNAT to
+    # the ENGINE'S MGMT IP — the jump owns .1 there and its own rule finishes the job.
     lines = ["#!/bin/bash",
              "# Re-asserted on every interface change (range-remote-access-monitor.service) and "
              "every 30s as a fallback (range-remote-access.timer): tailnet -> team "
@@ -184,8 +135,7 @@ def remote_access_firewall_script(local_ids, satellite_ids, engine_mgmt_ip):
 
 
 def remote_access_systemd_units():
-# range-remote-access .service/.timer — the same re-assert pattern as
-#     range-firewall (Docker wipes iptables on restart; the timer re-asserts).
+    # Same re-assert pattern as range-firewall: Docker wipes iptables on restart, the timer re-asserts.
     service = ("[Unit]\n"
                "Description=Re-assert tailnet->team SNAT/forwarding (headscale remote access)\n"
                "After=docker.service\n"
@@ -206,12 +156,9 @@ def remote_access_systemd_units():
 
 
 def remote_access_monitor_script():
-# The rebind-triggered re-assert. A tailscaled LinkChange with reason [ips-changed] (the
-#     Quotient container's interface gaining an address) makes tailscaled re-apply its
-#     ruleset, which takes the POSTROUTING chain — and the SNAT rules — with it; the 30s
-#     timer leaves tailnet->team traffic broken inside every window (caught live,
-#     on the run that found it: present for 9 samples, absent for 3, present again). Watch the interface
-#     event itself and re-assert immediately; the timer stays as the fallback.
+    # The rebind-triggered re-assert: a tailscaled LinkChange [ips-changed] makes tailscaled
+    # re-apply its ruleset and takes the POSTROUTING chain (the SNAT rules) with it, which the 30s
+    # timer leaves broken inside every window. Watch the interface event itself.
     return ("#!/bin/bash\n"
             "while :; do\n"
             "  stdbuf -oL ip monitor address link | while read -r _event; do\n"
@@ -222,8 +169,7 @@ def remote_access_monitor_script():
 
 
 def remote_access_monitor_unit():
-# range-remote-access-monitor.service — long-running, because the trigger is an event
-#     (an interface address change), not a schedule.
+    # Long-running: the trigger is an event (an interface address change), not a schedule.
     return ("[Unit]\n"
             "Description=Re-assert tailnet->team SNAT/forwarding when an interface changes "
             "(tailscaled rebind)\n"
@@ -240,7 +186,7 @@ def remote_access_monitor_unit():
 
 
 def enrollment_markdown(comp_id, server_url, entries):
-# The per-person enrollment handout. entries: [{"person","team","key"}].
+    # entries: [{"person","team","key"}].
     lines = [f"# {comp_id} — remote access enrollment",
              "",
              "Each command enrolls ONE device as that person. A key is single-use:",
@@ -257,11 +203,8 @@ def enrollment_markdown(comp_id, server_url, entries):
     return "\n".join(lines)
 
 
-# ── headscale host I/O (one ssh shape, one place) ────────────────────────────────
-
-
 def _headscale_env():
-# The headscale contract; a missing value is a deploy-stage failure.
+    # The headscale contract; a missing value is a deploy-stage failure.
     cfg = config.active()
     values = {"TEZ_HEADSCALE_URL": cfg.headscale.url,
               "TEZ_HEADSCALE_SSH_HOST": cfg.headscale.ssh_host,
@@ -277,8 +220,7 @@ def _headscale_env():
 
 
 def _hs_ssh(cmd, password, input_text="", timeout=90, check=True, capture=True):
-# One sshpass ssh to the headscale host. `cmd` runs under `sudo -S` with the
-#     password on stdin (sysadmin has passworded sudo; docker is root-only there).
+    # `cmd` runs under `sudo -S` with the password on stdin (sysadmin has passworded sudo).
     env = _headscale_env()
     argv = ["sshpass", "-p", password, "ssh",
             "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=15",
@@ -288,9 +230,8 @@ def _hs_ssh(cmd, password, input_text="", timeout=90, check=True, capture=True):
 
 
 def hs_cli(args, timeout=90, check=True):
-# `headscale <args>` inside the container on the headscale host. `args` is a
-#     pre-validated single string — only module-generated comp ids/person names ever
-#     reach it (PERSON_RE), never free user input.
+    # `headscale <args>` inside the container. `args` is a pre-validated single string — only
+    # module-generated comp ids/person names reach it (PERSON_RE).
     env = _headscale_env()
     pw = env["TEZ_HEADSCALE_SSH_PASSWORD"]
     return _hs_ssh(f"sudo -S -p '' docker exec headscale headscale {args}", pw,
@@ -303,8 +244,7 @@ def hs_json(args, timeout=90, check=True):
 
 
 def _infra_user_id():
-# The router nodes' owning service user (TEZ_HEADSCALE_INFRA_USER, default
-#     cyberrange-infra — the account that already owns the tailnet's infra nodes).
+    # The router nodes' owning service user (TEZ_HEADSCALE_INFRA_USER).
     name = (config.active().headscale.infra_user or INFRA_USER_DEFAULT)
     for u in hs_json("users list"):
         if u.get("name") == name:
@@ -326,8 +266,7 @@ def _ensure_user(name):
 
 
 def _mint_preauth_key(user_id, tags, expiration):
-# `tags` may be None for an untagged key (node keeps its user identity) or a
-#     comma-separated tag list.
+    # `tags` None for an untagged key (node keeps its user identity), else a comma-separated list.
     args = f"preauthkeys create -u {user_id} --expiration {expiration}"
     if tags:
         args += f" --tags {tags}"
@@ -339,9 +278,6 @@ def _mint_preauth_key(user_id, tags, expiration):
     return key
 
 
-# ── policy state (the one writer of acl.hujson) ──────────────────────────────────
-
-
 def _read_policy_state():
     env = _headscale_env()
     pw = env["TEZ_HEADSCALE_SSH_PASSWORD"]
@@ -349,9 +285,7 @@ def _read_policy_state():
                 check=False)
     if r.returncode == 0 and r.stdout.strip():
         return json.loads(r.stdout)
-    # Seed: the foundation policy grants these users the tailnet's
-    # previous (policy-less, allow-all) behavior. Edit the state file on the
-    # headscale host to change full-access membership.
+    # Seed on first contact: the foundation policy grants these users the tailnet's previous (allow-all) behavior.
     return {"full_access": [f"{u}@" for u in (INFRA_USER_DEFAULT, "hnasher1", "dipam1",
                                               "sdavis24", "ckegly")],
             "comps": {}}
@@ -367,8 +301,7 @@ def _write_policy_state(state):
 
 
 def _apply_policy(full_access, comps):
-# Render, stage, validate, restart. The restart is brief and expected: the
-#     WireGuard data plane keeps flowing through a control-plane restart.
+    # Render, stage, validate, restart; the WireGuard data plane flows through a control-plane restart.
     env = _headscale_env()
     pw = env["TEZ_HEADSCALE_SSH_PASSWORD"]
     policy = render_policy(full_access, comps)
@@ -389,8 +322,7 @@ def _apply_policy(full_access, comps):
 
 
 def policy_upsert_comp(comp_id, engine_ip, teams):
-# teams: [{"identifier", "participants"}] — insert/replace this comp's entry
-#     and re-apply. Idempotent on resume by construction.
+    # teams: [{"identifier", "participants"}] — insert/replace this comp's entry and re-apply.
     state = _read_policy_state()
     state.setdefault("comps", {})[comp_id] = {"engine_ip": engine_ip, "teams": teams}
     _write_policy_state(state)
@@ -398,15 +330,9 @@ def policy_upsert_comp(comp_id, engine_ip, teams):
                                          for k, v in sorted(state["comps"].items())])
 
 
-# ── route-conflict preflight ─────────────────────────────────────────────────────
-
-
 def route_conflicts(comp_id, planned_identifiers):
-# Advertised subnet routes from OTHER nodes overlapping this deploy's team
-#     subnets. Concurrent ranges sharing an identifier would cross-route each other's
-#     participants (two routers advertising 192.168.101.0/24 are one HA route group),
-#     so this is a refusal, not a warning. Our own previous router is excluded: an
-#     engine rebuild leaves its node registered until teardown.
+    # Advertised subnet routes from OTHER nodes overlapping this deploy's team subnets: two routers
+    # advertising the same /24 are one HA route group, so this is a refusal. Our own router is excluded.
     ours = router_node_name(comp_id)
     conflicts = []
     entries = hs_json("nodes list-routes")
@@ -422,20 +348,14 @@ def route_conflicts(comp_id, planned_identifiers):
     return conflicts
 
 
-# ── engine side (phase 3) ────────────────────────────────────────────────────────
-
-
 def _engine_cmd(ctx, cmd, **kw):
     from engine.engine_cmd_ops import _run_engine_cmd
     return _run_engine_cmd(ctx, cmd, **kw)
 
 
 def engine_tailscale_enrolled(ctx, server_url):
-# True when the engine's tailscaled is Running against OUR control server.
-#
-#     `status --json` reports the control server as CurrentTailnet.Name (bare host,
-#     no scheme) on current tailscale versions; older shapes exposed ControlURL —
-#     accept either, and fail the check on any JSON the field hunt can't satisfy.
+    # True when the engine's tailscaled is Running against OUR control server; `status --json`
+    # reports it as CurrentTailnet.Name on newer versions, ControlURL on older ones.
     r = _engine_cmd(ctx, "sudo tailscale status --json 2>/dev/null || true",
                     check=False, timeout=30, capture=True, step="tailscale status")
     try:
@@ -451,9 +371,7 @@ def engine_tailscale_enrolled(ctx, server_url):
 
 
 def enroll_engine_router(ctx, comp_id, all_identifiers):
-# Install (once) + enroll/update the engine as tag:range-router advertising
-#     every team subnet. Minting a fresh key on each run is deliberate: the key is
-#     single-use, short-lived, and an unused one costs nothing.
+    # Install (once) + enroll/update the engine as tag:range-router advertising every team subnet; a fresh single-use key each run is deliberate.
     server_url = config.require("headscale.url").rstrip("/")
     routes = ",".join(team_subnet(i) for i in all_identifiers)
     hostname = router_node_name(comp_id)
@@ -478,9 +396,8 @@ def enroll_engine_router(ctx, comp_id, all_identifiers):
 
 
 def push_remote_access_firewall(tf_ctx, engine_mgmt_ip, local_ids, satellite_ids):
-# The per-deploy SNAT/forward unit — separate from the template's
-#     range-firewall.sh so the engine template hash never moves. `tf_ctx` is the
-#     engine connection dict every engine SSH hop takes.
+    # A separate unit from the template's range-firewall.sh so the engine template hash never moves;
+    # `tf_ctx` is the engine connection dict every engine SSH hop takes.
     script = remote_access_firewall_script(local_ids, satellite_ids, engine_mgmt_ip)
     service, timer = remote_access_systemd_units()
     monitor_script = remote_access_monitor_script()
@@ -510,12 +427,8 @@ def push_remote_access_firewall(tf_ctx, engine_mgmt_ip, local_ids, satellite_ids
                 timeout=30, step="assert remote-access SNAT rules")
 
 
-# ── orchestration ────────────────────────────────────────────────────────────────
-
-
 def _comp_teams(ctx):
-# [{"identifier", "participants"}] for every team, participants from
-#     people.json. Refuses a roster naming a team this competition doesn't have.
+    # [{"identifier", "participants"}] for every team, participants from people.json.
     roster = load_roster(ctx.comp_dir)
     teams = []
     for team_key in sorted(ctx.teams):
@@ -531,8 +444,6 @@ def _comp_teams(ctx):
 
 
 def setup_remote_access(ctx):
-# Phase-3 step: engine enrollment + SNAT unit + headscale users/keys/policy +
-#     enrollment artifacts. Every comp, unless `remote_access 0` in the Compfile.
     env = _headscale_env()
     comp_id = ctx.comp_name
     teams = _comp_teams(ctx)
@@ -567,9 +478,8 @@ def setup_remote_access(ctx):
             user = f"comp-{comp_id}-{person}"
             uid = _ensure_user(user)
             ttl = config.active().headscale.key_ttl
-            # Deliberately UNTAGGED: a tagged node's identity is its tag, and
-            # headscale v0.29 does not expand tag sources into routers' packet
-            # filters (live-proven) — the username is the grant key.
+            # Deliberately UNTAGGED: headscale v0.29 does not expand tag sources into routers'
+            # packet filters, so the username is the grant key.
             key = _mint_preauth_key(uid, None, ttl)
             entries.append({"person": person, "team": team["identifier"], "key": key,
                             "user": user})
@@ -599,8 +509,7 @@ def setup_remote_access(ctx):
 
 
 def teardown_remote_access(comp_dir, state=None):
-# Destroy-path cleanup: warn-and-proceed, like the rest of teardown. Reads the state
-#     document's `remote_access` record; absent (the flag off) means nothing to do.
+    # Destroy-path cleanup: warn-and-proceed. Reads the state document's `remote_access` record.
     if state is None:
         state = estate_state.load_flat(comp_dir)
     ra = (state or {}).get("remote_access")
@@ -617,8 +526,7 @@ def teardown_remote_access(comp_dir, state=None):
                       "(revokes the engine's tailnet key).")
     except (subprocess.SubprocessError, ValueError, OSError, KeyError) as e:
         print(f"  WARNING: could not delete the engine's headscale node: {e}")
-    # headscale refuses `users destroy` while the user still owns nodes
-    # ("user not empty: node(s) found"), so participant devices go first.
+    # headscale refuses `users destroy` while the user still owns nodes, so devices go first.
     try:
         prefix = f"comp-{comp_id}-"
         for entry in hs_json("nodes list"):
@@ -648,8 +556,7 @@ def teardown_remote_access(comp_dir, state=None):
 
 
 def verify_remote_access(state, comp_id, planned_identifiers):
-# Post-deploy check used by the verifier: returns (ok, problems[]). Config-
-#     presence level — a real participant-device probe is a manual step (docs).
+    # Post-deploy check used by the verifier: returns (ok, problems[]). Config-presence level — a real participant-device probe is a manual step (docs).
     problems = []
     ra = (state or {}).get("remote_access") or {}
     if not ra.get("enabled"):

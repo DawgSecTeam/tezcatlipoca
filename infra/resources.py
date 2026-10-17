@@ -1,10 +1,4 @@
-"""Resource gates: the node must have what this deploy needs before it starts cloning.
-
-Two families, one module:
-
-  - datastore headroom (check_datastore_headroom): provisioned team-disk math vs pool avail.
-  - template resolution (check_share_templates / cloudinit_gate): box templates resolve and
-    carry cloud-init, the engine base image exists, satellites have a jump clone source."""
+"""Resource gates: the node must have what this deploy needs before it starts cloning."""
 
 import re
 
@@ -15,12 +9,10 @@ _CLOUDINIT_DISK_RE = re.compile(r"^(?:ide|scsi|sata)\d+$")
 
 
 def check_datastore_headroom(node, datastore, boxes, num_teams, label="", node_name=None):
-    """Blocking datastore-headroom gate: provisioned team-disk math vs pool avail.
-
-    `label` ("[name]") and `node_name` are the multi-node scoping: the same gate run once per
-    hosting node over that node's share."""
-    # The storage LIST zeroes/omits free on some pools;
-    # the per-store STATUS endpoint's avail is the authoritative number.
+    """Blocking datastore-headroom gate: provisioned team-disk math vs pool avail. `label` and
+    `node_name` are the multi-node scoping (the same gate run per hosting node)."""
+    # The storage LIST zeroes/omits free on some pools; the per-store STATUS avail is the
+    # authoritative number.
     free = proxmox_api("GET", f"/nodes/{node}/storage/{datastore}/status")["data"].get("avail")
     if free is None:
         print(f"  WARNING: could not read free space on datastore '{datastore}' — "
@@ -29,13 +21,11 @@ def check_datastore_headroom(node, datastore, boxes, num_teams, label="", node_n
               f"'{datastore}' — headroom unchecked")
         return
     free_gb = free / 1024 ** 3
-    # disk_gb unset means "template's own disk", unknowable here; 40 GB is a
-    # conservative stand-in across the base templates.
+    # disk_gb unset means "template's own disk", unknowable here; 40 GB is a conservative
+    # stand-in across the base templates.
     need_gb = num_teams * sum(b.get("disk_gb") or 40 for b in boxes)
-    # On thin-provisioned pools (ZFS, lvmthin) linked clones only allocate written
-    # blocks — the goldens and engine are the only full copies. Opt-in factor
-    # (0 < TEZ_THIN_HEADROOM <= 1) counts that fraction of the provisioned math
-    # instead of rejecting comps the pool can actually hold.
+    # On thin-provisioned pools (0 < TEZ_THIN_HEADROOM <= 1) count that fraction of the
+    # provisioned math: linked clones only allocate written blocks.
     thin = config.active().knobs.thin_headroom  # float; the config default is 1.0
     if not 0 < thin <= 1:
         raise SystemExit(f"  ERROR: TEZ_THIN_HEADROOM must be in (0, 1], got {thin}")
@@ -54,13 +44,8 @@ def check_datastore_headroom(node, datastore, boxes, num_teams, label="", node_n
 
 
 def template_cloudinit_missing(config):
-    """True when a Linux-ostype VM config carries no cloud-init drive.
-
-    A template can be tagged `template` and still be cloud-init-less — .150 vmid 920 is
-    literally named `base-debian13-cloudinit` and ships none — so its linked clones boot
-    with no network and no identity and the failure only surfaces an hour later at
-    wait_for_boxes_ssh. Windows ostypes never carry one (identity comes from
-    bootstrap_windows_box), so they and every other non-Linux ostype are exempt."""
+    """True when a Linux-ostype VM config carries no cloud-init drive. A template can be tagged
+    `template` and still ship none, so its clones boot with no network; Windows ostypes are exempt."""
     ostype = str((config or {}).get("ostype") or "").strip().lower()
     if not ostype.startswith("l"):
         return False
@@ -71,12 +56,8 @@ def template_cloudinit_missing(config):
 
 
 def cloudinit_gate(tagged_by_name, boxes, label=""):
-    """Refuse a selected Linux template that has no cloud-init drive.
-
-    `tagged_by_name` maps template name -> cluster-resource entry (vmid + node). A config
-    read that fails is warned about, not fatal — a transient API error must not block a
-    deploy, but the template's cloud-init drive stays marked UNVERIFIED. Returns the
-    number of distinct templates whose config was actually read and checked."""
+    """Refuse a selected Linux template with no cloud-init drive. A config read that fails is
+    warned about, not fatal, but its drive stays UNVERIFIED. Returns templates checked."""
     seen = set()
     verified = 0
     for box in boxes:
@@ -120,11 +101,9 @@ def tagged_templates(vms):
 
 
 def check_share_templates(share, boxes, vms):
-    """Template resolution for one NodeShare (a clone can only use its own node's templates).
-
-    Single-node: every box template on the cluster + the engine base image
-    (TEZ_PROXMOX_TEMPLATE_VM_ID). Multi-node: engine base on the engine node, every box template on a
-    node hosting teams, and a jump clone source on satellites. `vms` is the share's VM view."""
+    """Template resolution for one NodeShare: a clone can only use its own node's templates.
+    Single-node: every box template on the cluster + the engine base. Multi-node: engine base on
+    the engine node, box templates on a team node, a jump clone source on satellites."""
     where = f"node '{share.name}' ({share.node})" if share.multi else "the cluster"
     if share.check_templates:
         tagged, tagged_by_name = tagged_templates(vms)

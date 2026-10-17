@@ -1,9 +1,4 @@
-"""Plan builders: the named kinds of teardown, assembled from steps.
-
-build_terminal_plan is what destroy-competition.py (and, in-process, the scrim
-harness) runs: portal -> engine capture -> artifacts -> red01 -> pre-stop ->
-estate -> remote access. It is the only plan kind: deploy phase 1 no
-longer destroys a range, so nothing else composes one."""
+"""Plan builders: the named kinds of teardown, assembled from steps."""
 
 from teardown.plan import TeardownPlan
 from teardown.steps import (ArtifactStep, EngineCaptureStep, EstateStep,  # noqa: F401

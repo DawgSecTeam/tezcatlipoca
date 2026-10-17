@@ -19,7 +19,6 @@ from estate import config
 
 
 def _identifiers(comp_dir, teams, boxes):
-# Slot 0's identifiers, and whether an in-path firewall needs the transit NICs.
     placement = estate_state.EstateState.load(comp_dir).data.get("placement")
     slots = (placement or {}).get("team_slots") or {}
     teams_on_engine = [teams[k]["identifier"] for k in sorted(teams) if slots.get(k, 0) == 0]
@@ -27,11 +26,8 @@ def _identifiers(comp_dir, teams, boxes):
 
 
 def _replace_engine(comp_dir, state, teams, boxes):
-# Destroy ONLY the engine and re-clone it from the engine template.
-#
-#     Scoped by construction: the destroy names the engine's vmid and the create builds one
-#     VM, so a team box rebuilt out-of-band cannot be wiped mid-event — which is what the
-#     old `-target` scoping existed for (a Windows/AD test run).
+# Scoped by construction — the destroy names one vmid and the create builds one VM, so no
+#     team box can be wiped.
     from estate import apply as estate_apply, config as estate_config, engine_setup
     from infra.ownership import Ownership, destroy_vm_if_exists
     placement, identifiers, in_path = _identifiers(comp_dir, teams, boxes)
@@ -54,7 +50,6 @@ def _replace_engine(comp_dir, state, teams, boxes):
 
 
 def _address_engine(comp_dir, state, teams, boxes, ctx):
-# Re-address the fresh engine's team bridges (and re-assert the satellite routes).
     from estate import engine_setup
     from multinode.placement_record import satellite_routes_for
     placement, identifiers, in_path = _identifiers(comp_dir, teams, boxes)
@@ -66,10 +61,6 @@ def _address_engine(comp_dir, state, teams, boxes, ctx):
 
 
 def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
-# M4 engine recovery: re-clone the engine VM from the competition's engine
-#     template and apply per-deploy state fresh. Team boxes, golden templates, and the
-#     engine template are untouched. The scoring DB starts EMPTY (fresh volumes) —
-#     re-seed with create-competition.py --from-phase 7 afterwards.
     if not state.get("engine_template_vmid"):
         raise SystemExit(
             "  ERROR: the state document has no engine_template_vmid — this competition "
@@ -78,8 +69,7 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
     acquire_engine_lock(engine_vmid)
     node = config.active().proxmox.node
 
-    # Frozen semantics: recovery uses the node's template as-is; a hash mismatch is a
-    # loud warning, never a mid-event blocker.
+    # Frozen semantics: a hash mismatch is a loud warning, never a mid-event blocker.
     expected = state.get("engine_template_hash")
     on_node = stored_template_hash(node, int(state["engine_template_vmid"]))
     if expected and on_node and on_node != expected:
@@ -118,17 +108,13 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
                                          if state.get("domain_creds") else None))
         ensure_nat_forwarding(ctx)
 
-    # The scoring DB is empty now, so phase 7's per-step done-flags are stale: without
-    # clearing them the advertised --from-phase 7 re-seed skipped every step.
-    # portal_up goes too: the new engine has no portal until that re-seed's phase 8 re-ships
-    # it (portal_ops.deploy_portal reuses the recorded console tokens).
+    # The DB is empty, so phase 7's done-flags are stale — leaving them made the
+    # --from-phase 7 re-seed skip every step; portal_up too, the new engine has no portal yet.
     for flag in ("seeded", "engine_unpaused", "injects_created", "injects_fingerprint",
                  "portal_up"):
         state.pop(flag, None)
-    # This write lands LAST in engine-recovery, after the engine was re-cloned and the
-    # scoring DB wiped. A torn write here leaves a live engine with unreadable resume state
-    # and no second chance (caught live) — always through the document's
-    # atomic writer.
+    # Lands last, after the engine was re-cloned and the DB wiped — a torn write here leaves
+    # a live engine with unreadable resume state and no second chance.
     estate_state.write_flat(comp_dir, state)
 
     print(f"\n  Engine recovered from template (vmid {state['engine_template_vmid']}).")
@@ -139,10 +125,7 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
 
 
 def reseed_event(comp_dir):
-# Phase 7 against the freshly recovered engine: seed, unpause, and create injects with
-#     offsets anchored at NOW. This is how a reset-and-rerun gets a live inject window —
-#     offsets resolve at phase-7 time, so a rollback-ready alone left every inject closed
-#     (caught live: all 12 closed ~1.5h before T0).
+# Offsets resolve at phase-7 time — a rollback-ready alone left every inject already closed.
     import subprocess
     subprocess.run([sys.executable, "create-competition.py", "--competition", competition_name(comp_dir),
                     "--from-phase", "7", "--yes"], check=True)

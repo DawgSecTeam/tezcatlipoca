@@ -8,15 +8,10 @@ from common.ssh_ops import ssh_via_gateway
 from common.utils import PRINT_LOCK, record_degradation, run_concurrent
 
 
-# Match the upgrade WORKER by full command line. `pgrep -x unattended-upgr` (the
-# 15-char truncated comm) ALSO matches Ubuntu's permanent unattended-upgrade-shutdown
-# --wait-for-signal daemon, so every Ubuntu box read BUSY forever and each prep_apt
-# pass burned the full settle budget (measured on a Windows/AD test run). The [e] keeps the
-# pattern from matching this script's own shell.
+# Match the upgrade WORKER by full command line: `pgrep -x unattended-upgr` also matches
+# Ubuntu's permanent unattended-upgrade-shutdown daemon and read every box BUSY forever.
 _SETTLE_CHECK = (
-    # Non-apt distro: nothing can hold a dpkg lock, so it is settled by definition —
-    # without this guard `apt-get check` is rc=127 BUSY forever and every such box
-    # burns the full 240s settle budget per pass (caught live).
+    # Non-apt distro: nothing can hold a dpkg lock, but `apt-get check` is rc=127 BUSY forever.
     "command -v apt-get >/dev/null 2>&1 || { echo SETTLED; exit 0; }\n"
     "pgrep -f '/usr/bin/unattended-upgrad[e]( |$)' >/dev/null 2>&1 && echo BUSY\n"
     "apt-get -o DPkg::Lock::Timeout=1 check >/dev/null 2>&1 || echo BUSY\n"
@@ -25,17 +20,9 @@ _SETTLE_CHECK = (
 
 
 def _box_settled(node, vmid):
-# True once a freshly booted box has settled: guest agent responds, no
-#     unattended-upgrades process, dpkg lock free. All via the guest agent (root,
-#     virtio-serial) — SSH is exactly the channel the boot storm starves. The lock check
-#     is `apt-get check` with a 1s lock timeout rather than `fuser`: same condition, no
-#     psmisc dependency on minimal cloud images.
-#
-#     Returns None (not False) when the agent channel is alive but its data calls are
-#     useless — the realm node answers pings and returns NULL for every exec result, so
-#     "no SETTLED seen" there means 'cannot verify', not 'busy'. Treating that as False
-#     burned the whole 240s settle budget per prep_apt pass on realm ;
-#     callers fall back to the SSH probe on None.
+# All via the guest agent; SSH is the channel the boot storm starves. None (not False) when the
+# channel is alive but its data calls are useless (realm returns NULL for every exec): "cannot
+# verify", not "busy" — callers then fall back to the SSH probe.
     try:
         if not wait_for_guest_agent(node, vmid, timeout=20):
             return False
@@ -44,13 +31,12 @@ def _box_settled(node, vmid):
         out = out or ""
         if "SETTLED" in out:
             return "BUSY" not in out
-        return None  # agent ping ok, data channel dead (realm) — let the caller probe SSH
+        return None
     except Exception:
         return None
 
 
 def _box_settled_via_ssh(ctx, t):
-# SSH fallback of the settle check, for nodes whose guest agent won't return data.
     script = _SETTLE_CHECK
     try:
         r = ssh_via_gateway(ctx, t["ip"], f"sudo bash -c {shlex.quote(script)}",
@@ -60,9 +46,8 @@ def _box_settled_via_ssh(ctx, t):
     return r.returncode == 0 and "SETTLED" in (r.stdout or "") and "BUSY" not in (r.stdout or "")
 
 
-# cloud-init status: `command -v` guard makes a non-cloud-init box an honest no-op
-# (else `cloud-init: command not found` reads 'running' and burns the whole bound);
-# 2>&1 folds cloud-init's own stderr into the tail we report on a stuck box.
+# `command -v` guard makes a non-cloud-init box an honest no-op; 2>&1 folds cloud-init's stderr
+# into the reported tail.
 _CLOUD_INIT_CHECK = (
     "command -v cloud-init >/dev/null 2>&1 || { echo 'status: done'; exit 0; }\n"
     "cloud-init status 2>&1\n"
@@ -71,16 +56,8 @@ _CLOUD_INIT_POLL = 10
 
 
 def _cloud_init_verdict(rc, out):
-    """`cloud-init status` -> 'done', 'error' or 'running'.
-
-    The TEXT settles the state whenever it names one, and the exit code only decides
-    when the text says nothing. rc 2 alone is not an error verdict: cloud-init returns
-    it for a boot that finished with recorded errors, so on an image that always has one
-    (this estate's Ubuntu 24.04) rc 2 arrived alongside `status: done` on every box and
-    `status: running` while the boot was still going. Reading rc first made the gate
-    (a) record a tolerated failure for a box whose boot was over — which hard-fails
-    verify's degradations gate — and (b) skip the wait it exists to perform
-    (caught live: 'cloud-init errored: <ip>: status: done')."""
+    """`cloud-init status` -> 'done', 'error' or 'running'. The text settles the state
+    whenever it names one; rc only decides when it says nothing (rc 2 can mean done)."""
     out = out or ""
     if "status: error" in out:
         return "error"
@@ -96,17 +73,9 @@ def _cloud_init_verdict(rc, out):
 
 
 def wait_boxes_cloud_init(ctx, targets, timeout=600, run=None):
-    """Bounded wait for cloud-init to finish on freshly cloned boxes before a long
-    apt/build session opens. The base image's boot-time `package_upgrade` (a
-    kernel+firmware batch is enough) argues with the build's own apt chain over
-    the SAME long ssh session, and when the storm bounces sshd mid-session the
-    driver's single ssh call drops with exit 255 (live: engine-template builds
-    died 1-2 min into `install engine packages`). The apt-holder settle check
-    alone can slip through a gap between cloud-init's apt invocations, so the
-    real precondition is cloud-init's own 'done'. A box that reached 'error' is
-    warned about and passed — never block a deploy forever on a broken boot;
-    a box still running at the bound fails loudly with the status tail, because
-    opening the build anyway is exactly the race this closes."""
+    """Bounded wait for cloud-init to finish before a long apt/build session: the base image's
+    boot-time `package_upgrade` can bounce sshd mid-session (exit 255) and the apt-holder check
+    alone slips through the gaps. 'error' warns and passes; still running at the bound fails."""
     run = run or ssh_via_gateway
     user = ctx.get("box_username", "ubuntu")
     deadline = time.time() + timeout
@@ -146,15 +115,8 @@ def wait_boxes_cloud_init(ctx, targets, timeout=600, run=None):
 
 def wait_boxes_settled(targets, node, timeout=240, ssh_fallback=None, *,
                        cloud_init_ctx, cloud_init_timeout=600):
-# Poll every box until it settles after boot — the real condition the old blind
-#     150s sleep waited out (the initial unattended-upgrades run starves both the guest
-#     agent and the ssh -W forward). Boxes poll concurrently, each with the full budget.
-#     Returns the vmids that never settled; that is not fatal — the caller's per-box
-#     retry ladder covers a stubborn box exactly as before.
-#
-#     cloud_init_ctx is required (keyword-only): a freshly cloned box is not settled
-#     until cloud-init itself is done, and every consumer of this waiter must carry
-#     that guarantee before it opens its own long apt/build session.
+# Polls every box until it settles after boot and returns the vmids that never settled (not
+# fatal). cloud_init_ctx is keyword-only because a box is not settled until cloud-init is done.
     wait_boxes_cloud_init(cloud_init_ctx, targets, timeout=cloud_init_timeout)
     deadline = time.time() + timeout
 

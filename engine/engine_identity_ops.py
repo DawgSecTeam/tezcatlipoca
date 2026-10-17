@@ -5,18 +5,10 @@ from engine.engine_bootstrap_ops import push_quotient_env
 
 
 def clean_engine_for_template(ctx, vmid):
-# Strip every per-deploy / per-competition trace before qm template (M4 template
-#     point): containers + data volumes (no scoring DB, teams or injects baked), .env and
-#     event.conf secrets, machine-id, cloud-init state, SSH host keys. The apt-cacher-ng
-#     package cache is deliberately KEPT — a warm cache speeds up every later run.
-#
-#     `vmid` is the engine-template BUILD VM. The command below runs over SSH to a
-#     management IP that a second competition's engine can share, and this is the most
-#     destructive command in the pipeline. See assert_engine_build_identity().
+# The apt-cacher-ng package cache is deliberately KEPT — a warm cache speeds every later run.
     assert_engine_build_identity(ctx, vmid)
     _run_engine_cmd(ctx, (
         "cd /opt/quotient && sudo docker compose down -v --remove-orphans 2>/dev/null; "
-        # ~1 GB of image build cache is dead weight once the images exist.
         "sudo docker builder prune -af >/dev/null 2>&1; "
         "sudo rm -f /opt/quotient/.env /opt/quotient/config/event.conf && "
         "sudo rm -rf /opt/quotient/config/credlists && "
@@ -30,40 +22,24 @@ def clean_engine_for_template(ctx, vmid):
     ), timeout=300, step="clean engine for template")
 
 
-# Identity stamp for the engine-template build VM. The build VM is booted on the PLANNED
-# engine management IP and the cleanup is delivered by SSH to that IP, so with two
-# engines (or an engine and a build VM) up on one node, ARP flaps can land the cleanup
-# on a LIVE foreign engine — observed: an engine lost /etc/ssh/ssh_host_* (every session
-# reset at kex while the listener stayed up) plus its /opt/quotient/.env and containers
-# (known-issues: clean_engine_for_template). The stamp is written when the build VM
-# first accepts SSH and removed by the clean, so it exists only while a build is in
-# progress and never gets baked into the template.
+# The build VM boots on the PLANNED engine mgmt IP and is cleaned over SSH to it: with two
+# engines up on one node, ARP flaps can land the cleanup on a LIVE foreign engine (observed:
+# lost host keys, .env and containers). Written on first SSH, removed by the clean, so it
+# never gets baked into the template.
 ENGINE_BUILD_STAMP = "/etc/tezcatlipoca-build-id"
 
 
 def engine_build_identity(vmid):
-# The identity string a build VM carries. Keyed on the reserved vmid, which is
-#     deterministic (engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET) and unique per slot.
     return f"tezcatlipoca-engine-template/{vmid}"
 
 
 def stamp_engine_build(ctx, vmid):
-# Mark the guest at ctx['scoring_engine_ip'] as this build's VM.
-#
-#     Called as soon as the freshly cloned build VM accepts SSH, before any other work, so
-#     a later SSH that resolves to the wrong machine is detectable.
     return _run_engine_cmd(
         ctx, f"echo '{engine_build_identity(vmid)}' | sudo tee {ENGINE_BUILD_STAMP} >/dev/null",
         timeout=60, step="stamp engine build")
 
 
 def assert_engine_build_identity(ctx, vmid):
-# Refuse to touch the engine unless the guest at this address is THIS build's VM.
-#
-#     A missing stamp is fatal, not a warning: it means either we are pointed at a machine
-#     this pipeline never stamped (a foreign engine, or an engine clone made from a
-#     template) or the build VM is not the one we think it is. Both are worse than
-#     stopping.
     expected = engine_build_identity(vmid)
     result = _run_engine_cmd(ctx, f"cat {ENGINE_BUILD_STAMP} 2>/dev/null || true",
                              timeout=60, capture=True, step="verify engine build identity")
@@ -78,10 +54,8 @@ def assert_engine_build_identity(ctx, vmid):
             f"TEZ_ENGINE_MGMT_IP, or stop the other range, then retry.")
 
 
-# Grow / to the whole disk. The create path sizes the engine's virtual disk (40 GB)
-# but nothing grew the partition/PV/LV/filesystem, so the engine ran on the base image's
-# 10 GB root — full within one Windows+Linux deploy (a Windows/AD test run: 100% used,
-# apt-cacher-ng answering 500 to every box; Postgres would be next). Idempotent: growpart
+# The create path sizes the engine disk 40 GB but nothing grew the partition/PV/LV/fs, so
+# the engine ran on the base image's 10 GB root and filled it within one deploy. growpart
 # exits nonzero ("NOCHANGE") once the partition already fills the disk.
 _GROW_ROOT_CMD = (
     "ROOT=$(findmnt -no SOURCE /); "
@@ -101,13 +75,8 @@ _GROW_ROOT_CMD = (
 
 
 def prepare_engine_from_template(ctx, postgres_password, redis_password):
-# Per-deploy steps on an engine cloned from the engine template (M4).
-#
-#     The clone boots with a fresh identity and fresh host keys (baked by the template's
-#     clean step). .env goes down BEFORE compose up: the fresh postgres volume must
-#     initialize with this competition's credentials — up-then-rewrite would leave a
-#     volume initialized with an empty password. compose up on a template with no
-#     volumes creates exactly that: an empty scoring DB every run.
+# .env goes down BEFORE compose up: the fresh postgres volume must initialize with this
+# competition's credentials — up-then-rewrite leaves it initialized with an empty password.
     print("  Preparing engine from template (.env + fresh-volume compose up)...")
     _run_engine_cmd(ctx, _GROW_ROOT_CMD, check=False, timeout=120,
                     step="grow engine root filesystem")

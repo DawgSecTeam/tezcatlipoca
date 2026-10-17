@@ -85,8 +85,7 @@ def guest_agent_write_file(node, vmid, path, content):
 
 def guest_agent_read_file(node, vmid, path, local_path=None):
     """Read a guest file to bytes, or write it to a local path when one is given."""
-    # file-read decodes the base64 the agent sends (decode defaults to 1); content is a
-    # str, so surrogateescape is what carries non-UTF-8 bytes back out losslessly.
+    # content is a str, so surrogateescape carries non-UTF-8 bytes back out losslessly.
     data = proxmox_api(
         "GET", f"/nodes/{node}/qemu/{vmid}/agent/file-read", params={"file": path},
     )["data"]["content"].encode("utf-8", "surrogateescape")
@@ -97,14 +96,13 @@ def guest_agent_read_file(node, vmid, path, local_path=None):
         return data
 
 
-# file-write caps `content` at 61440 chars, and we hand it already-encoded base64
-# (encode=0), so the raw chunk budget is what base64 expands back up to that cap.
+# file-write caps `content` at 61440 chars and we hand it base64, so the raw chunk budget is what
+# base64 expands back up to that cap.
 _FILE_WRITE_CHUNK = 61440 // 4 * 3
 
 
 def _guest_agent_write_chunk(node, vmid, path, chunk):
     import base64
-    # file-write returns null, so there is no envelope to index.
     proxmox_api(
         "POST", f"/nodes/{node}/qemu/{vmid}/agent/file-write",
         data={"file": path, "content": base64.b64encode(chunk).decode("ascii"), "encode": 0},
@@ -136,10 +134,8 @@ def guest_agent_exec_windows(node, vmid, ps_script, timeout=120):
     raise RuntimeError(_exec_timeout_message(vmid, pid, timeout, last))
 
 
-# A bare "didn't finish within Ns" gives an operator nothing to act on, and five exec
-# logs carry exactly that at the 120s cap (caught live..10-01). The agent
-# already holds the partial output by the time we give up — include it, and point at
-# the detached path for work that legitimately outlives a poll budget.
+# Include the agent's partial output: a bare "didn't finish within Ns" gives an operator
+# nothing to act on, and point at the detached path for work that outlives a poll budget.
 def _exec_timeout_message(vmid, pid, timeout, status):
     status = status or {}
     detail = []
@@ -155,38 +151,25 @@ def _exec_timeout_message(vmid, pid, timeout, status):
 
 
 class DetachedExecResult(NamedTuple):
-    """`rc` is the script's exit status; `log` is the tail of the guest-side log;
-    `log_path` is where that log lives ON THE GUEST (not stderr — a detached run
-    has one merged stream, and the file outlives the call)."""
+    """`rc` is the script's exit status; `log_path` lives ON THE GUEST and outlives a dropped
+    agent channel (a detached run has one merged stream, not stderr)."""
 
     rc: int
     log: str
     log_path: str
 
 
-# Written by the same shell that ran the payload, so it cannot appear in the log
-# before the payload has finished.
+# Written by the same shell that ran the payload, so it can never appear in the log first.
 DETACHED_RC_MARKER = "__TZ_DETACHED_RC="
 
 
 def guest_agent_exec_detached(node, vmid, script, log_path, timeout=1800,
                               shell="bash", poll_interval=5):
-    """Run a long root script via the guest agent without holding the exec channel open.
-
-    The agent's exec channel is a poll loop with a caller-set budget, so work that
-    legitimately outlives that budget (apt installs, nakon bundles, service fixups)
-    used to die mid-plant with a timeout — and the plant's partial effects stayed on
-    the box. This starts the payload under setsid+nohup, redirects it to a log on the
-    guest, and polls that log for a completion marker, so `timeout` is a real deadline
-    rather than a request/response budget.
-
-    Returns DetachedExecResult(rc, log_tail, log_path). The log survives a dropped
-    agent channel, so a timeout here is diagnosable after the fact on the guest.
-    """
+    """Run a long root script via the guest agent without holding the exec channel open: the
+    payload runs under setsid+nohup to a guest log, polled for a completion marker, so `timeout`
+    is a real deadline. Returns DetachedExecResult(rc, log_tail, log_path)."""
     qlog = shlex.quote(log_path)
-    # A subshell keeps an `exit` inside the payload from skipping the rc marker, and
-    # the marker is written by the same shell that ran the payload — so it cannot
-    # appear in the log before the payload has finished.
+    # A subshell keeps an `exit` inside the payload from skipping the rc marker.
     body = (f"( {script}\n); __tz_rc=$?; "
             f'printf "%s%s\\n" "{DETACHED_RC_MARKER}" "$__tz_rc" >> {qlog}')
     wrapper = (f"rm -f {qlog}; "
@@ -205,8 +188,6 @@ def guest_agent_exec_detached(node, vmid, script, log_path, timeout=1800,
             _rc, out, _err = guest_agent_exec_root(
                 node, vmid, f"tail -c 4000 {qlog} 2>/dev/null || true", timeout=30)
         except Exception:
-            # A transient agent hiccup is expected while the payload churns; the log
-            # on the guest is the durable record, so keep polling until the deadline.
             continue
         last_log = out or ""
         marker_at = last_log.rfind(DETACHED_RC_MARKER)
@@ -234,9 +215,8 @@ def wait_for_guest_agent(node, vmid, timeout=300):
         except Exception:
             pass
         time.sleep(5)
-    # Never raises — callers depend on the boolean — but a silent False is how a
-    # 45-minute escalation looks like progress (observed 600 -> 1200 -> 2700 -> 2900s
-    # for one vmid). Say what the VM is actually doing instead.
+    # Never raises — callers depend on the boolean — but a silent False reads as progress
+    # and hides a 45-minute escalation. Say what the VM is doing instead.
     print(f"    guest agent on vmid {vmid} did not answer within {timeout}s{_vm_state_suffix(node, vmid)}")
     return False
 

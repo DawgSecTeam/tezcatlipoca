@@ -1,18 +1,4 @@
-"""Ownership-guarded Proxmox VM mutations: the ONE place the ownership-tag proof lives.
-
-Everything that destroys, re-tags, unlocks or garbage-collects a VM on the strength of "this is
-ours" goes through here, and both the preflight clash gate (infra/collisions.py) and the destroy
-guard (destroy_vm_if_exists) classify a VM with the same pure function, `ownership_verdict`:
-
-  * OWNED     - carries the FULL ownership set (constants.ownership_tags: tezcatlipoca +
-                comp-<name> + this deploy's run-<id>).
-  * MARKER    - carries NO tags but its description holds this competition's clone marker (an
-                interrupted clone: the clone POST wrote the description, the tag PUT never ran).
-  * UNPROVEN  - carries no tags and no marker: ownership cannot be proven.
-  * MISSING   - carries tags, but not all of the ownership set (another run's / another comp's).
-
-Only OWNED and MARKER VMs are ever touched. A same-comp VM without this run's tag is a DIFFERENT
-worktree's run (a near-miss) and is MISSING, never reclaimed."""
+"""Ownership-guarded Proxmox VM mutations: the ONE place the ownership-tag proof lives."""
 
 from dataclasses import dataclass, field
 
@@ -20,6 +6,8 @@ from common.constants import ownership_tags
 from infra.client import proxmox_api, wait_for_proxmox_task
 from estate import config
 
+# Only OWNED and MARKER VMs are ever touched; ownership_verdict is the single classification shared
+# by the preflight clash gate and the destroy guard.
 OWNED = "owned"
 MARKER = "marker"
 UNPROVEN = "unproven"
@@ -28,12 +16,8 @@ MISSING = "missing"
 
 @dataclass(frozen=True)
 class Ownership:
-    """The destruction-identity of one deploy: which VMs a teardown may touch.
-
-    Wraps constants.ownership_tags as a first-class type (teardown-redesign):
-    every destroy-shaped API takes an Ownership, and the only way to build one
-    is the state file's run id. `extra` carries role tags (golden, engine-
-    template, jump) that narrow the set to one VM role."""
+    """The destruction-identity of one deploy: which VMs a teardown may touch. The only way to
+    build one is the state file's run id; `extra` narrows the set to one VM role."""
     comp: str
     run_id: str = ""
     extra: frozenset = field(default_factory=frozenset)
@@ -43,17 +27,12 @@ class Ownership:
         return frozenset(ownership_tags(self.comp, self.run_id or None, *self.extra))
 
     def with_role(self, *role_tags):
-        """The same identity narrowed to one VM role (e.g. goldens only)."""
         return Ownership(self.comp, self.run_id, self.extra | frozenset(role_tags))
 
 
 class Refusal(RuntimeError):
-    """The ONE refusal vocabulary: what I saw, what I expected, what changes my mind.
-
-    Subclasses RuntimeError so every existing `except RuntimeError` around the
-    ownership guard keeps catching it. `detail` is the human prose (rendered by
-    str); `as_line()` is the machine contract bad-auto speaks too — every layer
-    renders refusals through one of these two shapes, never ad-hoc prose."""
+    """The ONE refusal vocabulary: what I saw, what I expected, what changes my mind. Subclasses
+    RuntimeError so every `except RuntimeError` around the ownership guard keeps catching it."""
 
     def __init__(self, saw, expected, remedy, detail=None):
         self.saw, self.expected, self.remedy = saw, expected, remedy
@@ -75,20 +54,14 @@ def parse_vm_tags(raw):
 
 
 def clone_marker(comp_name):
-    """Ownership marker written as the clone's `description` IN the clone POST itself.
-    /clone takes no `tags`, and the tagging PUT only lands after the clone task finishes —
-    a host reboot or kill mid-clone used to leave an untagged, clone-locked VM in our own
-    slot that preflight called "foreign" and blocked every later deploy.
-    The description exists from the first instant of the clone."""
+    """Ownership marker written as the clone's `description` in the clone POST: /clone takes no
+    `tags` and tagging only lands after the task finishes, so a kill mid-clone leaves it untagged."""
     return f"tezcatlipoca-clone comp-{comp_name}"
 
 
 def full_clone_data(newid, name, comp_name):
-    """POST body for a full clone: ownership marker + TEZ_PROXMOX_DATASTORE.
-
-    A full clone with no `storage` inherits the SOURCE's pool, so a golden cloned from a
-    base template on one pool silently landed there instead of on the pool the comp was
-    told to use (caught live). One definition for every golden / smoke clone."""
+    """POST body for a full clone. A full clone with no `storage` inherits the SOURCE's pool, so a
+    golden cloned from a base template lands on the wrong pool without it."""
     data = {"newid": newid, "name": name, "full": 1, "description": clone_marker(comp_name)}
     storage = config.active().proxmox.datastore
     if storage:
@@ -106,10 +79,8 @@ def has_clone_marker(node, vmid, comp_name):
 
 def ownership_identity(comp_dir, recorded):
     """The comp name a range's VMs carry: what its deploy recorded, else the Compfile's."""
-    # The document wins because a range deployed before the name came from the Compfile
-    # carries the older tag (`comp-comp` under a dashboard workspace) and must still tear
-    # down. A disagreement is named: silently looking for a tag no VM carries destroys
-    # nothing, and a teardown that finds nothing reads as success.
+    # The recorded name wins: a range deployed before the name came from the Compfile carries the
+    # older tag and must still tear down. A disagreement is named out loud.
     from common.utils import competition_name
     resolved = competition_name(comp_dir)
     if recorded and recorded != resolved:
@@ -120,21 +91,18 @@ def ownership_identity(comp_dir, recorded):
 
 
 def comp_name_from_tags(expect_tags):
-    """The competition name encoded in an ownership set's `comp-<name>` tag, or None."""
     return next((t[len("comp-"):] for t in expect_tags if t.startswith("comp-")), None)
 
 
 def bridge_comment(comp_name, run_id, prose=""):
-    """A bridge's PVE comment — the only ownership a bridge can carry, since bridges have no tags."""
+    """A bridge's PVE comment — the only ownership a bridge can carry (bridges have no tags)."""
     base = f"tezcatlipoca comp-{comp_name} {run_id}"
     return f"{base} — {prose}" if prose else base
 
 
 def bridge_owned_by(comment, comp_name, run_id):
-    """Whether a bridge's comment proves THIS run created it (comp tag + run tag + tezcatlipoca).
-
-    No run id is no proof: an empty run id would match every comment, and an unattributable
-    bridge must never be removed."""
+    """Whether a bridge's comment proves THIS run created it: no run id is no proof, and an
+    unattributable bridge must never be removed."""
     if not run_id or not comp_name:
         return False
     text = str(comment or "")
@@ -143,11 +111,8 @@ def bridge_owned_by(comment, comp_name, run_id):
 
 
 def ownership_verdict(node, vmid, raw_tags, expect_tags):
-    """Classify one VM against a full ownership set -> (verdict, missing_tags).
-
-    The single definition of the ownership proof (module docstring). `raw_tags` is the VM's tag
-    string from either the cluster resource list or its config. The clone-marker lookup is a
-    Proxmox read and only happens for a tagless VM."""
+    """Classify one VM against a full ownership set -> (verdict, missing_tags). `raw_tags` is the
+    tag string; the clone-marker lookup is a Proxmox read and only happens for a tagless VM."""
     tags = parse_vm_tags(raw_tags)
     expect = set(expect_tags)
     if not tags:
@@ -161,8 +126,8 @@ def ownership_verdict(node, vmid, raw_tags, expect_tags):
 
 
 def unlock_vm(node, vmid, lock):
-    """Clear a stale lock (an interrupted clone's 'clone'). PVE only lets root@pam touch
-    `lock`; with a token we fail loudly with the exact command instead of 'foreign VM'."""
+    """Clear a stale lock; PVE only lets root@pam touch `lock`, so with a token we fail loudly with
+    the exact command instead of 'foreign VM'."""
     try:
         proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data={"delete": "lock"})
         print(f"    vmid {vmid}: cleared stale '{lock}' lock (interrupted clone)")
@@ -174,10 +139,9 @@ def unlock_vm(node, vmid, lock):
 
 
 def gc_orphan_volumes(node, vmid):
-    """Delete disk volumes named for `vmid` when no VM with that vmid exists. An interrupted
-    clone/destroy can strand vm-<vmid>-disk-N zvols; the next clone into the slot then fails
-    with 'already exists'. Only called for vmids we just verified are empty and ours by
-    computed slot, so every volume here is a leftover of our own."""
+    """Delete disk volumes named for `vmid` when no VM with that vmid exists: an interrupted
+    clone/destroy strands vm-<vmid>-disk-N zvols and the next clone into the slot then fails
+    with 'already exists'. Only called for vmids just verified empty and ours by slot."""
     removed = 0
     for st in proxmox_api("GET", f"/nodes/{node}/storage", params={"content": "images"})["data"]:
         try:
@@ -204,16 +168,10 @@ def destroy_vm_if_exists(node, vmid, expect_tags=None, require_owned=False):
         gc_orphan_volumes(node, vmid)
         return
     if expect_tags is not None:
-        # Defense in depth for the parallel cleanup sweep: a VM that carries tags without
-        # ours is not ours, whatever the vmid math says (the preflight vmid-clash gate is
-        # the other half of the ownership proof). The expected set is the FULL ownership
-        # set (constants.ownership_tags): comp tag + per-deploy run tag.
         cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
         raw = str(cfg.get("tags") or "")
         verdict, missing = ownership_verdict(node, vmid, raw, expect_tags)
         if verdict == UNPROVEN:
-            # Ownership must be PROVEN. An untagged VM is ours only when it carries this
-            # competition's clone marker (an interrupted clone: the tag PUT never ran).
             raise Refusal(
                 saw=f"UNTAGGED vmid {vmid} ({vm.get('name')})",
                 expected="proof of ownership: this competition's tags or its clone marker",
@@ -221,9 +179,8 @@ def destroy_vm_if_exists(node, vmid, expect_tags=None, require_owned=False):
                 detail=f"refusing to destroy UNTAGGED vmid {vmid} ({vm.get('name')}): ownership "
                        f"cannot be proven (no tags, no clone marker of this competition).")
         if verdict == MARKER and require_owned:
-            # The clone marker proves the COMPETITION, not the run: a marker VM can be a live
-            # worktree's interrupted clone, so callers that must prove this run (the orphan
-            # reclaim, which has no comp dir to consult) never adopt it.
+            # The marker proves the COMPETITION, not the run, so callers that must prove this run
+            # (the orphan reclaim, which has no comp dir to consult) never adopt it.
             raise Refusal(
                 saw=f"UNTAGGED vmid {vmid} ({vm.get('name')}) with only this competition's clone marker",
                 expected="the full ownership set (this competition's tags + this run's tag)",
@@ -254,13 +211,9 @@ def destroy_vm_if_exists(node, vmid, expect_tags=None, require_owned=False):
 
 
 def retag_ownership(node, vmid, ownership):
-    """Re-stamp an ADOPTED VM's tags to the current run's full ownership set.
-
-    Templates kept across runs (M4 hash reuse) and ranges deployed before run ids
-    existed carry the old tag set; without this, the next full teardown's strict
-    guard would skip them as foreign and the next preflight would refuse them as
-    clashes. Only re-tags VMs already carrying this competition's comp tag — a
-    foreign VM is left alone (loudly)."""
+    """Re-stamp an ADOPTED VM's tags to the current run's full ownership set: templates kept
+    across runs and ranges deployed before run ids carry the old set, which the strict guard
+    would skip as foreign. Only re-tags VMs already carrying this competition's comp tag."""
     cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
     tags = parse_vm_tags(cfg.get("tags"))
     if ownership <= tags:

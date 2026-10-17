@@ -10,11 +10,7 @@ from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
 
 
 def _team_identifiers(teams):
-# Sorted string identifiers for every team (the third IP octet).
-#
-#     Tolerates an entry without one: the old `t["identifier"]` raised an uncaught
-#     KeyError here, killing the whole verifier over a hand-edited teams.json — an
-#     uncaught crash is the worst failure mode a gate can have.
+# Sorted string identifiers (the third IP octet); an entry without one is tolerated, not fatal.
     out = set()
     for t in (teams or {}).values():
         ident = t.get("identifier") if isinstance(t, dict) else None
@@ -24,7 +20,6 @@ def _team_identifiers(teams):
 
 
 def _cidr_covers(cidr, ip):
-# IPv4 CIDR containment — enough for the isolation-rule match.
     try:
         net_s, bits_s = cidr.split("/")
         bits = int(bits_s)
@@ -45,11 +40,8 @@ _ISOLATION_RULE_RE = re.compile(
 def _has_isolation_rule(stdout, subnet_ips):
 # A FORWARD DROP whose -s AND -d each cover every team subnet.
 #
-#     The subnets are DERIVED from the team identifiers the rest of the file uses,
-#     not the hardcoded 192.168.0.0/16 the old match required: a range renumbered
-#     off that supernet must not read PASS from a match on the old literal (the
-#     engine's aggregate 192.168.0.0/16 rule covers every derived subnet, so this
-#     stays a superset check rather than a per-subnet one).
+#     The subnets are DERIVED from the team identifiers, not the hardcoded 192.168.0.0/16 the old
+#     match required: a range renumbered off that supernet must not read PASS off the stale literal.
     for line in stdout.splitlines():
         if "-j DROP" not in line:
             continue
@@ -67,16 +59,12 @@ def _has_isolation_rule(stdout, subnet_ips):
 
 
 def _tcp_probe_cmd(host, port):
-# Remote shell probe: can THIS box open host:port? Prints RC=<exit status>.
     return f"timeout 3 bash -c 'echo > /dev/tcp/{host}/{port}' 2>/dev/null; echo RC=$?"
 
 
 def _target_live_from_engine(ctx, to_ip):
-# True/False/None: can the engine itself open to_ip:22?
-#
-#     The engine's traffic to a directly-attached team subnet is OUTPUT, not FORWARD,
-#     so the isolation DROP rule cannot apply to it — engine reachability is a
-#     liveness signal independent of the rule under test.
+# True/False/None: can the engine itself open to_ip:22? The engine's traffic to a directly-attached
+#     team subnet is OUTPUT, not FORWARD, so the DROP rule cannot apply — a liveness signal.
     try:
         proc = context.ssh_to_engine(
             ctx, _tcp_probe_cmd(to_ip, 22))
@@ -88,18 +76,9 @@ def _target_live_from_engine(ctx, to_ip):
 
 
 def check_isolation(ctx, teams, boxes):
-# Confirm isolation DROP rule present and actually blocks cross-team traffic.
-#
-#     Returns a GateResult. A rule that exists but couldn't be exercised is SKIP,
-#     never a pass.
-#
-#     D5 (caught live): a target box whose sshd is down, whose VM is
-#     stopped, or that is otherwise unreachable also yields RC!=0 from the
-#     cross-team /dev/tcp probe, and the old `blocked = "RC=0" not in stdout` read
-#     that as "blocked as expected" PASS. Establishing "blocked" now additionally
-#     requires the engine to reach the target (target is alive, so the failure is
-#     the rule) and the internet control to pass (the documented "blocked while
-#     that same box can still reach the internet" condition) — otherwise SKIP.
+# Confirm isolation DROP rule present and actually blocks cross-team traffic. A rule that exists but
+#     couldn't be exercised is SKIP, never a pass: a dead/stopped target also yields RC!=0, so "blocked"
+#     additionally requires the engine to reach the target and the internet control to pass.
     print("\n[3/5] ISOLATION")
     identifiers = _team_identifiers(teams)
     subnets = [f"192.168.{i}.1" for i in identifiers]
@@ -129,9 +108,7 @@ def check_isolation(ctx, teams, boxes):
         parts = box.get("ip", "").split(".")
         if len(parts) != 4 or parts[2] not in identifiers:
             continue
-        # Prefer a Linux box per team: the probe authenticates as the linux
-        # box_username and Windows boxes want Administrator (a medic probe there
-        # always 255s — caught live on the dc01-first lineup).
+        # Prefer a Linux box per team: the probe authenticates as the linux box_username.
         cur = team_ips.get(parts[2])
         if cur is None or (is_linux_box(box) and not is_linux_box(box_by_ip.get(cur, {}))):
             team_ips[parts[2]] = box["ip"]

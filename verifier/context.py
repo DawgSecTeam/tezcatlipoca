@@ -1,5 +1,4 @@
-"""Connection context: the engine's coordinates from the state document, ssh key
-resolution, and the two SSH hops (gateway, engine)."""
+"""Connection context: the engine's coordinates from the state document, ssh key resolution, and the two SSH hops."""
 
 import os
 import subprocess
@@ -17,7 +16,6 @@ ENV_PATH = REPO_ROOT / ".env"
 
 
 def read_estate_ctx(comp_dir):
-# The engine's coordinates from the competition's own state document.
     state = estate_state.read_flat(comp_dir)
     if state is None:
         raise CheckError(
@@ -30,7 +28,6 @@ def read_estate_ctx(comp_dir):
 
 
 def resolve_ssh_key():
-# Resolve the configured SSH private key, falling back to the legacy env name.
     val = config.active().ssh.private_key_path
     if not val:
         return str(estate_config.ssh_key_path())
@@ -38,7 +35,6 @@ def resolve_ssh_key():
 
 
 def build_ctx(args, comp_dir):
-# Assemble connection context, honoring --engine-ip override.
     ctx = {}
     estate_error = None
     try:
@@ -68,7 +64,6 @@ _SSH_COMMON_OPTS = ("-o", "StrictHostKeyChecking=no",
 
 
 def red_ssh_argv(ctx, red_user, red_ip, remote_cmd):
-# argv for an ssh straight to red01 (its mgmt address — no gateway hop).
     return ["ssh", "-i", ctx["ssh_key_path"], *_SSH_COMMON_OPTS,
             f"{red_user}@{red_ip}", remote_cmd]
 
@@ -95,7 +90,6 @@ def ssh_via_gateway(ctx, target_ip, cmd, timeout=60):
 
 
 def ssh_to_engine(ctx, cmd, timeout=30):
-# SSH directly to the scoring engine itself (no gateway hop — it's the gateway).
     key = ctx["ssh_key_path"]
     scoring_ip = ctx["scoring_engine_ip"]
     scoring_user = ctx["vm_username"]

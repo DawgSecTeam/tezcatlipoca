@@ -1,18 +1,4 @@
-"""Gate: red01's reserved vmid/IP must not collide with anything live.
-
-red01 is bad-auto's VM — not estate-managed, carrying no tezcatlipoca
-ownership tags — so it cannot ride the clash gate's slot math. It gets
-mgmt-IP-style gates instead (agent scans + a cluster-view vmid check), because
-a vmid-999 kill was exactly this gap: a validation deploy
-defaulting onto the shared red01 slot sailed through preflight and recycled
-another session's in-flight red01 (bad-auto's deploy is clone-or-reuse, so a
-live VM at the vmid is "reconfigured", re-stamped, and its owner's ground
-truth clobbered).
-
-Who owns a live red01 vmid: the bad-auto description marker
-(`bad-auto red01 comp=<name> id=<uuid>`), read on the error path so a refusal
-NAMES the owner instead of asking the operator to "coordinate with its
-session"."""
+"""red01's reserved-vmid/IP gates and occupant-identity verdicts (red01 is bad-auto's VM, carrying no tezcatlipoca ownership tags)."""
 
 import re
 
@@ -24,7 +10,6 @@ _MARKER_RE = re.compile(r"bad-auto red01 comp=(\S+) id=([0-9a-f]{8,64})")
 
 
 def _marker_of(vm):
-    """(exists-marker, comp-name-or-None) for a live VM, via its description."""
     try:
         desc = (proxmox_api("GET", f"/nodes/{vm['node']}/qemu/{vm['vmid']}/config")
                 .get("data", {}).get("description") or "")
@@ -46,9 +31,7 @@ def _all_vms(plan):
 
 
 def red01_vmid_gate(plan):
-    """A live VM at the planned red01 vmid is a REFUSAL — unless this is a
-    resume and the occupant's bad-auto marker names THIS competition (our own
-    red01 from the attempt being resumed)."""
+    """A live VM at the planned red01 vmid is a REFUSAL, unless this is a resume and its marker names THIS competition."""
     occupant = next((vm for vm in _all_vms(plan)
                      if vm.get("vmid") == plan.red01_vmid), None)
     if occupant is None:
@@ -73,12 +56,8 @@ def red01_vmid_gate(plan):
 
 
 def red01_ip_gate(plan):
-    """The planned red01 IP must not be answered by a running guest that is not
-    this competition's red01 (cluster-wide: the mgmt L2 spans nodes).
-
-    Same unverifiable-is-not-free rule as the engine mgmt-IP gate: guests whose
-    agent cannot be asked refuse an address nobody chose, and only warn on one that
-    was chosen (the operator's Compfile value, or a value selection proved free)."""
+    """The planned red01 IP must not be answered by a guest that is not this competition's red01
+    (the mgmt L2 spans nodes); an unverifiable address is refused, an explicitly chosen one warns."""
     explicit = plan.red01_ip_explicit
     ours_resuming = plan.resuming
     unchecked, taker = [], None
@@ -86,8 +65,7 @@ def red01_ip_gate(plan):
         if vm.get("status") != "running" or vm.get("template") == 1:
             continue
         if vm.get("vmid") == plan.red01_vmid and ours_resuming:
-            # our own red01 from the attempt being resumed (the vmid gate
-            # verified the marker); it legitimately holds the IP
+            # our own red01 from the attempt being resumed legitimately holds the IP
             continue
         label = f"{vm.get('vmid')} ({vm.get('name') or '?'} on {vm.get('node') or '?'})"
         addrs = guest_ipv4s(vm)
@@ -125,7 +103,6 @@ def red01_gate(plan):
     red01_ip_gate(plan)
 
 def vm_at(vmid):
-    """The cluster-view record for a live vmid: {vmid, node, name, status} or None."""
     try:
         vms = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
     except Exception:                                       # noqa: BLE001 - reported by caller
@@ -134,11 +111,7 @@ def vm_at(vmid):
 
 
 def occupant_verdict(vmid, comp_name=None):
-    """Who holds `vmid`: 'absent', 'ours', 'foreign', 'unmarked' or 'unknown'.
-
-    A bare vmid in the live set attributes nothing — the bad-auto marker is the only identity
-    a red01 has. 'unmarked' and 'unknown' must never read as clean; 'foreign' is an occupant
-    whose marker names another competition (our red01 is gone and its vmid was recycled)."""
+    """Who holds `vmid`: absent/ours/foreign/unmarked/unknown; 'unmarked' and 'unknown' never read as clean."""
     try:
         vms = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
     except Exception:                                       # noqa: BLE001 - reported as unknown
@@ -155,7 +128,6 @@ def occupant_verdict(vmid, comp_name=None):
 
 
 def occupant_label(vmid):
-    """The occupant's bad-auto marker, or the fact that it has none — for a refusal message."""
     vm = vm_at(vmid)
     owner = _marker_of(vm) if vm else None
     return (f"bad-auto marker comp={owner}" if owner
@@ -163,22 +135,9 @@ def occupant_label(vmid):
 
 
 def reclaim_unstamped_red(vmid, comp_name=None, log=print):
-    """Destroy a red01 that `badauto destroy` refuses to touch because it is UNSTAMPED.
-
-    A deploy that dies before bad-auto stamps its description marker leaves a red01 no destroy
-    will claim (its identity guard refuses: rc 17, "VM <vmid> with no bad-auto identity marker").
-    The standalone teardown then reported "warned" and the range was left with a red box holding
-    the LLM key and its beacon tasking (the leak class a scale soak
-    hit with red01 998).
-
-    Deliberately narrow, on top of `ownership.destroy_vm_if_exists`:
-      * only the vmid the caller already resolved as THIS range's red01 slot,
-      * only a VM still named like a bad-auto red01,
-      * never one whose marker names ANOTHER competition (a recycled vmid is someone else's),
-      * a missing marker is exactly the case this exists for, and is only accepted together with
-        the two checks above.
-    Returns True when the VM is gone afterwards (verified), False otherwise. Never raises.
-    """
+    """Destroy an UNSTAMPED red01 that `badauto destroy` refuses to touch (a deploy dying before
+    the marker lands leaves a red box holding the LLM key and its beacon tasking). Only the caller's
+    resolved vmid and only a VM named like a bad-auto red01, never another competition's."""
     try:
         from infra.ownership import destroy_vm_if_exists
         vm = vm_at(vmid)

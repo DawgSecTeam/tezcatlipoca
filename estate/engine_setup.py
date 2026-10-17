@@ -1,8 +1,4 @@
-"""Guest-side engine configuration and the cold boot that makes its NICs appear.
-
-The three things that must happen in this exact order after the engine exists: address the
-team NICs, cold-boot so the guest sees them, then wait for the engine to answer.
-"""
+"""Guest-side engine configuration and the cold boot that makes its NICs appear."""
 
 import time
 
@@ -11,27 +7,20 @@ from infra.client import proxmox_api, wait_for_proxmox_task
 
 
 def engine_ctx(comp_dir):
-    """The engine's SSH coordinates for a live range, from its state document."""
     from estate import config, state
     flat = state.load_flat(comp_dir)
     return {"scoring_engine_ip": flat.get("engine_mgmt_ip") or "",
             "ssh_key_path": str(config.ssh_key_path()),
             "vm_username": config.active().engine.username}
 
-# The hard-stop settle between stop and start: long enough for the VM to be
-# fully down, short enough not to matter (main.tf slept 15).
+# Hard-stop settle between stop and start: long enough for the VM to be fully down.
 COLD_BOOT_SETTLE_S = 15
-# The readiness probe's tail settle (main.tf's orchestrate slept 30 after the last probe).
+# Readiness probe's tail settle before nakon dials the boxes.
 READY_SETTLE_S = 30
 
 
 def cold_boot(node, vmid):
-    """Hard-stop then start the engine.
-
-    A guest reboot does NOT trigger the PCI rescan that reveals newly added VirtIO NICs —
-    only a cold boot does — so this must run after the NICs are in the VM config and before
-    the in-guest netplan that addresses them.
-    """
+    """Hard-stop then start: only a cold boot triggers the PCI rescan that reveals newly added VirtIO NICs."""
     upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/status/stop")["data"]
     wait_for_proxmox_task(node, upid)
     time.sleep(COLD_BOOT_SETTLE_S)
@@ -40,7 +29,6 @@ def cold_boot(node, vmid):
 
 
 def wait_engine_ready(ctx, timeout=300, settle=READY_SETTLE_S):
-    """Wait for the engine to answer SSH, then let it settle before nakon dials the boxes."""
     if not wait_for_ssh(ctx["ssh_key_path"], ctx["vm_username"], ctx["scoring_engine_ip"],
                         timeout=timeout):
         raise RuntimeError(f"scoring engine {ctx['scoring_engine_ip']} never accepted SSH")
@@ -48,9 +36,7 @@ def wait_engine_ready(ctx, timeout=300, settle=READY_SETTLE_S):
 
 
 def satellite_route_commands(routes):
-    """The engine's static routes to each satellite's team subnets, plus the oneshot unit
-    that re-asserts them: an engine reboot mid-event would otherwise strand satellite
-    scoring with no route to reach it."""
+    """Static routes to each satellite's team subnets, plus the oneshot unit that re-asserts them after an engine reboot."""
     commands = [f"ip route replace {r['subnet']} via {r['via']} || true" for r in routes]
     script_lines = ["#!/bin/sh", *commands]
     commands_quoted = " ".join(f"'{line}'" for line in script_lines)
@@ -77,14 +63,7 @@ def satellite_route_commands(routes):
 
 
 def netplan_yaml(team_identifiers, transit_identifiers=(), red_segment=None):
-    """The engine's team-interface netplan.
-
-    Addresses follow the NIC order create_engine built: net0 is the mgmt bridge (vmbr0,
-    addressed by the image), then one NIC per slot-0 team bridge, then the in-path transit
-    NICs — so team k is ens19+k and transit k appends after every team NIC. `red_segment`
-    (the range's private red bridge) appends one more NIC after the transits, holding the
-    segment gateway so red01's route to it stays on the private L2.
-    """
+    """The engine's team-interface netplan; addresses follow create_engine's NIC order (mgmt, teams, transit, then red_segment)."""
     lines = ["network:", "  version: 2", "  ethernets:"]
     for index, identifier in enumerate(team_identifiers):
         lines.append(f'    ens{18 + index + 1}:\n      addresses: ["192.168.{identifier}.1/24"]')
@@ -101,11 +80,7 @@ def netplan_yaml(team_identifiers, transit_identifiers=(), red_segment=None):
 
 def configure_engine_network(ctx, team_identifiers, transit_identifiers=(), satellite_routes=(),
                              red_segment=None):
-    """Address the engine's team bridges and enable forwarding, over SSH.
-
-    The netplan block is omitted when the engine hosts no slot-0 teams (an all-satellite
-    spread has no local bridges) — an empty ethernets map is a netplan error.
-    """
+    """Address the engine's team bridges and enable forwarding over SSH; the netplan block is omitted when there are no local teams (an empty ethernets map is a netplan error)."""
     if team_identifiers:
         _run(ctx, "sudo tee /etc/netplan/60-team-ifaces.yaml << 'EOF'\n"
                   + netplan_yaml(team_identifiers, transit_identifiers, red_segment) + "\nEOF")

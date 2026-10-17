@@ -10,12 +10,8 @@ from estate import config
 
 
 def setup_ubuntu_auth(targets, ctx):
-# Enable password auth + NOPASSWD sudo for box_username (nakon uses password auth + sudo).
-#
-#     Raises when a box ends the pass without working auth: nakon authenticates
-#     with these credentials, so marching into the plant against a box that
-#     provably can't SSH just defers the failure into noisy per-config timeouts.
-
+# nakon authenticates with these credentials: a box that ends the pass without working auth
+# must raise, not defer the failure into per-config timeouts.
     box_username = ctx.get("box_username", "ubuntu")
     if not valid_unix_username(box_username):
         raise RuntimeError(
@@ -23,11 +19,8 @@ def setup_ubuntu_auth(targets, ctx):
         )
     print(f"  Enabling password auth + NOPASSWD sudo for {box_username} on team boxes...")
     sudoers_line = shlex.quote(f"{box_username} ALL=(ALL) NOPASSWD:ALL")
-    # sshd_config.d drop-in: cloud-init ships `PasswordAuthentication no` in
-    # /etc/ssh/sshd_config.d/50-cloud-init.conf (alpine; the distro matrix), and
-    # OpenSSH keeps the FIRST value seen — the Include beats the main-file sed lines
-    # below. A 00- drop-in wins on every distro with the include; the sed lines still
-    # cover distros whose sshd_config has no include.
+    # cloud-init ships `PasswordAuthentication no` in 50-cloud-init.conf and OpenSSH keeps the
+    # FIRST value seen, so a 00- drop-in wins; the sed lines cover distros with no Include.
     auth_cmd = (
         "sudo sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config; "
         "sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config; "

@@ -1,10 +1,4 @@
-"""Gate orchestration: the ordered gate sequence of one verify run.
-
-Every gate reports a GateResult; the SUMMARY and the exit code are both derived from the
-list this produces (D6), so a gate's printed word can never disagree with its effect on
-the verdict. Gates are called through their modules (`scoreboard.check_services`, ...) so
-a test patches the one defining module.
-"""
+"""Gate orchestration: the ordered gate sequence of one verify run."""
 
 import json
 from dataclasses import dataclass, field
@@ -17,7 +11,6 @@ from verifier.model import CheckError, bool_gate, gate_skip
 
 
 class PacketProfileError(Exception):
-# --packet named a profile that could not be loaded (message is the operator text).
     pass
 
 
@@ -56,7 +49,6 @@ def _expected_service_names(comp_dir):
 
 
 def _red_gate(run, name, label, fn):
-# Run a red01 gate; a CheckError (couldn't run at all) is a SKIP, never a pass.
     try:
         run.add(fn())
     except CheckError as e:
@@ -65,11 +57,9 @@ def _red_gate(run, name, label, fn):
 
 
 def run_gates(args, comp_dir, ctx, teams, admin_password, boxes, base_url):
-# Run every gate in order; returns a RunOutcome. Raises PacketProfileError.
     if getattr(args, "interim", False):
-        # The deploy-time verify runs BEFORE red/blue staging, and staging is what registers
-        # the pins — caught live the same `pins_registered` gate read FAIL here and PASS
-        # three minutes later with nothing else changed. Say which reading this is.
+        # The deploy-time verify runs BEFORE red/blue staging, so a gate the staging still changes
+        # (pins_registered) is not the scoring verdict.
         print("\n  INTERIM VERIFY — the deploy-time reading, taken before red/blue staging: a "
               "gate the staging still changes (pins_registered) is not the scoring verdict. "
               "The pre-T0 verify after staging is the authoritative one.")

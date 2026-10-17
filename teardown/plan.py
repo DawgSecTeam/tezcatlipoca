@@ -1,9 +1,4 @@
-"""TeardownPlan: ordered steps as data, validated at construction (docs/internals.md#teardown).
-
-The invariant that used to live in comments — evidence collection happens
-before anything destructive — is a construction rule here: a plan with a
-destructive step before an EVIDENCE step cannot be BUILT, so no step added
-later can reintroduce the ordering races the redesign removed."""
+"""TeardownPlan: ordered steps as data, validated at construction (docs/internals.md#teardown)."""
 
 EVIDENCE = "evidence"
 TEARDOWN = "teardown"
@@ -15,7 +10,7 @@ class PlanError(ValueError):
 
 class TeardownPlan:
     def __init__(self, gates, steps):
-        self.gates = list(gates)          # callables(ctx) -> None, raise Refusal
+        self.gates = list(gates)
         self.steps = list(steps)
         evidence_idx = [i for i, s in enumerate(self.steps) if s.kind == EVIDENCE]
         if not evidence_idx:

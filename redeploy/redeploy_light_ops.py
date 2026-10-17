@@ -17,14 +17,9 @@ from redeploy.redeploy_plant_ops import run_nakon_and_harden, rerun_domain_confi
 
 
 def mode_resync(targets, rctx):
-# Engine-authoritative credential alignment — no rollback, no re-plant.
-#
-#     1. Pull the secrets the engine actually holds (event.conf, credlist,
-#        /opt/quotient/.env) and align the state document where they differ.
-#     2. Re-set the selected boxes' passwords to the state values via the guest
-#        agent, so drifted boxes come back in line without needing SSH.
-#     box_password (the box login) exists nowhere on the engine — it is baked
-#     into the boxes at bootstrap — so it is reported, not repaired.
+# Align the state document with the secrets the engine holds, then re-set the selected boxes'
+#     passwords via the guest agent. box_password is baked into the boxes and exists nowhere
+#     on the engine, so it is reported, not repaired.
     ctx, node, comp_dir, state = (
         rctx.ctx, rctx.node, rctx.comp_dir, rctx.state)
     print("  Reading engine-authoritative secrets (event.conf, credlist, /opt/quotient/.env)...")
@@ -50,7 +45,6 @@ def mode_resync(targets, rctx):
     if not changed:
         print("    the state document already matches the engine.")
     if changed:
-        # Atomic + 0600, same reason as run_nakon_and_harden above.
         estate_state.write_flat(comp_dir, state)
 
     box_password = state.get("box_password")
@@ -84,7 +78,6 @@ def mode_resync(targets, rctx):
 
 
 def mode_rollback(targets, rctx, snapshot, nakon_config_path, nakon_bundle, reconfigure):
-# Rollback to snapshot, optionally reconfigure.
     ctx, node = rctx.ctx, rctx.node
     restored = []
     for t in targets:
@@ -92,12 +85,8 @@ def mode_rollback(targets, rctx, snapshot, nakon_config_path, nakon_bundle, reco
         try:
             tnode = t.get("node") or node
             if snapshot == SNAP_BASE:
-                # PVE only rolls a disk back to its MOST RECENT snapshot (live-found
-                # caught live: "can't rollback, base is not most recent snapshot").
-                # tz-ready is always taken after tz-base, so reaching the pre-plant
-                # disk requires dropping the newer restore point first — the replant
-                # below re-takes it (and rebuild re-takes both), so nothing is lost
-                # that the ladder's own next steps don't recreate.
+                # PVE rolls a disk back only to its most recent snapshot, so reaching the
+                # pre-plant disk means dropping tz-ready first; the replant below re-takes it.
                 snaps = list_snapshots(tnode, t["vmid"])
                 if SNAP_READY in snaps:
                     print(f"    dropping newer '{SNAP_READY}' (PVE rolls back only to the "
@@ -136,11 +125,9 @@ def mode_rollback(targets, rctx, snapshot, nakon_config_path, nakon_bundle, reco
 
 
 def mode_reconfigure(targets, rctx, nakon_config_path, nakon_bundle):
-# No rollback — re-run the configure chain against the boxes as they are right now.
     ctx, comp_dir = rctx.ctx, rctx.comp_dir
-    # 900s: the operator->engine->box jump path has banner-timeout flakiness
-    # windows; a shared short budget aborts scoping runs on boxes the engine
-    # reaches fine
+    # 900s: the operator->engine->box jump path has banner-timeout flakiness, and a shorter
+    # shared budget aborts scoping runs on boxes the engine reaches fine.
     pipeline_api.wait_for_boxes_ssh(ctx, targets, timeout=900)
     run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle)
     roles_path = comp_dir / "domain_roles.json"

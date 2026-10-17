@@ -35,14 +35,9 @@ apt-get -o DPkg::Lock::Timeout=120 update
 
 
 def _apt_prep_script(gateway=None):
-# The apt-prep script, optionally pointing apt at the engine's apt-cacher-ng cache.
-#
-# gateway=None actively REMOVES any proxy file a previous prep wrote, so toggling the
-# Compfile's `apt_cache` flag between deploys can't leave stale proxying behind. The
-# proxy is an IP (the box's own gateway = the engine's team NIC), so apt-through-proxy
-# keeps working when a planted resolv-conf-null-dns breaks the box's DNS — the one
-# approved realism trade-off of the cache (see docs/internals.md); the other disruptive
-# apt configs (empty sources, package holds) break apt through the proxy too.
+# gateway=None removes any proxy file a previous prep wrote, so toggling the Compfile's
+# `apt_cache` flag cannot leave stale proxying. The proxy is an IP (the box's gateway = the
+# engine's team NIC), so apt keeps working when a planted null-DNS breaks the box's DNS.
     if gateway:
         proxy_lines = (
             "mkdir -p /etc/apt/apt.conf.d\n"
@@ -55,19 +50,12 @@ def _apt_prep_script(gateway=None):
 
 
 def prep_apt_on_boxes(targets, ctx, use_proxy=True):
-# Quiesce apt-daily/unattended-upgrades and refresh the apt index on every Linux
-# target before a Nakon plant. SSH-via-gateway + sudo is the primary channel (the
-# guest agent is unreliable in the minute after a tz-base rollback/reboot, when the
-# box is busy with unattended-upgrades — it timed out on every box in one run); the
-# guest agent (root) is the fallback. Non-fatal per box, but reported clearly.
-# use_proxy writes the engine's apt-cacher-ng proxy (Compfile `apt_cache`).
+# SSH + sudo is the primary channel (the guest agent is unreliable in the minute after a
+# tz-base rollback/reboot); the agent is the fallback. Non-fatal per box.
     box_username = ctx.get("box_username", "ubuntu")
     node = config.active().proxmox.node
     print("  Prepping apt on Linux boxes (disable apt-daily/unattended-upgrades, refresh index)...")
-    # Replaces the old blind 150s sleep: wait for the actual settle condition instead.
-    # Runs once; a box that never settles still gets its full retry ladder below.
-    # On agentless-data nodes (realm) the settle check falls back to SSH — otherwise
-    # every box burns the full budget returning 'cannot verify' forever.
+    # On agentless-data nodes (realm) the settle check falls back to SSH.
     unsettled = wait_boxes_settled(targets, node, timeout=240,
                                    ssh_fallback=lambda t: _box_settled_via_ssh(ctx, t),
                                    cloud_init_ctx=ctx)
@@ -107,9 +95,6 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
 
 
 def fix_dns_on_boxes(targets, ctx):
-# Fix DNS on every target box concurrently, each box with its own full retry ladder.
-# All-fail aborts (systemic vs transient).
-
     box_username = ctx.get("box_username", "ubuntu")
     node = config.active().proxmox.node
     print("  Fixing DNS on all team boxes...")

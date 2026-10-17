@@ -1,8 +1,4 @@
-"""Routing convergence checks: after apply #1, prove the engine can actually reach
-each satellite before anything downstream depends on it (golden plants, nakon,
-scoring). The static routes themselves are written into the engine's netplan by the
-team-NIC netplan step from the placement's satellite_routes; this
-module is the fail-loud gate, not the writer."""
+"""Fail-loud routing convergence gate; the static routes themselves are written by the team-NIC netplan step from satellite_routes."""
 
 import time
 
@@ -10,10 +6,6 @@ from common.ssh_ops import ssh_on_gateway
 
 
 def verify_satellite_routing(placement, ctx, timeout=120):
-# For every satellite: the engine must have a route to the anchor team's subnet
-#     via the jump's mgmt IP, and a live TCP path to the jump's sshd. Raises with the
-#     offending satellite named — proceeding without routing would strand the satellite
-#     golden plant (phase 4) dozens of minutes deep into clones.
     sats = placement.get("satellites") or []
     if not sats:
         return

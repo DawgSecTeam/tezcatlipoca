@@ -1,26 +1,7 @@
 """Per-team teardown: remove ONE team from a live range (the mid-event drop-out).
 
-Everything here is scoped to the deleted team — the other teams' VMs, the engine and
-the templates are never addressed:
-
-  1. load_ownership (the same refusals the full teardown runs; a state without its
-     run id names no ownership).
-  2. hard-stop the team's clones (ownership-gated, exactly the terminal plan's
-     pre-stop, narrowed to the one team).
-  3. destroy exactly the team_box instances and bridges this competition's recorded
-     inventory carries, through the ownership-guarded destroy primitives — the clones
-     before the bridges, and never another team's resources.
-  4. deactivate the team in Quotient (active:false drops it from scoring rounds;
-     Quotient has no delete API, so the row stays listed as inactive).
-  5. regenerate + push event.conf WITHOUT the team (revokes its scoreboard + portal
-     login) and rewrite the portal's portal.json without it (the portal reads its
-     config at startup, so a compose restart applies it). The push restarts Quotient.
-  6. record the deletion: teams.json and the state document's roster (teams /
-     deleted_teams) lose the team, so a later full teardown sees a consistent range.
-     The engine keeps the dead subnet's netplan until the next deploy re-addresses it.
-
-Resumable by re-running: every step is idempotent against its own result.
-"""
+Everything is scoped to the deleted team — the other teams' VMs, the engine and the
+templates are never addressed. Resumable by re-running."""
 
 import base64
 import json
@@ -41,7 +22,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def _engine_ctx(state):
-# The engine's SSH coordinates from the state document.
     from estate import config as estate_config
     cfg = estate_config.active()
     return {"scoring_engine_ip": state.get("engine_mgmt_ip") or "",
@@ -50,14 +30,12 @@ def _engine_ctx(state):
 
 
 def _team_prefix(team_key, team):
-    # team 1 is named `team1-<box>` (targets.enumerate_targets);
-    # every other team names its clones `<identifier>-<box>`.
+    # team 1 is named `team1-<box>` (targets.enumerate_targets), every other team `<identifier>-<box>`.
     return team_key if team_key == "team1" else str(team["identifier"])
 
 
 def team_resources(document, team_key, team):
-# This team's clones and bridges, read from the recorded inventory: only resources
-#     that exist are named, so the destroy cannot drift into another team.
+# This team's clones and bridges from the recorded inventory, so the destroy cannot drift into another team.
     prefix = _team_prefix(team_key, team) + "-"
     vmids = {row["vmid"] for row in document.resources("team_box")
              if (row["name"] or "").startswith(prefix)}
@@ -67,8 +45,7 @@ def team_resources(document, team_key, team):
 
 
 def _deactivate_team(base_url, scoring_password, team_key, identifier):
-    # Quotient has no team delete: active:false is the lever (the round loop skips
-    # inactive teams). Idempotent — the row keeps existing.
+    # Quotient has no team delete: active:false drops it from scoring rounds.
     session = requests.Session()
     r = session.post(f"{base_url}/api/login",
                      json={"username": "scoring", "password": scoring_password}, timeout=10)
@@ -99,10 +76,7 @@ def _refresh_engine_conf(comp_dir, teams, boxes, state, name, log):
 
 
 def _refresh_portal_config(comp_dir, team_key, log):
-    # The portal reads portal.json once at startup: drop the team from the config the
-    # comp dir already carries, push it, restart. Console users minted for the dead
-    # team's vmids stay until the full teardown revokes them — harmless, the portal
-    # can no longer resolve their boxes.
+    # The portal reads portal.json once at startup: drop the team and restart the container.
     from engine.engine_cmd_ops import _run_engine_cmd
     config_path = Path(comp_dir) / "portal.json"
     if not config_path.exists():
@@ -122,7 +96,6 @@ def _refresh_portal_config(comp_dir, team_key, log):
 
 
 def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
-# Remove one team from a live range. Returns {"clean": bool, "problems": [..]}.
     comp_dir = Path(comp_dir)
     env = dict(env if env is not None else os.environ)
     deployed_state, ownership = load_ownership(comp_dir)
@@ -180,7 +153,6 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
         problems += [f"{r['entry']['name']}: {r['reason']}" for r in refused]
     document.save()
 
-    # Verify the team's clones are actually gone before touching anything else.
     prefix = _team_prefix(team_key, team) + "-"
     for node in ([team_nodes[team_key]] if team_nodes else nodes):
         try:
@@ -217,8 +189,6 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
                         "re-run to retry")
         return {"clean": False, "problems": problems}
 
-    # Record the deletion everywhere the roster lives, so apply/destroy and the
-    # dashboard all see a consistent competition.
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     for roster in (teams, state.get("teams") or {}):
         roster.pop(team_key, None)

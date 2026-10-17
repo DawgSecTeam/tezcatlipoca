@@ -1,11 +1,4 @@
-"""Student portal gate: the portal answers, logins work, scoping holds, consoles relay.
-
-Runs portal_ops.check_portal's probe ON the engine against the portal's 127.0.0.1 listener (the
-same path cloudflared uses): health, a team login that sees exactly its own boxes, the gate
-(423 while closed), a cross-team console request refused (403), an admin login, and per
-Proxmox node one console minted and relayed far enough to read the RFB greeting, then the same
-relay id refused on reuse. Admin consoles bypass the gate, so the console rows prove the relay
-whether or not access is open yet."""
+"""Student portal gate: the portal answers, logins work, scoping holds, consoles relay."""
 
 import json
 import subprocess
@@ -18,8 +11,8 @@ from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
 
 
 def check_portal_gate(ctx, comp_dir, teams, admin_password):
-# GateResult: SKIP when the comp runs no portal; FAIL on any failed probe row; SKIP when
-#     the engine can't be reached (an unrun check is not a pass).
+# GateResult: SKIP when the comp runs no portal; FAIL on any failed probe row; SKIP when the
+#     engine can't be reached (an unrun check is not a pass).
     if not portal_enabled(comp_dir):
         return gate_skip("portal", "competition runs no student portal (Compfile `portal`)",
                          gating=False)

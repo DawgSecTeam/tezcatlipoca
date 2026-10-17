@@ -10,22 +10,19 @@ from common.utils import PRINT_LOCK, run_concurrent
 from estate import config
 
 
-# Pinned scored service -> (apk package, OpenRC service) for the alpine_services shim
-# (ensure_alpine_services). The vulndb catalog service scripts are apt/dnf/yum-only, so
-# Alpine boxes get their services here instead (the distro matrix).
+# Pinned scored service -> (apk package, OpenRC service). The vulndb catalog service scripts
+# are apt/dnf/yum-only, so Alpine boxes get their scored services here instead.
 ALPINE_SERVICES = {
     "nginx": ("nginx", "nginx"),
     "apache": ("apache2", "apache2"),
     "bind": ("bind", "named"),
-    # sshd ships in the -fix template (nakon's own transport); the shim entry just
-    # re-asserts it so an `ssh` pin scores a credlist Ssh check on Alpine boxes.
+    # sshd ships in the -fix template (nakon's transport); re-asserted so an `ssh` pin scores.
     "ssh": ("openssh", "sshd"),
 }
 
 
-# Alpine's nginx package ships a stub vhost that returns 404 for everything — the
-# Quotient web check needs 200 on /. This conf (base64 to survive the ssh quoting
-# layers) replaces the stub.
+# Alpine's nginx stub vhost 404s everything; the Quotient web check needs 200 on / (base64 to
+# survive the ssh quoting layers).
 _ALPINE_NGINX_200_VHOST_B64 = ("c2VydmVyIHsKICAgIGxpc3RlbiA4MCBkZWZhdWx0X3NlcnZlcjsKICAgIGxpc3Rl"
                                "biBbOjpdOjgwIGRlZmF1bHRfc2VydmVyOwogICAgbG9jYXRpb24gLyB7IHJldHVy"
                                "biAyMDAgInR6LWFscGluZSB1cFxuIjsgYWRkX2hlYWRlciBDb250ZW50LVR5cGUg"
@@ -33,15 +30,8 @@ _ALPINE_NGINX_200_VHOST_B64 = ("c2VydmVyIHsKICAgIGxpc3RlbiA4MCBkZWZhdWx0X3NlcnZl
 
 
 def ensure_alpine_services(comp_dir, targets, ctx):
-# Install + enable pinned scored services on Alpine boxes via apk + OpenRC.
-#
-# The vulndb service configs only speak apt/dnf/yum (and systemd), so on Alpine every
-# catalog service step exits 1 in 0 seconds (the distro matrix). With the
-# Compfile `alpine_services` knob set, the golden plant runs non-strict and this shim
-# owns Alpine services instead: apk add, rc-update add default, rc-service start, and
-# a status probe as the pass condition. Idempotent — clones inherit the golden disk,
-# so phase 5's pass usually confirms rather than installs. Unknown pinned services
-# are reported, not silently skipped.
+# The catalog service steps exit 1 in 0s on Alpine; with alpine_services the plant runs
+# non-strict and this shim owns them via apk + OpenRC.
     box_username = ctx.get("box_username", "ubuntu")
     pins = json.loads((comp_dir / "box_services.json").read_text())
     alpine = [t for t in targets
@@ -82,10 +72,7 @@ def ensure_alpine_services(comp_dir, targets, ctx):
             missing = [m for m in markers.split() if m not in (stdout or "")]
             return missing
 
-        # Primary channel: guest agent as root. The pre-domain pass's writable-sudoers
-        # pin makes sudoers.d world-writable post-clone, sudo then ignores the whole
-        # dir and `sudo sh -c` as medic demands a password it can't answer
-        # (caught live). The -fix alpine template ships the agent.
+        # Root via the guest agent: the pre-domain writable-sudoers pin makes `sudo sh -c` demand a password.
         node = config.active().proxmox.node
         vmid = t.get("vmid")
         if vmid is not None:

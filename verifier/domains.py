@@ -40,12 +40,8 @@ def _valid_domain_sid(sid):
 
 
 def _member_trusted(job, kv, pcs_by_team):
-# True/False/None: does the team's DC hold a machine account for this member?
-#
-#     None = cannot judge (the DC's listing never arrived, or the member reported no
-#     hostname) — the gate then leans on the member-side check alone rather than
-#     inventing a verdict. False = the member self-reports joined but the DC that must
-#     hold its machine account does not: a dead trust, never a pass.
+# True/False/None: does the team's DC hold a machine account for this member? False = self-reported
+#     joined but the DC holds no account (a dead trust, never a pass).
     if job["role"] != "member" or not pcs_by_team:
         return None
     accounts = pcs_by_team.get(job["team_key"])
@@ -58,17 +54,8 @@ def _member_trusted(job, kv, pcs_by_team):
 
 
 def check_domains(comp_dir, teams, boxes, ctx=None):
-# Domain gate (replaces the freeze's operator attestation with a live check).
-#
-#     Per team: the DC answers Get-ADDomain for team<id>.local with a syntactically
-#     valid DomainSID, the planted AD misconfig (svc-support) exists, and every member
-#     box is actually joined. Across teams: DomainSIDs must be unique (a collision
-#     means DC promotion reused image state — found exactly
-#     that); with a single team uniqueness cannot be exercised, so the PASS says so
-#     instead of claiming it. Member machine SIDs are reported, not gated: members
-#     linked-cloned from one golden share them by design, which is harmless for
-#     isolated forests. A present-but-malformed domain_roles.json fails closed.
-#     Returns a SKIP GateResult (gating=False) when the lineup has no domain_roles.json.
+# Domain gate: per team the DC answers Get-ADDomain with a valid DomainSID and svc-support exists,
+#     and every member box is joined; DomainSIDs must be unique across teams (SKIP without domain_roles.json).
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
         print("  SKIP  — no domain_roles.json")
@@ -109,15 +96,9 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
     ok = True
     domain_sids, machine_sids = {}, {}
 
-    # Work units in the serial loop's exact order (sorted teams, then `roles` order).
-    # Each unit is one independent per-VM probe: a Windows guest-agent call with a 120s
-    # timeout, or a Linux guest-agent call with a 60s timeout plus a 60s SSH fallback.
-    # For 4 teams x 5 boxes that was ~20 SEQUENTIAL probes — 3-10 minutes realistically
-    # and up to ~40 minutes in the all-timeout case, which is precisely the
-    # half-deployed range this gate exists to catch. Bound MAX_CONCURRENCY (8), not the
-    # per-box VM-work bound of 4: these are not Proxmox tasks (each VM has its own
-    # virtio-serial agent channel), and utils.run_concurrent's docstring pins 8 as the
-    # load-bounded cap that stays far under sshd's raised MaxSessions (64).
+    # Work units in the serial loop's exact order (sorted teams, then `roles` order). Bounded by
+    # MAX_CONCURRENCY (8), not the per-box VM-work bound of 4: these are guest-agent calls on
+    # per-VM virtio-serial channels, not Proxmox tasks.
     jobs = []
     for team_key, team in sorted(teams.items()):
         ident = team["identifier"]
@@ -131,12 +112,7 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
             })
 
     def _probe(job):
-    # One box's probe, returning an outcome instead of printing it.
-#
-    #         The main thread then walks `jobs` in the serial order and aggregates, so every
-    #         verdict, every printed line, and (critically) the team order inside the
-    #         duplicate-DomainSID message stay exactly what the serial loop produced — the
-    #         tri-state gate contract: same status, same message, same exit code.
+    # Returns an outcome instead of printing; the main thread aggregates in serial order.
         team_key, name = job["team_key"], job["name"]
         ident, domain = job["ident"], job["domain"]
         if job["windows"]:
@@ -155,10 +131,8 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
             _rc, out, err = guest_agent_exec_root(node, job["vmid"], realm_cmd, timeout=60)
             return {"kv": _kv(out), "err": err or "", "info": [], "fail": ""}
         except Exception as agent_err:
-            # The PVE agent channel has a per-instance exec breaker that can stay
-            # tripped (caught live: a join's failure probes tripped it
-            # permanently). Linux boxes are still reachable over gateway SSH — fall
-            # back to it before failing the gate.
+            # The PVE agent channel has a per-instance exec breaker that can stay tripped; Linux
+            # boxes are still reachable over gateway SSH — fall back before failing the gate.
             try:
                 box_ip = f"192.168.{ident}.{boxes[idx[name]]['last_octet']}"
                 proc = context.ssh_via_gateway(ctx or {"ssh_key_path": str(context.resolve_ssh_key())},
@@ -178,11 +152,8 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
 
     probe_results = run_concurrent(jobs, _probe, max_workers=MAX_CONCURRENCY)
 
-    # DC-side trust map (caught live, reset matrix): a member can self-report
-    # joined while the DC's freshly re-promoted AD holds NO machine account for it —
-    # Add-Computer then refuses any re-join ("already in that domain") and the dead
-    # trust is invisible to the member-side probe. The DC's Get-ADComputer listing is
-    # the truth; every member's hostname must appear in it.
+    # DC-side trust map: a member can self-report joined while the DC's re-promoted AD holds NO
+    # machine account for it; the member-side probe cannot see that.
     pcs_by_team = {}
     for job, outcome in zip(jobs, probe_results):
         kv = outcome.get("kv") if isinstance(outcome, dict) else None
@@ -194,8 +165,6 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
         team_key, name, role = job["team_key"], job["name"], job["role"]
         domain, windows = job["domain"], job["windows"]
         if isinstance(outcome, Exception):
-            # Every probe-body exception was already caught below into a FAIL line;
-            # only something outside those handlers could escape, and it still does.
             raise outcome
         for line in outcome["info"]:
             print(line)
@@ -203,11 +172,6 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
             print(outcome["fail"])
             ok = False
             continue
-        # `err` is this box's own stderr. The serial loop could leak the PREVIOUS
-        # iteration's `err` into the DC detail line when the guest-agent call raised and
-        # the SSH fallback then succeeded (the tuple assignment never happened); that
-        # leak is not reproduced — it printed another box's stderr, and the verdict in
-        # that path is FAIL either way.
         kv, err = outcome["kv"], outcome["err"]
         if role == "dc":
             if kv.get("ADERR") or kv.get("DNSROOT", "").lower() != domain:

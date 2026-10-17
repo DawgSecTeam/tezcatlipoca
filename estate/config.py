@@ -1,16 +1,4 @@
-"""Native process configuration: the tezcatlipoca.toml surface and its env overrides.
-
-Resolution order per key is override -> env -> file -> default. Overrides are the
-multi-node activation (`activate`): placing a competition on a satellite must beat a
-stale ambient env, and doing it in-process is what lets `nodes_config` stop mutating
-os.environ. Env beats file because the dashboard injects per-run values (node tokens,
-the engine mgmt IP) into the process environment and those must win over a committed
-profile.
-
-`_SPEC` is the only place the key set lives. The env override for any key is TEZ_ + the
-key upper-cased with dots as underscores (the `knobs.` prefix is dropped, so
-knobs.thin_headroom is TEZ_THIN_HEADROOM).
-"""
+"""Native process configuration: the tezcatlipoca.toml surface and its env overrides."""
 
 import os
 import tomllib
@@ -92,12 +80,7 @@ _TRUE = ("1", "true", "yes", "on")
 
 
 class ConfigError(SystemExit, RuntimeError):
-    """A mandatory config key is missing.
-
-    Dual-derived on purpose: a caller deep in a tolerant path wraps this in
-    `except Exception`, while at the top level it must still exit with a one-line
-    message and no traceback like every other operator refusal in this repo.
-    """
+    """A mandatory config key is missing: dual-derived so a tolerant path can catch it while a top-level caller still exits with a one-line message."""
 
 
 def env_name(key):
@@ -105,11 +88,7 @@ def env_name(key):
 
 
 def ssh_key_path():
-    """The SSH private key, resolved to an absolute path.
-
-    A relative path resolves against the checkout root, so the error names the path the
-    profile asked for when nothing exists there.
-    """
+    """The SSH private key, resolved to an absolute path against the checkout root."""
     raw = Path(active().ssh.private_key_path)
     if raw.is_absolute():
         return raw
@@ -127,8 +106,7 @@ def _coerce(key, default, raw):
 
 
 def _number(cast, key, raw):
-# A numeric key with a non-numeric value refuses by name: silently taking the default is
-# how a wrong scoring vmid stayed invisible until two ranges collided.
+# A non-numeric value refuses by name rather than silently taking the default.
     try:
         return cast(raw)
     except (TypeError, ValueError):
@@ -196,12 +174,7 @@ class Config:
         return value
 
     def is_set(self, key):
-        """True when the key is present at all — an explicitly empty value counts.
-
-        `get` cannot express the difference between unset and deliberately empty (both
-        read as the default), and one caller needs it: an empty engine mgmt IP means
-        "DHCP", which must not be re-defaulted to a static address.
-        """
+        """True when the key is present at all — an explicitly empty value counts (an empty engine mgmt IP means DHCP)."""
         if key in self._overrides:
             return True
         if os.environ.get(env_name(key)) is not None:
@@ -209,7 +182,6 @@ class Config:
         return _dig(self._file, key) is not None
 
     def activate(self, values):
-        """Apply in-process overrides; returns a token for `deactivate`."""
         previous = {k: self._overrides.get(k) for k in values}
         self._overrides.update(values)
         return previous
@@ -244,17 +216,11 @@ def reset():
 
 
 def require(key):
-    """`active().require(key)` — the module-level form call sites use."""
     return active().require(key)
 
 
 def require_proxmox_identity():
-    """Refuse when the ambient config carries neither a Proxmox endpoint nor an API token.
-
-    A deploy can survive that (nodes.json supplies its endpoint), so the gap stays invisible
-    until teardown, whose verify_clean reads the ambient config — two teardowns printed
-    `[estate] ok — destroyed 0` and then exited on `config 'proxmox.endpoint' is not set`.
-    """
+    """Refuse when the ambient config carries neither a Proxmox endpoint nor an API token: teardown's verify_clean reads the ambient config even when nodes.json supplied the deploy's endpoint."""
     cfg = active()
     if cfg.get("proxmox.endpoint") or cfg.get("proxmox.api_token"):
         return
@@ -266,13 +232,7 @@ def require_proxmox_identity():
 
 
 def proxmox_env():
-    """The resolved Proxmox identity as TEZ_* env, for subprocess-facing callers.
-
-    `activate_placement` moves the whole process onto the engine's host by mutating the config,
-    not os.environ, so a caller that snapshotted the environment before activation (or handed a
-    dict to a subprocess) still names the profile's host. This is what such a caller re-applies
-    after activation.
-    """
+    """The resolved Proxmox identity as TEZ_* env, for callers that snapshotted the environment before activation."""
     cfg = active()
     return {
         env_name("proxmox.endpoint"): cfg.proxmox.endpoint,

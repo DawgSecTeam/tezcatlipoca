@@ -1,12 +1,5 @@
-"""Remote-access gate: the engine's tailnet wiring is live, serving the right subnets,
-and the headscale policy carries this competition's scoped grants.
-
-Config-presence level on purpose: proving what a PARTICIPANT can and cannot reach
-needs an enrolled client device, which the verifier does not have — that probe is a
-documented manual step (docs/remote-access.md). What CAN be asserted from here is
-asserted: engine enrolled to the right control plane, every team subnet SERVING on
-the router node, SNAT lines in the engine's nat table, this comp's tag-scoped ACL
-lines in the live policy, and no other node advertising our subnets."""
+"""Remote-access gate: the engine's tailnet wiring is live, serving the right subnets, and the
+headscale policy carries this competition's scoped grants."""
 
 import subprocess
 import time
@@ -17,10 +10,8 @@ from verifier import context
 from verifier.model import gate_fail, gate_pass, gate_skip
 from estate import config
 
-# The tailnet->team SNAT rule is re-asserted by range-remote-access-monitor.service when an
-# interface changes (tailscaled rebind) and by range-remote-access.timer every 30s as a
-# fallback, so a single sample can catch the gap: give the probe one full timer cycle before
-# believing the rule is gone.
+# tailscaled's rebind re-applies its ruleset and drops this rule; the timer re-adds it every 30s,
+# so give the probe one full timer cycle before believing the rule is gone.
 SNAT_SETTLE_S = 90
 SNAT_RETRY_S = 15
 
@@ -35,9 +26,7 @@ def _identifiers(teams):
 
 
 def check_remote_access(comp_dir, teams, ctx):
-# GateResult. Feature off (or pre-feature comp) skips WITHOUT gating — a range
-#     that never enrolled says nothing about the gate either way. A range that DID
-#     enroll gets real checks; unreachable headscale is SKIP (never a pass).
+# GateResult. Feature off (or pre-feature comp) skips WITHOUT gating; unreachable headscale is SKIP, never a pass.
     print("\n  (headscale remote access)")
     state = _read_state(comp_dir)
     ra = state.get("remote_access") or {}
@@ -47,7 +36,6 @@ def check_remote_access(comp_dir, teams, ctx):
         return gate_skip("remote_access", "not enabled for this deploy", gating=False)
 
     identifiers = _identifiers(teams)
-    # Engine side: enrolled to OUR control plane (shared logic with the deploy).
     server_url = config.active().headscale.url.rstrip("/")
     if not server_url:
         print("  FAIL  — TEZ_HEADSCALE_URL not set; cannot confirm the engine's "
@@ -64,13 +52,8 @@ def check_remote_access(comp_dir, teams, ctx):
         return gate_fail("remote_access", "engine not enrolled to the headscale control plane")
     print(f"  PASS  engine enrolled to {server_url}")
 
-    # Engine side: the SNAT unit's rules are actually in the nat table, sampled past one
-    # full re-assert cycle. The rule is self-healing by design — the timer re-adds it every
-    # 30s because tailscaled's rebind (a docker interface gaining an address triggers one)
-    # re-applies its ruleset and takes the POSTROUTING chain with it — so a single sample
-    # reported one unchanged range clean then failing minutes apart (caught live:
-    # present for 9 samples, absent for 3, present again). A genuinely absent rule stays
-    # absent through the whole window.
+    # Sampled past one full re-assert cycle: a single sample caught an unchanged range clean then
+    # failing minutes apart, while a genuinely absent rule stays absent through the whole window.
     snat_probe = "; ".join(
         f"sudo iptables -t nat -S POSTROUTING | grep -q 'd 192.168.{i}.0/24 -j SNAT' && "
         f"echo ok{i} || echo MISSING{i}" for i in identifiers)
@@ -88,7 +71,6 @@ def check_remote_access(comp_dir, teams, ctx):
         time.sleep(SNAT_RETRY_S)
     print(f"  PASS  SNAT present for {len(identifiers)} team subnet(s)")
 
-    # Headscale side: routes serving, no foreign overlap, policy carries the grants.
     try:
         ok, problems = remote_access_ops.verify_remote_access(state, ra.get("comp_id"),
                                                               identifiers)

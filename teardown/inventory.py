@@ -1,15 +1,4 @@
-"""Inventory: the ONE classified view of the estate a teardown plans against.
-
-Pre-stop, the leftover sweep, the template teardown and verify_clean all ask
-this object instead of listing the API themselves — the classification
-(`owned`, verdicts, bridge-in-use) can never disagree between callers because
-there is only one shape. Listings are cached per generation; the engine bumps
-the generation between steps so every step sees fresh state without re-listing
-mid-step.
-
-Fail-closed is the contract: a node that will not list contributes nothing and
-says so (`listing_failed`), so verify_clean can never read an API outage as a
-clean estate."""
+"""Inventory: the ONE classified view of the estate a teardown plans against."""
 
 from infra.ownership import ownership_verdict, parse_vm_tags
 

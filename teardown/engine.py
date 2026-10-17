@@ -1,11 +1,4 @@
-"""TeardownEngine: gates → journal → steps → verify_clean().
-
-The engine is the one place that applies step policies (REFUSE vs
-WARN_AND_PROCEED), the one place that journals completion
-(the document's `teardown` section — resume skips journalled, resumable
-steps, which is what makes re-running until clean both safe and cheap), and
-the only source of a clean verdict. Exit 0 means verify_clean said clean;
-there is no other exit-0 path."""
+"""TeardownEngine: gates → journal → steps → verify_clean()."""
 
 import time
 from dataclasses import dataclass, field
@@ -14,7 +7,6 @@ from pathlib import Path
 from common.utils import competition_name
 
 def load_teardown_journal(comp_dir):
-    """This run's completed teardown steps, from the document's teardown section."""
     from estate import state
     section = state.EstateState.load(comp_dir).section("teardown")
     return section if section.get("done") else {}
@@ -30,8 +22,8 @@ def save_teardown_journal(comp_dir, journal):
 @dataclass
 class CleanReport:
     clean: bool
-    problems: list = field(default_factory=list)   # must-fix (exit nonzero)
-    notes: list = field(default_factory=list)      # kept-by-design / foreign survivors
+    problems: list = field(default_factory=list)
+    notes: list = field(default_factory=list)
 
     def render(self):
         lines = []
@@ -73,7 +65,7 @@ class TeardownEngine:
                                             f"already done this run ({done.get('detail', '')})"))
                 self.log(f"  [{step.name}] skipped — journalled done")
                 continue
-            self.ctx.inventory.invalidate()     # every step sees fresh state
+            self.ctx.inventory.invalidate()
             try:
                 result = step.run(self.ctx)
             except Exception as e:              # noqa: BLE001 - policy applies here, once
@@ -86,7 +78,7 @@ class TeardownEngine:
             results.append(result)
             self.log(f"  [{step.name}] {result.status}"
                      + (f" — {result.detail}" if result.detail else ""))
-            if result.status in ("ok", "skipped"):   # warned/failed: a re-run retries it
+            if result.status in ("ok", "skipped"):
                 journal["done"][step.name] = step.journal_detail(result)
                 if self.journal_enabled:
                     journal["run_id"] = self.ctx.ownership.run_id
@@ -101,8 +93,6 @@ class TeardownEngine:
         from teardown.steps import StepResult
         return StepResult(step.name, status, detail)
 
-    # the exit contract
-
     # unverifiable is NOT clean — fail closed on listing errors
     def verify_clean(self, plan, results=None):
         from infra.ownership import parse_vm_tags
@@ -111,8 +101,8 @@ class TeardownEngine:
         inv.invalidate()
         problems, notes = [], []
 
-        # 0. the plan must have COMPLETED — a step that refused means the estate
-        # was not fully processed, whatever the current listing says
+        # a step that refused means the estate was not fully processed, whatever the
+        # current listing says
         if results is not None:
             failed = [r for r in results if r.status == "failed"]
             if failed:
@@ -122,12 +112,10 @@ class TeardownEngine:
                 problems.append("teardown stopped early — not every step ran; "
                                 "re-run the destroy (it is idempotent)")
 
-        # 1. fail closed on nodes we could not see
         for node, err in inv.listing_failed():
             problems.append(f"could not list VMs on {node} ({err}) — cleanliness "
                             f"unverifiable, which is not clean")
 
-        # 2. nothing of ours remains (mode-dependent)
         owned = inv.owned(self.ctx.ownership)
         role_tags = {"tezcatlipoca-golden", "engine-template"}
         for node, v in owned:
@@ -144,7 +132,7 @@ class TeardownEngine:
         for node, v in inv.comp_tagged(self.ctx.ownership.comp):
             tags = parse_vm_tags(v.get("tags"))
             if set(self.ctx.ownership.tags) <= tags:
-                continue                        # already reported as ours above
+                continue
             if any(t.startswith("run-") for t in tags):
                 notes.append(f"same competition, DIFFERENT run — not touched by this "
                              f"teardown: {v.get('name')} (vmid {v['vmid']}) on {node}")
@@ -152,9 +140,8 @@ class TeardownEngine:
                 notes.append(f"competition-tagged, carries no run tag: "
                              f"{v.get('name')} (vmid {v['vmid']}) on {node}")
 
-        # 4. red01 gone (when it existed and we were told to destroy it)
         if not self.ctx.keep_red:
-            # the vmid: what RedStep actually destroyed (journal), then bad-auto's config, then the deploy default; None when unverifiable
+            # vmid: what RedStep destroyed (journal), then bad-auto's config, then the deploy default
             done_vmid = (self._journal_done(plan).get("red01") or {}).get("vmid")
             from red.red_plant_ops import red_vmid_candidates
             vmid = None
@@ -177,8 +164,7 @@ class TeardownEngine:
                 problems.append("red01 is STILL PRESENT — it holds the LLM key and "
                                 "beacon tasking")
             elif verdict == "foreign":
-                # The marker names another competition: our red01 is gone and its vmid was
-                # recycled. Accounted for, so it does not refuse this range's clean verdict.
+                # marker names another competition: our red01 is gone and the vmid was recycled
                 notes.append(f"vmid {vmid} now holds another competition's red01 "
                              f"({red01.occupant_label(vmid)}) — this range's red01 is gone")
             elif verdict == "unmarked":
@@ -189,8 +175,6 @@ class TeardownEngine:
                                     or (red01_done and red01_done.get("status") != "skipped")):
                 problems.append("red01's vmid could not be verified gone — check by hand")
 
-        # 5. evidence archived — demanded only when a teardown actually ran
-        # (a fresh journal means this plan never got past its gates)
         done = self._journal_done(plan)
         if done and any(s.kind == "evidence" for s in plan.steps):
             record = done.get("artifacts") or {}
@@ -199,9 +183,7 @@ class TeardownEngine:
                 problems.append("no artifact folder for this run — evidence was not "
                                 "archived before destruction")
             else:
-                # A note, never a problem: exit 0 must keep meaning "the estate is clean",
-                # and a wedged box must never hold a destroy hostage — but a lossy teardown
-                # must not read like a clean one at the point the operator reads it.
+                # a note, never a problem: a wedged box must not hold a destroy hostage
                 from artifacts_lib.collect import load_collection
                 from artifacts_lib.constants import LOST
                 lost = [f"{t.get('name')}/{f.get('want')} ({f.get('status')})"

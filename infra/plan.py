@@ -1,8 +1,4 @@
-"""What to check, and where: a PreflightPlan is a list of NodeShares.
-
-Single-node is simply a plan with ONE share (the whole cluster view, slot 0); multi-node is one
-share per hosting node, each scoped to exactly what that node will hold. All checking code is
-parametrized by the share - there is no separate single-node implementation."""
+"""What to check, and where: a PreflightPlan is a list of NodeShares (one for single-node, one per hosting node for multi-node)."""
 
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -13,23 +9,23 @@ from estate import config
 
 @dataclass
 class NodeShare:
-    name: str                      # nodes.json name ("" for single-node)
-    node: str                      # PVE hostname (API paths)
+    name: str
+    node: str
     multi: bool                    # multi-node wording/ordering (one flag, message level only)
     slot: int
     is_engine: bool
-    teams: dict                    # team_key -> {"identifier": ...} hosted on this share
+    teams: dict
     num_teams: int
     datastore: str
-    fetch_vms: Callable            # () -> cluster resource list as this share sees it
-    scope_to_node: bool = False    # filter the VM view to vm["node"] == node
-    engine_base: Optional[Callable] = None   # () -> engine base vmid that must exist here
+    fetch_vms: Callable
+    scope_to_node: bool = False
+    engine_base: Optional[Callable] = None
     check_templates: bool = True
     needs_jump_template: bool = False
     jump_template: str = ""
     check_collisions: bool = True
     check_headroom: bool = True
-    raw_vms: list = field(default_factory=list)   # filled by the runner
+    raw_vms: list = field(default_factory=list)
 
     @property
     def label(self):
@@ -50,9 +46,8 @@ class PreflightPlan:
     engine_mgmt_ip: Optional[str] = None
     placement: Optional[dict] = None   # multi-node only (jump-IP sweep)
     red01_vmid: int = 0                # the comp's reserved red01 (one stride past the goldens)
-    red01_ip: str = ""                 # the comp's red01 address ('' until deploy-time selection)
-    red01_ip_explicit: bool = False    # the address was chosen (operator or proven selection):
-                                       # unverifiable is only a warning, never a refusal
+    red01_ip: str = ""                 # '' until deploy-time selection
+    red01_ip_explicit: bool = False    # chosen (operator or proven): unverifiable warns, never refuses
     resuming: bool = False             # collision gates relax for THIS comp's own leftovers
 
     @property
@@ -62,8 +57,7 @@ class PreflightPlan:
 
     @property
     def our_tags(self):
-        """This deploy's FULL ownership set (comp tag + run id). Without a run tag a same-comp
-        VM is another run's and must classify as a collision, not as ours."""
+        """This deploy's FULL ownership set; without a run tag a same-comp VM is another run's and must classify as a collision, not ours."""
         tags = {"tezcatlipoca", f"comp-{self.comp_name}"}
         if self.our_run_tag:
             tags.add(self.our_run_tag)
@@ -74,11 +68,6 @@ def _fetch_cluster_vms_single():
     try:
         return proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
     except Exception as e:
-        # The API port IS the node's liveness signal. A site outage once left the tailnet
-        # bridge answering ICMP *for itself* while forwarding nothing, so "ping works"
-        # recovered hours before any TCP did (a ~10h outage) — never diagnose a
-        # node from ping. `curl -k https://<node>:8006/` returning any HTTP code but 000
-        # is the check that means something.
         raise SystemExit(
             f"  ERROR: Proxmox API unreachable during preflight: {e}\n"
             f"         This is the liveness check that counts — do NOT judge the node by "
@@ -108,15 +97,10 @@ def single_node_plan(comp_dir, boxes, num_teams, teams, engine_vmid, check_free,
 
 def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_ip,
                    check_free, our_run_tag):
-    # Lazy: only the multi-node path pulls in the placement machinery.
     from red import badauto_config_ops
     from multinode import placement_record
     from infra.client import cluster_vms_for
 
-    # In-path firewalls are a slot-0 feature for now: the transit bridge + gateway
-    # handoff live on the engine node, while each satellite's jump VM impersonates
-    # 192.168.<id>.1 for its local teams — an in-path firewall there would fight the
-    # jump for the gateway address (docs/multi-node.md).
     if any(b.get("in_path") for b in boxes) and any(
             s != 0 for s in placement.get("team_slots", {}).values()):
         raise SystemExit(
@@ -140,8 +124,7 @@ def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_i
             check_templates=bool(node_teams),
             needs_jump_template=bool(node_teams) and slot > 0,
             jump_template=getattr(rec, "jump_template", ""),
-            # resume (check_free off): this competition's own leftovers are
-            # the create path's to reconcile; a fresh deploy refuses them instead
+            # resume: this comp's own leftovers are the create path's to reconcile
             check_collisions=bool(check_free and not unused_satellite),
             check_headroom=bool(check_free and not unused_satellite)))
     red = placement.get("red01") or {}
@@ -150,7 +133,6 @@ def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_i
                          red01_vmid=red.get("vmid")
                          or badauto_config_ops.red01_vmid_for(comp_dir, engine_vmid, placement),
                          red01_ip=red.get("ip") or "",
-                         # A recorded address was either typed by the operator or proven free
-                         # when it was selected; either way it is not re-litigated here.
+                         # A recorded address was typed or proven free when selected; not re-litigated.
                          red01_ip_explicit=bool(red.get("ip")),
                          resuming=not check_free)

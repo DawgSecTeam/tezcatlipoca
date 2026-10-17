@@ -6,7 +6,6 @@ from common.targets import load_targets
 
 
 def parse_team_selector(raw, teams):
-# Parse team selector (team key, number, or subnet identifier).
     by_key = {k.lower(): k for k in teams}
     by_ident = {str(v["identifier"]): k for k, v in teams.items()}
     by_number = {k.lower().removeprefix("team"): k for k in teams}
@@ -41,12 +40,11 @@ def parse_box_selector(raw, boxes):
 
 
 def box_platform(box):
-# Platform via pipeline_api.os_to_platform (the single map nakon also uses).
+# Platform via pipeline_api.os_to_platform — the single map nakon also uses.
     return pipeline_api.os_to_platform(box.get("template", ""))
 
 
 def select_targets(comp_dir, teams, boxes, args):
-# Full target list, narrowed by whichever filters were given (AND-combined).
     targets = load_targets(comp_dir, teams, boxes)
 
     if args.teams:

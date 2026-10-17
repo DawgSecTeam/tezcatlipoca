@@ -1,10 +1,4 @@
-"""Deploy timing instrumentation (M0.1): per-op JSONL sidecar for the baseline.
-
-Every wrapped operation appends one line to competitions/<id>/.deploy-timings.jsonl
-(gitignored). The sidecar is append-only and per-competition, so resumes keep
-their history and the file never holds secrets — only op names, targets, and
-durations. Appends from concurrent workers (M2) are serialized by a lock.
-"""
+"""Deploy timing instrumentation: per-op JSONL sidecar."""
 
 import json
 import threading
@@ -22,10 +16,7 @@ def timings_path(comp_dir):
 
 
 def read_timings(path):
-# Parsed sidecar rows, each carrying the wall-clock span it occupied.
-#
-#     `ts` is the end stamp and `seconds` the duration, so a span is derivable from every
-#     line the file has ever held — including one written before the nesting was understood.
+# `ts` is the end stamp and `seconds` the duration, so every row's span is derivable.
     rows = []
     try:
         fh = open(path)
@@ -52,12 +43,7 @@ def read_timings(path):
 
 
 def top_level(rows):
-# The rows that did not run inside another timed block.
-#
-#     Parent and child are peers in the file — a phase wraps an op that itself times its
-#     inner work — so summing every row counts the same wall clock twice (caught live: a
-#     3062.1 s `domains` parent over 4994.7 s of concurrent `domain_adds` children). A row
-#     whose span falls inside another's is detail, not extra wall clock.
+# Parent and child are peers in the file, so summing every row double-counts wall clock.
     return [row for i, row in enumerate(rows)
             if row["start"] is None or not any(
                 other["start"] is not None
@@ -70,7 +56,6 @@ def top_level(rows):
 
 @contextmanager
 def timed(comp_dir, phase, op, target=""):
-# Time a block and append {ts, phase, op, target, seconds} on exit. Never raises.
     start = time.monotonic()
     try:
         yield
@@ -92,7 +77,6 @@ def timed(comp_dir, phase, op, target=""):
 
 
 def print_timing_summary(comp_dir, top=12):
-# Print total seconds per (phase, op), largest first. Never raises.
     totals = {}
     for record in top_level(read_timings(timings_path(comp_dir))):
         key = (record["phase"], record["op"])

@@ -1,16 +1,4 @@
-"""Reclaim an orphaned run: the VMs a discarded comp dir left behind.
-
-Every other destroy path reads its `Ownership` from a comp dir's state, so a workspace that is
-already gone strands its VMs — preflight refuses them as a leftover range and teardown refuses
-for want of a run id. This closes that hole with the SAME proof, never a weaker one: the caller
-names the comp tag and the run tag, and a VM is touched only when its own tag set carries both
-plus `tezcatlipoca`. Two deliberate narrowings: the clone-marker adoption the other paths allow
-is refused (`require_owned=True` — a marker names the competition, not the run, so it can be a
-live worktree's interrupted clone), and templates (golden / engine-template) are irreversible
-and need `allow_templates` because there is no freeze record left to consult. Bridges have no
-tags, so they come out only when their PVE comment proves this competition and run id (see
-`infra.ownership.bridge_comment`); an uncommented or foreign bridge is named and left alone. No
-state document, no terminal plan."""
+"""Reclaim an orphaned run: the VMs a discarded comp dir left behind."""
 
 import os
 from pathlib import Path
@@ -28,8 +16,7 @@ RETIRE_PATH = "/api/ranges/retire"
 
 
 def refuse_when_state_exists(comp, run_tag):
-# The orphan mode is for a run whose comp dir is gone. If some comp dir still owns this run id,
-# that dir is the sanctioned path — and the only one that can consult the freeze record.
+# orphan mode is for a run whose comp dir is gone; a dir that still holds the run id is the sanctioned path
     from common.comp_paths import comps_root
     from estate import state as estate_state
     root = comps_root()
@@ -47,9 +34,7 @@ def refuse_when_state_exists(comp, run_tag):
 
 
 def dashboard_handoff():
-# The dashboard's address + bearer, which it hands every driver it starts (its own
-# TEZ_DASHBOARD_* are inherited by the child process). Not estate config: a manual host has
-# none, and that must not fail the reclaim — retire_range prints the call instead.
+# Dashboard address + bearer, inherited from the parent; a manual host has none and that must not fail the reclaim.
     if not (os.environ.get("TEZ_DASHBOARD_HOST") and os.environ.get("TEZ_DASHBOARD_TOKENS")):
         load_dotenv(REPO_ROOT / ".env")
     host = os.environ.get("TEZ_DASHBOARD_HOST", "")
@@ -69,9 +54,7 @@ def _retire_call(run_tag):
 
 
 def retire_range(run_tag, *, log=print):
-# A reclaim is not a run, so no destroy reaches the dashboard store and the board keeps
-# reading the range live (the defect this closes). Reporting must never fail the reclaim, but
-# it must never be silent either.
+# A reclaim is not a run, so the dashboard store is only updated here; reporting must never fail the reclaim.
     base, token = dashboard_handoff()
     if not (base and token):
         log("  dashboard    : no handoff (TEZ_DASHBOARD_HOST/TEZ_DASHBOARD_TOKENS) — the board "
@@ -99,8 +82,7 @@ def retire_range(run_tag, *, log=print):
 
 
 def reclaim(comp, run_tag, *, node, allow_templates=False, log=print):
-# Destroy the VMs carrying {tezcatlipoca, comp-<comp>, <run_tag>}. Returns destroyed /
-#     kept-templates / notes / remaining; `remaining` non-empty means the reclaim did not finish.
+# Destroys VMs carrying {tezcatlipoca, comp-<comp>, <run_tag>}; `remaining` non-empty means the reclaim did not finish.
     ownership = Ownership(comp, run_tag)
     vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
     destroyed, kept, notes = [], [], []
@@ -123,8 +105,7 @@ def reclaim(comp, run_tag, *, node, allow_templates=False, log=print):
                              expect_tags=ownership.with_role(*role).tags, require_owned=True)
         destroyed.append({"vmid": vm["vmid"], "name": vm.get("name"),
                           "role": "+".join(sorted(role)) or "vm"})
-    # Bridges carry no tags, so their comment is the whole proof. Only this run's come out; a
-    # foreign or uncommented bridge is left alone and named.
+    # Bridges carry no tags, so their comment is the whole proof: only this run's come out.
     bridges = []
     for iface, comment in node_bridges(node).items():
         if not iface.startswith("vmbr"):
@@ -139,8 +120,7 @@ def reclaim(comp, run_tag, *, node, allow_templates=False, log=print):
             notes.append(f"bridge {iface} carries no ownership comment — not touched")
     remaining = [v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
                  if v["vmid"] in {d["vmid"] for d in destroyed}]
-    # A leftover means the reclaim did not finish, so the range still exists and the board
-    # must keep showing it live rather than retire it.
+    # A leftover means the reclaim did not finish, so the range still exists and must stay live.
     if not remaining:
         retire_range(run_tag, log=log)
     return {"destroyed": destroyed, "kept_templates": kept, "notes": notes,

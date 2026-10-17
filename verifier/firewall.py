@@ -1,9 +1,5 @@
 """In-path firewall gate: after phase 5's cutover each team's traffic must still ride its
-firewall (pfSense or VyOS — the probes here are OS-agnostic).
-
-Phase 5 proves this once (firewall_ops.verify_in_path). This gate re-proves it on every verify so
-drift is caught — chiefly an out-of-band reconfiguration that puts the team gateway address
-back on the engine."""
+firewall (the probes here are OS-agnostic)."""
 
 import json
 import subprocess
@@ -17,7 +13,6 @@ from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
 
 
 def _engine(ctx, cmd):
-# (rc, stdout) of one engine command; CheckError/timeout surface as CheckError.
     try:
         proc = context.ssh_to_engine(ctx, cmd)
     except subprocess.TimeoutExpired as e:
@@ -42,8 +37,8 @@ def _team_problems(ctx, tid):
 
 
 def check_firewall_in_path(ctx, comp_dir, teams):
-# GateResult: SKIP without an in_path firewall; FAIL on any per-team drift; SKIP when the
-#     engine can't be reached (an unrun check is not a pass).
+# GateResult: SKIP without an in_path firewall; FAIL on any per-team drift; SKIP when the engine
+#     can't be reached (an unrun check is not a pass).
     try:
         boxes = json.loads((comp_dir / "boxes.json").read_text())
     except (OSError, ValueError):

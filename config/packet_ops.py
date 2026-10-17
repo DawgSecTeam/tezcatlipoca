@@ -1,19 +1,4 @@
-"""Packet profiles: load, validate, compile into competition bundles, render fidelity.
-
-The inverse of generate-packet.py. Competitions publish a packet days ahead carrying
-the GENERAL shape — box lineup, scored services/ports, IP scheme, default credentials,
-schedule, rules — never the planted misconfigurations. That shape is hand-encoded as
-<comps-root>/<event>/packet.yaml and compiled here into a fully deployable
-competitions/<id>/ bundle (Compfile, boxes.json, users.json, box_services.json,
-domain_roles.json, injects/, passwords.json, box_baseline.json,
-domain_accounts.json, packet-fidelity.md).
-
-Two boundaries the compiler enforces by omission:
-  - box_vulns.json is NEVER emitted — misconfigurations are the black team's secret
-    layer, authored after compilation (an all-empty box_vulns.json deploys clean).
-  - the fidelity report is the compiler's honesty surface: every packet fact maps to
-    exact / substituted / unsupported, so a rehearsal range never silently claims
-    fidelity it doesn't have."""
+"""Packet profiles: load, validate, compile into competition bundles, render fidelity."""
 
 import json
 import re
@@ -33,11 +18,6 @@ PACKET_YAML_NAME = "packet.yaml"
 
 
 def resolve_packet_source(source, comp_dir=None):
-# A Compfile's packet_source (or a CLI packet path): comp-dir-relative wins, then
-#     comps-root-relative — packets ship beside their competition definitions in the
-#     comps repo, so both "packet.yaml" (colocated with the comp dir) and
-#     "cde-2026/packet.yaml" (event-dir keyed) resolve. Returns None when nothing
-#     matches; the caller turns that into its own refusal.
     path = Path(source)
     if path.is_absolute():
         return path if path.exists() else None
@@ -52,36 +32,27 @@ def resolve_packet_source(source, comp_dir=None):
 
 
 def packet_yaml_for_event(event):
-# A bare event name is its event dir under the comps root: <comps>/<event>/packet.yaml.
     return comps_root() / str(event).strip().strip("/") / PACKET_YAML_NAME
 
 FIDELITY_LEVELS = ("exact", "substituted", "unsupported")
 SCORE_PIN_PREFIX = "score/"
-# score/<name> suffix -> Quotient check slice, when the pin doesn't set `check`
 _SCORE_CHECK_DEFAULTS = {
     "tcp": "Tcp", "web": "Web", "dns": "Dns", "ssh": "Ssh", "ftp": "Ftp",
     "smtp": "Smtp", "imap": "Imap", "sql": "Sql",
 }
 _CHECK_SLICES = set(_SCORE_CHECK_DEFAULTS.values())
 # Baseline (packet-promised, non-scored) account pins ride box_baseline.json keyed by
-# platform; fix_services_on_boxes creates the credlist OS accounts on Linux, so only
-# Windows boxes need explicit account pins for credlist users.
+# platform; only Windows boxes need explicit credlist account pins.
 _BASELINE_WIN_CONFIG = "local-user-win"
 _BASELINE_LINUX_CONFIG = "local-user"
 
-# Decoy baseline passwords come from config_ops.random_password — one canonical
-# implementation, not a copy. The 14-char upper+lower+digit+symbol, cmd/PS- and
-# URL-safe charset is load-bearing (a digit-free pool gets rejected by AD complexity
-# policy on every Windows box; URL-specials break postgres DSNs), so two copies could
-# silently drift apart on exactly the property that keeps a range deployable. A second
-# copy here would claim to spare packet_ops the config_ops -> infra.client -> requests
-# chain, but that isolation is already nominal: quotient.setup (imported above) pulls
-# requests regardless.
+# Decoy baseline passwords come from config_ops.random_password — its charset is load-bearing,
+# and a second copy could silently drift on it.
 
 
 def team_domain_parts(name_template):
-# "mira-{team}.corp.sus" -> ("mira-", ".corp.sus"); the Compfile
-#     domain_prefix/domain_suffix knobs domain_ops.team_domain consumes.
+# "mira-{team}.corp.sus" -> ("mira-", ".corp.sus"); the Compfile domain_prefix/domain_suffix
+# knobs domain_ops.team_domain consumes.
     pieces = str(name_template).split("{team}")
     if len(pieces) != 2:
         raise SystemExit(
@@ -91,11 +62,7 @@ def team_domain_parts(name_template):
 
 
 def _has_control_chars(value):
-# True for newlines / C0 controls / DEL. The Compfile is line-oriented
-#     (utils.load_compfile splits on newlines into `key value`), so a newline in any
-#     interpolated field silently truncates the value or injects arbitrary keys —
-#     a YAML `|` block scalar with a trailing newline is enough (audited:
-#     event.name/event.scenario/domain.name_template reach compile_profile raw).
+# The Compfile is line-oriented, so a newline truncates the value or injects arbitrary keys.
     return any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in str(value))
 
 
@@ -121,7 +88,6 @@ def load_profile(path):
 
 
 def validate_profile(p):
-# Every problem that would die mid-deploy, surfaced at compile time. Returns [str].
     errors = []
 
     def err(msg):
@@ -170,10 +136,8 @@ def validate_profile(p):
             err(f"credentials.box_password must be a non-empty string "
                 f"(got {box_password!r})")
         else:
-            # The 8-char floor is a Windows local-account rule (net user / the guest
-            # agent push during bootstrap), so it applies to box_password itself, not
-            # just the baseline credlist users build_baseline filters (audit-found
-            # caught live). Linux-only lineups have no such floor.
+            # The 8-char floor is a Windows local-account rule (net user / the guest-agent
+            # push), so it applies to box_password itself, not just the baseline credlist users.
             win_boxes = [b.get("name") for b in (p.get("boxes") or [])
                          if not b.get("unmanaged")
                          and _platform_of(b.get("template")) == "windows"]
@@ -187,8 +151,6 @@ def validate_profile(p):
             err(f"credentials.out_of_scope must be a list of usernames "
                 f"(got {type(out_of_scope).__name__})")
         else:
-            # These become local-user/local-user-win USERNAME vars on every managed
-            # box (build_baseline), so they get the same name rules as credlist users.
             for user in out_of_scope:
                 _check_username(err, "credentials.out_of_scope", user)
     accounts = creds.get("domain_accounts")
@@ -203,10 +165,8 @@ def validate_profile(p):
                     err(f"{where} must be a mapping with username/password "
                         f"(got {acct!r})")
                     continue
-                # domain_ops adds each account at phase 6 (acct["username"] /
-                # acct["password"]), after DC promotion — a missing key is a KeyError
-                # ~40 minutes into a live deploy. AD names may be mixed-case (CDE's
-                # Red/Blue/...), so only presence/type is checked, not the unix regex.
+                # domain_ops adds each account at phase 6 after DC promotion, and AD names are
+                # mixed-case, so only presence/type is checked, not the unix regex.
                 if not isinstance(acct.get("username"), str) or not acct["username"].strip():
                     err(f"{where}.username is required and must be a non-empty string "
                         f"(got {acct.get('username')!r})")
@@ -259,9 +219,8 @@ def validate_profile(p):
             err(f"box {name!r}: an in-path firewall owns the team gateway address — "
                 f"last_octet must be 1 (got {lo})")
         if lo == 1 and not b.get("unmanaged"):
-            # An unmanaged fw01 at .1 is valid: the shipped packets carry one
-            # as a packet-fidelity stand-in (idle while the engine holds the
-            # gateway). Managed hosts must never claim the gateway address, though.
+            # An unmanaged appliance at .1 is a packet-fidelity stand-in; a managed host
+            # must never claim the gateway address.
             err(f"box {name!r}: last_octet 1 is the team gateway — only an unmanaged "
                 "firewall/appliance (in_path or a packet stand-in) may sit there")
         if b.get("in_path"):
@@ -309,7 +268,7 @@ def validate_profile(p):
             err(f"service {s.get('name')!r}: pin is required (catalog config name, or "
                 f"'{SCORE_PIN_PREFIX}<check>' for a native service scored without a plant)")
         elif plant_only:
-            pass  # a real plant with no scored check — a companion score-only pin scores it
+            pass
         elif str(pin).startswith(SCORE_PIN_PREFIX):
             suffix = str(pin)[len(SCORE_PIN_PREFIX):]
             check = s.get("check") or _SCORE_CHECK_DEFAULTS.get(suffix)
@@ -320,16 +279,12 @@ def validate_profile(p):
             err(f"service {s.get('name')!r}: pin {pin!r} has no Quotient check mapping — it "
                 f"would plant but score nothing. Fix the name, use a score-only pin "
                 f"({SCORE_PIN_PREFIX}<check>), or mark it `scored: false` (plant-only)")
-        # Known-broken gate: same list the deploy-time pin gate enforces
-        # (nakon_pin_ops._validate_known_broken_pins). A packet that pins one of these
-        # would compile into a bundle the deploy then refuses, so fail at compile time.
+        # Same known-broken list the deploy-time pin gate enforces, so fail at compile time.
         broken = KNOWN_BROKEN_CONFIGS.get(str(pin))
         if broken:
             err(f"service {s.get('name')!r}: pin {pin!r} is a known-broken catalog config: "
                 f"{broken}")
-        # fidelity is required like boxes[].fidelity: the honesty report defaults a
-        # missing value to "exact" (render_fidelity), silently claiming parity the
-        # packet may not have (audited).
+        # render_fidelity defaults a missing fidelity to "exact", silently claiming parity.
         fidelity = s.get("fidelity")
         if fidelity not in FIDELITY_LEVELS:
             err(f"service {s.get('name')!r}: fidelity must be one of {FIDELITY_LEVELS} "
@@ -337,9 +292,8 @@ def validate_profile(p):
         svc_vars = s.get("vars")
         if svc_vars is not None and not isinstance(svc_vars, dict):
             err(f"service {s.get('name')!r}: vars must be a mapping (got {svc_vars!r})")
-        # REQUIRED_VARS "literal" vars must be pinned at compile time, not discovered
-        # at deploy start (nakon_pin_ops._validate_pin_vars) after the golden is built.
-        # Identity kinds are exempt: they are auto-filled per machine.
+        # REQUIRED_VARS "literal" vars must be pinned at compile time, not discovered after the
+        # golden is built; identity kinds are auto-filled per machine.
         required = REQUIRED_VARS.get(str(pin)) or {}
         missing = [v for v, kind in required.items()
                    if kind == "literal" and v not in (svc_vars or {})]
@@ -401,12 +355,8 @@ def validate_profile(p):
 
 
 def _service_pins(svc):
-# box_services.json pin(s) for one profile service. Score-only services become
-#     {'name': 'score/<x>', 'score_only': True, ...}; plant-only services ({"scored":
-#     false}) become {'name': ..., 'plant_only': True} — a real catalog plant with no
-#     scored check (the service is scored by a companion score-only pin). Normal pins
-#     carry the display override, and dual_credit adds the domain-credlist twin (2:1
-#     full/half emulation: both checks score 5, so local-only scores half of both-up).
+# Score-only services become {'name': 'score/<x>', 'score_only': True}; plant-only is a real
+# catalog plant with no check. dual_credit adds the domain twin so local-only scores half.
     pin = svc["pin"]
     display = svc.get("display")
     out = []
@@ -447,8 +397,6 @@ def _service_pins(svc):
 
 
 def _cred_carrying_services(p, box_name):
-# True when any service on the box resolves to a check that authenticates with a
-#     credlist — Windows boxes then need baseline local-user-win pins for those users.
     from quotient.setup import _SERVICE_TO_CHECK
     for svc in p.get("services") or []:
         if svc.get("box") != box_name:
@@ -466,28 +414,14 @@ def _cred_carrying_services(p, box_name):
 
 
 def _platform_of(template):
-# Packet-side wrapper over the one template->platform map (nakon_config_ops.os_to_platform).
-#
-#     The shared map calls `.lower()` straight on its argument; packet YAML tolerates a box
-#     with no `template` key, so coerce first. This wrapper historically read
-#     `str(template)`, so an absent key classified as "linux" instead of raising — that
-#     coercion is the only intentional difference and it is preserved here (for every str
-#     input the two are identical). Nothing else may re-implement the mapping: the packet
-#     compiler's Windows/Linux split here and nakon's machine tagging have to agree
-#     (audited).
+# Packet-side wrapper over os_to_platform: packet YAML tolerates a box with no template key,
+# so coerce first. Nothing else may re-implement the map — nakon's machine tagging must agree.
     return os_to_platform(str(template))
 
 
 def build_baseline(p):
-# box_baseline.json payload: {box: [pins]}.
-#
-#     Two kinds of packet-promised, non-scored accounts ride here (planted like vulns
-#     ride box_vulns.json, but published in the packet, so they are baseline not secret):
-#       - out-of-scope decoys (scorebot/blackteam/red_scoring) on every managed box;
-#       - credlist local users on WINDOWS boxes (Linux gets them from
-#         fix_services_on_boxes; IIS FTP authenticates against local Windows users).
-#     Decoy passwords are random (the packet never publishes them) and live only in
-#     this 0600, gitignored file.
+# box_baseline.json payload: {box: [pins]} — out-of-scope decoys on every managed box, plus
+# credlist local users on Windows boxes. Decoy passwords are random and live only in this file.
     creds = p.get("credentials") or {}
     out_of_scope = list((creds.get("out_of_scope") or []))
     credlist_users = sorted((creds.get("credlists") or {}).get("linux") or {})
@@ -501,8 +435,7 @@ def build_baseline(p):
         win_cfg, linux_cfg = (_BASELINE_WIN_CONFIG, _BASELINE_LINUX_CONFIG)
         for user in out_of_scope:
             if platform == "windows":
-                # New-LocalUser caps -Description at 48 chars (Windows API) — live-found
-                # 54-char descriptions died in ParameterBindingValidation.
+                # New-LocalUser caps -Description at 48 chars (Windows API).
                 password = random_password()
                 while _windows_password_error(user, password, "Scoring infrastructure"):
                     password = random_password()
@@ -515,14 +448,8 @@ def build_baseline(p):
                     "USERNAME": user, "PASSWORD": random_password()}})
         if platform == "windows" and credlist_users and _cred_carrying_services(p, b["name"]):
             for user in credlist_users:
-                # Windows local-account creation enforces a minimum password length
-                # (caught live: a short credlist password died InvalidPasswordException
-                # while the packet's regular-password users passed — 8 chars is the floor).
-                # A credlist
-                # user whose packet password is too short stays MySQL/OS-only on Linux
-                # (fix_services_on_boxes has no such floor); the engine's cred-carrying
-                # check iterates the whole credlist, so one valid Windows account is
-                # enough for the check to score.
+                # Windows local-account creation enforces an 8-char minimum; a shorter credlist
+                # password stays Linux-only (the engine's check iterates the whole credlist).
                 if len(str(credlists_cfg["linux"][user])) < 8:
                     continue
                 pins.append({"name": win_cfg, "vars": {
@@ -535,10 +462,6 @@ def build_baseline(p):
 
 
 def packet_secret_files(p):
-# The packet's SECRET layer: {filename: content} for passwords.json,
-#     domain_accounts.json, and box_baseline.json. Compile-packet emits these as 0600
-#     gitignored files; ensure_packet_secrets re-emits them for a comp dir that arrived
-#     without them. One definition so the two paths cannot drift.
     creds = p.get("credentials") or {}
     credlists = creds.get("credlists") or {}
     linux_creds = dict(credlists.get("linux") or {})
@@ -563,16 +486,8 @@ def packet_secret_files(p):
 
 
 def ensure_packet_secrets(comp_dir):
-# Compile the packet's SECRET layer into an existing comp dir when missing.
-#
-#     compile-packet's outputs are 0600 gitignored files, so a comp dir that arrived by
-#     git — a stage_author authoring, a manual copy, a fresh clone — deploys without
-#     them: the machine list then lacks the packet-promised decoy/local accounts and
-#     the harness's pre-T0 `verify --packet` aborts the run (caught live,
-#     scrim-reset: packet_accounts FAIL killed the run before the event window). The
-#     Compfile's packet_source names the profile; this re-emits ONLY the secret files
-#     it promises, never the public shape (Compfile/boxes/pins are the comp's own).
-#     Returns the list of files written.
+# compile-packet's outputs are 0600 gitignored, so a comp dir that arrived by git deploys
+# without them and verify --packet aborts. Re-emits ONLY the secret files packet_source promises.
     compfile = comp_dir / "Compfile"
     if not compfile.exists():
         return []
@@ -616,7 +531,6 @@ def ensure_packet_secrets(comp_dir):
 
 
 def compile_profile(profile_path, competitions_dir=None, force=False, dry_run=False):
-# Validate + emit the competition bundle. Returns (comp_dir, fidelity_md, wrote[]).
     p = load_profile(profile_path)
     errors = validate_profile(p)
     if errors:
@@ -641,7 +555,7 @@ def compile_profile(profile_path, competitions_dir=None, force=False, dry_run=Fa
     if (p.get("domain") or {}).get("name_template"):
         prefix, suffix = team_domain_parts(p["domain"]["name_template"])
     else:
-        prefix, suffix = "team", ".local"  # historical default; explicit in the Compfile
+        prefix, suffix = "team", ".local"
 
     boxes = []
     for b in p["boxes"]:
@@ -667,7 +581,7 @@ def compile_profile(profile_path, competitions_dir=None, force=False, dry_run=Fa
         pass
     source_path = Path(p["_source"]).absolute()
     if comp_dir is not None and source_path.parent == Path(comp_dir).absolute():
-        source_str = PACKET_YAML_NAME  # colocated: the comp dir carries its own packet
+        source_str = PACKET_YAML_NAME
     elif source_path.is_relative_to(comps_dir):
         source_str = str(source_path.relative_to(comps_dir))
     else:
@@ -737,8 +651,7 @@ def _display_source(p):
 
 
 def render_fidelity(p):
-# packet-fidelity.md — the honesty surface. What the packet promised vs what this
-#     range delivers, per box / service / credential / schedule fact.
+# packet-fidelity.md — the honesty surface: what the packet promised vs what this range delivers.
     event = p["event"]
     lines = [
         f"# Packet fidelity — {event['name']}",

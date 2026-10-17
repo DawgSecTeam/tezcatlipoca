@@ -8,7 +8,6 @@ from verifier.model import Status, bool_gate, gate_fail, gate_skip
 
 
 def check_logins(base_url, teams, admin_password):
-# POST /api/login for admin + every team. Returns (all_ok, admin_session).
     print("\n[1/5] LOGIN")
     all_ok = True
 
@@ -42,23 +41,9 @@ def _check_passed(check):
 
 
 def check_services(base_url, admin_session, teams, strict, expected_names=frozenset()):
-# Report per-team service UP/DOWN from the latest scored round.
-#
-#     Returns a list of GateResult: the service gate plus (when box_services.json pins
-#     exist) a separate `pins_registered` result. Every path returns the same shape —
-#     the old code returned a 2-tuple on the /api/teams failure path while main
-#     unpacked 3, so a half-deployed or restarting engine (exactly the state this gate
-#     exists for) crashed verify with ValueError: not enough values to unpack, dumping
-#     a traceback and suppressing the SUMMARY and every other gate result.
-#
-#     pins_registered gates the scoreboard's actual ServiceName set against the pins'
-#     expected set — a pin that never registered (the regression-4x1 same-TYPE collapse:
-#     12 pins, 11 checks) scores nothing and silent-tallies as UP-absent, so it fails
-#     the exit code regardless of --strict.
-#
-#     Under --strict-services nothing-scored is a FAIL, not a vacuous pass (live-found
-#     caught live: a range where the engine had never scored a round still passed strict
-#     mode because every service was skipped as "not yet scored"). Round freshness is
+# Returns the service gate plus (when box_services.json pins exist) a separate `pins_registered`
+#     result. pins_registered gates the scoreboard's ServiceName set against the pins' expected set.
+#     Under --strict-services nothing-scored is a FAIL, not a vacuous pass; round freshness is
 #     check_round_loop's job (verifier/engine.py), not this gate's.
     print("\n[2/5] SERVICES")
     name = "services(strict)" if strict else "services"
@@ -71,8 +56,7 @@ def check_services(base_url, admin_session, teams, strict, expected_names=frozen
         out = [gate_skip(name, "no admin session (login failed)", gating=strict, label="services")]
         pins = _pins_status(False, "no admin session")
         if pins:
-            # Could not be evaluated, not a proven regression — but pins are always
-            # gating, so the operator must see SKIP, never a silent pass.
+            # Could not be evaluated, not a proven regression — but pins are always gating.
             pins.status = Status.SKIP_UNAVAILABLE
             out.append(pins)
         return out

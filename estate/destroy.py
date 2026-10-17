@@ -1,11 +1,4 @@
-"""Estate teardown in the one order linked clones survive.
-
-A clone shares its base volume — a golden's for a team box, the engine template's for the
-deployed engine — so destroying a base first fails with 'base volume ... is still in use by
-linked clone' (a teardown diagnostic log shows it), and a bridge cannot go while a VM NIC
-still references it. TIERS is that fixed order and is the only thing that decides it;
-`_CLONE_KINDS` re-checks it for the case a clone tier REFUSED and carried on.
-"""
+"""Estate teardown in the one order linked clones survive."""
 
 from common.constants import GOLDEN_TAG
 from infra.client import destroy_bridge_if_exists, node_bridges
@@ -14,20 +7,16 @@ from infra.ownership import (Ownership, Refusal, bridge_owned_by, destroy_vm_if_
 
 TIERS = (("team_box", "jump"), ("golden",), ("engine",), ("engine_template",), ("bridge",))
 
-# Only a TEMPLATE carries a role tag; the deployed engine is an ordinary clone proven by the
-# ownership set alone, so it must NOT be narrowed (requiring "engine-template" on it would
-# make every teardown refuse its own engine).
+# Only a TEMPLATE carries a role tag; narrowing the deployed engine to "engine-template" would make teardown refuse its own engine.
 _ROLE = {"golden": (GOLDEN_TAG,), "engine_template": ("engine-template",)}
 
-# A base kind -> the clone kinds whose survivors keep its volume in use. A refused clone
-# stays recorded (that is the tier's contract), so the base must be skipped, not attempted.
+# Clone kinds whose survivors keep the base volume in use; a refused clone stays recorded.
 _CLONE_KINDS = {"golden": ("team_box", "jump"), "engine_template": ("engine",)}
 
 _KEPT_WHEN_TEAMS_ONLY = ("golden", "engine_template")
 
 
 def _clones_remain(state, kind, nodes):
-    """Whether any linked clone of a `kind` base is still recorded."""
     return any(nodes is None or row["node"] in nodes
                for clone in _CLONE_KINDS[kind] for row in state.resources(clone))
 
@@ -38,11 +27,7 @@ def _entry(row):
 
 
 def destroy_tier(state, kind, *, nodes=None, only=None, log=print):
-    """Destroy every recorded resource of one kind; returns (destroyed, refused, skipped).
-
-    `only` narrows to a set of vmids (for VMs) or bridge names — the per-team teardown
-    destroys one team's resources without touching the others.
-    """
+    """Destroy every recorded resource of one kind; `only` narrows to a set of vmids or bridge names."""
     identity = state.data.get("identity") or {}
     comp_name = ownership_identity(state.comp_dir, identity.get("comp_name"))
     ownership = Ownership(comp_name, identity.get("run_id") or "")
@@ -61,13 +46,8 @@ def destroy_tier(state, kind, *, nodes=None, only=None, log=print):
                 expect = ownership.with_role(*_ROLE.get(kind, ())).tags
                 destroy_vm_if_exists(row["node"], row["vmid"], expect_tags=expect)
             else:
-                # A bridge row carries its NAME ("vmbr120"); `bridge` is only set by the
-                # per-team paths. Reading row["bridge"] alone passed None and the delete
-                # silently no-opped while the row was forgotten and reported destroyed —
-                # caught live left vmbr151 active through a "clean" teardown.
+                # row["bridge"] is only set by the per-team paths, so reading it alone passed None and the delete silently no-opped.
                 name = row["bridge"] or row["name"]
-                # A bridge carries no tags, so its comment is the whole ownership proof:
-                # never remove one that cannot be attributed to this run.
                 comments = node_bridges(row["node"])
                 if name in comments and not bridge_owned_by(
                         comments[name], comp_name, identity.get("run_id") or ""):
@@ -84,8 +64,7 @@ def destroy_tier(state, kind, *, nodes=None, only=None, log=print):
                     log(f"  REFUSED {kind} {row['name']}: bridge {name} survived the delete")
                     continue
         except Refusal as e:
-            # A refusal is a verdict the caller needs, not a step failure: leave the
-            # entry in state and carry on with the rest of the tier.
+            # A refusal is a verdict the caller needs: leave the entry in state and carry on.
             refused.append({"entry": _entry(row), "reason": e.detail})
             log(f"  REFUSED {kind} {row['name']}: {e.detail}")
             continue
@@ -96,7 +75,6 @@ def destroy_tier(state, kind, *, nodes=None, only=None, log=print):
 
 
 def destroy_estate(state, *, full=True, nodes=None, log=print):
-    """Destroy the state's estate in TIERS order; returns the teardown summary."""
     identity = state.data.get("identity") or {}
     comp_name = ownership_identity(state.comp_dir, identity.get("comp_name"))
     run_id = identity.get("run_id") or ""
@@ -108,8 +86,7 @@ def destroy_estate(state, *, full=True, nodes=None, log=print):
                             if nodes is None or row["node"] in nodes]
                 continue
             if kind in _CLONE_KINDS and _clones_remain(state, kind, nodes):
-                # A previous tier refused a clone; its base volume is still in use, so
-                # deleting the base could only fail the whole estate step.
+                # A previous tier refused a clone; its base volume is still in use.
                 held = [_entry(row) for row in state.resources(kind)
                         if nodes is None or row["node"] in nodes]
                 skipped += held
@@ -120,9 +97,7 @@ def destroy_estate(state, *, full=True, nodes=None, log=print):
             killed += destroyed
             refused += tier_refused
             skipped += tier_skipped
-    # A bridge created but never recorded (the state write failed) is still ours: its comment
-    # proves it, and the tier above only walks the record. No estate (or no run id) means
-    # there is nothing to attribute, so the node is not even asked.
+    # A bridge created but never recorded (the state write failed) is still ours if its comment proves it.
     for node in (nodes or []) if run_id and state.resources() else []:
         for iface, comment in node_bridges(node).items():
             if not iface.startswith("vmbr") or not bridge_owned_by(

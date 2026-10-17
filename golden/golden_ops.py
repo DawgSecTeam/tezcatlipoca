@@ -1,23 +1,4 @@
-"""Golden-set build and template conversion (M3.1).
-
-Plant once per box type on a "golden" VM, convert it to a template, then let the deploy
-apply #2 link-clone every team from those templates. The heavy work (package installs,
-services, non-disruptive misconfigs) lands once and rides the clone as bytes on disk.
-
-Why the API and not a declared resource: `qm template` conversion happens outside any
-resource lifecycle, so a managed golden box would drift the moment it converts. This
-module mirrors clone_ops' API path (clone, config, start, wait); the deploy only consumes
-the finished templates as `clone { full = false }` sources via the document's
-golden_template_ids record that deploy() persists.
-
-Identity note: linked clones of a BOOTED golden share its machine SID across teams.
-Harmless for members, but a new forest takes its domain SID from the promoted DC's
-machine SID, so DCs cloned from one booted golden gave every team the same DomainSID
-(measured: it takes a full plant per box type). Domain-controller box types therefore get an UNBOOTED
-golden: a full clone of the sysprepped base converted straight to a template, so each
-team's clone runs specialize itself (fresh SID). Their planted configs move to the
-per-team pre-domain stage (nakon_config_ops.generate_stage_configs), which still runs pre-domain.
-"""
+"""Golden-set build and template conversion: plant once per box type, convert to a template, link-clone teams from it."""
 
 import json
 import time
@@ -51,17 +32,10 @@ from estate import config
 
 
 def _await_base_volumes(node, vmid, box_name):
-# The conversion renames a golden's disk volumes to base-<vmid>-disk-N, and only those can
-#     back a linked clone. The rename is asynchronous, so a golden whose conversion was
-#     accepted but whose rename never landed stays template=1 on a plain vm- volume and then
-#     fails later and confusingly at the team-box clone: PVE 500 "Linked clone feature is not
-#     supported for 'hdd:vm-<vmid>-disk-0'". Both conversion paths must wait for it — the
-#     booted one; the unbooted/DC path only got the guard after a
-#     campaign run died at [4b/8] with exactly that 500 .
+# Only base-<vmid>-disk-N volumes can back a linked clone and the rename is asynchronous: a
+# template=1 VM still on a plain vm- volume fails later at the team clone with PVE 500.
     for _ in range(10):
         cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
-        # Disk ifaces only (ide carries the cloudinit drive; its name differs) — a volume
-        # string is "<storage>:<name>,<opts>"; the NAME is what the conversion renames.
         volids = [str(v) for k, v in cfg.items()
                   if k.startswith(("scsi", "sata", "virtio")) and isinstance(v, str) and ":" in v]
         missing = [v for v in volids
@@ -79,13 +53,9 @@ def _await_base_volumes(node, vmid, box_name):
 def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_tag_str,
                            golden_hashes):
     for t in cold:
-        # Any plain VM here is a dead attempt that may have booted (and specialized) —
-        # never reuse it; the whole point of this slot is a generalized disk.
-        # Adoption exception (caught live, same shape as the engine-template
-        # leftover): a clone task that outlived its 1800s task-wait completes AFTER
-        # the driver raised, leaving the VM with only the BASE image's inherited tags
-        # — the strict guard would refuse it forever. A not-yet-converted VM on the
-        # reserved slot carrying our clone-marker description is ours; adopt it loudly.
+        # A clone task that outlived its task-wait leaves a VM with only the BASE image's
+        # inherited tags, which the strict guard would refuse forever; a not-yet-converted VM
+        # on the reserved slot carrying our clone marker is ours — adopt it.
         try:
             cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"]
             desc = str(cfg.get("description") or "")
@@ -119,13 +89,9 @@ def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_
 def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password,
                           ownership_tag_str):
     print(f"  Cloning {len(missing)} golden box(es) from base templates...")
-    # The clone takes PVE's per-DATASTORE lock — `storage_queue_lock`'s own charter names
-    # "base-image clone" — and the conversion path a few lines down already queues for it,
-    # but this call never did: concurrent ranges fought and the loser died with
-    # `can't lock file '/var/lock/pve-manager/pve-storage-hdd' - got timeout`. Live
-    # on a node at load 22 with four concurrent clones: phases 1-3 fine, phase 4
-    # fatal, while two other comps deployed on the same host. Queue it, and keep a bounded
-    # retry for the holder we do not control (another host, or older code).
+    # The clone takes PVE's per-datastore lock; without the queue concurrent ranges fought
+    # and the loser died with `can't lock file ... got timeout`. Bounded retry for a holder
+    # we do not control (another host, or older code).
     for t in missing:
         skipped = False
         src = templates.get(t["box"]["template"])
@@ -139,10 +105,8 @@ def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password
                     if not locked_cfg.get("lock"):
                         skipped = True
                         break
-                    # An interrupted clone: half-copied disk, never usable — start over.
-                    # Ownership proof: only THIS competition's clone marker in the
-                    # description adopts it; expect_tags=set() used to destroy ANY VM
-                    # found here, foreign ones included.
+                    # An interrupted clone (half-copied disk) is never usable — start over,
+                    # but only if the description proves it ours.
                     if clone_marker(competition_name(comp_dir)) not in str(locked_cfg.get("description") or ""):
                         raise RuntimeError(
                             f"refusing to destroy locked vmid {t['vmid']} on reserved golden "
@@ -157,10 +121,8 @@ def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password
                     wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
                     break
                 except RuntimeError as e:
-                    # A task that lost the datastore lock may leave a half-clone with a
-                    # `lock: clone` config — the next attempt's interrupted-clone branch
-                    # above is what cleans it up, which is why existing_vmids is re-read
-                    # inside the loop rather than once before it.
+                    # A loser may leave a half-clone with `lock: clone`, which the
+                    # interrupted-clone branch above cleans up on the next attempt.
                     if "lock file" not in str(e) or attempt == 2:
                         raise
                     print(f"    {t['vm_name']}: golden clone hit datastore lock contention — "
@@ -172,8 +134,6 @@ def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password
             "ipconfig0": f"ip={t['ip']}/24,gw={t['gateway']}",
             "net0": f"virtio,bridge={t['bridge']}",
             "tags": ownership_tag_str,
-            # cloud-init identity for the golden box's first boot (the base template
-            # bakes no password — the create path's cloud-init normally supplies it):
             "ciuser": ctx.get("box_username", "ubuntu"),
             "cipassword": box_password,
             "sshkeys": _quote_sshkeys(config.active().ssh.public_key),
@@ -186,17 +146,12 @@ def _convert_goldens(node, targets, ownership_tag_str, golden_hashes):
     print("  Converting golden boxes to templates...")
 
     def _convert(t):
-        # qm template refuses a VM holding snapshots — and the tz-base rollback guard's
-        # purpose ends with the plant: a converted set is fatal on re-entry by design.
-        # Delete-then-convert stays INSIDE one worker, so a box's snapshot is always
-        # gone before the POST /template that needs it gone.
+        # qm template refuses a VM holding snapshots; delete-then-convert stays inside one
+        # worker so a box's snapshot is always gone before the POST that needs it gone.
         if SNAP_BASE in list_snapshots(node, t["vmid"]):
             delete_snapshot(node, t["vmid"], SNAP_BASE)
-        # The conversion takes PVE's datastore lock and a loser's task fails with `can't lock
-        # file ... - got timeout` while STILL leaving `template: 1` and the volume un-renamed,
-        # so queue it and read the task's own result instead of discovering the corpse through
-        # the volume guard (caught live: the DC golden failed exactly this way under three
-        # concurrent ranges and the deploy died at the guard).
+        # A conversion that loses the datastore lock fails while STILL leaving `template: 1`
+        # and the volume un-renamed, so queue it and read the task's own result.
         with storage_queue_lock(node):
             for attempt in range(3):
                 upid = proxmox_api("POST", f"/nodes/{node}/qemu/{t['vmid']}/template")["data"]
@@ -211,29 +166,18 @@ def _convert_goldens(node, targets, ownership_tag_str, golden_hashes):
                     print(f"    {t['vm_name']}: template conversion hit datastore lock "
                           f"contention — retrying (attempt {attempt + 2}/3)")
                     time.sleep(40 * (attempt + 1))
-        # The rename can still lag or lose the race against an interrupted session; a
-        # half-converted golden passes every hash gate and then breaks apply #2 confusingly.
         _await_base_volumes(node, t["vmid"], t["box"]["name"])
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={"tags": ownership_tag_str})
-        # M4: the hash lands on the template (description) AND in the comp's state —
-        # reuse/rebuild decisions read it back at the next deploy's hash gate.
+        # The hash lands on the template description AND in the comp's state, for the next
+        # deploy's reuse gate.
         if golden_hashes:
             write_template_hash(node, t["vmid"], golden_hashes[t["box"]["name"]],
                                 extra=f"box={t['box']['name']}")
         with PRINT_LOCK:
             print(f"    {t['vm_name']} (vmid {t['vmid']}) is now a template")
 
-    # Parallel since W11 : 4-5 API calls plus a snapshot-delete task wait
-    # per box (the converting POST itself returns no task to wait on), which is ~5-10s
-    # per box, so an 8-box-type build paid ~30-60s serially. Bound 4, NOT
-    # MAX_CONCURRENCY's 8: each unit drives Proxmox tasks and 4 is the validated
-    # per-box VM-work bound (deploy.py's snapshot/Windows-bootstrap pools, jump_ops).
-    #
-    # Every golden is stopped before this pool runs, so no POST /template can precede a
-    # failed step in the build. The clone loops (cold
-    # path, and `missing`) are deliberately NOT parallel: full clones are
-    # crash-consistent copies and saturate the datastore (see the module note on the
-    # cold path and deploy.py's -parallelism=1).
+    # Bound 4, not the default 8: each unit drives Proxmox tasks, and the clone loops are
+    # deliberately NOT parallel — full clones saturate the datastore.
     conv_results = run_concurrent(targets, _convert, max_workers=4)
     for _t, r in zip(targets, conv_results):
         if isinstance(r, Exception):
@@ -246,14 +190,10 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
                      slot=0, anchor_identifier=None, run_id=None, coverage=None):
     targets = golden_targets(engine_vmid, teams, boxes, slot=slot,
                              anchor_identifier=anchor_identifier)
-    # Full ownership set (comp tag + per-deploy run tag): stamped on everything this
-    # build creates and required before any destroy here touches a VM.
+    # Full ownership set (comp tag + run tag) for everything this build creates.
     own_set = ownership_tags(competition_name(comp_dir), run_id, GOLDEN_TAG)
     ownership_tag_str = ",".join(sorted(own_set))
     templates = _template_vmid_map(node)
-    # Loaded lazily but only once: the coverage skip paths and the plant section both
-    # need the stage machines, while the all-converted resume path must work without
-    # ever reading the config (same contract as before the coverage hook existed).
     _golden_cfg_cache = []
 
     def _golden_cfg():
@@ -262,10 +202,8 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
                 json.loads(golden_config_path.read_text())["machines"])
         return _golden_cfg_cache[0]
 
-    # Coverage keys are slot-qualified ('{box}-golden-slot{N}' on satellites, plain
-    # '{box}-golden' on slot 0): every slot's stage config names its golden machine
-    # identically, so one slot's clean replant would otherwise pop another slot's
-    # recorded failure.
+    # Coverage keys are slot-qualified: every slot's stage config names its golden machine
+    # identically, so one slot's replant would otherwise pop another slot's recorded failure.
     def _coverage_machines(box_names):
         suffix = f"-slot{slot}" if slot else ""
         by_box = {m["name"][:-len("-golden")]: m for m in _golden_cfg()}
@@ -296,16 +234,13 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     if len(converted) == len(targets):
         print(f"  Golden set already converted ({len(converted)} template(s)) — skipping "
               f"build (resume; M4 hash gate passed or rebuild already handled upstream)")
-        # Kept templates carry an earlier run's ownership (M4 reuse across runs) —
-        # re-stamp so teardown/preflight recognize them.
+        # Kept templates carry an earlier run's ownership; re-stamp so teardown recognizes them.
         for t in converted:
             retag_ownership(node, t["vmid"], own_set)
         if coverage:
             coverage(_coverage_machines(t["box"]["name"] for t in targets), None)
         return {t["box"]["name"]: t["vmid"] for t in targets}
 
-    # Only unconverted slots are worked on: a selective rebuild (one box type's hash
-    # changed) must not start, plant, or re-convert the matching templates it keeps.
     done = {t["vmid"] for t in converted}
     for t in converted:
         retag_ownership(node, t["vmid"], own_set)
@@ -315,9 +250,6 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_tag_str,
                             golden_hashes)
     if not booted:
-        # All-cold slot (every box type unbooted): nothing here is ever nakon-planted,
-        # and unbooted box types don't appear in the stage config at all — the clean
-        # marker is the whole record for this slot.
         if coverage:
             coverage(_coverage_machines(t["box"]["name"] for t in targets), None)
         return {t["box"]["name"]: t["vmid"] for t in targets}
@@ -325,16 +257,9 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     planted = [t for t in planted if t in booted]
     targets_all, targets = targets, booted
 
-    # Per-golden checkpoint. A re-entry used to roll EVERY planted golden back to
-    # base and re-plant the whole set; measured across the attempts that found it,
-    # `Golden re-entry: rolling golden-<name> back` appeared 33 times — 11 each for
-    # three boxes — over 10 runs, while only one box was ever the
-    # problem. A golden that already passed its plant on an unchanged hash does not
-    # need it redone.
-    #
-    # The conversion barrier is deliberately NOT relaxed: every golden is still stopped
-    # before any POST /template. A checkpoint is only trusted while SNAP_BASE still exists on the box — a fresh
-    # clone has no such snapshot, so a re-cloned golden is never mistaken for a done one.
+    # A golden that already passed its plant on an unchanged hash does not need it redone. The
+    # checkpoint is only trusted while SNAP_BASE still exists, so a re-cloned golden is never
+    # mistaken for a done one.
     checkpoint_record = golden_plant_checkpoints(comp_dir) if golden_hashes else {}
     checkpointed = set()
     for t in planted:
@@ -345,9 +270,6 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     if checkpointed:
         print(f"  Golden checkpoint: {', '.join(sorted(checkpointed))} already planted and "
               f"planted on this hash — skipping their rollback and plant")
-    # Everything below that does WORK (start, wait, prepare, snapshot, plant,
-    # cloud-init clean) is scoped to `work`; the stop-and-convert barrier still covers
-    # all of `targets`.
     work = [t for t in targets if t["box"]["name"] not in checkpointed]
 
     if missing:
@@ -369,9 +291,7 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     windows_targets = [t for t in work if is_windows_template(t["box"]["template"])]
 
     def _boot_win(t):
-        # 1800s: a fresh sysprep-specialize first boot can exceed the 900s default
-        # outright on a loaded node (caught live: two consecutive golden
-        # rebuilds died at exactly 900s with a second deploy saturating the host).
+        # 1800s: a fresh sysprep-specialize first boot can exceed the 900s default on a loaded node.
         bootstrap_windows_box(node, t["vmid"], t["ip"], t["gateway"], "8.8.8.8", box_password,
                               timeout=1800)
 
@@ -387,9 +307,7 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
         print("  Expanding guest root filesystems (LVM layouts need pvresize+lvextend)...")
         expand_guest_root_disks(linux_targets, ctx)
 
-    # Nakon authenticates to the golden boxes by PASSWORD, and an API clone of a base
-    # template has no password set (the create path's cloud-init normally supplies it at
-    # team-box creation). Reset it over the key-auth SSH channel before the plant.
+    # Nakon authenticates by PASSWORD and an API clone of a base template has none set.
     box_username = ctx.get("box_username", "ubuntu")
     print(f"  Setting box passwords on golden Linux boxes (nakon authenticates as {box_username})...")
 
@@ -400,11 +318,6 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
             raise RuntimeError(f"password reset failed on golden {t['ip']}: "
                                f"{(r.stderr or '').strip()[:120]}")
 
-    # Parallel since W11 : one independent SSH round trip per box, so an
-    # 8-box-type build paid ~8-16s of pure waiting for no reason (each box's reset is
-    # independent of every other box's). Same bound and same zip-and-raise aggregation
-    # as the Windows bootstrap above: a single failure still aborts the build with the
-    # identical message.
     pw_results = run_concurrent(linux_targets, _set_box_password, max_workers=4)
     for _t, r in zip(linux_targets, pw_results):
         if isinstance(r, Exception):
@@ -421,31 +334,19 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
         take_snapshot(node, t["vmid"], SNAP_BASE,
                       description="tezcatlipoca golden: booted, networked, pre-plant")
 
-    # Parallel since W11 : deploy.py's tz-base/tz-ready passes have run this
-    # exact op through run_concurrent(..., max_workers=4) since M2.1, so the serial loop
-    # here was an inconsistency as much as a slow path. The per-box snapshot wall,
-    # measured over 13 competitions (.deploy-timings.jsonl: 460 successful records, 16
-    # sub-second warn-path records excluded) is median 7.4s / mean 12.1s / p95 33.8s /
-    # max 103.3s — measured worst case an n-shot phase 4 alone was 12 snapshots / 135s — so
-    # an 8-box-type golden build paid ~60-100s of serial waiting. Bound 4, the same
-    # per-box bound deploy.py validated. run_concurrent joins the whole pool before it
-    # returns, so every box's snapshot still exists before the plant and the conversion
-    # that follow: the rollback-guard ordering is unchanged.
+    # run_concurrent joins the whole pool before returning, so every box's snapshot exists
+    # before the plant and conversion that follow.
     snap_results = run_concurrent(work, _snap_base, max_workers=4)
-    # take_snapshot warns and returns False instead of raising, so the serial semantics
-    # are warn-and-continue; anything that still escaped it must keep propagating.
+    # take_snapshot warns and returns False instead of raising; anything that escaped must propagate.
     for _t, r in zip(work, snap_results):
         if isinstance(r, Exception):
             raise r
 
-    # With the alpine_services knob, catalog service steps are EXPECTED to fail on
-    # Alpine (vulndb scripts are apt/dnf/yum-only) — the plant runs non-strict and
-    # ensure_alpine_services owns those services, with its own hard pass/fail.
+    # With alpine_services, catalog service steps are EXPECTED to fail on Alpine (vulndb
+    # scripts are apt/dnf/yum-only); the plant runs non-strict and the shim owns those services.
     alpine_shim = compfile_flag(comp_dir / "Compfile", "alpine_services")
-    # Score-only lineups carry no plantable golden configurations — the golden is a
-    # pristine disk by design. An empty plan makes nakon report "no output from the
-    # remote plan" per machine, so the plant is skipped outright (live-found
-    # caught live).
+    # Score-only lineups carry no plantable configurations (a pristine disk by design), and an
+    # empty plan makes nakon report "no output from the remote plan" per machine.
     if not any(m.get("configurations") for m in _golden_cfg()):
         print("  Golden stage carries no plantable configurations — skipping the "
               "nakon plant; converting pristine goldens")
@@ -467,10 +368,8 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
                       f"alpine_services shim owns those (apk/OpenRC)")
             else:
                 raise RuntimeError(f"golden plant had {len(result.failed)} FAILED step(s) — strict mode requires green")
-        # Record BEFORE the shim runs: an alpine-tolerated failure is a real gap on
-        # the golden disk (verify maps '{box}-golden' onto every team clone), and if
-        # ensure_alpine_services then fails the deploy, the record must already be
-        # on disk. A strict failure raised above and never reaches this line.
+        # Record BEFORE the shim runs: an alpine-tolerated failure is a real gap on the golden
+        # disk, and the record must be on disk even if the shim then fails the deploy.
         if coverage:
             coverage(_coverage_machines(t["box"]["name"] for t in work), result)
         if alpine_shim:
@@ -479,15 +378,10 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     print("  Cleaning cloud-init state on golden Linux boxes (clones must re-init)...")
 
     def _cloud_init_clean(t):
-        # 120 s, not 30: the jump-hosted SSH to a freshly booted golden can outlast a
-        # 30 s bound and aborts the whole build (live 2026-10-17, phase 4).
         return ssh_via_gateway(ctx, t["ip"], "sudo cloud-init clean --logs --machine-id",
                                timeout=120, user=ctx.get("box_username", "ubuntu"))
 
-    # Parallel since W11 : same ~1-2s independent SSH round trip as the
-    # password reset. The serial loop never let a non-zero rc abort — it warned — so
-    # the warnings are printed from the collected results in box order, keeping the log
-    # deterministic; a transport exception still propagates exactly as it did serially.
+    # The warnings print from the collected results in box order, keeping the log deterministic.
     clean_results = run_concurrent(linux_targets, _cloud_init_clean, max_workers=4)
     for t, r in zip(linux_targets, clean_results):
         if isinstance(r, Exception):
@@ -500,8 +394,7 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     for t in targets:
         stop_vm(node, t["vmid"])
 
-    # Record per-box before the conversion, so a later failure does not throw this
-    # box's plant away on the next re-entry.
+    # Record per-box before conversion, so a later failure does not throw this box's plant away.
     if golden_hashes:
         for t in work:
             save_template_hashes(comp_dir, golden_planted={
@@ -512,11 +405,8 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     return {t["box"]["name"]: t["vmid"] for t in targets_all}
 
 
-# Destroy order is AFTER the linked clones (they depend on the template's base disk).
-# A slot held by a FOREIGN VM (ownership guard refusal) is skipped with a loud warning —
-# one squatted vmid must not strand the rest of the teardown (a loadtest found a
-# satellite template squatting golden slot 1333 aborted the whole pass, leaving
-# everything else half-destroyed).
+# Destroy AFTER the linked clones, which depend on the template's base disk. A slot held by a
+# FOREIGN VM is skipped with a warning so one squatted vmid does not strand the whole teardown.
 def destroy_golden_set(node, engine_vmid, num_box_types, expect_tags=None, slot=0):
     skipped = []
     for box_idx in range(num_box_types):

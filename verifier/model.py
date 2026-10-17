@@ -10,13 +10,8 @@ class CheckError(Exception):
 
 
 class Status(enum.Enum):
-# Tri-state gate verdict.
-#
-#     SKIP_UNAVAILABLE means the gate could not be evaluated (dead SSH, missing
-#     state, no vantage point) and is deliberately NOT a pass: a check that never
-#     ran exiting 0 is how a dead box reads as a healthy range (live-found
-#     caught live: isolation's cross-team probe "PASSed" on stopped VMs). The
-#     operator can waive a specific gate with --allow-unverified.
+# Tri-state gate verdict: SKIP_UNAVAILABLE is deliberately NOT a pass (a check that never ran
+#     exiting 0 is how a dead box reads as a healthy range); --allow-unverified waives one gate.
     PASS = "PASS"
     FAIL = "FAIL"
     SKIP_UNAVAILABLE = "SKIP"
@@ -24,15 +19,13 @@ class Status(enum.Enum):
 
 @dataclasses.dataclass
 class GateResult:
-# One gate's verdict — the SUMMARY and the exit code both read THIS object,
-#     so the printed word and the gate dict can never drift apart (the old
-#     hand-printed SUMMARY said "SKIP — unverified" for isolation while the dict
-#     recorded a FAIL).
+# The SUMMARY and the exit code both read THIS object, so the printed word and the gate dict
+#     cannot drift apart.
     name: str
     status: Status
     detail: str = ""
     gating: bool = True      # False = reported in SUMMARY, excluded from the verdict
-    label: str = ""          # SUMMARY label; defaults to name
+    label: str = ""
 
     def __post_init__(self):
         if not self.label:
@@ -56,5 +49,4 @@ def gate_skip(name, detail="", gating=True, label=""):
 
 
 def bool_gate(name, ok, detail="", gating=True, label=""):
-# Wrap a plain bool check (no SKIP outcome) as a GateResult.
     return GateResult(name, Status.PASS if ok else Status.FAIL, detail, gating, label)

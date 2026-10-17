@@ -1,5 +1,4 @@
-"""The authoritative per-competition placement record (the document's `placement` section):
-read/write, accessors, process-wide activation, and the vmid slot math derived from it."""
+"""The authoritative per-competition placement record: read/write, accessors, process-wide activation, and the vmid slot math derived from it."""
 
 import os
 
@@ -10,12 +9,8 @@ from multinode.nodes_config import (JUMP_MGMT_IP_BASE, JUMP_VMID_OFFSET, NodeRec
 
 
 def read_placement(comp_dir):
-# The placement record from the document's `placement` section, or None when unplaced.
-#
-#     A v1 document predates the identity block; it upgrades on read and is written back, so
-#     a companion op (teardown above all) can still find the red01 that range deployed. A
-#     version this code does not know is refused: the record is the only map of vmids the
-#     range owns.
+# A v1 document upgrades on read and is written back, so a companion op (teardown above all)
+#     can still find the red01 that range deployed; an unknown version is refused.
     from estate import state
     placement = state.EstateState.load(comp_dir).data.get("placement")
     if not placement:
@@ -33,9 +28,7 @@ def read_placement(comp_dir):
 
 
 def _upgrade_v1(comp_dir, placement):
-# Fill the v2 identity block on a range deployed by the older code, resolving red01 the
-#     way that code did (Compfile -> the comp's .badauto-config.yaml -> engine + 170) —
-#     the v1 derivation, not this build's, because that is where the live red01 sits.
+# Resolve red01 the way the v1 code did — that is where the live red01 sits.
     from estate import state
     from red import badauto_config_ops
     upgraded = dict(placement)
@@ -67,13 +60,12 @@ def write_placement(comp_dir, placement):
 
 
 def engine_template_vmid(engine_vmid):
-# The engine template's slot, just below the golden block (+150) so one preflight scan covers both.
     return int(engine_vmid) + ENGINE_TEMPLATE_VMID_OFFSET
 
 
 def mgmt_bridge_for(record=None):
-# The management bridge this run attaches every NIC at net0 to: the node's own when its L2
-#     is not vmbr0 (the .67 cyber range's is vmbr100), else the profile's, else the default.
+# The node's own bridge when its L2 is not vmbr0 (the .67 cyber range's is vmbr100), else
+#     the profile's.
     from estate import config
     if record is not None and record.mgmt_bridge:
         return record.mgmt_bridge
@@ -81,8 +73,6 @@ def mgmt_bridge_for(record=None):
 
 
 def resolved_mgmt_bridge(placement=None):
-# The bridge a NIC attaches to: the placement's resolved value when this run is placed,
-#     else the profile's (defaulting to vmbr0 — absent a per-node value, nothing changes).
     return (placement or {}).get("mgmt_bridge") or mgmt_bridge_for()
 
 
@@ -93,10 +83,8 @@ def _golden_vmids(placement):
 
 def record_placement_identities(comp_dir, placement, engine_mgmt_ip="", engine_mgmt_gw="",
                                 red01=None):
-# Write every identity this run will create into the placement, before preflight reads it.
-#
-#     Same values every later reader derives, written once: preflight, resume, verify and
-#     teardown otherwise each re-add the same offsets and can disagree about a vmid.
+# Write every identity this run will create once, so preflight/resume/verify/teardown cannot
+#     disagree about a vmid.
     placement["version"] = PLACEMENT_VERSION
     placement["engine_template_vmid"] = engine_template_vmid(placement["engine_vmid"])
     placement["golden_vmids"] = _golden_vmids(placement)
@@ -110,8 +98,8 @@ def record_placement_identities(comp_dir, placement, engine_mgmt_ip="", engine_m
 
 
 def write_red01_ip(comp_dir, placement, ip):
-# Record the address SELECTED at deploy time. explicit_ip stays false: a selected address was
-#     proven free when it was chosen and is not re-litigated, unlike an operator's value.
+# explicit_ip stays false: a selected address was proven free when chosen, unlike an
+#     operator's value.
     placement.setdefault("red01", {})["ip"] = ip
     placement["red01"]["explicit_ip"] = False
     write_placement(comp_dir, placement)
@@ -119,8 +107,6 @@ def write_red01_ip(comp_dir, placement, ip):
 
 
 def reserved_vmids(placement):
-# Every vmid THIS placement's own bands occupy: engine, engine template, each used slot's
-#     golden span and jump, and red01.
     from red.badauto_config_ops import default_red_vmid
     engine_vmid = int(placement["engine_vmid"])
     reserved = {engine_vmid, engine_template_vmid(engine_vmid),
@@ -133,8 +119,7 @@ def reserved_vmids(placement):
 
 
 def check_team_blocks(placement, teams):
-# Refuse a team vmid block overlapping a band this placement reserves: collect_teams
-#     validates the engine's slot-0 bands only, and runs before the slot count exists.
+# collect_teams validates slot-0 bands only and runs before the slot count exists.
     reserved = reserved_vmids(placement)
     for key, team in teams.items():
         identifier = team["identifier"]
@@ -171,8 +156,6 @@ def teams_on_node(placement, node_name):
 
 
 def anchor_identifier(placement, node_name):
-# The team subnet this node's golden boxes sit on: the first (lowest-identifier)
-#     team placed there. Slot 0 anchors on team1 — today's golden math exactly.
     teams = teams_on_node(placement, node_name)
     if not teams:
         return None
@@ -181,21 +164,15 @@ def anchor_identifier(placement, node_name):
 
 
 def activate_placement(placement):
-# Make the whole process multi-node-aware: apply the engine node's config (every
-#     config-sourced read) and register the node->endpoint route table that routes
-#     node-scoped proxmox_api calls to the owning host. Returns the env restore dict.
     from infra.client import register_node_routes
     engine = engine_record(placement)
     restore = apply_node_env(engine)
-    # Keyed by PVE host name ("proxmox"/"pve") — every node-scoped API path uses
-    # /nodes/<pve-name>/..., not the nodes.json record name.
+    # Keyed by PVE host name, not the nodes.json record name: every node-scoped API path
+    # uses /nodes/<pve-name>/...
     routes = {}
     for rec in placement["nodes"].values():
         token = os.environ.get(rec["token_env"])
         if not token:
-            # A blank token used to surface as a 401 mid-preflight on the far node
-            # (a scale soak) with the token-env collision as its cause. Refuse
-            # here instead, naming the node and the variable.
             raise SystemExit(
                 f"  ERROR: nodes.json node '{rec['name']}' points at token_env "
                 f"'{rec['token_env']}' but that env var is empty/absent — set the token in "
@@ -213,11 +190,8 @@ def deactivate_placement(restore):
 
 
 def golden_vmid_for_slot(engine_vmid, slot, box_idx):
-# Golden blocks per node slot: slot 0 keeps the historical engine_vmid+150+i;
-#     each satellite shifts by one box-stride so the same box type can exist as a
-#     golden on several hosts (linked clones can't cross nodes on separate storages).
-#     vmids only need uniqueness per PVE instance — the stride exists so this also
-#     holds on a future single-cluster backend.
+# Slot 0 keeps engine_vmid+150+i; each satellite shifts one box-stride so the same box type
+#     can be a golden on several hosts (linked clones cannot cross nodes).
     return int(engine_vmid) + GOLDEN_VMID_OFFSET + slot * MAX_BOXES_PER_TEAM + box_idx
 
 
@@ -226,7 +200,6 @@ def jump_vmid_for(engine_vmid, slot):
 
 
 def default_jump_mgmt_ip(slot):
-# 10.0.0.249 for slot 1, .248 for slot 2, ...
     octet = int(JUMP_MGMT_IP_BASE.split(".")[-1]) - (slot - 1)
     if octet < 1:
         raise SystemExit(f"  ERROR: jump mgmt IP range exhausted at slot {slot} — "
@@ -241,11 +214,8 @@ def golden_slot_span(engine_vmid, slot):
 
 
 def satellite_routes_for(placement):
-# Engine static routes: one per TEAM SUBNET behind each satellite's jump (not
-#     just the golden anchor — every team box on the satellite is reached through the
-#     same jump, and the engine's default gw blackholes the un-routed subnets).
-#     Written into the engine by the estate component's engine-network setup, and
-#     re-asserted by a oneshot unit so an engine reboot mid-event keeps them.
+# One route per team subnet behind each satellite's jump: the engine's default gw blackholes
+#     the un-routed subnets. Re-asserted by a oneshot unit so an engine reboot keeps them.
     routes = []
     for sat in placement["satellites"]:
         anchor = sat.get("anchor_identifier")
