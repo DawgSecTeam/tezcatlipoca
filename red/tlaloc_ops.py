@@ -37,23 +37,10 @@ from common.constants import red_bridge_name
 from common.utils import local_python, record_degradation
 
 REPO = Path(__file__).resolve().parents[1]
-# Where the tlaloc v2 checkout lives. A sibling of the engine checkout is right on
-# a dev box but wrong under the dashboard, which cuts the engine into
-# `<run_dir>/engine` while the agent repo lives once per host — that mismatch let a
-# deploy print "tlaloc: no checkout … skipped" and still go live with NO red team
-# (smoke run-cb959268). `TEZ_TLALOC_PATH` names it, the dashboard's .env carries it,
-# and the sibling stays the fallback for a dev tree.
-def _tlaloc_repo():
-    raw = os.environ.get("TEZ_TLALOC_PATH")
-    if raw:
-        return Path(raw).expanduser().resolve()
-    sibling = REPO.parent / "tlaloc"
-    if (sibling / "tlaloc" / "__init__.py").exists():
-        return sibling
-    return Path.home() / "tlaloc"
-
-
-TLALOC_REPO = _tlaloc_repo()
+# The agent lives in this tree (tlaloc/). Staging, comp-prep and the scrim all read
+# it from here, so no host-side checkout can take its place and a deploy cannot go
+# live with NO red team because a path was missing (smoke run-cb959268).
+TLALOC_REPO = REPO / "tlaloc"
 
 RED_USER = "sysadmin"
 INSTALL_DIR = "/opt/tlaloc"
@@ -465,7 +452,7 @@ def stage_red01(ssh_key, red_ip, comp_dir, *, runner=None, timeout=600):
     """Push /opt/tlaloc + the unit file to an already-provisioned red01."""
     comp_dir = Path(comp_dir).resolve()
     if not (TLALOC_REPO / "tlaloc" / "__init__.py").exists():
-        return {"ok": False, "reason": f"no tlaloc checkout at {TLALOC_REPO}"}
+        return {"ok": False, "reason": f"no tlaloc agent at {TLALOC_REPO}"}
     if not UNIT_SRC.exists():
         return {"ok": False, "reason": f"no systemd unit at {UNIT_SRC}"}
     tar = subprocess.run(["tar", "-czf", "-", "-C", str(TLALOC_REPO),
@@ -593,9 +580,9 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, red_ip=None,
         record_degradation("tlaloc_red", "no ssh key on the deploy context")
         return {"ok": False, "reason": "no ssh key"}
     if not (TLALOC_REPO / "tlaloc" / "__init__.py").exists():
-        record_degradation("tlaloc_red", f"no tlaloc checkout at {TLALOC_REPO}")
-        print(f"  tlaloc: no checkout at {TLALOC_REPO} — skipped")
-        return {"ok": False, "reason": "no tlaloc checkout"}
+        record_degradation("tlaloc_red", f"no tlaloc agent at {TLALOC_REPO}")
+        print(f"  tlaloc: no agent at {TLALOC_REPO} — skipped")
+        return {"ok": False, "reason": "no tlaloc agent"}
 
     # 0. render the competition's tlaloc config FIRST: c2-prep, the push and the
     #    seed all read it, and a missing explicit --config is a hard error in
@@ -857,8 +844,7 @@ def status(comp_dir, *, ssh_key=None, red_ip=None, runner=None):
     block = red_block(comp_dir)
     out = {"engine": red_engine(comp_dir), "block": block,
            "problems": validate_red_block(block),
-           "tlaloc_checkout": str(TLALOC_REPO) if (TLALOC_REPO / "tlaloc").exists()
-           else None,
+           "tlaloc_agent": str(TLALOC_REPO),
            "unit": None}
     if ssh_key and red_ip:
         proc = _ssh_run(ssh_key, red_ip,

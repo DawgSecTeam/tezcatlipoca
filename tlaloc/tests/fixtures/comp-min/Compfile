@@ -1,0 +1,5 @@
+comp tlaloc-smoke
+teams 2
+red.assume_breach light
+red.duration_min 90
+red.caps.max_down 4

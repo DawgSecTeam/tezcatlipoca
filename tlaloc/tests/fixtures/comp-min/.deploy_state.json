@@ -1,0 +1,8 @@
+{
+  "box_password": "boxpw-1",
+  "admin_password": "quotient-admin",
+  "box_creds": {
+    "svc-backup": "Backup1!",
+    "analyst": "Analyst1!"
+  }
+}

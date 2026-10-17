@@ -17,6 +17,8 @@ All guidance lives in `docs/` — start with:
 - [docs/remote-access.md](docs/remote-access.md) — headscale participant access
 - [docs/known-issues.md](docs/known-issues.md) — open/pending issues only; drained every run cycle
 - [docs/environment-facts.md](docs/environment-facts.md) — host-agnostic template/vmid/runtime behavior
+- [tlaloc/AGENTS.md](tlaloc/AGENTS.md) — the red agent's own rules; it lives in this tree at
+  `tlaloc/`, and deploy phase 7 stages it onto red01 (`red/tlaloc_ops.py`)
 
 ## Estate ground truth is gitignored
 

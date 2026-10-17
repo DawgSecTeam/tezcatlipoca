@@ -1,0 +1,23 @@
+# tlaloc v2 — ignore what must never be committed
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+# Runtime state/reports are per-event artifacts, never source. NOTE: anchored so
+# these can never match the tlaloc/state PACKAGE (world.py/digest.py/schema.py) —
+# a bare `state/` did exactly that and left the package out of the repo.
+/.state/
+**/.tlaloc-state/
+*.state/
+!tlaloc/state/
+# ...but only the SOURCE: a broad `!tlaloc/state/**` un-ignored __pycache__ with
+# it (negations beat earlier rules regardless of order), which committed .pyc.
+!tlaloc/state/*.py
+KILL
+# derived competition config + frozen payloads are deploy artifacts
+.tlaloc-config.yaml
+red/payloads/
+# .env carries secrets (MYTHIC/LLM keys); /etc/tlaloc/env is the runtime one
+.env
+tests/fixtures/**/red/

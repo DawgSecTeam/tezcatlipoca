@@ -1,0 +1,23 @@
+{
+  "base-linux-server": [
+    "sudo-nopasswd",
+    {
+      "name": "weak-password-account",
+      "vars": {
+        "USERNAME": "fieldtech",
+        "PASSWORD": "Summer2026!"
+      }
+    },
+    "pam-permit-auth"
+  ],
+  "base-windows-server": [
+    "uac-disabled-win",
+    {
+      "name": "extra-admins-win",
+      "vars": {
+        "USERNAME": "svc-backup",
+        "PASSWORD": "Backup1!"
+      }
+    }
+  ]
+}

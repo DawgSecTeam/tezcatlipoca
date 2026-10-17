@@ -1,0 +1,123 @@
+# tlaloc v2 — example configuration
+#
+# Layers (lowest wins nothing; later wins): DEFAULTS in tlaloc/config.py <
+# this file (or /etc/tlaloc/config.yaml on red01) < the TLALOC_* env allow-map <
+# the competition's Compfile `red.*` block (the ROE authority).
+#
+# An explicit --config path that does not exist is a HARD error: running on
+# silent defaults is how a deploy once ended up on the wrong VM.
+#
+# The deploy pipeline pushes this file to /etc/tlaloc/config.yaml on red01. Every
+# field a red01-side feature reads MUST be in `tlaloc.cli.CONFIG_CONTRACT`;
+# `tlaloc verify-config --pushed /etc/tlaloc/config.yaml` diffs it per field.
+
+run:
+  comp: ""                  # competition id, stamped into world.json
+  state_dir: /var/lib/tlaloc            # fresh dir per competition — never reuse
+  kill_file: ""             # empty -> <state_dir>/KILL
+  dry_run: false
+  host_guard: true          # refuse the live loop off red01
+  required_host: red01      # informational: the hostname the guard looks for
+  decision_window_min: 4    # baseline cycle cadence
+  jitter_pct: 15            # +/- on the cadence, so the tempo is not a metronome
+  endgame_cycle_min: 1.0    # cadence while the final window is open
+  error_halt_after: 8       # consecutive cycle errors before the loop stops
+  verify_every_n_cycles: 3  # artifact health checks (the re-plant trigger)
+  blue_ips: []              # extra in-scope IPs (e.g. a human-blue laptop)
+
+red:                        # the ROE — normally supplied by the Compfile
+  assume_breach: full       # full | light | off
+  depth: 3                  # 0 access · 1 +escalate · 2 +channel · 3 +persistence/evasion
+  duration_min: 150         # THE event clock
+  ladder:
+    enabled: true
+    pause_after_restore_min: 10
+    tiers:
+      - {name: observe, at_pct: 0.00, modes: [recon], boxes_per_team: 0}
+      - {name: easy,    at_pct: 0.15, modes: [stop], boxes_per_team: 1}
+      - {name: medium,  at_pct: 0.55, modes: [stop, stop_mask], boxes_per_team: 2}
+      - {name: hard,    at_pct: 0.72, modes: [stop, stop_mask, block_port], boxes_per_team: 2}
+      - {name: brutal,  at_pct: 0.86,
+         modes: [stop, stop_mask, block_port, stop_rename_config],
+         boxes_per_team: 4, unrecoverable: true}
+  caps: {max_down: 5, min_standing: 1, grace_min: 10}
+  windows: {endgame_teardown: 15, lockout: 3}
+  budget: {extra_pressure_max: 2, improvise_rounds: 2, improvise_commands: 6}
+
+clef:                       # the decision model (judgment between bounded options)
+  enabled: true
+  base_url: http://10.0.0.143:8080
+  path: /v1/systemone
+  model: clef-flash
+  timeout_sec: 5
+  max_request_tokens: 16384 # the endpoint's batch (clef: 16384 since 2026-10-16;
+                            # it names the number in its own rejection message)
+  tokens_per_char: 0.7      # conservative estimate; the client learns the real
+                            # ratio from a rejection and wins over this
+  theta: 0.60               # confidence gate (top probability)
+  theta_by_question: {}     # recalibrated per question after each scrim
+  failure_threshold: 3      # consecutive failures before the cooldown
+  cooldown_sec: 120
+  high_stakes_effects: [takedown, lockout, rotate_credlist, block_port]
+
+llm:                        # generation + arbitration ONLY — never the decider
+  enabled: false
+  base_url: ""              # e.g. http://100.64.0.19:8000/v1
+  model: ""
+  timeout_sec: 60
+  max_tokens: 1024
+  api_key_env: TLALOC_LLM_API_KEY
+
+c2:                         # Mythic (installed/configured by Gaia)
+  enabled: false
+  base_url: ""              # e.g. https://10.0.0.210
+  username: tlaloc
+  password_env: TLALOC_MYTHIC_PASSWORD
+  operation: ""             # one operation per competition, created at comp-prep
+  verify_tls: false
+  callback_max_age_sec: 120 # a callback is live only if it is FRESH
+  # What a built payload dials, as the TEAM BOXES see it (the engine's DNAT
+  # gateway for the C2 port). Empty/0 leaves the Mythic profile instance's own
+  # default — which is loopback on a fresh install, i.e. a channel that never
+  # checks in.
+  callback_host: ""         # e.g. http://172.31.2.1
+  callback_port: 0          # e.g. 8000
+  plant_wait_sec: 45        # how long implant_channel waits for the callback
+  task_timeout_sec: 120
+
+sensors:
+  quotient_enabled: true
+  quotient_url: ""          # empty -> discovered from the comp's credentials.txt
+  poll_timeout_sec: 10
+  blue_hunting_every_n_cycles: 6
+
+limits:
+  action_timeout: 90
+  max_retries_per_service: 6
+  unreachable_halt_after: 8
+  command_max_len: 200      # free-form commands (improvise, task_channel)
+  cred_spray_max: 40        # spray_access: logins attempted per box
+  spray_probe_timeout: 20   # ...per-login deadline
+  spray_delay_sec: 0.4      # ...gap between logins (0 in tests)
+  nmap_top_ports: 200
+  nmap_timing: T4
+  scan_timeout: 180
+
+naming:
+  # full <stem>-<suffix> | stem | suffix — see tlaloc/effects/artifactnames.py.
+  # The half blue matches on is the half to drop.
+  mode: full
+
+effects:
+  allow_ssh_takedown: false # scoring sshd down needs explicit opt-in
+  rekill_cron: true
+  rotate_credlist: true
+  decoy: false              # optional v1 flavour (not in the catalogue)
+  mysql_udf: false          # optional v1 flavour (not in the catalogue)
+
+# Optional flavour ASSETS. Empty = the effects draw their own locations from
+# tlaloc/effects/artifactnames.py; set these only to point at a vendored asset.
+evasion:
+  preload_so: ""            # path to the hider .so on red01, if vendored
+procfilter:
+  install_dir: ""           # path to the procfilter tree, if vendored

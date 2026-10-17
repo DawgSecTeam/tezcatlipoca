@@ -26,6 +26,13 @@ python3 -m pytest tests/ -q -k frozen
 git ls-files tests/                  # the current file list — don't hard-code it here
 ```
 
+The red agent is a self-contained folder with its own hermetic pytest suite and its own runner
+config (`tlaloc/pyproject.toml`); it is not collected by `tests/`:
+
+```bash
+cd tlaloc && python3 -m pytest tests/ -q
+```
+
 One `conftest.py` exists for exactly one reason: `estate.config` is a deliberate process
 singleton (multi-node activation points the whole process at the engine's host), so the
 fixture resets it around each test. Otherwise each file is standalone `unittest`-style, safe

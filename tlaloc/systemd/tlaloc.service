@@ -1,0 +1,32 @@
+[Unit]
+Description=tlaloc v2 — assume-breach red team loop (tezcatlipoca)
+# The loop talks to Quotient, the C2 and clef; nothing here needs the engine's
+# Docker or Proxmox, so it can start as soon as the network is up.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/tlaloc
+Environment=TLALOC_CONFIG=/etc/tlaloc/config.yaml
+# The Mythic credentials the C2 client reads (c2.password_env). Written by the
+# deploy pipeline, root-owned 0600 — the secret never rides the pushed config.
+# `-` so a competition with no C2 still starts.
+EnvironmentFile=-/etc/tlaloc/c2.env
+# The package is STAGED, never installed (no pip on red01): the unit is what puts
+# it on the import path, which is also why an operator-side invocation must
+# `cd /opt/tlaloc` first.
+ExecStart=/usr/bin/python3 -m tlaloc --config /etc/tlaloc/config.yaml run
+# A crash must be visible, not silent: the audit log is the ground truth, and the
+# journal holds the reason. on-failure (not always) so a clean event end stays
+# stopped.
+Restart=on-failure
+RestartSec=20
+TimeoutStopSec=30
+# The loop writes only its state dir.
+StateDirectory=tlaloc
+ReadWritePaths=/var/lib/tlaloc
+
+[Install]
+WantedBy=multi-user.target

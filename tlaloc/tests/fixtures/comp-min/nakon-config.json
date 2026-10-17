@@ -1,0 +1,57 @@
+{
+  "machines": [
+    {
+      "ip": "192.168.1.10",
+      "hostname": "web01",
+      "os": "linux",
+      "user": "ubuntu",
+      "password": "boxpw-1",
+      "configurations": [
+        "sudo-nopasswd",
+        "pam-permit-auth",
+        "cron-watchdog-reinstaller"
+      ]
+    },
+    {
+      "ip": "192.168.1.11",
+      "hostname": "db01",
+      "os": "linux",
+      "user": "ubuntu",
+      "password": "boxpw-1",
+      "configurations": [
+        "mysql-remote-root",
+        "firewall-flush-refire"
+      ]
+    },
+    {
+      "ip": "192.168.1.20",
+      "hostname": "dc01",
+      "os": "windows",
+      "user": "Administrator",
+      "password": "boxpw-1",
+      "configurations": [
+        "uac-disabled-win"
+      ]
+    },
+    {
+      "ip": "192.168.2.10",
+      "hostname": "web01",
+      "os": "linux",
+      "user": "ubuntu",
+      "password": "boxpw-2",
+      "configurations": [
+        "sudo-nopasswd"
+      ]
+    },
+    {
+      "ip": "192.168.2.11",
+      "hostname": "db01",
+      "os": "linux",
+      "user": "ubuntu",
+      "password": "boxpw-2",
+      "configurations": [
+        "redis-no-auth"
+      ]
+    }
+  ]
+}

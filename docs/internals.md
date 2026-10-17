@@ -302,6 +302,25 @@ Local-files → Markdown. The packet is the same for every team (real credential
   - **Windows** (`Enable WinRM`, `New SMB Share`, `RDP misconfigs`): Quotient has no SMB/RDP/WinRM check (only Web/Dns/Ssh/Ftp/Smtp/Imap/Sql/Tcp), so these use Tcp port-open; `IIS HTTP` is a real Web check (`/` → 200). Keyed by exact catalog config name.
   - **ADDS**: scored (Tcp :389), never planted from `box_services.json`.
 
+## red/ and tlaloc/
+
+Two red engines, one provisioning path. `red_plant_ops` owns the range-side pieces both share —
+red01's clone and per-competition identity reservation, the engine DNAT — and `Compfile
+red.engine` chooses which agent runs: `badauto` (v1, the default, unchanged for every existing
+Compfile) or `tlaloc` (v2).
+
+- **badauto**: `.badauto-config.yaml` in the competition dir, the `bad-auto` checkout beside this
+  tree, `badauto deploy`/`seed`/`destroy`, Realm C2.
+- **tlaloc v2**: the agent lives IN this tree at `tlaloc/` (package, tests, docs, systemd unit).
+  `red/tlaloc_ops.py` parses the competition's `red.*` block, renders `.tlaloc-config.yaml` (the
+  file red01 reads), freezes the C2 payload matrix, stages `tlaloc/` onto red01 at `/opt/tlaloc`,
+  pushes the config and verifies the per-field contract against `tlaloc verify-config
+  --print-contract`, installs `tlaloc.service` and runs the day-0 seed. Staging, not installation,
+  is deliberate: red01 has no pip, and the unit is what puts the package on the import path.
+  `scrim/red_stage.py` takes the same path for a scrim.
+- The agent's own map is `tlaloc/README.md` and `tlaloc/AGENTS.md`; the deploy contract (which
+  side owns what) is `tlaloc/docs/deploy.md`.
+
 ## estate/
 
 The one component that mutates real infrastructure. Each creator is an ordinary function that calls

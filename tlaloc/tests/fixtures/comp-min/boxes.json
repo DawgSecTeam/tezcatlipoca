@@ -1,0 +1,23 @@
+[
+  {
+    "name": "web01",
+    "last_octet": 10,
+    "template": "base-linux-server"
+  },
+  {
+    "name": "db01",
+    "last_octet": 11,
+    "template": "base-linux-server"
+  },
+  {
+    "name": "dc01",
+    "last_octet": 20,
+    "template": "base-windows-server"
+  },
+  {
+    "name": "fw01",
+    "last_octet": 1,
+    "template": "pfsense",
+    "unmanaged": true
+  }
+]

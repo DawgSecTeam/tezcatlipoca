@@ -247,9 +247,8 @@ class PlantTests(unittest.TestCase):
         self.comp = compfile(self.tmp.name, "red.engine tlaloc\n", red_yaml="red.yaml")
         self.ctx = FakeCtx(self.comp)
         self.degradations = []
-        # A checkout fixture, not whatever the host happens to have: TLALOC_REPO is resolved
-        # from TEZ_TLALOC_PATH/$HOME at import, so a box without a cloned tlaloc failed every
-        # stage test with "no tlaloc checkout" instead of exercising the stage.
+        # A fixture tree, not the in-tree agent: the stage tests must exercise the stage
+        # against a known file set, and must fail if the code regresses to a host-side path.
         repo = Path(self.tmp.name) / "tlaloc-repo"
         (repo / "tlaloc").mkdir(parents=True)
         (repo / "tlaloc" / "__init__.py").write_text("")

@@ -31,6 +31,7 @@ Per-symbol rationale: [internals.md](internals.md). Open problems: [known-issues
 | `common/` | `constants` (vmid math, limits, snapshot names), `targets`, `ssh_ops`, `windows_ops`, `timing`, `utils` |
 | `estate/` | The one component that mutates real infrastructure: `state` (the competition's document + resource inventory), `config` (native process config), `apply` (bridges, engine, team boxes), `engine_setup` (guest-side engine setup), `destroy` (tier order) |
 | `red/`, `run-agent-scrim.py`, `scrim-report.py` | Red/blue agent scrim ([scrim-harness.md](scrim-harness.md)) |
+| `tlaloc/` | The red teamer (v2) as a self-contained folder: package, tests, docs, systemd unit. Staged to red01 by `red/tlaloc_ops.py` when a Compfile says `red.engine tlaloc`; the default stays badauto |
 | `vendor/nakon` | Submodule pinned to a release; CLI-only catalog access and bundle builder |
 
 ## Phases
@@ -136,7 +137,10 @@ Each rebooting step is its own single-machine nakon pass. A missing `domain_role
 - Engine iptables: `FORWARD -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP` (inserted at line 1); `POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE`.
 - Docker wipes `FORWARD` on every restart, so `bootstrap_scoring_engine` installs `range-firewall.{sh,service,timer}` (after `docker.service`; 30 s) to re-assert both rules, and `range-healthcheck.{sh,service,timer}` (60 s, offset from :00/:30) logging to `/var/log/range-healthcheck.log`. `ensure_nat_forwarding` re-asserts at phase 3 and on redeploy.
 
-Red identity is owned by `../bad-auto` (`badauto/deploy/engine_nat.py`, `deploy.red_mode`), installed as a `bad-auto-firewall` unit + 30 s timer:
+The agent is selected per competition by `red.engine`: `badauto` (v1, the default) or `tlaloc`
+(v2, the `tlaloc/` folder of this tree, staged to red01 — [internals.md](internals.md#red-and-tlaloc)).
+Provisioning is shared either way: red identity is owned by `../bad-auto`
+(`badauto/deploy/engine_nat.py`, `deploy.red_mode`), installed as a `bad-auto-firewall` unit + 30 s timer:
 
 - **routed** (default): red01 holds a segment address on a **private per-run bridge** (`vmbrR<run hex>`, created by the deploy; the engine gets an extra NIC there holding the gateway `.1`, red01 the `.10`). The private L2 is what keeps those two fixed addresses unique — on the shared management bridge every range's engine would claim `.1`. Attacks keep the red source end-to-end; scoring still sources from the team gateway.
 - **masq**: red01 is MASQUERADEd into the team gateways, indistinguishable from scoring.

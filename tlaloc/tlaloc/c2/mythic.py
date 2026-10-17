@@ -1,0 +1,293 @@
+"""Mythic REST client — tasking and callback evidence, nothing else.
+
+Endpoints are the Mythic v1.4 REST surface. This module is deliberately thin and
+injectable (`http=` seam) so the whole C2 path is testable offline and so a
+Mythic upgrade is one mapping table, not a rewrite:
+
+    POST /auth                                  -> {access_token, ...}
+    GET  /api/v1.4/callbacks/                   -> [callback rows]
+    POST /api/v1.4/task/                        -> {id: <task id>}
+    GET  /api/v1.4/task/{id}/                   -> task row (status, output)
+    POST /api/v1.4/payload/                     -> {uuid: ..., identifier: ...}
+    GET  /api/v1.4/payload/{uuid}/              -> build status + file_id
+    GET  /api/v1.4/payload/download/{file_id}   -> the binary
+
+Two behaviours worth stating because v1 got them wrong:
+
+* **liveness is a callback row with a fresh timestamp, never a process.** The
+  tavern lesson: a row survives the agent's death, so `callbacks()` reports
+  `seen_at` and every caller must ask "how old?" — `callback_max_age_sec`.
+* **attribution is the payload description**, set at build time to the box id, so
+  a callback maps to a box without guessing from IPs.
+"""
+
+import json
+import time
+from dataclasses import dataclass
+
+from ..errors import C2Error
+
+DEFAULT_TRANSPORTS = ("http", "webhook")
+AGENT_BY_OS = {"linux": "poseidon", "windows": "apollo"}
+
+# Task statuses that mean the task is finished. Mythic reports `submitted`
+# while a task is only QUEUED, so treating it as terminal reported an empty
+# output as success — the exact shape of an unverified step.
+TERMINAL_OK = ("completed", "processed", "success")
+TERMINAL_BAD = ("error", "failed", "cancelled", "canceled", "expired")
+
+
+@dataclass
+class Callback:
+    external_id: str
+    box_id: str
+    agent: str
+    host: str = ""
+    user: str = ""
+    seen_at: float = 0.0
+    raw: dict = None
+
+    def age(self, now=None):
+        return (now or time.time()) - self.seen_at
+
+
+class MythicClient:
+    def __init__(self, cfg, http=None, now=None, log=None, password=None):
+        c2 = cfg.get("c2") or {}
+        self.base_url = (c2.get("base_url") or "").rstrip("/")
+        self.username = c2.get("username") or "tlaloc"
+        self.password = password
+        self.password_env = c2.get("password_env") or "TLALOC_MYTHIC_PASSWORD"
+        self.operation_name = c2.get("operation") or ""
+        self.verify_tls = bool(c2.get("verify_tls", False))
+        self.callback_max_age = float(c2.get("callback_max_age_sec", 120))
+        # The build-time callback address (the engine's DNAT gateway as the team
+        # boxes see it). Passed to every payload build through the profile
+        # parameters; empty means "whatever the profile instance already sets".
+        self.callback_host = str(c2.get("callback_host") or "")
+        self.callback_port = int(c2.get("callback_port") or 0)
+        self.timeout = float(c2.get("timeout_sec", 30))
+        self.enabled = bool(c2.get("enabled")) and bool(self.base_url)
+        self._http = http
+        self._now = now or time.time
+        self._token = None
+        self.log = log
+
+    # -- plumbing -----------------------------------------------------------
+
+    def _password(self):
+        if self.password:
+            return self.password
+        import os
+        return os.environ.get(self.password_env) or ""
+
+    def _request(self, method, path, body=None, *, raw=False, timeout=None):
+        if self._http is not None:
+            return self._http(method, path, body, timeout or self.timeout)
+        import requests                                     # lazy
+        url = f"{self.base_url}{path}"
+        headers = {"Content-Type": "application/json"}
+        if self._token and path != "/auth":
+            headers["Authorization"] = f"Bearer {self._token}"
+        response = requests.request(method, url, json=body, headers=headers,
+                                    timeout=timeout or self.timeout,
+                                    verify=self.verify_tls)
+        if response.status_code >= 400:
+            raise C2Error(f"{method} {path} -> HTTP {response.status_code}: "
+                          f"{response.text[:200]}")
+        if raw:
+            return response.content
+        try:
+            return response.json()
+        except ValueError:
+            return {"raw": response.text}
+
+    def login(self):
+        payload = self._request("POST", "/auth",
+                                {"username": self.username,
+                                 "password": self._password()})
+        token = (payload or {}).get("access_token")
+        if not token:
+            raise C2Error("mythic login returned no access_token")
+        self._token = token
+        return token
+
+    # -- evidence -----------------------------------------------------------
+
+    def callback_rows(self):
+        payload = self._request("GET", "/api/v1.4/callbacks/")
+        return list(payload if isinstance(payload, list) else []) or []
+
+    def callbacks(self):
+        """{box_id: {"seen_at": epoch, "agent": str, "external_id": str}}.
+
+        `seen_at` comes from the row's `last_checkin`; a row with no parseable
+        timestamp is reported with `seen_at=None` so a caller cannot mistake it
+        for fresh.
+        """
+        now = self._now()
+        out = {}
+        for row in self.callback_rows():
+            box_id = (row.get("description") or row.get("host") or "").strip()
+            if not box_id:
+                continue
+            seen = _epoch(row.get("last_checkin") or row.get("timestamp"))
+            out[box_id] = {"seen_at": seen,
+                           "agent": (row.get("agent") or (row.get("payload") or {})
+                                     .get("payload_type") or "?"),
+                           "external_id": str(row.get("id") or row.get("display_id") or ""),
+                           "host": row.get("host"), "user": row.get("user"),
+                           "process": row.get("process_name")}
+            if seen is None:
+                out[box_id]["seen_at"] = now      # row exists, age unknown
+                out[box_id]["stale"] = True
+        return out
+
+    def fresh_callbacks(self):
+        """Callbacks whose last check-in is inside `c2.callback_max_age_sec`."""
+        now = self._now()
+        return {box: rec for box, rec in self.callbacks().items()
+                if rec.get("seen_at") is not None
+                and not rec.get("stale")
+                and (now - rec["seen_at"]) <= self.callback_max_age}
+
+    def callback_for(self, box_id):
+        rec = self.callbacks().get(box_id)
+        if not rec:
+            return None
+        return rec
+
+    # -- tasking ------------------------------------------------------------
+
+    def callback_id_for(self, box_id):
+        payload = self._request("GET", "/api/v1.4/callbacks/")
+        for row in (payload if isinstance(payload, list) else []):
+            if (row.get("description") or row.get("host") or "").strip() == box_id:
+                return row.get("id") or row.get("display_id")
+        return None
+
+    def task(self, box_id, command, *, timeout=120, poll_interval=2.0):
+        """Create one task on the box's callback and wait for its output."""
+        if not self.enabled:
+            raise C2Error("c2 disabled (c2.enabled / c2.base_url)")
+        callback_id = self.callback_id_for(box_id)
+        if callback_id is None:
+            return {"ok": False, "detail": f"no callback for {box_id}",
+                    "output": "", "task_id": None}
+        created = self._request("POST", "/api/v1.4/task/",
+                                {"callback_id": callback_id, "command": command})
+        task_id = (created or {}).get("id") or (created or {}).get("task_id")
+        if task_id is None:
+            return {"ok": False, "detail": f"task creation returned {str(created)[:120]}",
+                    "output": "", "task_id": None}
+        deadline = self._now() + timeout
+        last = None
+        while self._now() < deadline:
+            last = self._request("GET", f"/api/v1.4/task/{task_id}/")
+            if not isinstance(last, dict):          # a malformed poll is not a verdict
+                last = {}
+            status = str(last.get("status") or "").lower()
+            if status in TERMINAL_OK:
+                return {"ok": True, "output": _task_output(last),
+                        "task_id": task_id, "status": status}
+            if status in TERMINAL_BAD:
+                return {"ok": False, "detail": f"task {status}",
+                        "output": _task_output(last), "task_id": task_id}
+            time.sleep(poll_interval)
+        return {"ok": False, "detail": f"task {task_id} not finished within {timeout}s",
+                "output": _task_output(last), "task_id": task_id}
+
+    # -- payload prep (comp-prep; never mid-event) ---------------------------
+
+    def build_payload(self, box_id, os_name="linux", transport="http",
+                      c2_profile="http", extra=None):
+        """Create a payload build for one box (description = the box id).
+
+        The C2 profile's own parameters ride the build: a payload built with the
+        profile instance's default callback (Mythic installs with a loopback
+        `callback_host`) is a beacon that can never reach the range, and it would
+        only show up as a channel that never checks in.
+        """
+        agent = AGENT_BY_OS.get(os_name, "poseidon")
+        profile: dict = {"c2_profile": c2_profile}
+        params = self.profile_parameters(extra)
+        if params:
+            profile["c2_profile_parameters"] = params
+        body = {"payload_type": agent, "description": box_id,
+                "c2_profiles": [profile],
+                "build_parameters": {}}
+        created = self._request("POST", "/api/v1.4/payload/", body)
+        uuid = (created or {}).get("uuid")
+        if not uuid:
+            raise C2Error(f"payload build for {box_id} returned {str(created)[:120]}")
+        return {"uuid": str(uuid), "box": box_id, "agent": agent,
+                "transport": transport, "description": box_id,
+                "callback": self.callback_summary()}
+
+    def profile_parameters(self, extra=None):
+        """`c2_profile_parameters` for a build, from config + per-call extras."""
+        params = {}
+        if self.callback_host:
+            params["callback_host"] = self.callback_host
+        if self.callback_port:
+            params["callback_port"] = int(self.callback_port)
+        for key, value in (extra or {}).items():
+            if value not in (None, ""):
+                params[key] = value
+        return params
+
+    def callback_summary(self):
+        """What a built payload was told to dial (recorded in the manifest)."""
+        return {"host": self.callback_host, "port": self.callback_port}
+
+    def payload_status(self, uuid):
+        return self._request("GET", f"/api/v1.4/payload/{uuid}/") or {}
+
+    def download_payload(self, uuid, path):
+        status = self.payload_status(uuid)
+        file_id = status.get("file_id") or (status.get("payload") or {}).get("file_id")
+        if not file_id:
+            raise C2Error(f"payload {uuid} has no file yet "
+                          f"(build status {status.get('build_status')})")
+        blob = self._request("GET", f"/api/v1.4/payload/download/{file_id}", raw=True)
+        with open(path, "wb") as fh:
+            fh.write(blob)
+        return path
+
+    def operation(self):
+        """The competition's operation row (gives the loop a cheap liveness gate)."""
+        return {"name": self.operation_name,
+                "callbacks": len(self.callbacks())}
+
+
+def _epoch(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace("Z", "+00:00")
+    try:
+        import datetime
+        return datetime.datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
+def _task_output(row):
+    """Mythic stores task output as a JSON string in `response`/`output`."""
+    if not row:
+        return ""
+    for key in ("response", "output", "stdout"):
+        value = row.get(key)
+        if not value:
+            continue
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                return value
+            value = parsed
+        if isinstance(value, dict):
+            return str(value.get("output") or value.get("stdout") or value)[:4096]
+        return str(value)[:4096]
+    return ""

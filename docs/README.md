@@ -12,6 +12,7 @@ Grouped by what each doc is for. New here: [README.md](../README.md) → [archit
 | [multi-node.md](multi-node.md) | One competition across several Proxmox hosts |
 | [packet-profiles.md](packet-profiles.md) | Compiling a competition packet into a range, or authoring `packet.yaml` |
 | [rehearsal-gates.md](rehearsal-gates.md) | Numeric pass/fail gates for a scrim run |
+| [tlaloc/README.md](../tlaloc/README.md) | The red teamer itself (v2): loop, decision layer, effects, C2, seed, reports. Engine selection and the deploy contract are in [tlaloc/docs/deploy.md](../tlaloc/docs/deploy.md) |
 
 ## Running and repairing
 

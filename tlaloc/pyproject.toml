@@ -1,0 +1,12 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+markers = [
+    "net: test opts out of the hermeticity guard (real sockets/processes)",
+    "live: test needs a live range or model endpoint (skipped by default)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

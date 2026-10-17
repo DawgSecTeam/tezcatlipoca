@@ -1,0 +1,21 @@
+{
+  "web01": [
+    "nginx",
+    "ssh",
+    {
+      "name": "score/tcp",
+      "score_only": true,
+      "port": 3306,
+      "display": "MySQL pin"
+    }
+  ],
+  "db01": [
+    "mysql",
+    "ssh"
+  ],
+  "dc01": [
+    "Enable WinRM",
+    "New SMB Share",
+    "Adds LDAP"
+  ]
+}
