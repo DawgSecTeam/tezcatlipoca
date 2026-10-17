@@ -374,7 +374,7 @@ def stage_red_tlaloc(args, comp, creds, run_dir):
     """
     from red import tlaloc_ops
     _resolve_red_vmid(args, comp)
-    _resolve_red_ip(args, comp)
+    _resolve_red_ip(args, comp, read_placement(comp))
     ssh_key = (creds or {}).get("KEY_PATH") or core.REPO / "proxmox"
     ctx = _PipelineCtx(comp, args, ssh_key)
     log(f"staging tlaloc v2 on red01 {args.red_ip} (vmid {args.red_vmid}) — "
