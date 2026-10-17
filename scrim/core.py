@@ -42,7 +42,7 @@ def write_evidence(path, text):
     Evidence files were written with a plain write_text at the process umask: the final
     scoreboard and the per-team service dumps name every scored service and every error
     string on the range, yet a report reader on a shared host could read them — and a torn
-    write during teardown was possible (audit find D5).
+    write during teardown was possible (a harness audit finding).
     """
     return write_text_atomic(path, text, mode=0o600)
 

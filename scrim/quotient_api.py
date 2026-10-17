@@ -94,7 +94,7 @@ def qget(creds, user, jar, path):
 
 
 # without the isinstance guard an error body made next(...) raise StopIteration/TypeError
-# from inside the monitor thread, which died silently (audit find D3)
+# from inside the monitor thread, which died silently (a harness audit finding)
 def _team_tid(creds, user, jar, team):
     r = qget(creds, user, jar, "/api/teams")
     try:

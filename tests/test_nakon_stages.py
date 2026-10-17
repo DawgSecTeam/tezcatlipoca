@@ -41,7 +41,7 @@ def _write_crossbox(comp_dir, config_name="hypothetical-crossbox"):
     (comp_dir / "nakon-config.json").write_text(json.dumps({"machines": machines}))
 
 
-# D1: the satellite golden enforced a strictly weaker ban than slot 0, so a
+# The satellite golden enforced a strictly weaker ban than slot 0, so a
 # cross-box-only ("ip:<box>") config rode the satellite disk with team1's DB IP
 # already baked into the pin.
 class GoldenIdentityBan(unittest.TestCase):
@@ -93,7 +93,7 @@ class GoldenIdentityBan(unittest.TestCase):
                                  ("db01-golden", [])])
 
 
-# D2: the combined pre-domain ∪ final view deduped by config name only, silently
+# The combined pre-domain ∪ final view deduped by config name only, silently
 # dropping same-named pins that differ by vars.
 class PostCloneMerge(unittest.TestCase):
     COLD_BOXES = [{"name": "dc01", "template": "windows-server-2022"}]

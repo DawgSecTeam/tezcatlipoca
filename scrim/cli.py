@@ -29,7 +29,7 @@ from estate import config
 def main():
     # Start-up umask: every evidence file, jar and log this run creates is private unless
     # a call site explicitly widens it. Several evidence writes used to rely on the
-    # operator's umask (audit find D5).
+    # operator's umask (a harness audit finding).
     os.umask(0o077)
     # The deploy child reads .env itself, but the harness's IN-PROCESS paths (the
     # end-of-event teardown runner, compworld) resolve their config from this process's
@@ -224,7 +224,8 @@ def main():
 
     red_setup_started = time.time()
     # Marker BEFORE stage_red: red01 deployment takes tens of minutes, and a driver that
-    # dies in there used to leave nothing but a missing T0.txt for --resume-event (D3).
+    # dies in there used to leave nothing but a missing T0.txt for --resume-event
+    # (a harness audit finding).
     run_manifest.record_phase(run_dir, args, "red")
     red_stage.stage_red(args, comp, creds, run_dir)
     t0 = time.time()

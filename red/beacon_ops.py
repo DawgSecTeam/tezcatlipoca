@@ -95,7 +95,7 @@ def plant_team_beacons(teams, boxes, ctx, box_username="ubuntu", box_password=No
 #
 #     Only a lineup with NO beaconable box aborts: that is a configuration error (the
 #     Compfile asked for beacons and boxes.json offers nowhere to put them), and reporting
-#     "planted on 0/0" for it is exactly the silent degradation audit find D8 closed.
+#     "planted on 0/0" for it is exactly the silent degradation a harness audit closed.
     from common.targets import enumerate_targets
 
     plan = dict(beacon_plan(boxes))

@@ -6,7 +6,7 @@ the pause is what freezes the loop's last round, but a paused engine still answe
 these APIs — then pause. Capture is deliberately tolerant: the engine can answer 500
 or a non-JSON body mid-round, and the old `.json()` calls propagated straight out of
 main() BEFORE the pause ran, so the schedule said the event was over while scoring
-kept running (audit find D7). Every failure is recorded inside the dump instead, so
+kept running (a harness audit finding). Every failure is recorded inside the dump instead, so
 the pause always gets its turn and the operator still gets (partial) evidence on disk.
 """
 

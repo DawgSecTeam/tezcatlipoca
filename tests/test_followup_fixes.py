@@ -43,7 +43,7 @@ from infra import collisions as mgmt_ip_mod  # noqa: E402  (owns the engine mgmt
 
 
 class EngineMgmtGateTests(unittest.TestCase):
-# F5: "explicitly set" must mean the OPERATOR set it.
+# "explicitly set" must mean the OPERATOR set it.
 
     GUEST = [{"vmid": 500, "name": "foreign-thing", "node": "n1", "status": "running",
               "tags": "", "template": 0}]
@@ -143,7 +143,7 @@ boxes:
 
 
 class MemberTrustedTests(unittest.TestCase):
-# F6: the member's self-report is not the DC's truth.
+# the member's self-report is not the DC's truth.
 
     def _job(self, role="member", team="team1"):
         return {"team_key": team, "role": role}
@@ -159,7 +159,7 @@ class MemberTrustedTests(unittest.TestCase):
 
 
 class ReconcileStateTests(unittest.TestCase):
-# F9: import rebuilt boxes by deterministic vmid; warn, never die.
+# import rebuilt boxes by deterministic vmid; warn, never die.
 
     def _target(self, vm_name, vmid, slot=0):
         return {"vm_name": vm_name, "vmid": vmid, "slot": slot}

@@ -55,7 +55,7 @@ def top_level(rows):
 # The rows that did not run inside another timed block.
 #
 #     Parent and child are peers in the file — a phase wraps an op that itself times its
-#     inner work — so summing every row counts the same wall clock twice (live round 2: a
+#     inner work — so summing every row counts the same wall clock twice (caught live: a
 #     3062.1 s `domains` parent over 4994.7 s of concurrent `domain_adds` children). A row
 #     whose span falls inside another's is detail, not extra wall clock.
     return [row for i, row in enumerate(rows)

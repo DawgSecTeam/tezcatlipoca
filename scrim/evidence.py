@@ -81,7 +81,7 @@ def stage_capture(args, creds):
 
     # rc + body both checked: a version that logged "engine paused (best-effort)"
     # unconditionally left a 500 mid-round scoring while the operator read a line saying
-    # it had stopped (audit find D7)
+    # it had stopped (a harness audit finding)
     def _pause():
         r = procs.run_tree(["curl", "-s", "--max-time", "15", "-b", admin_jar, "-X", "POST",
                             f"http://{creds['ENGINE_IP']}/api/engine/pause",

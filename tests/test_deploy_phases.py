@@ -40,7 +40,7 @@ def _bundle(tmp):
 
 
 class GoldenHashEntries(unittest.TestCase):
-# D1: the loop that feeds phase 1's waves, the phase-4 rebuild gate and the
+# The loop that feeds phase 1's waves, the phase-4 rebuild gate and the
 #     document's template record. It must cover EVERY box name in boxes.json.
 
     def _entries(self, boxes, unbooted=(), golden_machines=None):
@@ -80,7 +80,7 @@ class GoldenHashEntries(unittest.TestCase):
 
 
 class GoldenRebuildGate(unittest.TestCase):
-# D1's second half: the gate decides rebuilds from the hash entries, which
+# Second half: the gate decides rebuilds from the hash entries, which
 #     golden_hash_entries gives every box.
 
     def setUp(self):
@@ -142,7 +142,7 @@ class GoldenRebuildGate(unittest.TestCase):
 
 
 class ResumeFromPhaseGuard(unittest.TestCase):
-# D2: --from-phase must not skip phases the state document never saw complete.
+# --from-phase must not skip phases the state document never saw complete.
 
     def test_next_phase_after_last_completed_is_allowed(self):
         dl_gates.guard_resume_from_phase(4, 3, "estate-state.json")  # no raise
@@ -175,7 +175,7 @@ class ResumeFromPhaseGuard(unittest.TestCase):
 
 
 class CoveragePersistence(unittest.TestCase):
-# D3: phase 6's coverage repair must reach disk even when the tally is empty.
+# Phase 6's coverage repair must reach disk even when the tally is empty.
 
     def _machines(self):
         return [{"name": "web01-team101",

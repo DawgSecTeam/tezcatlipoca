@@ -87,7 +87,7 @@ def stage_author(args):
                 or item.name.startswith("sub-") or item.name.startswith(".nakon-domain-"):
             continue
         # A swept template must not carry the marker into a competition authored from it:
-        # the new range would skip its own post-clone sweep (audit find 12).
+        # the new range would skip its own post-clone sweep (a harness audit finding).
         if item.name == ".postclone-swept":
             continue
         if item.is_dir():

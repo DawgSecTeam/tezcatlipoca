@@ -1,5 +1,5 @@
 """Compile-boundary validation: the packet shapes that used to survive
-validate_profile and die later in a live deploy (D3), some only at phase 6 after DC
+validate_profile and die later in a live deploy, some only at phase 6 after DC
 promotion. Offline — validate_profile is pure."""
 
 import copy

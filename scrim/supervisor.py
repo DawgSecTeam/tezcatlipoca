@@ -5,7 +5,7 @@ from scrim.core import log
 
 
 # a worker dying on its own must not let the harness exit clean: a dead feed leaves a team
-# unattended, a dead monitor leaves the post-hoc report without its evidence (audit find D3)
+# unattended, a dead monitor leaves the post-hoc report without its evidence (a harness audit finding)
 class WorkerDiedError(RuntimeError):
     pass
 

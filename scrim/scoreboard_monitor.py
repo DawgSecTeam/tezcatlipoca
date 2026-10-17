@@ -33,7 +33,7 @@ def monitor_loop(args, creds, t0, stop):
                 f.write(json.dumps(rec) + "\n")
         # Context manager: the log append used to be a bare open(...).write(...) with no
         # close, leaking one file descriptor per MONITOR_INTERVAL for the whole event
-        # (audit find D5).
+        # (a harness audit finding).
         with (Path(args.run_dir) / "monitor.log").open("a") as f:
             f.write(f"\n#### T+{t_plus // 60}min {time.strftime('%H:%M')}\n" +
                     "\n".join(f"{t}:\n{s}" for t, s in texts.items()))

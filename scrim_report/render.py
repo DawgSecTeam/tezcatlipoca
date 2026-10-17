@@ -25,7 +25,7 @@ def build_report(run_dir):
         ttrs = [t for d in down.values() for t in d["ttrs_min"]]
         fast = sum(1 for t in ttrs if t <= gate_table.RESTORE_TTR_GATE_MIN)
         # per-team down-minutes are rendered straight from `down` below; a local copy was
-        # built here and never used (audit find D12).
+        # built here and never used (a harness audit finding).
         max_sim = max((d["max_simultaneous_down"] for d in down.values()), default=0)
     else:
         restorations, ttrs, fast = rm["restore_reactions"], [], 0
