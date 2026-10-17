@@ -47,6 +47,33 @@ class RedDiskTest(unittest.TestCase):
         resize = [d for _, p, d in calls if p.endswith("/resize")][0]
         assert resize == {"disk": "scsi0", "size": "60G"}, resize
 
+    def test_the_guest_grow_waits_for_the_resize_task(self):
+        """PVE answers the resize with a task; the guest grow must wait for it or
+        growpart reads the old disk (live 2026-10-17: the task started as the ssh grow
+        ran, and the LV stayed at 13G on a 60G disk)."""
+        upid = "UPID:proxmox:1:2:3:resize:2099:x:"
+        calls = []
+
+        def api(method, path, **kwargs):
+            calls.append((method, path))
+            if path == "/cluster/resources":
+                return {"data": [{"vmid": 2099, "node": "proxmox"}]}
+            if path.endswith("/config"):
+                return {"data": {"scsi0": "ssd:vm-2099-disk-0,size=15G"}}
+            return {"data": upid}
+
+        waited, df = [], "/dev/mapper/ubuntu--vg-ubuntu--lv   59G  1.2G   55G   3% /\n"
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch("infra.client.proxmox_api", api), \
+                mock.patch("infra.client.wait_for_proxmox_task",
+                           side_effect=lambda node, upid, timeout=None:
+                           waited.append((node, upid))):
+            out = to.resize_red_disk(compfile(tmp), "10.0.0.241", 2099,
+                                     ssh_key="/tmp/key", target_gb=60,
+                                     runner=lambda argv, **kw: Completed(0, df))
+        assert out["ok"] is True, out
+        assert waited == [("proxmox", upid)], waited
+
     def test_a_disk_already_at_the_floor_is_left_alone(self):
         calls, df = [], "/dev/mapper/ubuntu--vg-ubuntu--lv   59G  1.2G   55G   3% /\n"
         with tempfile.TemporaryDirectory() as tmp, \

@@ -131,8 +131,16 @@ def resize_red_disk(comp_dir, red_ip, vmid, *, ssh_key, target_gb=None,
         # caught in a smoke: the resize silently degraded, Mythic's images filled
         # the old disk, its containers never started, and `gaia auth` got a non-JSON
         # reply — the deploy then failed three steps away from the actual cause.
-        proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/resize",
-                    data={"disk": disk, "size": f"{target}G"})
+        res = proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/resize",
+                          data={"disk": disk, "size": f"{target}G"})
+        # PVE answers the resize with a task; the guest-side grow must not start until
+        # that task has finished or growpart still sees the old disk. Live 2026-10-17:
+        # the resize task started at 12:02:16 and the ssh grow ran immediately, so the
+        # LV stayed at 13G on a 60G disk and the deploy refused Mythic.
+        upid = (res or {}).get("data") if isinstance(res, dict) else None
+        if isinstance(upid, str) and upid.startswith("UPID:"):
+            from infra.client import wait_for_proxmox_task
+            wait_for_proxmox_task(node, upid, timeout=300)
 
     ssh_argv = ["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
