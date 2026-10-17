@@ -10,6 +10,7 @@ import json
 import sys
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -75,36 +76,48 @@ class BuildGoldenSetTests(unittest.TestCase):
                template_map=None):
         template_map = template_map or {"windows-server-2022": 955,
                                         "ubuntu-2204-web": 956}
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
             comp_dir = Path(tmp)
-            with patch.object(golden_ops, "proxmox_api") as p_api, \
-                 patch.object(golden_ops, "_vm_exists",
-                              side_effect=lambda n, v: vm_exists.get(v, False)), \
-                 patch.object(golden_ops, "_is_template",
-                              side_effect=lambda n, v: is_template.get(v, False)), \
-                 patch.object(golden_ops, "_template_vmid_map",
-                              return_value=template_map), \
-                 patch.object(golden_ops, "destroy_vm_if_exists") as p_destroy, \
-                 patch.object(golden_ops, "retag_ownership") as p_retag, \
-                 patch.object(golden_ops, "wait_for_proxmox_task"), \
-                 patch.object(golden_ops, "write_template_hash") as p_hash, \
-                 patch.object(golden_ops, "stored_template_hash",
-                              side_effect=lambda n, v: hashes[BOX_BY_GOLDEN_VMID[v]]), \
-                 patch.object(golden_ops, "start_vm") as p_start, \
-                 patch.object(golden_ops, "take_snapshot") as p_snap, \
-                 patch.object(golden_ops, "run_nakon") as p_nakon, \
-                 patch.object(golden_ops, "build_nakon_bundle"), \
-                 patch.object(golden_ops, "prep_apt_on_boxes"), \
-                 patch.object(golden_ops, "ssh_via_gateway"), \
-                 patch.object(golden_ops, "wait_for_boxes_ssh"), \
-                 patch.object(golden_ops, "wait_for_cloud_init"):
-                result = golden_ops.build_golden_set(
-                    "node", TEAMS, boxes, {}, comp_dir, 1000, "pw",
-                    comp_dir / "nakon-golden.json", None, "ops", "10.0.0.9",
-                    golden_hashes=hashes, unbooted=unbooted)
+            (comp_dir / "nakon-golden.json").write_text(json.dumps({"machines": []}))
+            p_api = stack.enter_context(patch.object(golden_ops, "proxmox_api"))
+            stack.enter_context(patch.object(
+                golden_ops, "_vm_exists",
+                side_effect=lambda n, v: vm_exists.get(v, False)))
+            stack.enter_context(patch.object(
+                golden_ops, "_is_template",
+                side_effect=lambda n, v: is_template.get(v, False)))
+            stack.enter_context(patch.object(golden_ops, "_template_vmid_map",
+                                             return_value=template_map))
+            p_destroy = stack.enter_context(
+                patch.object(golden_ops, "destroy_vm_if_exists"))
+            stack.enter_context(patch.object(golden_ops, "gc_orphan_volumes"))
+            p_retag = stack.enter_context(patch.object(golden_ops, "retag_ownership"))
+            stack.enter_context(patch.object(golden_ops, "wait_for_proxmox_task"))
+            p_hash = stack.enter_context(patch.object(golden_ops, "write_template_hash"))
+            stack.enter_context(patch.object(
+                golden_ops, "stored_template_hash",
+                side_effect=lambda n, v: hashes[BOX_BY_GOLDEN_VMID[v]]))
+            p_start = stack.enter_context(patch.object(golden_ops, "start_vm"))
+            stack.enter_context(patch.object(golden_ops, "stop_vm"))
+            p_snap = stack.enter_context(patch.object(golden_ops, "take_snapshot"))
+            p_nakon = stack.enter_context(patch.object(golden_ops, "run_nakon"))
+            stack.enter_context(patch.object(golden_ops, "build_nakon_bundle"))
+            stack.enter_context(patch.object(golden_ops, "prep_apt_on_boxes"))
+            stack.enter_context(patch.object(golden_ops, "setup_ubuntu_auth"))
+            stack.enter_context(patch.object(golden_ops, "expand_guest_root_disks"))
+            stack.enter_context(patch.object(golden_ops, "fix_dns_on_boxes"))
+            p_ssh = stack.enter_context(patch.object(
+                golden_ops, "ssh_via_gateway",
+                return_value=SimpleNamespace(returncode=0, stdout="", stderr="")))
+            stack.enter_context(patch.object(golden_ops, "wait_for_boxes_ssh"))
+            stack.enter_context(patch.object(golden_ops, "wait_for_cloud_init"))
+            result = golden_ops.build_golden_set(
+                "node", TEAMS, boxes, {}, comp_dir, 1000, "pw",
+                comp_dir / "nakon-golden.json", None, "ops", "10.0.0.9",
+                golden_hashes=hashes, unbooted=unbooted)
         return result, SimpleNamespace(api=p_api, destroy=p_destroy, hash=p_hash,
                                        start=p_start, snap=p_snap, nakon=p_nakon,
-                                       retag=p_retag)
+                                       retag=p_retag, ssh=p_ssh)
 
     def test_dc_golden_full_cloned_and_converted_without_booting(self):
         dc_only = [BOXES[0]]
@@ -158,6 +171,15 @@ class BuildGoldenSetTests(unittest.TestCase):
         ctx.api.assert_not_called()
         ctx.destroy.assert_not_called()
         ctx.nakon.assert_not_called()
+
+    def test_box_ssh_gets_more_than_thirty_seconds(self):
+        """A jump-hosted SSH to a freshly booted golden outlasted 30 s and aborted the
+        whole build in phase 4 (live 2026-10-17, run-efb1944f)."""
+        hashes = {"dc01": "h1", "web01": "h-web01"}
+        _result, ctx = self._build({}, {}, hashes, {"dc01"})
+        clean = [c for c in ctx.ssh.call_args_list if "cloud-init clean" in c.args[2]]
+        self.assertTrue(clean, "the booted golden must run the cloud-init clean")
+        self.assertGreaterEqual(clean[0].kwargs.get("timeout", 60), 120)
 
 
 if __name__ == "__main__":

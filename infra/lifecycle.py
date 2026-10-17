@@ -10,6 +10,12 @@ from common.utils import record_degradation
 # and releases the lock.
 SHUTDOWN_GRACE_S = 120
 
+# PVE's own wait for a start, passed as the `timeout` of POST /status/start. Same rule as
+# the shutdown wait: it must expire inside OUR client wait, because abandoning a still-
+# running `qmstart` task declares a VM dead that is about to come up (live 2026-10-17: the
+# engine's start task outlived a 120 s client wait and the deploy died with the VM running).
+START_GRACE_S = 900
+
 def vm_status(node, vmid):
     """Current status string ('running'/'stopped'/...) or None if the VM doesn't exist."""
     vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
@@ -28,12 +34,19 @@ def stop_vm(node, vmid):
         run_vm_task(node, vmid, "POST", f"/nodes/{node}/qemu/{vmid}/status/stop", timeout=120)
 
 
-def start_vm(node, vmid, timeout=120):
+def start_vm(node, vmid, timeout=START_GRACE_S):
     """Start the VM if it isn't already running. No-op for a VM that doesn't exist."""
     status = vm_status(node, vmid)
     if status is None or status == "running":
         return
-    run_vm_task(node, vmid, "POST", f"/nodes/{node}/qemu/{vmid}/status/start", timeout=timeout)
+    try:
+        run_vm_task(node, vmid, "POST", f"/nodes/{node}/qemu/{vmid}/status/start",
+                    data={"timeout": timeout}, timeout=timeout + 120)
+    except RuntimeError:
+        # A task that outlived the wait may still have started the VM; only a VM that is
+        # not up afterwards is a failed start.
+        if vm_status(node, vmid) != "running":
+            raise
 
 
 def list_snapshots(node, vmid):

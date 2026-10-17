@@ -395,7 +395,7 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
 
     def _set_box_password(t):
         r = ssh_via_gateway(ctx, t["ip"], f"echo '{box_username}:{box_password}' | sudo chpasswd",
-                            timeout=30, user=box_username)
+                            timeout=120, user=box_username)
         if r.returncode != 0:
             raise RuntimeError(f"password reset failed on golden {t['ip']}: "
                                f"{(r.stderr or '').strip()[:120]}")
@@ -479,8 +479,10 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     print("  Cleaning cloud-init state on golden Linux boxes (clones must re-init)...")
 
     def _cloud_init_clean(t):
+        # 120 s, not 30: the jump-hosted SSH to a freshly booted golden can outlast a
+        # 30 s bound and aborts the whole build (live 2026-10-17, phase 4).
         return ssh_via_gateway(ctx, t["ip"], "sudo cloud-init clean --logs --machine-id",
-                               timeout=30, user=ctx.get("box_username", "ubuntu"))
+                               timeout=120, user=ctx.get("box_username", "ubuntu"))
 
     # Parallel since W11 : same ~1-2s independent SSH round trip as the
     # password reset. The serial loop never let a non-zero rc abort — it warned — so

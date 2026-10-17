@@ -230,6 +230,16 @@ class CommandTests(unittest.TestCase):
                          str(Path("some/comp").resolve()))
         self.assertIn("--yes", cmd)
 
+    def test_destroy_passes_the_competitions_own_config(self):
+        """bad-auto's destroy treats --competition as a cross-check, not a target: with no
+        --config it loads the host default (red_vmid 999) and exits 0 while the comp's
+        red01 is still running (live 2026-10-17: two teardowns journaled 999 and left 1671)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / ".badauto-config.yaml"
+            cfg.write_text("deploy:\n  red_vmid: 1671\n")
+            cmd = to.destroy_command(tmp)
+            self.assertEqual(cmd[cmd.index("--config") + 1], str(cfg.resolve()))
+
     def test_unit_commands_reference_the_unit(self):
         self.assertIn(to.UNIT, to.unit_stop_command())
         self.assertIn(to.UNIT, to.unit_install_command())

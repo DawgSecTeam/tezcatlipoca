@@ -424,8 +424,16 @@ def comp_prep_command(comp_dir, transports=("http", "webhook")):
 
 def destroy_command(comp_dir):
     """The VM + NAT teardown still belongs to the v1 provisioning path."""
-    return [local_python(), "-m", "badauto", "destroy", "--competition",
-            str(Path(comp_dir).resolve()), "--yes"]
+    from red import badauto_config_ops
+    comp_dir = Path(comp_dir).resolve()
+    cmd = [local_python(), "-m", "badauto"]
+    # `--competition` is only a cross-check to bad-auto's destroy, not a target: without
+    # `--config` it loads the HOST default (red_vmid 999) and exits 0 for a red01 it never
+    # touched. Two teardowns did exactly that and journaled 999 while vmid 1671 stayed up.
+    cfg_path = badauto_config_ops.config_path(comp_dir)
+    if cfg_path.exists():
+        cmd += ["--config", str(cfg_path)]
+    return cmd + ["destroy", "--competition", str(comp_dir), "--yes"]
 
 
 def unit_stop_command():

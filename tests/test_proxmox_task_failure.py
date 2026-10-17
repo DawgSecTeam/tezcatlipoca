@@ -64,6 +64,38 @@ class WaitForTaskTerminalStates(unittest.TestCase):
             self.assertIsNone(client.wait_for_proxmox_task("n", UPID))
 
 
+class StartVmWaitsForItsTask(unittest.TestCase):
+    """A start must not abandon its own PVE task the way the shutdown path once did.
+
+    caught live: the engine's `qmstart` task outlived a 120 s client wait while the VM
+    came up, so phase 2 failed the deploy with a running engine (2026-10-17).
+    """
+
+    def _start(self, statuses, run):
+        seq = list(statuses)
+        with patch.object(lifecycle, "vm_status", lambda n, v: seq.pop(0)), \
+                patch.object(lifecycle, "run_vm_task", run):
+            lifecycle.start_vm("n", 1000)
+
+    def test_the_start_hands_pve_its_own_wait(self):
+        calls = []
+        self._start(["stopped"], lambda *a, **k: calls.append((a, k)))
+        _args, kw = calls[0]
+        self.assertEqual(kw["data"], {"timeout": lifecycle.START_GRACE_S})
+        self.assertGreater(kw["timeout"], lifecycle.START_GRACE_S)
+
+    def test_a_timed_out_task_with_a_running_vm_passes(self):
+        def run(*_a, **_k):
+            raise RuntimeError("Proxmox task UPID:x timed out after 1020s")
+        self._start(["stopped", "running"], run)
+
+    def test_a_timed_out_task_with_a_stopped_vm_raises(self):
+        def run(*_a, **_k):
+            raise RuntimeError("Proxmox task UPID:x timed out")
+        with self.assertRaises(RuntimeError):
+            self._start(["stopped", "stopped"], run)
+
+
 class FakeCluster:
     """Routes every proxmox_api call through client's override seam.
 
