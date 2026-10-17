@@ -75,12 +75,35 @@ class EngineMgmtGateTests(unittest.TestCase):
 
 
 class EnsurePacketSecretsTests(unittest.TestCase):
-    COMPFILE = "name Test\npacket_source packets/cde-2026/packet.yaml\n"
+    # packet colocated with the comp dir: packet_source "packet.yaml" resolves
+    # comp-dir-relative, so the fixture needs no comps checkout at all.
+    COMPFILE = "name Test\npacket_source packet.yaml\n"
+    PACKET = """
+event:
+  comp_id: packet-secrets-fixture
+  name: Packet Secrets Fixture
+  scenario: fixture
+  difficulty: 3
+credentials:
+  box_username: ubuntu
+  box_password: fixture-pass-1
+  credlists:
+    linux:
+      svc01: service-pass-1
+  out_of_scope: [scorebot]
+  domain_accounts:
+    - {username: Blue, password: Domain-Pass-1}
+boxes:
+  - {name: web01, last_octet: 2, template: base-ubuntu24.04-fix, fidelity: exact}
+  - {name: fw01, last_octet: 1, template: base-pfsense, unmanaged: true,
+     fidelity: substituted}
+"""
 
     def _comp(self, tmp, compfile=COMPFILE):
         comp = Path(tmp) / "acomp"
         comp.mkdir()
         (comp / "Compfile").write_text(compfile)
+        (comp / "packet.yaml").write_text(self.PACKET)
         return comp
 
     def test_missing_secret_layer_is_compiled_0600(self):
@@ -102,7 +125,7 @@ class EnsurePacketSecretsTests(unittest.TestCase):
 
     def test_missing_profile_is_a_loud_refusal(self):
         with tempfile.TemporaryDirectory() as tmp:
-            comp = self._comp(tmp, "name T\npacket_source packets/nope/packet.yaml\n")
+            comp = self._comp(tmp, "name T\npacket_source nope/packet.yaml\n")
             with self.assertRaises(SystemExit):
                 packet_ops.ensure_packet_secrets(comp)
 

@@ -18,17 +18,23 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 from config import packet_ops  # noqa: E402
+from common.comp_paths import comps_root  # noqa: E402
 from deploy_lib import inputs as dl_inputs  # noqa: E402
 from deploy_lib import secrets as dl_secrets  # noqa: E402
 from deploy_lib.context import DeployContext  # noqa: E402
 from deploy_lib.phases import finish  # noqa: E402
 from verifier import packet as vpacket  # noqa: E402
 
+# The reference packets ship in the tezcatlipoca-competitions repo (beside their comp
+# definitions); this pipeline test needs that checkout present.
 PACKETS = ("cde-2026", "maccdc-q-2026")
+_expect_packets = unittest.skipUnless(
+    (comps_root() / PACKETS[0] / "packet.yaml").exists(),
+    "packet.yaml lives in the tezcatlipoca-competitions repo")
 
 
 def _compile(root, name):
-    path = _REPO / "packets" / name / "packet.yaml"
+    path = comps_root() / name / "packet.yaml"
     profile = packet_ops.load_profile(path)
     comps = Path(root) / "competitions"
     comps.mkdir(exist_ok=True)
@@ -36,6 +42,7 @@ def _compile(root, name):
     return profile, Path(comp_dir)
 
 
+@_expect_packets
 class PacketPipelineOffline(unittest.TestCase):
     def _each(self):
         out = []
@@ -107,7 +114,7 @@ class PacketPipelineOffline(unittest.TestCase):
 
     def test_packet_accounts_gate_against_real_profile(self):
         from verifier.model import Status
-        profile = packet_ops.load_profile(_REPO / "packets/cde-2026/packet.yaml")
+        profile = packet_ops.load_profile(comps_root() / "cde-2026" / "packet.yaml")
         users = profile["credentials"]["out_of_scope"]
         self.assertTrue(users)
         boxes = [{"name": "web01-t1", "ip": "192.168.101.4", "os": "ubuntu"}]

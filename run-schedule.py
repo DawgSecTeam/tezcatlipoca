@@ -34,14 +34,14 @@ ACTIONS = ("start", "freeze", "resume", "end")
 
 
 def load_profile(profile_arg):
-    from config.packet_ops import PACKETS_DIR, load_profile
-    path = Path(profile_arg)
-    if not path.exists():
-        candidate = PACKETS_DIR / profile_arg / "packet.yaml"
-        if not candidate.exists():
-            sys.exit(f"ERROR: no profile at {path} (or {candidate})")
-        path = candidate
-    return load_profile(path)
+    from config.packet_ops import load_profile, packet_yaml_for_event, resolve_packet_source
+    resolved = resolve_packet_source(profile_arg)
+    if resolved is None or resolved.is_dir():
+        resolved = packet_yaml_for_event(profile_arg)  # bare event name (or event-dir arg)
+    if not Path(resolved).exists():
+        sys.exit(f"ERROR: no packet profile at {profile_arg} "
+                 "(path, comp-dir/comps-root relative, or an event name)")
+    return load_profile(resolved)
 
 
 def engine_ctx(args, comp_dir):
@@ -84,7 +84,8 @@ def main():
     # creates) is private from the start rather than depending on the operator's umask.
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("profile", help="packets/<event>/packet.yaml (or event name)")
+    parser.add_argument("profile", help="path to a packet.yaml (comp-dir/comps-root "
+                        "relative, e.g. cde-2026/packet.yaml) or a bare event name")
     parser.add_argument("--competition", default=None,
                         help="competitions/<id> (default: profile event.comp_id)")
     parser.add_argument("--engine-ip", default=None, help="override scoring-engine IP")

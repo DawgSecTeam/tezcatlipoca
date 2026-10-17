@@ -270,7 +270,7 @@ class GoldenParallelism(unittest.TestCase):
 
 # A golden that already passed its plant is not redone.
 #
-# Measured on cde-2026: `Golden re-entry: rolling golden-<name> back to 'tz-base'`
+# Measured on a shipped packet's range: `Golden re-entry: rolling golden-<name> back to 'tz-base'`
 # appears 33 times — 11 each for web01, ftp01 and db01 — across 10 runs, while only
 # ftp01 was ever the problem. The checkpoint stops that multiplication; the
 # conversion barrier (every golden stopped before ANY POST /template) must survive it.

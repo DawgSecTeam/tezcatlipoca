@@ -3,7 +3,7 @@
 The inverse of generate-packet.py. Competitions publish a packet days ahead carrying
 the GENERAL shape — box lineup, scored services/ports, IP scheme, default credentials,
 schedule, rules — never the planted misconfigurations. That shape is hand-encoded as
-packets/<event>/packet.yaml and compiled here into a fully deployable
+<comps-root>/<event>/packet.yaml and compiled here into a fully deployable
 competitions/<id>/ bundle (Compfile, boxes.json, users.json, box_services.json,
 domain_roles.json, injects/, passwords.json, box_baseline.json,
 domain_accounts.json, packet-fidelity.md).
@@ -22,15 +22,38 @@ from pathlib import Path
 import yaml
 
 from config.config_ops import random_password
-from common.comp_paths import comps_root as default_comps_root
+from common.comp_paths import comps_root
 from common.constants import KNOWN_BROKEN_CONFIGS, MAX_BOXES_PER_TEAM, REQUIRED_VARS
 from nakonops.nakon_config_ops import os_to_platform
 from nakonops.nakon_pin_ops import _windows_password_error
 from quotient.setup import _SERVICE_TO_CHECK
 from common.utils import is_legacy_account_name, valid_comp_name, valid_unix_username
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-PACKETS_DIR = REPO_ROOT / "packets"
+PACKET_YAML_NAME = "packet.yaml"
+
+
+def resolve_packet_source(source, comp_dir=None):
+# A Compfile's packet_source (or a CLI packet path): comp-dir-relative wins, then
+#     comps-root-relative — packets ship beside their competition definitions in the
+#     comps repo, so both "packet.yaml" (colocated with the comp dir) and
+#     "cde-2026/packet.yaml" (event-dir keyed) resolve. Returns None when nothing
+#     matches; the caller turns that into its own refusal.
+    path = Path(source)
+    if path.is_absolute():
+        return path if path.exists() else None
+    if comp_dir is not None:
+        candidate = Path(comp_dir) / path
+        if candidate.exists():
+            return candidate
+    candidate = comps_root() / path
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def packet_yaml_for_event(event):
+# A bare event name is its event dir under the comps root: <comps>/<event>/packet.yaml.
+    return comps_root() / str(event).strip().strip("/") / PACKET_YAML_NAME
 
 FIDELITY_LEVELS = ("exact", "substituted", "unsupported")
 SCORE_PIN_PREFIX = "score/"
@@ -561,14 +584,13 @@ def ensure_packet_secrets(comp_dir):
             break
     if not source:
         return []
-    profile_path = Path(source)
-    if not profile_path.is_absolute():
-        profile_path = REPO_ROOT / source
-    if not profile_path.exists():
+    profile_path = resolve_packet_source(source, comp_dir=comp_dir)
+    if profile_path is None:
         raise SystemExit(
-            f"  ERROR: {compfile} declares packet_source {source!r}, which does not "
-            f"exist — cannot compile the packet's secret layer (passwords.json, "
-            f"box_baseline.json, domain_accounts.json).")
+            f"  ERROR: {compfile} declares packet_source {source!r}, which resolves "
+            f"nowhere (tried {comp_dir}, then the comps root) — cannot compile the "
+            "packet's secret layer (passwords.json, box_baseline.json, "
+            "domain_accounts.json).")
     missing = [n for n in ("passwords.json", "box_baseline.json", "domain_accounts.json")
                if not (comp_dir / n).exists()]
     if not missing:
@@ -603,7 +625,7 @@ def compile_profile(profile_path, competitions_dir=None, force=False, dry_run=Fa
 
     event = p["event"]
     comp_id = event["comp_id"]
-    comps_dir = Path(competitions_dir) if competitions_dir else default_comps_root()
+    comps_dir = Path(competitions_dir) if competitions_dir else comps_root()
     comp_dir = comps_dir / comp_id
     authored = (comp_dir / "Compfile").exists() and (comp_dir / "boxes.json").exists()
     if authored and not force and not dry_run:
@@ -639,6 +661,18 @@ def compile_profile(profile_path, competitions_dir=None, force=False, dry_run=Fa
     domain_roles = {b["name"]: b["domain_role"] for b in p["boxes"]
                     if b.get("domain_role")}
 
+    try:
+        comps_dir = Path(comps_dir).resolve()
+    except OSError:
+        pass
+    source_path = Path(p["_source"]).absolute()
+    if comp_dir is not None and source_path.parent == Path(comp_dir).absolute():
+        source_str = PACKET_YAML_NAME  # colocated: the comp dir carries its own packet
+    elif source_path.is_relative_to(comps_dir):
+        source_str = str(source_path.relative_to(comps_dir))
+    else:
+        source_str = str(source_path)
+
     files = {}
     files["Compfile"] = "\n".join([
         f"name {event['name']}",
@@ -646,7 +680,7 @@ def compile_profile(profile_path, competitions_dir=None, force=False, dry_run=Fa
         f"difficulty {event['difficulty']}",
         f"domain_prefix {prefix}",
         f"domain_suffix {suffix}",
-        f"packet_source {(Path(p['_source']).relative_to(REPO_ROOT) if Path(p['_source']).is_relative_to(REPO_ROOT) else p['_source'])}",
+        f"packet_source {source_str}",
     ]) + "\n"
     files["boxes.json"] = json.dumps(boxes, indent=2)
     files["users.json"] = json.dumps({
@@ -695,9 +729,11 @@ def _md_escape(text):
 
 
 def _display_source(p):
-    src = Path(p["_source"])
-    rel = str(src.relative_to(REPO_ROOT)) if src.is_relative_to(REPO_ROOT) else str(src)
-    return rel
+    src = Path(p["_source"]).absolute()
+    try:
+        return str(src.relative_to(comps_root()))
+    except ValueError:
+        return str(src)
 
 
 def render_fidelity(p):

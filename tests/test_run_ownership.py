@@ -23,12 +23,14 @@ sys.path.insert(0, str(_REPO))
 
 import infra.ownership  # noqa: E402
 from infra import ownership  # noqa: E402
+from common.comp_paths import comps_root  # noqa: E402
 
 RUN = "run-abcdef01"
 OTHER_RUN = "run-12345678"
 COMP = "c1"
 OURS = f"tezcatlipoca,comp-{COMP},{RUN}"
 OTHER = f"tezcatlipoca,comp-{COMP},{OTHER_RUN}"
+_PACKET = comps_root() / "cde-2026" / "packet.yaml"
 
 
 def load_destroy():
@@ -355,11 +357,14 @@ class RunIdMinting(unittest.TestCase):
             self.assertNotEqual(ctx.teams["team1"]["password"], "old-secret")
 
     def test_fresh_worktree_uses_tracked_packet_identifiers(self):
+        packet = Path(_PACKET)
+        if not packet.exists():
+            self.skipTest("cde-2026/packet.yaml lives in the tezcatlipoca-competitions repo")
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d) / "comp"
             comp_dir.mkdir()
             (comp_dir / "Compfile").write_text(
-                "packet_source packets/cde-2026/packet.yaml\n")
+                "packet_source cde-2026/packet.yaml\n")
             ctx = self._ctx(estate_state.state_path(comp_dir), engine_vmid=1080)
             with dpatch("persist_state"), dpatch(
                     "collect_teams",

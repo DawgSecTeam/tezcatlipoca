@@ -6,7 +6,8 @@ services and ports, IP scheme, default credentials, scoring weights, schedule, r
 pipeline deploys it unchanged. This is the inverse of `generate-packet.py` (which renders a
 competitor packet FROM a config).
 
-Two reference profiles ship under `packets/`: `cde-2026/packet.yaml` (in-path pfSense, dual-credit
+Two reference profiles ship in the comps repo beside their comp definitions:
+`cde-2026/packet.yaml` (in-path pfSense, dual-credit
 SSH pairs, published credentials, a day schedule with a lunch freeze) and
 `maccdc-q-2026/packet.yaml` (an in-path VyOS perimeter, with every unsupported gap recorded in the
 fidelity report rather than silently dropped).
@@ -14,12 +15,12 @@ fidelity report rather than silently dropped).
 ## Workflow
 
 ```bash
-python3 compile-packet.py packets/cde-2026/packet.yaml --dry-run   # plan + fidelity, writes nothing
-python3 compile-packet.py packets/cde-2026/packet.yaml             # emits competitions/<id>/
+python3 compile-packet.py cde-2026/packet.yaml --dry-run   # plan + fidelity, writes nothing
+python3 compile-packet.py cde-2026/packet.yaml             # emits <comps-root>/<id>/
 python3 create-competition.py --competition cde-2026 --teams 4 --yes --scoring-vmid 1010
-python3 verify-competition.py competitions/cde-2026 --packet packets/cde-2026/packet.yaml
-python3 run-schedule.py packets/cde-2026/packet.yaml --t0 "2026-10-03 09:30"   # plan
-python3 run-schedule.py packets/cde-2026/packet.yaml --execute freeze          # lunch
+python3 verify-competition.py cde-2026 --packet cde-2026/packet.yaml
+python3 run-schedule.py cde-2026/packet.yaml --t0 "2026-10-03 09:30"   # plan
+python3 run-schedule.py cde-2026/packet.yaml --execute freeze          # lunch
 ```
 
 Vulns are deliberately NOT compiled: `box_vulns.json` stays the black team's secret layer,
@@ -93,12 +94,12 @@ services:
 3. Map each scored service to a `pin` (a catalog config name, or `score/<check>` for a service
    scored without a plant); check `display` uniqueness per box.
 4. Add `schedule[]` windows if the event pauses — `run-schedule.py` executes them.
-5. `compile-packet.py packets/<event>/packet.yaml --dry-run` — writes nothing, prints every
+5. `compile-packet.py cde-2026/packet.yaml --dry-run` — writes nothing, prints every
    fidelity decision; iterate until the substitutions are ones you'd defend in a briefing.
 6. Real compile, then `create-competition.py --competition <id> --teams N --yes` (the deploy
    preflight resolves every `template` name — a typo fails there, not at compile).
 7. Author vulns separately, after, then `verify-competition.py competitions/<id> --packet
-   packets/<event>/packet.yaml`.
+   cde-2026/packet.yaml`.
 
 ## What compilation emits
 

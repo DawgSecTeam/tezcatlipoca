@@ -14,8 +14,16 @@ sys.path.insert(0, str(_REPO))
 from config import packet_ops
 from config.packet_ops import (build_baseline, compile_profile, load_profile, team_domain_parts,
                         validate_profile)
+from common.comp_paths import comps_root
 from quotient.setup import build_event_conf, expected_service_names
 from nakonops import nakon_config_ops
+
+# The reference packets ship in the tezcatlipoca-competitions repo (beside their comp
+# definitions); tests that read them need that checkout present.
+PACKET = comps_root() / "cde-2026" / "packet.yaml"
+MACCDC_PACKET = comps_root() / "maccdc-q-2026" / "packet.yaml"
+needs_packet = unittest.skipUnless(
+    PACKET.exists(), "packet.yaml lives in the tezcatlipoca-competitions repo")
 from guests.domain_ops import team_domain
 from nakonops.nakon_pin_ops import _windows_password_error
 
@@ -260,8 +268,9 @@ class ScoreOnlyAndCredlistPins(unittest.TestCase):
 
 
 class BaselineAccounts(unittest.TestCase):
+    @needs_packet
     def test_out_of_scope_on_all_managed_boxes_windows_credlist_users(self):
-        profile = load_profile(Path(_REPO) / "packets/cde-2026/packet.yaml")
+        profile = load_profile(PACKET)
         baseline = build_baseline(profile)
         # fw01 unmanaged -> excluded
         self.assertNotIn("fw01", baseline)
@@ -291,8 +300,9 @@ class BaselineAccounts(unittest.TestCase):
         ad_names = [p["vars"]["USERNAME"] for p in baseline["ad01"]]
         self.assertEqual(sorted(ad_names), ["blackteam", "red_scoring", "scorebot"])
 
+    @needs_packet
     def test_decoy_passwords_are_random_per_compile(self):
-        profile = load_profile(Path(_REPO) / "packets/cde-2026/packet.yaml")
+        profile = load_profile(PACKET)
         b1 = build_baseline(profile)
         b2 = build_baseline(profile)
         pw = lambda b, box, user: next(p for p in b[box]
@@ -301,8 +311,9 @@ class BaselineAccounts(unittest.TestCase):
         # credlist users carry the PACKET password verbatim, not a decoy random
         self.assertEqual(pw(b1, "ftp01", "blueteam"), "n0t_sus1")
 
+    @needs_packet
     def test_generated_windows_decoys_pass_local_policy(self):
-        profile = load_profile(Path(_REPO) / "packets/cde-2026/packet.yaml")
+        profile = load_profile(PACKET)
         for pins in build_baseline(profile).values():
             for pin in pins:
                 if pin["name"] == "local-user-win":
@@ -387,16 +398,16 @@ class CatalogCheckFilter(unittest.TestCase):
 
 
 class ShippedProfiles(unittest.TestCase):
+    @needs_packet
     def test_cde_fidelity_flags_dual_credit_and_gaps(self):
-        profile = load_profile(_REPO / "packets/cde-2026/packet.yaml")
+        profile = load_profile(PACKET)
         fidelity = packet_ops.render_fidelity(profile)
         # validated live: the domain SSH dimension is NOT expressible
         # (local blueteam shadows the domain account; shared credlist can't carry
         # per-team qualified names) — the report must say so honestly
         self.assertIn("NOT expressible", fidelity)
         self.assertIn("run-schedule", fidelity)
-        maccdc = packet_ops.render_fidelity(
-            load_profile(_REPO / "packets/maccdc-q-2026/packet.yaml"))
+        maccdc = packet_ops.render_fidelity(load_profile(MACCDC_PACKET))
         self.assertIn("UNSUPPORTED", maccdc)
 
 

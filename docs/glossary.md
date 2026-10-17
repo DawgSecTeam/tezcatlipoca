@@ -48,7 +48,7 @@ because that is the definition that wins when a doc and the code disagree.
 | Term | Meaning |
 |---|---|
 | **packet** | The public competition document: box lineup, scored services/ports, IP scheme, default credentials, schedule, rules. Modelled as `packet.yaml`. |
-| **profile** | The hand-encoded `packets/<event>/packet.yaml` that `compile-packet.py` turns into a `competitions/<id>/` bundle. |
+| **profile** | The hand-encoded `<comps-root>/<event>/packet.yaml` that `compile-packet.py` turns into a `competitions/<id>/` bundle. |
 | **fidelity** | Per-box/service/credential honesty label: `exact`, `substituted`, or `unsupported`, plus a `note`. Compiled into `packet-fidelity.md`; a rehearsal range never claims parity it does not have. |
 | **T0** | The event clock start: the moment the competition actually begins. Inject offsets are re-anchored to T0, not to deploy time. |
 | **freeze window / end** | `run-schedule.py` windows read from the packet's `schedule:` (`start`, `freeze`/`resume`, `end`). The engine has no schedule model — pausing *is* the schedule. |

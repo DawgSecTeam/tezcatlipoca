@@ -278,6 +278,7 @@ Local-files → Markdown. The packet is the same for every team (real credential
 - Emits `Compfile` (with `domain_prefix`/`domain_suffix`/`packet_source`), `boxes.json`, `users.json`, `box_services.json`, `domain_roles.json`, `injects/`, `packet-fidelity.md`, and 0600 `passwords.json`, `domain_accounts.json`, `box_baseline.json`.
 - **Score-only pins** (`score/tcp`) score a native service the catalog can't plant; they're stripped from the nakon machine list and catalog check but present in `event.conf` and `expected_service_names`.
 - `run-schedule.py`: the engine has no schedule model; pausing is the schedule. With `--execute` it drives `start`/`freeze`/`resume`/`end` from the packet's `schedule:`; `end` captures the scoreboard and injects into `<comp>/evidence/` before pausing.
+- **Packet sourcing**: packets live in the comps repo beside their comp definitions (`<comps>/cde-2026/packet.yaml`, or a colocated `packet.yaml` inside the comp dir); `resolve_packet_source()` is the one resolver — comp-dir-relative first, then comps-root-relative — behind the Compfile's `packet_source`, verify's `--packet`, and the CLI profile args.
 
 ## Multi-node and sync
 

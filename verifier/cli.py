@@ -37,7 +37,7 @@ def build_parser():
                              "(box_vulns.json all-empty): skip the misconfig gates instead of "
                              "failing on them")
     parser.add_argument("--packet", dest="packet_profile", default=None,
-                        help="packet profile (packets/<event>/packet.yaml): adds packet-"
+                        help="packet profile (path to a packet.yaml): adds packet-"
                              "fidelity gates — credentials.txt must match the packet's "
                              "published default credentials, and the packet's out-of-scope "
                              "accounts must exist on the boxes")

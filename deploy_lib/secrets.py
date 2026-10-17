@@ -21,12 +21,10 @@ def _tracked_team_identifier_defaults(comp_dir):
                 break
     if not source:
         return []
-    profile_path = Path(source)
-    if not profile_path.is_absolute():
-        profile_path = Path(__file__).resolve().parents[1] / profile_path
-    if not profile_path.is_file():
+    from config.packet_ops import load_profile, resolve_packet_source
+    profile_path = resolve_packet_source(source, comp_dir=comp_dir)
+    if profile_path is None:
         return []
-    from config.packet_ops import load_profile
     profile = load_profile(profile_path)
     return (profile.get("event") or {}).get("team_identifiers") or []
 

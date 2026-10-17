@@ -38,8 +38,8 @@ class _Run:
 
 def _load_packet_profile(path):
     try:
-        from config.packet_ops import load_profile
-        return load_profile(path)
+        from config.packet_ops import load_profile, resolve_packet_source
+        return load_profile(resolve_packet_source(str(path)) or path)
     except SystemExit as e:
         raise PacketProfileError(str(e))
 
