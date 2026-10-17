@@ -251,6 +251,28 @@ class CommandTests(unittest.TestCase):
         self.assertIn("c2-prep", cmd)
         self.assertEqual(cmd[cmd.index("--comp") + 1], str(Path("some/comp").resolve()))
 
+    def test_comp_prep_gives_c2_prep_a_writable_state_dir(self):
+        """c2-prep runs on the OPERATOR, where the config's VM state dir
+        (/var/lib/tlaloc) is unwritable: build_context's mkdir died with
+        PermissionError and the channel stage skipped (live 2026-10-17)."""
+        cmd = to.comp_prep_command("some/comp")
+        self.assertEqual(cmd[cmd.index("--state-dir") + 1],
+                         str(Path("some/comp").resolve() / ".tlaloc-state"))
+
+    def test_the_config_push_feeds_the_rendered_config_to_stdin(self):
+        """`tee` reads stdin: without input every deploy pushed a 0-byte config and
+        red01 ran on tlaloc's defaults (live 2026-10-17)."""
+        seen = {}
+
+        def runner(argv, **kw):
+            seen.update(kw)
+            return Completed(0)
+
+        out = to.push_config("/tmp/key", "10.0.0.195", "run:\n  comp: x1\n",
+                             runner=runner)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(seen["input"], "run:\n  comp: x1\n")
+
     def test_destroy_targets_the_competition(self):
         cmd = to.destroy_command("some/comp")
         self.assertEqual(cmd[cmd.index("--competition") + 1],

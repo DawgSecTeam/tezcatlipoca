@@ -425,8 +425,11 @@ def unit_install_command(local_unit=None):
 
 def comp_prep_command(comp_dir, transports=("http", "webhook")):
     comp_dir = Path(comp_dir).resolve()
+    # --state-dir: c2-prep runs on the OPERATOR, where the config's VM path
+    # (/var/lib/tlaloc) is unwritable; build_context mkdirs it (live 2026-10-17).
     return [local_python(), "-m", "tlaloc", "--comp", str(comp_dir),
-            "--config", str(comp_dir / ".tlaloc-config.yaml"), "c2-prep",
+            "--config", str(comp_dir / ".tlaloc-config.yaml"),
+            "--state-dir", str(comp_dir / ".tlaloc-state"), "c2-prep",
             "--transports", ",".join(transports)]
 
 
@@ -452,10 +455,13 @@ def unit_stop_command():
 # the phase-7 entry point
 # --------------------------------------------------------------------------- #
 
-def _ssh_run(ssh_key, red_ip, remote, *, runner=None, timeout=900):
+def _ssh_run(ssh_key, red_ip, remote, *, runner=None, timeout=900, input=None):
     runner = runner or _default_runner
+    kwargs = {"timeout": timeout}
+    if input is not None:
+        kwargs["input"] = input
     try:
-        return runner(ssh_argv(ssh_key, red_ip, remote), timeout=timeout)
+        return runner(ssh_argv(ssh_key, red_ip, remote), **kwargs)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess([], 124, "", f"timeout after {timeout}s")
 
@@ -508,9 +514,13 @@ def stage_red01(ssh_key, red_ip, comp_dir, *, runner=None, timeout=600):
 
 
 def push_config(ssh_key, red_ip, config_text, *, runner=None, timeout=120):
+    # `tee` reads stdin: without feeding the rendered config, every deploy wrote a 0-byte
+    # file and red01 ran on tlaloc's defaults (live 2026-10-17: the contract check named
+    # every field missing on a range whose local config was complete).
     remote = (f"sudo -n mkdir -p /etc/tlaloc && "
               f"sudo -n tee {CONFIG_PATH} >/dev/null && sudo -n chmod 600 {CONFIG_PATH}")
-    proc = _ssh_run(ssh_key, red_ip, remote, runner=runner, timeout=timeout)
+    proc = _ssh_run(ssh_key, red_ip, remote, runner=runner, timeout=timeout,
+                    input=config_text)
     return {"ok": getattr(proc, "returncode", 1) == 0, "detail": _tail(proc)}
 
 
